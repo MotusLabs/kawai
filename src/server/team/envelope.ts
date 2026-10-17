@@ -55,7 +55,7 @@ export function parseEnvelope(text: string): ChatPeerMessage | null {
       !['messageId', 'originPath', 'threadId'].every(key => typeof meta[key] === 'string' && meta[key].length > 0) ||
       // A human sender has no session id (team-message-threads D4).
       !(meta.senderSession === null || (typeof meta.senderSession === 'string' && meta.senderSession.length > 0)) ||
-      !(meta.senderKind === undefined || meta.senderKind === 'agent' || meta.senderKind === 'human') ||
+      !(meta.senderKind === undefined || meta.senderKind === 'agent' || meta.senderKind === 'human' || meta.senderKind === 'system') ||
       !(meta.senderGroup === null || typeof meta.senderGroup === 'string') ||
       !['urgent', 'normal'].includes(meta.priority) ||
       !Array.isArray(meta.tags) || !meta.tags.every((tag: unknown) => typeof tag === 'string') ||
@@ -63,7 +63,7 @@ export function parseEnvelope(text: string): ChatPeerMessage | null {
     if (meta.thread !== undefined && (!Array.isArray(meta.thread) || !meta.thread.every((row: Record<string, unknown>) =>
       row && typeof row.messageId === 'string' && typeof row.body === 'string' &&
       (row.senderSession === null || typeof row.senderSession === 'string') &&
-      (row.senderKind === undefined || row.senderKind === 'agent' || row.senderKind === 'human')))) return null
+      (row.senderKind === undefined || row.senderKind === 'agent' || row.senderKind === 'human' || row.senderKind === 'system')))) return null
     if (meta.task !== undefined && !isTaskContext(meta.task)) return null
     if (meta.handoff !== undefined && !isHandoffPackage(meta.handoff)) return null
     if (meta.revisionNotice !== undefined && !isRevisionNotice(meta.revisionNotice)) return null
@@ -93,7 +93,7 @@ export function parseEnvelope(text: string): ChatPeerMessage | null {
         thread: (meta.thread as Array<Record<string, unknown>>).map(row => ({
           messageId: row.messageId as string,
           senderSession: row.senderSession as string | null,
-          senderKind: (row.senderKind as 'agent' | 'human' | undefined) ?? 'agent',
+          senderKind: (row.senderKind as 'agent' | 'human' | 'system' | undefined) ?? 'agent',
           body: row.body as string,
         })),
       } : {}),

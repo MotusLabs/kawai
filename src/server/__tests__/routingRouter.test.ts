@@ -409,3 +409,63 @@ test('a zero-delay hold is reconsidered on the next cycle with unchanged candida
   expect(await router.route(message(), view)).toEqual({ kind: 'member', sessionId: 'a' })
   expect(calls).toBe(2)
 })
+
+describe('plan roles and author tags (plan-execution D15)', () => {
+  function roleRouter() {
+    return new ProfileRouter({
+      groupOf: async () => def,
+      members: () => members,
+      targetWorktree: () => '/wt',
+      staffing: {
+        spawnContext: async () => ({ worktree: '/wt', allowed: spawnAllowed, pendingProfiles: [], facts }),
+        spawnFor: async (m, _wt, _g, profileId) => {
+          spawns.push(profileId)
+          return { message: m, sessionId: `spawned-${profileId}` }
+        },
+      },
+      excludedProfile: m => m.excludedProfile ?? undefined,
+      allowedProfiles: m => m.allowedProfiles ?? null,
+      rules: { rule: () => (rule ? { route: async (ctx: RouteContext) => { ruleCalls.push(ctx); return rule!(ctx) } } as never : undefined) },
+      limits: { forProfile: id => events[id] ?? [] },
+      usageOf: () => null,
+      now: () => now,
+    })
+  }
+
+  test('a role keeps the mail to its profiles, in its order for profile-order', async () => {
+    // The role allows only glm; the claude member is invisible to it.
+    expect(await roleRouter().route(message({ allowedProfiles: ['glm'] }), { eligible: [eligible('a', 50), eligible('b', 5)], attempt: 0 }))
+      .toEqual({ kind: 'member', sessionId: 'a' })
+    expect(await roleRouter().route(message({ allowedProfiles: ['claude'] }), { eligible: [eligible('a', 50), eligible('b', 5)], attempt: 0 }))
+      .toEqual({ kind: 'member', sessionId: 'b' })
+    // profile-order ranks by the role's order: [glm, claude] prefers a.
+    def = group('profiles: [claude, glm]\nstrategy: profile-order')
+    expect(await roleRouter().route(message({ allowedProfiles: ['glm', 'claude'] }), { eligible: [eligible('a', 5), eligible('b', 50)], attempt: 0 }))
+      .toEqual({ kind: 'member', sessionId: 'a' })
+    // No profile of the role is present: no candidate at all.
+    expect(await roleRouter().route(message({ allowedProfiles: ['mimo'] }), { eligible: [eligible('a', 50), eligible('b', 5)], attempt: 0 }))
+      .toMatchObject({ kind: 'none' })
+  })
+
+  test('a rule reads the author-profile tag and picks another family (§9.4)', async () => {
+    rule = async ctx => {
+      const authors = ctx.message.tags?.filter(tag => tag.startsWith('author-profile:')) ?? []
+      const excluded = new Set(authors.map(tag => tag.replace('author-profile:', '')))
+      const pick = ctx.candidates.find(candidate => candidate.kind === 'member' && !excluded.has(candidate.profileId))
+      return pick ? { type: 'pick', candidateId: pick.id } : { type: 'default' }
+    }
+    const result = await roleRouter().route(
+      message({ tags: ['review', 'author-profile:glm'] }),
+      { eligible: [eligible('a', 50), eligible('b', 5)], attempt: 0 },
+    )
+    expect(result).toEqual({ kind: 'member', sessionId: 'b' })
+    expect(ruleCalls[0]!.message.tags).toContain('author-profile:glm')
+  })
+
+  test('without a rule the tags are metadata and the built-in strategy routes as usual', async () => {
+    expect(await roleRouter().route(
+      message({ tags: ['review', 'author-profile:glm'] }),
+      { eligible: [eligible('a', 50), eligible('b', 5)], attempt: 0 },
+    )).toEqual({ kind: 'member', sessionId: 'a' })
+  })
+})

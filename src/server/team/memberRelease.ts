@@ -10,7 +10,8 @@
 import type { Database } from 'bun:sqlite'
 import { logger } from '../logger'
 import type { ChatSessionRecord } from '../db'
-import type { JournalAuthor, TaskActor, TaskStatus, TeamTask } from '../../shared/teamTasks'
+import type { ActingParty } from '../../shared/team'
+import type { JournalAuthor, TaskStatus, TeamTask } from '../../shared/teamTasks'
 import type { GroupDefinition } from './groupFile'
 import type { MailboxStore } from './mailboxStore'
 import type { TaskStore } from './taskStore'
@@ -137,7 +138,7 @@ export class MemberRelease {
    * its undelivered worktree mail on the way into `done`/`cancelled`, and
    * cancelling pending releases on the way out.
    */
-  async transitionHook(task: TeamTask, status: TaskStatus, actor: TaskActor): Promise<() => void> {
+  async transitionHook(task: TeamTask, status: TaskStatus, actor: ActingParty): Promise<() => void> {
     if (isClosed(status) && !isClosed(task.status)) {
       // Definitions resolve per group id while we can await; everything that
       // can change during that window (a dispatch pass claiming and pushing

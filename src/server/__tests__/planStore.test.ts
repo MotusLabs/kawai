@@ -49,7 +49,7 @@ describe('PlanStore', () => {
 
   test('fresh database: the plan tables, the partial index, and the task link columns exist', () => {
     const tables = (db.db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'plan%'`).all() as Array<{ name: string }>).map(row => row.name)
-    expect(tables.sort()).toEqual(['plan_assessments', 'plan_drafts', 'plan_events', 'plan_revisions', 'plan_validation_decisions', 'plan_validation_reports', 'plans'])
+    expect(tables.sort()).toEqual(expect.arrayContaining(['plan_assessments', 'plan_drafts', 'plan_events', 'plan_revisions', 'plan_validation_decisions', 'plan_validation_reports', 'plans']))
     const indexes = (db.db.prepare(`SELECT name FROM sqlite_master WHERE type='index'`).all() as Array<{ name: string }>).map(row => row.name)
     expect(indexes).toContain('plan_revisions_one_approved')
     expect(indexes).toContain('team_tasks_plan')

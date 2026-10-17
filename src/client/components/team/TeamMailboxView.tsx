@@ -77,7 +77,7 @@ function searchableText(row: TeamMessage, reason: WaitingReason | undefined, ses
     }
   }
   return [
-    row.fromSession ?? '', row.fromGroup ?? '',
+    row.fromSession ?? (row.fromKind === 'system' ? 'Kawai' : ''), row.fromGroup ?? '',
     row.toKind === 'human' ? 'Human' : row.toId,
     ...named,
     row.body, blockerLine(row, reason),
@@ -187,7 +187,7 @@ function MailboxRow({ row, now, view, teamPath, sendMessage, connected, groups, 
   onToggle: () => void
 }) {
   const reason = view.waiting?.[row.id]
-  const from = `${row.fromSession ?? 'Human'}${row.fromGroup ? ` (${row.fromGroup})` : ''}`
+  const from = `${row.fromSession ?? (row.fromKind === 'system' ? 'Kawai' : 'Human')}${row.fromGroup ? ` (${row.fromGroup})` : ''}`
   const to = row.toKind === 'human' ? 'Human' : `${row.toKind}: ${row.toId}`
   const age = `${Math.max(0, Math.floor((now - Date.parse(row.createdAt)) / 60000))}m ago`
   const firstLine = row.body.split('\n')[0] ?? ''

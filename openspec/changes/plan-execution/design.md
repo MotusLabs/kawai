@@ -18,6 +18,20 @@ What this change builds on:
 - **Git and GitHub.** `runGitAsync` runs argument-array git with a timeout and bounded output. `createChangeWorktree` branches `.worktrees/<change>` from the main worktree's HEAD, seeds untracked change artifacts with a commit, and adopts an unassigned existing branch. Nothing in `src/` pushes, merges, or runs `gh`.
 - **Security rules.** Agents and Kawai send data only to model providers, the GitHub remote, and internal cluster services. Outbound actions are recorded, not blocked.
 
+### Reconciliation with the merged changes (task 1.1)
+
+These names were read on master `cf3ec663`, after `durable-plans`, `strategy-revision-impact`, and `plan-validation` had merged.
+- **Unchanged:**
+  - `PlanContent`, `PlanService`, `plan_events`, `planProgress`, `PLAN_CHECK_FLOOR`, `team-plan-result`, and `team-plan-detail` (durable-plans);
+  - `ValidationService.prepareStanding(planId, revision)`, the `resolve-condition` decision kind, and the `validation-current` precondition, appended last by `planComposition.ts` (plan-validation);
+  - `ImpactService.gate(planId, revision)`, which returns `ImpactGate | null` (strategy-revision-impact).
+- **Where the names live:**
+  - `carriedConditions` is a field of the report's `readiness` (`PlanValidationReport.readiness.carriedConditions`). Each entry is `{ target, text, gate: 'start' | 'acceptance', resolved }`. `target` is `<alignment assessment id>#<condition index>`, and `resolved` is already derived from the `resolve-condition` decisions. D4 and D13 read `resolved` from a standing recomputed at the time, not from the stored report.
+  - `PlanEvent.actor` already admits `{ kind: 'system' }`, so `completed` by `system` needs no type change. `PlanService`'s own caller type is `PlanCaller` (`agent | human`) and stays so. `completeBySystem` takes no caller.
+  - Replay runs through `runPlanCommand` (`planCommands.ts`). Its `CommandPayload.command` gains `execution-start`, `execution-stop`, `change-retry`, and `complete-by-system`.
+  - The task system caller is added to `TaskCaller` in `src/server/team/TaskService.ts`, beside `agent` and `human`.
+- **Migration.** D3's tables and column arrive as the next numbered entry of `MIGRATIONS` (`src/server/dbSafety/migrations.ts`, execution-safety-recovery D13), named `plan-execution`, and never as a baseline edit. Its version is the next free one when PR A is cut. `executionSchema.ts` holds the SQL. Stores never create tables; tests use `schemaDb()`.
+
 ## Goals / Non-Goals
 
 **Goals:**

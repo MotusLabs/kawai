@@ -24,7 +24,7 @@ import type { WaitingConstraint } from '../../shared/team'
 import type { TeamMessage } from './mailboxStore'
 import { MailboxStore } from './mailboxStore'
 import { messageEnvelope } from './envelope'
-import { memberExclusions, type MemberExclusion, type MemberExclusionKind } from './memberCauses'
+import { memberExclusions, messageExclusions, type MemberExclusion, type MemberExclusionKind } from './memberCauses'
 
 export interface MailRecipient {
   sessionId: string
@@ -278,6 +278,8 @@ export class MailDispatcher {
           else if (cause.kind === 'busy') constraints.push({ kind: 'recipient-busy' })
           else if (cause.kind === 'excluded-profile') {
             constraints.push({ kind: 'recipient-unavailable', detail: `the recipient is on the excluded profile ${message.excludedProfile}` })
+          } else if (cause.kind === 'outside-role') {
+            constraints.push({ kind: 'outside-role', ...(cause.detail ? { detail: cause.detail } : {}) })
           } else if (cause.kind === 'profile-cooling') {
             constraints.push({ kind: 'profile-cooling', ...(row.cooldownUntil ? { retryAt: row.cooldownUntil } : {}) })
           }
@@ -351,30 +353,16 @@ export class MailDispatcher {
    * the pass began.
    */
   private exclusionsFor(message: TeamMessage): MemberExclusion[] {
-    const eligible = new Set(this.eligibleFor(message).map(row => row.sessionId))
-    const target = this.targetOf(message)
     const failure = this.startFailures.get(message.id)
-    const out: MemberExclusion[] = []
-    for (const row of this.options.recipients()) {
-      if (row.teamId !== message.teamId || row.groupId !== message.toId) continue
-      // A member on the excluded profile passes `eligibleFor` (the candidate
-      // builder drops it instead), so its breakdown entry is added here.
-      if (eligible.has(row.sessionId)) {
-        if (message.excludedProfile && (row.profileId ?? 'default') === message.excludedProfile) {
-          out.push({ sessionId: row.sessionId, kind: 'excluded-profile' })
-        }
-        continue
-      }
-      const causes = memberExclusions(row, message, { targetWorktree: target, now: this.now(), startupFailed: this.failedThisPass.has(row.sessionId) })
-      // Cooling is never a breakdown cause (it is the separate all-profiles-
-      // cooling constraint); every other cause — excluded profile included —
-      // names this member's reason for not taking the message. A start
-      // failure carries its error text for the standalone constraint.
-      const cause = causes.find(entry => entry.kind !== 'profile-cooling')
-        ?? causes[0] ?? { sessionId: row.sessionId, kind: 'busy' as const, detail: 'became idle after this pass began' }
-      out.push(cause.kind === 'startup-failed' && failure?.sessionId === cause.sessionId ? { ...cause, detail: failure.error } : cause)
-    }
-    return out
+    return messageExclusions({
+      message,
+      recipients: this.options.recipients(),
+      eligibleIds: new Set(this.eligibleFor(message).map(row => row.sessionId)),
+      targetWorktree: this.targetOf(message),
+      startFailure: failure ?? null,
+      now: this.now(),
+      startupFailed: sessionId => this.failedThisPass.has(sessionId),
+    })
   }
 
   private async routeOne(message: TeamMessage) {

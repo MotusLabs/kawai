@@ -9,6 +9,8 @@
 // every read as `task_revision < team_tasks.revision` (task-revision-
 // publication D8's row rule): never stored, so nothing can miss an event.
 // The store is policy-free; TaskResultService decides who may do what.
+import type { ActingParty } from '../../shared/team'
+import { actorFromRow, partyFromRow } from './actorRow'
 import type { Database } from 'bun:sqlite'
 import type { TaskActor, TaskFindings, TaskResult, TaskTestClaim } from '../../shared/teamTasks'
 
@@ -38,8 +40,7 @@ export interface FindingsInsert {
 
 const nowIso = () => new Date().toISOString()
 const text = (value: unknown) => (value === null || value === undefined ? null : String(value))
-const actorOf = (kind: unknown, session: unknown): TaskActor =>
-  kind === 'agent' && typeof session === 'string' ? { kind: 'agent', sessionId: session } : { kind: 'human', sessionId: null }
+const actorOf = actorFromRow
 
 function parseTests(value: unknown): TaskTestClaim[] {
   try {
@@ -86,7 +87,7 @@ export class TaskResultStore {
   }
 
   /** Mark one result accepted (D5); runs inside the acceptance transaction. */
-  markAccepted(resultId: string, actor: TaskActor, now = nowIso()): boolean {
+  markAccepted(resultId: string, actor: ActingParty, now = nowIso()): boolean {
     return this.db.prepare('UPDATE team_task_results SET accepted_by_kind = ?, accepted_by_session = ?, accepted_at = ? WHERE id = ?')
       .run(actor.kind, actor.sessionId, now, resultId).changes === 1
   }
@@ -163,7 +164,7 @@ export class TaskResultStore {
       submittedBy: actorOf(row.submitted_by_kind, row.submitted_by_session),
       supersedesResultId: text(row.supersedes_result_id),
       supersededBy: superseding?.id ?? null,
-      acceptedBy: row.accepted_at === null ? null : actorOf(row.accepted_by_kind, row.accepted_by_session),
+      acceptedBy: row.accepted_at === null ? null : partyFromRow(row.accepted_by_kind, row.accepted_by_session),
       acceptedAt: text(row.accepted_at),
       needsReevaluation: current !== null && taskRevision < current.revision,
       findings: this.findingsFor(id),

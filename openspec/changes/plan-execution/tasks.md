@@ -4,12 +4,12 @@ Implement after `durable-plans`, `strategy-revision-impact`, and `plan-validatio
 
 ## 1. Shared model
 
-- [ ] 1.1 Reconcile names with the merged designs and record any renames in this design before coding. Verify by reading the merged `durable-plans` D7–D13, `plan-validation` D2/D7/D9/D12, and `strategy-revision-impact` D11 against D3, D4, D13, and D19 here:
+- [x] 1.1 Reconcile names with the merged designs and record any renames in this design before coding. Verify by reading the merged `durable-plans` D7–D13, `plan-validation` D2/D7/D9/D12, and `strategy-revision-impact` D11 against D3, D4, D13, and D19 here:
   - `durable-plans`: `PlanContent`, `PlanService`, `plan_events`, `planProgress`, `PLAN_CHECK_FLOOR`, and `team-plan-result`/`team-plan-detail`;
   - `plan-validation`: `prepareStanding`, `carriedConditions`, `resolve-condition`, and the `validation-current` entry;
   - `strategy-revision-impact`: `ImpactService.gate`.
-- [ ] 1.2 Create `src/shared/planExecution.ts` with the D3 state and stop-reason unions, `CiCheck`, `AttemptManifest` (D8), the view types, and `FLOOR_VERSION = 1`. Verify with a typecheck and a unit test that the manifest hash is stable under key order.
-- [ ] 1.3 Implement `evaluateCi` (D10). Verify with unit tests:
+- [x] 1.2 Create `src/shared/planExecution.ts` with the D3 state and stop-reason unions, `CiCheck`, `AttemptManifest` (D8), the view types, and `FLOOR_VERSION = 1`. Verify with a typecheck and a unit test that the manifest hash is stable under key order.
+- [x] 1.3 Implement `evaluateCi` (D10). Verify with unit tests:
   - all pass, and pass with `neutral` and `skipped`;
   - pending inside the window;
   - `ci-missing` with no checks after 30 minutes, and with an uncovered floor check after everything finished;
@@ -19,7 +19,7 @@ Implement after `durable-plans`, `strategy-revision-impact`, and `plan-validatio
   - flaky after a passing rerun, and fail after a second failure;
   - the newest run of a name decides;
   - a non-floor check counts.
-- [ ] 1.4 Implement `reviewVerdict` and `splitExtraChecks` (D11). Verify with unit tests:
+- [x] 1.4 Implement `reviewVerdict` and `splitExtraChecks` (D11). Verify with unit tests:
   - a claimant `pass`;
   - an author's own `pass` ignored;
   - a non-claimant's findings ignored;
@@ -28,7 +28,7 @@ Implement after `durable-plans`, `strategy-revision-impact`, and `plan-validatio
   - a `fail` fails;
   - findings on another result ignored;
   - extra checks split by reported names.
-- [ ] 1.5 Implement `fixRoundOutcome` (D12) and `executionProgress` (D17). Verify with unit tests:
+- [x] 1.5 Implement `fixRoundOutcome` (D12) and `executionProgress` (D17). Verify with unit tests:
   - the implementation round does not count;
   - three failed fix rounds stop;
   - a pass resets the count;
@@ -39,37 +39,37 @@ Implement after `durable-plans`, `strategy-revision-impact`, and `plan-validatio
 
 ## 2. Kawai as a system actor
 
-- [ ] 2.1 Add `SystemActor` and widen the task creator, assignment dispatcher, and message sender types, with `from_kind = 'system'`. Add the system `TaskCaller` minted only inside `src/server/plans/execution/`. Rewrite the comment in `src/shared/teamTasks.ts` that records member-release D4 ("the system is never a sender or task creator"), so it states D2's rights instead. Verify with a typecheck, and with a test that no tool handler or WebSocket connection path can construct a system caller.
-- [ ] 2.2 Convert every two-way actor branch in `TaskService`, `AssignmentService`, `TaskResultService`, `MemberRelease`, `TaskRelease`, the mailbox enqueue and sender paths, and the row mappers (`taskStore`, `assignmentStore`, `messageRow`) to exhaustive switches. Verify with tests that call each service with a system caller and read back `system` as creator, dispatcher, and sender, never the human.
-- [ ] 2.3 Keep the human-only paths refusing `system`: publish, notify, Release, plan approve, withdraw, close, and reopen, strategy actions, and validation decisions. Verify with one refusal test per path.
-- [ ] 2.4 Render "Kawai" as creator, dispatcher, sender, and journal author in the task list and detail, the assignment history, the Mailbox, the Messages view, and peer-message rows. It is never a link. Verify with component tests.
+- [x] 2.1 Add `SystemActor` and widen the task creator, assignment dispatcher, and message sender types, with `from_kind = 'system'`. Rewrite the comment in `src/shared/teamTasks.ts` that records member-release D4 ("the system is never a sender or task creator"), so it states D2's rights instead. Verify with a typecheck.
+- [x] 2.2 Convert every two-way actor branch in `TaskService`, `AssignmentService`, `TaskResultService`, `MemberRelease`, `TaskRelease`, the mailbox enqueue and sender paths, and the row mappers (`taskStore`, `assignmentStore`, `messageRow`) to exhaustive switches. Verify with tests that call each service with a system caller and read back `system` as creator, dispatcher, and sender, never the human.
+- [x] 2.3 Keep the human-only paths refusing `system`: publish, notify, Release, plan approve, withdraw, close, and reopen, strategy actions, and validation decisions. Verify with one refusal test per path.
+- [x] 2.4 Render "Kawai" as creator, dispatcher, sender, and journal author in the task list and detail, the assignment history, the Mailbox, the Messages view, and peer-message rows. It is never a link. Verify with component tests.
 
 ## 3. Records
 
-- [ ] 3.1 Add the D3 migration: seven tables including `plan_landing_slots`, the partial unique indexes, the nullable effect `change`, and `team_messages.allowed_profiles`. Verify with a migration test on an existing database: tables created, old rows intact, rerun idempotent.
-- [ ] 3.2 Implement `executionStore.ts`: inserts, transitions guarded by `state` and `generation`, owned-change lookups, taking and releasing the slot row in the transitions that enter and leave landing, clearing an orphan slot row (D3), and constraint errors mapped to `one-execution`, `changes-unclaimed`, and slot taken. Verify with unit tests, including two racing inserts per index, two racing slot takes, and a slot row held by a change outside `landing` cleared at startup and when the slot is found taken.
-- [ ] 3.3 Add `PlanService.recordExecutionEvent` for the kinds `execution-started`, `execution-stopped`, and `change-retried`, with the D3 compared payloads, and `completed` with actor `system` under the command id `exec:<id>:complete`. Verify with replay tests: same payload returns the prior result; a different payload is refused naming the field; a repeated completion writes one event. Verify with a grep test that only `PlanService`'s store writes `plan_events`.
+- [x] 3.1 Add the D3 migration: seven tables including `plan_landing_slots`, the partial unique indexes, the nullable effect `change`, and `team_messages.allowed_profiles`. Verify with a migration test on an existing database: tables created, old rows intact, rerun idempotent.
+- [x] 3.2 Implement `executionStore.ts`: inserts, transitions guarded by `state` and `generation`, owned-change lookups, taking and releasing the slot row in the transitions that enter and leave landing, clearing an orphan slot row (D3), and constraint errors mapped to `one-execution`, `changes-unclaimed`, and slot taken. Verify with unit tests, including two racing inserts per index, two racing slot takes, and a slot row held by a change outside `landing` cleared at startup and when the slot is found taken.
+- [x] 3.3 Add `PlanService.recordExecutionEvent` for the kinds `execution-started`, `execution-stopped`, and `change-retried`, with the D3 compared payloads, and `completed` with actor `system` under the command id `exec:<id>:complete`. Verify with replay tests: same payload returns the prior result; a different payload is refused naming the field; a repeated completion writes one event. Verify with a grep test that only `PlanService`'s store writes `plan_events`.
 
 ## 4. Settings
 
-- [ ] 4.1 Extend `TeamCaps` with `planExecution(teamId)` (D16): top-level default, per-team override, the floor-name and value checks, and errors through the existing log. Verify with unit tests for valid, missing, malformed, and unknown-key files, and that a missing floor map yields no default.
+- [x] 4.1 Extend `TeamCaps` with `planExecution(teamId)` (D16): top-level default, per-team override, the floor-name and value checks, and errors through the existing log. Verify with unit tests for valid, missing, malformed, and unknown-key files, and that a missing floor map yields no default.
 
 ## 5. Git and GitHub adapters
 
-- [ ] 5.1 Implement `ghCommand.ts`: argument-array `gh` with a timeout, bounded output, and token redaction in recorded output. Verify with tests against a stub `gh`: timeout, output cap, exit codes, and redaction.
-- [ ] 5.2 Implement `gitRemote.ts`: fetch, `ls-remote`, fast-forward push (never `--force`), worktree add and remove (never `--force`), ancestry, and `merge-tree --name-only`. Verify against a local bare `origin`: a non-fast-forward push is rejected and left as it was; conflicting files are listed; the main checkout's HEAD and index are untouched.
-- [ ] 5.3 Implement `github.ts`: PR list, create, and view; check-runs and statuses for a commit; `run rerun --failed`; `update-branch` with `expected_head_sha`; and `pr merge --match-head-commit`. Verify with the stub `gh` replaying recorded API responses for every call, including 202, 422, 403, and 5xx.
-- [ ] 5.4 Classify outcomes as success, transient, or permanent (D14). Verify with a table test over the adapters' error shapes.
+- [x] 5.1 Implement `ghCommand.ts`: argument-array `gh` with a timeout, bounded output, and token redaction in recorded output. Verify with tests against a stub `gh`: timeout, output cap, exit codes, and redaction.
+- [x] 5.2 Implement `gitRemote.ts`: fetch, `ls-remote`, fast-forward push (never `--force`), worktree add and remove (never `--force`), ancestry, and `merge-tree --name-only`. Verify against a local bare `origin`: a non-fast-forward push is rejected and left as it was; conflicting files are listed; the main checkout's HEAD and index are untouched.
+- [x] 5.3 Implement `github.ts`: PR list, create, and view; check-runs and statuses for a commit; `run rerun --failed`; `update-branch` with `expected_head_sha`; and `pr merge --match-head-commit`. Verify with the stub `gh` replaying recorded API responses for every call, including 202, 422, 403, and 5xx.
+- [x] 5.4 Classify outcomes as success, transient, or permanent (D14). Verify with a table test over the adapters' error shapes.
 
 ## 6. Probe and base checks
 
-- [ ] 6.1 Implement `landingProbe.ts` (plan-landing "landing probe"). It checks git, a GitHub `origin`, `gh auth status`, write permission, the default branch, the floor map, and names taken locally, on `origin`, or as worktrees, unless provisioned by the plan. Verify with tests for each finding, and that the probe writes nothing (refs and worktree list unchanged).
-- [ ] 6.2 Implement the `changes-on-base` comparison (D4). Compare `git hash-object` blob ids of the validated files and touched base specs with `origin`'s tree. Verify with tests: a change only in the main checkout, a design edited on `origin`, and equal content.
+- [x] 6.1 Implement `landingProbe.ts` (plan-landing "landing probe"). It checks git, a GitHub `origin`, `gh auth status`, write permission, the default branch, the floor map, and names taken locally, on `origin`, or as worktrees, unless provisioned by the plan. Verify with tests for each finding, and that the probe writes nothing (refs and worktree list unchanged).
+- [x] 6.2 Implement the `changes-on-base` comparison (D4). Compare `git hash-object` blob ids of the validated files and touched base specs with `origin`'s tree. Verify with tests: a change only in the main checkout, a design edited on `origin`, and equal content.
 
 ## 7. Start, preview, and the preconditions
 
-- [ ] 7.1 Implement `START_PRECONDITIONS` (D4) with every entry. Verify with one test per entry passing and failing, and with a test that every failing entry is reported at once.
-- [ ] 7.2 Implement `ExecutionService.preview` and `start`: agent refusal, pre-reads, then one transaction for replay, preconditions, rows, and the event, followed by an executor wake. Verify with tests:
+- [x] 7.1 Implement `START_PRECONDITIONS` (D4) with every entry. Verify with one test per entry passing and failing, and with a test that every failing entry is reported at once.
+- [x] 7.2 Implement `ExecutionService.preview` and `start`: agent refusal, pre-reads, then one transaction for replay, preconditions, rows, and the event, followed by an executor wake. Verify with tests:
   - a lost result replays;
   - a different payload under the same command id is refused naming the field;
   - two racing Starts leave one execution;
@@ -79,31 +79,31 @@ Implement after `durable-plans`, `strategy-revision-impact`, and `plan-validatio
 
 ## 8. Ownership guards and the agent surface in team services
 
-- [ ] 8.1 Add `ExecutionOwnership` and its null implementation. Wire it into `TaskService.create`, `AssignmentService.dispatch`, `TaskResultService.handoff` and `submit`, `TaskRelease.release`, and the reply paths. Verify with tests that the team services build and pass without the plans module.
-- [ ] 8.2 Make the system create path link to the execution's revision. Refuse other links to an owned change, for the human and for agents. Verify with the `team-tasks` delta scenarios.
-- [ ] 8.3 Refuse non-system dispatch and reassignment onto an owned task. Accept `allowedProfiles` and `tags` from the system caller only. Verify with the `task-assignment` delta scenarios, and that an agent cannot pass `allowedProfiles`.
-- [ ] 8.4 Refuse non-system handoffs and Release on owned tasks, while still accepting findings. Add the result submission checks (D9), refusing results only while the change is `updating` or `merging`. Verify with the `task-results` delta scenarios, that a refused result writes nothing, and that a result submitted while the change waits at `conditions` is accepted.
-- [ ] 8.5 Refuse replies to Kawai's mail with `KAWAI_REPLY_GUIDANCE`, in the `reply` tool and the human composer. Verify with the `agent-mailbox` delta scenarios.
-- [ ] 8.6 Add `execution: { id, revision }` to the task envelope for owned tasks (`taskContext.ts`). Verify with tests: the execution's revision differs from the current approved one, and unowned tasks keep their shape.
+- [x] 8.1 Add `ExecutionOwnership` and its null implementation. Wire it into `TaskService.create`, `AssignmentService.dispatch`, `TaskResultService.handoff` and `submit`, `TaskRelease.release`, and the reply paths. Verify with tests that the team services build and pass without the plans module.
+- [x] 8.2 Make the system create path link to the execution's revision. Refuse other links to an owned change, for the human and for agents. Verify with the `team-tasks` delta scenarios.
+- [x] 8.3 Refuse non-system dispatch and reassignment onto an owned task. Accept `allowedProfiles` and `tags` from the system caller only. Verify with the `task-assignment` delta scenarios, and that an agent cannot pass `allowedProfiles`.
+- [x] 8.4 Refuse non-system handoffs and Release on owned tasks, while still accepting findings. Add the result submission checks (D9), refusing results only while the change is `updating` or `merging`. Verify with the `task-results` delta scenarios, that a refused result writes nothing, and that a result submitted while the change waits at `conditions` is accepted.
+- [x] 8.5 Refuse replies to Kawai's mail with `KAWAI_REPLY_GUIDANCE`, in the `reply` tool and the human composer. Verify with the `agent-mailbox` delta scenarios.
+- [x] 8.6 Add `execution: { id, revision }` to the task envelope for owned tasks (`taskContext.ts`). Verify with tests: the execution's revision differs from the current approved one, and unowned tasks keep their shape.
 
 ## 9. Routing
 
-- [ ] 9.1 Carry `allowed_profiles` through `EnqueueInput`, the store, and forwarding (`routing/handoff.ts`). Verify with tests: stored on system mail; copied on forward with the limited profile excluded.
-- [ ] 9.2 Filter `buildCandidates` by `allowedProfiles`: the `outside-role` exclusion, spawn slots only for allowed profiles in the role's order, and `profile-order` by the role's order. Verify with the `team-routing-rules` delta scenarios and the existing routing suite.
-- [ ] 9.3 Add the `outside-role` waiting reason. Verify with a waiting-reasons test: a message with every role profile cooling names the role's profiles.
-- [ ] 9.4 Tag review handoffs with `author-profile:<id>`, and document the tags and `allowed_profiles` in `docs/routing/README.md`. Verify with a router test in which a rule reads the tag and picks another profile.
+- [x] 9.1 Carry `allowed_profiles` through `EnqueueInput`, the store, and forwarding (`routing/handoff.ts`). Verify with tests: stored on system mail; copied on forward with the limited profile excluded.
+- [x] 9.2 Filter `buildCandidates` by `allowedProfiles`: the `outside-role` exclusion, spawn slots only for allowed profiles in the role's order, and `profile-order` by the role's order. Verify with the `team-routing-rules` delta scenarios and the existing routing suite.
+- [x] 9.3 Add the `outside-role` waiting reason. Verify with a waiting-reasons test: a message with every role profile cooling names the role's profiles.
+- [x] 9.4 Tag review handoffs with `author-profile:<id>`, and document the tags and `allowed_profiles` in `docs/routing/README.md`. Verify with a router test in which a rule reads the tag and picks another profile.
 
 ## 10. Effects runner
 
-- [ ] 10.1 Implement `effects.ts` (D14): mark running, call with a timeout, commit the outcome with its follow-on transition, back off transient failures 3 times, fail permanent ones, and cancel effects on Stop. Verify with unit tests over a fake adapter: success, transient then success, three transients, permanent, and a cancelled effect never run.
-- [ ] 10.2 Implement startup recovery and the per-kind inspectors in the D14 table. Verify with one test per kind for found done, not done, and an undecidable inspection (`effect-unknown`), including a merge that completed before the restart.
+- [x] 10.1 Implement `effects.ts` (D14): mark running, call with a timeout, commit the outcome with its follow-on transition, back off transient failures 3 times, fail permanent ones, and cancel effects on Stop. Verify with unit tests over a fake adapter: success, transient then success, three transients, permanent, and a cancelled effect never run.
+- [x] 10.2 Implement startup recovery and the per-kind inspectors in the D14 table. Verify with one test per kind for found done, not done, and an undecidable inspection (`effect-unknown`), including a merge that completed before the restart.
 
 ## 11. Executor, provisioning, and the first dispatch
 
 - [ ] 11.1 Implement `ExecutionExecutor` (D5): the wake sources, single-flight per team, the 60-second timer while running, and the pure `planSteps`. Verify with tests: concurrent wakes run one tick; a tick after a restart resumes from stored rows.
 - [ ] 11.2 Implement scheduling: plan order, landed dependencies, the parallel limit, and a stopped dependency holding its dependents. Verify with the `plan-execution` scheduling scenarios.
 - [ ] 11.3 Implement the provision effect (D6): branch from `origin`'s base, refuse `name-taken`, and reuse worktrees and branches from earlier executions. Verify against a bare `origin`, including a foreign remote branch left untouched.
-- [ ] 11.4 Create Kawai's task and dispatch the implement attempt with its manifest and request key (D7, D8). Verify with tests: task fields, link, assignment dispatcher, `allowed_profiles` on the mail, and a replayed dispatch step yielding one instruction.
+- [ ] 11.4 Create Kawai's task and dispatch the implement attempt with its manifest and request key (D7, D8). Mint the system `TaskCaller` only inside `src/server/plans/execution/` (deferred from 2.1 by the review). Verify with tests: task fields, link, assignment dispatcher, `allowed_profiles` on the mail, a replayed dispatch step yielding one instruction, and that no tool handler or WebSocket connection path can construct a system caller.
 
 ## 12. Rounds and the gate
 

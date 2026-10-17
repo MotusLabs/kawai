@@ -12,7 +12,8 @@
 // sender columns it reads are `team-message-threads`', used as shipped.
 import type { Database } from 'bun:sqlite'
 import type { MessageState, TeamMessage } from '../../shared/team'
-import type { TaskActor, TaskHandoffKind, TeamTaskAssignment } from '../../shared/teamTasks'
+import type { TaskCreator, TaskHandoffKind, TeamTaskAssignment } from '../../shared/teamTasks'
+import { partyFromRow } from './actorRow'
 import { TASK_HANDOFF_KINDS } from '../../shared/teamTasks'
 import type { MailboxStore } from './mailboxStore'
 import { migrateHandoffColumns } from './taskResultSchema'
@@ -52,7 +53,7 @@ export interface DispatchInsert {
   /** The requested role: the group id when one is known; null for a groupless session. */
   role: string | null
   instruction: string
-  creator: TaskActor
+  creator: TaskCreator
   /** The enqueued instruction mail, once the dispatch transaction adds it. */
   messageId?: string | null
   /** A handoff's kind, referenced result, and expected response (task-results-handoffs D1). */
@@ -194,9 +195,7 @@ export class AssignmentStore {
     const raw = this.db.prepare('SELECT * FROM team_task_assignments WHERE id = ?').get(id) as Record<string, unknown> | null
     if (!raw) return null
     const message = raw.message_id === null ? null : this.mail?.get(String(raw.message_id)) ?? null
-    const actor: TaskActor = raw.created_by_kind === 'agent' && typeof raw.created_by_session === 'string'
-      ? { kind: 'agent', sessionId: raw.created_by_session }
-      : { kind: 'human', sessionId: null }
+    const actor = partyFromRow(raw.created_by_kind, raw.created_by_session)
     const { state, reason } = assignmentState({ supersededBy: raw.superseded_by === null ? null : String(raw.superseded_by) }, message)
     return {
       id: String(raw.id),
