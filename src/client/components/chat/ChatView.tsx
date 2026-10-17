@@ -79,9 +79,19 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
   const end = useRef<HTMLDivElement>(null)
   const connected = connectionStatus === 'connected'
   const archived = session.archivedAt != null
+  // Where this view's last attach landed (chat-history-window D3): the same
+  // session re-running the effect is a reconnect, which resumes from the
+  // window start the client still holds; a different session is an open,
+  // which widens only what the user expanded in this page load.
+  const lastAttachedRef = useRef<string | null>(null)
   useEffect(() => {
     if (!connected) return
-    sendMessage({ type: 'chat-attach', sessionId: session.id })
+    const held = useChatStore.getState().sessions[session.id]
+    const resume =
+      lastAttachedRef.current === session.id || held?.historyExpanded === true
+    const historyFrom = resume ? held?.historyStartId ?? undefined : undefined
+    lastAttachedRef.current = session.id
+    sendMessage({ type: 'chat-attach', sessionId: session.id, ...(historyFrom !== undefined ? { historyFrom } : {}) })
     return () => sendMessage({ type: 'chat-detach', sessionId: session.id })
   }, [session.id, connected, connectionEpoch, sendMessage])
   const debug = useChatDebugStore(state => state.views[session.id]) ?? CLOSED_DEBUG
