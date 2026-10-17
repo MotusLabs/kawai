@@ -100,10 +100,10 @@ Implement after `durable-plans`, `strategy-revision-impact`, and `plan-validatio
 
 ## 11. Executor, provisioning, and the first dispatch
 
-- [ ] 11.1 Implement `ExecutionExecutor` (D5): the wake sources, single-flight per team, the 60-second timer while running, and the pure `planSteps`. Verify with tests: concurrent wakes run one tick; a tick after a restart resumes from stored rows.
-- [ ] 11.2 Implement scheduling: plan order, landed dependencies, the parallel limit, and a stopped dependency holding its dependents. Verify with the `plan-execution` scheduling scenarios.
-- [ ] 11.3 Implement the provision effect (D6): branch from `origin`'s base, refuse `name-taken`, and reuse worktrees and branches from earlier executions. Verify against a bare `origin`, including a foreign remote branch left untouched.
-- [ ] 11.4 Create Kawai's task and dispatch the implement attempt with its manifest and request key (D7, D8). Mint the system `TaskCaller` only inside `src/server/plans/execution/` (deferred from 2.1 by the review). Verify with tests: task fields, link, assignment dispatcher, `allowed_profiles` on the mail, a replayed dispatch step yielding one instruction, and that no tool handler or WebSocket connection path can construct a system caller.
+- [x] 11.1 Implement `ExecutionExecutor` (D5): the wake sources, single-flight per team, the 60-second timer while running, and the pure `planSteps`. Verify with tests: concurrent wakes run one tick; a tick after a restart resumes from stored rows.
+- [x] 11.2 Implement scheduling: plan order, landed dependencies, the parallel limit, and a stopped dependency holding its dependents. Verify with the `plan-execution` scheduling scenarios.
+- [x] 11.3 Implement the provision effect (D6): branch from `origin`'s base, refuse `name-taken`, and reuse worktrees and branches from earlier executions. Verify against a bare `origin`, including a foreign remote branch left untouched.
+- [x] 11.4 Create Kawai's task and dispatch the implement attempt with its manifest and request key (D7, D8). Mint the system `TaskCaller` only inside `src/server/plans/execution/` (deferred from 2.1 by the review). Verify with tests: task fields, link, assignment dispatcher, `allowed_profiles` on the mail, a replayed dispatch step yielding one instruction, and that no tool handler or WebSocket connection path can construct a system caller.
 
 ## 12. Rounds and the gate
 

@@ -380,6 +380,19 @@ export class ExecutionStore {
     })()
   }
 
+  /**
+   * The done provision effects that created `branch` (D6): a name that
+   * exists is accepted only when one of these belongs to an execution of
+   * the same plan.
+   */
+  doneProvisions(branch: string): Array<{ executionId: string; command: Record<string, unknown> }> {
+    return (this.db.prepare(`SELECT * FROM plan_execution_effects WHERE kind = 'provision' AND state = 'done'`)
+      .all() as Array<Record<string, unknown>>)
+      .map(mapEffect)
+      .filter(effect => effect.command.branch === branch)
+      .map(effect => ({ executionId: effect.executionId, command: effect.command }))
+  }
+
   /** The due `unknown` effects, oldest first — inspected before anything else for their change runs (D14). */
   dueUnknownEffects(now: string): EffectRow[] {
     return (this.db.prepare(`SELECT e.* FROM plan_execution_effects e
