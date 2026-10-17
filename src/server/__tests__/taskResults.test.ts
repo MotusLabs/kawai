@@ -182,6 +182,7 @@ test('a contributor cannot accept a result of a human-created task: refused, and
   expect(accepted(result.id)).toBe(false)
   expect(tasks.store.journal(task.id)).toHaveLength(journal)
   expect(tasks.store.get(task.id)?.status).toBe('open')
+  expect(tasks.store.statusEvents(task.id)).toEqual([])
 })
 
 test('the human accepts: the mark, the journal entry, and done commit together, with the criteria shown', async () => {
@@ -206,8 +207,13 @@ test('the creating agent may accept; a failure inside the transaction leaves no 
   tasks.store.appendJournal = append
   expect(accepted(result.id)).toBe(false)
   expect(tasks.store.get(task.id)?.status).toBe('open')
+  expect(tasks.store.statusEvents(task.id)).toEqual([])
   await results.accept(agent('lead'), task.id, result.id)
   expect(tasks.store.get(task.id)?.status).toBe('done')
+  // Acceptance goes through the status update, so it records its own actor (team-process-metrics D3).
+  expect(tasks.store.statusEvents(task.id)).toEqual([
+    { fromStatus: 'open', toStatus: 'done', actor: { kind: 'agent', sessionId: 'lead' }, at: expect.any(String) },
+  ])
 })
 
 test('open child work and a flagged result need a journaled reason; a child\'s acceptance never closes its parent', async () => {

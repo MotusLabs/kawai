@@ -27,6 +27,7 @@ import type {
   ChatActivity,
   ChatApprovalDecision,
   ChatApprovalPolicy,
+  ChatTurnUsage,
   ChatBackgroundTask,
   ChatCommandState,
   ChatContextUsage,
@@ -98,6 +99,7 @@ import type { ChatProviderEnv } from './chatProviderEnv'
 import { ChatCommandTracker, type RawChatCommand } from './chatCommands'
 import { decideApproval } from './approvalPolicy'
 import { resolveClaudeProfile } from './ClaudeProfiles'
+import { logger } from '../logger'
 import { TurnQueue } from './TurnQueue'
 import { TEAM_ALLOWED_TOOLS } from '../team/mailboxTools'
 import { TEAM_MCP_SERVER } from '../team/teamPrompt'
@@ -121,6 +123,18 @@ export type ChatQueryFactory = (params: {
   options: Options
   wire?: ChatWireRecorder
 }) => Query
+
+/** What one spawn launched with, for agent-start provenance. */
+export interface ChatSpawnInfo {
+  cwd: string
+  systemPromptAppend: string
+  effort: Options['effort'] | null
+  /** The profile's model, null when Claude Code settings decide. */
+  model: string | null
+  /** The launch environment (the server's own when the profile sets none). */
+  env: Record<string, string | undefined>
+  resumed: boolean
+}
 
 export interface ChatSessionDriverOptions {
   /** Agentboard session id (chat-<uuid>); used for logging context only. */
@@ -161,6 +175,12 @@ export interface ChatSessionDriverOptions {
    * settings decide.
    */
   getEffort?: () => Options['effort']
+  /**
+   * Called once per constructed query with what this spawn launched with
+   * (team-process-metrics D2: agent-start provenance). Observational: a
+   * throw is logged and never affects the spawn.
+   */
+  onSpawn?: (info: ChatSpawnInfo) => void
   teamMcpServer?: NonNullable<Options['mcpServers']>[string]
   /**
    * Recovered roster rows (workers design D6) seeding a fresh driver, so
@@ -644,6 +664,15 @@ export class ChatSessionDriver {
     }
   }
 
+  private reportSpawn(info: ChatSpawnInfo): void {
+    if (!this.options.onSpawn) return
+    try {
+      this.options.onSpawn(info)
+    } catch (error) {
+      logger.warn('chat_spawn_hook_failed', { sessionId: this.options.sessionId, error: error instanceof Error ? error.message : String(error) })
+    }
+  }
+
   private spawnQuery(): void {
     const resume = this.capturedSdkSessionId ?? this.options.resumeSessionId
     const launch = resolveClaudeProfile(
@@ -723,6 +752,14 @@ export class ChatSessionDriver {
       return
     }
     this.query = query
+    this.reportSpawn({
+      cwd: this.sessionProjectPath,
+      systemPromptAppend: systemPromptAppend ?? '',
+      effort: effort ?? null,
+      model: typeof launchOptions.model === 'string' ? launchOptions.model : null,
+      env: launchOptions.env ?? process.env,
+      resumed: Boolean(resume),
+    })
     this.commands.beginLoading()
     void this.fetchInitializationCommands(query)
     void this.runQueryLoop(query)
@@ -1028,6 +1065,7 @@ export class ChatSessionDriver {
       subtype: message.subtype,
       totalCostUsd: message.total_cost_usd,
       numTurns: message.num_turns,
+      ...turnUsageOf(message),
       // Final text only on a success subtype.
       ...(message.subtype === 'success' ? { finalText: message.result } : {}),
     })
@@ -1602,5 +1640,23 @@ function validateAnswers(
     ok: true,
     answers: result,
     ...(response !== undefined ? { response } : {}),
+  }
+}
+
+/** The result's per-turn token counts (team-process-metrics D1); absent when the result carries none. */
+export function turnUsageOf(message: { usage?: unknown }): { usage?: ChatTurnUsage } {
+  const usage = message.usage
+  if (!usage || typeof usage !== 'object') return {}
+  const count = (key: string) => {
+    const value = (usage as Record<string, unknown>)[key]
+    return typeof value === 'number' && Number.isFinite(value) ? value : 0
+  }
+  return {
+    usage: {
+      inputTokens: count('input_tokens'),
+      outputTokens: count('output_tokens'),
+      cacheReadTokens: count('cache_read_input_tokens'),
+      cacheCreationTokens: count('cache_creation_input_tokens'),
+    },
   }
 }

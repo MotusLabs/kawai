@@ -133,7 +133,7 @@ const catalog = (): GroupCatalog => ({
       ],
       group: {
         id: 'devs', label: 'Developers', description: 'Build features', canCreateTasks: true, canCreatePlans: false,
-        releaseOnTaskClose: true, worktreeScoped: true, canReleaseMembers: true, canManageMailbox: false,
+        releaseOnTaskClose: true, worktreeScoped: true, canReleaseMembers: true, canReportProcess: false, canManageMailbox: false,
         max: 3, profiles: [{ profileId: 'glm', cap: 2 }, { profileId: 'default', cap: 1 }],
         strategy: 'first-available',
         onLimit: { parkIfResetWithinMs: 10_800_000, otherwise: 'forward', forwardTo: 'seniors' },

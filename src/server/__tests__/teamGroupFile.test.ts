@@ -36,7 +36,7 @@ describe('parseGroupFile', () => {
         canCreateTasks: false,
         releaseOnTaskClose: true,
         worktreeScoped: true,
-        canReleaseMembers: true,
+        canReleaseMembers: true, canReportProcess: false,
         max: 1,
         approval: 'manual',
         ...ROUTING_DEFAULTS,
@@ -48,7 +48,7 @@ describe('parseGroupFile', () => {
   test('a body-only file defaults the label to the id', () => {
     expect(parseGroupFile('qa', 'Test everything.\n')).toEqual({
       ok: true,
-      group: { id: 'qa', label: 'qa', description: '', canCreateTasks: false, releaseOnTaskClose: true, worktreeScoped: true, canReleaseMembers: true, max: 1, approval: 'manual', ...ROUTING_DEFAULTS, prompt: 'Test everything.' },
+      group: { id: 'qa', label: 'qa', description: '', canCreateTasks: false, releaseOnTaskClose: true, worktreeScoped: true, canReleaseMembers: true, canReportProcess: false, max: 1, approval: 'manual', ...ROUTING_DEFAULTS, prompt: 'Test everything.' },
     })
   })
 
@@ -105,7 +105,7 @@ describe('parseGroupFile', () => {
   test('task settings default to no creation right, one member, default profile, manual approval', () => {
     const parsed = parseGroupFile('devs', '---\ncanCreateTasks: false\n---\nBuild.')
     expect(parsed.ok && parsed.group).toEqual({
-      id: 'devs', label: 'devs', description: '', canCreateTasks: false, releaseOnTaskClose: true, worktreeScoped: true, canReleaseMembers: true, max: 1, approval: 'manual', ...ROUTING_DEFAULTS, prompt: 'Build.',
+      id: 'devs', label: 'devs', description: '', canCreateTasks: false, releaseOnTaskClose: true, worktreeScoped: true, canReleaseMembers: true, canReportProcess: false, max: 1, approval: 'manual', ...ROUTING_DEFAULTS, prompt: 'Build.',
     })
   })
 
@@ -124,6 +124,16 @@ describe('parseGroupFile', () => {
     const invalid = read('canCreatePlans: yes')
     expect(invalid.ok).toBe(false)
     if (!invalid.ok) expect(invalid.error).toContain('canCreatePlans must be true or false')
+  })
+
+  test('canReportProcess (team-process-metrics 8.1): true, false, default false, and an invalid value rejecting the file', () => {
+    const read = (frontmatter: string) => parseGroupFile('lead', `---\n${frontmatter}\n---\nLead.`)
+    expect(read('canReportProcess: true')).toMatchObject({ ok: true, group: { canReportProcess: true } })
+    expect(read('canReportProcess: false')).toMatchObject({ ok: true, group: { canReportProcess: false } })
+    expect(read('label: Lead')).toMatchObject({ ok: true, group: { canReportProcess: false } })
+    const invalid = read('canReportProcess: yes')
+    expect(invalid.ok).toBe(false)
+    if (!invalid.ok) expect(invalid.error).toContain('canReportProcess must be true or false')
   })
 
   test('release settings reject values other than true or false', () => {

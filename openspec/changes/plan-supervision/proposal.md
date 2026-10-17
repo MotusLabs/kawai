@@ -52,7 +52,7 @@ The Wave C contracts left these to this change:
 - **Team workspace.**
   - **Attention.** New sources join the queue: plan stops, stalls, decision questions, forward and correction fixes waiting on someone, acceptance conditions holding a change, and failed promotions. A new link kind `plan` joins `card`.
   - **Morning summary.** Over its last 24 hours, it gains landings, stops, stall alerts, decisions, and overrides.
-- **Usage per role and profile.** `turn_completed` gains the result frame's per-turn token usage, which covers the main agent loop only. Kawai records one usage row per completed turn on a task: group, profile, model, input, output, cache-read, and cache-creation tokens, and steps. A turn started by mail belongs to that mail's task, and to none when the mail has none, pinned when the turn starts. Any other turn belongs to the session's task. Plan usage sums the tasks linked to the plan, its execution tasks included, plus its fix and correction tasks. It is shown by role and profile, and per change. It shows no currency and sets no budget. Turns outside any task, such as the Lead answering questions, are shown as not attributed.
+- **Usage per role and profile.** Per-turn token usage comes from the result frame and covers the main agent loop only. Kawai reads the per-turn usage rows `team-process-metrics` records (a turn on no task has a null task): group, profile, model, input, output, cache-read, and cache-creation tokens, and steps. A turn started by mail belongs to that mail's task, and to none when the mail has none, pinned when the turn starts. Any other turn belongs to the session's task. Plan usage sums the tasks linked to the plan, its execution tasks included, plus its fix and correction tasks. It is shown by role and profile, and per change. It shows no currency and sets no budget. Turns outside any task, such as the Lead answering questions, are shown as not attributed.
 - **Agents.** `plan_get` gains decisions, supervision, and usage. Any agent on plan work can call `decision_ask`. `decision_record` is refused outside the Lead role. The plan note explains both. No agent tool answers for the owner, overrides, retries, stops, or dismisses anything.
 
 Non-goals:
@@ -91,8 +91,7 @@ Non-goals:
 - **Server.**
   - New `src/server/plans/decisions/`: schema and store, `DecisionService`, the agent tools, the connections, and the fix and correction tasks.
   - New `src/server/plans/supervision/`: the read model, the monitor and its stall alerts, the attention sources, and the summary buckets.
-  - New `src/server/chat/chatTurnUsageStore.ts`.
-  - `ChatSessionDriver` reads the result frame's `usage`. `ChatSessionManager` records usage beside turn ends.
+  - The plan usage read over `chat_turn_usage`, which `team-process-metrics` creates and writes (the driver's `usage` mapping and the turn-start pinning are its own).
   - The reply paths gain the decision guard, `teamPrompt.ts` gains the decision note, and `workspaceRead.ts` registers the new sources and buckets.
   - The system `TaskCaller` gains an `origin`, so Kawai creates fix and correction tasks through the decision origins. This modifies plan-execution's D2 caller shape and rights (design D7).
 - **Shared.**
@@ -101,7 +100,7 @@ Non-goals:
   - `AttentionLink` gains `plan` and an optional `planId`, and `MorningSummary` gains five buckets.
   - The new messages go in `src/shared/types.ts` and `CHAT_CONNECTION_TYPES`.
 - **Client.** `PlanReportSection`, `PlanDecisionCard`, `PlanDecisionDialog`, and `PlanUsageSection`, plus `teamPlanStore` and workspace wiring.
-- **Data.** An additive migration with five tables (`plan_decision_cards`, `plan_decisions`, `plan_fix_tasks`, `plan_stall_alerts`, `chat_turn_usage`). There is no backfill, so usage starts at deployment.
+- **Data.** An additive migration with four tables (`plan_decision_cards`, `plan_decisions`, `plan_fix_tasks`, `plan_stall_alerts`). Usage reads `team-process-metrics`' `chat_turn_usage`, with no backfill.
 - **Docs.** AGENTS.md bullets for decisions, supervision, and usage.
 - **Tests.** Unit coverage of the derivations, stall episodes, CAS, replay, the reply guard, fix completion, and cross-team refusals. One fixture walkthrough runs an override through to its fix, and it is named in `.github/workflows/ci.yml`.
 - **Sequencing.**
