@@ -184,6 +184,19 @@ describe('acknowledge (D10)', () => {
   })
 })
 
+describe('the violation groups gate (D10)', () => {
+  test('unknown-destination and allowed rows never group; only violations do', () => {
+    const h = harness()
+    h.store.insertCall(h.call({ id: 'obc-allowed', verdict: 'allowed', destination: 'github:origin', command: 'git push origin main' }))
+    h.store.insertCall(h.call({ id: 'obc-unknown', verdict: 'unknown-destination', destination: 'unresolved:variable' }))
+    expect(h.service.violationGroups(team.teamId)).toEqual([])
+    expect(h.store.counts(team.teamId).unacknowledgedViolations).toBe(0)
+    // The verdict is the only gate: a violation of the same rule groups alone.
+    h.store.insertCall(h.call({ id: 'obc-violation' }))
+    expect(h.service.violationGroups(team.teamId)).toHaveLength(1)
+  })
+})
+
 describe('the view projection', () => {
   test('a row reads its outcome state and named session; counts ride the range only', () => {
     const h = harness()
