@@ -2,7 +2,7 @@
 
 ## 1. Window function (server, pure)
 
-- [ ] 1.1 Add `src/server/chat/historyWindow.ts` with `HISTORY_WINDOW_MS = 24h` and `historyWindow(events, opts)` per design D1 (turn-start cut points, unit time with undated inheritance, newest-event anchor, at-least-one-turn, `fromId`, `beforeId`, `throughId` incl. `tool:<callId>` anchors, `hasOlder`, `startId`); verify with `src/server/__tests__/historyWindow.test.ts` covering: 5-day history → last 24 h only, idle-3-days chat → its last day, turn straddling the cutoff kept whole, short chat → `hasOlder: false`, empty-gap page still returns one turn, undated units, no dated events → whole list, unknown `fromId`/`beforeId`.
+- [x] 1.1 Add `src/server/chat/historyWindow.ts` with `HISTORY_WINDOW_MS = 24h` and `historyWindow(events, opts)` per design D1 (turn-start cut points, unit time with undated inheritance, newest-event anchor, at-least-one-turn, `fromId`, `beforeId`, `throughId` incl. `tool:<callId>` anchors, `hasOlder`, `startId`); verify with `src/server/__tests__/historyWindow.test.ts` covering: 5-day history → last 24 h only, idle-3-days chat → its last day, turn straddling the cutoff kept whole, short chat → `hasOlder: false`, empty-gap page still returns one turn, undated units, no dated events → whole list, unknown `fromId`/`beforeId`.
 
 ## 2. Wire contract and server wiring
 
