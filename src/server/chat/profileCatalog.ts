@@ -1,52 +1,55 @@
-// Layered chat profile catalog: `.kawai/profiles.json` files discovered from
-// the session's project path up to the filesystem root, layered above a
-// user-level catalog (~/.kawai/profiles.json) that replaces the image-provided
-// default when present. Same-id entries merge per environment key (nearest
-// wins, an empty value neutralizes an inherited one). `executable` is accepted
-// only in operator-owned files (user level / shipped default): project files
-// are agent-writable, and an executable there would run arbitrary code with
-// the server's credentials. A file that fails validation is reported and
-// skipped — the rest of the catalog still resolves. The shipped default is
-// also embedded at build time (the static JSON import below): compiled
-// release binaries have no config/ directory beside them, so a missing
-// default file falls back to the embedded copy, validated by the same code.
+// Layered chat profile catalog: `.kawai/providers.json` and
+// `.kawai/profiles.json` files discovered from the session's project path up
+// to the filesystem root, layered above a user-level catalog (~/.kawai/) that
+// replaces the image-provided defaults when either of its two files is
+// present. Providers own models; a model key is the profile id every consumer
+// stores. Same-id providers merge per environment key (nearest wins, an empty
+// value neutralizes an inherited one), and legacy `profiles.json` entries read
+// as one-model providers. `executable` is accepted only in operator-owned
+// files (user level / shipped default): project files are agent-writable, and
+// an executable there would run arbitrary code with the server's credentials.
+// A file that fails validation is reported and skipped — the rest of the
+// catalog still resolves. The shipped defaults are also embedded at build time
+// (the static JSON imports below): compiled release binaries have no config/
+// directory beside them, so a missing default file falls back to the embedded
+// copy, validated by the same code.
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import shippedDefaultCatalog from '../../../config/profiles.default.json'
-import { isResetTimeZone } from './limitSignals'
+import shippedDefaultProviders from '../../../config/providers.default.json'
+import { CatalogMerger, flattenModel } from './catalogMerge'
+import {
+  parseCatalogValue,
+  parseProviderCatalogValue,
+  type FileParse,
+} from './catalogParse'
 
-/**
- * The only environment variables a catalog file may set: provider routing,
- * model mapping, attribution, and compaction. Credentials (auth tokens, API
- * keys) are deliberately absent — they enter sessions only through the
- * server environment layer, so catalog files stay safe to commit and mount.
- */
-export const PROFILE_CONTROLLED_ENV = [
-  'ANTHROPIC_BASE_URL', 'ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_MODEL',
-  'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL',
-  'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_DEFAULT_FABLE_MODEL',
-  'CLAUDE_CODE_ATTRIBUTION_HEADER', 'CLAUDE_CODE_AUTO_COMPACT_WINDOW',
-] as const
+// The file formats' validators are re-exported: callers and tests import the
+// whole catalog surface from this module.
+export {
+  PROFILE_CONTROLLED_ENV,
+  type ProfileControlledEnvName,
+  PROFILE_ID_PATTERN,
+  parseCatalogValue,
+  parseProviderCatalogValue,
+  type ParsedModel,
+  type ParsedProvider,
+  type PartialProfile,
+} from './catalogParse'
 
-export type ProfileControlledEnvName = (typeof PROFILE_CONTROLLED_ENV)[number]
-
-/** Profile ids double as launch-command names one day; keep them tame. */
-export const PROFILE_ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/
-
-const MAX_ENV_ENTRIES = 32
-const MAX_ENV_VALUE_LENGTH = 4096
-const ENTRY_FIELDS = new Set(['label', 'model', 'executable', 'env', 'limitResetTimeZone'])
-const CONTROLLED = new Set<string>(PROFILE_CONTROLLED_ENV)
-
-/** Shipped fallback catalog; ~/.kawai/profiles.json replaces it when present. */
+/** Shipped fallback catalogs; either ~/.kawai file replaces both when present. */
 export const DEFAULT_PROFILE_CATALOG_PATH = path.resolve(
   import.meta.dir,
   '../../../config/profiles.default.json'
 )
+export const DEFAULT_PROVIDER_CATALOG_PATH = path.resolve(
+  import.meta.dir,
+  '../../../config/providers.default.json'
+)
 
 /**
- * The shipped default bundled into the build. Used only when the default
+ * The shipped defaults bundled into the build. Used only when the default
  * file itself is missing (compiled binaries carry no config/ directory);
  * an existing file always wins so deployments can patch it without a
  * rebuild. Validated through the same parser as a file, under this source
@@ -57,10 +60,17 @@ export const EMBEDDED_PROFILE_CATALOG: unknown = shippedDefaultCatalog
 /** Source name validation errors report for the embedded shipped catalog. */
 export const EMBEDDED_PROFILE_CATALOG_SOURCE = 'config/profiles.default.json (embedded)'
 
+/** The shipped providers default bundled into the build (see above). */
+export const EMBEDDED_PROVIDER_CATALOG: unknown = shippedDefaultProviders
+
+/** Source name validation errors report for the embedded shipped providers. */
+export const EMBEDDED_PROVIDER_CATALOG_SOURCE = 'config/providers.default.json (embedded)'
+
 export interface ProfileCatalogContext {
   projectPath?: string
   homeDir?: string
   imageDefaultPath?: string
+  imageDefaultProvidersPath?: string
 }
 
 /** A fully merged catalog entry: label resolved, env merged, never partial. */
@@ -72,140 +82,60 @@ export interface CatalogProfile {
   executable?: string
   /** Zone of reset times the provider writes without one (IANA or ±HH:MM). */
   limitResetTimeZone?: string
+  /** The provider owning this model: cooldown and usage key (design D10). */
+  providerId: string
+}
+
+export interface CatalogProvider {
+  label: string
+  /** This provider's model keys, in catalog order. */
+  models: string[]
 }
 
 export interface ProfileCatalog {
   profiles: Map<string, CatalogProfile>
+  /** Providers with their labels and model keys, default-holder first (D13). */
+  providers: Map<string, CatalogProvider>
   /** Per-file validation failures; the rest of the catalog still resolves. */
   errors: string[]
 }
 
-interface PartialProfile {
-  label?: string
-  env: Record<string, string>
-  model?: string
-  executable?: string
-  limitResetTimeZone?: string
-}
-
-type FileParse =
-  | { ok: true; entries: Map<string, PartialProfile> }
-  | { ok: false; error: string }
-
-function validateEntry(
-  id: string,
-  entry: unknown,
-  file: string,
-  trusted: boolean
-): PartialProfile | string {
-  if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
-    return `${file}: profile "${id}" must be an object.`
-  }
-  const source = entry as Record<string, unknown>
-  const profile: PartialProfile = { env: {} }
-  for (const [field, value] of Object.entries(source)) {
-    if (!ENTRY_FIELDS.has(field)) {
-      return `${file}: profile "${id}" has unknown field "${field}".`
-    }
-    if (field === 'env') {
-      if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-        return `${file}: profile "${id}" env must be an object of NAME: value pairs.`
-      }
-      const pairs = Object.entries(value)
-      if (pairs.length > MAX_ENV_ENTRIES) {
-        return `${file}: profile "${id}" defines more than ${MAX_ENV_ENTRIES} environment variables.`
-      }
-      for (const [name, raw] of pairs) {
-        if (!CONTROLLED.has(name)) {
-          return `${file}: profile "${id}" env variable "${name}" is not profile-controlled; catalog files carry routing and model configuration only, never credentials.`
-        }
-        if (typeof raw !== 'string') {
-          return `${file}: profile "${id}" env value for "${name}" must be a string.`
-        }
-        if (raw.length > MAX_ENV_VALUE_LENGTH) {
-          return `${file}: profile "${id}" env value for "${name}" is longer than ${MAX_ENV_VALUE_LENGTH} characters.`
-        }
-        profile.env[name] = raw
-      }
-      continue
-    }
-    if (field === 'executable') {
-      if (typeof value !== 'string' || !value) {
-        return `${file}: profile "${id}" executable must be a path string.`
-      }
-      if (!trusted) {
-        return `${file}: executables are allowed only in the user-level catalog (~/.kawai/profiles.json); this file is not operator-owned.`
-      }
-      if (!path.isAbsolute(value)) {
-        return `${file}: profile "${id}" executable must be an absolute path.`
-      }
-      profile.executable = value
-      continue
-    }
-    if (field === 'limitResetTimeZone') {
-      if (typeof value !== 'string' || !isResetTimeZone(value)) {
-        return `${file}: profile "${id}" limitResetTimeZone must be an IANA time zone (Asia/Shanghai) or a ±HH:MM offset.`
-      }
-      profile.limitResetTimeZone = value
-      continue
-    }
-    if (typeof value !== 'string' || !value.trim()) {
-      return `${file}: profile "${id}" field "${field}" must be a non-empty string.`
-    }
-    profile[field === 'label' ? 'label' : 'model'] = value
-  }
-  return profile
-}
-
 /**
- * The one catalog validator, shared by file reads and the embedded shipped
- * default: `value` is already-parsed JSON, `source` names it in errors.
+ * Read and JSON-parse one catalog file. `onMissing` supplies the parsed value
+ * to use when the file does not exist (the embedded shipped default); without
+ * it a missing file reads as an empty catalog. Any other read error fails —
+ * a path that is a directory (EISDIR) is reported, never silently replaced by
+ * the embedded copy.
  */
-export function parseCatalogValue(value: unknown, source: string, trusted: boolean): FileParse {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    return { ok: false, error: `${source}: catalog must be a JSON object of profile entries.` }
-  }
-  const entries = new Map<string, PartialProfile>()
-  for (const [id, entry] of Object.entries(value)) {
-    if (!PROFILE_ID_PATTERN.test(id)) {
-      return { ok: false, error: `${source}: profile id "${id}" must match ${PROFILE_ID_PATTERN}.` }
-    }
-    const validated = validateEntry(id, entry, source, trusted)
-    if (typeof validated === 'string') return { ok: false, error: validated }
-    entries.set(id, validated)
-  }
-  return { ok: true, entries }
-}
-
-/**
- * Read and parse one catalog file. `onMissing` supplies the parsed value and
- * its error source to use when the file does not exist (the embedded shipped
- * default); without it a missing file reads as an empty catalog.
- */
-function parseCatalogFile(
+function readCatalogJson(
   file: string,
-  trusted: boolean,
-  onMissing?: { value: unknown; source: string }
-): FileParse {
+  onMissing?: { value: unknown }
+): { ok: true; value: unknown; fromMissing: boolean } | { ok: false; error: string } {
   let raw: string
   try {
     raw = fs.readFileSync(file, 'utf8')
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code
     if (code === 'ENOENT') {
-      return onMissing
-        ? parseCatalogValue(onMissing.value, onMissing.source, trusted)
-        : { ok: true, entries: new Map() }
+      return { ok: true, value: onMissing?.value ?? {}, fromMissing: onMissing !== undefined }
     }
     return { ok: false, error: `${file}: cannot be read (${code ?? 'unknown error'}).` }
   }
-  let parsed: unknown
   try {
-    parsed = JSON.parse(raw)
+    return { ok: true, value: JSON.parse(raw), fromMissing: false }
   } catch (error) {
     return { ok: false, error: `${file}: invalid JSON (${error instanceof Error ? error.message : String(error)}).` }
   }
-  return parseCatalogValue(parsed, file, trusted)
+}
+
+function parseCatalogFile(
+  file: string,
+  trusted: boolean,
+  onMissing?: { value: unknown; source: string }
+): FileParse {
+  const read = readCatalogJson(file, onMissing)
+  if (!read.ok) return read
+  return parseCatalogValue(read.value, read.fromMissing ? onMissing!.source : file, trusted)
 }
 
 /**
@@ -220,7 +150,7 @@ function expandHomePath(projectPath: string, home: string): string {
   return projectPath
 }
 
-/** `.kawai/profiles.json` files from `/` down to the project path, farthest first. */
+/** `.kawai/providers.json` then `.kawai/profiles.json` per directory from `/` down to the project path, farthest first. */
 function projectCatalogFiles(projectPath: string): string[] {
   let real = projectPath
   try {
@@ -229,97 +159,187 @@ function projectCatalogFiles(projectPath: string): string[] {
     // A missing cwd is refused earlier by project-directory resolution.
   }
   const segments = path.resolve(real).split(path.sep).filter(Boolean)
-  const files = [path.join(path.sep, '.kawai', 'profiles.json')]
-  for (let depth = 1; depth <= segments.length; depth++) {
-    files.push(path.join(path.sep, ...segments.slice(0, depth), '.kawai', 'profiles.json'))
+  const files: string[] = []
+  for (let depth = 0; depth <= segments.length; depth++) {
+    const dir = path.join(path.sep, ...segments.slice(0, depth))
+    files.push(path.join(dir, '.kawai', 'providers.json'), path.join(dir, '.kawai', 'profiles.json'))
   }
   return files
 }
 
+export type CatalogLevel = {
+  file: string
+  /** Which file of the level this is: read order is providers first (D1). */
+  kind: 'providers' | 'profiles'
+  trusted: boolean
+  /** The shipped base: a nearer file may re-home its model keys away (D2). */
+  shipped?: boolean
+  /** When the file is missing, the embedded shipped catalog takes its place. */
+  embeddedFallback?: boolean
+}
+
 /**
- * The catalog levels a context reads, farthest (trusted base) first: the
- * user-level file — or the shipped default when it is absent — then every
- * project `.kawai/profiles.json` from the filesystem root down to the path.
- * The image-default base carries `embeddedFallback`: when that file is
- * missing, the embedded shipped catalog takes its place.
+ * The catalog files a context reads, farthest (trusted base) first: the
+ * user level's two files — or the shipped defaults when neither exists —
+ * then every project `.kawai` pair from the filesystem root down to the
+ * path. `providers.json` comes before `profiles.json` within a level. The
+ * shipped base carries `embeddedFallback`: when that file is missing, the
+ * embedded shipped catalog takes its place.
  */
-export function profileCatalogLevels(
-  ctx: ProfileCatalogContext = {}
-): Array<{ file: string; trusted: boolean; embeddedFallback?: boolean }> {
+export function profileCatalogLevels(ctx: ProfileCatalogContext = {}): CatalogLevel[] {
   // HOME first, the POSIX way: os.homedir() may be cached by the runtime and
   // ignore later HOME changes, which tests rely on for isolation.
   const home = ctx.homeDir ?? process.env.HOME ?? os.homedir()
-  const baseFile = path.join(home, '.kawai', 'profiles.json')
-  const levels: Array<{ file: string; trusted: boolean; embeddedFallback?: boolean }> = []
-  const base = fs.existsSync(baseFile)
-    ? { file: baseFile, trusted: true }
-    : { file: ctx.imageDefaultPath ?? DEFAULT_PROFILE_CATALOG_PATH, trusted: true, embeddedFallback: true }
-  // Farthest (base) first; project files follow from root down to the path.
-  levels.push(base)
+  const userProviders = path.join(home, '.kawai', 'providers.json')
+  const userProfiles = path.join(home, '.kawai', 'profiles.json')
+  const levels: CatalogLevel[] = []
+  const baseFiles = new Set<string>()
+  if (fs.existsSync(userProviders) || fs.existsSync(userProfiles)) {
+    // Either user-level file replaces both shipped defaults whole (D1).
+    baseFiles.add(userProviders)
+    baseFiles.add(userProfiles)
+    levels.push(
+      { file: userProviders, kind: 'providers', trusted: true },
+      { file: userProfiles, kind: 'profiles', trusted: true }
+    )
+  } else {
+    const providersFile = ctx.imageDefaultProvidersPath ?? DEFAULT_PROVIDER_CATALOG_PATH
+    const profilesFile = ctx.imageDefaultPath ?? DEFAULT_PROFILE_CATALOG_PATH
+    baseFiles.add(providersFile)
+    baseFiles.add(profilesFile)
+    levels.push(
+      { file: providersFile, kind: 'providers', trusted: true, shipped: true, embeddedFallback: true },
+      { file: profilesFile, kind: 'profiles', trusted: true, shipped: true, embeddedFallback: true }
+    )
+  }
   const projectPath = ctx.projectPath?.trim()
   if (projectPath) {
-    for (const file of projectCatalogFiles(expandHomePath(projectPath, home))) {
-      // A home-relative project path walks through the user-level file's
-      // directory: it is already read as the trusted base, and re-reading it
-      // as an untrusted project layer would refuse its executables.
-      if (file === base.file) continue
-      levels.push({ file, trusted: false })
+    const projectFiles = projectCatalogFiles(expandHomePath(projectPath, home))
+    for (let i = 0; i < projectFiles.length; i++) {
+      const file = projectFiles[i]
+      // A home-relative project path walks through the user-level files'
+      // directory: they are already read as the trusted base, and re-reading
+      // them as an untrusted project layer would refuse their executables.
+      if (baseFiles.has(file)) continue
+      levels.push({
+        file,
+        kind: i % 2 === 0 ? 'providers' : 'profiles',
+        trusted: false,
+      })
     }
   }
   return levels
 }
 
 /**
- * Assemble the catalog for a session: base layer (user-level file, or the
- * shipped default when absent — embedded when even the file is missing)
+ * Assemble the catalog for a session: base layer (the user level, or the
+ * shipped defaults when absent — embedded when even the files are missing)
  * beneath every `.kawai` directory from the filesystem root down to the
- * project path. Farther files merge first so nearer entries win per key.
+ * project path. Farther files merge first so nearer entries win per key;
+ * the tier rules (operator duplicates, shipped re-homing) live in the
+ * merger. The result keeps the flat per-model `profiles` map every consumer
+ * reads today, each entry naming its `providerId`, plus the `providers`
+ * view in catalog order.
  */
 export function resolveProfileCatalog(
   ctx: ProfileCatalogContext = {}
 ): ProfileCatalog {
-  const levels = profileCatalogLevels(ctx)
-
-  const merged = new Map<string, PartialProfile>()
+  const merger = new CatalogMerger()
   const errors: string[] = []
-  for (const level of levels) {
-    // Only the image-default base falls back to the embedded shipped catalog;
+  for (const level of profileCatalogLevels(ctx)) {
+    // Only the shipped base falls back to the embedded shipped defaults;
     // a missing project file just contributes nothing.
-    const onMissing = level.embeddedFallback
+    if (level.kind === 'providers') {
+      const read = readCatalogJson(level.file, level.embeddedFallback ? { value: EMBEDDED_PROVIDER_CATALOG } : undefined)
+      if (!read.ok) {
+        errors.push(read.error)
+        continue
+      }
+      const parsed = parseProviderCatalogValue(read.value, read.fromMissing ? EMBEDDED_PROVIDER_CATALOG_SOURCE : level.file, level.trusted)
+      if (!parsed.ok) {
+        errors.push(parsed.error)
+        continue
+      }
+      merger.addProviders(level.file, level.shipped ?? false, parsed.providers)
+      continue
+    }
+    const parsed = parseCatalogFile(level.file, level.trusted, level.embeddedFallback
       ? { value: EMBEDDED_PROFILE_CATALOG, source: EMBEDDED_PROFILE_CATALOG_SOURCE }
-      : undefined
-    const parsed = parseCatalogFile(level.file, level.trusted, onMissing)
+      : undefined)
     if (!parsed.ok) {
       errors.push(parsed.error)
       continue
     }
-    if (parsed.entries.size === 0) continue
-    for (const [id, entry] of parsed.entries) {
-      const current = merged.get(id) ?? { env: {} }
-      merged.set(id, {
-        label: entry.label ?? current.label,
-        env: { ...current.env, ...entry.env },
-        model: entry.model ?? current.model,
-        executable: entry.executable ?? current.executable,
-        limitResetTimeZone: entry.limitResetTimeZone ?? current.limitResetTimeZone,
-      })
-    }
+    merger.addProfiles(level.file, level.shipped ?? false, parsed.entries)
   }
+  merger.finish()
+  errors.push(...merger.errors)
 
   const profiles = new Map<string, CatalogProfile>()
-  for (const [id, profile] of merged) {
-    profiles.set(id, {
-      label: profile.label?.trim() || id,
-      env: profile.env,
-      ...(profile.model !== undefined ? { model: profile.model } : {}),
-      ...(profile.executable !== undefined ? { executable: profile.executable } : {}),
-      ...(profile.limitResetTimeZone !== undefined ? { limitResetTimeZone: profile.limitResetTimeZone } : {}),
-    })
+  const providers = new Map<string, CatalogProvider>()
+  // The flat profiles map keeps merge order; the providers view (D13) puts
+  // the provider holding `default` first, then the providers in file order,
+  // each with its models in order.
+  const view = [...merger.providers.entries()]
+  const defaultHolder = view.findIndex(([, p]) => p.models.has('default'))
+  if (defaultHolder > 0) view.unshift(...view.splice(defaultHolder, 1))
+  for (const [providerId, provider] of view) {
+    providers.set(providerId, { label: provider.label?.trim() || providerId, models: [...provider.models.keys()] })
+  }
+  for (const [providerId, provider] of merger.providers) {
+    for (const [modelKey, model] of provider.models) {
+      const flat = flattenModel(provider, model)
+      profiles.set(modelKey, {
+        label: flat.label?.trim() || modelKey,
+        env: flat.env,
+        ...(flat.model !== undefined ? { model: flat.model } : {}),
+        ...(flat.executable !== undefined ? { executable: flat.executable } : {}),
+        ...(flat.limitResetTimeZone !== undefined ? { limitResetTimeZone: flat.limitResetTimeZone } : {}),
+        providerId,
+      })
+    }
   }
   // Omitted selections resolve to `default`; it always exists, empty when no
   // file defines it (global provider environment alone).
   if (!profiles.has('default')) {
-    profiles.set('default', { label: 'Default', env: {} })
+    profiles.set('default', { label: 'Default', env: {}, providerId: 'default' })
   }
-  return { profiles, errors }
+  return { profiles, providers, errors }
+}
+
+/**
+ * Stamp of every catalog file the context reads: providers.json included.
+ * Consumers that cache catalog reads (the provider lookup, the group
+ * catalog, the outbound destinations) key their caches on it.
+ */
+export function profileCatalogStamp(ctx: ProfileCatalogContext = {}): string {
+  return profileCatalogLevels(ctx).map(({ file }) => {
+    try {
+      const stat = fs.statSync(file)
+      return `${stat.mtimeMs}:${stat.size}`
+    } catch {
+      return 'missing'
+    }
+  }).join('|')
+}
+
+const providerCache = new Map<string, Map<string, string>>()
+const PROVIDER_CACHE_LIMIT = 32
+
+/**
+ * The provider owning `profileId` (D10), resolved from the catalog at the
+ * context and cached per catalog stamp. A profile that is no longer in the
+ * catalog stands in as its own provider, so a session launched before a
+ * catalog edit keeps a stable cooldown and usage key.
+ */
+export function providerOf(profileId: string, ctx: ProfileCatalogContext = {}): string {
+  const key = `${ctx.homeDir ?? process.env.HOME ?? os.homedir()}\n${ctx.projectPath ?? ''}\n${profileCatalogStamp(ctx)}`
+  let known = providerCache.get(key)
+  if (!known) {
+    if (providerCache.size >= PROVIDER_CACHE_LIMIT) providerCache.clear()
+    const resolved = resolveProfileCatalog(ctx)
+    known = new Map([...resolved.profiles].map(([id, profile]) => [id, profile.providerId]))
+    providerCache.set(key, known)
+  }
+  return known.get(profileId) ?? profileId
 }
