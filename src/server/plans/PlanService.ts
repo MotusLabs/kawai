@@ -111,6 +111,11 @@ export class PlanService {
      * commit), so the execution module stops the plan's running executions.
      */
     onPlanClosed?: (planId: string, outcome: 'completed' | 'cancelled') => void
+    /**
+     * plan-execution D18: the plan's executions for `plan_get` (and the
+     * Plans view's detail pushes); absent when no execution module is wired.
+     */
+    executionsOf?: (planId: string) => import('../../shared/plans').PlanExecutionSummary[]
     /** plan-validation D9: approval's pre-transaction gather and in-transaction standing, and its appended precondition. */
     validation?: {
       prepareStanding: (planId: string, revision: number) => Promise<unknown> | null
@@ -138,7 +143,14 @@ export class PlanService {
 
   async get(caller: PlanCaller, planId: string): Promise<PlanDetail> {
     const { team } = await this.context(caller)
-    return this.store.detail(this.teamPlan(team, planId).id)!
+    return this.detailWithExecutions(this.teamPlan(team, planId).id)
+  }
+
+  /** D18: the stored detail plus the plan's executions, when the module is wired. */
+  detailWithExecutions(planId: string): PlanDetail {
+    const detail = this.store.detail(planId)!
+    const executions = this.options.executionsOf?.(planId)
+    return executions === undefined ? detail : { ...detail, executions }
   }
 
   /** D5: the plan, its creator's draft, and a `created` event in one transaction. */

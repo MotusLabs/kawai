@@ -152,8 +152,8 @@ Implement after `durable-plans`, `strategy-revision-impact`, and `plan-validatio
 
 ## 16. Agent surface
 
-- [ ] 16.1 Add `executions` to `plan_get` (D18). Verify with a tool test reading a running execution's change states, attempt, and latest round.
-- [ ] 16.2 Add the execution-task rules to the plan note in `teamPrompt.ts`. Verify with a prompt snapshot test.
+- [x] 16.1 Add `executions` to `plan_get` (D18). Verify with a tool test reading a running execution's change states, attempt, and latest round.
+- [x] 16.2 Add the execution-task rules to the plan note in `teamPrompt.ts`. Verify with a prompt snapshot test.
 
 ## 17. End to end and docs
 
