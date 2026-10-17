@@ -1,0 +1,22 @@
+{"action":"send","prompt":"A"}
+{"type":"command_lifecycle","command_uuid":"A","state":"queued"}
+{"type":"command_lifecycle","command_uuid":"A","state":"started"}
+{"type":"system","subtype":"init","capabilities":["interrupt_receipt_v1","interrupt_cancel_queued_v1","interrupt_send_now_v1"]}
+{"type":"rate_limit_event"}
+{"type":"assistant","content":["thinking"],"user_message_uuid":"A"}
+{"action":"send","prompt":"B"}
+{"type":"command_lifecycle","command_uuid":"B","state":"queued"}
+{"action":"interrupt","cancelQueued":true}
+{"type":"command_lifecycle","command_uuid":"B","state":"cancelled"}
+{"action":"receipt","still_queued":[],"cancelled":["B"]}
+{"type":"user","content":["[Request interrupted by user]"],"isReplay":false,"uuid":"unknown"}
+{"type":"result","subtype":"error_during_execution","is_error":true,"terminal_reason":"aborted_streaming","result_index":0,"queued_turn_count":0,"user_message_uuid":"A","user_message_uuids":["A"]}
+{"action":"send","prompt":"C"}
+{"type":"command_lifecycle","command_uuid":"A","state":"cancelled"}
+{"type":"command_lifecycle","command_uuid":"C","state":"queued"}
+{"type":"command_lifecycle","command_uuid":"C","state":"started"}
+{"type":"system","subtype":"init","capabilities":["interrupt_receipt_v1","interrupt_cancel_queued_v1","interrupt_send_now_v1"]}
+{"type":"assistant","content":["thinking"],"user_message_uuid":"C"}
+{"type":"assistant","content":["text"]}
+{"type":"result","subtype":"success","is_error":false,"terminal_reason":"completed","result_index":1,"queued_turn_count":0,"user_message_uuid":"C","user_message_uuids":["C"]}
+{"type":"command_lifecycle","command_uuid":"C","state":"completed"}

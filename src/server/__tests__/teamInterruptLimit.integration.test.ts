@@ -1,7 +1,9 @@
 // Real manager, driver, mailbox, dispatcher, and limit outcomes: urgent
-// direct mail interrupts a busy agent, the delivery waits for the CLI's
-// trailing result for the aborted turn, and the delivered turn then ends
-// at a final provider limit — the message must be parked on its holder.
+// direct mail interrupts a busy agent and is delivered on the CLI's
+// acknowledgement; the aborted turn's trailing result arrives after the
+// delivery and names its own prompt, so the delivered turn ends only on its
+// own result — at a final provider limit, where the message must be parked
+// on its holder.
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -43,7 +45,9 @@ function fakeQueryFactory(clis: FakeCli[]): ChatQueryFactory {
 
 const frame = (fields: Record<string, unknown>) => ({ uuid: 'f-uuid', session_id: 'sdk-1', ...fields }) as unknown as SDKMessage
 const init = () => frame({ type: 'system', subtype: 'init' })
-const result = (subtype: string, inputTokens: number) => frame({
+/** A result echoing the client uuid of the prompt it answers (none: agent-started). */
+const result = (subtype: string, inputTokens: number, prompt?: SDKUserMessage) => frame({
+  ...(prompt?.uuid ? { user_message_uuid: prompt.uuid, user_message_uuids: [prompt.uuid] } : {}),
   type: 'result', subtype, is_error: subtype !== 'success', num_turns: 1, total_cost_usd: 0, result: 'done',
   duration_ms: 1, duration_api_ms: 1, usage: { input_tokens: inputTokens, output_tokens: 1 }, modelUsage: {}, permission_denials: [], stop_reason: null,
 })
@@ -128,15 +132,12 @@ test('urgent mail that interrupts a busy agent is parked when its delivered turn
     originPath: project, priority: 'urgent', body: 'Drop that and fix the build' })
   manager!.dispatcher.notify()
   await waitFor(() => clis[0]!.interrupts === 1)
-  // Acknowledged: the dispatcher holds the claim until the aborted turn's
-  // trailing result arrives, and only then delivers.
-  await Bun.sleep(20)
-  expect(store.get(mail.id)).toMatchObject({ state: 'claimed', claimedBy: id, pushedAt: null })
-  clis[0]!.push(result('error_during_execution', 900))
+  // Delivered on the acknowledgement, before the aborted turn's tail.
   await manager!.dispatcher.settled()
   expect(store.get(mail.id)).toMatchObject({ claimedBy: id })
-
   await receipt(clis[0]!, 1)
+  // The tail names turn-1's prompt: it never completes the delivered turn.
+  clis[0]!.push(result('error_during_execution', 900, clis[0]!.prompts[0]))
 
   // The delivered turn makes progress and fails at a final limit resetting
   // within 3h (parkIfResetWithin's default).
@@ -146,7 +147,7 @@ test('urgent mail that interrupts a busy agent is parked when its delivered turn
   clis[0]!.push(frame({ type: 'user', parent_tool_use_id: null,
     message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok' }] } }))
   const resetsAt = finalLimit(clis[0]!)
-  clis[0]!.push(result('error_during_execution', 5))
+  clis[0]!.push(result('error_during_execution', 5, clis[0]!.prompts[1]))
   await waitFor(() => store.get(mail.id)?.state === 'parked')
 
   const parked = store.get(mail.id)!
@@ -169,7 +170,7 @@ test('a final limit in an agent-started turn parks the work the agent last held 
   await manager!.dispatcher.settled()
   await receipt(clis[0]!, 0)
   clis[0]!.push(init())
-  clis[0]!.push(result('success', 3))
+  clis[0]!.push(result('success', 3, clis[0]!.prompts[0]))
   await waitFor(() => store.get(mail.id)?.state === 'delivered' && manager!.getSnapshot(id)?.status === 'waiting')
 
   // A Monitor fires: the agent starts a turn itself, which ends at a final
