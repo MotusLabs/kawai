@@ -17,6 +17,7 @@ import type { ProductStrategy, StrategyDetail, StrategyDraft, StrategyRevision }
 import type { ImpactDecision, ImpactDisposition, StrategyImpactDetail } from './strategyImpact'
 import type { TeamWorkspaceSnapshot } from './teamWorkspace'
 import type { PlanClientMessage, PlanServerMessage } from './planMessages'
+import type { OutboundAuditClientMessage, OutboundAuditServerMessage } from './outbound'
 import type { MetricsClientMessage, MetricsServerMessage } from './metricsMessages'
 import type {
   WorkspaceOperationResult,
@@ -240,6 +241,8 @@ export interface UpdateState {
 export type ServerMessage =
   // Durable plans (durable-plans D12): see planMessages.ts.
   | PlanServerMessage
+  // The owner's audit view (execution-safety-recovery D9): see outbound.ts.
+  | OutboundAuditServerMessage
   // Process metrics (team-process-metrics D5): see metricsMessages.ts.
   | MetricsServerMessage
   | { type: 'sessions'; sessions: Session[] }
@@ -573,6 +576,8 @@ export interface WakeError {
 export type ClientMessage =
   // Durable plans (durable-plans D12): see planMessages.ts.
   | PlanClientMessage
+  // The owner's audit view (execution-safety-recovery D9/D10): see outbound.ts.
+  | OutboundAuditClientMessage
   // Process metrics (team-process-metrics D5): see metricsMessages.ts.
   | MetricsClientMessage
   | {

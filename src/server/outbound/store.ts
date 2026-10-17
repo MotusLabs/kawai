@@ -1,12 +1,13 @@
-// The only SQL writer of the audit calls and outcomes (execution-safety-recovery
-// D6): append-only — this class exposes no update or delete, and no other
-// module writes them. Calls dedupe on `(session_id, tool_use_id)` and
-// outcomes on `(session_id, tool_use_id, outcome)` (both
-// `INSERT … ON CONFLICT DO NOTHING`), so the second report of one tool use
-// is a no-op and an outcome that lands before its deferred call row is kept
-// and joins once the row exists. Rows are never pruned. Reads keyset-page
-// newest first with the verdict, rule, session, and time filters the Audit
-// view layers on (D9).
+// The only SQL writer of the audit calls, outcomes, and acknowledgements
+// (execution-safety-recovery D6, D10): append-only — this class exposes no
+// update or delete, and no other module writes them. Calls dedupe on
+// `(session_id, tool_use_id)` and outcomes on
+// `(session_id, tool_use_id, outcome)` (both `INSERT … ON CONFLICT DO
+// NOTHING`), so the second report of one tool use is a no-op and an outcome
+// that lands before its deferred call row is kept and joins once the row
+// exists. Acknowledgements are idempotent under `(team_id, command_id)`.
+// Rows are never pruned. Reads keyset-page newest first with the verdict,
+// rule, session, and time filters the Audit view layers on (D9).
 import type { Database, SQLQueryBindings } from 'bun:sqlite'
 
 /** One recorded send (D6 columns; `matches` stays its JSON string here). */
@@ -65,6 +66,15 @@ export interface OutboundCallPage {
 
 const CALL_COLUMNS = 'id, team_id, session_id, spawn_id, group_id, profile_id, task_id, agent_id, tool, mcp_server, tool_use_id, command, truncated, rule, verdict, destination, matches, classifier_version, cwd, created_at'
 
+/**
+ * D10's coverage test, aliased to the call table as `c`: an acknowledgement
+ * of the same (team, rule, destination) whose `through_*` position is at or
+ * after the call's covers it. Shared by the counts and the attention rows.
+ */
+const UNACKNOWLEDGED_EXISTS = `SELECT 1 FROM outbound_acknowledgements a
+  WHERE a.team_id = c.team_id AND a.rule = c.rule AND a.destination = c.destination
+    AND (a.through_created_at > c.created_at OR (a.through_created_at = c.created_at AND a.through_call_id >= c.id))`
+
 const toRow = (raw: Record<string, unknown>): OutboundCallRow => ({
   id: raw.id as string,
   teamId: raw.team_id as string,
@@ -86,6 +96,43 @@ const toRow = (raw: Record<string, unknown>): OutboundCallRow => ({
   classifierVersion: raw.classifier_version as number,
   cwd: raw.cwd as string,
   createdAt: raw.created_at as string,
+})
+
+/** One recorded acknowledgement (D10): covers a group through one call. */
+export interface OutboundAcknowledgementInsert {
+  id: string
+  teamId: string
+  commandId: string
+  rule: string
+  destination: string
+  throughCreatedAt: string
+  throughCallId: string
+  note?: string
+  acknowledgedAt: string
+}
+
+export interface OutboundAcknowledgement {
+  id: string
+  teamId: string
+  commandId: string
+  rule: string
+  destination: string
+  throughCreatedAt: string
+  throughCallId: string
+  note?: string
+  acknowledgedAt: string
+}
+
+const toAcknowledgement = (raw: Record<string, unknown>): OutboundAcknowledgement => ({
+  id: raw.id as string,
+  teamId: raw.team_id as string,
+  commandId: raw.command_id as string,
+  rule: raw.rule as string,
+  destination: raw.destination as string,
+  throughCreatedAt: raw.through_created_at as string,
+  throughCallId: raw.through_call_id as string,
+  ...(raw.note === null || raw.note === undefined ? {} : { note: raw.note as string }),
+  acknowledgedAt: raw.acknowledged_at as string,
 })
 
 export class OutboundStore {
@@ -157,6 +204,88 @@ export class OutboundStore {
     return {
       rows: page,
       cursor: rows.length > limit && last !== undefined ? `${last.createdAt}\u0000${last.id}` : null,
+    }
+  }
+
+  /**
+   * The Audit tab's header counts (D9): over the team's rows in the time
+   * range only — never the verdict, rule, or session filters, or the counts
+   * could not show allowed sends beside a violations-only list. The
+   * unacknowledged figure joins the acknowledgements: a violation covered by
+   * an acknowledgement of its group through it (D10's `through_*` at or
+   * after the call's `(created_at, id)`) does not count.
+   */
+  counts(teamId: string, from?: string, to?: string): {
+    allowedPerRule: Record<string, number>; unknown: number; violations: number; unacknowledgedViolations: number
+  } {
+    const range: string[] = []
+    const args: SQLQueryBindings[] = [teamId]
+    if (from !== undefined) { range.push('AND created_at >= ?'); args.push(from) }
+    if (to !== undefined) { range.push('AND created_at < ?'); args.push(to) }
+    const rows = this.db
+      .prepare(`SELECT verdict, rule, COUNT(*) AS n FROM outbound_calls WHERE team_id = ? ${range.join(' ')} GROUP BY verdict, rule`)
+      .all(...args) as Array<{ verdict: string; rule: string; n: number }>
+    const counts = { allowedPerRule: {} as Record<string, number>, unknown: 0, violations: 0, unacknowledgedViolations: 0 }
+    for (const row of rows) {
+      if (row.verdict === 'allowed') counts.allowedPerRule[row.rule] = (counts.allowedPerRule[row.rule] ?? 0) + row.n
+      else if (row.verdict === 'unknown-destination') counts.unknown += row.n
+      else if (row.verdict === 'violation') counts.violations += row.n
+    }
+    counts.unacknowledgedViolations = (this.db
+      .prepare(`SELECT COUNT(*) AS n FROM outbound_calls c WHERE c.team_id = ? AND c.verdict = 'violation'
+        ${range.map(condition => condition.replace('created_at', 'c.created_at')).join(' ')}
+        AND NOT EXISTS (${UNACKNOWLEDGED_EXISTS})`)
+      .get(...args) as { n: number } | undefined)?.n ?? 0
+    return counts
+  }
+
+  /**
+   * The attention source's rows (D10): every unacknowledged violation of the
+   * team, newest first — the caller groups them by `(rule, destination)`.
+   * No time range: the queue shows the current state, whatever its age.
+   */
+  unacknowledgedViolations(teamId: string): OutboundCallRow[] {
+    const rows = this.db
+      .prepare(`SELECT ${CALL_COLUMNS} FROM outbound_calls c WHERE c.team_id = ? AND c.verdict = 'violation'
+        AND NOT EXISTS (${UNACKNOWLEDGED_EXISTS}) ORDER BY c.created_at DESC, c.id DESC`)
+      .all(teamId) as Array<Record<string, unknown>>
+    return rows.map(toRow)
+  }
+
+  /** One call by session and tool use, for the outcome commit's team (D7 join). */
+  callByToolUse(sessionId: string, toolUseId: string): OutboundCallRow | null {
+    const raw = this.db
+      .prepare(`SELECT ${CALL_COLUMNS} FROM outbound_calls WHERE session_id = ? AND tool_use_id = ?`)
+      .get(sessionId, toolUseId)
+    return raw === undefined || raw === null ? null : toRow(raw as Record<string, unknown>)
+  }
+
+  /**
+   * The acknowledgement a command id produced, for D10's replay: the same
+   * payload returns it, a different one is refused naming the field.
+   */
+  acknowledgementByCommand(teamId: string, commandId: string): OutboundAcknowledgement | null {
+    const raw = this.db
+      .prepare('SELECT id, team_id, command_id, rule, destination, through_created_at, through_call_id, note, acknowledged_at FROM outbound_acknowledgements WHERE team_id = ? AND command_id = ?')
+      .get(teamId, commandId)
+    return raw === undefined || raw === null ? null : toAcknowledgement(raw as Record<string, unknown>)
+  }
+
+  /** Run `work` in one immediate transaction (the replay-then-insert pair). */
+  exclusively<T>(work: () => T): T {
+    return this.db.transaction(work).immediate()
+  }
+
+  /** Append one acknowledgement (D10); a repeat of the command id writes nothing. */
+  insertAcknowledgement(row: OutboundAcknowledgementInsert): OutboundAcknowledgement | null {
+    const result = this.db
+      .prepare('INSERT INTO outbound_acknowledgements (id, team_id, command_id, rule, destination, through_created_at, through_call_id, note, acknowledged_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(team_id, command_id) DO NOTHING')
+      .run(row.id, row.teamId, row.commandId, row.rule, row.destination, row.throughCreatedAt, row.throughCallId, row.note ?? null, row.acknowledgedAt)
+    if (result.changes !== 1) return null
+    return {
+      id: row.id, teamId: row.teamId, commandId: row.commandId, rule: row.rule, destination: row.destination,
+      throughCreatedAt: row.throughCreatedAt, throughCallId: row.throughCallId,
+      ...(row.note !== undefined ? { note: row.note } : {}), acknowledgedAt: row.acknowledgedAt,
     }
   }
 }
