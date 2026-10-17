@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { groupCatalogStamp, loadGroupCatalog } from '../team/groupCatalog'
-import { DEFAULT_PARK_IF_RESET_WITHIN_MS } from '../team/groupFile'
+import { DEFAULT_PARK_IF_RESET_WITHIN_MS, type GroupEffort } from '../team/groupFile'
 
 describe('loadGroupCatalog', () => {
   let root: string
@@ -246,6 +246,45 @@ describe('qualified worker names resolve against the catalog (D5)', () => {
     writeGroup('workers: [glm, haiku]\nmodelEffort: { claude/haiku: xhigh, zai/haiku: high }')
     const { groups, warnings } = loadGroupCatalog({ groupsRoot: repo, homeDir: home })
     expect(groups.get('juniors')?.group.profileEffort).toEqual({ haiku: 'xhigh' })
-    expect(warnings).toEqual([expect.stringContaining('profileEffort: "zai/haiku" is not defined; ignored')])
+    expect(warnings).toEqual([expect.stringContaining('modelEffort: "zai/haiku" is not defined; ignored')])
+  })
+
+  test('a modelEffort duplicate resolves the same in either order, with a warning (L1)', () => {
+    // First occurrence wins in file order, whatever spelling named it; the
+    // later entry warns instead of silently overwriting.
+    const cases: Array<[string, Record<string, GroupEffort>, string]> = [
+      ['---\nworkers: [glm]\nmodelEffort: { zai/glm: high, glm: low }\n---\nJunior.', { glm: 'high' }, 'modelEffort: "glm" is already listed; the later entry is ignored'],
+      ['---\nworkers: [glm]\nmodelEffort: { glm: low, zai/glm: high }\n---\nJunior.', { glm: 'low' }, 'modelEffort: "zai/glm" is already listed; the later entry is ignored'],
+    ]
+    for (const [content, effort, warning] of cases) {
+      fs.mkdirSync(path.join(repo, '.kawai', 'groups'), { recursive: true })
+      fs.writeFileSync(path.join(repo, '.kawai', 'groups', 'juniors.md'), content)
+      const { groups, warnings } = loadGroupCatalog({ groupsRoot: repo, homeDir: home })
+      expect(groups.get('juniors')?.group.profileEffort).toEqual(effort)
+      expect(warnings).toHaveLength(1)
+      expect(warnings[0]).toContain(warning)
+    }
+  })
+
+  test('a bare entry after a qualified one is dropped with the entry named (L2)', () => {
+    writeGroup('workers: [zai/glm, glm]')
+    const { groups, warnings } = loadGroupCatalog({ groupsRoot: repo, homeDir: home })
+    expect(groups.get('juniors')?.group.profiles.map(entry => entry.profileId)).toEqual(['glm'])
+    expect(warnings).toEqual([expect.stringContaining('profile "glm" is already listed; the later entry is ignored')])
+  })
+
+  test('a qualified map key keeps its cap (L4)', () => {
+    writeGroup('workers: { zai/glm: 2 }')
+    const { groups, warnings } = loadGroupCatalog({ groupsRoot: repo, homeDir: home })
+    expect(groups.get('juniors')?.group.profiles).toEqual([{ profileId: 'glm', cap: 2 }])
+    expect(groups.get('juniors')?.group.max).toBe(2)
+    expect(warnings).toEqual([])
+  })
+
+  test('the default max sums the resolved caps, not the dropped written ones (nit)', () => {
+    writeGroup('workers: { zai/glm: 2, zai/nope: 3 }')
+    const { groups } = loadGroupCatalog({ groupsRoot: repo, homeDir: home })
+    expect(groups.get('juniors')?.group.profiles).toEqual([{ profileId: 'glm', cap: 2 }])
+    expect(groups.get('juniors')?.group.max).toBe(2)
   })
 })

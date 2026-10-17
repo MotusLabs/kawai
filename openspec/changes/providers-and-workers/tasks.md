@@ -14,7 +14,7 @@
 
 - [x] 2.1 Add `providerId` and `providerLabel` to `GET /api/chat/profiles` entries (`ClaudeProfiles.ts`, `ClaudeProfileMetadata`), in D13 order. Verify `claudeProfileRoutes.test.ts` and `claudeProfiles.test.ts` assert the fields and the order, and that the response still carries no env, base URL, or executable.
 - [x] 2.2 Group models under `<optgroup>` per provider in `NewSessionModal.tsx`, keeping a one-model provider with equal labels as a plain option (D13). Verify `newSessionModal.test.tsx` covers "Models are grouped by provider" and an unchanged profiles-only picker. The `tests/e2e/chat-profiles.spec.ts` expectations follow the grouped shipped picker, and that spec runs alone on a spare `E2E_PORT` after `bun run build`.
-- [x] 2.3 Show the provider and model labels in the chat header (`ChatView.tsx` to `ChatHeader.tsx`), with one label when they are equal and the reported model after them. Verify `chatHeader.test.tsx` and `chatHeaderIntegration.test.tsx` cover "Provider and model labels", "Live session identity", and "Long metadata".
+- [x] 2.3 Show the provider and model labels in the chat header (`ChatView.tsx` to `ChatHeader.tsx`), with one label when they are equal and the reported model after them. Verify `chatHeader.test.tsx` covers "Provider and model labels", "Live session identity", and "Long metadata".
 
 ## 3. Group keys and the Members tab
 

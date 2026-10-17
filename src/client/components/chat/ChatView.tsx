@@ -26,6 +26,7 @@
 // and `chat-root`, whose --chat-font-size (Settings "Chat Font Size") sizes
 // chat text through the em-based text-chat-body / text-chat-meta utilities.
 import { useClaudeProfiles } from './useClaudeProfiles'
+import { profileIdentityLabels } from '../../utils/profileIdentity'
 import { useEffect, useMemo, useRef, type CSSProperties } from 'react'
 import type { SendClientMessage, ServerMessage, Session } from '@shared/types'
 import type { ConnectionStatus } from '../../stores/sessionStore'
@@ -70,9 +71,7 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
 }) {
   const catalog = useClaudeProfiles(true, session.projectPath)
   const profileId = session.claudeProfileId ?? 'default'
-  const profileEntry = catalog.profiles.find(profile => profile.id === profileId)
-  const profileLabel = profileEntry?.label ?? profileId
-  const providerLabel = profileEntry?.providerLabel ?? profileLabel
+  const { profileLabel, providerLabel } = profileIdentityLabels(catalog.profiles, profileId)
   const chatFontSize = useSettingsStore(state => state.chatFontSize)
   const transcript = useChatStore(state => state.sessions[session.id]) ?? EMPTY
   // Plan usage is per profile (usage bar design D4): every session of the

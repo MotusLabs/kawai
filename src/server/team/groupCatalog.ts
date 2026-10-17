@@ -100,6 +100,10 @@ export function loadGroupCatalog(ctx: GroupCatalogContext): GroupCatalog {
     const file = files.at(-1)!.file
     const groupWarnings = [...group.warnings]
     let changed = false
+    // A cap-derived default max sums the resolved caps, not the written ones.
+    const parsedCapSum = group.profiles.length > 0 && group.profiles.every(entry => entry.cap !== undefined)
+      ? group.profiles.reduce((sum, entry) => sum + entry.cap!, 0)
+      : null
     const resolvedProfiles: typeof group.profiles = []
     const seenProfiles = new Set<string>()
     for (const listed of group.profiles) {
@@ -116,7 +120,7 @@ export function loadGroupCatalog(ctx: GroupCatalogContext): GroupCatalog {
         continue
       }
       if (seenProfiles.has(entry.profileId)) {
-        groupWarnings.push(`profile "${written}" is already listed; the qualified name is ignored`)
+        groupWarnings.push(`profile "${written}" is already listed; the later entry is ignored`)
         continue
       }
       seenProfiles.add(entry.profileId)
@@ -125,31 +129,35 @@ export function loadGroupCatalog(ctx: GroupCatalogContext): GroupCatalog {
     let profileEffort: typeof group.profileEffort
     if (group.profileEffort) {
       profileEffort = {}
-      for (const [key, level] of Object.entries(group.profileEffort)) {
-        const bare = qualified.get(key)
-        if (bare !== undefined) {
-          if (profileEffort[bare] !== undefined) {
-            groupWarnings.push(`profileEffort: "${key}" resolves to the already-listed "${bare}"; ignored`)
-          } else {
-            profileEffort[bare] = level
-          }
+      for (const [written, level] of Object.entries(group.profileEffort)) {
+        const bare = qualified.get(written)
+        if (bare === undefined && written.includes('/')) {
+          groupWarnings.push(`modelEffort: "${written}" is not defined; ignored`)
           changed = true
           continue
         }
-        if (key.includes('/')) {
-          groupWarnings.push(`profileEffort: "${key}" is not defined; ignored`)
+        const key = bare ?? written
+        // First occurrence wins in file order, whatever spelling named it.
+        if (profileEffort[key] !== undefined) {
+          groupWarnings.push(`modelEffort: "${written}" is already listed; the later entry is ignored`)
           changed = true
           continue
         }
         profileEffort[key] = level
+        if (bare !== undefined) changed = true
       }
     }
     const unknown = resolvedProfiles.filter(entry => !known.has(entry.profileId))
     if (unknown.length > 0) changed = true
+    let max = group.max
+    if (changed && parsedCapSum !== null && group.max === parsedCapSum) {
+      max = Math.max(1, resolvedProfiles.reduce((sum, entry) => sum + (entry.cap ?? 0), 0))
+    }
     const checked: GroupDefinition = changed || unknown.length > 0
       ? {
         ...group,
         profiles: resolvedProfiles.filter(entry => known.has(entry.profileId)),
+        max,
         ...(profileEffort !== undefined ? { profileEffort } : {}),
         warnings: [...groupWarnings, ...unknown.map(entry => `profile "${entry.profileId}" is not defined; ignored`)],
       }

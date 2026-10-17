@@ -281,9 +281,9 @@ function parseProfileEffort(
 /** `id` always; `provider/model` too when the new group keys allow it (D5). */
 function isFlowKeyValid(key: string, qualifiedKeys: boolean): boolean {
   if (PROFILE_ID_PATTERN.test(key)) return true
-  if (!qualifiedKeys || !key.includes('/')) return false
-  const [provider, model] = key.split('/')
-  return PROFILE_ID_PATTERN.test(provider ?? '') && PROFILE_ID_PATTERN.test(model ?? '')
+  if (!qualifiedKeys) return false
+  const parts = key.split('/')
+  return parts.length === 2 && parts.every(part => PROFILE_ID_PATTERN.test(part))
 }
 
 /**

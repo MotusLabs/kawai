@@ -23,13 +23,14 @@ export function profileCountLabel(profile: TeamMemberProfile): string {
 
 /**
  * Workers grouped under their provider (design D13): `Z.AI: glm-flash · 0 of 3,
- * glm · 1 live · Claude: haiku · 0 of 2`. Providers keep their first-seen order.
+ * glm · 1 live · Claude: haiku · 0 of 2`. Every model of a provider shares one
+ * group, wherever the preference order puts it; providers keep first-seen order.
  */
 export function workersLabel(row: TeamMemberRow): string {
   const groups: Array<{ label: string; models: string[] }> = []
   for (const profile of row.profiles) {
-    const last = groups[groups.length - 1]
-    if (last?.label === profile.providerLabel) last.models.push(profileCountLabel(profile))
+    const group = groups.find(candidate => candidate.label === profile.providerLabel)
+    if (group) group.models.push(profileCountLabel(profile))
     else groups.push({ label: profile.providerLabel, models: [profileCountLabel(profile)] })
   }
   return groups.map(group => `${group.label}: ${group.models.join(', ')}`).join(' · ')
