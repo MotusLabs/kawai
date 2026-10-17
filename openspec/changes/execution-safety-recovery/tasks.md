@@ -77,11 +77,11 @@ Group 7's matrix rows for plan execution, integration, supervision, and revision
 
 ## 4. Audit view and attention
 
-- [ ] 4.1 Add `src/shared/outbound.ts` with the row, filter, count, and D9 message types, add them to `CHAT_CONNECTION_TYPES`, and add `outboundConnections.ts` over the team-scope resolver. Verify with router and connection tests:
+- [x] 4.1 Add `src/shared/outbound.ts` with the row, filter, count, and D9 message types, add them to `CHAT_CONNECTION_TYPES`, and add `outboundConnections.ts` over the team-scope resolver. Verify with router and connection tests:
   - every type is whitelisted;
   - `unknown-team` and another team's call id are refused;
   - `team-audit-changed` follows every committed row of the team and no other team's.
-- [ ] 4.2 Implement `OutboundService.acknowledge` (D10). Verify with unit tests:
+- [x] 4.2 Implement `OutboundService.acknowledge` (D10). Verify with unit tests:
   - human only, with an agent refused and nothing written;
   - replay and different-payload refusal naming the field;
   - the acknowledgement covers its group through the named call and no later call;
