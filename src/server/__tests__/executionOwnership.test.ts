@@ -222,6 +222,14 @@ describe('8.4 handoffs, release, and result submission on an owned task', () => 
     // A commit containing origin's head of the branch: accepted.
     const accepted = await checked.submit(bench.agent('dev'), taskId, { summary: 'good', commit: 'head1' })
     expect(accepted.commit).toBe('head1')
+    // An unreadable origin ref never passes the check (review finding 1).
+    const unreadable = executionOwnership(executions, {
+      isAncestor: stubGit([['head1', 'refs/heads/api']]).isAncestor,
+      lsRemoteHead: (async () => ({ ok: false, error: { argv: ['git', 'ls-remote'], exitCode: 1, stderr: 'origin unreachable' } })) as never,
+    }, () => null)
+    const guarded = new TaskResultService(tasks, { getSession: id => bench.records.get(id), assignments, ownership: unreadable })
+    await expect(guarded.submit(bench.agent('dev'), taskId, { summary: 's', commit: 'head1' }))
+      .rejects.toThrow('could not be read')
   })
 })
 

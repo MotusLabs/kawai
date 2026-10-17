@@ -73,7 +73,10 @@ export class TaskRelease {
   async release(caller: TaskCaller, taskId: string, request: ReleaseRequest): Promise<ReleaseOutcome> {
     if (caller.kind !== 'human') throw new Error("Release worktree and hand off is the human's; agents use release_member and task_handoff")
     const { team } = await this.results.tasks.context(caller)
-    // Only Kawai releases a running change's worktree (plan-execution D7).
+    // While a running execution owns the change, its worktree is released
+    // only through the execution's own landing — the human's release-and-hand-off
+    // is refused too (plan-execution D7; the caller check above already keeps
+    // agents and Kawai off this human-only path).
     const owner = (this.options.ownership ?? NULL_OWNERSHIP).ownerOfTask(taskId)
     if (owner !== null) {
       throw new Error(`The task is owned by a running execution (${owner.executionId}); close the task or stop the execution instead. Nothing was released.`)

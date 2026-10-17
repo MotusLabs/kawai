@@ -81,7 +81,10 @@ export function executionOwnership(store: ExecutionStore, git: OwnershipGit, mes
       if (!onBranch.ok) return `The commit could not be checked against the change's branch: ${onBranch.error.stderr.trim()}`
       if (!onBranch.ancestor) return `The commit ${commit} is not on the change's branch "${owner.branch}".`
       const originHead = await git.lsRemoteHead(cwd, `refs/heads/${owner.branch}`)
-      if (originHead.ok && originHead.sha !== null) {
+      // An unreadable ref never passes the check: only a clean "absent on
+      // origin" (ok with no sha) may skip the origin-head comparison.
+      if (!originHead.ok) return `The branch "${owner.branch}" on origin could not be read: ${originHead.error.stderr.trim()}`
+      if (originHead.sha !== null) {
         const ahead = await git.isAncestor(cwd, originHead.sha, commit)
         if (!ahead.ok) return `The origin head could not be checked: ${ahead.error.stderr.trim()}`
         if (!ahead.ancestor) return `The branch "${owner.branch}" on origin is ahead of ${commit}; push or rebase the result first.`

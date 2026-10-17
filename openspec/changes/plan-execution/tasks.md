@@ -39,7 +39,7 @@ Implement after `durable-plans`, `strategy-revision-impact`, and `plan-validatio
 
 ## 2. Kawai as a system actor
 
-- [x] 2.1 Add `SystemActor` and widen the task creator, assignment dispatcher, and message sender types, with `from_kind = 'system'`. Add the system `TaskCaller` minted only inside `src/server/plans/execution/`. Rewrite the comment in `src/shared/teamTasks.ts` that records member-release D4 ("the system is never a sender or task creator"), so it states D2's rights instead. Verify with a typecheck, and with a test that no tool handler or WebSocket connection path can construct a system caller.
+- [x] 2.1 Add `SystemActor` and widen the task creator, assignment dispatcher, and message sender types, with `from_kind = 'system'`. Rewrite the comment in `src/shared/teamTasks.ts` that records member-release D4 ("the system is never a sender or task creator"), so it states D2's rights instead. Verify with a typecheck.
 - [x] 2.2 Convert every two-way actor branch in `TaskService`, `AssignmentService`, `TaskResultService`, `MemberRelease`, `TaskRelease`, the mailbox enqueue and sender paths, and the row mappers (`taskStore`, `assignmentStore`, `messageRow`) to exhaustive switches. Verify with tests that call each service with a system caller and read back `system` as creator, dispatcher, and sender, never the human.
 - [x] 2.3 Keep the human-only paths refusing `system`: publish, notify, Release, plan approve, withdraw, close, and reopen, strategy actions, and validation decisions. Verify with one refusal test per path.
 - [x] 2.4 Render "Kawai" as creator, dispatcher, sender, and journal author in the task list and detail, the assignment history, the Mailbox, the Messages view, and peer-message rows. It is never a link. Verify with component tests.
@@ -103,7 +103,7 @@ Implement after `durable-plans`, `strategy-revision-impact`, and `plan-validatio
 - [ ] 11.1 Implement `ExecutionExecutor` (D5): the wake sources, single-flight per team, the 60-second timer while running, and the pure `planSteps`. Verify with tests: concurrent wakes run one tick; a tick after a restart resumes from stored rows.
 - [ ] 11.2 Implement scheduling: plan order, landed dependencies, the parallel limit, and a stopped dependency holding its dependents. Verify with the `plan-execution` scheduling scenarios.
 - [ ] 11.3 Implement the provision effect (D6): branch from `origin`'s base, refuse `name-taken`, and reuse worktrees and branches from earlier executions. Verify against a bare `origin`, including a foreign remote branch left untouched.
-- [ ] 11.4 Create Kawai's task and dispatch the implement attempt with its manifest and request key (D7, D8). Verify with tests: task fields, link, assignment dispatcher, `allowed_profiles` on the mail, and a replayed dispatch step yielding one instruction.
+- [ ] 11.4 Create Kawai's task and dispatch the implement attempt with its manifest and request key (D7, D8). Mint the system `TaskCaller` only inside `src/server/plans/execution/` (deferred from 2.1 by the review). Verify with tests: task fields, link, assignment dispatcher, `allowed_profiles` on the mail, a replayed dispatch step yielding one instruction, and that no tool handler or WebSocket connection path can construct a system caller.
 
 ## 12. Rounds and the gate
 
