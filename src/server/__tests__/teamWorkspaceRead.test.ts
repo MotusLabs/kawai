@@ -1,7 +1,10 @@
 // The workspace read model's pure projections (team-workspace 2.2, 3.2, 4.1,
 // 4.3): member rows over the layered catalog, task rows over assignment
 // state, the attention registry, and the morning summary's buckets.
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import type { ChatPendingRequest } from '../../shared/chat'
 import type { AttentionItem, TeamMemberRow } from '../../shared/teamWorkspace'
 import type { TeamMessage, WaitingReason } from '../../shared/team'
@@ -17,8 +20,45 @@ import {
   type AttentionInput,
 } from '../team/workspaceRead'
 import type { PendingAcceptance } from '../team/attentionAcceptance'
-import type { OutboundViolationGroup as ImportedViolationGroup } from '../outbound/service'
+import { OutboundService, type OutboundViolationGroup as ImportedViolationGroup } from '../outbound/service'
+import { OutboundStore, type OutboundCallInsert } from '../outbound/store'
+import { initDatabase } from '../db'
 import { filterTeamTaskRows } from '../../shared/teamWorkspace'
+
+// The outbound window test reads a real store (findings-8134cc45 PC1): a
+// stubbed windowCounts cannot catch a mutant on the snapshot's `since`.
+const OB_TEAM = 'team-ob'
+let obDb: ReturnType<typeof initDatabase> | null = null
+let obStore: OutboundStore | null = null
+afterEach(() => {
+  obDb?.close()
+  obDb = null
+  obStore = null
+})
+
+/** A fresh service over a fresh store on the same database — a restart's reader. */
+function realAudit(): OutboundService {
+  if (obDb === null) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-workspace-ob-'))
+    obDb = initDatabase({ path: path.join(dir, 'agentboard.db') })
+  }
+  obStore = new OutboundStore(obDb.db)
+  return new OutboundService({
+    store: obStore,
+    sessionOf: (_teamId, sessionId) => ({ name: sessionId, clickable: false }),
+    spawnLive: () => false,
+  })
+}
+
+function outboundCall(overrides: Partial<OutboundCallInsert> = {}): OutboundCallInsert {
+  return {
+    id: 'obc-x', teamId: OB_TEAM, sessionId: 'chat-ob', spawnId: 'sp-ob', tool: 'Bash',
+    toolUseId: `tu-${overrides.id ?? 'x'}`, command: 'git push origin main', truncated: false,
+    rule: 'git-push', verdict: 'allowed', destination: 'github:origin', matches: '[]',
+    classifierVersion: 3, cwd: '/repo', createdAt: new Date().toISOString(),
+    ...overrides,
+  }
+}
 
 const record = (overrides: Partial<ChatSessionRecord> = {}): ChatSessionRecord => ({
   sessionId: 'chat-1',
@@ -695,5 +735,51 @@ describe('the outbound summary bucket (execution-safety-recovery 4.3)', () => {
     // An empty window lists nothing; the bucket is durable (never runtimeOnly).
     expect(morningSummary(input({ allowed: 0, unknown: 0, violations: 0 })).outbound).toEqual({ items: [] })
     expect(morningSummary(input({ allowed: 0, unknown: 0, violations: 0 })).outbound.runtimeOnly).toBeUndefined()
+  })
+})
+
+describe('the outbound window against the real store (findings-8134cc45 PC1)', () => {
+  const snapshotFor = (audit: { violationGroups(teamId: string): ImportedViolationGroup[]; windowCounts(teamId: string, from: string, to: string): { allowed: number; unknown: number; violations: number } }) => {
+    const manager = {
+      tasks: { store: {
+        list: () => [], get: () => null,
+        results: { get: () => null, outstandingSince: () => [], submittedBy: () => false },
+        acknowledgements: { highest: () => null },
+      } },
+      mailbox: { store: { listForTeam: () => [], eventsFor: () => [] } },
+      waitingFor: () => ({}),
+      teamRecords: () => [],
+      directory: { list: () => [] },
+      getPendingRequests: () => [],
+      teams: { catalogForTeam: () => ({ groups: new Map() }) },
+      groupProfileCounts: () => ({}),
+      turnEnds: { finishedForTeam: () => [] },
+      outboundAudit: audit,
+    }
+    return new WorkspaceRead(manager as never).snapshot({ teamId: OB_TEAM } as never).summary.outbound
+  }
+
+  test('a 25 h-old send is out of the 24 h bucket; a fresh reader (restart) counts the same', () => {
+    const now = Date.now()
+    const at = (hoursAgo: number) => new Date(now - hoursAgo * 60 * 60 * 1000).toISOString()
+    realAudit() // opens the database
+    obStore!.insertCall(outboundCall({ id: 'obc-old', verdict: 'violation', rule: 'gh-write', destination: 'github:old/repo', createdAt: at(25) }))
+    realAudit() // opens the database
+    obStore!.insertCall(outboundCall({ id: 'obc-new', verdict: 'violation', rule: 'gh-write', destination: 'github:other/repo', createdAt: at(23) }))
+    realAudit() // opens the database
+    obStore!.insertCall(outboundCall({ id: 'obc-ok', verdict: 'allowed', rule: 'git-push', destination: 'github:origin', createdAt: at(1) }))
+    const first = snapshotFor(realAudit())
+    expect(first).toEqual({
+      items: [
+        { id: 'outbound:allowed', label: '1 allowed send', link: { kind: 'audit', id: '' } },
+        { id: 'outbound:violation', label: '1 violation', link: { kind: 'audit', id: '' } },
+      ],
+    })
+    // A restart: a fresh store instance over the same database, no memory.
+    const second = snapshotFor(realAudit())
+    expect(second).toEqual(first)
+    // And the queue's groups ignore the window: the old violation still raises.
+    expect(realAudit().violationGroups(OB_TEAM).map(group => group.destination).sort())
+      .toEqual(['github:old/repo', 'github:other/repo'])
   })
 })

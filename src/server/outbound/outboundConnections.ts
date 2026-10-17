@@ -62,14 +62,18 @@ export class OutboundConnections {
   async handle(connection: ChatConnection, message: AuditClientMessage) {
     if (message.type === 'team-audit-acknowledge') return this.acknowledge(connection, message)
     const { teamPath } = message
-    const target = `${teamPath}\0page`
+    // Open and more carry separate tokens: a more must not invalidate a
+    // slow open in flight (its reply is the page the more appends to), and
+    // only a newer request of the same kind supersedes its predecessor.
+    const target = `${teamPath}\0${message.type}`
     const token = {}
     const pending = this.pending.get(connection) ?? new Map<string, object>()
     pending.set(target, token)
     this.pending.set(connection, pending)
     if (message.type === 'team-audit-close') {
       this.subscriptions.get(connection)?.delete(teamPath)
-      this.pending.get(connection)?.delete(target)
+      this.pending.get(connection)?.delete(`${teamPath}\0team-audit-open`)
+      this.pending.get(connection)?.delete(`${teamPath}\0team-audit-more`)
       return
     }
     const { requestId } = message
