@@ -11,6 +11,9 @@
 // frames, merged per message id. All SDK types are confined to this module; the SDK itself is
 // injected as a queryFactory (the manager does the dynamic import), mirroring
 // the SpawnFn convention in server/terminal/.
+// Results and frames bind to turns by the client uuid each prompt carries,
+// relying on the pinned CLI contract in docs/claude-cli-contract.md (floor,
+// recorded-frame test, and the live check to run when the floor rises).
 import type {
   CanUseTool,
   HookCallback,
@@ -18,6 +21,7 @@ import type {
   PermissionResult,
   Query,
   SDKAssistantMessage,
+  SDKControlInterruptResponse,
   SDKMessage,
   SDKPartialAssistantMessage,
   SDKResultMessage,
@@ -101,6 +105,7 @@ import { decideApproval } from './approvalPolicy'
 import { resolveClaudeProfile } from './ClaudeProfiles'
 import { logger } from '../logger'
 import { TurnQueue } from './TurnQueue'
+import { CliTurnBinder } from './cliTurnBinding'
 import { TEAM_ALLOWED_TOOLS } from '../team/mailboxTools'
 import { TEAM_MCP_SERVER } from '../team/teamPrompt'
 import { formatEnvelope } from '../team/envelope'
@@ -326,6 +331,21 @@ export class ChatSessionDriver {
   private turnCounter = 0
   private activeTurnId: string | null = null
   /**
+   * Which CLI turn a result or content frame belongs to (see cliTurnBinding
+   * and docs/claude-cli-contract.md): every prompt carries a client uuid the
+   * CLI echoes on its result, so an interrupted turn's late frames and result
+   * never complete or feed a turn opened since, in any order.
+   */
+  private readonly binder = new CliTurnBinder({
+    violation: (reason) => logger.warn('chat_cli_contract_violation', { sessionId: this.options.sessionId, reason }),
+    unknownUuid: (uuid) => logger.warn('chat_unknown_result_uuid', { sessionId: this.options.sessionId, uuid }),
+  })
+  /**
+   * The CLI advertises interrupt_cancel_queued_v1 on init; undefined until
+   * the first init (an older CLI ignores the field, so it is sent then).
+   */
+  private cancelQueuedSupported: boolean | undefined
+  /**
    * Task notifications that arrived while no turn was active (background
    * tasks D5): they become the next turn's trigger — user-started or
    * agent-started alike — and are consumed when that turn opens.
@@ -438,8 +458,25 @@ export class ChatSessionDriver {
     const turnId = `turn-${this.turnCounter}`
     this.activeTurnId = turnId
     this.pendingTaskNotifications = []
+    this.binder.turnOpened(turnId, trigger !== undefined)
     this.emit({ type: 'turn_started', turnId, ...(trigger ? { trigger } : {}) })
     return turnId
+  }
+
+  /**
+   * The turn content frames belong to, or null while an interrupted turn's
+   * result is still owed — those frames are the aborted turn's, never the
+   * turn opened since.
+   */
+  private frameTurnId(): string | null {
+    return this.binder.framesBelongToActive() ? this.activeTurnId : null
+  }
+
+  /** Hand a prompt to the CLI under a fresh client uuid bound to `turnId`. */
+  private enqueue(turnId: string, message: Omit<SDKUserMessage, 'uuid'>): void {
+    const uuid = crypto.randomUUID()
+    this.binder.promptSent(uuid, turnId)
+    this.queue.push({ ...message, uuid })
   }
 
   /** Submit a user turn. Spawns the SDK lazily on the first turn. */
@@ -449,7 +486,7 @@ export class ChatSessionDriver {
     const turnId = this.activeTurnId ?? this.startTurn()
     this.trackEcho(text)
     this.emit({ type: 'user_message', turnId, text })
-    this.queue.push({
+    this.enqueue(turnId, {
       type: 'user',
       message: { role: 'user', content: text },
       parent_tool_use_id: null,
@@ -468,7 +505,7 @@ export class ChatSessionDriver {
     const text = formatEnvelope(envelope)
     this.trackEcho(text)
     this.emit({ type: 'peer_message', turnId, ...envelope })
-    this.queue.push({
+    this.enqueue(turnId, {
       type: 'user', message: { role: 'user', content: text },
       parent_tool_use_id: null,
       // A human sender has no session id; the envelope's senderKind says so.
@@ -477,13 +514,21 @@ export class ChatSessionDriver {
     this.refreshStatus()
   }
 
-  /** Stop button: abort the in-flight turn, drop queued sends, cancel asks. */
+  /**
+   * Stop button: abort the in-flight turn, drop queued sends, cancel asks.
+   * Every caller (Stop, archive, urgent mail) also cancels what the CLI
+   * already queued (cancel_queued), so a dropped send never runs later.
+   * turn_interrupted is emitted at once; the promise resolves on the CLI's
+   * acknowledgement. The aborted turn's late frames and result are told
+   * apart by uuid (see `binder`), so nothing waits for them.
+   */
   interrupt(): Promise<void> {
-    this.queue.clearPending()
+    this.binder.promptsWithdrawn(promptUuids(this.queue.clearPending()))
     this.cancelAllRequests('interrupted')
     if (this.activeTurnId) {
       const turnId = this.activeTurnId
       this.activeTurnId = null
+      this.binder.turnInterrupted(turnId)
       this.emit({ type: 'turn_interrupted', turnId })
       // Turn boundary: re-resolve the threshold for the next turn (design D2).
       this.refreshContextThreshold()
@@ -492,15 +537,19 @@ export class ChatSessionDriver {
     // settle as stopped so none can keep reading as live.
     this.feedWorkers({ type: 'process_end' })
     const query = this.query
-    if (query) {
-      const completed = query.interrupt().then(() => {}).catch(() => {
-        // The process may already be gone; the stream loop handles death.
-      })
-      this.refreshStatus()
-      return completed
-    }
     this.refreshStatus()
-    return Promise.resolve()
+    if (!query) return Promise.resolve()
+    const cancelQueued = this.cancelQueuedSupported !== false
+    if (!cancelQueued) {
+      logger.warn('chat_cli_contract_violation', { sessionId: this.options.sessionId, reason: 'interrupt-cancel-queued-unsupported' })
+    }
+    return interruptQuery(query, cancelQueued).then((receipt) => {
+      // Cancelled prompts never run: an interrupted turn whose prompts were
+      // all cancelled before its init owes no result.
+      if (this.query === query && receipt?.cancelled) this.binder.promptsWithdrawn(receipt.cancelled)
+    }).catch(() => {
+      // The process may already be gone; the stream loop handles death.
+    })
   }
 
   /** Kill the session: abort, settle pending approvals with a denial, stop. */
@@ -509,6 +558,7 @@ export class ChatSessionDriver {
     this.queue.end()
     this.cancelAllRequests('killed')
     this.activeTurnId = null
+    this.binder.reset()
     // Archive and kill both end the process (design D3): every worker still
     // without an outcome settles as stopped, nothing survives as live. The
     // background tasks die with the process too (background tasks D1) — but
@@ -520,7 +570,7 @@ export class ChatSessionDriver {
     this.query = null
     if (query) {
       try {
-        void query.interrupt().catch(() => {})
+        void interruptQuery(query, this.cancelQueuedSupported !== false).catch(() => {})
         query.close()
       } catch {
         // Already gone.
@@ -844,6 +894,7 @@ export class ChatSessionDriver {
     this.dead = true
     this.query = null
     this.activeTurnId = null
+    this.binder.reset()
     // The process is gone (design D3): workers cannot have outcomes any
     // more, so any still-open row settles as stopped rather than wedging.
     // Background tasks settle the same way (D1) — the respawn starts clean.
@@ -895,6 +946,11 @@ export class ChatSessionDriver {
         this.applyContextStep(this.context.resetConversation())
         return
       default:
+        // command_lifecycle frames are logged only; no rule reads them
+        // (docs/claude-cli-contract.md).
+        if ((message as { type: string }).type === 'command_lifecycle') {
+          logger.debug('chat_command_lifecycle', { sessionId: this.options.sessionId, frame: message })
+        }
         // Trailing informational frames (prompt suggestions, status, hooks,
         // ...) are tolerated and ignored — a result ends a turn, not the
         // stream, and unknown frames must never kill the session.
@@ -912,7 +968,7 @@ export class ChatSessionDriver {
     // Context usage rides the same wrapper level, whatever the turn state —
     // trailing frames after an interrupt still measure the live context.
     this.readContextUsage(message)
-    const turnId = this.activeTurnId
+    const turnId = this.frameTurnId()
     if (!turnId) return
     const messageId = message.message.id ?? message.uuid
     const subagent = isSubagentContentFrame(message)
@@ -974,7 +1030,7 @@ export class ChatSessionDriver {
     // Usage capture precedes the turn gate, like assistant-frame usage:
     // trailing frames after an interrupt still measure the live context.
     this.readStreamUsage(event)
-    const turnId = this.activeTurnId
+    const turnId = this.frameTurnId()
     if (!turnId) return
     if (event.type === 'message_start') this.streamingMessageId = event.message.id
     if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
@@ -992,7 +1048,7 @@ export class ChatSessionDriver {
   }
 
   private handleUser(message: SDKUserMessage): void {
-    const turnId = this.activeTurnId
+    const turnId = this.frameTurnId()
     if (!turnId) return
     const content = message.message.content
     if (typeof content === 'string') {
@@ -1052,12 +1108,12 @@ export class ChatSessionDriver {
     // modelUsage arrives on every result whatever the turn state; its
     // contextWindow is the threshold fallback (design D2 step 3).
     this.readModelContextWindow(message)
+    // A result ends only the turn it names (see `binder`): an interrupted
+    // turn's, a late or duplicate one, or one naming a never-sent uuid is
+    // dropped — already reported via turn_interrupted, or not ours.
+    const verdict = this.binder.result(resultUuids(message), message.queued_turn_count)
     const turnId = this.activeTurnId
-    if (!turnId) {
-      // Already reported via turn_interrupted (or no turn ran); a trailing
-      // result for an ended turn must not resurrect one.
-      return
-    }
+    if (verdict === 'drop' || !turnId) return
     this.activeTurnId = null
     this.emit({
       type: 'turn_completed',
@@ -1088,13 +1144,19 @@ export class ChatSessionDriver {
       this.reportLimit(retryLimitSignal(message, this.currentResetsAt()))
     }
     if (message.subtype === 'init') {
+      if (Array.isArray(message.capabilities)) {
+        this.cancelQueuedSupported = message.capabilities.includes('interrupt_cancel_queued_v1')
+      }
+      // An init opening an interrupted turn whose result is still owed (the
+      // interrupt landed before its init) opens nothing (see `binder`).
+      const binding = this.binder.init()
       // Agent-started turn (background tasks D5): `init` opens every turn
       // and is the first frame of one that the SDK yields to consumers —
       // `session_state_changed` is `sdk_host_only` and never reaches this
       // loop. A spawn without a prompt emits no `init`, so an idle attach
       // cannot open a phantom turn; a user `send()` has already set its turn
       // id before the CLI gets the message.
-      if (!this.activeTurnId) {
+      if (binding === 'open' && !this.activeTurnId) {
         this.startTurn(
           this.pendingTaskNotifications.length > 0
             ? { kind: 'task', tasks: this.pendingTaskNotifications.slice() }
@@ -1129,7 +1191,7 @@ export class ChatSessionDriver {
       return
     }
     if (message.subtype === 'local_command_output') {
-      const turnId = this.activeTurnId
+      const turnId = this.frameTurnId()
       if (turnId) {
         this.emit({ type: 'command_output', turnId, text: message.content })
       }
@@ -1641,6 +1703,28 @@ function validateAnswers(
     answers: result,
     ...(response !== undefined ? { response } : {}),
   }
+}
+
+/** The client uuids a result echoes (`user_message_uuids`, else `user_message_uuid`). */
+function resultUuids(message: SDKResultMessage): string[] {
+  if (Array.isArray(message.user_message_uuids)) return message.user_message_uuids.filter((uuid) => typeof uuid === 'string')
+  return typeof message.user_message_uuid === 'string' ? [message.user_message_uuid] : []
+}
+
+function promptUuids(messages: readonly SDKUserMessage[]): string[] {
+  return messages.flatMap((message) => (message.uuid ? [message.uuid] : []))
+}
+
+/**
+ * The SDK's runtime `interrupt` takes `{ cancelQueued }` and sends
+ * `cancel_queued` (SDK 0.3.289), but its d.ts declares no parameter: this is
+ * the one place that calls it with the option.
+ */
+type InterruptWithOptions = (options?: { cancelQueued?: boolean }) => Promise<SDKControlInterruptResponse | undefined>
+
+function interruptQuery(query: Query, cancelQueued: boolean): Promise<SDKControlInterruptResponse | undefined> {
+  const interrupt = query.interrupt as unknown as InterruptWithOptions
+  return interrupt.call(query, cancelQueued ? { cancelQueued: true } : undefined)
 }
 
 /** The result's per-turn token counts (team-process-metrics D1); absent when the result carries none. */

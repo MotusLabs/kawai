@@ -14,17 +14,22 @@
 //   profile has recovered (durable `team_handoff_notes` rows).
 // A successful turn of a parked agent — a human message or the resume —
 // unparks it and cancels any resume still queued.
+// A final limit in a turn the agent started itself (limit-outcomes-agent-turns)
+// parks the session's current work — the newest message delivered to, parked
+// on, or resumed by it that it still holds — and never releases or forwards
+// it: that instruction may already be complete.
 import type { Database } from 'bun:sqlite'
 import type { ChatSessionRecord } from '../../db'
 import type { ChatHandoffPackage } from '../../../shared/team'
 import type { LimitEvent, LimitOutcome, LimitOutcomeContext } from '../../../shared/routing'
 import { runGitAsync } from '../../git/gitCommand'
+import { logger } from '../../logger'
 import type { GroupDefinition } from '../groupFile'
 import { DEFAULT_PARK_IF_RESET_WITHIN_MS } from '../groupFile'
 import type { MailboxStore, TeamMessage } from '../mailboxStore'
 import { ProgressDigest } from './handoff'
 import { DEFAULT_COOLDOWN_MS, type LimitEventStore } from './limitEvents'
-import { resolveLimit, type LimitResolution } from './limitPolicy'
+import { MAX_PARKS, resolveLimit, type LimitResolution } from './limitPolicy'
 import type { RuleRegistry } from './ruleLoader'
 
 const CREATE_TABLE_SQL = `
@@ -72,6 +77,10 @@ export class LimitOutcomes {
   private readonly digests = new Map<string, ProgressDigest>()
   /** Session → the final limit event of its current turn. */
   private readonly pending = new Map<string, LimitEvent>()
+  /** Sessions whose current turn the agent started itself (D1). */
+  private readonly agentTurns = new Set<string>()
+  /** Session → the work it was last delivered, resumed on, or parked with (D2). */
+  private readonly lastWork = new Map<string, string>()
 
   constructor(private readonly db: Database, private readonly options: LimitOutcomesOptions) {
     options.limits.subscribe(event => { if (event.final) this.pending.set(event.sessionId, event) })
@@ -96,6 +105,7 @@ export class LimitOutcomes {
   delivered(sessionId: string, message: TeamMessage): void {
     const workId = this.options.store.parkedFor(message.id)?.id ?? message.id
     this.active.set(sessionId, workId)
+    this.lastWork.set(sessionId, workId)
     if (!this.digests.has(workId)) this.digests.set(workId, new ProgressDigest())
   }
 
@@ -105,22 +115,77 @@ export class LimitOutcomes {
     if (workId) this.digests.get(workId)?.record(tool, input)
   }
 
+  /**
+   * A turn opened; every start resets the kind and the delivered work, so
+   * neither leaks past an interrupted turn (which never reaches turnEnded).
+   * A delivery opens its turn before `delivered()` records the work.
+   */
+  turnStarted(sessionId: string, agentStarted: boolean): void {
+    this.active.delete(sessionId)
+    if (agentStarted) this.agentTurns.add(sessionId)
+    else this.agentTurns.delete(sessionId)
+  }
+
   /** The session's turn ended (after its mail was settled). */
   async turnEnded(sessionId: string, success: boolean): Promise<void> {
     const event = this.pending.get(sessionId)
     this.pending.delete(sessionId)
     const workId = this.active.get(sessionId)
     this.active.delete(sessionId)
+    const agentTurn = this.agentTurns.delete(sessionId)
     if (event && workId) {
       await this.resolve(workId, sessionId, event)
       return
     }
-    if (success && !event) {
+    // The result subtype is ignored: the CLI has reported success after a
+    // final limit, so the recorded event decides (D3).
+    if (event && agentTurn) {
+      this.parkCurrent(sessionId, event)
+      return
+    }
+    // A successful agent-started turn leaves parked work and its resume (D4).
+    if (success && !event && !(agentTurn && !workId)) {
       // Only a human turn or this work's own resume can complete parked work.
       for (const parked of this.options.store.parkedBy(sessionId)) {
         if (!workId || workId === parked.id) this.unpark(parked)
       }
     }
+  }
+
+  /**
+   * The work an agent-started turn's limit parks (D2): the last work while
+   * still held, else — after a restart — the newest parked, else the newest
+   * held delivered message that is not a resume (a resume points at work).
+   */
+  private currentWork(sessionId: string): TeamMessage | null {
+    const held = this.options.store.heldBy(sessionId)
+    const last = this.lastWork.get(sessionId)
+    const remembered = last ? held.find(message => message.id === last) : undefined
+    if (remembered) return remembered
+    const newest = (rows: TeamMessage[], at: (message: TeamMessage) => string | null) =>
+      rows.reduce<TeamMessage | null>((best, row) => !best || (at(row) ?? '') >= (at(best) ?? '') ? row : best, null)
+    return newest(held.filter(message => message.state === 'parked'), message => message.parkedUntil)
+      ?? newest(held.filter(message => message.state === 'delivered' && !message.tags.includes('resume')), message => message.deliveredAt)
+  }
+
+  /** A final limit in an agent-started turn parks the current work (D3). */
+  private parkCurrent(sessionId: string, event: LimitEvent): void {
+    const work = this.currentWork(sessionId)
+    if (!work) return
+    const resetsAt = this.resetTime(event)
+    if (Date.parse(resetsAt) <= this.now()) return
+    const record = this.options.getRecord(sessionId)
+    if (work.state === 'parked') {
+      // Already parked: only a later reset moves the resume; the count stays.
+      if (Date.parse(work.parkedUntil ?? '') < Date.parse(resetsAt)) this.park(work, sessionId, record, resetsAt, false)
+      return
+    }
+    if (work.parkCount >= MAX_PARKS) {
+      // Never released: the instruction may be complete. Left as it is.
+      logger.warn('limit_agent_turn_park_cap', { sessionId, messageId: work.id, parkCount: work.parkCount })
+      return
+    }
+    this.park(work, sessionId, record, resetsAt)
   }
 
   /** The human hands a parked message to a group or session (spec: Users can hand off parked work). */
@@ -258,8 +323,9 @@ export class LimitOutcomes {
     return new Date(Number.isFinite(reset) ? reset : Date.parse(event.at) + DEFAULT_COOLDOWN_MS).toISOString()
   }
 
-  private park(message: TeamMessage, sessionId: string, record: ChatSessionRecord | undefined, resetsAt: string) {
+  private park(message: TeamMessage, sessionId: string, record: ChatSessionRecord | undefined, resetsAt: string, countPark = true) {
     const store = this.options.store
+    this.lastWork.set(sessionId, message.id)
     store.replaceResume(message.id)
     const resume = store.enqueue({
       teamId: message.teamId, toKind: 'session', toId: sessionId, fromSession: sessionId,
@@ -268,7 +334,7 @@ export class LimitOutcomes {
       body: `Your provider limit has reset. Continue the work from message ${message.id}` +
         `${message.taskId ? ` (task ${message.taskId})` : ''} where you left off; check \`git status\` first.`,
     })
-    if (!store.park(message.id, resetsAt, resume.id)) store.cancel(resume.id, SYSTEM)
+    if (!store.park(message.id, resetsAt, resume.id, countPark)) store.cancel(resume.id, SYSTEM)
   }
 
   /** Resolve a frontmatter `forwardTo`: a team group, else a team session, else the same group. */

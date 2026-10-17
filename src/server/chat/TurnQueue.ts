@@ -24,9 +24,9 @@ export class TurnQueue implements AsyncIterable<SDKUserMessage> {
     }
   }
 
-  /** Drop messages the SDK has not consumed yet. */
-  clearPending(): void {
-    this.queued = []
+  /** Drop messages the SDK has not consumed yet, returning them. */
+  clearPending(): SDKUserMessage[] {
+    return this.queued.splice(0)
   }
 
   /** End iteration; pending pulls resolve done and later pushes are no-ops. */
