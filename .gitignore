@@ -16,3 +16,4 @@ systemd/agentboard.service
 /.agentcache
 .claude/
 .worktrees/
+.kawai/profiles.json
