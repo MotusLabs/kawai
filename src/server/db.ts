@@ -184,8 +184,10 @@ export function resolveDataDir(): string {
 /**
  * Open the database and bring its schema to this build's version
  * (execution-safety-recovery D13–D15). Throws DatabaseStartupError, before any
- * write, for a database newer than the build, and for a failed migration or
- * pre-migration backup. `migrations` and `appVersion` are for tests.
+ * write, for a database newer than the build, for a recorded migration name
+ * or version the registry disagrees with (a different lineage, or a gap in
+ * the recorded versions), and for a failed migration or pre-migration
+ * backup. `migrations` and `appVersion` are for tests.
  */
 export function initDatabase(
   options: { path?: string; migrations?: readonly Migration[]; appVersion?: string } = {},

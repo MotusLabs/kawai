@@ -113,6 +113,9 @@ import { MetricsReader } from '../metrics/computeMetrics'
 import { ProcessReportService, type ReportCaller } from '../metrics/reportService'
 import type { ChatSpawnInfo } from './ChatSessionDriver'
 import { OutboundDestinations } from '../outbound/destinations'
+import { sessionObserver } from '../outbound/auditHooks'
+import { RepoFactsResolver } from '../outbound/repoFacts'
+import { OutboundStore } from '../outbound/store'
 import {
   findTranscriptPath,
   findTranscriptPathAsync,
@@ -891,6 +894,10 @@ export class ChatSessionManager {
     this.options = options
     this.directory = new SessionDirectory(options.db.db)
     this.providerUsageRefreshMs = options.providerUsageRefreshMs ?? 10 * 60 * 1000
+    // Outbound audit (execution-safety-recovery D3/D6): one store and one
+    // repository-facts resolver for every session; observers are per session.
+    this.outboundStore = new OutboundStore(options.db.db)
+    this.outboundRepoFacts = new RepoFactsResolver()
     // Outbound destinations (execution-safety-recovery D2): the security
     // note's facts come from here at each spawn; the global provider env's
     // base URL rides along as a model provider every profile may inherit.
@@ -1253,6 +1260,10 @@ export class ChatSessionManager {
   readonly teams: SessionTeams
   /** The owner's outbound destinations (execution-safety-recovery D2); feeds every prompt's security note. */
   readonly outbound: OutboundDestinations
+  /** The append-only audit tables' only writer (execution-safety-recovery D6). */
+  private readonly outboundStore: OutboundStore
+  /** Repository facts for the classifier (execution-safety-recovery D4). */
+  private readonly outboundRepoFacts: RepoFactsResolver
   /** The team a human team view's `teamPath` addresses (team-workspace-pages D1). */
   readonly teamScopes: TeamScopes
   /** Last known name/group of each team's sessions, kept past kill (team-message-threads D3). */
@@ -2006,6 +2017,23 @@ export class ChatSessionManager {
         projectPath: record.projectPath,
         queryFactory,
         teamMcpServer,
+        // The session's observer (D7) constructs in src/server/outbound/;
+        // the manager registers it with its own live context getters.
+        outbound: sessionObserver({
+          sessionId: record.sessionId,
+          store: this.outboundStore,
+          destinations: this.outbound,
+          repos: this.outboundRepoFacts,
+          context: () => {
+            const live = this.records.get(record.sessionId)
+            return {
+              ...(live?.groupId != null ? { groupId: live.groupId } : {}),
+              ...(live?.claudeProfileId != null ? { profileId: live.claudeProfileId } : {}),
+              ...(live?.taskId != null ? { taskId: live.taskId } : {}),
+            }
+          },
+          teamIdFallback: () => this.teams.teamOf(record.sessionId)?.teamId ?? '',
+        }),
         getSystemPromptAppend: () => this.teams.promptFor(
           record.sessionId,
           this.records.get(record.sessionId)?.groupId
