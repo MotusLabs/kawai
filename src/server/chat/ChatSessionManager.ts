@@ -49,6 +49,7 @@ import { isExistingDirectory, resolveProjectDirectory } from '../paths'
 import type { SessionRegistry } from '../SessionRegistry'
 import { ChatSessionDriver, type ChatQueryFactory } from './ChatSessionDriver'
 import { chatAuthErrorMessage, hasClaudeAuth } from './chatAuth'
+import { historyWindow } from './historyWindow'
 import {
   ClaudeExecutableError,
   ensureClaudeExecutable,
@@ -488,8 +489,14 @@ export class ChatSessionManager {
   private readonly restoringSdkIds = new Set<string>()
   private isShutDown = false
 
-  /** Synchronous capture: no driver callback can interleave with history loading. */
-  getSnapshot(sessionId: string): Extract<ServerMessage, { type: 'chat-snapshot' }> | null {
+  /**
+   * Synchronous capture: no driver callback can interleave with history
+   * loading. `historyFrom` (chat-history-window D2) widens the recent
+   * window to the unit holding that event id, so a reconnect covers the
+   * span the client already showed; without it the window is the last 24
+   * hours ending at the newest dated event, at least the newest turn.
+   */
+  getSnapshot(sessionId: string, options: { historyFrom?: string } = {}): Extract<ServerMessage, { type: 'chat-snapshot' }> | null {
     if (!this.records.has(sessionId)) return null
     // Attach (live or archived) is one of the account-notice check points
     // (notification strip design D3): resolve the session's credentials path
@@ -498,13 +505,25 @@ export class ChatSessionManager {
     this.captureHistory(sessionId)
     const live = this.liveEvents.get(sessionId) ?? []
     const activity = this.getActivity(sessionId)
+    // The recent history window (chat-history-window D1/D2): memo + live
+    // cut to the last 24 hours. Only events are windowed — pending
+    // requests, activity, rosters, notices and throughSequence stay whole.
+    const window = historyWindow(
+      [...(this.snapshotHistory.get(sessionId) ?? []), ...live],
+      options.historyFrom !== undefined ? { fromId: options.historyFrom } : {}
+    )
     return {
       type: 'chat-snapshot', sessionId,
       profileId: this.records.get(sessionId)?.claudeProfileId ?? 'default',
-      events: [...(this.snapshotHistory.get(sessionId) ?? []), ...live],
+      events: window.events,
       pendingRequests: this.getPendingRequests(sessionId),
       status: this.options.registry.get(sessionId)?.status ?? 'waiting',
+      // The live tail, not the window: older live events outside the window
+      // stay behind it and a page must not replay them as new.
       throughSequence: live.at(-1)?.sequence ?? 0,
+      // Older history on request, and where pages and reconnect resume.
+      historyHasOlder: window.hasOlder,
+      historyStartId: window.startId,
       commands: this.commandState(sessionId),
       activity,
       // In-memory wins: between boundary writes it is fresher than the
@@ -527,6 +546,24 @@ export class ChatSessionManager {
       // first, then agent notices, sorted by priority and newest.
       notifications: this.notificationsOf(sessionId),
     }
+  }
+
+  /**
+   * One history page (chat-history-window D2): the 24 hours before the
+   * unit holding `beforeId`, at least one turn, widened back to `throughId`
+   * (an event id or a `tool:<callId>` search anchor). `stale` with no
+   * events means beforeId is not in the memo + live list. Never starts an
+   * agent — archived chats page too; the caller awaits loadHistory first,
+   * exactly as attach does.
+   */
+  getHistoryPage(sessionId: string, beforeId: string, throughId?: string): { events: ChatEvent[]; hasOlder: boolean; stale: boolean } | null {
+    if (!this.records.has(sessionId)) return null
+    this.captureHistory(sessionId)
+    const window = historyWindow(
+      [...(this.snapshotHistory.get(sessionId) ?? []), ...(this.liveEvents.get(sessionId) ?? [])],
+      { beforeId, ...(throughId !== undefined ? { throughId } : {}) }
+    )
+    return { events: window.events, hasOlder: window.hasOlder, stale: window.stale === true }
   }
 
   /**
