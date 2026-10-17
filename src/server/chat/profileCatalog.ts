@@ -6,10 +6,14 @@
 // only in operator-owned files (user level / shipped default): project files
 // are agent-writable, and an executable there would run arbitrary code with
 // the server's credentials. A file that fails validation is reported and
-// skipped — the rest of the catalog still resolves.
+// skipped — the rest of the catalog still resolves. The shipped default is
+// also embedded at build time (the static JSON import below): compiled
+// release binaries have no config/ directory beside them, so a missing
+// default file falls back to the embedded copy, validated by the same code.
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import shippedDefaultCatalog from '../../../config/profiles.default.json'
 import { isResetTimeZone } from './limitSignals'
 
 /**
@@ -40,6 +44,18 @@ export const DEFAULT_PROFILE_CATALOG_PATH = path.resolve(
   import.meta.dir,
   '../../../config/profiles.default.json'
 )
+
+/**
+ * The shipped default bundled into the build. Used only when the default
+ * file itself is missing (compiled binaries carry no config/ directory);
+ * an existing file always wins so deployments can patch it without a
+ * rebuild. Validated through the same parser as a file, under this source
+ * name in errors.
+ */
+export const EMBEDDED_PROFILE_CATALOG: unknown = shippedDefaultCatalog
+
+/** Source name validation errors report for the embedded shipped catalog. */
+export const EMBEDDED_PROFILE_CATALOG_SOURCE = 'config/profiles.default.json (embedded)'
 
 export interface ProfileCatalogContext {
   projectPath?: string
@@ -141,13 +157,46 @@ function validateEntry(
   return profile
 }
 
-function parseCatalogFile(file: string, trusted: boolean): FileParse {
+/**
+ * The one catalog validator, shared by file reads and the embedded shipped
+ * default: `value` is already-parsed JSON, `source` names it in errors.
+ */
+export function parseCatalogValue(value: unknown, source: string, trusted: boolean): FileParse {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return { ok: false, error: `${source}: catalog must be a JSON object of profile entries.` }
+  }
+  const entries = new Map<string, PartialProfile>()
+  for (const [id, entry] of Object.entries(value)) {
+    if (!PROFILE_ID_PATTERN.test(id)) {
+      return { ok: false, error: `${source}: profile id "${id}" must match ${PROFILE_ID_PATTERN}.` }
+    }
+    const validated = validateEntry(id, entry, source, trusted)
+    if (typeof validated === 'string') return { ok: false, error: validated }
+    entries.set(id, validated)
+  }
+  return { ok: true, entries }
+}
+
+/**
+ * Read and parse one catalog file. `onMissing` supplies the parsed value and
+ * its error source to use when the file does not exist (the embedded shipped
+ * default); without it a missing file reads as an empty catalog.
+ */
+function parseCatalogFile(
+  file: string,
+  trusted: boolean,
+  onMissing?: { value: unknown; source: string }
+): FileParse {
   let raw: string
   try {
     raw = fs.readFileSync(file, 'utf8')
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code
-    if (code === 'ENOENT') return { ok: true, entries: new Map() }
+    if (code === 'ENOENT') {
+      return onMissing
+        ? parseCatalogValue(onMissing.value, onMissing.source, trusted)
+        : { ok: true, entries: new Map() }
+    }
     return { ok: false, error: `${file}: cannot be read (${code ?? 'unknown error'}).` }
   }
   let parsed: unknown
@@ -156,19 +205,7 @@ function parseCatalogFile(file: string, trusted: boolean): FileParse {
   } catch (error) {
     return { ok: false, error: `${file}: invalid JSON (${error instanceof Error ? error.message : String(error)}).` }
   }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    return { ok: false, error: `${file}: catalog must be a JSON object of profile entries.` }
-  }
-  const entries = new Map<string, PartialProfile>()
-  for (const [id, entry] of Object.entries(parsed)) {
-    if (!PROFILE_ID_PATTERN.test(id)) {
-      return { ok: false, error: `${file}: profile id "${id}" must match ${PROFILE_ID_PATTERN}.` }
-    }
-    const validated = validateEntry(id, entry, file, trusted)
-    if (typeof validated === 'string') return { ok: false, error: validated }
-    entries.set(id, validated)
-  }
-  return { ok: true, entries }
+  return parseCatalogValue(parsed, file, trusted)
 }
 
 /**
@@ -200,21 +237,23 @@ function projectCatalogFiles(projectPath: string): string[] {
 }
 
 /**
- * The catalog files a context reads, farthest (trusted base) first: the
+ * The catalog levels a context reads, farthest (trusted base) first: the
  * user-level file — or the shipped default when it is absent — then every
  * project `.kawai/profiles.json` from the filesystem root down to the path.
+ * The image-default base carries `embeddedFallback`: when that file is
+ * missing, the embedded shipped catalog takes its place.
  */
 export function profileCatalogLevels(
   ctx: ProfileCatalogContext = {}
-): Array<{ file: string; trusted: boolean }> {
+): Array<{ file: string; trusted: boolean; embeddedFallback?: boolean }> {
   // HOME first, the POSIX way: os.homedir() may be cached by the runtime and
   // ignore later HOME changes, which tests rely on for isolation.
   const home = ctx.homeDir ?? process.env.HOME ?? os.homedir()
   const baseFile = path.join(home, '.kawai', 'profiles.json')
-  const levels: Array<{ file: string; trusted: boolean }> = []
+  const levels: Array<{ file: string; trusted: boolean; embeddedFallback?: boolean }> = []
   const base = fs.existsSync(baseFile)
     ? { file: baseFile, trusted: true }
-    : { file: ctx.imageDefaultPath ?? DEFAULT_PROFILE_CATALOG_PATH, trusted: true }
+    : { file: ctx.imageDefaultPath ?? DEFAULT_PROFILE_CATALOG_PATH, trusted: true, embeddedFallback: true }
   // Farthest (base) first; project files follow from root down to the path.
   levels.push(base)
   const projectPath = ctx.projectPath?.trim()
@@ -232,9 +271,9 @@ export function profileCatalogLevels(
 
 /**
  * Assemble the catalog for a session: base layer (user-level file, or the
- * shipped default when absent) beneath every `.kawai` directory from the
- * filesystem root down to the project path. Farther files merge first so
- * nearer entries win per key.
+ * shipped default when absent — embedded when even the file is missing)
+ * beneath every `.kawai` directory from the filesystem root down to the
+ * project path. Farther files merge first so nearer entries win per key.
  */
 export function resolveProfileCatalog(
   ctx: ProfileCatalogContext = {}
@@ -244,7 +283,12 @@ export function resolveProfileCatalog(
   const merged = new Map<string, PartialProfile>()
   const errors: string[] = []
   for (const level of levels) {
-    const parsed = parseCatalogFile(level.file, level.trusted)
+    // Only the image-default base falls back to the embedded shipped catalog;
+    // a missing project file just contributes nothing.
+    const onMissing = level.embeddedFallback
+      ? { value: EMBEDDED_PROFILE_CATALOG, source: EMBEDDED_PROFILE_CATALOG_SOURCE }
+      : undefined
+    const parsed = parseCatalogFile(level.file, level.trusted, onMissing)
     if (!parsed.ok) {
       errors.push(parsed.error)
       continue

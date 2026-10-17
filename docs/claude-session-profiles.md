@@ -28,6 +28,11 @@ every `.kawai/profiles.json` from the session's project path up to the
 filesystem root, above a user-level `~/.kawai/profiles.json` that replaces the
 shipped default (`config/profiles.default.json`) when present — in container
 deployments, mount the user-level file (ConfigMap) or bake an image default.
+Release builds embed the shipped default at build time: a compiled binary
+ships no `config/` directory, so when the default file is missing the
+embedded copy supplies the shipped profiles (validated like a file read,
+errors naming `config/profiles.default.json (embedded)`); when the file
+exists it is used as-is.
 
 The shipped catalog lists public provider endpoints only. Private gateways —
 an internal proxy that injects API keys, or a LAN relay — belong in a catalog
