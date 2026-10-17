@@ -23,7 +23,8 @@ See proposal.md (Why) for the motivation. The current code has this shape:
     - the router (`profileStates`, the `cooling` predicate, the `all-profiles-cooling` hold) and `builtinPick`;
     - the dispatch preview (`AssignmentService.spawnProfile`);
     - the urgent refusal (`TeamMailbox.refuseCooling`);
-    - the recovery notes (`LimitOutcomes.processNotes`/`nextNoteAt` over `team_handoff_notes.profile_id`).
+    - the recovery notes (`LimitOutcomes.processNotes`/`nextNoteAt` over `team_handoff_notes.profile_id`);
+    - the process-metrics limit tax (`src/server/metrics/capacity.ts`), which `team-process-metrics` (#189, landed after this change was proposed) reconstructs from `coolingTimeline` per profile.
   - Forwards set `team_messages.excluded_profile`, which `buildCandidates` compares by equality.
   - The driver keeps the reset of the latest rejected `rate_limit_event` but drops its `rateLimitType`, which only the usage parser reads.
   - Usage lives in `UsageLimitStore.profiles` (in memory). The SDK gap-fill claim, the Z.AI pull set and the 10-minute timers are also per profile id. `chat-snapshot.usage` and `chat-usage { profileId, report }` reach sessions through `ChatConnections.subscribesProfile`.
@@ -35,8 +36,9 @@ See proposal.md (Why) for the motivation. The current code has this shape:
 - **Published rule types.** `src/shared/routing.ts` is copied verbatim as `~/.kawai/routing/kawai-routing.d.ts`. Its shapes are `RouteCandidate.profileId`, `RouteContext.profiles: Record<string, RouteProfileState { usage, limitEvents, cooldownUntil }>`, `RouteGroupProfile`, `LimitEvent.profileId` and `LimitOutcomeContext.profileId`.
 - **Account notices** are already keyed by credentials path (`accountNotices.ts`), not by profile. They need no change.
 - **Overlapping changes.**
-  - `chat-transcript-layout` (complete, not archived) renames the chat-header requirement this change modifies. It must be archived first.
+  - `chat-transcript-layout` (archived 2026-10-16) renamed the chat-header requirement this change modifies and rewrote it around wrapping metadata. This change's chat-header delta sits on that renamed text.
   - `codex-chat-sessions` (not started) modifies "Users select a predefined chat profile" and adds its own per-Codex-home fan-out. It is amended to build on this change.
+  - `rename-agentboard-to-kawai` (open) restates "Users select a predefined chat profile" with `KAWAI_CHAT_ENV` in place of `AGENTBOARD_CHAT_ENV`, on the pre-provider picker text. Whichever change archives second rebases onto the first, so archiving the rename after this one never reverts the provider grouping (Workflow follow-up).
   - `plan-execution` adds routing requirements in profile ids. Those stay valid, because model keys are profile ids.
 
 ## Goals / Non-Goals
@@ -52,6 +54,7 @@ See proposal.md (Why) for the motivation. The current code has this shape:
 - Inferring providers for `profiles.json` entries, by host or otherwise.
 - Codex runtimes (`codex-chat-sessions`).
 - Changing which source fills a provider's usage bar.
+- Checking or refreshing a provider's published model names (follow-up F1 from the #190 review).
 
 ## Decisions
 
@@ -65,7 +68,7 @@ See proposal.md (Why) for the motivation. The current code has this shape:
   - `executable` stays trusted-files-only and provider-level.
   - `model` (the SDK startup model) is model-level.
   - Credentials stay refused at both levels.
-- **Shared levels and stamps.** `profileCatalogLevels(ctx)` returns both files for every level. The group catalog stamp and the outbound destinations stamp therefore cover `providers.json` without their own changes.
+- **Shared levels and stamps.** `profileCatalogLevels(ctx)` returns both files for every level. The group catalog stamp and the outbound destinations stamp therefore cover `providers.json` without their own changes, and a base URL set at the provider level reaches every flattened model entry, so `OutboundDestinations` derives it as a model-provider host exactly like a profile-level one.
 - Rejected: one combined file with a format switch. Two names keep every existing file valid with no version field, and an older server simply ignores the new file.
 
 ### D2. Merge by provider id and by model key; keys are unique
@@ -118,7 +121,7 @@ See proposal.md (Why) for the motivation. The current code has this shape:
 
 ### D7. Limit events record their provider and window
 
-- **Migration.** One numbered migration (`src/server/dbSafety/migrations.ts`) adds `provider_id TEXT` and `limit_window TEXT`, both nullable, to `profile_limit_events`. It takes the next free number at landing: 5, after `plan-validation` (3) and `execution-safety-recovery` (4). The baseline is never edited, and `schemaBaselinePin.test.ts` gains the migration's expected delta.
+- **Migration.** One numbered migration (`src/server/dbSafety/migrations.ts`) adds `provider_id TEXT` and `limit_window TEXT`, both nullable, to `profile_limit_events`. It takes the next free version when this change lands: versions are dense, master holds 2–7 today (`process-reports` is 7), and the open changes ahead of this one are expected to claim 8 and 9 first, so this migration is 10 or later — a concurrent branch claiming the same number renumbers on rebase. The baseline is never edited, and `schemaBaselinePin.test.ts` gains the migration's expected delta.
 - **Writer.** `ChatSessionManager`'s `onLimitEvent` writes `provider_id` from the session's provider (D10), and the reset zone comes from that provider (D11).
 - **Window.** The driver keeps the `rateLimitType` of the latest rejected `rate_limit_event` beside the reset it already keeps (`ChatSessionDriver.limitResetsAt`), and drops both together once past. `limitSignals` carries it into the event as `window`. Gateway errors carry none (`NULL`).
 - **Old rows.** Rows written before the migration have `provider_id NULL`.
@@ -141,7 +144,7 @@ The provider's own cooldown applies the same calculation to P's provider-scoped 
   - `forProfile` (unchanged);
   - `forProvider(providerId)`;
   - `cooldownFor(profileId, providerId)`, which returns `{ until, provider: boolean }`, true when the provider's cooldown decides.
-- Every reader in Context calls `cooldownFor`. The per-session provider comes from D10.
+- Every reader in Context calls `cooldownFor`. The per-session provider comes from D10. The process-metrics limit tax (`coolingTimeline` in `src/server/metrics/capacity.ts`) reconstructs each profile's cooling intervals from that profile's relevant events — its own plus its provider's provider-scoped ones — the same rule the router applies, so a provider cooldown shows in the limit tax of every profile it covers.
 - `team_handoff_notes` resolves the provider of its `from_session` record's project path, falling back to the profile id. The recovery note therefore waits for the model's effective cooldown.
 - Rejected: "latest event wins" across windows. A short window's later event would release a model whose weekly window is still exhausted.
 - Rejected: the maximum over all events. One misread reset would keep a profile cooling for the whole retention.

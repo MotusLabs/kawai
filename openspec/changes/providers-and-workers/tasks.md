@@ -6,6 +6,7 @@
 - [ ] 1.2 Merge providers by id and models by key (D2), read `profiles.json` entries as one-model providers (D3), and synthesize the implicit `default` (D4). `resolveProfileCatalog` should keep returning the flat per-model `profiles` map, with each entry's effective env, model, executable, and reset zone, plus `providerId`. It should also return a `providers` map of labels and model keys in catalog order. Verify `profileCatalog.test.ts` covers every scenario of the `claude-session-profiles` delta. A profiles-only fixture must resolve deep-equal to master's output, apart from the added `providerId` fields.
 - [ ] 1.3 Add the cached provider lookup `providerOf(profileId, ctx)` (D10), keyed by the catalog stamp, where a profile that is no longer in the catalog stands in as its own provider. Verify unit tests for a provider hit, the unknown-profile fallback, and cache invalidation when either catalog file changes.
 - [ ] 1.4 Document the `providers.json` format, the merge and uniqueness rules, legacy reading, and the design's Migration Plan in `docs/claude-session-profiles.md`, using only reserved example names. Verify the documented example passes `resolveProfileCatalog` in a test that loads it from the doc's fenced block.
+- [ ] 1.5 Verify `OutboundDestinations` derives a base URL set at the provider level as a model-provider host, like a profile-level one (design D1): `outboundDestinations.test.ts` gains a `providers.json` case where provider `env` carries `ANTHROPIC_BASE_URL`, its models appear as derived model-provider hosts, and a change to `providers.json` re-derives.
 
 ## 2. Picker and header
 
@@ -29,6 +30,7 @@
 - [ ] 4.5 Exclude a cooling provider's models from limit forwards in `buildCandidates` and in `LimitOutcomes.forward`'s session-target refusal (D9). Verify `routingCandidates.test.ts` and `limitOutcomes.test.ts` cover "Handoff received", a model-scoped forward from `opus` reaching `sonnet`, and a refused Hand off to a `glm-flash` session while `zai` cools.
 - [ ] 4.6 Name the provider when its cooldown decides (D15) in the `profile-cooling` constraint and `waitingLabels.ts`, the urgent refusal in `TeamMailbox.ts`, the decision log, and the hand-off note. Verify `waitingLabels.test.ts`, `teamMailbox.test.tsx`, and a `TeamMailbox` server test cover "Refused urgent mail" and "Refused for a cooling provider".
 - [ ] 4.7 Update the Limits section of `docs/routing/README.md` and the Limits bullet of `AGENTS.md` for provider cooldown, windows, and forwards. Verify by review against the `profile-limit-handling` delta.
+- [ ] 4.8 Follow the provider cooldown in the process-metrics limit tax (design D8): the cooling timeline that `metrics/capacity.ts` reconstructs per profile covers the profile's own final events plus its provider's provider-scoped ones, so a sibling model's limit shows in the tax. Verify `metricsFamilies.test.ts` covers a profile whose tax grows from its provider's event while its own events stay silent, and that a model-scoped window does not spread the tax.
 
 ## 5. Provider usage
 
@@ -44,11 +46,12 @@
 
 ## 7. Integration
 
-- [ ] 7.1 Run `bun run lint && bun run typecheck && bun run test` on the final head, and `openspec validate providers-and-workers --strict`. Verify all four pass. The only allowed validator note is the expected archive-order info for `chat-header` until `chat-transcript-layout` is archived.
+- [ ] 7.1 Run `bun run lint && bun run typecheck && bun run test` on the final head, and `openspec validate providers-and-workers --strict`. Verify all four pass with no validator notes.
 
 ## Workflow follow-up
 
-- Archive `chat-transcript-layout` before archiving this change. This change's chat-header delta modifies that change's renamed requirement.
+- ~~Archive `chat-transcript-layout` before archiving this change.~~ Done: archived 2026-10-16; this change's chat-header delta already sits on its renamed requirement.
 - Amend `codex-chat-sessions` to build on providers (design D6), rebasing its MODIFIED "Users select a predefined chat profile" onto this change's text.
+- Rebase `rename-agentboard-to-kawai`'s MODIFIED "Users select a predefined chat profile" onto this change's text after this change archives (keeping `KAWAI_CHAT_ENV`), so archiving the rename never reverts the provider grouping.
 - After merge, the owner moves accounts into `providers.json` following the design's Migration Plan, and switches group files to `workers` and `modelEffort` only after the live server runs this build.
 - Archive this change after review and merge, and check that `openspec validate --specs --strict` is no worse than on master.
