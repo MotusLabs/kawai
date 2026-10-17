@@ -3,6 +3,7 @@
 import { useClaudeProfiles } from './chat/useClaudeProfiles'
 import { capWarning, useTeamGroups } from './chat/useTeamGroups'
 import { useEffect, useRef, useState } from 'react'
+import { type ClaudeProfileMetadata } from '@shared/chat'
 import { type CommandPreset, getFullCommand, useSettingsStore } from '../stores/settingsStore'
 import { DirectoryBrowser } from './DirectoryBrowser'
 import AgentIcon from './AgentIcon'
@@ -97,6 +98,37 @@ interface NewSessionModalProps {
    * first-prompt ("Start with") selector for the change's apply command.
    */
   initialAutoStartChange?: string
+}
+
+/**
+ * The picker's provider grouping (design D13): entries arrive in catalog
+ * order, so runs of one `providerId` are its models. A provider with two or
+ * more models, or whose label differs from its single model's, renders as an
+ * `<optgroup>`; a one-model provider with equal labels stays a plain option,
+ * so a profiles-only catalog looks as it always did.
+ */
+export function profilePickerGroups(profiles: ClaudeProfileMetadata[]): Array<{
+  providerId: string
+  providerLabel: string
+  optgroup: boolean
+  models: ClaudeProfileMetadata[]
+}> {
+  const groups: Array<{ providerId: string; providerLabel: string; optgroup: boolean; models: ClaudeProfileMetadata[] }> = []
+  for (const profile of profiles) {
+    const providerId = profile.providerId ?? profile.id
+    const providerLabel = profile.providerLabel ?? profile.label
+    const last = groups[groups.length - 1]
+    if (last?.providerId === providerId) {
+      last.models.push(profile)
+    } else {
+      groups.push({ providerId, providerLabel, optgroup: false, models: [profile] })
+    }
+  }
+  for (const group of groups) {
+    const first = group.models[0]
+    group.optgroup = group.models.length > 1 || group.providerLabel !== (first?.label ?? group.providerId)
+  }
+  return groups
 }
 
 export default function NewSessionModal({
@@ -510,7 +542,11 @@ export default function NewSessionModal({
               <select aria-label="Profile" className="input mt-1.5" value={claudeProfileId}
                 disabled={catalog.loading || !!catalog.error}
                 onChange={event => setClaudeProfileId(event.target.value)}>
-                {catalog.profiles.map(profile => <option key={profile.id} value={profile.id}>{profile.label}</option>)}
+                {profilePickerGroups(catalog.profiles).map(group => group.optgroup
+                  ? <optgroup key={group.providerId} label={group.providerLabel}>
+                      {group.models.map(profile => <option key={profile.id} value={profile.id}>{profile.label}</option>)}
+                    </optgroup>
+                  : group.models.map(profile => <option key={profile.id} value={profile.id}>{profile.label}</option>))}
               </select>
             </label>
             {catalog.loading && <p className="mt-1 text-xs text-secondary">Loading profiles…</p>}

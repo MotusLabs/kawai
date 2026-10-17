@@ -8,33 +8,46 @@ test.skip(process.env.AGENTBOARD_CHAT_FIXTURE !== '1', 'Requires the development
 // Run with NODE_ENV=development AGENTBOARD_CHAT_FIXTURE=1; sessions use the SDK-independent chat
 // fixture, while separate smoke scripts verify actual subprocess routing.
 test('select named profile, create, display, reconnect, and retain terminal form', async ({ page }, info) => {
-  await page.goto('/')
-  await page.getByRole('button', { name: 'New session', exact: true }).first().click()
-  const dialog = page.getByRole('dialog', { name: 'New Session' })
-  await dialog.getByLabel('Session kind').selectOption('chat')
-  await expect(dialog.getByLabel('Profile')).toHaveValue('default')
-  await expect(dialog.getByRole('button', { name: 'Create', exact: true })).toBeEnabled()
-  await dialog.getByLabel('Profile').selectOption('glm')
-  await page.screenshot({ path: info.outputPath('profile-selection.png') })
-  await dialog.getByLabel('Project Path').fill(process.cwd())
-  await dialog.getByLabel('Display Name').fill('GLM profile browser check')
-  await dialog.getByRole('button', { name: 'Create', exact: true }).click()
-  await expect(page.getByTestId('chat-profile')).toHaveText('GLM')
-  await page.getByLabel('Message Claude').fill('Hello profile')
-  await page.getByRole('button', { name: 'Send', exact: true }).click()
-  await page.screenshot({ path: info.outputPath('profile-chat.png') })
-  await page.reload()
-  await page.getByText('GLM profile browser check', { exact: true }).first().click()
-  await expect(page.getByTestId('chat-profile')).toHaveText('GLM')
-  await page.screenshot({ path: info.outputPath('profile-reconnect.png') })
-  await page.getByRole('button', { name: 'New session', exact: true }).first().click()
-  // Reopening defaults to Claude chat; switching to Terminal still restores
-  // the terminal form untouched by the chat flow.
-  await expect(dialog.getByLabel('Session kind')).toHaveValue('chat')
-  await dialog.getByLabel('Session kind').selectOption('terminal')
-  await expect(dialog.getByTestId('command-select')).toBeVisible()
-  await expect(dialog.getByLabel('Profile')).toHaveCount(0)
-  await page.screenshot({ path: info.outputPath('terminal-regression.png') })
+  // A project outside the server home: catalogs under /home would layer the
+  // real user file as a project level and re-home the shipped keys.
+  const project = await mkdtemp(path.join(os.tmpdir(), 'agentboard-e2e-profile-main-'))
+  try {
+    await page.goto('/')
+    await page.getByRole('button', { name: 'New session', exact: true }).first().click()
+    const dialog = page.getByRole('dialog', { name: 'New Session' })
+    await dialog.getByLabel('Session kind').selectOption('chat')
+    await expect(dialog.getByLabel('Profile')).toHaveValue('default')
+    await dialog.getByLabel('Project Path').fill(project)
+    // Entering the project path refetches: outside the server home only the
+    // shipped catalog applies, grouped by provider (design D13).
+    const zaiGroup = dialog.getByLabel('Profile').locator('optgroup[label="Z.AI"]')
+    await expect(zaiGroup).toHaveCount(1)
+    await expect(zaiGroup.locator('option', { hasText: 'GLM Flash' })).toHaveCount(1)
+    await expect(dialog.getByRole('button', { name: 'Create', exact: true })).toBeEnabled()
+    await dialog.getByLabel('Profile').selectOption('glm')
+    await page.screenshot({ path: info.outputPath('profile-selection.png') })
+    await dialog.getByLabel('Display Name').fill('GLM profile browser check')
+    await dialog.getByRole('button', { name: 'Create', exact: true }).click()
+    // The grouped shipped catalog names glm's provider in the header (design D13).
+    await expect(page.getByTestId('chat-profile')).toHaveText('Z.AI · GLM')
+    await page.getByLabel('Message Claude').fill('Hello profile')
+    await page.getByRole('button', { name: 'Send', exact: true }).click()
+    await page.screenshot({ path: info.outputPath('profile-chat.png') })
+    await page.reload()
+    await page.getByText('GLM profile browser check', { exact: true }).first().click()
+    await expect(page.getByTestId('chat-profile')).toHaveText('Z.AI · GLM')
+    await page.screenshot({ path: info.outputPath('profile-reconnect.png') })
+    await page.getByRole('button', { name: 'New session', exact: true }).first().click()
+    // Reopening defaults to Claude chat; switching to Terminal still restores
+    // the terminal form untouched by the chat flow.
+    await expect(dialog.getByLabel('Session kind')).toHaveValue('chat')
+    await dialog.getByLabel('Session kind').selectOption('terminal')
+    await expect(dialog.getByTestId('command-select')).toBeVisible()
+    await expect(dialog.getByLabel('Profile')).toHaveCount(0)
+    await page.screenshot({ path: info.outputPath('terminal-regression.png') })
+  } finally {
+    await rm(project, { recursive: true, force: true })
+  }
 })
 
 test('project-level .kawai catalog extends the picker for that path', async ({ page }, info) => {
@@ -91,7 +104,8 @@ test('invalid project catalog file warns without blocking creation', async ({ pa
     await dialog.getByLabel('Display Name').fill('Invalid catalog check')
     await page.screenshot({ path: info.outputPath('catalog-warning.png') })
     await dialog.getByRole('button', { name: 'Create', exact: true }).click()
-    await expect(page.getByTestId('chat-profile')).toHaveText('Default')
+    // The grouped shipped catalog names Default's provider in the header.
+    await expect(page.getByTestId('chat-profile')).toHaveText('Claude · Default')
   } finally {
     await rm(project, { recursive: true, force: true })
   }

@@ -7,7 +7,7 @@
 // from the shipped model's flattened settings, so an existing project
 // override keeps its launch settings. Legacy entries read as one-model
 // providers (D3) unless their id names an existing provider.
-import type { ParsedModel, ParsedProvider, PartialProfile } from './profileCatalog'
+import type { ParsedProvider, PartialProfile } from './profileCatalog'
 
 /** The settings a re-homed model carries from the shipped provider it left. */
 export interface InheritedSettings {

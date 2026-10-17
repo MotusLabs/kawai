@@ -64,14 +64,18 @@ function catalogWithLan(): void {
 }
 
 describe('Claude profile resolution', () => {
-  test('catalog metadata has stable order and contains only identifiers and labels', () => {
+  test('catalog metadata has stable order and carries providers, identifiers, and labels', () => {
+    // D13 order: the provider holding default first, then file order.
     expect(claudeProfileMetadata({ homeDir: tempHome })).toEqual([
-      { id: 'default', label: 'Default' }, { id: 'glm', label: 'GLM' },
-      { id: 'glm-flash', label: 'GLM Flash' },
-      { id: 'opus', label: 'Claude Opus' }, { id: 'sonnet', label: 'Claude Sonnet' },
-      { id: 'haiku', label: 'Claude Haiku' },
-      { id: 'minimax', label: 'MiniMax' }, { id: 'mimo', label: 'MiMo' },
-      { id: 'kimi', label: 'Kimi' },
+      { id: 'default', label: 'Default', providerId: 'claude', providerLabel: 'Claude' },
+      { id: 'opus', label: 'Claude Opus', providerId: 'claude', providerLabel: 'Claude' },
+      { id: 'sonnet', label: 'Claude Sonnet', providerId: 'claude', providerLabel: 'Claude' },
+      { id: 'haiku', label: 'Claude Haiku', providerId: 'claude', providerLabel: 'Claude' },
+      { id: 'glm', label: 'GLM', providerId: 'zai', providerLabel: 'Z.AI' },
+      { id: 'glm-flash', label: 'GLM Flash', providerId: 'zai', providerLabel: 'Z.AI' },
+      { id: 'minimax', label: 'MiniMax', providerId: 'minimax', providerLabel: 'MiniMax' },
+      { id: 'mimo', label: 'MiMo', providerId: 'mimo', providerLabel: 'MiMo' },
+      { id: 'kimi', label: 'Kimi', providerId: 'kimi', providerLabel: 'Kimi' },
     ])
   })
   test('documentation matches catalog labels and effective mappings', () => {

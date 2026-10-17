@@ -483,6 +483,9 @@ export type ChatApprovalDecision = 'allow' | 'deny'
 export interface ClaudeProfileMetadata {
   id: string
   label: string
+  /** The provider owning this model: its cooldown and usage key (design D10). */
+  providerId: string
+  providerLabel: string
 }
 
 /**

@@ -5,7 +5,7 @@ The chat view header SHALL show status (color and word) and the session name, wh
 
 #### Scenario: Live session identity
 - **WHEN** a chat view is open for a live session on profile `Default` whose agent reported model `claude-opus-5-5` in `/home/coder/kawai`
-- **THEN** the identity row shows the status word and session name without a ` · Chat` suffix, and supporting metadata shows `Default`, `claude-opus-5-5`, and `kawai`, with `/home/coder/kawai` available on hover
+- **THEN** the identity row shows the status word and session name without a ` · Chat` suffix, and supporting metadata shows `Claude`, `Default`, `claude-opus-5-5`, and `kawai`, with `/home/coder/kawai` available on hover
 
 #### Scenario: Provider and model labels
 - **WHEN** a session runs on model GLM Flash of provider Z.AI and its agent reported model `glm-5.3-flash` in `/home/coder/kawai`

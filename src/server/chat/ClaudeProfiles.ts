@@ -20,31 +20,38 @@ export type ClaudeLaunchConfiguration = Pick<Options, 'env' | 'model' | 'setting
 
 /** Public catalog view: picker metadata plus per-file validation failures. */
 export interface ClaudeProfileCatalogView {
-  profiles: { id: string; label: string }[]
+  profiles: { id: string; label: string; providerId: string; providerLabel: string }[]
   /** Catalog file failures; the rest of the catalog remains usable. */
   errors: string[]
 }
 
 /**
- * Catalog identifiers and labels for a project path — the only fields that
- * may cross the client boundary — together with catalog file failures, so
- * invalid files are reported instead of silently skipped. `default` always
- * leads the list.
+ * Catalog identifiers, labels, and providers for a project path — the only
+ * fields that may cross the client boundary — together with catalog file
+ * failures, so invalid files are reported instead of silently skipped.
+ * Catalog order (D13): the provider holding `default` first, then providers
+ * in file order, each with its models in order — so `default` always leads
+ * the list.
  */
 export function claudeProfileCatalog(
   ctx: ProfileCatalogContext = {}
 ): ClaudeProfileCatalogView {
-  const { profiles, errors } = resolveProfileCatalog(ctx)
-  const metadata = [...profiles.entries()].map(({ 0: id, 1: profile }) => ({ id, label: profile.label }))
-  const defaultIndex = metadata.findIndex(profile => profile.id === 'default')
-  if (defaultIndex > 0) metadata.unshift(...metadata.splice(defaultIndex, 1))
+  const { profiles, providers, errors } = resolveProfileCatalog(ctx)
+  const metadata: ClaudeProfileCatalogView['profiles'] = []
+  for (const [providerId, provider] of providers) {
+    for (const modelKey of provider.models) {
+      const profile = profiles.get(modelKey)
+      if (!profile) continue
+      metadata.push({ id: modelKey, label: profile.label, providerId, providerLabel: provider.label })
+    }
+  }
   return { profiles: metadata, errors }
 }
 
 /** Identifier/label list only; see claudeProfileCatalog for the full view. */
 export function claudeProfileMetadata(
   ctx: ProfileCatalogContext = {}
-): { id: string; label: string }[] {
+): { id: string; label: string; providerId: string; providerLabel: string }[] {
   return claudeProfileCatalog(ctx).profiles
 }
 
