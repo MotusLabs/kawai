@@ -19,8 +19,8 @@ export const withheld = (reason: WithholdReason): string => `‹withheld: ${reas
 const WORDS = ['authoriz', 'bearer', 'cookie', 'token', 'secret', 'passw', 'api_key', 'apikey', 'api-key', 'private']
 /** Option names that carry a credential (`--token`, `--password-stdin`, `--api-key`, `--cookie`, `--cred…`). */
 const OPTION_WORDS = ['token', 'pass', 'secret', 'key', 'auth', 'bearer', 'cookie', 'cred']
-/** Known token shapes (D8): GitHub, OpenAI-style, Slack, AWS, JWT. */
-const SHAPES = /\b(?:gh[pousr]_[A-Za-z0-9]|github_pat_|xox[abpr]-|AKIA[0-9A-Z]{12}|eyJ[A-Za-z0-9_-]{6})|(?:^|[^A-Za-z0-9])sk-[A-Za-z0-9_-]{6}/
+/** Known token shapes (D8): GitHub, GitLab, npm, PyPI, Hugging Face, Google, OpenAI-style, Slack, AWS, JWT, PEM. */
+const SHAPES = /\b(?:gh[pousr]_[A-Za-z0-9]|github_pat_|glpat-|gl(?:dt|rt|ptt|cbt)-|npm_[A-Za-z0-9]{6}|pypi-[A-Za-z0-9_-]{6}|hf_[A-Za-z0-9]{6}|AIza[0-9A-Za-z_-]{6}|xox[abprs]-|xapp-|A[KS]IA[0-9A-Z]{12}|eyJ[A-Za-z0-9_-]{6})|(?:^|[^A-Za-z0-9])sk-[A-Za-z0-9_-]{6}|-----BEGIN/
 /** Tools whose `-u` is always a credential and whose `Name:value` words are headers. */
 const CURL_LIKE = new Set(['curl', 'wget', 'http', 'https', 'httpie', 'xh', 'xhs', 'aria2c'])
 const WORD_BREAK = /[\s;|&()<>]/
@@ -66,11 +66,14 @@ export function withholdReason(text: string): WithholdReason | null {
   if (hasUserinfo(text)) return 'credential'
   const words = wordsOf(text).map(dequote)
   const curlLike = words.some(word => CURL_LIKE.has(word.split('/').pop()!.toLowerCase()))
+  // A login's `-p` is its password (`docker login -p`, `helm registry login -p`).
+  const login = words.some(word => word === 'login')
   for (let i = 0; i < words.length; i++) {
     const word = words[i]!
     // A short option cluster naming H: `-H`, `-sH`, `-HAuthorization:x`.
     const cluster = /^-([A-Za-z]+)/.exec(word)
     if (cluster !== null && !word.startsWith('--') && cluster[1]!.includes('H')) return 'header'
+    if (login && /^-[A-Za-z]*p/.test(word) && !word.startsWith('--')) return 'credential'
     if (word.startsWith('-')) {
       const name = word.replace(/^-+/, '').split('=')[0]!.toLowerCase()
       if (word.startsWith('--') && OPTION_WORDS.some(part => name.includes(part))) return 'credential'
@@ -80,7 +83,8 @@ export function withholdReason(text: string): WithholdReason | null {
       }
     }
     // An httpie item or a bare header word for a curl-like tool: `Name:value`, `Name: value`.
-    if (curlLike && /^[A-Za-z][A-Za-z0-9_-]*:(?!\/\/)/.test(word)) return 'header'
+    // (An empty value, `failed:`, is prose; an `-H` before it is caught above.)
+    if (curlLike && /^[A-Za-z][A-Za-z0-9_-]*:(?!\/\/)./.test(word)) return 'header'
   }
   return null
 }

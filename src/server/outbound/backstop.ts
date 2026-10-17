@@ -21,6 +21,20 @@ const IMAGE_TOOLS = new Set(['docker', 'podman', 'helm', 'buildah', 'skopeo', 'n
 const RUN = /[A-Za-z0-9_.+-]/
 const ORDER = new Map<BackstopEntry, number>(BACKSTOP_ENTRIES.map((entry, index) => [entry, index]))
 
+const PUBLISHERS = new Set(['npm', 'pnpm', 'yarn', 'bun', 'cargo', 'twine', 'gem', 'poetry'])
+
+/**
+ * The entry a send tool's own name stands for, or null: what a command of
+ * that tool may be when a non-literal word hides its verb (`git $V`).
+ */
+export function toolEntry(name: string): BackstopEntry | null {
+  if (name === 'git') return 'git-push'
+  if (IMAGE_TOOLS.has(name) || name === 'buildctl') return 'image-push'
+  if (PUBLISHERS.has(name)) return 'publish'
+  const entry = COMMANDS[name]
+  return entry === undefined || name.startsWith('-') ? null : entry
+}
+
 /** The list entries `text` names, each once, in list order. */
 export function backstopEntries(text: string): BackstopEntry[] {
   const found = new Set<BackstopEntry>()

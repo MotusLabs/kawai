@@ -64,7 +64,7 @@ Group 7's matrix rows for plan execution, integration, supervision, and revision
 
   Measure the added per-call hook round trip with the fixture adapter and record it in the recovery matrix.
 - [x] 3.5 Implement `outcomeState` (D7). Verify with unit tests: the precedence of every outcome, pending while the spawn lives, and outcome unknown once it ends. Add the AGENTS.md audit bullet; that is the docs for group 3.
-- [ ] 3.6 Make `allowed` fail-closed, and add the backstop and withholding (D4's four checks and backstop, D8's withholding; task revision 3). Fix the invariants, not the spellings: `allowed` comes only from the four checks, and stored text only through the withholding gate. Bump `CLASSIFIER_VERSION`. Verify with tests:
+- [x] 3.6 Make `allowed` fail-closed, and add the backstop and withholding (D4's four checks and backstop, D8's withholding; task revision 3). Fix the invariants, not the spellings: `allowed` comes only from the four checks, and stored text only through the withholding gate. Bump `CLASSIFIER_VERSION`. Verify with tests:
   - the golden corpus re-baselined, listing every changed verdict and why;
   - round 7's cases as named regressions: `env --chdir /tmp git push fork` records a row that is not allowed; `git -c a=b -C "$D" push` reads unknown-destination; a heredoc header, unquoted `-H Authorization: Bearer X` words, and attached `-HAuthorization:X` store no secret byte;
   - noise controls stay allowed: `git push origin x`, `cd <repo> && git push`, `git -C <repo> push`, `gh pr create --body-file f`, `gh pr merge 1`;

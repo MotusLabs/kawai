@@ -8,7 +8,7 @@
 // proven non-send goes to the backstop, which names the list entries its
 // text holds. One `bash -c` level is walked with the call's state; deeper
 // nesting is the backstop's. Pure.
-import { backstopEntries } from './backstop'
+import { backstopEntries, toolEntry } from './backstop'
 import { BUILTINS, childState, evaluateBuiltin, initialState, pinsEnvironment, resolveDir, type CallState, type Cwd } from './callState'
 import type { SendCandidate } from './classify'
 import { firstFailure, unresolved, type BackstopEntry, type FailureCode, type RuleResult } from './proof'
@@ -29,6 +29,7 @@ export const PRECISE_MAX = 262_144
 const STANDARD_BIN = /^\/(usr\/(local\/)?)?s?bin\/[^/]+$|^\/opt\/homebrew\/bin\/[^/]+$|^\/snap\/bin\/[^/]+$/
 /** Wrappers that run their command as a separate process. */
 const EXTERNAL_WRAPPERS = new Set(['env', 'sudo', 'doas', 'timeout', 'nice', 'nohup', 'stdbuf', 'ionice', 'xargs'])
+const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*\+?=/
 /** Expansions that can assign in the current shell. */
 const ASSIGNING = /\$\{|\$\(\(|\$\[/
 
@@ -93,6 +94,8 @@ class Segment {
     const networkRedirect = cmd.redirects.some(redirect => /^\/dev\/(tcp|udp)\//.test(redirect.target?.text ?? ''))
     if (cmd.words.length === 0) return networkRedirect ? this.backstop() : []
     const unwrapped = unwrap(cmd.words)
+    // A command word that is not literal may name a builtin (`cd`, `eval`).
+    if (!cmd.words[0]!.literal) state.context.add('unevaluated-builtin')
     if (unwrapped.kind === 'unmodeled') {
       if (BUILTINS.has(basename(cmd.words[0]!.text))) state.context.add('unevaluated-builtin')
       // A word the parser could not place may be the command itself.
@@ -117,7 +120,10 @@ class Segment {
       return inner
     }
     const head = unwrapped.head
-    if (!head.literal) return this.backstop(['command-not-literal'])
+    if (!head.literal) {
+      state.context.add('unevaluated-builtin')
+      return this.backstop(['command-not-literal'])
+    }
     const name = basename(head.text)
     const inShell = unwrapped.wrappers.every(wrapper => !EXTERNAL_WRAPPERS.has(wrapper))
     const builtin = inShell && !head.text.includes('/') ? evaluateBuiltin(state, name, unwrapped.args, this.counts) : null
@@ -126,12 +132,15 @@ class Segment {
     if (builtin === 'exact') return networkRedirect ? this.backstop() : []
     const result = ruleFor({ name, args: unwrapped.args, stdin: this.stdin })
     this.noteChanges(name, unwrapped.args, result)
-    if (result.kind === 'unmodeled' || networkRedirect) return this.backstop()
+    // A send tool the rule could not prove may be sending: a non-literal word can hide its verb.
+    const hidden = cmd.words.some(word => !word.literal) ? toolEntry(name) : null
+    const tool = hidden === null ? [] : [hidden]
+    if (result.kind === 'unmodeled' || networkRedirect) return this.backstop(tool)
     const failures = this.segmentFailures(unwrapped, head)
     if (result.kind === 'non-send') {
       // A proven non-send: listed, every word literal, a standard head, no environment pin.
       const unproven = failures.some(code => code === 'not-literal' || code === 'unknown-command-path' || code === 'environment-pin')
-      return unproven ? this.backstop() : []
+      return unproven ? this.backstop(tool) : []
     }
     const sendCwd = this.effectiveCwd(cwd, result.chdir ?? [])
     return result.sends.map(found => {
@@ -151,7 +160,10 @@ class Segment {
     const words = [...this.cmd.words, ...this.cmd.redirects.flatMap(redirect => redirect.target === null ? [] : [redirect.target])]
     const unquotedHeredoc = this.cmd.redirects.some(redirect => redirect.heredoc !== undefined && !redirect.heredoc.quoted)
     if (words.some(word => !word.literal) || unquotedHeredoc) failures.push('not-literal')
-    if (head !== null && head.text.includes('/') && !STANDARD_BIN.test(head.text)) failures.push('unknown-command-path')
+    // The command word and, under wrappers, the wrapped head: either may be any program.
+    const first = this.cmd.words.find(word => !(word.literal && ASSIGNMENT.test(word.text)))
+    const heads = [first, head].filter((word): word is Word => word !== undefined && word !== null)
+    if (heads.some(word => word.text.includes('/') && !STANDARD_BIN.test(word.text))) failures.push('unknown-command-path')
     if (wrapped.wrappers.includes('xargs')) failures.push('xargs-arguments')
     if (wrapped.cleared || wrapped.unset.length > 0 || pinsEnvironment([...this.state.assigned, ...wrapped.assigned])) failures.push('environment-pin')
     return failures

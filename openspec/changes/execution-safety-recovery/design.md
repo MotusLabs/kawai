@@ -169,9 +169,9 @@ A call's row carries its strongest candidate (`violation` > `unknown-destination
 2. **Known shape.** The command and each wrapper before it are in the parser's tables, and every word is consumed. Every option the parser meets is listed with its arity, in every spelling the tool accepts: `-C dir`, `-Cdir`, `--chdir=dir`, `--chdir dir`, and clustered short flags. An unknown option, wrapper, or subcommand, or a leftover word, fails the check. An unmodeled spelling can therefore cost precision, but never reach `allowed`.
 3. **Proven context.** Every earlier segment of the call must be one of two things:
    - an external command, which cannot change the shell's directory or environment;
-   - a builtin the parser evaluates exactly: `cd`, `pushd`, or `popd` with literal arguments, or `export` or an assignment of literal values.
+   - a builtin the parser evaluates exactly: `cd`, `pushd`, or `popd` with literal arguments, `export` or an assignment of literal values, `set` with only shell-option flags (`-e`, `-u`, `-x`, `-o pipefail`), `printf` without `-v`, or a builtin that changes no state (`echo`, `true`, `test`, …).
 
-   The check fails for any other builtin before the candidate (`source`, `.`, `eval`, `alias`, a function definition, `set`, `shopt`, `exec`, `unset`, `declare`, `trap`, …), and for a subshell or brace group anywhere in the call. The pins above still apply.
+   The check fails for any other builtin before the candidate (`source`, `.`, `eval`, `alias`, a function definition, other `set` forms, `shopt`, `exec`, `unset`, `declare`, `trap`, …), for a command word that is not literal (it may name a builtin), and for a subshell or brace group anywhere in the call. A `cd` makes the directory exact for a later command only through an unbroken `&&` chain. The pins above still apply.
 4. **Exact facts.** The facts read for the effective cwd succeeded, and no pin above left the target unresolved.
 
 **The backstop.** The precise pass still misses sends it does not model, and a miss must never be silent. So after that pass, the backstop takes each segment that produced no candidate and is not a proven non-send.
@@ -182,9 +182,11 @@ It searches each such segment's text, including quoted strings and opaque bodies
 - `git` followed by `push`;
 - the commands `gh`, `curl`, `wget`, `http`, `https`, `ssh`, `scp`, `sftp`, `rsync`, `nc`, `ncat`, `socat`, `ftp`, and `telnet`;
 - the `mail-send` commands and the `registry-publish` publish words;
-- any `http://`, `https://`, `ssh://`, or `git@` URL.
+- an image push: an image tool followed by `push`, `--push`, `push=true`, or `type=registry`;
+- any `http://`, `https://`, `ssh://`, or `git@` URL;
+- appended in task revision 3: a command word that is not literal (`command-not-literal`), and a bash `/dev/tcp` or `/dev/udp` redirection (`dev-tcp`).
 
-A hit adds one `unclassified-send` candidate with verdict `unknown-destination` and destination `unresolved:unclassified:<entry>`. `<entry>` names the list entry, never command text. The backstop never yields `allowed` or `violation`.
+A known send tool whose rule cannot prove the segment while a non-literal word may hide its verb (`git $V`, `docker "$V" …`) also names that tool's entry (`git-push`, `image-push`, `publish`, …). Each entry a segment names adds one candidate, once, in list order; the segment's whole pipeline is searched with it. Above 256 KiB a command is read by the backstop alone. A hit adds one `unclassified-send` candidate with verdict `unknown-destination` and destination `unresolved:unclassified:<entry>`. `<entry>` names the list entry, never command text. The backstop never yields `allowed` or `violation`.
 
 The facts resolver is the one I/O step. It finds the repository with the same nearest-`.git` walk as `resolveTeam`, then reads remotes and the push remote from the common dir's `config` file as text, with no `git` process. Reads are cached per repository root by that file's mtime and size. It runs only for send candidates, about 200 a month.
 
