@@ -60,7 +60,7 @@ See proposal.md (Why) for the motivation. The current code has this shape:
 
 ### D1. `providers.json` sits beside `profiles.json` at every level
 
-- **Placement and order.** At each catalog level (user, then each project `.kawai/` from `/` down), `providers.json` is read before `profiles.json`. The user level's two files together replace the shipped default when either exists. The shipped `config/profiles.default.json` stays in the legacy format and is not edited.
+- **Placement and order.** At each catalog level (user, then each project `.kawai/` from `/` down), `providers.json` is read before `profiles.json`. The user level's two files together replace the shipped default when either exists, so any user-level file replaces both shipped files whole. The shipped default is `config/providers.default.json` plus `config/profiles.default.json`: provider `zai` (label Z.AI) holds `glm` and `glm-flash`, with their shared env (the base URL, the four tier maps, the auto-compact window) and the Asia/Shanghai reset zone at the provider level and each model keeping its own label and startup model, and one Claude provider (`claude`) holds `default`, `opus`, `sonnet`, and `haiku` with no env; `profiles.default.json` keeps only `mimo`, `kimi`, and `minimax` in the legacy format. Release builds embed both shipped files the way the embedded shipped catalog embeds the profiles default: the same missing-file fallback and the one shared parser, with errors naming the file plus `(embedded)`.
 - **File shape.** Each file is `{ "<provider id>": { label?, env?, limitResetTimeZone?, executable?, models: { "<model key>": { label?, model?, env? } } } }`.
   - Ids and keys use `PROFILE_ID_PATTERN`.
   - Provider `env` takes the same controlled names as today.
@@ -79,8 +79,10 @@ See proposal.md (Why) for the motivation. The current code has this shape:
   - A model's effective environment is the provider's env overlaid by the model's env.
 - **Duplicate keys.** A model key defined under two different providers is a catalog error that names both providers and files.
   - Inside one file, the file fails validation.
-  - Across levels, the nearer definition is ignored and the farther one stands. Base files are operator-owned, and re-homing a key would silently move its sessions, cooldown and usage to another account.
-- Rejected: the nearer definition wins, as with fields. That would let any project file move a user-level model to another account.
+  - Across operator levels (the user level and the project levels), the nearer definition is ignored and the farther one stands. Operator files are owner-owned, and re-homing a key between them would silently move its sessions, cooldown and usage to another account.
+  - **Shipped keys re-home.** The shipped files are the one base a nearer file may take keys from: a project-level definition of a shipped model key moves it out of its shipped provider, resolving as the nearer entry overlaid on the shipped model's flattened settings — a legacy entry as its own one-model provider. A private-gateway override in a project `profiles.json` (#190's docs place them there) therefore keeps exactly today's launch settings, and only that key leaves the shipped provider. A shipped key no nearer file defines keeps its shipped provider.
+- Rejected: the nearer definition wins across operator levels, as with fields. That would let any project file move a user-level model to another account.
+- Rejected (shipped keys): ignoring the override with an error — it breaks the private-gateway setup and the promise that existing files keep working unchanged. Also rejected: merging the override into the shipped provider — one key's base URL would silently move its siblings' endpoint.
 
 ### D3. `profiles.json` entries read as one-model providers
 
@@ -89,7 +91,7 @@ See proposal.md (Why) for the motivation. The current code has this shape:
   - `model` applies to the model.
   - `env`, `limitResetTimeZone` and `executable` apply to the provider.
 - **Interactions.**
-  - An entry whose id is a model of a different provider is ignored with an error naming both files.
+  - An entry whose id is a model of a different operator provider is ignored with an error naming both files; an entry whose id is a shipped model key re-homes instead (D2).
   - An entry whose id is an existing provider id merges into that provider like any provider entry.
 - **Consequence.** A profiles-only catalog therefore resolves exactly the same entries and launch settings as today, with one provider per profile.
 - Rejected: grouping legacy entries by base URL host or by host login. Executables can inject other credentials, and project overlays change URLs per path. One host can therefore front several accounts, and one account several hosts.
@@ -222,7 +224,7 @@ Existing fields keep their meaning with two refinements:
 
 ## Migration Plan
 
-1. **Land and deploy.** Land the change and update the live build. The migration runs at start after its backup. Nothing else changes until the owner edits a file: profiles-only catalogs resolve as before.
+1. **Land and deploy.** Land the change and update the live build. The migration runs at start after its backup. Nothing else changes until the owner edits a file: a user-level `profiles.json` resolves as before, and with no user-level file the shipped default now resolves as grouped providers — the Z.AI pair under `zai` and the four Claude profiles under `claude` — with every launch setting unchanged.
 2. **Group accounts.** To share an account's cooldown and usage, write `~/.kawai/providers.json`. At the user level it replaces the shipped default together with any `~/.kawai/profiles.json`, so it must hold every provider in use. A reserved-name example:
 
    ```json
