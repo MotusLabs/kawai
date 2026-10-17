@@ -33,12 +33,6 @@ export interface MergedProvider {
   models: Map<string, MergedModel>
   /** An operator file introduced this provider; overlays never change it (F2). */
   operatorOrigin: boolean
-  /**
-   * A shipped provider's operator-overlay facts (F2): its own facts and its
-   * shipped keys stay untouched; these reach only the keys the overlay file
-   * itself defines.
-   */
-  operatorOverlay?: { label?: string; env: Record<string, string>; executable?: string; limitResetTimeZone?: string }
   /** The first file that defined it, for duplicate-key errors. */
   originFile: string
 }
@@ -87,12 +81,20 @@ export class CatalogMerger {
     this.holders.set(key, holder)
   }
 
-  /** Merge one parsed `providers.json` (design D2). */
+  /**
+   * Merge one parsed `providers.json` (design D2, rev 5 table): pass one
+   * applies every provider's facts (P1/P2 — an overlay merges into either
+   * tier by D2's rules and reaches every key the provider holds, while the
+   * tier stays what the introducing file set); pass two then places every
+   * model key (P3) against those merged facts, so JSON key order never
+   * changes an outcome and a re-home carries its own level's overlay.
+   */
   addProviders(file: string, shipped: boolean, providers: Map<string, ParsedProvider>): void {
     for (const [id, provider] of providers) {
-      let merged = this.providers.get(id)
+      const merged = this.providers.get(id)
       if (!merged) {
-        merged = {
+        // P1: a new provider takes the introducing file's tier.
+        this.providers.set(id, {
           label: provider.label,
           env: { ...provider.env },
           executable: provider.executable,
@@ -100,27 +102,21 @@ export class CatalogMerger {
           models: new Map(),
           operatorOrigin: !shipped,
           originFile: file,
-        }
-        this.providers.set(id, merged)
-      } else if (merged.operatorOrigin) {
-        // An operator provider layers the overlay on, nearest wins (D2).
-        merged.label = provider.label ?? merged.label
-        merged.env = { ...merged.env, ...provider.env }
-        merged.executable = provider.executable ?? merged.executable
-        merged.limitResetTimeZone = provider.limitResetTimeZone ?? merged.limitResetTimeZone
-      } else {
-        // A shipped provider keeps its own facts under an operator overlay
-        // (F2): the overlay's facts reach only the keys this file defines.
-        merged.operatorOverlay = {
-          label: provider.label,
-          env: { ...provider.env },
-          executable: provider.executable,
-          limitResetTimeZone: provider.limitResetTimeZone,
-        }
+        })
+        continue
       }
+      // P2: the overlay's facts merge by D2's rules into either tier.
+      merged.label = provider.label ?? merged.label
+      merged.env = { ...merged.env, ...provider.env }
+      merged.executable = provider.executable ?? merged.executable
+      merged.limitResetTimeZone = provider.limitResetTimeZone ?? merged.limitResetTimeZone
+    }
+    for (const [id, provider] of providers) {
+      const merged = this.providers.get(id)!
       for (const [key, model] of provider.models) {
         const existing = merged.models.get(key)
         if (existing) {
+          // P3: the key is already this provider's; it merges.
           existing.label = model.label ?? existing.label
           existing.model = model.model ?? existing.model
           existing.env = { ...existing.env, ...model.env }
@@ -157,21 +153,10 @@ export class CatalogMerger {
           })
           continue
         }
+        // P3: a new key joins X with X's merged facts plus its own — the
+        // flatten applies this provider's (already overlaid) env.
         this.setHolder(key, { provider: id, operator: !shipped, originFile: file, own: false })
-        const overlay = !shipped ? undefined : merged.operatorOverlay
-        merged.models.set(key, {
-          label: model.label ?? overlay?.label,
-          model: model.model,
-          env: { ...model.env },
-          ...(overlay ? {
-            inherited: {
-              env: overlay.env,
-              label: overlay.label,
-              executable: overlay.executable,
-              limitResetTimeZone: overlay.limitResetTimeZone,
-            },
-          } : {}),
-        })
+        merged.models.set(key, { label: model.label, model: model.model, env: { ...model.env } })
       }
     }
   }

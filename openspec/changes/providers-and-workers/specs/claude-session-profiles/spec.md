@@ -118,6 +118,10 @@ The system SHALL assemble the chat catalog from `providers.json` and `profiles.j
 - **WHEN** the user-level `providers.json` defines provider `zai` and a project-level `providers.json` sets only a different base URL for `zai`
 - **THEN** that project path's sessions on every model of `zai` use the project-level base URL
 
+#### Scenario: Overlay of a shipped provider's base URL
+- **WHEN** no user-level catalog file exists and a project-level `providers.json` sets a different base URL for the shipped provider `zai`
+- **THEN** that project path's sessions on every model of `zai` use the project-level base URL, and `zai` keeps the tier its shipped file gave it
+
 #### Scenario: Mounted catalog replaces the image default
 - **WHEN** the server starts where a user-level `providers.json` or `profiles.json` exists
 - **THEN** it is used instead of any catalog built into the image

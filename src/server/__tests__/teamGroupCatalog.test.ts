@@ -281,10 +281,18 @@ describe('qualified worker names resolve against the catalog (D5)', () => {
     expect(warnings).toEqual([])
   })
 
-  test('the default max sums the resolved caps, not the dropped written ones (nit)', () => {
+  test('the default max sums the resolved caps, not the dropped written ones, with the warning (N2)', () => {
     writeGroup('workers: { zai/glm: 2, zai/nope: 3 }')
-    const { groups } = loadGroupCatalog({ groupsRoot: repo, homeDir: home })
+    const { groups, warnings } = loadGroupCatalog({ groupsRoot: repo, homeDir: home })
     expect(groups.get('juniors')?.group.profiles).toEqual([{ profileId: 'glm', cap: 2 }])
     expect(groups.get('juniors')?.group.max).toBe(2)
+    expect(warnings).toEqual([expect.stringContaining('profile "zai/nope" is not defined; ignored')])
+  })
+
+  test('an explicit max equal to the written cap sum stays (N2)', () => {
+    writeGroup('workers: { zai/glm: 2, zai/nope: 3 }\nmax: 5')
+    const { groups } = loadGroupCatalog({ groupsRoot: repo, homeDir: home })
+    expect(groups.get('juniors')?.group.profiles).toEqual([{ profileId: 'glm', cap: 2 }])
+    expect(groups.get('juniors')?.group.max).toBe(5)
   })
 })

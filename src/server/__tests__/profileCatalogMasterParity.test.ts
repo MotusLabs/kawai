@@ -136,73 +136,7 @@ describe('master parity for the shipped-provider legacy entry (B1, finding F2)',
     expect(head.profiles.get('claude')?.providerId).toBe('profile:claude')
   })
 
-  // The F2 invariant, every overlay kind against both shipped providers: a
-  // provider-level overlay never flips a shipped provider's tier, so the
-  // legacy entry keeps master's settings and the siblings stay put.
-  const overlays: Array<[string, Record<string, unknown>]> = [
-    ['label', { label: 'Relabeled' }],
-    ['env', { env: { ANTHROPIC_BASE_URL: 'https://gw.example.internal' } }],
-    ['zone', { limitResetTimeZone: 'Europe/Berlin' }],
-    ['empty models', { models: {} }],
-  ]
-  for (const [kind, overlay] of overlays) {
-    for (const id of ['claude', 'zai']) {
-      test(`a ${kind} overlay of ${id} leaves it shipped; the legacy entry re-homes to the reserved id`, () => {
-        const project = projectWith(`f2-${id}-${kind.replace(/\s/g, '-')}`, {
-          'providers.json': { [id]: overlay },
-          'profiles.json': { [id]: { label: `My ${id === 'zai' ? 'Z.AI' : 'Claude'}`, env: { ANTHROPIC_BASE_URL: 'https://gw.example.internal' } } },
-        })
-        const head = resolveProfileCatalog({ homeDir: home, projectPath: project })
-        expect(head.errors).toEqual([])
-        // The legacy entry keeps master's settings, under the reserved id.
-        expect(head.profiles.get(id)).toEqual({
-          label: `My ${id === 'zai' ? 'Z.AI' : 'Claude'}`,
-          env: { ANTHROPIC_BASE_URL: 'https://gw.example.internal' },
-          providerId: `profile:${id}`,
-        })
-        // The shipped provider keeps its id, models, and settings.
-        if (id === 'zai') {
-          expect(head.providers.get('zai')?.models).toEqual(['glm', 'glm-flash'])
-          expect(head.profiles.get('glm')).toEqual({ ...GLM, providerId: 'zai' })
-        } else {
-          expect(head.providers.get('claude')?.models).toEqual(['default', 'opus', 'sonnet', 'haiku'])
-          expect(head.profiles.get('default')).toEqual({ ...DEFAULT, providerId: 'claude' })
-        }
-      })
-    }
-  }
 })
-
-describe('master parity for the shipped re-home (B2, finding F2)', () => {
-  test('a zai relabel leaves glm shipped, so a later glm override re-homes like master', () => {
-    const project = projectWith('b2', {
-      'providers.json': { zai: { label: 'Z', models: {} } },
-      'profiles.json': { glm: { env: { ANTHROPIC_BASE_URL: 'https://gw.example.internal' } } },
-    })
-    const head = expectParity(project, {
-      ...SHIPPED,
-      glm: { ...GLM, env: { ...ZAI_ENV, ANTHROPIC_BASE_URL: 'https://gw.example.internal' } },
-    })
-    expect(head.providers.get('zai')?.models).toEqual(['glm-flash'])
-    // The relabel is inert for the shipped provider: it keeps its own label.
-    expect(head.providers.get('zai')?.label).toBe('Z.AI')
-    expect(head.profiles.get('glm')?.providerId).toBe('glm')
-  })
-
-  test('one level: providers.json read first, then profiles.json — the override still re-homes', () => {
-    const project = projectWith('order', {
-      'providers.json': { zai: { label: 'Z', models: {} } },
-      'profiles.json': { 'glm-flash': { label: 'Flash' } },
-    })
-    const head = expectParity(project, {
-      ...SHIPPED,
-      'glm-flash': { ...GLM_FLASH, label: 'Flash' },
-    })
-    expect(head.profiles.get('glm-flash')?.providerId).toBe('glm-flash')
-    expect(head.providers.get('zai')?.models).toEqual(['glm'])
-  })
-})
-
 describe('a user-level file replaces the shipped layer, so operator rules apply (F2 ruling)', () => {
   test('a legacy entry merges into a provider the user level defined', () => {
     fs.mkdirSync(path.join(home, '.kawai'), { recursive: true })
@@ -218,5 +152,242 @@ describe('a user-level file replaces the shipped layer, so operator rules apply 
     expect(head.profiles.get('glm')).toEqual({ ...GLM, providerId: 'zai' })
     expect(head.profiles.get('zai')).toBeUndefined()
     expect(head.providers.get('zai')).toEqual({ label: 'My Z.AI', models: ['glm'] })
+  })
+})
+
+describe('rev 5 acceptance cells', () => {
+  const X_KEYS: Record<string, string[]> = { zai: ['glm', 'glm-flash'], claude: ['default', 'opus', 'sonnet', 'haiku'] }
+  const KEY_SETTINGS: Record<string, Record<string, Omit<CatalogProfile, 'providerId'>>> = {
+    zai: { glm: GLM, 'glm-flash': GLM_FLASH },
+    claude: { default: DEFAULT, opus: OPUS, sonnet: SONNET, haiku: HAIKU },
+  }
+  const OPERATOR_USER: Record<string, unknown> = {
+    zai: { zai: { label: 'Z.AI', limitResetTimeZone: 'Asia/Shanghai', env: ZAI_ENV, models: { glm: { label: 'GLM', model: 'opus' }, 'glm-flash': { label: 'GLM Flash', model: 'sonnet' } } } },
+    claude: { claude: { label: 'Claude', models: { default: { label: 'Default' }, opus: { label: 'Claude Opus', model: 'claude-opus-5-5' }, sonnet: { label: 'Claude Sonnet', model: 'claude-sonnet-5-5' }, haiku: { label: 'Claude Haiku', model: 'claude-haiku-5-5' } } } },
+  }
+
+  /** Each cell runs over X and over the shipped and operator bases, with a
+   * fresh HOME per combination so no user file leaks across combinations. */
+  const forAll = (run: (x: string, base: 'shipped' | 'operator', project: string) => void, files: (x: string) => Record<string, unknown>) => {
+    for (const x of ['claude', 'zai']) {
+      for (const base of ['shipped', 'operator'] as const) {
+        home = path.join(root, `home-${x}-${base}-${Math.random().toString(36).slice(2, 6)}`)
+        fs.mkdirSync(home, { recursive: true })
+        if (base === 'operator') {
+          fs.mkdirSync(path.join(home, '.kawai'), { recursive: true })
+          fs.writeFileSync(path.join(home, '.kawai', 'providers.json'), JSON.stringify(OPERATOR_USER[x]))
+          fs.writeFileSync(path.join(home, '.kawai', 'profiles.json'), '{}')
+        }
+        const project = projectWith(`${x}-${base}-${Math.random().toString(36).slice(2, 6)}`, files(x))
+        run(x, base, project)
+      }
+    }
+  }
+
+  test('(a) label, env, zone, empty-models and new-key overlays reach every key X holds', () => {
+    forAll((x, _base, project) => {
+      const head = resolveProfileCatalog({ homeDir: home, projectPath: project })
+      // The base resolves before any overlay: X's keys sit under X.
+      for (const key of X_KEYS[x]) expect(head.profiles.get(key)?.providerId).toBe(x)
+    }, x => ({ 'providers.json': { [x]: {} } }))
+
+    const overlayCases: Array<[string, Record<string, unknown>, (head: ReturnType<typeof resolveProfileCatalog>, x: string) => void]> = [
+      ['label', { label: 'Relabeled' }, (head, x) => expect(head.providers.get(x)?.label).toBe('Relabeled')],
+      ['env', { env: { ANTHROPIC_BASE_URL: 'https://gw.example.internal' } }, (head, x) => {
+        for (const key of X_KEYS[x]) expect(head.profiles.get(key)?.env.ANTHROPIC_BASE_URL).toBe('https://gw.example.internal')
+      }],
+      ['zone', { limitResetTimeZone: 'Europe/Berlin' }, (head, x) => {
+        for (const key of X_KEYS[x]) expect(head.profiles.get(key)?.limitResetTimeZone).toBe('Europe/Berlin')
+      }],
+    ]
+    for (const [kind, overlay, assert$] of overlayCases) {
+      forAll((x, _base, project) => {
+        const head = resolveProfileCatalog({ homeDir: home, projectPath: project })
+        expect(head.errors).toEqual([])
+        assert$(head, x)
+      }, x => ({ 'providers.json': { [x]: overlay } }))
+    }
+
+    // An empty models map leaves X's keys in place.
+    forAll((x, _base, project) => {
+      const head = resolveProfileCatalog({ homeDir: home, projectPath: project })
+      for (const key of X_KEYS[x]) expect(head.profiles.get(key)?.providerId).toBe(x)
+    }, x => ({ 'providers.json': { [x]: { models: {} } } }))
+
+    // A new key joins X with X's merged facts: the overlay env and the
+    // provider label as its label fallback.
+    forAll((x, _base, project) => {
+      const head = resolveProfileCatalog({ homeDir: home, projectPath: project })
+      expect(head.profiles.get('newkey')?.providerId).toBe(x)
+      expect(head.profiles.get('newkey')?.env.ANTHROPIC_BASE_URL).toBe('https://gw.example.internal')
+      expect(head.providers.get(x)?.label).toBe('Relabeled')
+    }, x => ({ 'providers.json': { [x]: { label: 'Relabeled', env: { ANTHROPIC_BASE_URL: 'https://gw.example.internal' }, models: { newkey: {} } } } }))
+  })
+
+  test('(b) a legacy X becomes profile:X on the shipped base and merges on the operator base', () => {
+    forAll((x, base, project) => {
+      const head = resolveProfileCatalog({ homeDir: home, projectPath: project })
+      if (base === 'shipped') {
+        expect(head.profiles.get(x)?.providerId).toBe(`profile:${x}`)
+        expect(head.profiles.get(x)).toEqual({
+          label: `My ${x === 'zai' ? 'Z.AI' : 'Claude'}`,
+          env: { ANTHROPIC_BASE_URL: 'https://gw.example.internal' },
+          providerId: `profile:${x}`,
+        })
+      } else {
+        expect(head.profiles.get(x)).toBeUndefined()
+        expect(head.providers.get(x)?.label).toBe(`My ${x === 'zai' ? 'Z.AI' : 'Claude'}`)
+      }
+      for (const key of X_KEYS[x]) expect(head.profiles.get(key)?.providerId).toBe(x)
+    }, x => ({ 'profiles.json': { [x]: { label: `My ${x === 'zai' ? 'Z.AI' : 'Claude'}`, env: { ANTHROPIC_BASE_URL: 'https://gw.example.internal' } } } }))
+  })
+
+  test('(c) a later definition of one of the keys of X re-homes from the overlaid settings on the shipped base, and is refused on the operator base', () => {
+    const files = (x: string): Record<string, unknown> => ({
+      'providers.json': {
+        [x]: { env: { ANTHROPIC_BASE_URL: 'https://gw.example.internal' } },
+        moved2: { models: { [X_KEYS[x][0]]: {} } },
+      },
+    })
+    forAll((x, base, project) => {
+      const head = resolveProfileCatalog({ homeDir: home, projectPath: project })
+      const key = X_KEYS[x][0]
+      if (base === 'shipped') {
+        expect(head.errors).toEqual([])
+        expect(head.profiles.get(key)?.providerId).toBe('moved2')
+        expect(head.profiles.get(key)?.env.ANTHROPIC_BASE_URL).toBe('https://gw.example.internal')
+        // The rest of X's overlaid settings ride along.
+        const settings = { ...head.profiles.get(key) }
+        delete (settings as Record<string, unknown>).providerId
+        delete (settings as Record<string, unknown>).label
+        const otherKeys = { ...KEY_SETTINGS[x][key].env, ANTHROPIC_BASE_URL: 'https://gw.example.internal' }
+        expect((settings as CatalogProfile).env).toEqual(otherKeys)
+      } else {
+        expect(head.errors).toEqual([expect.stringContaining(`model "${key}" is already defined under provider "${x}"`)])
+        expect(head.profiles.get(key)?.providerId).toBe(x)
+        expect(head.profiles.get(key)?.env.ANTHROPIC_BASE_URL).toBe('https://gw.example.internal')
+      }
+    }, files)
+  })
+
+  test('(d) the overlay and the legacy entry at one level, and at farther and nearer levels', () => {
+    // One level.
+    forAll((x, base, project) => {
+      const head = resolveProfileCatalog({ homeDir: home, projectPath: project })
+      expect(head.errors).toEqual([])
+      // Shipped base: the entry takes the reserved id. Operator base: it
+      // merges into the operator provider.
+      if (base === 'shipped') expect(head.profiles.get(x)?.providerId).toBe(`profile:${x}`)
+      else expect(head.providers.get(x)?.label).toBe(`My ${x === 'zai' ? 'Z.AI' : 'Claude'}`)
+      for (const key of X_KEYS[x]) expect(head.profiles.get(key)?.env.ANTHROPIC_BASE_URL).toBe('https://gw.example.internal')
+    }, x => ({
+      'providers.json': { [x]: { env: { ANTHROPIC_BASE_URL: 'https://gw.example.internal' } } },
+      'profiles.json': { [x]: { label: `My ${x === 'zai' ? 'Z.AI' : 'Claude'}` } },
+    }))
+    // Farther overlay, nearer legacy: the legacy re-homes from the overlay.
+    forAll((x, base) => {
+      const outer = path.join(root, `d-far-${x}-${base}`, 'outer')
+      const project = path.join(outer, 'deep')
+      fs.mkdirSync(path.join(outer, '.kawai'), { recursive: true })
+      fs.writeFileSync(path.join(outer, '.kawai', 'providers.json'), JSON.stringify({ [x]: { env: { ANTHROPIC_BASE_URL: 'https://gw.example.internal' } } }))
+      fs.mkdirSync(path.join(project, '.kawai'), { recursive: true })
+      fs.writeFileSync(path.join(project, '.kawai', 'profiles.json'), JSON.stringify({ [x]: { label: `My ${x === 'zai' ? 'Z.AI' : 'Claude'}` } }))
+      const head = resolveProfileCatalog({ homeDir: home, projectPath: project })
+      // L3 on the shipped base: profile:X holds only the entry's settings —
+      // the level's overlay reaches the shipped provider's remaining keys.
+      // Rule 2 on the operator base: the entry merges into the provider.
+      if (base === 'shipped') {
+        expect(head.profiles.get(x)).toEqual({
+          label: `My ${x === 'zai' ? 'Z.AI' : 'Claude'}`,
+          env: {},
+          providerId: `profile:${x}`,
+        })
+      } else {
+        expect(head.providers.get(x)?.label).toBe(`My ${x === 'zai' ? 'Z.AI' : 'Claude'}`)
+      }
+      for (const key of X_KEYS[x]) expect(head.profiles.get(key)?.env.ANTHROPIC_BASE_URL).toBe('https://gw.example.internal')
+    }, () => ({}))
+    // Nearer overlay, farther legacy: the overlay applies to X's keys, and
+    // the re-homed key is left alone.
+    forAll((x, base) => {
+      const outer = path.join(root, `d-near-${x}-${base}`, 'outer')
+      const project = path.join(outer, 'deep')
+      fs.mkdirSync(path.join(outer, '.kawai'), { recursive: true })
+      fs.writeFileSync(path.join(outer, '.kawai', 'profiles.json'), JSON.stringify({ [x]: { label: `My ${x === 'zai' ? 'Z.AI' : 'Claude'}` } }))
+      fs.mkdirSync(path.join(project, '.kawai'), { recursive: true })
+      fs.writeFileSync(path.join(project, '.kawai', 'providers.json'), JSON.stringify({ [x]: { env: { ANTHROPIC_BASE_URL: 'https://gw.example.internal' } } }))
+      const head = resolveProfileCatalog({ homeDir: home, projectPath: project })
+      // Shipped base: the entry re-homed at the outer level and the nearer
+      // overlay leaves it alone. Operator base: the entry merged at the
+      // outer level and the overlay applies to the provider's keys.
+      if (base === 'shipped') {
+        expect(head.profiles.get(x)?.providerId).toBe(`profile:${x}`)
+        expect(head.profiles.get(x)?.env).toEqual({})
+      } else {
+        expect(head.providers.get(x)?.label).toBe(`My ${x === 'zai' ? 'Z.AI' : 'Claude'}`)
+      }
+      for (const key of X_KEYS[x]) expect(head.profiles.get(key)?.env.ANTHROPIC_BASE_URL).toBe('https://gw.example.internal')
+    }, () => ({}))
+  })
+
+  test('(e) two overlays at two levels: the later wins and an empty value neutralizes', () => {
+    forAll((x, _base, seed) => {
+      const outer = path.join(root, `e-outer-${seed ? '' : ''}${Math.random().toString(36).slice(2, 6)}`)
+      const project = path.join(outer, 'deep')
+      fs.mkdirSync(path.join(outer, '.kawai'), { recursive: true })
+      fs.writeFileSync(path.join(outer, '.kawai', 'providers.json'), JSON.stringify({ [x]: { label: 'Outer', env: { ANTHROPIC_BASE_URL: 'https://outer.example.internal' } } }))
+      fs.mkdirSync(path.join(project, '.kawai'), { recursive: true })
+      fs.writeFileSync(path.join(project, '.kawai', 'providers.json'), JSON.stringify({ [x]: { label: 'Inner', env: { ANTHROPIC_BASE_URL: '' } } }))
+      const head = resolveProfileCatalog({ homeDir: home, projectPath: project })
+      expect(head.providers.get(x)?.label).toBe('Inner')
+      for (const key of X_KEYS[x]) expect(head.profiles.get(key)?.env.ANTHROPIC_BASE_URL).toBe('')
+    }, () => ({}))
+  })
+
+  test('(f) an overlay later than a re-home leaves the re-homed key alone', () => {
+    const outer = path.join(root, 'f-outer')
+    const project = path.join(outer, 'deep')
+    fs.mkdirSync(path.join(outer, '.kawai'), { recursive: true })
+    fs.writeFileSync(path.join(outer, '.kawai', 'profiles.json'), JSON.stringify({ glm: { label: 'Moved' } }))
+    fs.mkdirSync(path.join(project, '.kawai'), { recursive: true })
+    fs.writeFileSync(path.join(project, '.kawai', 'providers.json'), JSON.stringify({ zai: { env: { ANTHROPIC_BASE_URL: 'https://gw.example.internal' } } }))
+    const head = resolveProfileCatalog({ homeDir: home, projectPath: project })
+    expect(head.errors).toEqual([])
+    expect(head.profiles.get('glm')).toEqual({ label: 'Moved', env: ZAI_ENV, model: 'opus', limitResetTimeZone: 'Asia/Shanghai', providerId: 'glm' })
+    expect(head.profiles.get('glm-flash')?.env.ANTHROPIC_BASE_URL).toBe('https://gw.example.internal')
+  })
+
+  test('(g) one providers.json overlaying zai and moving glm to zai2 resolves identically in both JSON key orders', () => {
+    const orders: Array<Record<string, unknown>> = [
+      { zai: { env: { ANTHROPIC_BASE_URL: 'https://gw.example.internal' } }, zai2: { models: { glm: {} } } },
+      { zai2: { models: { glm: {} } }, zai: { env: { ANTHROPIC_BASE_URL: 'https://gw.example.internal' } } },
+    ]
+    const runs = orders.map(order => {
+      const project = projectWith(`g-${Math.random().toString(36).slice(2, 6)}`, { 'providers.json': order })
+      const head = resolveProfileCatalog({ homeDir: home, projectPath: project })
+      expect(head.errors).toEqual([])
+      return head
+    })
+    for (const head of runs) {
+      expect(head.profiles.get('glm')?.env.ANTHROPIC_BASE_URL).toBe('https://gw.example.internal')
+      expect(head.profiles.get('glm')?.providerId).toBe('zai2')
+      expect(head.profiles.get('glm-flash')?.env.ANTHROPIC_BASE_URL).toBe('https://gw.example.internal')
+      expect(head.profiles.get('glm-flash')?.providerId).toBe('zai')
+    }
+    expect(JSON.stringify([...runs[0]!.profiles.entries()])).toEqual(JSON.stringify([...runs[1]!.profiles.entries()]))
+  })
+
+  test('(I3) a rule-2 merge with nowhere to land reports the dropped startup model', () => {
+    fs.mkdirSync(path.join(home, '.kawai'), { recursive: true })
+    fs.writeFileSync(path.join(home, '.kawai', 'providers.json'), JSON.stringify({
+      zai: { label: 'Z.AI', models: { glm: { label: 'GLM', model: 'opus' } } },
+    }))
+    const project = projectWith('i3', {
+      'profiles.json': { zai: { label: 'My Z.AI', model: 'opus' } },
+    })
+    const head = resolveProfileCatalog({ homeDir: home, projectPath: project })
+    expect(head.errors).toEqual([expect.stringContaining('model "opus" is ignored: provider "zai" holds other models and takes no startup model.')])
+    expect(head.providers.get('zai')?.label).toBe('My Z.AI')
+    expect(head.profiles.get('glm')?.providerId).toBe('zai')
   })
 })
