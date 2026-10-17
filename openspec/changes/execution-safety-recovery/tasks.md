@@ -87,7 +87,7 @@ Group 7's matrix rows for plan execution, integration, supervision, and revision
   - the acknowledgement covers its group through the named call and no later call;
   - a non-violation or another team's call refused;
   - one row written, with the call unchanged.
-- [ ] 4.3 Add `outboundItems` to `ATTENTION_SOURCES`, the `audit` link kind, and the `outbound` summary bucket. Verify with workspace read tests:
+- [x] 4.3 Add `outboundItems` to `ATTENTION_SOURCES`, the `audit` link kind, and the `outbound` summary bucket. Verify with workspace read tests:
   - one item per `(rule, destination)` group with unacknowledged violations, with its id, owner, cause and count, next action, and link;
   - repeated calls to one unlisted MCP server raise one item;
   - a violation after the group's acknowledgement raises it again;
