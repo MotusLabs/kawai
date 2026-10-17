@@ -56,6 +56,8 @@ Version 1, `baseline`, is the schema as it stood before versions existed. It is 
 
 **The database is newer than the build.** This happens when you run an older build against a database that a newer build has already migrated. The server exits before writing anything to the database. The message names the database's version, the newest version this build knows, the newest `pre-migration-<n>` backup taken before the first version this build does not know, and this page. There is no override: an older build could write rows that break rules it does not know. To go back to the older build, restore that backup (below), or run a build that knows the database's version.
 
+**A recorded migration name does not match the build's registry.** Each recorded version in `schema_migrations` carries the name of the migration that applied it; if a recorded version's name differs from what this build's registry says for that number, a different set of migrations wrote the database. The server exits before writing anything, naming the recorded and expected names and the newest `pre-migration-<n>` backup of that version. Restore that backup, or run the build whose migration carried the recorded name.
+
 **A migration or its backup failed.** The message names the migration and the backup. The database is left at its previous version. Fix the cause the message reports (for example, disk space for the backup) and start again, or restore a backup.
 
 ## Restoring a backup

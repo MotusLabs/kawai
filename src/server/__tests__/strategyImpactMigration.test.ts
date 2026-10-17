@@ -72,7 +72,7 @@ test('a version-1 database upgrades to 2 after its pre-migration-2 backup and ke
   expect(before.strategy_impact_reviews).toHaveLength(1)
 
   // Isolate the upgrade to exactly version 2: later migrations (this build's
-  // plan-validation, later builds' entries) have their own tests.
+  // plan-validation and outbound-audit, later builds' entries) have their own tests.
   const session = initDatabase({ path: dbPath, migrations: MIGRATIONS.filter(migration => migration.version <= 2) })
   const reviews = new StrategyStore(session.db).impactReviews(strategyId)
   // The new tables are usable at once: a decision on the existing review.
