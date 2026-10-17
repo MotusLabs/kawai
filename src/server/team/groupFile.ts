@@ -72,6 +72,8 @@ export interface GroupDefinition {
   canManageMailbox: boolean
   /** Live-member cap for worktree staffing spawns; default the sum of profile caps, else 1. */
   max: number
+  /** The max came from the cap sum, so the resolver re-sums resolved caps. */
+  maxFromCaps?: boolean
   /** Profiles spawned members may use, preferred first; empty = the default profile. */
   profiles: GroupProfile[]
   /** Built-in routing strategy when no rule decides. */
@@ -138,7 +140,7 @@ export function parseGroupFile(id: string, content: string): GroupFileParse {
 
 type TaskSettings = Pick<GroupDefinition,
   'canCreateTasks' | 'canCreatePlans' | 'canManageMailbox' | 'releaseOnTaskClose' | 'worktreeScoped' | 'canReleaseMembers'
-  | 'canReportProcess' | 'max' | 'profiles' | 'strategy' | 'onLimit' | 'approval' | 'effort' | 'profileEffort' | 'warnings'>
+  | 'canReportProcess' | 'max' | 'maxFromCaps' | 'profiles' | 'strategy' | 'onLimit' | 'approval' | 'effort' | 'profileEffort' | 'warnings'>
 
 type Parsed<T> = { ok: true; value: T } | { ok: false; error: string }
 
@@ -193,14 +195,19 @@ function parseTaskSettings(
       settings.profiles = parsed.value
     }
   }
-  // Map form: every entry has a cap, and their sum is the default max.
-  if (settings.profiles.length > 0 && settings.profiles.every(entry => entry.cap !== undefined)) {
-    settings.max = settings.profiles.reduce((sum, entry) => sum + entry.cap!, 0)
-  }
+  // Map form: every entry has a cap, and their sum is the default max —
+  // marked, so the resolver can re-sum the RESOLVED caps after dropping
+  // entries while an explicit max always stays (finding N2).
+  const capSum = settings.profiles.length > 0 && settings.profiles.every(entry => entry.cap !== undefined)
+    ? settings.profiles.reduce((sum, entry) => sum + entry.cap!, 0)
+    : null
   const max = fields.get('max')?.trim()
   if (max !== undefined) {
     if (!/^[1-9]\d*$/.test(max)) return { ok: false, error: `max must be a positive integer, got "${max}"` }
     settings.max = Number(max)
+  } else if (capSum !== null) {
+    settings.max = capSum
+    settings.maxFromCaps = true
   }
   const strategy = fields.get('strategy')?.trim()
   if (strategy !== undefined) {

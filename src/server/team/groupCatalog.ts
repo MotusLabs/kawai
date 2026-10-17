@@ -100,10 +100,6 @@ export function loadGroupCatalog(ctx: GroupCatalogContext): GroupCatalog {
     const file = files.at(-1)!.file
     const groupWarnings = [...group.warnings]
     let changed = false
-    // A cap-derived default max sums the resolved caps, not the written ones.
-    const parsedCapSum = group.profiles.length > 0 && group.profiles.every(entry => entry.cap !== undefined)
-      ? group.profiles.reduce((sum, entry) => sum + entry.cap!, 0)
-      : null
     const resolvedProfiles: typeof group.profiles = []
     const seenProfiles = new Set<string>()
     for (const listed of group.profiles) {
@@ -149,10 +145,11 @@ export function loadGroupCatalog(ctx: GroupCatalogContext): GroupCatalog {
     }
     const unknown = resolvedProfiles.filter(entry => !known.has(entry.profileId))
     if (unknown.length > 0) changed = true
-    let max = group.max
-    if (changed && parsedCapSum !== null && group.max === parsedCapSum) {
-      max = Math.max(1, resolvedProfiles.reduce((sum, entry) => sum + (entry.cap ?? 0), 0))
-    }
+    // A cap-derived default max re-sums the resolved caps; an explicit max
+    // stays even when it happens to equal the sum (finding N2).
+    const max = changed && group.maxFromCaps
+      ? Math.max(1, resolvedProfiles.reduce((sum, entry) => sum + (entry.cap ?? 0), 0))
+      : group.max
     const checked: GroupDefinition = changed || unknown.length > 0
       ? {
         ...group,

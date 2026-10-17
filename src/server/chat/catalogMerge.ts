@@ -31,8 +31,14 @@ export interface MergedProvider {
   executable?: string
   limitResetTimeZone?: string
   models: Map<string, MergedModel>
-  /** An operator (non-shipped) file has defined or merged this provider. */
-  operator: boolean
+  /** An operator file introduced this provider; overlays never change it (F2). */
+  operatorOrigin: boolean
+  /**
+   * A shipped provider's operator-overlay facts (F2): its own facts and its
+   * shipped keys stay untouched; these reach only the keys the overlay file
+   * itself defines.
+   */
+  operatorOverlay?: { label?: string; env: Record<string, string>; executable?: string; limitResetTimeZone?: string }
   /** The first file that defined it, for duplicate-key errors. */
   originFile: string
 }
@@ -92,17 +98,25 @@ export class CatalogMerger {
           executable: provider.executable,
           limitResetTimeZone: provider.limitResetTimeZone,
           models: new Map(),
-          operator: !shipped,
+          operatorOrigin: !shipped,
           originFile: file,
         }
         this.providers.set(id, merged)
-      } else {
-        // A provider-level overlay never flips a model key's tier (B2).
-        if (!shipped) merged.operator = true
+      } else if (merged.operatorOrigin) {
+        // An operator provider layers the overlay on, nearest wins (D2).
         merged.label = provider.label ?? merged.label
         merged.env = { ...merged.env, ...provider.env }
         merged.executable = provider.executable ?? merged.executable
         merged.limitResetTimeZone = provider.limitResetTimeZone ?? merged.limitResetTimeZone
+      } else {
+        // A shipped provider keeps its own facts under an operator overlay
+        // (F2): the overlay's facts reach only the keys this file defines.
+        merged.operatorOverlay = {
+          label: provider.label,
+          env: { ...provider.env },
+          executable: provider.executable,
+          limitResetTimeZone: provider.limitResetTimeZone,
+        }
       }
       for (const [key, model] of provider.models) {
         const existing = merged.models.get(key)
@@ -144,7 +158,20 @@ export class CatalogMerger {
           continue
         }
         this.setHolder(key, { provider: id, operator: !shipped, originFile: file, own: false })
-        merged.models.set(key, { label: model.label, model: model.model, env: { ...model.env } })
+        const overlay = !shipped ? undefined : merged.operatorOverlay
+        merged.models.set(key, {
+          label: model.label ?? overlay?.label,
+          model: model.model,
+          env: { ...model.env },
+          ...(overlay ? {
+            inherited: {
+              env: overlay.env,
+              label: overlay.label,
+              executable: overlay.executable,
+              limitResetTimeZone: overlay.limitResetTimeZone,
+            },
+          } : {}),
+        })
       }
     }
   }
@@ -185,14 +212,14 @@ export class CatalogMerger {
             env: { ...entry.env },
             inherited: { env: flat.env, label: flat.label, model: flat.model },
           }]]),
-          operator: !shipped,
+          operatorOrigin: !shipped,
           originFile: file,
         })
         this.setHolder(id, { provider: id, operator: !shipped, originFile: file, own: true })
         continue
       }
       const provider = this.providers.get(id)
-      if (provider && provider.operator) {
+      if (provider && provider.operatorOrigin) {
         this.mergeIntoProvider(provider, id, entry, shipped, file)
         continue
       }
@@ -206,7 +233,7 @@ export class CatalogMerger {
           executable: entry.executable,
           limitResetTimeZone: entry.limitResetTimeZone,
           models: new Map([[id, { label: entry.label, model: entry.model, env: { ...entry.env } }]]),
-          operator: !shipped,
+          operatorOrigin: !shipped,
           originFile: file,
         })
         this.setHolder(id, { provider: reservedId, operator: !shipped, originFile: file, own: true })
@@ -221,7 +248,7 @@ export class CatalogMerger {
         executable: entry.executable,
         limitResetTimeZone: entry.limitResetTimeZone,
         models: new Map([[id, { label: entry.label, model: entry.model, env: { ...entry.env } }]]),
-        operator: !shipped,
+        operatorOrigin: !shipped,
         originFile: file,
       })
       this.setHolder(id, { provider: id, operator: !shipped, originFile: file, own: true })
@@ -231,7 +258,6 @@ export class CatalogMerger {
   /** A legacy entry whose id names an existing operator provider merges into it. */
   private mergeIntoProvider(provider: MergedProvider, id: string, entry: PartialProfile, shipped: boolean, file: string): void {
     if (!shipped) {
-      provider.operator = true
       const holder = this.holders.get(id)
       if (holder) {
         holder.operator = true
@@ -249,10 +275,13 @@ export class CatalogMerger {
       // picker renders the pair as the plain option it has always been.
       if (provider.models.size === 1) provider.label = entry.label ?? provider.label
     } else {
-      // Provider-level facts; a startup model with no matching model key
-      // has no place to land and is dropped.
+      // Provider-level facts; a startup model with no matching model key has
+      // no place to land and is reported, never dropped silently (F2).
       provider.label = entry.label ?? provider.label
       provider.env = { ...provider.env, ...entry.env }
+      if (entry.model !== undefined) {
+        this.errors.push(`${file}: model "${entry.model}" is ignored: provider "${id}" holds other models and takes no startup model.`)
+      }
     }
     provider.executable = entry.executable ?? provider.executable
     provider.limitResetTimeZone = entry.limitResetTimeZone ?? provider.limitResetTimeZone
@@ -271,7 +300,7 @@ export class CatalogMerger {
       label: 'Default',
       env: {},
       models: new Map([['default', { label: 'Default', env: {} }]]),
-      operator: false,
+      operatorOrigin: false,
       originFile: '(implicit)',
     })
     this.setHolder('default', { provider: 'default', operator: false, originFile: '(implicit)', own: true })
