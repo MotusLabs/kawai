@@ -169,17 +169,29 @@ function parseTaskSettings(
   }
   const profile = fields.get('profile')?.trim()
   const profiles = fields.get('profiles')?.trim()
-  if (profile !== undefined && profiles !== undefined) {
-    return { ok: false, error: 'set either profile or profiles, not both' }
-  }
-  if (profile !== undefined) {
-    if (!PROFILE_ID_PATTERN.test(profile)) return { ok: false, error: `profile "${profile}" is not a valid profile id` }
-    settings.profiles = [{ profileId: profile }]
-  }
-  if (profiles !== undefined) {
-    const parsed = parseProfiles(profiles)
+  // `workers` is the new name of `profiles` (D12): when it is set, the old
+  // keys are ignored with one warning each — so setting both `profile` and
+  // `profiles` beside it no longer rejects the file, since neither is read.
+  const workers = fields.get('workers')?.trim()
+  if (workers !== undefined) {
+    if (profile !== undefined) warnings.push('profile is ignored; workers is set')
+    if (profiles !== undefined) warnings.push('profiles is ignored; workers is set')
+    const parsed = parseProfiles(workers, 'workers', true)
     if (!parsed.ok) return parsed
     settings.profiles = parsed.value
+  } else {
+    if (profile !== undefined && profiles !== undefined) {
+      return { ok: false, error: 'set either profile or profiles, not both' }
+    }
+    if (profile !== undefined) {
+      if (!PROFILE_ID_PATTERN.test(profile)) return { ok: false, error: `profile "${profile}" is not a valid profile id` }
+      settings.profiles = [{ profileId: profile }]
+    }
+    if (profiles !== undefined) {
+      const parsed = parseProfiles(profiles, 'profiles')
+      if (!parsed.ok) return parsed
+      settings.profiles = parsed.value
+    }
   }
   // Map form: every entry has a cap, and their sum is the default max.
   if (settings.profiles.length > 0 && settings.profiles.every(entry => entry.cap !== undefined)) {
@@ -209,8 +221,17 @@ function parseTaskSettings(
     if (GROUP_EFFORTS.includes(effort as GroupEffort)) settings.effort = effort as GroupEffort
     else warnings.push(`effort must be ${GROUP_EFFORTS.join(', ')}, got "${effort}"; ignored`)
   }
-  const profileEffort = parseProfileEffort(fields.get('profileEffort'), settings.profiles, warnings)
-  if (profileEffort) settings.profileEffort = profileEffort
+  // `modelEffort` is the new name of `profileEffort` (D12); the old key is
+  // ignored with a warning when both are set.
+  const rawModelEffort = fields.get('modelEffort')
+  if (rawModelEffort !== undefined) {
+    if (fields.get('profileEffort') !== undefined) warnings.push('profileEffort is ignored; modelEffort is set')
+    const modelEffort = parseProfileEffort(rawModelEffort.trim(), settings.profiles, warnings, 'modelEffort', true)
+    if (modelEffort) settings.profileEffort = modelEffort
+  } else {
+    const profileEffort = parseProfileEffort(fields.get('profileEffort'), settings.profiles, warnings)
+    if (profileEffort) settings.profileEffort = profileEffort
+  }
   return { ok: true, settings }
 }
 
@@ -221,12 +242,13 @@ function parseTaskSettings(
  * run on any profile.
  */
 function parseProfileEffort(
-  raw: string | undefined, listed: GroupProfile[], warnings: string[]
+  raw: string | undefined, listed: GroupProfile[], warnings: string[],
+  label = 'profileEffort', qualifiedKeys = false,
 ): Record<string, GroupEffort> | undefined {
   if (raw === undefined) return undefined
-  const flow = parseFlow(raw.trim(), true)
+  const flow = parseFlow(raw.trim(), true, qualifiedKeys)
   if (!flow.ok || flow.value.kind !== 'map') {
-    warnings.push(`profileEffort: ${flow.ok ? 'expected { profile: level, ... }' : flow.error}; ignored`)
+    warnings.push(`${label}: ${flow.ok ? 'expected { profile: level, ... }' : flow.error}; ignored`)
     return undefined
   }
   const groupProfiles = new Set(listed.length > 0 ? listed.map(entry => entry.profileId) : ['default'])
@@ -234,22 +256,34 @@ function parseProfileEffort(
   const seen = new Set<string>()
   for (const [profileId, level] of flow.value.entries) {
     if (seen.has(profileId)) {
-      warnings.push(`profileEffort: "${profileId}" is listed twice; the later entry is ignored`)
+      warnings.push(`${label}: "${profileId}" is listed twice; the later entry is ignored`)
       continue
     }
     seen.add(profileId)
-    if (!PROFILE_ID_PATTERN.test(profileId)) {
-      warnings.push(`profileEffort: "${profileId}" is not a valid profile id; ignored`)
+    // A `provider/model` key is left for groupCatalog to resolve against the
+    // catalog; a bare key must be an id.
+    if (!isFlowKeyValid(profileId, qualifiedKeys)) {
+      warnings.push(`${label}: "${profileId}" is not a valid profile id; ignored`)
     } else if (!GROUP_EFFORTS.includes(level as GroupEffort)) {
-      warnings.push(`profileEffort.${profileId} must be ${GROUP_EFFORTS.join(', ')}, got "${level}"; ignored`)
+      warnings.push(`${label}.${profileId} must be ${GROUP_EFFORTS.join(', ')}, got "${level}"; ignored`)
     } else {
       result[profileId] = level as GroupEffort
-      if (!groupProfiles.has(profileId)) {
-        warnings.push(`profileEffort: "${profileId}" is not one of the group's profiles; it applies only to members on that profile`)
+      // A qualified key cannot be checked against the list until groupCatalog
+      // resolves it; a bare key not among the group's profiles warns here.
+      if (!profileId.includes('/') && !groupProfiles.has(profileId)) {
+        warnings.push(`${label}: "${profileId}" is not one of the group's profiles; it applies only to members on that profile`)
       }
     }
   }
   return Object.keys(result).length > 0 ? result : undefined
+}
+
+/** `id` always; `provider/model` too when the new group keys allow it (D5). */
+function isFlowKeyValid(key: string, qualifiedKeys: boolean): boolean {
+  if (PROFILE_ID_PATTERN.test(key)) return true
+  if (!qualifiedKeys || !key.includes('/')) return false
+  const [provider, model] = key.split('/')
+  return PROFILE_ID_PATTERN.test(provider ?? '') && PROFILE_ID_PATTERN.test(model ?? '')
 }
 
 /**
@@ -266,28 +300,28 @@ function parseCanManageMailbox(raw: string | undefined, warnings: string[]): boo
 }
 
 /** `[a, b]` (no caps) or `{ a: 2, b: 1 }` (caps); order is preference. */
-function parseProfiles(raw: string): Parsed<GroupProfile[]> {
-  const flow = parseFlow(raw)
-  if (!flow.ok) return { ok: false, error: `profiles: ${flow.error}` }
+function parseProfiles(raw: string, label = 'profiles', qualifiedKeys = false): Parsed<GroupProfile[]> {
+  const flow = parseFlow(raw, false, qualifiedKeys)
+  if (!flow.ok) return { ok: false, error: `${label}: ${flow.error}` }
   const entries: GroupProfile[] = []
   const seen = new Set<string>()
   for (const [key, value] of flow.value.entries) {
     const profileId = flow.value.kind === 'list' ? value : key
-    if (!PROFILE_ID_PATTERN.test(profileId)) {
-      return { ok: false, error: `profiles: "${profileId}" is not a valid profile id` }
+    if (!isFlowKeyValid(profileId, qualifiedKeys)) {
+      return { ok: false, error: `${label}: "${profileId}" is not a valid profile id` }
     }
-    if (seen.has(profileId)) return { ok: false, error: `profiles: "${profileId}" is listed twice` }
+    if (seen.has(profileId)) return { ok: false, error: `${label}: "${profileId}" is listed twice` }
     seen.add(profileId)
     if (flow.value.kind === 'list') {
       entries.push({ profileId })
       continue
     }
     if (!/^[1-9]\d*$/.test(value)) {
-      return { ok: false, error: `profiles: cap for "${profileId}" must be a positive integer, got "${value}"` }
+      return { ok: false, error: `${label}: cap for "${profileId}" must be a positive integer, got "${value}"` }
     }
     entries.push({ profileId, cap: Number(value) })
   }
-  if (entries.length === 0) return { ok: false, error: 'profiles: list at least one profile' }
+  if (entries.length === 0) return { ok: false, error: `${label}: list at least one profile` }
   return { ok: true, value: entries }
 }
 
@@ -337,8 +371,11 @@ type Flow = { kind: 'list' | 'map'; entries: Array<[string, string]> }
  * List entries carry their index as key. Nesting, empty items, and stray
  * brackets are errors — the frontmatter stays a flat, scalar-only format. A
  * repeated map key is an error unless `allowRepeats` (the caller handles it).
+ * With `qualifiedKeys`, a map key may take one `/` between two id-shaped
+ * parts (`zai/glm`) — the new group keys' `provider/model` form (D5); the
+ * old keys keep their grammar and reject it as today.
  */
-function parseFlow(raw: string, allowRepeats = false): Parsed<Flow> {
+function parseFlow(raw: string, allowRepeats = false, qualifiedKeys = false): Parsed<Flow> {
   const open = raw[0]
   const close = open === '[' ? ']' : open === '{' ? '}' : null
   if (!close) return { ok: false, error: `expected [ ... ] or { ... }, got "${raw}"` }
@@ -357,7 +394,9 @@ function parseFlow(raw: string, allowRepeats = false): Parsed<Flow> {
       entries.push([String(index), value])
       continue
     }
-    const match = /^([A-Za-z0-9][A-Za-z0-9_-]*)\s*:\s*(.+)$/.exec(text)
+    const match = qualifiedKeys
+      ? /^([A-Za-z0-9][A-Za-z0-9_-]*(?:\/[A-Za-z0-9][A-Za-z0-9_-]*)?)\s*:\s*(.+)$/.exec(text)
+      : /^([A-Za-z0-9][A-Za-z0-9_-]*)\s*:\s*(.+)$/.exec(text)
     const value = match ? unquote(match[2]!.trim()) : null
     if (!match || value === null || value === '') return { ok: false, error: `"${text}" is not "key: value"` }
     if (!allowRepeats && entries.some(([key]) => key === match[1])) return { ok: false, error: `key "${match[1]}" is repeated` }

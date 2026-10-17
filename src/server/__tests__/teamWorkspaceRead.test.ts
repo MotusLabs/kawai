@@ -143,6 +143,10 @@ const catalog = (): GroupCatalog => ({
   ]),
   errors: [],
   warnings: [],
+  providers: new Map([
+    ['zai', { label: 'Z.AI', models: ['glm'] }],
+    ['claude', { label: 'Claude', models: ['default'] }],
+  ]),
 })
 
 describe('memberRows (2.2)', () => {
@@ -152,7 +156,10 @@ describe('memberRows (2.2)', () => {
     const row = rows[0]! as TeamMemberRow
     expect(row).toEqual({
       id: 'devs', label: 'Developers', description: 'Build features', canCreateTasks: true, max: 3,
-      profiles: [{ profileId: 'glm', cap: 2, live: 1 }, { profileId: 'default', cap: 1, live: 0 }],
+      profiles: [
+        { profileId: 'glm', providerId: 'zai', providerLabel: 'Z.AI', cap: 2, live: 1 },
+        { profileId: 'default', providerId: 'claude', providerLabel: 'Claude', cap: 1, live: 0 },
+      ],
       approval: 'manual', strategy: 'first-available',
       onLimit: { parkIfResetWithinMs: 10_800_000, otherwise: 'forward', forwardTo: 'seniors' },
       warnings: ['profile "nope" is not defined; ignored'],

@@ -11,6 +11,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { cleanGitEnv } from '../git/gitCommand'
+import { loadGroupCatalog } from '../team/groupCatalog'
 import { readValidationFileInputs } from '../plans/validation/validationInputs'
 import type { OpenspecAdapter } from '../plans/validation/openspecAdapter'
 
@@ -214,5 +215,31 @@ describe('readValidationFileInputs (D2)', () => {
     const inputs = await read(['main-change'])
     expect(Object.keys(inputs.changes[0]!.artifacts)).not.toContain('specs/extra/spec.md')
     expect(inputs.changes[0]!.baseSpecs.extra).toBeUndefined()
+  })
+
+  test("a group's qualified workers give validation the same inputs as the bare key (providers-and-workers CP0-d)", async () => {
+    // Validation reads groups through loadGroupCatalog and known profiles
+    // through the resolved catalog, so a `provider/model` worker must reach
+    // the inputs exactly as the resolved bare id does.
+    fs.mkdirSync(path.join(home, '.kawai'), { recursive: true })
+    fs.writeFileSync(path.join(home, '.kawai', 'profiles.json'), '{}')
+    fs.writeFileSync(path.join(home, '.kawai', 'providers.json'), JSON.stringify({
+      zai: { label: 'Z.AI', models: { glm: {} } },
+    }))
+    const groupDir = path.join(repo, '.kawai', 'groups')
+    fs.mkdirSync(groupDir, { recursive: true })
+    fs.writeFileSync(path.join(groupDir, 'juniors.md'), '---\nworkers: [zai/glm]\n---\nJunior.')
+    const qualified = await read([], ['juniors'])
+    fs.writeFileSync(path.join(groupDir, 'juniors.md'), '---\nworkers: [glm]\n---\nJunior.')
+    const bare = await read([], ['juniors'])
+    expect(qualified.catalog).toEqual(bare.catalog)
+    // An unknown qualified name changes the inputs and is flagged the way
+    // groupCatalog warns.
+    fs.writeFileSync(path.join(groupDir, 'juniors.md'), '---\nworkers: [zai/nope]\n---\nJunior.')
+    const unknown = await read([], ['juniors'])
+    expect(unknown.catalog.groups.juniors).not.toEqual(qualified.catalog.groups.juniors)
+    const catalog = loadGroupCatalog({ groupsRoot: repo, homeDir: home })
+    expect(catalog.warnings.some(warning => warning.includes('profile "zai/nope" is not defined; ignored'))).toBe(true)
+    expect(catalog.groups.get('juniors')?.group.profiles).toEqual([])
   })
 })

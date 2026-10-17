@@ -22,6 +22,20 @@ export function profileCountLabel(profile: TeamMemberProfile): string {
 }
 
 /**
+ * Workers grouped under their provider (design D13): `Z.AI: glm-flash · 0 of 3,
+ * glm · 1 live · Claude: haiku · 0 of 2`. Providers keep their first-seen order.
+ */
+export function workersLabel(row: TeamMemberRow): string {
+  const groups: Array<{ label: string; models: string[] }> = []
+  for (const profile of row.profiles) {
+    const last = groups[groups.length - 1]
+    if (last?.label === profile.providerLabel) last.models.push(profileCountLabel(profile))
+    else groups.push({ label: profile.providerLabel, models: [profileCountLabel(profile)] })
+  }
+  return groups.map(group => `${group.label}: ${group.models.join(', ')}`).join(' · ')
+}
+
+/**
  * The group level, then each per-profile override (group-profile-effort D4):
  * listed profiles in the group's order, unlisted ones alphabetically.
  */
@@ -56,8 +70,8 @@ function Group({ row, onOpenSession }: { row: TeamMemberRow; onOpenSession: (ses
       <dt className="text-secondary">Can create tasks</dt><dd>{row.canCreateTasks ? 'yes' : 'no'}</dd>
       <dt className="text-secondary">Approval</dt><dd>{row.approval}</dd>
       <dt className="text-secondary">Member cap</dt><dd>{row.max}</dd>
-      <dt className="text-secondary">Profiles</dt>
-      <dd data-testid="member-profiles">{row.profiles.length === 0 ? 'default profile' : row.profiles.map(profileCountLabel).join(', ')}</dd>
+      <dt className="text-secondary">Workers</dt>
+      <dd data-testid="member-profiles">{row.profiles.length === 0 ? 'default profile' : workersLabel(row)}</dd>
       <dt className="text-secondary">Routing strategy</dt><dd>{row.strategy}</dd>
       <dt className="text-secondary">On limit</dt>
       <dd>park if reset within {durationLabel(limit.parkIfResetWithinMs)}, otherwise {limit.otherwise}{limit.forwardTo ? ` to ${limit.forwardTo}` : ''}</dd>

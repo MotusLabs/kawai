@@ -10,10 +10,12 @@ Group files (`.kawai/groups/<id>.md`) accept, besides the team-task settings:
 ```yaml
 ---
 profiles: { glm: 2, mimo: 1, claude: 1 }   # or a list: [claude, glm]
+workers: { zai/glm: 2, mimo: 1 }           # the new name of profiles; also provider/model
 strategy: first-available                  # or profile-order
 onLimit: { parkIfResetWithin: 3h, otherwise: forward, forwardTo: architects }
 effort: medium                             # low, medium, high, xhigh, max
 profileEffort: { haiku: xhigh }            # per-profile effort; beats effort
+modelEffort: { claude/haiku: xhigh }       # the new name of profileEffort
 releaseOnTaskClose: true                   # default; false keeps spawned members
 worktreeScoped: true                       # default; false takes task mail anywhere
 canReleaseMembers: true                    # default; false opts out of release_member
@@ -27,6 +29,17 @@ canManageMailbox: true                     # default false
   to the sum of the caps. A single `profile: glm` still works. Unknown profile
   ids are reported and ignored. kawai never spawns past a cap; the new-session
   dialog warns before you do.
+- `workers` is the new name of `profiles`, and `modelEffort` of `profileEffort`.
+  Both old keys keep working. When a file sets both spellings of one key, the
+  new one wins and the group shows one warning per ignored old key; `profile`
+  beside `workers` is no longer an error, since neither old key is read.
+  Under the new keys a worker may be written `provider/model` (`zai/glm`),
+  resolved against the profile catalog: it reads as that model's profile id
+  when the provider holds the model, and is reported and ignored like an
+  unknown id otherwise. Switch a file to the new names only after the live
+  server reads them, or keep the old key beside the new one during the
+  switch — an older server would ignore `workers` and spawn on the default
+  profile.
 - `strategy` is the built-in routing without a rule: `first-available` takes
   the longest-idle member, else spawns on the first allowed profile;
   `profile-order` prefers members whose profile comes earlier. Both skip
@@ -52,7 +65,9 @@ canManageMailbox: true                     # default false
   is not a map is ignored whole; a bad profile id, a bad level, or a repeat of
   a profile already listed (the later entry is ignored, even if the first was
   invalid) is ignored alone; and an entry for a profile the group does not list
-  is reported but still applies. The Members tab shows the group level followed by each override.
+  is reported but still applies. `modelEffort` takes the same values with the
+  same warnings, plus `provider/model` keys resolved like `workers`' qualified
+  names. The Members tab shows the group level followed by each override.
 - `releaseOnTaskClose` (default `true`): when a task becomes `done` or
   `cancelled`, its live spawned members are released — archived, never killed —
   once each has settled (idle, no pending approval or answer, no live

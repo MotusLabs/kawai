@@ -49,6 +49,14 @@ export function capacityConstraintLabel(constraint: WaitingConstraint): string {
   }
 }
 
+/** The provider holding the model, for the Members tab's grouping (D13). */
+function providerLabelOf(catalog: GroupCatalog, profileId: string): { id: string; label: string } | undefined {
+  for (const [id, provider] of catalog.providers) {
+    if (provider.models.includes(profileId)) return { id, label: provider.label }
+  }
+  return undefined
+}
+
 /**
  * Members (task 2.2): one read-only row per group of the catalog — the role
  * description, never the prompt body (D7, Q3); every effective setting; each
@@ -79,11 +87,16 @@ export function memberRows(
       description: group.description,
       canCreateTasks: group.canCreateTasks,
       max: group.max,
-      profiles: group.profiles.map(entry => ({
-        profileId: entry.profileId,
-        live: live[entry.profileId] ?? 0,
-        ...(entry.cap !== undefined ? { cap: entry.cap } : {}),
-      })),
+      profiles: group.profiles.map(entry => {
+        const provider = providerLabelOf(catalog, entry.profileId)
+        return {
+          profileId: entry.profileId,
+          providerId: provider?.id ?? entry.profileId,
+          providerLabel: provider?.label ?? entry.profileId,
+          live: live[entry.profileId] ?? 0,
+          ...(entry.cap !== undefined ? { cap: entry.cap } : {}),
+        }
+      }),
       approval: group.approval,
       strategy: group.strategy,
       onLimit: group.onLimit.forwardTo !== undefined
