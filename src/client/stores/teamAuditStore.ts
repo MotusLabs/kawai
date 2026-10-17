@@ -110,7 +110,12 @@ export const useTeamAuditStore = create<AuditState>(set => ({
     if (!views[to]) views[to] = view
     return { views }
   }),
-  select: (teamKey, callId) => set(state => update(state, teamKey, { selected: callId })),
+  select: (teamKey, callId) => set(state => update(state, teamKey, {
+    selected: callId,
+    // Leaving the call id in the URL returns to the default view: the
+    // group's filters came from that call, so they go with it.
+    ...(callId === null ? { filters: {} } : {}),
+  })),
   setFilters: (teamKey, filters) => set(state => update(state, teamKey, {
     filters, rows: null, counts: null, cursor: null, loading: true, error: null,
   })),

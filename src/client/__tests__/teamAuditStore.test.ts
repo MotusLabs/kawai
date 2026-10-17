@@ -123,6 +123,18 @@ describe('page generations, notices, and applied filters (findings-bee1aa24)', (
     expect(useTeamAuditStore.getState().views['/repo']!.pending).toEqual({ ack1: 'acknowledge' })
   })
 
+  test("clearing the selection drops the group's filters (the URL left the call)", () => {
+    open()
+    useTeamAuditStore.getState().begin('/repo', 'p1', 'page')
+    useTeamAuditStore.getState().applyPage({
+      type: 'team-audit-page', teamPath: '/repo', teamId: 't', requestId: 'p1', page: page([row('a')]),
+      appliedFilters: { rule: 'gh-write', destination: 'github:other/repo' },
+    })
+    expect(useTeamAuditStore.getState().views['/repo']!.filters).toEqual({ rule: 'gh-write', destination: 'github:other/repo' })
+    useTeamAuditStore.getState().select('/repo', null)
+    expect(useTeamAuditStore.getState().views['/repo']!.filters).toEqual({})
+  })
+
   test('a notice rides the page and clears on the next request; applied filters are adopted', () => {
     open()
     useTeamAuditStore.getState().begin('/repo', 'p1', 'page')
