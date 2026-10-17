@@ -147,7 +147,7 @@ Implement after `durable-plans`, `strategy-revision-impact`, and `plan-validatio
 
 - [x] 15.1 Add the D17 messages to `src/shared/types.ts` and `CHAT_CONNECTION_TYPES`, plus `executionConnections.ts` with team-scope resolution and cross-team refusals. Verify with connection tests for each message, and a refusal for another team's plan.
 - [x] 15.2 Push `executions` in `team-plan-detail` after execution writes and owned task or mail changes. Verify with a test that a CI transition and a mail claim each push once.
-- [ ] 15.3 Wire `teamPlanStore`: executions, and the dialogs' command ids minted at open and re-minted only on a payload change. Verify with store tests, and a grep test that every applying method has a dispatch caller.
+- [x] 15.3 Wire `teamPlanStore`: executions, and the dialogs' command ids minted at open and re-minted only on a payload change. Verify with store tests, and a grep test that every applying method has a dispatch caller.
 - [ ] 15.4 Build `PlanExecutionSection`, `PlanExecutionStartDialog`, `PlanExecutionChangeRow`, and `PlanExecutionStopDialog`, and replace progress with `executionProgress` for executed plans. Add the owned-task note to the task view's **Accept result** dialog (D17). Verify with component tests for the Plans-view scenarios: Start standing and refusal, waiting explained, flaky and attested labels, a landing flagged for an unverified tree, disconnected controls, Stop listing what it cancels and keeps, and the Accept note on an owned task only.
 
 ## 16. Agent surface

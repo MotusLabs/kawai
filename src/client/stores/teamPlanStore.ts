@@ -19,7 +19,7 @@ import type { PlanDetail, PlanSummary } from '@shared/plans'
 import type { ImpactGate, PlanImpact } from '@shared/strategyImpact'
 import type { PlanRevisionValidation } from '@shared/planValidation'
 
-export type PlanAction = 'approve' | 'withdraw' | 'finish' | 'reopen' | 'validate' | 'assess' | 'decide'
+export type PlanAction = 'approve' | 'withdraw' | 'finish' | 'reopen' | 'validate' | 'assess' | 'decide' | 'start' | 'stop' | 'retry'
 
 /** One dialog's command id and the payload it was last sent with (null = not sent yet). */
 export interface ArmedPlanCommand {
@@ -49,6 +49,8 @@ export interface PlanView {
   detailImpact: PlanImpact | null
   /** The selected plan's Validation sections, per standing revision (plan-validation D11). */
   detailValidation: PlanRevisionValidation[] | null
+  /** The selected plan's executions, riding its detail (plan-execution D17). */
+  detailExecutions: PlanDetail['executions']
   /** Armed dialog command ids, by dialog slot (e.g. `approve:<plan>:<revision>`). */
   commands: Record<string, ArmedPlanCommand>
   /** Which slot each pending request was sent from. */
@@ -57,7 +59,7 @@ export interface PlanView {
 
 export const closedPlanView = (): PlanView => ({
   open: false, loading: false, plans: null, selected: null, detail: null, pending: {}, error: null, failures: [], commands: {}, commandRequests: {},
-  refusalImpact: null, impact: {}, detailImpact: null, detailValidation: null,
+  refusalImpact: null, impact: {}, detailImpact: null, detailValidation: null, detailExecutions: undefined,
 })
 
 interface PlanState {
@@ -149,7 +151,10 @@ export const useTeamPlanStore = create<PlanState>(set => ({
   applyDetail: message => set(state => {
     const view = state.views[message.teamPath]
     if (!view?.open || view.selected !== message.detail.plan.id) return state
-    return update(state, message.teamPath, { detail: message.detail, detailImpact: message.impact ?? null, detailValidation: message.validation ?? null })
+    return update(state, message.teamPath, {
+      detail: message.detail, detailImpact: message.impact ?? null, detailValidation: message.validation ?? null,
+      detailExecutions: message.detail.executions,
+    })
   }),
   applyResult: message => set(state => {
     const view = state.views[message.teamPath]
