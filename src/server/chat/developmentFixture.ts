@@ -29,6 +29,11 @@ export const fixtureQueryFactory: ChatQueryFactory = ({ prompt, options, wire })
   let wake: (() => void) | null = null
   let closed = false
   let generation = 0
+  /** A run is in flight: an interrupt owes its trailing result, like the CLI. */
+  let running = false
+  /** The client uuid of the prompt in flight, echoed on its results like the CLI. */
+  let current: string | undefined
+  const echo = () => (current ? { user_message_uuid: current, user_message_uuids: [current] } : {})
   const controller = new AbortController()
   /** The background scenario's tasks, answering getTaskOutput/stopTask. */
   const backgroundTasks = new Map<string, { output: string; lines: string[]; stopped?: boolean }>()
@@ -55,7 +60,7 @@ export const fixtureQueryFactory: ChatQueryFactory = ({ prompt, options, wire })
     // Session metadata opens every turn in a real stream; the fixture reports
     // the same model each time so the header badge (chat-session-model D1)
     // lights up like a live agent's would.
-    push({ type: 'system', subtype: 'init', model: 'claude-sonnet-4-5' })
+    push({ type: 'system', subtype: 'init', model: 'claude-sonnet-4-5', capabilities: ['interrupt_receipt_v1', 'interrupt_cancel_queued_v1'] })
     // Activity turns hold the initial request first so the "Waiting for
     // model…" phase is long enough to observe in a browser.
     if (/thinking|tool|retry/i.test(text)) {
@@ -266,14 +271,16 @@ export const fixtureQueryFactory: ChatQueryFactory = ({ prompt, options, wire })
       }
       push({ type: 'assistant', message: { id: messageId, role: 'assistant', content: [{ type: 'text', text: 'Streaming a response across reconnect.' }] } })
     }
-    if (!closed && turn === generation) push({ type: 'result', subtype: 'success', result: '', total_cost_usd: 0, num_turns: 1 })
+    if (!closed && turn === generation) push({ type: 'result', subtype: 'success', result: '', total_cost_usd: 0, num_turns: 1, ...echo() })
   }
   void (async () => {
     for await (const message of prompt) {
       if (closed) break
       frame('out', message)
       const content = message.message.content
-      await run(typeof content === 'string' ? content : '')
+      running = true
+      current = message.uuid
+      try { await run(typeof content === 'string' ? content : '') } finally { running = false; current = undefined }
     }
   })()
   const stream = (async function* () {
@@ -304,9 +311,20 @@ export const fixtureQueryFactory: ChatQueryFactory = ({ prompt, options, wire })
       isAutoCompactEnabled: true,
       apiUsage: null,
     }),
-    interrupt: async () => {
-      frame('out', { type: 'control_request', request_id: crypto.randomUUID(), request: { subtype: 'interrupt' } })
+    interrupt: async (interruptOptions?: { cancelQueued?: boolean }) => {
+      const cancelQueued = interruptOptions?.cancelQueued === true
+      frame('out', { type: 'control_request', request_id: crypto.randomUUID(), request: { subtype: 'interrupt', ...(cancelQueued ? { cancel_queued: true } : {}) } })
       generation++
+      // The real CLI flushes the aborted turn's result, naming its prompt,
+      // after the ack (docs/claude-cli-contract.md).
+      if (running) {
+        running = false
+        const ids = echo()
+        setTimeout(() => push({ type: 'result', subtype: 'error_during_execution', is_error: true, errors: [], total_cost_usd: 0, num_turns: 1, ...ids }), 0)
+      }
+      // Prompts the fixture has not pulled stay in the driver's queue, which
+      // the driver clears itself: nothing queued here to cancel.
+      return { still_queued: [], ...(cancelQueued ? { cancelled: [] } : {}) }
     },
     // The background-task controls (background tasks D3/D4), shaped like the
     // real CLI's runtime surface: getTaskOutput reads the scenario's real

@@ -248,11 +248,11 @@ export class MailboxStore {
   }
 
   /** Keep handled work on its agent after a limit, with a resume scheduled. */
-  park(id: string, until: string, resumeMessageId: string): boolean {
+  park(id: string, until: string, resumeMessageId: string, countPark = true): boolean {
     const message = this.get(id)
     if (!message) return false
     return this.transition(id, ['delivered', 'parked'], {
-      state: 'parked', parked_until: until, resume_message_id: resumeMessageId, park_count: message.parkCount + 1,
+      state: 'parked', parked_until: until, resume_message_id: resumeMessageId, park_count: message.parkCount + (countPark ? 1 : 0),
     }, 'parked')
   }
 
@@ -282,6 +282,11 @@ export class MailboxStore {
   /** Messages an agent holds parked. */
   parkedBy(sessionId: string): TeamMessage[] {
     return this.select(`state = 'parked' AND claimed_by = $sessionId`, { $sessionId: sessionId })
+  }
+
+  /** Work the session still holds: delivered to it or parked on it. */
+  heldBy(sessionId: string): TeamMessage[] {
+    return this.select(`claimed_by = $sessionId AND state IN ('delivered', 'parked')`, { $sessionId: sessionId })
   }
 
   /** The parked message a resume message belongs to. */

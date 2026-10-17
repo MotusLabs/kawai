@@ -433,6 +433,9 @@ export class SessionMailbox {
     this.outcomes.toolCall(sessionId, tool, input)
   }
 
+  /** A session's turn opened; `agentStarted` when the agent started it itself. */
+  turnStarted(sessionId: string, agentStarted: boolean) { this.outcomes.turnStarted(sessionId, agentStarted) }
+
   /** A session's turn ended; its mail was settled first. */
   turnEnded(sessionId: string, success: boolean) {
     void this.outcomes.turnEnded(sessionId, success).then(() => this.dispatcher.notify(), this.options.onError)
