@@ -38,7 +38,7 @@ Every model key SHALL be unique across the providers of a resolved catalog and S
 - **THEN** that file fails validation naming `glm` and both providers, and the other discovered files stay usable
 
 ### Requirement: Profile entries read as one-model providers
-Each `profiles.json` entry SHALL read as a provider with the entry's id holding one model of the same key: its label names both, its startup model applies to the model, and its environment, reset time zone, and executable apply to the provider. A catalog without `providers.json` SHALL resolve the same profiles with the same launch settings as before. An entry whose id is already a model of another provider SHALL be ignored with an error naming both files.
+Each `profiles.json` entry SHALL read as a provider with the entry's id holding one model of the same key, its label naming both. A catalog without `providers.json` SHALL resolve as before. An entry whose id is a model of another operator provider SHALL be ignored with an error naming both files. An entry naming a provider only the shipped files define SHALL become its own one-model provider under a reserved `profile:<id>` id, leaving the shipped provider unchanged.
 
 #### Scenario: Profiles-only catalog is unchanged
 - **WHEN** only `profiles.json` files exist
@@ -47,6 +47,10 @@ Each `profiles.json` entry SHALL read as a provider with the entry's id holding 
 #### Scenario: Entry names a model of another provider
 - **WHEN** the user-level `providers.json` defines `glm` under `zai` and a project's `.kawai/profiles.json` defines `glm`
 - **THEN** the project entry is ignored, the error names both files, and `glm` keeps the configuration of `zai`
+
+#### Scenario: Entry names a shipped provider
+- **WHEN** no user-level file exists and a project's `.kawai/profiles.json` defines `claude`
+- **THEN** `claude` resolves to the project entry as its own provider, and the shipped `claude` provider keeps its models and settings unchanged
 
 ### Requirement: A nearer definition re-homes a shipped model key
 When a project-level catalog file defines a model key that the shipped default holds, that key SHALL leave its shipped provider and resolve as the nearer definition's own entry, starting from the shipped model's resolved settings with the nearer definition overlaid, so an existing override keeps its launch settings. A shipped key no nearer file defines SHALL keep its shipped provider. Duplicates between operator levels SHALL keep the farther definition.

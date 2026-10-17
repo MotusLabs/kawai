@@ -4,7 +4,7 @@
 The chat view header SHALL show status (color and word) and the session name, which opens rename on click, in its identity row. Supporting metadata SHALL show the provider and model labels (one label when they are equal), the model the agent reported when known, and project's last path segment, with full path on hover. Metadata SHALL wrap when needed. Task and paused context SHALL have a separate wrapping row when present.
 
 #### Scenario: Live session identity
-- **WHEN** a chat view is open for a live session on profile `Default` whose agent reported model `claude-opus-5-5` in `/home/coder/kawai`
+- **WHEN** a chat view is open for a live session on model `Default` of provider `Claude` whose agent reported model `claude-opus-5-5` in `/home/coder/kawai`
 - **THEN** the identity row shows the status word and session name without a ` · Chat` suffix, and supporting metadata shows `Claude`, `Default`, `claude-opus-5-5`, and `kawai`, with `/home/coder/kawai` available on hover
 
 #### Scenario: Provider and model labels

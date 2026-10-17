@@ -90,9 +90,10 @@ See proposal.md (Why) for the motivation. The current code has this shape:
   - The entry's label is both labels.
   - `model` applies to the model.
   - `env`, `limitResetTimeZone` and `executable` apply to the provider.
-- **Interactions.**
-  - An entry whose id is a model of a different operator provider is ignored with an error naming both files; an entry whose id is a shipped model key re-homes instead (D2).
-  - An entry whose id is an existing provider id merges into that provider like any provider entry.
+- **Interactions.** A legacy entry X resolves in this order (lead ruling B1):
+  1. X is a model key: it overlays its own one-model provider (the legacy chain), re-homes while the key is still shipped (D2), and is ignored with an error naming both files when an operator provider holds it.
+  2. X names a provider an operator file defined: it merges into that provider like any provider entry.
+  3. Otherwise X becomes a new one-model provider. When X names a provider only shipped files define, that provider takes the reserved id `profile:<id>` — failing `PROFILE_ID_PATTERN`, so it never collides — holding model X; the shipped provider keeps its id, models, and settings. A legacy entry never changes a shipped-only provider, so existing files keep working unchanged and the shipped account's cooldown and usage stay whole.
 - **Consequence.** A profiles-only catalog therefore resolves exactly the same entries and launch settings as today, with one provider per profile.
 - Rejected: grouping legacy entries by base URL host or by host login. Executables can inject other credentials, and project overlays change URLs per path. One host can therefore front several accounts, and one account several hosts.
 

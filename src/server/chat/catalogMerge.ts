@@ -54,12 +54,32 @@ export function flattenModel(provider: MergedProvider, model: MergedModel): {
   }
 }
 
+/** Where a model key sits, and whether an operator file has defined it (B2). */
+interface KeyHolder {
+  provider: string
+  /** An operator file defined or overlaid this key; provider facts never do. */
+  operator: boolean
+  /** The operator file that defined the key, for duplicate errors. */
+  originFile: string
+  /** The provider is the key's own one-model provider (legacy chain, re-home, reserved). */
+  own: boolean
+}
+
+/** Provider ids taken by legacy entries naming a shipped-only provider (B1). */
+export function reservedProviderId(id: string): string {
+  return `profile:${id}`
+}
+
 export class CatalogMerger {
   /** Providers in first-seen (farthest file first) order. */
   readonly providers = new Map<string, MergedProvider>()
   readonly errors: string[] = []
-  /** Model key → the provider holding it. */
-  private holders = new Map<string, string>()
+  /** Model key → where it sits and which tier defined it. */
+  private holders = new Map<string, KeyHolder>()
+
+  private setHolder(key: string, holder: KeyHolder): void {
+    this.holders.set(key, holder)
+  }
 
   /** Merge one parsed `providers.json` (design D2). */
   addProviders(file: string, shipped: boolean, providers: Map<string, ParsedProvider>): void {
@@ -77,6 +97,7 @@ export class CatalogMerger {
         }
         this.providers.set(id, merged)
       } else {
+        // A provider-level overlay never flips a model key's tier (B2).
         if (!shipped) merged.operator = true
         merged.label = provider.label ?? merged.label
         merged.env = { ...merged.env, ...provider.env }
@@ -89,20 +110,25 @@ export class CatalogMerger {
           existing.label = model.label ?? existing.label
           existing.model = model.model ?? existing.model
           existing.env = { ...existing.env, ...model.env }
+          if (!shipped) {
+            const holder = this.holders.get(key)!
+            holder.operator = true
+            holder.originFile = file
+          }
           continue
         }
         const holder = this.holders.get(key)
-        if (holder !== undefined && holder !== id) {
-          const holderProvider = this.providers.get(holder)!
-          if (holderProvider.operator) {
-            this.errors.push(`${file}: model "${key}" is already defined under provider "${holder}" (${holderProvider.originFile}); the nearer definition is ignored.`)
+        if (holder !== undefined && holder.provider !== id) {
+          if (holder.operator) {
+            this.errors.push(`${file}: model "${key}" is already defined under provider "${holder.provider}" (${holder.originFile}); the nearer definition is ignored.`)
             continue
           }
-          // Re-home: the key leaves the shipped provider (D2), carrying its
-          // flattened settings below this provider's own overlay.
+          // Re-home: the still-shipped key leaves its provider (D2),
+          // carrying its flattened settings below this provider's overlay.
+          const holderProvider = this.providers.get(holder.provider)!
           const flat = flattenModel(holderProvider, holderProvider.models.get(key)!)
           holderProvider.models.delete(key)
-          this.holders.set(key, id)
+          this.setHolder(key, { provider: id, operator: !shipped, originFile: file, own: false })
           merged.models.set(key, {
             label: model.label ?? flat.label,
             model: model.model ?? flat.model,
@@ -117,31 +143,37 @@ export class CatalogMerger {
           })
           continue
         }
-        this.holders.set(key, id)
+        this.setHolder(key, { provider: id, operator: !shipped, originFile: file, own: false })
         merged.models.set(key, { label: model.label, model: model.model, env: { ...model.env } })
       }
     }
   }
 
-  /** Merge one parsed `profiles.json`: entries read as one-model providers (D3). */
+  /**
+   * Merge one parsed `profiles.json`: entries read as one-model providers
+   * (D3). Resolution order (lead ruling B1): the id is a model key first —
+   * overlay its own one-model provider, re-home a still-shipped key, ignore
+   * an operator key under another provider with an error; then an operator
+   * provider's id merges into it; otherwise the entry becomes a new
+   * one-model provider — one naming a shipped-only provider takes the
+   * reserved `profile:<id>` id and leaves the shipped provider unchanged.
+   */
   addProfiles(file: string, shipped: boolean, entries: Map<string, PartialProfile>): void {
     for (const [id, entry] of entries) {
-      const provider = this.providers.get(id)
-      if (provider) {
-        this.mergeIntoProvider(provider, id, entry, shipped)
-        continue
-      }
       const holder = this.holders.get(id)
       if (holder !== undefined) {
-        const holderProvider = this.providers.get(holder)!
-        if (holderProvider.operator) {
-          this.errors.push(`${file}: profile "${id}" is a model of provider "${holder}" (${holderProvider.originFile}); the entry is ignored.`)
+        const holderProvider = this.providers.get(holder.provider)!
+        if (holder.own) {
+          this.mergeIntoProvider(holderProvider, id, entry, shipped, file)
+          continue
+        }
+        if (holder.operator) {
+          this.errors.push(`${file}: profile "${id}" is a model of provider "${holder.provider}" (${holder.originFile}); the entry is ignored.`)
           continue
         }
         // Re-home into a one-model provider over the shipped settings.
         const flat = flattenModel(holderProvider, holderProvider.models.get(id)!)
         holderProvider.models.delete(id)
-        this.holders.delete(id)
         this.providers.set(id, {
           label: entry.label ?? flat.label,
           env: {},
@@ -156,7 +188,28 @@ export class CatalogMerger {
           operator: !shipped,
           originFile: file,
         })
-        this.holders.set(id, id)
+        this.setHolder(id, { provider: id, operator: !shipped, originFile: file, own: true })
+        continue
+      }
+      const provider = this.providers.get(id)
+      if (provider && provider.operator) {
+        this.mergeIntoProvider(provider, id, entry, shipped, file)
+        continue
+      }
+      if (provider) {
+        // The id names a shipped-only provider: a reserved one-model
+        // provider holds the entry, and the shipped provider is unchanged.
+        const reservedId = reservedProviderId(id)
+        this.providers.set(reservedId, {
+          label: entry.label,
+          env: {},
+          executable: entry.executable,
+          limitResetTimeZone: entry.limitResetTimeZone,
+          models: new Map([[id, { label: entry.label, model: entry.model, env: { ...entry.env } }]]),
+          operator: !shipped,
+          originFile: file,
+        })
+        this.setHolder(id, { provider: reservedId, operator: !shipped, originFile: file, own: true })
         continue
       }
       // A brand-new one-model provider: the entry's env sits on the model,
@@ -171,13 +224,20 @@ export class CatalogMerger {
         operator: !shipped,
         originFile: file,
       })
-      this.holders.set(id, id)
+      this.setHolder(id, { provider: id, operator: !shipped, originFile: file, own: true })
     }
   }
 
-  /** A legacy entry whose id names an existing provider merges into it. */
-  private mergeIntoProvider(provider: MergedProvider, id: string, entry: PartialProfile, shipped: boolean): void {
-    if (!shipped) provider.operator = true
+  /** A legacy entry whose id names an existing operator provider merges into it. */
+  private mergeIntoProvider(provider: MergedProvider, id: string, entry: PartialProfile, shipped: boolean, file: string): void {
+    if (!shipped) {
+      provider.operator = true
+      const holder = this.holders.get(id)
+      if (holder) {
+        holder.operator = true
+        holder.originFile = file
+      }
+    }
     const model = provider.models.get(id)
     if (model) {
       // The provider holds a model of the entry's key (the one-model legacy
@@ -204,7 +264,7 @@ export class CatalogMerger {
     const provider = this.providers.get('default')
     if (provider) {
       provider.models.set('default', { label: 'Default', env: {} })
-      this.holders.set('default', 'default')
+      this.setHolder('default', { provider: 'default', operator: false, originFile: '(implicit)', own: true })
       return
     }
     this.providers.set('default', {
@@ -214,6 +274,6 @@ export class CatalogMerger {
       operator: false,
       originFile: '(implicit)',
     })
-    this.holders.set('default', 'default')
+    this.setHolder('default', { provider: 'default', operator: false, originFile: '(implicit)', own: true })
   }
 }
