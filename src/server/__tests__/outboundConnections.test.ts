@@ -201,3 +201,40 @@ describe('the group open (findings-bee1aa24 B1)', () => {
     expect(JSON.stringify(page)).not.toContain('gh-write')
   })
 })
+
+describe('per-kind pending tokens (findings-8134cc45 PC2)', () => {
+  test('a more in flight does not invalidate a slow open on the same connection: both answers land', async () => {
+    store.insertCall(call({ id: 'obc-slow', verdict: 'allowed', rule: 'git-push', destination: 'github:origin', createdAt: '2026-01-01T00:00:00.000Z' }))
+    store.insertCall(call({ id: 'obc-older', verdict: 'allowed', rule: 'git-push', destination: 'github:origin', createdAt: '2025-12-31T00:00:00.000Z' }))
+    const sent: ServerMessage[] = []
+    const connection2 = { send: (message: ServerMessage) => sent.push(message) }
+    // The team resolver gates the FIRST call (the slow open); later calls
+    // resolve immediately (the more).
+    let release: (() => void) | null = null
+    const gate = new Promise<void>(resolve => { release = resolve })
+    let calls = 0
+    const slowConnections = new ChatConnections({
+      whenRestored: () => Promise.resolve(),
+      teamScopes: {
+        resolve: async () => {
+          calls += 1
+          if (calls === 1) await gate
+          return { teamId: world.team.teamId }
+        },
+      },
+      outboundAudit: service,
+    } as unknown as ChatSessionManager)
+    const slowOpen = slowConnections.handle(connection2, { type: 'team-audit-open', teamPath: world.repo, requestId: 'r-slow', filters: {} })
+    // A more of the SAME connection resolves while the open waits: with one
+    // shared token it used to supersede the open, whose reply never landed.
+    await slowConnections.handle(connection2, { type: 'team-audit-more', teamPath: world.repo, requestId: 'r-more', filters: {}, cursor: '2026-01-01T00:00:00.000Z\u0000obc-slow' })
+    const more = sent.filter((message): message is Extract<ServerMessage, { type: 'team-audit-page' }> => message.type === 'team-audit-page').at(-1)!
+    expect(more.requestId).toBe('r-more')
+    expect(more.page.rows.map(row => row.id)).toEqual(['obc-older'])
+    release!()
+    await slowOpen
+    const pages = sent.filter((message): message is Extract<ServerMessage, { type: 'team-audit-page' }> => message.type === 'team-audit-page')
+    expect(pages.map(page => page.requestId)).toEqual(['r-more', 'r-slow'])
+    expect(pages[1]!.page.rows.map(row => row.id)).toEqual(['obc-slow', 'obc-older'])
+  })
+})
