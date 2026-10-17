@@ -68,6 +68,7 @@ function mountView(view: Record<string, unknown>, props: { sent?: ClientMessage[
           mailbox: { search: '', filters: {}, expanded: props.expanded ?? ((view.messages as TeamMessage[] | undefined) ?? []).map(row => row.id), collapsedSections: ['#defaults', ...(props.collapsedSections ?? [])] },
           members: { search: '', filters: {}, expanded: [], collapsedSections: [] },
           plans: { search: '', filters: {}, expanded: [], collapsedSections: [] },
+          audit: { search: '', filters: {}, expanded: [], collapsedSections: [] },
           metrics: { search: '', filters: {}, expanded: [], collapsedSections: [] },
         },
         notice: null,

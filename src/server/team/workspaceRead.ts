@@ -18,6 +18,7 @@ import type {
   TeamWorkspaceSnapshot,
 } from '../../shared/teamWorkspace'
 import { attentionItemId } from '../../shared/teamWorkspace'
+import type { OutboundViolationGroup } from '../outbound/service'
 import { teamTaskStage } from '../../shared/teamTaskStage'
 import type { TeamMessage, WaitingConstraint, WaitingReason } from '../../shared/team'
 import type { TeamTaskSummary } from '../../shared/teamTasks'
@@ -186,6 +187,8 @@ export interface AttentionInput {
   nameOf: (sessionId: string) => string
   /** Open tasks whose outstanding result awaits **Accept result**. */
   pendingAcceptance: PendingAcceptance[]
+  /** The team's unacknowledged violations, grouped by rule and destination (execution-safety-recovery D10). */
+  outboundViolations: OutboundViolationGroup[]
 }
 
 /** One attention source: a pure function over the input (D5's registry). */
@@ -258,11 +261,30 @@ const staffingItems: AttentionSource = ({ messages, waiting, taskTitle, nameOf }
 }
 
 /**
+ * Unacknowledged outbound violations (execution-safety-recovery D10): one
+ * informational item per `(rule, destination)` group, owned by the human.
+ * Nothing waits on it — the impact names no task — and a verdict never
+ * becomes a stop reason, supervision cause, or dispatch input: this source
+ * only reads, and nothing downstream of a verdict exists.
+ */
+const outboundItems: AttentionSource = ({ outboundViolations, nameOf }) =>
+  outboundViolations.map(group => ({
+    id: `outbound-violation:${group.rule}:${group.destination}`,
+    kind: 'outbound-violation' as const,
+    cause: `${group.rule} to ${group.destination}: ${group.count} unacknowledged, latest by ${nameOf(group.latestSessionId)}`,
+    owner: { kind: 'human' as const, id: null, label: 'Human' },
+    impact: {},
+    nextAction: 'Review and acknowledge',
+    link: { kind: 'audit' as const, id: group.latestCallId },
+    requiresHuman: true,
+  }))
+
+/**
  * The source registry (task 4.1). Wave C sources (plan holds, stalls, Lead
  * decision cards) add entries the same way — an item of an unrecognized kind
  * is data like any other and never dropped.
  */
-export const ATTENTION_SOURCES: readonly AttentionSource[] = [requestItems, uncertainItems, staffingItems, acceptanceItems]
+export const ATTENTION_SOURCES: readonly AttentionSource[] = [requestItems, uncertainItems, staffingItems, acceptanceItems, outboundItems]
 
 /** Every attention item the current state yields, in a stable order. */
 export function attentionItems(
@@ -288,6 +310,8 @@ export interface SummaryInput {
   hasResult: (sessionId: string, taskId: string | null) => boolean
   /** Outstanding results submitted in the window, each with its accepted state. */
   results: Array<{ resultId: string; taskId: string; taskTitle: string | null; submitter: string; accepted: boolean }>
+  /** The audit records' row counts over the window (execution-safety-recovery D10). */
+  outboundCounts: { allowed: number; unknown: number; violations: number }
 }
 
 const bucket = (items: SummaryItem[], runtimeOnly = false): SummaryBucket =>
@@ -302,7 +326,7 @@ const bucket = (items: SummaryItem[], runtimeOnly = false): SummaryBucket =>
  * (E13): completed results come from result rows only.
  */
 export function morningSummary(input: SummaryInput): MorningSummary {
-  const { now, sessions, messages, messageEvents, waiting, turnEnds, nameOf, hasResult, results } = input
+  const { now, sessions, messages, messageEvents, waiting, turnEnds, nameOf, hasResult, results, outboundCounts } = input
   const since = new Date(Date.parse(now) - 24 * 60 * 60 * 1000).toISOString()
   const inWindow = (at: string) => Date.parse(at) >= Date.parse(since)
 
@@ -363,6 +387,29 @@ export function morningSummary(input: SummaryInput): MorningSummary {
     link: { kind: 'task' as const, id: result.taskId },
   }))
 
+  // The audit records' row counts (execution-safety-recovery D10): durable,
+  // so a restart within the window shows the same numbers. One item per
+  // class the window holds, each opening the Audit tab.
+  const outbound: SummaryItem[] = []
+  if (outboundCounts.allowed > 0) {
+    outbound.push({
+      id: 'outbound:allowed', label: `${outboundCounts.allowed} allowed send${outboundCounts.allowed === 1 ? '' : 's'}`,
+      link: { kind: 'audit', id: '' },
+    })
+  }
+  if (outboundCounts.unknown > 0) {
+    outbound.push({
+      id: 'outbound:unknown', label: `${outboundCounts.unknown} unknown destination${outboundCounts.unknown === 1 ? '' : 's'}`,
+      link: { kind: 'audit', id: '' },
+    })
+  }
+  if (outboundCounts.violations > 0) {
+    outbound.push({
+      id: 'outbound:violation', label: `${outboundCounts.violations} violation${outboundCounts.violations === 1 ? '' : 's'}`,
+      link: { kind: 'audit', id: '' },
+    })
+  }
+
   return {
     since,
     completedResults: bucket(completedResults),
@@ -370,6 +417,7 @@ export function morningSummary(input: SummaryInput): MorningSummary {
     approvals: bucket(approvals),
     uncertainDeliveries: bucket(uncertainDeliveries),
     finishedTurnsWithoutResult: bucket(finishedTurnsWithoutResult),
+    outbound: bucket(outbound),
   }
 }
 
@@ -414,7 +462,11 @@ export class WorkspaceRead {
         reviewVerdict: result.reviewVerdict, liveCreator: creator ? { sessionId: creator.sessionId, name: creator.name } : null,
       }]
     })
-    const attention = attentionItems({ sessions, messages, waiting, taskTitle, nameOf, pendingAcceptance })
+    const attention = attentionItems({
+      sessions, messages, waiting, taskTitle, nameOf, pendingAcceptance,
+      // The audit records' unacknowledged violations (execution-safety-recovery D10).
+      outboundViolations: manager.outboundAudit.violationGroups(teamId),
+    })
     const now = new Date().toISOString()
     const since = new Date(Date.parse(now) - 24 * 60 * 60 * 1000).toISOString()
     const revisionsOf = (taskId: string, sessionId: string) => ({
@@ -447,6 +499,7 @@ export class WorkspaceRead {
           submitter: actorName(result.submittedBy),
           accepted: result.acceptedAt !== null,
         })),
+        outboundCounts: manager.outboundAudit.windowCounts(teamId, since, now),
       }),
       directory,
     }

@@ -17,6 +17,7 @@ import {
   type AttentionInput,
 } from '../team/workspaceRead'
 import type { PendingAcceptance } from '../team/attentionAcceptance'
+import type { OutboundViolationGroup as ImportedViolationGroup } from '../outbound/service'
 import { filterTeamTaskRows } from '../../shared/teamWorkspace'
 
 const record = (overrides: Partial<ChatSessionRecord> = {}): ChatSessionRecord => ({
@@ -248,6 +249,7 @@ describe('attentionItems (4.1)', () => {
     taskTitle: id => (id === 'task-1' ? 'Build the thing' : null),
     nameOf: id => `Name of ${id}`,
     pendingAcceptance: [],
+    outboundViolations: [],
   })
 
   test('one item per source kind with cause, owner, impact, next action, and link', () => {
@@ -335,6 +337,7 @@ describe('morningSummary (4.3)', () => {
     nameOf: (id: string) => `Name of ${id}`,
     hasResult: () => false,
     results: [] as Array<{ resultId: string; taskId: string; taskTitle: string | null; submitter: string; accepted: boolean }>,
+    outboundCounts: { allowed: 0, unknown: 0, violations: 0 },
   })
 
   test('each bucket holds its items and capacity waits state their runtime bound', () => {
@@ -417,7 +420,7 @@ describe('Phase 2 sources (11.1, 11.2)', () => {
   })
   const itemsFor = (extra: Partial<PendingAcceptance>) => attentionItems({
     sessions: [], messages: [], waiting: {}, taskTitle: () => 'Build the thing', nameOf: id => `Name of ${id}`,
-    pendingAcceptance: [pending(extra)],
+    pendingAcceptance: [pending(extra)], outboundViolations: [],
   })
 
   test('failing findings: Fixes requested stage, Wait for fixes, and the awaiting-human filter drops the row', () => {
@@ -457,7 +460,7 @@ describe('Phase 2 sources (11.1, 11.2)', () => {
   test('a pending acceptance is a human-required item linking to the task', () => {
     const items = attentionItems({
       sessions: [], messages: [], waiting: {}, taskTitle: () => 'Build the thing', nameOf: id => `Name of ${id}`,
-      pendingAcceptance: [pending()],
+      pendingAcceptance: [pending()], outboundViolations: [],
     })
     expect(items).toEqual([{
       id: 'pending-acceptance:result-1', kind: 'pending-acceptance',
@@ -474,6 +477,7 @@ describe('completed results bucket (11.2)', () => {
     now: '2026-10-14T12:00:00Z', sessions: [], messages: [], messageEvents: () => [], waiting: {},
     turnEnds: [{ sessionId: 'chat-1', taskId: 'task-1', at: '2026-10-14T09:00:00Z' }],
     nameOf: (id: string) => `Name of ${id}`,
+    outboundCounts: { allowed: 0, unknown: 0, violations: 0 },
   }
 
   test('submitted results are listed with their accepted state; a finished turn with none is not completed', () => {
@@ -539,6 +543,7 @@ describe('WorkspaceRead.snapshot labelling (bc0a329 follow-up)', () => {
       teams: { catalogForTeam: () => ({ groups: new Map() }) },
       groupProfileCounts: () => ({}),
       turnEnds: { finishedForTeam: () => [] },
+      outboundAudit: { violationGroups: () => [], windowCounts: () => ({ allowed: 0, unknown: 0, violations: 0 }) },
     }
     const snapshot = new WorkspaceRead(manager as never).snapshot({ teamId: 'team' } as never)
 
@@ -576,6 +581,7 @@ describe('WorkspaceRead.snapshot acceptance ownership (attention-acceptance-owne
       teams: { catalogForTeam: () => ({ groups: new Map() }) },
       groupProfileCounts: () => ({}),
       turnEnds: { finishedForTeam: () => [] },
+      outboundAudit: { violationGroups: () => [], windowCounts: () => ({ allowed: 0, unknown: 0, violations: 0 }) },
     }
     return new WorkspaceRead(manager as never).snapshot({ teamId: 'team' } as never)
   }
@@ -615,5 +621,79 @@ describe('WorkspaceRead.snapshot acceptance ownership (attention-acceptance-owne
       nextAction: 'Wait for fixes', requiresHuman: false,
     }])
     expect(tasks[0]).toMatchObject({ stage: 'fixes-requested', nextAction: 'Wait for fixes', requiresHuman: false })
+  })
+})
+
+describe('outbound violations (execution-safety-recovery 4.3)', () => {
+  const group = (overrides: Partial<ImportedViolationGroup> = {}): ImportedViolationGroup => ({
+    rule: 'gh-write', destination: 'github:other/repo', count: 1,
+    latestCallId: 'obc-1', latestSessionId: 'chat-1', latestCallAt: '2026-10-14T09:00:00Z',
+    ...overrides,
+  })
+  const itemsFor = (groups: ImportedViolationGroup[]) => attentionItems({
+    sessions: [], messages: [], waiting: {}, taskTitle: () => null, nameOf: id => `Name of ${id}`,
+    pendingAcceptance: [], outboundViolations: groups,
+  })
+
+  test('one item per (rule, destination) group with the D10 shape', () => {
+    const items = itemsFor([
+      group({ rule: 'gh-write', destination: 'github:other/repo', count: 5, latestCallId: 'obc-9', latestSessionId: 'chat-2' }),
+      group({ rule: 'mcp-call', destination: 'mcp:docs-search', latestCallId: 'obc-4' }),
+    ])
+    expect(items.map(item => item.id)).toEqual([
+      'outbound-violation:gh-write:github:other/repo',
+      'outbound-violation:mcp-call:mcp:docs-search',
+    ])
+    expect(items[0]).toEqual({
+      id: 'outbound-violation:gh-write:github:other/repo', kind: 'outbound-violation',
+      cause: 'gh-write to github:other/repo: 5 unacknowledged, latest by Name of chat-2',
+      owner: { kind: 'human', id: null, label: 'Human' }, impact: {},
+      nextAction: 'Review and acknowledge', link: { kind: 'audit', id: 'obc-9' }, requiresHuman: true,
+    })
+  })
+
+  test('repeated calls to one server raise one item — the group carries the count', () => {
+    // The service groups the rows; the source maps each group to one item.
+    const items = itemsFor([group({ destination: 'mcp:docs-search', count: 5 })])
+    expect(items).toHaveLength(1)
+    expect(items[0]!.cause).toContain('5 unacknowledged')
+  })
+
+  test('unknown destinations and allowed rows raise nothing; an acknowledged state clears', () => {
+    // Unknown-destination and allowed rows never reach the input: the
+    // service groups violations only, so an empty group list — the state
+    // after an acknowledgement covered every violation — yields no item.
+    expect(itemsFor([])).toEqual([])
+  })
+
+  test('a violation after the group\'s acknowledgement raises it again', () => {
+    // The acknowledgement covered the group through an older call, so the
+    // snapshot's groups hold the later violation only: the item is back,
+    // counted and linked to the newest call.
+    const items = itemsFor([group({ count: 1, latestCallId: 'obc-later' })])
+    expect(items.map(item => item.id)).toEqual(['outbound-violation:gh-write:github:other/repo'])
+    expect(items[0]!.link).toEqual({ kind: 'audit', id: 'obc-later' })
+  })
+})
+
+describe('the outbound summary bucket (execution-safety-recovery 4.3)', () => {
+  const now = '2026-10-14T12:00:00Z'
+  const input = (counts: { allowed: number; unknown: number; violations: number }) => ({
+    now, sessions: [], messages: [], messageEvents: () => [], waiting: {}, turnEnds: [],
+    nameOf: (id: string) => id, hasResult: () => false, results: [], outboundCounts: counts,
+  })
+
+  test('the window\'s rows count by class, each item opening the Audit tab', () => {
+    const sum = morningSummary(input({ allowed: 2, unknown: 1, violations: 1 }))
+    expect(sum.outbound).toEqual({
+      items: [
+        { id: 'outbound:allowed', label: '2 allowed sends', link: { kind: 'audit', id: '' } },
+        { id: 'outbound:unknown', label: '1 unknown destination', link: { kind: 'audit', id: '' } },
+        { id: 'outbound:violation', label: '1 violation', link: { kind: 'audit', id: '' } },
+      ],
+    })
+    // An empty window lists nothing; the bucket is durable (never runtimeOnly).
+    expect(morningSummary(input({ allowed: 0, unknown: 0, violations: 0 })).outbound).toEqual({ items: [] })
+    expect(morningSummary(input({ allowed: 0, unknown: 0, violations: 0 })).outbound.runtimeOnly).toBeUndefined()
   })
 })

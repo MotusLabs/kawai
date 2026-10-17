@@ -103,14 +103,14 @@ afterEach(() => {
   resetTeamLocationForTests()
 })
 
-test('the tab strip renders Strategy, Plans, Tasks, Messages, Mailbox, Members, Metrics in order', () => {
+test('the tab strip renders Strategy, Plans, Tasks, Messages, Mailbox, Members, Metrics, Audit in order', () => {
   const { renderer } = mountPage({ teamKey: '/repo', tab: 'tasks' })
   const strip = renderer.root.findByProps({ 'data-testid': 'team-tab-strip' })
   const tabs = strip.findAll(node => node.props.role === 'tab')
   expect(tabs.map(tab => tab.props['data-testid'])).toEqual([
-    'team-tab-strategy', 'team-tab-plans', 'team-tab-tasks', 'team-tab-messages', 'team-tab-mailbox', 'team-tab-members', 'team-tab-metrics',
+    'team-tab-strategy', 'team-tab-plans', 'team-tab-tasks', 'team-tab-messages', 'team-tab-mailbox', 'team-tab-members', 'team-tab-metrics', 'team-tab-audit',
   ])
-  expect(tabs.map(tab => textOf(tab))).toEqual(['Strategy', 'Plans', 'Tasks', 'Messages', 'Mailbox', 'Members', 'Metrics'])
+  expect(tabs.map(tab => textOf(tab))).toEqual(['Strategy', 'Plans', 'Tasks', 'Messages', 'Mailbox', 'Members', 'Metrics', 'Audit'])
 })
 
 test('mounting opens the workspace read model; unmount closes it; a reconnect re-opens for a fresh snapshot', () => {
@@ -133,7 +133,7 @@ test('a pushed approval appears in the attention queue on every tab without a re
     useTeamWorkspaceDataStore.getState().apply({
       teamPath: '/repo', teamId: 'team', tasks: [], attention, members: [], directory: [],
       summary: { since: '2026-10-14T00:00:00.000Z', completedResults: empty, capacityWaits: empty, approvals: empty,
-        uncertainDeliveries: empty, finishedTurnsWithoutResult: empty },
+        uncertainDeliveries: empty, finishedTurnsWithoutResult: empty, outbound: empty },
     })
   })
   push([])
