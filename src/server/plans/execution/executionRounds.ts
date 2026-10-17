@@ -6,6 +6,7 @@
 // verdict — only an independent claimant's, never an author's — decides the
 // round. Effects are recorded before they run (D14); the CI read runs in
 // the tick (one read per gating round per minute, driven by the timer).
+import path from 'node:path'
 import type { TeamIdentity } from '../../team/teamIdentity'
 import type { ChatSessionRecord } from '../../db'
 import type { TaskService } from '../../team/TaskService'
@@ -19,6 +20,8 @@ import type { PlanStore } from '../planStore'
 import { lsRemoteHead, pushToRemote } from '../landing/gitRemote'
 import { ghCheckRuns, ghPrCreate, ghPrList, ghRerunFailed, ghStatuses } from '../landing/github'
 import type { GhCommandOptions } from '../landing/ghCommand'
+import type { AssignmentService } from '../../team/AssignmentService'
+import { dispatchFixAttempt } from './executionDispatch'
 import type { EffectAdapter } from './effects'
 
 /** The gh/git surface the pipeline uses; injectable for tests. */
@@ -45,15 +48,27 @@ export interface RoundDeps {
   plans: PlanStore
   tasks: TaskService
   results: TaskResultService
+  assignments: AssignmentService
   adapters: RoundAdapters
   /** Passed to every gh call (tests stub gh on a private PATH). */
   ghOptions?: GhCommandOptions
+  /**
+   * D11's release step: readiness and the archive+journal release of one
+   * spawned member. The composition wires member-release; without it the
+   * step is skipped (the implementer stays, as an unscoped group's would).
+   */
+  releases?: {
+    readiness: (sessionId: string) => { ready: boolean; reason: string | null }
+    release: (sessionId: string) => void
+  }
+  /** The group files: whether the review group is worktree-scoped (default true). */
+  groupScoped?: (teamId: string, groupId: string) => boolean
   records?: () => Iterable<ChatSessionRecord>
   now: () => string
 }
 
 /** One stage performance; throws nothing — a failed git/gh read leaves the stage due again. */
-export async function applyRoundStage(deps: RoundDeps, changeRow: { executionId: string; change: string; branch: string | null; worktree: string | null }, stage: { kind: string; roundId: string | null; resultId: string | null }): Promise<void> {
+export async function applyRoundStage(deps: RoundDeps, changeRow: { executionId: string; change: string; branch: string | null; worktree: string | null; taskId: string | null }, stage: { kind: string; roundId: string | null; resultId: string | null }): Promise<void> {
   const store = deps.executions
   const execution = store.execution(changeRow.executionId)
   if (execution === null) return
@@ -104,6 +119,33 @@ export async function applyRoundStage(deps: RoundDeps, changeRow: { executionId:
   if (stage.kind === 'ci') return pollCi(deps, changeRow, round, entry?.extraChecks ?? [])
   if (stage.kind === 'review') return dispatchReview(deps, changeRow, round)
   if (stage.kind === 'verdict') return decideVerdict(deps, changeRow, round, entry?.extraChecks ?? [])
+  if (stage.kind === 'revision') {
+    // D9: supersede the pinned round and dispatch a fix attempt naming the
+    // revision. The change goes back to implementing; the slot, if the
+    // change somehow held it, releases by leaving `landing` — a landing
+    // change never reaches this stage.
+    const task = changeRow.taskId === null ? null : deps.tasks.store.get(changeRow.taskId)
+    if (task === null || task === undefined) return
+    const change = store.change(changeRow.executionId, changeRow.change)
+    if (change === null) return
+    store.supersedeRound(round.id)
+    store.transition(changeRow.executionId, changeRow.change, change, { state: 'implementing', step: null })
+    const group = entry?.group
+    if (group === null || group === undefined) return
+    const revisionRow = deps.tasks.store.revisions(task.id).at(-1)
+    await dispatchFixAttempt(
+      { team: deps.team, executions: store, plans: deps.plans, tasks: deps.tasks, assignments: deps.assignments, results: deps.results },
+      {
+        executionId: changeRow.executionId, change: changeRow.change, group,
+        failingChecks: [],
+        findingsIds: [],
+        findingsTexts: [`The task's direction was republished as revision ${task.revision}${revisionRow?.rationale ? ` (${revisionRow.rationale})` : ''}. Re-apply your work on top of the new direction.`],
+        continueFrom: round.commitSha,
+        fixRounds: change.fixRounds,
+      },
+    )
+    return
+  }
 }
 
 async function pollCi(deps: RoundDeps, changeRow: { executionId: string; change: string; branch: string | null; worktree: string | null }, round: RoundRow, extra: PlanCheck[]): Promise<void> {
@@ -153,12 +195,26 @@ async function dispatchReview(deps: RoundDeps, changeRow: { executionId: string;
   const reviewGroup = entry?.reviewGroup ?? revision?.content.reviewGroup ?? null
   if (reviewGroup === null) return
   const change = store.change(changeRow.executionId, changeRow.change)!
-  if (change.step === 'releasing') {
-    // Re-check the holding member on the next member event (D11 step 1);
-    // this tick cannot proceed past it.
-    return
+  // D11 step 1 — Release: a worktree-scoped review group gets the worktree,
+  // so each live spawned member in it is released once ready; a not-ready
+  // member holds the step at `releasing`, re-checked on the next wake.
+  // Human-created sessions never release. An unscoped group (or no wiring)
+  // skips the step and leaves the implementer working.
+  if (deps.releases !== undefined && change.worktree !== null
+    && (deps.groupScoped?.(deps.team.teamId, reviewGroup) ?? true)) {
+    const members = [...(deps.records?.() ?? [])].filter(record =>
+      record.archivedAt == null && record.spawned === true && record.projectPath.startsWith(`${change.worktree}${path.sep}`)
+      && record.groupId !== reviewGroup)
+    for (const member of members) {
+      const readiness = deps.releases.readiness(member.sessionId)
+      if (!readiness.ready) {
+        if (change.step !== 'releasing') store.transition(changeRow.executionId, changeRow.change, change, { step: 'releasing' })
+        return
+      }
+      deps.releases.release(member.sessionId)
+    }
   }
-  store.transition(changeRow.executionId, changeRow.change, change, { step: 'reviewing' })
+  if (change.step !== 'reviewing') store.transition(changeRow.executionId, changeRow.change, change, { step: 'reviewing' })
   const role = revision?.content.roles.find(candidate => candidate.group === reviewGroup)?.profiles ?? []
   const authors = (change.taskId ? deps.tasks.store.results.listByTask(change.taskId) : [])
     .map(result => result.submittedBy.sessionId).filter((id): id is string => id !== null)

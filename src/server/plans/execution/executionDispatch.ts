@@ -10,11 +10,12 @@ import { createHash } from 'node:crypto'
 import type { TeamIdentity } from '../../team/teamIdentity'
 import type { TaskCaller, TaskService } from '../../team/TaskService'
 import type { AssignmentService } from '../../team/AssignmentService'
+import type { TaskResultService } from '../../team/TaskResultService'
 import { runGitAsync } from '../../git/gitCommand'
 import { manifestHashInput, type AttemptManifest } from '../../../shared/planExecution'
 import type { ExecutionStore } from './executionStore'
 import type { PlanStore } from '../planStore'
-import { implementInstruction } from './instructions'
+import { fixInstruction, implementInstruction } from './instructions'
 
 /** The system caller (D2): minted only inside this module. */
 function kawaiCaller(team: TeamIdentity, executionId: string): TaskCaller {
@@ -27,6 +28,8 @@ export interface DispatchDeps {
   plans: PlanStore
   tasks: TaskService
   assignments: AssignmentService
+  /** Fix and review stages dispatch as handoffs, superseding the prior stage (D7). */
+  results?: TaskResultService
 }
 
 /** sha256 of `git show <startCommit>:<path>` for each validated file (D8's digest). */
@@ -118,6 +121,109 @@ export async function dispatchImplementAttempt(deps: DispatchDeps, input: { exec
       taskId,
       manifestHash: manifestHash!,
     }),
+    requestKey,
+    ...(roleProfiles.length > 0 ? { allowedProfiles: roleProfiles } : {}),
+  })
+}
+
+/**
+ * The fix attempt after a failed round (D12): one more attempt of the change
+ * with `answers` naming what it fixes — the failing checks, the findings,
+ * the count, and the commit to continue from. The key is
+ * `exec:<execution>:<change>:attempt:<n>:<generation>`; a retry replays it.
+ */
+export async function dispatchFixAttempt(deps: DispatchDeps, input: {
+  executionId: string
+  change: string
+  group: string
+  failingChecks: Array<{ name: string; conclusion: string; link: string | null }>
+  findingsIds: string[]
+  findingsTexts: string[]
+  continueFrom: string
+  fixRounds: number
+}): Promise<void> {
+  const execution = deps.executions.execution(input.executionId)
+  if (execution === null) return
+  const changeRow = deps.executions.change(input.executionId, input.change)
+  if (changeRow === null || changeRow.worktree === null || changeRow.branch === null || changeRow.baselineCommit === null || changeRow.taskId === null) return
+  const revision = deps.plans.revision(execution.planId, execution.revision)
+  const entry = revision?.content.changes.find(candidate => candidate.change === input.change)
+  if (revision === null || entry === undefined) return
+  const roleProfiles = revision.content.roles.find(role => role.group === input.group)?.profiles ?? []
+  const round = deps.executions.rounds(input.executionId, input.change).at(-1) ?? null
+  const taskId = changeRow.taskId
+
+  const existing = deps.executions.attempts(input.executionId, input.change)
+  let number = existing.length
+  let manifestHash = existing.at(-1)?.manifestHash
+  if (existing.length === 0 || existing.at(-1)!.kind !== 'fix') {
+    const head = await runGitAsync(['rev-parse', 'HEAD'], { cwd: changeRow.worktree })
+    const startCommit = head.ok ? head.stdout.trim() : changeRow.baselineCommit
+    const files = await runGitAsync(['ls-tree', '-r', '--name-only', startCommit], { cwd: changeRow.worktree })
+    const artifacts = await artifactsAt(changeRow.worktree, startCommit, files.ok ? files.stdout.trim().split('\n').filter(Boolean) : [])
+    const manifest: AttemptManifest = {
+      version: 1,
+      plan: { id: execution.planId, revision: execution.revision, contentHash: execution.contentHash },
+      execution: input.executionId,
+      task: { id: taskId, revision: deps.tasks.store.get(taskId)?.revision ?? 1 },
+      validation: { reportId: execution.reportId, inputHash: execution.inputHash },
+      baseline: changeRow.baselineCommit,
+      startCommit,
+      artifacts,
+      roleProfiles,
+      answers: {
+        resultId: round?.resultId ?? '',
+        roundId: round?.id ?? '',
+        failingChecks: input.failingChecks.map(check => ({
+          name: check.name, source: 'actions' as const, conclusion: check.conclusion, link: check.link,
+          startedAt: null, completedAt: null,
+          ...(check.link?.match(/\/runs\/(\d+)/) ? { runId: Number(check.link.match(/\/runs\/(\d+)/)![1]) } : {}),
+        })),
+        findingsIds: input.findingsIds,
+      },
+    }
+    manifestHash = createHash('sha256').update(manifestHashInput(manifest)).digest('hex')
+    const attempt = deps.executions.insertAttempt({
+      executionId: input.executionId, change: input.change, kind: 'fix', assignmentId: null,
+      manifest, manifestHash,
+    })
+    number = attempt.number
+  }
+
+  const change = deps.executions.change(input.executionId, input.change)!
+  const requestKey = `exec:${input.executionId}:${input.change}:attempt:${number}:${change.generation}`
+  const instruction = fixInstruction({
+    planTitle: deps.plans.get(execution.planId)?.title ?? execution.planId,
+    revision: execution.revision,
+    change: input.change,
+    worktree: changeRow.worktree,
+    branch: changeRow.branch,
+    baseline: changeRow.baselineCommit,
+    head: input.continueFrom,
+    acceptance: [...entry.acceptance, ...revision.content.acceptanceRules],
+    extraChecks: entry.extraChecks.map(check => check.name),
+    guidance: entry.guidance,
+    taskId,
+    manifestHash: manifestHash!,
+    failingChecks: input.failingChecks,
+    findings: input.findingsTexts,
+    fixRounds: input.fixRounds,
+    continueFrom: input.continueFrom,
+  })
+  // A fix is a handoff (D7): it supersedes the outstanding review through
+  // the stop branch, so a delivered review never holds the change.
+  if (deps.results !== undefined) {
+    await deps.results.handoff(kawaiCaller(deps.team, input.executionId), taskId, {
+      kind: 'fix', resultId: round?.resultId ?? '', target: { kind: 'group', id: input.group },
+      instructions: instruction, requestKey,
+      ...(roleProfiles.length > 0 ? { allowedProfiles: roleProfiles } : {}),
+    })
+    return
+  }
+  await deps.assignments.dispatch(kawaiCaller(deps.team, input.executionId), {
+    taskId,
+    target: { kind: 'group', id: input.group },
+    instruction,
     requestKey,
     ...(roleProfiles.length > 0 ? { allowedProfiles: roleProfiles } : {}),
   })

@@ -107,22 +107,22 @@ Implement after `durable-plans`, `strategy-revision-impact`, and `plan-validatio
 
 ## 12. Rounds and the gate
 
-- [ ] 12.1 Create rounds from new results, superseding the current round, passed or not, unless its merge started, and releasing the slot when the change held it. Supersede on a new task revision and dispatch a fix attempt naming it, after any running `update-branch` effect settles (D9). Verify with the round-supersession scenarios, including:
+- [x] 12.1 Create rounds from new results, superseding the current round, passed or not, unless its merge started, and releasing the slot when the change held it. Supersede on a new task revision and dispatch a fix attempt naming it, after any running `update-branch` effect settles (D9). Verify with the round-supersession scenarios, including:
   - a revision published while the change holds the slot and waits for CI on its base merge;
   - a revision published during an update that then conflicts dispatches one fix attempt, naming the revision, the base head, and the files, and no update attempt;
   - a revision published during an update that then passes the clean-merge check continues from the updated head;
   - the superseded review handoff's cancelled mail does not stop the change as `instruction-failed`.
 - [x] 12.2 Run the push and open-pr effects for each round (plan-landing push and PR rules). Verify against a bare `origin` and the stub `gh`: reuse across rounds; an implementer's own push accepted; a moved branch stops as `effect-failed`; a closed PR stops as `pr-closed`.
 - [x] 12.3 Poll CI and request the single rerun (D10). Record checks, flaky marks, and stops. Verify with tests driving the stub `gh` through pending, failed, rerun, and passed states, and through both timeouts.
-- [ ] 12.4 Release before review for worktree-scoped review groups, then dispatch the review handoff with the instruction, allowed profiles, and author tags (D11). Verify with tests: a not-ready member holds the step with its reason; an unscoped group leaves the implementer; human sessions are never released.
+- [x] 12.4 Release before review for worktree-scoped review groups, then dispatch the review handoff with the instruction, allowed profiles, and author tags (D11). Verify with tests: a not-ready member holds the step with its reason; an unscoped group leaves the implementer; human sessions are never released.
 - [x] 12.5 Decide rounds from CI, the verdict, and the extra checks. Verify with the review and extra-check scenarios.
 
 ## 13. Fix rounds, stops, Retry, and Stop
 
-- [ ] 13.1 Dispatch fix attempts with the failing checks, findings, count, and continue-from commit. Apply the round limit. Verify with the fix-round and round-limit scenarios.
-- [ ] 13.2 Detect failed instructions and human task closes. Verify with the `instruction-failed` and `task-closed` scenarios, including a hand acceptance that merges nothing.
-- [ ] 13.3 Implement Retry for every stop reason with a new generation (D12), and the wait for a free slot. Implement the `review-unavailable` stop when an author claims the review, checked on the claim before any findings (D11). Verify with one test per reason, that Retry is refused while the task is closed, that a `name-taken` change, which has no task, can be retried, and that an author's claim stops the change with no findings submitted.
-- [ ] 13.4 Implement Stop and the plan-close hook (D12, D19): cancel tasks as Kawai with member release, cancel pending effects, and settle a running merge first. Verify with the Stop scenarios, including Stop during a merge.
+- [x] 13.1 Dispatch fix attempts with the failing checks, findings, count, and continue-from commit. Apply the round limit. Verify with the fix-round and round-limit scenarios.
+- [x] 13.2 Detect failed instructions and human task closes. Verify with the `instruction-failed` and `task-closed` scenarios, including a hand acceptance that merges nothing.
+- [x] 13.3 Implement Retry for every stop reason with a new generation (D12), and the wait for a free slot. Implement the `review-unavailable` stop when an author claims the review, checked on the claim before any findings (D11). Verify with one test per reason, that Retry is refused while the task is closed, that a `name-taken` change, which has no task, can be retried, and that an author's claim stops the change with no findings submitted.
+- [x] 13.4 Implement Stop and the plan-close hook (D12, D19): cancel tasks as Kawai with member release, cancel pending effects, and settle a running merge first. Verify with the Stop scenarios, including Stop during a merge.
 
 ## 14. Direct landing and completion
 

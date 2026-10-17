@@ -14,6 +14,9 @@ const change = (name: string, state: ChangeState, over: Partial<PlannedChange> =
   task: null, round: null, ...over,
 })
 
+const withTask = (state: ChangeState, task: Partial<NonNullable<PlannedChange['task']>>, over: Partial<PlannedChange> = {}): PlannedChange =>
+  change('api', state, { taskId: 't1', ...over, task: { status: 'active', revision: 1, results: [], assignment: null, ...task } })
+
 const snapshot = (changes: PlannedChange[], over: Partial<ExecutionSnapshot> = {}): ExecutionSnapshot => ({
   teamId: 'team', main: '/repo',
   executions: [{

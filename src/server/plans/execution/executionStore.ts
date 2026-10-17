@@ -367,6 +367,22 @@ export class ExecutionStore {
     this.db.prepare('UPDATE plan_execution_rounds SET review_assignment_id = ? WHERE id = ?').run(assignmentId, id)
   }
 
+  /** Clear the round's review assignment — Retry's review-unavailable re-dispatch (D12). */
+  clearRoundReview(id: string): void {
+    this.db.prepare('UPDATE plan_execution_rounds SET review_assignment_id = NULL WHERE id = ?').run(id)
+  }
+
+  /** Reopen the round's CI window — Retry after a CI stop (D12). */
+  reopenRoundWindow(id: string, from: string): void {
+    this.db.prepare('UPDATE plan_execution_rounds SET ci_window_from = ?, pushed_at = ? WHERE id = ?').run(from, from, id)
+  }
+
+  /** Supersede an open round outright (D9's revision supersession). */
+  supersedeRound(id: string): void {
+    this.db.prepare(`UPDATE plan_execution_rounds SET outcome = 'superseded', decided_at = ? WHERE id = ? AND outcome IS NULL`)
+      .run(this.iso(), id)
+  }
+
   /** Decide the round (D11/D12): outcome, verdict findings, extra checks, time. */
   decideRound(id: string, outcome: 'pass' | 'fail', detail: { verdictFindingsId?: string; extra?: RoundRow['extra'] } = {}): void {
     this.db.prepare(`UPDATE plan_execution_rounds SET outcome = ?, verdict_findings_id = ?, extra_json = ?, decided_at = ? WHERE id = ?`)

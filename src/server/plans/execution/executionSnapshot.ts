@@ -18,6 +18,13 @@ export interface ResultFact {
   submittedBySession: string | null
 }
 
+/** The outstanding stage assignment's derived state (D12's instruction-failed). */
+export interface AssignmentFact {
+  id: string
+  state: string
+  reason: string | null
+}
+
 export interface PlannedChange {
   executionId: string
   change: string
@@ -34,8 +41,8 @@ export interface PlannedChange {
   dependsOn: string[]
   /** The implementing group, from the execution's revision. */
   group: string | null
-  /** The change's task, when created: its current revision and results. */
-  task: { revision: number; results: ResultFact[] } | null
+  /** The change's task, when created: its status, revision, results, and outstanding assignment. */
+  task: { status: string; revision: number; results: ResultFact[]; assignment: AssignmentFact | null } | null
   /** The change's newest round, decided or open. */
   round: RoundRow | null
 }
@@ -59,7 +66,8 @@ export interface ExecutionSnapshot {
 
 /** Load the team's running-execution snapshot: rows, plan facts, effects, attempt counts. */
 export function executionSnapshot(teamId: string, main: string, executions: ExecutionStore, plans: PlanStore,
-  resultsOf: (taskId: string) => ResultFact[] = () => [], taskRevisionOf: (taskId: string) => number = () => 1): ExecutionSnapshot {
+  resultsOf: (taskId: string) => ResultFact[] = () => [], taskRevisionOf: (taskId: string) => number = () => 1,
+  taskStatusOf: (taskId: string) => string = () => 'active', assignmentOf: (taskId: string) => AssignmentFact | null = () => null): ExecutionSnapshot {
   const running = executions.runningForTeam(teamId)
   const contentOf = new Map<string, PlanContent>()
   const planned: PlannedExecution[] = running.map(execution => {
@@ -84,7 +92,7 @@ export function executionSnapshot(teamId: string, main: string, executions: Exec
         prNumber: row.prNumber,
         dependsOn: facts.get(row.change)?.dependsOn ?? [],
         group: facts.get(row.change)?.group ?? null,
-        task: row.taskId === null ? null : { revision: taskRevisionOf(row.taskId), results: resultsOf(row.taskId) },
+        task: row.taskId === null ? null : { status: taskStatusOf(row.taskId), revision: taskRevisionOf(row.taskId), results: resultsOf(row.taskId), assignment: assignmentOf(row.taskId) },
         round: executions.rounds(row.executionId, row.change).at(-1) ?? null,
       })),
     }

@@ -106,6 +106,11 @@ export class PlanService {
      * store read; without it every completion refuses as not found.
      */
     executionOf?: (executionId: string) => { planId: string; revision: number } | null
+    /**
+     * plan-execution D19: called after a plan completes or cancels (after
+     * commit), so the execution module stops the plan's running executions.
+     */
+    onPlanClosed?: (planId: string, outcome: 'completed' | 'cancelled') => void
     /** plan-validation D9: approval's pre-transaction gather and in-transaction standing, and its appended precondition. */
     validation?: {
       prepareStanding: (planId: string, revision: number) => Promise<unknown> | null
@@ -265,7 +270,9 @@ export class PlanService {
   /** Complete or cancel (human only, D8). */
   async close(caller: PlanCaller, input: PlanCloseInput): Promise<PlanCommandOutcome> {
     if (caller.kind !== 'human') return forbidden(input.outcome === 'cancelled' ? 'cancel' : 'complete')
-    return closePlan(this.store, caller.team.teamId, input)
+    const outcome = await closePlan(this.store, caller.team.teamId, input)
+    if (outcome.ok && !('replayed' in outcome && outcome.replayed)) this.options.onPlanClosed?.(input.planId, input.outcome)
+    return outcome
   }
 
   /** Reopen a completed or cancelled plan (human only, D8). */

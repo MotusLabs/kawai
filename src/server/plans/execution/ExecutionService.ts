@@ -18,7 +18,7 @@ import type { ImpactGate } from '../../../shared/strategyImpact'
 import { FLOOR_VERSION } from '../../../shared/planExecution'
 import type { ExecutionRow } from './executionRows'
 import type { ExecutionStore } from './executionStore'
-import { PlanRefusal, type PlanRefusalReason } from '../planCommands'
+import { PlanRefusal, type PlanCommandOutcome, type PlanRefusalReason } from '../planCommands'
 import type { PlanService } from '../PlanService'
 import type { PlanStore } from '../planStore'
 import type { ValidationStanding } from '../validation/validationStanding'
@@ -64,6 +64,8 @@ export class ExecutionService {
     getSession: (id: string) => ChatSessionRecord | null | undefined
     /** The registered landing mechanism modes (D13's registry; the wiring arrives with the landing sections). */
     landingModes: () => ReadonlySet<string>
+    /** Kawai cancels its tasks on Stop through the task service (D12). */
+    tasks?: import('../../team/TaskService').TaskService
     /** Woken after a Start commits (the executor, D5); never on a replay or refusal. */
     wake?: (teamId: string) => void
     homeDir?: string
@@ -195,5 +197,109 @@ export class ExecutionService {
     const prior = this.deps.store.executionsOf(planId).find(execution => execution.revision === input.revision && execution.contentHash === input.contentHash)
     if (!prior) throw new Error(`The recorded start of ${input.commandId} left no execution`)
     return prior
+  }
+
+  /**
+   * plan-execution D12: the owner retries a stopped change. One command per
+   * attempt, replayed by its id; the payload compares the execution and the
+   * change. The generation bumps, so every request key and effect key of
+   * the change is new. Retry is refused while the change's task is closed.
+   */
+  async retry(caller: ExecutionCaller, input: { executionId: string; change: string; commandId: string }): Promise<PlanCommandOutcome> {
+    if (caller.kind !== 'human') {
+      return { ok: false, reason: 'forbidden', message: 'Only the human can retry a change, from the Plans view. No agent tool can.' }
+    }
+    const execution = this.deps.store.execution(input.executionId)
+    if (execution === null || execution.teamId !== caller.team.teamId) {
+      return { ok: false, reason: 'not-found', message: `Execution not found in this team: ${input.executionId}` }
+    }
+    return this.deps.plans.recordExecutionEvent(execution.planId, {
+      kind: 'change-retried', commandId: input.commandId, executionId: input.executionId, change: input.change,
+    }, () => {
+      const row = this.deps.store.change(input.executionId, input.change)
+      if (row === null) throw new PlanRefusal('not-found', `Change not found on the execution: ${input.change}`)
+      if (row.state !== 'stopped') throw new PlanRefusal('state', `The change is ${row.state}, not stopped; nothing to retry.`)
+      if (row.taskId !== null && this.deps.tasks !== undefined) {
+        const task = this.deps.tasks.store.get(row.taskId) ?? null
+        if (task !== null && (task.status === 'done' || task.status === 'cancelled')) {
+          throw new PlanRefusal('state', `The change's task is ${task.status}; reopen it before retrying.`)
+        }
+      }
+      // The state each reason resumes in (D12): most return to the stage
+      // they stopped in; a name-taken change re-provisions.
+      const to: Parameters<ExecutionStore['transition']>[3] = { state: 'gating', step: null, stopReason: null, stopDetail: null }
+      if (row.stopReason === 'round-limit' || row.stopReason === 'instruction-failed' || row.stopReason === 'task-closed') to.state = 'implementing'
+      if (row.stopReason === 'name-taken') to.state = 'provisioning'
+      const moved = this.deps.store.transition(input.executionId, input.change, row, to)
+      if (moved === null) throw new PlanRefusal('state', 'The change moved while the retry was open; reload and retry again.')
+      const round = this.deps.store.rounds(input.executionId, input.change).at(-1) ?? null
+      if (row.stopReason === 'review-unavailable' && round !== null) this.deps.store.clearRoundReview(round.id)
+      if ((row.stopReason === 'ci-missing' || row.stopReason === 'ci-timeout') && round !== null) {
+        this.deps.store.reopenRoundWindow(round.id, new Date().toISOString())
+      }
+      if (row.stopReason === 'effect-unknown') {
+        const failed = this.deps.store.effectsOf(input.executionId)
+          .find(effect => effect.change === input.change && effect.state === 'failed')
+        if (failed !== undefined) this.deps.store.resetEffect(failed.id)
+      }
+      return { change: input.change }
+    })
+  }
+
+  /**
+   * plan-execution D12: the owner stops the execution. Every unlanded change
+   * is cancelled — its task too, as Kawai, inside the same transaction —
+   * and pending effects cancel. A change whose merge effect is running is
+   * left to settle.
+   */
+  async stop(caller: ExecutionCaller, input: { executionId: string; reason: string; commandId: string }): Promise<PlanCommandOutcome> {
+    if (caller.kind !== 'human') {
+      return { ok: false, reason: 'forbidden', message: 'Only the human can stop an execution, from the Plans view. No agent tool can.' }
+    }
+    const execution = this.deps.store.execution(input.executionId)
+    if (execution === null || execution.teamId !== caller.team.teamId) {
+      return { ok: false, reason: 'not-found', message: `Execution not found in this team: ${input.executionId}` }
+    }
+    const trimmed = input.reason.trim()
+    return this.deps.plans.recordExecutionEvent(execution.planId, {
+      kind: 'execution-stopped', commandId: input.commandId, executionId: input.executionId, reason: trimmed,
+    }, () => {
+      const current = this.deps.store.execution(input.executionId)
+      if (current === null || current.state !== 'running') {
+        throw new PlanRefusal('state', `The execution is ${current?.state ?? 'gone'}; nothing to stop.`)
+      }
+      if (trimmed === '') throw new PlanRefusal('invalid', 'Stopping an execution needs a reason.')
+      this.deps.store.cancelEffects(input.executionId)
+      const system = { kind: 'system' as const, team: caller.team, executionId: input.executionId }
+      for (const row of this.deps.store.changes(input.executionId)) {
+        if (row.state === 'landed' || row.state === 'cancelled') continue
+        const merging = row.state === 'landing' && this.deps.store.effectsOf(input.executionId)
+          .some(effect => effect.change === row.change && effect.kind === 'merge' && effect.state === 'running')
+        if (merging) continue
+        if (row.taskId !== null && this.deps.tasks !== undefined) {
+          void this.deps.tasks.setStatus(system, row.taskId, 'cancelled', `Execution stopped: ${trimmed}`, () => {
+            this.deps.store.transition(input.executionId, row.change, row, { state: 'cancelled', step: null })
+          })
+        } else {
+          this.deps.store.transition(input.executionId, row.change, row, { state: 'cancelled', step: null })
+        }
+      }
+      this.deps.store.finishExecution(input.executionId, 'stopped', trimmed)
+      return { executionId: input.executionId }
+    })
+  }
+
+  /**
+   * plan-execution D19: the plan-close hook. Kawai stops the plan's running
+   * executions with the reason `plan-closed`, under deterministic command
+   * ids, so a close retried after a restart replays.
+   */
+  stopForPlan(teamId: string, planId: string): void {
+    for (const execution of this.deps.store.runningForTeam(teamId)) {
+      if (execution.planId !== planId) continue
+      void this.stop({ kind: 'human', team: { teamId, groupsRoot: '' } }, {
+        executionId: execution.id, reason: 'plan-closed', commandId: `exec:${execution.id}:stop-for-plan`,
+      })
+    }
   }
 }

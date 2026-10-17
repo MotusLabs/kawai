@@ -39,3 +39,24 @@ export function implementInstruction(input: ImplementInstructionInput): string {
     'The plan, its validation report, and this task are the direction; ask the Lead group in a message if something is ambiguous.',
   ].filter(line => line !== null).join('\n\n')
 }
+
+export interface FixInstructionInput extends ImplementInstructionInput {
+  failingChecks: Array<{ name: string; conclusion: string; link: string | null }>
+  findings: string[]
+  fixRounds: number
+  continueFrom: string
+}
+
+/** D12's fix instruction: the failing checks, the findings, the count, and the commit to continue from. */
+export function fixInstruction(input: FixInstructionInput): string {
+  const checks = input.failingChecks.map(check => `- ${check.name}: ${check.conclusion}${check.link ? ` (${check.link})` : ''}`).join('\n')
+  const findings = input.findings.length > 0 ? input.findings.join('\n---\n') : ''
+  return [
+    implementInstruction(input),
+    '',
+    `This is fix round ${input.fixRounds + 1} of 3. Fix the failures below and submit a new result.`,
+    `Failing checks:\n${checks || '- none reported'}`,
+    findings !== '' ? `Review findings:\n${findings.slice(0, LIST_CHARS)}${findings.length > LIST_CHARS ? '\n…(cut — task_get has the rest)' : ''}` : null,
+    `Continue from commit ${input.continueFrom}.`,
+  ].filter(line => line !== null).join('\n')
+}

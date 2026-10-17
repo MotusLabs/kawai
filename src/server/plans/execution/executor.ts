@@ -15,14 +15,20 @@ import type { TaskService } from '../../team/TaskService'
 import type { TaskResultService } from '../../team/TaskResultService'
 import type { AssignmentService } from '../../team/AssignmentService'
 import { runGit } from '../../git/gitCommand'
+import { assignmentState } from '../../team/assignmentStore'
+import type { MailboxStore } from '../../team/mailboxStore'
 import { githubRepoOf } from '../landing/landingProbe'
+import { lsRemoteHead } from '../landing/gitRemote'
+import { ghPrList, ghPrView, ghRunAttempt } from '../landing/github'
+import { inspectUnknownEffects } from './effectInspectors'
 import type { GhCommandOptions } from '../landing/ghCommand'
 import { executionSnapshot } from './executionSnapshot'
 import { planSteps } from './executionPlanner'
 import { EffectRunner, type EffectAdapter } from './effects'
 import type { ExecutionStore } from './executionStore'
 import type { PlanStore } from '../planStore'
-import { dispatchImplementAttempt } from './executionDispatch'
+import { dispatchFixAttempt, dispatchImplementAttempt } from './executionDispatch'
+import { fixRoundOutcome } from '../../../shared/planExecutionProgress'
 import { applyRoundStage, openPrAdapter, pushAdapter, recordPull, rerunAdapter, roundAdapters } from './executionRounds'
 
 /** D5's polling interval while a team has a running execution. */
@@ -37,6 +43,12 @@ export interface ExecutorDeps {
   results?: TaskResultService
   /** Every live session record (author profiles for review tags). */
   records?: () => Iterable<ChatSessionRecord>
+  /** The team's mailbox (assignment states derive from instruction mail). */
+  mailbox?: MailboxStore
+  /** D11's release step, wired to member-release by the composition. */
+  releases?: { readiness: (sessionId: string) => { ready: boolean; reason: string | null }; release: (sessionId: string) => void }
+  /** Whether a group's current file is worktree-scoped (default true). */
+  groupScoped?: (teamId: string, groupId: string) => boolean
   /** The team's identity; without it (unknown team) a tick does nothing. */
   teamOf: (teamId: string) => TeamIdentity | undefined
   /** Effect adapters by kind; a kind without one fails its effect. */
@@ -71,6 +83,62 @@ export class ExecutionExecutor {
     }
   }
 
+  /**
+   * Startup recovery (D14): every `running` effect becomes `unknown` and is
+   * inspected before anything else for its change runs; the teams that hold
+   * running executions are woken. An exhausted inspection stops its change
+   * as effect-unknown (D12).
+   */
+  async startup(inspect?: (deps: Parameters<typeof import('./effectInspectors').inspectUnknownEffects>[0]) => void): Promise<void> {
+    const unknown = this.deps.store.markRunningEffectsUnknown()
+    const teams = new Set(unknown.map(effect => this.deps.store.execution(effect.executionId)?.teamId ?? ''))
+    for (const teamId of teams) {
+      if (teamId === '') continue
+      const reads: import('./effectInspectors').InspectorReads = {
+        worktree: async (repo, wt) => {
+          const listed = await runGit(['worktree', 'list', '--porcelain'], { cwd: repo })
+          const present = listed.ok && listed.stdout.split('\n').some(line => line.startsWith('worktree ') && line.slice(8) === wt)
+          if (!present) return { present: false, head: null }
+          const head = await runGit(['rev-parse', 'HEAD'], { cwd: wt })
+          return { present: true, head: head.ok ? head.stdout.trim() : null }
+        },
+        localBranch: async (repo, branch) => {
+          const result = await runGit(['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], { cwd: repo })
+          return result.ok ? result.stdout.trim() : null
+        },
+        remoteHead: async (cwd, ref) => {
+          const result = await lsRemoteHead(cwd, ref)
+          return result.ok ? result.sha : null
+        },
+        prList: async (repo, head) => {
+          const pulls = await ghPrList(repo, { head, base: '' }, this.deps.ghOptions)
+          return pulls.ok ? pulls.data : []
+        },
+        prView: async (repo, pr) => {
+          const view = await ghPrView(repo, pr, this.deps.ghOptions)
+          return view.ok ? view.data : { number: pr, url: '', state: 'OPEN', headRefOid: '', mergeCommit: null }
+        },
+        runAttempt: async (repo, runId) => {
+          const attempt = await ghRunAttempt(repo, runId, this.deps.ghOptions)
+          return attempt.ok ? attempt.data : 1
+        },
+      }
+      await inspectUnknownEffects({
+        store: this.deps.store, reads,
+        ...(this.deps.now ? { now: this.deps.now } : {}),
+        onUnknownSettled: effect => {
+          if (effect.change === null) return
+          const row = this.deps.store.change(effect.executionId, effect.change)
+          if (row === null || row.state === 'stopped') return
+          this.deps.store.transition(effect.executionId, effect.change, row, {
+            state: 'stopped', stopReason: 'effect-unknown', step: null, stopDetail: { message: effect.error ?? 'the outcome could not be determined' },
+          })
+        },
+      })
+      this.wake(teamId)
+    }
+  }
+
   /** Stop the timers (tests, shutdown). */
   close(): void {
     for (const timer of this.timers.values()) clearTimeout(timer)
@@ -88,10 +156,19 @@ export class ExecutionExecutor {
         taskId => this.deps.tasks.store.results.listByTask(taskId)
           .map(result => ({ id: result.id, commit: result.commit, taskRevision: result.taskRevision, submittedBySession: result.submittedBy.kind === 'agent' ? result.submittedBy.sessionId : null }))
           .reverse(),
-        taskId => this.deps.tasks.store.get(taskId)?.revision ?? 1)
+        taskId => this.deps.tasks.store.get(taskId)?.revision ?? 1,
+        taskId => this.deps.tasks.store.get(taskId)?.status ?? 'active',
+        taskId => {
+          // Without a mailbox wired there is no instruction fact to read.
+          if (this.deps.mailbox === undefined) return null
+          const outstanding = this.deps.tasks.store.assignmentsOf(taskId).find(row => row.supersededBy === null)
+          if (outstanding === undefined) return null
+          const state = assignmentState(outstanding, outstanding.messageId !== null ? this.deps.mailbox.get(outstanding.messageId) : null)
+          return { id: outstanding.id, state: state.state, reason: state.reason }
+        })
       if (snapshot.executions.length === 0) return
       const steps = planSteps(snapshot, this.deps.now?.().toISOString() ?? new Date().toISOString())
-      if (steps.transitions.length === 0 && steps.effects.length === 0 && steps.dispatches.length === 0 && steps.stages.length === 0) return
+      if (steps.transitions.length === 0 && steps.effects.length === 0 && steps.dispatches.length === 0 && steps.stages.length === 0 && steps.fixes.length === 0) return
 
       for (const step of steps.transitions) {
         this.deps.store.transition(step.executionId, step.change, step.guard, step.patch)
@@ -104,7 +181,8 @@ export class ExecutionExecutor {
       }
       for (const step of steps.dispatches) {
         await dispatchImplementAttempt(
-          { team, executions: this.deps.store, plans: this.deps.plans, tasks: this.deps.tasks, assignments: this.deps.assignments },
+          { team, executions: this.deps.store, plans: this.deps.plans, tasks: this.deps.tasks, assignments: this.deps.assignments,
+        ...(this.deps.results ? { results: this.deps.results } : {}) },
           step,
         )
       }
@@ -113,7 +191,10 @@ export class ExecutionExecutor {
         if (row === null) continue
         await applyRoundStage(this.roundDeps(team), row, stage)
       }
-      if (steps.effects.length > 0 || steps.stages.some(stage => stage.kind === 'push' || stage.kind === 'open-pr')) {
+      for (const fix of steps.fixes) {
+        await this.applyFix(team, fix)
+      }
+      if (steps.effects.length > 0 || steps.fixes.length > 0 || steps.stages.some(stage => stage.kind === 'push' || stage.kind === 'open-pr')) {
         // A done effect's follow-on transition lands with its outcome (D14),
         // so the next pass sees the state it implies.
         await this.runner(teamId).runDue(teamId)
@@ -129,9 +210,12 @@ export class ExecutionExecutor {
       plans: this.deps.plans,
       tasks: this.deps.tasks,
       results: this.deps.results as TaskResultService,
+      assignments: this.deps.assignments,
       adapters: this.deps.roundAdapters ?? roundAdapters,
       ...(this.deps.records ? { records: this.deps.records } : {}),
       ...(this.deps.ghOptions ? { ghOptions: this.deps.ghOptions } : {}),
+      ...(this.deps.releases ? { releases: this.deps.releases } : {}),
+      groupScoped: (teamId, groupId) => this.deps.groupScoped?.(teamId, groupId) ?? true,
       now: () => (this.deps.now?.() ?? new Date()).toISOString(),
     }
   }
@@ -169,6 +253,48 @@ export class ExecutionExecutor {
       onFailed: effect => this.applyEffectFailure(effect),
       ...(this.deps.now ? { now: this.deps.now } : {}),
     })
+  }
+
+  /**
+   * D12's fix step: the count rule decides — three consecutive failed fix
+   * rounds stop the change, anything else returns it to implementing and
+   * dispatches the fix attempt naming the failing checks, findings, count,
+   * and the commit to continue from.
+   */
+  private async applyFix(team: import('../../team/teamIdentity').TeamIdentity, fix: { executionId: string; change: string; roundId: string }): Promise<void> {
+    const store = this.deps.store
+    const round = store.round(fix.roundId)
+    const row = store.change(fix.executionId, fix.change)
+    if (round === null || row === null || row.state !== 'gating') return
+    const outcome = fixRoundOutcome(row.fixRounds, { fixRound: round.fixRound, outcome: 'fail' })
+    if (outcome.stop) {
+      store.transition(fix.executionId, fix.change, row, {
+        state: 'stopped', stopReason: 'round-limit', step: null,
+        stopDetail: { message: `Three consecutive failed fix rounds.`, checks: (round.ci ?? []).filter(check => check.conclusion === 'failure').map(check => check.name) },
+      })
+      return
+    }
+    const moved = store.transition(fix.executionId, fix.change, row, { state: 'implementing', step: null, fixRounds: outcome.count })
+    if (moved === null) return
+    const revision = this.deps.plans.revision(store.execution(fix.executionId)!.planId, store.execution(fix.executionId)!.revision)
+    const group = revision?.content.changes.find(entry => entry.change === fix.change)?.group
+    if (group === null || group === undefined) return
+    const failing = (round.ci ?? []).filter(check => check.conclusion.toLowerCase() === 'failure')
+      .map(check => ({ name: check.name, conclusion: check.conclusion, link: check.link }))
+    const all = row.taskId === null ? [] : this.deps.tasks.store.results.findingsFor(round.resultId)
+    const findings = round.verdictFindingsId !== null ? all.filter(entry => entry.id === round.verdictFindingsId) : all
+    await dispatchFixAttempt(
+      { team, executions: store, plans: this.deps.plans, tasks: this.deps.tasks, assignments: this.deps.assignments,
+        ...(this.deps.results ? { results: this.deps.results } : {}) },
+      {
+        executionId: fix.executionId, change: fix.change, group,
+        failingChecks: failing,
+        findingsIds: findings.map(row => row.id),
+        findingsTexts: findings.map(row => row.findings),
+        continueFrom: round.commitSha,
+        fixRounds: outcome.count,
+      },
+    )
   }
 
   /** A failed effect stops its change (D14): effect-failed, or pr-closed when the PR was closed. */

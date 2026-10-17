@@ -110,6 +110,20 @@ afterAll(() => {
   fs.rmSync(gitRoot, { recursive: true, force: true })
 })
 
+/** The stub round adapters, reading the live ghStub object. */
+const stubRoundAdapters = () => ({
+  lsRemoteHead: async () => ({ ok: true as const, sha: null as string | null }),
+  push: async (cwd: string, source: string, branch: string) => {
+    const result = spawnSync('git', ['push', 'origin', `${source}:refs/heads/${branch}`], { cwd, encoding: 'utf8', env: cleanGitEnv() })
+    return result.status === 0 ? { ok: true as const } : { ok: false as const, error: { argv: ['git', 'push'], exitCode: result.status, stderr: result.stderr } }
+  },
+  checkRuns: async () => ({ ok: true as const, data: JSON.parse(ghStub.checkRuns) }),
+  statuses: async () => ({ ok: true as const, data: JSON.parse(ghStub.statuses) }),
+  prList: async () => ({ ok: true as const, data: JSON.parse(ghStub.pulls) }),
+  prCreate: async () => ({ ok: true as const, data: JSON.parse(ghStub.created) }),
+  rerun: async (_repo: string, runId: number) => { ghStub.reruns.push(runId); return { ok: true as const, data: null } },
+})
+
 beforeEach(() => {
   bench?.db.close()
   bench = createPlanBench(world)
@@ -156,7 +170,7 @@ esac
   }
   fs.writeFileSync(path.join(gitRoot, 'rerun.log'), '')
   executor = new ExecutionExecutor({
-    store: executions, plans: bench.plans, tasks, assignments, results,
+    store: executions, plans: bench.plans, tasks, assignments, mailbox: mail, results,
     records: () => bench.records.values(),
     teamOf: id => (id === world.team.teamId ? world.team : undefined),
     adapters: { provision: provisionAdapter(executions) },
@@ -274,6 +288,158 @@ describe('the round pipeline (§12)', () => {
     executor.wake(world.team.teamId)
     await executor.idle()
     expect(executions.change(executionId, 'flow-c')).toMatchObject({ state: 'stopped', stopReason: 'pr-closed' })
+  })
+
+  test('a failed review returns the change for a fix attempt naming what it answers', async () => {
+    const executionId = await approvedExecution('fix-a')
+    await implementStage(executionId, 'fix-a', 'x')
+    ghStub.pulls = '[]'
+    passCi()
+    executor.wake(world.team.teamId)
+    await executor.idle()
+    const change = executions.change(executionId, 'fix-a')!
+    const round = executions.rounds(executionId, 'fix-a').at(-1)!
+    const assignment = tasks.store.assignmentsOf(change.taskId!).find(a => a.id === round.reviewAssignmentId)!
+    deliverToReviewer(assignment.messageId!, 'rev1')
+    ghStub.checkRuns = JSON.stringify([
+      { id: 't', name: 'ci', source: 'actions', conclusion: 'success', link: 'l', runId: 11, startedAt: '2026-10-17T00:00:00.000Z', completedAt: '2026-10-17T00:01:00.000Z' },
+      { id: 'e', name: 'e2e', source: 'status', conclusion: 'failure', link: null, startedAt: null, completedAt: null },
+    ])
+    await results.submitFindings(bench.agent('rev1'), change.taskId!, { resultId: round.resultId, kind: 'review', verdict: 'fail', findings: 'the e2e test fails on the settings page' })
+    executor.wake(world.team.teamId)
+    await executor.idle()
+
+    expect(executions.rounds(executionId, 'fix-a').at(-1)).toMatchObject({ outcome: 'fail' })
+    const row = executions.change(executionId, 'fix-a')!
+    expect(row).toMatchObject({ state: 'implementing', fixRounds: 0 })
+    const fixAttempt = executions.attempts(executionId, 'fix-a').at(-1)!
+    expect(fixAttempt.kind).toBe('fix')
+    expect(fixAttempt.manifest.answers?.resultId).toBe(round.resultId)
+    expect(fixAttempt.manifest.answers?.findingsIds).toHaveLength(1)
+    const fixAssignment = tasks.store.assignmentsOf(change.taskId!).at(-1)!
+    const fixMail = mail.get(fixAssignment.messageId!)!
+    expect(fixMail.body).toContain('fix round 1 of 3')
+    expect(fixMail.body).toContain('the e2e test fails on the settings page')
+    expect(fixMail.body).toContain(round.commitSha)
+  })
+
+  test('the third failed fix round stops the change as round-limit', async () => {
+    const executionId = await approvedExecution('fix-b')
+    await implementStage(executionId, 'fix-b', 'x')
+    const row = executions.change(executionId, 'fix-b')!
+    // Two failed fix rounds already counted: the next failure is the third.
+    executions.transition(executionId, 'fix-b', row, { fixRounds: 2 })
+    ghStub.pulls = '[]'
+    ghStub.checkRuns = '[]'
+    ghStub.statuses = JSON.stringify([{ name: 'e2e', source: 'status', conclusion: 'failure', link: null, startedAt: null, completedAt: null }])
+    executor.wake(world.team.teamId)
+    await executor.idle()
+    // The implement round fails on the non-rerunnable status (it never counts);
+    // a fix attempt follows, and ITS failed round is the third counted stop.
+    const change = executions.change(executionId, 'fix-b')!
+    expect(change.state).toBe('implementing')
+    const worktree = change.worktree!
+    fs.writeFileSync(path.join(worktree, 'src', 'fix-b.ts'), 'fix')
+    commitAll(worktree, 'fix attempt')
+    await results.submit(bench.agent('dev'), change.taskId!, { summary: 'fixed', commit: git(['rev-parse', 'HEAD'], worktree).trim() })
+    executor.wake(world.team.teamId)
+    await executor.idle()
+    const stopped = executions.change(executionId, 'fix-b')!
+    expect(stopped).toMatchObject({ state: 'stopped', stopReason: 'round-limit' })
+    expect(stopped.stopDetail?.checks).toContain('e2e')
+  })
+
+  test('a failed instruction and a hand-closed task stop the change', async () => {
+    const executionId = await approvedExecution('stop-a')
+    await implementStage(executionId, 'stop-a', 'x')
+    const change = executions.change(executionId, 'stop-a')!
+    // The instruction mail dead-letters.
+    const assignment = tasks.store.assignmentsOf(change.taskId!)[0]!
+    mail.deadLetter(assignment.messageId!, 'killed-recipient')
+    executor.wake(world.team.teamId)
+    await executor.idle()
+    expect(executions.change(executionId, 'stop-a')).toMatchObject({ state: 'stopped', stopReason: 'instruction-failed' })
+
+    // A hand-closed task stops another change.
+    const other = await approvedExecution('stop-b')
+    await implementStage(other, 'stop-b', 'x')
+    const rowB = executions.change(other, 'stop-b')!
+    await tasks.setStatus(bench.human, rowB.taskId!, 'done')
+    executor.wake(world.team.teamId)
+    await executor.idle()
+    expect(executions.change(other, 'stop-b')).toMatchObject({ state: 'stopped', stopReason: 'task-closed' })
+  })
+
+  test('a worktree-scoped review group releases the spawned implementer before review (12.4)', async () => {
+    const executionId = await approvedExecution('rel-a')
+    const staged = await implementStage(executionId, 'rel-a', 'x')
+    const worktreeA = staged.row!.worktree!
+    // dev is a spawned member working in the change's worktree.
+    bench.records.set('dev', { ...(bench.records.get('dev') as Exclude<ReturnType<typeof bench.records.get>, undefined>), projectPath: path.join(worktreeA, 'src'), spawned: true })
+    const released: string[] = []
+    const holding = { ready: true, reason: null as string | null }
+    const releasingExecutor = new ExecutionExecutor({
+      store: executions, plans: bench.plans, tasks, assignments, results, mailbox: mail,
+      records: () => bench.records.values(),
+      teamOf: id => (id === world.team.teamId ? world.team : undefined),
+      adapters: { provision: provisionAdapter(executions) },
+      roundAdapters: stubRoundAdapters(),
+      releases: { readiness: id => (id === 'dev' ? holding : { ready: true, reason: null }), release: id => released.push(id) },
+      groupScoped: () => true,
+    })
+    try {
+      ghStub.pulls = '[]'
+      passCi()
+      releasingExecutor.wake(world.team.teamId)
+      await releasingExecutor.idle()
+      expect(released).toEqual(['dev'])
+      expect(executions.change(executionId, 'rel-a')!.step).toBe('reviewing')
+
+      // A not-ready member holds the step with its reason.
+      const execution2 = await approvedExecution('rel-b')
+      const second = await implementStage(execution2, 'rel-b', 'x')
+      bench.records.set('dev', { ...(bench.records.get('dev') as Exclude<ReturnType<typeof bench.records.get>, undefined>), projectPath: path.join(second.row!.worktree!, 'src'), spawned: true })
+      holding.ready = false
+      holding.reason = 'busy'
+      releasingExecutor.wake(world.team.teamId)
+      await releasingExecutor.idle()
+      expect(executions.change(execution2, 'rel-b')!.step).toBe('releasing')
+      // Ready again, the review follows on the next tick.
+      holding.ready = true
+      ghStub.pulls = '[]'
+      passCi()
+      releasingExecutor.wake(world.team.teamId)
+      await releasingExecutor.idle()
+      expect(executions.change(execution2, 'rel-b')!.step).toBe('reviewing')
+    } finally {
+      releasingExecutor.close()
+    }
+  })
+
+  test('a new task revision supersedes the round and dispatches a fix naming it (12.1)', async () => {
+    const executionId = await approvedExecution('rev-a')
+    await implementStage(executionId, 'rev-a', 'x')
+    ghStub.pulls = '[]'
+    passCi()
+    executor.wake(world.team.teamId)
+    await executor.idle()
+    const change = executions.change(executionId, 'rev-a')!
+    expect(change.state).toBe('gating')
+
+    // The human republishes the task's direction.
+    await tasks.amend(bench.human, change.taskId!, { direction: 'Do it differently now', rationale: 'scope changed' })
+    executor.wake(world.team.teamId)
+    await executor.idle()
+
+    const rounds = executions.rounds(executionId, 'rev-a')
+    expect(rounds.map(round => round.outcome)).toEqual(['superseded'])
+    const row = executions.change(executionId, 'rev-a')!
+    expect(row.state).toBe('implementing')
+    const fix = tasks.store.assignmentsOf(change.taskId!).at(-1)!
+    const fixMail = mail.get(fix.messageId!)!
+    expect(fixMail.body).toContain('revision 2')
+    expect(fixMail.body).toContain('scope changed')
+    expect(executions.attempts(executionId, 'rev-a').at(-1)!.kind).toBe('fix')
   })
 
   test('an author claiming the review stops it as review-unavailable', async () => {
