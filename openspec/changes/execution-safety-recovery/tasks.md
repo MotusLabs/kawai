@@ -96,7 +96,7 @@ Group 7's matrix rows for plan execution, integration, supervision, and revision
   - the bucket's counts over the window.
 
   Also verify by grep and test that no execution, supervision, or dispatch module imports the outbound store.
-- [ ] 4.4 Add `TeamAuditView`, `teamAuditStore`, and the `#/team/<key>/audit` route (D9), including the backup status footer. Verify with component tests:
+- [x] 4.4 Add `TeamAuditView`, `teamAuditStore`, and the `#/team/<key>/audit` route (D9), including the backup status footer. Verify with component tests:
   - newest-first rows, filters, and Load more;
   - the counts;
   - each outcome state's label;
@@ -104,7 +104,7 @@ Group 7's matrix rows for plan execution, integration, supervision, and revision
   - Acknowledge arming one command id and reusing it while the payload is unchanged;
   - every control disabled while disconnected;
   - every store apply method has a dispatch caller.
-- [ ] 4.5 Write one browser walkthrough with the fixture adapter, `tests/e2e/chat-outbound-audit.spec.ts`, named in `.github/workflows/ci.yml`: a fixture agent runs an allowed push and a foreign-repository `gh` call, the item appears, and the owner filters and acknowledges it. Run it alone on a spare `E2E_PORT` after `bun run build`. Add the AGENTS.md view bullet; that is the docs for group 4.
+- [x] 4.5 Write one browser walkthrough with the fixture adapter, `tests/e2e/chat-outbound-audit.spec.ts`, named in `.github/workflows/ci.yml`: a fixture agent runs an allowed push and a foreign-repository `gh` call, the item appears, and the owner filters and acknowledges it. Run it alone on a spare `E2E_PORT` after `bun run build`. Add the AGENTS.md view bullet; that is the docs for group 4.
 
 ## 5. Database safety documentation
 
