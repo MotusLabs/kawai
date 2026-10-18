@@ -16,6 +16,7 @@ const KIND_LABELS: Record<string, string> = {
   'staffing-wait': 'Staffing wait',
   'pending-acceptance': 'Pending acceptance',
   'fixes-requested': 'Fixes requested',
+  'outbound-violation': 'Outbound violation',
 }
 
 /** A known kind's label; an unrecognized kind reads as itself. */

@@ -77,17 +77,17 @@ Group 7's matrix rows for plan execution, integration, supervision, and revision
 
 ## 4. Audit view and attention
 
-- [ ] 4.1 Add `src/shared/outbound.ts` with the row, filter, count, and D9 message types, add them to `CHAT_CONNECTION_TYPES`, and add `outboundConnections.ts` over the team-scope resolver. Verify with router and connection tests:
+- [x] 4.1 Add `src/shared/outbound.ts` with the row, filter, count, and D9 message types, add them to `CHAT_CONNECTION_TYPES`, and add `outboundConnections.ts` over the team-scope resolver. Verify with router and connection tests:
   - every type is whitelisted;
   - `unknown-team` and another team's call id are refused;
   - `team-audit-changed` follows every committed row of the team and no other team's.
-- [ ] 4.2 Implement `OutboundService.acknowledge` (D10). Verify with unit tests:
+- [x] 4.2 Implement `OutboundService.acknowledge` (D10). Verify with unit tests:
   - human only, with an agent refused and nothing written;
   - replay and different-payload refusal naming the field;
   - the acknowledgement covers its group through the named call and no later call;
   - a non-violation or another team's call refused;
   - one row written, with the call unchanged.
-- [ ] 4.3 Add `outboundItems` to `ATTENTION_SOURCES`, the `audit` link kind, and the `outbound` summary bucket. Verify with workspace read tests:
+- [x] 4.3 Add `outboundItems` to `ATTENTION_SOURCES`, the `audit` link kind, and the `outbound` summary bucket. Verify with workspace read tests:
   - one item per `(rule, destination)` group with unacknowledged violations, with its id, owner, cause and count, next action, and link;
   - repeated calls to one unlisted MCP server raise one item;
   - a violation after the group's acknowledgement raises it again;
@@ -96,7 +96,7 @@ Group 7's matrix rows for plan execution, integration, supervision, and revision
   - the bucket's counts over the window.
 
   Also verify by grep and test that no execution, supervision, or dispatch module imports the outbound store.
-- [ ] 4.4 Add `TeamAuditView`, `teamAuditStore`, and the `#/team/<key>/audit` route (D9), including the backup status footer. Verify with component tests:
+- [x] 4.4 Add `TeamAuditView`, `teamAuditStore`, and the `#/team/<key>/audit` route (D9), including the backup status footer. Verify with component tests:
   - newest-first rows, filters, and Load more;
   - the counts;
   - each outcome state's label;
@@ -104,7 +104,7 @@ Group 7's matrix rows for plan execution, integration, supervision, and revision
   - Acknowledge arming one command id and reusing it while the payload is unchanged;
   - every control disabled while disconnected;
   - every store apply method has a dispatch caller.
-- [ ] 4.5 Write one browser walkthrough with the fixture adapter, `tests/e2e/chat-outbound-audit.spec.ts`, named in `.github/workflows/ci.yml`: a fixture agent runs an allowed push and a foreign-repository `gh` call, the item appears, and the owner filters and acknowledges it. Run it alone on a spare `E2E_PORT` after `bun run build`. Add the AGENTS.md view bullet; that is the docs for group 4.
+- [x] 4.5 Write one browser walkthrough with the fixture adapter, `tests/e2e/chat-outbound-audit.spec.ts`, named in `.github/workflows/ci.yml`: a fixture agent runs an allowed push and a foreign-repository `gh` call, the item appears, and the owner filters and acknowledges it. Run it alone on a spare `E2E_PORT` after `bun run build`. Add the AGENTS.md view bullet; that is the docs for group 4.
 
 ## 5. Database safety documentation
 
