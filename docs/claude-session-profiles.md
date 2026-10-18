@@ -6,33 +6,88 @@ below). The chat header shows the selected profile. Catalog load failures
 block creation and offer **Retry profiles**; terminal command presets are
 independent.
 
-The shipped default catalog:
+The shipped default catalog, grouped by provider:
 
-| ID | Label | Routing and models |
-| --- | --- | --- |
-| default | Default | Existing server environment and global provider Settings |
-| glm | GLM | `https://api.z.ai/api/anthropic`; starts on Opus, mapped to `glm-5.3[1m]`; Sonnet and Haiku map to `glm-5.3-flash[1m]`, Fable to `glm-5.3[1m]`; auto-compact window `1000000`; reset zone `Asia/Shanghai` |
-| glm-flash | GLM Flash | `https://api.z.ai/api/anthropic`; starts on Sonnet, mapped to `glm-5.3-flash[1m]`; Opus and Fable map to `glm-5.3[1m]`, Haiku to `glm-5.3-flash[1m]`; auto-compact window `1000000`; reset zone `Asia/Shanghai` |
-| minimax | MiniMax | `https://api.minimax.io/anthropic`; starts on `MiniMax-M3`; every Claude tier maps to `MiniMax-M3` ([reference](https://platform.minimax.io/docs/token-plan/claude-code)) |
-| mimo | MiMo | `https://api.xiaomimimo.com/anthropic`; starts on `mimo-v2.6-pro`; Sonnet maps to `mimo-v2.6-flash`, Opus/Haiku/Fable to `mimo-v2.6-pro` ([reference](https://mimo.mi.com/docs/en-US/tokenplan/integration/claudecode)) |
-| kimi | Kimi | `https://api.moonshot.ai/anthropic`; starts on `kimi-k3[1m]`; every Claude tier maps to `kimi-k3[1m]`; auto-compact window `1000000` ([reference](https://platform.kimi.ai/docs/guide/claude-code-kimi#configuration-reference)) |
-| opus | Claude Opus | prescribed model `claude-opus-5-5` |
-| sonnet | Claude Sonnet | prescribed model `claude-sonnet-5-5` |
-| haiku | Claude Haiku | prescribed model `claude-haiku-5-5` |
+| ID | Label | Provider | Routing and models |
+| --- | --- | --- | --- |
+| default | Default | Claude | Existing server environment and global provider Settings |
+| opus | Claude Opus | Claude | prescribed model `claude-opus-5-5` |
+| sonnet | Claude Sonnet | Claude | prescribed model `claude-sonnet-5-5` |
+| haiku | Claude Haiku | Claude | prescribed model `claude-haiku-5-5` |
+| glm | GLM | Z.AI | starts on Opus; Sonnet and Haiku map to `glm-5.3-flash[1m]`, Opus and Fable to `glm-5.3[1m]` — provider env below |
+| glm-flash | GLM Flash | Z.AI | starts on Sonnet; Opus and Fable map to `glm-5.3[1m]`, Haiku to `glm-5.3-flash[1m]` — provider env below |
+| minimax | MiniMax | MiniMax | `https://api.minimax.io/anthropic`; starts on `MiniMax-M3`; every Claude tier maps to `MiniMax-M3` ([reference](https://platform.minimax.io/docs/token-plan/claude-code)) |
+| mimo | MiMo | MiMo | `https://api.xiaomimimo.com/anthropic`; starts on `mimo-v2.6-pro`; Sonnet maps to `mimo-v2.6-flash`, Opus/Haiku/Fable to `mimo-v2.6-pro` ([reference](https://mimo.mi.com/docs/en-US/tokenplan/integration/claudecode)) |
+| kimi | Kimi | Kimi | `https://api.moonshot.ai/anthropic`; starts on `kimi-k3[1m]`; every Claude tier maps to `kimi-k3[1m]`; auto-compact window `1000000` ([reference](https://platform.kimi.ai/docs/guide/claude-code-kimi#configuration-reference)) |
+
+Provider Z.AI carries the pair's shared routing at the provider level:
+base URL `https://api.z.ai/api/anthropic`, the four tier maps above,
+auto-compact window `1000000`, and reset zone `Asia/Shanghai` — every model
+of the provider launches with it, and the provider's cooldown and usage are
+shared.
 
 ## Catalog files
 
-Profiles are defined in `profiles.json` files inside `.kawai` directories,
-layered like Claude Code settings. For a chat session, the server collects
-every `.kawai/profiles.json` from the session's project path up to the
-filesystem root, above a user-level `~/.kawai/profiles.json` that replaces the
-shipped default (`config/profiles.default.json`) when present — in container
-deployments, mount the user-level file (ConfigMap) or bake an image default.
-Release builds embed the shipped default at build time: a compiled binary
-ships no `config/` directory, so when the default file is missing the
-embedded copy supplies the shipped profiles (validated like a file read,
-errors naming `config/profiles.default.json (embedded)`); when the file
-exists it is used as-is.
+Models come from two kinds of catalog files inside `.kawai` directories,
+layered like Claude Code settings. For a chat session, the server reads each
+level's `providers.json` and then `profiles.json`, from the session's project
+path up to the filesystem root, above the user level (`~/.kawai/providers.json`
+and `~/.kawai/profiles.json`) that replaces both shipped defaults
+(`config/providers.default.json`, `config/profiles.default.json`) when either
+of its two files is present — in container deployments, mount the user-level
+files (ConfigMap) or bake image defaults. Release builds embed both shipped
+files at build time: a compiled binary ships no `config/` directory, so when
+a default file is missing the embedded copy supplies it (validated like a
+file read, errors naming `config/profiles.default.json (embedded)` or
+`config/providers.default.json (embedded)`); when the file exists it is used
+as-is.
+
+A `providers.json` holds providers, and a provider owns its models:
+
+```json
+{
+  "zai": {
+    "label": "Z.AI",
+    "limitResetTimeZone": "Asia/Shanghai",
+    "env": { "ANTHROPIC_BASE_URL": "https://zai.example.internal/api/anthropic" },
+    "models": {
+      "glm": { "label": "GLM", "model": "opus", "env": { "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000" } },
+      "glm-flash": { "label": "GLM Flash", "model": "sonnet" }
+    }
+  }
+}
+```
+
+A model launches with its provider's environment merged with its own, its own
+values winning per key. A model entry may not set `ANTHROPIC_BASE_URL` — the
+base URL belongs to the provider, so every model of a provider reaches the
+same endpoint; a file whose model sets it fails validation with an error
+naming the file, provider, and model, and the rest of the catalog stays
+usable. Credentials are refused at both levels. `executable` stays
+provider-level and operator-trusted (see below).
+
+Same-id providers merge across levels with the nearer file winning per key,
+and an empty value neutralizes an inherited one; a provider's `models` merge
+by key within it. Model keys are unique across the whole resolved catalog —
+they are the profile ids sessions, groups, plans, and routing store. A key
+defined under two providers of different operator levels (the user level and
+the project levels) is an error naming both providers and files; the nearer
+definition is ignored. A nearer definition of a key the SHIPPED default holds
+re-homes instead: the key leaves its shipped provider and resolves as the
+nearer entry — a legacy entry as its own one-model provider — starting from
+the shipped model's flattened settings, so an existing project override (for
+example a private gateway in a project `profiles.json`) keeps exactly its
+launch settings and only that key leaves the provider.
+
+A `profiles.json` entry reads as a provider with one model of the same id:
+its label names both, its startup model applies to the model, and its
+environment, reset zone, and executable apply to the provider. An entry whose
+id is already a model of a different operator provider is ignored with an
+error naming both files; an entry whose id is an existing provider id merges
+into that provider. A catalog without `providers.json` therefore resolves
+exactly as before, one provider per profile. The `default` model is definable
+in files — under any provider — and always exists (implicit, provider
+`default`, when no file defines it).
 
 The shipped catalog lists public provider endpoints only. Private gateways —
 an internal proxy that injects API keys, or a LAN relay — belong in a catalog
@@ -74,11 +129,12 @@ resolution logs it (`chat_profile_catalog_errors` in agentboard.log).
 ## Provider reset time zone
 
 Some gateways put the limit reset in the error text without a zone (GLM:
-`Your limit will reset at 2026-10-13 17:17:00`). An entry's
+`Your limit will reset at 2026-10-13 17:17:00`). A provider's
 `limitResetTimeZone` — an IANA zone (`Asia/Shanghai`) or a fixed `±HH:MM`
-offset — says how to read it, so the profile's cooldown and parked work's
-resume use the real reset instead of the one-hour fallback. A reset the
-provider announces itself always wins; without the field the text is ignored.
+offset; a legacy `profiles.json` entry carries one the same way — says how to
+read it, so the provider's cooldown and parked work's resume use the real
+reset instead of the one-hour fallback. A reset the provider announces itself
+always wins; without the field the text is ignored.
 
 ```json
 { "glm": { "label": "GLM", "limitResetTimeZone": "Asia/Shanghai" } }

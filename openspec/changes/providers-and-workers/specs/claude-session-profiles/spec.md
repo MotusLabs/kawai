@@ -23,7 +23,7 @@ A model entry SHALL NOT set the routing base URL, so that every model of a provi
 - **THEN** catalog resolution reports the file, `zai`, and `glm`, and providers from the other discovered files stay available
 
 ### Requirement: Model keys are unique and serve as profile ids
-Every model key SHALL be unique across the providers of a resolved catalog and SHALL be the profile id that sessions, group files, plans, and routing name, so stored profile ids keep resolving to the model of the same key. A key defined under two providers SHALL be a catalog error naming both providers and their files: within one file the file fails validation, and across levels the nearer definition is ignored.
+Every model key SHALL be unique across the providers of a resolved catalog and SHALL be the profile id that sessions, group files, plans, and routing name, so stored profile ids keep resolving to the model of the same key. A key defined under two providers SHALL be a catalog error naming both providers and their files: within one file the file fails validation, and across operator levels the nearer definition is ignored.
 
 #### Scenario: A stored session keeps its model
 - **WHEN** a session created on profile `glm` resumes after `glm` became a model of provider `zai`
@@ -38,7 +38,7 @@ Every model key SHALL be unique across the providers of a resolved catalog and S
 - **THEN** that file fails validation naming `glm` and both providers, and the other discovered files stay usable
 
 ### Requirement: Profile entries read as one-model providers
-Each `profiles.json` entry SHALL read as a provider with the entry's id holding one model of the same key: its label names both, its startup model applies to the model, and its environment, reset time zone, and executable apply to the provider. A catalog without `providers.json` SHALL resolve the same profiles with the same launch settings as before. An entry whose id is already a model of another provider SHALL be ignored with an error naming both files.
+Each `profiles.json` entry SHALL read as a provider with the entry's id holding one model of the same key, its label naming both. A catalog without `providers.json` SHALL resolve as before. An entry whose id is a model of another operator provider SHALL be ignored with an error naming both files. An entry naming a provider a shipped file introduced, overlaid or not, SHALL become its own one-model provider under a reserved `profile:<id>` id, leaving the shipped provider unchanged.
 
 #### Scenario: Profiles-only catalog is unchanged
 - **WHEN** only `profiles.json` files exist
@@ -47,6 +47,32 @@ Each `profiles.json` entry SHALL read as a provider with the entry's id holding 
 #### Scenario: Entry names a model of another provider
 - **WHEN** the user-level `providers.json` defines `glm` under `zai` and a project's `.kawai/profiles.json` defines `glm`
 - **THEN** the project entry is ignored, the error names both files, and `glm` keeps the configuration of `zai`
+
+#### Scenario: Entry names a shipped provider
+- **WHEN** no user-level file exists and a project's `.kawai/profiles.json` defines `claude`
+- **THEN** `claude` resolves to the project entry as its own provider, and the shipped `claude` provider keeps its models and settings unchanged
+
+### Requirement: A nearer definition re-homes a shipped model key
+When a project-level catalog file defines a model key that the shipped default holds, that key SHALL leave its shipped provider and resolve as the nearer definition's own entry, starting from the shipped model's resolved settings with the nearer definition overlaid, so an existing override keeps its launch settings. A shipped key no nearer file defines SHALL keep its shipped provider. Duplicates between operator levels SHALL keep the farther definition.
+
+#### Scenario: A project override keeps its settings
+- **WHEN** the shipped default holds `glm` under `zai` and a project's `.kawai/profiles.json` defines `glm` with its own base URL
+- **THEN** `glm` resolves to the project definition overlaid on the shipped settings as its own provider, and `zai`'s other models keep the shipped base URL
+
+#### Scenario: A shipped key with no override stays
+- **WHEN** the shipped default holds `glm` and `glm-flash` under `zai` and no project file defines either
+- **THEN** both resolve under `zai` with the shipped settings
+
+### Requirement: Provider tiers and merge order
+The catalog file that introduces a provider SHALL fix its tier — shipped or operator — for its life. Each `providers.json` SHALL apply in two passes: first every provider's facts, then every model key, so the file's key order never changes the outcome. An overlay SHALL reach every key of either tier the provider holds, and a key re-homed in the second pass SHALL keep its label.
+
+#### Scenario: Key order never changes the outcome
+- **WHEN** one `providers.json` overlays `zai`'s base URL and moves `glm` to a new provider `zai2`, written in either JSON key order
+- **THEN** both resolve identically, with `glm` under `zai2` carrying the overlay base URL
+
+#### Scenario: A legacy entry naming an overlaid shipped provider
+- **WHEN** a project's `providers.json` overlays the shipped provider `zai`'s base URL and its `profiles.json` names `zai`
+- **THEN** the entry becomes `profile:zai` holding only the entry's settings, and `zai`'s models keep the overlaid base URL
 
 ### Requirement: The implicit default is a model of its own provider
 When no catalog file defines the `default` model, the implicit `default` SHALL be a model of provider `default`, holding no other model unless a file adds one there. A `providers.json` SHALL be able to define `default` under any provider, such as one holding the host login's other models.
@@ -102,6 +128,10 @@ The system SHALL assemble the chat catalog from `providers.json` and `profiles.j
 #### Scenario: Provider overlay
 - **WHEN** the user-level `providers.json` defines provider `zai` and a project-level `providers.json` sets only a different base URL for `zai`
 - **THEN** that project path's sessions on every model of `zai` use the project-level base URL
+
+#### Scenario: Overlay of a shipped provider's base URL
+- **WHEN** no user-level catalog file exists and a project-level `providers.json` sets a different base URL for the shipped provider `zai`
+- **THEN** that project path's sessions on every model of `zai` use the project-level base URL, and `zai` keeps the tier its shipped file gave it
 
 #### Scenario: Mounted catalog replaces the image default
 - **WHEN** the server starts where a user-level `providers.json` or `profiles.json` exists

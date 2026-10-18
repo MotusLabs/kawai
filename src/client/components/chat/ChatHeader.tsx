@@ -35,6 +35,8 @@ import ChatSessionMenu, { sessionMenuEntries } from './ChatSessionMenu'
 export interface ChatHeaderProps {
   session: Session
   profileLabel: string
+  /** The model's provider's label (design D13); shown before the model label. */
+  providerLabel: string
   model: string | null
   contextUsage: ChatContextUsage | null
   connectionStatus: ConnectionStatus
@@ -62,7 +64,7 @@ export function projectName(projectPath: string): string {
 }
 
 export default function ChatHeader({
-  session, profileLabel, model, contextUsage, connectionStatus, debugOpen,
+  session, profileLabel, providerLabel, model, contextUsage, connectionStatus, debugOpen,
   onToggleDebug, onOpenTeam, onOpenTask, onRename, onToggleApproval, onArchive, onKill, onClose, fontSizePx = 15, layout: forcedLayout,
 }: ChatHeaderProps) {
   const archived = session.archivedAt != null
@@ -148,7 +150,11 @@ export default function ChatHeader({
           fits, else its own line. */}
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-chat-meta text-secondary">
         <p className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-1.5" data-testid="chat-identity">
-          <span className="min-w-0 [overflow-wrap:anywhere]" data-testid="chat-profile" title={`Profile: ${profileLabel}`}>{profileLabel}</span>
+          {/* Provider and model labels (D13): one label when they are equal. */}
+          <span className="min-w-0 [overflow-wrap:anywhere]" data-testid="chat-profile"
+            title={profileLabel === providerLabel ? `Profile: ${profileLabel}` : `Provider: ${providerLabel} · Profile: ${profileLabel}`}>
+            {profileLabel === providerLabel ? profileLabel : `${providerLabel} · ${profileLabel}`}
+          </span>
           {model && <>
             <span aria-hidden="true">·</span>
             <span className="min-w-0 [overflow-wrap:anywhere]" data-testid="chat-model" title={`Model reported by the agent: ${model}`}>{model}</span>

@@ -25,7 +25,7 @@ const textOf = (node: TestRenderer.ReactTestInstance | string): string =>
 
 function renderHeader(overrides: Partial<ChatHeaderProps> = {}) {
   const props: ChatHeaderProps = {
-    session, profileLabel: 'Default', model: 'claude-opus-5-5', contextUsage: null, connectionStatus: 'connected',
+    session, profileLabel: 'Default', providerLabel: 'Claude', model: 'claude-opus-5-5', contextUsage: null, connectionStatus: 'connected',
     debugOpen: false, onToggleDebug: () => {}, onOpenTeam: () => {}, onOpenTask: () => {}, onRename: () => {},
     onToggleApproval: () => {}, onArchive: () => {}, onKill: () => {}, onClose: () => {}, ...overrides,
   }
@@ -42,20 +42,21 @@ describe('identity block', () => {
     const { byId } = renderHeader()
     expect(textOf(byId('chat-status'))).toBe('working')
     expect(textOf(byId('chat-name'))).toBe('Kawai Chat header buttons')
-    expect(textOf(byId('chat-profile'))).toBe('Default')
-    expect(byId('chat-profile').props.title).toBe('Profile: Default')
+    // Provider and model labels (D13): the shipped Default belongs to Claude.
+    expect(textOf(byId('chat-profile'))).toBe('Claude · Default')
+    expect(byId('chat-profile').props.title).toBe('Provider: Claude · Profile: Default')
     expect(textOf(byId('chat-model'))).toBe('claude-opus-5-5')
     // The basename shows; the full path is on hover and read by assistive technology.
     expect(textOf(byId('chat-project'))).toBe('kawai (/home/coder/kawai)')
     expect(textOf(byId('chat-project').findByProps({ className: 'sr-only' }))).toBe(' (/home/coder/kawai)')
     expect(byId('chat-project').props.title).toBe('/home/coder/kawai')
-    expect(textOf(byId('chat-identity'))).toBe('Default·claude-opus-5-5·kawai (/home/coder/kawai)')
+    expect(textOf(byId('chat-identity'))).toBe('Claude · Default·claude-opus-5-5·kawai (/home/coder/kawai)')
   })
 
   test('no model segment before the agent reports one', () => {
     const { allById, byId } = renderHeader({ model: null })
     expect(allById('chat-model')).toHaveLength(0)
-    expect(textOf(byId('chat-identity'))).toBe('Default·kawai (/home/coder/kawai)')
+    expect(textOf(byId('chat-identity'))).toBe('Claude · Default·kawai (/home/coder/kawai)')
   })
 
   test('the status indicator follows the session, the connection, and archiving', () => {
@@ -92,6 +93,17 @@ describe('identity block', () => {
     expect(allById('chat-context-row')).toHaveLength(0)
   })
 
+  test('provider and model labels: both names when they differ, one when equal', () => {
+    // GLM Flash of Z.AI shows both; a one-model provider with an equal label
+    // (MiMo) stays a single label.
+    const { byId } = renderHeader({ profileLabel: 'GLM Flash', providerLabel: 'Z.AI' })
+    expect(textOf(byId('chat-profile'))).toBe('Z.AI · GLM Flash')
+    expect(byId('chat-profile').props.title).toBe('Provider: Z.AI · Profile: GLM Flash')
+    const single = renderHeader({ profileLabel: 'MiMo', providerLabel: 'MiMo' })
+    expect(textOf(single.byId('chat-profile'))).toBe('MiMo')
+    expect(single.byId('chat-profile').props.title).toBe('Profile: MiMo')
+  })
+
   test('a spawned member keeps its provenance in the context row', () => {
     const { byId } = renderHeader({ session: { ...session, taskId: 'task-1', taskTitle: 'Export', spawned: true } as Session })
     expect(textOf(byId('chat-task-chip'))).toBe('Spawned for task Export')
@@ -100,7 +112,7 @@ describe('identity block', () => {
   test('long metadata and task labels break inside themselves instead of clipping', () => {
     const long = 'x'.repeat(120)
     const { byId } = renderHeader({
-      profileLabel: long, model: long,
+      profileLabel: long, providerLabel: long, model: long,
       session: { ...session, projectPath: `/home/${long}`, taskId: 'task-1', taskTitle: long } as Session,
     })
     for (const id of ['chat-profile', 'chat-model', 'chat-project', 'chat-task-chip']) {

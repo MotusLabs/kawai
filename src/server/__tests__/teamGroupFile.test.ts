@@ -1,4 +1,6 @@
 import { describe, expect, test } from 'bun:test'
+import fs from 'node:fs'
+import path from 'node:path'
 import { DEFAULT_PARK_IF_RESET_WITHIN_MS, parseDuration, parseGroupFile, type GroupDefinition, type GroupEffort } from '../team/groupFile'
 
 const ROUTING_DEFAULTS = {
@@ -311,6 +313,96 @@ describe('parseGroupFile', () => {
     expect(parseDuration('90m')).toBe(5_400_000)
     expect(parseDuration('3h')).toBe(10_800_000)
     for (const bad of ['0h', '1d', 'h', '1.5h', 'soon']) expect(parseDuration(bad)).toBeNull()
+  })
+
+  describe('workers and modelEffort (D12)', () => {
+    const parse = (frontmatter: string) => parseGroupFile('juniors', `---\n${frontmatter}\n---\nJunior.`)
+
+    test('the workers map parses like profiles: caps in preference order, max from their sum', () => {
+      const group = parse('workers: { glm-flash: 3, haiku: 2 }')
+      if (!group.ok) throw new Error(group.error)
+      expect(group.group.profiles).toEqual([
+        { profileId: 'glm-flash', cap: 3 }, { profileId: 'haiku', cap: 2 },
+      ])
+      expect(group.group.max).toBe(5)
+      expect(group.group.warnings).toEqual([])
+    })
+
+    test('the workers list parses like the profiles list', () => {
+      const group = parse('workers: [haiku]')
+      if (!group.ok) throw new Error(group.error)
+      expect(group.group.profiles).toEqual([{ profileId: 'haiku' }])
+      expect(group.group.max).toBe(1)
+    })
+
+    test('old and new keys together: workers wins with one warning per ignored key', () => {
+      const group = parse('workers: [haiku]\nprofiles: [glm-flash]')
+      if (!group.ok) throw new Error(group.error)
+      expect(group.group.profiles).toEqual([{ profileId: 'haiku' }])
+      expect(group.group.warnings).toEqual(['profiles is ignored; workers is set'])
+      const withProfile = parse('workers: [haiku]\nprofile: glm\nprofiles: [glm-flash]')
+      if (!withProfile.ok) throw new Error(withProfile.error)
+      expect(withProfile.group.profiles).toEqual([{ profileId: 'haiku' }])
+      expect(withProfile.group.warnings).toEqual([
+        'profile is ignored; workers is set', 'profiles is ignored; workers is set',
+      ])
+    })
+
+    test('the new names have the same effect as the old ones', () => {
+      const old = parse('profile: haiku\neffort: low\nprofileEffort: { haiku: xhigh }')
+      const newKeys = parse('workers: [haiku]\neffort: low\nmodelEffort: { haiku: xhigh }')
+      for (const parsed of [old, newKeys]) {
+        if (!parsed.ok) throw new Error(parsed.error)
+        expect(parsed.group.profiles).toEqual([{ profileId: 'haiku' }])
+        expect(parsed.group.effort).toBe('low')
+        expect(parsed.group.profileEffort).toEqual({ haiku: 'xhigh' })
+      }
+    })
+
+    test('both spellings of the effort key: modelEffort applies and names the ignored old key', () => {
+      const group = parse('workers: [haiku]\nmodelEffort: { haiku: xhigh }\nprofileEffort: { haiku: high }')
+      if (!group.ok) throw new Error(group.error)
+      expect(group.group.profileEffort).toEqual({ haiku: 'xhigh' })
+      expect(group.group.warnings).toEqual(['profileEffort is ignored; modelEffort is set'])
+    })
+
+    test('a qualified key parses under the new keys and waits for groupCatalog', () => {
+      const group = parse('workers: [zai/glm, claude/haiku]\nmodelEffort: { claude/haiku: xhigh }')
+      if (!group.ok) throw new Error(group.error)
+      expect(group.group.profiles.map(entry => entry.profileId)).toEqual(['zai/glm', 'claude/haiku'])
+      expect(group.group.profileEffort).toEqual({ 'claude/haiku': 'xhigh' })
+      expect(group.group.warnings).toEqual([])
+    })
+
+    test('the old keys keep their grammar: a qualified name still rejects or drops as today', () => {
+      // Under `profiles` the qualified name rejects the file (not a valid id).
+      expect(parseGroupFile('g', '---\nprofiles: [zai/glm]\n---\nx')).toEqual({
+        ok: false, error: 'profiles: "zai/glm" is not a valid profile id',
+      })
+      // Under `profileEffort` the whole key drops with a warning (strict flow).
+      const parsed = parseGroupFile('g', '---\nprofileEffort: { zai/glm: high }\n---\nx')
+      expect(parsed.ok && 'profileEffort' in parsed.group).toBe(false)
+      expect(parsed.ok && parsed.group.warnings[0]).toStartWith('profileEffort: ')
+    })
+
+    test("the routing README's group-settings example parses through the real parser", () => {
+      const readme = fs.readFileSync(path.resolve(import.meta.dir, '../../../docs/routing/README.md'), 'utf8')
+      const block = /## Group settings[\s\S]*?```yaml\n([\s\S]*?)```/.exec(readme)?.[1]
+      expect(block).toBeTruthy()
+      // The example's trailing comments are prose; the file format takes the
+      // bare values, so the test strips them the way an owner would.
+      const frontmatter = block!.split(/\r?\n/).map(line => line.replace(/\s+#.*$/, '')).join('\n')
+      const parsed = parseGroupFile('readme', `${frontmatter}\nBuild.`)
+      if (!parsed.ok) throw new Error(parsed.error)
+      // The example keeps the old keys beside the new ones (the switch-over
+      // advice), so the parse names each ignored old key.
+      expect(parsed.group.profiles.map(entry => entry.profileId)).toEqual(['zai/glm', 'mimo'])
+      expect(parsed.group.max).toBe(3)
+      expect(parsed.group.profileEffort).toEqual({ 'claude/haiku': 'xhigh' })
+      expect(parsed.group.warnings).toEqual([
+        'profiles is ignored; workers is set', 'profileEffort is ignored; modelEffort is set',
+      ])
+    })
   })
 })
 

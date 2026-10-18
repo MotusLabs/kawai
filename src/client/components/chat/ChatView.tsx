@@ -26,6 +26,7 @@
 // and `chat-root`, whose --chat-font-size (Settings "Chat Font Size") sizes
 // chat text through the em-based text-chat-body / text-chat-meta utilities.
 import { useClaudeProfiles } from './useClaudeProfiles'
+import { profileIdentityLabels } from '../../utils/profileIdentity'
 import { useEffect, useMemo, useRef, type CSSProperties } from 'react'
 import type { SendClientMessage, ServerMessage, Session } from '@shared/types'
 import type { ConnectionStatus } from '../../stores/sessionStore'
@@ -71,7 +72,7 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
 }) {
   const catalog = useClaudeProfiles(true, session.projectPath)
   const profileId = session.claudeProfileId ?? 'default'
-  const profileLabel = catalog.profiles.find(profile => profile.id === profileId)?.label ?? profileId
+  const { profileLabel, providerLabel } = profileIdentityLabels(catalog.profiles, profileId)
   const chatFontSize = useSettingsStore(state => state.chatFontSize)
   const transcript = useChatStore(state => state.sessions[session.id]) ?? EMPTY
   // Plan usage is per profile (usage bar design D4): every session of the
@@ -209,7 +210,7 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
     transcript.pendingRequests.length === 0
   return <main className="chat-palette chat-root flex min-h-0 min-w-0 flex-1 flex-col bg-base text-primary" data-testid="chat-view"
     style={{ '--chat-font-size': `${chatFontSize}px` } as CSSProperties}>
-    <ChatHeader session={session} profileLabel={profileLabel} model={transcript.model} contextUsage={transcript.contextUsage}
+    <ChatHeader session={session} profileLabel={profileLabel} providerLabel={providerLabel} model={transcript.model} contextUsage={transcript.contextUsage}
       connectionStatus={connectionStatus} debugOpen={debugOpen} onToggleDebug={toggleDebug}
       onOpenTeam={() => onOpenTeam?.(teamKey)} onOpenTask={taskId => onOpenTask?.(teamKey, taskId)}
       onRename={name => sendMessage({ type: 'session-rename', sessionId: session.id, newName: name })}

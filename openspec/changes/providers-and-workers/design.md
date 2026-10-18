@@ -23,7 +23,8 @@ See proposal.md (Why) for the motivation. The current code has this shape:
     - the router (`profileStates`, the `cooling` predicate, the `all-profiles-cooling` hold) and `builtinPick`;
     - the dispatch preview (`AssignmentService.spawnProfile`);
     - the urgent refusal (`TeamMailbox.refuseCooling`);
-    - the recovery notes (`LimitOutcomes.processNotes`/`nextNoteAt` over `team_handoff_notes.profile_id`).
+    - the recovery notes (`LimitOutcomes.processNotes`/`nextNoteAt` over `team_handoff_notes.profile_id`);
+    - the process-metrics limit tax (`src/server/metrics/capacity.ts`), which `team-process-metrics` (#189, landed after this change was proposed) reconstructs from `coolingTimeline` per profile.
   - Forwards set `team_messages.excluded_profile`, which `buildCandidates` compares by equality.
   - The driver keeps the reset of the latest rejected `rate_limit_event` but drops its `rateLimitType`, which only the usage parser reads.
   - Usage lives in `UsageLimitStore.profiles` (in memory). The SDK gap-fill claim, the Z.AI pull set and the 10-minute timers are also per profile id. `chat-snapshot.usage` and `chat-usage { profileId, report }` reach sessions through `ChatConnections.subscribesProfile`.
@@ -35,8 +36,9 @@ See proposal.md (Why) for the motivation. The current code has this shape:
 - **Published rule types.** `src/shared/routing.ts` is copied verbatim as `~/.kawai/routing/kawai-routing.d.ts`. Its shapes are `RouteCandidate.profileId`, `RouteContext.profiles: Record<string, RouteProfileState { usage, limitEvents, cooldownUntil }>`, `RouteGroupProfile`, `LimitEvent.profileId` and `LimitOutcomeContext.profileId`.
 - **Account notices** are already keyed by credentials path (`accountNotices.ts`), not by profile. They need no change.
 - **Overlapping changes.**
-  - `chat-transcript-layout` (complete, not archived) renames the chat-header requirement this change modifies. It must be archived first.
+  - `chat-transcript-layout` (archived 2026-10-16) renamed the chat-header requirement this change modifies and rewrote it around wrapping metadata. This change's chat-header delta sits on that renamed text.
   - `codex-chat-sessions` (not started) modifies "Users select a predefined chat profile" and adds its own per-Codex-home fan-out. It is amended to build on this change.
+  - `rename-agentboard-to-kawai` (open) restates "Users select a predefined chat profile" with `KAWAI_CHAT_ENV` in place of `AGENTBOARD_CHAT_ENV`, on the pre-provider picker text. Whichever change archives second rebases onto the first, so archiving the rename after this one never reverts the provider grouping (Workflow follow-up).
   - `plan-execution` adds routing requirements in profile ids. Those stay valid, because model keys are profile ids.
 
 ## Goals / Non-Goals
@@ -52,12 +54,13 @@ See proposal.md (Why) for the motivation. The current code has this shape:
 - Inferring providers for `profiles.json` entries, by host or otherwise.
 - Codex runtimes (`codex-chat-sessions`).
 - Changing which source fills a provider's usage bar.
+- Checking or refreshing a provider's published model names (follow-up F1 from the #190 review).
 
 ## Decisions
 
 ### D1. `providers.json` sits beside `profiles.json` at every level
 
-- **Placement and order.** At each catalog level (user, then each project `.kawai/` from `/` down), `providers.json` is read before `profiles.json`. The user level's two files together replace the shipped default when either exists. The shipped `config/profiles.default.json` stays in the legacy format and is not edited.
+- **Placement and order.** At each catalog level (user, then each project `.kawai/` from `/` down), `providers.json` is read before `profiles.json`. The user level's two files together replace the shipped default when either exists, so any user-level file replaces both shipped files whole. The shipped default is `config/providers.default.json` plus `config/profiles.default.json`: provider `zai` (label Z.AI) holds `glm` and `glm-flash`, with their shared env (the base URL, the four tier maps, the auto-compact window) and the Asia/Shanghai reset zone at the provider level and each model keeping its own label and startup model, and one Claude provider (`claude`) holds `default`, `opus`, `sonnet`, and `haiku` with no env; `profiles.default.json` keeps only `mimo`, `kimi`, and `minimax` in the legacy format. Release builds embed both shipped files the way the embedded shipped catalog embeds the profiles default: the same missing-file fallback and the one shared parser, with errors naming the file plus `(embedded)`.
 - **File shape.** Each file is `{ "<provider id>": { label?, env?, limitResetTimeZone?, executable?, models: { "<model key>": { label?, model?, env? } } } }`.
   - Ids and keys use `PROFILE_ID_PATTERN`.
   - Provider `env` takes the same controlled names as today.
@@ -65,19 +68,24 @@ See proposal.md (Why) for the motivation. The current code has this shape:
   - `executable` stays trusted-files-only and provider-level.
   - `model` (the SDK startup model) is model-level.
   - Credentials stay refused at both levels.
-- **Shared levels and stamps.** `profileCatalogLevels(ctx)` returns both files for every level. The group catalog stamp and the outbound destinations stamp therefore cover `providers.json` without their own changes.
+- **Shared levels and stamps.** `profileCatalogLevels(ctx)` returns both files for every level. The group catalog stamp and the outbound destinations stamp therefore cover `providers.json` without their own changes, and a base URL set at the provider level reaches every flattened model entry, so `OutboundDestinations` derives it as a model-provider host exactly like a profile-level one.
 - Rejected: one combined file with a format switch. Two names keep every existing file valid with no version field, and an older server simply ignores the new file.
 
 ### D2. Merge by provider id and by model key; keys are unique
 
-- **Merge rules.**
+- **Merge rules.** Each `providers.json` applies in two passes, farthest level first and `providers.json` before `profiles.json` within a level, so JSON key order never changes an outcome:
+  - Pass 1 (P1/P2) merges every provider's facts: a new provider takes the introducing file's tier (shipped or operator, fixed for its life); an overlay of an existing provider — either tier — merges its label, env, zone, and executable by the rules below and reaches every key the provider holds, shipped keys included. The tier never changes.
+  - Pass 2 (P3) then places every model key against those merged facts: a new key joins the provider with its merged facts; a key the provider already holds merges; a key operator-held by another provider is an error naming both; a key shipped-held by another provider re-homes from its flattened settings at that point, carrying every overlay of its own level and of farther ones.
   - Providers merge by id with today's rules: the nearest scalar wins, env merges per key, and an empty value neutralizes.
   - A provider's `models` merge by key within it.
+  - A key re-homed in the second pass keeps its label: the nearer file overrides it only when the re-homing definition sets one.
   - A model's effective environment is the provider's env overlaid by the model's env.
 - **Duplicate keys.** A model key defined under two different providers is a catalog error that names both providers and files.
   - Inside one file, the file fails validation.
-  - Across levels, the nearer definition is ignored and the farther one stands. Base files are operator-owned, and re-homing a key would silently move its sessions, cooldown and usage to another account.
-- Rejected: the nearer definition wins, as with fields. That would let any project file move a user-level model to another account.
+  - Across operator levels (the user level and the project levels), the nearer definition is ignored and the farther one stands. Operator files are owner-owned, and re-homing a key between them would silently move its sessions, cooldown and usage to another account.
+  - **Shipped keys re-home.** The shipped files are the one base a nearer file may take keys from: a project-level definition of a shipped model key moves it out of its shipped provider, resolving as the nearer entry overlaid on the shipped model's flattened settings — a legacy entry as its own one-model provider. A private-gateway override in a project `profiles.json` (#190's docs place them there) therefore keeps exactly today's launch settings, and only that key leaves the shipped provider. A shipped key no nearer file defines keeps its shipped provider.
+- Rejected: the nearer definition wins across operator levels, as with fields. That would let any project file move a user-level model to another account.
+- Rejected (shipped keys): ignoring the override with an error — it breaks the private-gateway setup and the promise that existing files keep working unchanged. Also rejected: merging the override into the shipped provider — one key's base URL would silently move its siblings' endpoint.
 
 ### D3. `profiles.json` entries read as one-model providers
 
@@ -85,9 +93,10 @@ See proposal.md (Why) for the motivation. The current code has this shape:
   - The entry's label is both labels.
   - `model` applies to the model.
   - `env`, `limitResetTimeZone` and `executable` apply to the provider.
-- **Interactions.**
-  - An entry whose id is a model of a different provider is ignored with an error naming both files.
-  - An entry whose id is an existing provider id merges into that provider like any provider entry.
+- **Interactions.** A legacy entry X resolves in this order (lead ruling B1):
+  1. X is a model key: it overlays its own one-model provider (the legacy chain), re-homes while the key is still shipped (D2), and is ignored with an error naming both files when an operator provider holds it.
+  2. X names a provider an operator file introduced: it merges into that provider like any provider entry. A provider a shipped file introduced stays shipped-tier, however much operator files overlay it, so X takes rule 3 instead. A rule-2 merge that has no model of X's key reports the dropped startup model.
+  3. Otherwise X becomes a new one-model provider. When X names a provider a shipped file introduced, overlaid or not, that provider takes the reserved id `profile:<id>` — failing `PROFILE_ID_PATTERN`, so it never collides — holding model X; the shipped provider keeps its id, models, and settings. A legacy entry never changes a shipped provider's id, models, or settings, so existing files keep working unchanged and the shipped account's cooldown and usage stay whole.
 - **Consequence.** A profiles-only catalog therefore resolves exactly the same entries and launch settings as today, with one provider per profile.
 - Rejected: grouping legacy entries by base URL host or by host login. Executables can inject other credentials, and project overlays change URLs per path. One host can therefore front several accounts, and one account several hosts.
 
@@ -118,7 +127,7 @@ See proposal.md (Why) for the motivation. The current code has this shape:
 
 ### D7. Limit events record their provider and window
 
-- **Migration.** One numbered migration (`src/server/dbSafety/migrations.ts`) adds `provider_id TEXT` and `limit_window TEXT`, both nullable, to `profile_limit_events`. It takes the next free number at landing: 5, after `plan-validation` (3) and `execution-safety-recovery` (4). The baseline is never edited, and `schemaBaselinePin.test.ts` gains the migration's expected delta.
+- **Migration.** One numbered migration (`src/server/dbSafety/migrations.ts`) adds `provider_id TEXT` and `limit_window TEXT`, both nullable, to `profile_limit_events`. It takes the next free version when this change lands: versions are dense, master holds 2–7 today (`process-reports` is 7), and the open changes ahead of this one are expected to claim 8 and 9 first, so this migration is 10 or later — a concurrent branch claiming the same number renumbers on rebase. The baseline is never edited, and `schemaBaselinePin.test.ts` gains the migration's expected delta.
 - **Writer.** `ChatSessionManager`'s `onLimitEvent` writes `provider_id` from the session's provider (D10), and the reset zone comes from that provider (D11).
 - **Window.** The driver keeps the `rateLimitType` of the latest rejected `rate_limit_event` beside the reset it already keeps (`ChatSessionDriver.limitResetsAt`), and drops both together once past. `limitSignals` carries it into the event as `window`. Gateway errors carry none (`NULL`).
 - **Old rows.** Rows written before the migration have `provider_id NULL`.
@@ -141,7 +150,7 @@ The provider's own cooldown applies the same calculation to P's provider-scoped 
   - `forProfile` (unchanged);
   - `forProvider(providerId)`;
   - `cooldownFor(profileId, providerId)`, which returns `{ until, provider: boolean }`, true when the provider's cooldown decides.
-- Every reader in Context calls `cooldownFor`. The per-session provider comes from D10.
+- Every reader in Context calls `cooldownFor`. The per-session provider comes from D10. The process-metrics limit tax (`coolingTimeline` in `src/server/metrics/capacity.ts`) reconstructs each profile's cooling intervals from that profile's relevant events — its own plus its provider's provider-scoped ones — the same rule the router applies, so a provider cooldown shows in the limit tax of every profile it covers.
 - `team_handoff_notes` resolves the provider of its `from_session` record's project path, falling back to the profile id. The recovery note therefore waits for the model's effective cooldown.
 - Rejected: "latest event wins" across windows. A short window's later event would release a model whose weekly window is still exhausted.
 - Rejected: the maximum over all events. One misread reset would keep a profile cooling for the whole retention.
@@ -219,7 +228,7 @@ Existing fields keep their meaning with two refinements:
 
 ## Migration Plan
 
-1. **Land and deploy.** Land the change and update the live build. The migration runs at start after its backup. Nothing else changes until the owner edits a file: profiles-only catalogs resolve as before.
+1. **Land and deploy.** Land the change and update the live build. The migration runs at start after its backup. Nothing else changes until the owner edits a file: a user-level `profiles.json` resolves as before, and with no user-level file the shipped default now resolves as grouped providers — the Z.AI pair under `zai` and the four Claude profiles under `claude` — with every launch setting unchanged.
 2. **Group accounts.** To share an account's cooldown and usage, write `~/.kawai/providers.json`. At the user level it replaces the shipped default together with any `~/.kawai/profiles.json`, so it must hold every provider in use. A reserved-name example:
 
    ```json

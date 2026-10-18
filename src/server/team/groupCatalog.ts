@@ -47,6 +47,8 @@ export interface GroupCatalog {
   errors: string[]
   /** Problems in loaded files that fell back to defaults, naming the path. */
   warnings: string[]
+  /** The resolved profile catalog's providers, for worker grouping (D13). */
+  providers: Map<string, { label: string; models: string[] }>
 }
 
 export interface GroupCatalogContext {
@@ -83,25 +85,87 @@ export function loadGroupCatalog(ctx: GroupCatalogContext): GroupCatalog {
       }
     }
   })
-  const known = new Set(resolveProfileCatalog(profileContext(ctx)).profiles.keys())
+  const resolved = resolveProfileCatalog(profileContext(ctx))
+  const known = new Set(resolved.profiles.keys())
+  // `<provider>/<model>` resolves to the bare model key when that provider
+  // holds it (D5); anything else is reported and ignored like an unknown id.
+  const qualified = new Map<string, string>()
+  for (const [providerId, provider] of resolved.providers) {
+    for (const model of provider.models) qualified.set(`${providerId}/${model}`, model)
+  }
   const warnings: string[] = []
   const groups = new Map<string, GroupCatalogEntry>()
   for (const [id, { files, group }] of [...merged].sort(([a], [b]) => a.localeCompare(b))) {
     // The last file is the winning layer's (the project layer, when both define the id).
     const file = files.at(-1)!.file
-    const unknown = group.profiles.filter(entry => !known.has(entry.profileId))
-    const checked = unknown.length === 0 ? group : {
-      ...group,
-      profiles: group.profiles.filter(entry => known.has(entry.profileId)),
-      warnings: [...group.warnings, ...unknown.map(entry => `profile "${entry.profileId}" is not defined; ignored`)],
+    const groupWarnings = [...group.warnings]
+    let changed = false
+    const resolvedProfiles: typeof group.profiles = []
+    const seenProfiles = new Set<string>()
+    for (const listed of group.profiles) {
+      let entry = listed
+      const written = entry.profileId
+      const bare = qualified.get(entry.profileId)
+      if (bare !== undefined) {
+        entry = { ...entry, profileId: bare }
+        changed = true
+      }
+      if (entry.profileId.includes('/')) {
+        groupWarnings.push(`profile "${written}" is not defined; ignored`)
+        changed = true
+        continue
+      }
+      if (seenProfiles.has(entry.profileId)) {
+        groupWarnings.push(`profile "${written}" is already listed; the later entry is ignored`)
+        continue
+      }
+      seenProfiles.add(entry.profileId)
+      resolvedProfiles.push(entry)
     }
+    let profileEffort: typeof group.profileEffort
+    if (group.profileEffort) {
+      profileEffort = {}
+      for (const [written, level] of Object.entries(group.profileEffort)) {
+        const bare = qualified.get(written)
+        if (bare === undefined && written.includes('/')) {
+          groupWarnings.push(`modelEffort: "${written}" is not defined; ignored`)
+          changed = true
+          continue
+        }
+        const key = bare ?? written
+        // First occurrence wins in file order, whatever spelling named it.
+        if (profileEffort[key] !== undefined) {
+          groupWarnings.push(`modelEffort: "${written}" is already listed; the later entry is ignored`)
+          changed = true
+          continue
+        }
+        profileEffort[key] = level
+        if (bare !== undefined) changed = true
+      }
+    }
+    const unknown = resolvedProfiles.filter(entry => !known.has(entry.profileId))
+    if (unknown.length > 0) changed = true
+    // A cap-derived default max re-sums the resolved caps; an explicit max
+    // stays even when it happens to equal the sum (finding N2).
+    const max = changed && group.maxFromCaps
+      ? Math.max(1, resolvedProfiles.reduce((sum, entry) => sum + (entry.cap ?? 0), 0))
+      : group.max
+    const checked: GroupDefinition = changed || unknown.length > 0
+      ? {
+        ...group,
+        profiles: resolvedProfiles.filter(entry => known.has(entry.profileId)),
+        max,
+        ...(profileEffort !== undefined ? { profileEffort } : {}),
+        warnings: [...groupWarnings, ...unknown.map(entry => `profile "${entry.profileId}" is not defined; ignored`)],
+      }
+      : group
     for (const warning of checked.warnings) warnings.push(`${file}: ${warning}`)
     groups.set(id, {
       group: checked, file,
       sources: files.map((source, position) => ({ ...source, inEffect: position === files.length - 1 })),
     })
   }
-  return { groups, errors, warnings }
+  return { groups, errors, warnings, providers: resolved.providers }
 }
 
 const profileContext = (ctx: GroupCatalogContext) =>

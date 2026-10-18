@@ -42,7 +42,7 @@ describe('catalog file parsing and validation', () => {
     const { profiles, errors } = resolveProfileCatalog({ homeDir })
     expect(errors).toEqual([])
     expect(profiles.get('glm')).toEqual({
-      label: 'GLM', model: 'sonnet', env: { ANTHROPIC_BASE_URL: 'https://zai.example' },
+      label: 'GLM', model: 'sonnet', env: { ANTHROPIC_BASE_URL: 'https://zai.example' }, providerId: 'glm',
     })
     // The file exists; a sibling directory without one contributes nothing.
     expect(file).toBeTruthy()
@@ -54,7 +54,7 @@ describe('catalog file parsing and validation', () => {
     const { profiles, errors } = resolveProfileCatalog({ homeDir })
     expect(errors).toEqual([])
     expect(profiles.get('glm-flash')).toEqual({
-      label: 'glm-flash', env: {}, model: 'glm-5.3-flash[1m]',
+      label: 'glm-flash', env: {}, model: 'glm-5.3-flash[1m]', providerId: 'glm-flash',
     })
   })
 
@@ -144,7 +144,7 @@ describe('catalog file parsing and validation', () => {
     expect(resolveProfileCatalog({ homeDir }).profiles.get('glm')?.limitResetTimeZone).toBe('Asia/Shanghai')
     writeCatalog(projectDir, { glm: { limitResetTimeZone: '+08:00' } })
     const nearer = resolveProfileCatalog({ homeDir, projectPath: projectDir })
-    expect(nearer.profiles.get('glm')).toEqual({ label: 'GLM', env: {}, limitResetTimeZone: '+08:00' })
+    expect(nearer.profiles.get('glm')).toEqual({ label: 'GLM', env: {}, limitResetTimeZone: '+08:00', providerId: 'glm' })
     writeCatalog(projectDir, { glm: { limitResetTimeZone: 'UTC+8' } })
     const { errors } = resolveProfileCatalog({ homeDir, projectPath: projectDir })
     expect(errors).toHaveLength(1)
@@ -175,6 +175,7 @@ describe('layered resolution', () => {
         ANTHROPIC_DEFAULT_SONNET_MODEL: 'glm-5.3-flash[1m]',
         ANTHROPIC_MODEL: 'glm-5.3',
       },
+      providerId: 'glm',
     })
   })
 
@@ -210,12 +211,12 @@ describe('layered resolution', () => {
     writeCatalog(homeDir, { default: { label: 'My Default', env: { ANTHROPIC_BASE_URL: 'https://default.example' } } })
     const defined = resolveProfileCatalog({ homeDir })
     expect(defined.profiles.get('default')).toEqual({
-      label: 'My Default', env: { ANTHROPIC_BASE_URL: 'https://default.example' },
+      label: 'My Default', env: { ANTHROPIC_BASE_URL: 'https://default.example' }, providerId: 'default',
     })
 
     writeCatalog(homeDir, { glm: { label: 'GLM' } })
     const implicit = resolveProfileCatalog({ homeDir })
-    expect(implicit.profiles.get('default')).toEqual({ label: 'Default', env: {} })
+    expect(implicit.profiles.get('default')).toEqual({ label: 'Default', env: {}, providerId: 'default' })
   })
 
   test('a malformed file does not blank the rest of the catalog', () => {
