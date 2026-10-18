@@ -186,6 +186,20 @@ test('the incident: the go mail is dead-lettered, parked work returns to its gro
   expect(entry?.text).toBe('Released Dev one (dev-1): its context is exhausted (blocking_limit).')
 })
 
+test('mail whose receipt went unconfirmed at the failed turn is dead-lettered too', async () => {
+  const t = task(featX)
+  records.set('dev-1', record('dev-1', { projectPath: featX, spawned: true, taskId: t.id }))
+  await trackAll()
+  const go = mail({ taskId: t.id, body: 'go' })
+  await pass()
+  if (!store().get(go.id)?.pushedAt) store().markPushed(go.id)
+  // No transcript row: the turn end holds it uncertain before the outcome runs.
+  runtime.settleRecipient('dev-1')
+  expect(store().get(go.id)?.state).toBe('uncertain')
+  expect(exhaust('dev-1')).toMatchObject({ dropped: { id: go.id, state: 'dead', reason: 'context-exhausted' } })
+  expect(store().eventsFor(go.id).at(-1)).toMatchObject({ kind: 'dead-lettered', prevState: 'uncertain' })
+})
+
 test('the outcome hands over the progress since the claim and the claim commit', async () => {
   const t = task(featX)
   records.set('dev-1', record('dev-1', { projectPath: featX, spawned: true, taskId: t.id }))

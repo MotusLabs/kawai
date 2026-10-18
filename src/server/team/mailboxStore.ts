@@ -241,12 +241,14 @@ export class MailboxStore {
   }
 
   /**
-   * Delivered mail its recipient never processed (chat-context-exhaustion
-   * D4): the turn that carried it failed with the context exhausted. A narrow
-   * transition, so `deadLetter` keeps its undelivered states.
+   * Pushed mail its recipient never processed (chat-context-exhaustion D4):
+   * the turn that carried it failed with the context exhausted, whether its
+   * receipt was confirmed (`delivered`) or not (`uncertain` — a retry would
+   * only wait on a session that takes no mail). A narrow transition, so
+   * `deadLetter` keeps its undelivered states.
    */
   deadLetterDelivered(id: string, reason: string): boolean {
-    return this.transition(id, ['delivered'], { state: 'dead', reason }, 'dead-lettered')
+    return this.transition(id, ['delivered', 'uncertain'], { state: 'dead', reason }, 'dead-lettered')
   }
 
   /** Receipt neither confirmed nor refuted (D10): out of automatic delivery. */

@@ -50,7 +50,7 @@ export class ContextExhaustion {
       const record = this.options.getRecord(sessionId)
       // A resume turn's work is the parked message: it returns to its group below.
       const handled = work ? store.get(work.messageId) : null
-      if (handled?.state === 'delivered') store.deadLetterDelivered(handled.id, CONTEXT_EXHAUSTED_REASON)
+      if (handled?.state === 'delivered' || handled?.state === 'uncertain') store.deadLetterDelivered(handled.id, CONTEXT_EXHAUSTED_REASON)
       else if (handled?.state === 'claimed') store.deadLetter(handled.id, CONTEXT_EXHAUSTED_REASON)
       // Parked work first: its scheduled resume is cancelled with it rather
       // than dead-lettered below as queued direct mail.

@@ -214,7 +214,7 @@ test('a context-exhausted dead letter: a session-addressed retry is refused whil
     expect(store.get(direct.id)).toMatchObject({ state: 'queued', toId: 'dead-dev' })
   } finally { db.close() }
 })
-test('deadLetterDelivered moves only delivered mail to dead, with its history event', () => {
+test('deadLetterDelivered moves only delivered or receipt-uncertain mail to dead, with its history event', () => {
   const db = schemaDb(':memory:'); const store = new MailboxStore(db)
   const base = { teamId: TEAM, toKind: 'group' as const, toId: 'devs', fromSession: 'lead', fromGroup: null, originPath: '/repo', body: 'Go' }
   try {
@@ -225,6 +225,11 @@ test('deadLetterDelivered moves only delivered mail to dead, with its history ev
     expect(store.eventsFor(delivered.id).at(-1)).toMatchObject({
       kind: 'dead-lettered', prevState: 'delivered', reason: 'context-exhausted',
     })
+    // Pushed mail whose receipt went unconfirmed was never processed either.
+    const held = store.enqueue(base)
+    store.claim(held.id, 'dev'); store.markPushed(held.id); store.holdUncertain(held.id, 'receipt-unconfirmed-after-delivery')
+    expect(store.deadLetterDelivered(held.id, 'context-exhausted')).toBe(true)
+    expect(store.eventsFor(held.id).at(-1)).toMatchObject({ kind: 'dead-lettered', prevState: 'uncertain', reason: 'context-exhausted' })
     // Every other state is refused and writes nothing.
     const queued = store.enqueue(base)
     const claimed = store.enqueue(base); store.claim(claimed.id, 'dev')
