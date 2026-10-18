@@ -7,12 +7,6 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import type { ChatPendingRequest } from '../../shared/chat'
-import type { AttentionItem } from '../../shared/teamWorkspace'
-import type { TeamMessage, WaitingReason } from '../../shared/team'
-import type { TeamTaskSummary } from '../../shared/teamTasks'
-import type { ChatSessionRecord } from '../db'
-import type { PendingAcceptance } from '../team/attentionAcceptance'
 import { OutboundService, type OutboundViolationGroup } from '../outbound/service'
 import { OutboundStore, type OutboundCallInsert } from '../outbound/store'
 import { initDatabase } from '../db'
@@ -145,7 +139,7 @@ describe('the outbound window against the real store (findings-8134cc45 PC1)', (
       turnEnds: { finishedForTeam: () => [] },
       outboundAudit: audit,
     }
-    return new WorkspaceRead(manager as never).snapshot({ teamId: OB_TEAM } as never).summary.outbound
+    return new WorkspaceRead(manager as never).snapshot({ teamId: OB_TEAM } as never)
   }
 
   test('a 25 h-old send is out of the 24 h bucket; a fresh reader (restart) counts the same', () => {
@@ -153,11 +147,10 @@ describe('the outbound window against the real store (findings-8134cc45 PC1)', (
     const at = (hoursAgo: number) => new Date(now - hoursAgo * 60 * 60 * 1000).toISOString()
     realAudit() // opens the database
     obStore!.insertCall(outboundCall({ id: 'obc-old', verdict: 'violation', rule: 'gh-write', destination: 'github:old/repo', createdAt: at(25) }))
-    realAudit() // opens the database
     obStore!.insertCall(outboundCall({ id: 'obc-new', verdict: 'violation', rule: 'gh-write', destination: 'github:other/repo', createdAt: at(23) }))
-    realAudit() // opens the database
     obStore!.insertCall(outboundCall({ id: 'obc-ok', verdict: 'allowed', rule: 'git-push', destination: 'github:origin', createdAt: at(1) }))
-    const first = snapshotFor(realAudit())
+    const snapshot = snapshotFor(realAudit())
+    const first = snapshot.summary.outbound
     expect(first).toEqual({
       items: [
         { id: 'outbound:allowed', label: '1 allowed send', link: { kind: 'audit', id: '' } },
@@ -165,10 +158,10 @@ describe('the outbound window against the real store (findings-8134cc45 PC1)', (
       ],
     })
     // A restart: a fresh store instance over the same database, no memory.
-    const second = snapshotFor(realAudit())
+    const second = snapshotFor(realAudit()).summary.outbound
     expect(second).toEqual(first)
     // And the queue's groups ignore the window: the old violation still raises.
-    expect(realAudit().violationGroups(OB_TEAM).map(group => group.destination).sort())
-      .toEqual(['github:old/repo', 'github:other/repo'])
+    expect(snapshot.attention.filter(item => item.kind === 'outbound-violation').map(item => item.id).sort())
+      .toEqual(['outbound-violation:gh-write:github:old/repo', 'outbound-violation:gh-write:github:other/repo'])
   })
 })

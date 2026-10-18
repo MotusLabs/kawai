@@ -10,6 +10,7 @@ import fs from 'node:fs'
 import type { ChatSessionManager } from '../chat/ChatSessionManager'
 import { ChatConnections } from '../chat/ChatConnections'
 import { CHAT_CONNECTION_TYPES } from '../chat/chatConnectionTypes'
+import { unknownTeamError } from '../../shared/team'
 import { TeamScopes } from '../team/teamScope'
 import type { SessionTeams } from '../team/sessionTeams'
 import type { ClientMessage, ServerMessage } from '../../shared/types'
@@ -82,7 +83,7 @@ describe('subscriptions', () => {
   test('an unknown path is refused with no data', async () => {
     await send({ type: 'team-audit-open', teamPath: '/nowhere', requestId: 'r1', filters: {} })
     expect(messages.map(message => message.type)).toEqual(['error'])
-    expect(messages[0]).toMatchObject({ message: expect.stringContaining('/nowhere') })
+    expect(messages[0]).toEqual({ type: 'error', message: unknownTeamError('/nowhere') })
   })
 
   test('a page is scoped to its team: another team\'s calls never appear', async () => {
@@ -123,7 +124,7 @@ describe('acknowledge over the wire', () => {
     const foreign = call({ id: 'obc-foreign', teamId: world.otherTeam.teamId, verdict: 'violation', rule: 'gh-write', destination: 'github:other/repo' })
     store.insertCall(foreign)
     await send({ type: 'team-audit-acknowledge', teamPath: world.repo, requestId: 'r5', callId: 'obc-foreign', commandId: 'cmd-1' })
-    expect(last('team-audit-result')).toMatchObject({ requestId: 'r5', error: expect.stringContaining('not found') })
+    expect(last('team-audit-result')).toEqual({ type: 'team-audit-result', teamPath: world.repo, requestId: 'r5', error: 'Call not found in this team: obc-foreign' })
     expect(store.acknowledgementByCommand(world.team.teamId, 'cmd-1')).toBeNull()
   })
 
@@ -162,9 +163,9 @@ describe('the recording store', () => {
 
 describe('the router whitelist', () => {
   test('every team-audit type is listed', () => {
-    expect(CHAT_CONNECTION_TYPES).toEqual(expect.arrayContaining([
+    expect([...CHAT_CONNECTION_TYPES].filter(type => type.startsWith('team-audit-'))).toEqual([
       'team-audit-open', 'team-audit-more', 'team-audit-close', 'team-audit-acknowledge',
-    ]))
+    ])
   })
 })
 
