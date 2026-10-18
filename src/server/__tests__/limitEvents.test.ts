@@ -187,6 +187,82 @@ describe('coolingTimeline equivalence with cooldownFor', () => {
     },
   ]
 
+  // B3 (findings-02d3127e): the sweep GENERATES its event sets — every pair
+  // and triple of a pool that overlaps, nests, and touches ends across at
+  // least two window groups, with a model-scoped window and the default
+  // +1 h — so the union's cross-group merge is exercised, not assumed.
+  test('generated cross-group sets agree with cooldownFor at every boundary', () => {
+    const HOUR2 = 60 * MIN
+    let g = 0
+    const gen = (at: number, window: string | null, resetsAt: number | null): LimitEvent =>
+      ({ id: `gen${++g}`, ...base, at: iso(T0 + at * HOUR2), final: true, resetsAt: resetsAt === null ? null : iso(T0 + resetsAt * HOUR2), window })
+    // Overlaps ([1,3] with [2,4]), nesting ([12,20] around [12,13]), touching
+    // ends ([2,4] with [4,5]), and the default +1 h.
+    const pool: LimitEvent[] = [
+      gen(1, 'x', 3), gen(2, 'y', 4), gen(12, 'x', 20), gen(2, 'seven_day_opus', 4),
+      gen(0, null, null), gen(1, null, 2), gen(3, 'x', null), gen(4, 'y', 5),
+      gen(12, 'seven_day_opus', 13), gen(0, 'x', 1),
+    ]
+    const sets: LimitEvent[][] = []
+    for (let a = 0; a < pool.length; a++) {
+      for (let b = a + 1; b < pool.length; b++) {
+        sets.push([pool[a]!, pool[b]!])
+        for (let c = b + 1; c < pool.length; c++) sets.push([pool[a]!, pool[b]!, pool[c]!])
+      }
+    }
+    const windows = (set: LimitEvent[]) => new Set(set.map(entry => entry.window ?? '\u0000'))
+    const spanning = sets.filter(set => windows(set).size >= 2)
+    expect(spanning.length).toBeGreaterThan(100)
+    // Non-vacuity: enough sets really do overlap across window groups, and
+    // enough sampled instants sit inside such a merged region.
+    const rawGroups = (set: LimitEvent[]) => [...windows(set)].map(key =>
+      coolingTimeline(set.filter(entry => (entry.window ?? '\u0000') === key)))
+    let crossGroupSets = 0
+    let crossGroupInstants = 0
+    let checked = 0
+    for (const set of spanning) {
+      const groups = rawGroups(set)
+      const overlaps = groups.some((groupA, i) => groups.some((groupB, j) =>
+        i !== j && groupA.some(a => groupB.some(b => a.start < b.end && b.start < a.end))))
+      if (!overlaps) continue
+      crossGroupSets++
+      const known = [...set].sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
+      const points = new Set<number>()
+      for (const entry of set) {
+        const at = Date.parse(entry.at)
+        const reset = entry.resetsAt ? Date.parse(entry.resetsAt) : at + DEFAULT_COOLDOWN_MS
+        for (const boundary of [at, reset, at + LIMIT_EVENT_READ_WINDOW_MS]) {
+          points.add(boundary - 1); points.add(boundary); points.add(boundary + 1)
+        }
+      }
+      const db = schemaDb(':memory:')
+      const insert = db.prepare(`INSERT INTO profile_limit_events
+        (id, profile_id, session_id, group_id, at, kind, final, status, message, resets_at, provider_id, limit_window)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      let clock = Date.parse(known[0]!.at)
+      const store = new LimitEventStore(db, () => clock)
+      let k = 0
+      for (const t of [...points].sort((a, b) => a - b)) {
+        clock = t
+        while (k < known.length && Date.parse(known[k]!.at) <= t) {
+          const entry = known[k++]!
+          insert.run(entry.id, entry.profileId, entry.sessionId, entry.groupId, entry.at, entry.kind,
+            entry.final ? 1 : 0, entry.status, entry.message, entry.resetsAt, entry.providerId, entry.window)
+        }
+        const timeline = coolingTimeline(relevantEvents(known.slice(0, k), set[0]!.profileId, set[0]!.providerId))
+        const inside = timeline.some(interval => interval.start <= t && t < interval.end)
+        const effective = store.cooldownFor(set[0]!.profileId, set[0]!.providerId).until !== null
+        checked++
+        expect({ set: set.map(entry => entry.id), t, inside }).toEqual({ set: set.map(entry => entry.id), t, inside: effective })
+        if (groups.some(group => group.some(a => a.start <= t && t < a.end)) &&
+          groups.filter(group => group.some(a => a.start <= t && t < a.end)).length > 1) crossGroupInstants++
+      }
+      db.close()
+    }
+    expect(crossGroupSets).toBeGreaterThanOrEqual(20)
+    expect(crossGroupInstants).toBeGreaterThanOrEqual(10)
+  }, 60_000)
+
   test('every minute and every boundary instant agree with cooldownFor', () => {
     for (const set of SETS) {
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-timeline-equiv-'))
@@ -271,8 +347,8 @@ describe('coolingTimeline', () => {
   const MIN = 60_000
   const HOUR = 60 * MIN
   let n = 0
-  const event = (at: number, resetsAt: number | null, final = true): LimitEvent =>
-    ({ id: `e${++n}`, ...base, at: iso(at), final, resetsAt: resetsAt === null ? null : iso(resetsAt) })
+  const event = (at: number, resetsAt: number | null, final = true, window: string | null = null): LimitEvent =>
+    ({ id: `e${++n}`, ...base, at: iso(at), final, resetsAt: resetsAt === null ? null : iso(resetsAt), window })
 
   test('a five-hour reset superseded a minute later by a one-minute reset counts about two minutes', () => {
     const events = [event(T0, T0 + 5 * HOUR), event(T0 + MIN, T0 + 2 * MIN)]
@@ -283,6 +359,18 @@ describe('coolingTimeline', () => {
   test('a later event extends a cooldown; retried attempts never cool', () => {
     const events = [event(T0, null), event(T0 + 30 * MIN, T0 + 3 * HOUR), event(T0 + 4 * HOUR, null, false)]
     expect(coolingTimeline(events)).toEqual([{ start: T0, end: T0 + 3 * HOUR }])
+  })
+
+  test("the reviewer's probe: a later group must not swallow another group's leading span (B3)", () => {
+    const events = [
+      event(T0 + HOUR, T0 + 3 * HOUR, true, 'x'),
+      event(T0 + 2 * HOUR, T0 + 4 * HOUR, true, 'y'),
+      event(T0 + 12 * HOUR, T0 + 20 * HOUR, true, 'x'),
+    ]
+    expect(coolingTimeline(events)).toEqual([
+      { start: T0 + HOUR, end: T0 + 4 * HOUR },
+      { start: T0 + 12 * HOUR, end: T0 + 20 * HOUR },
+    ])
   })
 
   test('a 30-hour reset is cut when the router read window drops it, and clipping to a window', () => {

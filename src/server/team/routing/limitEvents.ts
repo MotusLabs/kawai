@@ -269,16 +269,21 @@ export function coolingTimeline(events: readonly LimitEvent[]): CoolingInterval[
   const intervals: CoolingInterval[] = []
   for (const group of groups.values()) {
     group.sort((a, b) => a.at - b.at || a.index - b.index)
+    // Merge within the group only: a later group's interval may overlap an
+    // earlier group's tail, and absorbing it here would lose its leading
+    // span — the union happens once, after every group has contributed.
+    const groupIntervals: CoolingInterval[] = []
     group.forEach((entry, i) => {
       const reset = entry.event.resetsAt ? Date.parse(entry.event.resetsAt) : NaN
       const until = Number.isFinite(reset) ? reset : entry.at + DEFAULT_COOLDOWN_MS
       const next = group[i + 1]?.at ?? Infinity
       const end = Math.min(next, until, entry.at + LIMIT_EVENT_READ_WINDOW_MS + 1)
       if (end <= entry.at) return
-      const last = intervals.at(-1)
+      const last = groupIntervals.at(-1)
       if (last && last.end >= entry.at) last.end = Math.max(last.end, end)
-      else intervals.push({ start: entry.at, end })
+      else groupIntervals.push({ start: entry.at, end })
     })
+    intervals.push(...groupIntervals)
   }
   intervals.sort((a, b) => a.start - b.start)
   const merged: CoolingInterval[] = []
