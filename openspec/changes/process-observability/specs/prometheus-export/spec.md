@@ -59,3 +59,10 @@ Kawai SHALL retain detailed evidence independently of scrape availability and SH
 #### Scenario: Missed scrape interval
 - **WHEN** Prometheus resumes after an outage
 - **THEN** it sees current gauges and cumulative totals while Kawai's timeline remains the source for exact incidents during the gap
+
+### Requirement: Supported metrics can be exported before dependent integrations
+The optional endpoint SHALL serve supported observation families while dependent source integrations are unavailable, with bounded source-availability and coverage diagnostics. It SHALL NOT publish fabricated quota, canonical incident or stage samples. Missing sources SHALL remain distinguishable from installed sources with no observations; completing the foundation SHALL NOT count as completing dependent metric integrations.
+
+#### Scenario: Quota adapter has not landed
+- **WHEN** core managed-task/turn measurements exist but the shared-provider quota adapter is unavailable
+- **THEN** an authorized scrape returns the supported core measurements, identifies provider-quota source unavailability, and does not report synthetic fresh capacity

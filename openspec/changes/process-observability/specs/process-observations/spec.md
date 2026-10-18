@@ -107,3 +107,10 @@ Detailed observations SHALL be retained for 90 days by default, with a configura
 #### Scenario: Existing history
 - **WHEN** an old task has results but no recorded stage intervals
 - **THEN** known facts remain usable and missing stage/usage coverage is stated rather than backfilled as measured activity
+
+### Requirement: Source availability is explicit during staged delivery
+Kawai SHALL expose which observation sources are installed, available, unsupported or awaiting integration, separately from measurement values and coverage. Missing provider, dispatch or context-recovery integrations SHALL NOT prevent recording supported managed-chat/task facts. Source absence SHALL NOT imply zero usage, shared-account identity or a verified routing alternative.
+
+#### Scenario: Independent foundation
+- **WHEN** managed turn/task observation sources are available but shared-provider or canonical incident adapters are not
+- **THEN** supported facts are recorded with their actual identity and coverage, unavailable sources are identified, and no account-capacity or canonical-incident facts are invented

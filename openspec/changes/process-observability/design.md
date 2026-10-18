@@ -45,7 +45,7 @@ chat callbacks + committed task/mail/plan facts + quota readers
 authorized Prometheus scrape --> read-only aggregate snapshot
 ```
 
-Collection is on by default for managed work. Export is opt-in and neither quotas nor recommendations ever read Prometheus. Disabling or losing the scraper has no core effect.
+Collection is on by default for managed work. Export is opt-in and neither quotas nor recommendations ever read Prometheus. Disabling or losing the scraper has no core effect. The foundation can be developed and delivered against existing managed-chat/task sources without waiting for provider, worker-choice or context-recovery integrations. D12 defines the separate delivery gates; none changes the final capability contracts.
 
 ### D2. Normalized observations and explicit provenance
 
@@ -54,6 +54,8 @@ Use an append-only `process_observations` table: monotonic sequence, unique sour
 Kinds cover turn lifecycle, activity transition, pending-request edges, tool intervals, sampled context, compaction, quota poll result, task-stage/wait change, acceptance reference, incident evidence and collection gap. Reference existing task, mail, result, finding, limit and provenance rows rather than copy their bodies. `source_key` uses durable event/command/round identity, with deterministic subkeys for phases or window rows; a newly received quota poll gets a new poll identity even if values are unchanged.
 
 Snapshot effective worker/account identity and settings at collection: provider/model keys alone can be reassigned in configuration. Use an opaque account-configuration revision derived from provider identity and effective routing/auth context, never raw credentials or a reversible credential representation. Resolve contexts separately when project layering gives the same provider ID different effective accounts. Reuse resolved shared-account identity from provider/Codex support rather than guessing equality from URL or model. Store effort, effective model, driver/CLI version, configured context/compaction settings, and references to existing prompt/memory hashes. Historical reads use those versions, not current files.
+
+During the foundation, capture only identities actually supplied by the landed source. An absent account configuration revision is unknown, not a fabricated one-model account or an inferred shared login. Preserve legacy profile/source identity and supported-field coverage so later account-aware adapters can add new observations without relabeling old ones. Do not expose legacy profile reports as verified account-wide capacity.
 
 Shared-provider quota is collected once per effective account context. Keep a `process_observation_teams` association for the teams entitled to that observation at collection; team reads cannot enumerate unrelated providers or teams. Shared quota does not mean token usage from another team becomes attributable to this team's task.
 
@@ -99,7 +101,7 @@ Implement a versioned SDK-free rule evaluator over committed evidence. No new LL
 
 Persist `process_recommendations` (team, kind, scope, episode key, current assessment), `process_recommendation_assessments` (number, evidence cutoff, rule version, facts, estimates, coverage, rationale, status), and append-only decision/intervention records. Unique `(team, kind, episode, scope)` deduplicates. New material evidence or changed action makes a new assessment; equal canonical content is a no-op. Evidence includes compact frozen values and IDs so it remains interpretable after detailed retention. Link related/superseding recommendations instead of rewriting history.
 
-Start with quota/context incidents; consume the authoritative final limit/context outcome and its episode key, not every retry frame. The evaluator runs on the next queued server job after commit, coalesced per episode; target publication within five seconds under normal load. Re-evaluate on relevant quota/reset/intervention/outcome changes and daily. A slow/failed evaluator leaves work untouched, exposes freshness and retries independently.
+After the D12 provider/dispatch/context gate is satisfied, start actionable recommendations with quota/context incidents; consume the authoritative final limit/context outcome and its episode key, not every retry frame. Foundation recording and export do not create substitute incident/recovery machinery while that integration waits. The evaluator runs on the next queued server job after commit, coalesced per episode; target publication within five seconds under normal load. Re-evaluate on relevant quota/reset/intervention/outcome changes and daily. A slow/failed evaluator leaves work untouched, exposes freshness and retries independently.
 
 Switch comparison:
 
@@ -151,7 +153,7 @@ Add `process_export_totals` keyed by aggregate schema version, family, canonical
 
 For durable task/acceptance/usage sources, one-time initial reconciliation can accumulate retained history with an explicit recording horizon. Gauges are as-of-now projections and are never fabricated historically. An aggregate schema change uses a new metric name/version namespace; compatible additions do not reset existing totals. Prometheus rate calculations after a scrape outage cannot reconstruct exact event timing, and historical gauges stay in SQLite only.
 
-Initial families (prefix `kawai_`):
+Final metric families (prefix `kawai_`; delivered by source readiness as described below):
 
 | Family | Type | Unit / dimensions |
 | --- | --- | --- |
@@ -167,6 +169,10 @@ Initial families (prefix `kawai_`):
 | `tasks_blocked`, `mail_queued` | gauge | team, bounded reason |
 | `provider_quota_used_ratio`, `provider_quota_observed_timestamp_seconds`, `provider_quota_reset_timestamp_seconds`, `provider_quota_fresh` | gauge | opaque account-context alias, provider, bounded window/model scope |
 | `observation_errors_total`, `observations_last_success_timestamp_seconds`, `export_label_overflow_total` | health counter/gauge | bounded collector/family |
+
+The foundation delivers the aggregate schema, idempotent accumulator, bounded renderer and authenticated endpoint using known task acceptance, managed turn/token/context/compaction, existing queue and collection-health observations. Metric definitions are shared from the start; later Metrics-view work consumes them rather than introducing new meanings. Lifecycle metadata unavailable on the baseline remains unknown, and unsupported duration observations do not enter a histogram as zeros.
+
+Register the full family definitions up front, but publish samples only for supported/observed sources. Add bounded `kawai_measurement_source_available{source}` gauges for task, managed-turn, structured-context, canonical-stage, provider-quota and canonical-incident source support; these describe installed/usable collectors, not service uptime or numeric zero usage. Per-source coverage/last-success distinguishes an installed reader without data from a missing integration. Provider account/window gauges, canonical incident counters, and canonical stage/wait distributions require their respective adapters. Their definitions being present is not evidence that their integration task is complete. Once the gate opens, connect those families in task 9.6 and verify account sharing, freshness and exact stage/incident ownership; no synthetic live provider state is needed to ship tasks 9.1-9.5.
 
 Add review verdict/result/reopen counters to support quality dashboards with the same cohort caveats as Kawai. Do not average per-team percentiles. Existing rolling metrics remain read-time values; export distributions are observations, not repeated insertion of rolling summaries.
 
@@ -184,12 +190,24 @@ Record transitions, not every text/token delta. Aggregate context updates to at 
 
 ### D12. Coordination and delivery order
 
+The user approved independent foundation delivery while prerequisite-dependent integrations remain pending. The implementation order is an explicit dependency graph rather than a whole-change prerequisite barrier:
+
+| Delivery | Tasks | Gate and exit evidence |
+| --- | --- | --- |
+| Foundation | 1.1-1.5, 2.1-2.4, then 9.1-9.5 | Existing managed chat/task/result/usage and DB-safety contracts. Verify protected recording, restart/replay/prune, supported-source Prometheus export, source availability, and normal operation with export disabled. |
+| Provider and incident integration | 3.1-3.5, 4.1-4.6 | Task 3.1 verifies the actual shared-provider quota/cooldown, worker-choice and context-episode contracts on the implementation branch before dependent behavior is enabled. Unavailable contracts keep these tasks pending. |
+| Process feedback | 5.1-5.4, 6.1-6.4, 7.1-7.3 | Reuse foundation evidence; preserve canonical plan adapters where available and explicit unknowns where absent. Does not retroactively change foundation facts. |
+| Experiments and full export integration | 8.1-8.4, 9.6 | Real intervention membership, canonical stages/incidents and provider-account quota sources. Verify all remaining export families; do not treat initial endpoint delivery as completion of 9.6. |
+| Whole-change completion | 10.1-10.4 | Cross-change adapters and full managed-task walkthrough satisfy every remaining spec/task before archive. A foundation milestone alone never qualifies. |
+
+Do not stop the foundation because task 3.1 is waiting, and do not mark that gate or any dependent behavior complete based on an interface stub, fixture alone, unknown fallback or the upstream change name. Fixtures verify the foundation's absence behavior; actual landed contracts and integration checks unlock later work. A newly discovered prerequisite blocks only tasks consuming it. If such a blocker affects foundation acceptance itself, pause and report it rather than weaken the milestone.
+
 | Change | Contract used / reconciliation |
 | --- | --- |
-| `team-process-metrics` | Implemented prerequisite; archive before this change's modified specs. Reuse tables/attribution; extend usage horizon and reports without rewriting snapshots. |
-| `providers-and-workers` | Required for provider identities and shared/model-window cooldowns. Its usage spec archives before the live-polling delta here. |
-| `dispatch-worker-choice` | Required for actionable alternatives; consume its selector/capacity predicates. `team_capacity` remains fetch/write free. |
-| `chat-context-exhaustion` | Required for canonical context failure classification and episodes; retain session-local versus provider failure distinction. |
+| `team-process-metrics` | Archived on the implementation baseline; main capability specs exist. Foundation can reuse tables/attribution and extend usage retention. Recheck versions rather than repeating the original missing-spec blocker. |
+| `providers-and-workers` | Gates account-aware polling, quota interpretation and shared/model-window cooldown integration, not observation persistence or the core exporter. Its usage spec archives before the live-polling delta here. |
+| `dispatch-worker-choice` | Gates actionable alternatives and eligibility snapshots. Consume actual selector/capacity predicates once landed; foundation does not create competing ones. `team_capacity` remains fetch/write free. |
+| `chat-context-exhaustion` | Gates canonical context-episode/recovery integration. It has since appeared on shared `origin/master`; incorporate/recheck that landed version before enabling its adapter. Foundation can record available context/compaction facts independently. |
 | `plan-supervision` | Integrate its stall episodes, waits and attention sources when available; no duplicate detector. Standalone incident advice does not wait for plan execution to land. |
 | `revision-control` | Holds/pauses/checkpoint/revision adapters use canonical facts when available; capability absent means no such fact, not an invented hold. |
 | `plan-execution`, `integration-candidates` | Consumption adapters for rounds, CI, landing/acceptance and later promotion. Do not wait for promotion to measure accepted task time. |
@@ -199,7 +217,7 @@ Record transitions, not every text/token delta. Aggregate context updates to at 
 | `execution-safety-recovery` | Use numbered migrations/backups and protected callbacks; no budget or audit semantics change. |
 | `rename-agentboard-to-kawai` | New env names use KAWAI; resolve the existing database path instead of hardcoding a data home. |
 
-Keep other changes' artifacts untouched in this planning change. During implementation, rebase consumed contracts against what actually landed and carry any necessary new callback fields in their existing modules. The new delta specs state the intended supersession. Archive only after prerequisite specs exist; do not apply modifications to absent main capabilities.
+Keep other changes' artifacts untouched. At the start of the next apply, refresh/rebase this dedicated branch onto the current default branch, preserving its planning commits, and repeat the baseline audit; upstream progress is not captured by stale completion counts. During integration, recheck consumed contracts and add only the callback fields this change needs. Delta specs retain the intended final supersession. Foundation commits do not sync or archive the full change; archive only after prerequisite specs exist and all remaining behaviors are implemented.
 
 ## Risks / Trade-offs
 
@@ -208,14 +226,15 @@ Keep other changes' artifacts untouched in this planning change. During implemen
 - [Stage and activity proxies are imperfect] -> Preserve unknown/approximate states, separate task-time union from summed agent work, and show source evidence.
 - [Unused-provider polling needs account access] -> Reuse existing credential resolution and standalone readers only; no auto-login or model calls. Unsupported providers stay unknown.
 - [High-volume or unavailable SQLite] -> Coalesce context deltas, bound retention/batches, record collection health/gaps, and isolate recorder failures from authoritative outcomes.
-- [Scope spans unfinished plan/driver work] -> Land managed-Claude/standalone advice first, use additive capability adapters, and integration-test the landed plan/Codex contracts when those features arrive.
+- [Scope spans unfinished provider/plan/driver work] -> Deliver observation/storage/export first, keep dependent integrations explicitly tracked, and integration-test actual landed contracts before enabling their advice or metric families.
 - [Feedback loops optimize measured shortcuts] -> Keep explicit acceptance, coverage, first-pass/reopen/rework guards and human control; no automatic routing or compaction tuning.
 
 ## Migration Plan
 
-1. Confirm implemented `team-process-metrics` is archived and provider/dispatch/context prerequisite contracts are landed; do not archive them as part of this change's planning. Record actual dependency versions. Main observations can be developed independently but actionable provider rollout follows these prerequisites.
-2. Add dense numbered migrations for observation/association/coverage state; recommendation/assessment/decision/intervention/experiment/digest state; export totals and processing identities. Use existing pre-migration backups and frozen schema exports. Set recording horizon, increase usage pruning to 90 days, and update all usage-horizon calculations.
-3. Enable managed observation and eligible-provider collection, then incident recommendations. Existing records stay readable. Reconcile only trustworthy durable facts; flag legacy timing and usage gaps. No database-wide replay of raw chat logs.
-4. Land task-time metrics, Metrics/history/decision UI, daily digest and report-window extension; then compaction experiments/outcomes and optional plan/Codex adapters. Prometheus route and durable totals can land in parallel after D2/D4 definitions stabilize; neither gates incident advice.
-5. Verify without any Prometheus config, with valid scrape config, and with failing/unauthorized scrapes. Document metric definitions, omissions, schedule, collection identity and retention, with reserved example hosts only. No Prometheus deployment is included.
-6. Rollback: disable collector/scheduler/export using runtime controls in the new build if needed. Schema additions remain. An older build refusing the newer schema must follow the existing backup/restore procedure; never suggest bypassing version checks. Unapproved advice never changes execution, so rollback needs no compensating model/config action.
+1. Refresh/rebase the dedicated implementation branch onto the current default branch and audit its existing source/spec versions. `team-process-metrics` main specs are available on the recorded baseline. Missing provider/dispatch/context integrations do not block foundation development; record them as pending at task 3.1. Do not implement or archive another change to make this task appear satisfied.
+2. Deliver the foundation in tasks 1.1-1.5 and 2.1-2.4: add numbered observation/association/coverage and source-processing migrations, protected source hooks, reconciliation, managed timing/context recording, and the 90-day usage horizon. Use existing pre-migration backups. Reconcile trustworthy durable facts only and preserve missing timing/usage/account identity explicitly.
+3. Deliver tasks 9.1-9.5 with durable aggregates, bounded labels, supported-family samples, availability/coverage diagnostics and optional authenticated export. Verify restart/replay/pruning, absent integration adapters, and operation with export disabled. This is a usable foundation milestone; recommendation/provider/canonical-stage tasks remain unchecked.
+4. When task 3.1 verifies the required contracts on the implementation branch, add shared provider polling/usage history, incident alternatives and canonical context linkage, then actionable incident advice. Add the recommendation/assessment/decision/intervention/experiment/digest migrations as their features land; keep migration numbers dense at each merge.
+5. Deliver task-time metrics, recommendation/history/decision UI, daily digest and report-window extension, then experiments/outcomes and the remaining canonical export families in 9.6. Reuse foundation evidence and report definitions; record unavailable optional plan/Codex fields rather than invent facts. Finish the cross-change adapters and complete walkthrough before claiming the full change done.
+6. Document both the foundation capability coverage and final metric definitions, schedule, identity and retention with reserved examples. No Prometheus deployment is included. A runnable foundation and passing fixture checks never waive real provider/incident integration verification or final spec acceptance.
+7. Rollback: disable collector/scheduler/export using runtime controls in the new build if needed. Schema additions remain. An older build refusing the newer schema must follow the existing backup/restore procedure; never suggest bypassing version checks. Unapproved advice never changes execution, so rollback needs no compensating model/config action.

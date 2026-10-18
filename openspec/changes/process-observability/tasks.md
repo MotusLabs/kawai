@@ -1,8 +1,14 @@
 # Tasks
 
+## Delivery order
+
+The approved foundation is implementable without the provider/dispatch/context prerequisites. Execute groups 1 and 2, then tasks 9.1-9.5. Next satisfy integration gate 3.1 and continue groups 3-8, task 9.6 and group 10. Numeric section order preserves the existing feature grouping; this dependency order controls execution.
+
+Missing prerequisites leave only their consuming integration tasks pending. Foundation availability/unknown-source handling is not completion of those integrations, and the full change cannot archive until every remaining task/spec is satisfied. Task 1.1 is a baseline audit; the original requirement to verify landed provider/dispatch/context contracts is retained in the separate task 3.1.
+
 ## 1. Contracts and observation persistence
 
-- [ ] 1.1 Confirm the D12 prerequisite versions and landed provider/dispatch/context interfaces, and record them in implementation notes; verify `chat-turn-usage`, `process-reports` and provider-scoped usage requirements exist before applying their deltas, without silently archiving another change.
+- [ ] 1.1 Refresh/rebase the dedicated branch onto the current default branch, preserving planning commits, and audit the existing managed-chat/task/result/usage and DB-safety source/spec versions in implementation notes; verify the foundation sources and archived `chat-turn-usage`/`process-reports` capabilities exist. Record unavailable integrations against gate 3.1 instead of blocking the foundation or archiving another change.
 - [ ] 1.2 Add SDK-free observation, coverage, identity and measurement-version types plus frozen schema exports and numbered migrations for observations, team associations, source processing identities and collection checkpoints; verify migration upgrade/restart and duplicate-source-key tests with `schemaDb()`.
 - [ ] 1.3 Implement the protected recorder and post-commit hooks for task/result/assignment/mail/limit facts, including acceptance actor/mechanism and preserved handoff/result/revision identity; verify duplicate callbacks count once and recorder failure cannot roll back acceptance or mailbox settlement.
 - [ ] 1.4 Implement durable-source reconciliation and gap/health reporting; verify crash/replay recovery restores known facts, marks irrecoverable live gaps and cannot create measured activity from old chat text.
@@ -10,19 +16,25 @@
 
 ## 2. Managed turn and context measurements
 
-- [ ] 2.1 Feed task/start-pinned turn lifecycle observations from the driver/manager, including failure, interruption, process exit and restart uncertainty; verify task-less/mid-turn reassociation cases and that incomplete usage never becomes measured zero consumption.
+- [ ] 2.1 Feed task/start-pinned turn lifecycle observations from the driver/manager, including failure, interruption, process exit and restart uncertainty, using only outcome classifications actually provided by the landed driver; verify task-less/mid-turn reassociation cases and that incomplete usage never becomes measured zero consumption.
 - [ ] 2.2 Record activity, request-card and tool interval edges independently of the live activity projection; verify approval wait subtraction, overlapping tool union versus summed work, and background shells/Monitors not inflating active development time.
-- [ ] 2.3 Preserve structured compaction trigger/pre/post metadata, observed start/end, context-failure linkage and threshold source/settings provenance; verify missing post size/duration and approximate context-window fallbacks remain unknown/approximate.
-- [ ] 2.4 Add context sampling/coalescing and settings/account-version snapshots at exact lifecycle boundaries; verify high-frequency deltas are bounded, compaction/failure boundaries remain exact and catalog edits cannot relabel historical observations. Document the timing/token scope and omitted subagent usage.
+- [ ] 2.3 Preserve structured compaction trigger/pre/post metadata, observed start/end, available source failure metadata and threshold source/settings provenance; canonical context-recovery episode linkage remains in 4.4 after gate 3.1, rather than being reimplemented here; verify missing post size/duration and approximate context-window fallbacks remain unknown/approximate.
+- [ ] 2.4 Add context sampling/coalescing and actually available settings/account-version snapshots at exact lifecycle boundaries (unknown account identity stays unknown until the provider adapter in group 3); verify high-frequency deltas are bounded, compaction/failure boundaries remain exact and catalog edits cannot relabel historical observations. Document the timing/token scope and omitted subagent usage.
 
 ## 3. Provider quota history and eligible alternatives
 
-- [ ] 3.1 Extract shared quota readers from `ChatSessionManager.ts` with live-session and configured-team-worker subscriptions, effective account-context deduplication and team access associations; verify an unused eligible quota-serving provider is polled without starting an agent and shared accounts are pulled once.
-- [ ] 3.2 Implement configurable cadence/freshness, timeout, jitter, one-in-flight polling, backoff and configuration/shutdown cleanup; verify failures preserve original window timestamps, status-only pushes do not freshen windows, and removing the last subscription stops requests.
-- [ ] 3.3 Record supported/unavailable/auth-refused/failed quota outcomes through the existing parsers and source rules; verify unrelated host-login quota, passed resets and unsupported standalone readers cannot establish routed-provider headroom, with no credential or raw response persistence.
-- [ ] 3.4 Freeze incident alternatives using dispatch-worker-choice and routing/staffing predicates with evidence available at the incident cutoff; verify shared account/model windows, hard selectors, review restrictions, caps, writer occupancy and later quota observations. Document the revised background polling behavior and the unchanged read-only `team_capacity` contract.
+This integration group follows the foundation milestone; its prerequisite gate does not block groups 1-2 or tasks 9.1-9.5.
+
+- [ ] 3.1 Verify/rebase the actual landed provider-scoped usage/cooldown, worker-choice/capacity and context-exhaustion episode interfaces required by D12; record consumed versions and verify provider-scoped main-spec requirements before applying the usage delta. Keep this task and dependent integration behavior pending while contracts are unavailable; do not use stubs, fixture-only substitutes, partial upstream task counts, or an automatic archive as proof.
+
+- [ ] 3.2 Extract shared quota readers from `ChatSessionManager.ts` with live-session and configured-team-worker subscriptions, effective account-context deduplication and team access associations; verify an unused eligible quota-serving provider is polled without starting an agent and shared accounts are pulled once.
+- [ ] 3.3 Implement configurable cadence/freshness, timeout, jitter, one-in-flight polling, backoff and configuration/shutdown cleanup; verify failures preserve original window timestamps, status-only pushes do not freshen windows, and removing the last subscription stops requests.
+- [ ] 3.4 Record supported/unavailable/auth-refused/failed quota outcomes through the existing parsers and source rules; verify unrelated host-login quota, passed resets and unsupported standalone readers cannot establish routed-provider headroom, with no credential or raw response persistence.
+- [ ] 3.5 Freeze incident alternatives using dispatch-worker-choice and routing/staffing predicates with evidence available at the incident cutoff; verify shared account/model windows, hard selectors, review restrictions, caps, writer occupancy and later quota observations. Document the revised background polling behavior and the unchanged read-only `team_capacity` contract.
 
 ## 4. First useful incident recommendations
+
+Enable these after group 3 and its prerequisite gate. The foundation may already be delivered; no recommendation task is complete merely because its storage types or test fixtures exist.
 
 - [ ] 4.1 Add migrations/stores for stable recommendations, immutable assessments, frozen evidence, human decisions and explicit interventions; verify team isolation, material-change deduplication and restart-safe episode identity.
 - [ ] 4.2 Implement the versioned quota/context evaluator and supported-term switch-versus-wait comparison from D6; verify first-incident provisional advice appears without a baseline, numeric savings remain unknown when a material cost is unknown, and context exhaustion is never treated as account exhaustion.
@@ -60,12 +72,15 @@
 
 ## 9. Optional Prometheus export
 
-This group depends on observation/metric definitions, not the daily digest or experiment UI. It can land independently without gating the first incident-recommendation slice.
+Tasks 9.1-9.5 are the independent foundation export milestone after groups 1-2; they do not depend on group 3, recommendations, daily digests or experiments. Task 9.6 retains the full integration-dependent families. All families share versioned observation definitions; supported core samples and explicit source availability can ship without fabricated quota or incident facts.
 
 - [ ] 9.1 Add durable counter/histogram accumulation and the D10 processed-source ledger in the observation transaction; verify restart, rollback/retry, duplicate replay and detail pruning preserve exactly-once totals, with explicit definition/startup coverage.
 - [ ] 9.2 Implement the bounded metric/label registry, persistent aliases, bucket/series budgets and overflow diagnostics; verify thousands of task/session IDs create no task-specific series, catalog churn stays bounded and bucket expansion respects the budget.
-- [ ] 9.3 Implement the pure Prometheus renderer and consistent cached gauge snapshot with documented families/units/buckets; verify escaping, HELP/TYPE, cumulative buckets/count/sum, unknown/stale quota and shared-account quota not duplicated by team.
+- [ ] 9.3 Implement the pure Prometheus renderer and consistent cached snapshot for supported task-acceptance, managed turn/token/context/compaction, existing queue and health sources, with documented families/units/buckets and bounded source-availability gauges; verify escaping, HELP/TYPE, cumulative buckets/count/sum and missing-adapter behavior without inventing quota, canonical incident or stage samples. The provider/stage/incident completion criteria remain explicitly in 9.6.
 - [ ] 9.4 Register optional authenticated `GET /metrics` on the existing listener with `KAWAI_METRICS_ENABLED` and `KAWAI_METRICS_TOKEN`; verify disabled/misconfigured/auth-failed/scrape-error cases cannot disrupt core routes or trigger provider/model calls, and document scrape configuration using reserved examples.
+
+- [ ] 9.5 Verify and document the independent foundation milestone against the implementation branch: record a managed task/turn and available context/compaction observations, restart/replay/prune, inspect core export/coverage with provider/dispatch/context adapters absent, and verify normal operation when export is disabled or unavailable. Run the repository lint/typecheck/test checks for the foundation changes; retain group 3, recommendation and full-family integration tasks as unchecked.
+- [ ] 9.6 After gate 3.1 and the canonical source adapters are satisfied, connect and document provider-account quota, canonical limit/context incidents and canonical stage/wait metric families; verify shared-account quota is not duplicated by team, status-only/failing updates retain original freshness, source support changes correctly and final exported definitions match the complete Metrics/incident contracts. The initial endpoint and fixture absence checks do not satisfy this task.
 
 ## 10. Cross-change adapters and end-to-end verification
 
@@ -77,5 +92,6 @@ This group depends on observation/metric definitions, not the daily digest or ex
 ## Workflow follow-up
 
 - Review the planning defaults (90-day detail, 09:00 UTC digest, ten-minute quota cadence) before implementation rollout.
+- Foundation delivery is a milestone within this change, not completion or archive; no acceptance criterion is removed by the approved staging.
 - Archive this change only after its modified capability prerequisites exist and implementation/review are complete; preserve the explicit cross-change ordering in design D12.
 - Reassess retention volume, recommendation usefulness and metric cardinality from actual operation; do not wait for 90 days of data to begin issuing provisional advice.

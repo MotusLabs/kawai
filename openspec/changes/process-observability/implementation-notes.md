@@ -8,9 +8,9 @@
 - The approved change artifacts were copied from the original checkout, including CLI-created metadata. No unrelated uncommitted files were copied.
 - Schema: spec-driven. Initial progress: 0/42 tasks complete.
 
-## Task 1.1 prerequisite audit
+## Original prerequisite audit (before approved staging)
 
-Checked the fetched default branch on 2026-10-18. Task 1.1 remains unchecked because its required landed contracts are not all present.
+Checked the fetched default branch at `c6ab189e` on 2026-10-18. At that initial apply, original task 1.1 remained unchecked because its required landed contracts were not all present. This is historical evidence, not a claim about the current remote head.
 
 | Prerequisite | Observed state | Consequence |
 | --- | --- | --- |
@@ -22,6 +22,13 @@ Checked the fetched default branch on 2026-10-18. Task 1.1 remains unchecked bec
 
 No application code or task checkboxes were changed. No other changes were archived, merged, or cherry-picked.
 
-## Resume decision
+## Approved staging revision
 
-The apply workflow requires pausing at a prerequisite blocker rather than silently dropping or reimplementing specified contracts. Resume after these prerequisites land, or explicitly authorize staging the independent observation/persistence/export foundation while their integrations wait. The latter needs its task ordering and prerequisite notes made explicit without marking task 1.1 complete or weakening the remaining acceptance criteria.
+The owner answered “yes, revise” to the explicit proposal to revise task ordering and implement the independent observation/storage/Prometheus foundation while prerequisite integrations remain pending.
+
+- Revised task 1.1 audits/rebases the foundation baseline; the original landed-contract verification is preserved in the new task 3.1.
+- Foundation order: groups 1-2, then tasks 9.1-9.5. Provider/dispatch/context integration is not a prerequisite for this milestone.
+- Original group-3 tasks move from 3.1-3.4 to 3.2-3.5. Task 9.3 covers the core renderer/sources; full provider quota, canonical stage and incident-family checks remain in new task 9.6. New task 9.5 verifies the usable foundation.
+- All final capabilities and acceptance criteria remain required. No task was marked complete for revising the plan: progress is now 0/45 rather than 0/42.
+- The shared remote ref inspected during revision now includes context-exhaustion merge `9b3f0e84` (PR #213). This worktree remains on its recorded baseline plus planning commits; the next apply must refresh/rebase and recheck source/spec contracts. No assumption is made that other prerequisites landed with it.
+- The revision changes planning and audit documents only. No other change is archived, merged or reimplemented here. Full change completion/archive still requires all pending integrations and final verification.
