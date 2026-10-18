@@ -65,22 +65,28 @@ function turnIdOf(event: ChatEvent): string | undefined {
 }
 
 /**
- * Cut points are index 0, every `turn_started`, and every new `turnId`:
- * live turns open with a `turn_started` event, while replayed user and peer
- * turns open with their message (the replay assigns each a fresh
- * `hist-turn-N`), so both shapes cut on turn boundaries. Events without a
- * turn (notices, request resolutions) belong to the unit they sit in.
+ * Cut points are index 0, every `turn_started`, and every first-seen
+ * `turnId`: live turns open with a `turn_started` event, while replayed
+ * user and peer turns open with their message (the replay assigns each a
+ * fresh `hist-turn-N`), so both shapes cut on turn boundaries. Cutting on
+ * first appearance only — not on a change from the previous turn-carrying
+ * event — keeps the boundary local: a returning turnId would slice an
+ * orphan unit out of its turn. That is unreachable today (live turn ids
+ * and replay counters never repeat; an aborted turn's frames belong to no
+ * turn at all), and the first-appearance rule makes it structurally so.
+ * Events without a turn (notices, request resolutions) belong to the unit
+ * they sit in.
  */
 function unitsOf(events: ChatEvent[]): Unit[] {
   const units: Unit[] = []
-  let lastTurnId: string | undefined
+  const seenTurnIds = new Set<string>()
   for (let index = 0; index < events.length; index += 1) {
     const event = events[index]!
     const turnId = turnIdOf(event)
     const opens =
       event.type === 'turn_started' ||
-      (turnId !== undefined && turnId !== lastTurnId)
-    if (turnId !== undefined) lastTurnId = turnId
+      (turnId !== undefined && !seenTurnIds.has(turnId))
+    if (turnId !== undefined) seenTurnIds.add(turnId)
     if (opens) units.push({ start: index, time: null })
     const unit = units[units.length - 1]
     if (unit && unit.time === null) {

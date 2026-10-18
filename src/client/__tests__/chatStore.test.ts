@@ -720,6 +720,26 @@ describe('chat store history pages (chat-history-window 3.1)', () => {
     expect(transcript.historyExpanded).toBe(false)
   })
 
+  test('a page whose beforeId no longer matches the window start is dropped', () => {
+    seedWindow()
+    expect(useChatStore.getState().requestOlder('chat-1')).not.toBeNull()
+    // The window start moved while the page flew (a reopen's snapshot took
+    // a newer span): prepending would leave a gap, so the page is dropped
+    // and the claim is released for a fresh request from the new start.
+    useChatStore.getState().applyHistoryPage({
+      type: 'chat-history-page', sessionId: 'chat-1', beforeId: 'hist-drifted',
+      events: [replayed('hist-x', 'from the old start')], hasOlder: true,
+    })
+    const transcript = useChatStore.getState().sessions['chat-1']!
+    expect(transcript.events.some(event => event.id === 'hist-x')).toBe(false)
+    expect(transcript.historyLoading).toBe(false)
+    expect(transcript.historyExpanded).toBe(false)
+    expect(transcript.historyStartId).toBe('hist-a')
+    // The next claim composes from the unchanged window start again.
+    expect(useChatStore.getState().requestOlder('chat-1'))
+      .toEqual({ type: 'chat-history-page', sessionId: 'chat-1', beforeId: 'hist-a' })
+  })
+
   test('loading clears on the reply, on a snapshot, and on a disconnect', () => {
     seedWindow()
     useChatStore.getState().requestOlder('chat-1')

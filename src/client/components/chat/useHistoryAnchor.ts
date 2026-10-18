@@ -5,8 +5,9 @@
 // the recorded offset. The scroller disables the browser's own scroll
 // anchoring (overflow-anchor: none in ChatView) so this adjustment is the
 // only one — otherwise the two compound. The one skipped bottom-stick
-// belongs to the prepend, not to a live append — the view's stick effect
-// consumes the flag once.
+// belongs to the prepend, not to a live append — the flag is armed only
+// when the transcript actually grew while the page flew, so a stale reply
+// or a disconnect's strand-clear leaves the next append sticking as usual.
 import { useCallback, useLayoutEffect, useRef, type RefObject } from 'react'
 
 /** The slice of the scroll container the anchor logic touches. */
@@ -20,14 +21,16 @@ export interface AnchorScroller {
 export function useHistoryAnchor(
   scroller: RefObject<AnchorScroller | null>,
   /** The page request in flight; the restore runs when it resolves. */
-  loading: boolean
+  loading: boolean,
+  /** The transcript's event count; the prepend is a growth across the page. */
+  eventCount: number
 ): {
   /** Record the first visible row at the moment of the load-earlier click. */
   capture: () => void
   /** True once after a restore, so the bottom stick skips the prepend. */
   skipStickOnce: { current: boolean }
 } {
-  const armed = useRef<{ anchorId: string; viewportOffset: number } | null>(null)
+  const armed = useRef<{ anchorId: string; viewportOffset: number; eventCount: number } | null>(null)
   const skipStickOnce = useRef(false)
 
   const capture = useCallback(() => {
@@ -40,10 +43,10 @@ export function useHistoryAnchor(
       const rect = row.getBoundingClientRect()
       if (rect.bottom < top) continue
       const anchorId = row.getAttribute('data-anchor-id')
-      if (anchorId) armed.current = { anchorId, viewportOffset: rect.top - top }
+      if (anchorId) armed.current = { anchorId, viewportOffset: rect.top - top, eventCount }
       return
     }
-  }, [scroller])
+  }, [scroller, eventCount])
 
   useLayoutEffect(() => {
     const held = armed.current
@@ -53,11 +56,14 @@ export function useHistoryAnchor(
     if (!box) return
     const selector = `[data-anchor-id="${held.anchorId.replace(/["\\]/g, '\\$&')}"]`
     const row = box.querySelector(selector)
-    if (!row) return
+    // Arm the one stick skip only for a real prepend: a page that landed
+    // stale, was dropped, or brought nothing new must leave the next live
+    // append sticking to the bottom as usual.
+    if (!row || eventCount <= held.eventCount) return
     const offset = row.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop
     box.scrollTop = offset - held.viewportOffset
     skipStickOnce.current = true
-  }, [loading, scroller])
+  }, [loading, eventCount, scroller])
 
   return { capture, skipStickOnce }
 }

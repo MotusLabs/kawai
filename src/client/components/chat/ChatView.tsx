@@ -179,7 +179,7 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
   // once instead of yanking the reader to the bottom.
   const transcriptBox = useRef<HTMLDivElement>(null)
   const { capture: captureHistoryAnchor, skipStickOnce: historyStickSkip } =
-    useHistoryAnchor(transcriptBox, transcript.historyLoading)
+    useHistoryAnchor(transcriptBox, transcript.historyLoading, transcript.events.length)
   useEffect(() => {
     if (useChatStore.getState().pendingReveal?.sessionId === session.id) return
     if (historyStickSkip.current) {

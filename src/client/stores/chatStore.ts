@@ -1,4 +1,8 @@
-// Chat transcripts are replaced on attach and advanced by ordered live events.
+// Chat transcripts are replaced on attach and advanced by ordered live events;
+// the transcript model itself (its shape, `emptyTranscript`, and the live
+// event fold) lives in `chatTranscript.ts`, and the history-page actions'
+// bodies in `chatHistoryPages.ts` (chat-history-window D3) — this store keeps
+// the per-session state maps and one-line actions.
 // Final assistant text replaces its streamed preview — one entry per text
 // block, keeping the block's first time; request state is shared
 // through server resolution events rather than optimistic local answers. The
@@ -22,7 +26,6 @@
 import { create } from 'zustand'
 import type {
   ChatActivity,
-  ChatCommandState,
   ChatContextUsage,
   ChatEvent,
   ChatNotification,
@@ -31,21 +34,22 @@ import type {
   ChatWorker,
   ChatBackgroundTask,
 } from '@shared/chat'
-import { earliestTime } from '@shared/chatTime'
 import type { ClientMessage, SendClientMessage, ServerMessage, SessionStatus } from '@shared/types'
+import {
+  accountCloseKey,
+  anchorActivity,
+  anchorWorkers,
+  applyChatEvents,
+  emptyTranscript,
+  visibleNotifications,
+  type ChatTranscript,
+  type ChatTranscriptActivity,
+  type ChatTranscriptWorker,
+} from './chatTranscript'
+import { claimHistoryPage, foldHistoryPage, withoutHistoryLoading } from './chatHistoryPages'
 
-/** The live activity plus its client-clock anchor (design D6). */
-export interface ChatTranscriptActivity {
-  value: ChatActivity
-  /** Date.now() when the phase began; the row's timer ticks from this. */
-  phaseStartedAt: number
-}
-
-/** A roster row with its elapsed anchored on the client clock (D2). */
-export interface ChatTranscriptWorker extends Omit<ChatWorker, 'elapsedMs'> {
-  /** Date.now() - elapsedMs at adopt time; the row's timer ticks from this. */
-  startedAt: number
-}
+export { accountCloseKey, anchorActivity, anchorWorkers, applyChatEvents, emptyTranscript, visibleNotifications }
+export type { ChatTranscript, ChatTranscriptActivity, ChatTranscriptWorker }
 
 /** A worker's expanded body: in flight, delivered, or reported missing. */
 /** A background task's output tail (background tasks D3): latest reply, or a fetch marker. */
@@ -58,124 +62,6 @@ export type ChatWorkerBody =
   | { status: 'fetching' }
   | { status: 'ok'; events: ChatEvent[] }
   | { status: 'unavailable' }
-
-export interface ChatTranscript {
-  events: ChatEvent[]
-  pendingRequests: ChatPendingRequest[]
-  status: SessionStatus
-  throughSequence: number
-  /** The session's slash-command list; unavailable until an agent reports. */
-  commands: ChatCommandState
-  seen: Set<string>
-  activity: ChatTranscriptActivity | null
-  /** Latest context-usage reading; null before the first model request. */
-  contextUsage: ChatContextUsage | null
-  /** Model the agent last reported (init frame); null before the first turn. */
-  model: string | null
-  /** Latest worker roster (workers design D2): replaced, never merged. */
-  workers: ChatTranscriptWorker[]
-  /**
-   * Latest background-task roster (background tasks D2): replaced wholesale.
-   * Rows carry epoch startedAt/endedAt, so elapsed ticks client-side.
-   */
-  backgroundTasks: ChatBackgroundTask[]
-  /** Active notices (notification strip design D6), closed account ones filtered. */
-  notifications: ChatNotification[]
-  /** Older history exists above the window (chat-history-window D2); absent on older servers reads false. */
-  historyHasOlder: boolean
-  /** A page request is in flight; the load-earlier control and reveals claim it. */
-  historyLoading: boolean
-  /** The window's first event id: pages resume here, reconnects widen from here. */
-  historyStartId: string | null
-  /**
-   * The user loaded earlier history in this page load (design D3): memory
-   * only, never sent to the server, gone after a reload — a reopen of the
-   * chat resumes from the oldest loaded turn until then.
-   */
-  historyExpanded: boolean
-}
-
-export const emptyTranscript = (): ChatTranscript => ({
-  events: [], pendingRequests: [], status: 'waiting', throughSequence: 0,
-  commands: { status: 'unavailable', commands: [] }, seen: new Set(), activity: null, contextUsage: null,
-  model: null, workers: [], backgroundTasks: [], notifications: [],
-  historyHasOlder: false, historyLoading: false, historyStartId: null, historyExpanded: false,
-})
-
-/** Anchor a server-reported activity on the client's clock (design D2). */
-function anchorActivity(activity: ChatActivity): ChatTranscriptActivity {
-  return { value: activity, phaseStartedAt: Date.now() - activity.elapsedMs }
-}
-
-/** Anchor a roster's elapsed times on the client's clock (workers D2). */
-function anchorWorkers(workers: ChatWorker[]): ChatTranscriptWorker[] {
-  return workers.map(({ elapsedMs, ...row }) => ({
-    ...row,
-    startedAt: Date.now() - elapsedMs,
-  }))
-}
-
-/** A notice's per-tab close key: a changed text is a different notice. */
-function accountCloseKey(notice: ChatNotification): string {
-  return `${notice.key}:${notice.text}`
-}
-
-/** Drop the account notices this tab closed; agent notices pass through. */
-function visibleNotifications(
-  closed: Set<string> | undefined,
-  notifications: ChatNotification[]
-): ChatNotification[] {
-  if (!closed || closed.size === 0) return notifications
-  return notifications.filter(
-    (notice) => notice.source !== 'account' || !closed.has(accountCloseKey(notice))
-  )
-}
-
-export function applyChatEvents(state: ChatTranscript, incoming: ChatEvent[]): ChatTranscript {
-  const next = { ...state, events: [...state.events], pendingRequests: [...state.pendingRequests], seen: new Set(state.seen), activity: state.activity, contextUsage: state.contextUsage }
-  for (const event of incoming) {
-    if (next.seen.has(event.id) || (event.sequence > 0 && event.sequence <= next.throughSequence)) continue
-    next.seen.add(event.id)
-    next.throughSequence = Math.max(next.throughSequence, event.sequence)
-    if (event.type === 'assistant_delta' || event.type === 'assistant_text') {
-      // One entry per text block (chat-transcript-layout D5): merge only into
-      // the newest entry of this message when nothing followed it, so text
-      // after a tool call becomes its own entry in order. The entry keeps its
-      // earliest valid time (D2) so the clock never moves while it streams.
-      const index = next.events.length - 1
-      const previous = next.events[index]
-      const merges = previous !== undefined &&
-        (previous.type === 'assistant_text' || previous.type === 'assistant_delta') &&
-        previous.messageId === event.messageId && previous.turnId === event.turnId
-      const previousText = !merges ? '' : previous.type === 'assistant_text' ? previous.text : previous.delta
-      const text = event.type === 'assistant_text' ? event.text : previousText + event.delta
-      const at = merges ? earliestTime(previous.at, event.at) : event.at
-      const normalized: ChatEvent = { ...event, type: 'assistant_text', text, at }
-      if (merges) next.events[index] = normalized
-      else next.events.push(normalized)
-    } else {
-      next.events.push(event)
-    }
-    if (event.type === 'approval_request') {
-      next.pendingRequests.push({ kind: 'approval', requestId: event.requestId, tool: event.tool, input: event.input, at: event.at })
-    }
-    if (event.type === 'question_request') {
-      next.pendingRequests.push({ kind: 'question', requestId: event.requestId, questions: event.questions, at: event.at })
-    }
-    if (event.type === 'request_resolved') {
-      next.pendingRequests = next.pendingRequests.filter(request => request.requestId !== event.requestId)
-    }
-    if (event.type === 'turn_started') next.status = 'working'
-    if (event.type === 'turn_completed' || event.type === 'turn_interrupted') {
-      next.status = 'waiting'
-      // Safety net for a lost chat-activity null: a ended turn shows no row.
-      next.activity = null
-    }
-    if (next.pendingRequests.length > 0) next.status = 'permission'
-    else if (event.type === 'request_resolved' && next.status === 'permission') next.status = 'working'
-  }
-  return next
-}
 
 interface ChatStore {
   sessions: Record<string, ChatTranscript>
@@ -320,57 +206,24 @@ export const useChatStore = create<ChatStore>((set) => ({
   requestOlder: (sessionId, throughId) => {
     let request: Extract<ClientMessage, { type: 'chat-history-page' }> | null = null
     set(state => {
-      const current = state.sessions[sessionId]
-      // One page in flight per session, only while older history exists:
-      // the claim doubles as the load-earlier control's disabled state.
-      if (!current || current.historyLoading || !current.historyHasOlder || current.historyStartId === null) return state
-      request = {
-        type: 'chat-history-page',
-        sessionId,
-        beforeId: current.historyStartId,
-        ...(throughId !== undefined ? { throughId } : {}),
-      }
-      return { sessions: { ...state.sessions, [sessionId]: { ...current, historyLoading: true } } }
+      const claim = claimHistoryPage(state.sessions, sessionId, throughId)
+      if (!claim) return state
+      request = claim.request
+      return { sessions: claim.sessions }
     })
     return request
   },
   applyHistoryPage: (message, send) => set(state => {
     const current = state.sessions[message.sessionId] ?? emptyTranscript()
-    if (message.stale === true) {
-      // The server no longer holds the client's oldest event (chat-history-
-      // window D2): the expansion is lost once — drop it and re-attach
-      // plain, so the fresh snapshot rebuilds the recent window.
-      send?.({ type: 'chat-attach', sessionId: message.sessionId })
-      return { sessions: { ...state.sessions, [message.sessionId]: {
-        ...current, historyLoading: false, historyExpanded: false,
-      } } }
-    }
-    // Fold the page alone: its older live events (sequence > 0) must not
-    // move `throughSequence`, or later live events would read as seen.
-    const folded = applyChatEvents(emptyTranscript(), message.events).events
-    const fresh = folded.filter(event => !current.seen.has(event.id))
-    const seen = new Set(current.seen)
-    for (const event of fresh) seen.add(event.id)
-    return { sessions: { ...state.sessions, [message.sessionId]: {
-      ...current,
-      events: [...fresh, ...current.events],
-      seen,
-      historyHasOlder: message.hasOlder,
-      historyStartId: fresh[0]?.id ?? current.historyStartId,
-      historyLoading: false,
-      historyExpanded: true,
-    } } }
+    const outcome = foldHistoryPage(current, message)
+    // The server no longer holds the client's oldest event: re-attach plain
+    // so the fresh snapshot rebuilds the recent window (D2).
+    if (outcome.kind === 'stale') send?.({ type: 'chat-attach', sessionId: message.sessionId })
+    return { sessions: { ...state.sessions, [message.sessionId]: outcome.transcript } }
   }),
   clearHistoryLoading: () => set(state => {
-    const sessions = { ...state.sessions }
-    let changed = false
-    for (const [sessionId, transcript] of Object.entries(sessions)) {
-      if (transcript.historyLoading) {
-        sessions[sessionId] = { ...transcript, historyLoading: false }
-        changed = true
-      }
-    }
-    return changed ? { sessions } : state
+    const sessions = withoutHistoryLoading(state.sessions)
+    return sessions ? { sessions } : state
   }),
   setCommands: message => set(state => ({ sessions: {
     ...state.sessions,
