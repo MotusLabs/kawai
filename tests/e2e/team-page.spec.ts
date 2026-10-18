@@ -81,6 +81,16 @@ function useIsolatedServer(root: string) {
     const stopped = new Promise<void>(resolve => server!.once('exit', () => resolve()))
     server.kill('SIGTERM')
     await stopped
+    // The server leaves its private tmux server (TMUX_TMPDIR=root) running,
+    // and that daemon's cwd is this checkout — every run would leak one and
+    // pin the directory. Kill it through its own socket path, built from this
+    // spec's root and uid, so no other tmux server is ever addressed; a
+    // socket with no server just errors and is ignored.
+    try {
+      execFileSync('tmux', ['-S', join(root, `tmux-${process.getuid()}`, 'default'), 'kill-server'], { stdio: 'ignore' })
+    } catch {
+      // No server on that socket — nothing to clean up.
+    }
     server = null
   }
   return { start, stop, url: () => url, dbPath: () => dbPath, diagnostics: () => diagnostics }
