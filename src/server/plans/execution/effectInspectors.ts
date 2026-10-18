@@ -87,15 +87,16 @@ export async function inspectEffect(effect: EffectRow, reads: InspectorReads): P
       }
       case 'update-branch': {
         // PR head moved: done either way — the clean-merge check (D13) sorts
-        // carried rounds from update attempts on the new head.
+        // carried rounds from update attempts on the new head. The outcome
+        // keeps the adapter's shape: `head` is the reviewed head it pinned.
         const pull = await reads.prView(text('repo'), number('pr'))
-        return { found: 'done', outcome: { head: pull.headRefOid, moved: pull.headRefOid !== text('head'), state: pull.state } }
+        return { found: 'done', outcome: { requested: true, head: text('head'), newHead: pull.headRefOid, moved: pull.headRefOid !== text('head'), state: pull.state } }
       }
       case 'merge': {
         // PR state and merge commit: a completed merge is the landing fact's input.
         const pull = await reads.prView(text('repo'), number('pr'))
         if (pull.state === 'MERGED' && pull.mergeCommit !== null) {
-          return { found: 'done', outcome: { mergeCommit: pull.mergeCommit, head: pull.headRefOid } }
+          return { found: 'done', outcome: { merged: true, mergeCommit: pull.mergeCommit, head: pull.headRefOid } }
         }
         if (pull.state === 'CLOSED' && pull.mergeCommit === null) {
           return { found: 'stop', reason: 'pr-closed', detail: { message: `Pull request ${pull.number} was closed without merging.`, names: [String(pull.number)] } }

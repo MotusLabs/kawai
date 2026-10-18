@@ -19,6 +19,7 @@ import { SessionMailbox } from '../team/sessionMailbox'
 import { SessionTeams } from '../team/sessionTeams'
 import { clearTeamCache, resolveTeam, type TeamIdentity } from '../team/teamIdentity'
 import type { EnqueueInput } from '../team/mailboxStore'
+import { NULL_OWNERSHIP } from '../plans/execution/executionOwnership'
 import { CONTEXT_EXHAUSTED_TAG } from '../team/exhaustionNotes'
 import type { SpawnRequest } from '../team/staffing'
 
@@ -79,6 +80,7 @@ const makeRuntime = () => {
   errors = runtimeErrors
   return new SessionMailbox(db, {
   teams, records: () => records.values(), getRecord: id => records.get(id),
+  ownership: NULL_OWNERSHIP, onTaskResultWrite: () => {},
   getDriver: id => ({
     getPendingRequests: () => (pendingCards.has(id) ? [{ type: 'approval' }] : []),
     deliver: (envelope: { messageId: string; thread?: unknown[]; task?: { id: string } | null }) => {

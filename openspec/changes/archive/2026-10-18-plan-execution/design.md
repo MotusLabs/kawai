@@ -336,6 +336,8 @@ The manifest is serialized with `canonicalJson` and hashed with sha256. Artifact
 
 ### D11. Review and extra checks
 
+A change's extra checks are the running revision's plan-wide checks, then the change's own (`effectiveExtraChecks`; `planChecks` keeps the names disjoint). The instructions, the CI split, the verdict, the round view, and `plan_get` all read that one list.
+
 After CI passes, the review stage runs in these steps:
 1. **Release.** When the review group's current file is worktree-scoped, each live spawned member in the worktree is checked with `MemberRelease.readiness`. A ready member is archived with `releaseNow`, journaled as Kawai. One that is not ready holds the step at `releasing`, with that member and reason shown, and is re-checked on member events. Human-created sessions are never released. Staffing's occupancy rules then decide where the review lands.
 2. **Handoff.** The review handoff is dispatched to the review group with the role's `allowedProfiles` and `author-profile:<id>` tags (D15). The instruction lists:
@@ -507,6 +509,7 @@ Every outbound call Kawai makes is a git or `gh` call to `origin`, and each is a
 - **Completion.** When the last change lands, the execution finishes as completed. If its revision is still the plan's current approved revision and the plan is open, `PlanService.completeBySystem(planId, executionId)` writes `completed` with actor `system` under the command id `exec:<executionId>:complete` (D3). It refuses otherwise, and then the plan stays open.
 - **Plan closed.** When the human completes or cancels the plan, an after-commit hook of `PlanService` calls `ExecutionService.stopForPlan` with the reason `plan-closed`. The plan-close transaction writes no task rows, as durable-plans' D8 requires. The hook then runs as Kawai, the tasks' creator, and cancels Kawai's own tasks.
 - **Task closed.** A human close of an owned task that Kawai did not make stops the change as `task-closed`. A reopened task enables Retry.
+- **Task closed while an effect runs.** A human close (accept or cancel) while one of the change's effects runs is handled like Stop for that change: the effect settles and is recorded first, and no new effect starts. A completed merge records its landing fact and the change lands (worktree removal included), but Kawai never changes the task the human closed — no second acceptance, no status change. Otherwise the change stops as `task-closed`.
 
 ### D20. Contracts published for later changes
 

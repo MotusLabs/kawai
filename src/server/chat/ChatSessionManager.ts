@@ -87,7 +87,7 @@ import { MessageQuery } from '../team/messageQuery'
 import { ChatTurnEndStore } from './chatTurnEndStore'
 import { TeamMailbox } from '../team/TeamMailbox'
 import { createMailboxServer } from '../team/mailboxTools'
-import { composePlanServices } from '../plans/planComposition'
+import { composeExecutionCore, composePlanServices } from '../plans/planComposition'
 import type { ValidationService } from '../plans/validation/ValidationService'
 import type { OpenspecAdapter } from '../plans/validation/openspecAdapter'
 import type { ValidationDetailCache } from '../plans/validation/validationDetail'
@@ -1008,6 +1008,17 @@ export class ChatSessionManager {
         if (path === credentialsPath) this.emitNotifications(sessionId)
       }
     })
+    // The execution core exists before the team services: they take the
+    // ownership it mints (plan-execution D7), and the composition below
+    // reuses its store and wake hub (one ExecutionStore per server).
+    this.executionCore = composeExecutionCore(options.db.db)
+    const executionCore = this.executionCore
+    // One reader of `~/.kawai/teams.json` (N5): spawn caps for the mailbox
+    // and the plan-execution settings for the composition below.
+    this.caps = new TeamCaps({
+      ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
+      onErrors: errors => logger.warn('team_caps_file_errors', { errors }),
+    })
     this.teamMail = new SessionMailbox(options.db.db, {
       teams: this.teams, records: () => this.records.values(), getRecord: id => this.records.get(id),
       getDriver: id => this.drivers.get(id), homeDir: options.profileCatalogHome,
@@ -1021,10 +1032,7 @@ export class ChatSessionManager {
       hasLiveWorkers: id => this.hasLiveWorkers(id),
       hasRunningBackgroundTasks: id => this.hasRunningBackgroundTasks(id),
       spawn: request => this.spawnMember(request),
-      caps: new TeamCaps({
-        ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
-        onErrors: errors => logger.warn('team_caps_file_errors', { errors }),
-      }),
+      caps: this.caps,
       // A spawned member keeps the task it was spawned for; others follow
       // the task of the mail they received last.
       associateTask: (id, taskId) => {
@@ -1039,6 +1047,8 @@ export class ChatSessionManager {
       usageOf: profileId => this.usageLimits.get(profileId),
       onRulesLoaded: () => options.onRoutingRulesLoaded?.(),
       onError: error => logger.warn('team_mailbox_dispatch_failed', { error: String(error) }),
+      ownership: executionCore.ownership,
+      onTaskResultWrite: taskId => executionCore.wakes.resultWrite(taskId),
     })
     this.mailbox = this.teamMail.mailbox
     this.tasks = this.teamMail.tasks
@@ -1098,10 +1108,27 @@ export class ChatSessionManager {
       impact: this.impact,
       getSession: id => this.records.get(id),
       capacityReads: { capacity: (teamId, group, worktree) => this.teamMail.staffing.capacity(teamId, group, worktree), cooldownUntil: profileId => this.teamMail.limits.cooldownUntil(profileId) },
+      caps: this.caps,
+      executionCore,
+      executionTeam: {
+        tasks: this.teamMail.tasks,
+        assignments: this.teamMail.assignments,
+        results: this.teamMail.results,
+        taskStore: this.teamMail.tasks.store,
+        mailbox: this.teamMail.mailbox.store,
+        releases: this.teamMail.releases,
+        records: () => this.records.values(),
+        // The executor resolves teams by id (a member-less team included);
+        // the runtime's archive wake resolves sessions.
+        identityOf: teamId => this.teams.identityFor(teamId),
+        teamOfSession: id => this.teams.teamOf(id),
+      },
       ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
     })
     this.validation = planServices.validation
     this.plans = planServices.plans
+    this.executions = planServices.executions
+    this.executionRuntime = planServices.runtime
     this.validationDetail = planServices.validationDetail
     this.validationAdapter = planServices.adapter
     // The impact assessment derives from plans, and every plan's impact gate
@@ -1112,6 +1139,12 @@ export class ChatSessionManager {
     this.plans.store.subscribe(plan => {
       this.options.onPlanChange?.(plan.teamId, plan.id)
       this.options.onStrategyChange?.(plan.teamId)
+    })
+    // Every committed execution write re-pushes the plan's detail (D17):
+    // the changes carry the execution's view, and owned-task changes ride
+    // the task store's own plan flow above.
+    planServices.executionStore.subscribe(teamId => {
+      this.options.onPlanChange?.(teamId)
     })
     this.strategies.store.subscribe(strategy => {
       const teamId = strategyTeam(strategy)
@@ -1156,9 +1189,13 @@ export class ChatSessionManager {
     // orphan pruning start only after the rows exist — pruning before the
     // restore would see an empty registry and delete every chat's wire log.
     this.restorePromise = this.restorePersisted()
-      .then(() => {
+      .then(async () => {
         if (this.isShutDown) return
         this.teamMail.start()
+        // The executor boots after the mailbox and before its wakes install:
+        // D14 recovery runs to its end, then every team with a running
+        // execution resumes (plan-execution D5).
+        await this.executionRuntime?.start()
         // Work parked before a restart keeps its sessions paused.
         for (const sessionId of this.records.keys()) this.refreshParked(sessionId)
         // Logs of sessions deleted while the server was down are orphans now.
@@ -1371,6 +1408,14 @@ export class ChatSessionManager {
   private readonly turnUsageTracker: TurnUsageTracker
   /** Durable plans (durable-plans); the plan tools and UI actions go through it. */
   readonly plans: PlanService
+  /** Plan executions (plan-execution): the human Start/Stop/Retry commands. */
+  readonly executions: import('../plans/execution/ExecutionService').ExecutionService
+  /** The execution runtime (plan-execution D5): boot recovery, wakes, and stop. */
+  private readonly executionRuntime: import('../plans/execution/executionRuntime').ExecutionRuntime | null
+  /** The one execution store, its ownership, and its wake hub (plan-execution D5/D7). */
+  private readonly executionCore: ReturnType<typeof composeExecutionCore>
+  /** The user-level team settings (plan-execution D16's floor map lives here). */
+  readonly caps: TeamCaps
   /** Plan validation (plan-validation): reports, assessments, decisions, and the approval standing. */
   readonly validation: ValidationService
   /** The coalesced validation view for the Plans page pushes (plan-validation D11). */
@@ -1624,6 +1669,10 @@ export class ChatSessionManager {
     // Archived by any path: a pending release is settled by the archive
     // itself (member-release D1); a later restore starts clean.
     this.teamMail.cancelPendingRelease(sessionId)
+    // Every release path lands here (member release included), so one wake
+    // covers them: an archived member frees what its execution waits on (D5).
+    // Fired only once the archive succeeded (N2).
+    this.executionCore.wakes.archived(sessionId)
     return { ok: true }
   }
 
@@ -1788,6 +1837,8 @@ export class ChatSessionManager {
     // A restore still in flight stops at its next row (design D2).
     this.isShutDown = true
     this.teamMail.close()
+    // The executor stops with the server: wakes drop, the timer clears, new ticks refuse (D5).
+    this.executionRuntime?.stop()
     // Provider usage refreshes die with the server: timers stop now, and the
     // in-flight continuations check isShutDown before publishing.
     this.stopProviderUsageRefresh()

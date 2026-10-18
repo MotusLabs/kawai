@@ -10,6 +10,7 @@
 import { useEffect, useState } from 'react'
 import type { Session } from '@shared/types'
 import type { HumanTaskDetail, TaskHandoffKind, TaskResult } from '@shared/teamTasks'
+import { useTeamPlanStore } from '../../stores/teamPlanStore'
 import { TASK_HANDOFF_KINDS } from '@shared/teamTasks'
 import type { TaskActFn } from './TaskDirectionEditor'
 import TaskResultCard from './TaskResultCard'
@@ -38,10 +39,25 @@ export default function TaskResultsSection({ detail, groups, sessions, connected
   useEffect(() => { if (landed) setHandoff(null) }, [landed])
   const roleFor = (kind: TaskHandoffKind) => groups.some(group => group.id === HANDOFF_ROLE_HINT[kind]) ? HANDOFF_ROLE_HINT[kind] : ''
 
+  /** An execution owns this task while one of its change rows carries the task id (plan-execution D17). */
+  const ownedByExecution = useTeamPlanStore(state => {
+    if (task.planId === null || task.planChange === null) return false
+    for (const view of Object.values(state.views)) {
+      const executions = view?.detailExecutions ?? []
+      for (const execution of executions) {
+        if (execution.planId !== task.planId) continue
+        if (execution.changes.some(row => row.taskId === task.id)) return true
+      }
+    }
+    return false
+  })
   const acceptConfirm = (result: TaskResult) => {
     const needsReason = result.needsReevaluation || openChildren.length > 0
     return <div className="mt-2 border border-border p-2" data-testid="task-accept-confirm">
       <p className="font-medium">Accept this result and close the task as done?</p>
+      {ownedByExecution && <p className="text-chat-meta text-approval" data-testid="task-accept-owned-note">
+        A running execution owns this change: accepting stops it as task-closed and merges nothing.
+      </p>}
       <p className="text-chat-meta text-secondary">Acceptance criteria</p>
       <p className="whitespace-pre-wrap text-chat-body" data-testid="accept-criteria">{task.acceptance ?? 'No acceptance criteria were set.'}</p>
       {openChildren.length > 0 && <div className="text-chat-meta" data-testid="accept-open-children">

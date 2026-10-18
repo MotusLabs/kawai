@@ -100,64 +100,64 @@ Implement after `durable-plans`, `strategy-revision-impact`, and `plan-validatio
 
 ## 11. Executor, provisioning, and the first dispatch
 
-- [ ] 11.1 Implement `ExecutionExecutor` (D5): the wake sources, single-flight per team, the 60-second timer while running, and the pure `planSteps`. Verify with tests: concurrent wakes run one tick; a tick after a restart resumes from stored rows.
-- [ ] 11.2 Implement scheduling: plan order, landed dependencies, the parallel limit, and a stopped dependency holding its dependents. Verify with the `plan-execution` scheduling scenarios.
-- [ ] 11.3 Implement the provision effect (D6): branch from `origin`'s base, refuse `name-taken`, and reuse worktrees and branches from earlier executions. Verify against a bare `origin`, including a foreign remote branch left untouched.
-- [ ] 11.4 Create Kawai's task and dispatch the implement attempt with its manifest and request key (D7, D8). Mint the system `TaskCaller` only inside `src/server/plans/execution/` (deferred from 2.1 by the review). Verify with tests: task fields, link, assignment dispatcher, `allowed_profiles` on the mail, a replayed dispatch step yielding one instruction, and that no tool handler or WebSocket connection path can construct a system caller.
+- [x] 11.1 Implement `ExecutionExecutor` (D5): the wake sources, single-flight per team, the 60-second timer while running, and the pure `planSteps`. Verify with tests: concurrent wakes run one tick; a tick after a restart resumes from stored rows.
+- [x] 11.2 Implement scheduling: plan order, landed dependencies, the parallel limit, and a stopped dependency holding its dependents. Verify with the `plan-execution` scheduling scenarios.
+- [x] 11.3 Implement the provision effect (D6): branch from `origin`'s base, refuse `name-taken`, and reuse worktrees and branches from earlier executions. Verify against a bare `origin`, including a foreign remote branch left untouched.
+- [x] 11.4 Create Kawai's task and dispatch the implement attempt with its manifest and request key (D7, D8). Mint the system `TaskCaller` only inside `src/server/plans/execution/` (deferred from 2.1 by the review). Verify with tests: task fields, link, assignment dispatcher, `allowed_profiles` on the mail, a replayed dispatch step yielding one instruction, and that no tool handler or WebSocket connection path can construct a system caller.
 
 ## 12. Rounds and the gate
 
-- [ ] 12.1 Create rounds from new results, superseding the current round, passed or not, unless its merge started, and releasing the slot when the change held it. Supersede on a new task revision and dispatch a fix attempt naming it, after any running `update-branch` effect settles (D9). Verify with the round-supersession scenarios, including:
+- [x] 12.1 Create rounds from new results, superseding the current round, passed or not, unless its merge started, and releasing the slot when the change held it. Supersede on a new task revision and dispatch a fix attempt naming it, after any running `update-branch` effect settles (D9). Verify with the round-supersession scenarios, including:
   - a revision published while the change holds the slot and waits for CI on its base merge;
   - a revision published during an update that then conflicts dispatches one fix attempt, naming the revision, the base head, and the files, and no update attempt;
   - a revision published during an update that then passes the clean-merge check continues from the updated head;
   - the superseded review handoff's cancelled mail does not stop the change as `instruction-failed`.
-- [ ] 12.2 Run the push and open-pr effects for each round (plan-landing push and PR rules). Verify against a bare `origin` and the stub `gh`: reuse across rounds; an implementer's own push accepted; a moved branch stops as `effect-failed`; a closed PR stops as `pr-closed`.
-- [ ] 12.3 Poll CI and request the single rerun (D10). Record checks, flaky marks, and stops. Verify with tests driving the stub `gh` through pending, failed, rerun, and passed states, and through both timeouts.
-- [ ] 12.4 Release before review for worktree-scoped review groups, then dispatch the review handoff with the instruction, allowed profiles, and author tags (D11). Verify with tests: a not-ready member holds the step with its reason; an unscoped group leaves the implementer; human sessions are never released.
-- [ ] 12.5 Decide rounds from CI, the verdict, and the extra checks. Verify with the review and extra-check scenarios.
+- [x] 12.2 Run the push and open-pr effects for each round (plan-landing push and PR rules). Verify against a bare `origin` and the stub `gh`: reuse across rounds; an implementer's own push accepted; a moved branch stops as `effect-failed`; a closed PR stops as `pr-closed`.
+- [x] 12.3 Poll CI and request the single rerun (D10). Record checks, flaky marks, and stops. Verify with tests driving the stub `gh` through pending, failed, rerun, and passed states, and through both timeouts.
+- [x] 12.4 Release before review for worktree-scoped review groups, then dispatch the review handoff with the instruction, allowed profiles, and author tags (D11). Verify with tests: a not-ready member holds the step with its reason; an unscoped group leaves the implementer; human sessions are never released.
+- [x] 12.5 Decide rounds from CI, the verdict, and the extra checks. Verify with the review and extra-check scenarios.
 
 ## 13. Fix rounds, stops, Retry, and Stop
 
-- [ ] 13.1 Dispatch fix attempts with the failing checks, findings, count, and continue-from commit. Apply the round limit. Verify with the fix-round and round-limit scenarios.
-- [ ] 13.2 Detect failed instructions and human task closes. Verify with the `instruction-failed` and `task-closed` scenarios, including a hand acceptance that merges nothing.
-- [ ] 13.3 Implement Retry for every stop reason with a new generation (D12), and the wait for a free slot. Implement the `review-unavailable` stop when an author claims the review, checked on the claim before any findings (D11). Verify with one test per reason, that Retry is refused while the task is closed, that a `name-taken` change, which has no task, can be retried, and that an author's claim stops the change with no findings submitted.
-- [ ] 13.4 Implement Stop and the plan-close hook (D12, D19): cancel tasks as Kawai with member release, cancel pending effects, and settle a running merge first. Verify with the Stop scenarios, including Stop during a merge.
+- [x] 13.1 Dispatch fix attempts with the failing checks, findings, count, and continue-from commit. Apply the round limit. Verify with the fix-round and round-limit scenarios.
+- [x] 13.2 Detect failed instructions and human task closes. Verify with the `instruction-failed` and `task-closed` scenarios, including a hand acceptance that merges nothing.
+- [x] 13.3 Implement Retry for every stop reason with a new generation (D12), and the wait for a free slot. Implement the `review-unavailable` stop when an author claims the review, checked on the claim before any findings (D11). Verify with one test per reason, that Retry is refused while the task is closed, that a `name-taken` change, which has no task, can be retried, and that an author's claim stops the change with no findings submitted.
+- [x] 13.4 Implement Stop and the plan-close hook (D12, D19): cancel tasks as Kawai with member release, cancel pending effects, and settle a running merge first. Verify with the Stop scenarios, including Stop during a merge.
 
 ## 14. Direct landing and completion
 
-- [ ] 14.1 Implement the conditions check and the landing slot (D13). Verify with tests: an unresolved acceptance condition holds the change outside the slot, and resolving it lets the change land; two passing changes land in order among those ready to merge; every stop releases the slot.
-- [ ] 14.2 Implement up to date: the ancestry check, the `merge-tree` conflict prediction, the update attempt on conflict, `update-branch` with the clean-merge check (parents, base containment, and tree), and the carried round with CI on the new head. Verify against a bare `origin` and the stub `gh`:
+- [x] 14.1 Implement the conditions check and the landing slot (D13). Verify with tests: an unresolved acceptance condition holds the change outside the slot, and resolving it lets the change land; two passing changes land in order among those ready to merge; every stop releases the slot.
+- [x] 14.2 Implement up to date: the ancestry check, the `merge-tree` conflict prediction, the update attempt on conflict, `update-branch` with the clean-merge check (parents, base containment, and tree), and the carried round with CI on the new head. Verify against a bare `origin` and the stub `gh`:
   - a clean update keeps the review;
   - a base that moved during the update still passes when the merge is clean;
   - a hand-made merge with the right parents but another tree, and a head moved by a push, each release the slot and dispatch an update attempt;
   - a conflict dispatches an update attempt naming the files;
   - failed CI after the update dispatches a fix from the merge commit.
-- [ ] 14.3 Implement the pre-merge base re-read, the pinned merge, the landing fact with `base_sha` and `tree_verified`, Kawai's acceptance, worktree removal when safe, and post-landing CI as evidence. Verify with tests:
+- [x] 14.3 Implement the pre-merge base re-read, the pinned merge, the landing fact with `base_sha` and `tree_verified`, Kawai's acceptance, worktree removal when safe, and post-landing CI as evidence. Verify with tests:
   - a base that moved before the merge returns the change to the up-to-date step;
   - a moved head is refused and nothing merged;
   - the fact is written once, and `tree_verified` is 1 for a landing whose base held still under each of `merge`, `squash`, and `rebase`, and 0 when the base moved between the re-read and the merge;
   - the task is done and its members are released once ready;
   - a live session keeps the worktree;
   - a failing base branch keeps the change landed.
-- [ ] 14.4 Add `PlanService.completeBySystem` and the execution's completion (D19). Verify with tests: the last landing completes the plan as `system`, while a newer approved revision leaves it open.
-- [ ] 14.5 Register `direct` in the mechanism registry, and refuse `integration-branch` as `landing-mode-supported`. Verify with the integration-branch scenarios.
+- [x] 14.4 Add `PlanService.completeBySystem` and the execution's completion (D19). Verify with tests: the last landing completes the plan as `system`, while a newer approved revision leaves it open.
+- [x] 14.5 Register `direct` in the mechanism registry, and refuse `integration-branch` as `landing-mode-supported`. Verify with the integration-branch scenarios.
 
 ## 15. Human protocol and the Execution section
 
-- [ ] 15.1 Add the D17 messages to `src/shared/types.ts` and `CHAT_CONNECTION_TYPES`, plus `executionConnections.ts` with team-scope resolution and cross-team refusals. Verify with connection tests for each message, and a refusal for another team's plan.
-- [ ] 15.2 Push `executions` in `team-plan-detail` after execution writes and owned task or mail changes. Verify with a test that a CI transition and a mail claim each push once.
-- [ ] 15.3 Wire `teamPlanStore`: executions, and the dialogs' command ids minted at open and re-minted only on a payload change. Verify with store tests, and a grep test that every applying method has a dispatch caller.
-- [ ] 15.4 Build `PlanExecutionSection`, `PlanExecutionStartDialog`, `PlanExecutionChangeRow`, and `PlanExecutionStopDialog`, and replace progress with `executionProgress` for executed plans. Add the owned-task note to the task view's **Accept result** dialog (D17). Verify with component tests for the Plans-view scenarios: Start standing and refusal, waiting explained, flaky and attested labels, a landing flagged for an unverified tree, disconnected controls, Stop listing what it cancels and keeps, and the Accept note on an owned task only.
+- [x] 15.1 Add the D17 messages to `src/shared/types.ts` and `CHAT_CONNECTION_TYPES`, plus `executionConnections.ts` with team-scope resolution and cross-team refusals. Verify with connection tests for each message, and a refusal for another team's plan.
+- [x] 15.2 Push `executions` in `team-plan-detail` after execution writes and owned task or mail changes. Verify with a test that a CI transition and a mail claim each push once.
+- [x] 15.3 Wire `teamPlanStore`: executions, and the dialogs' command ids minted at open and re-minted only on a payload change. Verify with store tests, and a grep test that every applying method has a dispatch caller.
+- [x] 15.4 Build `PlanExecutionSection`, `PlanExecutionStartDialog`, `PlanExecutionChangeRow`, and `PlanExecutionStopDialog`, and replace progress with `executionProgress` for executed plans. Add the owned-task note to the task view's **Accept result** dialog (D17). Verify with component tests for the Plans-view scenarios: Start standing and refusal, waiting explained, flaky and attested labels, a landing flagged for an unverified tree, disconnected controls, Stop listing what it cancels and keeps, and the Accept note on an owned task only.
 
 ## 16. Agent surface
 
-- [ ] 16.1 Add `executions` to `plan_get` (D18). Verify with a tool test reading a running execution's change states, attempt, and latest round.
-- [ ] 16.2 Add the execution-task rules to the plan note in `teamPrompt.ts`. Verify with a prompt snapshot test.
+- [x] 16.1 Add `executions` to `plan_get` (D18). Verify with a tool test reading a running execution's change states, attempt, and latest round.
+- [x] 16.2 Add the execution-task rules to the plan note in `teamPrompt.ts`. Verify with a prompt snapshot test.
 
 ## 17. End to end and docs
 
-- [ ] 17.1 Add an integration test with a bare `origin`, the stub `gh`, and fake members submitting results and findings. Two changes have a dependency. One gets a flaky check and one a failed review with a fix round. Both land, and the plan completes as `system`. The server restarts once mid-merge. Verify that the test passes and records one landing fact per change, with no duplicate dispatch, push, or merge.
-- [ ] 17.2 Add one fixture browser walkthrough of the Execution section, using a fixture landing adapter, and name it in `.github/workflows/ci.yml`. Verify by running that one spec on a spare `E2E_PORT` after `bun run build`, never the whole e2e suite.
-- [ ] 17.3 Add AGENTS.md How It Works bullets for execution, landing, the system actor, the ownership guards, routing roles, and the settings. Verify by reading them against the specs.
-- [ ] 17.4 Run `bun run lint && bun run typecheck && bun run test` and `openspec validate plan-execution --strict`. Verify that both pass.
+- [x] 17.1 Add an integration test with a bare `origin`, the stub `gh`, and fake members submitting results and findings. Two changes have a dependency. One gets a flaky check and one a failed review with a fix round. Both land, and the plan completes as `system`. The server restarts once mid-merge. Verify that the test passes and records one landing fact per change, with no duplicate dispatch, push, or merge.
+- [x] 17.2 Add one fixture browser walkthrough of the Execution section, using a fixture landing adapter, and name it in `.github/workflows/ci.yml`. Verify by running that one spec on a spare `E2E_PORT` after `bun run build`, never the whole e2e suite.
+- [x] 17.3 Add AGENTS.md How It Works bullets for execution, landing, the system actor, the ownership guards, routing roles, and the settings. Verify by reading them against the specs.
+- [x] 17.4 Run `bun run lint && bun run typecheck && bun run test` and `openspec validate plan-execution --strict`. Verify that both pass.

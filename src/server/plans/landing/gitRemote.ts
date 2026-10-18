@@ -30,9 +30,9 @@ const failure = (args: string[], result: GitCommandResult): Failed => ({
 const run = async (args: string[], cwd: string, timeoutMs?: number): Promise<GitCommandResult> =>
   runGitAsync(args, { cwd, ...(timeoutMs !== undefined ? { timeoutMs } : {}) })
 
-/** `git fetch origin` in the repository at `cwd`. */
-export async function gitFetch(cwd: string, remote = 'origin'): Promise<{ ok: true } | Failed> {
-  const args = ['fetch', remote]
+/** `git fetch origin [refspec]` in the repository at `cwd` (D6 fetches just the base). */
+export async function gitFetch(cwd: string, remote = 'origin', refspec?: string): Promise<{ ok: true } | Failed> {
+  const args = refspec === undefined ? ['fetch', remote] : ['fetch', remote, refspec]
   const result = await run(args, cwd, GIT_REMOTE_TIMEOUT_MS)
   return result.ok ? { ok: true } : failure(args, result)
 }

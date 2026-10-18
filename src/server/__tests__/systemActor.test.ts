@@ -4,7 +4,6 @@
 // it.
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
-import path from 'node:path'
 import { KAWAI_REPLY_GUIDANCE } from '../../shared/team'
 import { AssignmentService } from '../team/AssignmentService'
 import { AssignmentStore } from '../team/assignmentStore'

@@ -10,7 +10,7 @@
 // backoff's end folds into the dispatcher's wake time.
 import type { ChatSessionRecord } from '../db'
 import type { ChatSessionDriver } from '../chat/ChatSessionDriver'
-import type { TeamMessage, WaitingConstraint, WaitingReason } from '../../shared/team'
+import type { TeamMessage, WaitingReason } from '../../shared/team'
 import type { GroupCatalog } from './groupCatalog'
 import type { GroupDefinition } from './groupFile'
 import type { PendingSpawnRow } from './teamRoster'
@@ -37,7 +37,7 @@ import { ProfileRouter } from './routing/router'
 import { LimitOutcomes, type HandoffTarget } from './routing/limitOutcomes'
 import { ContextExhaustion, type ExhaustionOutcome } from './contextExhaustion'
 import { ExhaustionNotes } from './exhaustionNotes'
-import { ReasonLedger, orderConstraints, toReason } from './waitingReasons'
+import { ReasonLedger, startingAgentReason, toReason } from './waitingReasons'
 import { loadTeamGroups } from './teamGroups'
 import type { ChatUsageReport } from '../../shared/chat'
 import type { RouteDecisionLogEntry } from '../../shared/routing'
@@ -112,6 +112,14 @@ export class SessionMailbox {
     /** A routing decision was made (mailbox view). */
     onRouteDecision?: (entry: RouteDecisionLogEntry) => void
     onError: (error: unknown) => void
+    /**
+     * What a running execution owns (plan-execution D7): injected into the
+     * task, assignment, and result services and the delivered task context.
+     * Required (I1): tests without executions pass NULL_OWNERSHIP.
+     */
+    ownership: import('../plans/execution/executionOwnership').ExecutionOwnership
+    /** A result or findings write landed (plan-execution D5); the composition's wake hub. Required (I1). */
+    onTaskResultWrite: (taskId: string) => void
   }) {
     const store = new MailboxStore(db, {
       recipientExists: id => !!options.getRecord(id),
@@ -152,6 +160,7 @@ export class SessionMailbox {
       onStatusTransition: (task, status, actor) => this.releases.transitionHook(task, status, actor),
       restoreSession: options.restore,
       plans: this.plans,
+      ownership: options.ownership,
     })
     this.management = new MailboxManagement(store, {
       getSession: options.getRecord, tasks: this.tasks, homeDir: options.homeDir,
@@ -187,9 +196,12 @@ export class SessionMailbox {
       ...(options.homeDir ? { homeDir: options.homeDir } : {}),
       plans: this.plans,
       cooldownUntil: profileId => this.limits.cooldownUntil(profileId),
+      ownership: options.ownership,
     })
     this.results = new TaskResultService(this.tasks, { getSession: options.getRecord, assignments: this.assignments,
-      releases: this.releases, records: options.records, ...(options.homeDir ? { homeDir: options.homeDir } : {}) })
+      releases: this.releases, records: options.records, ...(options.homeDir ? { homeDir: options.homeDir } : {}),
+      ownership: options.ownership,
+      onWrite: options.onTaskResultWrite })
     // Worktree scoping (member-release D5): an unscoped group's task mail goes
     // to any member and never spawns; a missing definition stays scoped.
     const targetWorktree = (message: TeamMessage): string | null => {
@@ -274,7 +286,7 @@ export class SessionMailbox {
         if (!driver) throw new Error('Recipient disappeared')
         driver.deliver(envelope)
       },
-      taskContext: taskId => buildTaskContext(taskStore, taskId, this.plans),
+      taskContext: taskId => buildTaskContext(taskStore, taskId, this.plans, options.ownership),
       targetWorktree,
       router: this.router,
       associateTask: (id, taskId) => options.associateTask?.(id, taskId),
@@ -354,46 +366,12 @@ export class SessionMailbox {
     return out
   }
 
-  /**
-   * A `spawning` row's reason (D1/D3): Starting agent is always the blocker
-   * — its own reservation fills caps and holds the worktree, so those facts
-   * it creates itself sit among the other constraints, and an independent
-   * occupant is named there.
-   */
+  /** A `spawning` row's reason, read through the live catalog and staffing counts. */
   private startingAgentReason(teamId: string, row: TeamMessage, reservation: PendingSpawnRow | null): WaitingReason {
-    const blocker: WaitingConstraint = {
-      kind: 'starting-agent',
-      ...(reservation ? { reservation: {
-        group: reservation.groupId, profile: reservation.profileId,
-        worktree: reservation.worktree, startedAt: reservation.createdAt,
-      } } : {}),
-    }
-    const others: WaitingConstraint[] = []
-    if (reservation && row.toId !== null) {
-      const group = this.groupOfTeam(teamId, row.toId)
-      const capacity = this.staffing.capacity(teamId, row.toId, reservation.worktree, row.id)
-      if (group && capacity.groupMembers >= group.max) {
-        others.push({ kind: 'group-cap', counts: { live: capacity.groupMembers, cap: group.max } })
-      }
-      for (const entry of group?.profiles ?? []) {
-        const live = capacity.onProfile[entry.profileId] ?? 0
-        if (entry.cap !== undefined && live >= entry.cap) {
-          others.push({ kind: 'profile-cap', counts: { live, cap: entry.cap }, detail: entry.profileId })
-        }
-      }
-      if (capacity.teamSpawned >= capacity.teamCap) {
-        others.push({ kind: 'team-spawn-cap', counts: { live: capacity.teamSpawned, cap: capacity.teamCap } })
-      }
-      // Its own pending reservation holds the writer slot; independent
-      // occupants (spawned members, other reservations) are named.
-      const live = capacity.worktreeOccupants.length + capacity.worktreePending + 1
-      others.push({
-        kind: 'worktree-occupied', counts: { live, cap: 1 },
-        ...(capacity.worktreeOccupants.length > 0 ? { sessionIds: capacity.worktreeOccupants } : {}),
-        detail: reservation.worktree,
-      })
-    }
-    return { blocker, others: orderConstraints(others) }
+    return startingAgentReason(teamId, row, reservation, {
+      group: (team, id) => this.groupOfTeam(team, id),
+      capacity: (team, id, worktree, exclude) => this.staffing.capacity(team, id, worktree, exclude),
+    })
   }
 
   /** The group definition from a live member's cached catalog, when one exists. */
