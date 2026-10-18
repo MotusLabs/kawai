@@ -16,85 +16,22 @@
 // holder kind a landing mechanism adds supplies its own liveness check (X6).
 import type { Database } from 'bun:sqlite'
 import { logger } from '../../logger'
-import type { AttemptKind, AttemptManifest, ChangeState, ChangeStep, CiCheck, EffectKind, ExecutionOutcome, FloorMap, MergeMethod, StopDetail, StopReason } from '../../../shared/planExecution'
+import type { AttemptKind, AttemptManifest, CiCheck, EffectKind, ExecutionOutcome } from '../../../shared/planExecution'
 import {
   changeHolderId, mapAttempt, mapChange, mapEffect, mapExecution, mapLanding, mapRound, mapSlot,
   type AttemptRow, type ChangeRow, type EffectRow, type ExecutionRow, type LandingRow, type RoundRow, type SlotRow,
 } from './executionRows'
+import { mapConstraint, patchAssignments, type ChangeGuard, type ChangePatch, type NewExecution } from './executionPatch'
 
-export type ExecutionConflictKind = 'one-execution' | 'changes-unclaimed' | 'slot-taken'
-
-/** A database race lost, named; the message is fit for a refusal. */
-export class ExecutionConflict extends Error {
-  constructor(readonly kind: ExecutionConflictKind, message: string) { super(message) }
-}
-
-export interface NewExecution {
-  teamId: string
-  planId: string
-  revision: number
-  contentHash: string
-  reportId: string
-  inputHash: string
-  landingMode: string
-  baseBranch: string
-  baseCommit: string
-  floor: { version: number; map: FloorMap }
-  maxParallel: number
-  mergeMethod: MergeMethod
-  /** In content order; a change with a landing fact starts `landed` and owns nothing (D4). */
-  changes: Array<{ change: string; landed: boolean }>
-}
-
-/** Fields a transition may set; `undefined` leaves a column as it is, `null` clears it. */
-export interface ChangePatch {
-  state?: ChangeState
-  step?: ChangeStep | null
-  stopReason?: StopReason | null
-  stopDetail?: StopDetail | null
-  taskId?: string | null
-  worktree?: string | null
-  branch?: string | null
-  baselineCommit?: string | null
-  prNumber?: number | null
-  prUrl?: string | null
-  prOpenedByKawai?: boolean | null
-  fixRounds?: number
-  passedAt?: string | null
-}
-
-export interface ChangeGuard { state: ChangeState; generation: number }
+// The write vocabulary lives in `executionPatch.ts` (kept there so this file
+// stays under 500 lines) and is re-exported unchanged for every importer.
+export {
+  type ExecutionConflictKind, ExecutionConflict, type NewExecution,
+  type ChangePatch, type ChangeGuard, mapConstraint,
+} from './executionPatch'
 
 /** A mechanism-added slot holder kind's liveness check (X6): true while its holder still needs the slot. */
 export type SlotHolderCheck = (holderId: string) => boolean
-
-const PATCH_COLUMNS: Record<keyof ChangePatch, string> = {
-  state: 'state', step: 'step', stopReason: 'stop_reason', stopDetail: 'stop_detail_json', taskId: 'task_id',
-  worktree: 'worktree', branch: 'branch', baselineCommit: 'baseline_commit', prNumber: 'pr_number', prUrl: 'pr_url',
-  prOpenedByKawai: 'pr_opened_by_kawai', fixRounds: 'fix_rounds', passedAt: 'passed_at',
-}
-
-function columnValue(key: keyof ChangePatch, value: unknown): string | number | null {
-  if (value === null) return null
-  if (key === 'stopDetail') return JSON.stringify(value)
-  if (key === 'prOpenedByKawai') return value ? 1 : 0
-  return value as string | number
-}
-
-/** Map a constraint error to its named conflict; anything else is rethrown as is. */
-export function mapConstraint(error: unknown): never {
-  const message = error instanceof Error ? error.message : String(error)
-  if (message.includes('UNIQUE constraint failed: plan_executions.plan_id')) {
-    throw new ExecutionConflict('one-execution', 'The plan already has a running execution.')
-  }
-  if (message.includes('UNIQUE constraint failed: plan_execution_changes.team_id, plan_execution_changes.change')) {
-    throw new ExecutionConflict('changes-unclaimed', 'A change of this plan is already owned by another running execution.')
-  }
-  if (message.includes('UNIQUE constraint failed: plan_landing_slots.team_id')) {
-    throw new ExecutionConflict('slot-taken', "The team's landing slot is taken.")
-  }
-  throw error
-}
 
 export class ExecutionStore {
   private readonly holderChecks = new Map<string, SlotHolderCheck>()
@@ -237,10 +174,9 @@ export class ExecutionStore {
       const at = this.iso()
       const sets = ['generation = generation + 1', 'updated_at = ?']
       const values: Array<string | number | null> = [at]
-      for (const key of Object.keys(patch) as Array<keyof ChangePatch>) {
-        if (patch[key] === undefined) continue
-        sets.push(`${PATCH_COLUMNS[key]} = ?`)
-        values.push(columnValue(key, patch[key]))
+      for (const [column, value] of patchAssignments(patch)) {
+        sets.push(`${column} = ?`)
+        values.push(value)
       }
       if (next === 'landed' || next === 'cancelled') sets.push('owns = 0')
       this.db.prepare(`UPDATE plan_execution_changes SET ${sets.join(', ')} WHERE execution_id = ? AND change = ?`)

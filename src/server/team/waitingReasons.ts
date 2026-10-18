@@ -4,7 +4,10 @@
 // consumer (ledger, snapshot derivation, router diagnosis) agrees on which
 // constraint is the immediate blocker. The ledger is in-memory only: nothing
 // persists, and after a restart the first pass rebuilds every entry.
-import type { WaitingConstraint, WaitingConstraintKind, WaitingReason } from '../../shared/team'
+import type { TeamMessage, WaitingConstraint, WaitingConstraintKind, WaitingReason } from '../../shared/team'
+import type { PendingSpawnRow } from './teamRoster'
+import type { GroupDefinition } from './groupFile'
+import type { StaffingCapacity } from './staffing'
 
 /**
  * D1's deterministic order, decided by the human (Q1): a missing group
@@ -94,4 +97,48 @@ export class ReasonLedger {
     for (const [messageId, reason] of this.teams.get(teamId) ?? []) out[messageId] = reason
     return out
   }
+}
+
+/**
+ * A `spawning` row's reason (D3): the starting-agent blocker is pinned, and
+ * its own pending reservation's capacity effects are listed among the others.
+ */
+export function startingAgentReason(teamId: string, row: TeamMessage, reservation: PendingSpawnRow | null,
+  reads: {
+    group: (teamId: string, groupId: string) => GroupDefinition | undefined
+    capacity: (teamId: string, groupId: string, worktree: string, excludeMessageId?: string) => StaffingCapacity
+  }): WaitingReason {
+  const blocker: WaitingConstraint = {
+    kind: 'starting-agent',
+    ...(reservation ? { reservation: {
+      group: reservation.groupId, profile: reservation.profileId,
+      worktree: reservation.worktree, startedAt: reservation.createdAt,
+    } } : {}),
+  }
+  const others: WaitingConstraint[] = []
+  if (reservation && row.toId !== null) {
+    const group = reads.group(teamId, row.toId)
+    const capacity = reads.capacity(teamId, row.toId, reservation.worktree, row.id)
+    if (group && capacity.groupMembers >= group.max) {
+      others.push({ kind: 'group-cap', counts: { live: capacity.groupMembers, cap: group.max } })
+    }
+    for (const entry of group?.profiles ?? []) {
+      const live = capacity.onProfile[entry.profileId] ?? 0
+      if (entry.cap !== undefined && live >= entry.cap) {
+        others.push({ kind: 'profile-cap', counts: { live, cap: entry.cap }, detail: entry.profileId })
+      }
+    }
+    if (capacity.teamSpawned >= capacity.teamCap) {
+      others.push({ kind: 'team-spawn-cap', counts: { live: capacity.teamSpawned, cap: capacity.teamCap } })
+    }
+    // Its own pending reservation holds the writer slot; independent
+    // occupants (spawned members, other reservations) are named.
+    const live = capacity.worktreeOccupants.length + capacity.worktreePending + 1
+    others.push({
+      kind: 'worktree-occupied', counts: { live, cap: 1 },
+      ...(capacity.worktreeOccupants.length > 0 ? { sessionIds: capacity.worktreeOccupants } : {}),
+      detail: reservation.worktree,
+    })
+  }
+  return { blocker, others: orderConstraints(others) }
 }

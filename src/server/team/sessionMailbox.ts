@@ -35,7 +35,7 @@ import { LimitEventStore } from './routing/limitEvents'
 import { RuleRegistry, type RuleLoadReport } from './routing/ruleLoader'
 import { ProfileRouter } from './routing/router'
 import { LimitOutcomes, type HandoffTarget } from './routing/limitOutcomes'
-import { ReasonLedger, orderConstraints, toReason } from './waitingReasons'
+import { ReasonLedger, orderConstraints, startingAgentReason, toReason } from './waitingReasons'
 import { loadTeamGroups } from './teamGroups'
 import type { ChatUsageReport } from '../../shared/chat'
 import type { RouteDecisionLogEntry } from '../../shared/routing'
@@ -339,46 +339,12 @@ export class SessionMailbox {
     return out
   }
 
-  /**
-   * A `spawning` row's reason (D1/D3): Starting agent is always the blocker
-   * — its own reservation fills caps and holds the worktree, so those facts
-   * it creates itself sit among the other constraints, and an independent
-   * occupant is named there.
-   */
+  /** A `spawning` row's reason, read through the live catalog and staffing counts. */
   private startingAgentReason(teamId: string, row: TeamMessage, reservation: PendingSpawnRow | null): WaitingReason {
-    const blocker: WaitingConstraint = {
-      kind: 'starting-agent',
-      ...(reservation ? { reservation: {
-        group: reservation.groupId, profile: reservation.profileId,
-        worktree: reservation.worktree, startedAt: reservation.createdAt,
-      } } : {}),
-    }
-    const others: WaitingConstraint[] = []
-    if (reservation && row.toId !== null) {
-      const group = this.groupOfTeam(teamId, row.toId)
-      const capacity = this.staffing.capacity(teamId, row.toId, reservation.worktree, row.id)
-      if (group && capacity.groupMembers >= group.max) {
-        others.push({ kind: 'group-cap', counts: { live: capacity.groupMembers, cap: group.max } })
-      }
-      for (const entry of group?.profiles ?? []) {
-        const live = capacity.onProfile[entry.profileId] ?? 0
-        if (entry.cap !== undefined && live >= entry.cap) {
-          others.push({ kind: 'profile-cap', counts: { live, cap: entry.cap }, detail: entry.profileId })
-        }
-      }
-      if (capacity.teamSpawned >= capacity.teamCap) {
-        others.push({ kind: 'team-spawn-cap', counts: { live: capacity.teamSpawned, cap: capacity.teamCap } })
-      }
-      // Its own pending reservation holds the writer slot; independent
-      // occupants (spawned members, other reservations) are named.
-      const live = capacity.worktreeOccupants.length + capacity.worktreePending + 1
-      others.push({
-        kind: 'worktree-occupied', counts: { live, cap: 1 },
-        ...(capacity.worktreeOccupants.length > 0 ? { sessionIds: capacity.worktreeOccupants } : {}),
-        detail: reservation.worktree,
-      })
-    }
-    return { blocker, others: orderConstraints(others) }
+    return startingAgentReason(teamId, row, reservation, {
+      group: (team, id) => this.groupOfTeam(team, id),
+      capacity: (team, id, worktree, exclude) => this.staffing.capacity(team, id, worktree, exclude),
+    })
   }
 
   /** The group definition from a live member's cached catalog, when one exists. */
