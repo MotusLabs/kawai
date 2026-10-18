@@ -459,6 +459,7 @@ describe('session comparator (design D6)', () => {
       taskTitle: 'Export',
       spawned: false,
       parked: null,
+      contextExhausted: null,
     }
     // Compile-time exhaustiveness comes from the mapped type (a new Session
     // field without a comparator entry fails typecheck); this runtime check
@@ -591,6 +592,27 @@ describe('session comparator (design D6)', () => {
     const badges = renderer.root.findAllByProps({ 'data-testid': 'session-paused-badge' })
     expect(badges).toHaveLength(1)
     expect(badges[0]!.props.title).toBe('Paused: Provider limit on glm')
+    act(() => renderer.unmount())
+  })
+
+  test('a context-exhausted chat shows a badge that leaves when the flag clears', () => {
+    const listProps = {
+      selectedSessionId: null, loading: false, error: null,
+      onSelect: () => {}, onRename: () => {},
+    }
+    const flag = { at: '2026-10-18T08:28:01Z', reason: 'prompt_too_long' }
+    const chat = (id: string, extra: Partial<Session>): Session => ({ ...baseSession, id, kind: 'chat', ...extra })
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<SessionList sessions={[chat('dead', { contextExhausted: flag }), chat('fine', {})]} {...listProps} />)
+    })
+    const badges = () => renderer.root.findAllByProps({ 'data-testid': 'session-exhausted-badge' })
+    expect(badges()).toHaveLength(1)
+    expect(badges()[0]!.props.title).toBe('Context exhausted (prompt_too_long) · Run /compact or start a new session')
+    act(() => {
+      renderer.update(<SessionList sessions={[chat('dead', { contextExhausted: null }), chat('fine', {})]} {...listProps} />)
+    })
+    expect(badges()).toHaveLength(0)
     act(() => renderer.unmount())
   })
 

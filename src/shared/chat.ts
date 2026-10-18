@@ -296,6 +296,19 @@ export interface ChatActivity {
  * ChatEvent and is absent (`null`) rather than zero before the first
  * request.
  */
+/**
+ * The context-exhausted flag (chat-context-exhaustion D3): set when a turn
+ * fails with a terminal reason in `EXHAUSTING_REASONS`, cleared by a
+ * compaction or a successful turn. `reason` is the CLI's verbatim.
+ */
+export interface ChatContextExhausted {
+  at: string
+  reason: string
+}
+
+/** Terminal reasons that flag a session as context-exhausted. */
+export const EXHAUSTING_REASONS: readonly string[] = ['prompt_too_long', 'blocking_limit', 'rapid_refill_breaker']
+
 export interface ChatContextUsage {
   usedTokens: number
   thresholdTokens: number

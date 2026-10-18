@@ -36,7 +36,7 @@ import type {
   ChatWorker,
   ChatBackgroundTask,
 } from '../../shared/chat'
-import { turnSucceeded } from '../../shared/chat'
+import { EXHAUSTING_REASONS, turnSucceeded } from '../../shared/chat'
 import type {
   ChatNameSource,
   ServerMessage,
@@ -2475,6 +2475,9 @@ export class ChatSessionManager {
       }
     }
     if (event.type === 'error' || event.type === 'turn_completed') this.teamMail.settleRecipient(sessionId)
+    // The context-exhausted flag (chat-context-exhaustion D3), set or cleared
+    // before the mail outcome below reads it.
+    this.trackContextExhaustion(sessionId, event)
     // Profile routing: progress and limit outcomes for the mail a turn handles.
     if (event.type === 'tool_call') this.teamMail.toolCall(sessionId, event.tool, event.input)
     // A trigger marks a turn the agent started itself (limit-outcomes-agent-turns D1).
@@ -2529,6 +2532,24 @@ export class ChatSessionManager {
       (event.type === 'notice' && event.kind === 'compacted')
     ) {
       this.persistContextUsage(sessionId)
+    }
+  }
+
+  /**
+   * Flag a session whose turn failed on a context limit, and clear the flag
+   * on the compaction notice or a successful turn (chat-context-exhaustion
+   * D3). The column is the truth: nothing re-derives it at startup.
+   */
+  private trackContextExhaustion(sessionId: string, event: ChatEvent): void {
+    const flagged = this.records.get(sessionId)?.contextExhausted ?? null
+    if (event.type === 'turn_completed') {
+      if (turnSucceeded(event)) {
+        if (flagged) this.applyPatch(sessionId, { contextExhausted: null })
+      } else if (event.terminalReason && EXHAUSTING_REASONS.includes(event.terminalReason)) {
+        this.applyPatch(sessionId, { contextExhausted: { at: event.at || new Date().toISOString(), reason: event.terminalReason } })
+      }
+    } else if (event.type === 'notice' && event.kind === 'compacted' && flagged) {
+      this.applyPatch(sessionId, { contextExhausted: null })
     }
   }
 
@@ -2741,13 +2762,15 @@ export class ChatSessionManager {
     if (
       (patch.status !== undefined && patch.status !== record.status) ||
       patch.projectPath !== undefined || patch.archivedAt !== undefined ||
+      patch.contextExhausted !== undefined ||
       (patch.sdkSessionId !== undefined && patch.sdkSessionId !== record.sdkSessionId)
     ) this.dispatcher?.notify()
     // Fields a team view shows (team-workspace: live membership); other
     // patches (usage, activity stamps) stay silent.
     if (
       patch.status !== undefined || patch.archivedAt !== undefined || patch.projectPath !== undefined ||
-      patch.name !== undefined || patch.groupId !== undefined || patch.taskId !== undefined
+      patch.name !== undefined || patch.groupId !== undefined || patch.taskId !== undefined ||
+      patch.contextExhausted !== undefined
     ) this.options.onSessionRecordChange?.(sessionId)
     this.options.db.updateChatSession(sessionId, patch)
     // The first SDK session id makes a transcript followable: start the
@@ -2779,6 +2802,7 @@ export class ChatSessionManager {
         ? { nameSource: patch.nameSource }
         : {}),
       ...(patch.taskId !== undefined ? this.taskFields(next) : {}),
+      ...(patch.contextExhausted !== undefined ? { contextExhausted: patch.contextExhausted } : {}),
     })
   }
 
@@ -2804,6 +2828,7 @@ export class ChatSessionManager {
       ...this.taskFields(record),
       ...(record.spawned ? { spawned: true } : {}),
       ...(this.parkedShown.has(record.sessionId) ? { parked: this.parkedShown.get(record.sessionId)! } : {}),
+      ...(record.contextExhausted ? { contextExhausted: record.contextExhausted } : {}),
     }
   }
 

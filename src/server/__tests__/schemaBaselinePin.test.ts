@@ -18,7 +18,8 @@
 // migration 7 (`process-reports`) adds the process report tables;
 // migration 8 (`plan-execution`) the seven execution tables and
 // `team_messages.allowed_profiles`; migration 9 (`outbound-audit`) the three
-// outbound audit tables below.
+// outbound audit tables below; migration 10 (`context-exhausted`) the two
+// `chat_sessions` flag columns.
 import { expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { initDatabase } from '../db'
@@ -282,7 +283,11 @@ test('a fresh database opened by this build has the same shape plus each migrati
   expect(Object.keys(added).filter(table => table in expected.tables)).toEqual([])
   const messages = expected.tables.team_messages!
   const withProfiles = { ...messages, columns: [...messages.columns, optional('allowed_profiles')] }
-  expect(schemaShape(session.db)).toEqual({ tables: { ...expected.tables, ...added, team_messages: withProfiles } })
+  const chats = expected.tables.chat_sessions!
+  const withFlag = { ...chats, columns: [...chats.columns, optional('context_exhausted_at'), optional('context_exhausted_reason')] }
+  expect(schemaShape(session.db)).toEqual({
+    tables: { ...expected.tables, ...added, team_messages: withProfiles, chat_sessions: withFlag },
+  })
   const extra = session.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'").get()
   expect(extra).toEqual({ name: 'schema_migrations' })
   session.close()
