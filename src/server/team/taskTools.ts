@@ -36,6 +36,9 @@ export const taskSchemas = {
   }),
   task_handoff: z.object({
     ...taskId, kind: z.enum(['review', 'qa', 'fix']), result_id: z.string().min(1), target: z.string().min(1),
+    // Explicit recipient kind (session-targeted-task-handoffs D1): omitted
+    // means group, even when the id resembles a session id — never inferred.
+    target_kind: z.enum(['group', 'session']).optional(),
     instructions: z.string().min(1), expected_response: z.string().optional(),
   }),
 }
@@ -50,7 +53,7 @@ export const taskDescriptions: Record<(typeof TASK_TOOL_NAMES)[number], string> 
   task_acknowledge: 'State the published task revision you are now working from (the revision in the task header). Call it when you start or take over work on a task, and after a revision notice.',
   task_submit_result: 'Submit a result for a task: a summary, a commit and/or diff reference (at least one), the tests you ran with their outcomes, and known limitations. Your test outcomes are shown as claimed, not verified. Supersedes the task\'s previous result; does not close the task.',
   task_submit_findings: 'Report review or QA findings on one exact result (result_id from task_get): kind review|qa, verdict pass|fail, and the findings. They stay bound to that result — a newer result inherits nothing.',
-  task_handoff: 'Hand a result off to a role (target: a group id): kind review, qa, or fix (return for fixes), the result_id, instructions, and an optional expected_response. Dispatched like an assignment to one member of the group. While an equivalent handoff (same task, result, kind) is outstanding, this returns it instead of dispatching again.',
+  task_handoff: 'Hand a result off (kind review, qa, or fix — return for fixes; the result_id, instructions, and an optional expected_response) to a recipient: target_kind "group" (the default when omitted, even for a session-shaped id) with target: <group id>, or target_kind "session" with target: <session id> to dispatch ordinary direct task mail to that exact session — no other member is chosen. While an equivalent handoff (same task, result, kind) is outstanding, this returns it instead of dispatching again; if the standing handoff names another recipient, the notice says so and nothing is reassigned.',
 }
 
 export function taskHandlers(tasks: TaskService, sessionId: string, results?: TaskResultService) {
@@ -85,9 +88,11 @@ export function taskHandlers(tasks: TaskService, sessionId: string, results?: Ta
         return results.submitFindings(caller, task_id, { resultId: result_id, kind, verdict, findings })
       },
       task_handoff: async (input: unknown) => {
-        const { task_id, kind, result_id, target, instructions, expected_response } = taskSchemas.task_handoff.parse(input)
+        const { task_id, kind, result_id, target_kind, target, instructions, expected_response } = taskSchemas.task_handoff.parse(input)
+        const id = target.trim()
+        if (!id) throw new Error('A handoff target needs an identifier')
         return results.handoff(caller, task_id, {
-          kind, resultId: result_id, target: { kind: 'group', id: target }, instructions, expectedResponse: expected_response ?? null,
+          kind, resultId: result_id, target: { kind: target_kind ?? 'group', id }, instructions, expectedResponse: expected_response ?? null,
         })
       },
     } : {}),

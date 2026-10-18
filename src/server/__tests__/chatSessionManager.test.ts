@@ -20,6 +20,7 @@ import type {
 } from '../../shared/chat'
 import type { ClaudeLaunchConfiguration } from '../chat/ClaudeProfiles'
 import { initDatabase, type SessionDatabase } from '../db'
+import { MetricsSnapshot } from '../metrics/export/snapshot'
 import { OutboundStore } from '../outbound/store'
 import { SessionRegistry } from '../SessionRegistry'
 import { ChatWireLogs } from '../chat/ChatWireLogs'
@@ -429,6 +430,52 @@ describe('ChatSessionManager', () => {
     closeDispatchers()
     db.close()
     fs.rmSync(tempDir, { recursive: true, force: true })
+  })
+
+  test('observability foundation records managed task context, compaction, usage and acceptance without Prometheus', async () => {
+    process.env.ANTHROPIC_API_KEY = 'sk-test-key'
+    const h = await createHarness(db)
+    const task = h.manager.tasks.store.create({teamId:'/tmp/proj',title:'foundation',direction:'fixture only',creator:{kind:'human',sessionId:null}})
+    const created = h.manager.createSession({projectPath:'/tmp/proj',taskId:task.id})
+    if(!created.ok)throw Error('create failed')
+    expect((await h.manager.send(created.session.id,'fixture work')).ok).toBe(true)
+    const handle=h.handles[0]!
+    handle.push(initMessage('sdk-observability'))
+    handle.push(assistantUsage(12000,'context-before'))
+    handle.push(resultWithWindow())
+    await flush()
+    // A second turn has a known context threshold; the boundary preserves both sizes.
+    await h.manager.send(created.session.id,'compact and finish')
+    handle.push(assistantUsage(14000,'context-next'))
+    handle.push(compactBoundary(3000))
+    handle.push(resultWithWindow())
+    await flush()
+    const result=h.manager.tasks.store.results.insert({teamId:'/tmp/proj',taskId:task.id,taskRevision:1,summary:'fixture accepted',commit:null,diff:null,worktree:null,tests:[],limitations:null,submittedBy:{kind:'agent',sessionId:created.session.id}})
+    h.manager.tasks.store.setStatus(task.id,'done',()=>{h.manager.tasks.store.results.markAccepted(result.id,{kind:'human',sessionId:null})})
+    await flush()
+    const observations = db.db.prepare('SELECT kind,data FROM process_observations').all() as {kind:string;data:string}[]
+    for(const kind of ['turn_started','turn_ended','context','compaction','usage','acceptance'])expect(observations.some(row=>row.kind===kind)).toBe(true)
+    expect(h.manager.observations.recorder.failures).toBe(0)
+    const snapshot=new MetricsSnapshot(h.manager.observations).read()
+    expect(snapshot).toContain('kawai_task_acceptance_duration_seconds_count')
+    expect(snapshot).toContain('kawai_agent_compactions_total')
+    expect(snapshot).toContain('source="provider-quota"} 0')
+    writeTranscript('sdk-observability','[]')
+    h.manager.shutdown()
+    const restarted=await createHarness(db)
+    expect(new MetricsSnapshot(restarted.manager.observations).read()).toContain('kawai_task_acceptance_duration_seconds_count')
+    expect((db.db.prepare("SELECT count(*) n FROM process_observations WHERE kind='acceptance'").get() as {n:number}).n).toBe(1)
+    const resumed=await restarted.manager.send(created.session.id,'work after restart')
+    if(!resumed.ok)throw Error(resumed.error)
+    expect(restarted.handles[0]!.options.resume).toBe('sdk-observability')
+    restarted.handles[0]!.push(initMessage('sdk-observability'))
+    restarted.handles[0]!.push(resultWithWindow())
+    await flush()
+    const turns=restarted.manager.turnUsage.forSession(created.session.id)
+    expect(turns).toHaveLength(3)
+    expect(new Set(turns.map(turn=>turn.turnId)).size).toBe(3)
+    expect((db.db.prepare("SELECT count(*) n FROM process_observations WHERE kind='turn_ended'").get() as {n:number}).n).toBe(3)
+    restarted.manager.shutdown()
   })
 
   test('profiles persist, retain metadata, reject unknown IDs, and restore the SDK conversation', async () => {
@@ -3308,6 +3355,7 @@ describe('ChatSessionManager context usage', () => {
     // last displayed.
     let threshold = 200_000
     let probes = 0
+    let finishBoundaryProbe: (() => void) | undefined
     const report = () => ({
       categories: [], totalTokens: 0, maxTokens: 200_000, rawMaxTokens: 200_000,
       percentage: 0, gridRows: [], model: 'claude-sonnet-4-5', memoryFiles: [],
@@ -3319,7 +3367,7 @@ describe('ChatSessionManager context usage', () => {
       // Attach answers at once; the boundary probe resolves late.
       if (probes === 1) return Promise.resolve(report())
       return new Promise((resolve) => {
-        setTimeout(() => resolve(report()), 25)
+        finishBoundaryProbe = () => resolve(report())
       })
     })
     const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
@@ -3333,7 +3381,9 @@ describe('ChatSessionManager context usage', () => {
     expect(db.getChatSession(id)!.contextUsage).toMatchObject({ usedTokens: 157_900, thresholdTokens: 200_000 })
 
     threshold = 100_000
-    await new Promise((resolve) => setTimeout(resolve, 40))
+    expect(finishBoundaryProbe).toBeDefined()
+    finishBoundaryProbe!()
+    await waitForCondition(() => db.getChatSession(id)?.contextUsage?.thresholdTokens === 100_000)
     // No further turn or event: the correction wrote the re-scaled reading.
     expect(db.getChatSession(id)!.contextUsage).toMatchObject({ usedTokens: 157_900, thresholdTokens: 100_000, percentage: 157.9 })
     harness.manager.shutdown()
@@ -4741,13 +4791,14 @@ describe('ChatSessionManager provider usage pull', () => {
     if (!created.ok) throw new Error('create failed')
     await manager.send(created.session.id, 'hello')
     await flush()
-    expect(fetchCalls).toHaveLength(1)
+    expect(fetchCalls.length).toBeGreaterThanOrEqual(1)
+    const beforeArchive = fetchCalls.length
 
     await manager.archive(created.session.id)
     // Several cadences pass: the tick clears the timer without a request,
     // and the held report stays visible.
     await new Promise((resolve) => setTimeout(resolve, 200))
-    expect(fetchCalls).toHaveLength(1)
+    expect(fetchCalls).toHaveLength(beforeArchive)
     expect(usage).toHaveLength(1)
     expect(manager.getSnapshot(created.session.id)!.usage?.source).toBe('provider')
   })

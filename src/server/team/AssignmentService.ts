@@ -84,7 +84,7 @@ const nowIso = () => new Date().toISOString()
 
 const HANDOFF_LABELS: Record<TaskHandoffKind, string> = { review: 'Review', qa: 'QA', fix: 'Fix' }
 
-const targetLabel = (target: AssignmentTarget) => (target.kind === 'group' ? `group ${target.id}` : `session ${target.id}`)
+export const targetLabel = (target: AssignmentTarget) => (target.kind === 'group' ? `group ${target.id}` : `session ${target.id}`)
 
 const stateLabel = (assignment: TeamTaskAssignment) =>
   assignment.claimedBy ? `${assignment.state} (claimed by ${assignment.claimedBy})` : assignment.state
