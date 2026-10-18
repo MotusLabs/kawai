@@ -25,4 +25,4 @@
 
 ## 6. Docs and checks
 
-- [ ] 6.1 Update `CLAUDE.md`/`AGENTS.md` "How It Works" (attach sends a 24 h window; `chat-history-page`; `historyFrom` on reconnect) and the header comments of touched files; verify `bun run lint && bun run typecheck && bun run test` pass and `openspec validate chat-history-window --strict` is valid.
+- [x] 6.1 Update `CLAUDE.md`/`AGENTS.md` "How It Works" (attach sends a 24 h window; `chat-history-page`; `historyFrom` on reconnect) and the header comments of touched files; verify `bun run lint && bun run typecheck && bun run test` pass and `openspec validate chat-history-window --strict` is valid.
