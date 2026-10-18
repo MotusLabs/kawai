@@ -58,6 +58,29 @@ function spawnedIn(worktree: string): { sessionId: string; archivedAt: string | 
   return raw ? JSON.parse(raw) : null
 }
 
+/** Kill the chats a walkthrough made, as the UI does, so no leftover chat is auto-selected in later specs. */
+async function killSessions(page: Page, sessionIds: string[]) {
+  if (sessionIds.length === 0) return
+  await page.evaluate(async (ids) => {
+    const ws = new WebSocket(`${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`)
+    await new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = reject })
+    for (const sessionId of ids) ws.send(JSON.stringify({ type: 'session-kill', sessionId }))
+    await new Promise(resolve => setTimeout(resolve, 500))
+    ws.close()
+  }, sessionIds)
+  await expect.poll(() => withDb(`
+    return args.filter(id => db.query('SELECT 1 FROM chat_sessions WHERE session_id = ?').get(id)).length;
+  `, sessionIds), { timeout: 15_000 }).toBe('0')
+}
+
+/** Every spawned session in `worktree` (read-only). */
+function spawnedAll(worktree: string): string[] {
+  const raw = withDb(`
+    return JSON.stringify(db.query('SELECT session_id FROM chat_sessions WHERE spawned = 1 AND project_path = ?').all(args[0]).map(row => row.session_id));
+  `, [worktree])
+  return raw ? JSON.parse(raw) : []
+}
+
 const queue = (page: Page) => page.getByTestId('team-attention-queue')
 const exhaustedItems = (page: Page) => queue(page).locator('[data-kind="context-exhausted"]')
 async function openTab(page: Page, teamKey: string, tab: string) {
@@ -67,9 +90,11 @@ async function openTab(page: Page, teamKey: string, tab: string) {
 
 test('2.3/D8: a human-created chat shows the failed turn, badge, header row, and a needs-you item until a successful turn', async ({ page }, info) => {
   const team = resultsTeam()
+  const made: string[] = []
   try {
     await page.goto('/')
     const chat = await createChat(page, team.root, 'CE human chat', 'leads')
+    made.push(chat)
     await say(page, chat, 'go prompt-too-long')
     await expect(page.getByTestId('chat-transcript').getByRole('alert')).toContainText('Prompt is too long (blocking_limit)', { timeout: 15_000 })
     await expect(page.getByTestId('chat-status')).toHaveText('waiting', { timeout: 15_000 })
@@ -94,14 +119,19 @@ test('2.3/D8: a human-created chat shows the failed turn, badge, header row, and
     await page.screenshot({ path: info.outputPath('flag-cleared.png') })
     await openTab(page, team.root, 'tasks')
     await expect(exhaustedItems(page)).toHaveCount(0)
-  } finally { rmSync(team.root, { recursive: true, force: true }) }
+  } finally {
+    await killSessions(page, made)
+    rmSync(team.root, { recursive: true, force: true })
+  }
 })
 
 test('6.1: lead mail to a spawned member is dead-lettered, the member archived, the lead noted, and the item resolves on a new dispatch', async ({ page }, info) => {
   const team = resultsTeam()
+  const made: string[] = []
   try {
     await page.goto('/')
     const lead = await createChat(page, team.root, 'CE lead', 'leads')
+    made.push(lead)
     const seeded = seedLeadDispatch(team.root, team.worktree, lead, 'Build the export prompt-too-long')
     // Rows seeded behind the server's back wait for a dispatch pass; a turn ending in the lead's chat wakes it.
     await say(page, lead, 'hello')
@@ -144,5 +174,10 @@ test('6.1: lead mail to a spawned member is dead-lettered, the member archived, 
     await expect(page.getByTestId('task-outstanding-assignment')).toContainText('group devs', { timeout: 20_000 })
     await expect(exhaustedItems(page)).toHaveCount(0, { timeout: 20_000 })
     await page.screenshot({ path: info.outputPath('item-resolved.png') })
-  } finally { rmSync(team.root, { recursive: true, force: true }) }
+  } finally {
+    // The spawned member, archived or (after the new dispatch) a fresh one, goes too.
+    made.push(...spawnedAll(team.worktree))
+    await killSessions(page, made)
+    rmSync(team.root, { recursive: true, force: true })
+  }
 })
