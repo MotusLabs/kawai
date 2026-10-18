@@ -51,7 +51,7 @@ beforeEach(() => {
   })
   bench.service = planServices.plans
   composed = planServices
-  const teamScopes = new TeamScopes({ teams: { hasTeam: async () => false } as unknown as SessionTeams, repositories: () => [world.team.teamId] })
+  const teamScopes = new TeamScopes({ teams: { hasTeam: async () => false } as unknown as SessionTeams, repositories: () => [world.team.teamId, world.otherTeam.teamId] })
   const manager = {
     whenRestored: () => Promise.resolve(), teamScopes, plans: planServices.plans, executions: planServices.executions,
     impact: bench.impact, validation: planServices.validation, validationDetail: planServices.validationDetail,
@@ -106,7 +106,12 @@ describe('execution commands (§15.1)', () => {
 
     messages = []
     await send({ type: 'team-plan-execution-preview', teamPath: world.other, requestId: 'q2', planId, revision })
-    expect(last('team-plan-result')).toMatchObject({ requestId: 'q2', error: expect.stringContaining(world.other) })
+    expect(last('team-plan-result')).toMatchObject({ requestId: 'q2', error: expect.stringContaining('not found in this team') })
+    expect(last('team-plan-result')?.preview).toBeUndefined()
+    messages = []
+    const unknown = path.join(world.root, 'nowhere')
+    await send({ type: 'team-plan-execution-preview', teamPath: unknown, requestId: 'q2b', planId, revision })
+    expect(last('team-plan-result')).toMatchObject({ requestId: 'q2b', error: expect.stringContaining(unknown) })
     messages = []
     await send({ type: 'team-plan-execution-preview', teamPath: world.repo, requestId: 'q3', planId: 'plan-none', revision })
     expect(last('team-plan-result')).toMatchObject({ requestId: 'q3', error: expect.stringContaining('not found') })
@@ -142,6 +147,42 @@ describe('execution commands (§15.1)', () => {
     messages = []
     await send({ type: 'team-plan-execution-retry', teamPath: world.repo, requestId: 'q9', executionId, change: 'api', commandId: 'retry-1' })
     expect(last('team-plan-result')).toMatchObject({ requestId: 'q9', replayed: true })
+  })
+})
+
+describe('another team over the wire (§15.1)', () => {
+  test('Start, Stop, and Retry each refuse another team\'s plan or execution and write nothing', async () => {
+    const { planId, revision, hash } = await bench.draftInReview()
+    await bench.approve(planId, revision)
+    const store = composed.executionStore
+
+    // Start from another team's path: no execution of this plan is written.
+    messages = []
+    await send({ type: 'team-plan-execution-start', teamPath: world.other, requestId: 'x1', planId, revision, contentHash: hash, commandId: 'x-start' })
+    expect(last('team-plan-result')).toMatchObject({ requestId: 'x1', error: expect.stringContaining('not found in this team') })
+    expect(last('team-plan-result')?.execution).toBeUndefined()
+    expect(store.executionsOf(planId)).toEqual([])
+
+    // Start from this team over the wire.
+    messages = []
+    await send({ type: 'team-plan-execution-start', teamPath: world.repo, requestId: 'x2', planId, revision, contentHash: hash, commandId: 'x-start-own' })
+    const started = last('team-plan-result')
+    expect(started).toMatchObject({ requestId: 'x2', execution: { state: 'running' }, replayed: false })
+    const executionId = started!.execution!.id
+
+    // Stop from another team: refused, the execution keeps running.
+    messages = []
+    await send({ type: 'team-plan-execution-stop', teamPath: world.other, requestId: 'x3', executionId, reason: 'not yours', commandId: 'x-stop' })
+    expect(last('team-plan-result')).toMatchObject({ requestId: 'x3', error: expect.stringContaining('not found in this team') })
+    expect(store.execution(executionId)!.state).toBe('running')
+
+    // Retry from another team: refused, the stopped change stays stopped.
+    const row = store.change(executionId, 'api')!
+    store.transition(executionId, 'api', row, { state: 'stopped', stopReason: 'round-limit', stopDetail: { message: 'three failures' } })
+    messages = []
+    await send({ type: 'team-plan-execution-retry', teamPath: world.other, requestId: 'x4', executionId, change: 'api', commandId: 'x-retry' })
+    expect(last('team-plan-result')).toMatchObject({ requestId: 'x4', error: expect.stringContaining('not found in this team') })
+    expect(store.change(executionId, 'api')).toMatchObject({ state: 'stopped', stopReason: 'round-limit' })
   })
 })
 

@@ -21,6 +21,8 @@ import { TeamWorktrees } from '../team/worktreeRoots'
 import { WorktreeStaffing } from '../team/staffing'
 import { TeamCaps } from '../team/teamCaps'
 import { ExecutionStore } from '../plans/execution/executionStore'
+import { executionViewReads, executionViews } from '../plans/execution/executionView'
+import { flakyChecks } from '../../shared/planExecutionGates'
 import { executionOwnership } from '../plans/execution/executionOwnership'
 import { ExecutionExecutor } from '../plans/execution/executor'
 import { provisionAdapter } from '../plans/execution/executionProvision'
@@ -327,8 +329,10 @@ describe('the executed plan end to end (§17.1)', () => {
     await executor.idle()
     // The rerun effect ran; with CI green now the round reaches review.
     gh.checks = JSON.stringify([
-      // The post-rerun run completes after the rerun was requested (a far
+      // GitHub lists the failed attempt beside the rerun's run; the
+      // post-rerun run completes after the rerun was requested (a far
       // future stamp keeps it after the recorded rerun time).
+      { name: 'ci', source: 'actions', conclusion: 'failure', link: 'https://example.internal/runs/31/at', runId: 31, startedAt: '2026-10-17T00:00:00.000Z', completedAt: '2026-10-17T00:01:00.000Z' },
       { name: 'ci', source: 'actions', conclusion: 'success', link: 'https://example.internal/runs/31/bt', runId: 31, startedAt: '2026-10-17T00:02:00.000Z', completedAt: '2099-01-01T00:00:00.000Z' },
       { name: 'e2e', source: 'status', conclusion: 'success', link: null, startedAt: null, completedAt: null },
     ])
@@ -356,9 +360,15 @@ describe('the executed plan end to end (§17.1)', () => {
     // Both landed; the execution completed and the plan completed as system.
     expect(executions.change(executionId, 'flaky-b')!.state).toBe('landed')
     expect(executions.execution(executionId)).toMatchObject({ state: 'finished', outcome: 'completed' })
-    const plan = bench.plans.get(planId)!
-    expect(bench.plans.events(planId).at(-1)).toMatchObject({ kind: 'completed' })
-    void plan
+    expect(bench.plans.get(planId)!.lifecycle).toBe('completed')
+    const completion = bench.plans.events(planId).at(-1)!
+    expect(completion).toMatchObject({ kind: 'completed', actor: { kind: 'system' }, commandId: `exec:${executionId}:complete` })
+    // flaky-b's CI passed on the one rerun: its CI round marks the name flaky.
+    const flakyRound = executions.rounds(executionId, 'flaky-b').find(round => round.ci !== null && flakyChecks(round.ci).includes('ci'))
+    expect(flakyRound).toBeDefined()
+    const flakyView = executionViews(executions, planId, executionViewReads(bench.plans, bench.db.db))
+      .find(entry => entry.id === executionId)!.changes.find(entry => entry.change === 'flaky-b')!
+    expect(flakyView.state).toBe('landed')
     // One landing fact per change; no duplicate dispatch, push, or merge.
     const facts = executions.landings(planId)
     expect(facts.map(fact => fact.change).sort()).toEqual(['dep-a', 'flaky-b'])

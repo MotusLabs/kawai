@@ -1,7 +1,7 @@
 // The executor's wake loop (plan-execution I2, N1): a failing tick is
 // logged and the timer still rescheduled — never an unhandled rejection,
 // which would exit the server — and a wake during a running tick runs
-// exactly one more tick, however many wakes arrived.
+// exactly one more tick, however many wakes arrived. Startup never wakes (N6).
 import { afterEach, expect, test } from 'bun:test'
 import { ExecutionExecutor, type ExecutorDeps } from '../plans/execution/executor'
 
@@ -76,4 +76,15 @@ test('a wake never ticks inside the caller\'s synchronous work', async () => {
   expect(ticks).toBe(1)
   // No running execution: no timer.
   expect(timers(executor).has('team')).toBe(false)
+})
+
+test('startup recovers and never wakes: no tick and no timer until the runtime wakes (N6)', async () => {
+  let ticks = 0
+  const store = { runningForTeam: () => [{ id: 'e1' }], markRunningEffectsUnknown: () => [], execution: () => null }
+  executor = new ExecutionExecutor({ store, tickMs: 60_000 } as unknown as ExecutorDeps)
+  ;(executor as unknown as { tick: (teamId: string) => Promise<void> }).tick = async () => { ticks += 1 }
+  await executor.startup()
+  await new Promise(resolve => setTimeout(resolve, 20))
+  expect(ticks).toBe(0)
+  expect(timers(executor).size).toBe(0)
 })

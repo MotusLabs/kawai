@@ -25,7 +25,7 @@ import { benchGhStub, benchOpenspecStub } from './planExecutionBenchStubs'
 
 const FLOOR = { lint: ['ci'], typecheck: ['ci'], 'unit-tests': ['ci'], 'ci-e2e': ['e2e'] }
 const GITHUB_URL = 'https://github.com/acme/app.git'
-const CHANGES = ['bench-a', 'bench-f', 'bench-c', 'bench-d', 'bench-e', 'bench-g', 'bench-h', 'bench-i']
+const CHANGES = ['bench-a', 'bench-f', 'bench-c', 'bench-d', 'bench-e', 'bench-g', 'bench-h', 'bench-i', 'bench-j', 'bench-k', 'bench-l']
 
 let root: string
 let repo: string
@@ -34,6 +34,8 @@ let transcriptDir: string
 let manager: ChatSessionManager
 let team: TeamIdentity
 let human: { kind: 'human'; team: TeamIdentity }
+/** Every plan-view push the manager announced (bootstrap's onPlanChange → publishPlans). */
+const planPushes: Array<{ teamId: string; planId: string | undefined }> = []
 const saved = { path: process.env.PATH, config: process.env.CLAUDE_CONFIG_DIR }
 
 async function waitFor(check: () => boolean, label: string, ms = 20_000): Promise<void> {
@@ -88,7 +90,7 @@ beforeAll(async () => {
     return { path: file!, sha: meta!.split(' ')[2]!, type: 'blob' }
   })
   fs.writeFileSync(path.join(bin, 'trees.json'), JSON.stringify({ tree: entries }))
-  fs.writeFileSync(path.join(bin, 'gh'), benchGhStub(path.join(bin, 'trees.json')), { mode: 0o755 })
+  fs.writeFileSync(path.join(bin, 'gh'), benchGhStub(path.join(bin, 'trees.json'), origin, bin), { mode: 0o755 })
   fs.writeFileSync(path.join(bin, 'openspec'), benchOpenspecStub(), { mode: 0o755 })
   process.env.PATH = `${bin}${path.delimiter}${saved.path ?? ''}`
 
@@ -104,6 +106,7 @@ beforeAll(async () => {
   manager = new ChatSessionManager({
     db: initDatabase({ path: path.join(root, 'sessions.db') }), registry: new SessionRegistry(), authCheck: () => true, profileCatalogHome: root,
     onEvent: () => {},
+    onPlanChange: (teamId, planId) => { planPushes.push({ teamId, planId }) },
     queryFactory: params => {
       const sdkId = params.options.resume ?? crypto.randomUUID()
       const file = path.join(transcriptDir, `${sdkId}.jsonl`)
@@ -312,6 +315,95 @@ describe('the plan-execution manager bench', () => {
     } finally {
       writeGroup('gone-devs', '---\nmax: 2\n---\nBuild, until the file goes.')
     }
+  }, 60_000)
+
+  test('(j) §15.2: each execution write and each claim of the owned task\'s mail pushes the plan views exactly once', async () => {
+    // Each write is observed synchronously: the pushes it announced are the
+    // ones between entering and leaving the real store call.
+    const store = executions()
+    const mailbox = manager.mailbox.store
+    const writes: Array<{ kind: string; id: string; pushes: typeof planPushes }> = []
+    const originals = { transition: store.transition, claim: mailbox.claim, claimSpawned: mailbox.claimSpawned }
+    store.transition = function (this: typeof store, ...args: Parameters<typeof store.transition>) {
+      const before = planPushes.length
+      const result = originals.transition.apply(this, args)
+      if (result !== null) writes.push({ kind: 'transition', id: `${args[0]}:${args[1]}`, pushes: planPushes.slice(before) })
+      return result
+    }
+    mailbox.claim = function (this: typeof mailbox, ...args: Parameters<typeof mailbox.claim>) {
+      const before = planPushes.length
+      const claimed = originals.claim.apply(this, args)
+      if (claimed) writes.push({ kind: 'claim', id: args[0], pushes: planPushes.slice(before) })
+      return claimed
+    }
+    // A spawned implementer claims its first turn through claimSpawned.
+    mailbox.claimSpawned = function (this: typeof mailbox, ...args: Parameters<typeof mailbox.claimSpawned>) {
+      const before = planPushes.length
+      const claimed = originals.claimSpawned.apply(this, args)
+      if (claimed) writes.push({ kind: 'claim', id: args[0], pushes: planPushes.slice(before) })
+      return claimed
+    }
+    try {
+      const { planId, executionId } = await started('bench-j')
+      const member = await implementer(executionId, 'bench-j')
+      const { commit } = await submit(executionId, 'bench-j', member)
+      await waitFor(() => originHead('bench-j') === commit, 'bench-j: round pushed to origin', 10_000)
+      // Every committed transition of this execution: one team-wide push.
+      const transitions = writes.filter(write => write.kind === 'transition' && write.id.startsWith(`${executionId}:`))
+      expect(transitions.length).toBeGreaterThan(0)
+      for (const write of transitions) expect(write.pushes).toEqual([{ teamId: team.teamId, planId: undefined }])
+      // The claim of the implement instruction: one push of this plan.
+      const instructionId = manager.tasks.store.assignmentsOf(changeRow(executionId, 'bench-j').taskId!)[0]!.messageId!
+      const claims = writes.filter(write => write.kind === 'claim' && write.id === instructionId)
+      expect(claims).toHaveLength(1)
+      expect(claims[0]!.pushes).toEqual([{ teamId: team.teamId, planId }])
+    } finally {
+      store.transition = originals.transition
+      mailbox.claim = originals.claim
+      mailbox.claimSpawned = originals.claimSpawned
+    }
+  }, 60_000)
+
+  test('(k) §14.3: a reviewed change lands through the composed path; the task is done and its members are released once ready', async () => {
+    const { planId, executionId } = await started('bench-k')
+    const implementerId = await implementer(executionId, 'bench-k')
+    const { resultId } = await submit(executionId, 'bench-k', implementerId)
+    const taskId = changeRow(executionId, 'bench-k').taskId!
+    const review = () => manager.tasks.store.assignmentsOf(taskId).find(entry => entry.handoffKind === 'review')
+    await waitFor(() => {
+      const id = review()?.messageId
+      return id != null && manager.mailbox.store.get(id)?.state === 'delivered'
+    }, 'bench-k: review delivered', 15_000)
+    const reviewer = manager.mailbox.store.get(review()!.messageId!)!.claimedBy!
+    await waitFor(() => manager.getSnapshot(reviewer)?.status === 'waiting', 'bench-k: reviewer idle')
+    // The findings write alone wakes the executor (no tick, no timer): it lands.
+    await taskHandlers(manager.tasks, reviewer, manager.results).task_submit_findings!({
+      task_id: taskId, result_id: resultId, kind: 'review', verdict: 'pass', findings: 'Looks right.',
+    })
+    await waitFor(() => changeRow(executionId, 'bench-k').state === 'landed', 'bench-k: landed', 20_000)
+    const facts = executions().landings(planId)
+    expect(facts).toHaveLength(1)
+    expect(facts[0]).toMatchObject({ change: 'bench-k', mergeSha: originHead('master'), treeVerified: true })
+    expect(manager.tasks.store.get(taskId)).toMatchObject({ status: 'done' })
+    expect(manager.tasks.store.results.get(resultId)?.acceptedBy?.kind).toBe('system')
+    // Member release: every spawned member of the done task is archived once ready.
+    const archived = (id: string) => db().getChatSessions().find(row => row.sessionId === id)?.archivedAt != null
+    await waitFor(() => archived(implementerId) && archived(reviewer), 'bench-k: members released', 15_000)
+  }, 90_000)
+
+  test('(l) §13.4: Stop cancels the task as Kawai and releases its spawned member; the state holds when stop resolves', async () => {
+    const { executionId } = await started('bench-l')
+    const member = await implementer(executionId, 'bench-l')
+    const taskId = changeRow(executionId, 'bench-l').taskId!
+    const stopped = await manager.executions.stop(human, { executionId, reason: 'enough', commandId: 'stop-bench-l' })
+    expect(stopped.ok).toBe(true)
+    // Asserted the moment stop resolves: one transaction committed it all.
+    expect(executions().execution(executionId)).toMatchObject({ state: 'finished', outcome: 'stopped', stopReason: 'enough' })
+    expect(changeRow(executionId, 'bench-l').state).toBe('cancelled')
+    expect(manager.tasks.store.get(taskId)?.status).toBe('cancelled')
+    await waitFor(() => db().getChatSessions().find(row => row.sessionId === member)?.archivedAt != null, 'bench-l: member released')
+    const releases = manager.tasks.store.journal(taskId).filter(entry => entry.author.kind === 'system' && entry.text.includes(member))
+    expect(releases.length).toBeGreaterThan(0)
   }, 60_000)
 
   test('(i) each production wake fires from its own source: task change, result write, archive', async () => {

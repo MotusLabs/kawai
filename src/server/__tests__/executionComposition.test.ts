@@ -329,6 +329,23 @@ describe('the composed execution stack (rev 3)', () => {
     expect(bench.tasks.assignmentsOf(row.taskId ?? '')).toHaveLength(1)
   }, 20000)
 
+  test('the release step reads group scoping through the team identity, with no live member (N7)', () => {
+    writeGroup(world, 'free-devs', '---\nworktreeScoped: false\n---\nAnywhere.')
+    try {
+      // Nobody of either group is live: the read goes through identityOf.
+      const live = [...bench.records.values()].filter(record => record.groupId === 'free-devs' || record.groupId === 'reviewers')
+      expect(live).toEqual([])
+      const groupScoped = (runtime as unknown as { deps: { executor: { deps: { groupScoped: (teamId: string, groupId: string) => boolean } } } })
+        .deps.executor.deps.groupScoped
+      expect(groupScoped(world.team.teamId, 'free-devs')).toBe(false)
+      expect(groupScoped(world.team.teamId, 'reviewers')).toBe(true)
+      // An unknown team counts as scoped.
+      expect(groupScoped('no-such-team', 'free-devs')).toBe(true)
+    } finally {
+      fs.rmSync(path.join(world.repo, '.kawai', 'groups', 'free-devs.md'), { force: true })
+    }
+  })
+
   test('the D5 wakes fire only for owned tasks', async () => {
     const change = nextChange()
     const executionId = await startedExecution(change)
