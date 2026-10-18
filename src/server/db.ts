@@ -4,7 +4,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { Database as SQLiteDatabase } from 'bun:sqlite'
-import type { ChatApprovalPolicy, ChatContextUsage } from '../shared/chat'
+import type { ChatApprovalPolicy, ChatContextExhausted, ChatContextUsage } from '../shared/chat'
 import type { AgentType, ChatNameSource, SessionStatus } from '../shared/types'
 import { parseApprovalPolicy } from './chat/approvalPolicy'
 import { resolveProjectPath } from './paths'
@@ -82,6 +82,12 @@ export interface ChatSessionRecord {
   taskId?: string | null
   /** Created by worktree staffing rather than by the human (team-tasks D4). */
   spawned?: boolean
+  /**
+   * The context-exhausted flag (chat-context-exhaustion D3): when a turn
+   * failed on a context limit and the CLI's terminal reason; null/absent = not
+   * flagged. Patched as one value over its two columns.
+   */
+  contextExhausted?: ChatContextExhausted | null
 }
 
 // last_user_message is a UI preview; unbounded values (giant pastes, tool
@@ -579,8 +585,14 @@ export function initDatabase(
         params.$context_at = usage?.at ?? null
         params.$context_approx = usage ? (usage.thresholdApproximate ? 1 : 0) : null
       }
+      // The flag is one value over two columns; null clears both together.
+      if (patch.contextExhausted !== undefined) {
+        fields.push('context_exhausted_at', 'context_exhausted_reason')
+        params.$context_exhausted_at = patch.contextExhausted?.at ?? null
+        params.$context_exhausted_reason = patch.contextExhausted?.reason ?? null
+      }
       for (const [key, value] of Object.entries(patch)) {
-        if (value === undefined || key === 'contextUsage') continue
+        if (value === undefined || key === 'contextUsage' || key === 'contextExhausted') continue
         const field = fieldMap[key]
         if (!field) continue
         fields.push(field)
@@ -665,6 +677,10 @@ function mapChatRow(row: Record<string, unknown>): ChatSessionRecord {
     groupId: row.group_id === null || row.group_id === undefined ? null : String(row.group_id),
     taskId: row.task_id === null || row.task_id === undefined ? null : String(row.task_id),
     spawned: Number(row.spawned ?? 0) === 1,
+    contextExhausted:
+      typeof row.context_exhausted_at === 'string' && typeof row.context_exhausted_reason === 'string'
+        ? { at: row.context_exhausted_at, reason: row.context_exhausted_reason }
+        : null,
   }
 }
 

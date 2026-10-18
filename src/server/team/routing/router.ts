@@ -188,6 +188,7 @@ const CAUSE_LABELS: Record<MemberExclusion['kind'], string> = {
   'busy': 'working',
   'pending-card': 'awaiting an approval or answer',
   'parked': 'parked',
+  'context-exhausted': 'context exhausted',
   'other-worktree': 'in another worktree',
   'unavailable': 'unavailable',
   'startup-failed': 'startup failed',

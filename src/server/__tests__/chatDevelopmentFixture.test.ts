@@ -93,6 +93,28 @@ describe('development fixture wire frames', () => {
   })
 })
 
+describe('development fixture context-exhaustion turn', () => {
+  test('a prompt-too-long turn ends failed with the incident\'s terminal reason', async () => {
+    const events: ChatEvent[] = []
+    const driver = new ChatSessionDriver({
+      sessionId: 'chat-fixture-exhausted',
+      projectPath: '/tmp/project',
+      queryFactory: fixtureQueryFactory,
+      onEvent: (event) => events.push(event),
+      onStatus: () => {},
+      onWorkers: () => {},
+    })
+    driver.send('go prompt-too-long')
+    const deadline = Date.now() + 3_000
+    while (!events.some((event) => event.type === 'turn_completed') && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+    expect(events.find((event) => event.type === 'turn_completed')).toMatchObject({ subtype: 'success', isError: true, terminalReason: 'blocking_limit' })
+    expect(events.find((event) => event.type === 'error')).toMatchObject({ message: 'Prompt is too long (blocking_limit)' })
+    driver.kill()
+  })
+})
+
 describe('development fixture activity turns', () => {
   /** Collapse the human-scale phase holds to near-zero. */
   beforeEach(() => {
