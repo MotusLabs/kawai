@@ -14,17 +14,18 @@
 // an orphan — a slot row held by a change that is not in `landing` — is
 // cleared and logged at startup and whenever the slot is found taken. A
 // holder kind a landing mechanism adds supplies its own liveness check (X6).
-import type { Database } from 'bun:sqlite'
 import { logger } from '../../logger'
-import type { AttemptKind, AttemptManifest, CiCheck, EffectKind, ExecutionOutcome } from '../../../shared/planExecution'
+import type { AttemptKind, AttemptManifest, CiCheck, ExecutionOutcome } from '../../../shared/planExecution'
 import {
-  changeHolderId, mapAttempt, mapChange, mapEffect, mapExecution, mapLanding, mapRound, mapSlot,
-  type AttemptRow, type ChangeRow, type EffectRow, type ExecutionRow, type LandingRow, type RoundRow, type SlotRow,
+  changeHolderId, mapAttempt, mapChange, mapExecution, mapLanding, mapRound, mapSlot,
+  type AttemptRow, type ChangeRow, type ExecutionRow, type LandingRow, type RoundRow, type SlotRow,
 } from './executionRows'
 import { mapConstraint, patchAssignments, type ChangeGuard, type ChangePatch, type NewExecution } from './executionPatch'
+import { ExecutionEffectStore } from './executionEffectStore'
 
-// The write vocabulary lives in `executionPatch.ts` (kept there so this file
-// stays under 500 lines) and is re-exported unchanged for every importer.
+// The write vocabulary lives in `executionPatch.ts` and the effect rows in
+// `executionEffectStore.ts` (the base class), so this file stays under 500
+// lines; both are re-exported or inherited unchanged for every importer.
 export {
   type ExecutionConflictKind, ExecutionConflict, type NewExecution,
   type ChangePatch, type ChangeGuard, mapConstraint,
@@ -33,13 +34,9 @@ export {
 /** A mechanism-added slot holder kind's liveness check (X6): true while its holder still needs the slot. */
 export type SlotHolderCheck = (holderId: string) => boolean
 
-export class ExecutionStore {
+export class ExecutionStore extends ExecutionEffectStore {
   private readonly holderChecks = new Map<string, SlotHolderCheck>()
   private readonly listeners = new Set<(teamId: string) => void>()
-
-  constructor(readonly db: Database, private readonly now: () => Date = () => new Date()) {}
-
-  private iso(): string { return this.now().toISOString() }
 
   /** A committed execution write (D17): the team's plan views re-push. */
   subscribe(listener: (teamId: string) => void): () => void {
@@ -391,114 +388,5 @@ export class ExecutionStore {
   decideRound(id: string, outcome: 'pass' | 'fail', detail: { verdictFindingsId?: string; extra?: RoundRow['extra'] } = {}): void {
     this.db.prepare(`UPDATE plan_execution_rounds SET outcome = ?, verdict_findings_id = ?, extra_json = ?, decided_at = ? WHERE id = ?`)
       .run(outcome, detail.verdictFindingsId ?? null, detail.extra ? JSON.stringify(detail.extra) : null, this.iso(), id)
-  }
-
-  // --- effects (D14): recorded before they run, inspected before they repeat ---
-
-  /**
-   * Insert one effect row; idempotent by key — a step re-enqueued after a
-   * restart returns the recorded row and never writes a second.
-   */
-  insertEffect(input: { executionId: string; change: string | null; roundId: string | null; kind: EffectKind; effectKey: string; command: Record<string, unknown> }): EffectRow {
-    const existing = this.effectByKey(input.effectKey)
-    if (existing) return existing
-    const id = `effect-${crypto.randomUUID()}`
-    this.db.prepare(`INSERT INTO plan_execution_effects (id, execution_id, change, round_id, kind, effect_key, command_json, state, tries, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?)`).run(
-      id, input.executionId, input.change, input.roundId, input.kind, input.effectKey, JSON.stringify(input.command), this.iso(),
-    )
-    return this.effect(id)!
-  }
-
-  effect(id: string): EffectRow | null {
-    const row = this.db.prepare('SELECT * FROM plan_execution_effects WHERE id = ?').get(id) as Record<string, unknown> | null
-    return row ? mapEffect(row) : null
-  }
-
-  effectByKey(effectKey: string): EffectRow | null {
-    const row = this.db.prepare('SELECT * FROM plan_execution_effects WHERE effect_key = ?').get(effectKey) as Record<string, unknown> | null
-    return row ? mapEffect(row) : null
-  }
-
-  effectsOf(executionId: string): EffectRow[] {
-    return (this.db.prepare('SELECT * FROM plan_execution_effects WHERE execution_id = ? ORDER BY created_at, rowid').all(executionId) as Array<Record<string, unknown>>)
-      .map(mapEffect)
-  }
-
-  /**
-   * The team's due pending effects, oldest first, across its running
-   * executions (D5: one at a time per team). A finished execution's cleanup
-   * (`remove-worktree`) stays due: the completion must not strand it.
-   */
-  dueEffects(teamId: string, now: string): EffectRow[] {
-    return (this.db.prepare(`SELECT e.* FROM plan_execution_effects e
-      JOIN plan_executions x ON x.id = e.execution_id
-      WHERE x.team_id = ? AND (x.state = 'running' OR e.kind = 'remove-worktree')
-        AND e.state = 'pending' AND (e.next_at IS NULL OR e.next_at <= ?)
-      ORDER BY e.created_at, e.rowid`).all(teamId, now) as Array<Record<string, unknown>>)
-      .map(mapEffect)
-  }
-
-  markEffectRunning(id: string): void {
-    this.db.prepare("UPDATE plan_execution_effects SET state = 'running', started_at = COALESCE(started_at, ?) WHERE id = ?").run(this.iso(), id)
-  }
-
-  /** Commit a settled outcome (done, failed, unknown, cancelled) with its facts. */
-  setEffectOutcome(id: string, outcome: { state: 'done' | 'failed' | 'unknown' | 'cancelled'; outcome?: unknown; error?: string | null }): void {
-    this.db.prepare(`UPDATE plan_execution_effects SET state = ?, outcome_json = ?, error = ?, finished_at = ? WHERE id = ?`).run(
-      outcome.state, outcome.outcome === undefined ? null : JSON.stringify(outcome.outcome), outcome.error ?? null, this.iso(), id,
-    )
-  }
-
-  /** A transient failure goes back to pending, one try counted, retrying at `nextAt` (D14's backoff). */
-  scheduleEffectRetry(id: string, nextAt: string, error: string | null): void {
-    this.db.prepare(`UPDATE plan_execution_effects SET state = 'pending', tries = tries + 1, next_at = ?, error = ? WHERE id = ?`).run(nextAt, error, id)
-  }
-
-  /** Stop cancels every pending effect of the execution (D12). */
-  cancelEffects(executionId: string): void {
-    this.db.prepare("UPDATE plan_execution_effects SET state = 'cancelled', finished_at = ? WHERE execution_id = ? AND state = 'pending'").run(this.iso(), executionId)
-  }
-
-  /** Startup recovery (D14): a `running` effect's process is gone — it becomes `unknown`, inspected before it repeats. */
-  markRunningEffectsUnknown(): EffectRow[] {
-    return this.db.transaction(() => {
-      const rows = (this.db.prepare("SELECT * FROM plan_execution_effects WHERE state = 'running'").all() as Array<Record<string, unknown>>).map(mapEffect)
-      const update = this.db.prepare("UPDATE plan_execution_effects SET state = 'unknown' WHERE id = ?")
-      for (const row of rows) update.run(row.id)
-      return rows
-    })()
-  }
-
-  /**
-   * The done provision effects that created `branch` (D6): a name that
-   * exists is accepted only when one of these belongs to an execution of
-   * the same plan.
-   */
-  doneProvisions(branch: string): Array<{ executionId: string; command: Record<string, unknown> }> {
-    return (this.db.prepare(`SELECT * FROM plan_execution_effects WHERE kind = 'provision' AND state = 'done'`)
-      .all() as Array<Record<string, unknown>>)
-      .map(mapEffect)
-      .filter(effect => effect.command.branch === branch)
-      .map(effect => ({ executionId: effect.executionId, command: effect.command }))
-  }
-
-  /** The due `unknown` effects, oldest first — inspected before anything else for their change runs (D14). */
-  dueUnknownEffects(now: string): EffectRow[] {
-    return (this.db.prepare(`SELECT e.* FROM plan_execution_effects e
-      JOIN plan_executions x ON x.id = e.execution_id
-      WHERE x.state = 'running' AND e.state = 'unknown' AND (e.next_at IS NULL OR e.next_at <= ?)
-      ORDER BY e.created_at, e.rowid`).all(now) as Array<Record<string, unknown>>)
-      .map(mapEffect)
-  }
-
-  /** An inspection that found the work not done puts the effect back to pending, to run again (D14). */
-  resetEffect(id: string): void {
-    this.db.prepare("UPDATE plan_execution_effects SET state = 'pending', next_at = NULL WHERE id = ?").run(id)
-  }
-
-  /** An undecidable inspection stays `unknown`, one try counted, retrying at `nextAt` (D14). */
-  scheduleInspectionRetry(id: string, nextAt: string, error: string | null): void {
-    this.db.prepare("UPDATE plan_execution_effects SET state = 'unknown', tries = tries + 1, next_at = ?, error = ? WHERE id = ?").run(nextAt, error, id)
   }
 }
