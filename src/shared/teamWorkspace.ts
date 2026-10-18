@@ -22,6 +22,10 @@ export type AttentionKind =
   | 'staffing-wait'
   | 'pending-acceptance'
   | 'fixes-requested'
+  // The owner's informational item for unacknowledged outbound violations
+  // (execution-safety-recovery D10): nothing waits on it, only the human
+  // clears it, and it never stops execution, supervision, or dispatch.
+  | 'outbound-violation'
   | (string & {})
 
 /** Who an attention item is waiting on: the human, one session, or a group. */
@@ -43,6 +47,8 @@ export interface AttentionImpact {
 /** D11: a link names where the existing human action lives — never a new one. */
 export interface AttentionLink {
   kind: 'card' | 'task' | 'message' | 'chat'
+  /** `audit` (execution-safety-recovery D10): the Audit tab, `id` a call id or '' for the tab. */
+  | 'audit'
   id: string
 }
 
@@ -264,6 +270,12 @@ export interface MorningSummary {
   approvals: SummaryBucket
   uncertainDeliveries: SummaryBucket
   finishedTurnsWithoutResult: SummaryBucket
+  /**
+   * The window's recorded outbound sends (execution-safety-recovery D10):
+   * violations, unknown destinations, and allowed sends as row counts, read
+   * from the durable audit records — a restart never empties it.
+   */
+  outbound: SummaryBucket
 }
 
 /** What `team-workspace-open` answers and every change push replaces (D1). */

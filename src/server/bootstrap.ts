@@ -161,6 +161,8 @@ export function startServer(): void {
     onStrategyChange: teamId => chatConnections.publishStrategies(teamId),
     onProcessReportChange: teamId => chatConnections.publishMetrics(teamId),
     onPlanChange: (teamId, planId) => chatConnections.publishPlans(teamId, planId),
+    onOutboundChange: teamId => chatConnections.publishOutbound(teamId),
+    backupStatus: () => db.backups?.status() ?? null,
     onCommandState: (sessionId, state) => chatConnections.publishCommandState(sessionId, state),
     onActivity: (sessionId, activity) => chatConnections.publishActivity(sessionId, activity),
     onContextUsage: (sessionId, usage) => chatConnections.publishContextUsage(sessionId, usage),

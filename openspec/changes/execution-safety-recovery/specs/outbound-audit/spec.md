@@ -152,7 +152,7 @@ Outcomes SHALL be `completed`, `failed`, `denied` (a permission denial or a decl
 - **THEN** the call reads started in background and links to its background task
 
 ### Requirement: The owner audits sends in a read-only view
-The Team page SHALL have an Audit tab listing the team's recorded calls newest first, with filters by verdict, rule, session, and time range, paging, counts of allowed sends per rule, and each row's outcome state. It SHALL be addressed by team path, refuse unknown teams, and offer no edit beyond Acknowledge. Its controls SHALL disable while disconnected.
+The Team page SHALL have an Audit tab listing the team's recorded calls newest first, with filters by verdict, rule, destination, session, and time range, paging, counts of allowed sends per rule, and each row's outcome state. It SHALL be addressed by team path, refuse unknown teams, and offer no edit beyond Acknowledge. Its controls SHALL disable while disconnected.
 
 #### Scenario: Filtering by verdict
 - **WHEN** the owner filters the Audit tab to violations in the last 7 days

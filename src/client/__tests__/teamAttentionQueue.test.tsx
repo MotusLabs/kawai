@@ -27,7 +27,7 @@ const byId = (root: TestRenderer.ReactTestRenderer, id: string) => root.root.fin
 const summary = (extra: Partial<MorningSummary> = {}): MorningSummary => ({
   since: '2026-10-14T00:00:00.000Z',
   completedResults: { items: [] }, capacityWaits: { items: [], runtimeOnly: true }, approvals: { items: [] },
-  uncertainDeliveries: { items: [] }, finishedTurnsWithoutResult: { items: [] }, ...extra,
+  uncertainDeliveries: { items: [] }, finishedTurnsWithoutResult: { items: [] }, outbound: { items: [] }, ...extra,
 })
 const snapshotOf = (attention: AttentionItem[], extra: Partial<MorningSummary> = {}): TeamWorkspaceSnapshot =>
   ({ tasks: [], attention, members: [], directory: [], summary: summary(extra) })
@@ -89,18 +89,19 @@ test('links go to their source: a task, a mailbox row, a chat', () => {
   expect(useSessionStore.getState().selectedSessionId).toBe('chat-8')
 })
 
-test('the summary shows five buckets, the runtime-only label, and links', () => {
+test('the summary shows six buckets, the runtime-only label, and links', () => {
   const opened: string[] = []
   let renderer!: TestRenderer.ReactTestRenderer
   act(() => {
     renderer = TestRenderer.create(<TeamMorningSummary onOpen={entry => opened.push(entry.id)} summary={summary({
       capacityWaits: { runtimeOnly: true, items: [{ id: 'w', label: 'Waiting on devs cap', link: { kind: 'message', id: 'm' } }] },
       finishedTurnsWithoutResult: { items: [{ id: 'f', label: 'dev two finished a turn', link: { kind: 'chat', id: 's2' } }] },
+      outbound: { items: [] },
     })} />)
   })
   const buckets = byId(renderer, 'summary-bucket')
   expect(buckets.map(bucket => bucket.props['data-bucket'])).toEqual([
-    'Completed results', 'Capacity waits', 'Approvals', 'Uncertain deliveries', 'Finished turns without a result',
+    'Completed results', 'Capacity waits', 'Approvals', 'Uncertain deliveries', 'Finished turns without a result', 'Outbound sends',
   ])
   expect(textOf(buckets[1]!)).toContain('Runtime only')
   expect(textOf(buckets[0]!)).toContain('None.')

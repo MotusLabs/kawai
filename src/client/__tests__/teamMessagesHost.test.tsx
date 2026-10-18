@@ -151,6 +151,7 @@ test('the Messages view composes and reads; delivery operations stay with the Ma
         mailbox: { search: '', filters: {}, expanded: ['u1', 'd1'], collapsedSections: ['#defaults'] },
         members: { search: '', filters: {}, expanded: [], collapsedSections: [] },
         plans: { search: '', filters: {}, expanded: [], collapsedSections: [] },
+          audit: { search: '', filters: {}, expanded: [], collapsedSections: [] },
         metrics: { search: '', filters: {}, expanded: [], collapsedSections: [] },
       },
       notice: null,

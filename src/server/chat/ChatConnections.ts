@@ -43,6 +43,7 @@ import { MessageConnections } from '../team/messageConnections'
 import { StrategyConnections } from '../strategy/strategyConnections'
 import { WorkspaceConnections } from '../team/workspaceConnections'
 import { PlanConnections } from '../plans/planConnections'
+import { OutboundConnections } from '../outbound/outboundConnections'
 import { MetricsConnections } from '../metrics/metricsConnections'
 import type { TeamMessage } from '../../shared/team'
 
@@ -85,6 +86,7 @@ export class ChatConnections {
   private readonly strategyConnections: StrategyConnections
   private readonly workspaceConnections: WorkspaceConnections
   private readonly planConnections: PlanConnections
+  private readonly outboundConnections: OutboundConnections
   private readonly metricsConnections: MetricsConnections
 
   constructor(
@@ -98,6 +100,7 @@ export class ChatConnections {
     this.strategyConnections = new StrategyConnections(manager)
     this.workspaceConnections = new WorkspaceConnections(manager)
     this.planConnections = new PlanConnections(manager)
+    this.outboundConnections = new OutboundConnections(manager)
     this.metricsConnections = new MetricsConnections(manager)
   }
 
@@ -158,6 +161,16 @@ export class ChatConnections {
     this.metricsConnections.publish(teamId)
   }
 
+  /**
+   * A committed audit call, outcome, or acknowledgement (execution-safety-
+   * recovery D9): the Audit tab re-requests its first page, and the
+   * workspace re-projects — an unacknowledged violation is an attention item.
+   */
+  publishOutbound(teamId: string): void {
+    this.outboundConnections.publish(teamId)
+    this.workspaceConnections.publish(teamId)
+  }
+
   disconnect(connection: ChatConnection): void {
     this.epochs.set(connection, {})
     this.pendingAttach.delete(connection)
@@ -167,6 +180,7 @@ export class ChatConnections {
     this.strategyConnections.disconnect(connection)
     this.workspaceConnections.disconnect(connection)
     this.planConnections.disconnect(connection)
+    this.outboundConnections.disconnect(connection)
     this.metricsConnections.disconnect(connection)
     this.subscriptions.delete(connection)
     this.batches.delete(connection)
@@ -552,6 +566,7 @@ export class ChatConnections {
     if (message.type.startsWith('strategy-')) return this.strategyConnections.handle(connection, message as Extract<ClientMessage, { type: `strategy-${string}` }>)
     if (message.type.startsWith('team-workspace-')) return this.workspaceConnections.handle(connection, message as Extract<ClientMessage, { type: `team-workspace-${string}` }>)
     if (message.type.startsWith('team-plan')) return this.planConnections.handle(connection, message as Extract<ClientMessage, { type: `team-plan${string}` }>)
+    if (message.type.startsWith('team-audit-')) return this.outboundConnections.handle(connection, message as Extract<ClientMessage, { type: `team-audit-${string}` }>)
     if (message.type.startsWith('process-metrics-')) return this.metricsConnections.handle(connection, message as Extract<ClientMessage, { type: `process-metrics-${string}` }>)
     if (message.type.startsWith('process-proposal-')) return this.metricsConnections.handleCommand(connection, message as Extract<ClientMessage, { type: `process-proposal-${string}` }>)
     if (message.type.startsWith('process-report-')) return this.metricsConnections.handleReport(connection, message as Extract<ClientMessage, { type: `process-report-${string}` }>)
@@ -693,5 +708,6 @@ function opensSubscription(type: ClientMessage['type']): boolean {
     type === 'team-mailbox-open' || type === 'team-tasks-open' || type === 'team-task-open' ||
     type === 'team-messages-open' || type === 'team-thread-open' ||
     type === 'strategy-open' || type === 'team-workspace-open' || type === 'team-plans-open' || type === 'team-plan-open' ||
+    type === 'team-audit-open' ||
     type === 'process-metrics-open' || type === 'process-report-open'
 }

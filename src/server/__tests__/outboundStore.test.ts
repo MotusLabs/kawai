@@ -97,7 +97,15 @@ describe('OutboundStore (the only writer)', () => {
 
   test('the store exposes no update or delete', () => {
     const methods = Object.getOwnPropertyNames(OutboundStore.prototype).filter(name => name !== 'constructor')
-    expect(methods.sort()).toEqual(['callById', 'insertCall', 'insertOutcome', 'outcomesOf', 'page'])
+    expect(methods.sort()).toEqual([
+      'acknowledgementByCommand', 'callById', 'callByToolUse', 'counts', 'exclusively',
+      'insertAcknowledgement', 'insertCall', 'insertOutcome', 'outcomesOf', 'page', 'unacknowledgedViolations',
+    ])
+    // And no statement of it ever mutates a row (E3): the append-only
+    // guarantee is over the source, not the method names alone.
+    const source = fs.readFileSync(import.meta.dir + '/../outbound/store.ts', 'utf8')
+    expect(source).not.toMatch(/\bUPDATE\b/)
+    expect(source).not.toMatch(/\bDELETE FROM\b/)
     expect(methods.some(name => /update|delete|drop|prune/i.test(name))).toBe(false)
   })
 
