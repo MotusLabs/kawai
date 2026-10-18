@@ -107,7 +107,7 @@ test('urgent direct mail to an agent whose profile is cooling is refused; normal
   records.get('dev')!.claudeProfileId = 'glm'
   const until = '2026-10-12T15:40:00.000Z'
   mailbox = new TeamMailbox(store, { getSession: id => records.get(id), homeDir: dir,
-    cooldownUntil: profileId => (profileId === 'glm' ? until : null) })
+    cooldownFor: profileId => ({ until: profileId === 'glm' ? until : null, provider: false, providerId: null }) })
   handlers = mailboxHandlers(mailbox, 'lead')
   const time = new Date(until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
   const error = await handlers.send_message({ to_kind: 'session', to_id: 'dev', body: 'Now!', urgent: true }).then(() => null, e => e as Error)

@@ -32,6 +32,7 @@ import { WorktreeStaffing, type SpawnRequest, type SpawnResult } from './staffin
 import { TeamCaps } from './teamCaps'
 import { worktreeRootOf } from './worktreeRoots'
 import { LimitEventStore } from './routing/limitEvents'
+import { providerOf } from '../chat/profileCatalog'
 import { RuleRegistry, type RuleLoadReport } from './routing/ruleLoader'
 import { ProfileRouter } from './routing/router'
 import { LimitOutcomes, type HandoffTarget } from './routing/limitOutcomes'
@@ -148,7 +149,7 @@ export class SessionMailbox {
     })
     this.mailbox = new TeamMailbox(store, {
       getSession: options.getRecord, homeDir: options.homeDir, restoreSession: options.restore, tasks: taskStore,
-      cooldownUntil: profileId => this.limits.cooldownUntil(profileId),
+      cooldownFor: (profileId, record) => this.cooldownForSession(profileId, record),
     })
     this.staffing = new WorktreeStaffing(db, store, {
       records: options.records,
@@ -175,7 +176,7 @@ export class SessionMailbox {
       worktrees: this.tasks.worktrees,
       ...(options.homeDir ? { homeDir: options.homeDir } : {}),
       plans: this.plans,
-      cooldownUntil: profileId => this.limits.cooldownUntil(profileId),
+      cooldownUntil: profileId => this.cooldownForSession(profileId, null).until,
     })
     this.results = new TaskResultService(this.tasks, { getSession: options.getRecord, assignments: this.assignments,
       releases: this.releases, records: options.records, ...(options.homeDir ? { homeDir: options.homeDir } : {}) })
@@ -207,6 +208,7 @@ export class SessionMailbox {
       staffing: this.staffing,
       rules: this.rules,
       limits: this.limits,
+      providerOf: profileId => providerOf(profileId, this.profileCtx()),
       usageOf: profileId => options.usageOf?.(profileId) ?? null,
       excludedProfile: message => message.excludedProfile ?? undefined,
       allowedProfiles: message => message.allowedProfiles ?? null,
@@ -268,6 +270,21 @@ export class SessionMailbox {
     })
   }
 
+  /**
+   * The profile's effective cooldown (providers-and-workers D8), resolved
+   * with a session's project path when one is at hand, else the ambient
+   * catalog — the same resolution its launch settings use.
+   */
+  private cooldownForSession(profileId: string, record: Pick<ChatSessionRecord, 'projectPath'> | null) {
+    const ctx = { ...(this.options.homeDir ? { homeDir: this.options.homeDir } : {}), ...(record?.projectPath ? { projectPath: record.projectPath } : {}) }
+    return this.limits.cooldownFor(profileId, providerOf(profileId, ctx))
+  }
+
+  /** The ambient catalog context for group-level reads (router profile states). */
+  private profileCtx() {
+    return this.options.homeDir ? { homeDir: this.options.homeDir } : {}
+  }
+
   private recipient(id: string): MailRecipient | undefined {
     const record = this.options.getRecord(id)
     const team = this.options.teams.teamOf(id)
@@ -282,7 +299,7 @@ export class SessionMailbox {
       worktree: worktreeRootOf(record.projectPath),
       parked: this.mailbox.store.parkedBy(id).length > 0,
       profileId: record.claudeProfileId ?? 'default',
-      cooldownUntil: this.limits.cooldownUntil(record.claudeProfileId ?? 'default'),
+      cooldownUntil: this.cooldownForSession(record.claudeProfileId ?? 'default', record).until,
     }
   }
 

@@ -137,25 +137,97 @@ export class LimitEventStore {
       .all(profileId, cutoff) as Row[]).map(fromRow)
   }
 
-  /** The built-in cooldown end of a profile (ISO), or null when not cooling. */
-  cooldownUntil(profileId: string): string | null {
-    return cooldownUntil(this.forProfile(profileId), this.now())
+  /** A provider's events (any profile on it) within routing's 24-hour read window, oldest first. */
+  forProvider(providerId: string): LimitEvent[] {
+    const cutoff = new Date(this.now() - LIMIT_EVENT_READ_WINDOW_MS).toISOString()
+    return (this.db.prepare('SELECT * FROM profile_limit_events WHERE provider_id = ? AND at >= ? ORDER BY at, rowid')
+      .all(providerId, cutoff) as Row[]).map(fromRow)
+  }
+
+  /**
+   * The profile's effective cooldown (providers-and-workers D8): its own
+   * events and its provider's provider-scoped ones decide it; `provider`
+   * says whose end won, `providerId` names that provider (null without one).
+   */
+  cooldownFor(profileId: string, providerId: string | null = null): EffectiveCooldown {
+    const now = this.now()
+    const own = this.forProfile(profileId)
+    const providerEvents = providerId === null ? [] : this.forProvider(providerId)
+    const until = cooldownUntil(profileId, providerId, [...own, ...providerEvents], now)
+    const providerEnd = providerCooldownUntil(providerId, providerEvents, now)
+    return {
+      until,
+      provider: providerEnd !== null && until !== null && Date.parse(providerEnd) >= Date.parse(until),
+      providerId,
+    }
   }
 }
 
 /**
- * Built-in cooldown (design D7): the latest final event's reset time, else
- * (unknown or unparseable) one hour after it. Retried attempts never cool a profile. Null once over.
+ * Windows whose quota covers one model only (providers-and-workers D8); any
+ * other or unknown window — and none — cools the provider, the conservative
+ * default.
  */
-export function cooldownUntil(events: readonly LimitEvent[], now: number): string | null {
-  let latest: LimitEvent | null = null
+export const MODEL_SCOPED_WINDOWS: ReadonlySet<string> = new Set(['seven_day_opus', 'seven_day_sonnet'])
+
+export const isModelScoped = (window: string | null): boolean => window !== null && MODEL_SCOPED_WINDOWS.has(window)
+
+/**
+ * A profile's effective cooldown (providers-and-workers D8): when it ends,
+ * whether the provider's cooldown decided that end, and which provider was
+ * considered.
+ */
+export interface EffectiveCooldown {
+  until: string | null
+  provider: boolean
+  providerId: string | null
+}
+
+/**
+ * The events relevant to `profileId` of `providerId` (D8): its own final
+ * candidates whatever their provider or window — rows from before the
+ * migration and model-scoped windows count only here — plus final events of
+ * the provider's other profiles whose window is not model-scoped.
+ */
+export function relevantEvents(events: readonly LimitEvent[], profileId: string, providerId: string | null): LimitEvent[] {
+  return events.filter(event =>
+    event.profileId === profileId ||
+    (providerId !== null && event.providerId === providerId && !isModelScoped(event.window)))
+}
+
+/**
+ * The built-in cooldown end over one event set (D8): grouped by window, with
+ * none as one group, the latest final event of each group sets its end — its
+ * reset, else (unknown or unparseable) one hour after it — and the profile
+ * cools until the latest end still in the future. Retried attempts never
+ * cool. Null once over.
+ */
+function latestCoolingEnd(events: readonly LimitEvent[], now: number): string | null {
+  const latest = new Map<string, LimitEvent>()
   for (const event of events) {
-    if (event.final && (!latest || Date.parse(event.at) >= Date.parse(latest.at))) latest = event
+    if (!event.final) continue
+    const key = event.window ?? '\u0000'
+    const prev = latest.get(key)
+    if (prev === undefined || Date.parse(event.at) >= Date.parse(prev.at)) latest.set(key, event)
   }
-  if (!latest) return null
-  const reset = latest.resetsAt ? Date.parse(latest.resetsAt) : NaN
-  const until = Number.isFinite(reset) ? reset : Date.parse(latest.at) + DEFAULT_COOLDOWN_MS
-  return Number.isFinite(until) && until > now ? new Date(until).toISOString() : null
+  let end: number | null = null
+  for (const event of latest.values()) {
+    const reset = event.resetsAt ? Date.parse(event.resetsAt) : NaN
+    const until = Number.isFinite(reset) ? reset : Date.parse(event.at) + DEFAULT_COOLDOWN_MS
+    if (Number.isFinite(until) && until > now && (end === null || until > end)) end = until
+  }
+  return end === null ? null : new Date(end).toISOString()
+}
+
+/** The profile's effective cooldown end (D8) over a read window's events. */
+export function cooldownUntil(profileId: string, providerId: string | null, events: readonly LimitEvent[], now: number): string | null {
+  return latestCoolingEnd(relevantEvents(events, profileId, providerId), now)
+}
+
+/** The provider's own cooldown end (D8): its provider-scoped events alone decide it. */
+export function providerCooldownUntil(providerId: string | null, events: readonly LimitEvent[], now: number): string | null {
+  if (providerId === null) return null
+  return latestCoolingEnd(events.filter(event => event.providerId === providerId && !isModelScoped(event.window)), now)
 }
 
 /** One interval during which the router saw a profile as cooling, epoch ms, half-open. */

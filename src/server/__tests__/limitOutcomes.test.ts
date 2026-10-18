@@ -28,6 +28,8 @@ let records: Map<string, ChatSessionRecord>
 let groups: Map<string, GroupDefinition>
 let ruleOnLimit: ((ctx: LimitOutcomeContext) => Promise<LimitOutcome>) | null
 let errors: unknown[]
+let home: string
+let priorHome: string | undefined
 
 const group = (id: string, frontmatter = '') => {
   const parsed = parseGroupFile(id, `---\n${frontmatter}\n---\nWork.`)
@@ -56,6 +58,11 @@ function makeOutcomes() {
 
 beforeEach(() => {
   now = T0
+  // providerOf resolves the catalog from HOME when a record has no path;
+  // keep that read inside a temp home the test owns.
+  home = fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-limit-home-'))
+  priorHome = process.env.HOME
+  process.env.HOME = home
   db = schemaDb(':memory:')
   store = new MailboxStore(db)
   limits = new LimitEventStore(db, () => now)
@@ -67,7 +74,12 @@ beforeEach(() => {
   errors = []
   outcomes = makeOutcomes()
 })
-afterEach(() => db.close())
+afterEach(() => {
+  db.close()
+  if (priorHome === undefined) delete process.env.HOME
+  else process.env.HOME = priorHome
+  fs.rmSync(home, { recursive: true, force: true })
+})
 
 /** Group mail claimed and delivered to `sessionId` as its current turn. */
 function deliver(sessionId = 'dev', extra: Partial<Parameters<MailboxStore['enqueue']>[0]> = {}): TeamMessage {
@@ -281,6 +293,27 @@ describe('recovery notes', () => {
     store.claim(forwarded.id, 'dev2')
     outcomes.processNotes()
     expect(store.listForTeam('team').some(row => row.tags.includes('handoff-note'))).toBe(true)
+  })
+
+  test("a sibling's provider-scoped event holds the note past the original reset", async () => {
+    const m = deliver()
+    work()
+    await hitLimit(5 * 60 * MIN)
+    // glm-flash shares glm's shipped provider zai: its later provider reset
+    // holds glm's note past glm's own.
+    limits.record({
+      profileId: 'glm-flash', sessionId: 'dev2', groupId: 'devs', kind: 'rate_limit', final: true, status: 429,
+      message: 'quota', at: iso(T0 + MIN), resetsAt: iso(T0 + 6 * 60 * MIN), providerId: 'zai', window: null,
+    })
+    const forwardedId = store.get(m.id)!.reason!.replace('forwarded: ', '')
+    store.claim(forwardedId, 'dev2')
+    expect(outcomes.nextNoteAt()).toBe(T0 + 6 * 60 * MIN)
+    now = T0 + 5 * 60 * MIN + 1
+    outcomes.processNotes()
+    expect(store.listForTeam('team').some(row => row.tags.includes('handoff-note'))).toBe(false)
+    now = T0 + 6 * 60 * MIN + 1
+    outcomes.processNotes()
+    expect(store.listForTeam('team').filter(row => row.tags.includes('handoff-note'))).toHaveLength(1)
   })
 })
 

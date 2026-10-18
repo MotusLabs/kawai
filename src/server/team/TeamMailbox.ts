@@ -40,6 +40,8 @@ export interface MailReplyInput {
   task_id?: string
 }
 
+import type { EffectiveCooldown } from './routing/limitEvents'
+
 const START_TO_HUMAN = 'New mail to the human is not a thing. Reply to a message they sent instead — that reply reaches them.'
 
 export class TeamMailbox {
@@ -49,15 +51,15 @@ export class TeamMailbox {
     onChange?: (message: TeamMessage) => void
     restoreSession?: (id: string) => void | Promise<void>
     tasks?: TaskStore
-    /** Built-in cooldown end (ISO) of a profile, or null. */
-    cooldownUntil?: (profileId: string) => string | null
+    /** The recipient profile's effective cooldown (providers-and-workers D8), or null. */
+    cooldownFor?: (profileId: string, record: ChatSessionRecord) => EffectiveCooldown
   }) {}
 
   /** Refuse urgent direct mail to an agent whose profile is cooling; nothing is queued. */
   private refuseCooling(recipient: ChatSessionRecord, urgent: boolean | undefined) {
     if (!urgent) return
     const profileId = recipient.claudeProfileId ?? 'default'
-    const until = this.options.cooldownUntil?.(profileId)
+    const until = this.options.cooldownFor?.(profileId, recipient).until ?? null
     if (!until) return
     const time = new Date(until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     throw new Error(`Session ${recipient.sessionId} runs on profile ${profileId}, which is cooling down after a provider limit until ${time} (${until}). ` +

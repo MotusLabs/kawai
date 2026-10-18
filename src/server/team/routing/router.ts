@@ -20,7 +20,7 @@ import type { TeamMessage } from '../mailboxStore'
 import type { SpawnContext, WorktreeStaffing } from '../staffing'
 import { builtinPick } from './builtin'
 import { buildCandidates, DEFAULT_PROFILE_ID } from './candidates'
-import { cooldownUntil, type LimitEventStore } from './limitEvents'
+import type { LimitEventStore } from './limitEvents'
 import type { RuleRegistry } from './ruleLoader'
 
 /** Entries kept per group. */
@@ -41,7 +41,9 @@ export interface ProfileRouterOptions {
   targetWorktree: (message: TeamMessage) => string | null
   staffing: Pick<WorktreeStaffing, 'spawnContext' | 'spawnFor'>
   rules: Pick<RuleRegistry, 'rule'>
-  limits: Pick<LimitEventStore, 'forProfile'>
+  limits: Pick<LimitEventStore, 'forProfile' | 'cooldownFor'>
+  /** The provider owning a profile (providers-and-workers D10); unresolved ids stand in as their own provider. */
+  providerOf?: (profileId: string) => string
   usageOf: (profileId: string) => ChatUsageReport | null
   /** The profile a forwarded message must not go back to. */
   excludedProfile?: (message: TeamMessage) => string | undefined
@@ -149,7 +151,7 @@ export class ProfileRouter implements GroupRouter {
     return assignment ? { kind: 'spawned', assignment } : { kind: 'none' }
   }
 
-  private profileStates(group: GroupDefinition, candidates: RouteCandidate[], now: number): Record<string, RouteProfileState> {
+  private profileStates(group: GroupDefinition, candidates: RouteCandidate[], _now: number): Record<string, RouteProfileState> {
     const ids = new Set([...group.profiles.map(entry => entry.profileId), ...candidates.map(candidate => candidate.profileId)])
     if (group.profiles.length === 0) ids.add(DEFAULT_PROFILE_ID)
     const states: Record<string, RouteProfileState> = {}
@@ -162,7 +164,9 @@ export class ProfileRouter implements GroupRouter {
           windows: usage.windows.map(window => ({ key: window.key, percentUsed: window.percentUsed, resetsAt: window.resetsAt })),
         } : null,
         limitEvents: events,
-        cooldownUntil: cooldownUntil(events, now),
+        // The profile's effective cooldown (providers-and-workers D8): its
+        // provider's provider-scoped events cool it too.
+        cooldownUntil: this.options.limits.cooldownFor(id, this.options.providerOf?.(id) ?? id).until,
       }
     }
     return states

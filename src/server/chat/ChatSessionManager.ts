@@ -1096,7 +1096,11 @@ export class ChatSessionManager {
       strategies: this.strategies.store,
       impact: this.impact,
       getSession: id => this.records.get(id),
-      capacityReads: { capacity: (teamId, group, worktree) => this.teamMail.staffing.capacity(teamId, group, worktree), cooldownUntil: profileId => this.teamMail.limits.cooldownUntil(profileId) },
+      capacityReads: {
+        capacity: (teamId, group, worktree) => this.teamMail.staffing.capacity(teamId, group, worktree),
+        // The profile's effective cooldown (providers-and-workers D8) in the ambient catalog.
+        cooldownUntil: profileId => this.teamMail.limits.cooldownFor(profileId, providerOf(profileId, this.catalogCtx())).until,
+      },
       ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
     })
     this.validation = planServices.validation

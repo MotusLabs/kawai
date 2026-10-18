@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import {
   cooldownUntil, coolingMsWithin, coolingTimeline, DEFAULT_COOLDOWN_MS, LIMIT_EVENT_READ_WINDOW_MS, LIMIT_EVENT_RETENTION_MS,
-  LimitEventStore, type LimitEvent,
+  LimitEventStore, providerCooldownUntil, type LimitEvent,
 } from '../team/routing/limitEvents'
 
 const T0 = Date.parse('2026-10-12T12:00:00.000Z')
@@ -39,7 +39,7 @@ describe('LimitEventStore', () => {
     now = T0 + 10 * 60_000
     const reopened = new LimitEventStore(schemaDb(file), () => now)
     expect(reopened.forProfile('glm')).toHaveLength(1)
-    expect(reopened.cooldownUntil('glm')).toBe(iso(T0 + DEFAULT_COOLDOWN_MS))
+    expect(reopened.cooldownFor('glm').until).toBe(iso(T0 + DEFAULT_COOLDOWN_MS))
   })
 
   test('prunes events older than 15 days on write and at startup; routing still reads only 24 hours', () => {
@@ -56,7 +56,7 @@ describe('LimitEventStore', () => {
     expect(count()).toBe(2)
     // Routing ignores everything older than 24 hours exactly as before, even a reset still in the future.
     expect(store.forProfile('glm')).toEqual([])
-    expect(store.cooldownUntil('glm')).toBeNull()
+    expect(store.cooldownFor('glm').until).toBeNull()
     store.record({ ...base, final: false })
     expect(store.forProfile('glm')).toHaveLength(1)
     now = T0 + 15 * DAY + 1
@@ -70,15 +70,15 @@ describe('cooldownUntil', () => {
     ({ id: crypto.randomUUID(), ...base, at: iso(T0), final: true, ...over })
 
   test('the provider reset time when known', () => {
-    expect(cooldownUntil([event({ resetsAt: iso(T0 + 40 * 60_000) })], T0)).toBe(iso(T0 + 40 * 60_000))
+    expect(cooldownUntil('glm', null, [event({ resetsAt: iso(T0 + 40 * 60_000) })], T0)).toBe(iso(T0 + 40 * 60_000))
   })
 
   test('one hour after the failure when the reset is unknown', () => {
-    expect(cooldownUntil([event({})], T0 + 1)).toBe(iso(T0 + DEFAULT_COOLDOWN_MS))
+    expect(cooldownUntil('glm', null, [event({})], T0 + 1)).toBe(iso(T0 + DEFAULT_COOLDOWN_MS))
   })
 
   test('retried attempts alone never cool', () => {
-    expect(cooldownUntil([event({ final: false }), event({ final: false })], T0)).toBeNull()
+    expect(cooldownUntil('glm', null, [event({ final: false }), event({ final: false })], T0)).toBeNull()
   })
 
   test('the latest final event decides', () => {
@@ -86,12 +86,86 @@ describe('cooldownUntil', () => {
       event({ resetsAt: iso(T0 + 5 * 3_600_000) }),
       event({ at: iso(T0 + 60_000), resetsAt: iso(T0 + 120_000) }),
     ]
-    expect(cooldownUntil(events, T0 + 60_000)).toBe(iso(T0 + 120_000))
+    expect(cooldownUntil('glm', null, events, T0 + 60_000)).toBe(iso(T0 + 120_000))
   })
 
   test('expires', () => {
-    expect(cooldownUntil([event({})], T0 + DEFAULT_COOLDOWN_MS)).toBeNull()
-    expect(cooldownUntil([event({ resetsAt: 'garbage' })], T0)).toBe(iso(T0 + DEFAULT_COOLDOWN_MS))
+    expect(cooldownUntil('glm', null, [event({})], T0 + DEFAULT_COOLDOWN_MS)).toBeNull()
+    expect(cooldownUntil('glm', null, [event({ resetsAt: 'garbage' })], T0)).toBe(iso(T0 + DEFAULT_COOLDOWN_MS))
+  })
+})
+
+describe('provider cooldown (providers-and-workers D8)', () => {
+  const MIN = 60_000
+  const HOUR = 60 * MIN
+  const DAY = 24 * HOUR
+  const event = (over: Partial<LimitEvent>): LimitEvent =>
+    ({ id: crypto.randomUUID(), ...base, at: iso(T0), final: true, ...over })
+
+  test('profiles of one provider cool together from one event; others do not', () => {
+    const glm = event({ providerId: 'zai', resetsAt: iso(T0 + 3 * HOUR) })
+    expect(cooldownUntil('glm-flash', 'zai', [glm], T0)).toBe(iso(T0 + 3 * HOUR))
+    expect(cooldownUntil('claude', 'claude', [glm], T0)).toBeNull()
+    // Without a provider only the profile's own events count.
+    expect(cooldownUntil('glm-flash', null, [glm], T0)).toBeNull()
+  })
+
+  test('a model-scoped window cools one profile', () => {
+    const opus = event({ profileId: 'opus', providerId: 'claude', window: 'seven_day_opus', resetsAt: iso(T0 + 3 * DAY) })
+    expect(cooldownUntil('opus', 'claude', [opus], T0)).toBe(iso(T0 + 3 * DAY))
+    expect(cooldownUntil('sonnet', 'claude', [opus], T0)).toBeNull()
+    expect(providerCooldownUntil('claude', [opus], T0)).toBeNull()
+    expect(providerCooldownUntil(null, [opus], T0)).toBeNull()
+  })
+
+  test('a short later window does not release a weekly one', () => {
+    const weekly = event({ profileId: 'opus', providerId: 'claude', window: 'seven_day', resetsAt: iso(T0 + 3 * DAY) })
+    const short = event({ profileId: 'sonnet', at: iso(T0 + HOUR), providerId: 'claude', window: 'five_hour', resetsAt: iso(T0 + 2 * HOUR) })
+    expect(cooldownUntil('opus', 'claude', [weekly, short], T0 + 2 * HOUR)).toBe(iso(T0 + 3 * DAY))
+    expect(cooldownUntil('sonnet', 'claude', [weekly, short], T0 + 2 * HOUR)).toBe(iso(T0 + 3 * DAY))
+  })
+
+  test('events recorded before providers cool their profile alone', () => {
+    const old = event({ providerId: null })
+    expect(cooldownUntil('glm', 'zai', [old], T0)).toBe(iso(T0 + DEFAULT_COOLDOWN_MS))
+    expect(cooldownUntil('glm-flash', 'zai', [old], T0)).toBeNull()
+  })
+
+  test('an unknown window cools the provider', () => {
+    const weird = event({ profileId: 'glm', providerId: 'zai', window: 'seven_day_newmodel' })
+    expect(cooldownUntil('glm-flash', 'zai', [weird], T0)).toBe(iso(T0 + DEFAULT_COOLDOWN_MS))
+  })
+})
+
+describe('cooldownFor', () => {
+  let dir: string
+  let file: string
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-cooldownfor-'))
+    file = path.join(dir, 'db.sqlite')
+  })
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }))
+
+  test('the shipped glm and glm-flash of zai cool together from one event', () => {
+    const store = new LimitEventStore(schemaDb(file), () => T0)
+    store.record({ ...base, final: true, providerId: 'zai', resetsAt: iso(T0 + 3 * 3_600_000) })
+    expect(store.cooldownFor('glm', 'zai')).toEqual({ until: iso(T0 + 3 * 3_600_000), provider: true, providerId: 'zai' })
+    expect(store.cooldownFor('glm-flash', 'zai')).toEqual({ until: iso(T0 + 3 * 3_600_000), provider: true, providerId: 'zai' })
+    expect(store.cooldownFor('claude', 'claude')).toEqual({ until: null, provider: false, providerId: 'claude' })
+  })
+
+  test('a model-scoped own event decides; the provider flag stays false', () => {
+    const HOUR = 3_600_000
+    const DAY = 24 * HOUR
+    const store = new LimitEventStore(schemaDb(file), () => T0)
+    store.record({ ...base, final: true, providerId: 'zai', resetsAt: iso(T0 + HOUR) })
+    store.record({ ...base, profileId: 'opus', final: true, providerId: 'claude', window: 'seven_day_opus', resetsAt: iso(T0 + 3 * DAY) })
+    expect(store.cooldownFor('opus', 'claude')).toEqual({ until: iso(T0 + 3 * DAY), provider: false, providerId: 'claude' })
+    expect(store.cooldownFor('sonnet', 'claude')).toEqual({ until: null, provider: false, providerId: 'claude' })
+    expect(store.cooldownFor('glm', 'zai')).toEqual({ until: iso(T0 + HOUR), provider: true, providerId: 'zai' })
+    // forProvider reads across the provider's profiles.
+    expect(store.forProvider('zai').map(event => event.profileId)).toEqual(['glm'])
+    expect(store.forProvider('claude').map(event => event.profileId)).toEqual(['opus'])
   })
 })
 
@@ -141,7 +215,7 @@ describe('coolingTimeline', () => {
         const t = T0 + Math.floor(rand() * 200 * HOUR / 1000) * 1000 + 500
         const visible = events.filter(e => Date.parse(e.at) >= t - LIMIT_EVENT_READ_WINDOW_MS && Date.parse(e.at) <= t)
         const inside = intervals.some(i => i.start <= t && t < i.end)
-        expect({ t, inside }).toEqual({ t, inside: cooldownUntil(visible, t) !== null })
+        expect({ t, inside }).toEqual({ t, inside: cooldownUntil('glm', null, visible, t) !== null })
       }
     }
   })
