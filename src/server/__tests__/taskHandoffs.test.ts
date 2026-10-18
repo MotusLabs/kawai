@@ -4,6 +4,10 @@
 // pre-check and the store's insert-then-read — superseding the outstanding
 // assignment as the task's next stage; task_handoff returns a standing
 // equivalent instead of dispatching again, and a failed one loses standing.
+// Session targets (session-targeted-task-handoffs): the tool's explicit
+// recipient kind rides the same dispatch — recipient validation, ordinary
+// direct task mail, atomic supersession — and the standing equivalent is
+// returned whatever recipient a retry names, with both sides on a mismatch.
 import { afterAll, beforeAll, beforeEach, expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -11,6 +15,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { cleanGitEnv } from '../git/gitCommand'
 import { initDatabase, type ChatSessionRecord, type SessionDatabase } from '../db'
+import { NULL_OWNERSHIP } from '../plans/execution/executionOwnership'
 import { AssignmentService } from '../team/AssignmentService'
 import { AssignmentStore } from '../team/assignmentStore'
 import { MailboxStore } from '../team/mailboxStore'
@@ -30,6 +35,7 @@ function git(args: string[], cwd?: string) {
 
 let root: string
 let repo: string
+let feature: string
 let other: string
 let team: TeamIdentity
 let db: SessionDatabase
@@ -48,11 +54,13 @@ const row = (sessionId: string, groupId: string, projectPath = repo): ChatSessio
 beforeAll(async () => {
   root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-handoffs-')))
   repo = path.join(root, 'repo')
+  feature = path.join(root, 'repo-feature')
   other = path.join(root, 'other')
   for (const dir of [repo, other]) {
     git(['init', '-q', dir])
     git(['-c', 'user.email=t@e', '-c', 'user.name=T', 'commit', '-q', '--allow-empty', '-m', 'init'], dir)
   }
+  git(['worktree', 'add', '-q', '-b', 'feature', feature], repo)
   fs.mkdirSync(path.join(repo, '.kawai', 'groups'), { recursive: true })
   for (const id of ['devs', 'reviewers', 'qa']) fs.writeFileSync(path.join(repo, '.kawai', 'groups', `${id}.md`), `${id}.`)
   fs.writeFileSync(path.join(repo, '.kawai', 'groups', 'leads.md'), '---\ncanCreateTasks: true\n---\nLead.')
@@ -62,7 +70,8 @@ beforeAll(async () => {
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }))
 
 beforeEach(() => {
-  records = new Map([['lead', row('lead', 'leads')], ['dev', row('dev', 'devs')], ['stranger', row('stranger', 'leads', other)]])
+  records = new Map([['lead', row('lead', 'leads')], ['dev', row('dev', 'devs')], ['reviewer', row('reviewer', 'reviewers')],
+    ['stranger', row('stranger', 'leads', other)]])
   db?.close()
   db = initDatabase({ path: path.join(fs.mkdtempSync(path.join(root, 'db-')), 'tasks.db') })
   mail = new MailboxStore(db.db)
@@ -230,4 +239,235 @@ test('task_handoff refusals: a result of another task, an unknown group, another
   await expect(taskHandlers(tasks, 'stranger', results).task_handoff!({ ...call, task_id: otherTask.id })).rejects.toThrow('not found in this team')
   await expect(results.handoff(agent('lead'), otherTask.id, review(result.id, { instructions: '  ' }))).rejects.toThrow('needs instructions')
   expect(mail.forTask(otherTask.id)).toEqual([])
+})
+
+// Session targets (session-targeted-task-handoffs 1.1/1.2): an explicit
+// recipient kind through the real tool handler; omission never reads a
+// session-shaped id as a session.
+const sessionCall = (taskId: string, resultId: string, extra: Record<string, unknown> = {}) => ({
+  task_id: taskId, kind: 'review' as const, result_id: resultId, target_kind: 'session',
+  target: 'reviewer', instructions: 'Review the export', ...extra,
+})
+
+test('task_handoff target_kind defaults to group: omitted and explicit group route identically, never reading a session-shaped id as a session', async () => {
+  const task = await tasks.create(agent('lead'), { title: 'Export', direction: 'v1' })
+  const result = await results.submit(agent('dev'), task.id, submission)
+  const lead = taskHandlers(tasks, 'lead', results)
+  const base = { task_id: task.id, kind: 'review', result_id: result.id, instructions: 'Review the export' }
+  await expect(lead.task_handoff!({ ...base, target: 'chat-session-shaped' })).rejects.toThrow('Unknown group: chat-session-shaped')
+  const omitted = await lead.task_handoff!({ ...base, target: 'reviewers' }) as { assignment: { id: string; targetKind: string; targetId: string } }
+  expect(omitted.assignment).toMatchObject({ targetKind: 'group', targetId: 'reviewers' })
+  const explicit = await lead.task_handoff!({ ...base, target_kind: 'group', target: 'reviewers' }) as { duplicate: boolean; assignment: { id: string } }
+  expect(explicit).toMatchObject({ duplicate: true, assignment: { id: omitted.assignment.id } })
+  expect(taskMail(task.id)).toHaveLength(1)
+})
+
+test('task_handoff refuses a blank target and an unsupported target_kind before any write', async () => {
+  const task = await tasks.create(agent('lead'), { title: 'Export', direction: 'v1' })
+  const result = await results.submit(agent('dev'), task.id, submission)
+  const lead = taskHandlers(tasks, 'lead', results)
+  const base = { task_id: task.id, kind: 'review', result_id: result.id, target: 'reviewers', instructions: 'Review the export' }
+  await expect(lead.task_handoff!({ ...base, target: '   ' })).rejects.toThrow('A handoff target needs an identifier')
+  await expect(lead.task_handoff!({ ...base, target_kind: 'role' })).rejects.toThrow()
+  expect(tasks.store.assignmentsOf(task.id)).toEqual([])
+  expect(taskMail(task.id)).toEqual([])
+  expect(tasks.store.outstandingAssignment(task.id)).toBeNull()
+})
+
+test('a session-targeted handoff onto an execution-owned task is refused with zero writes', async () => {
+  const owned = new TaskResultService(tasks, {
+    getSession: id => records.get(id), assignments,
+    ownership: { ...NULL_OWNERSHIP, ownerOfTask: () =>
+      ({ executionId: 'exec-1', revision: 1, change: 'change-a', step: null, worktree: null, branch: null }) },
+  })
+  const task = await tasks.create(agent('lead'), { title: 'Export', direction: 'v1' })
+  const result = await results.submit(agent('dev'), task.id, submission)
+  const journal = tasks.store.journal(task.id).length
+  await expect(owned.handoff(agent('lead'), task.id, {
+    kind: 'review', resultId: result.id, target: { kind: 'session', id: 'reviewer' }, instructions: 'Review it', expectedResponse: null,
+  })).rejects.toThrow('owned by a running execution (exec-1)')
+  expect(tasks.store.assignmentsOf(task.id)).toEqual([])
+  expect(taskMail(task.id)).toEqual([])
+  expect(tasks.store.journal(task.id)).toHaveLength(journal)
+})
+
+test('an invalid session target cannot replace current work: unknown, killed, archived, and other-team recipients are refused with zero writes', async () => {
+  const task = await tasks.create(agent('lead'), { title: 'Export', direction: 'v1' })
+  const result = await results.submit(agent('dev'), task.id, submission)
+  const standing = await assignments.dispatch(human(), { taskId: task.id, target: { kind: 'group', id: 'devs' }, instruction: 'Build it', requestKey: 'assign-1' })
+  const lead = taskHandlers(tasks, 'lead', results)
+  const journal = tasks.store.journal(task.id).length
+  await expect(lead.task_handoff!(sessionCall(task.id, result.id, { target: 'nobody' }))).rejects.toThrow('Unknown session: nobody')
+  records.delete('dev')
+  await expect(lead.task_handoff!(sessionCall(task.id, result.id, { target: 'dev' }))).rejects.toThrow('Unknown session: dev')
+  records.set('retired', { ...row('retired', 'reviewers'), archivedAt: new Date().toISOString() })
+  await expect(lead.task_handoff!(sessionCall(task.id, result.id, { target: 'retired' }))).rejects.toThrow('Session retired is archived')
+  await expect(lead.task_handoff!(sessionCall(task.id, result.id, { target: 'stranger' }))).rejects.toThrow('Session stranger belongs to another team')
+  // The plain assignment still stands; nothing was superseded, enqueued, or journaled.
+  expect(tasks.store.outstandingAssignment(task.id)?.id).toBe(standing.assignment.id)
+  expect(tasks.store.assignmentsOf(task.id)).toHaveLength(1)
+  expect(taskMail(task.id).map(row => [row.toId, row.state])).toEqual([['devs', 'queued']])
+  expect(tasks.store.journal(task.id)).toHaveLength(journal)
+})
+
+test('a session handoff to a context-exhausted session is refused with zero writes', async () => {
+  const task = await tasks.create(agent('lead'), { title: 'Export', direction: 'v1' })
+  const result = await results.submit(agent('dev'), task.id, submission)
+  const standing = await assignments.dispatch(human(), { taskId: task.id, target: { kind: 'group', id: 'devs' }, instruction: 'Build it', requestKey: 'assign-1' })
+  records.set('clogged', { ...row('clogged', 'reviewers'),
+    contextExhausted: { at: '2026-10-18T09:00:00.000Z', reason: 'prompt_too_long' } })
+  const lead = taskHandlers(tasks, 'lead', results)
+  const journal = tasks.store.journal(task.id).length
+  await expect(lead.task_handoff!(sessionCall(task.id, result.id, { target: 'clogged' }))).rejects
+    .toThrow('context is exhausted (prompt_too_long, since 2026-10-18T09:00:00.000Z)')
+  expect(tasks.store.outstandingAssignment(task.id)?.id).toBe(standing.assignment.id)
+  expect(tasks.store.assignmentsOf(task.id)).toHaveLength(1)
+  expect(taskMail(task.id).map(row => [row.toId, row.state])).toEqual([['devs', 'queued']])
+  expect(tasks.store.journal(task.id)).toHaveLength(journal)
+})
+
+test('a session-targeted review dispatches ordinary direct task mail to that session: identity, actor, result reference, and atomic supersession', async () => {
+  const task = await tasks.create(agent('lead'), { title: 'Export', direction: 'v1' })
+  const plain = await assignments.dispatch(human(), { taskId: task.id, target: { kind: 'group', id: 'devs' }, instruction: 'Build it', requestKey: 'assign-1' })
+  const result = await results.submit(agent('dev'), task.id, submission)
+  const handed = await results.handoff(agent('lead'), task.id, {
+    kind: 'review', resultId: result.id, target: { kind: 'session', id: 'reviewer' }, instructions: 'Review the export', expectedResponse: 'A verdict',
+  })
+  expect(handed).toMatchObject({ duplicate: false, notice: null, assignment: {
+    handoffKind: 'review', resultId: result.id, expectedResponse: 'A verdict', targetKind: 'session', targetId: 'reviewer',
+    role: 'reviewers', createdBy: { kind: 'agent', sessionId: 'lead' }, state: 'queued' } })
+  expect(tasks.store.assignmentsOf(task.id).map(row => [row.id, row.supersededBy])).toEqual([
+    [plain.assignment.id, handed.assignment.id], [handed.assignment.id, null]])
+  // Ordinary direct task mail from the dispatching agent, carrying the task and result context.
+  const instruction = taskMail(task.id)[1]!
+  expect(instruction).toMatchObject({ taskId: task.id, toKind: 'session', toId: 'reviewer', fromKind: 'agent', fromSession: 'lead', fromGroup: 'leads' })
+  expect(instruction.body).toBe(`Review the export\n\nReview of result ${result.id} (commit abc123): CSV export\nExpected response: A verdict`)
+  expect(tasks.store.journal(task.id).slice(-2).map(entry => entry.text)).toEqual([
+    `Review handoff of result ${result.id} to session reviewer by lead`,
+    'Assignment to group devs superseded by the review handoff',
+  ])
+})
+
+test('a busy or request-holding recipient queues the instruction without interruption or a different member', async () => {
+  const task = await tasks.create(agent('lead'), { title: 'Export', direction: 'v1' })
+  const result = await results.submit(agent('dev'), task.id, submission)
+  records.set('busy', { ...row('busy', 'reviewers'), status: 'working' })
+  records.set('carded', { ...row('carded', 'reviewers'), status: 'permission' })
+  const lead = taskHandlers(tasks, 'lead', results)
+  const first = await lead.task_handoff!(sessionCall(task.id, result.id, { target: 'busy' })) as { duplicate: boolean; assignment: { targetId: string; state: string } }
+  expect(first).toMatchObject({ duplicate: false, assignment: { targetId: 'busy', state: 'queued' } })
+  // A different kind reaches the second session; the superseding stop branch cancels the first instruction while queued.
+  const second = await lead.task_handoff!({ ...sessionCall(task.id, result.id, { target: 'carded' }), kind: 'qa' }) as { duplicate: boolean; assignment: { handoffKind: string; targetId: string; state: string } }
+  expect(second).toMatchObject({ duplicate: false, assignment: { handoffKind: 'qa', targetId: 'carded', state: 'queued' } })
+  expect(taskMail(task.id).map(row => [row.toId, row.state])).toEqual([['busy', 'cancelled'], ['carded', 'queued']])
+})
+
+test('fixes return to a named developer session: the assignment names it, the instruction references the result, and a new result is expected', async () => {
+  const task = await tasks.create(agent('lead'), { title: 'Export', direction: 'v1' })
+  const result = await results.submit(agent('dev'), task.id, submission)
+  const lead = taskHandlers(tasks, 'lead', results)
+  const fix = await lead.task_handoff!({ ...sessionCall(task.id, result.id, { target: 'dev' }), kind: 'fix' }) as
+    { duplicate: boolean; assignment: { handoffKind: string; targetKind: string; targetId: string; expectedResponse: string | null } }
+  expect(fix).toMatchObject({ duplicate: false, assignment: { handoffKind: 'fix', targetKind: 'session', targetId: 'dev', expectedResponse: null } })
+  const instruction = taskMail(task.id)[0]!
+  expect(instruction).toMatchObject({ toKind: 'session', toId: 'dev', taskId: task.id })
+  expect(instruction.body).toContain(`Fix of result ${result.id} (commit abc123): CSV export`)
+  expect(instruction.body).toContain('Expected response: a new result with task_submit_result')
+})
+
+test('a reviewer outside the task worktree receives the instruction where it lives; nothing spawns or moves', async () => {
+  records.set('roving', row('roving', 'reviewers', feature))
+  const task = await tasks.create(agent('lead'), { title: 'Export', direction: 'v1', worktree: repo })
+  const result = await results.submit(agent('dev'), task.id, submission)
+  const lead = taskHandlers(tasks, 'lead', results)
+  const handed = await lead.task_handoff!(sessionCall(task.id, result.id, { target: 'roving' })) as { duplicate: boolean; assignment: { targetKind: string; targetId: string; role: string | null } }
+  expect(handed).toMatchObject({ duplicate: false, assignment: { targetKind: 'session', targetId: 'roving', role: 'reviewers' } })
+  const instruction = taskMail(task.id)[0]!
+  expect(instruction).toMatchObject({ toKind: 'session', toId: 'roving', taskId: task.id })
+  expect(instruction.body).toContain(`Review of result ${result.id}`)
+  // The recipient stayed where it was and no member was spawned for the dispatch.
+  expect(records.get('roving')?.projectPath).toBe(feature)
+  expect([...records.values()].filter(rec => rec.sessionId === 'roving')).toHaveLength(1)
+})
+
+// Duplicates (2.1): the standing recipient is exposed; a differing request names both sides.
+test('a session retry returns the standing handoff; a different session or a group request names both recipients and reassigns nothing', async () => {
+  const task = await tasks.create(agent('lead'), { title: 'Export', direction: 'v1' })
+  const result = await results.submit(agent('dev'), task.id, submission)
+  records.set('second', row('second', 'reviewers'))
+  const lead = taskHandlers(tasks, 'lead', results)
+  const first = await lead.task_handoff!(sessionCall(task.id, result.id, { target: 'reviewer' })) as { assignment: { id: string } }
+  const same = await lead.task_handoff!(sessionCall(task.id, result.id, { target: 'reviewer' })) as { duplicate: boolean; assignment: { id: string; supersededBy: string | null }; notice: string }
+  expect(same).toMatchObject({ duplicate: true, assignment: { id: first.assignment.id, supersededBy: null } })
+  expect(same.notice).toContain(`already outstanding (${first.assignment.id}, dispatched by lead, queued) to session reviewer`)
+  const other = await lead.task_handoff!(sessionCall(task.id, result.id, { target: 'second' })) as { duplicate: boolean; assignment: { id: string; targetId: string }; notice: string }
+  expect(other).toMatchObject({ duplicate: true, assignment: { id: first.assignment.id, targetId: 'reviewer' } })
+  expect(other.notice).toContain('You asked for session second, which differs from the standing session reviewer: no reassignment occurred')
+  const asGroup = await lead.task_handoff!({ ...sessionCall(task.id, result.id), target: 'reviewers', target_kind: 'group' }) as { duplicate: boolean; assignment: { id: string }; notice: string }
+  expect(asGroup).toMatchObject({ duplicate: true, assignment: { id: first.assignment.id } })
+  expect(asGroup.notice).toContain('You asked for group reviewers, which differs from the standing session reviewer: no reassignment occurred')
+  // Exactly one instruction ever: duplicates never enqueue.
+  expect(taskMail(task.id)).toHaveLength(1)
+})
+
+test('a group handoff stands against a session-targeted retry of the same kind, with both recipients named', async () => {
+  const task = await tasks.create(agent('lead'), { title: 'Export', direction: 'v1' })
+  const result = await results.submit(agent('dev'), task.id, submission)
+  const lead = taskHandlers(tasks, 'lead', results)
+  const group = await lead.task_handoff!({ task_id: task.id, kind: 'qa', result_id: result.id, target: 'qa', instructions: 'Run the QA pass' }) as { assignment: { id: string } }
+  const asSession = await lead.task_handoff!({ task_id: task.id, kind: 'qa', result_id: result.id, target_kind: 'session', target: 'reviewer', instructions: 'Run the QA pass' }) as
+    { duplicate: boolean; assignment: { id: string; targetKind: string; targetId: string; supersededBy: string | null }; notice: string }
+  expect(asSession).toMatchObject({ duplicate: true, assignment: { id: group.assignment.id, targetKind: 'group', targetId: 'qa', supersededBy: null } })
+  expect(asSession.notice).toContain('You asked for session reviewer, which differs from the standing group qa: no reassignment occurred')
+  expect(taskMail(task.id)).toHaveLength(1)
+})
+
+// Standing before validation (2.2): the standing lookup runs before the recipient check.
+test('a standing handoff survives recipient lifecycle changes: a killed, archived, or unknown retry returns it before validation, restoring nothing', async () => {
+  const task = await tasks.create(agent('lead'), { title: 'Export', direction: 'v1' })
+  const result = await results.submit(agent('dev'), task.id, submission)
+  const lead = taskHandlers(tasks, 'lead', results)
+  const first = await lead.task_handoff!(sessionCall(task.id, result.id, { target: 'reviewer' })) as { assignment: { id: string } }
+  records.delete('reviewer')
+  const afterKill = await lead.task_handoff!(sessionCall(task.id, result.id, { target: 'reviewer' })) as { duplicate: boolean; assignment: { id: string } }
+  expect(afterKill).toMatchObject({ duplicate: true, assignment: { id: first.assignment.id } })
+  records.set('reviewer', { ...row('reviewer', 'reviewers'), archivedAt: new Date().toISOString() })
+  const afterArchive = await lead.task_handoff!(sessionCall(task.id, result.id, { target: 'reviewer' })) as { duplicate: boolean; assignment: { id: string } }
+  expect(afterArchive).toMatchObject({ duplicate: true, assignment: { id: first.assignment.id } })
+  expect(records.get('reviewer')?.archivedAt).toBeTruthy()
+  const unknown = await lead.task_handoff!(sessionCall(task.id, result.id, { target: 'nobody' })) as { duplicate: boolean; assignment: { id: string } }
+  expect(unknown).toMatchObject({ duplicate: true, assignment: { id: first.assignment.id } })
+  expect(taskMail(task.id)).toHaveLength(1)
+})
+
+test('after a session handoff fails, a new call validates the recipient again: an unknown one is refused with zero writes', async () => {
+  const task = await tasks.create(agent('lead'), { title: 'Export', direction: 'v1' })
+  const result = await results.submit(agent('dev'), task.id, submission)
+  const lead = taskHandlers(tasks, 'lead', results)
+  await lead.task_handoff!(sessionCall(task.id, result.id, { target: 'reviewer' }))
+  mail.deadLetter(taskMail(task.id)[0]!.id, 'hop-limit')
+  records.delete('reviewer')
+  await expect(lead.task_handoff!(sessionCall(task.id, result.id, { target: 'reviewer' }))).rejects.toThrow('Unknown session: reviewer')
+  expect(tasks.store.assignmentsOf(task.id)).toHaveLength(1)
+  expect(taskMail(task.id)).toHaveLength(1)
+})
+
+// Findings answer the claimed stage (2.3): real claim and delivery transitions before task_submit_findings.
+test('findings answer a claimed session handoff by exact result and handoff id; another author answers nothing; a newer result inherits neither', async () => {
+  const task = await tasks.create(agent('lead'), { title: 'Export', direction: 'v1' })
+  const result = await results.submit(agent('dev'), task.id, submission)
+  const lead = taskHandlers(tasks, 'lead', results)
+  const handed = await lead.task_handoff!(sessionCall(task.id, result.id, { target: 'reviewer' })) as { assignment: { id: string } }
+  const instruction = taskMail(task.id)[0]!
+  mail.claim(instruction.id, 'reviewer'); mail.markPushed(instruction.id); mail.markDelivered(instruction.id)
+  expect(tasks.store.outstandingAssignment(task.id)).toMatchObject({ id: handed.assignment.id, claimedBy: 'reviewer' })
+  const reviewer = taskHandlers(tasks, 'reviewer', results)
+  const findings = await reviewer.task_submit_findings!({ task_id: task.id, result_id: result.id, kind: 'review', verdict: 'fail', findings: 'Header row missing' }) as { handoffId: string | null }
+  expect(findings.handoffId).toBe(handed.assignment.id)
+  const unrelated = await taskHandlers(tasks, 'dev', results).task_submit_findings!({ task_id: task.id, result_id: result.id, kind: 'qa', verdict: 'pass', findings: 'ok' }) as { handoffId: string | null }
+  expect(unrelated.handoffId).toBeNull()
+  // The newer result inherits neither the earlier findings nor their approval.
+  const second = await results.submit(agent('dev'), task.id, { ...submission, summary: 'CSV export, header fixed' })
+  expect(tasks.store.results.get(second.id)!.findings).toEqual([])
+  expect(tasks.store.results.get(second.id)!.acceptedAt).toBeNull()
 })
