@@ -12,7 +12,12 @@ bun run typecheck  # tsc --noEmit
 bun run test       # unit tests
 ```
 
-Run `bun run lint && bun run typecheck && bun run test` after changes.
+The pre-commit hook runs lint and typecheck on every commit, and the unit
+suite unless the commit is docs-only (`scripts/docs-only-changes.sh`), so a
+commit that touches source is its own full check — don't run the trio just
+before it. Run `bun run lint && bun run typecheck && bun run test` yourself for
+changes you won't commit, and run `bun run test` once before a docs-only commit
+touching `AGENTS.md`, `.kawai/groups/`, `docs/`, or any other file a test reads.
 
 ## How It Works
 
