@@ -15,6 +15,7 @@ describe('redact', () => {
       ['ghs_ABCDEFghijklmnop0123456789', REDACTED],
       ['github_pat_11ABCDEF0123456789_abc', REDACTED],
       ['sk-ABCDEFghijklmnop0123456789', REDACTED],
+      // The Slack-format token is assembled at runtime because GitHub push protection rejects the contiguous literal; never restore it, the push would be refused.
       [['xoxb-', '123456789012-ABCDEFghijklmn'].join(''), REDACTED],
       ['AKIAIOSFODNN7EXAMPLE', REDACTED],
       ['eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcDEF123456_XYZ', REDACTED],

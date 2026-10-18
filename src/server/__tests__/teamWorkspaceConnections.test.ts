@@ -73,6 +73,7 @@ beforeEach(() => {
       since: () => turnEndRows,
     },
     recordOf: (sessionId: string) => records.find(record => record.sessionId === sessionId),
+    outboundAudit: { violationGroups: () => [], windowCounts: () => ({ allowed: 0, unknown: 0, violations: 0 }) },
     teams: {
       catalogForTeam: () => catalog,
       teamOf: (sessionId: string) => {
@@ -268,7 +269,7 @@ describe('publishes coalesce and share one read per team', () => {
     tasks: [], attention: [], members: [], directory: [],
     summary: {
       since: '2026-10-13T00:00:00Z', completedResults: { items: [] }, capacityWaits: { items: [] },
-      approvals: { items: [] }, uncertainDeliveries: { items: [] }, finishedTurnsWithoutResult: { items: [] },
+      approvals: { items: [] }, uncertainDeliveries: { items: [] }, finishedTurnsWithoutResult: { items: [] }, outbound: { items: [] },
     },
   })
   const make = () => {

@@ -1,4 +1,4 @@
-// The morning summary (team-workspace D8): the last 24 hours in five buckets
+// The morning summary (team-workspace D8): the last 24 hours in six buckets
 // from the workspace snapshot. A finished turn with no submitted result sits
 // only in its own bucket; the runtime-only capacity bucket states its bound.
 // Items link to where the existing action lives, like the attention queue.
@@ -10,6 +10,7 @@ const BUCKETS: Array<{ key: keyof Omit<MorningSummary, 'since'>; title: string; 
   { key: 'approvals', title: 'Approvals' },
   { key: 'uncertainDeliveries', title: 'Uncertain deliveries' },
   { key: 'finishedTurnsWithoutResult', title: 'Finished turns without a result', note: 'Not counted as completed.' },
+  { key: 'outbound', title: 'Outbound sends', note: 'Recorded sends of the window (execution-safety-recovery).' },
 ]
 
 const RUNTIME_ONLY_NOTE = 'Runtime only — lists only waits the running server has observed.'
