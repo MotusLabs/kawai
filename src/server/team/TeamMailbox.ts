@@ -40,6 +40,8 @@ export interface MailReplyInput {
   task_id?: string
 }
 
+import type { EffectiveCooldown } from './routing/limitEvents'
+
 const START_TO_HUMAN = 'New mail to the human is not a thing. Reply to a message they sent instead — that reply reaches them.'
 
 export class TeamMailbox {
@@ -49,19 +51,34 @@ export class TeamMailbox {
     onChange?: (message: TeamMessage) => void
     restoreSession?: (id: string) => void | Promise<void>
     tasks?: TaskStore
-    /** Built-in cooldown end (ISO) of a profile, or null. */
-    cooldownUntil?: (profileId: string) => string | null
+    /** The recipient profile's effective cooldown (providers-and-workers D8), or null. */
+    cooldownFor?: (profileId: string, record: ChatSessionRecord) => EffectiveCooldown
   }) {}
 
   /** Refuse urgent direct mail to an agent whose profile is cooling; nothing is queued. */
   private refuseCooling(recipient: ChatSessionRecord, urgent: boolean | undefined) {
     if (!urgent) return
     const profileId = recipient.claudeProfileId ?? 'default'
-    const until = this.options.cooldownUntil?.(profileId)
+    const cooldown = this.options.cooldownFor?.(profileId, recipient)
+    const until = cooldown?.until ?? null
     if (!until) return
+    // The provider is named when its cooldown decided (providers-and-workers D15).
+    const providerPart = cooldown?.provider && cooldown.providerId ? ` of provider ${cooldown.providerId}` : ''
     const time = new Date(until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    throw new Error(`Session ${recipient.sessionId} runs on profile ${profileId}, which is cooling down after a provider limit until ${time} (${until}). ` +
+    throw new Error(`Session ${recipient.sessionId} runs on profile ${profileId}${providerPart}, which is cooling down after a provider limit until ${time} (${until}). ` +
       'Send it without urgent to queue it, or send it to another agent.')
+  }
+
+  /**
+   * Refuse direct mail and replies to a context-exhausted session
+   * (chat-context-exhaustion D5), before any restore, so mail never revives
+   * a flagged archived session; nothing is queued.
+   */
+  private refuseExhausted(recipient: ChatSessionRecord) {
+    const flag = recipient.contextExhausted
+    if (!flag) return
+    throw new Error(`Session ${recipient.sessionId}'s context is exhausted (${flag.reason}, since ${flag.at}); it takes no mail until ` +
+      '/compact or a successful turn clears it. Its task\'s dispatcher has a decision note — send the work to a group or another session.')
   }
 
   /** A task id of the sender's team, or an error; nothing is enqueued on failure. */
@@ -109,6 +126,7 @@ export class TeamMailbox {
       if ((await resolveTeam(recipient.projectPath)).teamId !== sender.team.teamId) {
         throw new Error('Recipient belongs to another team')
       }
+      this.refuseExhausted(recipient)
       this.refuseCooling(recipient, input.urgent)
       // Direct mail resumes an archived recipient, exactly as replies do:
       // otherwise the message could queue forever behind a parked session.
@@ -156,6 +174,7 @@ export class TeamMailbox {
     if (recipient && (await resolveTeam(recipient.projectPath)).teamId !== sender.team.teamId) {
       throw new Error('Recipient belongs to another team')
     }
+    if (recipient) this.refuseExhausted(recipient)
     if (recipient) this.refuseCooling(recipient, input.urgent)
     if (recipient?.archivedAt) await this.options.restoreSession?.(recipient.sessionId)
     const fallback = !toHuman && !recipient && original.fromGroup !== null

@@ -18,13 +18,17 @@
 // migration 7 (`process-reports`) adds the process report tables;
 // migration 8 (`plan-execution`) the seven execution tables and
 // `team_messages.allowed_profiles`; migration 9 (`outbound-audit`) the three
-// outbound audit tables below.
+// outbound audit tables below; migration 10 (`context-exhausted`) the two
+// `chat_sessions` flag columns and the exhaustion episode table; migration
+// 11 (`provider-limit-window`) adds the nullable `provider_id` and
+// `limit_window` to `profile_limit_events`.
 import { expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { initDatabase } from '../db'
 import { applyBaselineSchema } from '../dbSafety/baseline'
 import { schemaShape, type SchemaShape } from './fixtures/schemaShape'
 import master from './fixtures/masterSchemaShape.json'
+import migration11 from './fixtures/processObservationSchemaShape.json'
 
 const expected = master as SchemaShape
 
@@ -276,13 +280,34 @@ const migration9: SchemaShape['tables'] = {
   },
 }
 
+/** Migration 10's table: one row per context-exhausted episode (chat-context-exhaustion D6/D8). */
+const migration10 = {
+  team_exhaustion_episodes: {
+    columns: [
+      keyPart('session_id', 1), keyPart('flagged_at', 2), column('team_id'), column('reason'),
+      ...['task_id', 'dropped_id', 'recipient_session', 'note_id'].map(optional), column('created_at'),
+    ],
+    indexes: [],
+  },
+}
+
 test('a fresh database opened by this build has the same shape plus each migration\'s delta and schema_migrations', () => {
   const session = initDatabase({ path: ':memory:' })
-  const added = { ...migration2, ...migration3, ...migration4, ...migration5, ...migration6, ...migration7, ...migration8, ...migration9 }
+  const added = { ...migration2, ...migration3, ...migration4, ...migration5, ...migration6, ...migration7, ...migration8, ...migration9, ...migration10, ...migration11 }
   expect(Object.keys(added).filter(table => table in expected.tables)).toEqual([])
   const messages = expected.tables.team_messages!
   const withProfiles = { ...messages, columns: [...messages.columns, optional('allowed_profiles')] }
-  expect(schemaShape(session.db)).toEqual({ tables: { ...expected.tables, ...added, team_messages: withProfiles } })
+  // Migration 10's delta: the chat_sessions exhaustion flags; migration 11's
+  // the process-observations tables (in `added` above); migration 12's: limit
+  // events record their provider and window (providers-and-workers D7), both
+  // nullable, after the baseline columns.
+  const chats = expected.tables.chat_sessions!
+  const withFlag = { ...chats, columns: [...chats.columns, optional('context_exhausted_at'), optional('context_exhausted_reason')] }
+  const limitEvents = expected.tables.profile_limit_events!
+  const withLimitContext = { ...limitEvents, columns: [...limitEvents.columns, optional('provider_id'), optional('limit_window')] }
+  expect(schemaShape(session.db)).toEqual({
+    tables: { ...expected.tables, ...added, team_messages: withProfiles, chat_sessions: withFlag, profile_limit_events: withLimitContext },
+  })
   const extra = session.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'").get()
   expect(extra).toEqual({ name: 'schema_migrations' })
   session.close()

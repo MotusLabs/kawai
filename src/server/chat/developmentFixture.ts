@@ -7,7 +7,8 @@
 // compaction threshold and drops it across a compact_boundary; the worker turn
 // spawns a subagent (with a nested one) through task frames. Tests shrink
 // the holds via AGENTBOARD_CHAT_FIXTURE_HOLD_MS. Tool turns exercise short
-// Bash handles; "tool fail" adds a failed result and a project-relative Read.
+// Bash handles; "tool fail" adds a failed result and a project-relative Read;
+// "prompt-too-long" ends the turn with the CLI's context-exhaustion result.
 import type { Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -21,6 +22,9 @@ export const chatFixtureEnabled =
 const hold = (ms: number) =>
   new Promise<void>(resolve =>
     setTimeout(resolve, Number(process.env.AGENTBOARD_CHAT_FIXTURE_HOLD_MS ?? ms)))
+
+/** Every real CLI result reports the turn's usage; a result without it is recorded as unknown, not zero. */
+const resultUsage = { usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } }
 
 export const fixtureQueryFactory: ChatQueryFactory = ({ prompt, options, wire }) => {
   const frame = (dir: 'out' | 'in' | 'lifecycle', value: unknown) => wire?.record(dir, JSON.stringify(value))
@@ -188,7 +192,7 @@ export const fixtureQueryFactory: ChatQueryFactory = ({ prompt, options, wire })
         push({ type: 'system', subtype: 'init', cwd: options.cwd ?? '/tmp', session_id: 'fixture', model: 'fixture-model', tools: [], slash_commands: [] })
         push({ type: 'system', subtype: 'status', status: 'requesting' })
         push({ type: 'assistant', message: { id: crypto.randomUUID(), role: 'assistant', content: [{ type: 'text', text: 'The marker printed fixture-shell-done.' }] } })
-        push({ type: 'result', subtype: 'success', result: '', total_cost_usd: 0, num_turns: 1 })
+        push({ type: 'result', subtype: 'success', result: '', total_cost_usd: 0, num_turns: 1, ...resultUsage })
       }, Number(process.env.AGENTBOARD_CHAT_FIXTURE_HOLD_MS ?? 1200))
     }
     if (/worker/i.test(text)) {
@@ -292,7 +296,17 @@ export const fixtureQueryFactory: ChatQueryFactory = ({ prompt, options, wire })
       }
       push({ type: 'assistant', message: { id: messageId, role: 'assistant', content: [{ type: 'text', text: 'Streaming a response across reconnect.' }] } })
     }
-    if (!closed && turn === generation) push({ type: 'result', subtype: 'success', result: '', total_cost_usd: 0, num_turns: 1, ...echo() })
+    if (/prompt-too-long/i.test(text)) {
+      // Context-exhaustion walkthrough (chat-context-exhaustion 6.1): the
+      // incident's frames — the CLI's synthetic API-error reply, then a
+      // success-subtype result marked is_error with its terminal reason.
+      if (!closed && turn === generation) {
+        push({ type: 'assistant', message: { id: crypto.randomUUID(), role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text: 'Prompt is too long' }] }, error: 'invalid_request' })
+        push({ type: 'result', subtype: 'success', is_error: true, result: 'Prompt is too long', terminal_reason: 'blocking_limit', total_cost_usd: 0, num_turns: 1, ...resultUsage, ...echo() })
+      }
+      return
+    }
+    if (!closed && turn === generation) push({ type: 'result', subtype: 'success', result: '', total_cost_usd: 0, num_turns: 1, ...resultUsage, ...echo() })
   }
   void (async () => {
     for await (const message of prompt) {
@@ -341,7 +355,7 @@ export const fixtureQueryFactory: ChatQueryFactory = ({ prompt, options, wire })
       if (running) {
         running = false
         const ids = echo()
-        setTimeout(() => push({ type: 'result', subtype: 'error_during_execution', is_error: true, errors: [], total_cost_usd: 0, num_turns: 1, ...ids }), 0)
+        setTimeout(() => push({ type: 'result', subtype: 'error_during_execution', is_error: true, errors: [], total_cost_usd: 0, num_turns: 1, ...resultUsage, ...ids }), 0)
       }
       // Prompts the fixture has not pulled stay in the driver's queue, which
       // the driver clears itself: nothing queued here to cancel.

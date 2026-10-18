@@ -115,10 +115,29 @@ export interface MailboxServerServices {
   reports?: ReportToolDeps
 }
 
-export async function createMailboxServer(mailbox: TeamMailbox, sessionId: string, services: MailboxServerServices = {}) {
+/** One runtime-neutral team tool: schema-validated, session-bound. */
+export interface TeamToolSpec {
+  name: string
+  description: string
+  schema: z.ZodObject
+  handler: (input: unknown) => unknown
+}
+
+/**
+ * The whole team tool table (codex-chat-sessions 2.4): every tool the
+ * session's team server exposes, with identity bound to the calling session
+ * and unknown arguments stripped before the service sees them. The Claude
+ * MCP server (createMailboxServer) and the Codex dynamic-tool namespace
+ * (codexTools) both build from this table, so the two runtimes cannot
+ * drift.
+ */
+export function teamToolTable(
+  mailbox: TeamMailbox,
+  sessionId: string,
+  services: MailboxServerServices = {}
+): TeamToolSpec[] {
   const { tasks, results, strategies, plans, validation, impact, releases, management, metrics, reports } = services
-  const { createSdkMcpServer, tool } = await import('@anthropic-ai/claude-agent-sdk')
-  const handlers: Record<string, (input: unknown) => Promise<unknown>> = {
+  const handlers: Record<string, (input: unknown) => Promise<unknown> | unknown> = {
     ...mailboxHandlers(mailbox, sessionId),
     ...(management ? managementHandlers(management, sessionId) : {}),
     ...(tasks ? taskHandlers(tasks, sessionId, results) : {}),
@@ -158,10 +177,20 @@ export async function createMailboxServer(mailbox: TeamMailbox, sessionId: strin
     ...(metrics ? metricsDescriptions : {}),
     ...(reports ? reportDescriptions : {}),
   }
-  return createSdkMcpServer({ name: TEAM_MCP_SERVER, version: '1.0.0', tools: Object.keys(handlers).map(name =>
-    tool(name, descriptions[name]!, schemas[name]!.shape, async (input) => {
+  return Object.keys(handlers).map((name) => ({
+    name,
+    description: descriptions[name]!,
+    schema: schemas[name]!,
+    handler: handlers[name]!,
+  }))
+}
+
+export async function createMailboxServer(mailbox: TeamMailbox, sessionId: string, services: MailboxServerServices = {}) {
+  const { createSdkMcpServer, tool } = await import('@anthropic-ai/claude-agent-sdk')
+  return createSdkMcpServer({ name: TEAM_MCP_SERVER, version: '1.0.0', tools: teamToolTable(mailbox, sessionId, services).map(({ name, description, schema, handler }) =>
+    tool(name, description, schema.shape, async (input) => {
       try {
-        const result = await handlers[name]!(input)
+        const result = await handler(input)
         return { content: [{ type: 'text' as const, text: JSON.stringify(result) }] }
       } catch (error) {
         return { isError: true, content: [{ type: 'text' as const, text: error instanceof Error ? error.message : String(error) }] }

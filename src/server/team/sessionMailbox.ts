@@ -9,7 +9,7 @@
 // failure backoff, published when it structurally changes; the failed-spawn
 // backoff's end folds into the dispatcher's wake time.
 import type { ChatSessionRecord } from '../db'
-import type { ChatSessionDriver } from '../chat/ChatSessionDriver'
+import type { ChatAgentDriver } from '../chat/provider/driver'
 import type { TeamMessage, WaitingReason } from '../../shared/team'
 import type { GroupCatalog } from './groupCatalog'
 import type { GroupDefinition } from './groupFile'
@@ -31,10 +31,12 @@ import { PlanStore } from '../plans/planStore'
 import { WorktreeStaffing, type SpawnRequest, type SpawnResult } from './staffing'
 import { TeamCaps } from './teamCaps'
 import { worktreeRootOf } from './worktreeRoots'
-import { LimitEventStore } from './routing/limitEvents'
+import { ambientProviderOf, LimitEventStore, recipientCooldown, sessionCooldown } from './cooldowns'
 import { RuleRegistry, type RuleLoadReport } from './routing/ruleLoader'
 import { ProfileRouter } from './routing/router'
 import { LimitOutcomes, type HandoffTarget } from './routing/limitOutcomes'
+import { ContextExhaustion, type ExhaustionOutcome } from './contextExhaustion'
+import { ExhaustionNotes } from './exhaustionNotes'
 import { ReasonLedger, startingAgentReason, toReason } from './waitingReasons'
 import { loadTeamGroups } from './teamGroups'
 import type { ChatUsageReport } from '../../shared/chat'
@@ -58,6 +60,10 @@ export class SessionMailbox {
   readonly outcomes: LimitOutcomes
   /** Pending member releases (member-release); the release tool and task-close hook. */
   readonly releases: MemberRelease
+  /** The context-exhaustion outcome (chat-context-exhaustion D4). */
+  readonly exhaustion: ContextExhaustion
+  /** Flagged episodes and their decision notes (chat-context-exhaustion D6). */
+  readonly exhaustionNotes: ExhaustionNotes
   /** Per-team waiting reasons (D3): in-memory, rebuilt by the first pass. */
   private readonly reasons = new ReasonLedger()
   private readonly catalogs = new Map<string, GroupCatalog>()
@@ -69,7 +75,7 @@ export class SessionMailbox {
     teams: SessionTeams
     records: () => Iterable<ChatSessionRecord>
     getRecord: (id: string) => ChatSessionRecord | undefined
-    getDriver: (id: string) => ChatSessionDriver | undefined
+    getDriver: (id: string) => ChatAgentDriver | undefined
     available: (record: ChatSessionRecord) => boolean
     /** The manager's start refusal text for the unavailable reason (D2); `available` keeps deciding. */
     startBlocker?: (record: ChatSessionRecord) => string | null
@@ -101,6 +107,8 @@ export class SessionMailbox {
     onRulesLoaded?: (report: RuleLoadReport) => void
     /** A profile's latest plan usage, for routing rules. */
     usageOf?: (profileId: string) => ChatUsageReport | null
+    /** HEAD of a directory for the decision note; tests inject their own. */
+    gitHead?: (cwd: string) => Promise<string | null>
     /** A routing decision was made (mailbox view). */
     onRouteDecision?: (entry: RouteDecisionLogEntry) => void
     onError: (error: unknown) => void
@@ -113,7 +121,10 @@ export class SessionMailbox {
     /** A result or findings write landed (plan-execution D5); the composition's wake hub. Required (I1). */
     onTaskResultWrite: (taskId: string) => void
   }) {
-    const store = new MailboxStore(db, { recipientExists: id => !!options.getRecord(id) })
+    const store = new MailboxStore(db, {
+      recipientExists: id => !!options.getRecord(id),
+      recipientFlagged: id => Boolean(options.getRecord(id)?.contextExhausted),
+    })
     this.limits = new LimitEventStore(db)
     this.rules = new RuleRegistry({
       ...(options.homeDir ? { homeDir: options.homeDir } : {}),
@@ -157,7 +168,7 @@ export class SessionMailbox {
     })
     this.mailbox = new TeamMailbox(store, {
       getSession: options.getRecord, homeDir: options.homeDir, restoreSession: options.restore, tasks: taskStore,
-      cooldownUntil: profileId => this.limits.cooldownUntil(profileId),
+      cooldownFor: (profileId, record) => sessionCooldown(this.limits, this.options.homeDir, profileId, record?.projectPath),
     })
     this.staffing = new WorktreeStaffing(db, store, {
       records: options.records,
@@ -184,7 +195,7 @@ export class SessionMailbox {
       worktrees: this.tasks.worktrees,
       ...(options.homeDir ? { homeDir: options.homeDir } : {}),
       plans: this.plans,
-      cooldownUntil: profileId => this.limits.cooldownUntil(profileId),
+      cooldownUntil: profileId => sessionCooldown(this.limits, this.options.homeDir, profileId).until,
       ownership: options.ownership,
     })
     this.results = new TaskResultService(this.tasks, { getSession: options.getRecord, assignments: this.assignments,
@@ -218,20 +229,31 @@ export class SessionMailbox {
       targetWorktree,
       staffing: this.staffing,
       rules: this.rules,
-      limits: this.limits,
+      limits: this.limits, providerOf: ambientProviderOf(this.options.homeDir),
       usageOf: profileId => options.usageOf?.(profileId) ?? null,
       excludedProfile: message => message.excludedProfile ?? undefined,
       allowedProfiles: message => message.allowedProfiles ?? null,
       ...(options.onRouteDecision ? { onDecision: options.onRouteDecision } : {}),
     })
     this.outcomes = new LimitOutcomes(db, {
-      store, limits: this.limits, rules: this.rules,
+      store, limits: this.limits, rules: this.rules, homeDir: options.homeDir,
       getRecord: options.getRecord,
       teamOf: id => options.teams.teamOf(id)?.teamId,
       groupOf: (sessionId, groupId) => options.teams.catalogOf(sessionId, this.catalogs)?.groups.get(groupId)?.group,
       taskTitle: taskId => taskStore.get(taskId)?.title ?? null,
       targetWorktree, restoreSession: options.restore,
       onError: options.onError,
+    })
+    this.exhaustion = new ContextExhaustion(db, {
+      store, outcomes: this.outcomes, releases: this.releases, getRecord: options.getRecord,
+    })
+    this.exhaustionNotes = new ExhaustionNotes(db, {
+      store, tasks: taskStore, getRecord: options.getRecord,
+      teamOf: id => options.teams.teamOf(id)?.teamId,
+      groupOf: (sessionId, groupId) => options.teams.catalogOf(sessionId, this.catalogs)?.groups.get(groupId)?.group,
+      usageOf: profileId => options.usageOf?.(profileId) ?? null,
+      cooldownUntil: profileId => sessionCooldown(this.limits, this.options.homeDir, profileId).until,
+      ...(options.gitHead ? { head: options.gitHead } : {}),
     })
     this.dispatcher = new MailDispatcher(this.mailbox.store, {
       // Cycle start (member-release D5): clear the catalog cache, keep the
@@ -293,8 +315,9 @@ export class SessionMailbox {
       blockedBy: this.options.startBlocker?.(record) ?? null,
       worktree: worktreeRootOf(record.projectPath),
       parked: this.mailbox.store.parkedBy(id).length > 0,
+      contextExhausted: Boolean(record.contextExhausted),
       profileId: record.claudeProfileId ?? 'default',
-      cooldownUntil: this.limits.cooldownUntil(record.claudeProfileId ?? 'default'),
+      ...recipientCooldown(this.limits, this.options.homeDir, record.claudeProfileId ?? 'default', record),
     }
   }
 
@@ -419,6 +442,21 @@ export class SessionMailbox {
   turnEnded(sessionId: string, success: boolean) {
     void this.outcomes.turnEnded(sessionId, success).then(() => this.dispatcher.notify(), this.options.onError)
   }
+
+  /**
+   * A session's turn ended with its context exhausted; its mail was settled
+   * first. Replaces {@link turnEnded}: no limit resolution runs (D4).
+   */
+  contextExhausted(sessionId: string): ExhaustionOutcome {
+    const outcome = this.exhaustion.turnExhausted(sessionId)
+    this.dispatcher.notify()
+    // After the commit (D6): record the episode and send its note, once.
+    this.lastNote = this.exhaustionNotes.record(outcome).catch(error => { this.options.onError(error); return null })
+    return outcome
+  }
+
+  /** The newest decision-note send; tests await it. */
+  lastNote: Promise<TeamMessage | null> = Promise.resolve(null)
 
   /** The human hands parked work to a group or session. */
   handOff(messageId: string, target: HandoffTarget) {

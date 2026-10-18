@@ -52,6 +52,7 @@ test('known dead-letter codes read as sentences and unknown codes pass through',
   expect(deadLetterLabel('worktree-missing: /repo/feat-x')).toBe('The target worktree is missing')
   expect(deadLetterLabel('killed-recipient')).toBe('The recipient session no longer exists')
   expect(deadLetterLabel('killed-sender-without-group')).toBe('The sender session no longer exists and has no group')
+  expect(deadLetterLabel('context-exhausted')).toBe("The recipient's context was exhausted; the message was not processed")
   expect(deadLetterLabel('hop-limit')).toBe('The reply chain reached its hop limit')
   expect(deadLetterLabel('some-future-code')).toBe('some-future-code')
   expect(deadLetterLabel('worktree-missing: /gone')).toBe('The target worktree is missing')
@@ -66,6 +67,13 @@ test('constraint labels mention their counts, names, and details', () => {
     .toBe('Starting agent (devs, glm, feat-x)')
   expect(constraintLabel({ kind: 'recipient-unavailable', detail: 'no directory' })).toContain('no directory')
   expect(constraintLabel({ kind: 'startup-failed', detail: 'lost auth' })).toContain('lost auth')
+  // The provider is named when its cooldown decided (providers-and-workers D15);
+  // the label keeps today's text without the detail.
+  const coolingUntil = new Date(Date.parse('2026-10-13T12:00:00.000Z')).toLocaleTimeString()
+  expect(constraintLabel({ kind: 'profile-cooling', detail: 'zai', retryAt: '2026-10-13T12:00:00.000Z' }))
+    .toBe(`Recipient's provider zai is cooling until ${coolingUntil}`)
+  expect(constraintLabel({ kind: 'profile-cooling', retryAt: '2026-10-13T12:00:00.000Z' }))
+    .toBe(`Recipient's provider is cooling until ${coolingUntil}`)
 })
 
 test('elapsed labels tick in minutes', () => {

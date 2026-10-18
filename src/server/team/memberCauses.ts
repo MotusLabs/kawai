@@ -9,6 +9,7 @@ export type MemberExclusionKind =
   | 'busy'
   | 'pending-card'
   | 'parked'
+  | 'context-exhausted'
   | 'other-worktree'
   | 'unavailable'
   | 'startup-failed'
@@ -94,6 +95,8 @@ export function memberExclusions(
     if (!recipient.idle) add('busy')
   }
   if (recipient.parked) add('parked')
+  // A context-exhausted session (chat-context-exhaustion D7) takes no mail.
+  if (recipient.contextExhausted) add('context-exhausted')
   if (options.startupFailed) add('startup-failed')
   if (message.toKind === 'group' && options.targetWorktree !== null && recipient.worktree !== options.targetWorktree) {
     add('other-worktree', recipient.worktree)
@@ -101,6 +104,6 @@ export function memberExclusions(
   if (message.excludedProfile && (recipient.profileId ?? 'default') === message.excludedProfile) add('excluded-profile')
   const outsideRole = outsideRoleExclusion(recipient.sessionId, recipient.profileId, message.allowedProfiles)
   if (outsideRole !== null) causes.push(outsideRole)
-  if (Date.parse(recipient.cooldownUntil ?? '') > options.now) add('profile-cooling')
+  if (Date.parse(recipient.cooldownUntil ?? '') > options.now) add('profile-cooling', recipient.cooldownProvider ?? undefined)
   return causes
 }

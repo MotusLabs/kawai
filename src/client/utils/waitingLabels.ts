@@ -12,6 +12,7 @@ const DEAD_LETTER_LABELS: Record<string, string> = {
   'killed-recipient': 'The recipient session no longer exists',
   'killed-sender-without-group': 'The sender session no longer exists and has no group',
   'hop-limit': 'The reply chain reached its hop limit',
+  'context-exhausted': "The recipient's context was exhausted; the message was not processed",
 }
 
 /** A readable label for a dead-letter reason; the code stays visible beside it. */
@@ -51,7 +52,7 @@ export function constraintLabel(constraint: WaitingConstraint, nameOf: (sessionI
     case 'outside-role':
       return constraint.detail ?? 'Outside the plan role\'s profiles'
     case 'profile-cooling':
-      return `Recipient's provider is cooling${constraint.retryAt ? ` until ${new Date(constraint.retryAt).toLocaleTimeString()}` : ''}`
+      return `Recipient's provider${constraint.detail ? ` ${constraint.detail}` : ''} is cooling${constraint.retryAt ? ` until ${new Date(constraint.retryAt).toLocaleTimeString()}` : ''}`
     case 'startup-failed':
       return `Agent startup failed${constraint.detail ? `: ${constraint.detail}` : ''}`
     case 'no-eligible-member':

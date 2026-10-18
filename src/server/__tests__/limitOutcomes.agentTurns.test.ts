@@ -67,7 +67,7 @@ async function deliveredAndDone(body = 'Build the export'): Promise<TeamMessage>
 async function limitedTurn(agentStarted: boolean, resetInMs: number) {
   outcomes.turnStarted('dev', agentStarted)
   limits.record({ profileId: 'glm', sessionId: 'dev', groupId: 'devs', kind: 'rate_limit', final: true, status: 429,
-    message: 'quota', resetsAt: iso(now + resetInMs) })
+    message: 'quota', resetsAt: iso(now + resetInMs), providerId: null, window: null })
   await outcomes.turnEnded('dev', true)
 }
 

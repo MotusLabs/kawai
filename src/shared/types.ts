@@ -28,6 +28,7 @@ import type {
   ChatApprovalDecision,
   ChatApprovalPolicy,
   ChatCommandState,
+  ChatContextExhausted,
   ChatContextUsage,
   ChatEvent,
   ChatNotification,
@@ -166,6 +167,8 @@ export interface Session {
   spawned?: boolean
   /** Paused after a provider limit with work parked on it (profile routing); null/absent = not paused. */
   parked?: SessionParkedState | null
+  /** Chat sessions only: a turn failed on a context limit (chat-context-exhaustion D3); null/absent = not flagged. */
+  contextExhausted?: ChatContextExhausted | null
 }
 
 /** Why and until when a chat session is paused (profile routing). */

@@ -22,7 +22,10 @@ export interface ChatLimitSignal {
   status: number | null
   message: string | null
   resetsAt: string | null
-  /** The limit window (`credit` for a 402), or null when unknown. */
+  /**
+   * The limit window: the rejected rate-limit report's (`seven_day_opus`, …),
+   * `credit` for a 402, or null when unnamed.
+   */
   window: string | null
 }
 
@@ -35,12 +38,12 @@ export interface ApiRetrySlice {
   error_status?: number | null
 }
 
-export function retryLimitSignal(frame: ApiRetrySlice, resetsAt: string | null): ChatLimitSignal | null {
+export function retryLimitSignal(frame: ApiRetrySlice, resetsAt: string | null, window: string | null = null): ChatLimitSignal | null {
   const status = typeof frame.error_status === 'number' ? frame.error_status : null
   const kind = frame.error ?? 'unknown'
   if (status === 402) return { kind, status, message: null, ...CREDIT }
   if (!LIMIT_ERROR_CLASSES.has(kind) && status !== 429) return null
-  return { kind, final: false, status, message: null, resetsAt, window: null }
+  return { kind, final: false, status, message: null, resetsAt, window }
 }
 
 /**
@@ -50,7 +53,8 @@ export function retryLimitSignal(frame: ApiRetrySlice, resetsAt: string | null):
 export function assistantLimitSignal(
   error: string | undefined,
   text: string,
-  resetsAt: string | null
+  resetsAt: string | null,
+  window: string | null = null
 ): ChatLimitSignal | null {
   if (!error) return null
   const match = /API Error:\s*(\d{3})\b/.exec(text)
@@ -58,7 +62,7 @@ export function assistantLimitSignal(
   const message = text.trim() || null
   if (status === 402) return { kind: error, status, message, ...CREDIT }
   if (!LIMIT_ERROR_CLASSES.has(error) && status !== 429) return null
-  return { kind: error, final: true, status, message, resetsAt, window: null }
+  return { kind: error, final: true, status, message, resetsAt, window }
 }
 
 const FIXED_OFFSET = /^([+-])(\d{2}):(\d{2})$/
@@ -121,6 +125,8 @@ export interface RejectedRateLimitSlice {
   status?: string
   /** Epoch seconds. */
   resetsAt?: number | null
+  /** The window the rejection names (`five_hour`, `seven_day_opus`, …). */
+  rateLimitType?: string
 }
 
 /**
@@ -130,4 +136,14 @@ export interface RejectedRateLimitSlice {
 export function rejectedResetsAt(info: RejectedRateLimitSlice | null | undefined): string | null {
   if (info?.status !== 'rejected' || typeof info.resetsAt !== 'number' || !Number.isFinite(info.resetsAt)) return null
   return new Date(info.resetsAt * 1000).toISOString()
+}
+
+/**
+ * The window a rejected `rate_limit_event` names (providers-and-workers D7):
+ * the pair the driver keeps beside its reset. Null for any other status or an
+ * unnamed window.
+ */
+export function rejectedWindow(info: RejectedRateLimitSlice | null | undefined): string | null {
+  if (info?.status !== 'rejected' || typeof info.rateLimitType !== 'string' || info.rateLimitType === '') return null
+  return info.rateLimitType
 }

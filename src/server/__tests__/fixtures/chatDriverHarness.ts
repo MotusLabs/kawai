@@ -194,6 +194,7 @@ export interface Harness {
 
 export function createHarness(
   overrides: {
+    deterministicTurnIds?: boolean
     claudeProfileId?: string
     resumeSessionId?: string
     claudeExecutablePath?: string
@@ -205,6 +206,7 @@ export function createHarness(
     /** The outbound audit sink the driver's hooks report to (execution-safety-recovery D3). */
     outbound?: OutboundAuditSink
     onSpawn?: (info: ChatSpawnInfo) => void
+    onCompaction?: (data: import('../../../shared/processObservations').Measurement) => void
     /** Replaces the harness's cwd capture (e.g. with a throwing observer). */
     onCwdChanged?: (newCwd: string) => void
     wire?: ChatWireRecorder
@@ -245,7 +247,7 @@ export function createHarness(
   const models: string[] = []
   // usageImpl/contextImpl/claimUsagePull/initializationCommands feed the fake
   // factory; the rest pass to the driver.
-  const { usageImpl, contextImpl, claimUsagePull, initializationCommands, ...driverOverrides } = overrides
+  const { deterministicTurnIds = true, usageImpl, contextImpl, claimUsagePull, initializationCommands, ...driverOverrides } = overrides
   const factory: ChatQueryFactory = ({ prompt, options, wire }) => {
     factoryWires.push(wire)
     const handle = createFakeQuery(prompt, options, usageImpl, contextImpl)
@@ -256,7 +258,9 @@ export function createHarness(
     }
     return handle.query
   }
+  let turnOrdinal = 0
   const driver = new ChatSessionDriver({
+    ...(deterministicTurnIds ? { createTurnId: () => `turn-${++turnOrdinal}` } : {}),
     sessionId: 'chat-test',
     projectPath: '/tmp/project',
     queryFactory: factory,

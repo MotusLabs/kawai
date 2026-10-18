@@ -15,7 +15,7 @@ For Codex chat sessions, the system SHALL keep the latest Codex rate-limit repor
 
 #### Scenario: Claude reports are separate
 - **WHEN** a Claude profile and a Codex profile both have reports
-- **THEN** each session shows only its own provider's windows
+- **THEN** each session shows only its own runtime's windows
 
 ### Requirement: Codex windows render with their own identity
 Each Codex rate-limit window SHALL render as its own usage-bar meter with its percent used and local reset time, labelled by its duration (for example, 5-hour or weekly) and, when Codex names the limit, by that name. A reached limit SHALL render as limited. A window without a usable percentage SHALL be dropped while the others still render.

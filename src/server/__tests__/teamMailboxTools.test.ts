@@ -10,6 +10,7 @@ import type { ChatSessionRecord } from '../db'
 import { TeamMailbox } from '../team/TeamMailbox'
 import { MailboxStore } from '../team/mailboxStore'
 import { createMailboxServer, mailboxHandlers } from '../team/mailboxTools'
+import { resolveTeam } from '../team/teamIdentity'
 
 let dir: string
 let db: Database
@@ -50,6 +51,24 @@ test('direct mail restores an archived recipient instead of queueing forever', a
   const message = await handlers.send_message({ to_kind: 'session', to_id: 'dev', body: 'Review' })
   expect(message).toMatchObject({ toKind: 'session', toId: 'dev', state: 'queued' })
   expect(records.get('dev')!.archivedAt).toBeNull()
+})
+test('mail to a context-exhausted session is refused before any restore (chat-context-exhaustion D5)', async () => {
+  const flag = { at: '2026-10-18T08:28:01Z', reason: 'blocking_limit' }
+  // An agent's reply to mail the flagged session sent.
+  const asked = await mailboxHandlers(mailbox, 'dev').send_message({ to_kind: 'session', to_id: 'lead', body: 'Question' })
+  store.claim(asked.id, 'lead'); store.markPushed(asked.id); store.markDelivered(asked.id)
+  records.get('dev')!.contextExhausted = flag
+  records.get('dev')!.archivedAt = '2026-10-18T09:00:00Z'
+  await expect(handlers.reply({ message_id: asked.id, body: 'Answer' })).rejects.toThrow("dev's context is exhausted (blocking_limit")
+  await expect(handlers.send_message({ to_kind: 'session', to_id: 'dev', body: 'Go' })).rejects.toThrow('context is exhausted')
+  // The human composer goes through the same send.
+  const human = { kind: 'human' as const, team: await resolveTeam(records.get('dev')!.projectPath) }
+  await expect(mailbox.send(human, { to_kind: 'session', to_id: 'dev', body: 'Go' })).rejects.toThrow('context is exhausted')
+  // Nothing queued, and the archived flagged session stayed archived.
+  expect(store.teamsWithQueuedMail()).toEqual([])
+  expect(records.get('dev')!.archivedAt).toBe('2026-10-18T09:00:00Z')
+  // Group mail to its group is still accepted (routing keeps it off the member).
+  expect(await handlers.send_message(groupMail)).toMatchObject({ toKind: 'group', state: 'queued' })
 })
 test('unknown group and session are refused without enqueueing', async () => {
   await expect(handlers.send_message({ ...groupMail, to_id: 'missing' })).rejects.toThrow('Unknown group')
@@ -107,7 +126,7 @@ test('urgent direct mail to an agent whose profile is cooling is refused; normal
   records.get('dev')!.claudeProfileId = 'glm'
   const until = '2026-10-12T15:40:00.000Z'
   mailbox = new TeamMailbox(store, { getSession: id => records.get(id), homeDir: dir,
-    cooldownUntil: profileId => (profileId === 'glm' ? until : null) })
+    cooldownFor: profileId => ({ until: profileId === 'glm' ? until : null, provider: false, providerId: null }) })
   handlers = mailboxHandlers(mailbox, 'lead')
   const time = new Date(until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
   const error = await handlers.send_message({ to_kind: 'session', to_id: 'dev', body: 'Now!', urgent: true }).then(() => null, e => e as Error)
@@ -122,6 +141,19 @@ test('urgent direct mail to an agent whose profile is cooling is refused; normal
   expect(replyError?.message).toContain('profile glm')
   // Group mail is never refused for cooldown.
   expect(await handlers.send_message({ ...groupMail, urgent: true })).toMatchObject({ state: 'queued' })
+})
+
+test('urgent mail to a profile of a cooling provider is refused naming profile and provider', async () => {
+  records.get('dev')!.claudeProfileId = 'glm-flash'
+  const until = '2026-10-12T15:40:00.000Z'
+  // The provider zai cools after a glm limit; glm-flash's own events are silent.
+  mailbox = new TeamMailbox(store, { getSession: id => records.get(id), homeDir: dir,
+    cooldownFor: profileId => ({ until: profileId === 'glm-flash' ? until : null, provider: true, providerId: 'zai' }) })
+  handlers = mailboxHandlers(mailbox, 'lead')
+  const error = await handlers.send_message({ to_kind: 'session', to_id: 'dev', body: 'Now!', urgent: true }).then(() => null, e => e as Error)
+  expect(error?.message).toContain('profile glm-flash of provider zai')
+  expect(error?.message).toContain(new Date(until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))
+  expect(store.teamsWithQueuedMail()).toEqual([])
 })
 
 // release_member (member-release D6): the tool name is allowed without a
@@ -208,5 +240,25 @@ test('management tools bind the caller session, ignore forged ids, and are allow
   const server = await createMailboxServer(mailbox, 'lead', { management })
   expect(Object.keys((server.instance as unknown as { _registeredTools: Record<string, unknown> })._registeredTools).sort())
     .toEqual(['cancel_message', 'discard_message', 'list_groups', 'list_mailbox', 'reply', 'schedule_message', 'send_message'])
+  await server.instance.close()
+})
+
+test('the runtime-neutral table and the MCP server expose the same tools', async () => {
+  const { teamToolTable } = await import('../team/mailboxTools')
+  const table = teamToolTable(mailbox, 'lead')
+  // Every table entry carries its schema, description, and a callable handler.
+  for (const spec of table) {
+    expect(typeof spec.name).toBe('string')
+    expect(spec.description.length).toBeGreaterThan(0)
+    expect(spec.schema).toBeDefined()
+    expect(typeof spec.handler).toBe('function')
+  }
+  const names = table.map(spec => spec.name).sort()
+  const server = await createMailboxServer(mailbox, 'lead')
+  const registered = Object.keys((server.instance as unknown as { _registeredTools: Record<string, unknown> })._registeredTools).sort()
+  expect(registered).toEqual(names)
+  // The table's handlers behave like the registered ones: same refusal path.
+  const listed = await table.find(spec => spec.name === 'list_groups')!.handler({}) as Array<{ id: string }>
+  expect(Array.isArray(listed)).toBe(true)
   await server.instance.close()
 })

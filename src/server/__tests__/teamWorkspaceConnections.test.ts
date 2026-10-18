@@ -44,7 +44,8 @@ beforeEach(() => {
   const assignmentStore = new AssignmentStore(db.db, mail)
   const taskStore = new TaskStore(db.db, mail, assignmentStore)
   tasks = new TaskService(taskStore, { getSession: () => undefined })
-  // Never the real user layer: ~/.kawai/groups would leak into the members.
+  // homeDir pins the user-level layer to the temp dir: the operator's real
+  // ~/.kawai/groups must never reach a fixture's member list.
   catalog = loadGroupCatalog({ groupsRoot: dir, homeDir: dir })
   records = []
   pendingRequests = new Map()
@@ -74,6 +75,7 @@ beforeEach(() => {
       since: () => turnEndRows,
     },
     recordOf: (sessionId: string) => records.find(record => record.sessionId === sessionId),
+    exhaustionEpisodes: () => [],
     outboundAudit: { violationGroups: () => [], windowCounts: () => ({ allowed: 0, unknown: 0, violations: 0 }) },
     teams: {
       catalogForTeam: () => catalog,

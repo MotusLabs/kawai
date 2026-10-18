@@ -77,8 +77,9 @@ export function computeMetrics(inputs: MetricsInputs, window: MetricWindow, slic
 }
 
 /** Loads and computes one team's metrics for a window ending at `end`. */
-export function readMetrics(db: Database, teamId: string, window: MetricWindow, slice: MetricSlice | null, end: number): ProcessMetrics {
-  return computeMetrics(loadMetricsInputs(db, teamId, end - 2 * WINDOW_MS[window], end), window, slice, end)
+export function readMetrics(db: Database, teamId: string, window: MetricWindow, slice: MetricSlice | null, end: number,
+  resolveProvider?: (profileId: string, teamId: string) => string): ProcessMetrics {
+  return computeMetrics(loadMetricsInputs(db, teamId, end - 2 * WINDOW_MS[window], end, resolveProvider), window, slice, end)
 }
 
 export class MetricsReader {
@@ -87,6 +88,7 @@ export class MetricsReader {
   constructor(
     private readonly db: Database,
     private readonly now: () => number = Date.now,
+    private readonly resolveProvider?: (profileId: string, teamId: string) => string,
   ) {}
 
   read(teamId: string, window: MetricWindow, slice: MetricSlice | null, options: { fresh?: boolean } = {}): ProcessMetrics {
@@ -95,7 +97,7 @@ export class MetricsReader {
     const hit = this.cache.get(key)
     if (hit && !options.fresh && at - hit.at < METRICS_CACHE_MS) return hit.metrics
     for (const [k, v] of this.cache) if (at - v.at >= METRICS_CACHE_MS) this.cache.delete(k)
-    const metrics = readMetrics(this.db, teamId, window, slice, at)
+    const metrics = readMetrics(this.db, teamId, window, slice, at, this.resolveProvider)
     this.cache.set(key, { at, metrics })
     return metrics
   }

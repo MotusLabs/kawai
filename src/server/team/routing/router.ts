@@ -20,7 +20,7 @@ import type { TeamMessage } from '../mailboxStore'
 import type { SpawnContext, WorktreeStaffing } from '../staffing'
 import { builtinPick } from './builtin'
 import { buildCandidates, DEFAULT_PROFILE_ID } from './candidates'
-import { cooldownUntil, type LimitEventStore } from './limitEvents'
+import type { LimitEventStore } from './limitEvents'
 import type { RuleRegistry } from './ruleLoader'
 
 /** Entries kept per group. */
@@ -41,7 +41,9 @@ export interface ProfileRouterOptions {
   targetWorktree: (message: TeamMessage) => string | null
   staffing: Pick<WorktreeStaffing, 'spawnContext' | 'spawnFor'>
   rules: Pick<RuleRegistry, 'rule'>
-  limits: Pick<LimitEventStore, 'forProfile'>
+  limits: Pick<LimitEventStore, 'forProfile' | 'cooldownFor' | 'providerCooldownUntil'>
+  /** The provider owning a profile (providers-and-workers D10); unresolved ids stand in as their own provider. */
+  providerOf?: (profileId: string) => string
   usageOf: (profileId: string) => ChatUsageReport | null
   /** The profile a forwarded message must not go back to. */
   excludedProfile?: (message: TeamMessage) => string | undefined
@@ -88,6 +90,15 @@ export class ProfileRouter implements GroupRouter {
       spawnAllowed: spawn?.allowed ?? false,
       spawnCwd: spawn?.worktree ?? null,
       ...(this.options.excludedProfile?.(message) ? { excludeProfile: this.options.excludedProfile(message)! } : {}),
+      // A forward also skips the excluded model's provider while it cools
+      // (providers-and-workers D9): a hard filter, so a rule cannot pick it.
+      ...(() => {
+        const excluded = this.options.excludedProfile?.(message)
+        if (excluded === undefined) return {}
+        const excludedProvider = this.options.providerOf?.(excluded) ?? excluded
+        if (this.options.limits.providerCooldownUntil(excludedProvider) === null) return {}
+        return { excludeProvider: excludedProvider, providerOf: (id: string) => this.options.providerOf?.(id) ?? id }
+      })(),
       ...(this.options.allowedProfiles?.(message) ? { allowedProfiles: this.options.allowedProfiles(message)! } : {}),
     })
     if (candidates.length === 0) {
@@ -139,7 +150,14 @@ export class ProfileRouter implements GroupRouter {
         const ends = candidates.map(candidate => Date.parse(profiles[candidate.profileId]?.cooldownUntil ?? ''))
           .filter(Number.isFinite)
         const retryAt = ends.length > 0 ? Math.min(...ends) : null
-        record('builtin', 'hold', 'every candidate profile is cooling')
+        // The log names the provider when its cooldown decides (providers-and-workers D15).
+        const providers = [...new Set(candidates
+          .map(candidate => this.options.limits.cooldownFor(candidate.profileId, this.options.providerOf?.(candidate.profileId) ?? candidate.profileId))
+          .filter(state => state.provider && state.providerId !== null)
+          .map(state => state.providerId!))]
+        record('builtin', 'hold', providers.length > 0
+          ? `every candidate profile is cooling (provider ${providers.join(', ')})`
+          : 'every candidate profile is cooling')
         return { kind: 'hold', retryAt, diagnosis: [{ kind: 'all-profiles-cooling', ...(retryAt !== null ? { retryAt: new Date(retryAt).toISOString() } : {}) }] }
       }
       record('builtin', chosen.id, view.attempt === 2 ? 'stale pick retried' : undefined)
@@ -149,7 +167,7 @@ export class ProfileRouter implements GroupRouter {
     return assignment ? { kind: 'spawned', assignment } : { kind: 'none' }
   }
 
-  private profileStates(group: GroupDefinition, candidates: RouteCandidate[], now: number): Record<string, RouteProfileState> {
+  private profileStates(group: GroupDefinition, candidates: RouteCandidate[], _now: number): Record<string, RouteProfileState> {
     const ids = new Set([...group.profiles.map(entry => entry.profileId), ...candidates.map(candidate => candidate.profileId)])
     if (group.profiles.length === 0) ids.add(DEFAULT_PROFILE_ID)
     const states: Record<string, RouteProfileState> = {}
@@ -162,7 +180,9 @@ export class ProfileRouter implements GroupRouter {
           windows: usage.windows.map(window => ({ key: window.key, percentUsed: window.percentUsed, resetsAt: window.resetsAt })),
         } : null,
         limitEvents: events,
-        cooldownUntil: cooldownUntil(events, now),
+        // The profile's effective cooldown (providers-and-workers D8): its
+        // provider's provider-scoped events cool it too.
+        cooldownUntil: this.options.limits.cooldownFor(id, this.options.providerOf?.(id) ?? id).until,
       }
     }
     return states
@@ -188,6 +208,7 @@ const CAUSE_LABELS: Record<MemberExclusion['kind'], string> = {
   'busy': 'working',
   'pending-card': 'awaiting an approval or answer',
   'parked': 'parked',
+  'context-exhausted': 'context exhausted',
   'other-worktree': 'in another worktree',
   'unavailable': 'unavailable',
   'startup-failed': 'startup failed',

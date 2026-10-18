@@ -1,5 +1,24 @@
 import { describe, expect, test } from 'bun:test'
-import { assistantLimitSignal, isResetTimeZone, rejectedResetsAt, retryLimitSignal, textResetsAt, withTextReset } from '../chat/limitSignals'
+import { assistantLimitSignal, isResetTimeZone, rejectedResetsAt, rejectedWindow, retryLimitSignal, textResetsAt, withTextReset } from '../chat/limitSignals'
+
+describe('the rejected report window', () => {
+  test('a rejected report names its window; other statuses and unnamed windows do not', () => {
+    expect(rejectedWindow({ status: 'rejected', resetsAt: 5, rateLimitType: 'seven_day_opus' })).toBe('seven_day_opus')
+    expect(rejectedWindow({ status: 'rejected', resetsAt: 5 })).toBeNull()
+    expect(rejectedWindow({ status: 'allowed', rateLimitType: 'five_hour' })).toBeNull()
+    expect(rejectedWindow({ status: 'rejected', rateLimitType: '' })).toBeNull()
+    expect(rejectedWindow(null)).toBeNull()
+  })
+
+  test('both signals carry the window beside the reset', () => {
+    expect(retryLimitSignal({ error: 'rate_limit', error_status: 429 }, 'r', 'five_hour'))
+      .toMatchObject({ final: false, resetsAt: 'r', window: 'five_hour' })
+    expect(assistantLimitSignal('rate_limit', 'API Error: 429 x', 'r', 'seven_day_sonnet'))
+      .toMatchObject({ final: true, resetsAt: 'r', window: 'seven_day_sonnet' })
+    // Gateway errors carry none.
+    expect(retryLimitSignal({ error: 'rate_limit', error_status: 429 }, null)).toMatchObject({ window: null })
+  })
+})
 
 describe('limit signals', () => {
   test('retries count for limit classes or status 429', () => {
@@ -31,7 +50,7 @@ describe('limit signals', () => {
     // A retried 402 (none observed) is still final.
     expect(retryLimitSignal({ error: 'unknown', error_status: 402 }, 'r'))
       .toEqual({ kind: 'unknown', final: true, status: 402, message: null, resetsAt: null, window: 'credit' })
-    // Other limits carry no window yet.
+    // Other limits carry the window they are given, none here.
     expect(retryLimitSignal({ error: 'rate_limit', error_status: 429 }, null)).toMatchObject({ window: null })
     expect(assistantLimitSignal('rate_limit', 'API Error: 429 x', null)).toMatchObject({ window: null })
   })

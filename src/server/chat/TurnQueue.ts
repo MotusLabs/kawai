@@ -7,14 +7,15 @@ import type { SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
  * A pull-based queue of user turns. The SDK's query() iterates it; `push`
  * resolves a pending pull or buffers for the next one. `clearPending` drops
  * everything not yet consumed (stop discards queued unsent messages) and
- * `end` terminates the iterator (kill/shutdown).
+ * `end` terminates the iterator (kill/shutdown). Generic over its item type
+ * (design D1); the Claude driver keeps the SDK message default.
  */
-export class TurnQueue implements AsyncIterable<SDKUserMessage> {
-  private queued: SDKUserMessage[] = []
-  private waiters: Array<(result: IteratorResult<SDKUserMessage>) => void> = []
+export class TurnQueue<T = SDKUserMessage> implements AsyncIterable<T> {
+  private queued: T[] = []
+  private waiters: Array<(result: IteratorResult<T>) => void> = []
   private ended = false
 
-  push(message: SDKUserMessage): void {
+  push(message: T): void {
     if (this.ended) return
     const waiter = this.waiters.shift()
     if (waiter) {
@@ -25,7 +26,7 @@ export class TurnQueue implements AsyncIterable<SDKUserMessage> {
   }
 
   /** Drop messages the SDK has not consumed yet, returning them. */
-  clearPending(): SDKUserMessage[] {
+  clearPending(): T[] {
     return this.queued.splice(0)
   }
 
@@ -38,8 +39,8 @@ export class TurnQueue implements AsyncIterable<SDKUserMessage> {
     }
   }
 
-  [Symbol.asyncIterator](): AsyncIterator<SDKUserMessage> {
-    const pull = (): Promise<IteratorResult<SDKUserMessage>> =>
+  [Symbol.asyncIterator](): AsyncIterator<T> {
+    const pull = (): Promise<IteratorResult<T>> =>
       new Promise((resolve) => {
         const next = this.queued.shift()
         if (next !== undefined || this.ended) {

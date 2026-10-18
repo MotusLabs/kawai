@@ -88,6 +88,17 @@ describe('identity block', () => {
     expect(opened).toEqual(['task-1'])
   })
 
+  test('a context-exhausted session shows its reason and the /compact hint; the row leaves when the flag clears', () => {
+    const { byId, allById, update } = renderHeader({
+      session: { ...session, contextExhausted: { at: '2026-10-18T08:28:01Z', reason: 'blocking_limit' } } as Session,
+    })
+    expect(textOf(byId('chat-context-row').findByProps({ 'data-testid': 'chat-exhausted' })))
+      .toBe('Context exhausted (blocking_limit) · Run /compact or start a new session')
+    update({ session: { ...session, contextExhausted: null } as Session })
+    expect(allById('chat-exhausted')).toHaveLength(0)
+    expect(allById('chat-context-row')).toHaveLength(0)
+  })
+
   test('no task or pause: no empty context row', () => {
     const { allById } = renderHeader()
     expect(allById('chat-context-row')).toHaveLength(0)
