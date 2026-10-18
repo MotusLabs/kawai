@@ -19,6 +19,7 @@ import { BUILD_VERSION } from '../version'
 import { outboundAuditMigration } from '../outbound/migration'
 import { CREATE_PROCESS_OBSERVATIONS_SQL } from '../metrics/observations/schema'
 import { contextExhaustedMigration } from '../chat/contextExhaustedMigration'
+import { codexSessionMigration } from '../chat/codexSessionMigration'
 import { applyBaselineSchema } from './baseline'
 import { CREATE_IMPACT_TABLES_SQL } from '../strategy/impactSchema'
 import { CREATE_VALIDATION_TABLES_SQL } from '../plans/validation/validationSchema'
@@ -68,6 +69,9 @@ export const MIGRATIONS: readonly Migration[] = [
   // providers-and-workers D7: limit events record their provider and the
   // rejected report's window; rows from before it read provider-less.
   { version: 12, name: 'provider-limit-window', up: migrateProviderLimitWindow },
+  // codex-chat-sessions 3.3 (ruling R1): the chat's creation-fixed runtime,
+  // its resolved Codex home, and the Codex transcript path.
+  codexSessionMigration,
 ]
 
 export const RESTORE_DOC = 'docs/operations/database-backups.md'

@@ -6,6 +6,7 @@ import path from 'node:path'
 import { Database as SQLiteDatabase } from 'bun:sqlite'
 import type { ChatApprovalPolicy, ChatContextExhausted, ChatContextUsage } from '../shared/chat'
 import type { AgentType, ChatNameSource, SessionStatus } from '../shared/types'
+import type { ChatRuntime } from './chat/provider/driver'
 import { parseApprovalPolicy } from './chat/approvalPolicy'
 import { resolveProjectPath } from './paths'
 import { DatabaseBackups } from './dbSafety/backups'
@@ -88,6 +89,15 @@ export interface ChatSessionRecord {
    * flagged. Patched as one value over its two columns.
    */
   contextExhausted?: ChatContextExhausted | null
+  /**
+   * The chat's agent runtime (codex-chat-sessions 3.3, ruling R1), fixed at
+   * creation; absent/`claude` for chats created before runtimes existed.
+   */
+  runtime?: ChatRuntime
+  /** The resolved Codex home a Codex chat was created against; null otherwise. */
+  codexHome?: string | null
+  /** The Codex transcript file path, once the driver's thread reveals it (§5). */
+  transcriptPath?: string | null
 }
 
 // last_user_message is a UI preview; unbounded values (giant pastes, tool
@@ -289,12 +299,18 @@ export function initDatabase(
     'DELETE FROM app_settings WHERE key = $key'
   )
 
-  // Chat sessions prepared statements
+  // Chat sessions prepared statements. The runtime columns are written at
+  // call time (see insertChatSession): an eagerly prepared statement naming
+  // them would refuse to open any database the codex-chat-runtime migration
+  // has not reached yet — the migration tests' subset opens.
   const insertChatStmt = db.prepare(
     `INSERT INTO chat_sessions
       (session_id, name, project_path, sdk_session_id, profile_id, status, created_at, last_activity_at, approval_policy, name_source, group_id, task_id, spawned)
      VALUES ($sessionId, $name, $projectPath, $sdkSessionId, $profileId, $status, $createdAt, $lastActivityAt, $approvalPolicy, $nameSource, $groupId, $taskId, $spawned)`
   )
+  // Call-time, not a named prepared statement, for the same subset-open reason.
+  const setChatRuntimeSql =
+    'UPDATE chat_sessions SET runtime = ?, codex_home = ? WHERE session_id = ?'
   const selectChatBySessionId = db.prepare(
     'SELECT * FROM chat_sessions WHERE session_id = $sessionId'
   )
@@ -543,6 +559,14 @@ export function initDatabase(
         $taskId: session.taskId ?? null,
         $spawned: session.spawned ? 1 : 0,
       })
+      // The runtime and, for Codex, the resolved home are fixed at creation
+      // (codex-chat-sessions 3.3); the transcript path arrives later (§5).
+      // Written at call time and only when the record carries them, so a
+      // predecessor record (the migration tests) inserts without naming the
+      // columns it predates.
+      if (session.runtime !== undefined) {
+        db.run(setChatRuntimeSql, [session.runtime, session.codexHome ?? null, session.sessionId])
+      }
       return session
     },
     updateChatSession: (sessionId, patch) => {
@@ -561,6 +585,10 @@ export function initDatabase(
         // creation (agent-teams), so no patch can change it.
         taskId: 'task_id',
         model: 'model',
+        // The Codex transcript path arrives whenever the driver's thread
+        // reveals it (§5); runtime and codex_home are deliberately absent —
+        // both are fixed at creation (codex-chat-sessions 3.3).
+        transcriptPath: 'transcript_path',
       }
       const fields: string[] = []
       const params: Record<string, string | number | null> = {
@@ -681,6 +709,13 @@ function mapChatRow(row: Record<string, unknown>): ChatSessionRecord {
       typeof row.context_exhausted_at === 'string' && typeof row.context_exhausted_reason === 'string'
         ? { at: row.context_exhausted_at, reason: row.context_exhausted_reason }
         : null,
+    // Chats created before runtimes existed restore as Claude (3.3).
+    runtime: row.runtime === 'codex' ? 'codex' : 'claude',
+    codexHome: row.codex_home === null || row.codex_home === undefined ? null : String(row.codex_home),
+    transcriptPath:
+      row.transcript_path === null || row.transcript_path === undefined
+        ? null
+        : String(row.transcript_path),
   }
 }
 

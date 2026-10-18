@@ -20,8 +20,11 @@
 // `team_messages.allowed_profiles`; migration 9 (`outbound-audit`) the three
 // outbound audit tables below; migration 10 (`context-exhausted`) the two
 // `chat_sessions` flag columns and the exhaustion episode table; migration
-// 11 (`provider-limit-window`) adds the nullable `provider_id` and
-// `limit_window` to `profile_limit_events`.
+// 11 (`process-observations`) the observation tables (imported fixture);
+// migration 12 (`provider-limit-window`) the nullable `provider_id` and
+// `limit_window` on `profile_limit_events`; migration 13
+// (`codex-chat-runtime`) the creation-fixed `runtime` and `codex_home` plus
+// the `transcript_path` on `chat_sessions`.
 import { expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { initDatabase } from '../db'
@@ -300,9 +303,21 @@ test('a fresh database opened by this build has the same shape plus each migrati
   // Migration 10's delta: the chat_sessions exhaustion flags; migration 11's
   // the process-observations tables (in `added` above); migration 12's: limit
   // events record their provider and window (providers-and-workers D7), both
-  // nullable, after the baseline columns.
+  // nullable, after the baseline columns; migration 13's (codex-chat-sessions
+  // 3.3): the creation-fixed runtime (NOT NULL DEFAULT 'claude') and, for
+  // Codex chats, the resolved home, plus the transcript path.
   const chats = expected.tables.chat_sessions!
-  const withFlag = { ...chats, columns: [...chats.columns, optional('context_exhausted_at'), optional('context_exhausted_reason')] }
+  const withFlag = {
+    ...chats,
+    columns: [
+      ...chats.columns,
+      optional('context_exhausted_at'),
+      optional('context_exhausted_reason'),
+      { name: 'runtime', type: 'TEXT', notnull: 1, dflt_value: "'claude'", pk: 0 },
+      optional('codex_home'),
+      optional('transcript_path'),
+    ],
+  }
   const limitEvents = expected.tables.profile_limit_events!
   const withLimitContext = { ...limitEvents, columns: [...limitEvents.columns, optional('provider_id'), optional('limit_window')] }
   expect(schemaShape(session.db)).toEqual({

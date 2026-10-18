@@ -21,6 +21,7 @@
 // Restore-on-start and attach history read transcripts asynchronously
 // (async-transcript-parsing): whenRestored() resolves once every persisted
 // row is registered, and the team mailbox starts only after that.
+import os from 'node:os'
 import type {
   ChatActivity,
   ChatApprovalDecision,
@@ -49,7 +50,7 @@ import { generateSessionName } from '../nameGenerator'
 import { isExistingDirectory, resolveProjectDirectory } from '../paths'
 import type { SessionRegistry } from '../SessionRegistry'
 import { ChatSessionDriver, type ChatQueryFactory } from './ChatSessionDriver'
-import type { ChatAgentDriver } from './provider/driver'
+import type { ChatAgentDriver, ChatRuntime } from './provider/driver'
 import { chatAuthErrorMessage, hasClaudeAuth } from './chatAuth'
 import { historyWindow } from './historyWindow'
 import {
@@ -74,7 +75,8 @@ import { probeSdkAvailability } from './sdkAvailability'
 import { AccountNoticeStore, credentialsPathFor } from './accountNotices'
 import { UsageLimitStore } from './usageLimits'
 import { withTextReset } from './limitSignals'
-import { providerOf } from './profileCatalog'
+import { providerOf, resolveProfileCatalog } from './profileCatalog'
+import { resolveCodexHome } from './codexProfiles'
 import { fetchZaiUsage } from './zaiUsage'
 import { readWorkerTranscript } from './chatWorkerTranscript'
 import { isTaskOutputFile, readTaskOutputTail } from './taskOutputFile'
@@ -1505,6 +1507,10 @@ export class ChatSessionManager {
     if (!this.authOk(input.claudeProfileId, projectPath)) {
       return { ok: false, error: chatAuthErrorMessage() }
     }
+    // The runtime facts are fixed at creation (codex-chat-sessions 3.3,
+    // ruling R1): a later profile edit never moves an existing chat to
+    // another driver or home — the mismatch refuses the start instead.
+    const runtimeFacts = this.runtimeFactsOf(input.claudeProfileId ?? 'default', projectPath)
     const sessionId = `chat-${crypto.randomUUID()}`
     const suppliedName = input.name?.trim()
     const name = suppliedName || generateSessionName()
@@ -1518,6 +1524,8 @@ export class ChatSessionManager {
       // The client's Settings default, sent on session-create; absent means
       // manual (older clients). Profiles never influence the policy.
       approvalPolicy: (input.approvalPolicy ?? 'manual') as ChatApprovalPolicy,
+      runtime: runtimeFacts?.runtime ?? 'claude',
+      codexHome: runtimeFacts?.codexHome ?? null,
       // chat-session-naming design D1: a name the user typed sticks forever,
       // one the generator produced is a placeholder a later title may replace.
       nameSource: (suppliedName ? 'manual' : 'placeholder') as ChatNameSource,
@@ -1959,6 +1967,27 @@ export class ChatSessionManager {
         'Create a new chat session in an existing directory.'
       )
     }
+    // The runtime is fixed at creation (codex-chat-sessions 3.3, R1): a
+    // profile edited to another runtime — or, for a Codex chat, another
+    // home — never moves the chat. The refusal states which fact changed and
+    // never names a home. A profile that no longer resolves keeps its
+    // existing error path.
+    const runtimeFacts = this.runtimeFactsOf(record.claudeProfileId ?? 'default', record.projectPath)
+    if (runtimeFacts) {
+      const stored = record.runtime ?? 'claude'
+      if (runtimeFacts.runtime !== stored) {
+        return (
+          `Cannot start the agent: this chat's profile changed runtime (${stored} → ${runtimeFacts.runtime}) since the chat was created. ` +
+          'Create a new chat session with the profile\'s current runtime.'
+        )
+      }
+      if (runtimeFacts.runtime === 'codex' && runtimeFacts.codexHome !== (record.codexHome ?? null)) {
+        return (
+          'Cannot start the agent: this chat\'s profile\'s Codex home changed since the chat was created. ' +
+          'Create a new chat session with the profile\'s current Codex home.'
+        )
+      }
+    }
     return null
   }
 
@@ -2383,6 +2412,31 @@ export class ChatSessionManager {
       ...(this.options.profileCatalogHome
         ? { homeDir: this.options.profileCatalogHome }
         : {}),
+    }
+  }
+
+  /**
+   * The runtime facts a profile resolves to now (codex-chat-sessions 3.3,
+   * ruling R1): its catalog runtime (`claude` when absent) and, for a Codex
+   * profile, the resolved absolute home — resolved exactly as the catalog's
+   * own home-provider id is, so the two can never disagree. Null when the
+   * profile does not resolve, leaving an unknown profile to its existing
+   * error paths.
+   */
+  private runtimeFactsOf(profileId: string, projectPath: string): { runtime: ChatRuntime; codexHome: string | null } | null {
+    const ctx = this.catalogCtx(projectPath)
+    const profile = resolveProfileCatalog(ctx).profiles.get(profileId)
+    if (!profile) return null
+    if (profile.runtime !== 'codex') return { runtime: 'claude', codexHome: null }
+    return {
+      runtime: 'codex',
+      codexHome: resolveCodexHome(
+        { codexHome: profile.codexHome },
+        {
+          CODEX_HOME: ctx.serverCodexHome ?? process.env.CODEX_HOME,
+          HOME: ctx.homeDir ?? process.env.HOME ?? os.homedir(),
+        },
+      ),
     }
   }
 
