@@ -30,14 +30,19 @@ export function seedMail(mail: SeedMail): string {
     const [file, mail] = JSON.parse(await Bun.stdin.text());
     const db = new Database(file); db.exec('PRAGMA busy_timeout = 5000');
     const store = new MailboxStore(db);
-    const row = store.enqueue({ teamId: mail.root + '/.git', fromSession: mail.fromSession, fromGroup: mail.fromGroup,
-      originPath: mail.root, body: mail.body, toKind: mail.toKind, toId: mail.toId, tags: [],
-      ...(mail.priority ? { priority: mail.priority } : {}) });
-    if (mail.uncertainFor) {
-      store.claim(row.id, mail.uncertainFor); store.markPushed(row.id);
-      store.holdUncertain(row.id, 'transcript-unavailable-or-torn');
-    }
-    console.log(row.id); db.close();
+    // One immediate transaction: the live e2e server polls this database, so
+    // step-by-step autocommit would let it observe or claim a half-seeded row.
+    const id = db.transaction(() => {
+      const row = store.enqueue({ teamId: mail.root + '/.git', fromSession: mail.fromSession, fromGroup: mail.fromGroup,
+        originPath: mail.root, body: mail.body, toKind: mail.toKind, toId: mail.toId, tags: [],
+        ...(mail.priority ? { priority: mail.priority } : {}) });
+      if (mail.uncertainFor) {
+        store.claim(row.id, mail.uncertainFor); store.markPushed(row.id);
+        store.holdUncertain(row.id, 'transcript-unavailable-or-torn');
+      }
+      return row.id;
+    }).immediate();
+    console.log(id); db.close();
   `], { cwd: process.cwd(), input: JSON.stringify([isolatedDb(), mail]), encoding: 'utf8' }).trim()
 }
 
@@ -48,7 +53,10 @@ export function discardMail(id: string): void {
     import { MailboxStore } from './src/server/team/mailboxStore';
     const [file, id] = JSON.parse(await Bun.stdin.text());
     const db = new Database(file); db.exec('PRAGMA busy_timeout = 5000');
-    if (!new MailboxStore(db).discard(id, { kind: 'human' }, 'e2e')) throw new Error('discard refused');
+    // Same atomicity as seedMail: the discard and its event row commit together.
+    db.transaction(() => {
+      if (!new MailboxStore(db).discard(id, { kind: 'human' }, 'e2e')) throw new Error('discard refused');
+    }).immediate();
     db.close();
   `], { cwd: process.cwd(), input: JSON.stringify([isolatedDb(), id]), encoding: 'utf8' })
 }
