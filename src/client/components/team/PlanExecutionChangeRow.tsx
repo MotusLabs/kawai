@@ -1,6 +1,7 @@
 // One change's row in the Execution section (plan-execution D17): state and
 // waiting reason, task, PR, fix-round count, the latest round's CI with its
-// flaky marks, the verdict, the landing fact flagged when its tree was not
+// flaky marks, the verdict, each extra check labeled verified by CI or
+// attested by the reviewer, the landing fact flagged when its tree was not
 // verified, and the change's effects, expandable.
 import { useState } from 'react'
 import type { ExecutionChangeView, PlanExecutionView } from '@shared/planExecution'
@@ -53,6 +54,11 @@ export default function PlanExecutionChangeRow({ row, execution, onOpenTask }: {
       {round.verdict !== null && ` · review ${round.verdict.verdict}`}
       {round.outcome !== null && ` · ${round.outcome}`}
     </p>}
+    {round !== null && round.extraChecks.length > 0 && <ul className="text-chat-meta" data-testid="plan-execution-extra-checks">
+      {round.extraChecks.map(check => <li key={check.name} title={check.description}>
+        {`${check.name} · ${check.by === 'ci' ? 'verified by CI' : `attested by the reviewer${round.verdict !== null ? ` (${round.verdict.reviewer})` : ''}`}`}
+      </li>)}
+    </ul>}
     {row.landing !== null && <p className="text-chat-meta" data-testid="plan-execution-landing">
       landed{row.landing.treeVerified ? '' : ' — tree not verified, base moved at the last moment'}
       {row.landing.postCi !== null && row.landing.postCi.length > 0 ? ` · base CI: ${row.landing.postCi.map(check => `${check.name}=${check.conclusion}`).join(', ')}` : ''}

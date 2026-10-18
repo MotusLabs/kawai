@@ -254,8 +254,12 @@ export async function redispatchStage(deps: DispatchDeps, row: { executionId: st
       const round = deps.executions.rounds(row.executionId, row.change).at(-1) ?? null
       if (handoffKind === 'review' && round !== null) deps.executions.setRoundReview(round.id, outcome.assignment.id)
     } else {
+      // The earlier instruction may still be outstanding (claimed or
+      // delivered before a hand close, or unscoped group mail the close
+      // left queued): the resend supersedes it through the stop branch,
+      // which cancels it only while it is still queued.
       await refusable('implement', () => deps.assignments.dispatch(caller, {
-        taskId, target, instruction: previous.instruction, requestKey,
+        taskId, target, instruction: previous.instruction, requestKey, handling: 'stop',
         ...(roleProfiles.length > 0 ? { allowedProfiles: roleProfiles } : {}),
       }))
     }

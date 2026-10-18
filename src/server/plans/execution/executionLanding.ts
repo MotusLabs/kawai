@@ -289,7 +289,20 @@ export async function applyLandingOutcome(deps: LandingDeps, effect: { kind: str
     const fresh = store.change(effect.executionId, effect.change)!
     const reviewedHead = String((effect.outcome as { head?: string } | null)?.head ?? '')
     const updateRound = effect.roundId !== null && effect.roundId !== undefined ? store.round(effect.roundId) : null
+    // A human close while the update ran (D19): the update has settled, so
+    // the change stops unless the update came through clean — then its
+    // carried round is recorded first and the planner stops it. Nothing
+    // waits on GitHub or dispatches an update attempt for a closed task.
+    const status = row.taskId === null ? null : deps.taskStatusOf(row.taskId)
+    const closed = status === 'done' || status === 'cancelled'
+    const stopClosed = () => {
+      store.transition(effect.executionId, effect.change!, fresh, {
+        state: 'stopped', stopReason: 'task-closed', step: null,
+        stopDetail: { message: `The task was ${status} by hand while the branch update ran; nothing merges.`, resumeState: 'landing', ...(row.taskId !== null ? { taskId: row.taskId } : {}) },
+      })
+    }
     if (outcome?.conflict === true) {
+      if (closed) return stopClosed()
       // GitHub refused the update: the slot is released and the conflicting
       // files, predicted against the base head now, name the attempt.
       const cwd = row.worktree ?? deps.team.groupsRoot
@@ -302,6 +315,7 @@ export async function applyLandingOutcome(deps: LandingDeps, effect: { kind: str
       return failedUpdate(deps, fresh, updateRound, { base: base.sha, files: prediction.conflicts })
     }
     if (view.data.headRefOid === reviewedHead) {
+      if (closed) return stopClosed()
       return // not moved yet
     }
     // The clean-merge check: parents [H, B'], the base contains B', and the
@@ -336,6 +350,7 @@ export async function applyLandingOutcome(deps: LandingDeps, effect: { kind: str
       }
       return
     }
+    if (closed) return stopClosed()
     return failedUpdate(deps, fresh, updateRound, { base: base.sha, files: [] })
   }
 

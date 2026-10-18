@@ -44,7 +44,8 @@ beforeEach(() => {
   const assignmentStore = new AssignmentStore(db.db, mail)
   const taskStore = new TaskStore(db.db, mail, assignmentStore)
   tasks = new TaskService(taskStore, { getSession: () => undefined })
-  catalog = loadGroupCatalog({ groupsRoot: dir })
+  // Never the real user layer: ~/.kawai/groups would leak into the members.
+  catalog = loadGroupCatalog({ groupsRoot: dir, homeDir: dir })
   records = []
   pendingRequests = new Map()
   turnEndRows = []

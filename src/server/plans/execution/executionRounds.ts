@@ -254,7 +254,7 @@ async function dispatchReview(deps: RoundDeps, changeRow: { executionId: string;
     .map(result => result.submittedBy.sessionId).filter((id): id is string => id !== null)
   const outcome = await refusable('review', () => deps.results.handoff({ kind: 'system', team: deps.team, executionId: changeRow.executionId }, change.taskId!, {
     kind: 'review', resultId: round.resultId, target: { kind: 'group', id: reviewGroup },
-    instructions: reviewInstruction(deps, changeRow.change, round, entry?.extraChecks ?? []),
+    instructions: reviewInstruction(deps, changeRow.change, round, entry?.extraChecks ?? [], [...entry?.acceptance ?? [], ...revision?.content.acceptanceRules ?? []]),
     requestKey: `exec:${changeRow.executionId}:${changeRow.change}:round:${round.number}:review:${change.generation}`,
     ...(role.length > 0 ? { allowedProfiles: role } : {}),
     tags: [...new Set(authors.flatMap(session => sessionProfileOf(deps, session)).map(profile => `author-profile:${profile}`))],
@@ -297,7 +297,8 @@ async function decideVerdict(deps: RoundDeps, changeRow: { executionId: string; 
   ]
   store.decideRound(round.id, 'pass', { verdictFindingsId: counted ?? undefined, extra: extraView })
   const fresh = store.change(changeRow.executionId, changeRow.change)!
-  store.transition(changeRow.executionId, changeRow.change, fresh, { passedAt: deps.now(), step: null })
+  // A pass resets the consecutive failed fix rounds (D12's count).
+  store.transition(changeRow.executionId, changeRow.change, fresh, { passedAt: deps.now(), step: null, fixRounds: 0 })
 }
 
 /** Record the change's pull request (the open-pr effect's done handler). */
@@ -318,15 +319,18 @@ async function stopChange(deps: RoundDeps, changeRow: { executionId: string; cha
   deps.executions.transition(changeRow.executionId, changeRow.change, change, { state: 'stopped', stopReason: reason as StopReason, stopDetail: detail, step: null })
 }
 
-function reviewInstruction(deps: RoundDeps, change: string, round: RoundRow, extra: PlanCheck[]): string {
+function reviewInstruction(deps: RoundDeps, change: string, round: RoundRow, extra: PlanCheck[], acceptance: string[]): string {
   const execution = deps.executions.execution(round.executionId)!
   const changeRow = deps.executions.change(round.executionId, change)!
   const checks = (round.ci ?? []).map(check => `${check.name}: ${check.conclusion}`).join(', ')
-  const extraLines = extra.map(check => `- ${check.name}: ${check.description}${check.command ? ` (command: ${check.command})` : ''}`).join('\n')
+  // Only the extra checks CI did not decide are the reviewer's to attest (D11).
+  const reported = (round.ci ?? []).filter(check => check.conclusion.toLowerCase() === 'success').map(check => check.name)
+  const extraLines = splitExtraChecks(extra, reported).attested.map(check => `- ${check.name}: ${check.description}${check.command ? ` (command: ${check.command})` : ''}`).join('\n')
   return [
     `Review the result ${round.resultId} of change "${change}" (round ${round.number}, commit ${round.commitSha}).`,
     changeRow.prUrl ? `Pull request: ${changeRow.prUrl}` : null,
     `CI: ${checks || 'none reported'}`,
+    acceptance.length > 0 ? `Acceptance rules:\n${acceptance.map(rule => `- ${rule}`).join('\n')}` : null,
     extraLines !== '' ? `Extra checks to attest:\n${extraLines}` : null,
     `Submit your verdict with task_submit_findings on task ${changeRow.taskId} for result ${round.resultId}: pass or fail, with what you checked.`,
     'You are the independent reviewer: if you authored one of this change\'s results, do not review it — say so in a message to the Lead group instead.',

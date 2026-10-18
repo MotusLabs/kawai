@@ -31,6 +31,7 @@ import type { LandingAdapters } from '../plans/execution/executionLanding'
 import { PlanService } from '../plans/PlanService'
 import { StrategyStore } from '../strategy/strategyStore'
 import type { CiCheck, MergeMethod } from '../../shared/planExecution'
+import type { PlanCheck } from '../../shared/plans'
 import { createPlanBench, createPlanWorld, writeGroup, type PlanBench, type PlanWorld } from './planHarness'
 import { neutralExecutorSeams } from './executorTestSeams'
 
@@ -272,7 +273,7 @@ export function createMatrixBench(matrix: MatrixWorld): MatrixBench {
 }
 
 /** One approved plan of the given changes and its running execution (not yet ticked). */
-export async function startedExecution(h: MatrixBench, changes: Array<{ change: string; dependsOn?: string[] }>, options: { mergeMethod?: MergeMethod; maxParallel?: number } = {}): Promise<string> {
+export async function startedExecution(h: MatrixBench, changes: Array<{ change: string; dependsOn?: string[]; acceptance?: string[]; extraChecks?: PlanCheck[] }>, options: { mergeMethod?: MergeMethod; maxParallel?: number; acceptanceRules?: string[] } = {}): Promise<string> {
   const { world } = h.matrix
   // Earlier tests may have moved origin's base: catch up first.
   git(['pull', '-q', '--ff-only', 'origin', 'master'], world.repo)
@@ -283,8 +284,9 @@ export async function startedExecution(h: MatrixBench, changes: Array<{ change: 
   commitAll(world.repo, `changes ${changes.map(entry => entry.change).join(' ')}`)
   git(['push', '-q', 'origin', 'master'], world.repo)
   const { planId, revision, hash } = await h.bench.draftInReview({
-    changes: changes.map(entry => ({ change: entry.change, dependsOn: entry.dependsOn ?? [], group: 'middle-devs', acceptance: [], extraChecks: [], guidance: '' })),
+    changes: changes.map(entry => ({ change: entry.change, dependsOn: entry.dependsOn ?? [], group: 'middle-devs', acceptance: entry.acceptance ?? [], extraChecks: entry.extraChecks ?? [], guidance: '' })),
     reviewGroup: 'reviewers',
+    ...(options.acceptanceRules ? { acceptanceRules: options.acceptanceRules } : {}),
   })
   await h.bench.approve(planId, revision)
   return h.executions.insertExecution({

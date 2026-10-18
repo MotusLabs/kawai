@@ -68,13 +68,13 @@ describe('PlanExecutionSection', () => {
     expect(tree).toContain('Running')
   })
 
-  test('a flaky check is labeled and an unverified tree flags the landing', () => {
+  test('a flaky check and the attested and CI-verified extra checks are labeled; an unverified tree flags the landing', () => {
     render(section([
       changeRow({
         state: 'landed',
         latestRound: { id: 'r1', number: 2, attemptId: 'a1', resultId: 'res', commit: 'c', fixRound: false, carriedFrom: null, pushedAt: 't',
           ci: { checks: [{ name: 'ci', source: 'actions', conclusion: 'success', link: null, runId: 1, startedAt: null, completedAt: null }], flaky: ['ci'], rerunAt: null, state: 'pass' },
-          reviewAssignmentId: 'as', verdict: { findingsId: 'f1', verdict: 'pass', reviewer: 'rev' }, extraChecks: [{ name: 'security', description: 'no secrets', command: null, by: 'reviewer', outcome: 'attested' }], outcome: 'pass', decidedAt: 't' },
+          reviewAssignmentId: 'as', verdict: { findingsId: 'f1', verdict: 'pass', reviewer: 'rev' }, extraChecks: [{ name: 'security', description: 'no secrets', command: null, by: 'reviewer', outcome: 'attested' }, { name: 'bundle-size', description: 'under 2 MiB', command: 'bun run size', by: 'ci', outcome: 'success' }], outcome: 'pass', decidedAt: 't' },
         landing: { planId: 'plan-1', change: 'api', executionId: 'exec-1', mechanism: 'direct', prNumber: 7, prUrl: 'https://example.internal/pr/7', headSha: 'h', baseSha: 'b', mergeSha: 'm', landedAt: 't', treeVerified: false, postCi: null },
       }),
     ]))
@@ -82,6 +82,8 @@ describe('PlanExecutionSection', () => {
     expect(tree).toContain('(flaky)')
     expect(tree).toContain('review pass')
     expect(tree).toContain('tree not verified')
+    expect(tree).toContain('security · attested by the reviewer (rev)')
+    expect(tree).toContain('bundle-size · verified by CI')
   })
 
   test('Stop opens to list what it cancels and keeps; disconnected disables the control', () => {
