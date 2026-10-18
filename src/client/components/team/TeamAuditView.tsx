@@ -74,7 +74,9 @@ export default function TeamAuditView({ teamPath, view, sendMessage, connected, 
     return () => send.current({ type: 'team-audit-close', teamPath })
   }, [teamPath, connected, connectionEpoch, view.open])
   // The one request owner (N2): mount, a URL selection, the owner's Apply,
-  // a changed push, or a reconnect. Each is a change of exactly one of these
+  // a changed push, a reconnect, or a new team path (a rekeyed view or
+  // another team's, whose subscription the effect above just closed for the
+  // old path). Each is a change of exactly one of these
   // dependencies, so the tab opens once on mount and once per transition
   // (several in one commit still run the effect once). `view.filters` is
   // deliberately absent: a group page adopting its applied filters must not
@@ -82,7 +84,7 @@ export default function TeamAuditView({ teamPath, view, sendMessage, connected, 
   useEffect(() => {
     if (!connected || !view.open) return
     request(view.filters, view.selected ?? undefined)
-  }, [view.selected, view.changed, view.filtersEpoch, connected, connectionEpoch, view.open]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [teamPath, view.selected, view.changed, view.filtersEpoch, connected, connectionEpoch, view.open]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadMore = () => {
     if (view.cursor === null) return

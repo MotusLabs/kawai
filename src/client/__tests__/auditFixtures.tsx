@@ -17,8 +17,8 @@ export const auditRow = (id: string, overrides: Partial<OutboundAuditRow> = {}):
   ...overrides,
 })
 
-export const auditPage = (rows: OutboundAuditRow[], requestId: string, cursor: string | null = null) => ({
-  type: 'team-audit-page' as const, teamPath: '/repo', teamId: 't', requestId,
+export const auditPage = (rows: OutboundAuditRow[], requestId: string, cursor: string | null = null, teamPath = '/repo') => ({
+  type: 'team-audit-page' as const, teamPath, teamId: 't', requestId,
   page: {
     rows, cursor,
     counts: { allowedPerRule: { 'git-push': 2 }, unknown: 4, violations: 3, unacknowledgedViolations: 1 },
@@ -28,33 +28,36 @@ export const auditPage = (rows: OutboundAuditRow[], requestId: string, cursor: s
 
 /** The open request the view's own mount sent, answered with `rows`. */
 export function answerLatest(sent: ClientMessage[], rows: OutboundAuditRow[], cursor: string | null = null) {
-  const open = sent.filter(message => message.type === 'team-audit-open').at(-1) as { requestId: string }
-  act(() => useTeamAuditStore.getState().applyPage(auditPage(rows, open.requestId, cursor)))
+  const open = sent.filter(message => message.type === 'team-audit-open').at(-1) as { requestId: string; teamPath: string }
+  act(() => useTeamAuditStore.getState().applyPage(auditPage(rows, open.requestId, cursor, open.teamPath)))
 }
 
 export function mountAudit(options: {
   connected?: boolean
   onSelectedCall?: (callId: string | null) => void
   createNodeMock?: () => unknown
+  teamPath?: string
 } = {}) {
   const sent: ClientMessage[] = []
   let sink = sent
   let connected = options.connected ?? true
   let epoch = 0
+  let teamPath = options.teamPath ?? '/repo'
   let renderer!: TestRenderer.ReactTestRenderer
   const element = () => {
     // Each render passes a fresh sendMessage bound to the current sink.
     const target = sink
-    return <TeamAuditView teamPath="/repo" view={useTeamAuditStore.getState().views['/repo']!}
+    return <TeamAuditView teamPath={teamPath} view={useTeamAuditStore.getState().views[teamPath]!}
       sendMessage={message => { target.push(message) }} connected={connected} connectionEpoch={epoch}
       {...(options.onSelectedCall ? { onSelectedCall: options.onSelectedCall } : {})} />
   }
   act(() => {
-    if (!useTeamAuditStore.getState().views['/repo']) useTeamAuditStore.getState().open('/repo')
+    if (!useTeamAuditStore.getState().views[teamPath]) useTeamAuditStore.getState().open(teamPath)
     renderer = TestRenderer.create(element(), options.createNodeMock ? { createNodeMock: options.createNodeMock } : undefined)
   })
-  const rerender = (next: { connected?: boolean; epoch?: number; sink?: ClientMessage[] } = {}) => {
+  const rerender = (next: { connected?: boolean; epoch?: number; sink?: ClientMessage[]; teamPath?: string } = {}) => {
     if (next.sink !== undefined) sink = next.sink
+    if (next.teamPath !== undefined) teamPath = next.teamPath
     if (next.connected !== undefined) connected = next.connected
     if (next.epoch !== undefined) epoch = next.epoch
     act(() => { renderer.update(element()) })
@@ -65,6 +68,6 @@ export function mountAudit(options: {
   const allBy = (testId: string) => renderer.root.findAllByProps({ 'data-testid': testId })
   const byLabel = (label: string) => renderer.root.findByProps({ 'aria-label': label })
   const opens = () => sent.filter(message => message.type === 'team-audit-open') as Array<Extract<ClientMessage, { type: 'team-audit-open' }>>
-  const view = () => useTeamAuditStore.getState().views['/repo']!
+  const view = () => useTeamAuditStore.getState().views[teamPath]!
   return { renderer, sent, rerender, change, byId, allBy, byLabel, opens, view }
 }

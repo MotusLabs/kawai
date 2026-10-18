@@ -116,6 +116,33 @@ describe('the reconnect edge (F1)', () => {
   })
 })
 
+describe('a new team path (findings-a0769fc9 F1)', () => {
+  const expectMoved = (audit: ReturnType<typeof mountAudit>, from: string, to: string) => {
+    expect(audit.sent.map(message => ({ type: message.type, teamPath: (message as { teamPath: string }).teamPath }))).toEqual([
+      { type: 'team-audit-close', teamPath: from }, { type: 'team-audit-open', teamPath: to },
+    ])
+    expect(audit.view().pending).toEqual({ [audit.opens()[0]!.requestId]: 'page' })
+  }
+
+  test('a rekeyed view closes the old path and opens the new one, exactly once each', () => {
+    const audit = mountAudit({ teamPath: '/repo/wt' })
+    answerLatest(audit.sent, [auditRow('a')])
+    audit.sent.length = 0
+    act(() => useTeamAuditStore.getState().rekey('/repo/wt', '/repo'))
+    audit.rerender({ teamPath: '/repo' })
+    expectMoved(audit, '/repo/wt', '/repo')
+  })
+
+  test("navigating to another team's open view closes this one and opens that one, exactly once each", () => {
+    act(() => useTeamAuditStore.getState().open('/other'))
+    const audit = mountAudit()
+    answerLatest(audit.sent, [auditRow('a')])
+    audit.sent.length = 0
+    audit.rerender({ teamPath: '/other' })
+    expectMoved(audit, '/repo', '/other')
+  })
+})
+
 describe('keyed transitions', () => {
   test('a changed push, Apply, and a selection each send exactly one request', () => {
     const audit = mountAudit()
