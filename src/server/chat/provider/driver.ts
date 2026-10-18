@@ -74,10 +74,7 @@ export interface ChatDriverCallbacks {
    * state down. Fired once per process.
    */
   onProcessEnd?: () => void
-  /**
-   * Structured compaction facts (process observability); an observational
-   * callback, never a transcript payload.
-   */
+  /** Structured compaction facts; observational callback, never a transcript payload. */
   onCompaction?: (data: Measurement, sourceId?: string) => void
   /** The spawned-worker roster: the full projection, on change — never per
    * elapsed tick; settled outcomes persist through the sidecar. */
@@ -86,11 +83,15 @@ export interface ChatDriverCallbacks {
    * consulted for status. */
   onBackgroundTasks?: (tasks: ChatBackgroundTask[]) => void
   /**
-   * The latest context-meter reading; null clears it (a conversation reset
-   * leaves nothing measured). Before the first measurement this callback
-   * simply does not fire. `persist` marks writes that must not wait for
-   * the next turn boundary; `thresholdSource` names how the reading's
-   * threshold was derived, for process observability.
+   * Context usage (context meter designs D1/D7): the latest reading, fired
+   * when a new per-request usage lands, when compaction adopts a
+   * post-compaction size, or when a threshold correction re-scales the
+   * current reading. Never fired with a placeholder — before the first model
+   * request this callback simply does not fire (D7). A null `usage` clears
+   * the reading (a conversation reset leaves nothing measured). `persist`
+   * marks writes that must not wait for the next turn boundary: probe
+   * answers, spawn-time re-anchors, and compaction; `thresholdSource` names
+   * how the reading's threshold was derived, for process observability.
    */
   onContextUsage?: (usage: ChatContextUsage | null, opts?: { persist?: boolean; thresholdSource?: string }) => void
   /**
@@ -100,7 +101,10 @@ export interface ChatDriverCallbacks {
   onModel?: (model: string) => void
   /** Plan usage: a pushed rate-limit report, whatever the turn state is. */
   onRateLimit?: (report: ChatUsageReport) => void
-  /** Plan usage: a structured usage report from the agent. */
+  /**
+   * Plan usage: a structured usage report from the agent (the structured
+   * twin of /usage). Not called when the report carries no limits at all.
+   */
   onUsageReport?: (report: ChatUsageReport) => void
   /** A usage pull that yielded no windows (or failed). */
   onUsageNoData?: () => void

@@ -45,6 +45,7 @@
   - status derivation
   - `turn/interrupt` with request cancellation
   - respawn on process end
+  - `onCompaction` from the mapped `contextCompaction` item, and `onContextUsage`'s `thresholdSource` — both optional callbacks, so without them a Codex chat only misses process observability
 
   Verify the driver tests against the fake app-server for the persistence, resume, streaming, activity, and interrupt scenarios.
 - [ ] 5.3 Add `codexSandbox.ts` (design D5): `workspace-write`, the git common dir writable root (absolute; none outside a repository), and network from the profile. Verify unit tests for main checkout, linked worktree, non-repository, and `network: false`.

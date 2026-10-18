@@ -57,6 +57,8 @@ function makeWorkspace(): { dir: string; gitCommonDir: string } {
  * value becomes the reply. Every raw line, both directions, is recorded.
  */
 class SmokeClient {
+  /** Every live client, so a Ctrl-C can stop the detached children (review N3). */
+  static readonly live = new Set<SmokeClient>()
   readonly proc: ChildProcess
   private nextId = 1
   private readonly pending = new Map<number, { resolve: (v: Json) => void; reject: (e: Error) => void }>()
@@ -71,6 +73,7 @@ class SmokeClient {
     // Detached: the child leads its own process group, so stop() can signal
     // the sandboxed grandchildren alongside it (review O5).
     this.proc = spawn(CODEX, ['app-server'], { stdio: ['pipe', 'pipe', 'pipe'], detached: true })
+    SmokeClient.live.add(this)
     this.proc.on('error', (error) => this.failAll(`spawn ${CODEX} app-server: ${error.message}`))
     this.exit = new Promise((resolve) => this.proc.on('exit', (code) => resolve(code)))
     const rl = readline.createInterface({ input: this.proc.stdout!, crlfDelay: Infinity })
@@ -155,6 +158,7 @@ class SmokeClient {
   }
 
   async stop() {
+    SmokeClient.live.delete(this)
     // Signal the whole process group: a sandboxed app-server can leave
     // helper grandchildren that outlive the pid alone (review O5). Falls
     // back to the pid when the group is already gone.
@@ -322,6 +326,15 @@ async function main() {
   const { dir: workspace, gitCommonDir } = makeWorkspace()
   console.log(`workspace: ${workspace}`)
 
+  // The detached child leads its own process group, so the terminal's
+  // Ctrl-C never reaches it (review N3): stop every live client's group
+  // here, then exit. stop() escalates to SIGKILL and awaits the child, so
+  // nothing is left behind; a second Ctrl-C finds the set empty and exits.
+  process.on('SIGINT', () => {
+    void Promise.allSettled([...SmokeClient.live].map((client) => client.stop()))
+      .then(() => process.exit(130))
+  })
+
   // Process 1: initialize, thread/start (or resume --thread), phases A–D.
   const first = new SmokeClient(lines)
   try {
@@ -479,7 +492,8 @@ async function main() {
   console.log(`\nSUMMARY ${JSON.stringify(scrubSmokeValue(summary), null, 2)}`)
 }
 
-// Guarded so the hygiene test can import the scrub without running a spike.
+// Main runs only on direct execution; the hygiene test imports the scrub
+// module, never this script.
 if (import.meta.main) {
   main().then(
     () => process.exit(0),
