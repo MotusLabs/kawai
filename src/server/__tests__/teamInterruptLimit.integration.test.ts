@@ -92,6 +92,7 @@ async function setup() {
   fs.mkdirSync(project)
   manager = new ChatSessionManager({
     isDirectory: () => true, registry: new SessionRegistry(), db, onEvent: () => {},
+    profileCatalogHome: tempDir,
     queryFactory: fakeQueryFactory(clis),
     providerUsageFetch: (async () => { throw new Error('no provider pulls') }) as unknown as typeof fetch,
   })

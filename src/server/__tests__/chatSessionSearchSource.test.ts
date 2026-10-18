@@ -60,6 +60,7 @@ describe('ChatSessionManager search source', () => {
       isDirectory: () => true,
       registry,
       db,
+      profileCatalogHome: tempDir,
       onEvent: () => {},
       providerUsageFetch: (async () => { throw new Error('no network in tests') }) as unknown as typeof fetch,
       queryFactory: () => { queryFactoryCalls++; throw new Error('a search must not start an agent') },

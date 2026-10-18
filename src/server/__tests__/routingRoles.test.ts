@@ -85,7 +85,7 @@ describe('9.1 allowed_profiles on the row', () => {
     outcomes.toolCall('dev', 'Read', { file_path: 'src/b.ts' })
     limits.record({
       profileId: 'glm', sessionId: 'dev', groupId: 'devs', kind: 'rate_limit', final: true, status: 429,
-      message: 'API Error: 429 quota', resetsAt: iso(now + 6 * 60 * MIN),
+      message: 'API Error: 429 quota', resetsAt: iso(now + 6 * 60 * MIN), providerId: null, window: null,
     })
     await outcomes.turnEnded('dev', true)
     const forwardedId = store.get(message.id)!.reason!.replace('forwarded: ', '')

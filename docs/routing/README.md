@@ -124,9 +124,17 @@ files are never loaded. It default-exports `{ route, onLimit?, env?, timeoutMs? 
 ## Limits
 
 Rate-limit, billing, and overload failures (and any 429) are recorded per
-profile for 24 hours. A final failure starts a cooldown for that profile in
-every group — until the provider's reset when known, else one hour. When the
-turn handling a message fails that way, the message is:
+profile for 24 hours, with the provider owning the profile and the window the
+rejected report named (`five_hour`, `seven_day_opus`, …). A final failure
+starts a cooldown in every group for the profile's provider — until the
+provider's reset when known, else one hour — except a window that covers one
+model only (`seven_day_opus`, `seven_day_sonnet`), which cools that profile
+alone. A profile is cooling while its provider or the profile itself is: the
+latest final event of each window sets that window's end, and the latest end
+still ahead decides, so a later short-window event never releases a weekly one
+still running. Events recorded before providers (no provider id) cool only
+their own profile. When the turn handling a message fails that way, the
+message is:
 
 - **parked** on the same agent, with a resume message scheduled at the reset;
   the agent shows as paused and takes no group mail; a successful turn (yours
@@ -135,8 +143,10 @@ turn handling a message fails that way, the message is:
   direct work queued for the same session at the reset time;
 - **forwarded** with a handoff package (progress digest, last error, claim
   commit, and an instruction to inspect `git status`/`git diff` first); it
-  never routes back to the limited profile, and the original agent is told who
-  took over once its profile recovers.
+  never routes back to the limited profile, nor to any other model of its
+  provider while that provider cools — a **Hand off** to such a session is
+  refused — and the original agent is told who took over once its provider
+  recovers.
 
 A reset that has already passed retries work immediately without marking the
 agent paused. An unrelated peer message does not cancel parked work's resume.
@@ -146,7 +156,9 @@ Parked work can be handed to a group or a session on another profile with
 receiving a handoff. Handoffs continue the original thread without consuming
 another reply hop. Invalid automatic targets fall back to the same group.
 Urgent direct mail to an agent whose profile is cooling is refused with the
-cooldown end time; normal direct mail waits in the queue until recovery.
+cooldown end time, naming the provider when its cooldown decided ("runs on
+profile `glm-flash` of provider `zai`, which is cooling down after a provider
+limit until …"); normal direct mail waits in the queue until recovery.
 
 ## Plan roles and author tags
 

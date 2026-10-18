@@ -116,6 +116,7 @@ import { createWireTappedSpawn, type ChatWireRecorder } from './wireTap'
 import {
   assistantLimitSignal,
   rejectedResetsAt,
+  rejectedWindow,
   retryLimitSignal,
   type ChatLimitSignal,
 } from './limitSignals'
@@ -402,6 +403,8 @@ export class ChatSessionDriver {
   }
   /** Reset time from the latest rejected rate_limit_event (design D6). */
   private limitResetsAt: string | null = null
+  /** That event's window (`seven_day_opus`, …), kept and dropped beside the reset (providers-and-workers D7). */
+  private limitWindow: string | null = null
   private dead = false
   /** The audit id of the agent process this driver currently runs (D7). */
   private currentSpawnId = 'ob-s-none'
@@ -968,7 +971,12 @@ export class ChatSessionDriver {
         this.handleSystem(message)
         return
       case 'rate_limit_event':
-        this.limitResetsAt = rejectedResetsAt(message.rate_limit_info) ?? this.limitResetsAt
+        // A rejected event's window rides beside the reset it names
+        // (providers-and-workers D7); both drop together once past.
+        if (rejectedResetsAt(message.rate_limit_info) !== null) {
+          this.limitResetsAt = rejectedResetsAt(message.rate_limit_info)
+          this.limitWindow = rejectedWindow(message.rate_limit_info)
+        }
         // Plan usage rides these frames whatever the turn state; malformed
         // values degrade to a windowless report, never a session error.
         this.options.onRateLimit?.(
@@ -1013,7 +1021,8 @@ export class ChatSessionDriver {
     const subagent = isSubagentContentFrame(message)
     if (message.error && !subagent) {
       const text = message.message.content.map(block => block.type === 'text' ? block.text : '').join('\n')
-      this.reportLimit(assistantLimitSignal(message.error, text, this.currentResetsAt()))
+      const { resetsAt, window } = this.currentLimit()
+      this.reportLimit(assistantLimitSignal(message.error, text, resetsAt, window))
     }
     for (const block of message.message.content) {
       if (block.type === 'text') {
@@ -1195,7 +1204,8 @@ export class ChatSessionDriver {
       }
     }
     if (message.subtype === 'api_retry') {
-      this.reportLimit(retryLimitSignal(message, this.currentResetsAt()))
+      const { resetsAt, window } = this.currentLimit()
+      this.reportLimit(retryLimitSignal(message, resetsAt, window))
     }
     if (message.subtype === 'init') {
       if (Array.isArray(message.capabilities)) {
@@ -1339,10 +1349,13 @@ export class ChatSessionDriver {
     // Other system subtypes are informational; ignored.
   }
 
-  /** The announced reset time while it is still ahead. */
-  private currentResetsAt(): string | null {
-    if (this.limitResetsAt && Date.parse(this.limitResetsAt) <= Date.now()) this.limitResetsAt = null
-    return this.limitResetsAt
+  /** The announced reset and its window while still ahead (providers-and-workers D7). */
+  private currentLimit(): { resetsAt: string | null; window: string | null } {
+    if (this.limitResetsAt && Date.parse(this.limitResetsAt) <= Date.now()) {
+      this.limitResetsAt = null
+      this.limitWindow = null
+    }
+    return { resetsAt: this.limitResetsAt, window: this.limitWindow }
   }
 
   private reportLimit(signal: ChatLimitSignal | null): void {

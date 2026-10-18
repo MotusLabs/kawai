@@ -28,7 +28,9 @@ import type { GroupDefinition } from '../groupFile'
 import { DEFAULT_PARK_IF_RESET_WITHIN_MS } from '../groupFile'
 import type { MailboxStore, TeamMessage } from '../mailboxStore'
 import { ProgressDigest } from './handoff'
-import { DEFAULT_COOLDOWN_MS, type LimitEventStore } from './limitEvents'
+import { DEFAULT_COOLDOWN_MS, isModelScoped, type LimitEventStore } from './limitEvents'
+import { providerOf } from '../../chat/profileCatalog'
+import { catalogCtx } from '../cooldowns'
 import { MAX_PARKS, resolveLimit, type LimitResolution } from './limitPolicy'
 import type { RuleRegistry } from './ruleLoader'
 
@@ -52,6 +54,8 @@ export type HandoffTarget = { kind: 'group' | 'session'; id: string }
 export interface LimitOutcomesOptions {
   store: MailboxStore
   limits: LimitEventStore
+  /** The ambient catalog home for provider resolution (D10), as sessionMailbox passes it. */
+  homeDir?: string
   rules: Pick<RuleRegistry, 'rule'>
   getRecord: (id: string) => ChatSessionRecord | undefined
   /** The session's team id; undefined while resolving. */
@@ -222,7 +226,7 @@ export class LimitOutcomes {
     const rows = this.db.prepare('SELECT * FROM team_handoff_notes WHERE notified_at IS NULL').all() as NoteRow[]
     for (const row of rows) {
       try {
-        if (this.options.limits.cooldownUntil(row.profile_id)) continue
+        if (this.cooldownEnd(row.profile_id, row.from_session) !== null) continue
         const forwarded = this.options.store.get(row.forwarded_id)
         const owner = forwarded?.claimedBy
         const recipient = this.options.getRecord(row.from_session)
@@ -234,11 +238,20 @@ export class LimitOutcomes {
         const original = this.options.store.get(row.original_id)
         const task = original?.taskId ? this.options.taskTitle(original.taskId) : null
         const ownerName = this.options.getRecord(owner)?.name ?? owner
+        // D15's same case: the note names the provider when the wait it
+        // announces was the provider's — the profile's own provider-scoped
+        // events — not a model-scoped window's (the profile cools alone).
+        // The parked resume keeps naming the limited profile alone.
+        const record = this.options.getRecord(row.from_session)
+        const provider = providerOf(row.profile_id, catalogCtx(this.options.homeDir, record?.projectPath))
+        const providerWaited = this.options.limits.forProfile(row.profile_id)
+          .some(event => event.final && !isModelScoped(event.window))
+        const namedProvider = providerWaited && provider !== row.profile_id ? ` ${provider}` : ''
         this.options.store.enqueue({
           teamId: row.team_id, toKind: 'session', toId: row.from_session, fromSession: row.from_session,
           fromGroup: recipient.groupId ?? null, originPath: recipient.projectPath, tags: ['handoff-note'],
           taskId: original?.taskId ?? null,
-          body: `Your provider limit has recovered. While it was limited, your work${task ? ` on task "${task}"` : ''} ` +
+          body: `Your provider${namedProvider} limit has recovered. While it was limited, your work${task ? ` on task "${task}"` : ''} ` +
             `(message ${row.original_id}) was handed to ${ownerName} (session ${owner}). It is theirs now; do not continue it.`,
         })
         this.markNoted(row.id)
@@ -250,9 +263,19 @@ export class LimitOutcomes {
 
   /** When the next note could become due (a pending note's cooldown end). */
   nextNoteAt(): number | null {
-    const rows = this.db.prepare('SELECT DISTINCT profile_id FROM team_handoff_notes WHERE notified_at IS NULL').all() as Array<{ profile_id: string }>
-    const ends = rows.map(row => this.options.limits.cooldownUntil(row.profile_id)).filter((end): end is string => end !== null).map(Date.parse)
+    const rows = this.db.prepare('SELECT DISTINCT profile_id, from_session FROM team_handoff_notes WHERE notified_at IS NULL').all() as Array<{ profile_id: string; from_session: string }>
+    const ends = rows.map(row => this.cooldownEnd(row.profile_id, row.from_session)).filter((end): end is string => end !== null).map(Date.parse)
     return ends.length > 0 ? Math.min(...ends) : null
+  }
+
+  /**
+   * The profile's effective cooldown end (providers-and-workers D8) with the
+   * provider resolved at its session's project path — providerOf falls back
+   * to the profile id without a record or catalog entry.
+   */
+  private cooldownEnd(profileId: string, fromSession: string): string | null {
+    const record = this.options.getRecord(fromSession)
+    return this.options.limits.cooldownFor(profileId, providerOf(profileId, catalogCtx(this.options.homeDir, record?.projectPath))).until
   }
 
   private markNoted(id: string) {
@@ -373,6 +396,16 @@ export class LimitOutcomes {
       const recipient = this.options.getRecord(target.id)
       if (!recipient || this.options.teamOf(target.id) !== message.teamId) throw new Error('Handoff recipient is not a session of this team')
       if ((recipient.claudeProfileId ?? 'default') === profileId) throw new Error(`Cannot hand off work to its limited profile ${profileId}`)
+      // A session on any model of the cooling provider refuses too (D9).
+      const fromRecord = this.options.getRecord(fromSession)
+      const excludedProvider = providerOf(profileId, catalogCtx(this.options.homeDir, fromRecord?.projectPath))
+      if (this.options.limits.providerCooldownUntil(excludedProvider) !== null) {
+        const recipientProvider = providerOf(recipient.claudeProfileId ?? 'default', catalogCtx(this.options.homeDir, recipient.projectPath))
+        if (recipientProvider === excludedProvider) {
+          throw new Error(`Cannot hand off work to ${recipient.claudeProfileId ?? 'default'}: its provider ${excludedProvider}` +
+            ` is cooling after the limit on ${profileId}`)
+        }
+      }
       if (recipient.archivedAt) {
         if (!this.options.restoreSession) throw new Error('Restoring the handoff recipient is not available')
         this.options.restoreSession(target.id)

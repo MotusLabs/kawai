@@ -31,7 +31,7 @@ import { PlanStore } from '../plans/planStore'
 import { WorktreeStaffing, type SpawnRequest, type SpawnResult } from './staffing'
 import { TeamCaps } from './teamCaps'
 import { worktreeRootOf } from './worktreeRoots'
-import { LimitEventStore } from './routing/limitEvents'
+import { ambientProviderOf, LimitEventStore, recipientCooldown, sessionCooldown } from './cooldowns'
 import { RuleRegistry, type RuleLoadReport } from './routing/ruleLoader'
 import { ProfileRouter } from './routing/router'
 import { LimitOutcomes, type HandoffTarget } from './routing/limitOutcomes'
@@ -168,7 +168,7 @@ export class SessionMailbox {
     })
     this.mailbox = new TeamMailbox(store, {
       getSession: options.getRecord, homeDir: options.homeDir, restoreSession: options.restore, tasks: taskStore,
-      cooldownUntil: profileId => this.limits.cooldownUntil(profileId),
+      cooldownFor: (profileId, record) => sessionCooldown(this.limits, this.options.homeDir, profileId, record?.projectPath),
     })
     this.staffing = new WorktreeStaffing(db, store, {
       records: options.records,
@@ -195,7 +195,7 @@ export class SessionMailbox {
       worktrees: this.tasks.worktrees,
       ...(options.homeDir ? { homeDir: options.homeDir } : {}),
       plans: this.plans,
-      cooldownUntil: profileId => this.limits.cooldownUntil(profileId),
+      cooldownUntil: profileId => sessionCooldown(this.limits, this.options.homeDir, profileId).until,
       ownership: options.ownership,
     })
     this.results = new TaskResultService(this.tasks, { getSession: options.getRecord, assignments: this.assignments,
@@ -229,14 +229,14 @@ export class SessionMailbox {
       targetWorktree,
       staffing: this.staffing,
       rules: this.rules,
-      limits: this.limits,
+      limits: this.limits, providerOf: ambientProviderOf(this.options.homeDir),
       usageOf: profileId => options.usageOf?.(profileId) ?? null,
       excludedProfile: message => message.excludedProfile ?? undefined,
       allowedProfiles: message => message.allowedProfiles ?? null,
       ...(options.onRouteDecision ? { onDecision: options.onRouteDecision } : {}),
     })
     this.outcomes = new LimitOutcomes(db, {
-      store, limits: this.limits, rules: this.rules,
+      store, limits: this.limits, rules: this.rules, homeDir: options.homeDir,
       getRecord: options.getRecord,
       teamOf: id => options.teams.teamOf(id)?.teamId,
       groupOf: (sessionId, groupId) => options.teams.catalogOf(sessionId, this.catalogs)?.groups.get(groupId)?.group,
@@ -252,7 +252,7 @@ export class SessionMailbox {
       teamOf: id => options.teams.teamOf(id)?.teamId,
       groupOf: (sessionId, groupId) => options.teams.catalogOf(sessionId, this.catalogs)?.groups.get(groupId)?.group,
       usageOf: profileId => options.usageOf?.(profileId) ?? null,
-      cooldownUntil: profileId => this.limits.cooldownUntil(profileId),
+      cooldownUntil: profileId => sessionCooldown(this.limits, this.options.homeDir, profileId).until,
       ...(options.gitHead ? { head: options.gitHead } : {}),
     })
     this.dispatcher = new MailDispatcher(this.mailbox.store, {
@@ -317,7 +317,7 @@ export class SessionMailbox {
       parked: this.mailbox.store.parkedBy(id).length > 0,
       contextExhausted: Boolean(record.contextExhausted),
       profileId: record.claudeProfileId ?? 'default',
-      cooldownUntil: this.limits.cooldownUntil(record.claudeProfileId ?? 'default'),
+      ...recipientCooldown(this.limits, this.options.homeDir, record.claudeProfileId ?? 'default', record),
     }
   }
 
