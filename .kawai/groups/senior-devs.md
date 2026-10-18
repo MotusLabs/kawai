@@ -52,9 +52,17 @@ implement it there, end to end.
   the resulting head for review.
 - Commit small and often with Conventional Commits (`feat:`, `fix:`, …). Stage
   explicit paths, never `git add -A`.
-- After changes: `bun run lint && bun run typecheck && bun run test`. Use `bun
-  run test`, not raw `bun test`. Never run `bun run test:e2e` (its teardown
-  kills the live kawai server). Tests that spawn git need `cleanGitEnv`.
+- Checks: the pre-commit hook runs lint, typecheck, and the full unit suite on
+  every commit, so a commit that lands is your full check. Never run `bun run
+  test` (or the lint/typecheck/test trio) just before committing — that runs
+  the suite twice. While iterating, run only the test files you touched, and
+  `bun run typecheck` when types change. Run every heavy command (`git commit`,
+  `bun run test`, `bun run typecheck`, client `.tsx` tests) only as
+  `/home/coder/kawai-lead/suite-run <command> > <log> 2>&1`, with a 2 h Bash
+  timeout (7200000) so the wait for a slot does not kill it; then confirm HEAD
+  moved. Never `--no-verify` unless the Lead says so. Never run `bun run
+  test:e2e` (its teardown kills the live kawai server). Tests that spawn git
+  need `cleanGitEnv`.
 - Keep files under 500 lines; fix root causes; add tests for new behavior.
 - Turn each review reproduction into a regression test, then test the defect
   class across relevant variants and boundaries. After two unsuccessful fix
