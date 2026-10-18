@@ -19,10 +19,10 @@ import { logger } from '../../logger'
 import { assignmentState } from '../../team/assignmentStore'
 import type { MailboxStore } from '../../team/mailboxStore'
 import { githubRepoOf } from '../landing/landingProbe'
-import { ghCheckRuns, ghStatuses } from '../landing/github'
 import { recoverUnknownEffects } from './executorStartup'
 import { applyLanding, applyLandingOutcome, landingAdapters, mergeAdapter, removeWorktreeAdapter, updateBranchAdapter } from './executionLanding'
 import type { CiCheck } from '../../../shared/planExecution'
+import { ciClass } from '../../../shared/planExecutionGates'
 import type { GhCommandOptions } from '../landing/ghCommand'
 import { executionSnapshot } from './executionSnapshot'
 import { planSteps } from './executionPlanner'
@@ -32,7 +32,7 @@ import type { PlanStore } from '../planStore'
 import { dispatchFixAttempt, dispatchImplementAttempt, redispatchStage, type DispatchDeps } from './executionDispatch'
 import { StepRefusal } from './stepRefusal'
 import { fixRoundOutcome } from '../../../shared/planExecutionProgress'
-import { applyRoundStage, type ReleaseSeam, openPrAdapter, pushAdapter, recordPull, rerunAdapter, roundAdapters } from './executionRounds'
+import { applyRoundStage, dispatchRevisionAttempt, type ReleaseSeam, openPrAdapter, pushAdapter, recordPull, rerunAdapter, roundAdapters } from './executionRounds'
 
 /** D5's polling interval while a team has a running execution. */
 export const EXECUTOR_TICK_MS = 60_000
@@ -312,6 +312,7 @@ export class ExecutionExecutor {
       results: this.deps.results, plansService: this.deps.plansService, conditionsOf: this.deps.conditionsOf, records: this.deps.records,
       ...(this.deps.ghOptions ? { ghOptions: this.deps.ghOptions } : {}),
       now: () => (this.deps.now?.() ?? new Date()).toISOString(),
+      revisionAttempt: (changeRow, round, update) => dispatchRevisionAttempt(this.roundDeps(team), changeRow, round, update),
     }
   }
 
@@ -328,11 +329,14 @@ export class ExecutionExecutor {
       const execution = this.deps.store.execution(row.executionId)
       const fact = execution === null ? null : this.deps.store.landings(execution.planId).find(entry => entry.change === row.change)
       if (execution === null || fact === null || fact === undefined) return
-      const runs = await ghCheckRuns(this.repoOf(team), fact.mergeSha, this.deps.ghOptions)
-      const statuses = await ghStatuses(this.repoOf(team), fact.mergeSha, this.deps.ghOptions)
+      // Through the round adapters, like every other CI read: the fixture
+      // and test adapters answer it too.
+      const adapters = this.deps.roundAdapters ?? roundAdapters
+      const runs = await adapters.checkRuns(this.repoOf(team), fact.mergeSha, this.deps.ghOptions)
+      const statuses = await adapters.statuses(this.repoOf(team), fact.mergeSha, this.deps.ghOptions)
       if (!runs.ok || !statuses.ok) return
       const checks: CiCheck[] = [...runs.data, ...statuses.data]
-      const pending = checks.some(check => ['queued', 'in_progress', 'waiting', 'requested', 'pending'].includes(check.conclusion.toLowerCase()))
+      const pending = checks.some(check => ciClass(check) === 'pending')
       if (!pending) this.deps.store.setLandingPostCi(execution.planId, row.change, checks)
     }
   }

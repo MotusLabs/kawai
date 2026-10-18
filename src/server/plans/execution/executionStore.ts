@@ -300,7 +300,9 @@ export class ExecutionStore {
         id, input.executionId, input.change, input.attemptId, number, input.resultId, input.commitSha, input.fixRound ? 1 : 0,
       )
       if (prior && prior.outcome === null) {
-        this.db.prepare(`UPDATE plan_execution_rounds SET outcome = 'superseded', decided_at = ? WHERE id = ? AND outcome IS NULL`).run(at, prior.id)
+        // Any verdict stops counting (D9): a passed round waiting for the slot
+    // is superseded as well as an open one.
+    this.db.prepare(`UPDATE plan_execution_rounds SET outcome = 'superseded', decided_at = ? WHERE id = ? AND (outcome IS NULL OR outcome != 'superseded')`).run(at, prior.id)
       }
       // Back to gating (D9); leaving `landing` releases the slot (D3).
       const row = this.change(input.executionId, input.change)!
@@ -351,7 +353,9 @@ export class ExecutionStore {
 
   /** Supersede an open round outright (D9's revision supersession). */
   supersedeRound(id: string): void {
-    this.db.prepare(`UPDATE plan_execution_rounds SET outcome = 'superseded', decided_at = ? WHERE id = ? AND outcome IS NULL`)
+    // Any verdict stops counting (D9): a passed round waiting for the slot
+    // is superseded as well as an open one.
+    this.db.prepare(`UPDATE plan_execution_rounds SET outcome = 'superseded', decided_at = ? WHERE id = ? AND (outcome IS NULL OR outcome != 'superseded')`)
       .run(this.iso(), id)
   }
 
@@ -369,7 +373,9 @@ export class ExecutionStore {
         source?.fixRound === true ? 1 : 0, input.carriedFrom, input.ciWindowFrom, input.ciWindowFrom, source?.reviewAssignmentId ?? null,
       )
       if (prior && prior.outcome === null) {
-        this.db.prepare(`UPDATE plan_execution_rounds SET outcome = 'superseded', decided_at = ? WHERE id = ? AND outcome IS NULL`).run(this.iso(), prior.id)
+        // Any verdict stops counting (D9): a passed round waiting for the slot
+    // is superseded as well as an open one.
+    this.db.prepare(`UPDATE plan_execution_rounds SET outcome = 'superseded', decided_at = ? WHERE id = ? AND (outcome IS NULL OR outcome != 'superseded')`).run(this.iso(), prior.id)
       }
       return this.round(id)!
     })()

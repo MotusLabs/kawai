@@ -67,9 +67,9 @@ export interface GhScript {
   merges: Array<{ pr: number; method: MergeMethod; head: string }>
   updates: Array<{ pr: number; head: string }>
   /** Runs inside the merge call before GitHub merges (a race: move the base or the head). */
-  beforeMerge: (() => void) | null
-  /** Replaces update-branch's clean merge (a hand merge, a push). Returns nothing; acts on origin. */
-  update: ((branch: string, head: string) => void) | null
+  beforeMerge: (() => void | Promise<void>) | null
+  /** Replaces update-branch's clean merge (a hand merge, a push), acting on origin; 'conflict' answers GitHub's 422. */
+  update: ((branch: string, head: string) => void | 'conflict' | Promise<void | 'conflict'>) | null
 }
 
 export interface MatrixWorld { world: PlanWorld; origin: string; gitRoot: string }
@@ -204,7 +204,7 @@ export function createMatrixBench(matrix: MatrixWorld): MatrixBench {
       if (originHead(matrix, pull.branch) !== expectedHead) return fail(['api', 'update-branch'], 'expected head sha didn\'t match current head ref.')
       gh.updates.push({ pr, head: expectedHead })
       if (gh.update !== null) {
-        gh.update(pull.branch, expectedHead)
+        if (await gh.update(pull.branch, expectedHead) === 'conflict') return fail(['api', 'update-branch'], 'merge conflict between base and head')
         return { ok: true, data: null }
       }
       onOrigin(matrix, clone => {
@@ -217,7 +217,7 @@ export function createMatrixBench(matrix: MatrixWorld): MatrixBench {
     prMerge: async (_repo, pr, method, head) => {
       const pull = pullOf(pr)
       if (pull === undefined) return fail(['pr', 'merge'], 'no such pull request', 404)
-      gh.beforeMerge?.()
+      await gh.beforeMerge?.()
       if (originHead(matrix, pull.branch) !== head) return fail(['pr', 'merge'], 'Head branch was modified. Review and try the merge again.')
       gh.merges.push({ pr, method, head })
       onOrigin(matrix, clone => {

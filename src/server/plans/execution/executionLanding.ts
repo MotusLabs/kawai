@@ -12,7 +12,7 @@ import fs from 'node:fs'
 import type { TeamIdentity } from '../../team/teamIdentity'
 import type { TaskResultService } from '../../team/TaskResultService'
 import type { EffectAdapter, EffectCallResult } from './effects'
-import type { EffectRow, RoundRow } from './executionRows'
+import type { ChangeRow, EffectRow, RoundRow } from './executionRows'
 import type { ExecutionStore } from './executionStore'
 import type { PlanStore } from '../planStore'
 import type { PlanService } from '../PlanService'
@@ -40,6 +40,12 @@ export interface LandingDeps {
   /** Live session records: a worktree with a live session is never removed. */
   records: () => Iterable<{ sessionId: string; projectPath: string; archivedAt?: string | null }>
   now: () => string
+  /**
+   * D9 within D13: once a failed branch update settles, a newer task revision
+   * replaces the update attempt with its own fix attempt naming the base head
+   * and files. Resolves false when no revision is pending.
+   */
+  revisionAttempt: (changeRow: { executionId: string; change: string; taskId: string | null }, round: RoundRow, update: { base: string; files: string[] }) => Promise<boolean>
 }
 
 /** The landing stage's git/gh reads, injectable for tests. */
@@ -112,8 +118,9 @@ export async function applyLanding(deps: LandingDeps, adapters: LandingAdapters,
     if (prediction.conflicts.length > 0) {
       // A conflict releases the slot (leaving `landing`) and dispatches an
       // update attempt naming the files.
+      // passedAt clears: the round's pass waits on the attempt's new result.
       const fresh = store.change(changeRow.executionId, changeRow.change)!
-      store.transition(changeRow.executionId, changeRow.change, fresh, { state: 'gating', step: null, stopReason: null, stopDetail: null })
+      store.transition(changeRow.executionId, changeRow.change, fresh, { state: 'gating', step: null, stopReason: null, stopDetail: null, passedAt: null })
       return dispatchUpdateAttempt(deps, changeRow, round, { kind: 'conflict', files: prediction.conflicts, base: base.sha })
     }
     // Clean: the update-branch effect runs, pinned to the reviewed head.
@@ -145,6 +152,21 @@ async function fetchHeads(adapters: Pick<LandingAdapters, 'fetch'>, cwd: string,
     if (!fetched.ok) return false
   }
   return true
+}
+
+/**
+ * A branch update that did not produce a clean base merge (D13): the change
+ * leaves the slot for gating, and one attempt answers it — the revision's fix
+ * attempt when a newer task revision waited for the update (D9), else the
+ * update attempt naming the files, or the failed check when none conflict.
+ */
+async function failedUpdate(deps: LandingDeps, row: ChangeRow, updateRound: RoundRow | null, update: { base: string; files: string[] }): Promise<void> {
+  const store = deps.executions
+  store.transition(row.executionId, row.change, row, { state: 'gating', step: null, passedAt: null })
+  const round = updateRound ?? store.rounds(row.executionId, row.change).at(-1) ?? null
+  if (round === null) return
+  if (await deps.revisionAttempt(row, round, update)) return
+  await dispatchUpdateAttempt(deps, row, round, update.files.length > 0 ? { kind: 'conflict', files: update.files, base: update.base } : { kind: 'failed-check' })
 }
 
 /** D13's update attempt: a fix handoff naming the conflict or the failed update. */
@@ -184,6 +206,12 @@ export function updateBranchAdapter(adapters: LandingAdapters, ghOptions?: GhCom
       const pr = Number(command.pr ?? 0)
       const head = String(command.head ?? '')
       const result = await adapters.updateBranch(repo, pr, head, ghOptions)
+      // GitHub answers a conflicting update — or a head that moved past the
+      // pin — with 422: the update settles as not merged (D13), and the
+      // follow-on dispatches the attempt that answers it.
+      if (!result.ok && 'httpStatus' in result.error && result.error.httpStatus === 422) {
+        return { ok: true, outcome: { requested: false, conflict: true, head, message: result.error.message } }
+      }
       if (!result.ok) return { ok: false, error: result.error }
       return { ok: true, outcome: { requested: true, head } }
     },
@@ -245,7 +273,7 @@ export function mergeAdapter(adapters: LandingAdapters, ghOptions?: GhCommandOpt
 export async function applyLandingOutcome(deps: LandingDeps, effect: { kind: string; change: string | null; executionId: string; roundId?: string | null; outcome: unknown }, adapters: LandingAdapters = landingAdapters): Promise<void> {
   const store = deps.executions
   if (effect.change === null) return
-  const outcome = effect.outcome as { merged?: boolean; baseMoved?: boolean; base?: string; mergeCommit?: string; head?: string; requested?: boolean } | null
+  const outcome = effect.outcome as { merged?: boolean; baseMoved?: boolean; base?: string; mergeCommit?: string; head?: string; requested?: boolean; conflict?: boolean } | null
   const row = store.change(effect.executionId, effect.change)
   if (row === null || row.state !== 'landing') return
 
@@ -258,6 +286,19 @@ export async function applyLandingOutcome(deps: LandingDeps, effect: { kind: str
     if (!view.ok) return
     const fresh = store.change(effect.executionId, effect.change)!
     const reviewedHead = String((effect.outcome as { head?: string } | null)?.head ?? '')
+    const updateRound = effect.roundId !== null && effect.roundId !== undefined ? store.round(effect.roundId) : null
+    if (outcome?.conflict === true) {
+      // GitHub refused the update: the slot is released and the conflicting
+      // files, predicted against the base head now, name the attempt.
+      const cwd = row.worktree ?? deps.team.groupsRoot
+      const baseRef = `refs/heads/${execution.baseBranch}`
+      const base = await adapters.lsRemoteHead(cwd, baseRef)
+      if (!base.ok || base.sha === null) return
+      if (!(await fetchHeads(adapters, cwd, [baseRef]))) return
+      const prediction = await adapters.mergeTree(cwd, reviewedHead, base.sha)
+      if (!prediction.ok) return
+      return failedUpdate(deps, fresh, updateRound, { base: base.sha, files: prediction.conflicts })
+    }
     if (view.data.headRefOid === reviewedHead) {
       return // not moved yet
     }
@@ -293,10 +334,7 @@ export async function applyLandingOutcome(deps: LandingDeps, effect: { kind: str
       }
       return
     }
-    store.transition(effect.executionId, effect.change, fresh, { state: 'gating', step: null })
-    const carried = store.rounds(effect.executionId, effect.change).at(-1)!
-    await dispatchUpdateAttempt(deps, { executionId: effect.executionId, change: effect.change, taskId: fresh.taskId }, carried, { kind: 'failed-check' })
-    return
+    return failedUpdate(deps, fresh, updateRound, { base: base.sha, files: [] })
   }
 
   if (effect.kind === 'merge' && outcome !== null) {

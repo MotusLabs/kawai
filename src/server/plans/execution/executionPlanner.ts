@@ -190,8 +190,9 @@ export function planSteps(snapshot: ExecutionSnapshot, _now: string): PlanSteps 
       // D9: a result pinned to an older task revision can never pass — the
       // change returns for a fix attempt naming the revision (a landing
       // change too, releasing the slot), unless its merge started or an
-      // update-branch effect is still settling.
-      if (round !== null && change.task.results.some(result => result.id === round.resultId && result.taskRevision < change.task!.revision)) {
+      // update-branch effect is still settling. A round superseded once
+      // stays superseded: its fix attempt is already out.
+      if (round !== null && round.outcome !== 'superseded' && change.task.results.some(result => result.id === round.resultId && result.taskRevision < change.task!.revision)) {
         steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'revision', roundId: round.id, resultId: null })
         continue
       }

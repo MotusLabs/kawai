@@ -123,32 +123,51 @@ export async function applyRoundStage(deps: RoundDeps, changeRow: { executionId:
   if (stage.kind === 'review') return dispatchReview(deps, changeRow, round)
   if (stage.kind === 'verdict') return decideVerdict(deps, changeRow, round, entry?.extraChecks ?? [])
   if (stage.kind === 'revision') {
-    // D9: supersede the pinned round and dispatch a fix attempt naming the
-    // revision. The change goes back to implementing; the slot, if the
-    // change somehow held it, releases by leaving `landing` — a landing
-    // change never reaches this stage.
-    const task = changeRow.taskId === null ? null : deps.tasks.store.get(changeRow.taskId)
-    if (task === null || task === undefined) return
-    const change = store.change(changeRow.executionId, changeRow.change)
-    if (change === null) return
-    store.supersedeRound(round.id)
-    store.transition(changeRow.executionId, changeRow.change, change, { state: 'implementing', step: null })
-    const group = entry?.group
-    if (group === null || group === undefined) return
-    const revisionRow = deps.tasks.store.revisions(task.id).at(-1)
-    await dispatchFixAttempt(
-      { team: deps.team, executions: store, plans: deps.plans, tasks: deps.tasks, assignments: deps.assignments, results: deps.results },
-      {
-        executionId: changeRow.executionId, change: changeRow.change, group,
-        failingChecks: [],
-        findingsIds: [],
-        findingsTexts: [`The task's direction was republished as revision ${task.revision}${revisionRow?.rationale ? ` (${revisionRow.rationale})` : ''}. Re-apply your work on top of the new direction.`],
-        continueFrom: round.commitSha,
-        fixRounds: change.fixRounds,
-      },
-    )
+    await dispatchRevisionAttempt(deps, changeRow, round)
     return
   }
+}
+
+/** D9: the round's result is pinned to a task revision older than the task's current one. */
+export function revisionPending(deps: Pick<RoundDeps, 'tasks'>, taskId: string | null, round: RoundRow): boolean {
+  const task = taskId === null ? null : deps.tasks.store.get(taskId)
+  if (task === null || task === undefined) return false
+  const result = deps.tasks.store.results.get(round.resultId)
+  return result !== null && result !== undefined && result.taskRevision < task.revision
+}
+
+/**
+ * D9's fix attempt naming a newer task revision: supersede the pinned round
+ * and return the change to implementing — leaving `landing` releases the
+ * slot. A revision applied once a failed branch update settled (D9, D13)
+ * names the base head and the conflicting files too, so one attempt answers
+ * both and no update attempt follows. False when no revision is pending.
+ */
+export async function dispatchRevisionAttempt(deps: RoundDeps, changeRow: { executionId: string; change: string; taskId: string | null }, round: RoundRow, update?: { base: string; files: string[] }): Promise<boolean> {
+  const store = deps.executions
+  if (!revisionPending(deps, changeRow.taskId, round)) return false
+  const task = deps.tasks.store.get(changeRow.taskId!)!
+  const change = store.change(changeRow.executionId, changeRow.change)
+  const execution = store.execution(changeRow.executionId)
+  if (change === null || execution === null) return false
+  store.supersedeRound(round.id)
+  store.transition(changeRow.executionId, changeRow.change, change, { state: 'implementing', step: null })
+  const group = deps.plans.revision(execution.planId, execution.revision)?.content.changes.find(entry => entry.change === changeRow.change)?.group
+  if (group === null || group === undefined) return true
+  const revisionRow = deps.tasks.store.revisions(task.id).at(-1)
+  const texts = [`The task's direction was republished as revision ${task.revision}${revisionRow?.rationale ? ` (${revisionRow.rationale})` : ''}. Re-apply your work on top of the new direction.`]
+  if (update !== undefined) {
+    texts.push(`GitHub's update of the branch with the base did not merge cleanly (base head ${update.base}${update.files.length > 0 ? `; conflicting files: ${update.files.join(', ')}` : ''}). Merge the base branch as part of this attempt.`)
+  }
+  await dispatchFixAttempt(
+    { team: deps.team, executions: store, plans: deps.plans, tasks: deps.tasks, assignments: deps.assignments, results: deps.results },
+    {
+      executionId: changeRow.executionId, change: changeRow.change, group,
+      failingChecks: [], findingsIds: [], findingsTexts: texts,
+      continueFrom: round.commitSha, fixRounds: change.fixRounds,
+    },
+  )
+  return true
 }
 
 async function pollCi(deps: RoundDeps, changeRow: { executionId: string; change: string; branch: string | null; worktree: string | null }, round: RoundRow, extra: PlanCheck[]): Promise<void> {
