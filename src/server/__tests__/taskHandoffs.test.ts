@@ -268,7 +268,8 @@ test('task_handoff refuses a blank target and an unsupported target_kind before 
   const lead = taskHandlers(tasks, 'lead', results)
   const base = { task_id: task.id, kind: 'review', result_id: result.id, target: 'reviewers', instructions: 'Review the export' }
   await expect(lead.task_handoff!({ ...base, target: '   ' })).rejects.toThrow('A handoff target needs an identifier')
-  await expect(lead.task_handoff!({ ...base, target_kind: 'role' })).rejects.toThrow()
+  await expect(lead.task_handoff!({ ...base, target_kind: 'role' })).rejects
+    .toThrow(`Invalid option: expected one of \\"group\\"|\\"session\\"`)
   expect(tasks.store.assignmentsOf(task.id)).toEqual([])
   expect(taskMail(task.id)).toEqual([])
   expect(tasks.store.outstandingAssignment(task.id)).toBeNull()
@@ -419,6 +420,20 @@ test('a group handoff stands against a session-targeted retry of the same kind, 
     { duplicate: boolean; assignment: { id: string; targetKind: string; targetId: string; supersededBy: string | null }; notice: string }
   expect(asSession).toMatchObject({ duplicate: true, assignment: { id: group.assignment.id, targetKind: 'group', targetId: 'qa', supersededBy: null } })
   expect(asSession.notice).toContain('You asked for session reviewer, which differs from the standing group qa: no reassignment occurred')
+  expect(taskMail(task.id)).toHaveLength(1)
+})
+
+// Kind-only mismatch (2.1): the same id under the other recipient kind is
+// still a differing request — the standing handoff stands and both kinds are named.
+test('a kind-only retry of the same id returns the standing handoff and names both recipient kinds', async () => {
+  const task = await tasks.create(agent('lead'), { title: 'Export', direction: 'v1' })
+  const result = await results.submit(agent('dev'), task.id, submission)
+  const lead = taskHandlers(tasks, 'lead', results)
+  const first = await lead.task_handoff!(sessionCall(task.id, result.id, { target: 'reviewer' })) as { assignment: { id: string } }
+  const asGroup = await lead.task_handoff!({ ...sessionCall(task.id, result.id), target_kind: 'group' }) as
+    { duplicate: boolean; assignment: { id: string; targetKind: string; targetId: string }; notice: string }
+  expect(asGroup).toMatchObject({ duplicate: true, assignment: { id: first.assignment.id, targetKind: 'session', targetId: 'reviewer' } })
+  expect(asGroup.notice).toContain('You asked for group reviewer, which differs from the standing session reviewer: no reassignment occurred')
   expect(taskMail(task.id)).toHaveLength(1)
 })
 
