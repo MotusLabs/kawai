@@ -7,7 +7,8 @@
 // compaction threshold and drops it across a compact_boundary; the worker turn
 // spawns a subagent (with a nested one) through task frames. Tests shrink
 // the holds via AGENTBOARD_CHAT_FIXTURE_HOLD_MS. Tool turns exercise short
-// Bash handles; "tool fail" adds a failed result and a project-relative Read.
+// Bash handles; "tool fail" adds a failed result and a project-relative Read;
+// "prompt-too-long" ends the turn with the CLI's context-exhaustion result.
 import type { Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -291,6 +292,16 @@ export const fixtureQueryFactory: ChatQueryFactory = ({ prompt, options, wire })
         push({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: delta } } })
       }
       push({ type: 'assistant', message: { id: messageId, role: 'assistant', content: [{ type: 'text', text: 'Streaming a response across reconnect.' }] } })
+    }
+    if (/prompt-too-long/i.test(text)) {
+      // Context-exhaustion walkthrough (chat-context-exhaustion 6.1): the
+      // incident's frames — the CLI's synthetic API-error reply, then a
+      // success-subtype result marked is_error with its terminal reason.
+      if (!closed && turn === generation) {
+        push({ type: 'assistant', message: { id: crypto.randomUUID(), role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text: 'Prompt is too long' }] }, error: 'invalid_request' })
+        push({ type: 'result', subtype: 'success', is_error: true, result: 'Prompt is too long', terminal_reason: 'blocking_limit', total_cost_usd: 0, num_turns: 1, ...echo() })
+      }
+      return
     }
     if (!closed && turn === generation) push({ type: 'result', subtype: 'success', result: '', total_cost_usd: 0, num_turns: 1, ...echo() })
   }

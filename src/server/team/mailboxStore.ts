@@ -50,7 +50,10 @@ export class MailboxStore {
   /** Append-only history of every transition (team-message-threads D2). */
   readonly events: MessageEventLog
   private readonly parkedCancel: ParkedCancel
-  constructor(private readonly db: Database, private readonly options: { recipientExists?: (id: string) => boolean } = {}) {
+  constructor(private readonly db: Database, private readonly options: {
+    recipientExists?: (id: string) => boolean
+    recipientFlagged?: (id: string) => boolean
+  } = {}) {
     this.events = new MessageEventLog(db)
     this.parkedCancel = new ParkedCancel({
       transaction: run => db.transaction(run)(),
@@ -237,6 +240,17 @@ export class MailboxStore {
     return this.transition(id, ['queued', 'claimed', 'awaiting-request', 'spawning'], { state: 'dead', reason }, 'dead-lettered', actor)
   }
 
+  /**
+   * Pushed mail its recipient never processed (chat-context-exhaustion D4):
+   * the turn that carried it failed with the context exhausted, whether its
+   * receipt was confirmed (`delivered`) or not (`uncertain` — a retry would
+   * only wait on a session that takes no mail). A narrow transition, so
+   * `deadLetter` keeps its undelivered states.
+   */
+  deadLetterDelivered(id: string, reason: string): boolean {
+    return this.transition(id, ['delivered', 'uncertain'], { state: 'dead', reason }, 'dead-lettered')
+  }
+
   /** Receipt neither confirmed nor refuted (D10): out of automatic delivery. */
   holdUncertain(id: string, reason: string): boolean {
     return this.transition(id, ['claimed'], { state: 'uncertain', reason }, 'held-uncertain')
@@ -315,6 +329,7 @@ export class MailboxStore {
     return retryMessage({
       get: key => this.get(key), transition: (...args) => this.transition(...args),
       ...(this.options.recipientExists ? { recipientExists: this.options.recipientExists } : {}),
+      ...(this.options.recipientFlagged ? { recipientFlagged: this.options.recipientFlagged } : {}),
     }, id)
   }
 

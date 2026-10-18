@@ -138,6 +138,7 @@ describe('the outbound window against the real store (findings-8134cc45 PC1)', (
       groupProfileCounts: () => ({}),
       turnEnds: { finishedForTeam: () => [] },
       outboundAudit: audit,
+      exhaustionEpisodes: () => [],
     }
     return new WorkspaceRead(manager as never).snapshot({ teamId: OB_TEAM } as never)
   }

@@ -238,6 +238,32 @@ describe('parseTranscriptContent', () => {
     })
   })
 
+  test('an API-error assistant reply replays as an error, never as assistant text', () => {
+    const content = [
+      JSON.stringify({
+        type: 'user',
+        uuid: 'u1',
+        timestamp: '2026-10-18T08:28:00.000Z',
+        message: { role: 'user', content: 'go' },
+      }),
+      JSON.stringify({
+        type: 'assistant',
+        uuid: 'a1',
+        timestamp: '2026-10-18T08:28:00.111Z',
+        isApiErrorMessage: true,
+        message: {
+          id: 'msg_synthetic',
+          model: '<synthetic>',
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Prompt is too long' }],
+        },
+      }),
+    ].join('\n')
+    const { events } = parseTranscriptContent(content)
+    expect(events.map((event) => event.type)).toEqual(['user_message', 'error'])
+    expect(events[1]).toMatchObject({ type: 'error', message: 'Prompt is too long', at: '2026-10-18T08:28:00.111Z' })
+  })
+
   test('unknown command markup falls back to plain user text', () => {
     // A markup shape without <command-name> (here: only the message tag, as a
     // hypothetical future/older CLI might write) renders as it was recorded.

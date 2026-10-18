@@ -53,6 +53,8 @@ describe('buildTeamPrompt', () => {
       buildTeamPrompt({ outbound, sessionId: 'chat-8', groups: [devs] }),
     ]) {
       expect(prompt).toContain('New mail to them is refused: only a reply to a message they sent reaches them.')
+      expect(prompt).toContain('A message tagged `context-exhausted` reports that a session you dispatched work to stopped')
+      expect(prompt).toContain('Mail and retries to a flagged session are refused, and kawai never compacts it.')
     }
   })
 

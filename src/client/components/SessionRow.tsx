@@ -30,6 +30,7 @@ import ProjectBadge from './ProjectBadge'
 import HostBadge from './HostBadge'
 import { spawnedNeedsAttention } from '../utils/teamTaskNotification'
 import { parkedLabel } from '../utils/parkedLabel'
+import { contextExhaustedLabel } from '../utils/contextExhaustedLabel'
 
 /** Status pill classes for the time/activity badge */
 export const statusPillClass: Record<Session['status'], string> = {
@@ -125,6 +126,7 @@ export const SESSION_FIELD_EQUALS: {
   spawned: strictEquals,
   // A fresh object per push: compare the fields the row shows.
   parked: (a, b) => a === b || (!!a && !!b && a.messageId === b.messageId && a.until === b.until && a.profileId === b.profileId && a.reason === b.reason),
+  contextExhausted: (a, b) => a === b || (!!a && !!b && a.at === b.at && a.reason === b.reason),
   lastActivity: activityInSameBucket,
 }
 
@@ -463,7 +465,7 @@ export function SessionRow({
   const showHostBadge = showHostInfo && Boolean(hostLabel)
   const showMessage = showLastUserMessage && Boolean(session.lastUserMessage)
   // Team tasks: spawned/task badges ride line 2 so they never crowd out the name.
-  const showTaskBadges = session.kind === 'chat' && (session.spawned === true || Boolean(session.taskId) || Boolean(session.parked))
+  const showTaskBadges = session.kind === 'chat' && (session.spawned === true || Boolean(session.taskId) || Boolean(session.parked) || Boolean(session.contextExhausted))
 
   // Track previous status for transition animation
   const prevStatusRef = useRef<Session['status']>(session.status)
@@ -665,6 +667,10 @@ export function SessionRow({
             {session.parked && (
               <span data-testid="session-paused-badge" className="shrink-0 rounded border border-amber-500 px-1 text-[11px] text-amber-600"
                 title={parkedLabel(session.parked)}>paused</span>
+            )}
+            {session.contextExhausted && (
+              <span data-testid="session-exhausted-badge" className="shrink-0 rounded border border-red-500 px-1 text-[11px] text-red-600"
+                title={contextExhaustedLabel(session.contextExhausted)}>Context exhausted</span>
             )}
             {spawnedNeedsAttention(session) && (
               <span data-testid="session-attention-badge" className="shrink-0 rounded bg-amber-500/20 px-1 text-[11px] text-amber-600"

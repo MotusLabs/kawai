@@ -194,6 +194,59 @@ test('retry to a killed direct or uncertain recipient cannot leave a queue row',
     }
   } finally { db.close() }
 })
+test('a context-exhausted dead letter: a session-addressed retry is refused while flagged, a group one requeues', () => {
+  const db = schemaDb(':memory:')
+  let flagged = true
+  const store = new MailboxStore(db, { recipientFlagged: id => flagged && id === 'dead-dev' })
+  try {
+    const base = { teamId: TEAM, fromSession: 'lead', fromGroup: null, originPath: '/repo', body: 'Go' }
+    const direct = store.enqueue({ ...base, toKind: 'session', toId: 'dead-dev' })
+    const group = store.enqueue({ ...base, toKind: 'group', toId: 'devs' })
+    store.deadLetter(direct.id, 'context-exhausted')
+    store.deadLetter(group.id, 'context-exhausted')
+    expect(store.retry(direct.id)).toBe(false)
+    expect(store.get(direct.id)).toMatchObject({ state: 'dead', reason: 'context-exhausted' })
+    expect(store.retry(group.id)).toBe(true)
+    expect(store.get(group.id)).toMatchObject({ state: 'queued', toKind: 'group', toId: 'devs' })
+    // Once the flag clears (a /compact), the session-addressed retry goes through.
+    flagged = false
+    expect(store.retry(direct.id)).toBe(true)
+    expect(store.get(direct.id)).toMatchObject({ state: 'queued', toId: 'dead-dev' })
+  } finally { db.close() }
+})
+test('deadLetterDelivered moves only delivered or receipt-uncertain mail to dead, with its history event', () => {
+  const db = schemaDb(':memory:'); const store = new MailboxStore(db)
+  const base = { teamId: TEAM, toKind: 'group' as const, toId: 'devs', fromSession: 'lead', fromGroup: null, originPath: '/repo', body: 'Go' }
+  try {
+    const delivered = store.enqueue(base)
+    store.claim(delivered.id, 'dev'); store.markPushed(delivered.id); store.markDelivered(delivered.id)
+    expect(store.deadLetterDelivered(delivered.id, 'context-exhausted')).toBe(true)
+    expect(store.get(delivered.id)).toMatchObject({ state: 'dead', reason: 'context-exhausted' })
+    expect(store.eventsFor(delivered.id).at(-1)).toMatchObject({
+      kind: 'dead-lettered', prevState: 'delivered', reason: 'context-exhausted',
+    })
+    // Pushed mail whose receipt went unconfirmed was never processed either.
+    const held = store.enqueue(base)
+    store.claim(held.id, 'dev'); store.markPushed(held.id); store.holdUncertain(held.id, 'receipt-unconfirmed-after-delivery')
+    expect(store.deadLetterDelivered(held.id, 'context-exhausted')).toBe(true)
+    expect(store.eventsFor(held.id).at(-1)).toMatchObject({ kind: 'dead-lettered', prevState: 'uncertain', reason: 'context-exhausted' })
+    // Every other state is refused and writes nothing.
+    const queued = store.enqueue(base)
+    const claimed = store.enqueue(base); store.claim(claimed.id, 'dev')
+    const parked = store.enqueue(base)
+    store.claim(parked.id, 'dev'); store.markPushed(parked.id); store.markDelivered(parked.id)
+    const resume = store.enqueue({ ...base, toKind: 'session', toId: 'dev', tags: ['resume'] })
+    store.park(parked.id, '2099-01-01T00:00:00.000Z', resume.id)
+    for (const row of [queued, claimed, parked]) {
+      const before = store.eventsFor(row.id).length
+      const state = store.get(row.id)?.state
+      expect(store.deadLetterDelivered(row.id, 'context-exhausted')).toBe(false)
+      expect(store.get(row.id)?.state).toBe(state!)
+      expect(store.eventsFor(row.id)).toHaveLength(before)
+    }
+    expect(store.deadLetterDelivered(delivered.id, 'again')).toBe(false)
+  } finally { db.close() }
+})
 test('thread history includes confirmed delivery only, excluding queued, cancelled and dead siblings', () => {
   const db = schemaDb(':memory:'); const store = new MailboxStore(db)
   const base = { teamId: TEAM, toKind: 'group' as const, toId: 'devs', fromSession: 'lead', fromGroup: null, originPath: '/repo', body: 'Confirmed' }
