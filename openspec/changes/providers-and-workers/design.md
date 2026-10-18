@@ -150,7 +150,7 @@ The provider's own cooldown applies the same calculation to P's provider-scoped 
   - `forProfile` (unchanged);
   - `forProvider(providerId)`;
   - `cooldownFor(profileId, providerId)`, which returns `{ until, provider: boolean }`, true when the provider's cooldown decides.
-- Every reader in Context calls `cooldownFor`. The per-session provider comes from D10. The process-metrics limit tax (`coolingTimeline` in `src/server/metrics/capacity.ts`) reconstructs each profile's cooling intervals from that profile's relevant events — its own plus its provider's provider-scoped ones — the same rule the router applies, so a provider cooldown shows in the limit tax of every profile it covers.
+- Every reader in Context calls `cooldownFor`. The per-session provider comes from D10. The process-metrics limit tax (`coolingTimeline` in `src/server/metrics/capacity.ts`) reconstructs each profile's cooling intervals from that profile's relevant events — its own plus its provider's provider-scoped ones — the same rule the router applies, so a provider cooldown shows in the limit tax of every profile it covers. The proposal-outcome windows of process reports (`reportOutcomes.ts`) resolve no catalog and compute the tax from own events on both sides — like-for-like.
 - `team_handoff_notes` resolves the provider of its `from_session` record's project path, falling back to the profile id. The recovery note therefore waits for the model's effective cooldown.
 - Rejected: "latest event wins" across windows. A short window's later event would release a model whose weekly window is still exhausted.
 - Rejected: the maximum over all events. One misread reset would keep a profile cooling for the whole retention.

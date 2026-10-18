@@ -135,6 +135,24 @@ test('capacity: a provider event spreads the tax to its silent sibling; a model-
   m.db.close()
 })
 
+test('capacity: the tax follows the router — a weekly window outlives a later sibling window', () => {
+  const s = new Seed()
+  s.member('chat-opus')
+  // opus's model-scoped weekly event resets in 72 h; 1 h later a
+  // provider-scoped five_hour event (sonnet's) resets 2 h after it. Routing
+  // cools opus until the weekly event leaves the 24 h read window; the tax
+  // is that span, not the sibling's three hours.
+  s.limit('opus', 'chat-opus', 30, 30 - 72, true, { provider: 'claude', window: 'seven_day_opus' })
+  s.limit('sonnet', 'chat-sonnet', 29, 27, true, { provider: 'claude', window: 'five_hour' })
+  const inputs = {
+    ...loadMetricsInputs(s.db, TEAM, END - 14 * DAY, END),
+    providerIds: new Map([['opus', 'claude'], ['sonnet', 'claude']]),
+  }
+  const obs = capacityObservations(metricsContext(inputs, END - 7 * DAY, END))
+  expect(breakdown(obs, 'limit_tax_hours').opus).toBeCloseTo(24, 6)
+  s.db.close()
+})
+
 test('capacity: a superseding shorter reset, an open park, task-less tokens, and partial tokens', () => {
   const s = new Seed()
   s.member('chat-dev')

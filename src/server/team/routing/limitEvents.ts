@@ -244,30 +244,50 @@ export interface CoolingInterval {
 
 /**
  * The router's cooling timeline for one profile (team-process-metrics D4),
- * from its events in `(at, rowid)` order — the store's order. Each final
- * event decides from its `at` until the earliest of the next final event's
- * `at`, its own cooldown end (`cooldownUntil`'s rule), and `at + 24 h`, when
- * routing's read window drops it (no older event can take over then: older
- * events left the window first). Retried attempts never cool. Intervals are
- * returned in order, non-overlapping, with empty ones dropped.
+ * from its events in `(at, rowid)` order — the store's order. It follows the
+ * router's own rule (providers-and-workers D8): final events group by
+ * window, with none as one group — `latestCoolingEnd`'s key — and a later
+ * final event replaces only an earlier event of its OWN window; each event
+ * decides from its `at` until the earliest of the next same-window event's
+ * `at`, its own cooldown end (reset, else one hour after it), and one
+ * millisecond past `at + 24 h` — the read window's inclusive edge, where the
+ * router stops reading it (`at >= t - 24 h`). The union of the groups'
+ * intervals is returned in order, non-overlapping, with empty ones dropped.
+ * Retried attempts never cool.
  */
 export function coolingTimeline(events: readonly LimitEvent[]): CoolingInterval[] {
-  const finals = events
-    .map((event, index) => ({ event, index, at: Date.parse(event.at) }))
-    .filter(entry => entry.event.final && Number.isFinite(entry.at))
-    .sort((a, b) => a.at - b.at || a.index - b.index)
-  const intervals: CoolingInterval[] = []
-  finals.forEach((entry, i) => {
-    const reset = entry.event.resetsAt ? Date.parse(entry.event.resetsAt) : NaN
-    const until = Number.isFinite(reset) ? reset : entry.at + DEFAULT_COOLDOWN_MS
-    const next = finals[i + 1]?.at ?? Infinity
-    const end = Math.min(next, until, entry.at + LIMIT_EVENT_READ_WINDOW_MS)
-    if (end <= entry.at) return
-    const last = intervals.at(-1)
-    if (last && last.end >= entry.at) last.end = Math.max(last.end, end)
-    else intervals.push({ start: entry.at, end })
+  const groups = new Map<string, { event: LimitEvent; index: number; at: number }[]>()
+  events.forEach((event, index) => {
+    if (!event.final) return
+    const at = Date.parse(event.at)
+    if (!Number.isFinite(at)) return
+    const key = event.window ?? '\u0000'
+    const group = groups.get(key)
+    if (group) group.push({ event, index, at })
+    else groups.set(key, [{ event, index, at }])
   })
-  return intervals
+  const intervals: CoolingInterval[] = []
+  for (const group of groups.values()) {
+    group.sort((a, b) => a.at - b.at || a.index - b.index)
+    group.forEach((entry, i) => {
+      const reset = entry.event.resetsAt ? Date.parse(entry.event.resetsAt) : NaN
+      const until = Number.isFinite(reset) ? reset : entry.at + DEFAULT_COOLDOWN_MS
+      const next = group[i + 1]?.at ?? Infinity
+      const end = Math.min(next, until, entry.at + LIMIT_EVENT_READ_WINDOW_MS + 1)
+      if (end <= entry.at) return
+      const last = intervals.at(-1)
+      if (last && last.end >= entry.at) last.end = Math.max(last.end, end)
+      else intervals.push({ start: entry.at, end })
+    })
+  }
+  intervals.sort((a, b) => a.start - b.start)
+  const merged: CoolingInterval[] = []
+  for (const interval of intervals) {
+    const last = merged.at(-1)
+    if (last && last.end >= interval.start) last.end = Math.max(last.end, interval.end)
+    else merged.push({ ...interval })
+  }
+  return merged
 }
 
 /** Milliseconds of `intervals` inside `[from, to)`. */

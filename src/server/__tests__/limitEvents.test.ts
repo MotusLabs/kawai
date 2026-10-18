@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import {
   cooldownUntil, coolingMsWithin, coolingTimeline, DEFAULT_COOLDOWN_MS, LIMIT_EVENT_READ_WINDOW_MS, LIMIT_EVENT_RETENTION_MS,
-  LimitEventStore, providerCooldownUntil, type LimitEvent,
+  LimitEventStore, providerCooldownUntil, relevantEvents, type LimitEvent,
 } from '../team/routing/limitEvents'
 
 const T0 = Date.parse('2026-10-12T12:00:00.000Z')
@@ -137,6 +137,104 @@ describe('provider cooldown (providers-and-workers D8)', () => {
   })
 })
 
+// B2 (findings-7f4df8a6): the timeline is the router's rule — at every
+// sampled instant, an event set's timeline holds t exactly when a store
+// clocked at t reports the profile cooling.
+describe('coolingTimeline equivalence with cooldownFor', () => {
+  const MIN = 60_000
+  const HOUR = 60 * MIN
+  const DAY = 24 * HOUR
+  let n = 0
+  const event = (over: Partial<LimitEvent>): LimitEvent =>
+    ({ id: `eq${++n}`, ...base, at: iso(T0), final: true, ...over })
+
+  const SETS: Array<{ label: string; profile: string; provider: string; events: LimitEvent[] }> = [
+    {
+      label: 'same-window shorter replacement', profile: 'glm', provider: 'zai', events: [
+        event({ resetsAt: iso(T0 + 5 * HOUR) }),
+        event({ at: iso(T0 + MIN), resetsAt: iso(T0 + 2 * MIN) }),
+      ],
+    },
+    {
+      label: 'same-window longer replacement', profile: 'glm', provider: 'zai', events: [
+        event({ resetsAt: iso(T0 + MIN) }),
+        event({ at: iso(T0 + 30 * MIN), resetsAt: iso(T0 + 5 * HOUR) }),
+      ],
+    },
+    {
+      label: 'a model-scoped own event plus a provider-scoped sibling', profile: 'opus', provider: 'claude', events: [
+        event({ profileId: 'opus', providerId: 'claude', window: 'seven_day_opus', resetsAt: iso(T0 + 3 * DAY) }),
+        event({ profileId: 'sonnet', providerId: 'claude', window: 'five_hour', at: iso(T0 + HOUR), resetsAt: iso(T0 + 3 * HOUR) }),
+      ],
+    },
+    {
+      label: 'a null window plus a named window', profile: 'glm', provider: 'zai', events: [
+        event({ resetsAt: iso(T0 + HOUR) }),
+        event({ profileId: 'glm-flash', providerId: 'zai', window: 'five_hour', at: iso(T0 + 30 * MIN), resetsAt: iso(T0 + 3 * HOUR) }),
+      ],
+    },
+    { label: 'no reset cools one hour', profile: 'glm', provider: 'zai', events: [event({})] },
+    {
+      label: 'an event older than the read window', profile: 'glm', provider: 'zai', events: [
+        event({ at: iso(T0 - 25 * HOUR), resetsAt: iso(T0 - 24 * HOUR + 30 * MIN) }),
+      ],
+    },
+    {
+      label: 'retried attempts never cool', profile: 'glm', provider: 'zai', events: [
+        event({ final: false, resetsAt: iso(T0 + 5 * HOUR) }),
+        event({ at: iso(T0 + HOUR), resetsAt: iso(T0 + 2 * HOUR) }),
+      ],
+    },
+  ]
+
+  test('every minute and every boundary instant agree with cooldownFor', () => {
+    for (const set of SETS) {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-timeline-equiv-'))
+      try {
+        const db = schemaDb(path.join(dir, 'db.sqlite'))
+        // Sampling starts at the earliest `at`: an event cannot reach the
+        // router before it is recorded. Points move forward in time, so each
+        // event is inserted as the clock passes its `at` — the router only
+        // ever sees what has been recorded by t.
+        const points = new Set<number>()
+        let lo = Infinity
+        let hi = -Infinity
+        for (const entry of set.events) {
+          const at = Date.parse(entry.at)
+          lo = Math.min(lo, at)
+          hi = Math.max(hi, at + DAY + MIN, entry.resetsAt ? Date.parse(entry.resetsAt) + MIN : 0)
+          points.add(at + 1)
+          points.add(entry.resetsAt ? Date.parse(entry.resetsAt) + 1 : at + DEFAULT_COOLDOWN_MS + 1)
+          points.add(at + DAY + 1)
+        }
+        for (let t = lo; t <= hi; t += MIN) points.add(t)
+        const ordered = [...set.events].sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
+        const insert = db.prepare(`INSERT INTO profile_limit_events
+          (id, profile_id, session_id, group_id, at, kind, final, status, message, resets_at, provider_id, limit_window)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        let clock = lo
+        const store = new LimitEventStore(db, () => clock)
+        let known = 0
+        for (const t of [...points].sort((a, b) => a - b)) {
+          clock = t
+          while (known < ordered.length && Date.parse(ordered[known]!.at) <= t) {
+            const entry = ordered[known++]!
+            insert.run(entry.id, entry.profileId, entry.sessionId, entry.groupId, entry.at, entry.kind,
+              entry.final ? 1 : 0, entry.status, entry.message, entry.resetsAt, entry.providerId, entry.window)
+          }
+          const timeline = coolingTimeline(relevantEvents(ordered.slice(0, known), set.profile, set.provider))
+          const inside = timeline.some(interval => interval.start <= t && t < interval.end)
+          const effective = store.cooldownFor(set.profile, set.provider).until !== null
+          expect({ set: set.label, t, inside }).toEqual({ set: set.label, t, inside: effective })
+        }
+        db.close()
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true })
+      }
+    }
+  }, 30_000)
+})
+
 describe('cooldownFor', () => {
   let dir: string
   let file: string
@@ -189,8 +287,10 @@ describe('coolingTimeline', () => {
 
   test('a 30-hour reset is cut when the router read window drops it, and clipping to a window', () => {
     const intervals = coolingTimeline([event(T0, T0 + 30 * HOUR)])
-    expect(intervals).toEqual([{ start: T0, end: T0 + 24 * HOUR }])
-    expect(coolingMsWithin(intervals, T0 + 20 * HOUR, T0 + 48 * HOUR)).toBe(4 * HOUR)
+    // The read cutoff is inclusive (`at >= t - 24 h`), so the event still
+    // decides at exactly `at + 24 h` — the interval runs 1 ms past it.
+    expect(intervals).toEqual([{ start: T0, end: T0 + 24 * HOUR + 1 }])
+    expect(coolingMsWithin(intervals, T0 + 20 * HOUR, T0 + 48 * HOUR)).toBe(4 * HOUR + 1)
   })
 
   test('a reset before the event itself and same-instant ties follow the router (later row wins)', () => {
