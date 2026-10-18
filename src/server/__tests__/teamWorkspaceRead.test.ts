@@ -545,7 +545,7 @@ describe('WorkspaceRead.snapshot labelling (bc0a329 follow-up)', () => {
       getPendingRequests: () => [],
       teams: { catalogForTeam: () => ({ groups: new Map() }) },
       groupProfileCounts: () => ({}),
-      turnEnds: { finishedForTeam: () => [] }, outboundAudit: { violationGroups: () => [], windowCounts: () => ({ allowed: 0, unknown: 0, violations: 0 }) },
+      turnEnds: { finishedForTeam: () => [] }, exhaustionEpisodes: () => [], outboundAudit: { violationGroups: () => [], windowCounts: () => ({ allowed: 0, unknown: 0, violations: 0 }) },
     }
     const snapshot = new WorkspaceRead(manager as never).snapshot({ teamId: 'team' } as never)
 
@@ -582,7 +582,7 @@ describe('WorkspaceRead.snapshot acceptance ownership (attention-acceptance-owne
       getPendingRequests: () => [],
       teams: { catalogForTeam: () => ({ groups: new Map() }) },
       groupProfileCounts: () => ({}),
-      turnEnds: { finishedForTeam: () => [] }, outboundAudit: { violationGroups: () => [], windowCounts: () => ({ allowed: 0, unknown: 0, violations: 0 }) },
+      turnEnds: { finishedForTeam: () => [] }, exhaustionEpisodes: () => [], outboundAudit: { violationGroups: () => [], windowCounts: () => ({ allowed: 0, unknown: 0, violations: 0 }) },
     }
     return new WorkspaceRead(manager as never).snapshot({ teamId: 'team' } as never)
   }

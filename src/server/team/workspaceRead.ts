@@ -26,6 +26,7 @@ import type { TeamTaskSummary } from '../../shared/teamTasks'
 import type { ChatSessionRecord } from '../db'
 import type { ChatSessionManager } from '../chat/ChatSessionManager'
 import { acceptanceItems, taskImpact, type PendingAcceptance } from './attentionAcceptance'
+import { exhaustionAttentionItems, type ExhaustionFact } from './workspaceExhaustion'
 import type { GroupCatalog } from './groupCatalog'
 import type { TeamIdentity } from './teamIdentity'
 
@@ -203,6 +204,8 @@ export interface AttentionInput {
   pendingAcceptance: PendingAcceptance[]
   /** The team's unacknowledged violations, grouped by rule and destination (execution-safety-recovery D10). */
   outboundViolations: OutboundViolationGroup[]
+  /** Recorded context-exhaustion episodes with their resolution facts (chat-context-exhaustion D8). */
+  exhaustion?: ExhaustionFact[]
 }
 
 /** One attention source: a pure function over the input (D5's registry). */
@@ -277,12 +280,16 @@ const staffingItems: AttentionSource = ({ messages, waiting, taskTitle, nameOf }
 /** Unacknowledged outbound violations (execution-safety-recovery D10; workspaceOutbound.ts). */
 const outboundItems: AttentionSource = ({ outboundViolations, nameOf }) => outboundAttentionItems(outboundViolations, nameOf)
 
+/** Context-exhausted sessions awaiting a decision (chat-context-exhaustion D8; workspaceExhaustion.ts). */
+const exhaustionItems: AttentionSource = ({ exhaustion, taskTitle, nameOf }) =>
+  exhaustionAttentionItems(exhaustion ?? [], taskTitle, nameOf)
+
 /**
  * The source registry (task 4.1). Wave C sources (plan holds, stalls, Lead
  * decision cards) add entries the same way — an item of an unrecognized kind
  * is data like any other and never dropped.
  */
-export const ATTENTION_SOURCES: readonly AttentionSource[] = [requestItems, uncertainItems, staffingItems, acceptanceItems, outboundItems]
+export const ATTENTION_SOURCES: readonly AttentionSource[] = [requestItems, uncertainItems, staffingItems, acceptanceItems, outboundItems, exhaustionItems]
 
 /** Every attention item the current state yields, in a stable order. */
 export function attentionItems(
@@ -444,6 +451,19 @@ export class WorkspaceRead {
       sessions, messages, waiting, taskTitle, nameOf, pendingAcceptance,
       // The audit records' unacknowledged violations (execution-safety-recovery D10).
       outboundViolations: manager.outboundAudit.violationGroups(teamId),
+      exhaustion: manager.exhaustionEpisodes(teamId).map(episode => {
+        const record = records.find(row => row.sessionId === episode.sessionId)
+        const task = episode.taskId ? store.get(episode.taskId) : null
+        const dispatches = task ? store.assignmentsOf(task.id).map(row => row.createdAt).sort() : []
+        return {
+          episode,
+          sessionName: record?.name ?? null,
+          currentFlagAt: record?.contextExhausted?.at ?? null,
+          droppedState: episode.droppedId ? manager.mailbox.store.get(episode.droppedId)?.state ?? null : null,
+          taskStatus: task?.status ?? null,
+          newestDispatchAt: dispatches.at(-1) ?? null,
+        }
+      }),
     })
     const now = new Date().toISOString()
     const since = new Date(Date.parse(now) - 24 * 60 * 60 * 1000).toISOString()

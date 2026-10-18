@@ -165,6 +165,37 @@ describe('dispatch', () => {
     expect(mail.forTask(task.id)).toEqual([])
     expect(taskStore.journal(task.id)).toEqual([])
   })
+
+  test('a context-exhausted session target is refused, naming the flag, and nothing is written', async () => {
+    const task = await service.create(human(), { title: 'Export', direction: 'CSV' })
+    const flag = { at: '2026-10-18T09:00:00.000Z', reason: 'blocking_limit' as const }
+    records.set('dev-feature', { ...records.get('dev-feature')!, contextExhausted: flag })
+    await expect(dispatcher.dispatch(human(), {
+      taskId: task.id, target: { kind: 'session', id: 'dev-feature' }, instruction: 'Go', requestKey: 'k-flag',
+    })).rejects.toThrow(`Session dev-feature's context is exhausted (blocking_limit, since ${flag.at})`)
+    await expect(dispatcher.preview(human(), { taskId: task.id, target: { kind: 'session', id: 'dev-feature' } }))
+      .rejects.toThrow('context is exhausted')
+    expect(assignments.listByTask(task.id)).toEqual([])
+    expect(mail.forTask(task.id)).toEqual([])
+  })
+
+  test('a session flagged while the team is resolved is refused: the flag is read after the last await', async () => {
+    const task = await service.create(human(), { title: 'Export', direction: 'CSV' })
+    const clean = records.get('dev-feature')!
+    const get = records.get.bind(records)
+    let reads = 0
+    // The first read precedes resolveTeam's await; every later read sees the flag set meanwhile.
+    records.get = (id: string) => (id === 'dev-feature' && reads++ > 0
+      ? { ...clean, contextExhausted: { at: '2026-10-18T09:00:00.000Z', reason: 'prompt_too_long' } }
+      : get(id))
+    try {
+      await expect(dispatcher.dispatch(human(), {
+        taskId: task.id, target: { kind: 'session', id: 'dev-feature' }, instruction: 'Go', requestKey: 'k-race',
+      })).rejects.toThrow('context is exhausted')
+    } finally { records.get = get }
+    expect(assignments.listByTask(task.id)).toEqual([])
+    expect(mail.forTask(task.id)).toEqual([])
+  })
 })
 
 describe('request-key idempotency', () => {

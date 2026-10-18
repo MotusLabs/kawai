@@ -444,3 +444,31 @@ test('manual handoff wins while a resume limit rule is still running', async () 
   expect(store.get(m.id)?.state).toBe('forwarded')
   expect(store.listForTeam('team').map(row => row.id)).toEqual([forwarded.id])
 })
+
+describe('takeExhaustedWork (chat-context-exhaustion D4)', () => {
+  test('hands back the turn\'s work with its progress and ends the turn without a limit resolution', async () => {
+    const m = deliver()
+    work('dev', 3)
+    limits.record({
+      profileId: 'glm', sessionId: 'dev', groupId: 'devs', kind: 'rate_limit', final: true, status: 429, message: 'API Error: 429',
+      resetsAt: iso(now + 10 * MIN),
+    })
+    const taken = outcomes.takeExhaustedWork('dev')
+    expect(taken).toEqual({ messageId: m.id, progress: { toolCalls: 3, tools: ['Read', 'Edit', 'Read'], filesTouched: ['src/f0.ts', 'src/f1.ts', 'src/f2.ts'] } })
+    // The pending limit event is gone: a later turn end resolves nothing.
+    await outcomes.turnEnded('dev', false)
+    expect(store.get(m.id)?.state).toBe('delivered')
+    expect(outcomes.takeExhaustedWork('dev')).toBeNull()
+  })
+
+  test('a resume turn hands back the parked work it resumes', async () => {
+    const m = deliver()
+    work()
+    await hitLimit(40 * MIN)
+    const resume = store.get(store.get(m.id)!.resumeMessageId!)!
+    store.claim(resume.id, 'dev'); store.markPushed(resume.id); store.markDelivered(resume.id)
+    outcomes.turnStarted('dev', false)
+    outcomes.delivered('dev', store.get(resume.id)!)
+    expect(outcomes.takeExhaustedWork('dev')?.messageId).toBe(m.id)
+  })
+})
