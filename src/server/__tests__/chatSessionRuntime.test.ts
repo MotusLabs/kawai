@@ -18,6 +18,7 @@ let codexHome: string
 let db: SessionDatabase
 const originalCodexHome = process.env.CODEX_HOME
 const originalApiKey = process.env.ANTHROPIC_API_KEY
+const originalCodexPath = process.env.KAWAI_CODEX_PATH
 
 beforeEach(() => {
   tempDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-chat-runtime-')))
@@ -31,6 +32,17 @@ beforeEach(() => {
   // home is this test's directory, never the host's.
   process.env.CODEX_HOME = codexHome
   process.env.ANTHROPIC_API_KEY = 'sk-test-key'
+  // Creation's Codex gate (4.2) probes the executable and the home's login:
+  // a hermetic fixture at the baseline, and a logged-in home, so these §3.3
+  // tests exercise the runtime facts, not the gates.
+  const codexExe = path.join(tempDir, 'codex')
+  fs.writeFileSync(codexExe, '#!/bin/sh\necho "codex-cli 0.163.0"\n')
+  fs.chmodSync(codexExe, 0o755)
+  process.env.KAWAI_CODEX_PATH = codexExe
+  fs.writeFileSync(
+    path.join(codexHome, 'auth.json'),
+    JSON.stringify({ OPENAI_API_KEY: null, tokens: { access_token: 'tok' } }),
+  )
 })
 
 afterEach(() => {
@@ -38,6 +50,8 @@ afterEach(() => {
   else process.env.CODEX_HOME = originalCodexHome
   if (originalApiKey === undefined) delete process.env.ANTHROPIC_API_KEY
   else process.env.ANTHROPIC_API_KEY = originalApiKey
+  if (originalCodexPath === undefined) delete process.env.KAWAI_CODEX_PATH
+  else process.env.KAWAI_CODEX_PATH = originalCodexPath
   db.close()
   fs.rmSync(tempDir, { recursive: true, force: true })
 })
@@ -83,6 +97,12 @@ test('a profile edited to another runtime refuses to start and says which way', 
 
 test('a profile edited to another Codex home refuses to start without naming either home', async () => {
   writeProfiles({ codex: { label: 'Codex', runtime: 'codex', codexHome: '~/codex-a' } })
+  // Creation's login gate (4.2) applies to the profile's own home too.
+  fs.mkdirSync(path.join(home, 'codex-a'), { recursive: true })
+  fs.writeFileSync(
+    path.join(home, 'codex-a', 'auth.json'),
+    JSON.stringify({ OPENAI_API_KEY: null, tokens: { access_token: 'tok' } }),
+  )
   const manager = createManager()
   try {
     const created = await manager.createAvailableSession({ projectPath: project, claudeProfileId: 'codex' })

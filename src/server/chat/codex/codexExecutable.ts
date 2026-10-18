@@ -9,7 +9,7 @@
 // (protocol/VERSION, pinned by test).
 import fs from 'node:fs'
 import path from 'node:path'
-import { compareVersions } from '../claudeExecutable'
+import { compareVersions } from '../executableVersion'
 
 /**
  * Minimum Codex CLI version Codex chat sessions support. The §1 spike

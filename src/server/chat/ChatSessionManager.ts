@@ -67,6 +67,7 @@ import {
   profileLimitResetTimeZone,
   claudeLaunchKey,
   verifyProfileExecutable,
+  type ChatLaunchConfiguration,
   type ClaudeLaunchConfiguration,
   type ProfileCatalogContext,
 } from './ClaudeProfiles'
@@ -76,6 +77,8 @@ import { AccountNoticeStore, credentialsPathFor } from './accountNotices'
 import { UsageLimitStore } from './usageLimits'
 import { withTextReset } from './limitSignals'
 import { providerOf, resolveProfileCatalog } from './profileCatalog'
+import { ensureCodexExecutable } from './codex/codexExecutable'
+import { codexLoginErrorMessage, hasCodexLogin } from './codex/codexAuth'
 import { resolveCodexHome } from './codexProfiles'
 import { fetchZaiUsage } from './zaiUsage'
 import { readWorkerTranscript } from './chatWorkerTranscript'
@@ -471,10 +474,30 @@ export class ChatSessionManager {
         return { ok: false, error: `Unknown group "${input.groupId}" for this project's team` }
       }
     }
+    let launch: ChatLaunchConfiguration
     try {
-      this.launchFor(input.claudeProfileId, project.path)
+      launch = this.launchFor(input.claudeProfileId, project.path)
     } catch (error) {
       return { ok: false, error: String(error instanceof Error ? error.message : error) }
+    }
+    // A Codex chat gates on the Codex executable and the resolved home's
+    // login (codex-chat-sessions 4.2, spec scenarios "Codex missing", "Codex
+    // below the baseline", "Not logged in"); the Claude SDK probe never
+    // runs — it spends a Claude spawn that says nothing about Codex.
+    if (launch.runtime === 'codex') {
+      // An injected fake runtime (the development fixture) starts no Codex
+      // child — the same seam checkExecutable applies to the Claude install.
+      if (!this.options.queryFactory) {
+        try {
+          await ensureCodexExecutable()
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) }
+        }
+        if (!hasCodexLogin(launch.codexHome)) {
+          return { ok: false, error: codexLoginErrorMessage(launch.codexHome) }
+        }
+      }
+      return this.createSession(input)
     }
     if (!this.authOk(input.claudeProfileId, project.path)) return { ok: false, error: chatAuthErrorMessage() }
     try {
@@ -1499,18 +1522,32 @@ export class ChatSessionManager {
     const project = resolveProjectDirectory(input.projectPath, this.options.isDirectory)
     if (!project.ok) return project
     const projectPath = project.path
+    let launch: ChatLaunchConfiguration
     try {
-      this.launchFor(input.claudeProfileId, projectPath)
+      launch = this.launchFor(input.claudeProfileId, projectPath)
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error) }
     }
-    if (!this.authOk(input.claudeProfileId, projectPath)) {
+    // One resolution feeds both the gate and the stamped facts: a Codex
+    // chat's login lives in the resolved home (defense in depth —
+    // createAvailableSession already refused), a Claude chat's in its
+    // environment. No runtimeFactsOf re-resolution, so stamp and gate can
+    // never disagree.
+    if (launch.runtime === 'codex') {
+      // The fixture seam again: a fake runtime never checks a real login.
+      if (!this.options.queryFactory && !hasCodexLogin(launch.codexHome)) {
+        return { ok: false, error: codexLoginErrorMessage(launch.codexHome) }
+      }
+    } else if (!this.authOk(input.claudeProfileId, projectPath)) {
       return { ok: false, error: chatAuthErrorMessage() }
     }
     // The runtime facts are fixed at creation (codex-chat-sessions 3.3,
     // ruling R1): a later profile edit never moves an existing chat to
     // another driver or home — the mismatch refuses the start instead.
-    const runtimeFacts = this.runtimeFactsOf(input.claudeProfileId ?? 'default', projectPath)
+    const runtimeFacts: { runtime: ChatRuntime; codexHome: string | null } | null =
+      launch.runtime === 'codex'
+        ? { runtime: 'codex', codexHome: launch.codexHome }
+        : { runtime: 'claude', codexHome: null }
     const sessionId = `chat-${crypto.randomUUID()}`
     const suppliedName = input.name?.trim()
     const name = suppliedName || generateSessionName()
@@ -1988,6 +2025,50 @@ export class ChatSessionManager {
         )
       }
     }
+    // A Codex chat whose stored home lost its login cannot start (4.2); the
+    // mismatch refusals above still win, and the ensureDriver gates refuse
+    // with the same text when a send reaches the driver first. The fixture
+    // (a fake runtime) starts no Codex child and checks no login.
+    if (
+      !this.options.queryFactory &&
+      (record.runtime ?? 'claude') === 'codex' &&
+      record.codexHome &&
+      !hasCodexLogin(record.codexHome)
+    ) {
+      return codexLoginErrorMessage(record.codexHome)
+    }
+    return null
+  }
+
+  /**
+   * The Codex-specific start refusal for a record, or null (codex-chat-
+   * sessions 4.2): the profile's runtime or home no longer matching the
+   * chat's creation-fixed facts, else the stored home's login. Shared by
+   * startBlocker (waiting reasons, mail eligibility) and the ensureDriver
+   * gates (the hard refusal when a send starts the agent), so both name the
+   * same fault the same way.
+   */
+  private codexStartRefusal(record: ChatSessionRecord, launch: ChatLaunchConfiguration): string | null {
+    // The fixture seam (see checkExecutable): an injected fake runtime
+    // starts no Codex child, so no real gate applies.
+    if (this.options.queryFactory) return null
+    const stored = record.runtime ?? 'claude'
+    if (launch.runtime !== 'codex') {
+      return (
+        `Cannot start the agent: this chat's profile changed runtime (${stored} → ${launch.runtime}) since the chat was created. ` +
+        'Create a new chat session with the profile\'s current runtime.'
+      )
+    }
+    if (launch.codexHome !== (record.codexHome ?? null)) {
+      return (
+        'Cannot start the agent: this chat\'s profile\'s Codex home changed since the chat was created. ' +
+        'Create a new chat session with the profile\'s current Codex home.'
+      )
+    }
+    // The home-mismatch check above guarantees the stored home for a
+    // resolvable profile; a null home here cannot pass the launch gate.
+    const home = record.codexHome
+    if (!home || !hasCodexLogin(home)) return codexLoginErrorMessage(home ?? launch.codexHome)
     return null
   }
 
@@ -2180,15 +2261,22 @@ export class ChatSessionManager {
       if (existing.isDead) {
         const record = this.records.get(sessionId)
         const launch = this.launchFor(record?.claudeProfileId, record?.projectPath)
-        if (launch.executable) {
-          verifyProfileExecutable(record?.claudeProfileId ?? 'default', launch.executable)
+        // A Codex chat gates on its stored home (runtime/home/login); the
+        // Claude executable and auth never apply to it.
+        if (record?.runtime === 'codex') {
+          const refusal = this.codexStartRefusal(record, launch)
+          if (refusal) throw new Error(refusal)
         } else {
-          // The executable may have been removed or moved since the last
-          // spawn: surface a failure now, and respawn the path just verified.
-          const executable = await this.checkExecutable()
-          existing.setClaudeExecutablePath?.(executable?.path)
+          if (launch.runtime === 'claude' && launch.executable) {
+            verifyProfileExecutable(record?.claudeProfileId ?? 'default', launch.executable)
+          } else {
+            // The executable may have been removed or moved since the last
+            // spawn: surface a failure now, and respawn the path just verified.
+            const executable = await this.checkExecutable()
+            existing.setClaudeExecutablePath?.(executable?.path)
+          }
+          if (!this.authOk(record?.claudeProfileId, record?.projectPath)) throw new Error(chatAuthErrorMessage())
         }
-        if (!this.authOk(record?.claudeProfileId, record?.projectPath)) throw new Error(chatAuthErrorMessage())
       }
       return existing
     }
@@ -2200,15 +2288,26 @@ export class ChatSessionManager {
     // archived session must never start an agent process.
     if (record.archivedAt != null) throw new Error(ARCHIVED_SESSION_ERROR)
     const launch = this.launchFor(record.claudeProfileId, record.projectPath)
-    if (launch.executable) verifyProfileExecutable(record.claudeProfileId ?? 'default', launch.executable)
-    if (!this.authOk(record.claudeProfileId, record.projectPath)) throw new Error(chatAuthErrorMessage())
+    // Codex chats gate on their stored home (spec "Login lost after
+    // creation"); the Claude executable and auth never apply to them.
+    if (record.runtime === 'codex') {
+      const refusal = this.codexStartRefusal(record, launch)
+      if (refusal) throw new Error(refusal)
+    } else {
+      if (launch.runtime === 'claude' && launch.executable) {
+        verifyProfileExecutable(record.claudeProfileId ?? 'default', launch.executable)
+      }
+      if (!this.authOk(record.claudeProfileId, record.projectPath)) throw new Error(chatAuthErrorMessage())
+    }
     // Agent start is one of the account-notice check points (notification
     // strip design D3).
     this.refreshAccountNotice(record.sessionId)
     const promise = (async () => {
       // A profile executable replaces the standard binary (already verified
       // above); otherwise every spawn runs the checked Claude Code install.
-      const executable = launch.executable ? null : await this.checkExecutable()
+      // A Codex launch never reaches an SDK spawn — spawnQuery refuses it.
+      const executable =
+        launch.runtime === 'claude' && launch.executable ? null : await this.checkExecutable()
       const queryFactory = await this.resolveQueryFactory()
       // The team must be known before the first spawn reads its prompt.
       await this.teams.track(record.sessionId, this.records.get(record.sessionId)?.projectPath ?? record.projectPath)
@@ -2367,6 +2466,9 @@ export class ChatSessionManager {
   private async probeAvailability(profileId: string = 'default', projectPath?: string): Promise<void> {
     const providerEnv = this.providerEnv()
     const launch = this.launchFor(profileId, projectPath)
+    // Only Claude chats probe the SDK handshake; a Codex chat returns from
+    // createAvailableSession before this runs.
+    if (launch.runtime !== 'claude') return
     // A profile executable replaces the standard binary; verify it the same
     // way creation would so the probe failure is the actionable one.
     if (launch.executable) verifyProfileExecutable(profileId, launch.executable)
@@ -2445,7 +2547,7 @@ export class ChatSessionManager {
    * goes through here so catalog file failures are reported (never silently
    * skipped: an invalid file would otherwise launch with inherited settings).
    */
-  private launchFor(profileId: string | undefined, projectPath?: string): ClaudeLaunchConfiguration {
+  private launchFor(profileId: string | undefined, projectPath?: string): ChatLaunchConfiguration {
     const report = this.options.catalogErrorLog
       ?? (errors => logger.warn('chat_profile_catalog_errors', { errors }))
     return resolveClaudeProfile(profileId, this.providerEnv(), this.catalogCtx(projectPath), report)
@@ -2470,6 +2572,10 @@ export class ChatSessionManager {
     projectPath?: string
   ): Record<string, string> {
     const launch = this.launchFor(profileId, projectPath)
+    // Codex homes hold the credentials, never ANTHROPIC_* environment: the
+    // Claude credential consumers (account notices, provider usage) see an
+    // empty environment for a Codex profile.
+    if (launch.runtime === 'codex') return {}
     const overrides = Object.fromEntries(
       Object.entries(launch.env ?? {}).filter(
         (entry): entry is [string, string] => entry[1] !== undefined

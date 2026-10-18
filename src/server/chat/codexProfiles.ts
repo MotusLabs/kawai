@@ -60,3 +60,18 @@ export const CODEX_PROVIDER_LABEL = 'Codex'
 export function codexSpawnEnv(resolvedHome: string): Record<string, string> {
   return { CODEX_HOME: resolvedHome }
 }
+
+/**
+ * The Codex arm of profile resolution (design D4): a resolved home (the
+ * login and usage key live there), the model when the profile names one,
+ * and network access (default on, turned off per profile). Configuration
+ * travels to the app-server as `-c` overrides built from these, never as
+ * catalog env entries.
+ */
+export interface CodexLaunchConfiguration {
+  runtime: 'codex'
+  codexHome: string
+  network: boolean
+  model?: string
+}
+

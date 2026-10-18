@@ -6,7 +6,6 @@ import {
   CODEX_MIN_VERSION,
   CodexExecutableError,
   checkCodexExecutable,
-  ensureCodexExecutable,
   parseCodexVersion,
   resetCodexExecutableCache,
   resolveCodexExecutable,

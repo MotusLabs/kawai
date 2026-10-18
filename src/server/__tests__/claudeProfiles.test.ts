@@ -8,8 +8,19 @@ import {
   PROFILE_CONTROLLED_ENV,
   resolveClaudeProfile,
   verifyProfileExecutable,
+  type ClaudeLaunchConfiguration,
 } from '../chat/ClaudeProfiles'
 import { resolveProfileCatalog } from '../chat/profileCatalog'
+
+// Every resolution in this file is a Claude entry; the helper narrows the
+// launch union so `.env`/`.model` read directly, failing loudly on a Codex arm.
+const resolveClaudeLaunch = (
+  ...args: Parameters<typeof resolveClaudeProfile>
+): ClaudeLaunchConfiguration => {
+  const launch = resolveClaudeProfile(...args)
+  if (launch.runtime !== 'claude') throw new Error(`expected a Claude launch, got ${launch.runtime}`)
+  return launch
+}
 
 // Catalog reads are pinned to an empty temp home so a real ~/.kawai can never
 // leak into these tests; the shipped default catalog provides the profiles.
@@ -100,7 +111,7 @@ describe('Claude profile resolution', () => {
     const doc = fs.readFileSync(path.resolve(import.meta.dir, '../../../docs/claude-session-profiles.md'), 'utf8')
     for (const { id, label } of claudeProfileMetadata({ homeDir: tempHome })) {
       expect(doc).toContain(`| ${id} | ${label} |`)
-      const launch = resolveClaudeProfile(id, {}, { homeDir: tempHome })
+      const launch = resolveClaudeLaunch(id, {}, { homeDir: tempHome })
       if (id === 'default') continue
       for (const name of PROFILE_CONTROLLED_ENV) {
         const value = launch.env?.[name]
@@ -129,27 +140,27 @@ describe('Claude profile resolution', () => {
     }
   })
   test('omitted profile preserves existing Default behavior and unknown IDs fail', () => {
-    expect(resolveClaudeProfile(undefined, {}, { homeDir: tempHome })).toEqual({})
-    expect(resolveClaudeProfile('default', { ANTHROPIC_MODEL: 'global' }, { homeDir: tempHome }).env?.ANTHROPIC_MODEL).toBe('global')
+    expect(resolveClaudeLaunch(undefined, {}, { homeDir: tempHome })).toEqual({ runtime: 'claude' })
+    expect(resolveClaudeLaunch('default', { ANTHROPIC_MODEL: 'global' }, { homeDir: tempHome }).env?.ANTHROPIC_MODEL).toBe('global')
     for (const id of ['unknown', 'glm-turbo', '__proto__']) {
-      expect(() => resolveClaudeProfile(id, {}, { homeDir: tempHome })).toThrow('Unknown Claude profile')
+      expect(() => resolveClaudeLaunch(id, {}, { homeDir: tempHome })).toThrow('Unknown Claude profile')
     }
   })
   test('all effective wrapper assignments and prescribed models match', () => {
     const ctx = { homeDir: tempHome }
-    const glm = resolveClaudeProfile('glm', {}, ctx)
+    const glm = resolveClaudeLaunch('glm', {}, ctx)
     expect(glm.model).toBe('opus')
     expect(glm.env).toMatchObject({ ANTHROPIC_BASE_URL: 'https://api.z.ai/api/anthropic', ANTHROPIC_DEFAULT_SONNET_MODEL: 'glm-5.3-flash[1m]', ANTHROPIC_DEFAULT_OPUS_MODEL: 'glm-5.3[1m]', ANTHROPIC_DEFAULT_HAIKU_MODEL: 'glm-5.3-flash[1m]', ANTHROPIC_DEFAULT_FABLE_MODEL: 'glm-5.3[1m]', CLAUDE_CODE_AUTO_COMPACT_WINDOW: '1000000' })
-    const glmFlash = resolveClaudeProfile('glm-flash', {}, ctx)
+    const glmFlash = resolveClaudeLaunch('glm-flash', {}, ctx)
     expect(glmFlash.model).toBe('sonnet')
     expect(glmFlash.env).toMatchObject({ ANTHROPIC_DEFAULT_HAIKU_MODEL: 'glm-5.3-flash[1m]', ANTHROPIC_DEFAULT_FABLE_MODEL: 'glm-5.3[1m]' })
-    const minimax = resolveClaudeProfile('minimax', {}, ctx)
+    const minimax = resolveClaudeLaunch('minimax', {}, ctx)
     expect(minimax.model).toBe('MiniMax-M3')
     expect(minimax.env).toMatchObject({ ANTHROPIC_BASE_URL: 'https://api.minimax.io/anthropic', ANTHROPIC_MODEL: 'MiniMax-M3', ANTHROPIC_DEFAULT_OPUS_MODEL: 'MiniMax-M3', ANTHROPIC_DEFAULT_SONNET_MODEL: 'MiniMax-M3', ANTHROPIC_DEFAULT_HAIKU_MODEL: 'MiniMax-M3', ANTHROPIC_DEFAULT_FABLE_MODEL: 'MiniMax-M3' })
-    const mimo = resolveClaudeProfile('mimo', {}, ctx)
+    const mimo = resolveClaudeLaunch('mimo', {}, ctx)
     expect(mimo.model).toBe('mimo-v2.6-pro')
     expect(mimo.env).toMatchObject({ ANTHROPIC_BASE_URL: 'https://api.xiaomimimo.com/anthropic', ANTHROPIC_MODEL: 'mimo-v2.6-pro', ANTHROPIC_DEFAULT_SONNET_MODEL: 'mimo-v2.6-flash', ANTHROPIC_DEFAULT_OPUS_MODEL: 'mimo-v2.6-pro', ANTHROPIC_DEFAULT_HAIKU_MODEL: 'mimo-v2.6-pro', ANTHROPIC_DEFAULT_FABLE_MODEL: 'mimo-v2.6-pro' })
-    const kimi = resolveClaudeProfile('kimi', {}, ctx)
+    const kimi = resolveClaudeLaunch('kimi', {}, ctx)
     expect(kimi.model).toBe('kimi-k3[1m]')
     // Extracted: asymmetric matchers mutate the received object, and the env
     // also carries the merged backend environment's unrelated variables.
@@ -165,7 +176,7 @@ describe('Claude profile resolution', () => {
     })
   })
   test('every shipped profile with a base URL maps every Claude tier to a provider model', () => {
-    // resolveClaudeProfile() clears inherited profile-controlled variables, so
+    // resolveClaudeLaunch() clears inherited profile-controlled variables, so
     // an unmapped tier would send a Claude model name to the provider. The
     // shipped checks read both defaults: legacy entries and provider models,
     // whose tier maps sit at the provider level.
@@ -191,14 +202,14 @@ describe('Claude profile resolution', () => {
     // And the shipped catalog resolves cleanly (every env name is
     // profile-controlled, no file failures).
     const reported: string[][] = []
-    resolveClaudeProfile('default', {}, { homeDir: tempHome }, errors => reported.push(errors))
+    resolveClaudeLaunch('default', {}, { homeDir: tempHome }, errors => reported.push(errors))
     expect(reported).toEqual([])
   })
   test('a user-catalog LAN entry resolves like a shipped profile would', () => {
     catalogWithLan()
     const ctx = { homeDir: tempHome }
-    expect(resolveClaudeProfile('lan', {}, ctx).env).toMatchObject({ ANTHROPIC_BASE_URL: 'http://192.0.2.10:9292', CLAUDE_CODE_ATTRIBUTION_HEADER: '0' })
-    expect(resolveClaudeProfile('lan', {}, ctx).model).toBeUndefined()
+    expect(resolveClaudeLaunch('lan', {}, ctx).env).toMatchObject({ ANTHROPIC_BASE_URL: 'http://192.0.2.10:9292', CLAUDE_CODE_ATTRIBUTION_HEADER: '0' })
+    expect(resolveClaudeLaunch('lan', {}, ctx).model).toBeUndefined()
   })
   test('named profiles clean controlled variables, keep runtime and credentials, and never mutate inputs', () => {
     catalogWithLan()
@@ -206,14 +217,14 @@ describe('Claude profile resolution', () => {
     const input = Object.fromEntries(PROFILE_CONTROLLED_ENV.map((name) => [name, 'conflict']))
     Object.assign(input, { ANTHROPIC_AUTH_TOKEN: 'test-secret', PATH: '/test/path', HOME: '/test/home', CLAUDE_CONFIG_DIR: '/test/config', UNRELATED: 'yes' })
     const before = { ...input }
-    const lan = resolveClaudeProfile('lan', input, ctx)
+    const lan = resolveClaudeLaunch('lan', input, ctx)
     expect(lan.env).toMatchObject({ ANTHROPIC_AUTH_TOKEN: 'test-secret', PATH: '/test/path', HOME: '/test/home', CLAUDE_CONFIG_DIR: '/test/config', UNRELATED: 'yes' })
     for (const name of PROFILE_CONTROLLED_ENV) {
       if (name !== 'ANTHROPIC_BASE_URL' && name !== 'CLAUDE_CODE_ATTRIBUTION_HEADER') expect(lan.env?.[name]).toBeUndefined()
     }
     expect(input).toEqual(before)
-    const glm = resolveClaudeProfile('glm', input, ctx)
-    const minimax = resolveClaudeProfile('minimax', input, ctx)
+    const glm = resolveClaudeLaunch('glm', input, ctx)
+    const minimax = resolveClaudeLaunch('minimax', input, ctx)
     expect(glm.env?.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe('1000000')
     expect(minimax.env?.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBeUndefined()
     expect(lan.env?.HOME).toBe('/test/home')
@@ -223,7 +234,7 @@ describe('Claude profile resolution', () => {
 describe('executable-backed profiles', () => {
   test('launch hands off the merged base environment with no inline settings', () => {
     userCatalog({ lan: { ...lanEntry(), executable: '/usr/local/bin/claude-lan' } })
-    const launch = resolveClaudeProfile('lan', { ANTHROPIC_AUTH_TOKEN: 'secret', ANTHROPIC_MODEL: 'global-model' }, { homeDir: tempHome })
+    const launch = resolveClaudeLaunch('lan', { ANTHROPIC_AUTH_TOKEN: 'secret', ANTHROPIC_MODEL: 'global-model' }, { homeDir: tempHome })
     expect(launch.executable).toBe('/usr/local/bin/claude-lan')
     // Credentials and inherited routing pass through; entry values win over them.
     expect(launch.env).toMatchObject({ ANTHROPIC_AUTH_TOKEN: 'secret', ANTHROPIC_BASE_URL: 'http://192.0.2.10:9292' })
@@ -234,7 +245,7 @@ describe('executable-backed profiles', () => {
 
   test('wrapper exports win over pre-applied entry values at launch time', () => {
     userCatalog({ wrap: { label: 'Wrap', executable: '/usr/local/bin/claude-wrap', env: { ANTHROPIC_MODEL: 'entry-model' } } })
-    const launch = resolveClaudeProfile('wrap', {}, { homeDir: tempHome })
+    const launch = resolveClaudeLaunch('wrap', {}, { homeDir: tempHome })
     // The entry value is pre-applied into the environment the wrapper sees...
     expect(launch.env?.ANTHROPIC_MODEL).toBe('entry-model')
     // ...and, being a plain environment export, the wrapper's own export of
@@ -259,7 +270,7 @@ describe('executable-backed profiles', () => {
   })
 
   test('launch key separates profiles that differ only by executable', () => {
-    const base = { env: { ANTHROPIC_BASE_URL: 'https://same.example' }, model: 'same' }
+    const base = { runtime: 'claude' as const, env: { ANTHROPIC_BASE_URL: 'https://same.example' }, model: 'same' }
     const a = claudeLaunchKey({ ...base, executable: '/wrappers/a' })
     const b = claudeLaunchKey({ ...base, executable: '/wrappers/b' })
     const neither = claudeLaunchKey({ ...base })
@@ -276,7 +287,7 @@ describe('catalog reporting', () => {
     fs.writeFileSync(path.join(project, '.kawai', 'profiles.json'), JSON.stringify({
       'home-proj': { label: 'Home Proj', model: 'glm-5.3-flash[1m]' },
     }))
-    const launch = resolveClaudeProfile('home-proj', {}, { homeDir: tempHome, projectPath: '~/proj' })
+    const launch = resolveClaudeLaunch('home-proj', {}, { homeDir: tempHome, projectPath: '~/proj' })
     expect(launch.model).toBe('glm-5.3-flash[1m]')
   })
 
@@ -289,15 +300,15 @@ describe('catalog reporting', () => {
       const reported: string[][] = []
       // The invalid file is skipped (the shipped catalog still resolves), but
       // the failure reaches the reporter instead of vanishing.
-      const launch = resolveClaudeProfile('default', {}, { homeDir: tempHome, projectPath: project },
+      const launch = resolveClaudeLaunch('default', {}, { homeDir: tempHome, projectPath: project },
         errors => reported.push(errors))
-      expect(launch).toEqual({})
+      expect(launch).toEqual({ runtime: 'claude' })
       expect(reported).toHaveLength(1)
       expect(reported[0]).toHaveLength(1)
       expect(reported[0]![0]).toContain(badFile)
       // No callback, no throw: resolution keeps working for callers that
       // cannot report.
-      expect(() => resolveClaudeProfile('default', {}, { homeDir: tempHome, projectPath: project })).not.toThrow()
+      expect(() => resolveClaudeLaunch('default', {}, { homeDir: tempHome, projectPath: project })).not.toThrow()
     } finally {
       fs.rmSync(project, { recursive: true, force: true })
     }
