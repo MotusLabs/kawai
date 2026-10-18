@@ -15,11 +15,11 @@ Implement after `plan-execution` has landed on master, together with what it bui
 ## 2. Records
 
 - [ ] 2.1 Add the D3 migration in `src/server/plans/landing/integration/integrationSchema.ts`: four tables and the one-running-promotion index. Verify with a migration test on a fresh database and on one that already has the plan-execution tables, run twice.
-- [ ] 2.2 Implement `integrationStore.ts` as the only SQL writer of those tables, with a header comment saying so; the records need no user docs beyond it. Cover the branch record (insert, and a creation again that updates it), candidates with the next `seq` and their state transitions, and promotions with the next `number`, their step, moves, and finish. Verify with unit tests:
+- [x] 2.2 Implement `integrationStore.ts` as the only SQL writer of those tables, with a header comment saying so; the records need no user docs beyond it. Cover the branch record (insert, and a creation again that updates it), candidates with the next `seq` and their state transitions, and promotions with the next `number`, their step, moves, and finish. Verify with unit tests:
   - `UNIQUE (team_id, branch, seq)` holds under two concurrent inserts;
   - the partial index maps to the `no-promotion` refusal;
   - illegal transitions are refused, such as `landed` to `failed` or `failed` to `passed`.
-- [ ] 2.3 Extract the effects runner's queue behind an `EffectQueue` interface, with one implementation over `plan_execution_effects` and one over `plan_promotion_effects` (D3). Verify that plan-execution's runner tests still pass unchanged, and that new tests cover the promotion queue: due order, backoff, and `running` becoming `unknown` at startup.
+- [x] 2.3 Extract the effects runner's queue behind an `EffectQueue` interface, with one implementation over `plan_execution_effects` and one over `plan_promotion_effects` (D3). Verify that plan-execution's runner tests still pass unchanged, and that new tests cover the promotion queue: due order, backoff, and `running` becoming `unknown` at startup.
 
 ## 3. Mechanism, probe, and branch creation
 
