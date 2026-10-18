@@ -17,7 +17,7 @@
 
 ## 4. Load-earlier control
 
-- [ ] 4.1 Render the top-of-transcript **Load earlier messages** button / "Beginning of conversation" marker in `ChatMessages.tsx` (disabled while disconnected or loading, styled in the chat palette), preserving the first visible row's on-screen offset across a prepend (design D4); verify with a component test for states and a `dev-browser` check on a fixture chat with multi-day history that the viewed row does not move after loading.
+- [x] 4.1 Render the top-of-transcript **Load earlier messages** button / "Beginning of conversation" marker in `ChatMessages.tsx` (disabled while disconnected or loading, styled in the chat palette), preserving the first visible row's on-screen offset across a prepend (design D4); verify with a component test for states and a `dev-browser` check on a fixture chat with multi-day history that the viewed row does not move after loading.
 
 ## 5. Search reveal
 

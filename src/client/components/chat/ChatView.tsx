@@ -37,6 +37,7 @@ import ChatActivityRow from './ChatActivityRow'
 import ChatHeader from './ChatHeader'
 import ChatDebugPanel from './ChatDebugPanel'
 import ChatMessages from './ChatMessages'
+import { useHistoryAnchor } from './useHistoryAnchor'
 import { AsideRow } from './ChatRow'
 import { agentLabelOf } from './transcriptLayout'
 import { openParticipantChat } from './openParticipant'
@@ -174,12 +175,28 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
   }
   // A pending search reveal owns the scroll position: stick-to-bottom yields
   // to it (the reveal hook below runs after this effect in the same commit).
+  // After a history page prepends (chat-history-window D4), the stick skips
+  // once instead of yanking the reader to the bottom.
+  const transcriptBox = useRef<HTMLDivElement>(null)
+  const { capture: captureHistoryAnchor, skipStickOnce: historyStickSkip } =
+    useHistoryAnchor(transcriptBox, transcript.historyLoading)
   useEffect(() => {
     if (useChatStore.getState().pendingReveal?.sessionId === session.id) return
+    if (historyStickSkip.current) {
+      historyStickSkip.current = false
+      return
+    }
     end.current?.scrollIntoView?.({ block: 'end' })
   }, [transcript.events.length, transcript.throughSequence, session.id])
-  const transcriptBox = useRef<HTMLDivElement>(null)
   useRevealRow({ sessionId: session.id, loaded: transcript !== EMPTY, container: transcriptBox })
+  // Load earlier history (chat-history-window D4): claim the one page, keep
+  // the first visible row still across the prepend, send the request.
+  const loadEarlier = () => {
+    const request = useChatStore.getState().requestOlder(session.id)
+    if (!request) return
+    captureHistoryAnchor()
+    sendMessage(request)
+  }
 
   // Activity row hiding rules (design D4): text streaming is its own visible
   // progress, a pending approval/question owns the footer, and archived chats
@@ -218,11 +235,16 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
         {/* The live-workers strip (design D8): live rows only, hidden in
             archived chats and when nothing runs (the strip hides itself). */}
         {!archived && <ChatWorkersStrip sessionId={session.id} sendMessage={sendMessage} connected={connected} />}
-        <div ref={transcriptBox} className="min-h-0 flex-1 overflow-y-auto p-4">
+        {/* overflow-anchor off (chat-history-window D4): the history anchor
+            owns the scroll adjustment across a prepend; the browser's own
+            anchoring would compensate twice. */}
+        <div ref={transcriptBox} className="min-h-0 flex-1 overflow-y-auto p-4" style={{ overflowAnchor: 'none' }}>
           <div className="mx-auto max-w-4xl space-y-4">
             <ChatMessages events={transcript.events} projectPath={session.projectPath}
               sessionId={session.id} sendMessage={sendMessage} connected={connected}
               archived={archived} agentLabel={agentLabelOf(session.agentType)}
+              historyHasOlder={transcript.historyHasOlder} historyLoading={transcript.historyLoading}
+              onLoadEarlier={loadEarlier}
               sessions={liveSessions} directory={participantDirectory} onOpenParticipant={openParticipantChat} />
             {/* The activity row keeps to the transcript's body column (chat-transcript-layout D3). */}
             {showActivity && <div className="chat-transcript">
