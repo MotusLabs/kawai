@@ -45,6 +45,12 @@ beforeEach(() => {
 afterEach(() => fs.rmSync(root, { recursive: true, force: true }))
 
 describe('rev 5 acceptance cells', () => {
+  const P = (d: string) => path.join(d, '.kawai', 'providers.json')
+  const F = (d: string) => path.join(d, '.kawai', 'profiles.json')
+  const MODEL = (file: string, key: string, provider: string, origin: string) =>
+    `${file}: model "${key}" is already defined under provider "${provider}" (${origin}); the nearer definition is ignored.`
+  const ENTRY = (file: string, key: string, provider: string, origin: string) =>
+    `${file}: profile "${key}" is a model of provider "${provider}" (${origin}); the entry is ignored.`
   const X_KEYS: Record<string, string[]> = { zai: ['glm', 'glm-flash'], claude: ['default', 'opus', 'sonnet', 'haiku'] }
   const KEY_SETTINGS: Record<string, Record<string, Omit<CatalogProfile, 'providerId'>>> = {
     zai: { glm: GLM, 'glm-flash': GLM_FLASH },
@@ -89,7 +95,7 @@ describe('rev 5 acceptance cells', () => {
         for (const key of X_KEYS[x]) expect(head.profiles.get(key)?.limitResetTimeZone).toBe('Europe/Berlin')
       }],
     ]
-    for (const [kind, overlay, assert$] of overlayCases) {
+    for (const [, overlay, assert$] of overlayCases) {
       forAll((x, _base, project) => {
         const head = resolveProfileCatalog({ homeDir: home, projectPath: project })
         expect(head.errors).toEqual([])
@@ -152,7 +158,7 @@ describe('rev 5 acceptance cells', () => {
         const otherKeys = { ...KEY_SETTINGS[x][key].env, ANTHROPIC_BASE_URL: 'https://gw.example.internal' }
         expect((settings as CatalogProfile).env).toEqual(otherKeys)
       } else {
-        expect(head.errors).toEqual([expect.stringContaining(`model "${key}" is already defined under provider "${x}"`)])
+        expect(head.errors).toEqual([MODEL(P(project), key, x, P(home))])
         expect(head.profiles.get(key)?.providerId).toBe(x)
         expect(head.profiles.get(key)?.env.ANTHROPIC_BASE_URL).toBe('https://gw.example.internal')
       }
@@ -272,14 +278,11 @@ describe('rev 5 acceptance cells', () => {
             expect(head.errors).toEqual([])
           } else {
             // Operator-held: the nearer definition is refused with the error.
-            expect(head.errors).toEqual([expect.stringContaining(`model "${moving}" is already defined under provider "${x}"`)])
+            expect(head.errors).toEqual([MODEL(P(project), moving, x, P(home))])
           }
           return head
         })
-        for (const [i, head] of runs.entries()) {
-          if (head.profiles.get(moving)?.env.ANTHROPIC_BASE_URL !== 'https://gw.example.internal') {
-            console.error('DBG', x, base, 'order', i, 'moving:', JSON.stringify(head.profiles.get(moving)))
-          }
+        for (const head of runs) {
           // Either way the moved key carries the overlay base URL; X's
           // remaining keys keep it too.
           expect(head.profiles.get(moving)?.env.ANTHROPIC_BASE_URL).toBe('https://gw.example.internal')
@@ -306,7 +309,7 @@ describe('rev 5 acceptance cells', () => {
         expect(head.profiles.get(key)?.label).toBe('Moved')
         expect(head.profiles.get(key)?.env.ANTHROPIC_BASE_URL).toBe('https://gw.example.internal')
       } else {
-        expect(head.errors).toEqual([expect.stringContaining(`profile "${key}" is a model of provider "${x}" (${home}/.kawai/providers.json`)])
+        expect(head.errors).toEqual([ENTRY(F(project), key, x, P(home))])
         expect(head.profiles.get(key)?.providerId).toBe(x)
       }
     }, x => ({

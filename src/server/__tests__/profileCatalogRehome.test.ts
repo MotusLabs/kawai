@@ -37,6 +37,15 @@ beforeEach(() => {
 
 afterEach(() => fs.rmSync(root, { recursive: true, force: true }))
 
+const P = (d: string) => path.join(d, '.kawai', 'providers.json')
+const F = (d: string) => path.join(d, '.kawai', 'profiles.json')
+// The two refusal strings, rebuilt here from the rev 9 templates so the
+// assertions cover the whole error including both file names.
+const MODEL = (file: string, key: string, provider: string, origin: string) =>
+  `${file}: model "${key}" is already defined under provider "${provider}" (${origin}); the nearer definition is ignored.`
+const ENTRY = (file: string, key: string, provider: string, origin: string) =>
+  `${file}: profile "${key}" is a model of provider "${provider}" (${origin}); the entry is ignored.`
+
 describe('R3: operator levels keep the farther definition', () => {
   // T1: a project providers.json moves a shipped key of X to a new
   // provider (operator-held). A nearer file defining it under yet another
@@ -53,7 +62,9 @@ describe('R3: operator levels keep the farther definition', () => {
       const nearer = nearerProject(outer)
       fs.writeFileSync(path.join(nearer, '.kawai', 'providers.json'), JSON.stringify({ [other]: { models: { [key]: {} } } }))
       const head = resolveProfileCatalog({ homeDir: home, projectPath: nearer })
-      expect(head.errors).toEqual([expect.stringContaining(`model "${key}" is already defined under provider "${mover}"`)])
+      expect(head.errors).toEqual([MODEL(P(nearer), key, mover, P(outer))])
+      const farther = resolveProfileCatalog({ homeDir: home, projectPath: outer })
+      expect(head.profiles.get(key)).toEqual(farther.profiles.get(key))
       expect(head.profiles.get(key)?.providerId).toBe(mover)
       // A nearer profiles.json names it: refused the same way. A separate
       // tree — the first nearer dir stays on any deeper walk.
@@ -63,7 +74,9 @@ describe('R3: operator levels keep the farther definition', () => {
       const nearer2 = nearerProject(outer2)
       fs.writeFileSync(path.join(nearer2, '.kawai', 'profiles.json'), JSON.stringify({ [key]: { label: 'Nearer' } }))
       const head2 = resolveProfileCatalog({ homeDir: home, projectPath: nearer2 })
-      expect(head2.errors).toEqual([expect.stringContaining(`profile "${key}" is a model of provider "${mover}"`)])
+      expect(head2.errors).toEqual([ENTRY(F(nearer2), key, mover, P(outer2))])
+      const farther2 = resolveProfileCatalog({ homeDir: home, projectPath: outer2 })
+      expect(head2.profiles.get(key)).toEqual(farther2.profiles.get(key))
       expect(head2.profiles.get(key)?.providerId).toBe(mover)
     }
   })
@@ -81,7 +94,9 @@ describe('R3: operator levels keep the farther definition', () => {
       const nearer = nearerProject(outer)
       fs.writeFileSync(path.join(nearer, '.kawai', 'providers.json'), JSON.stringify({ [other]: { models: { [key]: {} } } }))
       const head = resolveProfileCatalog({ homeDir: home, projectPath: nearer })
-      expect(head.errors).toEqual([expect.stringContaining(`model "${key}" is already defined under provider "${key}"`)])
+      expect(head.errors).toEqual([MODEL(P(nearer), key, key, F(outer))])
+      const farther = resolveProfileCatalog({ homeDir: home, projectPath: outer })
+      expect(head.profiles.get(key)).toEqual(farther.profiles.get(key))
       expect(head.profiles.get(key)?.providerId).toBe(key)
       expect(head.profiles.get(key)?.label).toBe('Moved')
     }
@@ -100,7 +115,9 @@ describe('R3: operator levels keep the farther definition', () => {
       const nearer = nearerProject(outer)
       fs.writeFileSync(path.join(nearer, '.kawai', 'providers.json'), JSON.stringify({ [other]: { models: { [key]: {} } } }))
       const head = resolveProfileCatalog({ homeDir: home, projectPath: nearer })
-      expect(head.errors).toEqual([expect.stringContaining(`model "${key}" is already defined under provider "${x}"`)])
+      expect(head.errors).toEqual([MODEL(P(nearer), key, x, P(outer))])
+      const farther = resolveProfileCatalog({ homeDir: home, projectPath: outer })
+      expect(head.profiles.get(key)).toEqual(farther.profiles.get(key))
       expect(head.profiles.get(key)?.providerId).toBe(x)
       const outer2 = projectWith(`t3-outer2-${x}`, {
         'providers.json': { [x]: { models: { [key]: { model: 'overlay-model' } } } },
@@ -108,7 +125,9 @@ describe('R3: operator levels keep the farther definition', () => {
       const nearer2 = nearerProject(outer2)
       fs.writeFileSync(path.join(nearer2, '.kawai', 'profiles.json'), JSON.stringify({ [key]: { label: 'Nearer' } }))
       const head2 = resolveProfileCatalog({ homeDir: home, projectPath: nearer2 })
-      expect(head2.errors).toEqual([expect.stringContaining(`profile "${key}" is a model of provider "${x}"`)])
+      expect(head2.errors).toEqual([ENTRY(F(nearer2), key, x, P(outer2))])
+      const farther2 = resolveProfileCatalog({ homeDir: home, projectPath: outer2 })
+      expect(head2.profiles.get(key)).toEqual(farther2.profiles.get(key))
       expect(head2.profiles.get(key)?.providerId).toBe(x)
     }
   })
@@ -123,7 +142,9 @@ describe('R3: operator levels keep the farther definition', () => {
     const nearer = nearerProject(outer)
     fs.writeFileSync(path.join(nearer, '.kawai', 'providers.json'), JSON.stringify({ mimo2: { models: { mimo: {} } } }))
     const head = resolveProfileCatalog({ homeDir: home, projectPath: nearer })
-    expect(head.errors).toEqual([expect.stringContaining('model "mimo" is already defined under provider "mimo"')])
+    expect(head.errors).toEqual([MODEL(P(nearer), 'mimo', 'mimo', F(outer))])
+    const farther = resolveProfileCatalog({ homeDir: home, projectPath: outer })
+    expect(head.profiles.get('mimo')).toEqual(farther.profiles.get('mimo'))
     expect(head.profiles.get('mimo')?.providerId).toBe('mimo')
     expect(head.profiles.get('mimo')?.label).toBe('My MiMo')
   })
