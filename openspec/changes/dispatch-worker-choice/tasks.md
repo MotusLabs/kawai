@@ -10,7 +10,12 @@ Start only after `providers-and-workers` §5 (provider-keyed usage) and §6 (`ct
 
 ## 2. Routing and staffing
 
-- [ ] 2.1 Resolve the selector on each pass, and intersect it with the message's role list in the router's `allowedProfiles` option (`sessionMailbox.ts`), keeping the role's order. `buildCandidates` is unchanged. Report `worker-choice` versus `outside-role` per member in `memberCauses.ts`, testing the role first. Verify candidates and router tests:
+- [ ] 2.0 Add the pure eligibility check `workerEligibility.ts` (design D10). It takes a stated routing state and returns the eligible candidates in preference order, plus every excluded alternative with its constraint kinds. It does no I/O and reads no clock. Then rebuild `buildCandidates` and `memberCauses.ts` on it. Verify with unit tests:
+  - each exclusion reason;
+  - an evaluation at a past time with the cooldowns then in force;
+  - existing candidates, router and waiting-reasons suites pass unchanged, with the same answers as before;
+  - a structural test that the module imports no store, filesystem or clock.
+- [ ] 2.1 Resolve the selector on each pass, and intersect it with the message's role list in the router's `allowedProfiles` option (`sessionMailbox.ts`), keeping the role's order. Report `worker-choice` versus `outside-role` per member through the eligibility check, testing the role first. Verify candidates and router tests:
   - members on other workers are skipped;
   - spawn slots are limited and ordered;
   - an unset choice changes nothing;
@@ -25,8 +30,14 @@ Start only after `providers-and-workers` §5 (provider-keyed usage) and §6 (`ct
 ## 3. Agent tools
 
 - [ ] 3.1 Add `worker` to `send_message` and `schedule_message` (zod schema, descriptions), validated in `TeamMailbox.send` with the spec's refusals, nothing queued on refusal. Verify mailbox tool tests: group accept, refusals for direct mail, the human, an unknown worker, a worker outside the group, and an ambiguous id.
-- [ ] 3.2 Add `worker` to `task_handoff` and include it in `payloadDiff` and the standing-equivalent check. Verify task tool tests: a group handoff carries it; the same key with a different worker is refused naming `worker`; a session target refuses it.
+- [ ] 3.2 Add `worker` to `task_handoff` and include it in `payloadDiff` and the standing-equivalent check. Verify task tool tests: a group handoff carries it; the same key with a different worker is refused naming `worker`; a session target refuses it. Verify that Kawai's plan-execution dispatches and handoffs (`executionDispatch.ts`, `executionLanding.ts`) never set `worker_choice`, with an execution test asserting a null choice beside the role's allowed profiles.
 - [ ] 3.3 Implement `team_capacity { group? }` from the routing objects (design D6), card-free and identity-bound. Verify tool tests: every group, one group, an unknown group refused, unknown usage as null, a cooling provider's end, and live counts including pending spawns equal to what `buildCandidates` counts.
+- [ ] 3.3a Add `sharesLoginWith` to `team_capacity`, following design D6's detection rule. Verify unit tests:
+  - two stored-login Claude profiles with one config directory are marked as sharing, both ways;
+  - different config directories are not marked;
+  - profiles using an API key, an auth token, an OAuth token or a proxy base URL are never marked;
+  - Codex profiles on one home are never marked;
+  - the tool description states that unmarked means not detected.
 - [ ] 3.4 Update the system prompt's mailbox note (`teamPrompt.ts`) to name `team_capacity` and `worker`. Verify the prompt snapshot test.
 
 ## 4. Human dispatch

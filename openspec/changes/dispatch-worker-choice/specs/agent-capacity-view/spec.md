@@ -36,6 +36,21 @@ For each provider that appears among the returned workers, `team_capacity` SHALL
 - **WHEN** a provider is cooling after a final limit event
 - **THEN** the result names its cooldown end
 
+### Requirement: Capacity flags providers that share a login
+`team_capacity` SHALL mark each listed provider with the other listed providers that share its login. Two Claude profiles share a login when both use the CLI's stored login (no API key or token, no non-Anthropic base URL) and resolve the same Claude config directory. Sharing SHALL never be inferred otherwise, and unmarked SHALL read as not detected.
+
+#### Scenario: Two Claude profiles on one claude.ai account
+- **WHEN** providers `claude-default` and `claude-opus` both use the stored login in the same config directory
+- **THEN** each is marked as sharing its login with the other
+
+#### Scenario: Different config directories
+- **WHEN** two stored-login Claude profiles resolve different config directories
+- **THEN** neither is marked as sharing a login
+
+#### Scenario: Unknown credentials are never assumed shared
+- **WHEN** a provider's profiles authenticate with an API key or through a proxy base URL
+- **THEN** that provider is not marked as sharing a login with any other
+
 ### Requirement: Capacity reads the routing state
 `team_capacity` SHALL report the same usage, cooldown, cap, and live-count facts that group routing and routing rules use at the moment of the call. It SHALL fetch nothing new, and it SHALL store nothing.
 

@@ -20,7 +20,8 @@ The 2026-10-18 context-exhaustion incident (dev chat-e94dc0fc, see `chat-context
 - **Not changed:**
   - groups' own `workers`, `strategy`, and `onLimit` settings;
   - limit outcomes;
-  - how usage is gathered.
+  - how usage is gathered;
+  - Kawai's plan-execution dispatches, which take no worker choice.
 
 ## Decisions taken while specifying
 
@@ -28,6 +29,9 @@ The 2026-10-18 context-exhaustion incident (dev chat-e94dc0fc, see `chat-context
 - **Direct mail:** a `worker` on mail to a session or to the human is refused, since a session's model is fixed.
 - **Replay:** the choice is part of the request-key payload identity of assignments and handoffs.
 - **Limit forwards:** a forward drops the choice; its exclusion of the limited worker governs.
+- **Eligibility is one reusable pure check (the human's call, PR #221).** The check takes a group, a choice and a stated routing state, and returns the eligible workers plus a reason for each excluded alternative. Routing uses it. `process-observability` D12 can call it at an incident cutoff instead of reading the last pass's record (design D10).
+- **No choice on plan-execution dispatches (the human's call, PR #221).** Kawai's own plan-execution instructions and handoffs never carry a worker choice in this change. Roles alone narrow them.
+- **Shared logins are flagged (the human's call, PR #221).** `team_capacity` marks providers that share one login, so switching between them is never presented as escaping a quota window. Sharing is detected by a stated rule and never assumed (design D6).
 
 ## Dependencies
 
@@ -37,24 +41,18 @@ The 2026-10-18 context-exhaustion incident (dev chat-e94dc0fc, see `chat-context
   - Before provider keys, a per-profile choice would treat two models of one account as independent, so "switch provider" would not mean anything.
 - **Plan-execution D15.** This change reuses its role filter (`team_messages.allowed_profiles`, `CandidateInput.allowedProfiles`). The worker choice narrows it rather than adding a second candidate filter (design D2).
 - **`codex-chat-sessions` (#220).** It adds Codex providers (`codex-home-<hash>`) and caches their usage per home. A choice may name one like any provider.
-- **`process-observability` D12.** Its recommendations read the allowed workers and exclusion reasons that this change produces (design D10).
-
-## Open questions
-
-- Should the eligibility for a group and choice (its allowed workers, and why each alternative is excluded) be a reusable pure function? `process-observability` D12 could then call it outside a dispatch pass. The alternative is that D12 reads the cause reporter's output from the last pass.
-- Should a choice also be allowed on Kawai's own plan-execution dispatches, narrowing a role? Or should it stay agent- and human-only?
-- Should `team_capacity` mark providers that share a login but are declared separately (for example two Claude profiles on one claude.ai account)? Or should that be left to `providers.json`?
+- **`process-observability` D12.** Its recommendations call this change's eligibility check (design D10).
 
 ## Capabilities
 
 ### New Capabilities
-- `agent-capacity-view`: what agents can read about their team's provider usage, cooldowns, caps and live counts.
+- `agent-capacity-view`: what agents can read about their team's provider usage, cooldowns, caps, live counts and shared logins.
 
 ### Modified Capabilities
 - `agent-mailbox`: `send_message` and `schedule_message` accept a worker choice and store it on the message.
 - `task-results`: `task_handoff` accepts a worker choice.
 - `task-assignment`: human dispatch and its preview carry a worker choice.
-- `team-routing-rules`: routing filters candidates and spawn slots by a message's worker choice; rules see it as a constraint.
+- `team-routing-rules`: routing filters candidates and spawn slots by a message's worker choice, and rules see it as a constraint. Eligibility is one reusable pure check that returns exclusion reasons.
 - `team-worktree-staffing`: spawning for a message with a worker choice uses that worker.
 - `team-waiting-reasons`: mail held by its worker choice names it in its reason.
 
@@ -64,5 +62,6 @@ The 2026-10-18 context-exhaustion incident (dev chat-e94dc0fc, see `chat-context
 - `team_messages` and `team_task_assignments` each gain a nullable column through a new numbered migration (13 or later; 12 is the latest on master).
 - `src/server/team/sessionMailbox.ts` and the dispatcher, which intersect the choice with the role filter that `candidates.ts` already applies.
 - `memberCauses.ts`, for the `worker-choice` cause.
+- A new pure eligibility module under `src/server/team/routing/`, which routing and `process-observability` share.
 - `src/shared/routing.ts`, the type-only rule contract, gains an additive field.
 - The task form, the dispatch preview, and the system prompt's mailbox note.

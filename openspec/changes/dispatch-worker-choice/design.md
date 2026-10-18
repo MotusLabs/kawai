@@ -26,6 +26,8 @@ See proposal.md (Why). The relevant state on master (after #219 and #220), and w
 - Changing groups' `strategy`, `onLimit`, caps, or how usage is gathered.
 - A persisted usage history.
 - Any agent right to change group files.
+- A worker choice on Kawai's plan-execution dispatches. Kawai's instructions and handoffs for a change it executes carry only the role's `allowed_profiles`, never `worker_choice`. Roles alone narrow them (the human's decision on PR #221).
+- Reconstructing past routing state. The eligibility check (D10) evaluates whatever state its caller supplies. Building that state for an incident cutoff is `process-observability`'s work.
 
 ## Decisions
 
@@ -44,7 +46,7 @@ See proposal.md (Why). The relevant state on master (after #219 and #220), and w
   - The router's `allowedProfiles` option (`sessionMailbox.ts`) passes the intersection. `buildCandidates` then skips members and spawn slots outside it before rules run, exactly as it does for roles today.
   - `team_messages.allowed_profiles` itself is never rewritten. The role stays Kawai's, and the choice stays the sender's.
 - **Exclusion reasons.** A member outside the choice reports `worker-choice` (D5), not `outside-role`. A member outside both reports `outside-role`. The cause reporter (`memberCauses.ts`) tells them apart by testing the role list first.
-- **Empty intersection.** A choice that leaves no role profile is refused at send when the role is known at that point (Kawai's own dispatches and handoffs). Otherwise it is held with `worker-choice`, like any empty filter.
+- **Empty intersection.** Only Kawai sets role lists, and Kawai's dispatches carry no choice (Non-Goals). A message therefore never carries both today. The intersection keeps the two composable. An empty intersection is held with `worker-choice`, like any empty filter.
 - **Interaction with the forward exclusion.** Both filters may apply to forwarded mail in principle. D4 drops the choice on forwards, so in practice they never stack.
 - **Rule picks.** A rule's pick outside the filtered set is "unknown", which already falls back to the built-in strategy.
 - **Cooling choice.** When every allowed candidate is cooling, the existing built-in path yields `hold` with `retryAt` at the earliest cooldown end. The dispatcher already wakes then. No new waiting machinery is needed.
@@ -65,6 +67,10 @@ A new constraint kind, `worker-choice`, has its `detail` set to the selector and
 - **Tool.** A new tool beside the mailbox tools, in the same identity-bound, card-free set. It builds its answer from the same group catalog, live-member counts (`staffing`'s counting, including pending spawn reservations), `LimitEventStore.cooldownFor`, and provider-keyed usage that the router's context uses. That usage is `providers-and-workers` §5 plus the Codex per-home cache. The tool reads only memory and SQLite: no fetch and no write.
 - **Shape.** It reads as a slice of `RouteContext`: groups → workers (model key, provider, cap, live) and providers → { usage, cooldownUntil }.
 - **Unknown usage.** Usage the store lacks is `null` (unknown), never zeros.
+- **Shared logins.** Each provider carries `sharesLoginWith`: the other listed providers detected as drawing on the same account. Switching between them is therefore never presented as escaping a quota window. This was the human's decision on PR #221.
+  - **Detection rule.** Detection covers Claude profiles that authenticate through the CLI's stored login. That means their launch env sets none of `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or `CLAUDE_CODE_OAUTH_TOKEN`, and leaves `ANTHROPIC_BASE_URL` unset or at Anthropic's API. Two such profiles of different providers share a login when `claudeConfigDir(launch env)` resolves to the same path, because that path holds one `.credentials.json`.
+  - Codex profiles on one home are already one provider (`codex-chat-sessions` D4), so they are never flagged.
+  - **Unknowns.** Any other profile is never flagged. This covers API keys, tokens, proxies and other base URLs, and launch envs that cannot be resolved. An empty `sharesLoginWith` means sharing was not detected; it does not mean the providers are independent, and the tool description says so.
 - Rejected: extending `list_groups`. Its answer is a stable directory; capacity is volatile and larger. Keeping them apart keeps the common call cheap, and keeps the prompt note clear about which call is a live reading.
 
 ### D7. Assignment and handoff identity
@@ -76,15 +82,25 @@ A new constraint kind, `worker-choice`, has its `detail` set to the selector and
 `RouteContext.message` and `LimitOutcomeContext.message` gain an optional `worker` (the selector). This is additive, in `src/shared/routing.ts`, so the published `kawai-routing.d.ts` stays compatible.
 
 ### D9. Prompt and tool descriptions
-- **Mailbox note.** The system prompt's mailbox note names `team_capacity` and the `worker` argument. It states that a choice applies only to group mail, that a cooling choice waits for the cooldown end, and that caps still apply.
+- **Mailbox note.** The system prompt's mailbox note names `team_capacity` and the `worker` argument. It states that a choice applies only to group mail, that a cooling choice waits for the cooldown end, and that caps still apply. It also states that providers marked as sharing a login draw on one quota window.
 - **Strategy wording.** Nothing in the prompt states a strategy for when to switch providers. That stays the lead's judgment and its group's role text.
 
-### D10. Consumers of the eligibility
-`process-observability` D12 builds staffing recommendations from "dispatch-worker-choice's allowed workers" and from the routing and staffing exclusion reasons. This change exposes nothing new for it beyond D2. The intersected list and the per-member causes (`worker-choice`, `outside-role`, caps, occupancy) are what the existing cause reporter already outputs. Whether that change needs a reusable function outside a dispatch pass ("eligible workers for this group and choice, with reasons") is an open question (proposal), not scope here.
+### D10. One pure eligibility check
+The human decided this on PR #221. `process-observability` D12 must be able to ask, at an incident cutoff, which workers could have taken the work and why each other alternative could not. Reading the last dispatch pass's record is not enough, so eligibility becomes one reusable pure function.
+- **Module.** `workerEligibility.ts` in `src/server/team/routing/`, SDK-free, with no I/O and no clock read.
+- **Input.** A stated routing state:
+  - the group's workers, caps and strategy;
+  - the message's worker choice and role list;
+  - the members (profile, worktree, busy, pending request, parked, context-exhausted);
+  - the effective cooldown per profile;
+  - the staffing counts (group, per profile, team spawns, worktree writers, spawn backoff);
+  - the evaluation time.
+- **Output.** The eligible members and spawn slots in preference order. Every excluded alternative, member or worker slot, comes with its reasons. Each reason is a `WaitingConstraintKind` (`outside-role`, `worker-choice`, `profile-cooling` with its end, the caps, `worktree-occupied`, `spawn-backoff`, and the member causes), with the counts and detail the waiting reasons use.
+- **One source.** `buildCandidates` and the cause reporter (`memberCauses.ts`) are rebuilt on it. The dispatcher, the dispatch preview, `team_capacity`'s live counts and D12 therefore cannot disagree about who was eligible.
+- **The caller states the state.** For a live pass the dispatcher builds the state from current objects. For a cutoff, D12 builds it from its records, using `coolingTimeline` and the stored events. This change adds no reconstruction and no new table.
+- **Rejected:** having D12 read the last pass's diagnosis. A pass records only mail that was waiting at that moment, so an incident with no pass near its cutoff would have no answer.
 
 ## Risks / Trade-offs
-
-- [Two Claude profiles on one claude.ai login count as separate providers today] → Choosing `opus` while `default` cools does not escape their shared session window. This is a known `providers-and-workers` gap. `team_capacity` shows each provider's usage, so the lead sees both near their limit. Declaring them as one provider in `providers.json` fixes it.
 
 - [A lead pins work to a provider and forgets it] → The waiting reason names the choice and its retry time. The Mailbox lets the human or a `canManageMailbox` agent cancel the mail, and the lead can re-dispatch.
 - [Usage is unknown after a restart until the next report] → The capacity tool states unknown and its source, and the lead's prompt note says so. Kawai never invents a figure.

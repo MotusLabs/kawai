@@ -17,6 +17,21 @@ For group mail with a worker choice, route candidates SHALL include only the mem
 - **WHEN** a rule names a candidate that the worker choice filtered out
 - **THEN** the pick is treated as unknown, and the built-in strategy picks among the filtered candidates
 
+### Requirement: Eligibility is one reusable pure check
+Kawai SHALL decide which members and spawn slots may take group mail with one pure check over a stated routing state: workers, caps, choice, role list, members, cooldowns, staffing counts, and an evaluation time. It SHALL return the eligible candidates in preference order, plus every excluded alternative with its reasons as waiting-constraint kinds. Routing, waiting reasons, the dispatch preview, and observers evaluating a past cutoff SHALL all use it, and it SHALL perform no I/O.
+
+#### Scenario: Exclusion reasons per alternative
+- **WHEN** a message chose `zai`, an idle `sonnet` member exists, and the `glm` worker is at its cap
+- **THEN** the check returns no eligible candidate, the `sonnet` member excluded by `worker-choice`, and the `glm` slot excluded by `profile-cap` with its counts
+
+#### Scenario: Evaluation at an incident cutoff
+- **WHEN** an observer supplies the routing state as of an earlier cutoff, including the cooldowns then in force
+- **THEN** the check returns the eligibility routing would have computed at that time, and reads no current state
+
+#### Scenario: Same answer as a live pass
+- **WHEN** the dispatcher routes a message, and the check is called with the same state
+- **THEN** both name the same eligible candidates and the same exclusion reasons
+
 ### Requirement: Rules see the worker choice
 The route context and limit-outcome context given to routing rules SHALL include the message's worker choice as an additive metadata field, absent when the message has none.
 

@@ -13,6 +13,10 @@
 - **WHEN** a handoff is replayed with the same request key but a different worker
 - **THEN** it is refused naming `worker` as the differing field
 
+#### Scenario: Plan-execution handoffs carry no choice
+- **WHEN** Kawai hands off a change it executes under a plan
+- **THEN** the instruction carries the role's allowed profiles and no worker choice
+
 #### Scenario: Worker on a session target
 - **WHEN** a handoff targets a session and names a worker
 - **THEN** it is refused stating that a worker choice applies only to group targets
