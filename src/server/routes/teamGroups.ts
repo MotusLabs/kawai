@@ -14,7 +14,7 @@ export interface TeamGroupSummary {
   label: string
   description: string
   /** Allowed profiles in preference order; empty = the default profile. */
-  profiles: Array<{ profileId: string; cap?: number; live: number }>
+  profiles: Array<{ profileId: string; providerId: string; providerLabel: string; cap?: number; live: number }>
 }
 
 export function createTeamGroupRoutes(options: {
@@ -32,9 +32,15 @@ export function createTeamGroupRoutes(options: {
       const live = options.groupProfileCounts?.(team.teamId, group.id) ?? {}
       return {
         id: group.id, label: group.label, description: group.description,
-        profiles: group.profiles.map(entry => ({
-          profileId: entry.profileId, live: live[entry.profileId] ?? 0, ...(entry.cap !== undefined ? { cap: entry.cap } : {}),
-        })),
+        profiles: group.profiles.map(entry => {
+          const provider = [...catalog.providers].find(([, provider]) => provider.models.includes(entry.profileId))
+          return {
+            profileId: entry.profileId,
+            providerId: provider?.[0] ?? entry.profileId,
+            providerLabel: provider?.[1].label ?? entry.profileId,
+            live: live[entry.profileId] ?? 0, ...(entry.cap !== undefined ? { cap: entry.cap } : {}),
+          }
+        }),
       }
     })
     return c.json({ groups, errors: catalog.errors, warnings: catalog.warnings })

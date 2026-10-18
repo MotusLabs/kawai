@@ -7,7 +7,10 @@ import TeamMembersPanel from '../components/team/TeamMembersPanel'
 
 const row = (extra: Partial<TeamMemberRow> = {}): TeamMemberRow => ({
   id: 'devs', label: 'Middle Dev', description: 'Implements ordinary tasks', canCreateTasks: false, max: 2,
-  profiles: [{ profileId: 'claude', cap: 2, live: 1 }, { profileId: 'glm', live: 0 }],
+  profiles: [
+    { profileId: 'claude', providerId: 'claude', providerLabel: 'Claude', cap: 2, live: 1 },
+    { profileId: 'glm', providerId: 'zai', providerLabel: 'Z.AI', live: 0 },
+  ],
   approval: 'manual', strategy: 'first-available',
   onLimit: { parkIfResetWithinMs: 3 * 3_600_000, otherwise: 'forward', forwardTo: 'lead' },
   warnings: [], sources: [{ file: '/home/u/.kawai/groups/devs.md', layer: 'user', inEffect: true }],
@@ -26,7 +29,8 @@ const byId = (renderer: TestRenderer.ReactTestRenderer, id: string) => renderer.
 
 test('caps show live counts and the live member is named', () => {
   const renderer = mount([row()])
-  expect(textOf(byId(renderer, 'member-profiles')[0]!)).toBe('claude · 1 of 2, glm · 0 live')
+  // Workers are grouped under their provider (design D13).
+  expect(textOf(byId(renderer, 'member-profiles')[0]!)).toBe('Claude: claude · 1 of 2 · Z.AI: glm · 0 live')
   expect(textOf(byId(renderer, 'member-session')[0]!)).toContain('dev one · spawned · claude · working · task t-1')
   expect(textOf(byId(renderer, 'member-settings')[0]!)).toContain('park if reset within 3h, otherwise forward to lead')
 })

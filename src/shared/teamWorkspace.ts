@@ -193,6 +193,9 @@ export interface TeamMemberSession {
 /** An allowed profile of a group with its cap and live count (spec: "1 of 2"). */
 export interface TeamMemberProfile {
   profileId: string
+  /** The provider owning this model (design D13): the Members tab groups by it. */
+  providerId: string
+  providerLabel: string
   /** Live-member cap (map form only); absent = uncapped. */
   cap?: number
   live: number

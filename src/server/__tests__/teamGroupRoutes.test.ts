@@ -57,7 +57,10 @@ describe('team group routes', () => {
     const body = await (await routes.request(`/?projectPath=${encodeURIComponent(project)}`)).json() as { groups: unknown[] }
     expect(body.groups).toEqual([{
       id: 'devs', label: 'devs', description: '',
-      profiles: [{ profileId: 'glm', cap: 2, live: 2 }, { profileId: 'default', cap: 1, live: 0 }],
+      profiles: [
+        { profileId: 'glm', providerId: 'zai', providerLabel: 'Z.AI', cap: 2, live: 2 },
+        { profileId: 'default', providerId: 'claude', providerLabel: 'Claude', cap: 1, live: 0 },
+      ],
     }])
     expect(counts[0]![1]).toBe('devs')
   })

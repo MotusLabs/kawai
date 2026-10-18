@@ -1857,6 +1857,58 @@ describe('NewSessionModal team group picker', () => {
   })
 })
 
+describe('profile picker groups by provider', () => {
+  // Catalog order (D13): the provider holding default first, then file order.
+  const groupedCatalog = [
+    { id: 'default', label: 'Default', providerId: 'claude', providerLabel: 'Claude' },
+    { id: 'opus', label: 'Claude Opus', providerId: 'claude', providerLabel: 'Claude' },
+    { id: 'glm', label: 'GLM', providerId: 'zai', providerLabel: 'Z.AI' },
+    { id: 'glm-flash', label: 'GLM Flash', providerId: 'zai', providerLabel: 'Z.AI' },
+    { id: 'mimo', label: 'MiMo', providerId: 'mimo', providerLabel: 'MiMo' },
+  ]
+
+  async function openWith(profiles: unknown) {
+    globalThis.fetch = ((url: string) =>
+      String(url).startsWith('/api/chat/groups')
+        ? Promise.resolve(Response.json({ groups: [], errors: [] }))
+        : Promise.resolve(Response.json({ profiles, errors: [] }))) as unknown as typeof fetch
+    let renderer!: TestRenderer.ReactTestRenderer
+    await act(async () => {
+      renderer = TestRenderer.create(
+        <NewSessionModal isOpen onClose={() => {}} onCreate={() => {}} defaultProjectDir="/base" commandPresets={DEFAULT_PRESETS} defaultPresetId="claude" />
+      )
+      await settle()
+    })
+    return renderer
+  }
+
+  test('models are grouped by provider; a one-model provider with an equal label stays plain', async () => {
+    const renderer = await openWith(groupedCatalog)
+    const select = renderer.root.findByProps({ 'aria-label': 'Profile' })
+    const groups = select.findAllByType('optgroup')
+    expect(groups.map(group => group.props.label)).toEqual(['Claude', 'Z.AI'])
+    expect(groups[0]!.findAllByType('option').map(option => option.props.value))
+      .toEqual(['default', 'opus'])
+    expect(groups[1]!.findAllByType('option').map(option => option.props.value))
+      .toEqual(['glm', 'glm-flash'])
+    // MiMo: one model whose label equals the provider's label — a plain option.
+    const allOptions = select.findAllByType('option').map(option => option.props.value)
+    expect(allOptions).toEqual(['default', 'opus', 'glm', 'glm-flash', 'mimo'])
+    act(() => { renderer.unmount() })
+  })
+
+  test('a profiles-only catalog keeps the plain picker it has always had', async () => {
+    const renderer = await openWith([
+      { id: 'default', label: 'Default', providerId: 'default', providerLabel: 'Default' },
+      { id: 'glm', label: 'GLM', providerId: 'glm', providerLabel: 'GLM' },
+    ])
+    const select = renderer.root.findByProps({ 'aria-label': 'Profile' })
+    expect(select.findAllByType('optgroup')).toEqual([])
+    expect(select.findAllByType('option').map(option => option.props.value)).toEqual(['default', 'glm'])
+    act(() => { renderer.unmount() })
+  })
+})
+
 describe('capWarning', () => {
   test('only a reached cap on the chosen profile warns', async () => {
     const { capWarning } = await import('../components/chat/useTeamGroups')
