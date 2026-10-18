@@ -21,12 +21,12 @@ A Codex turn failing on a usage, rate, spend, credit, or overload limit SHALL re
 - **WHEN** a Codex turn fails because the context window was exceeded
 - **THEN** no limit event is recorded
 
-### Requirement: Codex limits cool every profile sharing the login
-A Codex limit event of the login or plan SHALL be recorded for every Codex profile whose Codex home is the same as the limited session's, because those profiles share one login and one plan. Each of them SHALL then cool down under the existing cooldown rules. A limit scoped to one session's own budget SHALL be recorded for that session's profile only. Claude profiles and Codex profiles on other homes SHALL NOT be affected.
+### Requirement: Codex login limits cool the home's provider
+A login- or plan-scoped Codex limit event SHALL be recorded once, naming the limited session's Codex home provider (`codex-home-<hash of the resolved home>`), and SHALL cool that home through the shared cooldown, so every profile on the home cools down together. No per-profile copies SHALL be written. A limit scoped to one session's own budget SHALL be recorded for that session's profile only, without a provider. Claude profiles and Codex profiles on other homes SHALL NOT be affected.
 
 #### Scenario: Two profiles on one home
 - **WHEN** `codex` and `codex-fast` both use `~/.codex` and a `codex` member hits its usage limit
-- **THEN** both profiles cool down, and group mail skips members on either one
+- **THEN** one limit event names the home's provider, both profiles cool down, and group mail skips members on either one
 
 #### Scenario: Separate homes
 - **WHEN** `codex` uses `~/.codex`, `codex-2` uses `~/.codex-2`, and a `codex` member hits its limit
@@ -34,7 +34,7 @@ A Codex limit event of the login or plan SHALL be recorded for every Codex profi
 
 #### Scenario: Session budget
 - **WHEN** `codex` and `codex-fast` both use `~/.codex` and a `codex` member's turn fails because its own session budget is exhausted
-- **THEN** only `codex` cools down, and members on `codex-fast` keep receiving group mail
+- **THEN** only `codex` cools down, its event carries no provider, and members on `codex-fast` keep receiving group mail
 
 #### Scenario: Forwarding avoids the shared login
 - **WHEN** work from a limited `codex` member is forwarded to a group with members on `codex-fast` and `default`

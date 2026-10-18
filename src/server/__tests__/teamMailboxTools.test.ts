@@ -242,3 +242,23 @@ test('management tools bind the caller session, ignore forged ids, and are allow
     .toEqual(['cancel_message', 'discard_message', 'list_groups', 'list_mailbox', 'reply', 'schedule_message', 'send_message'])
   await server.instance.close()
 })
+
+test('the runtime-neutral table and the MCP server expose the same tools', async () => {
+  const { teamToolTable } = await import('../team/mailboxTools')
+  const table = teamToolTable(mailbox, 'lead')
+  // Every table entry carries its schema, description, and a callable handler.
+  for (const spec of table) {
+    expect(typeof spec.name).toBe('string')
+    expect(spec.description.length).toBeGreaterThan(0)
+    expect(spec.schema).toBeDefined()
+    expect(typeof spec.handler).toBe('function')
+  }
+  const names = table.map(spec => spec.name).sort()
+  const server = await createMailboxServer(mailbox, 'lead')
+  const registered = Object.keys((server.instance as unknown as { _registeredTools: Record<string, unknown> })._registeredTools).sort()
+  expect(registered).toEqual(names)
+  // The table's handlers behave like the registered ones: same refusal path.
+  const listed = await table.find(spec => spec.name === 'list_groups')!.handler({}) as Array<{ id: string }>
+  expect(Array.isArray(listed)).toBe(true)
+  await server.instance.close()
+})

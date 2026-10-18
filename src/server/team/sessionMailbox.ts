@@ -9,7 +9,7 @@
 // failure backoff, published when it structurally changes; the failed-spawn
 // backoff's end folds into the dispatcher's wake time.
 import type { ChatSessionRecord } from '../db'
-import type { ChatSessionDriver } from '../chat/ChatSessionDriver'
+import type { ChatAgentDriver } from '../chat/provider/driver'
 import type { TeamMessage, WaitingReason } from '../../shared/team'
 import type { GroupCatalog } from './groupCatalog'
 import type { GroupDefinition } from './groupFile'
@@ -75,7 +75,7 @@ export class SessionMailbox {
     teams: SessionTeams
     records: () => Iterable<ChatSessionRecord>
     getRecord: (id: string) => ChatSessionRecord | undefined
-    getDriver: (id: string) => ChatSessionDriver | undefined
+    getDriver: (id: string) => ChatAgentDriver | undefined
     available: (record: ChatSessionRecord) => boolean
     /** The manager's start refusal text for the unavailable reason (D2); `available` keeps deciding. */
     startBlocker?: (record: ChatSessionRecord) => string | null

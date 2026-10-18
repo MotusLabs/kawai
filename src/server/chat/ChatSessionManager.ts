@@ -49,6 +49,7 @@ import { generateSessionName } from '../nameGenerator'
 import { isExistingDirectory, resolveProjectDirectory } from '../paths'
 import type { SessionRegistry } from '../SessionRegistry'
 import { ChatSessionDriver, type ChatQueryFactory } from './ChatSessionDriver'
+import type { ChatAgentDriver } from './provider/driver'
 import { chatAuthErrorMessage, hasClaudeAuth } from './chatAuth'
 import { historyWindow } from './historyWindow'
 import {
@@ -116,7 +117,7 @@ import { ProvenanceRecorder } from '../metrics/provenanceRecorder'
 import { ChatTurnUsageStore, TurnUsageTracker } from './chatTurnUsageStore'
 import { MetricsReader } from '../metrics/computeMetrics'
 import { ProcessReportService, type ReportCaller } from '../metrics/reportService'
-import type { ChatSpawnInfo } from './ChatSessionDriver'
+import type { ChatSpawnInfo } from './provider/driver'
 import { OutboundDestinations } from '../outbound/destinations'
 import { sessionObserver } from '../outbound/auditHooks'
 import { RepoFactsResolver } from '../outbound/repoFacts'
@@ -342,11 +343,11 @@ export type ChatTaskOutputResult =
 export class ChatSessionManager {
   private readonly options: ChatSessionManagerOptions
   private readonly records = new Map<string, ChatSessionRecord>()
-  private readonly drivers = new Map<string, ChatSessionDriver>()
+  private readonly drivers = new Map<string, ChatAgentDriver>()
   /** In-flight ensureDriver calls, so racing sends never build two drivers. */
   private readonly driverPromises = new Map<
     string,
-    Promise<ChatSessionDriver | null>
+    Promise<ChatAgentDriver | null>
   >()
   private sdkQuery: Promise<ChatQueryFactory> | null = null
   /**
@@ -1381,7 +1382,7 @@ export class ChatSessionManager {
         groupId,
         profileId: record?.claudeProfileId ?? 'default',
         model: info.model ?? record?.model ?? null,
-        effort: info.effort ?? null,
+        effort: info.effort == null ? null : String(info.effort),
         cwd: info.cwd,
         groupFile: groupId ? this.teams.catalogOf(sessionId)?.groups.get(groupId)?.file ?? null : null,
         promptAppend: info.systemPromptAppend,
@@ -1602,7 +1603,7 @@ export class ChatSessionManager {
     if (blocked) {
       return { ok: false, error: blocked }
     }
-    let driver: ChatSessionDriver | null
+    let driver: ChatAgentDriver | null
     try {
       driver = await this.ensureDriver(sessionId)
     } catch (error) {
@@ -1635,7 +1636,7 @@ export class ChatSessionManager {
     if (blocked) {
       return { ok: false, error: blocked }
     }
-    let driver: ChatSessionDriver | null
+    let driver: ChatAgentDriver | null
     try {
       driver = await this.ensureDriver(sessionId)
     } catch (error) {
@@ -2144,7 +2145,7 @@ export class ChatSessionManager {
 
   private async ensureDriver(
     sessionId: string
-  ): Promise<ChatSessionDriver | null> {
+  ): Promise<ChatAgentDriver | null> {
     const existing = this.drivers.get(sessionId)
     if (existing) {
       if (existing.isDead) {
@@ -2156,7 +2157,7 @@ export class ChatSessionManager {
           // The executable may have been removed or moved since the last
           // spawn: surface a failure now, and respawn the path just verified.
           const executable = await this.checkExecutable()
-          existing.setClaudeExecutablePath(executable?.path)
+          existing.setClaudeExecutablePath?.(executable?.path)
         }
         if (!this.authOk(record?.claudeProfileId, record?.projectPath)) throw new Error(chatAuthErrorMessage())
       }
