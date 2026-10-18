@@ -104,9 +104,9 @@ export function applyIntegrationSchema(db: Database): void {
   db.exec(CREATE_INTEGRATION_TABLES_SQL)
 }
 
-/** Migration 12, after providers-and-workers' 11; numbers stay dense from the baseline (E5). */
+/** Migration 13, after providers-and-workers' 12; numbers stay dense from the baseline (E5). */
 export const integrationMigration: Migration = {
-  version: 12,
+  version: 13,
   name: 'integration-candidates',
   up: applyIntegrationSchema,
 }
