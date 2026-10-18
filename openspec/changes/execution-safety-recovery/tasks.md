@@ -2,7 +2,7 @@
 
 Order:
 - group 6 (the migration runner and backups) lands first;
-- group 3 follows group 6, because migration 2 needs the runner;
+- group 3 follows group 6, because migration 9 needs the runner;
 - groups 1, 2, and 5 are independent of the others;
 - group 4 waits until `team-workspace-pages` and `durable-plans` are on master: it needs the tab model and durable-plans' host-agnostic mount pattern (D12), not the Plans tab itself;
 - group 7 comes last, after `plan-execution`, `integration-candidates`, `plan-supervision`, and `revision-control` merge.
@@ -33,7 +33,7 @@ Group 7's matrix rows for plan execution, integration, supervision, and revision
 
 ## 3. Capture, classification, and records
 
-- [ ] 3.1 Implement the pure `src/server/outbound/parse.ts` (tokenizer, segments, one-level `-c` unwrap, `cd`/`-C` tracking) and `classify.ts` (`parseSends`, `judge`, the D4 rules, verdicts, and `CLASSIFIER_VERSION`). Verify with unit tests over a corpus from the spike's command shapes, rewritten with example names:
+- [x] 3.1 Implement the pure `src/server/outbound/parse.ts` (tokenizer, segments, one-level `-c` unwrap, `cd`/`-C` tracking) and `classify.ts` (`parseSends`, `judge`, the D4 rules, verdicts, and `CLASSIFIER_VERSION`). Verify with unit tests over a corpus from the spike's command shapes, rewritten with example names:
   - each rule's send and non-send forms;
   - origin-implicit and `-R` gh;
   - `--body`, `--body-file`, `-F body=@file`, and heredoc values never being targets;
@@ -45,24 +45,35 @@ Group 7's matrix rows for plan execution, integration, supervision, and revision
   - mail;
   - variables and `$(…)` reading unknown;
   - the strongest verdict and the match list of compound commands.
-- [ ] 3.2 Implement `redact.ts` (D8). Verify with a fixture corpus: every listed secret shape, including query-string credentials and JSON and form body fields, is redacted in the command, each match segment, the destination, and outcome details; a non-secret command is unchanged; and truncation at 4096 characters is marked.
-- [ ] 3.3 Add migration 2 `outbound-audit` (D6) to `MIGRATIONS`, and `OutboundStore` as the only writer, with header comments saying so. Verify with tests:
+- [x] 3.2 Implement `redact.ts` (D8). Verify with a fixture corpus: every listed secret shape, including query-string credentials and JSON and form body fields, is redacted in the command, each match segment, the destination, and outcome details; a non-secret command is unchanged; and truncation at 4096 characters is marked.
+- [x] 3.3 Add migration 9 `outbound-audit` (D6) to `MIGRATIONS` (after migrations 2–8: strategy-impact, plan-validation, task-status-events, agent-starts, chat-turn-usage, process-reports, plan-execution), and `OutboundStore` as the only writer, with header comments saying so. Verify with tests:
   - migration on a fresh database and on a baseline copy, run twice;
   - the duplicate `(session_id, tool_use_id)` call and duplicate outcome are no-ops;
   - the store exposes no update or delete;
   - keyset paging and the filters.
-- [ ] 3.4 Register the four hooks in `ChatSessionDriver` (D3), and add `OutboundObserver` with the repository facts resolver and the `spawn_id` live set (D7). Verify with tests:
+- [x] 3.4 Register the four hooks in `ChatSessionDriver` (D3), and add `OutboundObserver` with the repository facts resolver and the `spawn_id` live set (D7). Verify with tests:
   - **The no-decision test:** across every audited event, tool, and an observer that throws, the hook's output deep-equals `{ continue: true }`.
   - the hook returns before the store write;
   - `kawai-team` calls and non-sends write nothing;
   - subagent calls record `agent_id`;
   - `canUseTool` deny and `PermissionDenied` record one `denied`;
   - background calls record `started-background`;
+  - **Round-trip measurement (after the round-3 `setImmediate` deferral):** the synchronous part of the Pre hook — tokenizing, parsing, and filling `pendingSends`, with every later step (facts walk, judging, redaction, SQLite) deferred — measured **~10.3 µs per call** averaged over 20,000 calls across five representative commands (git push, a cd-chain, curl, npm publish, gh pr comment) on the dev host; a non-send call parses in the same range. This is the observer's synchronous work only — it does not include the fixture adapter's control-protocol round trip, which task 7.1 measures against the live driver. For group 7's recovery matrix.
   - a facts read error records `unknown-destination` and never throws;
   - an outcome that lands before its queued call row is recorded and joins the row once written.
 
   Measure the added per-call hook round trip with the fixture adapter and record it in the recovery matrix.
-- [ ] 3.5 Implement `outcomeState` (D7). Verify with unit tests: the precedence of every outcome, pending while the spawn lives, and outcome unknown once it ends. Add the AGENTS.md audit bullet; that is the docs for group 3.
+- [x] 3.5 Implement `outcomeState` (D7). Verify with unit tests: the precedence of every outcome, pending while the spawn lives, and outcome unknown once it ends. Add the AGENTS.md audit bullet; that is the docs for group 3.
+- [x] 3.6 Make `allowed` fail-closed, and add the backstop and withholding (D4's four checks and backstop, D8's withholding; task revision 3). Fix the invariants, not the spellings: `allowed` comes only from the four checks, and stored text only through the withholding gate. Bump `CLASSIFIER_VERSION`. Verify with tests:
+  - the golden corpus re-baselined, listing every changed verdict and why;
+  - round 7's cases as named regressions: `env --chdir /tmp git push fork` records a row that is not allowed; `git -c a=b -C "$D" push` reads unknown-destination; a heredoc header, unquoted `-H Authorization: Bearer X` words, and attached `-HAuthorization:X` store no secret byte;
+  - noise controls stay allowed: `git push origin x`, `cd <repo> && git push`, `git -C <repo> push`, `gh pr create --body-file f`, `gh pr merge 1`;
+  - reads stay unrecorded: `git status`, a plain `curl` GET, `grep -rn "git push" docs`;
+  - generated variants, not only listed cases: from each allowed corpus send, mutations that replace one word with a variable, a substitution, or a glob; insert an unknown option or wrapper; respell a known option (`-Cdir`, `--chdir=dir`, `--chdir dir`, clustered flags); or put an unevaluated builtin, a subshell, or a brace group before it. No mutation reads allowed, and every one records a row;
+  - generated secret spellings (each header option spelling and quoting, heredoc and here-string bodies, `-u`, URL userinfo, token flags, token shapes) carrying one marker secret: no stored field of the call, its matches, or its outcomes contains the marker;
+  - the backstop: each list entry in an unmodeled segment adds one `unclassified-send` row naming the entry, and a proven non-send adds none;
+  - withholding and redaction are linear: 40,000 headers take at most about twice the time of 20,000, asserted as a ratio, never a wall-clock bound;
+  - the existing paths stay green: the driver's hook tests, the shared fixtures and PATH stubs, and one chat fixture e2e spec run alone on a spare `E2E_PORT` after `bun run build`.
 
 ## 4. Audit view and attention
 

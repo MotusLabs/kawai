@@ -22,6 +22,7 @@ import type {
 import type { SessionStatus } from '../../../shared/types'
 import type { ChatWireRecorder } from '../../chat/wireTap'
 import type { ChatLimitSignal } from '../../chat/limitSignals'
+import type { OutboundAuditSink } from '../../outbound/observer'
 import {
   ChatSessionDriver,
   type ChatQueryFactory,
@@ -201,6 +202,8 @@ export function createHarness(
     teamMcpServer?: NonNullable<Options['mcpServers']>[string]
     getSystemPromptAppend?: () => string | undefined
     getEffort?: () => Options['effort']
+    /** The outbound audit sink the driver's hooks report to (execution-safety-recovery D3). */
+    outbound?: OutboundAuditSink
     onSpawn?: (info: ChatSpawnInfo) => void
     /** Replaces the harness's cwd capture (e.g. with a throwing observer). */
     onCwdChanged?: (newCwd: string) => void

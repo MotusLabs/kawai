@@ -91,7 +91,6 @@ test('a database written by the build before plan-validation upgrades keeping ev
   expect(before.plans).toHaveLength(1)
   expect(before.plan_revisions).toHaveLength(1)
   expect(VALIDATION_TABLES.filter(table => table in before)).toEqual([])
-  const previous = versions(dbPath)
 
   const session = initDatabase({ path: dbPath, migrations: THROUGH_VALIDATION })
   // The new tables are usable at once: a report, an assessment, a decision.
@@ -108,12 +107,13 @@ test('a database written by the build before plan-validation upgrades keeping ev
 
   const after = rows(dbPath)
   for (const [table, tableRows] of Object.entries(before)) expect(after[table]).toEqual(tableRows)
-  expect(Object.keys(after).filter(table => !(table in before)).sort()).toEqual(VALIDATION_TABLES)
+  expect(Object.keys(after).filter(table => !(table in before) && !table.startsWith('outbound_')).sort()).toEqual(VALIDATION_TABLES)
   const recorded = versions(dbPath)
-  expect(recorded.map(row => row.version)).toEqual([...previous.map(row => row.version), previous.at(-1)!.version + 1])
-  expect(recorded.at(-1)!.name).toBe('plan-validation')
-  const backup = recorded.at(-1)!.backup_path!
-  expect(path.basename(backup)).toMatch(new RegExp(`-pre-migration-${recorded.at(-1)!.version}\\.db$`))
+  expect(recorded.map(row => row.version)).toEqual([1, ...THROUGH_VALIDATION.map(migration => migration.version)])
+  expect(recorded.find(row => row.name === 'plan-validation')).toMatchObject({ version: 3 })
+  const mine = recorded.find(row => row.name === 'plan-validation')!
+  const backup = mine.backup_path!
+  expect(path.basename(backup)).toMatch(new RegExp(`-pre-migration-${mine.version}\\.db$`))
   expect(VALIDATION_TABLES.filter(table => table in rows(backup))).toEqual([])
 })
 

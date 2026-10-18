@@ -114,13 +114,18 @@ describe('baseline', () => {
   test('this build ships its migrations, and a database at the newest version opens applying nothing', () => {
     const newest = MIGRATIONS.at(-1)!
     expect(MIGRATIONS.map(migration => migration.name)).toEqual(
-      ['strategy-impact', 'plan-validation', 'task-status-events', 'agent-starts', 'chat-turn-usage', 'process-reports', 'plan-execution'],
+      ['strategy-impact', 'plan-validation', 'task-status-events', 'agent-starts', 'chat-turn-usage', 'process-reports', 'plan-execution', 'outbound-audit'],
     )
     expect(newestVersion()).toBe(newest.version)
     initDatabase({ path: dbPath }).close()
+    expect(versions(dbPath).map(row => [row.version, row.name])).toEqual([
+      [1, 'baseline'], [2, 'strategy-impact'], [3, 'plan-validation'], [4, 'task-status-events'], [5, 'agent-starts'], [6, 'chat-turn-usage'], [7, 'process-reports'], [8, 'plan-execution'], [9, 'outbound-audit'],
+    ])
+    expect(Object.keys(dump(dbPath))).toEqual(expect.arrayContaining([
+      'strategy_impact_proposals', 'outbound_calls', 'outbound_outcomes', 'outbound_acknowledgements',
+    ]))
     const before = dump(dbPath)
-    const db = initDatabase({ path: dbPath })
-    db.close()
+    initDatabase({ path: dbPath }).close()
     expect(dump(dbPath)).toEqual(before)
     expect(versions(dbPath).map(row => row.version)).toEqual([1, ...MIGRATIONS.map(migration => migration.version)])
   })
@@ -284,5 +289,90 @@ describe('a database newer than the build', () => {
     expect(readSchemaVersion(db)).toBe(0)
     db.close()
     expect(fs.statSync(dbPath).size).toBe(0)
+  })
+})
+
+describe('a recorded migration name the registry disagrees with (CC round 3)', () => {
+  test('is refused before any write, both names and the backup named; the database is unchanged', () => {
+    // A database a different lineage migrated: its version 2 is recorded as
+    // `outbound-audit`, where this build's registry says `strategy-impact`.
+    const stray = (version: number, name: string): Migration => ({
+      version, name, up: db => db.exec(`ALTER TABLE chat_sessions ADD COLUMN stray_${version} TEXT`),
+    })
+    initDatabase({ path: dbPath, migrations: [stray(2, 'outbound-audit')] }).close()
+    const before = dump(dbPath)
+    const bytes = fs.readFileSync(dbPath)
+    const backupsBefore = fs.readdirSync(path.join(dir, 'backups')).sort()
+    const premigration2 = backupsBefore.find(name => name.endsWith('-pre-migration-2.db'))!
+    let error: unknown
+    try { initDatabase({ path: dbPath }) } catch (caught) { error = caught }
+    expect(error).toBeInstanceOf(DatabaseStartupError)
+    const message = (error as Error).message
+    expect(message).toContain('"outbound-audit"')
+    expect(message).toContain('"strategy-impact"')
+    expect(message).toContain(premigration2)
+    expect(message).toContain('docs/operations/database-backups.md')
+    // Nothing was written: same bytes, same tables, no new backup.
+    expect(fs.readFileSync(dbPath).equals(bytes)).toBe(true)
+    expect(dump(dbPath)).toEqual(before)
+    expect(fs.readdirSync(path.join(dir, 'backups')).sort()).toEqual(backupsBefore)
+  })
+
+  test('matching names proceed, and the guard reads an unversioned database as fine', () => {
+    // The real registry applied everything; opening again with it works.
+    initDatabase({ path: dbPath }).close()
+    expect(versions(dbPath).map(row => row.name)).toEqual(['baseline', ...MIGRATIONS.map(migration => migration.name)])
+    initDatabase({ path: dbPath }).close()
+    // An unversioned database has no rows to disagree with.
+    preChangeDatabase()
+    const db = initDatabase({ path: dbPath })
+    expect(versions(dbPath).map(row => row.version)).toEqual([1, ...MIGRATIONS.map(migration => migration.version)])
+    db.close()
+  })
+
+  test('a gap in the recorded versions is refused before any write (CC round 4 G)', () => {
+    // Migrate to 3 with the real registry, then remove the version-2 row to
+    // simulate a torn or hand-edited history: 1 and 3 recorded, 2 missing.
+    initDatabase({ path: dbPath }).close()
+    const db = new Database(dbPath)
+    db.exec('DELETE FROM schema_migrations WHERE version = 2')
+    db.exec('DROP TABLE strategy_impact_proposals')
+    db.close()
+    const bytes = fs.readFileSync(dbPath)
+    let error: unknown
+    try { initDatabase({ path: dbPath }) } catch (caught) { error = caught }
+    expect(error).toBeInstanceOf(DatabaseStartupError)
+    const message = (error as Error).message
+    expect(message).toContain('version 2 is missing')
+    expect(message).toContain('not dense from version 1')
+    expect(message).toContain('docs/operations/database-backups.md')
+    // Refused before any write: same bytes, the strategy table stays gone
+    // (the gap was not "healed" by re-applying migration 2).
+    expect(fs.readFileSync(dbPath).equals(bytes)).toBe(true)
+    const check = new Database(dbPath, { readonly: true })
+    const tables = (check.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map(row => row.name)
+    check.close()
+    expect(tables).not.toContain('strategy_impact_proposals')
+  })
+
+  test('the pre-migration-9 backup predates the audit tables (CC round 3)', () => {
+    // A database at version 8 (plan-execution) upgrades to 9; the backup
+    // taken before migration 9 holds plan-execution's tables, never the outbound ones.
+    initDatabase({ path: dbPath, migrations: MIGRATIONS.filter(migration => migration.version <= 8) }).close()
+    initDatabase({ path: dbPath }).close()
+    const backup = fs.readdirSync(path.join(dir, 'backups')).find(name => name.endsWith('-pre-migration-9.db'))!
+    const backupPath = path.join(dir, 'backups', backup)
+    const snapshot = new Database(backupPath, { readonly: true })
+    const tables = (snapshot.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map(row => row.name)
+    snapshot.close()
+    expect(tables).toContain('plan_executions')
+    expect(tables).not.toContain('outbound_calls')
+    expect(tables).not.toContain('outbound_outcomes')
+    expect(tables).not.toContain('outbound_acknowledgements')
+    // The live database now has them, and running 3 again writes nothing.
+    const live = new Database(dbPath, { readonly: true })
+    const liveTables = (live.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map(row => row.name)
+    live.close()
+    expect(liveTables).toContain('outbound_calls')
   })
 })

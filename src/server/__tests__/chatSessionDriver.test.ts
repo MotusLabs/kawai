@@ -16,6 +16,7 @@ import type {
 } from '../../shared/chat'
 import type { ChatWireRecorder } from '../chat/wireTap'
 import type { ChatLimitSignal } from '../chat/limitSignals'
+import type { OutboundAuditSink } from '../outbound/observer'
 import { outboundFile } from '../outbound/destinations'
 import { applyChatEvents, emptyTranscript } from '../../client/stores/chatStore'
 import { SessionTeams } from '../team/sessionTeams'
@@ -314,6 +315,159 @@ describe('ChatSessionDriver', () => {
     harness.driver.send('after exit')
     expect(harness.fakes[1]!.options.systemPrompt).toMatchObject({ append: '# Your role: QA\n\nTest it twice.' })
     expect(reads).toBe(2)
+    harness.driver.kill()
+  })
+
+  test('audit hooks (execution-safety-recovery D3): registered for the audited tools, observational only', () => {
+    const harness = createHarness()
+    harness.driver.send('hello')
+    const hooks = harness.fakes[0]!.options.hooks as Record<string, Array<{ matcher?: string; hooks: Array<(input: unknown) => Promise<unknown>> }>>
+    expect(hooks.CwdChanged).toHaveLength(1)
+    for (const event of ['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionDenied']) {
+      expect(hooks[event]).toHaveLength(1)
+      expect(hooks[event]![0]!.matcher).toBe('^(Bash|Monitor|mcp__.+)$')
+    }
+    harness.driver.kill()
+  })
+
+  test('the no-decision test: every event and tool returns exactly { continue: true }, observer included', async () => {
+    const throws: OutboundAuditSink = {
+      onPreToolUse: () => { throw new Error('sink down') },
+      onPostToolUse: () => { throw new Error('sink down') },
+      onPostToolUseFailure: () => { throw new Error('sink down') },
+      onPermissionDenied: () => { throw new Error('sink down') },
+      onDeniedCard: () => { throw new Error('sink down') },
+      onSpawnEnd: () => { throw new Error('sink down') },
+    }
+    const harness = createHarness({ outbound: throws })
+    harness.driver.send('hello')
+    const hooks = harness.fakes[0]!.options.hooks as Record<string, Array<{ hooks: Array<(input: unknown) => Promise<unknown>> }>>
+    const inputs = [
+      { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'git push' }, tool_use_id: 'tu-1', agent_id: 'agent-1' },
+      { hook_event_name: 'PreToolUse', tool_name: 'mcp__web-lookup__fetch', tool_input: { url: 'https://example.com' }, tool_use_id: 'tu-2' },
+      { hook_event_name: 'PostToolUse', tool_name: 'Monitor', tool_input: { command: 'x' }, tool_response: '', tool_use_id: 'tu-3', duration_ms: 5 },
+      { hook_event_name: 'PostToolUseFailure', tool_name: 'Bash', tool_input: { command: 'x' }, tool_use_id: 'tu-4', error: 'boom', is_interrupt: true },
+      { hook_event_name: 'PermissionDenied', tool_name: 'Bash', tool_input: { command: 'x' }, tool_use_id: 'tu-5', reason: 'policy' },
+    ]
+    for (const [event, uses] of [
+      ['PreToolUse', inputs.slice(0, 2)],
+      ['PostToolUse', [inputs[2]]],
+      ['PostToolUseFailure', [inputs[3]]],
+      ['PermissionDenied', [inputs[4]]],
+    ] as const) {
+      for (const input of uses) {
+        const result = await hooks[event]![0]!.hooks[0]!(input)
+        expect(result).toEqual({ continue: true })
+      }
+    }
+    harness.driver.kill()
+  })
+
+  test('the hook returns before the store write: an async sink cannot delay it', async () => {
+    // A sink that writes off the microtask queue (as the observer does): if
+    // the driver ever awaited the sink, or the observer wrote inline, the
+    // push would land before the hook's promise resolved and this fails.
+    const seen: string[] = []
+    const defer = (line: string): void => { setImmediate(() => seen.push(line)) }
+    const sink: OutboundAuditSink = {
+      onPreToolUse: use => defer(`pre:${use.toolName}`),
+      onPostToolUse: use => defer(`post:${use.toolName}`),
+      onPostToolUseFailure: use => defer(`fail:${use.toolName}`),
+      onPermissionDenied: use => defer(`denied:${use.toolName}`),
+      onDeniedCard: use => defer(`card:${use.toolUseId}`),
+      onSpawnEnd: () => defer('spawn-end'),
+    }
+    const harness = createHarness({ outbound: sink })
+    harness.driver.send('hello')
+    const hooks = harness.fakes[0]!.options.hooks as { PreToolUse: Array<{ hooks: Array<(input: unknown) => Promise<unknown>> }> }
+    const input = { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'git push' }, tool_use_id: 'tu-9' }
+    await hooks.PreToolUse[0]!.hooks[0]!(input)
+    // The hook resolved before the sink's deferred write ran.
+    expect(seen).toEqual([])
+    await flush()
+    expect(seen).toEqual(['pre:Bash'])
+    harness.driver.kill()
+  })
+
+  test('a declined card reports one denied outcome (D3)', async () => {
+    const denied: Array<{ toolUseId: string; reason?: string }> = []
+    const sink: OutboundAuditSink = {
+      onPreToolUse: () => {},
+      onPostToolUse: () => {},
+      onPostToolUseFailure: () => {},
+      onPermissionDenied: () => {},
+      onDeniedCard: use => { denied.push({ toolUseId: use.toolUseId, ...(use.reason === undefined ? {} : { reason: use.reason }) }) },
+      onSpawnEnd: () => {},
+    }
+    const harness = createHarness({ outbound: sink })
+    harness.driver.send('go')
+    const fake = harness.fakes[0]!
+    const approval = sendApproval(fake, { command: 'git push' })
+    await flush()
+    const event = harness.events.find(e => e.type === 'approval_request') as { requestId: string }
+    harness.driver.resolveApproval(event.requestId, 'deny')
+    await expect(approval).resolves.toMatchObject({ behavior: 'deny' })
+    await flush()
+    expect(denied).toHaveLength(1)
+    // A declined card carries no interrupt reason.
+    expect(denied[0]?.reason).toBeUndefined()
+    harness.driver.kill()
+  })
+
+  test('an interrupt-cancelled card stays denied, with detail interrupted (CC round 3)', async () => {
+    const denied: Array<{ toolUseId: string; reason?: string }> = []
+    const sink: OutboundAuditSink = {
+      onPreToolUse: () => {},
+      onPostToolUse: () => {},
+      onPostToolUseFailure: () => {},
+      onPermissionDenied: () => {},
+      onDeniedCard: use => { denied.push({ toolUseId: use.toolUseId, reason: use.reason }) },
+      onSpawnEnd: () => {},
+    }
+    const harness = createHarness({ outbound: sink })
+    harness.driver.send('go')
+    const fake = harness.fakes[0]!
+    const controller = new AbortController()
+    const cancelled = fake.options.canUseTool!('Bash', { command: 'git push' }, {
+      signal: controller.signal,
+      toolUseID: 'toolu_cancel',
+      requestId: 'sdk-req-cancel',
+    })
+    await flush()
+    controller.abort()
+    const result = await cancelled
+    expect(result).toMatchObject({ behavior: 'deny', interrupt: true })
+    await flush()
+    expect(denied).toEqual([{ toolUseId: 'toolu_cancel', reason: 'interrupted' }])
+    harness.driver.kill()
+  })
+
+  test('a foreground Bash the harness moved to the background records started-background (CC round 3, round 4 F)', async () => {
+    const backgrounds: boolean[] = []
+    const sink: OutboundAuditSink = {
+      onPreToolUse: () => {},
+      onPostToolUse: use => { backgrounds.push(use.background) },
+      onPostToolUseFailure: () => {},
+      onPermissionDenied: () => {},
+      onDeniedCard: () => {},
+      onSpawnEnd: () => {},
+    }
+    const harness = createHarness({ outbound: sink })
+    harness.driver.send('hello')
+    const hooks = harness.fakes[0]!.options.hooks as { PostToolUse: Array<{ hooks: Array<(input: unknown) => Promise<unknown>> }> }
+    const post = (response: unknown, id: string): Promise<unknown> =>
+      hooks.PostToolUse[0]!.hooks[0]!({ tool_name: 'Bash', tool_input: { command: 'bun run test' }, tool_response: response, tool_use_id: id })
+    // The SDK's typed shape (BashOutput): a backgroundTaskId, a user move,
+    // and a timeout move all mark the call backgrounded.
+    await post({ type: 'text', backgroundTaskId: 'bash_1' }, 'tu-bg-1')
+    await post({ type: 'text', backgroundedByUser: true }, 'tu-bg-2')
+    await post({ type: 'text', timedOutAfterMs: 120_000 }, 'tu-bg-3')
+    // A plain structured output and a plain string stay foreground.
+    await post({ type: 'text', text: 'done' }, 'tu-fg-1')
+    await post('done', 'tu-fg-2')
+    // The older text marker stays as a fallback for older builds.
+    await post('Command did not complete within its 120s timeout and was moved to the background (ID: b0usjmoay).', 'tu-bg-4')
+    expect(backgrounds).toEqual([true, true, true, false, false, true])
     harness.driver.kill()
   })
 

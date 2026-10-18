@@ -17,7 +17,8 @@
 // migration 6 (`chat-turn-usage`) adds per-turn usage;
 // migration 7 (`process-reports`) adds the process report tables;
 // migration 8 (`plan-execution`) the seven execution tables and
-// `team_messages.allowed_profiles` below.
+// `team_messages.allowed_profiles`; migration 9 (`outbound-audit`) the three
+// outbound audit tables below.
 import { expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { initDatabase } from '../db'
@@ -228,9 +229,56 @@ const migration8: SchemaShape['tables'] = {
   },
 }
 
+/** Migration 9's delta: the three append-only outbound audit tables (execution-safety-recovery D6). */
+const migration9: SchemaShape['tables'] = {
+  outbound_calls: {
+    columns: [
+      { name: 'id', type: 'TEXT', notnull: 0, dflt_value: null, pk: 1 },
+      { name: 'team_id', type: 'TEXT', notnull: 1, dflt_value: null, pk: 0 },
+      { name: 'session_id', type: 'TEXT', notnull: 1, dflt_value: null, pk: 0 },
+      { name: 'spawn_id', type: 'TEXT', notnull: 1, dflt_value: null, pk: 0 },
+      { name: 'group_id', type: 'TEXT', notnull: 0, dflt_value: null, pk: 0 },
+      { name: 'profile_id', type: 'TEXT', notnull: 0, dflt_value: null, pk: 0 },
+      { name: 'task_id', type: 'TEXT', notnull: 0, dflt_value: null, pk: 0 },
+      { name: 'agent_id', type: 'TEXT', notnull: 0, dflt_value: null, pk: 0 },
+      { name: 'tool', type: 'TEXT', notnull: 1, dflt_value: null, pk: 0 },
+      { name: 'mcp_server', type: 'TEXT', notnull: 0, dflt_value: null, pk: 0 },
+      { name: 'tool_use_id', type: 'TEXT', notnull: 1, dflt_value: null, pk: 0 },
+      { name: 'command', type: 'TEXT', notnull: 1, dflt_value: null, pk: 0 },
+      { name: 'truncated', type: 'INTEGER', notnull: 1, dflt_value: '0', pk: 0 },
+      { name: 'rule', type: 'TEXT', notnull: 1, dflt_value: null, pk: 0 },
+      { name: 'verdict', type: 'TEXT', notnull: 1, dflt_value: null, pk: 0 },
+      { name: 'destination', type: 'TEXT', notnull: 1, dflt_value: null, pk: 0 },
+      { name: 'matches', type: 'TEXT', notnull: 1, dflt_value: null, pk: 0 },
+      { name: 'classifier_version', type: 'INTEGER', notnull: 1, dflt_value: null, pk: 0 },
+      { name: 'cwd', type: 'TEXT', notnull: 1, dflt_value: null, pk: 0 },
+      { name: 'created_at', type: 'TEXT', notnull: 1, dflt_value: null, pk: 0 },
+    ],
+    indexes: [{ name: 'outbound_calls_team_time', unique: 0, columns: ['team_id', 'created_at', 'id'] }],
+  },
+  outbound_outcomes: {
+    columns: [
+      ...['session_id', 'tool_use_id', 'outcome'].map(name => column(name)),
+      optional('detail'),
+      { name: 'duration_ms', type: 'INTEGER', notnull: 0, dflt_value: null, pk: 0 },
+      column('created_at'),
+    ],
+    indexes: [],
+  },
+  outbound_acknowledgements: {
+    columns: [
+      id,
+      ...['team_id', 'command_id', 'rule', 'destination', 'through_created_at', 'through_call_id'].map(name => column(name)),
+      optional('note'),
+      column('acknowledged_at'),
+    ],
+    indexes: [],
+  },
+}
+
 test('a fresh database opened by this build has the same shape plus each migration\'s delta and schema_migrations', () => {
   const session = initDatabase({ path: ':memory:' })
-  const added = { ...migration2, ...migration3, ...migration4, ...migration5, ...migration6, ...migration7, ...migration8 }
+  const added = { ...migration2, ...migration3, ...migration4, ...migration5, ...migration6, ...migration7, ...migration8, ...migration9 }
   expect(Object.keys(added).filter(table => table in expected.tables)).toEqual([])
   const messages = expected.tables.team_messages!
   const withProfiles = { ...messages, columns: [...messages.columns, optional('allowed_profiles')] }
