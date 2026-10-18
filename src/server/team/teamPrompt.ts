@@ -186,6 +186,8 @@ function mailboxNote({ sessionId, group, groups }: TeamPromptInput): string {
     ...managementLines(group, tool),
     'The human works alongside you. New mail to them is refused: only a reply to a message they sent reaches them.',
     '',
+    'A message tagged `context-exhausted` reports that a session you dispatched work to stopped because its context is full: the work it carried was dead-lettered unprocessed, and it lists the dropped message, the progress since the claim, the claim commit and HEAD, and the providers\' usage. Decide how the work continues — dispatch it again to a group or another session (one on a provider with headroom when a limit is near; it should inspect the worktree first), or leave the session for the human to /compact. Mail and retries to a flagged session are refused, and kawai never compacts it.',
+    '',
     'Sending returns a message id immediately; it never waits for an answer. Replies arrive as later turns. Do not spin waiting for them — finish your turn.',
   ].join('\n')
 }

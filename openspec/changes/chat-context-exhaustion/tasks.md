@@ -43,7 +43,7 @@ Groups 1–3 depend on nothing else and may land as their own PR. Group 5's usag
   - the body lists the dropped id, digest, claim commit, HEAD (or "unknown"), acknowledgement state, and each provider's usage and cooldown;
   - a repeated evaluation sends no second note.
 - [x] 5.2 Project the `context-exhausted` attention item (identity, owner, cause, impact, next action, resolution rules) in `workspaceRead.ts`, and render it. Verify read-model tests for each resolution path (newer dispatch, task closed, retry or discard, flag cleared, kill), the needs-you case for a human-created session, and one toast per episode.
-- [ ] 5.3 Update AGENTS.md (the success predicate, the flag, the exhaustion outcome, the note, the attention item) and the system prompt's mailbox note, so agents know what a `context-exhausted` note asks of them. Verify the prompt snapshot test, and that the doc names only shipped fields.
+- [x] 5.3 Update AGENTS.md (the success predicate, the flag, the exhaustion outcome, the note, the attention item) and the system prompt's mailbox note, so agents know what a `context-exhausted` note asks of them. Verify the prompt snapshot test, and that the doc names only shipped fields.
 
 ## 6. Integration
 
