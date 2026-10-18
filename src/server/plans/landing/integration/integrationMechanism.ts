@@ -56,15 +56,29 @@ async function outsideCommits(cwd: string, reference: string, head: string): Pro
 }
 
 /** D6's rewritten rule: the change stops, naming the head and the missing commit; Retry checks again. */
-function stopRewritten(executions: ExecutionStore, row: ChangeRow, branch: string, head: string, reference: string): void {
+function stopRewritten(executions: ExecutionStore, row: ChangeRow, branch: string, head: string | null, reference: string): void {
+  stopIntegration(executions, row, {
+    message: head === null
+      ? `The integration branch "${branch}" is missing on origin, so it lacks ${reference}, which Kawai landed or created. Kawai never re-creates it under a landing; restore the branch, then Retry.`
+      : `The integration branch "${branch}" was rewritten: its head ${head} lacks ${reference}, which Kawai landed or created. Kawai never forces it; restore the branch, then Retry.`,
+    names: head === null ? [`refs/heads/${branch}`, reference] : [head, reference],
+  })
+}
+
+/** No branch record for the execution's base: nothing names the reference commit, so the change stops rather than loop (review F1). */
+function stopUnrecorded(executions: ExecutionStore, row: ChangeRow, branch: string): void {
+  stopIntegration(executions, row, {
+    message: `The integration branch "${branch}" has no creation record, so its reference commit is unknown and Kawai cannot check it was not rewritten. Retry once the record is restored.`,
+    names: [`refs/heads/${branch}`],
+  })
+}
+
+function stopIntegration(executions: ExecutionStore, row: ChangeRow, detail: { message: string; names: string[] }): void {
   const fresh = executions.change(row.executionId, row.change)
   if (fresh === null || fresh.state !== 'landing') return
   executions.transition(row.executionId, row.change, fresh, {
     state: 'stopped', stopReason: 'integration-rewritten', step: null,
-    stopDetail: {
-      message: `The integration branch "${branch}" was rewritten: its head ${head} lacks ${reference}, which Kawai landed or created. Kawai never forces it; restore the branch, then Retry.`,
-      names: [head, reference], resumeState: 'landing',
-    },
+    stopDetail: { ...detail, resumeState: 'landing' },
   })
 }
 
@@ -74,7 +88,7 @@ export function integrationMechanism(store: IntegrationStore, adapters: Integrat
     const executions = deps.executions
     if (row.step === 'merging') return
     const record = branchRecordOf(store, executions, at.execution)
-    if (record === null) return
+    if (record === null) return stopUnrecorded(executions, row, at.execution.baseBranch)
     const reference = referenceCommit(record, store.candidates(record.teamId, record.branch))
     const contains = await adapters.isAncestor(at.cwd, reference, at.base)
     if (!contains.ok) return
@@ -128,11 +142,9 @@ export function integrationMechanism(store: IntegrationStore, adapters: Integrat
     if (!landed) {
       const head = outcome?.head ?? null
       const record = branchRecordOf(store, executions, execution)
-      if (head === null || record === null) {
-        store.transitionCandidate(candidateId, 'superseded')
-        executions.transition(effect.executionId, effect.change, row, { step: 'up-to-date' })
-        return
-      }
+      if (record === null) return stopUnrecorded(executions, row, execution.baseBranch)
+      // A missing branch lacks the reference commit too: D6's rewritten rule (review F1).
+      if (head === null) return stopRewritten(executions, row, record.branch, null, referenceCommit(record, store.candidates(record.teamId, record.branch)))
       if (!(await adapters.fetch(cwd, 'origin', `refs/heads/${record.branch}`)).ok) return
       const containsC = await adapters.isAncestor(cwd, sha, head)
       if (!containsC.ok) return
@@ -198,7 +210,7 @@ export function integrationMechanism(store: IntegrationStore, adapters: Integrat
     effectDone(effect) {
       if (effect.kind === 'create-integration') recordCreated(store, effect)
     },
-    land: (deps, landing, row, round) => applyLanding(deps, landing, row, round, (fresh, at) => finish(deps, fresh, { ...at, roundId: round.id, resultId: round.resultId })),
+    land: (deps, landing, row, round) => applyLanding(deps, landing, row, round, (fresh, at) => finish(deps, fresh, { ...at, roundId: round.id, resultId: round.resultId }), fresh => baseMissing(deps, fresh)),
     async landOutcome(deps, effect, landing) {
       if (effect.kind === 'fast-forward') return fastForwarded(deps, effect)
       await applyLandingOutcome(deps, effect, landing)
@@ -210,6 +222,15 @@ export function integrationMechanism(store: IntegrationStore, adapters: Integrat
       if (kind === 'create-integration') return createIntegrationAdapter(adapters, (teamId, branch) => store.branch(teamId, branch), ghOptions)
       return undefined
     },
+  }
+
+  /** Step 3 found the integration branch absent on origin: it lacks the reference commit, so D6 stops the change (review F1). */
+  function baseMissing(deps: LandingDeps, row: ChangeRow): void {
+    const execution = deps.executions.execution(row.executionId)
+    if (execution === null) return
+    const record = branchRecordOf(store, deps.executions, execution)
+    if (record === null) return stopUnrecorded(deps.executions, row, execution.baseBranch)
+    stopRewritten(deps.executions, row, record.branch, null, referenceCommit(record, store.candidates(record.teamId, record.branch)))
   }
 
   /**

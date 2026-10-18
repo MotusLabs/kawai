@@ -72,7 +72,7 @@ export const landingAdapters: LandingAdapters = {
  * `landing` releases the slot (the store's rule).
  */
 export async function applyLanding(deps: LandingDeps, adapters: LandingAdapters, changeRow: { executionId: string; change: string; branch: string | null; worktree: string | null; prNumber: number | null; state: string; step: string | null; taskId: string | null }, round: RoundRow,
-  finish?: LandingFinish): Promise<void> {
+  finish?: LandingFinish, baseMissing?: (row: ChangeRow) => void): Promise<void> {
   const store = deps.executions
   const execution = store.execution(changeRow.executionId)
   if (execution === null || changeRow.branch === null) return
@@ -109,7 +109,9 @@ export async function applyLanding(deps: LandingDeps, adapters: LandingAdapters,
   const head = await adapters.lsRemoteHead(changeRow.worktree ?? deps.team.groupsRoot, headRef)
   if (!head.ok || head.sha === null) return
   const base = await adapters.lsRemoteHead(changeRow.worktree ?? deps.team.groupsRoot, baseRef)
-  if (!base.ok || base.sha === null) return
+  if (!base.ok) return
+  // An absent base (a read that answered): the mechanism decides; direct keeps waiting as before.
+  if (base.sha === null) return baseMissing?.(store.change(changeRow.executionId, changeRow.change)!)
   // Both heads may exist only on origin (a merge on GitHub, another push):
   // fetch them before any local ancestry or merge read.
   if (!(await fetchHeads(adapters, changeRow.worktree ?? deps.team.groupsRoot, [baseRef, headRef]))) return

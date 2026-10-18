@@ -1,14 +1,12 @@
 // Startup recovery (plan-execution D14): after a restart every `running`
-// effect is `unknown`; each is inspected with real git/gh reads before
+// effect is `unknown`; each is inspected with real git/gh reads (startupReads.ts) before
 // anything else for its change runs. An exhausted inspection stops its
 // change as effect-unknown (D12). It never wakes the executor: the runtime
 // wakes the running teams once its wakes are installed.
-import { runGit } from '../../git/gitCommand'
-import { ghPrList, ghPrView, ghRunAttempt } from '../landing/github'
 import type { GhCommandOptions } from '../landing/ghCommand'
-import { inspectUnknownEffects, type InspectorReads } from './effectInspectors'
+import { inspectUnknownEffects } from './effectInspectors'
 import type { ExecutionStore } from './executionStore'
-import { gitFetch, isAncestor, lsRemoteHead } from '../landing/gitRemote'
+import { startupReads } from './startupReads'
 import { applyEffectOutcome, stopWaitingChanges, type OutcomeDeps } from './executorOutcomes'
 
 export async function recoverUnknownEffects(deps: { store: ExecutionStore; outcomes?: OutcomeDeps; ghOptions?: GhCommandOptions; now?: () => Date }): Promise<void> {
@@ -16,41 +14,7 @@ export async function recoverUnknownEffects(deps: { store: ExecutionStore; outco
   const teams = new Set(unknown.map(effect => deps.store.execution(effect.executionId)?.teamId ?? ''))
   for (const teamId of teams) {
     if (teamId === '') continue
-    const reads: InspectorReads = {
-      worktree: async (repo, wt) => {
-        const listed = await runGit(['worktree', 'list', '--porcelain'], { cwd: repo })
-        const present = listed.ok && listed.stdout.split('\n').some(line => line.startsWith('worktree ') && line.slice(8) === wt)
-        if (!present) return { present: false, head: null }
-        const head = await runGit(['rev-parse', 'HEAD'], { cwd: wt })
-        return { present: true, head: head.ok ? head.stdout.trim() : null }
-      },
-      localBranch: async (repo, branch) => {
-        const result = await runGit(['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], { cwd: repo })
-        return result.ok ? result.stdout.trim() : null
-      },
-      remoteHead: async (cwd, ref) => {
-        const result = await lsRemoteHead(cwd, ref)
-        return result.ok ? result.sha : null
-      },
-      prList: async (repo, head) => {
-        const pulls = await ghPrList(repo, { head, base: '' }, deps.ghOptions)
-        return pulls.ok ? pulls.data : []
-      },
-      prView: async (repo, pr) => {
-        const view = await ghPrView(repo, pr, deps.ghOptions)
-        return view.ok ? view.data : { number: pr, url: '', state: 'OPEN', headRefOid: '', mergeCommit: null }
-      },
-      contains: async (cwd, ref, ancestor, descendant) => {
-        if (!(await gitFetch(cwd, 'origin', ref)).ok) throw new Error(`the fetch of ${ref} failed`)
-        const result = await isAncestor(cwd, ancestor, descendant)
-        if (!result.ok) throw new Error(`the ancestry of ${ancestor} could not be read`)
-        return result.ancestor
-      },
-      runAttempt: async (repo, runId) => {
-        const attempt = await ghRunAttempt(repo, runId, deps.ghOptions)
-        return attempt.ok ? attempt.data : 1
-      },
-    }
+    const reads = startupReads(deps.ghOptions)
     await inspectUnknownEffects({
       store: deps.store, reads,
       ...(deps.now ? { now: deps.now } : {}),

@@ -195,3 +195,67 @@ describe('failed candidates (4.4, D7)', () => {
     expect(h.mail.get(fix.messageId!)!.body).toContain('e2e')
   })
 })
+
+describe('a missing branch or record stops, never loops (review F1)', () => {
+  const slots = () => h.bench.db.db.prepare('SELECT holder_id FROM plan_landing_slots WHERE team_id = ?').all(h.matrix.world.team.teamId)
+  const stoppedAs = async (executionId: string, name: string) => {
+    await until(() => change(executionId, name).state === 'stopped')
+    const stopped = change(executionId, name)
+    expect(stopped.stopReason).toBe('integration-rewritten')
+    expect(slots()).toEqual([])
+    return stopped
+  }
+
+  test('the branch deleted during the fast-forward (a live 422) stops the change naming the missing ref; the slot frees; Retry after a restore lands', async () => {
+    const branch = branchName()
+    const executionId = await startedIntegration(h, i, branch, [{ change: `d${n}` }])
+    await passed(executionId, `d${n}`)
+    const created = i.store.branch(h.matrix.world.team.teamId, branch)!.createdSha
+    i.refs.beforeFastForward = () => {
+      i.refs.beforeFastForward = null
+      git(['update-ref', '-d', `refs/heads/${branch}`], matrix.origin)
+    }
+    const stopped = await stoppedAs(executionId, `d${n}`)
+    expect(stopped.stopDetail?.names).toEqual([`refs/heads/${branch}`, created])
+    expect(stopped.stopDetail?.message).toContain('missing on origin')
+    git(['update-ref', `refs/heads/${branch}`, created], matrix.origin)
+    expect((await h.service.retry({ kind: 'human', team: h.matrix.world.team }, { executionId, change: `d${n}`, commandId: `retry-d-${n}` })).ok).toBe(true)
+    await until(landed(executionId, `d${n}`))
+  })
+
+  test('the branch deleted before a restart\'s inspection of the fast-forward stops the change as integration-rewritten', async () => {
+    const branch = branchName()
+    const executionId = await startedIntegration(h, i, branch, [{ change: `e${n}` }])
+    await passed(executionId, `e${n}`)
+    await crashAndRestart(executionId, () => git(['update-ref', '-d', `refs/heads/${branch}`], matrix.origin))
+    const stopped = await stoppedAs(executionId, `e${n}`)
+    expect(stopped.stopDetail?.names?.[0]).toBe(`refs/heads/${branch}`)
+  })
+
+  test('the branch missing when the change reaches the up-to-date step stops it there', async () => {
+    const branch = branchName()
+    const executionId = await startedIntegration(h, i, branch, [{ change: `u${n}` }])
+    await i.tick()
+    git(['update-ref', '-d', `refs/heads/${branch}`], matrix.origin)
+    await passed(executionId, `u${n}`)
+    const stopped = await stoppedAs(executionId, `u${n}`)
+    expect(stopped.stopDetail?.names?.[0]).toBe(`refs/heads/${branch}`)
+    expect(i.refs.fastForwards).toEqual([])
+  })
+
+  test('a branch record gone at the fast-forward\'s follow-on stops the change instead of returning to up-to-date', async () => {
+    const branch = branchName()
+    const executionId = await startedIntegration(h, i, branch, [{ change: `g${n}` }])
+    await passed(executionId, `g${n}`)
+    i.refs.beforeFastForward = () => {
+      i.refs.beforeFastForward = null
+      pushCommit(matrix, branch, `gone-${n}.txt`, 'gone\n')
+      // The record and the creation outcome it could be rebuilt from are both gone.
+      h.bench.db.db.prepare('DELETE FROM plan_integration_branches WHERE branch = ?').run(branch)
+      h.bench.db.db.prepare(`UPDATE plan_execution_effects SET outcome_json = '{"created":false,"reused":true}' WHERE execution_id = ? AND kind = 'create-integration'`).run(executionId)
+    }
+    const stopped = await stoppedAs(executionId, `g${n}`)
+    expect(stopped.stopDetail?.names).toEqual([`refs/heads/${branch}`])
+    expect(stopped.stopDetail?.message).toContain('no creation record')
+  })
+})

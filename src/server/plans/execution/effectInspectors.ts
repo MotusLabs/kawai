@@ -25,7 +25,7 @@ export interface InspectorReads {
   worktree: (repo: string, path: string) => Promise<{ present: boolean; head: string | null }>
   /** `git rev-parse --verify refs/heads/<branch>`: a local branch's head. */
   localBranch: (repo: string, branch: string) => Promise<string | null>
-  /** `git ls-remote origin <ref>`: a remote ref's head, null when absent. */
+  /** `git ls-remote origin <ref>`: a remote ref's head, null only when absent; a failed read rejects. */
   remoteHead: (cwd: string, ref: string) => Promise<string | null>
   /** `gh pr list --head <change> --base <base> --state all` (D14's open-pr inspection). */
   prList: (repo: string, head: string, base: string) => Promise<PrSummary[]>
@@ -122,6 +122,8 @@ export async function inspectEffect(effect: EffectRow, reads: InspectorReads): P
         // the moved and rewritten rules apply to the refused outcome.
         const ref = `refs/heads/${text('branch')}`
         const head = await reads.remoteHead(text('cwd'), ref)
+        // A missing branch lacks every commit: refused with no head, which the
+        // follow-on stops as integration-rewritten (review F1).
         if (head === null) return { found: 'done', outcome: { fastForwarded: false, refused: true, head: null } }
         if (await reads.contains(text('cwd'), ref, text('sha'), head)) return { found: 'done', outcome: { fastForwarded: true, head: text('sha') } }
         if (await reads.contains(text('cwd'), ref, head, text('sha'))) return { found: 'not-done' }
