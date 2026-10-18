@@ -163,7 +163,10 @@ export const useTeamPlanStore = create<PlanState>(set => ({
   reconnected: teamKey => set(state => {
     const view = state.views[teamKey]
     if (!view?.open || Object.keys(view.pending).length === 0) return state
-    return update(state, teamKey, { pending: {}, commandRequests: {} })
+    // A preview whose answer was lost leaves no pending standing behind: the
+    // open Start dialog asks again (N4); settled standings stay.
+    const standings = Object.fromEntries(Object.entries(view.standings).filter(([, standing]) => standing.state !== 'pending'))
+    return update(state, teamKey, { pending: {}, commandRequests: {}, previewRequests: {}, standings })
   }),
   applySnapshot: message => set(state => update(state, message.teamPath, { loading: false, plans: message.plans, impact: message.impact ?? {} })),
   applyDetail: message => set(state => {

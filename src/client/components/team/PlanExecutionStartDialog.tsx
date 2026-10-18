@@ -28,15 +28,20 @@ export default function PlanExecutionStartDialog({ teamPath, planId, revision, c
 
   useEffect(() => { if (open && armed === undefined) setOpen(false) }, [open, armed])
 
-  const arm = () => {
-    useTeamPlanStore.getState().arm(teamPath, slot)
-    // The standing is the server's, fetched as the dialog opens (15.4): the
-    // same pre-reads Start itself runs, with no write.
+  // The standing is the server's, fetched as the dialog opens (15.4): the
+  // same pre-reads Start itself runs, with no write.
+  const requestPreview = () => {
     const requestId = crypto.randomUUID()
     useTeamPlanStore.getState().beginPreview(teamPath, requestId, standingKey)
     onSend({ type: 'team-plan-execution-preview', teamPath, requestId, planId, revision })
+  }
+  const arm = () => {
+    useTeamPlanStore.getState().arm(teamPath, slot)
+    requestPreview()
     setOpen(true)
   }
+  // A reconnect drops a preview whose answer was lost (N4): ask again while open.
+  useEffect(() => { if (open && standing === undefined) requestPreview() }, [open, standing]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const send = () => {
     const store = useTeamPlanStore.getState()

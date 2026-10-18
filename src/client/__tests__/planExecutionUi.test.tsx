@@ -2,8 +2,8 @@
 // the state and waiting explained, flaky CI and attested checks labeled, a
 // landing flagged when its tree was not verified, disconnected controls,
 // Stop listing what it cancels and keeps, the Start dialog's standing and
-// refusal, and the task view's Accept note appearing only for a task an
-// execution owns. Renderers are created inside act() so later store updates
+// refusal, a lost preview asked again after a reconnect, and the task
+// view's Accept note appearing only for a task an execution owns. Renderers are created inside act() so later store updates
 // re-render (the bun act trap).
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
@@ -137,6 +137,26 @@ describe('PlanExecutionStartDialog', () => {
     act(() => useTeamPlanStore.getState().applyResult({
       type: 'team-plan-result', teamPath: '/repo', requestId: sent[1]!.requestId,
       preview: { failures: [], ready: true },
+    }))
+    expect(renderer!.root.findByProps({ 'data-testid': 'plan-execution-start-confirm' }).props.disabled).toBe(false)
+  })
+})
+
+describe('PlanExecutionStartDialog after a reconnect', () => {
+  test('a preview answer lost with the connection is asked for again while the dialog is open (N4)', () => {
+    useTeamPlanStore.getState().open('/repo')
+    const sent: Array<{ type: string; requestId: string }> = []
+    act(() => render(createElement(PlanExecutionStartDialog, {
+      teamPath: '/repo', planId: 'plan-1', revision: 1, contentHash: 'h', connected: true,
+      onSend: message => sent.push(message as { type: string; requestId: string }),
+    })))
+    act(() => renderer!.root.findByProps({ 'data-testid': 'plan-execution-start-button' }).props.onClick())
+    expect(sent).toHaveLength(1)
+    act(() => useTeamPlanStore.getState().reconnected('/repo'))
+    expect(sent).toHaveLength(2)
+    expect(sent[1]!.type).toBe('team-plan-execution-preview')
+    act(() => useTeamPlanStore.getState().applyResult({
+      type: 'team-plan-result', teamPath: '/repo', requestId: sent[1]!.requestId, preview: { failures: [], ready: true },
     }))
     expect(renderer!.root.findByProps({ 'data-testid': 'plan-execution-start-confirm' }).props.disabled).toBe(false)
   })
