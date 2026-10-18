@@ -310,6 +310,22 @@ test('an invalid session target cannot replace current work: unknown, killed, ar
   expect(tasks.store.journal(task.id)).toHaveLength(journal)
 })
 
+test('a session handoff to a context-exhausted session is refused with zero writes', async () => {
+  const task = await tasks.create(agent('lead'), { title: 'Export', direction: 'v1' })
+  const result = await results.submit(agent('dev'), task.id, submission)
+  const standing = await assignments.dispatch(human(), { taskId: task.id, target: { kind: 'group', id: 'devs' }, instruction: 'Build it', requestKey: 'assign-1' })
+  records.set('clogged', { ...row('clogged', 'reviewers'),
+    contextExhausted: { at: '2026-10-18T09:00:00.000Z', reason: 'prompt_too_long' } })
+  const lead = taskHandlers(tasks, 'lead', results)
+  const journal = tasks.store.journal(task.id).length
+  await expect(lead.task_handoff!(sessionCall(task.id, result.id, { target: 'clogged' }))).rejects
+    .toThrow('context is exhausted (prompt_too_long, since 2026-10-18T09:00:00.000Z)')
+  expect(tasks.store.outstandingAssignment(task.id)?.id).toBe(standing.assignment.id)
+  expect(tasks.store.assignmentsOf(task.id)).toHaveLength(1)
+  expect(taskMail(task.id).map(row => [row.toId, row.state])).toEqual([['devs', 'queued']])
+  expect(tasks.store.journal(task.id)).toHaveLength(journal)
+})
+
 test('a session-targeted review dispatches ordinary direct task mail to that session: identity, actor, result reference, and atomic supersession', async () => {
   const task = await tasks.create(agent('lead'), { title: 'Export', direction: 'v1' })
   const plain = await assignments.dispatch(human(), { taskId: task.id, target: { kind: 'group', id: 'devs' }, instruction: 'Build it', requestKey: 'assign-1' })
