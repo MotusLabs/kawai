@@ -24,8 +24,8 @@ _None._
 
 ## Impact
 
-- `src/server/chat/usageLimits.ts` — `ZaiQuotaLimitRowSlice` gains `unit`/`number`; `parseZaiQuotaLimit` sets `periodMs` and builds labels from them.
+- `src/server/chat/zaiQuotaLimit.ts` — `ZaiQuotaLimitRowSlice` gains `unit`/`number`; `parseZaiQuotaLimit` sets `periodMs` and builds labels from them.
 - A small pure helper for provider row periods (unit table, calendar-month arithmetic), beside `usageWindowPeriods.ts`.
-- Tests: `usageLimits.test.ts`, `zaiUsage.test.ts`, `usageBarPace.test.tsx` (labels and the provider-row marker case).
+- Tests: `zaiQuotaLimit.test.ts`, `zaiUsage.test.ts`, `usageBarPace.test.tsx` (labels and the provider-row marker case).
 - `AGENTS.md` usage-bar bullet (it states `periodMs` is never set for provider quota rows).
 - No wire-format change: `periodMs` is already an optional field of `ChatUsageWindow`; older clients ignore it.

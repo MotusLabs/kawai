@@ -6,7 +6,7 @@
 
 ## 2. Parser and labels
 
-- [ ] 2.1 In `src/server/chat/usageLimits.ts`, add `unit`/`number` to `ZaiQuotaLimitRowSlice`, set `periodMs` in `parseZaiQuotaLimit` from 1.1, and replace `ZAI_ROW_LABELS` with the composed labels of design D4 ("5-hour tokens", "Monthly tool calls", "Tokens"/"Tool calls" without a length, the raw type for an unknown kind); update the parser's doc comment. Verify by updating `src/server/__tests__/usageLimits.test.ts` (the 2026-10-12 capture with `unit`/`number` now expects `periodMs` and the new labels; add cases for a row without `unit`, with an unknown unit, and an unknown kind) and checking `src/server/__tests__/zaiUsage.test.ts` and `chatSessionManager.test.ts` still pass with the label change.
+- [ ] 2.1 In `src/server/chat/zaiQuotaLimit.ts`, add `unit`/`number` to `ZaiQuotaLimitRowSlice`, set `periodMs` in `parseZaiQuotaLimit` from 1.1, and replace `ZAI_ROW_LABELS` with the composed labels of design D4 ("5-hour tokens", "Monthly tool calls", "Tokens"/"Tool calls" without a length, the raw type for an unknown kind); update the parser's doc comment. Verify by updating `src/server/__tests__/zaiQuotaLimit.test.ts` (the 2026-10-12 capture with `unit`/`number` now expects `periodMs` and the new labels; add cases for a row without `unit`, with an unknown unit, and an unknown kind) and checking `src/server/__tests__/zaiUsage.test.ts` and `chatSessionManager.test.ts` still pass with the label change.
 - [ ] 2.2 Update `src/client/__tests__/usageBarPace.test.tsx`'s provider fixtures to the new labels, and add a case where a provider row with `periodMs` draws the marker, so the client claim in the proposal (no client change needed) is proven; run `bun test src/client/__tests__/usageBarPace.test.tsx`.
 
 ## 3. Documentation
