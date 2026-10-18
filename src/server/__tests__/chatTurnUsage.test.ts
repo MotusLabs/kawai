@@ -1,5 +1,5 @@
 // Per-turn usage (team-process-metrics D1): the store writes each turn once,
-// prunes past 60 days, and keeps a killed session's rows; the tracker pins
+// prunes past 90 days, and keeps a killed session's rows; the tracker pins
 // each turn's task and agent start at turn start — mail's task (or none) for
 // a mail-started turn, the session's task otherwise — so nothing that happens
 // mid-turn moves it, and an interrupted turn writes nothing.
@@ -14,7 +14,7 @@ const row = (overrides: Partial<TurnUsageRow> = {}): TurnUsageRow => ({
   taskId: 'task-1', startId: 'start-1', ok: true, usage, numTurns: 3, endedAt: '2026-10-16T00:00:00.000Z', ...overrides,
 })
 
-test('a turn is recorded once; rows past 60 days are pruned at startup', () => {
+test('a turn is recorded once; rows past 90 days are pruned at startup', () => {
   const db = schemaDb()
   const store = new ChatTurnUsageStore(db)
   store.record(row())
@@ -92,9 +92,9 @@ test('the start is pinned at turn start; an interrupted turn writes nothing; an 
   h.db.close()
 })
 
-test('a completion without usage records zeros', () => {
+test('a completion without usage remains unknown', () => {
   const h = harness()
   h.started('t-1'); h.completed('t-1', { usage: undefined, subtype: 'error_during_execution', numTurns: undefined })
-  expect(h.store.forSession('chat-a')[0]).toMatchObject({ ok: false, numTurns: 0, usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 } })
+  expect(h.store.forSession('chat-a')).toEqual([])
   h.db.close()
 })

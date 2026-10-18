@@ -6,8 +6,8 @@
 // task is the one pinned when the turn started (TurnUsageTracker below): the
 // delivered mail's task (or none) for a mail-started turn, else the session's
 // task at that moment; nothing that happens mid-turn moves it. Rows outlive
-// kill/archive and age out after 60 days, pruned at startup and at most
-// hourly on write. The DDL is schema migration 6 `chat-turn-usage`
+// kill/archive and age out after 90 days, pruned at startup and at most
+// hourly on write, continuing a backlog on later writes. The DDL is schema migration 6 `chat-turn-usage`
 // (`dbSafety/migrations.ts`), frozen like every applied migration.
 import type { Database } from 'bun:sqlite'
 import type { ChatEvent, ChatTurnUsage } from '../../shared/chat'
@@ -36,7 +36,7 @@ CREATE INDEX IF NOT EXISTS chat_turn_usage_team ON chat_turn_usage (team_id, end
 CREATE INDEX IF NOT EXISTS chat_turn_usage_task ON chat_turn_usage (task_id);
 `
 
-export const TURN_USAGE_RETENTION_MS = 60 * 24 * 60 * 60 * 1000
+export const TURN_USAGE_RETENTION_MS = 90 * 24 * 60 * 60 * 1000
 const PRUNE_INTERVAL_MS = 60 * 60 * 1000
 
 export interface TurnUsageRow {
@@ -79,6 +79,7 @@ export function mapTurnUsage(row: Record<string, unknown>): TurnUsageRow {
 }
 
 export class ChatTurnUsageStore {
+  private prunePending = false
   private lastPruneAt: number
 
   constructor(
@@ -98,7 +99,7 @@ export class ChatTurnUsageStore {
       row.ok ? 1 : 0, row.usage.inputTokens, row.usage.outputTokens, row.usage.cacheReadTokens, row.usage.cacheCreationTokens,
       row.numTurns, row.endedAt,
     )
-    if (this.now() - this.lastPruneAt >= PRUNE_INTERVAL_MS) {
+    if (this.prunePending || this.now() - this.lastPruneAt >= PRUNE_INTERVAL_MS) {
       this.lastPruneAt = this.now()
       this.prune()
     }
@@ -111,7 +112,7 @@ export class ChatTurnUsageStore {
 
   private prune(): void {
     const cutoff = new Date(this.now() - TURN_USAGE_RETENTION_MS).toISOString()
-    this.db.prepare('DELETE FROM chat_turn_usage WHERE ended_at < ?').run(cutoff)
+    this.prunePending = this.db.prepare('DELETE FROM chat_turn_usage WHERE rowid IN (SELECT rowid FROM chat_turn_usage WHERE ended_at < ? ORDER BY ended_at LIMIT 500)').run(cutoff).changes === 500
   }
 }
 
@@ -128,8 +129,6 @@ interface Pin {
   taskId: string | null
   startId: string | null
 }
-
-const ZERO: ChatTurnUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 }
 
 /**
  * Pins each turn's task and agent start at `turn_started` (D1) and writes the
@@ -165,6 +164,7 @@ export class TurnUsageTracker {
       const pinned = this.pins.get(sessionId)
       const pin = pinned?.turnId === event.turnId ? pinned : null
       if (pin) this.pins.delete(sessionId)
+      if (!event.usage) return // Missing final usage is unknown, never measured zero.
       this.store.record({
         sessionId,
         turnId: event.turnId,
@@ -172,7 +172,7 @@ export class TurnUsageTracker {
         taskId: pin ? pin.taskId : this.deps.sessionTask(sessionId),
         startId: pin ? pin.startId : this.deps.latestStart(sessionId),
         ok: turnSucceeded(event),
-        usage: event.usage ?? ZERO,
+        usage: event.usage,
         numTurns: event.numTurns ?? 0,
         endedAt: event.at,
       })
