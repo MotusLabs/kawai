@@ -14,7 +14,7 @@ Groups 1–3 depend on nothing else and may land as their own PR. Group 5's usag
 
 - [x] 2.1 Add the numbered migration for `chat_sessions.context_exhausted_at` and `context_exhausted_reason`, and thread them through `ChatSessionRecord` and the session wire type. Verify that `schemaBaselinePin.test.ts` gains the delta and that the db round-trip tests pass.
 - [x] 2.2 Set the flag on a failed turn with a reason in `EXHAUSTING_REASONS`, and clear it on a compaction notice or a successful turn. Verify manager tests for each terminal reason (flagging and not), for persistence across restart, archive and restore, and for both clear paths.
-- [ ] 2.3 Show the navigator badge and the chat header row (reason plus the `/compact` hint), both disappearing when the flag clears. Verify component tests and a `dev-browser` screenshot of a flagged fixture session.
+- [x] 2.3 Show the navigator badge and the chat header row (reason plus the `/compact` hint), both disappearing when the flag clears. Verify component tests and a `dev-browser` screenshot of a flagged fixture session.
 
 ## 3. Mail and routing respect the flag
 
@@ -47,7 +47,7 @@ Groups 1–3 depend on nothing else and may land as their own PR. Group 5's usag
 
 ## 6. Integration
 
-- [ ] 6.1 End-to-end on the development fixture: add a fixture turn that returns the incident's result frames, dispatch group task mail to a spawned member, and observe:
+- [x] 6.1 End-to-end on the development fixture: add a fixture turn that returns the incident's result frames, dispatch group task mail to a spawned member, and observe:
   - the failed turn and error row;
   - the flag badge;
   - the `context-exhausted` dead letter;
