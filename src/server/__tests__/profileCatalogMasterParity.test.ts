@@ -66,9 +66,7 @@ let home: string
 beforeEach(() => {
   root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-master-parity-')))
   home = path.join(root, 'no-home')
-  projectDir = path.join(root, 'work', 'proj')
   fs.mkdirSync(home, { recursive: true })
-  fs.mkdirSync(projectDir, { recursive: true })
 })
 
 afterEach(() => fs.rmSync(root, { recursive: true, force: true }))
@@ -82,17 +80,6 @@ const projectWith = (name: string, files: Record<string, unknown>): string => {
   return project
 }
 
-let projectDir: string
-
-const writeCatalog = (dir: string, name: string, json: unknown): string => {
-  const file = path.join(dir, '.kawai', name)
-  fs.mkdirSync(path.dirname(file), { recursive: true })
-  fs.writeFileSync(file, JSON.stringify(json))
-  return file
-}
-const writeProviders = (dir: string, json: unknown) => writeCatalog(dir, 'providers.json', json)
-const writeProfiles = (dir: string, json: unknown) => writeCatalog(dir, 'profiles.json', json)
-
 /** The head must resolve master's profiles, settings included, plus providerId. */
 const expectParity = (project: string, master: Record<string, Omit<CatalogProfile, 'providerId'>>) => {
   const head = resolveProfileCatalog({ homeDir: home, projectPath: project })
@@ -104,6 +91,7 @@ const expectParity = (project: string, master: Record<string, Omit<CatalogProfil
   }
   return head
 }
+
 describe('master parity for the shipped-provider legacy entry (B1, finding F2)', () => {
   const cases: Array<[string, string]> = [
     ['claude', 'profile:claude'],
@@ -173,28 +161,24 @@ describe('master parity for the shipped-provider legacy entry (B1, finding F2)',
           providerId: `profile:${id}`,
         })
         // The shipped provider keeps its id, models, and settings. Rev 5's
-        // overlay reach is the one allowed edit here: the env and zone
-        // overlays apply to the keys (cell (a)); label and empty-models
-        // leave the settings as written.
-        const expectKey = (key: string, base: Omit<CatalogProfile, 'providerId'>) => {
-          const settings = { ...base }
-          if (kind === 'env') settings.env = { ...base.env, ANTHROPIC_BASE_URL: 'https://gw.example.internal' }
-          if (kind === 'zone') settings.limitResetTimeZone = 'Europe/Berlin'
-          expect(head.profiles.get(key)).toEqual({ ...settings, providerId: id })
+        // overlay reach: the env and zone overlays apply to the keys.
+        const expectShippedKey = (key: string, base: Omit<CatalogProfile, 'providerId'>) => {
+          const expected = { ...base }
+          if (kind === 'env') expected.env = { ...base.env, ANTHROPIC_BASE_URL: 'https://gw.example.internal' }
+          if (kind === 'zone') expected.limitResetTimeZone = 'Europe/Berlin'
+          expect(head.profiles.get(key)).toEqual({ ...expected, providerId: id })
         }
         if (id === 'zai') {
           expect(head.providers.get('zai')?.models).toEqual(['glm', 'glm-flash'])
-          expectKey('glm', GLM)
+          expectShippedKey('glm', GLM)
         } else {
           expect(head.providers.get('claude')?.models).toEqual(['default', 'opus', 'sonnet', 'haiku'])
-          expectKey('default', DEFAULT)
+          expectShippedKey('default', DEFAULT)
         }
       })
     }
   }
 })
-
-
 
 describe('master parity for the shipped re-home (B2, finding F2)', () => {
   test('a zai relabel leaves glm shipped, so a later glm override re-homes like master', () => {
@@ -212,7 +196,7 @@ describe('master parity for the shipped re-home (B2, finding F2)', () => {
     expect(head.profiles.get('glm')?.providerId).toBe('glm')
   })
 
-  test('one level: providers.json read first, then profiles.json \u2014 the override still re-homes', () => {
+  test('one level: providers.json read first, then profiles.json — the override still re-homes', () => {
     const project = projectWith('order', {
       'providers.json': { zai: { label: 'Z', models: {} } },
       'profiles.json': { 'glm-flash': { label: 'Flash' } },
@@ -225,7 +209,6 @@ describe('master parity for the shipped re-home (B2, finding F2)', () => {
     expect(head.providers.get('zai')?.models).toEqual(['glm'])
   })
 })
-
 
 describe('a user-level file replaces the shipped layer, so operator rules apply (F2 ruling)', () => {
   test('a legacy entry merges into a provider the user level defined', () => {
