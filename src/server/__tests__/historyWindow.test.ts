@@ -308,4 +308,24 @@ describe('historyWindow', () => {
     expect(page.hasOlder).toBe(false)
     expect(page.stale).toBeUndefined()
   })
+
+  test('a turnId reappearing after another turn stays in the unit it sits in', () => {
+    // unitsOf opens a unit at a turnId's FIRST appearance only, so turn-1's
+    // id returning after turn-2 has opened cuts nothing: the returning event
+    // belongs to turn-2's unit, and the page ending before turn-3 starts
+    // there. Slicing on a change from the previous turn-carrying event (the
+    // H6 mutant) would open a unit at the returning event and leave
+    // turn-2's opener out of the page.
+    const events = [
+      ...turn('turn-1', ago(50)),
+      ...turn('turn-2', ago(30)),
+      assistantText('turn-1', ago(20)),
+      ...turn('turn-3', ago(2)),
+    ]
+    const page = historyWindow(events, { beforeId: events[3]!.id })
+    expect(page.stale).toBeUndefined()
+    expect(page.events.map(event => ('turnId' in event ? event.turnId : undefined))).toEqual(['turn-2', 'turn-1'])
+    expect(page.startId).toBe(events[1]!.id)
+    expect(page.hasOlder).toBe(true)
+  })
 })

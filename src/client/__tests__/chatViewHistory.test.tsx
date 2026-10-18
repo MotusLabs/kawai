@@ -1,7 +1,10 @@
 // ChatView + history window (chat-history-window D3): a reconnect of the
 // same session resumes from the window start the client holds; opening a
 // chat widens only what the user expanded in this page load; and whatever
-// is shown never trims while live events append.
+// is shown never trims while live events append. The anchor wiring of the
+// load-earlier button (D4) is pinned at this level too: which ChatView
+// argument reaches the hook decides whether a dropped page after a live
+// append still lets the next append stick.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import type { ClientMessage, Session } from '@shared/types'
@@ -49,6 +52,57 @@ describe('ChatView history window', () => {
           connectionEpoch={connectionEpoch} error={null} onClose={() => {}} onKill={() => {}} />
       )
     })
+  }
+
+  /**
+   * Mount with node mocks (chat-history-window D4): the transcript scroller
+   * gets the AnchorScroller surface the history anchor touches — a fake
+   * `[data-anchor-id]` row whose rect top the test controls — and every
+   * other node records its scrollIntoView calls, so a test can count the
+   * bottom sticks (the sentinel's scrollIntoView is the stick).
+   */
+  function mountWithScroller(session: Session) {
+    const row = {
+      top: 100,
+      getBoundingClientRect: () => ({ top: row.top } as DOMRect),
+      getAttribute: () => 'row-1',
+    }
+    // One shared object, so the test's handle IS the node the scroller ref
+    // receives (a spread copy would fork scrollTop).
+    const scroller = {
+      scrollTop: 1230,
+      scrolls: [] as ScrollIntoViewOptions[],
+      scrollIntoView: (options?: ScrollIntoViewOptions) => { scroller.scrolls.push(options ?? {}) },
+      getBoundingClientRect: () => ({ top: 0 } as DOMRect),
+      querySelector: () => row,
+      querySelectorAll: () => [row],
+    }
+    const nodes: Array<{ scrolls: ScrollIntoViewOptions[] }> = [scroller]
+    act(() => {
+      renderer = TestRenderer.create(
+        <ChatView session={session} sendMessage={sendMessage} connectionStatus="connected"
+          connectionEpoch={0} error={null} onClose={() => {}} onKill={() => {}} />,
+        {
+          createNodeMock: element => {
+            if (String(element.props.className ?? '').includes('overflow-y-auto')) return scroller
+            const node = {
+              scrolls: [] as ScrollIntoViewOptions[],
+              scrollIntoView: (options?: ScrollIntoViewOptions) => { node.scrolls.push(options ?? {}) },
+            }
+            nodes.push(node)
+            return node
+          },
+        }
+      )
+    })
+    const stickCount = () =>
+      nodes.reduce((total, node) => total + node.scrolls.filter(options => options.block === 'end').length, 0)
+    const loadEarlier = () => {
+      act(() => {
+        renderer!.root.findByProps({ 'data-testid': 'chat-load-earlier' }).props.onClick()
+      })
+    }
+    return { scroller, row, stickCount, loadEarlier }
   }
 
   function rerender(session: Session, connectionEpoch: number) {
@@ -130,5 +184,68 @@ describe('ChatView history window', () => {
     })
     const transcript = useChatStore.getState().sessions['chat-a']!
     expect(transcript.events.map(event => event.id)).toEqual(['u1', 'u2', 'u3'])
+  })
+
+  const heldEvent = { id: 'u1', sequence: 0, at: '2026-10-15T09:00:00.000Z', turnId: 't1', type: 'user_message' as const, text: 'held' }
+  const olderEvent = { id: 'u0', sequence: 0, at: '2026-10-14T09:00:00.000Z', turnId: 't0', type: 'user_message' as const, text: 'older' }
+  const liveEvent = (id: string, sequence: number) =>
+    ({ id, sequence, at: '2026-10-18T09:00:00.000Z', turnId: `t-${id}`, type: 'user_message' as const, text: `live ${id}` })
+
+  test('a live append during a page load followed by a dropped page keeps the next append stuck to the bottom', () => {
+    act(() => {
+      useChatStore.getState().snapshot(snapshotMessage({
+        sessionId: 'chat-a', events: [heldEvent], historyHasOlder: true, historyStartId: 'u1',
+      }))
+    })
+    const { stickCount, loadEarlier } = mountWithScroller(makeSession('chat-a'))
+    const initial = stickCount()
+    loadEarlier()
+    // A live append lands while the page flies: it sticks as usual.
+    act(() => {
+      useChatStore.getState().apply('chat-a', [liveEvent('u2', 1)])
+    })
+    expect(stickCount()).toBe(initial + 1)
+    // The page resolves dropped — its beforeId no longer matches the window
+    // start — so nothing prepends and the transcript's first event id is
+    // unchanged: the stick skip stays disarmed.
+    act(() => {
+      useChatStore.getState().applyHistoryPage({
+        type: 'chat-history-page', sessionId: 'chat-a', beforeId: 'drifted', events: [olderEvent], hasOlder: true,
+      })
+    })
+    expect(useChatStore.getState().sessions['chat-a']!.events.map(event => event.id)).toEqual(['u1', 'u2'])
+    expect(stickCount()).toBe(initial + 1)
+    // So the next live append sticks to the bottom: a fresh bottom stick.
+    act(() => {
+      useChatStore.getState().apply('chat-a', [liveEvent('u3', 2)])
+    })
+    expect(stickCount()).toBe(initial + 2)
+  })
+
+  test('a real prepend restores the anchor and skips one stick', () => {
+    act(() => {
+      useChatStore.getState().snapshot(snapshotMessage({
+        sessionId: 'chat-a', events: [heldEvent], historyHasOlder: true, historyStartId: 'u1',
+      }))
+    })
+    const { scroller, row, stickCount, loadEarlier } = mountWithScroller(makeSession('chat-a'))
+    const initial = stickCount()
+    loadEarlier()
+    // The page prepends above the pinned row, pushing it 520px further down.
+    act(() => { row.top = 620 })
+    act(() => {
+      useChatStore.getState().applyHistoryPage({
+        type: 'chat-history-page', sessionId: 'chat-a', beforeId: 'u1', events: [olderEvent], hasOlder: false,
+      })
+    })
+    // The row is put back to its on-screen offset: 620 - 0 + 1230 - 100.
+    expect(scroller.scrollTop).toBe(1750)
+    // The prepend itself added no bottom stick: the one skip was spent on it.
+    expect(stickCount()).toBe(initial)
+    // And the next live append sticks again.
+    act(() => {
+      useChatStore.getState().apply('chat-a', [liveEvent('u2', 1)])
+    })
+    expect(stickCount()).toBe(initial + 1)
   })
 })
