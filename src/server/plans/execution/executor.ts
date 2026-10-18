@@ -15,12 +15,12 @@ import type { TaskService } from '../../team/TaskService'
 import type { TaskResultService } from '../../team/TaskResultService'
 import type { AssignmentService } from '../../team/AssignmentService'
 import { runGit } from '../../git/gitCommand'
+import { logger } from '../../logger'
 import { assignmentState } from '../../team/assignmentStore'
 import type { MailboxStore } from '../../team/mailboxStore'
 import { githubRepoOf } from '../landing/landingProbe'
-import { lsRemoteHead } from '../landing/gitRemote'
-import { ghCheckRuns, ghPrList, ghPrView, ghRunAttempt, ghStatuses } from '../landing/github'
-import { inspectUnknownEffects } from './effectInspectors'
+import { ghCheckRuns, ghStatuses } from '../landing/github'
+import { recoverUnknownEffects } from './executorStartup'
 import { applyLanding, applyLandingOutcome, landingAdapters, mergeAdapter, removeWorktreeAdapter, updateBranchAdapter } from './executionLanding'
 import type { CiCheck } from '../../../shared/planExecution'
 import type { GhCommandOptions } from '../landing/ghCommand'
@@ -29,9 +29,10 @@ import { planSteps } from './executionPlanner'
 import { EffectRunner, type EffectAdapter } from './effects'
 import type { ExecutionStore } from './executionStore'
 import type { PlanStore } from '../planStore'
-import { dispatchFixAttempt, dispatchImplementAttempt } from './executionDispatch'
+import { dispatchFixAttempt, dispatchImplementAttempt, redispatchStage, type DispatchDeps } from './executionDispatch'
+import { StepRefusal } from './stepRefusal'
 import { fixRoundOutcome } from '../../../shared/planExecutionProgress'
-import { applyRoundStage, openPrAdapter, pushAdapter, recordPull, rerunAdapter, roundAdapters } from './executionRounds'
+import { applyRoundStage, type ReleaseSeam, openPrAdapter, pushAdapter, recordPull, rerunAdapter, roundAdapters } from './executionRounds'
 
 /** D5's polling interval while a team has a running execution. */
 export const EXECUTOR_TICK_MS = 60_000
@@ -41,50 +42,82 @@ export interface ExecutorDeps {
   plans: PlanStore
   tasks: TaskService
   assignments: AssignmentService
-  /** Review handoffs dispatch through the result service (D11). */
-  results?: TaskResultService
-  /** Every live session record (author profiles for review tags). */
-  records?: () => Iterable<ChatSessionRecord>
+  /** Review, fix, and update handoffs, and Kawai's acceptance (D7, D11, D13). */
+  results: TaskResultService
+  /** Every live session record (author profiles for review tags, worktree occupancy). */
+  records: () => Iterable<ChatSessionRecord>
   /** The team's mailbox (assignment states derive from instruction mail). */
-  mailbox?: MailboxStore
+  mailbox: MailboxStore
   /** D11's release step, wired to member-release by the composition. */
-  releases?: { readiness: (sessionId: string) => { ready: boolean; reason: string | null }; release: (sessionId: string) => void }
+  releases: ReleaseSeam
   /** The plan service, for the system completion when everything landed (D19). */
-  plansService?: import('../PlanService').PlanService
-  /** D13's live condition read: unresolved acceptance-gated conditions per change. */
-  conditionsOf?: (change: string) => string[]
-  /** The landing adapters (defaults to the real git/gh). */
-  landingAdapters?: import('./executionLanding').LandingAdapters
-  /** Whether a group's current file is worktree-scoped (default true). */
-  groupScoped?: (teamId: string, groupId: string) => boolean
+  plansService: import('../PlanService').PlanService
+  /** D13's live condition read: the execution's unresolved acceptance-gated conditions. */
+  conditionsOf: (executionId: string) => string[]
+  /** Whether a group's current file is worktree-scoped (D11's release step). */
+  groupScoped: (teamId: string, groupId: string) => boolean
   /** The team's identity; without it (unknown team) a tick does nothing. */
   teamOf: (teamId: string) => TeamIdentity | undefined
-  /** Effect adapters by kind; a kind without one fails its effect. */
+  /** Test seam: the landing adapters (defaults to the real git/gh). */
+  landingAdapters?: import('./executionLanding').LandingAdapters
+  /** Test seam: effect adapters by kind (the composition passes provision's). */
   adapters?: Partial<Record<string, EffectAdapter>>
-  /** Round-pipeline adapters (push, PRs, CI, rerun); defaults to the real gh/git. */
+  /** Test seam: round-pipeline adapters (push, PRs, CI, rerun); defaults to the real gh/git. */
   roundAdapters?: typeof roundAdapters
   /** The tick interval while a team runs an execution; the development fixture shortens it. */
   tickMs?: number
-  /** Passed to every gh call (tests stub gh on a private PATH). */
+  /** Test seam: passed to every gh call (a stub gh on a private PATH). */
   ghOptions?: GhCommandOptions
+  /** Test seam: the clock. */
   now?: () => Date
 }
 
 export class ExecutionExecutor {
   private readonly ticking = new Set<string>()
+  /** Teams woken while their tick ran: exactly one more tick follows (N1). */
+  private readonly dirty = new Set<string>()
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>()
   private closed = false
 
   constructor(private readonly deps: ExecutorDeps) {}
 
-  /** Schedule one tick for the team; concurrent wakes share it (D5); a closed executor refuses. */
+  /**
+   * Schedule one tick for the team (D5). A wake during a tick marks the team
+   * dirty, so exactly one more tick follows the running one; a closed
+   * executor refuses. The returned loop never rejects (I2).
+   */
   wake(teamId: string): void {
-    if (this.closed || this.ticking.has(teamId)) return
+    if (this.closed) return
+    if (this.ticking.has(teamId)) {
+      this.dirty.add(teamId)
+      return
+    }
     this.ticking.add(teamId)
-    void this.tick(teamId).finally(() => {
-      this.ticking.delete(teamId)
+    void this.run(teamId)
+  }
+
+  /**
+   * The team's tick loop. It starts after the waker's synchronous work, so a
+   * wake fired inside a caller's transaction never ticks inside it. Every
+   * tick failure is logged as `plan_execution_tick_failed` and the timer is
+   * still rescheduled: an unhandled rejection would exit the server.
+   */
+  private async run(teamId: string): Promise<void> {
+    await Promise.resolve()
+    do {
+      this.dirty.delete(teamId)
+      try {
+        await this.tick(teamId)
+      } catch (error) {
+        if (!this.closed) logger.error('plan_execution_tick_failed', { teamId, error: String(error) })
+      }
+    } while (this.dirty.has(teamId) && !this.closed)
+    this.ticking.delete(teamId)
+    try {
       this.scheduleTimer(teamId)
-    })
+    } catch (error) {
+      if (!this.closed) logger.error('plan_execution_tick_failed', { teamId, error: String(error) })
+    }
   }
 
   /** The in-flight tick, for callers and tests that need to await it. */
@@ -96,58 +129,11 @@ export class ExecutionExecutor {
 
   /**
    * Startup recovery (D14): every `running` effect becomes `unknown` and is
-   * inspected before anything else for its change runs; the teams that hold
-   * running executions are woken. An exhausted inspection stops its change
-   * as effect-unknown (D12).
+   * inspected before anything else for its change runs. Startup never
+   * wakes: the runtime wakes the running teams once its wakes are installed.
    */
-  async startup(inspect?: (deps: Parameters<typeof import('./effectInspectors').inspectUnknownEffects>[0]) => void): Promise<void> {
-    const unknown = this.deps.store.markRunningEffectsUnknown()
-    const teams = new Set(unknown.map(effect => this.deps.store.execution(effect.executionId)?.teamId ?? ''))
-    for (const teamId of teams) {
-      if (teamId === '') continue
-      const reads: import('./effectInspectors').InspectorReads = {
-        worktree: async (repo, wt) => {
-          const listed = await runGit(['worktree', 'list', '--porcelain'], { cwd: repo })
-          const present = listed.ok && listed.stdout.split('\n').some(line => line.startsWith('worktree ') && line.slice(8) === wt)
-          if (!present) return { present: false, head: null }
-          const head = await runGit(['rev-parse', 'HEAD'], { cwd: wt })
-          return { present: true, head: head.ok ? head.stdout.trim() : null }
-        },
-        localBranch: async (repo, branch) => {
-          const result = await runGit(['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], { cwd: repo })
-          return result.ok ? result.stdout.trim() : null
-        },
-        remoteHead: async (cwd, ref) => {
-          const result = await lsRemoteHead(cwd, ref)
-          return result.ok ? result.sha : null
-        },
-        prList: async (repo, head) => {
-          const pulls = await ghPrList(repo, { head, base: '' }, this.deps.ghOptions)
-          return pulls.ok ? pulls.data : []
-        },
-        prView: async (repo, pr) => {
-          const view = await ghPrView(repo, pr, this.deps.ghOptions)
-          return view.ok ? view.data : { number: pr, url: '', state: 'OPEN', headRefOid: '', mergeCommit: null }
-        },
-        runAttempt: async (repo, runId) => {
-          const attempt = await ghRunAttempt(repo, runId, this.deps.ghOptions)
-          return attempt.ok ? attempt.data : 1
-        },
-      }
-      await inspectUnknownEffects({
-        store: this.deps.store, reads,
-        ...(this.deps.now ? { now: this.deps.now } : {}),
-        onUnknownSettled: effect => {
-          if (effect.change === null) return
-          const row = this.deps.store.change(effect.executionId, effect.change)
-          if (row === null || row.state === 'stopped') return
-          this.deps.store.transition(effect.executionId, effect.change, row, {
-            state: 'stopped', stopReason: 'effect-unknown', step: null, stopDetail: { message: effect.error ?? 'the outcome could not be determined' },
-          })
-        },
-      })
-      this.wake(teamId)
-    }
+  async startup(): Promise<void> {
+    await recoverUnknownEffects({ store: this.deps.store, ...(this.deps.ghOptions ? { ghOptions: this.deps.ghOptions } : {}), ...(this.deps.now ? { now: this.deps.now } : {}) })
   }
 
   /** Stop the timers (tests, shutdown); a wake's trailing schedule arms none. */
@@ -172,9 +158,9 @@ export class ExecutionExecutor {
         taskId => this.deps.tasks.store.get(taskId)?.revision ?? 1,
         taskId => this.deps.tasks.store.get(taskId)?.status ?? 'active',
         taskId => {
-          // Without a mailbox wired there is no instruction fact to read.
-          if (this.deps.mailbox === undefined) return null
-          const outstanding = this.deps.tasks.store.assignmentsOf(taskId).find(row => row.supersededBy === null)
+          // The newest standing assignment is the stage's (a retried stage's
+          // failed predecessor stays unsuperseded, older).
+          const outstanding = this.deps.tasks.store.assignmentsOf(taskId).filter(row => row.supersededBy === null).at(-1)
           if (outstanding === undefined) return null
           const state = assignmentState(outstanding, outstanding.messageId !== null ? this.deps.mailbox.get(outstanding.messageId) : null)
           return { id: outstanding.id, state: state.state, reason: state.reason }
@@ -197,24 +183,23 @@ export class ExecutionExecutor {
           kind: step.kind, effectKey: step.effectKey, command: step.command,
         })
       }
+      // Each step runs in its own guard: a refused service call stops only
+      // its change; any other throw ends the tick (the wake loop logs it).
       for (const step of steps.dispatches) {
-        await dispatchImplementAttempt(
-          { team, executions: this.deps.store, plans: this.deps.plans, tasks: this.deps.tasks, assignments: this.deps.assignments,
-        ...(this.deps.results ? { results: this.deps.results } : {}) },
-          step,
-        )
+        await this.guarded(step, () => dispatchImplementAttempt(this.dispatchDeps(team), step))
       }
       for (const stage of steps.stages) {
         const row = this.deps.store.change(stage.executionId, stage.change)
         if (row === null) continue
-        if (stage.kind === 'landing' || stage.kind === 'post-ci') {
-          await this.applyLandingStage(team, row, stage)
-          continue
-        }
-        await applyRoundStage(this.roundDeps(team), row, stage)
+        await this.guarded(stage, async () => {
+          if (stage.kind === 'landing' || stage.kind === 'post-ci') return this.applyLandingStage(team, row, stage)
+          if (stage.kind === 'redispatch') return redispatchStage(this.dispatchDeps(team), row)
+          if (stage.kind === 'landing-outcome') return this.applyLandingFollowOn(team, row, stage.effectId ?? '')
+          return applyRoundStage(this.roundDeps(team), row, stage)
+        })
       }
       for (const fix of steps.fixes) {
-        await this.applyFix(team, fix)
+        await this.guarded(fix, () => this.applyFix(team, fix))
       }
       // A done effect's follow-on transition lands with its outcome (D14),
       // so the next pass sees the state it implies — and an effect the
@@ -230,13 +215,13 @@ export class ExecutionExecutor {
       executions: this.deps.store,
       plans: this.deps.plans,
       tasks: this.deps.tasks,
-      results: this.deps.results as TaskResultService,
+      results: this.deps.results,
       assignments: this.deps.assignments,
       adapters: this.deps.roundAdapters ?? roundAdapters,
-      ...(this.deps.records ? { records: this.deps.records } : {}),
+      records: this.deps.records,
       ...(this.deps.ghOptions ? { ghOptions: this.deps.ghOptions } : {}),
-      ...(this.deps.releases ? { releases: this.deps.releases } : {}),
-      groupScoped: (teamId, groupId) => this.deps.groupScoped?.(teamId, groupId) ?? true,
+      releases: this.deps.releases,
+      groupScoped: this.deps.groupScoped,
       now: () => (this.deps.now?.() ?? new Date()).toISOString(),
     }
   }
@@ -256,7 +241,7 @@ export class ExecutionExecutor {
   private async settledRunDue(teamId: string): Promise<void> {
     if (this.closed) return
     try {
-      await this.runner(teamId).runDue(teamId)
+      await this.runner().runDue(teamId)
     } catch (error) {
       // A test or shutdown closed the database under an in-flight effect:
       // the tick is abandoned, not failed — the next executor resumes.
@@ -264,7 +249,7 @@ export class ExecutionExecutor {
     }
   }
 
-  private runner(teamId: string): EffectRunner {
+  private runner(): EffectRunner {
     return new EffectRunner({
       store: this.deps.store,
       adapter: {
@@ -286,29 +271,46 @@ export class ExecutionExecutor {
           return adapter.call(effect)
         },
       },
-      onDone: effect => {
-        this.applyEffectOutcome(effect)
-        if (effect.kind === 'merge' || effect.kind === 'update-branch') {
-          const execution = this.deps.store.execution(effect.executionId)
-          const team = execution === null ? undefined : this.deps.teamOf(execution.teamId)
-          if (team !== undefined && effect.change !== null) {
-            void applyLandingOutcome({
-              team,
-              repo: this.repoOf(team),
-              executions: this.deps.store,
-              plans: this.deps.plans,
-              ...(this.deps.results ? { results: this.deps.results } : {}),
-              ...(this.deps.plansService ? { plansService: this.deps.plansService } : {}),
-              ...(this.deps.ghOptions ? { ghOptions: this.deps.ghOptions } : {}),
-              ...(this.deps.records ? { records: this.deps.records } : {}),
-              now: () => (this.deps.now?.() ?? new Date()).toISOString(),
-            }, effect).then(() => this.wake(team.teamId)).catch(() => undefined)
-          }
-        }
-      },
+      // A done effect's follow-on transition commits with its outcome (D14);
+      // merge and update-branch outcomes are applied by the next pass's
+      // landing-outcome stage, inside the single-flight tick.
+      onDone: effect => this.applyEffectOutcome(effect),
       onFailed: effect => this.applyEffectFailure(effect),
       ...(this.deps.now ? { now: this.deps.now } : {}),
     })
+  }
+
+  /**
+   * A settled merge or update-branch effect's follow-on (D13). A stopped
+   * execution's merge that did not complete leaves the change cancelled,
+   * with Kawai's task, in one transaction (D12).
+   */
+  private async applyLandingFollowOn(team: TeamIdentity, row: import('./executionRows').ChangeRow, effectId: string): Promise<void> {
+    const effect = this.deps.store.effectsOf(row.executionId).find(entry => entry.id === effectId)
+    if (effect === undefined) return
+    if (effect.state === 'done') await applyLandingOutcome(this.landingDeps(team), effect, this.deps.landingAdapters ?? landingAdapters)
+    const execution = this.deps.store.execution(row.executionId)
+    const fresh = this.deps.store.change(row.executionId, row.change)
+    if (execution === null || execution.state === 'running' || fresh === null || fresh.state !== 'landing') return
+    const task = fresh.taskId === null ? null : this.deps.tasks.store.get(fresh.taskId) ?? null
+    const prepared = task !== null && task.status !== 'done' && task.status !== 'cancelled'
+      ? await this.deps.tasks.prepareStatus({ kind: 'system', team, executionId: row.executionId }, task.id, 'cancelled', 'Execution stopped; its merge did not complete.')
+      : null
+    this.deps.store.atomically(() => {
+      const current = this.deps.store.change(row.executionId, row.change)
+      if (current === null || current.state !== 'landing') return
+      this.deps.store.transition(row.executionId, row.change, current, { state: 'cancelled', step: null })
+      prepared?.commit()
+    })
+  }
+
+  private landingDeps(team: TeamIdentity): import('./executionLanding').LandingDeps {
+    return {
+      team, repo: this.repoOf(team), executions: this.deps.store, plans: this.deps.plans,
+      results: this.deps.results, plansService: this.deps.plansService, conditionsOf: this.deps.conditionsOf, records: this.deps.records,
+      ...(this.deps.ghOptions ? { ghOptions: this.deps.ghOptions } : {}),
+      now: () => (this.deps.now?.() ?? new Date()).toISOString(),
+    }
   }
 
   /** The landing stages (D13): a passed change lands; a landed change's base CI lands as evidence. */
@@ -316,18 +318,7 @@ export class ExecutionExecutor {
     if (stage.kind === 'landing' && stage.roundId !== null) {
       const round = this.deps.store.round(stage.roundId)
       if (row.branch === null || round === null) return
-      await applyLanding({
-        team,
-        repo: this.repoOf(team),
-        executions: this.deps.store,
-        plans: this.deps.plans,
-        ...(this.deps.results ? { results: this.deps.results } : {}),
-        ...(this.deps.plansService ? { plansService: this.deps.plansService } : {}),
-        ...(this.deps.ghOptions ? { ghOptions: this.deps.ghOptions } : {}),
-        ...(this.deps.conditionsOf ? { conditionsOf: this.deps.conditionsOf } : {}),
-        ...(this.deps.records ? { records: this.deps.records } : {}),
-        now: () => (this.deps.now?.() ?? new Date()).toISOString(),
-      }, this.deps.landingAdapters ?? landingAdapters, row, round)
+      await applyLanding(this.landingDeps(team), this.deps.landingAdapters ?? landingAdapters, row, round)
       return
     }
     if (stage.kind === 'post-ci') {
@@ -354,7 +345,8 @@ export class ExecutionExecutor {
     const store = this.deps.store
     const round = store.round(fix.roundId)
     const row = store.change(fix.executionId, fix.change)
-    if (round === null || row === null || row.state !== 'gating') return
+    // A carried round that failed base-merge CI fixes from `landing`, leaving the slot.
+    if (round === null || row === null || (row.state !== 'gating' && row.state !== 'landing')) return
     const outcome = fixRoundOutcome(row.fixRounds, { fixRound: round.fixRound, outcome: 'fail' })
     if (outcome.stop) {
       store.transition(fix.executionId, fix.change, row, {
@@ -363,8 +355,6 @@ export class ExecutionExecutor {
       })
       return
     }
-    const moved = store.transition(fix.executionId, fix.change, row, { state: 'implementing', step: null, fixRounds: outcome.count })
-    if (moved === null) return
     const revision = this.deps.plans.revision(store.execution(fix.executionId)!.planId, store.execution(fix.executionId)!.revision)
     const group = revision?.content.changes.find(entry => entry.change === fix.change)?.group
     if (group === null || group === undefined) return
@@ -372,9 +362,11 @@ export class ExecutionExecutor {
       .map(check => ({ name: check.name, conclusion: check.conclusion, link: check.link }))
     const all = row.taskId === null ? [] : this.deps.tasks.store.results.findingsFor(round.resultId)
     const findings = round.verdictFindingsId !== null ? all.filter(entry => entry.id === round.verdictFindingsId) : all
+    // The dispatch comes first: a refused fix stops the change while it is
+    // still gating on the failed round, so Retry finds the round again. The
+    // dispatch replays under its key if the transition below never landed.
     await dispatchFixAttempt(
-      { team, executions: store, plans: this.deps.plans, tasks: this.deps.tasks, assignments: this.deps.assignments,
-        ...(this.deps.results ? { results: this.deps.results } : {}) },
+      this.dispatchDeps(team),
       {
         executionId: fix.executionId, change: fix.change, group,
         failingChecks: failing,
@@ -384,11 +376,45 @@ export class ExecutionExecutor {
         fixRounds: outcome.count,
       },
     )
+    store.transition(fix.executionId, fix.change, row, { state: 'implementing', step: null, fixRounds: outcome.count })
   }
 
-  /** A failed effect stops its change (D14): effect-failed, or pr-closed when the PR was closed. */
+  private dispatchDeps(team: TeamIdentity): DispatchDeps {
+    return { team, executions: this.deps.store, plans: this.deps.plans, tasks: this.deps.tasks, assignments: this.deps.assignments, results: this.deps.results }
+  }
+
+  /** Run one step; a StepRefusal stops its change as instruction-failed, anything else propagates. */
+  private async guarded(target: { executionId: string; change: string }, step: () => Promise<void>): Promise<void> {
+    try {
+      await step()
+    } catch (error) {
+      if (!(error instanceof StepRefusal)) throw error
+      this.stopRefused(target, error)
+    }
+  }
+
+  /**
+   * A refused step (I2, D12): the change stops as `instruction-failed` with
+   * the stage, the refusal text, and the state it was in, which Retry
+   * resumes so the stage dispatches again.
+   */
+  private stopRefused(target: { executionId: string; change: string }, refusal: StepRefusal): void {
+    logger.warn('plan_execution_step_refused', { executionId: target.executionId, change: target.change, stage: refusal.stage, refusal: refusal.refusal })
+    const row = this.deps.store.change(target.executionId, target.change)
+    if (row === null || row.state === 'stopped' || row.state === 'cancelled' || row.state === 'landed') return
+    this.deps.store.transition(target.executionId, target.change, row, {
+      state: 'stopped', stopReason: 'instruction-failed', step: null,
+      stopDetail: { message: refusal.message, stage: refusal.stage, refusal: refusal.refusal, resumeState: row.state },
+    })
+  }
+
+  /**
+   * A failed effect stops its change (D14): effect-failed, or pr-closed when
+   * the PR was closed. A stopped execution's failed merge is settled by its
+   * landing-outcome stage instead (D12: cancelled with its task).
+   */
   private applyEffectFailure(effect: { id: string; kind: string; change: string | null; executionId: string; error: string | null }): void {
-    if (effect.change === null) return
+    if (effect.change === null || this.deps.store.execution(effect.executionId)?.state !== 'running') return
     const row = this.deps.store.change(effect.executionId, effect.change)
     if (row === null || row.state === 'stopped') return
     const error = effect.error ?? ''

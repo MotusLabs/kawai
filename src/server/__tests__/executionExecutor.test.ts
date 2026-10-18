@@ -24,6 +24,7 @@ import { executionOwnership } from '../plans/execution/executionOwnership'
 import { ExecutionExecutor } from '../plans/execution/executor'
 import { provisionAdapter } from '../plans/execution/executionProvision'
 import { createPlanBench, createPlanWorld, writeGroup, type PlanBench, type PlanWorld } from './planHarness'
+import { neutralExecutorSeams } from './executorTestSeams'
 
 let world: PlanWorld
 let bench: PlanBench
@@ -81,7 +82,9 @@ async function runningExecution(changes: string[]): Promise<string> {
 }
 
 const makeExecutor = () => new ExecutionExecutor({
-  store: executions, plans: bench.plans, tasks, assignments,
+  ...neutralExecutorSeams,
+  store: executions, plans: bench.plans, tasks, assignments, results, mailbox: mail,
+  records: () => bench.records.values(), plansService: bench.service,
   teamOf: id => (id === world.team.teamId ? world.team : undefined),
   adapters: { provision: provisionAdapter(executions) },
 })

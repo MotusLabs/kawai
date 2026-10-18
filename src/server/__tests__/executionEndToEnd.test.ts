@@ -27,6 +27,7 @@ import { provisionAdapter } from '../plans/execution/executionProvision'
 import { PlanService } from '../plans/PlanService'
 import { StrategyStore } from '../strategy/strategyStore'
 import { createPlanBench, createPlanWorld, writeGroup, type PlanBench, type PlanWorld } from './planHarness'
+import { neutralExecutorSeams } from './executorTestSeams'
 
 const FLOOR = { lint: ['ci'], typecheck: ['ci'], 'unit-tests': ['ci'], 'ci-e2e': ['e2e'] }
 
@@ -170,6 +171,7 @@ afterEach(() => executor.close())
 /** The executor with real git and the scripted gh. */
 function makeExecutor(): ExecutionExecutor {
   return new ExecutionExecutor({
+    ...neutralExecutorSeams,
     store: executions, plans: bench.plans, tasks, assignments, results, mailbox: mail,
     records: () => bench.records.values(),
     teamOf: id => (id === world.team.teamId ? world.team : undefined),

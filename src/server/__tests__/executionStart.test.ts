@@ -122,6 +122,7 @@ esac
     settings: { planExecution: async () => ({ floorChecks: FLOOR, maxParallelChanges: 3, mergeMethod: 'merge' }) },
     getSession: () => null,
     landingModes: () => new Set(['direct']),
+    identityOf: () => team,
     wake: teamId => wakes.push(teamId),
     ghOptions: { env },
   })

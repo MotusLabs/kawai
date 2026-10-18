@@ -49,11 +49,15 @@ export interface PlannedChange {
   round: RoundRow | null
   /** The change's landing fact, once it landed (D13). */
   landing: { mergeSha: string; postCi: unknown } | null
+  /** The change's newest merge or update-branch effect, any state (D13's follow-ons). */
+  landingEffect: EffectRow | null
 }
 
 export interface PlannedExecution {
   row: ExecutionRow
   changes: PlannedChange[]
+  /** A finished (stopped) execution loaded only to settle a merge running at Stop (D12). */
+  finished: boolean
 }
 
 export interface ExecutionSnapshot {
@@ -72,7 +76,7 @@ export interface ExecutionSnapshot {
 export function executionSnapshot(teamId: string, main: string, executions: ExecutionStore, plans: PlanStore,
   resultsOf: (taskId: string) => ResultFact[] = () => [], taskRevisionOf: (taskId: string) => number = () => 1,
   taskStatusOf: (taskId: string) => string = () => 'active', assignmentOf: (taskId: string) => AssignmentFact | null = () => null): ExecutionSnapshot {
-  const running = executions.runningForTeam(teamId)
+  const running = [...executions.runningForTeam(teamId), ...executions.settlingForTeam(teamId)]
   const contentOf = new Map<string, PlanContent>()
   const planned: PlannedExecution[] = running.map(execution => {
     let content = contentOf.get(execution.planId)
@@ -81,8 +85,10 @@ export function executionSnapshot(teamId: string, main: string, executions: Exec
       if (content) contentOf.set(execution.planId, content)
     }
     const facts = new Map((content?.changes ?? []).map(entry => [entry.change, entry]))
+    const effects = executions.effectsOf(execution.id)
     return {
       row: execution,
+      finished: execution.state !== 'running',
       changes: executions.changes(execution.id).map(row => ({
         executionId: row.executionId,
         change: row.change,
@@ -103,6 +109,7 @@ export function executionSnapshot(teamId: string, main: string, executions: Exec
           const fact = executions.landings(execution.planId).find(entry => entry.change === row.change)
           return fact ? { mergeSha: fact.mergeSha, postCi: fact.postCi as unknown } : null
         })(),
+        landingEffect: effects.filter(effect => effect.change === row.change && (effect.kind === 'merge' || effect.kind === 'update-branch')).at(-1) ?? null,
       })),
     }
   })

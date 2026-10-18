@@ -10,7 +10,6 @@ import path from 'node:path'
 import type { ChatSessionManager } from '../chat/ChatSessionManager'
 import { ChatConnections } from '../chat/ChatConnections'
 import { CHAT_CONNECTION_TYPES } from '../chat/chatConnectionTypes'
-import { TaskService } from '../team/TaskService'
 import { TeamScopes } from '../team/teamScope'
 import type { SessionTeams } from '../team/sessionTeams'
 import type { ClientMessage, ServerMessage } from '../../shared/types'
@@ -23,7 +22,6 @@ const FLOOR = { lint: ['ci'], typecheck: ['ci'], 'unit-tests': ['ci'], 'ci-e2e':
 
 let world: PlanWorld
 let bench: ImpactBench
-let tasks: TaskService
 let connections: ChatConnections
 let messages: ServerMessage[]
 let composed: ReturnType<typeof composePlanServices>
@@ -43,7 +41,6 @@ beforeEach(() => {
   bench?.db.close()
   writeGroup(world, 'leads', '---\ncanCreatePlans: true\ncanCreateTasks: true\n---\nLead.')
   bench = createImpactBench(world)
-  tasks = new TaskService(bench.tasks, { getSession: id => bench.records.get(id), homeDir: world.home, plans: bench.plans })
   messages = []
   const planServices = composePlanServices({
     db: bench.db.db, plans: bench.plans, strategies: bench.strategies, impact: bench.impact, adapter: fakeAdapter(),
@@ -139,7 +136,9 @@ describe('execution commands (§15.1)', () => {
     messages = []
     await send({ type: 'team-plan-execution-retry', teamPath: world.repo, requestId: 'q8', executionId, change: 'api', commandId: 'retry-1' })
     expect(last('team-plan-result')).toMatchObject({ requestId: 'q8', replayed: false as boolean })
-    expect(store.change(executionId, 'api')!.state).toBe('implementing')
+    // Round limit resumes at gating; the woken executor may already have moved it on.
+    expect(store.change(executionId, 'api')).toMatchObject({ stopReason: null })
+    expect(['gating', 'implementing']).toContain(store.change(executionId, 'api')!.state)
     messages = []
     await send({ type: 'team-plan-execution-retry', teamPath: world.repo, requestId: 'q9', executionId, change: 'api', commandId: 'retry-1' })
     expect(last('team-plan-result')).toMatchObject({ requestId: 'q9', replayed: true })

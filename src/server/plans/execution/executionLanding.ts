@@ -19,7 +19,10 @@ import type { PlanService } from '../PlanService'
 import { isAncestor, mergeTree, gitFetch, lsRemoteHead, worktreeRemove } from '../landing/gitRemote'
 import { ghPrMerge, ghPrView, ghUpdateBranch } from '../landing/github'
 import type { GhCommandOptions } from '../landing/ghCommand'
+import type { MergeMethod } from '../../../shared/planExecution'
 import { runGit } from '../../git/gitCommand'
+import { logger } from '../../logger'
+import { refusable } from './stepRefusal'
 
 export interface LandingDeps {
   team: TeamIdentity
@@ -27,14 +30,14 @@ export interface LandingDeps {
   executions: ExecutionStore
   plans: PlanStore
   /** Kawai accepts the landed change's result through it (D13 step 5). */
-  results?: TaskResultService
+  results: TaskResultService
   /** The plan service, for the system completion (D19). */
-  plansService?: PlanService
+  plansService: PlanService
   ghOptions?: GhCommandOptions
-  /** Unresolved acceptance-gated conditions of the change, read live (D13 step 1). */
-  conditionsOf?: (change: string) => string[]
+  /** Unresolved acceptance-gated conditions of the execution, read live (D13 step 1). */
+  conditionsOf: (executionId: string) => string[]
   /** Live session records: a worktree with a live session is never removed. */
-  records?: () => Iterable<{ sessionId: string; projectPath: string; archivedAt?: string | null }>
+  records: () => Iterable<{ sessionId: string; projectPath: string; archivedAt?: string | null }>
   now: () => string
 }
 
@@ -66,7 +69,7 @@ export async function applyLanding(deps: LandingDeps, adapters: LandingAdapters,
   if (changeRow.state === 'gating') {
     // Step 1 — Conditions: an unresolved acceptance condition holds the
     // change outside the slot (D13).
-    const unresolved = deps.conditionsOf?.(changeRow.change) ?? []
+    const unresolved = deps.conditionsOf(changeRow.executionId)
     if (unresolved.length > 0) {
       const fresh = store.change(changeRow.executionId, changeRow.change)!
       if (fresh.step !== 'conditions') store.transition(changeRow.executionId, changeRow.change, fresh, { step: 'conditions' })
@@ -123,17 +126,26 @@ export async function applyLanding(deps: LandingDeps, adapters: LandingAdapters,
   store.insertEffect({
     executionId: changeRow.executionId, change: changeRow.change, roundId: round.id, kind: 'merge',
     effectKey: `${changeRow.executionId}:${changeRow.change}:merge:${round.number}:${fresh.generation}`,
-    command: { repo: deps.repo, pr: changeRow.prNumber ?? 0, head: head.sha, base: base.sha, baseBranch: execution.baseBranch, cwd: changeRow.worktree ?? deps.team.groupsRoot },
+    command: { repo: deps.repo, pr: changeRow.prNumber ?? 0, head: head.sha, base: base.sha, baseBranch: execution.baseBranch, method: execution.mergeMethod, cwd: changeRow.worktree ?? deps.team.groupsRoot },
   })
 }
 
 /** D13's update attempt: a fix handoff naming the conflict or the failed update. */
 async function dispatchUpdateAttempt(deps: LandingDeps, changeRow: { executionId: string; change: string; taskId: string | null }, round: RoundRow, detail: { kind: 'conflict'; files: string[]; base: string } | { kind: 'failed-check' }): Promise<void> {
-  if (deps.results === undefined || changeRow.taskId === null) return
+  if (changeRow.taskId === null) return
+  const taskId = changeRow.taskId
   const files = detail.kind === 'conflict' ? detail.files : []
   const base = detail.kind === 'conflict' ? detail.base : ''
-  await deps.results.handoff({ kind: 'system', team: deps.team, executionId: changeRow.executionId }, changeRow.taskId, {
-    kind: 'fix', resultId: round.resultId, target: { kind: 'group', id: 'middle-devs' },
+  // The update attempt goes to the change's implementing group (D13).
+  const execution = deps.executions.execution(changeRow.executionId)
+  const revision = execution === null ? null : deps.plans.revision(execution.planId, execution.revision)
+  const group = revision?.content.changes.find(entry => entry.change === changeRow.change)?.group ?? null
+  if (group === null) return
+  const roleProfiles = revision?.content.roles.find(role => role.group === group)?.profiles ?? []
+  const generation = deps.executions.change(changeRow.executionId, changeRow.change)?.generation ?? 0
+  await refusable('update', () => deps.results.handoff({ kind: 'system', team: deps.team, executionId: changeRow.executionId }, taskId, {
+    kind: 'fix', resultId: round.resultId, target: { kind: 'group', id: group },
+    ...(roleProfiles.length > 0 ? { allowedProfiles: roleProfiles } : {}),
     instructions: [
       `Bring the branch up to date with the base branch.`,
       detail.kind === 'conflict'
@@ -141,8 +153,8 @@ async function dispatchUpdateAttempt(deps: LandingDeps, changeRow: { executionId
         : `GitHub's branch update did not produce a clean merge. Merge the base branch yourself and push.`,
       `Then submit a new result with task_submit_result.`,
     ].join('\n\n'),
-    requestKey: `exec:${changeRow.executionId}:${changeRow.change}:attempt:update:${round.number}`,
-  })
+    requestKey: `exec:${changeRow.executionId}:${changeRow.change}:attempt:update:${round.number}:${generation}`,
+  }))
 }
 
 /** The update-branch effect: GitHub merges the base into the PR, pinned to the reviewed head. */
@@ -181,7 +193,6 @@ export function mergeAdapter(adapters: LandingAdapters, ghOptions?: GhCommandOpt
       const repo = String(command.repo ?? '')
       const pr = Number(command.pr ?? 0)
       const head = String(command.head ?? '')
-      const baseAtCheck = String(command.base ?? '')
       const cwd = String(command.cwd ?? '')
       // The pre-merge base re-read: a base that moved returns the change to
       // the up-to-date step (the executor's done handler sees baseMoved).
@@ -191,8 +202,9 @@ export function mergeAdapter(adapters: LandingAdapters, ghOptions?: GhCommandOpt
       if (!contains.ok || !contains.ancestor) {
         return { ok: true, outcome: { merged: false, baseMoved: true, base: base.sha } }
       }
-      void baseAtCheck
-      const merged = await adapters.prMerge(repo, pr, 'merge', head, ghOptions)
+      // The execution's merge method (D16), snapshotted at Start.
+      const method = String(command.method ?? 'merge') as MergeMethod
+      const merged = await adapters.prMerge(repo, pr, method, head, ghOptions)
       if (!merged.ok) return { ok: false, error: merged.error }
       const view = await adapters.prView(repo, pr, ghOptions)
       if (!view.ok) return { ok: false, error: view.error }
@@ -210,7 +222,7 @@ export function mergeAdapter(adapters: LandingAdapters, ghOptions?: GhCommandOpt
  * the landing fact, accepts the task as Kawai, removes the worktree when
  * safe, and completes the execution and the plan when everything landed.
  */
-export async function applyLandingOutcome(deps: LandingDeps, effect: { kind: string; change: string | null; executionId: string; roundId?: string | null; outcome: unknown }): Promise<void> {
+export async function applyLandingOutcome(deps: LandingDeps, effect: { kind: string; change: string | null; executionId: string; roundId?: string | null; outcome: unknown }, adapters: LandingAdapters = landingAdapters): Promise<void> {
   const store = deps.executions
   if (effect.change === null) return
   const outcome = effect.outcome as { merged?: boolean; baseMoved?: boolean; base?: string; mergeCommit?: string; head?: string; requested?: boolean } | null
@@ -220,9 +232,9 @@ export async function applyLandingOutcome(deps: LandingDeps, effect: { kind: str
   if (effect.kind === 'update-branch') {
     // Poll the PR head: moved → the clean-merge check; not yet → wait.
     const execution = store.execution(effect.executionId)!
-    const head = await lsRemoteHead(row.worktree ?? deps.team.groupsRoot, `refs/heads/${row.branch!}`)
+    const head = await adapters.lsRemoteHead(row.worktree ?? deps.team.groupsRoot, `refs/heads/${row.branch!}`)
     if (!head.ok || head.sha === null) return
-    const view = await ghPrView(deps.repo, row.prNumber ?? 0, deps.ghOptions)
+    const view = await adapters.prView(deps.repo, row.prNumber ?? 0, deps.ghOptions)
     if (!view.ok) return
     const fresh = store.change(effect.executionId, effect.change)!
     const reviewedHead = String((effect.outcome as { head?: string } | null)?.head ?? '')
@@ -231,13 +243,13 @@ export async function applyLandingOutcome(deps: LandingDeps, effect: { kind: str
     }
     // The clean-merge check: parents [H, B'], the base contains B', and the
     // tree equals merge-tree H B'.
-    const base = await lsRemoteHead(row.worktree ?? deps.team.groupsRoot, `refs/heads/${execution.baseBranch}`)
+    const base = await adapters.lsRemoteHead(row.worktree ?? deps.team.groupsRoot, `refs/heads/${execution.baseBranch}`)
     if (!base.ok || base.sha === null) return
     const parents = await runGit(['log', '-1', '--pretty=%P', view.data.headRefOid], { cwd: row.worktree ?? deps.team.groupsRoot })
     const parentList = parents.ok ? parents.stdout.trim().split(/\s+/) : []
-    const predicted = await mergeTree(row.worktree ?? deps.team.groupsRoot, reviewedHead, base.sha)
+    const predicted = await adapters.mergeTree(row.worktree ?? deps.team.groupsRoot, reviewedHead, base.sha)
     const secondParent = parentList.find(parent => parent !== reviewedHead) ?? ''
-    const secondAncestry = secondParent === '' ? null : await isAncestor(row.worktree ?? deps.team.groupsRoot, secondParent, base.sha)
+    const secondAncestry = secondParent === '' ? null : await adapters.isAncestor(row.worktree ?? deps.team.groupsRoot, secondParent, base.sha)
     const secondContained = secondAncestry !== null && secondAncestry.ok && secondAncestry.ancestor
     const clean = parents.ok && predicted.ok
       && parentList.length === 2
@@ -271,7 +283,9 @@ export async function applyLandingOutcome(deps: LandingDeps, effect: { kind: str
     const execution = store.execution(effect.executionId)!
     const mergeCommit = String(outcome.mergeCommit ?? '')
     const head = String(outcome.head ?? '')
-    // tree_verified: the merge commit's tree equals the reviewed head's tree.
+    // tree_verified: the merge commit's tree equals the reviewed head's
+    // tree. The merge commit lives on origin: fetch the base first.
+    runGit(['fetch', '--quiet', 'origin', execution.baseBranch], { cwd: row.worktree ?? deps.team.groupsRoot })
     const mergeTree_ = await runGit(['rev-parse', `${mergeCommit}^{tree}`], { cwd: row.worktree ?? deps.team.groupsRoot })
     const headTree = await runGit(['rev-parse', `${head}^{tree}`], { cwd: row.worktree ?? deps.team.groupsRoot })
     const treeVerified = mergeTree_.ok && headTree.ok && mergeTree_.stdout.trim() === headTree.stdout.trim()
@@ -282,16 +296,19 @@ export async function applyLandingOutcome(deps: LandingDeps, effect: { kind: str
     })
     store.transition(effect.executionId, effect.change, row, { state: 'landed', step: null })
     // Kawai accepts the landed change's result (idempotent per result).
-    if (deps.results !== undefined && row.taskId !== null) {
+    if (row.taskId !== null) {
       const round = store.rounds(effect.executionId, effect.change).find(entry => entry.commitSha === head) ?? null
       if (round !== null) {
-        await deps.results.accept({ kind: 'system', team: deps.team, executionId: effect.executionId }, row.taskId, round.resultId).catch(() => undefined)
+        // The change is landed whatever the acceptance says; a refused
+        // acceptance is logged and the task stays for the human to close.
+        await deps.results.accept({ kind: 'system', team: deps.team, executionId: effect.executionId }, row.taskId, round.resultId)
+          .catch(error => logger.warn('plan_execution_accept_failed', { executionId: effect.executionId, change: effect.change, error: String(error) }))
       }
     }
     // Cleanup: remove the worktree only when clean and unoccupied (D13 step 6).
     if (row.worktree !== null && fs.existsSync(row.worktree)) {
       const dirty = runGit(['status', '--porcelain'], { cwd: row.worktree })
-      const occupied = [...(deps.records?.() ?? [])].some(record =>
+      const occupied = [...deps.records()].some(record =>
         record.archivedAt == null && (record.projectPath === row.worktree || record.projectPath.startsWith(`${row.worktree}${path.sep}`)))
       if (dirty.ok && dirty.stdout.trim() === '' && !occupied) {
         store.insertEffect({
@@ -302,11 +319,13 @@ export async function applyLandingOutcome(deps: LandingDeps, effect: { kind: str
       }
     }
     // Completion: when every change has landed, the execution completes and
-    // the plan completes as the system (D19).
+    // the plan completes as the system (D19). A stopped execution settling
+    // its one running merge (D12) stays stopped.
     const changes = store.changes(effect.executionId)
-    if (changes.length > 0 && changes.every(entry => entry.state === 'landed')) {
+    if (execution.state === 'running' && changes.length > 0 && changes.every(entry => entry.state === 'landed')) {
       store.finishExecution(effect.executionId, 'completed')
-      deps.plansService?.completeBySystem(execution.planId, effect.executionId)
+      const completed = deps.plansService.completeBySystem(execution.planId, effect.executionId)
+      if (!completed.ok) logger.info('plan_execution_plan_left_open', { executionId: effect.executionId, reason: completed.reason, message: completed.message })
     }
   }
 }

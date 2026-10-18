@@ -26,12 +26,10 @@ import { WorktreeStaffing } from '../team/staffing'
 import { TeamCaps } from '../team/teamCaps'
 import { ImpactService } from '../strategy/ImpactService'
 import { ImpactStore } from '../strategy/impactStore'
-import { StrategyStore } from '../strategy/strategyStore'
 import { composeExecutionCore, composePlanServices, type ExecutionCore } from '../plans/planComposition'
 import type { ExecutionRuntime } from '../plans/execution/executionRuntime'
 import type { ExecutionStore } from '../plans/execution/executionStore'
 import { roundAdapters } from '../plans/execution/executionRounds'
-import type { PlanService } from '../plans/PlanService'
 import type { ExecutionService } from '../plans/execution/ExecutionService'
 import { createPlanBench, createPlanWorld, sessionRow, writeGroup, type PlanBench, type PlanWorld } from './planHarness'
 
@@ -53,7 +51,6 @@ let releases: MemberRelease
 let store: ExecutionStore
 let service: ExecutionService
 let runtime: ExecutionRuntime
-let plansService: PlanService
 let main: string
 let origin: string
 let baseSha: string
@@ -146,13 +143,12 @@ async function compose(): Promise<void> {
     },
     executionValidation: {
       prepareStanding: async () => ({}),
-      standing: prepared => ({ state: 'current', report: { id: 'rep-1', inputHash: 'ih-1', readiness: { carriedConditions: [] } } }) as never,
+      standing: () => ({ state: 'current', report: { id: 'rep-1', inputHash: 'ih-1', readiness: { carriedConditions: [] } } }) as never,
     },
     executionGhOptions: { env: { PATH: `${ghBin}${path.delimiter}${process.env.PATH ?? ''}` } },
   })
   store = composed.executionStore
   service = composed.executions
-  plansService = composed.plans
   runtime = composed.runtime!
   await runtime.start()
 }

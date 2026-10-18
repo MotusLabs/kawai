@@ -1011,6 +1011,12 @@ export class ChatSessionManager {
     // reuses its store and wake hub (one ExecutionStore per server).
     this.executionCore = composeExecutionCore(options.db.db)
     const executionCore = this.executionCore
+    // One reader of `~/.kawai/teams.json` (N5): spawn caps for the mailbox
+    // and the plan-execution settings for the composition below.
+    this.caps = new TeamCaps({
+      ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
+      onErrors: errors => logger.warn('team_caps_file_errors', { errors }),
+    })
     this.teamMail = new SessionMailbox(options.db.db, {
       teams: this.teams, records: () => this.records.values(), getRecord: id => this.records.get(id),
       getDriver: id => this.drivers.get(id), homeDir: options.profileCatalogHome,
@@ -1024,10 +1030,7 @@ export class ChatSessionManager {
       hasLiveWorkers: id => this.hasLiveWorkers(id),
       hasRunningBackgroundTasks: id => this.hasRunningBackgroundTasks(id),
       spawn: request => this.spawnMember(request),
-      caps: new TeamCaps({
-        ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
-        onErrors: errors => logger.warn('team_caps_file_errors', { errors }),
-      }),
+      caps: this.caps,
       // A spawned member keeps the task it was spawned for; others follow
       // the task of the mail they received last.
       associateTask: (id, taskId) => {
@@ -1092,10 +1095,6 @@ export class ChatSessionManager {
     })
     // Plans and their validation (durable-plans + plan-validation), composed
     // the one way anything may compose them: the ValidationService over the
-    this.caps = new TeamCaps({
-      ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
-      onErrors: errors => logger.warn('team_caps_file_errors', { errors }),
-    })
     // same plan store, capacity evidence from staffing and the limit events
     // through the team's own groups root, and the PlanService with
     // validation's `validation-current` appended after the shipped approval
@@ -1629,9 +1628,6 @@ export class ChatSessionManager {
     if (!record) {
       return { ok: false, error: `Unknown chat session ${sessionId}` }
     }
-    // Every release path lands here (member release included), so one wake
-    // covers them: an archived member frees what its execution waits on (D5).
-    this.executionCore.wakes.archived(sessionId)
     const driver = this.drivers.get(sessionId)
     if (driver) {
       // Interrupt first so subscribers see request_resolved(cancelled) and
@@ -1666,6 +1662,10 @@ export class ChatSessionManager {
     // Archived by any path: a pending release is settled by the archive
     // itself (member-release D1); a later restore starts clean.
     this.teamMail.cancelPendingRelease(sessionId)
+    // Every release path lands here (member release included), so one wake
+    // covers them: an archived member frees what its execution waits on (D5).
+    // Fired only once the archive succeeded (N2).
+    this.executionCore.wakes.archived(sessionId)
     return { ok: true }
   }
 

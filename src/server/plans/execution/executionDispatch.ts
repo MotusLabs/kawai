@@ -16,6 +16,7 @@ import { manifestHashInput, type AttemptManifest } from '../../../shared/planExe
 import type { ExecutionStore } from './executionStore'
 import type { PlanStore } from '../planStore'
 import { fixInstruction, implementInstruction } from './instructions'
+import { refusable } from './stepRefusal'
 
 /** The system caller (D2): minted only inside this module. */
 function kawaiCaller(team: TeamIdentity, executionId: string): TaskCaller {
@@ -29,7 +30,7 @@ export interface DispatchDeps {
   tasks: TaskService
   assignments: AssignmentService
   /** Fix and review stages dispatch as handoffs, superseding the prior stage (D7). */
-  results?: TaskResultService
+  results: TaskResultService
 }
 
 /** sha256 of `git show <startCommit>:<path>` for each validated file (D8's digest). */
@@ -61,7 +62,7 @@ export async function dispatchImplementAttempt(deps: DispatchDeps, input: { exec
   // The task (D7): title, direction, acceptance, worktree, openspec link, plan link.
   let taskId = changeRow.taskId
   if (taskId === null) {
-    const task = await deps.tasks.create(kawaiCaller(deps.team, input.executionId), {
+    const task = await refusable('implement', () => deps.tasks.create(kawaiCaller(deps.team, input.executionId), {
       title: `${input.change} — ${deps.plans.get(execution.planId)?.title ?? execution.planId}`,
       direction: `The OpenSpec change "${input.change}" is the authoritative direction for this task; its proposal, design, and tasks under openspec/changes/${input.change}/ govern the work.\n\n${entry.guidance}`.trim(),
       acceptance: [...entry.acceptance, ...revision.content.acceptanceRules].join('\n') || null,
@@ -69,7 +70,7 @@ export async function dispatchImplementAttempt(deps: DispatchDeps, input: { exec
       openspec_change: input.change,
       plan_id: execution.planId,
       plan_change: input.change,
-    })
+    }))
     taskId = task.id
     deps.executions.transition(input.executionId, input.change, { state: changeRow.state, generation: changeRow.generation }, { taskId })
   }
@@ -104,8 +105,11 @@ export async function dispatchImplementAttempt(deps: DispatchDeps, input: { exec
 
   const change = deps.executions.change(input.executionId, input.change)!
   const requestKey = `exec:${input.executionId}:${input.change}:attempt:${number}:${change.generation}`
-  await deps.assignments.dispatch(kawaiCaller(deps.team, input.executionId), {
-    taskId,
+  const head = existing.length === 0
+    ? (await runGitAsync(['rev-parse', 'HEAD'], { cwd: changeRow.worktree! })).stdout.trim()
+    : changeRow.baselineCommit!
+  await refusable('implement', () => deps.assignments.dispatch(kawaiCaller(deps.team, input.executionId), {
+    taskId: taskId!,
     target: { kind: 'group', id: input.group },
     instruction: implementInstruction({
       planTitle: deps.plans.get(execution.planId)?.title ?? execution.planId,
@@ -114,16 +118,16 @@ export async function dispatchImplementAttempt(deps: DispatchDeps, input: { exec
       worktree: changeRow.worktree!,
       branch: changeRow.branch!,
       baseline: changeRow.baselineCommit!,
-      head: existing.length === 0 ? (await runGitAsync(['rev-parse', 'HEAD'], { cwd: changeRow.worktree })).stdout.trim() : changeRow.baselineCommit!,
+      head,
       acceptance: [...entry.acceptance, ...revision.content.acceptanceRules],
       extraChecks: entry.extraChecks.map(check => check.name),
       guidance: entry.guidance,
-      taskId,
+      taskId: taskId!,
       manifestHash: manifestHash!,
     }),
     requestKey,
     ...(roleProfiles.length > 0 ? { allowedProfiles: roleProfiles } : {}),
-  })
+  }))
 }
 
 /**
@@ -212,19 +216,53 @@ export async function dispatchFixAttempt(deps: DispatchDeps, input: {
   })
   // A fix is a handoff (D7): it supersedes the outstanding review through
   // the stop branch, so a delivered review never holds the change.
-  if (deps.results !== undefined) {
-    await deps.results.handoff(kawaiCaller(deps.team, input.executionId), taskId, {
-      kind: 'fix', resultId: round?.resultId ?? '', target: { kind: 'group', id: input.group },
-      instructions: instruction, requestKey,
-      ...(roleProfiles.length > 0 ? { allowedProfiles: roleProfiles } : {}),
-    })
-    return
-  }
-  await deps.assignments.dispatch(kawaiCaller(deps.team, input.executionId), {
-    taskId,
-    target: { kind: 'group', id: input.group },
-    instruction,
-    requestKey,
+  await refusable('fix', () => deps.results.handoff(kawaiCaller(deps.team, input.executionId), taskId, {
+    kind: 'fix', resultId: round?.resultId ?? '', target: { kind: 'group', id: input.group },
+    instructions: instruction, requestKey,
     ...(roleProfiles.length > 0 ? { allowedProfiles: roleProfiles } : {}),
-  })
+  }))
+}
+
+/**
+ * Retry of a failed or closed stage (D12): the stage's instruction is sent
+ * again. The task's newest standing assignment is re-sent verbatim to the
+ * same target under a key carrying the change's new generation — a handoff
+ * through the result service (a review re-pins the round's review), else a
+ * plain dispatch. A change without one dispatches its implement attempt.
+ * The step clears once the instruction is sent.
+ */
+export async function redispatchStage(deps: DispatchDeps, row: { executionId: string; change: string; taskId: string | null; generation: number }): Promise<void> {
+  const execution = deps.executions.execution(row.executionId)
+  if (execution === null) return
+  const revision = deps.plans.revision(execution.planId, execution.revision)
+  const caller = kawaiCaller(deps.team, row.executionId)
+  const previous = row.taskId === null ? undefined
+    : deps.tasks.store.assignmentsOf(row.taskId).filter(entry => entry.supersededBy === null).at(-1)
+  if (row.taskId !== null && previous !== undefined) {
+    const taskId = row.taskId
+    const target = { kind: previous.targetKind, id: previous.targetId }
+    const roleProfiles = previous.targetKind === 'group' ? revision?.content.roles.find(role => role.group === previous.targetId)?.profiles ?? [] : []
+    const requestKey = `${previous.requestKey}:retry:${row.generation}`
+    const handoffKind = previous.handoffKind ?? null
+    const resultId = previous.resultId ?? null
+    if (handoffKind !== null && resultId !== null) {
+      const outcome = await refusable(handoffKind, () => deps.results.handoff(caller, taskId, {
+        kind: handoffKind, resultId, target, instructions: previous.instruction, requestKey,
+        ...(previous.expectedResponse ? { expectedResponse: previous.expectedResponse } : {}),
+        ...(roleProfiles.length > 0 ? { allowedProfiles: roleProfiles } : {}),
+      }))
+      const round = deps.executions.rounds(row.executionId, row.change).at(-1) ?? null
+      if (handoffKind === 'review' && round !== null) deps.executions.setRoundReview(round.id, outcome.assignment.id)
+    } else {
+      await refusable('implement', () => deps.assignments.dispatch(caller, {
+        taskId, target, instruction: previous.instruction, requestKey,
+        ...(roleProfiles.length > 0 ? { allowedProfiles: roleProfiles } : {}),
+      }))
+    }
+  } else {
+    const group = revision?.content.changes.find(entry => entry.change === row.change)?.group ?? null
+    if (group !== null) await dispatchImplementAttempt(deps, { executionId: row.executionId, change: row.change, group })
+  }
+  const fresh = deps.executions.change(row.executionId, row.change)
+  if (fresh !== null && fresh.step === 'redispatch') deps.executions.transition(row.executionId, row.change, fresh, { step: null })
 }

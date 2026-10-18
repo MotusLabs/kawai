@@ -64,6 +64,7 @@ export const CHANGE_STEP_LABELS: Record<ChangeStep, string> = {
   'up-to-date': 'bringing the branch up to date',
   updating: 'updating the branch from its base',
   merging: 'merging',
+  redispatch: 'sending the instruction again',
 }
 
 export const STOP_REASON_LABELS: Record<StopReason, string> = {

@@ -141,7 +141,7 @@ function submitRound(root: string, mode: 'result' | 'findings', implementer: str
   }).trim()
 }
 
-/** Poll the execution's progress until its outcome reads completed. */
+/** Poll the execution's progress until a row reads `until` (e.g. its outcome `completed`). */
 async function pollExecution(root: string, until: string): Promise<boolean> {
   const dbPath = process.env.AGENTBOARD_DB_PATH!
   const script = `
@@ -170,7 +170,7 @@ async function pollExecution(root: string, until: string): Promise<boolean> {
       const stdout = execFileSync('bun', ['-e', script], { cwd: process.cwd(), encoding: 'utf8' })
       const line = stdout.split('\n').find(entry => entry.startsWith('POLL '))
       const rows = line ? JSON.parse(line.slice('POLL '.length)) as Array<Record<string, unknown>> : []
-      if (JSON.stringify(rows).includes('"completed"')) return true
+      if (JSON.stringify(rows).includes(JSON.stringify(until))) return true
     } catch {
       // A poll cycle that could not read the state yet tries again.
     }

@@ -13,7 +13,7 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { cleanGitEnv, runGitAsync } from '../git/gitCommand'
+import { cleanGitEnv } from '../git/gitCommand'
 import { isAncestor as realIsAncestor, mergeTree as realMergeTree } from '../plans/landing/gitRemote'
 import { AssignmentService } from '../team/AssignmentService'
 import { AssignmentStore } from '../team/assignmentStore'
@@ -30,6 +30,7 @@ import { provisionAdapter } from '../plans/execution/executionProvision'
 import { PlanService } from '../plans/PlanService'
 import { StrategyStore } from '../strategy/strategyStore'
 import { createPlanBench, createPlanWorld, writeGroup, type PlanBench, type PlanWorld } from './planHarness'
+import { neutralExecutorSeams } from './executorTestSeams'
 
 const FLOOR = { lint: ['ci'], typecheck: ['ci'], 'unit-tests': ['ci'], 'ci-e2e': ['e2e'] }
 
@@ -47,6 +48,7 @@ let origin: string
 let baseSha: string
 let ghStub: { prMerge: Record<string, string>; prView: Record<string, { state: string; mergeCommit: string | null; headRefOid: string }> }
 let predictedConflicts: string[]
+/** Unresolved acceptance conditions by execution id (the live read, D13 step 1). */
 let conditions: Record<string, string[]>
 
 
@@ -144,12 +146,13 @@ beforeEach(() => {
   conditions = {}
   predictedConflicts = []
   executor = new ExecutionExecutor({
+    ...neutralExecutorSeams,
     store: executions, plans: bench.plans, tasks, assignments, results, mailbox: mail,
     records: () => bench.records.values(),
     teamOf: id => (id === world.team.teamId ? world.team : undefined),
     adapters: { provision: provisionAdapter(executions) },
     plansService,
-    conditionsOf: change => conditions[change] ?? [],
+    conditionsOf: executionId => conditions[executionId] ?? [],
     roundAdapters: {
       lsRemoteHead: async () => ({ ok: true, sha: null }),
       push: async () => ({ ok: true as const }),
@@ -217,13 +220,13 @@ describe('direct landing (§14)', () => {
 
   test('an unresolved condition holds the change outside the slot; resolving lands (14.1)', async () => {
     const { executionId } = await passedChangeExecution('cond-a')
-    conditions['cond-a'] = ['Confirm the rollback plan with the owner']
+    conditions[executionId] = ['Confirm the rollback plan with the owner']
     executor.wake(world.team.teamId)
     await executor.idle()
     expect(executions.change(executionId, 'cond-a')).toMatchObject({ state: 'gating', step: 'conditions' })
     expect(executions.slot(world.team.teamId)).toBeNull()
 
-    conditions['cond-a'] = []
+    conditions[executionId] = []
     executor.wake(world.team.teamId)
     await executor.idle()
     expect(executions.change(executionId, 'cond-a')!.state).toBe('landing')
@@ -313,6 +316,9 @@ describe('direct landing (§14)', () => {
     })()
     remoteHeads['refs/heads/master'] = movedBase
     predictedConflicts = []
+    // The second PR is open, its head still the reviewed one: GitHub has not
+    // carried the update yet, so the update poll waits.
+    ghStub.prView['7'] = { state: 'OPEN', mergeCommit: null, headRefOid: second.commit }
     executor.wake(world.team.teamId)
     await executor.idle()
     const row = executions.change(second.executionId, 'move-b')!

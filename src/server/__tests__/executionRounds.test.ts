@@ -26,6 +26,7 @@ import { executionOwnership } from '../plans/execution/executionOwnership'
 import { ExecutionExecutor } from '../plans/execution/executor'
 import { provisionAdapter } from '../plans/execution/executionProvision'
 import { createPlanBench, createPlanWorld, writeGroup, type PlanBench, type PlanWorld } from './planHarness'
+import { neutralExecutorSeams } from './executorTestSeams'
 
 let world: PlanWorld
 let bench: PlanBench
@@ -38,7 +39,6 @@ let executor: ExecutionExecutor
 let gitRoot: string
 let origin: string
 let baseSha: string
-let ghEnv: Record<string, string>
 let ghStub: { checkRuns: string; statuses: string; pulls: string; created: string; reruns: number[] }
 
 
@@ -148,27 +148,10 @@ beforeEach(() => {
     staffing, caps, worktrees, homeDir: world.home, plans: bench.plans, ownership,
   })
   results = new TaskResultService(tasks, { getSession: id => bench.records.get(id), assignments, ownership })
-  // The stub gh: scripted per test through the ghStub object.
+  // The scripted gh surface: the round adapters below read the ghStub object.
   ghStub = { checkRuns: '[]', statuses: '[]', pulls: '[]', created: '{"number":7,"url":"https://example.internal/pr/7"}', reruns: [] }
-  const bin = path.join(gitRoot, 'bin')
-  fs.mkdirSync(bin, { recursive: true })
-  fs.writeFileSync(path.join(bin, 'gh'), `#!/bin/sh
-case "$*" in
-  *"check-runs"*) printf '%s' "$GH_CHECK_RUNS" ;;
-  *"commits/"*"status"*) printf '%s' "$GH_STATUSES" ;;
-  *"pr list"*) printf '%s' "$GH_PULLS" ;;
-  *"pr create"*) printf '%s' "$GH_PR_CREATE" ;;
-  *"run rerun"*) echo "$*" >> "$GH_RERUN_LOG"; exit 0 ;;
-  *) echo "gh: unexpected call: $*" >&2; exit 1 ;;
-esac
-`, { mode: 0o755 })
-  ghEnv = {
-    PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`,
-    GH_CHECK_RUNS: '[]', GH_STATUSES: '[]', GH_PULLS: '[]',
-    GH_PR_CREATE: ghStub.created, GH_RERUN_LOG: path.join(gitRoot, 'rerun.log'),
-  }
-  fs.writeFileSync(path.join(gitRoot, 'rerun.log'), '')
   executor = new ExecutionExecutor({
+    ...neutralExecutorSeams, plansService: bench.service,
     store: executions, plans: bench.plans, tasks, assignments, mailbox: mail, results,
     records: () => bench.records.values(),
     teamOf: id => (id === world.team.teamId ? world.team : undefined),
@@ -199,7 +182,7 @@ const passCi = () => {
 describe('the round pipeline (§12)', () => {
   test('a result becomes a decided round: push, PR, CI, review, independent pass', async () => {
     const executionId = await approvedExecution('flow-a')
-    const { row, commit } = await implementStage(executionId, 'flow-a', 'export const a = 1\n')
+    const { commit } = await implementStage(executionId, 'flow-a', 'export const a = 1\n')
     ghStub.pulls = '[]'
     passCi()
     executor.wake(world.team.teamId)
@@ -378,12 +361,13 @@ describe('the round pipeline (§12)', () => {
     const released: string[] = []
     const holding = { ready: true, reason: null as string | null }
     const releasingExecutor = new ExecutionExecutor({
+      ...neutralExecutorSeams, plansService: bench.service,
       store: executions, plans: bench.plans, tasks, assignments, results, mailbox: mail,
       records: () => bench.records.values(),
       teamOf: id => (id === world.team.teamId ? world.team : undefined),
       adapters: { provision: provisionAdapter(executions) },
       roundAdapters: stubRoundAdapters(),
-      releases: { readiness: id => (id === 'dev' ? holding : { ready: true, reason: null }), release: id => released.push(id) },
+      releases: { readiness: id => (id === 'dev' ? holding : { ready: true, reason: null }), release: id => { released.push(id); return { ok: true as const } } },
       groupScoped: () => true,
     })
     try {

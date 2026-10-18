@@ -20,6 +20,7 @@ import { ExecutionService } from '../plans/execution/ExecutionService'
 import { ExecutionExecutor } from '../plans/execution/executor'
 import { provisionAdapter } from '../plans/execution/executionProvision'
 import { createPlanBench, createPlanWorld, writeGroup, type PlanBench, type PlanWorld } from './planHarness'
+import { neutralExecutorSeams } from './executorTestSeams'
 
 const FLOOR = { lint: ['ci'], typecheck: ['ci'], 'unit-tests': ['ci'], 'ci-e2e': ['e2e'] }
 
@@ -69,10 +70,13 @@ beforeEach(async () => {
     settings: { planExecution: async () => ({ floorChecks: FLOOR, maxParallelChanges: 2, mergeMethod: 'merge' }) },
     getSession: () => null,
     landingModes: () => new Set(['direct']),
+    identityOf: () => world.team,
     tasks,
   })
   executor = new ExecutionExecutor({
+    ...neutralExecutorSeams,
     store: executions, plans: bench.plans, tasks, assignments, results, mailbox: mail,
+    records: () => bench.records.values(), plansService: bench.service,
     teamOf: id => (id === world.team.teamId ? world.team : undefined),
     adapters: { provision: provisionAdapter(executions) },
   })
@@ -120,7 +124,9 @@ describe('Retry (§13.3)', () => {
     const first = await service.retry(bench.human, { executionId, change: 'rt-a', commandId: 'retry-1' })
     expect(first).toMatchObject({ ok: true, replayed: false })
     const moved = executions.change(executionId, 'rt-a')!
-    expect(moved).toMatchObject({ state: 'implementing', stopReason: null })
+    // Round limit: back to gating on its failed round, whose fix step
+    // dispatches the fix attempt on the next tick (spec: Retry after the round limit).
+    expect(moved).toMatchObject({ state: 'gating', step: null, stopReason: null, fixRounds: 0 })
     expect(moved.generation).toBe(stoppedAt.generation + 1)
     expect(moved.generation).toBeGreaterThan(before.generation)
 

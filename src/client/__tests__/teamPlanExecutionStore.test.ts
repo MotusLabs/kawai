@@ -5,7 +5,6 @@
 // grep test — a store method nothing dispatches is dead wiring).
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import type { PlanDetail } from '@shared/plans'
 import { useTeamPlanStore } from '../stores/teamPlanStore'

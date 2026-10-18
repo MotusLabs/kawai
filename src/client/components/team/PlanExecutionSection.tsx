@@ -4,7 +4,6 @@
 // Stop while something does. Every control disables while disconnected.
 import type { SendClientMessage } from '@shared/types'
 import type { PlanDetail, PlanSummary } from '@shared/plans'
-import type { PlanExecutionView } from '@shared/planExecution'
 import PlanExecutionChangeRow from './PlanExecutionChangeRow'
 import PlanExecutionStartDialog from './PlanExecutionStartDialog'
 import PlanExecutionStopDialog from './PlanExecutionStopDialog'

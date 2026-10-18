@@ -10,7 +10,7 @@
 // (D7/D8), performed by the executor, not an effect row.
 import type { ChangeState } from '../../../shared/planExecution'
 import type { ChangePatch } from './executionStore'
-import type { ExecutionSnapshot, PlannedChange } from './executionSnapshot'
+import type { ExecutionSnapshot } from './executionSnapshot'
 
 export interface PlannedTransition {
   executionId: string
@@ -38,9 +38,11 @@ export interface PlannedDispatch {
 export interface PlannedStage {
   executionId: string
   change: string
-  kind: 'result' | 'push' | 'open-pr' | 'ci' | 'review' | 'verdict' | 'revision' | 'landing' | 'post-ci'
+  kind: 'result' | 'push' | 'open-pr' | 'ci' | 'review' | 'verdict' | 'revision' | 'landing' | 'post-ci' | 'redispatch' | 'landing-outcome'
   roundId: string | null
   resultId: string | null
+  /** A `landing-outcome` stage's settled merge or update-branch effect. */
+  effectId?: string
 }
 
 export interface PlanSteps {
@@ -65,6 +67,17 @@ export function planSteps(snapshot: ExecutionSnapshot, _now: string): PlanSteps 
   const steps: PlanSteps = { transitions: [], effects: [], dispatches: [], stages: [], fixes: [] }
   const standing = new Set(snapshot.effects.map(effect => effect.effectKey))
   for (const execution of snapshot.executions) {
+    if (execution.finished) {
+      // A stopped execution only settles the merge that ran at Stop (D12):
+      // landed and accepted if it merged, cancelled with its task otherwise.
+      for (const change of execution.changes) {
+        const effect = change.landingEffect
+        if (change.state === 'landing' && effect !== null && effect.kind === 'merge' && (effect.state === 'done' || effect.state === 'failed')) {
+          steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'landing-outcome', roundId: null, resultId: null, effectId: effect.id })
+        }
+      }
+      continue
+    }
     const states = new Map(execution.changes.map(change => [change.change, change.state]))
     let inProgress = execution.changes.filter(change => IN_PROGRESS.has(change.state)).length
     for (const change of execution.changes) {
@@ -108,7 +121,16 @@ export function planSteps(snapshot: ExecutionSnapshot, _now: string): PlanSteps 
         })
         continue
       }
-      if (change.state === 'implementing' && change.taskId === null && change.group !== null) {
+      // Retry of a failed or closed stage (D12): its instruction is sent
+      // again before anything reads the old, failed assignment.
+      if (change.step === 'redispatch') {
+        steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'redispatch', roundId: null, resultId: null })
+        continue
+      }
+      // The implement dispatch: a change without its task, or whose task
+      // exists but whose dispatch never committed (a refused one, retried).
+      if (change.state === 'implementing' && change.group !== null
+        && (change.taskId === null || (change.task !== null && change.task.assignment === null && change.task.results.length === 0))) {
         steps.dispatches.push({ executionId: change.executionId, change: change.change, group: change.group })
       }
       // A stage instruction that failed stops the change (D12): its
@@ -124,6 +146,7 @@ export function planSteps(snapshot: ExecutionSnapshot, _now: string): PlanSteps 
             stopDetail: {
               message: `The stage instruction failed to deliver (${change.task.assignment.reason ?? 'the mail settled'}).`,
               assignmentId: change.task.assignment.id,
+              resumeState: change.state,
             },
           },
         })
@@ -135,41 +158,62 @@ export function planSteps(snapshot: ExecutionSnapshot, _now: string): PlanSteps 
         steps.transitions.push({
           executionId: change.executionId, change: change.change,
           guard: { state: change.state, generation: change.generation },
-          patch: { state: 'stopped', stopReason: 'task-closed', step: null, stopDetail: { message: `The task was ${change.task.status} by hand.`, ...(change.taskId !== null ? { taskId: change.taskId } : {}) } },
+          patch: { state: 'stopped', stopReason: 'task-closed', step: null, stopDetail: { message: `The task was ${change.task.status} by hand.`, resumeState: change.state, ...(change.taskId !== null ? { taskId: change.taskId } : {}) } },
         })
         continue
       }
+      if (change.task === null) continue
+      // D13's follow-ons: a settled merge or update-branch effect of a
+      // landing change is applied by the tick (merge → landed, or back to
+      // up-to-date; update → the clean-merge check, polled until the head
+      // moves); a standing one is left to settle.
+      const landingEffect = change.landingEffect
+      const settling = change.state === 'landing' && (change.step === 'merging' || change.step === 'updating')
+      if (settling) {
+        if (landingEffect !== null && landingEffect.state === 'done'
+          && ((change.step === 'merging' && landingEffect.kind === 'merge') || (change.step === 'updating' && landingEffect.kind === 'update-branch'))) {
+          steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'landing-outcome', roundId: null, resultId: null, effectId: landingEffect.id })
+        }
+        continue
+      }
       // The round pipeline (D9-D11): a result becomes a round, a round is
-      // pushed, PR'd, CI-read, reviewed, and decided. A landing change's
-      // merge has started, so no newer result supersedes its round.
-      if (change.task === null || change.state === 'landing') continue
+      // pushed, PR'd, CI-read, reviewed, and decided. A landing change holds
+      // the slot for its base merge, so no newer result supersedes its round.
       const newest = change.task.results.at(-1) ?? null
-      if (newest !== null && (change.round === null || change.round.resultId !== newest.id)) {
+      if (change.state !== 'landing' && newest !== null && (change.round === null || change.round.resultId !== newest.id)) {
         steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'result', roundId: null, resultId: newest.id })
         continue
       }
       const round = change.round
       // D9: a result pinned to an older task revision can never pass — the
-      // change returns for a fix attempt naming the revision, unless its
-      // merge started or an update-branch effect is still settling.
-      if (change.task !== null && round !== null && change.task.results.some(result => result.id === round.resultId && result.taskRevision < change.task!.revision)) {
-        const updating = snapshot.effects.some(effect => effect.change === change.change && effect.kind === 'update-branch')
-        if (!updating) steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'revision', roundId: round.id, resultId: null })
+      // change returns for a fix attempt naming the revision (a landing
+      // change too, releasing the slot), unless its merge started or an
+      // update-branch effect is still settling.
+      if (round !== null && change.task.results.some(result => result.id === round.resultId && result.taskRevision < change.task!.revision)) {
+        steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'revision', roundId: round.id, resultId: null })
         continue
       }
-      if (change.state !== 'gating' || round === null) continue
+      if ((change.state !== 'gating' && change.state !== 'landing') || round === null) continue
       if (round.outcome === 'pass' && change.passedAt !== null) {
-        // D13: a passed change lands — conditions first, then the slot.
+        // D13: a passed change lands — conditions first, then the slot, then
+        // up to date and the merge.
         steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'landing', roundId: round.id, resultId: null })
         continue
       }
       if (round.outcome === 'fail') {
         // A failed round returns the change for fixes under the count rule
-        // (D12); the executor decides stop versus dispatch.
+        // (D12) — a carried round that failed base-merge CI too, leaving the
+        // slot; the executor decides stop versus dispatch.
         steps.fixes.push({ executionId: change.executionId, change: change.change, roundId: round.id })
         continue
       }
       if (round.outcome !== null) continue
+      if (round.carriedFrom !== null) {
+        // A carried round keeps its review: CI on the new head decides it.
+        const rerunKey = `${change.executionId}:${change.change}:rerun:${round.number}:${change.generation}`
+        if (!standing.has(rerunKey)) steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'ci', roundId: round.id, resultId: null })
+        continue
+      }
       const pushKey = `${change.executionId}:${change.change}:push:${round.number}:${change.generation}`
       if (round.pushedAt === null) {
         if (!standing.has(pushKey)) steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'push', roundId: round.id, resultId: null })

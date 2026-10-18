@@ -22,6 +22,7 @@ import { ghCheckRuns, ghPrCreate, ghPrList, ghRerunFailed, ghStatuses } from '..
 import type { GhCommandOptions } from '../landing/ghCommand'
 import type { AssignmentService } from '../../team/AssignmentService'
 import { dispatchFixAttempt } from './executionDispatch'
+import { refusable } from './stepRefusal'
 import type { EffectAdapter } from './effects'
 
 /** The gh/git surface the pipeline uses; injectable for tests. */
@@ -40,6 +41,15 @@ export const roundAdapters: RoundAdapters = {
   prList: ghPrList, prCreate: ghPrCreate, rerun: ghRerunFailed,
 }
 
+/**
+ * Member release's readiness and release (D11). `release` reports whether
+ * the archive happened; a refused one holds the step at `releasing`.
+ */
+export interface ReleaseSeam {
+  readiness: (sessionId: string) => { ready: boolean; reason: string | null }
+  release: (sessionId: string) => { ok: true } | { ok: false; error: string }
+}
+
 export interface RoundDeps {
   team: TeamIdentity
   /** origin as owner/repo (the probe's read); every gh call is addressed to it. */
@@ -52,18 +62,11 @@ export interface RoundDeps {
   adapters: RoundAdapters
   /** Passed to every gh call (tests stub gh on a private PATH). */
   ghOptions?: GhCommandOptions
-  /**
-   * D11's release step: readiness and the archive+journal release of one
-   * spawned member. The composition wires member-release; without it the
-   * step is skipped (the implementer stays, as an unscoped group's would).
-   */
-  releases?: {
-    readiness: (sessionId: string) => { ready: boolean; reason: string | null }
-    release: (sessionId: string) => void
-  }
-  /** The group files: whether the review group is worktree-scoped (default true). */
-  groupScoped?: (teamId: string, groupId: string) => boolean
-  records?: () => Iterable<ChatSessionRecord>
+  /** D11's release step: readiness and the archive+journal release of one spawned member. */
+  releases: ReleaseSeam
+  /** The group files: whether the review group is worktree-scoped. */
+  groupScoped: (teamId: string, groupId: string) => boolean
+  records: () => Iterable<ChatSessionRecord>
   now: () => string
 }
 
@@ -167,7 +170,10 @@ async function pollCi(deps: RoundDeps, changeRow: { executionId: string; change:
   store.setRoundCi(round.id, checks, rerunOutcome?.at ?? null)
   if (evaluation.kind === 'pending') return
   if (evaluation.kind === 'pass') {
-    // The review stage follows in the same tick: release, then handoff (D11).
+    // A carried round keeps its source's review, so its verdict decides now
+    // (D13); otherwise the review stage follows in the same tick: release,
+    // then handoff (D11).
+    if (round.carriedFrom !== null) return decideVerdict(deps, changeRow, store.round(round.id)!, extra)
     return dispatchReview(deps, changeRow, store.round(round.id)!)
   }
   if (evaluation.kind === 'fail') {
@@ -194,43 +200,48 @@ async function dispatchReview(deps: RoundDeps, changeRow: { executionId: string;
   const entry = revision?.content.changes.find(candidate => candidate.change === changeRow.change) ?? null
   const reviewGroup = entry?.reviewGroup ?? revision?.content.reviewGroup ?? null
   if (reviewGroup === null) return
-  const change = store.change(changeRow.executionId, changeRow.change)!
+  let change = store.change(changeRow.executionId, changeRow.change)!
   // D11 step 1 — Release: a worktree-scoped review group gets the worktree,
   // so each live spawned member in it is released once ready; a not-ready
-  // member holds the step at `releasing`, re-checked on the next wake.
-  // Human-created sessions never release. An unscoped group (or no wiring)
+  // member, or a release that is refused, holds the step at `releasing`
+  // with the reason in the detail, and no review is dispatched — the next
+  // wake re-checks. Human-created sessions never release. An unscoped group
   // skips the step and leaves the implementer working.
-  if (deps.releases !== undefined && change.worktree !== null
-    && (deps.groupScoped?.(deps.team.teamId, reviewGroup) ?? true)) {
-    const members = [...(deps.records?.() ?? [])].filter(record =>
+  if (change.worktree !== null && deps.groupScoped(deps.team.teamId, reviewGroup)) {
+    const members = [...deps.records()].filter(record =>
       record.archivedAt == null && record.spawned === true
       && (record.projectPath === change.worktree || record.projectPath.startsWith(`${change.worktree}${path.sep}`))
       && record.groupId !== reviewGroup)
     for (const member of members) {
       const readiness = deps.releases.readiness(member.sessionId)
-      if (!readiness.ready) {
-        if (change.step !== 'releasing') store.transition(changeRow.executionId, changeRow.change, change, { step: 'releasing' })
+      const released = readiness.ready ? deps.releases.release(member.sessionId) : { ok: false as const, error: readiness.reason ?? 'not ready' }
+      if (!released.ok) {
+        const held = store.change(changeRow.executionId, changeRow.change)!
+        const message = `Waiting to release ${member.sessionId} before the review: ${released.error}`
+        if (held.step !== 'releasing' || held.stopDetail?.message !== message) {
+          store.transition(changeRow.executionId, changeRow.change, held, { step: 'releasing', stopDetail: { message, session: member.sessionId } })
+        }
         return
       }
-      deps.releases.release(member.sessionId)
     }
   }
-  if (change.step !== 'reviewing') store.transition(changeRow.executionId, changeRow.change, change, { step: 'reviewing' })
+  change = store.change(changeRow.executionId, changeRow.change)!
+  if (change.step !== 'reviewing') store.transition(changeRow.executionId, changeRow.change, change, { step: 'reviewing', stopDetail: null })
   const role = revision?.content.roles.find(candidate => candidate.group === reviewGroup)?.profiles ?? []
   const authors = (change.taskId ? deps.tasks.store.results.listByTask(change.taskId) : [])
     .map(result => result.submittedBy.sessionId).filter((id): id is string => id !== null)
-  const outcome = await deps.results.handoff({ kind: 'system', team: deps.team, executionId: changeRow.executionId }, change.taskId!, {
+  const outcome = await refusable('review', () => deps.results.handoff({ kind: 'system', team: deps.team, executionId: changeRow.executionId }, change.taskId!, {
     kind: 'review', resultId: round.resultId, target: { kind: 'group', id: reviewGroup },
     instructions: reviewInstruction(deps, changeRow.change, round, entry?.extraChecks ?? []),
-    requestKey: `exec:${changeRow.executionId}:${changeRow.change}:round:${round.number}:review`,
+    requestKey: `exec:${changeRow.executionId}:${changeRow.change}:round:${round.number}:review:${change.generation}`,
     ...(role.length > 0 ? { allowedProfiles: role } : {}),
     tags: [...new Set(authors.flatMap(session => sessionProfileOf(deps, session)).map(profile => `author-profile:${profile}`))],
-  })
-  if ('assignment' in outcome) store.setRoundReview(round.id, outcome.assignment.id)
+  }))
+  store.setRoundReview(round.id, outcome.assignment.id)
 }
 
 function sessionProfileOf(deps: RoundDeps, sessionId: string): string[] {
-  const record = [...(deps.records?.() ?? [])].find(row => row.sessionId === sessionId)
+  const record = [...deps.records()].find(row => row.sessionId === sessionId)
   return record?.claudeProfileId ? [record.claudeProfileId] : []
 }
 

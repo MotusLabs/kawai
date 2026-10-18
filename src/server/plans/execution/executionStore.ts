@@ -99,6 +99,18 @@ export class ExecutionStore {
       .map(mapExecution)
   }
 
+  /** Finished executions still holding a `landing` change: a merge running at Stop settles after it (D12). */
+  settlingForTeam(teamId: string): ExecutionRow[] {
+    return (this.db.prepare(`SELECT * FROM plan_executions e WHERE team_id = ? AND state <> 'running'
+      AND EXISTS (SELECT 1 FROM plan_execution_changes c WHERE c.execution_id = e.id AND c.state = 'landing') ORDER BY started_at, rowid`)
+      .all(teamId) as Array<Record<string, unknown>>).map(mapExecution)
+  }
+
+  /** Run `body` in one transaction on the store's connection (Stop's commit, D12). */
+  atomically<T>(body: () => T): T {
+    return this.db.transaction(body)()
+  }
+
   /** Every team holding a running execution (the runtime's boot wake, D5). */
   runningTeams(): string[] {
     return (this.db.prepare("SELECT DISTINCT team_id FROM plan_executions WHERE state = 'running'").all() as Array<{ team_id: string }>)
@@ -347,10 +359,12 @@ export class ExecutionStore {
       const prior = this.rounds(input.executionId, input.change).at(-1) ?? null
       const number = (prior?.number ?? 0) + 1
       const id = `round-${crypto.randomUUID()}`
-      this.db.prepare(`INSERT INTO plan_execution_rounds (id, execution_id, change, attempt_id, number, result_id, commit_sha, fix_round, carried_from, ci_window_from)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      // GitHub's merge commit is on origin and keeps its source's review: only CI reruns (D13).
+      const source = this.round(input.carriedFrom)
+      this.db.prepare(`INSERT INTO plan_execution_rounds (id, execution_id, change, attempt_id, number, result_id, commit_sha, fix_round, carried_from, ci_window_from, pushed_at, review_assignment_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
         id, input.executionId, input.change, input.attemptId, number, input.resultId, input.commitSha,
-        prior?.fixRound === true ? 1 : 0, input.carriedFrom, input.ciWindowFrom,
+        source?.fixRound === true ? 1 : 0, input.carriedFrom, input.ciWindowFrom, input.ciWindowFrom, source?.reviewAssignmentId ?? null,
       )
       if (prior && prior.outcome === null) {
         this.db.prepare(`UPDATE plan_execution_rounds SET outcome = 'superseded', decided_at = ? WHERE id = ? AND outcome IS NULL`).run(this.iso(), prior.id)

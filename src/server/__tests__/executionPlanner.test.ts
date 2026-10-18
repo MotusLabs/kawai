@@ -11,7 +11,7 @@ import type { ExecutionSnapshot, PlannedChange } from '../plans/execution/execut
 const change = (name: string, state: ChangeState, over: Partial<PlannedChange> = {}): PlannedChange => ({
   executionId: 'e1', change: name, state, step: null, generation: 0, taskId: null,
   worktree: null, branch: null, baselineCommit: null, prNumber: null, passedAt: null, dependsOn: [], group: 'devs',
-  task: null, round: null, landing: null, ...over,
+  task: null, round: null, landing: null, landingEffect: null, ...over,
 })
 
 const withTask = (state: ChangeState, task: Partial<NonNullable<PlannedChange['task']>>, over: Partial<PlannedChange> = {}): PlannedChange =>
@@ -25,7 +25,7 @@ const snapshot = (changes: PlannedChange[], over: Partial<ExecutionSnapshot> = {
       landingMode: 'direct', baseBranch: 'master', baseCommit: 'base', floor: { version: 1, map: { lint: ['ci'], typecheck: ['ci'], 'unit-tests': ['ci'], 'ci-e2e': ['e2e'] } },
       maxParallel: 1, mergeMethod: 'merge', state: 'running', outcome: null, stopReason: null, startedAt: '', finishedAt: null,
     },
-    changes,
+    changes, finished: false,
   }],
   effects: [], attempts: new Map(), ...over,
 })
@@ -48,7 +48,7 @@ describe('planSteps scheduling (§11.2)', () => {
   test('the parallel limit holds ready changes back; landed work is not redone', () => {
     const result = steps([change('one', 'waiting'), change('two', 'waiting'), change('done', 'landed')], {
       executions: [{
-        row: { ...snapshot([]).executions[0]!.row, maxParallel: 1 }, changes: [change('one', 'waiting'), change('two', 'waiting'), change('done', 'landed')],
+        row: { ...snapshot([]).executions[0]!.row, maxParallel: 1 }, changes: [change('one', 'waiting'), change('two', 'waiting'), change('done', 'landed')], finished: false,
       }],
     })
     expect(result.transitions.map(step => step.change)).toEqual(['one'])
