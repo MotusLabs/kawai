@@ -37,6 +37,7 @@ import ChatActivityRow from './ChatActivityRow'
 import ChatHeader from './ChatHeader'
 import ChatDebugPanel from './ChatDebugPanel'
 import ChatMessages from './ChatMessages'
+import { useHistoryAnchor } from './useHistoryAnchor'
 import { AsideRow } from './ChatRow'
 import { agentLabelOf } from './transcriptLayout'
 import { openParticipantChat } from './openParticipant'
@@ -79,9 +80,19 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
   const end = useRef<HTMLDivElement>(null)
   const connected = connectionStatus === 'connected'
   const archived = session.archivedAt != null
+  // Where this view's last attach landed (chat-history-window D3): the same
+  // session re-running the effect is a reconnect, which resumes from the
+  // window start the client still holds; a different session is an open,
+  // which widens only what the user expanded in this page load.
+  const lastAttachedRef = useRef<string | null>(null)
   useEffect(() => {
     if (!connected) return
-    sendMessage({ type: 'chat-attach', sessionId: session.id })
+    const held = useChatStore.getState().sessions[session.id]
+    const resume =
+      lastAttachedRef.current === session.id || held?.historyExpanded === true
+    const historyFrom = resume ? held?.historyStartId ?? undefined : undefined
+    lastAttachedRef.current = session.id
+    sendMessage({ type: 'chat-attach', sessionId: session.id, ...(historyFrom !== undefined ? { historyFrom } : {}) })
     return () => sendMessage({ type: 'chat-detach', sessionId: session.id })
   }, [session.id, connected, connectionEpoch, sendMessage])
   const debug = useChatDebugStore(state => state.views[session.id]) ?? CLOSED_DEBUG
@@ -164,12 +175,28 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
   }
   // A pending search reveal owns the scroll position: stick-to-bottom yields
   // to it (the reveal hook below runs after this effect in the same commit).
+  // After a history page prepends (chat-history-window D4), the stick skips
+  // once instead of yanking the reader to the bottom.
+  const transcriptBox = useRef<HTMLDivElement>(null)
+  const { capture: captureHistoryAnchor, skipStickOnce: historyStickSkip } =
+    useHistoryAnchor(transcriptBox, transcript.historyLoading, transcript.events.length)
   useEffect(() => {
     if (useChatStore.getState().pendingReveal?.sessionId === session.id) return
+    if (historyStickSkip.current) {
+      historyStickSkip.current = false
+      return
+    }
     end.current?.scrollIntoView?.({ block: 'end' })
   }, [transcript.events.length, transcript.throughSequence, session.id])
-  const transcriptBox = useRef<HTMLDivElement>(null)
-  useRevealRow({ sessionId: session.id, loaded: transcript !== EMPTY, container: transcriptBox })
+  useRevealRow({ sessionId: session.id, loaded: transcript !== EMPTY, container: transcriptBox, sendMessage, eventCount: transcript.events.length })
+  // Load earlier history (chat-history-window D4): claim the one page, keep
+  // the first visible row still across the prepend, send the request.
+  const loadEarlier = () => {
+    const request = useChatStore.getState().requestOlder(session.id)
+    if (!request) return
+    captureHistoryAnchor()
+    sendMessage(request)
+  }
 
   // Activity row hiding rules (design D4): text streaming is its own visible
   // progress, a pending approval/question owns the footer, and archived chats
@@ -208,11 +235,16 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
         {/* The live-workers strip (design D8): live rows only, hidden in
             archived chats and when nothing runs (the strip hides itself). */}
         {!archived && <ChatWorkersStrip sessionId={session.id} sendMessage={sendMessage} connected={connected} />}
-        <div ref={transcriptBox} className="min-h-0 flex-1 overflow-y-auto p-4">
+        {/* overflow-anchor off (chat-history-window D4): the history anchor
+            owns the scroll adjustment across a prepend; the browser's own
+            anchoring would compensate twice. */}
+        <div ref={transcriptBox} className="min-h-0 flex-1 overflow-y-auto p-4" style={{ overflowAnchor: 'none' }}>
           <div className="mx-auto max-w-4xl space-y-4">
             <ChatMessages events={transcript.events} projectPath={session.projectPath}
               sessionId={session.id} sendMessage={sendMessage} connected={connected}
               archived={archived} agentLabel={agentLabelOf(session.agentType)}
+              historyHasOlder={transcript.historyHasOlder} historyLoading={transcript.historyLoading}
+              onLoadEarlier={loadEarlier}
               sessions={liveSessions} directory={participantDirectory} onOpenParticipant={openParticipantChat} />
             {/* The activity row keeps to the transcript's body column (chat-transcript-layout D3). */}
             {showActivity && <div className="chat-transcript">

@@ -19,6 +19,7 @@ export type ChatConnectionMessage = Extract<
       | `team-workspace-${string}`
       | `strategy-${string}`
       | `team-plan${string}`
+      | `team-audit-${string}`
       | `process-metrics-${string}`
       | `process-proposal-${string}`
       | `process-report-${string}`
@@ -27,6 +28,7 @@ export type ChatConnectionMessage = Extract<
 
 export const CHAT_CONNECTION_TYPES = [
   'chat-attach',
+  'chat-history-page',
   'chat-detach',
   'chat-send',
   'chat-interrupt',
@@ -95,6 +97,10 @@ export const CHAT_CONNECTION_TYPES = [
   'team-plan-execution-start',
   'team-plan-execution-stop',
   'team-plan-execution-retry',
+  'team-audit-open',
+  'team-audit-more',
+  'team-audit-close',
+  'team-audit-acknowledge',
   'process-metrics-open',
   'process-metrics-close',
   'process-metrics-refresh',

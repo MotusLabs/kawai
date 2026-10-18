@@ -303,11 +303,12 @@ The 4096-character cut backs off before an unterminated quote or a partial word,
 The view shows:
 - **Header counts** for the chosen time range: allowed sends per rule (for example `git-push 106`, `gh-write 51`), unknown destinations, violations, and unacknowledged violations.
 - **Rows,** newest first: time, verdict, rule, destination, the session (named, `Name (gone)` through `team_session_directory` for a killed one, linking only live or archived sessions), group, profile, task, subagent, tool, the redacted command (one line, expandable), cwd, and the outcome state (D7) with its detail.
-- **Filters:** verdict, rule, session, and a time range. These are server filters with keyset paging over `(created_at, id)` and **Load more**, as in the Messages view.
+- **Filters:** verdict, rule, destination, session, and a time range. These are server filters with keyset paging over `(created_at, id)` and **Load more**, as in the Messages view.
 - **Acknowledge** on a violation row, with an optional note. It acknowledges the row's group (rule and destination) through that row (D10).
+- **A call in the URL** (`#/team/<key>/audit/<callId>`, D10's attention link): the open resolves that call's `(rule, destination)` group server-side and answers the group's page, with the row selected and scrolled into view; an unknown or other-team id falls back to the default view with a notice.
 
 The protocol, addressed by `teamPath` through the shared team-scope resolver:
-- `team-audit-open { teamPath, filters }` answers `team-audit-page { rows, counts, cursor }`, and `team-audit-more { teamPath, filters, cursor }` answers the next page.
+- `team-audit-open { teamPath, filters, callId? }` answers `team-audit-page { rows, counts, cursor, notice?, appliedFilters? }`, and `team-audit-more { teamPath, filters, cursor }` answers the next page.
 - `team-audit-close` ends the subscription.
 - Every committed call, outcome, or acknowledgement of the team sends `team-audit-changed`, and the client re-requests its first page. Volume is low, and replace semantics keep the client trivial.
 - `team-audit-acknowledge { teamPath, callId, commandId, note? }` answers `team-audit-result`.

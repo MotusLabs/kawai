@@ -247,7 +247,7 @@ describe('attentionItems (4.1)', () => {
     waiting: { 'wait-1': reason({ kind: 'group-cap', counts: { live: 1, cap: 1 } }) },
     taskTitle: id => (id === 'task-1' ? 'Build the thing' : null),
     nameOf: id => `Name of ${id}`,
-    pendingAcceptance: [],
+    pendingAcceptance: [], outboundViolations: [],
   })
 
   test('one item per source kind with cause, owner, impact, next action, and link', () => {
@@ -333,7 +333,7 @@ describe('morningSummary (4.3)', () => {
       { sessionId: 'chat-1', taskId: 'task-1', at: '2026-10-13T09:00:00Z' },
     ],
     nameOf: (id: string) => `Name of ${id}`,
-    hasResult: () => false,
+    hasResult: () => false, outboundCounts: { allowed: 0, unknown: 0, violations: 0 },
     results: [] as Array<{ resultId: string; taskId: string; taskTitle: string | null; submitter: string; accepted: boolean }>,
   })
 
@@ -417,7 +417,7 @@ describe('Phase 2 sources (11.1, 11.2)', () => {
   })
   const itemsFor = (extra: Partial<PendingAcceptance>) => attentionItems({
     sessions: [], messages: [], waiting: {}, taskTitle: () => 'Build the thing', nameOf: id => `Name of ${id}`,
-    pendingAcceptance: [pending(extra)],
+    pendingAcceptance: [pending(extra)], outboundViolations: [],
   })
 
   test('failing findings: Fixes requested stage, Wait for fixes, and the awaiting-human filter drops the row', () => {
@@ -457,7 +457,7 @@ describe('Phase 2 sources (11.1, 11.2)', () => {
   test('a pending acceptance is a human-required item linking to the task', () => {
     const items = attentionItems({
       sessions: [], messages: [], waiting: {}, taskTitle: () => 'Build the thing', nameOf: id => `Name of ${id}`,
-      pendingAcceptance: [pending()],
+      pendingAcceptance: [pending()], outboundViolations: [],
     })
     expect(items).toEqual([{
       id: 'pending-acceptance:result-1', kind: 'pending-acceptance',
@@ -473,7 +473,7 @@ describe('completed results bucket (11.2)', () => {
   const base = {
     now: '2026-10-14T12:00:00Z', sessions: [], messages: [], messageEvents: () => [], waiting: {},
     turnEnds: [{ sessionId: 'chat-1', taskId: 'task-1', at: '2026-10-14T09:00:00Z' }],
-    nameOf: (id: string) => `Name of ${id}`,
+    nameOf: (id: string) => `Name of ${id}`, outboundCounts: { allowed: 0, unknown: 0, violations: 0 },
   }
 
   test('submitted results are listed with their accepted state; a finished turn with none is not completed', () => {
@@ -538,7 +538,7 @@ describe('WorkspaceRead.snapshot labelling (bc0a329 follow-up)', () => {
       getPendingRequests: () => [],
       teams: { catalogForTeam: () => ({ groups: new Map() }) },
       groupProfileCounts: () => ({}),
-      turnEnds: { finishedForTeam: () => [] },
+      turnEnds: { finishedForTeam: () => [] }, outboundAudit: { violationGroups: () => [], windowCounts: () => ({ allowed: 0, unknown: 0, violations: 0 }) },
     }
     const snapshot = new WorkspaceRead(manager as never).snapshot({ teamId: 'team' } as never)
 
@@ -575,7 +575,7 @@ describe('WorkspaceRead.snapshot acceptance ownership (attention-acceptance-owne
       getPendingRequests: () => [],
       teams: { catalogForTeam: () => ({ groups: new Map() }) },
       groupProfileCounts: () => ({}),
-      turnEnds: { finishedForTeam: () => [] },
+      turnEnds: { finishedForTeam: () => [] }, outboundAudit: { violationGroups: () => [], windowCounts: () => ({ allowed: 0, unknown: 0, violations: 0 }) },
     }
     return new WorkspaceRead(manager as never).snapshot({ teamId: 'team' } as never)
   }

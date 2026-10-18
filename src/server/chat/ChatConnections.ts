@@ -44,6 +44,7 @@ import { StrategyConnections } from '../strategy/strategyConnections'
 import { WorkspaceConnections } from '../team/workspaceConnections'
 import { PlanConnections } from '../plans/planConnections'
 import { ExecutionConnections } from '../plans/execution/executionConnections'
+import { OutboundConnections } from '../outbound/outboundConnections'
 import { MetricsConnections } from '../metrics/metricsConnections'
 import type { TeamMessage } from '../../shared/team'
 
@@ -87,6 +88,7 @@ export class ChatConnections {
   private readonly workspaceConnections: WorkspaceConnections
   private readonly planConnections: PlanConnections
   private readonly executionConnections: ExecutionConnections
+  private readonly outboundConnections: OutboundConnections
   private readonly metricsConnections: MetricsConnections
 
   constructor(
@@ -101,6 +103,7 @@ export class ChatConnections {
     this.workspaceConnections = new WorkspaceConnections(manager)
     this.planConnections = new PlanConnections(manager)
     this.executionConnections = new ExecutionConnections(manager)
+    this.outboundConnections = new OutboundConnections(manager)
     this.metricsConnections = new MetricsConnections(manager)
   }
 
@@ -161,6 +164,16 @@ export class ChatConnections {
     this.metricsConnections.publish(teamId)
   }
 
+  /**
+   * A committed audit call, outcome, or acknowledgement (execution-safety-
+   * recovery D9): the Audit tab re-requests its first page, and the
+   * workspace re-projects — an unacknowledged violation is an attention item.
+   */
+  publishOutbound(teamId: string): void {
+    this.outboundConnections.publish(teamId)
+    this.workspaceConnections.publish(teamId)
+  }
+
   disconnect(connection: ChatConnection): void {
     this.epochs.set(connection, {})
     this.pendingAttach.delete(connection)
@@ -170,6 +183,7 @@ export class ChatConnections {
     this.strategyConnections.disconnect(connection)
     this.workspaceConnections.disconnect(connection)
     this.planConnections.disconnect(connection)
+    this.outboundConnections.disconnect(connection)
     this.metricsConnections.disconnect(connection)
     this.subscriptions.delete(connection)
     this.batches.delete(connection)
@@ -556,6 +570,7 @@ export class ChatConnections {
     if (message.type.startsWith('team-workspace-')) return this.workspaceConnections.handle(connection, message as Extract<ClientMessage, { type: `team-workspace-${string}` }>)
     if (message.type.startsWith('team-plan-execution-')) return this.executionConnections.handle(connection, message as Extract<ClientMessage, { type: `team-plan-execution-${string}` }>)
     if (message.type.startsWith('team-plan')) return this.planConnections.handle(connection, message as Extract<ClientMessage, { type: `team-plan${string}` }>)
+    if (message.type.startsWith('team-audit-')) return this.outboundConnections.handle(connection, message as Extract<ClientMessage, { type: `team-audit-${string}` }>)
     if (message.type.startsWith('process-metrics-')) return this.metricsConnections.handle(connection, message as Extract<ClientMessage, { type: `process-metrics-${string}` }>)
     if (message.type.startsWith('process-proposal-')) return this.metricsConnections.handleCommand(connection, message as Extract<ClientMessage, { type: `process-proposal-${string}` }>)
     if (message.type.startsWith('process-report-')) return this.metricsConnections.handleReport(connection, message as Extract<ClientMessage, { type: `process-report-${string}` }>)
@@ -576,7 +591,12 @@ export class ChatConnections {
         const pending = this.pendingAttach.get(connection)
         if (!pending || pending.get(sessionId) !== token) return
         pending.delete(sessionId)
-        const snapshot = this.manager.getSnapshot(sessionId)
+        // historyFrom (chat-history-window D2): a reconnecting client names
+        // the oldest event it holds, so its snapshot covers the same span.
+        const snapshot = this.manager.getSnapshot(
+          sessionId,
+          message.historyFrom !== undefined ? { historyFrom: message.historyFrom } : {}
+        )
         if (!snapshot) return
         this.batches.get(connection)?.delete(sessionId)
         this.activityBatches.get(connection)?.delete(sessionId)
@@ -599,6 +619,26 @@ export class ChatConnections {
       case 'chat-detach':
         // Already unsubscribed before the restore await.
         return
+      case 'chat-history-page': {
+        // A read-only page (chat-history-window D2): answered to the asking
+        // connection only, and only while it subscribes to the session —
+        // paging follows an attach, never replaces one. History loads off
+        // the event loop exactly as attach does, and no agent starts:
+        // archived chats page too.
+        if (!this.subscriptions.get(connection)?.has(sessionId)) {
+          connection.send({ type: 'error', message: `chat-history-page needs an active subscription to ${sessionId}` })
+          return
+        }
+        await this.manager.loadHistory(sessionId)
+        if (!this.subscriptions.get(connection)?.has(sessionId)) return
+        const page = this.manager.getHistoryPage(sessionId, message.beforeId, message.throughId)
+        if (!page) return
+        connection.send({
+          type: 'chat-history-page', sessionId, beforeId: message.beforeId,
+          events: page.events, hasOlder: page.hasOlder, ...(page.stale ? { stale: true } : {}),
+        })
+        return
+      }
       case 'chat-send': {
         const result = await this.manager.send(sessionId, message.text)
         if (!result.ok) connection.send({ type: 'error', message: result.error })
@@ -697,5 +737,6 @@ function opensSubscription(type: ClientMessage['type']): boolean {
     type === 'team-mailbox-open' || type === 'team-tasks-open' || type === 'team-task-open' ||
     type === 'team-messages-open' || type === 'team-thread-open' ||
     type === 'strategy-open' || type === 'team-workspace-open' || type === 'team-plans-open' || type === 'team-plan-open' ||
+    type === 'team-audit-open' ||
     type === 'process-metrics-open' || type === 'process-report-open'
 }

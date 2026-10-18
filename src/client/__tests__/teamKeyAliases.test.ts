@@ -7,6 +7,7 @@ import { handleTeamMessage } from '../protocol/teamMessages'
 import type { MessageRouterDeps } from '../protocol/types'
 import { useStrategyStore } from '../stores/strategyStore'
 import { useTeamPlanStore } from '../stores/teamPlanStore'
+import { useTeamAuditStore } from '../stores/teamAuditStore'
 import { useTeamTaskStore } from '../stores/teamTaskStore'
 import { aliasTeamKey, clearTeamKeyAliases, routedTeamPath } from '../utils/teamKeyAliases'
 
@@ -17,6 +18,7 @@ afterEach(() => {
   useTeamTaskStore.setState({ views: {} })
   useStrategyStore.setState({ views: {} })
   useTeamPlanStore.setState({ views: {} })
+  useTeamAuditStore.setState({ views: {} })
 })
 
 describe('routedTeamPath', () => {
@@ -36,6 +38,14 @@ describe('routedTeamPath', () => {
     expect(routedTeamPath('/a', {})).toBe('/a')
     expect(routedTeamPath('/c', {})).toBe('/a')
   })
+})
+
+test('the audit view follows the rekey (findings-bee1aa24)', () => {
+  useTeamAuditStore.getState().open('/repo/wt')
+  rekeyTeamViewsForTests('/repo/wt', '/repo')
+  expect(useTeamAuditStore.getState().views['/repo']?.open).toBe(true)
+  expect(useTeamAuditStore.getState().views['/repo/wt']).toBeUndefined()
+  useTeamAuditStore.setState({ views: {} })
 })
 
 test('a task action result sent before a rekey settles under the new key', () => {

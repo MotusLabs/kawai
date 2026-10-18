@@ -247,6 +247,7 @@ export default function App() {
   useEffect(() => {
     const routeMessage = createMessageRouter({
       getConnectionEpoch,
+      sendClient: sendMessage,
       setTransientError,
       clearTransientError,
       openSessionFormPrefilled,
@@ -262,6 +263,7 @@ export default function App() {
   }, [
     subscribe,
     getConnectionEpoch,
+    sendMessage,
     setTransientError,
     clearTransientError,
     openSessionFormPrefilled,

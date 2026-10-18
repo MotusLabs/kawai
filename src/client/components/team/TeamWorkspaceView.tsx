@@ -15,6 +15,7 @@ import { useTeamWorkspaceStore } from '../../stores/teamWorkspaceStore'
 import { useTeamWorkspaceDataStore } from '../../stores/teamWorkspaceDataStore'
 import { useTeamMailboxStore } from '../../stores/teamMailboxStore'
 import { useTeamPlanStore } from '../../stores/teamPlanStore'
+import { useTeamAuditStore } from '../../stores/teamAuditStore'
 import { useTeamTaskStore } from '../../stores/teamTaskStore'
 import { useWorkspaceStore } from '../../stores/workspaceStore'
 import { useTeamLocationStore } from '../../hooks/useTeamLocation'
@@ -27,6 +28,7 @@ import TeamMailboxView from './TeamMailboxView'
 import TeamMessagesView from './TeamMessagesView'
 import TeamMembersPanel from './TeamMembersPanel'
 import TeamPlansView from './TeamPlansView'
+import TeamAuditView from './TeamAuditView'
 import TeamTasksView from './TeamTasksView'
 import TeamWorkspaceBands from './TeamWorkspaceBands'
 import MetricsView, { resolveMetricsWindow } from './metrics/MetricsView'
@@ -45,6 +47,7 @@ const TAB_LABELS: Record<WorkspaceTab, string> = {
   members: 'Members',
   plans: 'Plans',
   metrics: 'Metrics',
+  audit: 'Audit',
 }
 
 /** The one-line strategy status: approved revision or none, and reviews open. */
@@ -192,6 +195,20 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, conn
     if ((currentLocation.id ?? null) !== (store.views[teamKey]?.selected ?? null)) store.select(teamKey, currentLocation.id ?? null)
   }, [plansOpen, teamKey, currentLocation.id])
 
+  // Audit (execution-safety-recovery D9): the host-agnostic view owns its
+  // subscription; the URL names the selected call, so a link reopens it.
+  const auditOpen = currentLocation.tab === 'audit' && !unknown
+  const audit = useTeamAuditStore(state => state.views[teamKey])
+  useEffect(() => {
+    if (!auditOpen) return
+    useTeamAuditStore.getState().open(teamKey)
+  }, [auditOpen, teamKey])
+  useEffect(() => {
+    if (!auditOpen) return
+    const store = useTeamAuditStore.getState()
+    if ((currentLocation.id ?? null) !== (store.views[teamKey]?.selected ?? null)) store.select(teamKey, currentLocation.id ?? null)
+  }, [auditOpen, teamKey, currentLocation.id])
+
   // Metrics (team-process-metrics 7.2): the view owns its subscription; the
   // URL names the window (D5).
   const metricsOpen = currentLocation.tab === 'metrics' && !unknown
@@ -287,6 +304,11 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, conn
         onSelectedPlan={planId => navigate(planId ? { teamKey, tab: 'plans', id: planId } : { teamKey, tab: 'plans' })}
         onOpenImpactReview={revision => navigate({ teamKey, tab: 'strategy', sub: 'impact', id: String(revision) })}
         onCaptureStrategy={() => navigate({ teamKey, tab: 'strategy', sub: 'overview' })}
+      />}
+      {auditOpen && audit && <TeamAuditView
+        teamPath={teamKey} view={audit} sendMessage={sendMessage} connected={connected}
+        connectionEpoch={connectionEpoch}
+        onSelectedCall={callId => navigate(callId ? { teamKey, tab: 'audit', id: callId } : { teamKey, tab: 'audit' })}
       />}
       {metricsOpen && <MetricsView
         teamPath={teamKey} view={metrics} locationWindow={currentLocation.window} reportId={currentLocation.id} sendMessage={sendMessage}

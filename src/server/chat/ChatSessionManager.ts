@@ -49,6 +49,7 @@ import { isExistingDirectory, resolveProjectDirectory } from '../paths'
 import type { SessionRegistry } from '../SessionRegistry'
 import { ChatSessionDriver, type ChatQueryFactory } from './ChatSessionDriver'
 import { chatAuthErrorMessage, hasClaudeAuth } from './chatAuth'
+import { historyWindow } from './historyWindow'
 import {
   ClaudeExecutableError,
   ensureClaudeExecutable,
@@ -115,6 +116,8 @@ import type { ChatSpawnInfo } from './ChatSessionDriver'
 import { OutboundDestinations } from '../outbound/destinations'
 import { sessionObserver } from '../outbound/auditHooks'
 import { RepoFactsResolver } from '../outbound/repoFacts'
+import { OutboundService, recordingStore, type OutboundAuditBackups } from '../outbound/service'
+import type { OutboundObserver } from '../outbound/observer'
 import { OutboundStore } from '../outbound/store'
 import {
   findTranscriptPath,
@@ -156,6 +159,14 @@ export interface ChatSessionManagerOptions {
    * the team (a strategy or impact change moves every plan's impact gate).
    */
   onPlanChange?: (teamId: string, planId?: string) => void
+  /**
+   * Every committed audit call, outcome, or acknowledgement of the team
+   * (execution-safety-recovery D9; wired to the Audit tab's
+   * `team-audit-changed` push and the workspace's attention refresh).
+   */
+  onOutboundChange?: (teamId: string) => void
+  /** The backup status footer's facts (database-safety); null when backups are off. */
+  backupStatus?: () => OutboundAuditBackups | null
   /** Conversation-event sink (wired to the WS broadcast in index.ts). */
   onEvent: (sessionId: string, event: ChatEvent) => void
   /** Command-state sink (wired to the chat-commands push in index.ts). */
@@ -488,8 +499,14 @@ export class ChatSessionManager {
   private readonly restoringSdkIds = new Set<string>()
   private isShutDown = false
 
-  /** Synchronous capture: no driver callback can interleave with history loading. */
-  getSnapshot(sessionId: string): Extract<ServerMessage, { type: 'chat-snapshot' }> | null {
+  /**
+   * Synchronous capture: no driver callback can interleave with history
+   * loading. `historyFrom` (chat-history-window D2) widens the recent
+   * window to the unit holding that event id, so a reconnect covers the
+   * span the client already showed; without it the window is the last 24
+   * hours ending at the newest dated event, at least the newest turn.
+   */
+  getSnapshot(sessionId: string, options: { historyFrom?: string } = {}): Extract<ServerMessage, { type: 'chat-snapshot' }> | null {
     if (!this.records.has(sessionId)) return null
     // Attach (live or archived) is one of the account-notice check points
     // (notification strip design D3): resolve the session's credentials path
@@ -498,13 +515,25 @@ export class ChatSessionManager {
     this.captureHistory(sessionId)
     const live = this.liveEvents.get(sessionId) ?? []
     const activity = this.getActivity(sessionId)
+    // The recent history window (chat-history-window D1/D2): memo + live
+    // cut to the last 24 hours. Only events are windowed — pending
+    // requests, activity, rosters, notices and throughSequence stay whole.
+    const window = historyWindow(
+      [...(this.snapshotHistory.get(sessionId) ?? []), ...live],
+      options.historyFrom !== undefined ? { fromId: options.historyFrom } : {}
+    )
     return {
       type: 'chat-snapshot', sessionId,
       profileId: this.records.get(sessionId)?.claudeProfileId ?? 'default',
-      events: [...(this.snapshotHistory.get(sessionId) ?? []), ...live],
+      events: window.events,
       pendingRequests: this.getPendingRequests(sessionId),
       status: this.options.registry.get(sessionId)?.status ?? 'waiting',
+      // The live tail, not the window: older live events outside the window
+      // stay behind it and a page must not replay them as new.
       throughSequence: live.at(-1)?.sequence ?? 0,
+      // Older history on request, and where pages and reconnect resume.
+      historyHasOlder: window.hasOlder,
+      historyStartId: window.startId,
       commands: this.commandState(sessionId),
       activity,
       // In-memory wins: between boundary writes it is fresher than the
@@ -527,6 +556,24 @@ export class ChatSessionManager {
       // first, then agent notices, sorted by priority and newest.
       notifications: this.notificationsOf(sessionId),
     }
+  }
+
+  /**
+   * One history page (chat-history-window D2): the 24 hours before the
+   * unit holding `beforeId`, at least one turn, widened back to `throughId`
+   * (an event id or a `tool:<callId>` search anchor). `stale` with no
+   * events means beforeId is not in the memo + live list. Never starts an
+   * agent — archived chats page too; the caller awaits loadHistory first,
+   * exactly as attach does.
+   */
+  getHistoryPage(sessionId: string, beforeId: string, throughId?: string): { events: ChatEvent[]; hasOlder: boolean; stale: boolean } | null {
+    if (!this.records.has(sessionId)) return null
+    this.captureHistory(sessionId)
+    const window = historyWindow(
+      [...(this.snapshotHistory.get(sessionId) ?? []), ...(this.liveEvents.get(sessionId) ?? [])],
+      { beforeId, ...(throughId !== undefined ? { throughId } : {}) }
+    )
+    return { events: window.events, hasOlder: window.hasOlder, stale: window.stale === true }
   }
 
   /**
@@ -898,6 +945,25 @@ export class ChatSessionManager {
     // repository-facts resolver for every session; observers are per session.
     this.outboundStore = new OutboundStore(options.db.db)
     this.outboundRepoFacts = new RepoFactsResolver()
+    this.outboundObservers = new Map()
+    // The audit view's reads and the owner's acknowledge (D9/D10): rows are
+    // enriched with the live records and the durable directory, and every
+    // committed row notifies the team's views through onOutboundChange.
+    this.outboundAudit = new OutboundService({
+      store: this.outboundStore,
+      sessionOf: (teamId, sessionId) => {
+        const record = this.records.get(sessionId)
+        if (record) return { name: record.name, clickable: true }
+        // A killed session keeps its recorded name and never a link (D9).
+        const gone = this.directory.get(teamId, sessionId)
+        return gone
+          ? { name: `${gone.name} (gone)`, clickable: false }
+          : { name: sessionId, clickable: false }
+      },
+      spawnLive: (sessionId, spawnId) => this.outboundObservers.get(sessionId)?.spawnIsLive(spawnId) ?? false,
+      ...(options.backupStatus ? { backups: options.backupStatus } : {}),
+      onCommit: teamId => options.onOutboundChange?.(teamId),
+    })
     // Outbound destinations (execution-safety-recovery D2): the security
     // note's facts come from here at each spawn; the global provider env's
     // base URL rides along as a model provider every profile may inherit.
@@ -1300,6 +1366,10 @@ export class ChatSessionManager {
   readonly outbound: OutboundDestinations
   /** The append-only audit tables' only writer (execution-safety-recovery D6). */
   private readonly outboundStore: OutboundStore
+  /** The audit view's reads and the owner's acknowledge (execution-safety-recovery D9/D10). */
+  readonly outboundAudit: OutboundService
+  /** Each live session's observer, for D7's pending-while-the-spawn-lives. */
+  private readonly outboundObservers: Map<string, OutboundObserver>
   /** Repository facts for the classifier (execution-safety-recovery D4). */
   private readonly outboundRepoFacts: RepoFactsResolver
   /** The team a human team view's `teamPath` addresses (team-workspace-pages D1). */
@@ -1573,6 +1643,7 @@ export class ChatSessionManager {
     this.teamMail.settleRecipient(sessionId)
     this.drivers.delete(sessionId)
     this.driverPromises.delete(sessionId)
+    this.outboundObservers.delete(sessionId)
     // The transcript is final once the agent is stopped: release the title
     // tail with it (design D4 risk note).
     this.releaseTitleWatch(sessionId)
@@ -1709,6 +1780,12 @@ export class ChatSessionManager {
     return this.drivers.get(sessionId)?.getPendingRequests() ?? []
   }
 
+  /** Keep the session's observer for D7's pending-while-the-spawn-lives reads. */
+  private trackObserver(sessionId: string, observer: OutboundObserver): OutboundObserver {
+    this.outboundObservers.set(sessionId, observer)
+    return observer
+  }
+
   /** Kill: abort the agent, settle pending requests, forget the session. */
   kill(sessionId: string): boolean {
     const record = this.records.get(sessionId)
@@ -1717,6 +1794,7 @@ export class ChatSessionManager {
     this.teamMail.settleRecipient(sessionId)
     this.drivers.delete(sessionId)
     this.driverPromises.delete(sessionId)
+    this.outboundObservers.delete(sessionId)
     this.releaseTitleWatch(sessionId)
     this.cancelCwdRefresh(sessionId)
     // A killed session never releases; its pending row is moot (member-release D1).
@@ -2069,10 +2147,11 @@ export class ChatSessionManager {
         queryFactory,
         teamMcpServer,
         // The session's observer (D7) constructs in src/server/outbound/;
-        // the manager registers it with its own live context getters.
-        outbound: sessionObserver({
+        // the manager registers it with its own live context getters. Its
+        // writes notify the team's views only when a row was committed (D9).
+        outbound: this.trackObserver(record.sessionId, sessionObserver({
           sessionId: record.sessionId,
-          store: this.outboundStore,
+          store: recordingStore(this.outboundStore, teamId => this.options.onOutboundChange?.(teamId)),
           destinations: this.outbound,
           repos: this.outboundRepoFacts,
           context: () => {
@@ -2084,7 +2163,7 @@ export class ChatSessionManager {
             }
           },
           teamIdFallback: () => this.teams.teamOf(record.sessionId)?.teamId ?? '',
-        }),
+        })),
         getSystemPromptAppend: () => this.teams.promptFor(
           record.sessionId,
           this.records.get(record.sessionId)?.groupId

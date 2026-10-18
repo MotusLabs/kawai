@@ -9,19 +9,20 @@
 // with a notice when it names no window.
 // Parse/format are pure so the hook and its tests share one grammar; an
 // absent or unknown tab reads as the default tab (Tasks), never an error.
-export type WorkspaceTab = 'strategy' | 'tasks' | 'messages' | 'mailbox' | 'members' | 'plans' | 'metrics'
+export type WorkspaceTab = 'strategy' | 'tasks' | 'messages' | 'mailbox' | 'members' | 'plans' | 'metrics' | 'audit'
 
 /** Every tab key. */
 export const WORKSPACE_TABS: readonly WorkspaceTab[] = [
-  'strategy', 'tasks', 'messages', 'mailbox', 'members', 'plans', 'metrics',
+  'strategy', 'tasks', 'messages', 'mailbox', 'members', 'plans', 'metrics', 'audit',
 ]
 
 /**
  * The tabs the strip renders. Plans is durable-plans' tab (D12), beside
  * Strategy; Members is the read-only group inspection (team-workspace);
- * Metrics is team-process-metrics' tab (D5).
+ * Metrics is team-process-metrics' tab (D5); Audit is the owner's read-only
+ * send audit (execution-safety-recovery D9) — last, not part of the daily flow.
  */
-export const RENDERED_WORKSPACE_TABS: readonly WorkspaceTab[] = ['strategy', 'plans', 'tasks', 'messages', 'mailbox', 'members', 'metrics']
+export const RENDERED_WORKSPACE_TABS: readonly WorkspaceTab[] = ['strategy', 'plans', 'tasks', 'messages', 'mailbox', 'members', 'metrics', 'audit']
 
 /** The tab a team's page opens on when none was used yet (chat-header spec). */
 export const DEFAULT_WORKSPACE_TAB: WorkspaceTab = 'tasks'

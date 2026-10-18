@@ -83,6 +83,12 @@ describe('WS router forwards every ChatConnections type', () => {
     expect(h.handled).toEqual([])
     expect(h.sent).toEqual([{ type: 'error', message: 'Unknown message type' }])
   })
+
+  test('the audit view\'s types are forwarded (execution-safety-recovery D9)', () => {
+    expect(CHAT_CONNECTION_TYPES).toEqual(expect.arrayContaining([
+      'team-audit-open', 'team-audit-more', 'team-audit-close', 'team-audit-acknowledge',
+    ]))
+  })
 })
 
 describe('the handled set matches ChatConnections dispatch', () => {

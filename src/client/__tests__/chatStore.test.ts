@@ -608,3 +608,171 @@ describe('chat store background tasks', () => {
     expect(useChatStore.getState().sessions['chat-1'].backgroundTasks[0]).toMatchObject({ taskId: 'b1' })
   })
 })
+
+describe('chat store history pages (chat-history-window 3.1)', () => {
+  const replayed = (id: string, text: string): ChatEvent => ({
+    type: 'user_message', id, sequence: 0, at: '2026-10-16T10:00:00.000Z', turnId: `turn-${id}`, text,
+  })
+  type SnapshotMessage = Parameters<ReturnType<typeof useChatStore.getState>['snapshot']>[0]
+  const snapshotMessage = (overrides: Partial<SnapshotMessage> = {}) => ({
+    type: 'chat-snapshot' as const, sessionId: 'chat-1', profileId: 'default', events: [],
+    pendingRequests: [], status: 'waiting' as const, throughSequence: 0,
+    commands: { status: 'unavailable' as const, commands: [] }, activity: null, contextUsage: null,
+    usage: null, workers: [], backgroundTasks: [], notifications: [], model: null, ...overrides,
+  })
+  const seedWindow = () => {
+    const store = useChatStore.getState()
+    store.snapshot(snapshotMessage({
+      events: [delta(1, 'live'), { ...delta(2, ''), id: 'event-2', type: 'assistant_text', text: 'recent' }],
+      throughSequence: 5,
+      historyHasOlder: true,
+      historyStartId: 'hist-a',
+    }))
+  }
+  const sent: ClientMessage[] = []
+  const send = (message: ClientMessage) => { sent.push(message) }
+
+  test('a snapshot adopts the window fields and preserves the user expansion', () => {
+    seedWindow()
+    const transcript = useChatStore.getState().sessions['chat-1']!
+    expect(transcript.historyHasOlder).toBe(true)
+    expect(transcript.historyStartId).toBe('hist-a')
+    expect(transcript.historyLoading).toBe(false)
+    expect(transcript.historyExpanded).toBe(false)
+    // A snapshot without the fields (an older server) reads false/null.
+    useChatStore.getState().snapshot(snapshotMessage())
+    const bare = useChatStore.getState().sessions['chat-1']!
+    expect(bare.historyHasOlder).toBe(false)
+    expect(bare.historyStartId).toBeNull()
+  })
+
+  test('requestOlder claims once, composes the request, and refuses without older history', () => {
+    seedWindow()
+    const store = useChatStore.getState()
+    const request = store.requestOlder('chat-1')
+    expect(request).toEqual({ type: 'chat-history-page', sessionId: 'chat-1', beforeId: 'hist-a' })
+    expect(useChatStore.getState().sessions['chat-1']!.historyLoading).toBe(true)
+    // One page in flight: the second claim is refused.
+    expect(useChatStore.getState().requestOlder('chat-1')).toBeNull()
+    // A reveal widens its one request with the anchor.
+    useChatStore.getState().applyHistoryPage({
+      type: 'chat-history-page', sessionId: 'chat-1', beforeId: 'hist-a', events: [replayed('hist-0', 'older')], hasOlder: true,
+    })
+    expect(useChatStore.getState().sessions['chat-1']!.historyLoading).toBe(false)
+    const widened = useChatStore.getState().requestOlder('chat-1', 'tool:call-9')
+    expect(widened).toEqual({ type: 'chat-history-page', sessionId: 'chat-1', beforeId: 'hist-0', throughId: 'tool:call-9' })
+    // Nothing older: no request at all.
+    useChatStore.getState().applyHistoryPage({
+      type: 'chat-history-page', sessionId: 'chat-1', beforeId: 'hist-0', events: [], hasOlder: false,
+    })
+    expect(useChatStore.getState().requestOlder('chat-1')).toBeNull()
+  })
+
+  test('a page prepends de-duplicated and older live events never move throughSequence', () => {
+    seedWindow()
+    const store = useChatStore.getState()
+    store.applyHistoryPage({
+      type: 'chat-history-page', sessionId: 'chat-1', beforeId: 'hist-a',
+      // An older live event (sequence > 0 but ≤ throughSequence) rides the page.
+      events: [{ ...delta(3, 'old-live'), id: 'event-old' }, replayed('hist-0', 'older')],
+      hasOlder: true,
+    })
+    const transcript = useChatStore.getState().sessions['chat-1']!
+    expect(transcript.events.map(event => event.id)).toEqual(['event-old', 'hist-0', 'event-2'])
+    expect(transcript.throughSequence).toBe(5)
+    expect(transcript.historyHasOlder).toBe(true)
+    expect(transcript.historyStartId).toBe('event-old')
+    expect(transcript.historyLoading).toBe(false)
+    expect(transcript.historyExpanded).toBe(true)
+    // The old live event in the page did not poison the filter: a new live
+    // event above throughSequence still lands, one below stays skipped.
+    const live = (sequence: number, text: string): ChatEvent => ({
+      type: 'user_message', id: `event-${sequence}`, sequence, at: 'now', turnId: `turn-live-${sequence}`, text,
+    })
+    store.apply('chat-1', [live(9, 'new')])
+    store.apply('chat-1', [live(4, 'stale')])
+    expect(useChatStore.getState().sessions['chat-1']!.events.map(event => event.id)).toEqual([
+      'event-old', 'hist-0', 'event-2', 'event-9',
+    ])
+    // A reply already held is dropped by seen, the rest still prepends.
+    store.applyHistoryPage({
+      type: 'chat-history-page', sessionId: 'chat-1', beforeId: 'event-old',
+      events: [replayed('hist-0', 'older'), replayed('hist-00', 'oldest')],
+      hasOlder: false,
+    })
+    const deduped = useChatStore.getState().sessions['chat-1']!
+    expect(deduped.events.filter(event => event.id === 'hist-0')).toHaveLength(1)
+    expect(deduped.events[0]!.id).toBe('hist-00')
+    expect(deduped.historyHasOlder).toBe(false)
+  })
+
+  test('a stale reply re-attaches plain and drops the expansion', () => {
+    seedWindow()
+    const store = useChatStore.getState()
+    expect(store.requestOlder('chat-1')).not.toBeNull()
+    sent.length = 0
+    useChatStore.getState().applyHistoryPage({
+      type: 'chat-history-page', sessionId: 'chat-1', beforeId: 'hist-a', events: [], hasOlder: false, stale: true,
+    }, send)
+    expect(sent).toEqual([{ type: 'chat-attach', sessionId: 'chat-1' }])
+    const transcript = useChatStore.getState().sessions['chat-1']!
+    expect(transcript.historyLoading).toBe(false)
+    expect(transcript.historyExpanded).toBe(false)
+  })
+
+  test('a page whose beforeId no longer matches the window start is dropped', () => {
+    seedWindow()
+    expect(useChatStore.getState().requestOlder('chat-1')).not.toBeNull()
+    // The window start moved while the page flew (a reopen's snapshot took
+    // a newer span): prepending would leave a gap, so the page is dropped
+    // and the claim is released for a fresh request from the new start.
+    useChatStore.getState().applyHistoryPage({
+      type: 'chat-history-page', sessionId: 'chat-1', beforeId: 'hist-drifted',
+      events: [replayed('hist-x', 'from the old start')], hasOlder: true,
+    })
+    const transcript = useChatStore.getState().sessions['chat-1']!
+    expect(transcript.events.some(event => event.id === 'hist-x')).toBe(false)
+    expect(transcript.historyLoading).toBe(false)
+    expect(transcript.historyExpanded).toBe(false)
+    expect(transcript.historyStartId).toBe('hist-a')
+    // The next claim composes from the unchanged window start again.
+    expect(useChatStore.getState().requestOlder('chat-1'))
+      .toEqual({ type: 'chat-history-page', sessionId: 'chat-1', beforeId: 'hist-a' })
+  })
+
+  test('loading clears on the reply, on a snapshot, and on a disconnect', () => {
+    seedWindow()
+    useChatStore.getState().requestOlder('chat-1')
+    expect(useChatStore.getState().sessions['chat-1']!.historyLoading).toBe(true)
+    // The reply clears it.
+    useChatStore.getState().applyHistoryPage({
+      type: 'chat-history-page', sessionId: 'chat-1', beforeId: 'hist-a', events: [], hasOlder: true,
+    })
+    expect(useChatStore.getState().sessions['chat-1']!.historyLoading).toBe(false)
+    // A reconnect snapshot clears it too.
+    useChatStore.getState().requestOlder('chat-1')
+    useChatStore.getState().snapshot(snapshotMessage({ historyHasOlder: true, historyStartId: 'hist-a' }))
+    expect(useChatStore.getState().sessions['chat-1']!.historyLoading).toBe(false)
+    // A dropped socket strands the claim: the disconnect sweep clears it.
+    useChatStore.getState().requestOlder('chat-1')
+    expect(useChatStore.getState().sessions['chat-1']!.historyLoading).toBe(true)
+    useChatStore.getState().clearHistoryLoading()
+    expect(useChatStore.getState().sessions['chat-1']!.historyLoading).toBe(false)
+  })
+
+  test('historyExpanded survives a reconnect snapshot within the page load', () => {
+    seedWindow()
+    useChatStore.getState().applyHistoryPage({
+      type: 'chat-history-page', sessionId: 'chat-1', beforeId: 'hist-a', events: [replayed('hist-0', 'older')], hasOlder: true,
+    })
+    expect(useChatStore.getState().sessions['chat-1']!.historyExpanded).toBe(true)
+    // The reconnect snapshot adopts the widened span, keeps the expansion.
+    useChatStore.getState().snapshot(snapshotMessage({
+      events: [replayed('hist-0', 'older'), delta(1, 'live')],
+      throughSequence: 5, historyHasOlder: true, historyStartId: 'hist-0',
+    }))
+    const transcript = useChatStore.getState().sessions['chat-1']!
+    expect(transcript.historyExpanded).toBe(true)
+    expect(transcript.historyStartId).toBe('hist-0')
+  })
+})

@@ -12,6 +12,9 @@ export function handleChatMessage(message: ChatMessage, _deps: MessageRouterDeps
   switch (message.type) {
     case 'chat-events': chat.apply(message.sessionId, message.events); return
     case 'chat-snapshot': chat.snapshot(message); return
+    // One history page (chat-history-window D3): the store folds, dedupes,
+    // and prepends it; on `stale` it re-attaches plain through the sender.
+    case 'chat-history-page': chat.applyHistoryPage(message, _deps.sendClient); return
     case 'chat-commands': chat.setCommands(message); return
     case 'chat-activity': chat.setActivity(message.sessionId, message.activity); return
     case 'chat-context-usage': chat.setContextUsage(message.sessionId, message.usage); return

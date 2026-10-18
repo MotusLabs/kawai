@@ -1,10 +1,9 @@
-# Spec Delta
+# outbound-audit Specification
 
 ## Purpose
-
 Records the outbound publish and send actions Kawai can observe its chat agents take, for the owner to audit afterwards. Capture is observational and never blocks, delays, or decides a tool call. Each observed send is classified against the allowed destinations, redacted, and stored in append-only records with its outcome. A violation is shown to the owner, who acknowledges it.
 
-## ADDED Requirements
+## Requirements
 
 ### Requirement: Audit hooks observe and never decide
 Kawai SHALL register `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, and `PermissionDenied` hooks for Bash, Monitor, and external MCP tools, subagent calls included. Every hook SHALL return only `{ continue: true }`, with no permission decision, input update, retry, or message, SHALL swallow observer errors, and SHALL return before any file read or database write.
@@ -152,7 +151,7 @@ Outcomes SHALL be `completed`, `failed`, `denied` (a permission denial or a decl
 - **THEN** the call reads started in background and links to its background task
 
 ### Requirement: The owner audits sends in a read-only view
-The Team page SHALL have an Audit tab listing the team's recorded calls newest first, with filters by verdict, rule, session, and time range, paging, counts of allowed sends per rule, and each row's outcome state. It SHALL be addressed by team path, refuse unknown teams, and offer no edit beyond Acknowledge. Its controls SHALL disable while disconnected.
+The Team page SHALL have an Audit tab listing the team's recorded calls newest first, with filters by verdict, rule, destination, session, and time range, paging, counts of allowed sends per rule, and each row's outcome state. It SHALL be addressed by team path, refuse unknown teams, and offer no edit beyond Acknowledge. Its controls SHALL disable while disconnected.
 
 #### Scenario: Filtering by verdict
 - **WHEN** the owner filters the Audit tab to violations in the last 7 days

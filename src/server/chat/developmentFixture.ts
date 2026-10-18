@@ -228,6 +228,27 @@ export const fixtureQueryFactory: ChatQueryFactory = ({ prompt, options, wire })
       push({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: spawnId, content: 'Found three packages: client, server, shared.' }] }, parent_tool_use_id: null })
       assistant('The worker mapped the workspace.')
     }
+    if (/audit/i.test(text)) {
+      // Outbound-audit walkthrough (execution-safety-recovery D3/D9): the two
+      // calls run through the driver's registered audit hooks — exactly what
+      // the real CLI invokes — so the observer, classifier, and store record
+      // an allowed push and a foreign-repository gh write for real.
+      const runAuditHooks = async (event: 'PreToolUse' | 'PostToolUse', toolUseID: string, input: Record<string, unknown>) => {
+        for (const entry of options.hooks?.[event] ?? []) {
+          for (const hook of entry.hooks) await hook(input as never, toolUseID, { signal: controller.signal })
+        }
+      }
+      for (const command of ['git push origin main', 'gh issue create -R other/repo --title Fixture']) {
+        const toolUseID = crypto.randomUUID()
+        const input = { description: 'Audit walkthrough send', command }
+        push({ type: 'assistant', message: { id: crypto.randomUUID(), role: 'assistant', content: [{ type: 'tool_use', id: toolUseID, name: 'Bash', input }] } })
+        await runAuditHooks('PreToolUse', toolUseID, { tool_name: 'Bash', tool_input: input, tool_use_id: toolUseID })
+        await hold(500)
+        if (closed || turn !== generation) return
+        await runAuditHooks('PostToolUse', toolUseID, { tool_name: 'Bash', tool_input: input, tool_use_id: toolUseID, tool_response: 'fixture output' })
+      }
+      assistant('Recorded the audit walkthrough sends.')
+    }
     if (/markdown/i.test(text)) {
       assistant([
         '# Markdown showcase',

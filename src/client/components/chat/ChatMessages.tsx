@@ -43,7 +43,7 @@ function SummaryLabel({ label, detail, failed = false }: { label: string; detail
   </summary>
 }
 
-function ChatMessagesView({ events, projectPath, sessionId, sendMessage, connected, archived, sessions, directory, onOpenParticipant, agentLabel = 'Claude' }: {
+function ChatMessagesView({ events, projectPath, sessionId, sendMessage, connected, archived, historyHasOlder, historyLoading, onLoadEarlier, sessions, directory, onOpenParticipant, agentLabel = 'Claude' }: {
   events: ChatEvent[]; projectPath?: string
   /** The session's agent identity (from its agent kind, never the model string). */
   agentLabel?: string
@@ -51,6 +51,13 @@ function ChatMessagesView({ events, projectPath, sessionId, sendMessage, connect
   sessionId?: string; sendMessage?: SendClientMessage; connected?: boolean
   /** Archived chats never offer a task's Stop control (background tasks D4). */
   archived?: boolean
+  /**
+   * The history window control (chat-history-window D4): present only for a
+   * top-level transcript — nested worker transcripts never page. The button
+   * disables while disconnected or loading; when nothing older remains it
+   * gives way to the start-of-conversation marker.
+   */
+  historyHasOlder?: boolean; historyLoading?: boolean; onLoadEarlier?: () => void
   /** Live/archived sessions and the team directory, for naming senders. */
   sessions?: Session[]; directory?: SessionDirectoryEntry[]
   /** Open a participant's chat; omit to disable click-through. */
@@ -116,6 +123,16 @@ function ChatMessagesView({ events, projectPath, sessionId, sendMessage, connect
   }
 
   return <div className="chat-transcript" data-testid="chat-transcript">
+    {onLoadEarlier !== undefined && (historyHasOlder === true || entries.length > 0) && (
+      <div className="flex justify-center py-1" data-testid="chat-history-top">
+        {historyHasOlder === true
+          ? <button type="button" data-testid="chat-load-earlier" className="btn btn-secondary text-chat-meta"
+            disabled={connected === false || historyLoading === true} onClick={onLoadEarlier}>
+            {historyLoading === true ? 'Loading…' : 'Load earlier messages'}
+          </button>
+          : <p className="py-1 text-chat-meta text-muted" data-testid="chat-history-start">Beginning of conversation</p>}
+      </div>
+    )}
     {entries.map(({ event, result }, index) => {
       const layout = layouts[index]!
       const spacing = rowSpacing(index === 0, layout.turnStart, layout.authorStart)
