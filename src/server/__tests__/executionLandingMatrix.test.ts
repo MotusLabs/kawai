@@ -4,7 +4,8 @@
 // that moves during it; a hand merge, a pushed head, and a real conflict each
 // returning the change as an update attempt; failed CI after the update), the
 // pinned merge and its landing fact under every merge method, Stop while a
-// merge runs, and new task revisions published around the landing.
+// merge runs, a human close while a merge runs (13.4b), and new task
+// revisions published around the landing.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -262,6 +263,64 @@ describe('Stop while a merge runs (13.4)', () => {
     expect(h.executions.landings(h.executions.execution(executionId)!.planId)).toEqual([])
     expect(h.tasks.store.get(row(executionId, 'st-b').taskId!)!.status).toBe('cancelled')
     expect(h.executions.execution(executionId)).toMatchObject({ state: 'finished', outcome: 'stopped' })
+  })
+})
+
+describe('a human close while a merge runs (13.4b)', () => {
+  /** The human closes the change's task from inside the merge call (accept, or cancel). */
+  function closeDuringMerge(executionId: string, change: string, close: 'accept' | 'cancel', after?: () => void): void {
+    h.gh.beforeMerge = async () => {
+      h.gh.beforeMerge = null
+      const taskId = row(executionId, change).taskId!
+      if (close === 'accept') await h.results.accept(h.bench.human, taskId, h.executions.rounds(executionId, change).at(-1)!.resultId)
+      else await h.tasks.setStatus(h.bench.human, taskId, 'cancelled')
+      after?.()
+    }
+  }
+
+  test('(i) accept while the merge completes: one landing fact, landed, only the human acceptance', async () => {
+    const executionId = await startedExecution(h, [{ change: 'hc-a' }])
+    await passedChange(h, executionId, 'hc-a')
+    closeDuringMerge(executionId, 'hc-a', 'accept')
+    await tickUntil(executionId, 'hc-a', state => state === 'landed' || state === 'stopped')
+    await h.tick()
+    expect(row(executionId, 'hc-a').state).toBe('landed')
+    expect(h.executions.landings(h.executions.execution(executionId)!.planId)).toHaveLength(1)
+    const taskId = row(executionId, 'hc-a').taskId!
+    expect(h.tasks.store.get(taskId)!.status).toBe('done')
+    const accepted = h.tasks.store.results.listByTask(taskId).filter(result => result.acceptedBy !== null)
+    expect(accepted.map(result => result.acceptedBy?.kind)).toEqual(['human'])
+    expect(h.tasks.store.journal(taskId).filter(entry => entry.author.kind === 'system' && /accept/i.test(entry.text))).toEqual([])
+    expect(h.executions.effectsOf(executionId).filter(effect => effect.kind === 'merge')).toHaveLength(1)
+  })
+
+  test('(ii) cancel while the merge completes: one landing fact, landed, the task stays cancelled', async () => {
+    const executionId = await startedExecution(h, [{ change: 'hc-b' }])
+    await passedChange(h, executionId, 'hc-b')
+    closeDuringMerge(executionId, 'hc-b', 'cancel')
+    await tickUntil(executionId, 'hc-b', state => state === 'landed' || state === 'stopped')
+    await h.tick()
+    expect(row(executionId, 'hc-b').state).toBe('landed')
+    expect(h.executions.landings(h.executions.execution(executionId)!.planId)).toHaveLength(1)
+    const taskId = row(executionId, 'hc-b').taskId!
+    expect(h.tasks.store.get(taskId)!.status).toBe('cancelled')
+    expect(h.tasks.store.results.listByTask(taskId).filter(result => result.acceptedBy !== null)).toEqual([])
+  })
+
+  test('(iii) accept while the merge fails: stopped as task-closed, nothing merged, no later effect', async () => {
+    const executionId = await startedExecution(h, [{ change: 'hc-c' }])
+    await passedChange(h, executionId, 'hc-c')
+    const baseBefore = originHead(matrix, 'master')
+    closeDuringMerge(executionId, 'hc-c', 'accept', () => pushCommit(matrix, row(executionId, 'hc-c').branch!, 'late.txt', 'late\n'))
+    await tickUntil(executionId, 'hc-c', state => state === 'stopped')
+    const effects = h.executions.effectsOf(executionId).length
+    await h.tick()
+    expect(row(executionId, 'hc-c')).toMatchObject({ state: 'stopped', stopReason: 'task-closed' })
+    expect(h.gh.merges).toHaveLength(0)
+    expect(originHead(matrix, 'master')).toBe(baseBefore)
+    expect(h.executions.landings(h.executions.execution(executionId)!.planId)).toEqual([])
+    expect(h.executions.effectsOf(executionId)).toHaveLength(effects)
+    expect(h.tasks.store.get(row(executionId, 'hc-c').taskId!)!.status).toBe('done')
   })
 })
 

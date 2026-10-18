@@ -46,6 +46,8 @@ export interface LandingDeps {
    * and files. Resolves false when no revision is pending.
    */
   revisionAttempt: (changeRow: { executionId: string; change: string; taskId: string | null }, round: RoundRow, update: { base: string; files: string[] }) => Promise<boolean>
+  /** The task's live status: a task the human closed is never touched again (D19). */
+  taskStatusOf: (taskId: string) => string | null
 }
 
 /** The landing stage's git/gh reads, injectable for tests. */
@@ -358,8 +360,11 @@ export async function applyLandingOutcome(deps: LandingDeps, effect: { kind: str
       headSha: head, baseSha: String(outcome.base ?? ''), mergeSha: mergeCommit, treeVerified,
     })
     store.transition(effect.executionId, effect.change, row, { state: 'landed', step: null })
-    // Kawai accepts the landed change's result (idempotent per result).
-    if (row.taskId !== null) {
+    // Kawai accepts the landed change's result (idempotent per result) —
+    // unless the human closed the task while the merge ran (D19): Kawai
+    // never accepts again nor changes its status.
+    const status = row.taskId === null ? null : deps.taskStatusOf(row.taskId)
+    if (row.taskId !== null && status !== 'done' && status !== 'cancelled') {
       const round = store.rounds(effect.executionId, effect.change).find(entry => entry.commitSha === head) ?? null
       if (round !== null) {
         // The change is landed whatever the acceptance says; a refused

@@ -507,6 +507,7 @@ Every outbound call Kawai makes is a git or `gh` call to `origin`, and each is a
 - **Completion.** When the last change lands, the execution finishes as completed. If its revision is still the plan's current approved revision and the plan is open, `PlanService.completeBySystem(planId, executionId)` writes `completed` with actor `system` under the command id `exec:<executionId>:complete` (D3). It refuses otherwise, and then the plan stays open.
 - **Plan closed.** When the human completes or cancels the plan, an after-commit hook of `PlanService` calls `ExecutionService.stopForPlan` with the reason `plan-closed`. The plan-close transaction writes no task rows, as durable-plans' D8 requires. The hook then runs as Kawai, the tasks' creator, and cancels Kawai's own tasks.
 - **Task closed.** A human close of an owned task that Kawai did not make stops the change as `task-closed`. A reopened task enables Retry.
+- **Task closed while an effect runs.** A human close (accept or cancel) while one of the change's effects runs is handled like Stop for that change: the effect settles and is recorded first, and no new effect starts. A completed merge records its landing fact and the change lands (worktree removal included), but Kawai never changes the task the human closed — no second acceptance, no status change. Otherwise the change stops as `task-closed`.
 
 ### D20. Contracts published for later changes
 

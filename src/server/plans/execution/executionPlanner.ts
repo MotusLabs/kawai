@@ -133,6 +133,21 @@ export function planSteps(snapshot: ExecutionSnapshot, _now: string): PlanSteps 
         && (change.taskId === null || (change.task !== null && change.task.assignment === null && change.task.results.length === 0))) {
         steps.dispatches.push({ executionId: change.executionId, change: change.change, group: change.group })
       }
+      // D13's follow-ons: a settled merge or update-branch effect of a
+      // landing change is applied by the tick (merge → landed, or back to
+      // up-to-date; update → the clean-merge check, polled until the head
+      // moves); a standing one is left to settle. Checked before a human
+      // close (D19): like Stop for that one change, the running effect
+      // settles and is recorded first, and a completed merge lands.
+      const landingEffect = change.landingEffect
+      const settling = change.state === 'landing' && (change.step === 'merging' || change.step === 'updating')
+      if (settling) {
+        if (landingEffect !== null && landingEffect.state === 'done'
+          && ((change.step === 'merging' && landingEffect.kind === 'merge') || (change.step === 'updating' && landingEffect.kind === 'update-branch'))) {
+          steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'landing-outcome', roundId: null, resultId: null, effectId: landingEffect.id })
+        }
+        continue
+      }
       // A human close of the change's task stops it (D19); Kawai's own closes
       // happen after landing, on a change that no longer runs. Checked before
       // the failed instruction: the close itself dead-letters queued task
@@ -165,19 +180,6 @@ export function planSteps(snapshot: ExecutionSnapshot, _now: string): PlanSteps 
         continue
       }
       if (change.task === null) continue
-      // D13's follow-ons: a settled merge or update-branch effect of a
-      // landing change is applied by the tick (merge → landed, or back to
-      // up-to-date; update → the clean-merge check, polled until the head
-      // moves); a standing one is left to settle.
-      const landingEffect = change.landingEffect
-      const settling = change.state === 'landing' && (change.step === 'merging' || change.step === 'updating')
-      if (settling) {
-        if (landingEffect !== null && landingEffect.state === 'done'
-          && ((change.step === 'merging' && landingEffect.kind === 'merge') || (change.step === 'updating' && landingEffect.kind === 'update-branch'))) {
-          steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'landing-outcome', roundId: null, resultId: null, effectId: landingEffect.id })
-        }
-        continue
-      }
       // The round pipeline (D9-D11): a result becomes a round, a round is
       // pushed, PR'd, CI-read, reviewed, and decided. A landing change holds
       // the slot for its base merge, so no newer result supersedes its round.

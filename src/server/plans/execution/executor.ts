@@ -313,6 +313,7 @@ export class ExecutionExecutor {
       ...(this.deps.ghOptions ? { ghOptions: this.deps.ghOptions } : {}),
       now: () => (this.deps.now?.() ?? new Date()).toISOString(),
       revisionAttempt: (changeRow, round, update) => dispatchRevisionAttempt(this.roundDeps(team), changeRow, round, update),
+      taskStatusOf: taskId => this.deps.tasks.store.get(taskId)?.status ?? null,
     }
   }
 
@@ -416,7 +417,8 @@ export class ExecutionExecutor {
 
   /**
    * A failed effect stops its change (D14): effect-failed, or pr-closed when
-   * the PR was closed. A stopped execution's failed merge is settled by its
+   * the PR was closed; task-closed when the human closed the task while the
+   * effect ran (D19). A stopped execution's failed merge is settled by its
    * landing-outcome stage instead (D12: cancelled with its task).
    */
   private applyEffectFailure(effect: { id: string; kind: string; change: string | null; executionId: string; error: string | null }): void {
@@ -424,6 +426,14 @@ export class ExecutionExecutor {
     const row = this.deps.store.change(effect.executionId, effect.change)
     if (row === null || row.state === 'stopped') return
     const error = effect.error ?? ''
+    const taskStatus = row.taskId === null ? null : this.deps.tasks.store.get(row.taskId)?.status
+    if (taskStatus === 'done' || taskStatus === 'cancelled') {
+      this.deps.store.transition(effect.executionId, effect.change, row, {
+        state: 'stopped', stopReason: 'task-closed', step: null,
+        stopDetail: { message: `The task was ${taskStatus} by hand; ${error || 'its running effect failed'}.`, resumeState: row.state, taskId: row.taskId!, effectId: effect.id },
+      })
+      return
+    }
     const reason = error.includes('pr-closed') ? 'pr-closed'
       : error.includes('name-taken') ? 'name-taken' : 'effect-failed'
     this.deps.store.transition(effect.executionId, effect.change, row, {

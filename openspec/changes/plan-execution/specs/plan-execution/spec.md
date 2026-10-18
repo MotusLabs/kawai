@@ -342,6 +342,10 @@ When the human closes a task that an execution created, the execution SHALL stop
 - **WHEN** the human accepts a change's result from the task view before its review passed
 - **THEN** the task is done, the change stops as `task-closed`, and nothing is merged
 
+#### Scenario: A hand close while the merge runs
+- **WHEN** the human accepts or cancels a change's task while its merge runs
+- **THEN** a merge that completes is recorded with its landing fact and the change lands, leaving the task as the human closed it; a merge that fails stops the change as `task-closed` with nothing merged
+
 ### Requirement: An execution completes when its changes have landed
 When every change of the execution's revision has a landing fact, the execution SHALL finish as completed. If that revision is still the plan's current approved revision, Kawai SHALL complete the plan as the system, with an event naming the execution. Otherwise the plan SHALL stay open.
 
