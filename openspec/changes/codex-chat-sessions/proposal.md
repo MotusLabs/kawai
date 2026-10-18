@@ -23,7 +23,7 @@ Every Kawai chat session, and so every team member, is Claude Code. When the sha
 - **Runtime on the profile.** A catalog entry may declare `runtime: "codex"` with Codex fields: model, `codexHome` (default `~/.codex`), and network. Each runtime has its own field allowlist. `codexHome` and `network` are trusted-tier fields: like `executable`, only the shipped default and the user level set them, and a project file setting either is rejected with that file's error. A Codex profile cannot be declared as a model of a providers.json provider. The runtime, and for Codex the resolved Codex home, are stored on the chat row at creation and reused on resume, so a profile edit never moves an existing chat to another driver or home; a mismatch refuses the start. Kawai never writes into a Codex home: it passes only `CODEX_HOME` and `-c` overrides.
 - **Codex limits and usage.**
   - Codex usage-limit, rate-limit, and overload failures feed `profile_limit_events`, so Codex members park, release, or forward through the existing limit outcomes.
-  - A login-wide limit event is recorded once against the Codex home's provider (`codex-home-<hash of the resolved home>`), so every profile on that home cools down together through the shared cooldown; no per-profile copies are written. A limit on one session's own budget cools only that session's profile. When multiple applicable quota windows are exhausted, the cooldown and parked-work resume use the latest known reset among them.
+  - A login-wide limit event is recorded once against the Codex home's provider (`codex-home-<first 12 hex of sha256 of the resolved home>`), so every profile on that home cools down together through the shared cooldown; no per-profile copies are written. A limit on one session's own budget cools only that session's profile. When multiple applicable quota windows are exhausted, the cooldown and parked-work resume use the latest known reset among them.
   - The usage bar shows Codex rate-limit windows, kept per Codex home.
 
 Non-goals:
@@ -44,7 +44,7 @@ Non-goals:
 
 ### Modified Capabilities
 
-- `claude-session-profiles`: catalog entries may declare a runtime. Codex entries have their own allowlisted fields, including the user-level-only `codexHome` and `network`, and the chat profile picker offers Codex profiles beside Claude ones.
+- `claude-session-profiles`: catalog entries may declare a runtime. Codex entries have their own allowlisted fields, including the trusted-tier `codexHome` and `network`, and the chat profile picker offers Codex profiles beside Claude ones.
 - `chat-usage-limits`: Codex rate-limit windows feed the usage bar, kept per Codex home and shared by every profile on that home.
 - `profile-limit-handling`: Codex limit failures are recorded as limit events; a login-wide one names the Codex home's provider and cools every profile on that home through the shared cooldown, with no per-profile copies.
 
