@@ -3098,7 +3098,7 @@ describe('ChatSessionDriver limit events', () => {
     fake.push(frame({ type: 'system', subtype: 'api_retry', attempt: 2, max_retries: 10, retry_delay_ms: 500, error_status: 504, error: 'server_error' }))
     fake.push(result('success'))
     await flush()
-    expect(limits).toEqual([{ kind: 'rate_limit', final: false, status: 429, message: null, resetsAt: null }])
+    expect(limits).toEqual([{ kind: 'rate_limit', final: false, status: 429, message: null, resetsAt: null, window: null }])
   })
 
   test('a failed assistant message is the final event, with the reset a rejected rate_limit_event announced', async () => {
@@ -3111,6 +3111,7 @@ describe('ChatSessionDriver limit events', () => {
     expect(limits).toEqual([{
       kind: 'rate_limit', final: true, status: 429, message: 'API Error: 429 {"error":"quota"}',
       resetsAt: new Date(reset * 1000).toISOString(),
+      window: null,
     }])
   })
 
