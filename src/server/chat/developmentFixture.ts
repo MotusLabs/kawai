@@ -23,6 +23,9 @@ const hold = (ms: number) =>
   new Promise<void>(resolve =>
     setTimeout(resolve, Number(process.env.AGENTBOARD_CHAT_FIXTURE_HOLD_MS ?? ms)))
 
+/** Every real CLI result reports the turn's usage; a result without it is recorded as unknown, not zero. */
+const resultUsage = { usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } }
+
 export const fixtureQueryFactory: ChatQueryFactory = ({ prompt, options, wire }) => {
   const frame = (dir: 'out' | 'in' | 'lifecycle', value: unknown) => wire?.record(dir, JSON.stringify(value))
   frame('lifecycle', { event: 'spawn', command: 'fixture', args: [], cwd: options.cwd ?? null })
@@ -189,7 +192,7 @@ export const fixtureQueryFactory: ChatQueryFactory = ({ prompt, options, wire })
         push({ type: 'system', subtype: 'init', cwd: options.cwd ?? '/tmp', session_id: 'fixture', model: 'fixture-model', tools: [], slash_commands: [] })
         push({ type: 'system', subtype: 'status', status: 'requesting' })
         push({ type: 'assistant', message: { id: crypto.randomUUID(), role: 'assistant', content: [{ type: 'text', text: 'The marker printed fixture-shell-done.' }] } })
-        push({ type: 'result', subtype: 'success', result: '', total_cost_usd: 0, num_turns: 1 })
+        push({ type: 'result', subtype: 'success', result: '', total_cost_usd: 0, num_turns: 1, ...resultUsage })
       }, Number(process.env.AGENTBOARD_CHAT_FIXTURE_HOLD_MS ?? 1200))
     }
     if (/worker/i.test(text)) {
@@ -299,11 +302,11 @@ export const fixtureQueryFactory: ChatQueryFactory = ({ prompt, options, wire })
       // success-subtype result marked is_error with its terminal reason.
       if (!closed && turn === generation) {
         push({ type: 'assistant', message: { id: crypto.randomUUID(), role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text: 'Prompt is too long' }] }, error: 'invalid_request' })
-        push({ type: 'result', subtype: 'success', is_error: true, result: 'Prompt is too long', terminal_reason: 'blocking_limit', total_cost_usd: 0, num_turns: 1, ...echo() })
+        push({ type: 'result', subtype: 'success', is_error: true, result: 'Prompt is too long', terminal_reason: 'blocking_limit', total_cost_usd: 0, num_turns: 1, ...resultUsage, ...echo() })
       }
       return
     }
-    if (!closed && turn === generation) push({ type: 'result', subtype: 'success', result: '', total_cost_usd: 0, num_turns: 1, ...echo() })
+    if (!closed && turn === generation) push({ type: 'result', subtype: 'success', result: '', total_cost_usd: 0, num_turns: 1, ...resultUsage, ...echo() })
   }
   void (async () => {
     for await (const message of prompt) {
@@ -352,7 +355,7 @@ export const fixtureQueryFactory: ChatQueryFactory = ({ prompt, options, wire })
       if (running) {
         running = false
         const ids = echo()
-        setTimeout(() => push({ type: 'result', subtype: 'error_during_execution', is_error: true, errors: [], total_cost_usd: 0, num_turns: 1, ...ids }), 0)
+        setTimeout(() => push({ type: 'result', subtype: 'error_during_execution', is_error: true, errors: [], total_cost_usd: 0, num_turns: 1, ...resultUsage, ...ids }), 0)
       }
       // Prompts the fixture has not pulled stay in the driver's queue, which
       // the driver clears itself: nothing queued here to cancel.

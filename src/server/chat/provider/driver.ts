@@ -23,6 +23,7 @@ import type {
 import type { SessionStatus } from '../../../shared/types'
 import type { BackgroundTaskRecord } from '../chatBackgroundTasks'
 import type { ChatLimitSignal } from '../limitSignals'
+import type { Measurement } from '../../../shared/processObservations'
 
 /**
  * The agent runtime a chat runs on: Claude Code today, Codex with the driver
@@ -73,6 +74,11 @@ export interface ChatDriverCallbacks {
    * state down. Fired once per process.
    */
   onProcessEnd?: () => void
+  /**
+   * Structured compaction facts (process observability); an observational
+   * callback, never a transcript payload.
+   */
+  onCompaction?: (data: Measurement, sourceId?: string) => void
   /** The spawned-worker roster: the full projection, on change — never per
    * elapsed tick; settled outcomes persist through the sidecar. */
   onWorkers?: (workers: ChatWorker[]) => void
@@ -83,9 +89,10 @@ export interface ChatDriverCallbacks {
    * The latest context-meter reading; null clears it (a conversation reset
    * leaves nothing measured). Before the first measurement this callback
    * simply does not fire. `persist` marks writes that must not wait for
-   * the next turn boundary.
+   * the next turn boundary; `thresholdSource` names how the reading's
+   * threshold was derived, for process observability.
    */
-  onContextUsage?: (usage: ChatContextUsage | null, opts?: { persist?: boolean }) => void
+  onContextUsage?: (usage: ChatContextUsage | null, opts?: { persist?: boolean; thresholdSource?: string }) => void
   /**
    * The current model, when it is non-empty and differs from the last fired
    * one — so a mid-session switch lands on the next turn.

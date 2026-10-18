@@ -11,7 +11,7 @@ import type { ChatSessionRecord } from '../db'
 import { NULL_OWNERSHIP, type ExecutionOwnership } from '../plans/execution/executionOwnership'
 import type { AssignmentTarget, TaskFindings, TaskHandoffKind, TaskResult, TaskTestClaim, TeamTask, TeamTaskAssignment, TeamTaskSummary } from '../../shared/teamTasks'
 import { TASK_HANDOFF_KINDS } from '../../shared/teamTasks'
-import type { AssignmentService } from './AssignmentService'
+import { targetLabel, type AssignmentService } from './AssignmentService'
 import type { MemberRelease } from './memberRelease'
 import { TaskRelease } from './taskRelease'
 import { statusRefusal, type TaskCaller, type TaskService } from './TaskService'
@@ -235,9 +235,16 @@ export class TaskResultService {
       const standing = this.tasks.store.assignmentsOf(taskId).find(row => row.handoffKind === request.kind &&
         row.resultId === result.id && row.supersededBy === null && row.state !== 'failed')
       if (standing) {
+        // The standing recipient is exposed (session-targeted-task-handoffs
+        // D3): kind, id, and — when the request names another recipient — both
+        // sides, so a retry can never look like a silent reassignment.
+        const storedTarget = { kind: standing.targetKind, id: standing.targetId }
+        const asked = targetLabel(request.target)
+        const mismatch = storedTarget.kind === request.target.kind && storedTarget.id === request.target.id ? '' :
+          ` You asked for ${asked}, which differs from the standing ${targetLabel(storedTarget)}: no reassignment occurred — inspect the standing assignment (${standing.id}).`
         return { assignment: standing, duplicate: true,
           notice: `An equivalent ${request.kind} handoff of result ${result.id} is already outstanding (${standing.id}, dispatched by ` +
-            `${partyName(standing.createdBy)}, ${standing.state}); nothing was dispatched again.` }
+            `${partyName(standing.createdBy)}, ${standing.state}) to ${targetLabel(storedTarget)}; nothing was dispatched again.${mismatch}` }
       }
     }
     const outcome = await this.options.assignments.dispatch(caller, {
