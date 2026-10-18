@@ -1051,7 +1051,10 @@ export class ChatSessionManager {
         mailbox: this.teamMail.mailbox.store,
         releases: this.teamMail.releases,
         records: () => this.records.values(),
-        teamOf: id => this.teams.teamOf(id),
+        // The executor resolves teams by id (a member-less team included);
+        // the runtime's archive wake resolves sessions.
+        identityOf: teamId => this.teams.identityFor(teamId),
+        teamOfSession: id => this.teams.teamOf(id),
       },
       ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
     })

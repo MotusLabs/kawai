@@ -58,7 +58,10 @@ export interface ExecutionTeamServices {
   /** Member release's readiness and release (the D11 release-before-review seam). */
   releases: MemberRelease
   records: () => Iterable<ChatSessionRecord>
-  teamOf: (sessionId: string) => TeamIdentity | undefined
+  /** The team's identity by team id — the executor's ticks resolve teams this way. */
+  identityOf: (teamId: string) => TeamIdentity | undefined
+  /** The session's team — the runtime's archive wake resolves sessions this way. */
+  teamOfSession: (sessionId: string) => TeamIdentity | undefined
 }
 
 /** The store, the real ownership over it, and the pre-runtime wake hub. */
@@ -225,7 +228,7 @@ export function composePlanServices(options: PlanServicesOptions): {
       records: team.records,
       mailbox: team.mailbox,
       plansService: plans,
-      teamOf: team.teamOf,
+      teamOf: team.identityOf,
       releases: {
         readiness: sessionId => {
           const readiness = team.releases.readiness(sessionId)
@@ -241,7 +244,7 @@ export function composePlanServices(options: PlanServicesOptions): {
     })
     runtime = new ExecutionRuntime({
       executor, store: executionStore, ownership: core.ownership, wakes: core.wakes,
-      taskStore: team.taskStore, mailbox: team.mailbox, records: team.records, teamOf: team.teamOf,
+      taskStore: team.taskStore, mailbox: team.mailbox, records: team.records, teamOf: team.teamOfSession,
       adapters: { fixture, rounds: roundAdaptersUsed },
     })
   }
@@ -268,7 +271,7 @@ function executionSettings(caps?: { planExecution: (teamId: string) => Promise<P
  */
 function groupScopedOf(team: ExecutionTeamServices, teamId: string, groupId: string): boolean {
   for (const record of team.records()) {
-    const identity = team.teamOf(record.sessionId)
+    const identity = team.teamOfSession(record.sessionId)
     if (identity?.teamId !== teamId) continue
     const entry = loadGroupCatalog({ groupsRoot: identity.groupsRoot }).groups.get(groupId)
     return entry?.group.worktreeScoped ?? true

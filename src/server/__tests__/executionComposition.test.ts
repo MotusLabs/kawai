@@ -139,7 +139,10 @@ async function compose(): Promise<void> {
     executionCore: core,
     executionTeam: {
       tasks, assignments, results, taskStore: bench.tasks, mailbox: mail, releases,
-      records: () => bench.records.values(), teamOf,
+      records: () => bench.records.values(),
+      // The executor resolves by team id; the runtime's archive wake by session.
+      identityOf: id => (id === world.team.teamId ? world.team : undefined),
+      teamOfSession: teamOf,
     },
     executionValidation: {
       prepareStanding: async () => ({}),
