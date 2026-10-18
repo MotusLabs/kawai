@@ -20,6 +20,7 @@ import { useTeamPlanStore, type PlanView } from '../../stores/teamPlanStore'
 import PlanIntentSection from './PlanIntentSection'
 import PlanChangesSection from './PlanChangesSection'
 import PlanPolicySection from './PlanPolicySection'
+import PlanExecutionSection from './PlanExecutionSection'
 import PlanRevisionsSection from './PlanRevisionsSection'
 import PlanLifecycleControls from './PlanLifecycleControls'
 import { pinLabel, planActorLabel } from './planLabels'
@@ -160,6 +161,7 @@ function PlanDetailPane({ teamPath, planId, detail, sessions, sendMessage, conne
       <PlanIntentSection content={shown.content} pin={shown.pin} />
       <PlanChangesSection content={shown.content} progress={shown === approved ? detail.progress : null} onOpenTask={onOpenTask} />
       <PlanPolicySection content={shown.content} />
+      <PlanExecutionSection teamPath={teamPath} plan={detail.plan} detail={detail} connected={connected} onSend={sendMessage} onOpenTask={onOpenTask} />
     </>}
     <PlanRevisionsSection teamPath={teamPath} detail={detail} sessions={sessions} sendMessage={sendMessage} connected={connected} busy={busy}
       validation={validation} onCaptureStrategy={onCaptureStrategy} />

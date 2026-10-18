@@ -337,6 +337,19 @@ function validationAlignment(
     : { state: 'blocked', reason: 'exploration not authorized', effective: newest.id }
 }
 
+/**
+ * The carried conditions read live from a revision's assessments and
+ * decisions (plan-execution D13 step 1): the same rule readiness applies,
+ * without a report.
+ */
+export function carriedConditionsOf(assessments: readonly AssessmentRow[], decisions: readonly DecisionRecord[]): Readiness['carriedConditions'] {
+  const newest = assessments
+    .filter((row): row is Extract<AssessmentRow, { kind: 'alignment' }> => row.kind === 'alignment')
+    .sort((x, y) => byCodePoint(x.createdAt, y.createdAt))
+    .at(-1) ?? null
+  return validationCarried(newest, decisions)
+}
+
 /** The effective assessment's `start` and `acceptance` conditions, with their resolution (D7). */
 function validationCarried(
   newest: Extract<AssessmentRow, { kind: 'alignment' }> | null,

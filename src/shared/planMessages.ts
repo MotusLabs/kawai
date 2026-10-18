@@ -36,6 +36,10 @@ export type PlanServerMessage =
       validation?: { report: PlanValidationRecord; stored: boolean; dryRun: boolean }
       /** plan-validation: new record ids from `team-plan-assess`. */
       assessment?: { ids: { alignment: string | null; questions: string[]; findings: string[] }; replayed: boolean }
+      /** plan-execution D17: the outcome of an execution command, with the execution it touched. */
+      execution?: { id: string; state: 'running' | 'finished'; outcome: 'completed' | 'stopped' | null }
+      /** plan-execution D17: the preview's standing (the failing preconditions with their messages). */
+      preview?: { failures: Array<{ name: string; message: string }>; ready: boolean }
     }
 
 /** The report a `team-plan-result` carries (plan-validation D11): the stored row, or a dry run with a null id. */
@@ -65,6 +69,13 @@ export type PlanClientMessage =
   | { type: 'team-plan-validate'; teamPath: string; requestId: string; planId: string; revision: number }
   | { type: 'team-plan-assess'; teamPath: string; requestId: string; planId: string; revision: number; alignment: AlignmentAssessment; commandId: string }
   | { type: 'team-plan-validation-decide'; teamPath: string; requestId: string; planId: string; revision: number; kind: 'answer' | 'accept-warning' | 'resolve-condition' | 'alignment-exception' | 'authorize-exploration'; target: string; text: string; scope?: string | null; commandId: string }
+  // plan-execution D17: the human execution commands. Each replays by its
+  // command id; `team-plan-result` answers each with `execution` (or
+  // `preview` for the standing read).
+  | { type: 'team-plan-execution-preview'; teamPath: string; requestId: string; planId: string; revision: number }
+  | { type: 'team-plan-execution-start'; teamPath: string; requestId: string; planId: string; revision: number; contentHash: string; commandId: string }
+  | { type: 'team-plan-execution-stop'; teamPath: string; requestId: string; executionId: string; reason: string; commandId: string }
+  | { type: 'team-plan-execution-retry'; teamPath: string; requestId: string; executionId: string; change: string; commandId: string }
 
 /** plan-validation D11: the shape `team-plan-assess` alignment takes (questions and findings are the agents' tools'). */
 export type PlanAssessAlignment = AlignmentAssessment

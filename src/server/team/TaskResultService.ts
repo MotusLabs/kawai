@@ -42,6 +42,10 @@ export interface HandoffRequest {
   expectedResponse?: string | null
   /** The human's client request key; agents send none (D3). */
   requestKey?: string
+  /** The role's profiles the review may route to (plan-execution D11/D15); honored for the system caller only. */
+  allowedProfiles?: string[]
+  /** Tags on the instruction mail (plan-execution D15: author-profile); the system caller only. */
+  tags?: string[]
 }
 
 export interface HandoffOutcome {
@@ -90,6 +94,8 @@ export class TaskResultService {
     homeDir?: string
     /** What a running execution owns (plan-execution D7/D9); the default owns nothing. */
     ownership?: ExecutionOwnership
+    /** A result or findings write landed (plan-execution D5): the composition wakes the owner's executor. */
+    onWrite?: (taskId: string) => void
   }) {
     this.release = options.releases && options.records
       ? new TaskRelease(this, {
@@ -136,6 +142,7 @@ export class TaskResultService {
       this.store.appendJournal(taskId, actor, `Submitted result ${inserted.id}: ${summary}`)
       return inserted
     })
+    this.options.onWrite?.(taskId)
     return this.store.results.get(result.id)!
   }
 
@@ -161,6 +168,7 @@ export class TaskResultService {
       kind: input.kind, verdict: input.verdict, findings, author: actor,
     })
     this.store.appendJournal(taskId, actor, `${input.kind === 'qa' ? 'QA' : 'Review'} findings on result ${result.id}: ${input.verdict}`)
+    this.options.onWrite?.(taskId)
     return stored
   }
 
@@ -178,6 +186,9 @@ export class TaskResultService {
     const task = this.tasks.sameTeamTask(team, taskId)
     const refusal = statusRefusal(actor, task, 'done')
     if (refusal) throw new Error(refusal.replace(`set it to done`, 'accept its results and close it'))
+    // plan-execution D7/D19: ownership guards dispatch, handoff, and release,
+    // never acceptance. A human accept of an owned task closes it like any
+    // close: the executor stops the change as task-closed and merges nothing.
     const result = this.store.results.get(resultId)
     if (!result || result.taskId !== taskId) throw new Error(`Result ${resultId} is not a result of task ${taskId}`)
     const openChildren = this.store.list(team.teamId).filter(child =>
@@ -234,6 +245,8 @@ export class TaskResultService {
       instruction: handoffInstruction(request.kind, result, instructions, expectedResponse),
       requestKey: request.requestKey?.trim() || `handoff-${crypto.randomUUID()}`,
       handoff: { kind: request.kind, resultId: result.id, expectedResponse },
+      ...(request.allowedProfiles ? { allowedProfiles: request.allowedProfiles } : {}),
+      ...(request.tags ? { tags: request.tags } : {}),
     })
     return { assignment: outcome.assignment, duplicate: outcome.replay,
       notice: outcome.replay ? 'This request was already dispatched; the earlier handoff is returned.' : null }
