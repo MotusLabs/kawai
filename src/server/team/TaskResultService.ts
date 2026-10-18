@@ -186,12 +186,9 @@ export class TaskResultService {
     const task = this.tasks.sameTeamTask(team, taskId)
     const refusal = statusRefusal(actor, task, 'done')
     if (refusal) throw new Error(refusal.replace(`set it to done`, 'accept its results and close it'))
-    // plan-execution D7: while an execution owns the change, only Kawai
-    // accepts its results — the landing does, as the system.
-    const owner = (this.options.ownership ?? NULL_OWNERSHIP).ownerOfTask(taskId)
-    if (owner !== null && caller.kind !== 'system') {
-      throw new Error(`The task is owned by a running execution (${owner.executionId}); its results are accepted by the execution's landing. Stop the execution or let it finish instead. Nothing was accepted.`)
-    }
+    // plan-execution D7/D19: ownership guards dispatch, handoff, and release,
+    // never acceptance. A human accept of an owned task closes it like any
+    // close: the executor stops the change as task-closed and merges nothing.
     const result = this.store.results.get(resultId)
     if (!result || result.taskId !== taskId) throw new Error(`Result ${resultId} is not a result of task ${taskId}`)
     const openChildren = this.store.list(team.teamId).filter(child =>

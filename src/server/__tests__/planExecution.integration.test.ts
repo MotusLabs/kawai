@@ -25,7 +25,7 @@ import { benchGhStub, benchOpenspecStub } from './planExecutionBenchStubs'
 
 const FLOOR = { lint: ['ci'], typecheck: ['ci'], 'unit-tests': ['ci'], 'ci-e2e': ['e2e'] }
 const GITHUB_URL = 'https://github.com/acme/app.git'
-const CHANGES = ['bench-a', 'bench-c', 'bench-d', 'bench-e', 'bench-g', 'bench-h', 'bench-i']
+const CHANGES = ['bench-a', 'bench-f', 'bench-c', 'bench-d', 'bench-e', 'bench-g', 'bench-h', 'bench-i']
 
 let root: string
 let repo: string
@@ -193,7 +193,7 @@ const originHead = (branch: string): string | null => {
 }
 
 describe('the plan-execution manager bench', () => {
-  test('(a) Start dispatches the implement attempt with the execution in its envelope; (b) a tool-submitted result pushes; (f) manual assign and accept refused', async () => {
+  test('(a) Start dispatches the implement attempt with the execution in its envelope; (b) a tool-submitted result pushes; (f) a manual assign is refused for the human and an agent', async () => {
     const { revision, executionId } = await started('bench-a')
     const member = await implementer(executionId, 'bench-a')
     const message = manager.mailbox.store.get(instruction(executionId, 'bench-a')!.messageId!)!
@@ -214,10 +214,26 @@ describe('the plan-execution manager bench', () => {
     await expect(manager.assignments.dispatch({ kind: 'agent', sessionId: member }, {
       taskId, target: { kind: 'group', id: 'middle-devs' }, instruction: 'take it over', requestKey: 'manual-agent',
     })).rejects.toThrow('owned by a running execution')
-    await expect(manager.results.accept(human, taskId, resultId)).rejects.toThrow('owned by a running execution')
-    // An agent is refused before ownership is consulted: only Kawai created the task.
+    expect(manager.tasks.store.assignmentsOf(taskId)).toHaveLength(1)
+    // An agent accept is refused by the creator rule: only Kawai created the task.
     await expect(manager.results.accept({ kind: 'agent', sessionId: member }, taskId, resultId)).rejects.toThrow("Only the task's creator")
     expect(manager.tasks.store.get(taskId)?.status).not.toBe('done')
+  }, 60_000)
+
+  test('(f) a human accept of an owned result closes the task and stops the change as task-closed, merging nothing', async () => {
+    const { planId, executionId } = await started('bench-f')
+    const member = await implementer(executionId, 'bench-f')
+    const { resultId } = await submit(executionId, 'bench-f', member)
+    const taskId = changeRow(executionId, 'bench-f').taskId!
+    const accepted = await manager.results.accept(human, taskId, resultId)
+    expect(accepted.task.status).toBe('done')
+    expect(manager.tasks.store.results.get(resultId)?.acceptedBy).toBeTruthy()
+    await waitFor(() => changeRow(executionId, 'bench-f').state === 'stopped', 'bench-f: stopped')
+    expect(changeRow(executionId, 'bench-f')).toMatchObject({ stopReason: 'task-closed' })
+    expect(executions().landings(planId)).toEqual([])
+    expect(executions().effectsOf(executionId).some(effect => effect.kind === 'merge')).toBe(false)
+    // No replacement task: the change keeps its one task.
+    expect(manager.tasks.store.list(team.teamId).filter(task => task.planId === planId)).toHaveLength(1)
   }, 60_000)
 
   test('(c) a human close of the owned task stops the change as task-closed', async () => {

@@ -248,15 +248,29 @@ describe('the composed execution stack (rev 3)', () => {
     expect(store.attempts(executionId, change).at(-1)).toMatchObject({ kind: 'implement' })
   })
 
-  test('a manual assign and an accept of an owned task are refused', async () => {
+  test('a manual assign of an owned task is refused; a human accept closes it and stops the change unmerged', async () => {
     const change = nextChange()
     const executionId = await startedExecution(change)
     const { taskId, resultId } = await implement(executionId, change)
+    const assignmentsBefore = tasks.store.assignmentsOf(taskId).length
     await expect(assignments.dispatch(bench.human, {
       taskId, target: { kind: 'session', id: 'stranger' }, instruction: 'take it over', requestKey: 'manual-1',
     })).rejects.toThrow('owned by a running execution')
-    // The human has closing rights, so the ownership refusal is what answers.
-    await expect(results.accept(bench.human, taskId, resultId)).rejects.toThrow('owned by a running execution')
+    await expect(assignments.dispatch(bench.agent('impl'), {
+      taskId, target: { kind: 'session', id: 'stranger' }, instruction: 'take it over', requestKey: 'manual-2',
+    })).rejects.toThrow('owned by a running execution')
+    expect(tasks.store.assignmentsOf(taskId)).toHaveLength(assignmentsBefore)
+    // An agent is refused by the creator rule: Kawai created the task.
+    await expect(results.accept(bench.agent('impl'), taskId, resultId)).rejects.toThrow("Only the task's creator")
+    // The human accept closes the task (spec: Accepting by hand closes without landing).
+    const accepted = await results.accept(bench.human, taskId, resultId)
+    expect(accepted.task.status).toBe('done')
+    await runtime.idle()
+    const planId = store.execution(executionId)!.planId
+    expect(store.change(executionId, change)).toMatchObject({ state: 'stopped', stopReason: 'task-closed' })
+    expect(store.landings(planId)).toEqual([])
+    expect(store.effectsOf(executionId).some(effect => effect.kind === 'merge')).toBe(false)
+    expect(tasks.store.list(world.team.teamId).filter(task => task.planChange === change)).toHaveLength(1)
   })
 
   test('an owned result advances without the timer and releases the implementer before the review', async () => {
