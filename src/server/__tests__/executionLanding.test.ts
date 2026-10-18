@@ -49,7 +49,6 @@ let ghStub: { prMerge: Record<string, string>; prView: Record<string, { state: s
 let predictedConflicts: string[]
 let conditions: Record<string, string[]>
 
-const main = () => world.repo
 
 function git(args: string[], cwd?: string) {
   const result = spawnSync('git', args, { cwd, encoding: 'utf8', env: cleanGitEnv() })

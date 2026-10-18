@@ -54,7 +54,6 @@ let gh: {
   mergeGate: Promise<void> | null
 }
 
-const main = () => world.repo
 
 function git(args: string[], cwd?: string) {
   const result = spawnSync('git', args, { cwd, encoding: 'utf8', env: cleanGitEnv() })
@@ -242,10 +241,6 @@ function makeExecutor(): ExecutionExecutor {
       },
     },
   })
-}
-const remoteHeadOr = (branch: string, fallback: string, cwd: string) => {
-  const rev = git(['rev-parse', '--verify', '--quiet', `origin/${branch === 'dep-a' ? 'master' : 'master'}`], cwd).trim()
-  return rev === '' ? fallback : rev
 }
 
 describe('the executed plan end to end (§17.1)', () => {

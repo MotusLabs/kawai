@@ -41,7 +41,6 @@ let baseSha: string
 let ghEnv: Record<string, string>
 let ghStub: { checkRuns: string; statuses: string; pulls: string; created: string; reruns: number[] }
 
-const main = () => world.repo
 
 function git(args: string[], cwd?: string) {
   const result = spawnSync('git', args, { cwd, encoding: 'utf8', env: cleanGitEnv() })
