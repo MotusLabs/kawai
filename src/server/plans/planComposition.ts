@@ -2,10 +2,13 @@
 // production wiring, extracted from ChatSessionManager so tests exercise the
 // same construction the server runs): the ValidationService over the shared
 // plan store, its adapter and capacity evidence, the coalesced validation
-// view for the Plans page pushes, and the PlanService with validation's
-// `validation-current` appended after the shipped approval preconditions.
-// Both the manager and the test benches call `composePlanServices`; nothing
-// else may wire these services by hand.
+// view for the Plans page pushes, the PlanService with validation's
+// `validation-current` appended after the shipped approval preconditions,
+// and — with team services given — the execution runtime: the executor with
+// the real adapters (fixture adapters under the development fixture switch),
+// D14 startup recovery, every D5 wake, and the stop path. Both the manager
+// and the test benches call `composePlanServices`; nothing else may wire
+// these services by hand.
 import type { Database } from 'bun:sqlite'
 import type { ChatSessionRecord } from '../db'
 import type { TeamIdentity } from '../team/teamIdentity'
@@ -21,15 +24,65 @@ import { ValidationStore } from './validation/validationStore'
 import { ValidationDetailCache } from './validation/validationDetail'
 import { ExecutionStore } from './execution/executionStore'
 import { ExecutionService } from './execution/ExecutionService'
-import { executionOwnership } from './execution/executionOwnership'
+import { executionOwnership, type ExecutionOwnership } from './execution/executionOwnership'
 import { executionViews } from './execution/executionView'
+import { ExecutionExecutor } from './execution/executor'
+import { ExecutionRuntime, ExecutionWakes } from './execution/executionRuntime'
+import { provisionAdapter } from './execution/executionProvision'
+import { roundAdapters } from './execution/executionRounds'
+import { fixtureLandingAdapters, fixtureProbe, fixtureRoundAdapters, FIXTURE_FLOOR } from './execution/fixtureAdapters'
+import { chatFixtureEnabled } from '../chat/developmentFixture'
 import { REGISTERED_LANDING_MODES } from './landing/landingMechanisms'
+import type { MemberRelease } from '../team/memberRelease'
+import type { TaskService } from '../team/TaskService'
+import type { TaskResultService } from '../team/TaskResultService'
+import type { AssignmentService } from '../team/AssignmentService'
+import type { MailboxStore } from '../team/mailboxStore'
+import type { TaskStore } from '../team/taskStore'
 import type { PlanExecutionSettings } from '../team/teamCaps'
 
 /** What capacity evidence reads: staffing's counts and the cooldown ends (D3). */
 export interface CapacityReads {
   capacity: (teamId: string, groupId: string, worktree: string) => { groupMembers: number; onProfile: Record<string, number> }
   cooldownUntil: (profileId: string) => string | null
+}
+
+/** The team services the execution runtime drives and wakes on (plan-execution D5). */
+export interface ExecutionTeamServices {
+  tasks: TaskService
+  assignments: AssignmentService
+  results: TaskResultService
+  /** The task store (TaskStore.changed wakes) and the mailbox (owned mail wakes). */
+  taskStore: TaskStore
+  mailbox: MailboxStore
+  /** Member release's readiness and release (the D11 release-before-review seam). */
+  releases: MemberRelease
+  records: () => Iterable<ChatSessionRecord>
+  teamOf: (sessionId: string) => TeamIdentity | undefined
+}
+
+/** The store, the real ownership over it, and the pre-runtime wake hub. */
+export interface ExecutionCore {
+  executionStore: ExecutionStore
+  ownership: ExecutionOwnership
+  wakes: ExecutionWakes
+}
+
+/**
+ * The execution store, its ownership, and the wake hub — built before the
+ * team services (they take the ownership) and shared with
+ * `composePlanServices`, so the whole server runs one ExecutionStore.
+ */
+export function composeExecutionCore(db: Database): ExecutionCore {
+  const executionStore = new ExecutionStore(db)
+  const ownership = executionOwnership(executionStore, {
+    isAncestor: (...args) => import('./landing/gitRemote').then(module => module.isAncestor(...args)),
+    lsRemoteHead: (...args) => import('./landing/gitRemote').then(module => module.lsRemoteHead(...args)),
+  }, messageId => {
+    const row = db.prepare('SELECT from_kind FROM team_messages WHERE id = ?').get(messageId) as { from_kind?: string } | undefined
+    return row?.from_kind === 'system' ? 'system' : row === undefined ? null : row.from_kind === 'human' ? 'human' : 'agent'
+  })
+  return { executionStore, ownership, wakes: new ExecutionWakes(executionStore, ownership) }
 }
 
 export interface PlanServicesOptions {
@@ -41,13 +94,22 @@ export interface PlanServicesOptions {
   getSession: (id: string) => ChatSessionRecord | null | undefined
   /** The user-level settings (plan-execution D16); without it Start refuses on the missing floor map. */
   caps?: { planExecution: (teamId: string) => Promise<PlanExecutionSettings> }
+  /** The pre-built execution core (one store for the whole server); built here when absent. */
+  executionCore?: ExecutionCore
+  /**
+   * The team services: given, the composition constructs the executor with
+   * the real adapters and the runtime (boot recovery, D5 wakes, stop).
+   */
+  executionTeam?: ExecutionTeamServices
   /** Test seam: replace the execution pre-reads' validation standing (defaults to the composed service). */
   executionValidation?: {
     prepareStanding: (planId: string, revision: number) => Promise<unknown> | null
     standing: (prepared: unknown) => unknown
   }
-  /** Test seam: replace the landing probe (defaults to the real one). */
+  /** Test seam: replace the landing probe (defaults to the real one; the fixture switch its own). */
   executionProbe?: (input: import('./landing/landingProbe').ProbeInput, options?: import('./landing/ghCommand').GhCommandOptions) => Promise<import('./landing/landingProbe').ProbeResult>
+  /** Test seam: the gh surface every composed gh call uses (a stub gh on a private PATH). */
+  executionGhOptions?: import('./landing/ghCommand').GhCommandOptions
   /** One adapter per manager by default (one 4-slot CLI pool per process). */
   adapter?: OpenspecAdapter
   /** Without staffing or limit reads, the capacity check shows no evidence row. */
@@ -92,6 +154,8 @@ export function composePlanServices(options: PlanServicesOptions): {
   adapter: OpenspecAdapter
   executions: ExecutionService
   executionStore: ExecutionStore
+  /** The execution runtime (boot, wakes, stop); null without team services. */
+  runtime: ExecutionRuntime | null
 } {
   const adapter = options.adapter ?? new OpenspecAdapter()
   const validationStore = new ValidationStore(options.db)
@@ -106,16 +170,8 @@ export function composePlanServices(options: PlanServicesOptions): {
       : undefined,
     ...(options.homeDir ? { homeDir: options.homeDir } : {}),
   })
-  const executionStore = new ExecutionStore(options.db)
-  // The real ownership (plan-execution D7/D9): the store reads, and the git
-  // checks run over the real remote reads.
-  const ownership = executionOwnership(executionStore, {
-    isAncestor: (...args) => import('./landing/gitRemote').then(module => module.isAncestor(...args)),
-    lsRemoteHead: (...args) => import('./landing/gitRemote').then(module => module.lsRemoteHead(...args)),
-  }, messageId => {
-    const row = options.db.prepare('SELECT from_kind FROM team_messages WHERE id = ?').get(messageId) as { from_kind?: string } | undefined
-    return row?.from_kind === 'system' ? 'system' : row === undefined ? null : row.from_kind === 'human' ? 'human' : 'agent'
-  })
+  const core = options.executionCore ?? composeExecutionCore(options.db)
+  const executionStore = core.executionStore
   const plans = new PlanService(options.plans, {
     getSession: options.getSession,
     strategies: options.strategies,
@@ -132,6 +188,12 @@ export function composePlanServices(options: PlanServicesOptions): {
     executionsOf: planId => executionViews(executionStore, planId),
     ...(options.homeDir ? { homeDir: options.homeDir } : {}),
   })
+  // The runtime binds the executor after this function returns; a committed
+  // command wakes through it, so a Start racing boot recovery wakes only
+  // once recovery has ended and the running teams are woken.
+  let runtime: ExecutionRuntime | null = null
+  const team = options.executionTeam
+  const fixture = chatFixtureEnabled
   const executions = new ExecutionService({
     store: executionStore,
     plansStore: options.plans,
@@ -141,12 +203,75 @@ export function composePlanServices(options: PlanServicesOptions): {
       standing: (prepared: unknown) => validation.standing(prepared as Parameters<ValidationService['standing']>[0]),
     },
     impact: { gate: (planId, revision) => options.impact.gate(planId, revision) },
-    settings: options.caps ?? { planExecution: async () => ({ floorChecks: null, maxParallelChanges: 3, mergeMethod: 'merge' }) },
+    settings: executionSettings(options.caps),
     getSession: options.getSession,
     landingModes: () => new Set(REGISTERED_LANDING_MODES),
-    ...(options.executionProbe ? { probe: options.executionProbe } : {}),
+    ...(team !== undefined ? {
+      tasks: team.tasks,
+      wake: (teamId: string) => runtime?.command(teamId),
+    } : {}),
+    ...(options.executionGhOptions ? { ghOptions: options.executionGhOptions } : {}),
+    ...(options.executionProbe ? { probe: options.executionProbe } : fixture ? { probe: fixtureProbe } : {}),
     ...(options.homeDir ? { homeDir: options.homeDir } : {}),
   })
-  void ownership
-  return { validation, validationStore, plans, validationDetail: new ValidationDetailCache(validation), adapter, executions, executionStore }
+  if (team !== undefined) {
+    const roundAdaptersUsed = fixture ? fixtureRoundAdapters() : roundAdapters
+    const executor = new ExecutionExecutor({
+      store: executionStore,
+      plans: options.plans,
+      tasks: team.tasks,
+      assignments: team.assignments,
+      results: team.results,
+      records: team.records,
+      mailbox: team.mailbox,
+      plansService: plans,
+      teamOf: team.teamOf,
+      releases: {
+        readiness: sessionId => {
+          const readiness = team.releases.readiness(sessionId)
+          return readiness.ready ? { ready: true, reason: null } : { ready: false, reason: readiness.reason }
+        },
+        release: sessionId => team.releases.releaseNow(sessionId, ' before the review handoff (plan-execution D11)'),
+      },
+      adapters: { provision: provisionAdapter(executionStore) },
+      groupScoped: (teamId, groupId) => groupScopedOf(team, teamId, groupId),
+      roundAdapters: roundAdaptersUsed,
+      ...(fixture ? { landingAdapters: fixtureLandingAdapters(), tickMs: 1_000 } : {}),
+      ...(options.executionGhOptions ? { ghOptions: options.executionGhOptions } : {}),
+    })
+    runtime = new ExecutionRuntime({
+      executor, store: executionStore, ownership: core.ownership, wakes: core.wakes,
+      taskStore: team.taskStore, mailbox: team.mailbox, records: team.records, teamOf: team.teamOf,
+      adapters: { fixture, rounds: roundAdaptersUsed },
+    })
+  }
+  return {
+    validation, validationStore, plans, validationDetail: new ValidationDetailCache(validation), adapter, executions, executionStore,
+    runtime,
+  }
+}
+
+/**
+ * The settings Start reads: the user's `~/.kawai/teams.json` through the
+ * caps, except under the development fixture, where the deterministic floor
+ * map and defaults replace configuration so the walkthrough always starts.
+ */
+function executionSettings(caps?: { planExecution: (teamId: string) => Promise<PlanExecutionSettings> }): { planExecution: (teamId: string) => Promise<PlanExecutionSettings> } {
+  if (chatFixtureEnabled) return { planExecution: async () => ({ floorChecks: FIXTURE_FLOOR, maxParallelChanges: 3, mergeMethod: 'merge' }) }
+  return caps ?? { planExecution: async () => ({ floorChecks: null, maxParallelChanges: 3, mergeMethod: 'merge' }) }
+}
+
+/**
+ * The group-scoping read the release step consults (D11): the team's
+ * current group files, through any live member's team identity; a team with
+ * no live identity counts as scoped.
+ */
+function groupScopedOf(team: ExecutionTeamServices, teamId: string, groupId: string): boolean {
+  for (const record of team.records()) {
+    const identity = team.teamOf(record.sessionId)
+    if (identity?.teamId !== teamId) continue
+    const entry = loadGroupCatalog({ groupsRoot: identity.groupsRoot }).groups.get(groupId)
+    return entry?.group.worktreeScoped ?? true
+  }
+  return true
 }

@@ -94,6 +94,8 @@ export class TaskResultService {
     homeDir?: string
     /** What a running execution owns (plan-execution D7/D9); the default owns nothing. */
     ownership?: ExecutionOwnership
+    /** A result or findings write landed (plan-execution D5): the composition wakes the owner's executor. */
+    onWrite?: (taskId: string) => void
   }) {
     this.release = options.releases && options.records
       ? new TaskRelease(this, {
@@ -140,6 +142,7 @@ export class TaskResultService {
       this.store.appendJournal(taskId, actor, `Submitted result ${inserted.id}: ${summary}`)
       return inserted
     })
+    this.options.onWrite?.(taskId)
     return this.store.results.get(result.id)!
   }
 
@@ -165,6 +168,7 @@ export class TaskResultService {
       kind: input.kind, verdict: input.verdict, findings, author: actor,
     })
     this.store.appendJournal(taskId, actor, `${input.kind === 'qa' ? 'QA' : 'Review'} findings on result ${result.id}: ${input.verdict}`)
+    this.options.onWrite?.(taskId)
     return stored
   }
 
@@ -182,6 +186,12 @@ export class TaskResultService {
     const task = this.tasks.sameTeamTask(team, taskId)
     const refusal = statusRefusal(actor, task, 'done')
     if (refusal) throw new Error(refusal.replace(`set it to done`, 'accept its results and close it'))
+    // plan-execution D7: while an execution owns the change, only Kawai
+    // accepts its results — the landing does, as the system.
+    const owner = (this.options.ownership ?? NULL_OWNERSHIP).ownerOfTask(taskId)
+    if (owner !== null && caller.kind !== 'system') {
+      throw new Error(`The task is owned by a running execution (${owner.executionId}); its results are accepted by the execution's landing. Stop the execution or let it finish instead. Nothing was accepted.`)
+    }
     const result = this.store.results.get(resultId)
     if (!result || result.taskId !== taskId) throw new Error(`Result ${resultId} is not a result of task ${taskId}`)
     const openChildren = this.store.list(team.teamId).filter(child =>

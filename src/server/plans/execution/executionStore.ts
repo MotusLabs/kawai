@@ -162,6 +162,12 @@ export class ExecutionStore {
       .map(mapExecution)
   }
 
+  /** Every team holding a running execution (the runtime's boot wake, D5). */
+  runningTeams(): string[] {
+    return (this.db.prepare("SELECT DISTINCT team_id FROM plan_executions WHERE state = 'running'").all() as Array<{ team_id: string }>)
+      .map(row => row.team_id)
+  }
+
   /** Every execution of a plan, newest first. */
   executionsOf(planId: string): ExecutionRow[] {
     return (this.db.prepare('SELECT * FROM plan_executions WHERE plan_id = ? ORDER BY started_at DESC, rowid DESC').all(planId) as Array<Record<string, unknown>>)

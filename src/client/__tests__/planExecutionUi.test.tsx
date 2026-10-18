@@ -47,11 +47,14 @@ const planSummary: PlanSummary = {
   creator: { kind: 'human', sessionId: null }, currentApprovedRevision: 1, pin: null, linkedTaskCount: 0,
 }
 const detailOf = (executions: PlanExecutionView[]): PlanDetail => ({
-  plan: planSummary, revisions: [], drafts: [], events: [], linkedTasks: [], progress: null, executions,
+  plan: planSummary,
+  // The section reads only the approved revision's number and hash.
+  revisions: [{ revision: 1, contentHash: 'h' }] as unknown as PlanDetail['revisions'],
+  drafts: [], events: [], linkedTasks: [], progress: null, executions,
 })
 
 const section = (executions: PlanExecutionView['changes'], connected = true) =>
-  createElement(PlanExecutionSection, { teamPath: '/repo', plan: planSummary, detail: detailOf([baseExecution(executions)]), connected })
+  createElement(PlanExecutionSection, { teamPath: '/repo', plan: planSummary, detail: detailOf([baseExecution(executions)]), connected, onSend: () => undefined })
 
 describe('PlanExecutionSection', () => {
   test('waiting is explained; the state shows', () => {
@@ -81,35 +84,61 @@ describe('PlanExecutionSection', () => {
     expect(tree).toContain('tree not verified')
   })
 
-  test('Stop lists what it cancels and keeps; disconnected disables the control', () => {
+  test('Stop opens to list what it cancels and keeps; disconnected disables the control', () => {
+    useTeamPlanStore.getState().open('/repo')
     render(section([
       changeRow({ change: 'api', state: 'landed' }),
       changeRow({ change: 'ui', position: 1 }),
     ]))
+    const open = renderer!.root.findByProps({ 'data-testid': 'plan-execution-stop-open' })
+    act(() => open.props.onClick())
     const tree = text()
     expect(tree).toContain('Cancels')
     expect(tree).toContain('Keeps')
+    act(() => renderer!.unmount())
+    renderer = null
     render(section([changeRow()], false))
-    expect(text()).toContain('disabled')
+    expect(renderer!.root.findByProps({ 'data-testid': 'plan-execution-stop-open' }).props.disabled).toBe(true)
   })
 
-  test('no execution: the empty state with the Start hint', () => {
-    render(createElement(PlanExecutionSection, { teamPath: '/repo', plan: planSummary, detail: detailOf([]), connected: true }))
+  test('no execution: the empty state with the Start hint and dialog', () => {
+    render(createElement(PlanExecutionSection, { teamPath: '/repo', plan: planSummary, detail: detailOf([]), connected: true, onSend: () => undefined }))
     expect(text()).toContain('No execution has run')
+    expect(text()).toContain('Start runs the approved revision')
+    expect(renderer!.root.findByProps({ 'data-testid': 'plan-execution-start-button' })).toBeTruthy()
   })
 })
 
 describe('PlanExecutionStartDialog', () => {
-  test('the standing names its failures and disables Start; ready starts armed', () => {
+  test('opening asks the server for the standing; the reply disables or arms Start (15.4)', () => {
     useTeamPlanStore.getState().open('/repo')
+    const sent: Array<{ type: string; requestId: string }> = []
     render(createElement(PlanExecutionStartDialog, {
-      teamPath: '/repo', planId: 'plan-1', revision: 1, contentHash: 'h', connected: true, onSend: () => undefined,
-      standing: [{ name: 'landing-ready', message: 'No floor map is configured.' }],
+      teamPath: '/repo', planId: 'plan-1', revision: 1, contentHash: 'h', connected: true,
+      onSend: message => sent.push(message as { type: string; requestId: string }),
     }))
-    const start = renderer!.root.findByProps({ 'data-testid': 'plan-execution-start-button' })
-    act(() => start.props.onClick())
+    const open = renderer!.root.findByProps({ 'data-testid': 'plan-execution-start-button' })
+    act(() => open.props.onClick())
+    // Open → send: the preview request left with the dialog open and pending.
+    expect(sent).toHaveLength(1)
+    expect(sent[0]!.type).toBe('team-plan-execution-preview')
+    expect(text()).toContain('Checking the standing')
+    // Reply → the standing shows and Start stays disabled while not ready.
+    act(() => useTeamPlanStore.getState().applyResult({
+      type: 'team-plan-result', teamPath: '/repo', requestId: sent[0]!.requestId,
+      preview: { failures: [{ name: 'landing-ready', message: 'No floor map is configured.' }], ready: false },
+    }))
     expect(text()).toContain('landing-ready')
     expect(text()).toContain('No floor map')
+    expect(renderer!.root.findByProps({ 'data-testid': 'plan-execution-start-confirm' }).props.disabled).toBe(true)
+    // Re-opening refreshes the standing; a ready one arms the confirm.
+    act(() => open.props.onClick())
+    expect(sent).toHaveLength(2)
+    act(() => useTeamPlanStore.getState().applyResult({
+      type: 'team-plan-result', teamPath: '/repo', requestId: sent[1]!.requestId,
+      preview: { failures: [], ready: true },
+    }))
+    expect(renderer!.root.findByProps({ 'data-testid': 'plan-execution-start-confirm' }).props.disabled).toBe(false)
   })
 })
 

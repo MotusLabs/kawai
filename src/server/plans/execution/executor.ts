@@ -63,6 +63,8 @@ export interface ExecutorDeps {
   adapters?: Partial<Record<string, EffectAdapter>>
   /** Round-pipeline adapters (push, PRs, CI, rerun); defaults to the real gh/git. */
   roundAdapters?: typeof roundAdapters
+  /** The tick interval while a team runs an execution; the development fixture shortens it. */
+  tickMs?: number
   /** Passed to every gh call (tests stub gh on a private PATH). */
   ghOptions?: GhCommandOptions
   now?: () => Date
@@ -75,9 +77,9 @@ export class ExecutionExecutor {
 
   constructor(private readonly deps: ExecutorDeps) {}
 
-  /** Schedule one tick for the team; concurrent wakes share it (D5). */
+  /** Schedule one tick for the team; concurrent wakes share it (D5); a closed executor refuses. */
   wake(teamId: string): void {
-    if (this.ticking.has(teamId)) return
+    if (this.closed || this.ticking.has(teamId)) return
     this.ticking.add(teamId)
     void this.tick(teamId).finally(() => {
       this.ticking.delete(teamId)
@@ -437,6 +439,6 @@ export class ExecutionExecutor {
     this.timers.set(teamId, setTimeout(() => {
       this.timers.delete(teamId)
       this.wake(teamId)
-    }, EXECUTOR_TICK_MS))
+    }, this.deps.tickMs ?? EXECUTOR_TICK_MS))
   }
 }

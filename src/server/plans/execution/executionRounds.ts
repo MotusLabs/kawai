@@ -203,7 +203,8 @@ async function dispatchReview(deps: RoundDeps, changeRow: { executionId: string;
   if (deps.releases !== undefined && change.worktree !== null
     && (deps.groupScoped?.(deps.team.teamId, reviewGroup) ?? true)) {
     const members = [...(deps.records?.() ?? [])].filter(record =>
-      record.archivedAt == null && record.spawned === true && record.projectPath.startsWith(`${change.worktree}${path.sep}`)
+      record.archivedAt == null && record.spawned === true
+      && (record.projectPath === change.worktree || record.projectPath.startsWith(`${change.worktree}${path.sep}`))
       && record.groupId !== reviewGroup)
     for (const member of members) {
       const readiness = deps.releases.readiness(member.sessionId)

@@ -216,7 +216,7 @@ export class ExecutionService {
     if (execution === null || execution.teamId !== caller.team.teamId) {
       return { ok: false, reason: 'not-found', message: `Execution not found in this team: ${input.executionId}` }
     }
-    return this.deps.plans.recordExecutionEvent(execution.planId, {
+    const outcome = this.deps.plans.recordExecutionEvent(execution.planId, {
       kind: 'change-retried', commandId: input.commandId, executionId: input.executionId, change: input.change,
     }, () => {
       const row = this.deps.store.change(input.executionId, input.change)
@@ -247,6 +247,8 @@ export class ExecutionService {
       }
       return { change: input.change }
     })
+    if (outcome.ok && !outcome.replayed) this.deps.wake?.(caller.team.teamId)
+    return outcome
   }
 
   /**
@@ -264,7 +266,7 @@ export class ExecutionService {
       return { ok: false, reason: 'not-found', message: `Execution not found in this team: ${input.executionId}` }
     }
     const trimmed = input.reason.trim()
-    return this.deps.plans.recordExecutionEvent(execution.planId, {
+    const outcome = this.deps.plans.recordExecutionEvent(execution.planId, {
       kind: 'execution-stopped', commandId: input.commandId, executionId: input.executionId, reason: trimmed,
     }, () => {
       const current = this.deps.store.execution(input.executionId)
@@ -290,6 +292,8 @@ export class ExecutionService {
       this.deps.store.finishExecution(input.executionId, 'stopped', trimmed)
       return { executionId: input.executionId }
     })
+    if (outcome.ok && !outcome.replayed) this.deps.wake?.(caller.team.teamId)
+    return outcome
   }
 
   /**

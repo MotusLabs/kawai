@@ -104,6 +104,10 @@ export class SessionMailbox {
     /** A routing decision was made (mailbox view). */
     onRouteDecision?: (entry: RouteDecisionLogEntry) => void
     onError: (error: unknown) => void
+    /** What a running execution owns (plan-execution D7): injected into the task, assignment, and result services. */
+    ownership?: import('../plans/execution/executionOwnership').ExecutionOwnership
+    /** A result or findings write landed (plan-execution D5); the composition's wake hub. */
+    onTaskResultWrite?: (taskId: string) => void
   }) {
     const store = new MailboxStore(db, { recipientExists: id => !!options.getRecord(id) })
     this.limits = new LimitEventStore(db)
@@ -141,6 +145,7 @@ export class SessionMailbox {
       onStatusTransition: (task, status, actor) => this.releases.transitionHook(task, status, actor),
       restoreSession: options.restore,
       plans: this.plans,
+      ...(options.ownership ? { ownership: options.ownership } : {}),
     })
     this.management = new MailboxManagement(store, {
       getSession: options.getRecord, tasks: this.tasks, homeDir: options.homeDir,
@@ -176,9 +181,12 @@ export class SessionMailbox {
       ...(options.homeDir ? { homeDir: options.homeDir } : {}),
       plans: this.plans,
       cooldownUntil: profileId => this.limits.cooldownUntil(profileId),
+      ...(options.ownership ? { ownership: options.ownership } : {}),
     })
     this.results = new TaskResultService(this.tasks, { getSession: options.getRecord, assignments: this.assignments,
-      releases: this.releases, records: options.records, ...(options.homeDir ? { homeDir: options.homeDir } : {}) })
+      releases: this.releases, records: options.records, ...(options.homeDir ? { homeDir: options.homeDir } : {}),
+      ...(options.ownership ? { ownership: options.ownership } : {}),
+      ...(options.onTaskResultWrite ? { onWrite: options.onTaskResultWrite } : {}) })
     // Worktree scoping (member-release D5): an unscoped group's task mail goes
     // to any member and never spawns; a missing definition stays scoped.
     const targetWorktree = (message: TeamMessage): string | null => {
