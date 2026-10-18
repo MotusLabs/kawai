@@ -36,6 +36,7 @@ import type {
   ChatWorker,
   ChatBackgroundTask,
 } from '../../shared/chat'
+import { turnSucceeded } from '../../shared/chat'
 import type {
   ChatNameSource,
   ServerMessage,
@@ -2480,7 +2481,7 @@ export class ChatSessionManager {
     if (event.type === 'turn_started') this.teamMail.turnStarted(sessionId, event.trigger !== undefined)
     if (event.type === 'turn_completed') {
       try {
-        this.teamMail.turnEnded(sessionId, event.subtype === 'success')
+        this.teamMail.turnEnded(sessionId, turnSucceeded(event))
       } catch (error) {
         logger.warn('chat_turn_mail_ended_failed', {
           sessionId,
@@ -2499,7 +2500,7 @@ export class ChatSessionManager {
       const taskId = this.records.get(sessionId)?.taskId
       if (taskId) {
         try {
-          this.turnEnds.record(sessionId, taskId, event.at, event.subtype === 'success')
+          this.turnEnds.record(sessionId, taskId, event.at, turnSucceeded(event))
         } catch (error) {
           logger.warn('chat_turn_end_record_failed', {
             sessionId,

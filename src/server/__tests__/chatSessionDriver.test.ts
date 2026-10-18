@@ -14,6 +14,7 @@ import type {
   ChatEvent,
   ChatWorker,
 } from '../../shared/chat'
+import { turnSucceeded } from '../../shared/chat'
 import type { ChatWireRecorder } from '../chat/wireTap'
 import type { ChatLimitSignal } from '../chat/limitSignals'
 import type { OutboundAuditSink } from '../outbound/observer'
@@ -1245,6 +1246,57 @@ describe('ChatSessionDriver', () => {
     harness.driver.send('again')
     expect(harness.fakes).toHaveLength(1)
     expect(harness.statuses.at(-1)).toBe('working')
+  })
+
+  test('a success result with is_error completes the turn as failed (the 2026-10-18 incident frames)', async () => {
+    const harness = createHarness()
+    harness.driver.send('go')
+    const fake = harness.fakes[0]!
+    // The CLI's blocking-limit refusal: a <synthetic> reply with zero usage,
+    // then subtype success with is_error and the terminal reason.
+    fake.push({
+      type: 'assistant',
+      message: {
+        id: 'msg_synthetic',
+        model: '<synthetic>',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Prompt is too long' }],
+        usage: { input_tokens: 0, output_tokens: 0 },
+      },
+      parent_tool_use_id: null,
+      uuid: 'synthetic-uuid',
+      session_id: 'sdk-1',
+      error: 'invalid_request',
+    } as unknown as SDKMessage)
+    fake.push(
+      result('success', {
+        is_error: true,
+        result: 'Prompt is too long',
+        terminal_reason: 'blocking_limit',
+        usage: { input_tokens: 0, output_tokens: 0 },
+      })
+    )
+    await flush()
+
+    const completed = harness.events.find((e) => e.type === 'turn_completed')
+    expect(completed).toMatchObject({ subtype: 'success', isError: true, terminalReason: 'blocking_limit' })
+    expect(completed && 'finalText' in completed).toBe(false)
+    expect(completed && turnSucceeded(completed as never)).toBe(false)
+    const error = harness.events.find((e) => e.type === 'error')
+    expect(error).toMatchObject({ message: 'Prompt is too long (blocking_limit)' })
+    expect(harness.statuses.at(-1)).toBe('waiting')
+    expect(harness.driver.isDead).toBe(false)
+  })
+
+  test('a plain success result carries isError false and no error event', async () => {
+    const harness = createHarness()
+    harness.driver.send('hi')
+    harness.fakes[0]!.push(result('success'))
+    await flush()
+    const completed = harness.events.find((e) => e.type === 'turn_completed')
+    expect(completed).toMatchObject({ isError: false, finalText: 'all done' })
+    expect(completed && 'terminalReason' in completed).toBe(false)
+    expect(harness.events.some((e) => e.type === 'error')).toBe(false)
   })
 
   test('trailing events after result are tolerated without killing the session', async () => {

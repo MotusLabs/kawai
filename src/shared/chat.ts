@@ -76,6 +76,15 @@ export interface ChatTurnUsage {
 /** Result subtype reported by turn_completed (SDK result.subtype). */
 export type ChatTurnResultSubtype = string
 
+/**
+ * The one success predicate every reader of a completed turn uses
+ * (chat-context-exhaustion D1): a success subtype the SDK did not also mark
+ * as an error.
+ */
+export function turnSucceeded(event: { subtype: ChatTurnResultSubtype; isError?: boolean }): boolean {
+  return event.subtype === 'success' && event.isError !== true
+}
+
 /** Where a slash command the agent reports is defined. */
 export type ChatCommandSource = 'builtin' | 'project' | 'user'
 
@@ -201,6 +210,14 @@ export type ChatEvent =
       usage?: ChatTurnUsage
       /** Final assistant text; only present on a success subtype. */
       finalText?: string
+      /**
+       * The SDK result's `is_error` (chat-context-exhaustion D1): a context
+       * overflow arrives as subtype `success` with this set. Absent in older
+       * history, which reads by its subtype alone.
+       */
+      isError?: boolean
+      /** The SDK result's `terminal_reason`, verbatim, when it gives one. */
+      terminalReason?: string
     })
   | (ChatTurnEventBase & { type: 'turn_interrupted' })
   | (ChatEventBase & {

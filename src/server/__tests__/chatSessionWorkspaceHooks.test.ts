@@ -145,6 +145,36 @@ test('a task-bound turn end writes a durable row with its outcome; a taskless on
   } finally { manager.shutdown() }
 })
 
+test('a success result flagged is_error is a failed turn for turn ends, usage, and mail outcomes', async () => {
+  const { manager } = createManager()
+  try {
+    const caller = { kind: 'human' as const, team: await resolveTeam(project) }
+    const task = await manager.tasks.create(caller, { title: 'Go', direction: 'd' })
+    const bound = await manager.createAvailableSession({ projectPath: project, groupId: 'devs', taskId: task.id })
+    if (!bound.ok) throw new Error(bound.error)
+    const { id } = bound.session
+    await until(() => manager.teams.teamOf(id) !== undefined)
+    const mail = (manager as unknown as { teamMail: { turnEnded: (id: string, ok: boolean) => void } }).teamMail
+    const ended = spyOn(mail, 'turnEnded')
+    try {
+      const feed = (manager as unknown as { handleDriverEvent: (sessionId: string, event: Record<string, unknown>) => void })
+        .handleDriverEvent.bind(manager)
+      feed(id, { type: 'turn_started', id: 's-1', sequence: 1, turnId: 't-1', at: '2026-10-18T08:28:00Z' })
+      feed(id, {
+        type: 'turn_completed', subtype: 'success', isError: true, terminalReason: 'blocking_limit',
+        id: 'e-1', sequence: 2, turnId: 't-1', at: '2026-10-18T08:28:01Z',
+      })
+      expect(ended).toHaveBeenCalledWith(id, false)
+      expect(manager.turnEnds.since('2026-10-13T00:00:00Z')).toEqual([
+        { sessionId: id, taskId: task.id, endedAt: '2026-10-18T08:28:01Z', ok: false },
+      ])
+      // The morning summary's finished turns never include it.
+      expect(manager.turnEnds.finishedForTeam(manager.teams.teamOf(id)!.teamId, '2026-10-13T00:00:00Z')).toEqual([])
+      expect(manager.turnUsage.forSession(id)).toEqual([expect.objectContaining({ ok: false })])
+    } finally { ended.mockRestore() }
+  } finally { manager.shutdown() }
+})
+
 test('a failing turn-end write is contained: the turn bookkeeping still runs, nothing escapes', async () => {
   const { manager } = createManager()
   try {
