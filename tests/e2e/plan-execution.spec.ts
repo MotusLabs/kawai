@@ -141,8 +141,8 @@ function submitRound(root: string, mode: 'result' | 'findings', implementer: str
   }).trim()
 }
 
-/** Poll the execution's progress, dumping the row each cycle for diagnosis. */
-async function pollExecution(root: string, until: string, info: { outputFile: (name: string) => string }): Promise<boolean> {
+/** Poll the execution's progress until its outcome reads completed. */
+async function pollExecution(root: string, until: string): Promise<boolean> {
   const dbPath = process.env.AGENTBOARD_DB_PATH!
   const script = `
     import { initDatabase } from './src/server/db';
@@ -170,12 +170,9 @@ async function pollExecution(root: string, until: string, info: { outputFile: (n
       const stdout = execFileSync('bun', ['-e', script], { cwd: process.cwd(), encoding: 'utf8' })
       const line = stdout.split('\n').find(entry => entry.startsWith('POLL '))
       const rows = line ? JSON.parse(line.slice('POLL '.length)) as Array<Record<string, unknown>> : []
-      console.log(`poll ${attempt}:`, JSON.stringify(rows))
-      info.annotations.push({ type: 'warning', description: `poll ${attempt}: ${JSON.stringify(rows).slice(0, 300)}` })
-      const state = JSON.stringify(rows)
-      if (state.includes('"completed"')) return true
-    } catch (error) {
-      console.log(`poll ${attempt} failed:`, String(error).slice(0, 200))
+      if (JSON.stringify(rows).includes('"completed"')) return true
+    } catch {
+      // A poll cycle that could not read the state yet tries again.
     }
     await new Promise(resolve => setTimeout(resolve, 2_000))
   }
@@ -234,7 +231,7 @@ test('Start runs the composed executor through to a fixture landing', async ({ p
     // The reviewer's passing findings decide the round; the fixture landing
     // adapter merges, the fact records, and the plan completes as Kawai's.
     submitRound(root, 'findings', implementer, reviewer)
-    const finished = await pollExecution(root, 'completed', info)
+    const finished = await pollExecution(root, 'completed')
     expect(finished).toBe(true)
     await expect(section.getByTestId('plan-execution-state')).toContainText('Finished completed', { timeout: 10_000 })
     await expect(section.getByTestId('plan-execution-change')).toContainText('Landed')
