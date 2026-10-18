@@ -58,6 +58,7 @@ interface DepsHarness {
   cleared: number
   prefills: SessionFormPrefill[]
   epoch: { value: number }
+  sent: unknown[]
 }
 
 function makeDeps(): DepsHarness {
@@ -66,11 +67,13 @@ function makeDeps(): DepsHarness {
     cleared: 0,
     prefills: [],
     epoch: { value: 1 },
+    sent: [],
     deps: undefined as unknown as MessageRouterDeps,
   }
   const emptyRef = <T,>(): MutableRefObject<T> => ({ current: undefined as unknown as T })
   harness.deps = {
     getConnectionEpoch: () => harness.epoch.value,
+    sendClient: (message) => { harness.sent.push(message) },
     setTransientError: (message) => { harness.transientErrors.push(message) },
     clearTransientError: () => { harness.cleared += 1 },
     openSessionFormPrefilled: (prefill) => { harness.prefills.push(prefill) },

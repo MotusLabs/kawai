@@ -20,6 +20,55 @@ import { Switch } from '../components/Switch'
 import { chooseSessionMenuEntry, sessionMenuEntry } from './support/sessionMenu'
 
 describe('chat components', () => {
+  test('the load-earlier control renders its states (chat-history-window 4.1)', () => {
+    const message: ChatEvent[] = [
+      { type: 'user_message', id: 'u1', sequence: 0, at: 'now', turnId: 't', text: 'hello' },
+    ]
+    // Older history exists: the button offers to load, disabled while
+    // loading or disconnected.
+    const offered = TestRenderer.create(<ChatMessages events={message} connected
+      historyHasOlder historyLoading={false} onLoadEarlier={() => {}} />)
+    const button = offered.root.findByProps({ 'data-testid': 'chat-load-earlier' })
+    expect(button.props.disabled).toBe(false)
+    expect(button.children).toEqual(['Load earlier messages'])
+    offered.unmount()
+    const loading = TestRenderer.create(<ChatMessages events={message} connected
+      historyHasOlder historyLoading onLoadEarlier={() => {}} />)
+    const loadingButton = loading.root.findByProps({ 'data-testid': 'chat-load-earlier' })
+    expect(loadingButton.props.disabled).toBe(true)
+    expect(loadingButton.children).toEqual(['Loading…'])
+    loading.unmount()
+    const offline = TestRenderer.create(<ChatMessages events={message} connected={false}
+      historyHasOlder historyLoading={false} onLoadEarlier={() => {}} />)
+    expect(offline.root.findByProps({ 'data-testid': 'chat-load-earlier' }).props.disabled).toBe(true)
+    offline.unmount()
+    // Nothing older: the start-of-conversation marker replaces the button.
+    const start = TestRenderer.create(<ChatMessages events={message} connected
+      historyHasOlder={false} historyLoading={false} onLoadEarlier={() => {}} />)
+    expect(start.root.findByProps({ 'data-testid': 'chat-history-start' }).children).toEqual(['Beginning of conversation'])
+    expect(start.root.findAllByType('button')).toHaveLength(0)
+    start.unmount()
+    // No history at all: neither control nor marker.
+    const empty = TestRenderer.create(<ChatMessages events={[]} connected
+      historyHasOlder={false} historyLoading={false} onLoadEarlier={() => {}} />)
+    expect(empty.root.findByProps({ 'data-testid': 'chat-transcript' }).children).toEqual([])
+    empty.unmount()
+    // A nested transcript (no onLoadEarlier) never renders the control.
+    const nested = TestRenderer.create(<ChatMessages events={message} connected historyHasOlder />)
+    expect(nested.root.findAllByProps({ 'data-testid': 'chat-history-top' })).toHaveLength(0)
+    nested.unmount()
+  })
+
+  test('clicking the load-earlier control asks the view to page', () => {
+    let clicked = 0
+    const renderer = TestRenderer.create(<ChatMessages
+      events={[{ type: 'user_message', id: 'u1', sequence: 0, at: 'now', turnId: 't', text: 'hello' }]}
+      connected historyHasOlder historyLoading={false} onLoadEarlier={() => { clicked += 1 }} />)
+    act(() => { renderer.root.findByProps({ 'data-testid': 'chat-load-earlier' }).props.onClick() })
+    expect(clicked).toBe(1)
+    renderer.unmount()
+  })
+
   test('approval cards send allow and deny without hiding the pending request locally', () => {
     const sent: ClientMessage[] = []
     const renderer = TestRenderer.create(<ChatRequests sessionId="chat-1" disabled={false} sendMessage={message => sent.push(message)}
