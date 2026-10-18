@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, jest, test } from 'bun:test'
 import { useRef } from 'react'
 import TestRenderer, { act } from 'react-test-renderer'
+import type { ClientMessage } from '@shared/types'
 import { REVEAL_MS, useRevealRow, type RevealContainer, type RevealTarget } from '../components/chat/useRevealRow'
-import { useChatStore } from '../stores/chatStore'
+import { emptyTranscript, useChatStore } from '../stores/chatStore'
 
 interface FakeRow extends RevealTarget {
   classes: Set<string>
@@ -18,14 +19,16 @@ function row(tagName = 'ARTICLE'): FakeRow {
   }
 }
 
-function Harness({ sessionId, loaded }: { sessionId: string; loaded: boolean }) {
+function Harness({ sessionId, loaded, sendMessage, eventCount }: {
+  sessionId: string; loaded: boolean; sendMessage?: (message: ClientMessage) => void; eventCount?: number
+}) {
   const ref = useRef<RevealContainer | null>(null)
-  useRevealRow({ sessionId, loaded, container: ref })
+  useRevealRow({ sessionId, loaded, container: ref, sendMessage, eventCount })
   return <div ref={ref as never} />
 }
 
 const mounted: TestRenderer.ReactTestRenderer[] = []
-function mount(rows: Record<string, FakeRow>, props: { sessionId?: string; loaded?: boolean } = {}) {
+function mount(rows: Record<string, FakeRow>, props: { sessionId?: string; loaded?: boolean; sendMessage?: (message: ClientMessage) => void; eventCount?: number } = {}) {
   const selectors: string[] = []
   const container: RevealContainer = {
     querySelector: selector => {
@@ -35,11 +38,16 @@ function mount(rows: Record<string, FakeRow>, props: { sessionId?: string; loade
     },
   }
   let renderer!: TestRenderer.ReactTestRenderer
-  const element = (loaded: boolean) =>
-    <Harness sessionId={props.sessionId ?? 's1'} loaded={loaded} />
-  act(() => { renderer = TestRenderer.create(element(props.loaded ?? true), { createNodeMock: () => container }) })
+  const element = (loaded: boolean, eventCount?: number) =>
+    <Harness sessionId={props.sessionId ?? 's1'} loaded={loaded} sendMessage={props.sendMessage} eventCount={eventCount} />
+  act(() => { renderer = TestRenderer.create(element(props.loaded ?? true, props.eventCount), { createNodeMock: () => container }) })
   mounted.push(renderer)
-  return { renderer, selectors, setLoaded: (loaded: boolean) => act(() => renderer.update(element(loaded))) }
+  return {
+    renderer,
+    selectors,
+    setLoaded: (loaded: boolean) => act(() => renderer.update(element(loaded, props.eventCount))),
+    setEventCount: (eventCount: number) => act(() => renderer.update(element(props.loaded ?? true, eventCount))),
+  }
 }
 const request = (sessionId: string, anchorId: string) =>
   act(() => { useChatStore.getState().requestReveal(sessionId, anchorId) })
@@ -143,5 +151,76 @@ describe('useRevealRow', () => {
     request('s1', 'a"b\\c')
     expect(selectors).toEqual(['[data-anchor-id="a\\"b\\\\c"]'])
     expect(target.classes.has('chat-reveal')).toBe(true)
+  })
+
+  test('an old tool anchor pages once with throughId, then reveals (chat-history-window 5.1)', () => {
+    const sent: ClientMessage[] = []
+    const rows: Record<string, FakeRow> = {}
+    useChatStore.setState({
+      sessions: {
+        s1: { ...emptyTranscript(), historyHasOlder: true, historyStartId: 'hist-a' },
+      },
+    })
+    const { setEventCount } = mount(rows, { sendMessage: message => { sent.push(message) }, eventCount: 2 })
+    const target = row('DETAILS')
+    request('s1', 'tool:call-old')
+    // The anchor is not rendered: exactly one page request, reveal pending.
+    expect(sent).toEqual([
+      { type: 'chat-history-page', sessionId: 's1', beforeId: 'hist-a', throughId: 'tool:call-old' },
+    ])
+    expect(useChatStore.getState().pendingReveal).toEqual({ sessionId: 's1', anchorId: 'tool:call-old' })
+    // The page lands carrying the tool call; the reveal resolves there.
+    rows['tool:call-old'] = target
+    act(() => {
+      useChatStore.getState().applyHistoryPage({
+        type: 'chat-history-page', sessionId: 's1', beforeId: 'hist-a',
+        events: [{ type: 'tool_call', id: 'hist-t', sequence: 0, at: '', turnId: 't', toolCallId: 'call-old', tool: 'Bash', input: {} }],
+        hasOlder: true,
+      })
+    })
+    setEventCount(3)
+    expect(target.open).toBe(true)
+    expect(target.classes.has('chat-reveal')).toBe(true)
+    expect(useChatStore.getState().pendingReveal).toBeNull()
+    expect(sent).toHaveLength(1)
+  })
+
+  test('an anchor no page ever holds is dropped after exactly one request', () => {
+    const sent: ClientMessage[] = []
+    useChatStore.setState({
+      sessions: {
+        s1: { ...emptyTranscript(), historyHasOlder: true, historyStartId: 'hist-a' },
+      },
+    })
+    const { setEventCount } = mount({}, { sendMessage: message => { sent.push(message) }, eventCount: 2 })
+    request('s1', 'hist-gone')
+    expect(sent).toHaveLength(1)
+    expect(useChatStore.getState().pendingReveal).toEqual({ sessionId: 's1', anchorId: 'hist-gone' })
+    // The page lands without the anchor: the reveal falls back silently and
+    // no second request goes out.
+    act(() => {
+      useChatStore.getState().applyHistoryPage({
+        type: 'chat-history-page', sessionId: 's1', beforeId: 'hist-a',
+        events: [{ type: 'user_message', id: 'hist-x', sequence: 0, at: '', turnId: 't', text: 'unrelated' }],
+        hasOlder: false,
+      })
+    })
+    setEventCount(3)
+    expect(useChatStore.getState().pendingReveal).toBeNull()
+    expect(sent).toHaveLength(1)
+  })
+
+  test('a reveal waits for a page another click already started, without a second request', () => {
+    const sent: ClientMessage[] = []
+    useChatStore.setState({
+      sessions: {
+        s1: { ...emptyTranscript(), historyHasOlder: true, historyStartId: 'hist-a', historyLoading: true },
+      },
+    })
+    mount({}, { sendMessage: message => { sent.push(message) }, eventCount: 2 })
+    request('s1', 'hist-gone')
+    // Loading is in flight: no second request, the reveal stays pending.
+    expect(sent).toEqual([])
+    expect(useChatStore.getState().pendingReveal).toEqual({ sessionId: 's1', anchorId: 'hist-gone' })
   })
 })

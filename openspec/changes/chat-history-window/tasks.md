@@ -21,7 +21,7 @@
 
 ## 5. Search reveal
 
-- [ ] 5.1 Extend `useRevealRow`: when the anchor is not rendered and older history exists, send one page request with `throughId = anchor`, resolve the reveal after it lands, else fall back to the existing no-error behavior (design D5); verify with a `useRevealRow` test for an old tool anchor and for an anchor that is never found (exactly one request).
+- [x] 5.1 Extend `useRevealRow`: when the anchor is not rendered and older history exists, send one page request with `throughId = anchor`, resolve the reveal after it lands, else fall back to the existing no-error behavior (design D5); verify with a `useRevealRow` test for an old tool anchor and for an anchor that is never found (exactly one request).
 
 ## 6. Docs and checks
 

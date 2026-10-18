@@ -188,7 +188,7 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
     }
     end.current?.scrollIntoView?.({ block: 'end' })
   }, [transcript.events.length, transcript.throughSequence, session.id])
-  useRevealRow({ sessionId: session.id, loaded: transcript !== EMPTY, container: transcriptBox })
+  useRevealRow({ sessionId: session.id, loaded: transcript !== EMPTY, container: transcriptBox, sendMessage, eventCount: transcript.events.length })
   // Load earlier history (chat-history-window D4): claim the one page, keep
   // the first visible row still across the prepend, send the request.
   const loadEarlier = () => {
