@@ -66,7 +66,9 @@ let home: string
 beforeEach(() => {
   root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-master-parity-')))
   home = path.join(root, 'no-home')
+  projectDir = path.join(root, 'work', 'proj')
   fs.mkdirSync(home, { recursive: true })
+  fs.mkdirSync(projectDir, { recursive: true })
 })
 
 afterEach(() => fs.rmSync(root, { recursive: true, force: true }))
@@ -79,6 +81,17 @@ const projectWith = (name: string, files: Record<string, unknown>): string => {
   }
   return project
 }
+
+let projectDir: string
+
+const writeCatalog = (dir: string, name: string, json: unknown): string => {
+  const file = path.join(dir, '.kawai', name)
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  fs.writeFileSync(file, JSON.stringify(json))
+  return file
+}
+const writeProviders = (dir: string, json: unknown) => writeCatalog(dir, 'providers.json', json)
+const writeProfiles = (dir: string, json: unknown) => writeCatalog(dir, 'profiles.json', json)
 
 /** The head must resolve master's profiles, settings included, plus providerId. */
 const expectParity = (project: string, master: Record<string, Omit<CatalogProfile, 'providerId'>>) => {
@@ -137,6 +150,100 @@ describe('master parity for the shipped-provider legacy entry (B1, finding F2)',
   })
 
 })
+describe('master parity for the shipped re-home (B2, finding F2)', () => {
+  // The shipped defaults as fixtures: provider zai holding the GLM pair.
+  const shippedProviders = () => {
+    const file = path.join(root, 'b2-shipped', 'providers.json')
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, JSON.stringify({
+      zai: {
+        label: 'Z.AI',
+        limitResetTimeZone: 'Asia/Shanghai',
+        env: {
+          ANTHROPIC_BASE_URL: 'https://zai.example.internal/api/anthropic',
+          ANTHROPIC_DEFAULT_OPUS_MODEL: 'glm-5.3[1m]',
+        },
+        models: {
+          glm: { label: 'GLM', model: 'opus', env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '1000000' } },
+          'glm-flash': { label: 'GLM Flash', model: 'sonnet' },
+        },
+      },
+    }))
+    return file
+  }
+  const emptyProfiles = () => {
+    const file = path.join(root, 'b2-shipped', 'profiles.json')
+    fs.writeFileSync(file, '{}')
+    return file
+  }
+  const shippedCtx = (extra: Record<string, unknown> = {}) => ({
+    homeDir: path.join(root, 'b2-no-home'),
+    imageDefaultProvidersPath: shippedProviders(),
+    imageDefaultPath: emptyProfiles(),
+    ...extra,
+  })
+
+  test('a zai relabel leaves glm shipped, so a later glm override re-homes like master', () => {
+    writeProfiles(projectDir, {
+      glm: { env: { ANTHROPIC_BASE_URL: 'https://gw.example.internal' } },
+    })
+    const { profiles, providers, errors } = resolveProfileCatalog(shippedCtx({ projectPath: projectDir }))
+    expect(errors).toEqual([])
+    expect(profiles.get('glm')).toEqual({
+      label: 'GLM',
+      model: 'opus',
+      env: {
+        ANTHROPIC_BASE_URL: 'https://gw.example.internal',
+        ANTHROPIC_DEFAULT_OPUS_MODEL: 'glm-5.3[1m]',
+        CLAUDE_CODE_AUTO_COMPACT_WINDOW: '1000000',
+      },
+      limitResetTimeZone: 'Asia/Shanghai',
+      providerId: 'glm',
+    })
+    // Only that key left zai.
+    expect(providers.get('zai')?.models).toEqual(['glm-flash'])
+    expect(profiles.get('glm-flash')).toEqual({
+      label: 'GLM Flash', model: 'sonnet',
+      env: { ANTHROPIC_BASE_URL: 'https://zai.example.internal/api/anthropic', ANTHROPIC_DEFAULT_OPUS_MODEL: 'glm-5.3[1m]' },
+      limitResetTimeZone: 'Asia/Shanghai',
+      providerId: 'zai',
+    })
+  })
+
+  test('a nearer providers.json re-homes the key with the shipped settings as base', () => {
+    writeProviders(projectDir, { zai2: { models: { glm: { label: 'P-Glm' } } } })
+    const { profiles, errors } = resolveProfileCatalog(shippedCtx({ projectPath: projectDir }))
+    expect(errors).toEqual([])
+    expect(profiles.get('glm')).toEqual({
+      label: 'P-Glm',
+      model: 'opus',
+      env: {
+        ANTHROPIC_BASE_URL: 'https://zai.example.internal/api/anthropic',
+        ANTHROPIC_DEFAULT_OPUS_MODEL: 'glm-5.3[1m]',
+        CLAUDE_CODE_AUTO_COMPACT_WINDOW: '1000000',
+      },
+      limitResetTimeZone: 'Asia/Shanghai',
+      providerId: 'zai2',
+    })
+  })
+
+  test('a shipped key with no override stays under its shipped provider, label overlaid (P2)', () => {
+    writeProviders(projectDir, { zai: { label: 'Z' } })
+    const { profiles, providers, errors } = resolveProfileCatalog(shippedCtx({ projectPath: projectDir }))
+    expect(errors).toEqual([])
+    // The P2 overlay applies: the provider label takes 'Z'...
+    expect(providers.get('zai')?.label).toBe('Z')
+    // ...and the shipped keys keep their settings under zai.
+    expect(profiles.get('glm')).toEqual({
+      label: 'GLM', model: 'opus',
+      env: { ANTHROPIC_BASE_URL: 'https://zai.example.internal/api/anthropic', ANTHROPIC_DEFAULT_OPUS_MODEL: 'glm-5.3[1m]', CLAUDE_CODE_AUTO_COMPACT_WINDOW: '1000000' },
+      limitResetTimeZone: 'Asia/Shanghai',
+      providerId: 'zai',
+    })
+    expect(profiles.get('glm-flash')?.providerId).toBe('zai')
+  })
+})
+
 describe('a user-level file replaces the shipped layer, so operator rules apply (F2 ruling)', () => {
   test('a legacy entry merges into a provider the user level defined', () => {
     fs.mkdirSync(path.join(home, '.kawai'), { recursive: true })
@@ -375,6 +482,26 @@ describe('rev 5 acceptance cells', () => {
       expect(head.profiles.get('glm-flash')?.providerId).toBe('zai')
     }
     expect(JSON.stringify([...runs[0]!.profiles.entries()])).toEqual(JSON.stringify([...runs[1]!.profiles.entries()]))
+  })
+
+  test('(c, L1) a profiles.json definition of one of the keys of X re-homes on the shipped base and reports on the operator base', () => {
+    forAll((x, base, project) => {
+      const head = resolveProfileCatalog({ homeDir: home, projectPath: project })
+      const key = X_KEYS[x][0]
+      if (base === 'shipped') {
+        // L1: the key re-homes into its own provider from the overlaid settings.
+        expect(head.errors).toEqual([])
+        expect(head.profiles.get(key)?.providerId).toBe(key)
+        expect(head.profiles.get(key)?.label).toBe('Moved')
+        expect(head.profiles.get(key)?.env.ANTHROPIC_BASE_URL).toBe('https://gw.example.internal')
+      } else {
+        expect(head.errors).toEqual([expect.stringContaining(`profile "${key}" is a model of provider "${x}"`)])
+        expect(head.profiles.get(key)?.providerId).toBe(x)
+      }
+    }, x => ({
+      'providers.json': { [x]: { env: { ANTHROPIC_BASE_URL: 'https://gw.example.internal' } } },
+      'profiles.json': { [X_KEYS[x][0]]: { label: 'Moved' } },
+    }))
   })
 
   test('(I3) a rule-2 merge with nowhere to land reports the dropped startup model', () => {

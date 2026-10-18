@@ -78,6 +78,7 @@ See proposal.md (Why) for the motivation. The current code has this shape:
   - Pass 2 (P3) then places every model key against those merged facts: a new key joins the provider with its merged facts; a key the provider already holds merges; a key operator-held by another provider is an error naming both; a key shipped-held by another provider re-homes from its flattened settings at that point, carrying every overlay of its own level and of farther ones.
   - Providers merge by id with today's rules: the nearest scalar wins, env merges per key, and an empty value neutralizes.
   - A provider's `models` merge by key within it.
+  - A key re-homed in the second pass keeps its label: the nearer file overrides it only when the re-homing definition sets one.
   - A model's effective environment is the provider's env overlaid by the model's env.
 - **Duplicate keys.** A model key defined under two different providers is a catalog error that names both providers and files.
   - Inside one file, the file fails validation.
@@ -95,7 +96,7 @@ See proposal.md (Why) for the motivation. The current code has this shape:
 - **Interactions.** A legacy entry X resolves in this order (lead ruling B1):
   1. X is a model key: it overlays its own one-model provider (the legacy chain), re-homes while the key is still shipped (D2), and is ignored with an error naming both files when an operator provider holds it.
   2. X names a provider an operator file introduced: it merges into that provider like any provider entry. A provider a shipped file introduced stays shipped-tier, however much operator files overlay it, so X takes rule 3 instead. A rule-2 merge that has no model of X's key reports the dropped startup model.
-  3. Otherwise X becomes a new one-model provider. When X names a provider only shipped files define, that provider takes the reserved id `profile:<id>` — failing `PROFILE_ID_PATTERN`, so it never collides — holding model X; the shipped provider keeps its id, models, and settings. A legacy entry never changes a shipped provider's id, models, or settings, so existing files keep working unchanged and the shipped account's cooldown and usage stay whole.
+  3. Otherwise X becomes a new one-model provider. When X names a provider a shipped file introduced, overlaid or not, that provider takes the reserved id `profile:<id>` — failing `PROFILE_ID_PATTERN`, so it never collides — holding model X; the shipped provider keeps its id, models, and settings. A legacy entry never changes a shipped provider's id, models, or settings, so existing files keep working unchanged and the shipped account's cooldown and usage stay whole.
 - **Consequence.** A profiles-only catalog therefore resolves exactly the same entries and launch settings as today, with one provider per profile.
 - Rejected: grouping legacy entries by base URL host or by host login. Executables can inject other credentials, and project overlays change URLs per path. One host can therefore front several accounts, and one account several hosts.
 

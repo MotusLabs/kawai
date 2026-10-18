@@ -38,7 +38,7 @@ Every model key SHALL be unique across the providers of a resolved catalog and S
 - **THEN** that file fails validation naming `glm` and both providers, and the other discovered files stay usable
 
 ### Requirement: Profile entries read as one-model providers
-Each `profiles.json` entry SHALL read as a provider with the entry's id holding one model of the same key, its label naming both. A catalog without `providers.json` SHALL resolve as before. An entry whose id is a model of another operator provider SHALL be ignored with an error naming both files. An entry naming a provider only the shipped files define SHALL become its own one-model provider under a reserved `profile:<id>` id, leaving the shipped provider unchanged.
+Each `profiles.json` entry SHALL read as a provider with the entry's id holding one model of the same key, its label naming both. A catalog without `providers.json` SHALL resolve as before. An entry whose id is a model of another operator provider SHALL be ignored with an error naming both files. An entry naming a provider a shipped file introduced, overlaid or not, SHALL become its own one-model provider under a reserved `profile:<id>` id, leaving the shipped provider unchanged.
 
 #### Scenario: Profiles-only catalog is unchanged
 - **WHEN** only `profiles.json` files exist
@@ -62,6 +62,17 @@ When a project-level catalog file defines a model key that the shipped default h
 #### Scenario: A shipped key with no override stays
 - **WHEN** the shipped default holds `glm` and `glm-flash` under `zai` and no project file defines either
 - **THEN** both resolve under `zai` with the shipped settings
+
+### Requirement: Provider tiers and merge order
+The catalog file that introduces a provider SHALL fix its tier — shipped or operator — for its life. Each `providers.json` SHALL apply in two passes: first every provider's facts, then every model key, so the file's key order never changes the outcome. An overlay SHALL reach every key of either tier the provider holds, and a key re-homed in the second pass SHALL keep its label.
+
+#### Scenario: Key order never changes the outcome
+- **WHEN** one `providers.json` overlays `zai`'s base URL and moves `glm` to a new provider `zai2`, written in either JSON key order
+- **THEN** both resolve identically, with `glm` under `zai2` carrying the overlay base URL
+
+#### Scenario: A legacy entry naming an overlaid shipped provider
+- **WHEN** a project's `providers.json` overlays the shipped provider `zai`'s base URL and its `profiles.json` names `zai`
+- **THEN** the entry becomes `profile:zai` holding only the entry's settings, and `zai`'s models keep the overlaid base URL
 
 ### Requirement: The implicit default is a model of its own provider
 When no catalog file defines the `default` model, the implicit `default` SHALL be a model of provider `default`, holding no other model unless a file adds one there. A `providers.json` SHALL be able to define `default` under any provider, such as one holding the host login's other models.
