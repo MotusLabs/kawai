@@ -43,3 +43,14 @@ export function codexHomeProviderId(resolvedHome: string): string {
   const hash = createHash('sha256').update(resolvedHome).digest('hex')
   return `codex-home-${hash.slice(0, 12)}`
 }
+
+/**
+ * The environment a Codex app-server spawn receives (task 3.2): exactly
+ * `CODEX_HOME` at the resolved home — nothing else, so the server's Claude
+ * provider configuration never reaches the Codex process. Configuration
+ * travels as `-c` overrides instead (task 5.3's sandbox builds them), and
+ * the spawn writes nothing into the home.
+ */
+export function codexSpawnEnv(resolvedHome: string): Record<string, string> {
+  return { CODEX_HOME: resolvedHome }
+}
