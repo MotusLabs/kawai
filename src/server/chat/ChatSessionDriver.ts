@@ -119,6 +119,10 @@ import {
   type ChatLimitSignal,
 } from './limitSignals'
 
+/** Spawn provenance is part of the runtime-neutral contract (design D1). */
+export type { ChatSpawnInfo } from './provider/driver'
+import type { ChatAgentDriver, ChatSpawnInfo } from './provider/driver'
+
 /**
  * The SDK `query()` — injected so tests run against a fake. `wire` is the
  * session's protocol-frame recorder: the real SDK is tapped through
@@ -130,18 +134,6 @@ export type ChatQueryFactory = (params: {
   options: Options
   wire?: ChatWireRecorder
 }) => Query
-
-/** What one spawn launched with, for agent-start provenance. */
-export interface ChatSpawnInfo {
-  cwd: string
-  systemPromptAppend: string
-  effort: Options['effort'] | null
-  /** The profile's model, null when Claude Code settings decide. */
-  model: string | null
-  /** The launch environment (the server's own when the profile sets none). */
-  env: Record<string, string | undefined>
-  resumed: boolean
-}
 
 export interface ChatSessionDriverOptions {
   /** Agentboard session id (chat-<uuid>); used for logging context only. */
@@ -330,7 +322,7 @@ type DistributiveOmit<T, K extends PropertyKey> = T extends unknown
   : never
 type ChatEventDraft = DistributiveOmit<ChatEvent, 'id' | 'sequence' | 'at'>
 
-export class ChatSessionDriver {
+export class ChatSessionDriver implements ChatAgentDriver {
   private readonly options: ChatSessionDriverOptions
   private readonly queue = new TurnQueue()
   /** Slash-command list state; this driver is its only feeder (design D2). */
