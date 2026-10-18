@@ -38,6 +38,32 @@ describe('buildCandidates', () => {
     expect(ids(build({ members: parked, excludeProfile: 'glm' }).candidates)).toEqual(['spawn:mimo', 'spawn:claude'])
   })
 
+  test('a cooling provider hard-filters its other models, members and spawn slots alike', () => {
+    const def = group('profiles: [glm, glm-flash, haiku]\nmax: 5')
+    const set = buildCandidates({
+      group: def,
+      members: [member('f', 'glm-flash'), member('h', 'haiku')],
+      pendingSpawnProfiles: [], spawnAllowed: true, spawnCwd: '/repo/wt',
+      excludeProfile: 'glm', excludeProvider: 'zai',
+      providerOf: id => (id === 'glm' || id === 'glm-flash' ? 'zai' : 'claude'),
+    })
+    expect(ids(set.candidates)).toEqual(['member:h', 'spawn:haiku'])
+  })
+
+  test('without a cooling provider the exclusion narrows to the profile alone', () => {
+    const def = group('profiles: [opus, sonnet]\nmax: 5')
+    // No excludeProvider: opus's model-scoped window left its provider cool,
+    // so a forward from opus may still reach sonnet.
+    const set = buildCandidates({
+      group: def,
+      members: [member('s', 'sonnet')],
+      pendingSpawnProfiles: [], spawnAllowed: true, spawnCwd: '/repo/wt',
+      excludeProfile: 'opus',
+      providerOf: id => (id === 'opus' || id === 'sonnet' ? 'claude' : id),
+    })
+    expect(ids(set.candidates)).toEqual(['member:s', 'spawn:sonnet'])
+  })
+
   test('pending reservations count toward caps', () => {
     expect(ids(build({ pendingSpawnProfiles: ['mimo'] }).candidates)).toEqual(['spawn:glm', 'spawn:claude'])
   })

@@ -49,6 +49,7 @@ import { generateSessionName } from '../nameGenerator'
 import { isExistingDirectory, resolveProjectDirectory } from '../paths'
 import type { SessionRegistry } from '../SessionRegistry'
 import { ChatSessionDriver, type ChatQueryFactory } from './ChatSessionDriver'
+import type { ChatAgentDriver } from './provider/driver'
 import { chatAuthErrorMessage, hasClaudeAuth } from './chatAuth'
 import { historyWindow } from './historyWindow'
 import {
@@ -73,6 +74,7 @@ import { probeSdkAvailability } from './sdkAvailability'
 import { AccountNoticeStore, credentialsPathFor } from './accountNotices'
 import { UsageLimitStore } from './usageLimits'
 import { withTextReset } from './limitSignals'
+import { providerOf } from './profileCatalog'
 import { fetchZaiUsage } from './zaiUsage'
 import { readWorkerTranscript } from './chatWorkerTranscript'
 import { isTaskOutputFile, readTaskOutputTail } from './taskOutputFile'
@@ -115,7 +117,7 @@ import { ProvenanceRecorder } from '../metrics/provenanceRecorder'
 import { ChatTurnUsageStore, TurnUsageTracker } from './chatTurnUsageStore'
 import { MetricsReader } from '../metrics/computeMetrics'
 import { ProcessReportService, type ReportCaller } from '../metrics/reportService'
-import type { ChatSpawnInfo } from './ChatSessionDriver'
+import type { ChatSpawnInfo } from './provider/driver'
 import { OutboundDestinations } from '../outbound/destinations'
 import { sessionObserver } from '../outbound/auditHooks'
 import { RepoFactsResolver } from '../outbound/repoFacts'
@@ -341,11 +343,11 @@ export type ChatTaskOutputResult =
 export class ChatSessionManager {
   private readonly options: ChatSessionManagerOptions
   private readonly records = new Map<string, ChatSessionRecord>()
-  private readonly drivers = new Map<string, ChatSessionDriver>()
+  private readonly drivers = new Map<string, ChatAgentDriver>()
   /** In-flight ensureDriver calls, so racing sends never build two drivers. */
   private readonly driverPromises = new Map<
     string,
-    Promise<ChatSessionDriver | null>
+    Promise<ChatAgentDriver | null>
   >()
   private sdkQuery: Promise<ChatQueryFactory> | null = null
   /**
@@ -1062,7 +1064,10 @@ export class ChatSessionManager {
     this.turnEnds = new ChatTurnEndStore(options.db.db)
     this.provenance = new ProvenanceRecorder(options.db.db)
     this.turnUsage = new ChatTurnUsageStore(options.db.db)
-    this.metrics = new MetricsReader(options.db.db)
+    this.metrics = new MetricsReader(options.db.db, Date.now,
+      // The provider cooldown (providers-and-workers D8) resolves in the
+      // team's own catalog, so a provider event shows in every profile's tax.
+      (profileId, teamId) => providerOf(profileId, this.catalogCtx(teamId)))
     this.reports = new ProcessReportService(options.db.db, this.metrics, {
       onCommit: teamId => this.options.onProcessReportChange?.(teamId),
     })
@@ -1127,7 +1132,11 @@ export class ChatSessionManager {
       strategies: this.strategies.store,
       impact: this.impact,
       getSession: id => this.records.get(id),
-      capacityReads: { capacity: (teamId, group, worktree) => this.teamMail.staffing.capacity(teamId, group, worktree), cooldownUntil: profileId => this.teamMail.limits.cooldownUntil(profileId) },
+      capacityReads: {
+        capacity: (teamId, group, worktree) => this.teamMail.staffing.capacity(teamId, group, worktree),
+        // The profile's effective cooldown (providers-and-workers D8) in the ambient catalog.
+        cooldownUntil: profileId => this.teamMail.limits.cooldownFor(profileId, providerOf(profileId, this.catalogCtx())).until,
+      },
       caps: this.caps,
       executionCore,
       executionTeam: {
@@ -1373,7 +1382,7 @@ export class ChatSessionManager {
         groupId,
         profileId: record?.claudeProfileId ?? 'default',
         model: info.model ?? record?.model ?? null,
-        effort: info.effort ?? null,
+        effort: info.effort == null ? null : String(info.effort),
         cwd: info.cwd,
         groupFile: groupId ? this.teams.catalogOf(sessionId)?.groups.get(groupId)?.file ?? null : null,
         promptAppend: info.systemPromptAppend,
@@ -1594,7 +1603,7 @@ export class ChatSessionManager {
     if (blocked) {
       return { ok: false, error: blocked }
     }
-    let driver: ChatSessionDriver | null
+    let driver: ChatAgentDriver | null
     try {
       driver = await this.ensureDriver(sessionId)
     } catch (error) {
@@ -1627,7 +1636,7 @@ export class ChatSessionManager {
     if (blocked) {
       return { ok: false, error: blocked }
     }
-    let driver: ChatSessionDriver | null
+    let driver: ChatAgentDriver | null
     try {
       driver = await this.ensureDriver(sessionId)
     } catch (error) {
@@ -2136,7 +2145,7 @@ export class ChatSessionManager {
 
   private async ensureDriver(
     sessionId: string
-  ): Promise<ChatSessionDriver | null> {
+  ): Promise<ChatAgentDriver | null> {
     const existing = this.drivers.get(sessionId)
     if (existing) {
       if (existing.isDead) {
@@ -2148,7 +2157,7 @@ export class ChatSessionManager {
           // The executable may have been removed or moved since the last
           // spawn: surface a failure now, and respawn the path just verified.
           const executable = await this.checkExecutable()
-          existing.setClaudeExecutablePath(executable?.path)
+          existing.setClaudeExecutablePath?.(executable?.path)
         }
         if (!this.authOk(record?.claudeProfileId, record?.projectPath)) throw new Error(chatAuthErrorMessage())
       }
@@ -2280,14 +2289,19 @@ export class ChatSessionManager {
         // session's profile, with its current group for context. A gateway
         // that writes its reset into the error text without a zone is read in
         // the profile's `limitResetTimeZone`.
-        onLimitEvent: (signal) =>
+        onLimitEvent: (signal) => {
+          const profileId = record.claudeProfileId ?? 'default'
+          const projectPath = this.records.get(record.sessionId)?.projectPath ?? record.projectPath
           this.teamMail.limits.record({
-            ...withTextReset(signal, profileLimitResetTimeZone(
-              record.claudeProfileId, this.catalogCtx(this.records.get(record.sessionId)?.projectPath ?? record.projectPath))),
-            profileId: record.claudeProfileId ?? 'default',
+            ...withTextReset(signal, profileLimitResetTimeZone(profileId, this.catalogCtx(projectPath))),
+            profileId,
             sessionId: record.sessionId,
             groupId: this.records.get(record.sessionId)?.groupId ?? null,
-          }),
+            // The provider owning the profile at its project path (D7/D10).
+            providerId: providerOf(profileId, this.catalogCtx(projectPath)),
+            window: signal.window,
+          })
+        },
       })
       if (
         !this.records.has(record.sessionId) ||

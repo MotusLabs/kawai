@@ -86,7 +86,7 @@ const expectParity = (project: string, master: Record<string, Omit<CatalogProfil
   expect(head.errors).toEqual([])
   expect([...head.profiles.keys()].sort()).toEqual(Object.keys(master).sort())
   for (const [key, masterProfile] of Object.entries(master)) {
-    const { providerId, ...settings } = head.profiles.get(key) ?? ({} as CatalogProfile)
+    const { providerId: _providerId, ...settings } = head.profiles.get(key) ?? ({} as CatalogProfile)
     expect({ key, settings }).toEqual({ key, settings: masterProfile })
   }
   return head

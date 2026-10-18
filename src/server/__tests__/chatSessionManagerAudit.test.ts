@@ -58,6 +58,7 @@ async function harness() {
   const changes: string[] = []
   const manager = new ChatSessionManager({
     db, registry: new SessionRegistry(), onEvent: () => {}, isDirectory: () => true,
+    profileCatalogHome: tempDir,
     queryFactory: scriptedQueries(spawns),
     providerUsageFetch: (async () => { throw new Error('no provider pulls') }) as unknown as typeof fetch,
     onOutboundChange: teamId => changes.push(teamId),

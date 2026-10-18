@@ -44,6 +44,8 @@ export interface MailRecipient {
   profileId?: string
   /** Direct mail waits for provider recovery; custom group rules may override cooling. */
   cooldownUntil?: string | null
+  /** The provider whose cooldown decided that end (providers-and-workers D15), when it did. */
+  cooldownProvider?: string | null
 }
 
 // The member-state cause reporter lives beside the predicates it sits beneath.
@@ -286,7 +288,11 @@ export class MailDispatcher {
           } else if (cause.kind === 'outside-role') {
             constraints.push({ kind: 'outside-role', ...(cause.detail ? { detail: cause.detail } : {}) })
           } else if (cause.kind === 'profile-cooling') {
-            constraints.push({ kind: 'profile-cooling', ...(row.cooldownUntil ? { retryAt: row.cooldownUntil } : {}) })
+            constraints.push({
+              kind: 'profile-cooling',
+              ...(row.cooldownUntil ? { retryAt: row.cooldownUntil } : {}),
+              ...(cause.detail ? { detail: cause.detail } : {}),
+            })
           }
         }
       }
