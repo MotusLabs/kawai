@@ -19,6 +19,7 @@ import type {
 } from '../../shared/teamWorkspace'
 import { attentionItemId } from '../../shared/teamWorkspace'
 import type { OutboundViolationGroup } from '../outbound/service'
+import { outboundAttentionItems, outboundSummaryItems } from './workspaceOutbound'
 import { teamTaskStage } from '../../shared/teamTaskStage'
 import type { TeamMessage, WaitingConstraint, WaitingReason } from '../../shared/team'
 import type { TeamTaskSummary } from '../../shared/teamTasks'
@@ -260,24 +261,8 @@ const staffingItems: AttentionSource = ({ messages, waiting, taskTitle, nameOf }
     })
 }
 
-/**
- * Unacknowledged outbound violations (execution-safety-recovery D10): one
- * informational item per `(rule, destination)` group, owned by the human.
- * Nothing waits on it — the impact names no task — and a verdict never
- * becomes a stop reason, supervision cause, or dispatch input: this source
- * only reads, and nothing downstream of a verdict exists.
- */
-const outboundItems: AttentionSource = ({ outboundViolations, nameOf }) =>
-  outboundViolations.map(group => ({
-    id: `outbound-violation:${group.rule}:${group.destination}`,
-    kind: 'outbound-violation' as const,
-    cause: `${group.rule} to ${group.destination}: ${group.count} unacknowledged, latest by ${nameOf(group.latestSessionId)}`,
-    owner: { kind: 'human' as const, id: null, label: 'Human' },
-    impact: {},
-    nextAction: 'Review and acknowledge',
-    link: { kind: 'audit' as const, id: group.latestCallId },
-    requiresHuman: true,
-  }))
+/** Unacknowledged outbound violations (execution-safety-recovery D10; workspaceOutbound.ts). */
+const outboundItems: AttentionSource = ({ outboundViolations, nameOf }) => outboundAttentionItems(outboundViolations, nameOf)
 
 /**
  * The source registry (task 4.1). Wave C sources (plan holds, stalls, Lead
@@ -387,28 +372,8 @@ export function morningSummary(input: SummaryInput): MorningSummary {
     link: { kind: 'task' as const, id: result.taskId },
   }))
 
-  // The audit records' row counts (execution-safety-recovery D10): durable,
-  // so a restart within the window shows the same numbers. One item per
-  // class the window holds, each opening the Audit tab.
-  const outbound: SummaryItem[] = []
-  if (outboundCounts.allowed > 0) {
-    outbound.push({
-      id: 'outbound:allowed', label: `${outboundCounts.allowed} allowed send${outboundCounts.allowed === 1 ? '' : 's'}`,
-      link: { kind: 'audit', id: '' },
-    })
-  }
-  if (outboundCounts.unknown > 0) {
-    outbound.push({
-      id: 'outbound:unknown', label: `${outboundCounts.unknown} unknown destination${outboundCounts.unknown === 1 ? '' : 's'}`,
-      link: { kind: 'audit', id: '' },
-    })
-  }
-  if (outboundCounts.violations > 0) {
-    outbound.push({
-      id: 'outbound:violation', label: `${outboundCounts.violations} violation${outboundCounts.violations === 1 ? '' : 's'}`,
-      link: { kind: 'audit', id: '' },
-    })
-  }
+  // The audit records' row counts (execution-safety-recovery D10; workspaceOutbound.ts).
+  const outbound = outboundSummaryItems(outboundCounts)
 
   return {
     since,
