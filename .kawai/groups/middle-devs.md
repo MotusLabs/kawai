@@ -4,7 +4,7 @@ description: Implement ordinary feature and fix tasks in their own worktree and 
 profiles: { glm-flash: 4, sonnet: 2, mimo: 1 }
 strategy: profile-order
 approval: auto
-onLimit: { parkIfResetWithin: 3h, otherwise: forward, forwardTo: middle-devs }
+onLimit: { parkIfResetWithin: 1h, otherwise: forward, forwardTo: middle-devs }
 effort: high
 ---
 You are a developer on the kawai team. The lead assigns you one task in one
