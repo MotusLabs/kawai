@@ -1299,6 +1299,38 @@ describe('ChatSessionDriver', () => {
     expect(harness.events.some((e) => e.type === 'error')).toBe(false)
   })
 
+  test('turn identities stay unique when the same managed session constructs a fresh driver', () => {
+    const first=createHarness({deterministicTurnIds:false})
+    const restarted=createHarness({deterministicTurnIds:false})
+    first.driver.send('first');restarted.driver.send('after restart')
+    const a=first.events.find(event=>event.type==='turn_started')!.turnId
+    const b=restarted.events.find(event=>event.type==='turn_started')!.turnId
+    expect(a).not.toBe(b)
+    expect(a).toMatch(/^turn-[0-9a-f-]{36}$/)
+    first.driver.kill();restarted.driver.kill()
+  })
+
+  test('structured compaction preserves metadata, measures only an observed start and isolates callback failure', async () => {
+    const observations: import('../../shared/processObservations').Measurement[] = []
+    const h = createHarness({onCompaction:data=>observations.push(data)})
+    h.driver.send('hi')
+    h.fakes[0]!.push(compactBoundary('auto', 100))
+    await flush()
+    expect(observations[0]).toMatchObject({trigger:'auto',preTokens:100,postTokens:null,startedAt:null,durationSeconds:null,outcome:'completed'})
+    h.fakes[0]!.push({type:'system',subtype:'status',status:'compacting'} as unknown as SDKMessage)
+    h.fakes[0]!.push(compactBoundary('manual', 200, 50))
+    await flush()
+    expect(observations[1]).toMatchObject({outcome:'started',endedAt:null})
+    expect(observations[2]).toMatchObject({trigger:'manual',preTokens:200,postTokens:50,outcome:'completed'})
+    expect(typeof observations[2]!.durationSeconds).toBe('number')
+    h.driver.kill()
+    const failing=createHarness({onCompaction:()=>{throw Error('recorder failure')}})
+    failing.driver.send('hi');failing.fakes[0]!.push(compactBoundary('auto',100,40))
+    failing.fakes[0]!.push(result('success'));await flush()
+    expect(typesOf(failing.events)).toContain('turn_completed')
+    failing.driver.kill()
+  })
+
   test('trailing events after result are tolerated without killing the session', async () => {
     const harness = createHarness()
     harness.driver.send('hi')

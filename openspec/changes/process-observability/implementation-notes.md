@@ -32,3 +32,7 @@ The owner answered “yes, revise” to the explicit proposal to revise task ord
 - All final capabilities and acceptance criteria remain required. No task was marked complete for revising the plan: progress is now 0/45 rather than 0/42.
 - The shared remote ref inspected during revision now includes context-exhaustion merge `9b3f0e84` (PR #213). This worktree remains on its recorded baseline plus planning commits; the next apply must refresh/rebase and recheck source/spec contracts. No assumption is made that other prerequisites landed with it.
 - The revision changes planning and audit documents only. No other change is archived, merged or reimplemented here. Full change completion/archive still requires all pending integrations and final verification.
+
+## Foundation apply baseline
+
+Rebased the dedicated branch onto fetched `origin/master` (`9b3f0e84`, context-exhaustion PR #213). Verified managed chat/task/result/usage stores, schema migrations and archived process-metrics capabilities. Provider usage/cooldown remains profile-scoped and worker-choice/capacity is absent; their checks belong to gate 3.1. Foundation work is authorized independently.

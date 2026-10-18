@@ -1,0 +1,60 @@
+import { expect, test } from 'bun:test';
+import { Database } from 'bun:sqlite';
+import { schemaDb } from './schemaDb';
+import { ObservationStore } from '../metrics/observations/store';
+import { migrateSchema, MIGRATIONS } from '../dbSafety/migrations';
+import type { ProcessObservation } from '../../shared/processObservations';
+const at = '2026-10-18T00:00:00.000Z';
+const fact = (sourceKey = 'turn:1'): ProcessObservation => ({ sourceKey, kind: 'turn_started', teamId: 'a', sessionId: 's', turnId: 't', observedAt: at, data: {} });
+test('upgrade from version 10 preserves existing rows and applies the observation schema once', () => {
+  const db = new Database(':memory:');
+  migrateSchema(db, ':memory:', { backups: null, migrations: MIGRATIONS.slice(0, -1) });
+  db.exec("INSERT INTO chat_turn_usage(session_id,turn_id,ok,input_tokens,output_tokens,cache_read_tokens,cache_creation_tokens,num_turns,ended_at) VALUES ('s','t',1,10,2,0,0,1,'2026-10-18')");
+  migrateSchema(db, ':memory:', { backups: null });
+  migrateSchema(db, ':memory:', { backups: null });
+  expect(db.prepare('SELECT input_tokens FROM chat_turn_usage').get()).toEqual({ input_tokens: 10 });
+  expect(db.prepare("SELECT count(*) AS n FROM schema_migrations WHERE name='process-observations'").get()).toEqual({ n: 1 });
+  new ObservationStore(db).record(fact());
+  db.close();
+});
+test('source replay, team isolation and shared-source access associations', () => {
+  const db = schemaDb(), store = new ObservationStore(db);
+  store.record(fact(), ['shared']);
+  expect(store.record({ ...fact(), teamId: 'b' })).toBeNull();
+  expect(store.forTeam('a')).toHaveLength(1);
+  expect(store.forTeam('shared')).toHaveLength(1);
+  expect(store.forTeam('b')).toEqual([]);
+  expect(store.forTeam('a')[0]).toMatchObject({ sourceKey: 'turn:1', version: 1, data: {} });
+  db.close();
+});
+test('a failed aggregate transaction records neither the fact nor the deduplication key', () => {
+  const db = schemaDb(), store = new ObservationStore(db);
+  store.accumulate = () => { throw Error('sink unavailable'); };
+  expect(() => store.record(fact())).toThrow('sink unavailable');
+  expect(store.forTeam('a')).toEqual([]);
+  store.accumulate = undefined;
+  expect(store.record(fact())).not.toBeNull();
+  db.close();
+});
+test('detail pruning retains source identity, checkpoints, live state and cumulative totals', () => {
+  const db = schemaDb();
+  let now = Date.parse(at);
+  const store = new ObservationStore(db, () => now);
+  store.record(fact());
+  db.exec("INSERT INTO process_export_totals VALUES ('test','{}','count',1)");
+  store.setCheckpoint('source', '12');
+  now += 91 * 24 * 3600000;
+  expect(store.prune()).toBe(1);
+  expect(store.forTeam('a')).toEqual([]);
+  expect(store.record(fact())).toBeNull();
+  expect(store.checkpoint('source')).toBe('12');
+  expect(db.prepare('SELECT value FROM process_export_totals').get()).toEqual({ value: 1 });
+  db.close();
+});
+test('raw payload copies and invalid measurements are refused before a write', () => {
+  const db = schemaDb(), store = new ObservationStore(db);
+  expect(() => store.record({ ...fact(), data: { prompt: 'private' } })).toThrow('Unsupported measurement');
+  expect(() => store.record({ ...fact(), kind: 'context', data: { usedTokens: NaN } })).toThrow('Invalid measurement');
+  expect(store.forTeam('a')).toEqual([]);
+  db.close();
+});
