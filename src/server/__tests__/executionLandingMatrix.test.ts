@@ -322,6 +322,31 @@ describe('a human close while a merge runs (13.4b)', () => {
     expect(h.executions.effectsOf(executionId)).toHaveLength(effects)
     expect(h.tasks.store.get(row(executionId, 'hc-c').taskId!)!.status).toBe('done')
   })
+
+  test('(iv) cancel while the branch update runs: the update settles and is recorded, no merge effect, stopped as task-closed', async () => {
+    const executionId = await startedExecution(h, [{ change: 'hc-d' }])
+    await passedChange(h, executionId, 'hc-d')
+    pushCommit(matrix, 'master', 'other-hc-d.txt', 'd\n')
+    const baseBefore = originHead(matrix, 'master')
+    h.gh.update = async branch => {
+      h.gh.update = null
+      await h.tasks.setStatus(h.bench.human, row(executionId, 'hc-d').taskId!, 'cancelled')
+      mergeBaseInto(branch)
+    }
+    await tickUntil(executionId, 'hc-d', state => state === 'stopped' || state === 'landed', 6)
+    await h.tick()
+    expect(row(executionId, 'hc-d')).toMatchObject({ state: 'stopped', stopReason: 'task-closed' })
+    const effects = h.executions.effectsOf(executionId)
+    expect(effects.filter(effect => effect.kind === 'update-branch').map(effect => effect.state)).toEqual(['done'])
+    // The update's outcome was applied: the review carried onto the updated head.
+    const rounds = h.executions.rounds(executionId, 'hc-d')
+    expect(rounds.at(-1)!.carriedFrom).toBe(rounds[0]!.id)
+    expect(effects.filter(effect => effect.kind === 'merge')).toEqual([])
+    expect(h.gh.merges).toHaveLength(0)
+    expect(originHead(matrix, 'master')).toBe(baseBefore)
+    expect(h.executions.landings(h.executions.execution(executionId)!.planId)).toEqual([])
+    expect(h.tasks.store.get(row(executionId, 'hc-d').taskId!)!.status).toBe('cancelled')
+  })
 })
 
 describe('a new task revision around the landing (12.1)', () => {
