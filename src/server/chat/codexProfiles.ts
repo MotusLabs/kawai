@@ -45,6 +45,12 @@ export function codexHomeProviderId(resolvedHome: string): string {
 }
 
 /**
+ * The label every home-derived provider carries (R2): the picker and chat
+ * header identify the runtime as Codex through it.
+ */
+export const CODEX_PROVIDER_LABEL = 'Codex'
+
+/**
  * The environment a Codex app-server spawn receives (task 3.2): exactly
  * `CODEX_HOME` at the resolved home — nothing else, so the server's Claude
  * provider configuration never reaches the Codex process. Configuration

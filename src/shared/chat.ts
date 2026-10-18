@@ -509,6 +509,13 @@ export type ChatPendingRequest =
 /** User decision on a pending approval_request. */
 export type ChatApprovalDecision = 'allow' | 'deny'
 
+/**
+ * Which agent runtime a chat runs on (codex-chat-sessions, ruling R1):
+ * deliberately not `provider` — the catalog's provider level (providers.json,
+ * providerOf) means an account or endpoint.
+ */
+export type ChatRuntime = 'claude' | 'codex'
+
 /** Public catalog metadata; environment and credentials stay on the server. */
 export interface ClaudeProfileMetadata {
   id: string
@@ -516,6 +523,8 @@ export interface ClaudeProfileMetadata {
   /** The provider owning this model: its cooldown and usage key (design D10). */
   providerId: string
   providerLabel: string
+  /** The runtime a chat of this profile runs on; fixed at the chat's creation. */
+  runtime: ChatRuntime
 }
 
 /**

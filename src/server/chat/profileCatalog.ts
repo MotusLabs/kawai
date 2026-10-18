@@ -29,6 +29,7 @@ import {
   type FileParse,
 } from './catalogParse'
 import { codexHomeProviderId, resolveCodexHome } from './codexProfiles'
+import type { ChatRuntime } from '../../shared/chat'
 
 // The file formats' validators are re-exported: callers and tests import the
 // whole catalog surface from this module.
@@ -93,7 +94,7 @@ export interface CatalogProfile {
    * The entry's runtime (ruling R1). Absent reads as `claude`, keeping every
    * existing profile's shape unchanged.
    */
-  runtime?: 'claude' | 'codex'
+  runtime?: ChatRuntime
   /** The Codex home the user-level catalog named, if any (R1, trusted tier). */
   codexHome?: string
   /** Whether the Codex sandbox may reach the network (trusted tier). */

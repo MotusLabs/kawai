@@ -25,12 +25,9 @@ import type { BackgroundTaskRecord } from '../chatBackgroundTasks'
 import type { ChatLimitSignal } from '../limitSignals'
 import type { Measurement } from '../../../shared/processObservations'
 
-/**
- * The agent runtime a chat runs on: Claude Code today, Codex with the driver
- * change that wires it. Deliberately not `provider` — the catalog's provider
- * level (providers.json, providerOf) means an account or endpoint.
- */
-export type ChatRuntime = 'claude' | 'codex'
+// The agent runtime a chat runs on (the shared union, re-exported so every
+// driver-side import keeps its path).
+export type { ChatRuntime } from '../../../shared/chat'
 
 /** Reasoning effort a driver launches with: a named level or a raw number. */
 export type ChatEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | number

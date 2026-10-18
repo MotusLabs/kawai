@@ -3,7 +3,9 @@
 // and never changes process.env.
 import fs from 'node:fs'
 import type { Options } from '@anthropic-ai/claude-agent-sdk'
+import type { ClaudeProfileMetadata } from '../../shared/chat'
 import { buildChatOptionsEnv, effectiveChatEnv, type ChatProviderEnv } from './chatProviderEnv'
+import { CODEX_PROVIDER_LABEL } from './codexProfiles'
 import {
   PROFILE_CONTROLLED_ENV,
   resolveProfileCatalog,
@@ -20,18 +22,19 @@ export type ClaudeLaunchConfiguration = Pick<Options, 'env' | 'model' | 'setting
 
 /** Public catalog view: picker metadata plus per-file validation failures. */
 export interface ClaudeProfileCatalogView {
-  profiles: { id: string; label: string; providerId: string; providerLabel: string }[]
+  profiles: ClaudeProfileMetadata[]
   /** Catalog file failures; the rest of the catalog remains usable. */
   errors: string[]
 }
 
 /**
- * Catalog identifiers, labels, and providers for a project path — the only
- * fields that may cross the client boundary — together with catalog file
- * failures, so invalid files are reported instead of silently skipped.
+ * Catalog identifiers, labels, providers, and runtimes for a project path —
+ * the only fields that may cross the client boundary — together with catalog
+ * file failures, so invalid files are reported instead of silently skipped.
  * Catalog order (D13): the provider holding `default` first, then providers
  * in file order, each with its models in order — so `default` always leads
- * the list.
+ * the list — then Codex entries in file order, each its own home-derived
+ * provider under the fixed Codex label (R2).
  */
 export function claudeProfileCatalog(
   ctx: ProfileCatalogContext = {}
@@ -42,8 +45,12 @@ export function claudeProfileCatalog(
     for (const modelKey of provider.models) {
       const profile = profiles.get(modelKey)
       if (!profile) continue
-      metadata.push({ id: modelKey, label: profile.label, providerId, providerLabel: provider.label })
+      metadata.push({ id: modelKey, label: profile.label, providerId, providerLabel: provider.label, runtime: 'claude' })
     }
+  }
+  for (const [id, profile] of profiles) {
+    if (profile.runtime !== 'codex') continue
+    metadata.push({ id, label: profile.label, providerId: profile.providerId, providerLabel: CODEX_PROVIDER_LABEL, runtime: 'codex' })
   }
   return { profiles: metadata, errors }
 }
@@ -51,7 +58,7 @@ export function claudeProfileCatalog(
 /** Identifier/label list only; see claudeProfileCatalog for the full view. */
 export function claudeProfileMetadata(
   ctx: ProfileCatalogContext = {}
-): { id: string; label: string; providerId: string; providerLabel: string }[] {
+): ClaudeProfileMetadata[] {
   return claudeProfileCatalog(ctx).profiles
 }
 

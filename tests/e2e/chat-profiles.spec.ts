@@ -85,6 +85,37 @@ test('project-level .kawai catalog extends the picker for that path', async ({ p
   }
 })
 
+test('a Codex profile option identifies its runtime in the picker and chat view', async ({ page }, info) => {
+  const project = await mkdtemp(path.join(os.tmpdir(), 'agentboard-e2e-profiles-codex-'))
+  try {
+    await mkdir(path.join(project, '.kawai'), { recursive: true })
+    // Codex entries may live at project level; only codexHome/network are
+    // trusted-tier fields, so this entry names neither — the default home
+    // applies server-side and never crosses the boundary.
+    await writeFile(path.join(project, '.kawai', 'profiles.json'), JSON.stringify({
+      codex: { label: 'Codex', runtime: 'codex', model: 'gpt-5.3-codex' },
+    }))
+    await page.goto('/')
+    await page.getByRole('button', { name: 'New session', exact: true }).first().click()
+    const dialog = page.getByRole('dialog', { name: 'New Session' })
+    await dialog.getByLabel('Session kind').selectOption('chat')
+    const profile = dialog.getByLabel('Profile')
+    await dialog.getByLabel('Project Path').fill(project)
+    // The Codex entry renders once (its label equals the provider label, so
+    // a plain option; the home-derived provider id never shows a path).
+    await expect(profile.locator('option', { hasText: 'Codex' })).toHaveCount(1)
+    await profile.selectOption('codex')
+    await dialog.getByLabel('Display Name').fill('Codex profile check')
+    await page.screenshot({ path: info.outputPath('codex-picker.png') })
+    await dialog.getByRole('button', { name: 'Create', exact: true }).click()
+    // The chat view identifies the profile as Codex: provider · profile.
+    await expect(page.getByTestId('chat-profile')).toHaveText('Codex · Codex')
+    await page.screenshot({ path: info.outputPath('codex-chat-header.png') })
+  } finally {
+    await rm(project, { recursive: true, force: true })
+  }
+})
+
 test('invalid project catalog file warns without blocking creation', async ({ page }, info) => {
   const project = await mkdtemp(path.join(os.tmpdir(), 'agentboard-e2e-profiles-bad-'))
   try {

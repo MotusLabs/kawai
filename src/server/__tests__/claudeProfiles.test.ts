@@ -64,19 +64,37 @@ function catalogWithLan(): void {
 }
 
 describe('Claude profile resolution', () => {
-  test('catalog metadata has stable order and carries providers, identifiers, and labels', () => {
+  test('catalog metadata has stable order and carries providers, identifiers, labels, and runtimes', () => {
     // D13 order: the provider holding default first, then file order.
     expect(claudeProfileMetadata({ homeDir: tempHome })).toEqual([
-      { id: 'default', label: 'Default', providerId: 'claude', providerLabel: 'Claude' },
-      { id: 'opus', label: 'Claude Opus', providerId: 'claude', providerLabel: 'Claude' },
-      { id: 'sonnet', label: 'Claude Sonnet', providerId: 'claude', providerLabel: 'Claude' },
-      { id: 'haiku', label: 'Claude Haiku', providerId: 'claude', providerLabel: 'Claude' },
-      { id: 'glm', label: 'GLM', providerId: 'zai', providerLabel: 'Z.AI' },
-      { id: 'glm-flash', label: 'GLM Flash', providerId: 'zai', providerLabel: 'Z.AI' },
-      { id: 'minimax', label: 'MiniMax', providerId: 'minimax', providerLabel: 'MiniMax' },
-      { id: 'mimo', label: 'MiMo', providerId: 'mimo', providerLabel: 'MiMo' },
-      { id: 'kimi', label: 'Kimi', providerId: 'kimi', providerLabel: 'Kimi' },
+      { id: 'default', label: 'Default', providerId: 'claude', providerLabel: 'Claude', runtime: 'claude' },
+      { id: 'opus', label: 'Claude Opus', providerId: 'claude', providerLabel: 'Claude', runtime: 'claude' },
+      { id: 'sonnet', label: 'Claude Sonnet', providerId: 'claude', providerLabel: 'Claude', runtime: 'claude' },
+      { id: 'haiku', label: 'Claude Haiku', providerId: 'claude', providerLabel: 'Claude', runtime: 'claude' },
+      { id: 'glm', label: 'GLM', providerId: 'zai', providerLabel: 'Z.AI', runtime: 'claude' },
+      { id: 'glm-flash', label: 'GLM Flash', providerId: 'zai', providerLabel: 'Z.AI', runtime: 'claude' },
+      { id: 'minimax', label: 'MiniMax', providerId: 'minimax', providerLabel: 'MiniMax', runtime: 'claude' },
+      { id: 'mimo', label: 'MiMo', providerId: 'mimo', providerLabel: 'MiMo', runtime: 'claude' },
+      { id: 'kimi', label: 'Kimi', providerId: 'kimi', providerLabel: 'Kimi', runtime: 'claude' },
     ])
+  })
+  test('Codex entries follow the provider models, each under the fixed Codex provider (task 3.4)', () => {
+    userCatalog({
+      codex: { label: 'Codex', runtime: 'codex', model: 'gpt-5.3-codex' },
+      'work-codex': { label: 'Work Codex', runtime: 'codex', codexHome: '~/codex-work' },
+    })
+    const view = claudeProfileMetadata({ homeDir: tempHome })
+    const codexRows = view.filter(profile => profile.runtime === 'codex')
+    expect(codexRows.map(profile => profile.id)).toEqual(['codex', 'work-codex'])
+    for (const row of codexRows) {
+      expect(row.providerId).toMatch(/^codex-home-[0-9a-f]{12}$/)
+      expect(row.providerLabel).toBe('Codex')
+    }
+    // The two homes hash differently, so each entry is its own provider group.
+    expect(codexRows[0]!.providerId).not.toBe(codexRows[1]!.providerId)
+    // And the catalog's profiles read in catalog order: providers first.
+    expect(view[view.length - 2]!.id).toBe('codex')
+    expect(view[view.length - 1]!.id).toBe('work-codex')
   })
   test('documentation matches catalog labels and effective mappings', () => {
     const doc = fs.readFileSync(path.resolve(import.meta.dir, '../../../docs/claude-session-profiles.md'), 'utf8')
