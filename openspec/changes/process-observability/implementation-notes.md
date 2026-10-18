@@ -36,3 +36,30 @@ The owner answered “yes, revise” to the explicit proposal to revise task ord
 ## Foundation apply baseline
 
 Rebased the dedicated branch onto fetched `origin/master` (`9b3f0e84`, context-exhaustion PR #213). Verified managed chat/task/result/usage stores, schema migrations and archived process-metrics capabilities. Provider usage/cooldown remains profile-scoped and worker-choice/capacity is absent; their checks belong to gate 3.1. Foundation work is authorized independently.
+
+## Foundation delivery (2026-10-18)
+
+Implemented the approved foundation: tasks 1.1–1.5, 2.1–2.4 and 9.1–9.5.
+This is a milestone within the change, not completion or an archive.
+
+- Migration 11 (`process-observations`) adds observation details, access associations, retained source identities/checkpoints, live interval state and durable export aliases/totals. The frozen baseline and earlier DDL were not edited. The test DB helper now uses the production versioned runner, so reopening cannot reapply migration 11.
+- Post-commit reconciliation records managed task/result/assignment/finding/mail/limit/usage facts, keeps handoff/result/revision references, and protects acceptance and mailbox settlement from collection failures. First acceptance has a retained per-task identity; accepting again or reopening cannot recount it. Landing classification requires the system actor and the exact result/commit.
+- Managed timing preserves task/start pins, independent tool/request/activity intervals, approval-wait subtraction, overlapping tool union versus summed work, and checkpointed restart uncertainty. Background-task level updates do not extend active work.
+- Live turn IDs are now UUIDs: the old per-driver `turn-1` counter could collide after restart in usage and interval keys. The walkthrough now resumes the SDK conversation and completes a third turn after a manager restart, verifying three distinct usage/completion records and one acceptance. Already-lost legacy usage and legacy zero-versus-missing ambiguity cannot be reconstructed.
+- Structured context samples coalesce ordinary updates while preserving exact lifecycle/threshold/compaction boundaries, approximation and known threshold provenance. Missing compaction post size/duration, final usage, provider/account identity and unavailable settings versions remain unknown.
+- Detail and completed usage retain 90 days with bounded pruning and backlog continuation; source keys, totals, aliases and immutable existing reports persist. Tests cover 75-day usage and explicitly partial earlier coverage.
+- Optional same-listener bearer-authenticated `/metrics` has a fixed bounded registry, persistent counters/classic histograms, conservative alias/expanded-series budgets, a consistent five-second snapshot, capability/coverage diagnostics and no model/network scrape work. Disabled or invalid configuration leaves normal operation intact. Provider-account quota, canonical stage and canonical incident samples are absent rather than fabricated.
+- Operator definitions, scope, buckets, retention, recovery, legacy limitations and configuration are in `docs/operations/process-observability.md`; recovery mechanisms are also recorded in `docs/recovery-matrix.md`.
+
+### Verification
+
+- The implementation commit passed the repository pre-commit `bun run lint`, `bun run typecheck` and `bun run test`: **5,453 passing tests, zero failures** (5,001 main-suite tests plus isolated suites). Lint has five existing warnings and no errors.
+- Strict `openspec validate process-observability --strict` passed.
+- After that full run, refreshed/rebased onto `origin/master` **23bbfd44**, including session-targeted task handoffs (PRs #215/#216) and team-role updates. No foundation code conflict occurred. On the rebased branch, lint/typecheck passed again; **55** foundation/schema/recovery/handoff tests and **3** managed-manager walkthrough/timing/poll-stop tests passed. The full-suite count above describes the implementation before this final upstream rebase; the additional targeted checks describe compatibility with the rebased upstream handoff changes.
+- The isolated manager walkthrough and endpoint tests use scripted SDK frames and local SQLite/Hono instances. They make no model-provider requests, deploy nothing, and require no Prometheus installation. No browser UI was changed; the full recommendation/daily-reassessment browser walkthrough remains in task 10.3/10.4.
+
+### Integration gate 3.1
+
+Rechecked the actual fetched default branch at **23bbfd44**. Context-exhaustion and session-targeted task handoffs are landed, but provider cooldown/usage tasks 4.x/5.x in `providers-and-workers` remain unchecked, `chat-usage-limits` still specifies per-profile reports, and the `team_capacity`/worker-choice contract is absent. These are actual missing interfaces, not fixtures or partial task counts used as proof of readiness.
+
+Task 3.1 and the remaining integration/recommendation/digest/experiment tasks remain unchecked (31 tasks). No upstream feature was stubbed, merged or archived to satisfy this gate. Migration 11 is free on this base; `providers-and-workers` explicitly takes the next free version at landing, so its migration must be reconciled with this registry when either branch lands first.
