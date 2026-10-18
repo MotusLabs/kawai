@@ -15,7 +15,7 @@ import { ghAuthStatus, ghCommitTree, ghRepo } from './github'
 import { lsRemoteHead } from './gitRemote'
 import type { GhCommandOptions } from './ghCommand'
 
-export type ProbeFindingCode = 'git' | 'origin' | 'gh-auth' | 'write-permission' | 'base-branch' | 'floor-map' | 'name-taken'
+export type ProbeFindingCode = 'git' | 'origin' | 'gh-auth' | 'write-permission' | 'base-branch' | 'floor-map' | 'name-taken' | 'integration-branch'
 
 export interface ProbeFinding {
   code: ProbeFindingCode
@@ -35,6 +35,13 @@ export interface ProbeResult {
   repo: string | null
   /** Set whenever the base branch, head, and tree could be read, whatever else failed. */
   base: ProbeBase | null
+  /**
+   * An integration plan's facts (integration-candidates D2): the base above
+   * is the integration branch, and the target is the default branch. When
+   * the branch is still missing, the base head is the default head the
+   * branch will be created from.
+   */
+  integration?: { branch: string; target: string; exists: boolean }
 }
 
 export interface ProbeInput {

@@ -23,7 +23,7 @@ Implement after `plan-execution` has landed on master, together with what it bui
 
 ## 3. Mechanism, probe, and branch creation
 
-- [ ] 3.1 Implement `integrationProbe.ts` with D2's four rules. Verify with tests against a bare remote and a stub `gh`: the default branch, a change name, an existing branch without a record, and another plan's record each refuse `landing-ready`, naming the branch, and the probe creates no ref.
+- [x] 3.1 Implement `integrationProbe.ts` with D2's four rules. Verify with tests against a bare remote and a stub `gh`: the default branch, a change name, an existing branch without a record, and another plan's record each refuse `landing-ready`, naming the branch, and the probe creates no ref.
 - [ ] 3.2 Implement and register `integrationMechanism.ts` (D2). Verify with Start tests:
   - an integration plan starts, recording the integration branch as `base_branch` and the default branch as the target;
   - `landing-mode-supported` passes;

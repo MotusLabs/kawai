@@ -31,6 +31,7 @@ import { ghTreeEntries } from '../landing/github'
 import type { GhCommandOptions } from '../landing/ghCommand'
 import type { PlanExecutionSettings } from '../../team/teamCaps'
 import { evaluateStartPreconditions, type StartCheckContext, type StartRoleFact } from './startPreconditions'
+import { readIntegrationStartFacts } from '../landing/integration/integrationStart'
 
 export type ExecutionCaller = { kind: 'human'; team: TeamIdentity } | { kind: 'agent'; sessionId: string }
 
@@ -52,6 +53,8 @@ export interface StartGather {
   roles: StartRoleFact[]
   landed: ReadonlySet<string>
   settings: PlanExecutionSettings
+  /** integration-candidates D8: landing facts the base head lacks. */
+  offBaseLandings: StartCheckContext['offBaseLandings']
 }
 
 export class ExecutionService {
@@ -72,6 +75,10 @@ export class ExecutionService {
     probe?: typeof probeLanding
     /** The registered landing mechanisms, by mode (the composition's; direct only by default). */
     mechanisms?: LandingMechanisms
+    /** integration-candidates D8: the plan's running promotion (promotion-idle). */
+    promotions: { runningPromotion: (planId: string) => StartCheckContext['runningPromotion'] }
+    /** integration-candidates D8's landings-on-base pre-read; tests stub it. */
+    startFacts?: typeof readIntegrationStartFacts
     /** Kawai cancels its tasks on Stop through the task service (D12). */
     tasks?: import('../../team/TaskService').TaskService
     /** The team's identity for Kawai's own stop (D19's plan-close hook). */
@@ -157,7 +164,8 @@ export class ExecutionService {
         sharedProfiles: roleProfiles.length > 0 ? roleProfiles.filter(profile => groupProfiles.includes(profile)) : groupProfiles,
       }
     })
-    const landed = new Set(this.deps.store.landings(planId).map(landing => landing.change))
+    const landings = this.deps.store.landings(planId)
+    const landed = new Set(landings.map(landing => landing.change))
     const probeInput = { main: team.groupsRoot, floorChecks: settings.floorChecks, changes: names, provisioned: landed }
     const landing = revisionRow?.content.landing ?? { mode: 'direct' as const }
     // An unregistered mode is refused by landing-mode-supported; direct's checks still report the repository.
@@ -174,7 +182,12 @@ export class ExecutionService {
         baseDiffs = await compareWithOriginTree(team.groupsRoot, originTree, perChange)
       }
     }
-    return { probe, baseDiffs, roles, landed, settings }
+    const facts = await (this.deps.startFacts ?? readIntegrationStartFacts)({
+      main: team.groupsRoot, probe, landings, runningPromotion: null,
+      baseBranchOf: executionId => this.deps.store.execution(executionId)?.baseBranch ?? null,
+    })
+    const checked = facts.error === undefined ? probe : { ...probe, findings: [...probe.findings, { code: 'base-branch' as const, message: facts.error }] }
+    return { probe: checked, baseDiffs, roles, landed, settings, offBaseLandings: facts.offBaseLandings }
   }
 
   /** The precondition context, inside Start's transaction or in preview, plus the commit's own reads. */
@@ -203,6 +216,9 @@ export class ExecutionService {
       probeFindings: gather.probe.findings,
       landingMode: content?.landing.mode ?? 'direct',
       supportedLandingModes: this.deps.landingModes(),
+      runningPromotion: this.deps.promotions.runningPromotion(request.planId),
+      offBaseLandings: gather.offBaseLandings,
+      baseBranch: gather.probe.base?.branch ?? null,
       reportId: report?.id ?? null,
       inputHash: report?.inputHash ?? null,
       changes: names,

@@ -223,6 +223,10 @@ export function composePlanServices(options: PlanServicesOptions): {
     getSession: options.getSession,
     landingModes: () => new Set(mechanisms.keys()),
     mechanisms,
+    // TEMPORARY (integration-candidates 2.1): reads the integration store once
+    // migration 11 is registered after providers' migration 10 merges; until
+    // then no promotion table exists, so none can be running.
+    promotions: { runningPromotion: () => null },
     identityOf: teamId => identityOrBare(team, teamId),
     ...(team !== undefined ? {
       tasks: team.tasks,
