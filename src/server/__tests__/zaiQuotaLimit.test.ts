@@ -88,6 +88,53 @@ describe('parseZaiQuotaLimit', () => {
     }
   })
 
+  test('every Object.prototype name as a row kind labels raw and carries no period', () => {
+    // The kind lower-cases into a table lookup, so inherited names must not
+    // resolve: a 'CONSTRUCTOR' or '__PROTO__' row is as unknown as any other.
+    const names = Object.getOwnPropertyNames(Object.prototype)
+    expect(names.length).toBeGreaterThan(0)
+    const rows = names.flatMap((name) =>
+      [name, name.toUpperCase()].map((type) => ({
+        type,
+        unit: 3,
+        number: 5,
+        percentage: 10,
+        nextResetTime: 1791845403778,
+      }))
+    )
+    const windows = parseZaiQuotaLimit({ success: true, data: { limits: rows } }, AT)?.windows ?? []
+    expect(windows).toHaveLength(rows.length)
+    expect(windows.map((window) => window.label)).toEqual(rows.map((row) => row.type))
+    for (const window of windows) {
+      expect('periodMs' in window).toBe(false)
+    }
+  })
+
+  test('an Object.prototype name with an ISO reset stays raw and periodless', () => {
+    const payload: ZaiQuotaLimitSlice = {
+      success: true,
+      data: {
+        limits: [
+          {
+            type: 'CONSTRUCTOR',
+            unit: 5,
+            number: 1,
+            percentage: 10,
+            nextResetTime: '2026-11-03T10:23:19.997Z',
+          },
+        ],
+      },
+    }
+    expect(parseZaiQuotaLimit(payload, AT)?.windows).toEqual([
+      {
+        key: 'zai:constructor',
+        label: 'CONSTRUCTOR',
+        percentUsed: 10,
+        resetsAt: '2026-11-03T10:23:19.997Z',
+      },
+    ])
+  })
+
   test('an ISO-string reset still yields a period, like the epoch-ms form', () => {
     const payload: ZaiQuotaLimitSlice = {
       success: true,

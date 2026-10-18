@@ -41,6 +41,16 @@ const ZAI_ROW_WORDS: Record<string, string> = {
 }
 
 /**
+ * Own-key lookup of a row's counted-thing word. A wire string indexes the
+ * table, so inherited names must not resolve: `ZAI_ROW_WORDS[kind]` alone
+ * would answer for Object.prototype keys like 'constructor' or '__proto__'
+ * and dress an unknown kind in a garbage word and a period.
+ */
+function zaiRowWord(kind: string): string | undefined {
+  return Object.hasOwn(ZAI_ROW_WORDS, kind) ? ZAI_ROW_WORDS[kind] : undefined
+}
+
+/**
  * Length prefix from the row's own unit and count (design D4): hours give
  * "<n>-hour", months "Monthly" for one and "<n>-month" otherwise; null when
  * the unit is unknown or the count is not a positive integer. The count is
@@ -114,7 +124,7 @@ export function parseZaiQuotaLimit(
     const kind = row.type.toLowerCase()
     const count = (seen.get(kind) ?? 0) + 1
     seen.set(kind, count)
-    const word = ZAI_ROW_WORDS[kind]
+    const word = zaiRowWord(kind)
     const window: ChatUsageWindow = {
       key: count === 1 ? `zai:${kind}` : `zai:${kind}#${count}`,
       label: word === undefined ? row.type : zaiRowLabelFrom(word, row.unit, row.number),
