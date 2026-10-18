@@ -1,6 +1,8 @@
 // The manager bench's stub executables (plan-execution rev 5): `gh` answers
 // exactly what the composed path asks — the probe's auth, repository, and
-// tree reads, the round's PR and green CI, and the pinned merge — and
+// tree reads, the round's PR and green CI, the pinned merge, and (for
+// integration landing, integration-candidates D4/D5) the branch update and
+// the ref create and non-forced fast-forward on the bare origin — and
 // anything else fails loudly;
 // `openspec` answers the validation adapter's probe, strict validation,
 // and delta reads with a valid, delta-free change.
@@ -10,6 +12,12 @@
  * check. Pull requests are numbered from 7 with their head branch kept in
  * `stateDir`; `pr view` reads the head from the bare `origin`, and `pr merge`
  * merges for real there (a clone, `--no-ff`, a push), refusing a moved head.
+ * `update-branch` merges the PR's base into its head there. A ref create
+ * answers 422 for an existing ref; a fast-forward answers 422 for a missing
+ * branch or one that is not an ancestor. Before a fast-forward of `<b>`, a
+ * `move-<b>` file in `stateDir` has an owner commit pushed onto it first
+ * (its sha in `moved-<b>`), and a `rewrite-<b>` file resets it to a
+ * parentless commit (in `rewritten-<b>`); each file is consumed once.
  * Every GIT_* variable is unset first: the pre-commit hook's must never
  * reach the stub's own git.
  */
@@ -21,7 +29,36 @@ STATE="${stateDir}"
 ORIGIN="${origin}"
 after() { want="$1"; shift; while [ $# -gt 1 ]; do [ "$1" = "$want" ] && { echo "$2"; return; }; shift; done; }
 head_of() { git --git-dir "$ORIGIN" rev-parse "refs/heads/$(cat "$STATE/pr-$1")"; }
+field() { want="$1"; shift; for a in "$@"; do case "$a" in "$want="*) echo "\${a#*=}"; return ;; esac; done; }
+WHO="-c user.email=owner@e -c user.name=Owner"
 case "$*" in
+  *"-X POST repos/acme/app/git/refs"*)
+    b=$(field ref "$@"); b="\${b#refs/heads/}"
+    git --git-dir "$ORIGIN" rev-parse -q --verify "refs/heads/$b" >/dev/null && { echo "Reference already exists (HTTP 422)" >&2; exit 1; }
+    git --git-dir "$ORIGIN" update-ref "refs/heads/$b" "$(field sha "$@")" ;;
+  *"-X PATCH repos/acme/app/git/refs/heads/"*)
+    b="\${4#repos/acme/app/git/refs/heads/}"; sha=$(field sha "$@")
+    if [ -f "$STATE/move-$b" ]; then
+      rm "$STATE/move-$b"; tmp=$(mktemp -d) && git clone -q -b "$b" "$ORIGIN" "$tmp/c" && cd "$tmp/c" \\
+        && echo hand > "hand-$b.txt" && git add "hand-$b.txt" && git $WHO commit -q -m "owner commit on $b" \\
+        && git push -q origin "HEAD:refs/heads/$b" && git rev-parse HEAD > "$STATE/moved-$b"; cd /; rm -rf "$tmp"
+    fi
+    if [ -f "$STATE/rewrite-$b" ]; then
+      rm "$STATE/rewrite-$b"; c=$(echo rewritten | git $WHO --git-dir "$ORIGIN" commit-tree "$(git --git-dir "$ORIGIN" rev-parse "refs/heads/$b^{tree}")")
+      git --git-dir "$ORIGIN" update-ref "refs/heads/$b" "$c" && echo "$c" > "$STATE/rewritten-$b"
+    fi
+    cur=$(git --git-dir "$ORIGIN" rev-parse -q --verify "refs/heads/$b") || { echo "Reference does not exist (HTTP 422)" >&2; exit 1; }
+    git --git-dir "$ORIGIN" merge-base --is-ancestor "$cur" "$sha" || { echo "Update is not a fast forward (HTTP 422)" >&2; exit 1; }
+    git --git-dir "$ORIGIN" update-ref "refs/heads/$b" "$sha" "$cur" ;;
+  *"/update-branch"*)
+    n=$(echo "$4" | sed 's#.*/pulls/\\([0-9]*\\)/.*#\\1#'); h=$(head_of "$n")
+    [ "$h" = "$(field expected_head_sha "$@")" ] || { echo "expected head sha didn't match (HTTP 422)" >&2; exit 1; }
+    br=$(cat "$STATE/pr-$n"); base=$(cat "$STATE/base-$n" 2>/dev/null || echo master)
+    tmp=$(mktemp -d) && git clone -q -b "$br" "$ORIGIN" "$tmp/c" && cd "$tmp/c" \\
+      && git -c user.email=gh@e -c user.name=GitHub merge -q --no-ff -m "Merge $base into $br" "origin/$base" \\
+      && git push -q origin "HEAD:refs/heads/$br" || { cd /; rm -rf "$tmp"; exit 1; }
+    cd /; rm -rf "$tmp"
+    printf '%s' '{"message":"Updating pull request branch."}' ;;
   *"auth status"*) exit 0 ;;
   *check-runs*) printf '%s' '[{"check_runs":[${run('ci')},${run('e2e')}]}]' ;;
   *"/status"*) printf '%s' '{"statuses":[]}' ;;
@@ -29,7 +66,7 @@ case "$*" in
   *"git/commits/"*) printf '%s' '{"tree":{"sha":"ttt-0000"}}' ;;
   *"pr create"*)
     n=$(( $(cat "$STATE/count" 2>/dev/null || echo 6) + 1 )); echo "$n" > "$STATE/count"
-    after --head "$@" > "$STATE/pr-$n"
+    after --head "$@" > "$STATE/pr-$n"; after --base "$@" > "$STATE/base-$n"
     printf '{"number":%s,"url":"https://example.internal/pr/%s"}' "$n" "$n" ;;
   *"pr view"*)
     n="$3"; h=$(head_of "$n")

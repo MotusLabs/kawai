@@ -4,10 +4,8 @@
 // and process-observations' tables and rows. Each gains the four tables and the one-running-promotion
 // index exactly once and keeps every earlier row.
 //
-// The registry under test is MIGRATIONS up to version 12, then migration 13.
-// Until providers-and-workers' version 12 is on this branch, a no-op stand-in
-// under its name fills the gap. The stand-in is dropped as soon as MIGRATIONS
-// reaches 12 itself.
+// The registry under test is the build's own MIGRATIONS; the version-12
+// database is opened with every entry up to 12 (providers-and-workers').
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -18,13 +16,8 @@ import { MIGRATIONS, type Migration } from '../dbSafety/migrations'
 import { integrationMigration } from '../plans/landing/integration/integrationSchema'
 
 const INTEGRATION_TABLES = ['plan_integration_branches', 'plan_integration_candidates', 'plan_promotion_effects', 'plan_promotions']
-const STAND_IN_12: Migration = { version: 12, name: 'provider-limit-window', up: () => {} }
-const UP_TO_12: readonly Migration[] = MIGRATIONS.some(migration => migration.version === 12)
-  ? MIGRATIONS.filter(migration => migration.version <= 12)
-  : [...MIGRATIONS, STAND_IN_12]
-const REGISTRY: readonly Migration[] = MIGRATIONS.some(migration => migration.name === integrationMigration.name)
-  ? MIGRATIONS
-  : [...UP_TO_12, integrationMigration]
+const UP_TO_12: readonly Migration[] = MIGRATIONS.filter(migration => migration.version <= 12)
+const REGISTRY: readonly Migration[] = MIGRATIONS
 
 let dir: string
 let dbPath: string
@@ -57,10 +50,10 @@ function indexes(file: string): string[] {
   } finally { db.close() }
 }
 
-test('integration-candidates is migration 13, right after version 12', () => {
+test('integration-candidates is migration 13, registered right after provider-limit-window', () => {
   expect(integrationMigration.version).toBe(13)
-  expect(REGISTRY.at(-1)).toBe(integrationMigration)
-  expect(REGISTRY.at(-2)!.version).toBe(12)
+  expect(MIGRATIONS.find(migration => migration.version === 13)).toBe(integrationMigration)
+  expect(MIGRATIONS.find(migration => migration.version === 12)!.name).toBe('provider-limit-window')
 })
 
 test('a fresh database, opened twice, gains the tables and the index once', () => {

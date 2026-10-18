@@ -33,7 +33,9 @@ import { roundAdapters } from './execution/executionRounds'
 import { fixtureLandingAdapters, fixtureProbe, fixtureRoundAdapters, FIXTURE_FLOOR } from './execution/fixtureAdapters'
 import { chatFixtureEnabled } from '../chat/developmentFixture'
 import type { LandingMechanisms } from './landing/landingMechanisms'
-import { DIRECT_MECHANISMS } from './landing/directMechanism'
+import { directMechanism } from './landing/directMechanism'
+import { IntegrationStore } from './landing/integration/integrationStore'
+import { integrationMechanism } from './landing/integration/integrationMechanism'
 import type { MemberRelease } from '../team/memberRelease'
 import type { TaskService } from '../team/TaskService'
 import type { TaskResultService } from '../team/TaskResultService'
@@ -208,8 +210,16 @@ export function composePlanServices(options: PlanServicesOptions): {
   const team = options.executionTeam
   // The registered landing mechanisms (integration-candidates D1): built once here and
   // passed to the Start service, the executor, and the provision adapter (I1).
-  const mechanisms: LandingMechanisms = DIRECT_MECHANISMS
+  // Under the development fixture only direct registers: the integration
+  // mechanism's ref writes have no fixture adapter yet (PR B's walkthrough
+  // adds one), so Start refuses an integration plan as an unsupported mode
+  // rather than calling the real gh.
   const fixture = chatFixtureEnabled
+  const integrationStore = new IntegrationStore(options.db)
+  const mechanisms: LandingMechanisms = new Map([
+    [directMechanism.mode, directMechanism],
+    ...(fixture ? [] : [['integration-branch', integrationMechanism(integrationStore)] as const]),
+  ])
   executions = new ExecutionService({
     store: executionStore,
     plansStore: options.plans,
@@ -223,10 +233,13 @@ export function composePlanServices(options: PlanServicesOptions): {
     getSession: options.getSession,
     landingModes: () => new Set(mechanisms.keys()),
     mechanisms,
-    // TEMPORARY (integration-candidates 2.1): reads the integration store once
-    // migration 13 is registered after providers' migration 12 merges; until
-    // then no promotion table exists, so none can be running.
-    promotions: { runningPromotion: () => null },
+    // D8's promotion-idle pre-read: the plan's running promotion, named with its step.
+    promotions: {
+      runningPromotion: planId => {
+        const running = integrationStore.runningPromotion(planId)
+        return running === null ? null : { id: running.id, number: running.number, branch: running.branch, step: running.step }
+      },
+    },
     identityOf: teamId => identityOrBare(team, teamId),
     ...(team !== undefined ? {
       tasks: team.tasks,

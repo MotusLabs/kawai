@@ -14,7 +14,7 @@ Implement after `plan-execution` has landed on master, together with what it bui
 
 ## 2. Records
 
-- [ ] 2.1 Add the D3 migration in `src/server/plans/landing/integration/integrationSchema.ts`: four tables and the one-running-promotion index. Verify with a migration test on a fresh database and on one that already has the plan-execution tables, run twice.
+- [x] 2.1 Add the D3 migration in `src/server/plans/landing/integration/integrationSchema.ts`: four tables and the one-running-promotion index. Verify with a migration test on a fresh database and on one that already has the plan-execution tables, run twice.
 - [x] 2.2 Implement `integrationStore.ts` as the only SQL writer of those tables, with a header comment saying so; the records need no user docs beyond it. Cover the branch record (insert, and a creation again that updates it), candidates with the next `seq` and their state transitions, and promotions with the next `number`, their step, moves, and finish. Verify with unit tests:
   - `UNIQUE (team_id, branch, seq)` holds under two concurrent inserts;
   - the partial index maps to the `no-promotion` refusal;
@@ -24,7 +24,7 @@ Implement after `plan-execution` has landed on master, together with what it bui
 ## 3. Mechanism, probe, and branch creation
 
 - [x] 3.1 Implement `integrationProbe.ts` with D2's four rules. Verify with tests against a bare remote and a stub `gh`: the default branch, a change name, an existing branch without a record, and another plan's record each refuse `landing-ready`, naming the branch, and the probe creates no ref.
-- [ ] 3.2 Implement and register `integrationMechanism.ts` (D2). Verify with Start tests:
+- [x] 3.2 Implement and register `integrationMechanism.ts` (D2). Verify with Start tests:
   - an integration plan starts, recording the integration branch as `base_branch` and the default branch as the target;
   - `landing-mode-supported` passes;
   - `changes-on-base` compares with the integration head, or with the default head while the branch is missing.
