@@ -42,6 +42,8 @@ export interface AuditView {
   requestGenerations: Record<string, number>
   /** Bumped on every team-audit-changed; the host re-requests the first page. */
   changed: number
+  /** Bumped by setFilters: the owner's own edit is a request of its own. */
+  filtersEpoch: number
   /**
    * The latest first-page request's generation: a `more` appends only while
    * its own generation still matches, so a stale more of a superseded page
@@ -58,8 +60,8 @@ export interface AuditView {
 
 export const closedAuditView = (): AuditView => ({
   open: false, loading: false, rows: null, counts: null, cursor: null, backups: null, loadingMore: false,
-  filters: {}, selected: null, pending: {}, requestGenerations: {}, changed: 0, pageGeneration: 0,
-  notice: null, error: null, command: null, commandRequest: null,
+  filters: {}, selected: null, pending: {}, requestGenerations: {}, changed: 0, filtersEpoch: 0,
+  pageGeneration: 0, notice: null, error: null, command: null, commandRequest: null,
 })
 
 interface AuditState {
@@ -117,7 +119,12 @@ export const useTeamAuditStore = create<AuditState>(set => ({
     ...(callId === null ? { filters: {} } : {}),
   })),
   setFilters: (teamKey, filters) => set(state => update(state, teamKey, {
-    filters, rows: null, counts: null, cursor: null, loading: true, error: null,
+    filters,
+    // The owner's own filter edit leaves the call selection (N1): the group
+    // view came from that call, and Apply supersedes it.
+    selected: null,
+    filtersEpoch: (state.views[teamKey]?.filtersEpoch ?? 0) + 1,
+    rows: null, counts: null, cursor: null, loading: true, error: null,
   })),
   arm: teamKey => set(state => update(state, teamKey, {
     command: { commandId: crypto.randomUUID(), payload: null }, error: null,

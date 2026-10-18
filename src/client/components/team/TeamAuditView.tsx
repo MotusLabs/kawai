@@ -15,6 +15,7 @@ import type { SendClientMessage } from '@shared/types'
 import type { OutboundAuditFilters, OutboundAuditRow, OutboundVerdict } from '@shared/outbound'
 import { useTeamAuditStore, type AuditView } from '../../stores/teamAuditStore'
 import { openParticipantChat } from '../chat/openParticipant'
+import { localDayOf, localDayStart, toDisplayDay } from '../../utils/localDate'
 
 const VERDICT_LABELS: Record<string, string> = {
   violation: 'Violation',
@@ -33,56 +34,53 @@ const OUTCOME_LABELS: Record<string, string> = {
 }
 export const outcomeLabel = (state: string): string => OUTCOME_LABELS[state] ?? state
 
-export default function TeamAuditView({ teamPath, view, sendMessage, connected, connectionEpoch }: {
+export default function TeamAuditView({ teamPath, view, sendMessage, connected, connectionEpoch, onSelectedCall }: {
   teamPath: string
   view: AuditView
   sendMessage: SendClientMessage
   connected: boolean
   /** Bumps on every reconnect, so subscriptions are re-sent. */
   connectionEpoch: number
+  /** The host names the selection in its URL; Apply clears it (N1). */
+  onSelectedCall?: (callId: string | null) => void
 }) {
   const requestSeq = useRef(0)
-  // `callId` rides only the automatic opens (mount, reconnect, changed):
-  // the server resolves that call's group and the store adopts the filters.
-  // The Apply-filters path deliberately drops it — the owner chose new filters.
+  // `callId` rides the automatic opens (URL selection): the server resolves
+  // that call's group and the store adopts the filters. The owner's own
+  // Apply clears the selection, so its request — and every later one —
+  // carries no callId until a link selects a call again.
   const request = (filters: OutboundAuditFilters, callId?: string) => {
     const requestId = `audit-page-${++requestSeq.current}`
     useTeamAuditStore.getState().begin(teamPath, requestId, 'page')
     sendMessage({ type: 'team-audit-open', teamPath, requestId, filters, ...(callId !== undefined ? { callId } : {}) })
   }
-  // The selection the last sent request carried (dedups the URL effect).
-  const lastSelectionRequested = useRef<string | null | undefined>(undefined)
-  // The tab's subscription: one authoritative page on open and every
-  // reconnect; close ends it. A reconnect also drops its lost requests.
+  // The tab's subscription; a reconnect drops its lost requests and asks
+  // the request effect below for a fresh page.
   const wasConnected = useRef(connected)
   const lastEpoch = useRef(connectionEpoch)
+  const [reconnects, setReconnects] = useState(0)
   useEffect(() => {
     if (!connected || !view.open) return
     const reconnected = (!wasConnected.current && connected) || (connected && lastEpoch.current !== connectionEpoch)
     wasConnected.current = connected
     lastEpoch.current = connectionEpoch
-    if (reconnected) useTeamAuditStore.getState().reconnected(teamPath)
-    const current = useTeamAuditStore.getState().views[teamPath]
-    lastSelectionRequested.current = current?.selected ?? undefined
-    request(current?.filters ?? {}, current?.selected ?? undefined)
+    if (reconnected) {
+      useTeamAuditStore.getState().reconnected(teamPath)
+      setReconnects(count => count + 1)
+    }
     return () => sendMessage({ type: 'team-audit-close', teamPath })
   }, [teamPath, connected, connectionEpoch, view.open, sendMessage]) // eslint-disable-line react-hooks/exhaustive-deps
-  // A call id arriving while the tab is open (the attention link, or a
-  // pasted URL) re-requests with it, so the group's rows replace the view.
+  // The one request owner (N2): mount, a URL selection, the owner's Apply,
+  // a changed push, or a reconnect — each is one keyed transition, so the
+  // tab opens exactly once on mount.
+  const lastRequested = useRef('')
   useEffect(() => {
     if (!connected || !view.open) return
-    if (lastSelectionRequested.current === view.selected) return
-    lastSelectionRequested.current = view.selected
+    const key = `${view.selected ?? ''}|${reconnects}|${view.changed}|${view.filtersEpoch}`
+    if (lastRequested.current === key) return
+    lastRequested.current = key
     request(view.filters, view.selected ?? undefined)
-  }, [view.selected, connected, view.open]) // eslint-disable-line react-hooks/exhaustive-deps
-  // A committed row of the team: re-request the first page (D9's replace
-  // semantics) — the push itself carries no data.
-  useEffect(() => {
-    if (view.changed > 0 && connected && view.open) {
-      lastSelectionRequested.current = view.selected ?? undefined
-      request(view.filters, view.selected ?? undefined)
-    }
-  }, [view.changed]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [view.selected, reconnects, view.changed, view.filtersEpoch, connected, view.open]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadMore = () => {
     if (view.cursor === null) return
@@ -106,7 +104,7 @@ export default function TeamAuditView({ teamPath, view, sendMessage, connected, 
         </>
       }
     </div>
-    <AuditFilters teamPath={teamPath} view={view} connected={connected} onRequest={request} />
+    <AuditFilters teamPath={teamPath} view={view} connected={connected} onSelectionCleared={() => onSelectedCall?.(null)} />
     {view.error && <p role="alert" className="border-b border-border px-3 py-2 text-chat-meta text-chat-danger">{view.error}</p>}
     <div className="flex flex-col" data-testid="audit-rows">
       {view.rows?.map(row => <AuditRow key={row.id} row={row} teamPath={teamPath} connected={connected}
@@ -122,24 +120,19 @@ export default function TeamAuditView({ teamPath, view, sendMessage, connected, 
   </div>
 }
 
-/** The local YYYY-MM-DD of an ISO stamp (the date inputs' value). */
-const isoDayOf = (stamp: string): string => {
-  const [date] = stamp.split('T')
-  return date ?? ''
-}
-
 /** The filters are committed as one edit — one page request per Apply. */
-function AuditFilters({ teamPath, view, connected, onRequest }: {
+function AuditFilters({ teamPath, view, connected, onSelectionCleared }: {
   teamPath: string
   view: AuditView
   connected: boolean
-  onRequest: (filters: OutboundAuditFilters) => void
+  /** The host rewrites the URL to the plain tab: the call selection is gone. */
+  onSelectionCleared: () => void
 }) {
   const [draft, setDraft] = useState<OutboundAuditFilters>(view.filters)
   const rules = Object.keys(view.counts?.allowedPerRule ?? {})
   const apply = () => {
     useTeamAuditStore.getState().setFilters(teamPath, draft)
-    onRequest(draft)
+    onSelectionCleared()
   }
   return <div className="flex flex-wrap items-end gap-2 border-b border-border px-3 py-2" data-testid="audit-filters">
     <label className="flex flex-col text-chat-meta">
@@ -176,24 +169,14 @@ function AuditFilters({ teamPath, view, connected, onRequest }: {
     <label className="flex flex-col text-chat-meta">
       From
       <input aria-label="From date" type="date" className="input" disabled={!connected}
-        value={draft.from ? isoDayOf(draft.from) : ''}
-        onChange={event => {
-          if (event.target.value === '') { setDraft({ ...draft, from: undefined }); return }
-          const [y, m, d] = event.target.value.split('-').map(Number)
-          setDraft({ ...draft, from: new Date(y!, m! - 1, d!).toISOString() })
-        }} />
+        value={draft.from ? localDayOf(draft.from) : ''}
+        onChange={event => setDraft({ ...draft, from: event.target.value === '' ? undefined : localDayStart(event.target.value) })} />
     </label>
     <label className="flex flex-col text-chat-meta">
       To
       <input aria-label="To date" type="date" className="input" disabled={!connected}
-        value={draft.to ? isoDayOf(draft.to) : ''}
-        onChange={event => {
-          // Inclusive for the owner: the day named is kept, so the store's
-          // exclusive bound is local midnight of the next day (D9's range).
-          if (event.target.value === '') { setDraft({ ...draft, to: undefined }); return }
-          const [y, m, d] = event.target.value.split('-').map(Number)
-          setDraft({ ...draft, to: new Date(y!, m! - 1, d! + 1).toISOString() })
-        }} />
+        value={draft.to ? toDisplayDay(draft.to) : ''}
+        onChange={event => setDraft({ ...draft, to: event.target.value === '' ? undefined : localDayStart(event.target.value, 1) })} />
     </label>
     <button type="button" className="btn" data-testid="audit-apply-filters" disabled={!connected} onClick={apply}>Apply filters</button>
   </div>

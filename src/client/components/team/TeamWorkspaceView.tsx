@@ -308,6 +308,7 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, conn
       {auditOpen && audit && <TeamAuditView
         teamPath={teamKey} view={audit} sendMessage={sendMessage} connected={connected}
         connectionEpoch={connectionEpoch}
+        onSelectedCall={callId => navigate(callId ? { teamKey, tab: 'audit', id: callId } : { teamKey, tab: 'audit' })}
       />}
       {metricsOpen && <MetricsView
         teamPath={teamKey} view={metrics} locationWindow={currentLocation.window} reportId={currentLocation.id} sendMessage={sendMessage}

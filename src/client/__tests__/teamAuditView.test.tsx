@@ -58,13 +58,18 @@ const openWith = (cursor: string | null = null) => mount(() => {
     row('obc-new', { createdAt: '2026-01-02T03:04:05.000Z', verdict: 'violation', rule: 'gh-write', destination: 'github:other/repo', command: 'gh issue create -R other/repo --title x', outcome: { state: 'denied', detail: 'declined by the human' }, session: { id: 'chat-gone', name: 'Gone Dev (gone)', clickable: false } }),
     row('obc-old', { createdAt: '2026-01-01T00:00:00.000Z', outcome: { state: 'outcome-unknown' }, session: { id: 'chat-gone', name: 'Gone Dev (gone)', clickable: false } }),
     row('obc-bg', { createdAt: '2026-01-01T00:00:01.000Z', outcome: { state: 'started-background' } }),
+    row('obc-fail', { createdAt: '2026-01-01T00:00:02.000Z', outcome: { state: 'failed', detail: 'exit 1' } }),
+    row('obc-pend', { createdAt: '2026-01-01T00:00:03.000Z', outcome: { state: 'pending' } }),
+    row('obc-done', { createdAt: '2026-01-01T00:00:04.000Z', outcome: { state: 'completed' } }),
   ], cursor))
 })
 
 test('rows list newest first with the counts; gone sessions are named and not clickable', () => {
   const { renderer, byId } = openWith()
   const rows = renderer.root.findAll(node => String(node.props['data-testid'] ?? '').startsWith('audit-row-'))
-  expect(rows.map(r => r.props['data-testid'])).toEqual(['audit-row-obc-new', 'audit-row-obc-old', 'audit-row-obc-bg'])
+  expect(rows.map(r => r.props['data-testid'])).toEqual([
+    'audit-row-obc-new', 'audit-row-obc-old', 'audit-row-obc-bg', 'audit-row-obc-fail', 'audit-row-obc-pend', 'audit-row-obc-done',
+  ])
   expect(textOf(byId('audit-counts'))).toContain('git-push 2')
   expect(textOf(byId('audit-counts'))).toContain('gh-write 1')
   expect(textOf(byId('audit-counts'))).toContain('Unknown destinations 1')
@@ -74,6 +79,12 @@ test('rows list newest first with the counts; gone sessions are named and not cl
   expect(textOf(rows[0]!)).toContain('Denied')
   expect(textOf(rows[1]!)).toContain('Outcome unknown')
   expect(textOf(rows[2]!)).toContain('Started in background')
+  expect(textOf(rows[3]!)).toContain('Failed')
+  expect(textOf(rows[3]!)).toContain('exit 1')
+  expect(textOf(rows[4]!)).toContain('Pending')
+  // Completed closes the set of six outcome labels.
+  const labels = rows.map(r => textOf(r.findAll(node => /Denied|Failed|Completed|Started in background|Pending|Outcome unknown/.test(textOf(node)))[0] ?? ''))
+  expect(new Set(labels).size).toBe(6)
   // The gone session renders as text, never a button.
   const gone = rows[0]!.findAll(node => node.props['data-testid'] === 'audit-session')
   expect(gone).toHaveLength(1)
@@ -86,15 +97,17 @@ test('rows list newest first with the counts; gone sessions are named and not cl
 })
 
 test('filters commit as one page request; Load more sends the cursor; the footer shows backups', () => {
-  const { sent, byId, renderer } = mount(() => {
+  const { sent, byId, renderer, rerender } = mount(() => {
     useTeamAuditStore.getState().begin('/repo', 'r1', 'page')
     useTeamAuditStore.getState().applyPage(pageOf([row('a')], 'cur-1'))
   })
-  sent.length = 0
-  byId('audit-apply-filters').props.onClick()
-  expect(sent.at(-1)).toMatchObject({ type: 'team-audit-open', teamPath: '/repo', filters: {} })
   byId('audit-load-more').props.onClick()
   expect(sent.at(-1)).toMatchObject({ type: 'team-audit-more', teamPath: '/repo', cursor: 'cur-1', filters: {} })
+  // Apply resets paging (a fresh first page for the new filters).
+  sent.length = 0
+  byId('audit-apply-filters').props.onClick()
+  rerender()
+  expect(sent.at(-1)).toMatchObject({ type: 'team-audit-open', teamPath: '/repo', filters: {} })
   const footer = textOf(byId('audit-backups'))
   expect(footer).toContain('/h/.agentboard/backups')
   expect(footer).toContain('interval db-1.db (2 KB, check ok)')
@@ -158,7 +171,7 @@ describe('the fix round (findings-bee1aa24)', () => {
   })
 
   test('the destination filter rides the committed request; the footer is server-wide with the check result', () => {
-    const { sent, byId, renderer } = mount(() => {
+    const { sent, byId, renderer, rerender } = mount(() => {
       useTeamAuditStore.getState().begin('/repo', 'r1', 'page')
       useTeamAuditStore.getState().applyPage(pageOf([row('a', { destination: 'github:origin' })]))
     })
@@ -166,6 +179,7 @@ describe('the fix round (findings-bee1aa24)', () => {
     const destination = renderer.root.findAllByProps({ 'aria-label': 'Filter by destination' })[0]!
     act(() => destination.props.onChange({ target: { value: 'github:origin' } }))
     byId('audit-apply-filters').props.onClick()
+    rerender()
     expect(sent.at(-1)).toMatchObject({ type: 'team-audit-open', filters: { destination: 'github:origin' } })
     const footer = textOf(byId('audit-backups'))
     expect(footer).toContain('Server-wide database backups')
@@ -188,5 +202,62 @@ test('a call id arriving while the tab is open re-requests with it (the attentio
   sent.length = 0
   rerender()
   expect(sent).toEqual([])
+  act(() => renderer.unmount())
+})
+
+test('the tab opens exactly once on mount (findings-0f39baed N2)', () => {
+  const { sent, rerender } = mount(() => {
+    useTeamAuditStore.getState().begin('/repo', 'r1', 'page')
+    useTeamAuditStore.getState().applyPage(pageOf([row('a')]))
+  })
+  const opens = sent.filter(message => message.type === 'team-audit-open')
+  expect(opens).toHaveLength(1)
+  rerender()
+  expect(sent.filter(message => message.type === 'team-audit-open')).toHaveLength(1)
+})
+
+test("Apply filters leaves the selection: a changed push or reconnect sends no callId, and the same link re-selects (findings-0f39baed N1)", () => {
+  const selections: Array<string | null> = []
+  const sent: ClientMessage[] = []
+  let renderer!: TestRenderer.ReactTestRenderer
+  let connected = true
+  const sendMessage = (message: ClientMessage) => { sent.push(message) }
+  const element = () => <TeamAuditView teamPath="/repo" view={useTeamAuditStore.getState().views['/repo']!}
+    sendMessage={sendMessage} connected={connected} connectionEpoch={0} onSelectedCall={callId => selections.push(callId)} />
+  act(() => {
+    useTeamAuditStore.getState().open('/repo')
+    useTeamAuditStore.getState().select('/repo', 'obc-new')
+    useTeamAuditStore.getState().begin('/repo', 'r1', 'page')
+    useTeamAuditStore.getState().applyPage(pageOf([
+      row('obc-new', { verdict: 'violation', rule: 'gh-write', destination: 'github:other/repo' }),
+    ]))
+    renderer = TestRenderer.create(element())
+  })
+  const rerender = () => act(() => { renderer.update(element()) })
+  // The mount request carried the call id.
+  expect(sent.filter(message => message.type === 'team-audit-open')).toHaveLength(1)
+  expect(sent[0]).toMatchObject({ callId: 'obc-new' })
+  // Apply: the selection clears and the host is told.
+  const apply = renderer.root.findByProps({ 'data-testid': 'audit-apply-filters' })
+  act(() => apply.props.onClick())
+  rerender()
+  expect(selections).toEqual([null])
+  expect(useTeamAuditStore.getState().views['/repo']!.selected).toBeNull()
+  // A changed push re-requests WITHOUT the call id (mount, Apply, push).
+  act(() => useTeamAuditStore.getState().applyChanged({ type: 'team-audit-changed', teamPath: '/repo', teamId: 't' }))
+  rerender()
+  const opens = sent.filter(message => message.type === 'team-audit-open')
+  expect(opens).toHaveLength(3)
+  expect(opens[1]).not.toHaveProperty('callId')
+  expect(opens[2]).not.toHaveProperty('callId')
+  // A reconnect likewise.
+  connected = false; rerender(); connected = true; rerender()
+  const afterReconnect = sent.filter(message => message.type === 'team-audit-open')
+  expect(afterReconnect.length).toBeGreaterThanOrEqual(3)
+  expect(afterReconnect.at(-1)).not.toHaveProperty('callId')
+  // The link to the same call again re-selects and re-requests with it.
+  act(() => useTeamAuditStore.getState().select('/repo', 'obc-new'))
+  rerender()
+  expect(sent.at(-1)).toMatchObject({ type: 'team-audit-open', callId: 'obc-new' })
   act(() => renderer.unmount())
 })

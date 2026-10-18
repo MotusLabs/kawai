@@ -277,3 +277,67 @@ describe('violation groups against the real store (B2 mutants)', () => {
     expect(groups.get('mcp-call')).toMatchObject({ count: 1 })
   })
 })
+
+describe('UNACKNOWLEDGED_EXISTS conjuncts (findings-0f39baed B2c)', () => {
+  // The ack lands on `obc-acked` (default rule gh-write, destination
+  // github:other/repo) at T1. Each uncovered call differs from it in
+  // exactly ONE conjunct and carries an earlier createdAt at T0, so the
+  // order conjunct is true by time — only the named conjunct can keep it
+  // uncovered. Its id sorts before `obc-acked`, so an id-sort accident
+  // cannot save a dropped conjunct either.
+  const T0 = '2026-01-01T00:00:00.000Z'
+  const T1 = '2026-01-02T00:00:00.000Z'
+  const T2 = '2026-01-03T00:00:00.000Z'
+
+  function conjunctHarness() {
+    const h = harness()
+    h.store.insertCall(h.call({ id: 'obc-acked', createdAt: T1 }))
+    expect(h.service.acknowledge(h.human, { callId: 'obc-acked', commandId: 'cmd-acked' })).toEqual({ ok: true, replayed: false })
+    return h
+  }
+
+  test('team: the same rule and destination in another team stay uncovered', () => {
+    const h = conjunctHarness()
+    h.store.insertCall(h.call({ id: 'obc-aaaa', teamId: other.teamId, sessionId: 'chat-other', createdAt: T0 }))
+    // The ack crosses no team boundary: the other team's group stands.
+    expect(h.service.violationGroups(other.teamId).map(group => group.latestCallId)).toEqual(['obc-aaaa'])
+    expect(h.service.violationGroups(team.teamId)).toEqual([])
+  })
+
+  test('rule: the same destination under another rule stays uncovered', () => {
+    const h = conjunctHarness()
+    h.store.insertCall(h.call({ id: 'obc-aaaa', rule: 'gh-api-write', destination: 'github:other/repo', createdAt: T0 }))
+    const groups = h.service.violationGroups(team.teamId)
+    expect(groups.map(group => group.latestCallId)).toEqual(['obc-aaaa'])
+    expect(groups[0]).toMatchObject({ rule: 'gh-api-write', destination: 'github:other/repo', count: 1 })
+  })
+
+  test('destination: the same rule under another destination stays uncovered', () => {
+    const h = conjunctHarness()
+    h.store.insertCall(h.call({ id: 'obc-aaaa', rule: 'gh-write', destination: 'github:third/repo', createdAt: T0 }))
+    const groups = h.service.violationGroups(team.teamId)
+    expect(groups.map(group => group.latestCallId)).toEqual(['obc-aaaa'])
+    expect(groups[0]).toMatchObject({ rule: 'gh-write', destination: 'github:third/repo', count: 1 })
+  })
+
+  test('order: a violation after the ack, of the acked group, stays uncovered', () => {
+    const h = conjunctHarness()
+    h.store.insertCall(h.call({ id: 'obc-zzzz', rule: 'gh-write', destination: 'github:other/repo', createdAt: T2 }))
+    const groups = h.service.violationGroups(team.teamId)
+    expect(groups.map(group => group.latestCallId)).toEqual(['obc-zzzz'])
+    expect(groups[0]).toMatchObject({ rule: 'gh-write', destination: 'github:other/repo', count: 1 })
+  })
+
+  test("boundary: at the ack's exact (created_at, id) coverage holds; the next id at that createdAt is not covered", () => {
+    const h = harness()
+    h.store.insertCall(h.call({ id: 'obc-acked', createdAt: T1 }))
+    // Same createdAt as the acked call: one id sorting before it, one after.
+    h.store.insertCall(h.call({ id: 'obc-aaaa', rule: 'gh-write', destination: 'github:other/repo', createdAt: T1 }))
+    h.store.insertCall(h.call({ id: 'obc-zzzz', rule: 'gh-write', destination: 'github:other/repo', createdAt: T1 }))
+    expect(h.service.acknowledge(h.human, { callId: 'obc-acked', commandId: 'cmd-acked' })).toEqual({ ok: true, replayed: false })
+    const groups = h.service.violationGroups(team.teamId)
+    // `obc-acked >= obc-aaaa` holds (covered); `obc-acked >= obc-zzzz` does not.
+    expect(groups.map(group => group.latestCallId)).toEqual(['obc-zzzz'])
+    expect(groups[0]).toMatchObject({ count: 1 })
+  })
+})
