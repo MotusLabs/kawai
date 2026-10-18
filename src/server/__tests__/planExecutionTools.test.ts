@@ -80,4 +80,16 @@ describe('the plan note (16.2)', () => {
     expect(prompt).toContain('Kawai checks it against the branch')
     expect(prompt).toContain('Reply to Kawai’s instruction mail is refused')
   })
+
+  test('the execution lines are pinned verbatim (snapshot)', () => {
+    const outbound = { internal: ['example.internal'], modelProviders: [], mcpServers: [], extraModelProviderHosts: [] } as never
+    const prompt = buildTeamPrompt({ outbound, sessionId: 'chat-x', groups: [] })
+    const start = prompt.indexOf('`plan_get` also shows the plan\'s executions')
+    expect(start).toBeGreaterThan(-1)
+    const lines = prompt.slice(start).split('\n').slice(0, 2)
+    expect(lines).toEqual([
+      '`plan_get` also shows the plan\'s executions: each change\'s state (waiting, provisioning, implementing, gating, landing, landed, stopped), its latest round\'s attempt, and where its review stands.',
+      'When a running execution owns a change: only Kawai dispatches its task or hands it to its next stage — your findings on its results still count. Submit results with the commit that landed on the change’s branch (Kawai checks it against the branch and origin). Reply to Kawai’s instruction mail is refused: answer with a result, findings, a journal note, or a message to the responsible group. No tool of yours starts, stops, retries, or approves an execution — only the human does, from the Plans view.',
+    ])
+  })
 })
