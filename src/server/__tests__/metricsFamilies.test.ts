@@ -107,6 +107,34 @@ test('overhead: mail share by sender group, task mail per done task, friction by
   s.db.close()
 })
 
+test('capacity: a provider event spreads the tax to its silent sibling; a model-scoped window does not', () => {
+  const s = new Seed()
+  s.member('chat-glm')
+  // glm's provider-scoped limit stands for three hours; glm-flash records nothing.
+  s.limit('glm', 'chat-glm', 30, 27, true, { provider: 'zai' })
+  const inputs = {
+    ...loadMetricsInputs(s.db, TEAM, END - 14 * DAY, END),
+    providerIds: new Map([['glm', 'zai'], ['glm-flash', 'zai'], ['opus', 'claude'], ['sonnet', 'claude']]),
+  }
+  const obs = capacityObservations(metricsContext(inputs, END - 7 * DAY, END))
+  expect(breakdown(obs, 'limit_tax_hours').glm).toBeCloseTo(3, 6)
+  expect(breakdown(obs, 'limit_tax_hours')['glm-flash']).toBeCloseTo(3, 6)
+  s.db.close()
+
+  const m = new Seed()
+  m.member('chat-opus')
+  // The seven_day_opus window is model-scoped: it stays opus's tax alone.
+  m.limit('opus', 'chat-opus', 30, 27, true, { provider: 'claude', window: 'seven_day_opus' })
+  const scoped = {
+    ...loadMetricsInputs(m.db, TEAM, END - 14 * DAY, END),
+    providerIds: new Map([['opus', 'claude'], ['sonnet', 'claude']]),
+  }
+  const scopedObs = capacityObservations(metricsContext(scoped, END - 7 * DAY, END))
+  expect(breakdown(scopedObs, 'limit_tax_hours').opus).toBeCloseTo(3, 6)
+  expect(breakdown(scopedObs, 'limit_tax_hours').sonnet).toBeUndefined()
+  m.db.close()
+})
+
 test('capacity: a superseding shorter reset, an open park, task-less tokens, and partial tokens', () => {
   const s = new Seed()
   s.member('chat-dev')

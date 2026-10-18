@@ -10,7 +10,7 @@
 // horizon (retention, or the team's first recorded turn). Tokens sum all
 // four counts. Pure.
 import type { ChatTurnUsage } from '../../shared/chat'
-import { coolingMsWithin, coolingTimeline } from '../team/routing/limitEvents'
+import { coolingMsWithin, coolingTimeline, relevantEvents } from '../team/routing/limitEvents'
 import { taskOwner, type MetricsContext } from './metricsContext'
 import { PARK_END_KINDS, type MetricMessageEvent } from './metricsQuery'
 import type { Observation } from './slices'
@@ -46,8 +46,15 @@ function parkObservations(ctx: MetricsContext): Observation[] {
 
 export function capacityObservations(ctx: MetricsContext): Observation[] {
   const out: Observation[] = []
-  for (const [profile, events] of ctx.inputs.limitEvents) {
-    const ms = coolingMsWithin(coolingTimeline(events), ctx.fromMs, ctx.toMs)
+  // The timeline follows the routing rule (providers-and-workers D8): each
+  // profile's relevant events are its own plus its provider's
+  // provider-scoped ones, so a provider cooldown shows in the tax of every
+  // profile it covers — a sibling with no events of its own included.
+  const pool = [...ctx.inputs.limitEvents.values()].flat()
+  const profiles = new Set([...ctx.inputs.limitEvents.keys(), ...ctx.inputs.providerIds.keys()])
+  for (const profile of profiles) {
+    const merged = relevantEvents(pool, profile, ctx.inputs.providerIds.get(profile) ?? profile)
+    const ms = coolingMsWithin(coolingTimeline(merged), ctx.fromMs, ctx.toMs)
     if (ms > 0) out.push({ metric: 'limit_tax_hours', value: ms / HOUR_MS, key: profile })
   }
   out.push(...parkObservations(ctx))

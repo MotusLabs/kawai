@@ -1050,7 +1050,10 @@ export class ChatSessionManager {
     this.turnEnds = new ChatTurnEndStore(options.db.db)
     this.provenance = new ProvenanceRecorder(options.db.db)
     this.turnUsage = new ChatTurnUsageStore(options.db.db)
-    this.metrics = new MetricsReader(options.db.db)
+    this.metrics = new MetricsReader(options.db.db, Date.now,
+      // The provider cooldown (providers-and-workers D8) resolves in the
+      // team's own catalog, so a provider event shows in every profile's tax.
+      (profileId, teamId) => providerOf(profileId, this.catalogCtx(teamId)))
     this.reports = new ProcessReportService(options.db.db, this.metrics, {
       onCommit: teamId => this.options.onProcessReportChange?.(teamId),
     })
