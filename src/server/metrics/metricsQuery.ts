@@ -145,6 +145,7 @@ const mapLimit = (row: Record<string, unknown>): LimitEvent => ({
   id: String(row.id), profileId: String(row.profile_id), sessionId: String(row.session_id), groupId: text(row.group_id),
   at: String(row.at), kind: String(row.kind), final: Number(row.final) === 1, status: row.status === null ? null : Number(row.status),
   message: text(row.message), resetsAt: text(row.resets_at),
+  providerId: text(row.provider_id), window: text(row.limit_window),
 })
 
 /** Park-episode event kinds: `parked` opens one, the rest close it. */

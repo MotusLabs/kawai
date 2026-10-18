@@ -18,7 +18,8 @@
 // migration 7 (`process-reports`) adds the process report tables;
 // migration 8 (`plan-execution`) the seven execution tables and
 // `team_messages.allowed_profiles`; migration 9 (`outbound-audit`) the three
-// outbound audit tables below.
+// outbound audit tables; migration 10 (`provider-limit-window`) adds the
+// nullable `provider_id` and `limit_window` to `profile_limit_events`.
 import { expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { initDatabase } from '../db'
@@ -282,7 +283,11 @@ test('a fresh database opened by this build has the same shape plus each migrati
   expect(Object.keys(added).filter(table => table in expected.tables)).toEqual([])
   const messages = expected.tables.team_messages!
   const withProfiles = { ...messages, columns: [...messages.columns, optional('allowed_profiles')] }
-  expect(schemaShape(session.db)).toEqual({ tables: { ...expected.tables, ...added, team_messages: withProfiles } })
+  // Migration 10's delta: limit events record their provider and window
+  // (providers-and-workers D7), both nullable, after the baseline columns.
+  const limitEvents = expected.tables.profile_limit_events!
+  const withLimitContext = { ...limitEvents, columns: [...limitEvents.columns, optional('provider_id'), optional('limit_window')] }
+  expect(schemaShape(session.db)).toEqual({ tables: { ...expected.tables, ...added, team_messages: withProfiles, profile_limit_events: withLimitContext } })
   const extra = session.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'").get()
   expect(extra).toEqual({ name: 'schema_migrations' })
   session.close()

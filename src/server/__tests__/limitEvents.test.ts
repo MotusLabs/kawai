@@ -10,7 +10,7 @@ import {
 
 const T0 = Date.parse('2026-10-12T12:00:00.000Z')
 const iso = (ms: number) => new Date(ms).toISOString()
-const base = { profileId: 'glm', sessionId: 's1', groupId: 'devs', kind: 'rate_limit', status: 429, message: 'quota', resetsAt: null }
+const base = { profileId: 'glm', sessionId: 's1', groupId: 'devs', kind: 'rate_limit', status: 429, message: 'quota', resetsAt: null, providerId: null, window: null }
 
 describe('LimitEventStore', () => {
   let dir: string

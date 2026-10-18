@@ -72,6 +72,7 @@ import { probeSdkAvailability } from './sdkAvailability'
 import { AccountNoticeStore, credentialsPathFor } from './accountNotices'
 import { UsageLimitStore } from './usageLimits'
 import { withTextReset } from './limitSignals'
+import { providerOf } from './profileCatalog'
 import { fetchZaiUsage } from './zaiUsage'
 import { readWorkerTranscript } from './chatWorkerTranscript'
 import { isTaskOutputFile, readTaskOutputTail } from './taskOutputFile'
@@ -2187,14 +2188,19 @@ export class ChatSessionManager {
         // session's profile, with its current group for context. A gateway
         // that writes its reset into the error text without a zone is read in
         // the profile's `limitResetTimeZone`.
-        onLimitEvent: (signal) =>
+        onLimitEvent: (signal) => {
+          const profileId = record.claudeProfileId ?? 'default'
+          const projectPath = this.records.get(record.sessionId)?.projectPath ?? record.projectPath
           this.teamMail.limits.record({
-            ...withTextReset(signal, profileLimitResetTimeZone(
-              record.claudeProfileId, this.catalogCtx(this.records.get(record.sessionId)?.projectPath ?? record.projectPath))),
-            profileId: record.claudeProfileId ?? 'default',
+            ...withTextReset(signal, profileLimitResetTimeZone(profileId, this.catalogCtx(projectPath))),
+            profileId,
             sessionId: record.sessionId,
             groupId: this.records.get(record.sessionId)?.groupId ?? null,
-          }),
+            // The provider owning the profile at its project path (D7/D10).
+            providerId: providerOf(profileId, this.catalogCtx(projectPath)),
+            window: signal.window,
+          })
+        },
       })
       if (
         !this.records.has(record.sessionId) ||

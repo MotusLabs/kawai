@@ -84,7 +84,7 @@ function deliver(sessionId = 'dev', extra: Partial<Parameters<MailboxStore['enqu
 async function hitLimit(resetInMs: number | null, sessionId = 'dev', profileId = 'glm') {
   limits.record({
     profileId, sessionId, groupId: 'devs', kind: 'rate_limit', final: true, status: 429, message: 'API Error: 429 quota',
-    resetsAt: resetInMs === null ? null : iso(now + resetInMs),
+    resetsAt: resetInMs === null ? null : iso(now + resetInMs), providerId: null, window: null,
   })
   await outcomes.turnEnded(sessionId, true)
 }

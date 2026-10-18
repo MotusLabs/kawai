@@ -64,7 +64,7 @@ function makeRouter() {
 
 const finalEvent = (profileId: string, resetsAt: string | null): LimitEvent => ({
   id: crypto.randomUUID(), profileId, sessionId: 's', groupId: 'devs', at: new Date(now).toISOString(), kind: 'rate_limit',
-  final: true, status: 429, message: 'quota', resetsAt,
+  final: true, status: 429, message: 'quota', resetsAt, providerId: null, window: null,
 })
 
 beforeEach(() => {

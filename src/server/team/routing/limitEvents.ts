@@ -49,6 +49,8 @@ interface Row {
   status: number | null
   message: string | null
   resets_at: string | null
+  provider_id: string | null
+  limit_window: string | null
 }
 
 const fromRow = (row: Row): LimitEvent => ({
@@ -62,11 +64,26 @@ const fromRow = (row: Row): LimitEvent => ({
   status: row.status,
   message: row.message,
   resetsAt: row.resets_at,
+  providerId: row.provider_id,
+  window: row.limit_window,
 })
 
 /** Create the table; part of the frozen baseline step (execution-safety-recovery D13): the baseline step calls this, never the store. */
 export function ensureLimitEventSchema(db: Database): void {
   db.exec(CREATE_TABLE_SQL)
+}
+
+/**
+ * Migration 10 `provider-limit-window` (providers-and-workers D7): the two
+ * nullable columns beside the frozen baseline table. Rows written before it
+ * read with `providerId: null` — their profile alone cools. The guard keeps
+ * re-application (schemaDb's versionless replay) idempotent; a real startup
+ * runs it once under its version row.
+ */
+export function migrateProviderLimitWindow(db: Database): void {
+  const columns = new Set((db.prepare("SELECT name FROM pragma_table_info('profile_limit_events')").all() as Array<{ name: string }>).map(row => row.name))
+  if (!columns.has('provider_id')) db.exec('ALTER TABLE profile_limit_events ADD COLUMN provider_id TEXT')
+  if (!columns.has('limit_window')) db.exec('ALTER TABLE profile_limit_events ADD COLUMN limit_window TEXT')
 }
 
 export class LimitEventStore {
@@ -94,13 +111,15 @@ export class LimitEventStore {
       status: input.status,
       message: input.message,
       resetsAt: input.resetsAt,
+      providerId: input.providerId,
+      window: input.window,
     }
     this.prune()
     this.db.prepare(`INSERT INTO profile_limit_events
-      (id, profile_id, session_id, group_id, at, kind, final, status, message, resets_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      (id, profile_id, session_id, group_id, at, kind, final, status, message, resets_at, provider_id, limit_window)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       event.id, event.profileId, event.sessionId, event.groupId, event.at, event.kind,
-      event.final ? 1 : 0, event.status, event.message, event.resetsAt)
+      event.final ? 1 : 0, event.status, event.message, event.resetsAt, event.providerId, event.window)
     for (const listener of this.listeners) listener(event)
     return event
   }

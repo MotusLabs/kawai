@@ -3096,19 +3096,46 @@ describe('ChatSessionDriver limit events', () => {
     fake.push(frame({ type: 'system', subtype: 'api_retry', attempt: 2, max_retries: 10, retry_delay_ms: 500, error_status: 504, error: 'server_error' }))
     fake.push(result('success'))
     await flush()
-    expect(limits).toEqual([{ kind: 'rate_limit', final: false, status: 429, message: null, resetsAt: null }])
+    expect(limits).toEqual([{ kind: 'rate_limit', final: false, status: 429, message: null, resetsAt: null, window: null }])
   })
 
   test('a failed assistant message is the final event, with the reset a rejected rate_limit_event announced', async () => {
     const { fake, limits } = limitHarness()
     const reset = Math.floor(Date.now() / 1000) + 2400
-    fake.push(frame({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: reset } }))
+    fake.push(frame({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: reset, rateLimitType: 'seven_day_opus' } }))
     fake.push(failedAssistant('rate_limit', 'API Error: 429 {"error":"quota"}'))
     fake.push(result('success'))
     await flush()
     expect(limits).toEqual([{
       kind: 'rate_limit', final: true, status: 429, message: 'API Error: 429 {"error":"quota"}',
-      resetsAt: new Date(reset * 1000).toISOString(),
+      resetsAt: new Date(reset * 1000).toISOString(), window: 'seven_day_opus',
+    }])
+  })
+
+  test('the window follows the latest reset-bearing rejected event, nameless or not', async () => {
+    const { fake, limits } = limitHarness()
+    const first = Math.floor(Date.now() / 1000) + 2400
+    const second = first + 60
+    fake.push(frame({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: first, rateLimitType: 'seven_day_opus' } }))
+    fake.push(frame({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: second } }))
+    fake.push(failedAssistant('rate_limit', 'API Error: 429 quota'))
+    fake.push(result('success'))
+    await flush()
+    expect(limits).toEqual([{
+      kind: 'rate_limit', final: true, status: 429, message: 'API Error: 429 quota',
+      resetsAt: new Date(second * 1000).toISOString(), window: null,
+    }])
+  })
+
+  test('the window drops together with its reset once past', async () => {
+    const { fake, limits } = limitHarness()
+    const stale = Math.floor(Date.now() / 1000) - 10
+    fake.push(frame({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: stale, rateLimitType: 'five_hour' } }))
+    fake.push(failedAssistant('rate_limit', 'API Error: 429 quota'))
+    fake.push(result('success'))
+    await flush()
+    expect(limits).toEqual([{
+      kind: 'rate_limit', final: true, status: 429, message: 'API Error: 429 quota', resetsAt: null, window: null,
     }])
   })
 

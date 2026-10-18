@@ -3056,6 +3056,35 @@ describe('ChatSessionManager usage', () => {
     expect(manager.limitEvents.forProfile('default')).toEqual([])
   })
 
+  test('the final event records the provider and the rejected report window', async () => {
+    fs.mkdirSync(path.join(tempDir, '.kawai'), { recursive: true })
+    fs.writeFileSync(path.join(tempDir, '.kawai', 'providers.json'), JSON.stringify({
+      zai: {
+        label: 'Z.AI',
+        models: { glm: { label: 'GLM', model: 'opus' }, 'glm-flash': { label: 'GLM Flash', model: 'sonnet' } },
+      },
+    }))
+    const { manager, handles } = await createHarness(db)
+    const created = manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'glm' })
+    if (!created.ok) throw new Error('create failed')
+    await manager.send(created.session.id, 'hello')
+    const reset = Math.floor(Date.now() / 1000) + 2400
+    handles[0]!.push({
+      type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: reset, rateLimitType: 'seven_day_opus' },
+    } as unknown as SDKMessage)
+    handles[0]!.push({
+      type: 'assistant', error: 'rate_limit', parent_tool_use_id: null, session_id: 'sdk-1', uuid: 'a-uuid',
+      message: { id: 'msg_err2', role: 'assistant', content: [{ type: 'text', text: 'API Error: 429 quota' }] },
+    } as unknown as SDKMessage)
+    await flush()
+    expect(manager.limitEvents.forProfile('glm')).toEqual([{
+      id: expect.any(String), profileId: 'glm', sessionId: created.session.id, groupId: null, at: expect.any(String),
+      kind: 'rate_limit', final: true, status: 429, message: 'API Error: 429 quota',
+      resetsAt: new Date(reset * 1000).toISOString(), providerId: 'zai', window: 'seven_day_opus',
+    }])
+    manager.shutdown()
+  })
+
   test("a zone-less reset in the error text is read in the profile's limitResetTimeZone", async () => {
     process.env.ANTHROPIC_AUTH_TOKEN = 'test-token'
     const project = path.join(tempDir, 'proj')
