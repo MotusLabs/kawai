@@ -121,6 +121,20 @@ export async function ghPrMerge(repo: string, prNumber: number, method: MergeMet
   return result.ok ? { ok: true, data: null } : result
 }
 
+// --- Ref writes (integration-candidates D4, D5) ---
+
+/** `POST repos/{repo}/git/refs`: the branch at `sha`; a 422 means the ref already exists. */
+export async function ghCreateRef(repo: string, branch: string, sha: string, options: GhCommandOptions = {}): Promise<GithubOutcome<null>> {
+  const result = await call(['api', '-X', 'POST', `repos/${repo}/git/refs`, '-f', `ref=refs/heads/${branch}`, '-f', `sha=${sha}`], options)
+  return result.ok ? { ok: true, data: null } : result
+}
+
+/** `PATCH repos/{repo}/git/refs/heads/{branch}` with force=false: a 422 means the branch is not an ancestor of `sha`. */
+export async function ghFastForwardRef(repo: string, branch: string, sha: string, options: GhCommandOptions = {}): Promise<GithubOutcome<null>> {
+  const result = await call(['api', '-X', 'PATCH', `repos/${repo}/git/refs/heads/${branch}`, '-f', `sha=${sha}`, '-F', 'force=false'], options)
+  return result.ok ? { ok: true, data: null } : result
+}
+
 // --- CI reads (D10) ---
 
 /** `gh auth status`: exit 0 when the CLI is logged in (the probe's auth check). */

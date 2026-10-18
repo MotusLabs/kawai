@@ -65,9 +65,10 @@ export type StopReason =
   | 'ci-missing'
   | 'ci-timeout'
   | 'pr-closed'
+  | 'integration-rewritten'
 export const STOP_REASONS: readonly StopReason[] = [
   'round-limit', 'name-taken', 'instruction-failed', 'task-closed', 'review-unavailable',
-  'effect-failed', 'effect-unknown', 'ci-missing', 'ci-timeout', 'pr-closed',
+  'effect-failed', 'effect-unknown', 'ci-missing', 'ci-timeout', 'pr-closed', 'integration-rewritten',
 ]
 
 /** What a stop names: every field optional, each reason filling its own. */
@@ -93,6 +94,8 @@ export type RoundOutcome = 'pass' | 'fail' | 'superseded'
 
 /** Effect kinds (X3, append-only; a mechanism may add execution-level kinds). */
 export type EffectKind = 'provision' | 'push' | 'open-pr' | 'rerun' | 'update-branch' | 'merge' | 'remove-worktree'
+  // integration-candidates (D4, D5): the execution-level branch creation, and the non-forced landing.
+  | 'create-integration' | 'fast-forward'
 export type EffectState = 'pending' | 'running' | 'done' | 'failed' | 'unknown' | 'cancelled'
 
 /**

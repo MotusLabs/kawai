@@ -4,13 +4,14 @@
 // change as effect-unknown (D12). It never wakes the executor: the runtime
 // wakes the running teams once its wakes are installed.
 import { runGit } from '../../git/gitCommand'
-import { lsRemoteHead } from '../landing/gitRemote'
 import { ghPrList, ghPrView, ghRunAttempt } from '../landing/github'
 import type { GhCommandOptions } from '../landing/ghCommand'
 import { inspectUnknownEffects, type InspectorReads } from './effectInspectors'
 import type { ExecutionStore } from './executionStore'
+import { gitFetch, isAncestor, lsRemoteHead } from '../landing/gitRemote'
+import { applyEffectOutcome, stopWaitingChanges, type OutcomeDeps } from './executorOutcomes'
 
-export async function recoverUnknownEffects(deps: { store: ExecutionStore; ghOptions?: GhCommandOptions; now?: () => Date }): Promise<void> {
+export async function recoverUnknownEffects(deps: { store: ExecutionStore; outcomes?: OutcomeDeps; ghOptions?: GhCommandOptions; now?: () => Date }): Promise<void> {
   const unknown = deps.store.markRunningEffectsUnknown()
   const teams = new Set(unknown.map(effect => deps.store.execution(effect.executionId)?.teamId ?? ''))
   for (const teamId of teams) {
@@ -39,6 +40,12 @@ export async function recoverUnknownEffects(deps: { store: ExecutionStore; ghOpt
         const view = await ghPrView(repo, pr, deps.ghOptions)
         return view.ok ? view.data : { number: pr, url: '', state: 'OPEN', headRefOid: '', mergeCommit: null }
       },
+      contains: async (cwd, ref, ancestor, descendant) => {
+        if (!(await gitFetch(cwd, 'origin', ref)).ok) throw new Error(`the fetch of ${ref} failed`)
+        const result = await isAncestor(cwd, ancestor, descendant)
+        if (!result.ok) throw new Error(`the ancestry of ${ancestor} could not be read`)
+        return result.ancestor
+      },
       runAttempt: async (repo, runId) => {
         const attempt = await ghRunAttempt(repo, runId, deps.ghOptions)
         return attempt.ok ? attempt.data : 1
@@ -47,8 +54,16 @@ export async function recoverUnknownEffects(deps: { store: ExecutionStore; ghOpt
     await inspectUnknownEffects({
       store: deps.store, reads,
       ...(deps.now ? { now: deps.now } : {}),
+      // Execution-level effects (X3, integration-candidates D4): a done one is
+      // recorded by its mechanism; a stopped or exhausted one stops every
+      // change still waiting on it.
+      onInspected: (effect, verdict) => {
+        if (effect.change !== null) return
+        if (verdict.found === 'done' && deps.outcomes) applyEffectOutcome(deps.outcomes, { ...effect, state: 'done', outcome: verdict.outcome })
+        if (verdict.found === 'stop') stopWaitingChanges(deps.store, effect.executionId, effect.kind, effect.id, verdict.detail.message ?? `stopped as ${verdict.reason}`)
+      },
       onUnknownSettled: effect => {
-        if (effect.change === null) return
+        if (effect.change === null) return stopWaitingChanges(deps.store, effect.executionId, effect.kind, effect.id, effect.error ?? 'the outcome could not be determined')
         const row = deps.store.change(effect.executionId, effect.change)
         // A stopped execution's merge is settled by its landing-outcome stage.
         if (row === null || row.state === 'stopped' || row.state === 'cancelled' || row.state === 'landed') return

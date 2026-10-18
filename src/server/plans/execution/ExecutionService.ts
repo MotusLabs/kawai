@@ -120,6 +120,11 @@ export class ExecutionService {
         maxParallel: settings.maxParallelChanges, mergeMethod: settings.mergeMethod,
         changes: ctx.changes.map(change => ({ change, landed: gather.landed.has(change) })),
       })
+      // The mechanism's execution-level effects commit with the execution (integration-candidates D4).
+      const mechanism = (this.deps.mechanisms ?? DIRECT_MECHANISMS).get(ctx.landingMode)
+      for (const effect of mechanism?.startEffects?.({ execution, probe: gather.probe, main: caller.team.groupsRoot }) ?? []) {
+        this.deps.store.insertEffect({ executionId: execution.id, change: null, roundId: null, ...effect })
+      }
       return { executionId: execution.id }
     })
     if (!outcome.ok) return outcome
@@ -274,6 +279,10 @@ export class ExecutionService {
         if (row.stopDetail?.stage === undefined) to.step = 'redispatch'
       }
       if (row.stopReason === 'name-taken') to.state = 'provisioning'
+      // A change an execution-level effect stopped while it waited (integration-candidates D4)
+      // waits again, and the planner issues the effect anew; integration-rewritten resumes at
+      // gating, where its passed round re-enters landing and the rewritten check runs again (D6).
+      if (row.stopDetail?.resumeState === 'waiting') to.state = 'waiting'
       const moved = this.deps.store.transition(input.executionId, input.change, row, to)
       if (moved === null) throw new PlanRefusal('state', 'The change moved while the retry was open; reload and retry again.')
       const round = this.deps.store.rounds(input.executionId, input.change).at(-1) ?? null

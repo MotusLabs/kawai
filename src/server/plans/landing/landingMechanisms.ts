@@ -51,6 +51,12 @@ export interface LandingMechanism {
   landOutcome(deps: LandingDeps, effect: EffectRow, adapters: LandingAdapters): Promise<void>
   /** The adapter for an effect kind the mechanism owns; undefined for the rest. */
   effectAdapter(kind: EffectKind, adapters: LandingAdapters, ghOptions?: GhCommandOptions): EffectAdapter | undefined
+  /** Execution-level effects (X3) Start inserts in its transaction: integration's create-integration (D4). */
+  startEffects?(input: { execution: ExecutionRow; probe: ProbeResult; main: string }): Array<{ kind: EffectKind; effectKey: string; command: Record<string, unknown> }>
+  /** A done execution-level effect's record (integration's branch creation). */
+  effectDone?(effect: EffectRow): void
+  /** A failed round's fix step begins (D7: integration fails the round's candidate). */
+  roundFailed?(round: RoundRow): void
 }
 
 export type LandingMechanisms = ReadonlyMap<string, LandingMechanism>

@@ -28,7 +28,7 @@ Implement after `plan-execution` has landed on master, together with what it bui
   - an integration plan starts, recording the integration branch as `base_branch` and the default branch as the target;
   - `landing-mode-supported` passes;
   - `changes-on-base` compares with the integration head, or with the default head while the branch is missing.
-- [ ] 3.3 Implement the `create-integration` effect and its inspector (D4, D6). Verify with tests:
+- [x] 3.3 Implement the `create-integration` effect and its inspector (D4, D6). Verify with tests:
   - the first execution creates the branch at the default head before any `provision` effect runs;
   - a later execution reuses the branch at its head;
   - a creation again keeps the record and updates its creation fields;
@@ -36,7 +36,7 @@ Implement after `plan-execution` has landed on master, together with what it bui
   - three transient failures stop as `effect-failed`;
   - the first Retry creates the branch, and the others find it;
   - restart inspection follows the D6 table row.
-- [ ] 3.4 Append `promotion-idle` and `landings-on-base` to `START_PRECONDITIONS` as pre-reads (D8). Verify with Start tests:
+- [x] 3.4 Append `promotion-idle` and `landings-on-base` to `START_PRECONDITIONS` as pre-reads (D8). Verify with Start tests:
   - a running promotion refuses, naming it and its step, and a finished one passes;
   - switching to `direct` before promotion refuses, naming the changes and the integration branch;
   - the same switch after promotion passes;
@@ -44,22 +44,22 @@ Implement after `plan-execution` has landed on master, together with what it bui
 
 ## 4. Increments
 
-- [ ] 4.1 Implement the integration `nextLandingStep`: direct's steps 1 to 3 reused unchanged, then the candidate insert (D5). Verify with tests:
+- [x] 4.1 Implement the integration `land` (renamed from `nextLandingStep`, design D1): direct's steps 1 to 3 reused unchanged, then the candidate insert (D5). Verify with tests:
   - an up-to-date change's candidate is the round's commit, already `passed`;
   - a change behind the integration head gets `update-branch` and a carried round, and its candidate stays `verifying` until the carried CI passes;
   - outside commits are recorded only when the baseline differs from the reference, and back-to-back landings flag nothing.
-- [ ] 4.2 Implement the `fast-forward` effect and the landing transaction (D5). Verify with tests:
+- [x] 4.2 Implement the `fast-forward` effect and the landing transaction (D5). Verify with tests:
   - the integration head becomes C itself;
   - the landing fact has mechanism `integration-branch`, `head_sha = merge_sha = C`, the re-read `base_sha`, `tree_verified = 1`, and no `post_ci_json`;
   - the task is done with Kawai's acceptance, and dependents become schedulable;
   - the plan completes on the last landing and shows as not yet promoted.
-- [ ] 4.3 Implement the moved and rewritten rules and the `fast-forward` inspector (D6). Verify with tests:
+- [x] 4.3 Implement the moved and rewritten rules and the `fast-forward` inspector (D6). Verify with tests:
   - a branch moved by hand supersedes the candidate, returns the change to the up-to-date step keeping the slot, and flags the owner's commit on the next candidate;
   - a refused fast-forward (422) is handled the same way;
   - a rewritten branch stops the change as `integration-rewritten`, naming the head and the missing commit, and Retry after a restore lands a new candidate;
   - a restart after the fast-forward records the landing without moving the branch again, and a restart before it runs the fast-forward again.
-- [ ] 4.4 Implement failed candidates (D7). Verify with the R15 test (`b` fails once merged with `a`; the branch keeps `a`'s candidate; `b` gets a fix attempt naming the checks) and the R16 test (`a` lands first; `b`'s candidate builds on it with its own CI; `a`'s evidence never counts for `b`).
-- [ ] 4.5 Append `integration-rewritten` to the stop reasons, with its Retry rule (check again), and document integration landing in an AGENTS.md bullet. That bullet is the docs for groups 3 and 4. Verify with a Retry test and by reading the bullet against D2–D8.
+- [x] 4.4 Implement failed candidates (D7). Verify with the R15 test (`b` fails once merged with `a`; the branch keeps `a`'s candidate; `b` gets a fix attempt naming the checks) and the R16 test (`a` lands first; `b`'s candidate builds on it with its own CI; `a`'s evidence never counts for `b`).
+- [x] 4.5 Append `integration-rewritten` to the stop reasons, with its Retry rule (check again), and document integration landing in an AGENTS.md bullet. That bullet is the docs for groups 3 and 4. Verify with a Retry test and by reading the bullet against D2–D8.
 
 ## 5. Promote and Cancel
 

@@ -69,6 +69,11 @@ const adapters = (): InspectorReads => ({
     if (result === undefined) throw new Error('pr view failed')
     return result
   },
+  contains: async (_cwd, _ref, ancestor, descendant) => {
+    const result = (reads.contains as Record<string, boolean> | undefined)?.[`${ancestor}..${descendant}`]
+    if (result === undefined) throw new Error('ancestry read failed')
+    return result
+  },
   runAttempt: async (repo, runId) => {
     const result = (reads.runAttempt as Record<string, number> | undefined)?.[String(runId)]
     if (result === undefined) throw new Error('run view failed')
