@@ -30,7 +30,7 @@ Each chat agent SHALL have a tool to send a message to a group of its team or to
 - **THEN** the tool returns an error and nothing is queued
 
 ### Requirement: Messages carry sender context
-Every message SHALL record its sender — a chat session with its group and its project directory as `origin_path`, or the human — plus its priority, its tags, its thread, and its creation time. Sender fields SHALL be set by the system and SHALL NOT be settable by the sender.
+Every message SHALL record its sender — a chat session with its group and its project directory as `origin_path`, the human, or Kawai itself for plan-execution mail — plus its priority, its tags, its thread, and its creation time. Sender fields SHALL be set by the system and SHALL NOT be settable by the sender. Kawai's mail SHALL have no sender session, and the team's main checkout as its origin.
 
 #### Scenario: Worktree sender path recorded
 - **WHEN** an agent running in a linked worktree sends a message
@@ -43,6 +43,10 @@ Every message SHALL record its sender — a chat session with its group and its 
 #### Scenario: Human sender recorded
 - **WHEN** the human sends a message from the composer
 - **THEN** the message records the human as its sender, with no chat session, and delivered rows show it the same way agent senders are shown
+
+#### Scenario: Kawai sender recorded
+- **WHEN** Kawai dispatches an execution instruction
+- **THEN** the message records Kawai as its sender, with no chat session and the main checkout as its origin, and delivered rows show it as "Kawai"
 
 ### Requirement: Normal messages never interrupt
 A message that is not urgent SHALL be delivered only when the recipient is idle: its agent has no turn in flight, no pending approval or question, and no running background worker. It SHALL be delivered as a new turn and SHALL NOT be added to an in-flight turn.
@@ -274,3 +278,14 @@ The human SHALL be able to send a message to a group of the team or to one of it
 #### Scenario: Invalid recipient refused
 - **WHEN** the human sends to a session of another team or an unknown group
 - **THEN** the composer shows an error and nothing is queued
+
+### Requirement: Replies to Kawai's mail are refused with guidance
+A reply to a message whose sender is Kawai SHALL be refused with nothing queued, for agents and for the human. The refusal SHALL say how to answer instead: `task_submit_result` for a result, `task_submit_findings` for a verdict, `task_note` for progress, or `send_message` to the responsible group or session.
+
+#### Scenario: A dev replies to Kawai
+- **WHEN** a dev calls `reply` on Kawai's fix instruction
+- **THEN** the tool returns the guidance and nothing is queued
+
+#### Scenario: The human replies to Kawai
+- **WHEN** the human replies to Kawai's instruction in the Messages view
+- **THEN** the reply is refused inline with the guidance, and nothing is queued
