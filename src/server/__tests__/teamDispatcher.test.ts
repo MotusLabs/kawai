@@ -407,6 +407,25 @@ test('afterPass reports each direct-mail reason from the recipient view', async 
   expect(outcomes.at(-1)!.waiting.has(busy.id)).toBe(true)
 })
 
+test('a recipient cooled by its provider reports the provider in the constraint detail (4.6)', async () => {
+  recipients = [
+    { sessionId: 'flash', teamId: 'team', groupId: 'devs', idle: true, pendingRequest: false, available: true,
+      cooldownUntil: new Date(2_000).toISOString(), cooldownProvider: 'zai' },
+  ]
+  const outcomes: PassOutcome[] = []
+  dispatcher.close()
+  dispatcher = new MailDispatcher(store, {
+    recipients: () => recipients, prepare: async () => {}, interrupt: async () => {},
+    deliver: () => { throw new Error('no delivery') }, watchReceipt: () => {},
+    afterPass: outcome => outcomes.push(outcome),
+    now: () => 1_000,
+  })
+  const cooling = send({ toKind: 'session', toId: 'flash' })
+  await dispatch()
+  expect(outcomes.at(-1)!.reasons.get(cooling.id))
+    .toEqual([{ kind: 'profile-cooling', retryAt: new Date(2_000).toISOString(), detail: 'zai' }])
+})
+
 test('an awaiting-request row reports its pending card and clears when delivered', async () => {
   recipients[0]!.pendingRequest = true
   const outcomes: PassOutcome[] = []

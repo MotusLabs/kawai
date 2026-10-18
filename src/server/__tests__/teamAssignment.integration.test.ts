@@ -172,3 +172,44 @@ test('human dispatch reaches one idle member idempotently, and worktree assignme
     fs.rmSync(root, { recursive: true, force: true })
   }
 }, 60_000)
+
+// B1(c) (providers-and-workers 4.4, findings-7f4df8a6): the spawn preview
+// through the real seam — sessionMailbox's wired effective cooldown with the
+// real store and providerOf — so a provider-scoped limit on the sibling glm
+// cools the previewed glm-flash and the first spawn profile is haiku.
+test('the spawn preview cools a sibling provider model through the real seam', async () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-preview-provider-')))
+  const repo = path.join(root, 'repo')
+  git(['init', '-q', repo])
+  git(['-c', 'user.email=t@e', '-c', 'user.name=T', 'commit', '-q', '--allow-empty', '-m', 'init'], repo)
+  const priorConfig = process.env.CLAUDE_CONFIG_DIR
+  process.env.CLAUDE_CONFIG_DIR = path.join(root, 'claude')
+  fs.mkdirSync(path.join(repo, '.kawai/groups'), { recursive: true })
+  fs.writeFileSync(path.join(repo, '.kawai/groups/routed.md'), '---\nprofiles: [glm-flash, haiku]\n---\nRoute work')
+  const db = initDatabase({ path: path.join(root, 'sessions.db') })
+  const manager = new ChatSessionManager({
+    db, registry: new SessionRegistry(), authCheck: () => true, profileCatalogHome: root,
+    onEvent: () => {},
+    queryFactory: fixtureQueryFactory,
+  })
+  try {
+    const team = await resolveTeam(repo)
+    const human = { kind: 'human' as const, team }
+    // glm's provider-scoped limit cools zai for an hour: glm-flash is out.
+    const resetsAt = new Date(Date.now() + 3_600_000).toISOString()
+    manager.limitEvents.record({
+      profileId: 'glm', sessionId: 'preview-probe', groupId: 'routed', kind: 'rate_limit', final: true,
+      status: 429, message: 'quota', resetsAt, providerId: 'zai', window: null,
+    })
+    const preview = await manager.assignments.preview(human, { target: { kind: 'group', id: 'routed' } })
+    expect(preview.profile).toBe('haiku')
+    // The spawn slot follows the same pick (blocked here only by the missing task worktree).
+    expect(preview.spawn.profile).toBe('haiku')
+  } finally {
+    manager.shutdown()
+    db.close()
+    if (priorConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = priorConfig
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+}, 30_000)

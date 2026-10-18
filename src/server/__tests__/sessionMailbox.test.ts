@@ -11,6 +11,7 @@ import type { ChatSessionDriver } from '../chat/ChatSessionDriver'
 import { SessionMailbox } from '../team/sessionMailbox'
 import { SessionTeams } from '../team/sessionTeams'
 import { messageEnvelope, formatEnvelope } from '../team/envelope'
+import { mailboxHandlers } from '../team/mailboxTools'
 
 let dir: string
 let db: Database
@@ -39,6 +40,37 @@ beforeEach(async () => {
 })
 afterEach(() => { runtime.close(); db.close(); fs.rmSync(dir, { recursive: true, force: true }) })
 const mail = () => runtime.mailbox.store.enqueue({ teamId: dir, toKind: 'group', toId: 'devs', fromSession: 'lead', fromGroup: 'leads', originPath: dir, body: 'Work' })
+
+// B1(a) (providers-and-workers 4.4/4.6, findings-7f4df8a6): through the real
+// wiring — the store, providerOf over the shipped catalog, and the wired
+// refusal — glm's provider-scoped limit cools the glm-flash recipient row
+// (cooldownProvider 'zai') and urgent direct mail names profile and provider.
+test("a sibling's provider limit cools the recipient row and the urgent refusal names it", async () => {
+  records.set('lead', { sessionId: 'lead', groupId: 'leads', projectPath: dir, status: 'waiting' } as ChatSessionRecord)
+  records.set('flash', { sessionId: 'flash', groupId: 'devs', projectPath: dir, claudeProfileId: 'glm-flash', status: 'waiting' } as ChatSessionRecord)
+  await teams.track('lead', dir)
+  await teams.track('flash', dir)
+  const untilMs = Date.now() + 3_600_000
+  const until = new Date(untilMs).toISOString()
+  runtime.limits.record({
+    profileId: 'glm', sessionId: 'flash', groupId: 'devs', kind: 'rate_limit', final: true, status: 429,
+    message: 'quota', resetsAt: until, providerId: 'zai', window: null,
+  })
+  // Urgent direct mail to the glm-flash session is refused with the full string.
+  const error = await mailboxHandlers(runtime.mailbox, 'lead').send_message({ to_kind: 'session', to_id: 'flash', body: 'Now!', urgent: true })
+    .then(() => null, e => e as Error)
+  const time = new Date(until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  expect(error?.message).toBe(`Session flash runs on profile glm-flash of provider zai, which is cooling down after a provider limit until ${time} (${until}). ` +
+    'Send it without urgent to queue it, or send it to another agent.')
+  expect(runtime.mailbox.store.teamsWithQueuedMail()).toEqual([])
+  // The recipient row cools with the deciding provider: a queued direct
+  // message's waiting reason carries retryAt and the provider detail.
+  const direct = runtime.mailbox.store.enqueue({ teamId: dir, toKind: 'session', toId: 'flash', fromSession: 'lead', fromGroup: 'leads', originPath: dir, body: 'Later' })
+  runtime.dispatcher.notify()
+  await runtime.dispatcher.settled()
+  const waiting = runtime.waitingFor(dir)
+  expect(waiting[direct.id]!.blocker).toEqual({ kind: 'profile-cooling', retryAt: until, detail: 'zai' })
+})
 
 test('one catalog read per team per dispatch cycle despite eight recipients and claim rechecks', async () => {
   const read = spyOn(fs, 'readFileSync')
