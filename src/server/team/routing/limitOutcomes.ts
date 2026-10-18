@@ -28,8 +28,9 @@ import type { GroupDefinition } from '../groupFile'
 import { DEFAULT_PARK_IF_RESET_WITHIN_MS } from '../groupFile'
 import type { MailboxStore, TeamMessage } from '../mailboxStore'
 import { ProgressDigest } from './handoff'
-import { DEFAULT_COOLDOWN_MS, type LimitEventStore } from './limitEvents'
+import { DEFAULT_COOLDOWN_MS, isModelScoped, type LimitEventStore } from './limitEvents'
 import { providerOf } from '../../chat/profileCatalog'
+import { catalogCtx } from '../cooldowns'
 import { MAX_PARKS, resolveLimit, type LimitResolution } from './limitPolicy'
 import type { RuleRegistry } from './ruleLoader'
 
@@ -53,6 +54,8 @@ export type HandoffTarget = { kind: 'group' | 'session'; id: string }
 export interface LimitOutcomesOptions {
   store: MailboxStore
   limits: LimitEventStore
+  /** The ambient catalog home for provider resolution (D10), as sessionMailbox passes it. */
+  homeDir?: string
   rules: Pick<RuleRegistry, 'rule'>
   getRecord: (id: string) => ChatSessionRecord | undefined
   /** The session's team id; undefined while resolving. */
@@ -216,13 +219,15 @@ export class LimitOutcomes {
         const original = this.options.store.get(row.original_id)
         const task = original?.taskId ? this.options.taskTitle(original.taskId) : null
         const ownerName = this.options.getRecord(owner)?.name ?? owner
-        // The note names the provider when the catalog holds one for the
-        // profile (providers-and-workers D15); the parked resume keeps
-        // naming the limited profile alone.
+        // D15's same case: the note names the provider when the wait it
+        // announces was the provider's — the profile's own provider-scoped
+        // events — not a model-scoped window's (the profile cools alone).
+        // The parked resume keeps naming the limited profile alone.
         const record = this.options.getRecord(row.from_session)
-        const noteCtx = record?.projectPath ? { projectPath: record.projectPath } : {}
-        const provider = providerOf(row.profile_id, noteCtx)
-        const namedProvider = provider !== row.profile_id ? ` ${provider}` : ''
+        const provider = providerOf(row.profile_id, catalogCtx(this.options.homeDir, record?.projectPath))
+        const providerWaited = this.options.limits.forProfile(row.profile_id)
+          .some(event => event.final && !isModelScoped(event.window))
+        const namedProvider = providerWaited && provider !== row.profile_id ? ` ${provider}` : ''
         this.options.store.enqueue({
           teamId: row.team_id, toKind: 'session', toId: row.from_session, fromSession: row.from_session,
           fromGroup: recipient.groupId ?? null, originPath: recipient.projectPath, tags: ['handoff-note'],
@@ -251,8 +256,7 @@ export class LimitOutcomes {
    */
   private cooldownEnd(profileId: string, fromSession: string): string | null {
     const record = this.options.getRecord(fromSession)
-    const ctx = record?.projectPath ? { projectPath: record.projectPath } : {}
-    return this.options.limits.cooldownFor(profileId, providerOf(profileId, ctx)).until
+    return this.options.limits.cooldownFor(profileId, providerOf(profileId, catalogCtx(this.options.homeDir, record?.projectPath))).until
   }
 
   private markNoted(id: string) {
@@ -375,9 +379,9 @@ export class LimitOutcomes {
       if ((recipient.claudeProfileId ?? 'default') === profileId) throw new Error(`Cannot hand off work to its limited profile ${profileId}`)
       // A session on any model of the cooling provider refuses too (D9).
       const fromRecord = this.options.getRecord(fromSession)
-      const excludedProvider = providerOf(profileId, fromRecord?.projectPath ? { projectPath: fromRecord.projectPath } : {})
-      if (excludedProvider !== null && this.options.limits.providerCooldownUntil(excludedProvider) !== null) {
-        const recipientProvider = providerOf(recipient.claudeProfileId ?? 'default', recipient.projectPath ? { projectPath: recipient.projectPath } : {})
+      const excludedProvider = providerOf(profileId, catalogCtx(this.options.homeDir, fromRecord?.projectPath))
+      if (this.options.limits.providerCooldownUntil(excludedProvider) !== null) {
+        const recipientProvider = providerOf(recipient.claudeProfileId ?? 'default', catalogCtx(this.options.homeDir, recipient.projectPath))
         if (recipientProvider === excludedProvider) {
           throw new Error(`Cannot hand off work to ${recipient.claudeProfileId ?? 'default'}: its provider ${excludedProvider}` +
             ` is cooling after the limit on ${profileId}`)

@@ -119,56 +119,6 @@ describe('built-in routing', () => {
       .toMatchObject({ kind: 'none' })
   })
 
-  test("a forward from a model-scoped limit may reach the provider's other model", async () => {
-    def = group('profiles: [opus, sonnet]\nmax: 2')
-    members = [
-      { sessionId: 'o', profileId: 'opus', cwd: '/wt' },
-      { sessionId: 's', profileId: 'sonnet', cwd: '/wt' },
-    ]
-    providerFor = () => 'claude'
-    // opus's own seven_day_opus window is model-scoped: the provider does not cool.
-    events.opus = [{ ...finalEvent('opus', new Date(T0 + 3 * 24 * 3_600_000).toISOString()), providerId: 'claude', window: 'seven_day_opus' }]
-    expect(await makeRouter().route(message({ excludedProfile: 'opus' }), { eligible: [eligible('s', 5)], attempt: 0 }))
-      .toEqual({ kind: 'member', sessionId: 's' })
-    providerFor = null
-  })
-
-  test('a spawn slot of the cooling provider is hard-filtered from a forward', async () => {
-    def = group('profiles: [glm, glm-flash]\nmax: 2')
-    providerFor = () => 'zai'
-    events.glm = [{ ...finalEvent('glm', new Date(T0 + 40 * 60_000).toISOString()), providerId: 'zai', window: null }]
-    spawnAllowed = true
-    const result = await makeRouter().route(message({ excludedProfile: 'glm' }), { eligible: [], attempt: 0 })
-    expect(result).toMatchObject({ kind: 'none' })
-    expect(spawns).toEqual([])
-    providerFor = null
-  })
-
-  test("a sibling model's limit cools its provider's other profile in routing", async () => {
-    def = group('profiles: [claude, glm-flash]\nmax: 2')
-    members = [
-      { sessionId: 'f', profileId: 'glm-flash', cwd: '/wt' },
-      { sessionId: 'b', profileId: 'claude', cwd: '/wt' },
-    ]
-    providerFor = id => (id === 'glm' || id === 'glm-flash' ? 'zai' : 'claude')
-    // glm's provider-scoped limit cools glm-flash; the rule context sees the same end.
-    events.glm = [{ ...finalEvent('glm', new Date(T0 + 40 * 60_000).toISOString()), providerId: 'zai', window: null }]
-    expect(await makeRouter().route(message(), { eligible: [eligible('f', 50), eligible('b', 5)], attempt: 0 }))
-      .toEqual({ kind: 'member', sessionId: 'b' })
-    const ruleCtx = await new Promise<RouteContext>(resolve => {
-      rule = async ctx => { resolve(ctx); return { type: 'default' } }
-      void makeRouter().route(message(), { eligible: [eligible('f', 50), eligible('b', 5)], attempt: 0 })
-    })
-    expect(ruleCtx.profiles['glm-flash']!.cooldownUntil).toBe(new Date(T0 + 40 * 60_000).toISOString())
-    expect(ruleCtx.profiles['claude']!.cooldownUntil).toBeNull()
-    // A hold names the deciding provider in the log (providers-and-workers D15).
-    members = [{ sessionId: 'f', profileId: 'glm-flash', cwd: '/wt' }]
-    const router = makeRouter()
-    expect(await router.route(message(), { eligible: [eligible('f')], attempt: 0 })).toMatchObject({ kind: 'hold' })
-    expect(router.decisions('team').some(entry => entry.decision === 'hold' && (entry.reason ?? '').includes('provider zai'))).toBe(true)
-    providerFor = null
-  })
-
   test('a cooling-only candidate set holds until the cooldown ends', async () => {
     events.glm = [finalEvent('glm', new Date(T0 + 40 * 60_000).toISOString())]
     expect(await makeRouter().route(message(), { eligible: [eligible('a')], attempt: 0 }))

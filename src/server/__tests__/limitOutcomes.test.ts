@@ -29,7 +29,6 @@ let groups: Map<string, GroupDefinition>
 let ruleOnLimit: ((ctx: LimitOutcomeContext) => Promise<LimitOutcome>) | null
 let errors: unknown[]
 let home: string
-let priorHome: string | undefined
 
 const group = (id: string, frontmatter = '') => {
   const parsed = parseGroupFile(id, `---\n${frontmatter}\n---\nWork.`)
@@ -53,16 +52,14 @@ function makeOutcomes() {
     restoreSession: id => { records.get(id)!.archivedAt = null },
     onError: error => errors.push(error),
     now: () => now,
+    homeDir: home,
   })
 }
 
 beforeEach(() => {
   now = T0
-  // providerOf resolves the catalog from HOME when a record has no path;
-  // keep that read inside a temp home the test owns.
+  // providerOf reads the catalog home the options pass, never the operator's.
   home = fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-limit-home-'))
-  priorHome = process.env.HOME
-  process.env.HOME = home
   db = schemaDb(':memory:')
   store = new MailboxStore(db)
   limits = new LimitEventStore(db, () => now)
@@ -76,8 +73,6 @@ beforeEach(() => {
 })
 afterEach(() => {
   db.close()
-  if (priorHome === undefined) delete process.env.HOME
-  else process.env.HOME = priorHome
   fs.rmSync(home, { recursive: true, force: true })
 })
 
@@ -311,6 +306,26 @@ describe('recovery notes', () => {
     store.claim(forwarded.id, 'dev2')
     outcomes.processNotes()
     expect(store.listForTeam('team').some(row => row.tags.includes('handoff-note'))).toBe(true)
+  })
+
+  test('a model-scoped limit keeps the provider out of the note (D15 same case)', async () => {
+    const m = deliver()
+    work()
+    // opus's own seven_day_opus window: the cooldown is the profile's alone,
+    // so the note does not name claude.
+    limits.record({
+      profileId: 'opus', sessionId: 'dev', groupId: 'devs', kind: 'rate_limit', final: true, status: 429,
+      message: 'quota', resetsAt: iso(T0 + 5 * 60 * MIN), providerId: 'claude', window: 'seven_day_opus',
+    })
+    await outcomes.turnEnded('dev', true)
+    const forwardedId = store.get(m.id)!.reason!.replace('forwarded: ', '')
+    store.claim(forwardedId, 'dev2')
+    now = T0 + 5 * 60 * MIN + 1
+    outcomes.processNotes()
+    const notes = store.listForTeam('team').filter(row => row.tags.includes('handoff-note'))
+    expect(notes).toHaveLength(1)
+    expect(notes[0]!.body).toContain('Your provider limit has recovered')
+    expect(notes[0]!.body).not.toContain('claude')
   })
 
   test("a sibling's provider-scoped event holds the note past the original reset", async () => {
