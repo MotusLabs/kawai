@@ -346,6 +346,19 @@ test('a busy or request-holding recipient queues the instruction without interru
   expect(taskMail(task.id).map(row => [row.toId, row.state])).toEqual([['busy', 'cancelled'], ['carded', 'queued']])
 })
 
+test('fixes return to a named developer session: the assignment names it, the instruction references the result, and a new result is expected', async () => {
+  const task = await tasks.create(agent('lead'), { title: 'Export', direction: 'v1' })
+  const result = await results.submit(agent('dev'), task.id, submission)
+  const lead = taskHandlers(tasks, 'lead', results)
+  const fix = await lead.task_handoff!({ ...sessionCall(task.id, result.id, { target: 'dev' }), kind: 'fix' }) as
+    { duplicate: boolean; assignment: { handoffKind: string; targetKind: string; targetId: string; expectedResponse: string | null } }
+  expect(fix).toMatchObject({ duplicate: false, assignment: { handoffKind: 'fix', targetKind: 'session', targetId: 'dev', expectedResponse: null } })
+  const instruction = taskMail(task.id)[0]!
+  expect(instruction).toMatchObject({ toKind: 'session', toId: 'dev', taskId: task.id })
+  expect(instruction.body).toContain(`Fix of result ${result.id} (commit abc123): CSV export`)
+  expect(instruction.body).toContain('Expected response: a new result with task_submit_result')
+})
+
 test('a reviewer outside the task worktree receives the instruction where it lives; nothing spawns or moves', async () => {
   records.set('roving', row('roving', 'reviewers', feature))
   const task = await tasks.create(agent('lead'), { title: 'Export', direction: 'v1', worktree: repo })
