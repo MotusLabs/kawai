@@ -101,10 +101,28 @@ test('a late-spawn mark is synchronous: an opted-out group is marked, then kept 
 })
 
 describe('a failed late-spawn mark (MM LOW 3)', () => {
-  const settle = () => new Promise(resolve => setTimeout(resolve, 30))
+  /** A manual retry scheduler: records the delays it is given and runs its queued retries only when the test says so. */
+  const manualScheduler = () => {
+    const queued: { run: () => void }[] = []
+    const delays: number[] = []
+    const schedule: NonNullable<MemberReleaseOptions['scheduleRetry']> = (run, delayMs) => {
+      delays.push(delayMs)
+      const entry = { run }
+      queued.push(entry)
+      return { cancel: () => { const at = queued.indexOf(entry); if (at >= 0) queued.splice(at, 1) } }
+    }
+    return {
+      schedule,
+      delays,
+      size: () => queued.length,
+      runNext: () => queued.shift()?.run(),
+      runAll: () => { while (queued.length > 0) queued.shift()!.run() },
+    }
+  }
   let warn: ReturnType<typeof spyOn>
   let error: ReturnType<typeof spyOn>
-  /** A closed task with a late-spawned member, and a task store whose `get` throws `failures` times. */
+  let made: MemberRelease[]
+  /** A closed task with a late-spawned member, and a task store whose `get` throws `failures` times; the instance is closed in afterEach. */
   const setup = (failures: number, overrides: Partial<MemberReleaseOptions> = {}) => {
     const t = task()
     tasks.setStatus(t.id, 'done')
@@ -112,71 +130,114 @@ describe('a failed late-spawn mark (MM LOW 3)', () => {
     const get = tasks.get.bind(tasks)
     let left = failures
     tasks.get = id => { if (left > 0) { left -= 1; throw new Error('database is locked') } return get(id) }
-    return { t, releases: makeReleases({ lateMarkRetryDelaysMs: [1, 1, 1], ...overrides }) }
+    const releases = makeReleases(overrides)
+    made.push(releases)
+    return { t, releases }
+  }
+  /** setup over the fast delays with the manual scheduler wired in. */
+  const manualSetup = (failures: number, overrides: Partial<MemberReleaseOptions> = {}) => {
+    const scheduler = manualScheduler()
+    return { scheduler, ...setup(failures, { lateMarkRetryDelaysMs: [1, 1, 1], scheduleRetry: scheduler.schedule, ...overrides }) }
   }
   beforeEach(() => {
     warn = spyOn(logger, 'warn').mockImplementation(() => {})
     error = spyOn(logger, 'error').mockImplementation(() => {})
+    made = []
   })
-  afterEach(() => { warn.mockRestore(); error.mockRestore() })
+  afterEach(() => {
+    for (const releases of made) releases.close()
+    warn.mockRestore()
+    error.mockRestore()
+  })
 
-  test('a rejection then a success marks the member and logs the warning', async () => {
-    const { t, releases } = setup(1)
+  test('a rejection then a success marks the member and logs the warning', () => {
+    const { t, releases, scheduler } = manualSetup(1)
     releases.markLateSpawn('spawned-9', t.id)
     expect(warn).toHaveBeenCalledWith('member_release_mark_failed', { sessionId: 'spawned-9', taskId: t.id, attempt: 1, error: 'database is locked' })
     expect(releases.pending()).toEqual([])
-    await settle()
+    scheduler.runNext()
     expect(releases.pending().map(row => row.sessionId)).toEqual(['spawned-9'])
     expect(error).not.toHaveBeenCalled()
   })
 
-  test('exhausted retries log an error naming both ids, then stop', async () => {
-    const { t, releases } = setup(Infinity)
+  test('exhausted retries log an error naming both ids, then stop', () => {
+    const { t, releases, scheduler } = manualSetup(Infinity)
     releases.markLateSpawn('spawned-9', t.id)
-    await settle()
+    scheduler.runAll()
     expect(warn).toHaveBeenCalledTimes(3)
     expect(error).toHaveBeenCalledTimes(1)
     expect(error).toHaveBeenCalledWith('member_release_mark_gave_up', { sessionId: 'spawned-9', taskId: t.id, attempts: 4, error: 'database is locked' })
     expect(releases.pending()).toEqual([])
+    expect(scheduler.delays).toEqual([1, 1, 1])
+    expect(scheduler.size()).toBe(0)
   })
 
-  test('a member restored, archived, or re-associated between attempts is not marked', async () => {
+  test('the default delays 1 s, 5 s, and 30 s reach the scheduler', () => {
+    const scheduler = manualScheduler()
+    const { t, releases } = setup(Infinity, { scheduleRetry: scheduler.schedule })
+    releases.markLateSpawn('spawned-9', t.id)
+    scheduler.runAll()
+    expect(scheduler.delays).toEqual([1000, 5000, 30000])
+    expect(error).toHaveBeenCalledTimes(1)
+    expect(releases.pending()).toEqual([])
+  })
+
+  test('a member restored, archived, or re-associated between attempts is not marked', () => {
     for (const change of ['restored', 'archived', 're-associated'] as const) {
-      const { t, releases } = setup(1)
+      const { t, releases, scheduler } = manualSetup(1)
       releases.markLateSpawn('spawned-9', t.id)
       if (change === 'restored') releases.cancel('spawned-9')
       if (change === 'archived') records.get('spawned-9')!.archivedAt = new Date().toISOString()
       if (change === 're-associated') records.get('spawned-9')!.taskId = 'task-other'
-      await settle()
+      scheduler.runAll()
       expect({ change, pending: releases.pending() }).toEqual({ change, pending: [] })
       expect(error).not.toHaveBeenCalled()
+      if (change === 'restored') expect(scheduler.size()).toBe(0)
     }
   })
 
   test('a second markLateSpawn over a pending retry cannot orphan it: cancel still stops the mark', async () => {
     const archived: string[] = []
-    const { t, releases } = setup(1, {
+    const { t, releases, scheduler } = manualSetup(1, {
       lateMarkRetryDelaysMs: [20],
       archive: id => { archived.push(id); return { ok: true } },
     })
-    // The first attempt fails and schedules a 20 ms retry; the second call
-    // runs over it, succeeds, and marks the member — then it is cancelled.
+    // The first attempt fails and queues a retry; the second call runs over
+    // it, succeeds, and marks the member — then it is cancelled.
     releases.markLateSpawn('spawned-9', t.id)
     releases.markLateSpawn('spawned-9', t.id)
     releases.cancel('spawned-9')
-    await new Promise(resolve => setTimeout(resolve, 100))
+    expect(scheduler.delays).toEqual([20])
+    scheduler.runAll()
+    expect(scheduler.size()).toBe(0)
     expect(releases.pending()).toEqual([])
     await releases.evaluate()
     expect(archived).toEqual([])
   })
 
-  test('shutdown drops a pending retry', async () => {
-    const { t, releases } = setup(1)
+  test('shutdown drops a pending retry', () => {
+    const { t, releases, scheduler } = manualSetup(1)
     releases.markLateSpawn('spawned-9', t.id)
     releases.close()
-    await settle()
+    scheduler.runAll()
+    expect(scheduler.size()).toBe(0)
     expect(releases.pending()).toEqual([])
     expect(warn).toHaveBeenCalledTimes(1)
+  })
+
+  test('the default scheduler retries on real timers until the mark succeeds', async () => {
+    const { t, releases } = setup(1, { lateMarkRetryDelaysMs: [1] })
+    releases.markLateSpawn('spawned-9', t.id)
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(releases.pending()).toEqual([])
+    // No fixed sleep: yield to the event loop until the chained retry has
+    // landed, with a 2 s deadline.
+    const deadline = Date.now() + 2_000
+    while (releases.pending().length === 0 && Date.now() < deadline) {
+      await new Promise(resolve => setImmediate(resolve))
+    }
+    expect(releases.pending().map(row => row.sessionId)).toEqual(['spawned-9'])
+    expect(error).not.toHaveBeenCalled()
   })
 })
 
