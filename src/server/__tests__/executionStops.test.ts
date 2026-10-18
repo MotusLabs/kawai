@@ -174,4 +174,45 @@ describe('Stop (§13.4)', () => {
     expect(await service.stop(bench.human, { executionId, reason: 'enough for today', commandId: 'stop-1' })).toMatchObject({ ok: true, replayed: true })
     expect((await service.stop(bench.human, { executionId, reason: '  ', commandId: 'stop-2' })).ok).toBe(false)
   })
+
+  test('a refused task cancel refuses the whole stop: nothing changes, nothing is swallowed', async () => {
+    const executionId = await runningExecution(['sr-a', 'sr-b'])
+    // sr-b's task is the human's, not Kawai's: Kawai may not cancel it.
+    const foreign = await tasks.create(bench.human, { title: 'hand-made', direction: 'not Kawai\'s' })
+    executions.transition(executionId, 'sr-b', executions.change(executionId, 'sr-b')!, { taskId: foreign.id })
+    const ownTask = executions.change(executionId, 'sr-a')!.taskId!
+    const refused = await service.stop(bench.human, { executionId, reason: 'enough', commandId: 'stop-refused' })
+    expect(refused).toMatchObject({ ok: false, reason: 'state' })
+    if (!refused.ok) expect(refused.message).toContain(foreign.id)
+    // Right after the refusal resolves: the execution, its changes, and both tasks are untouched.
+    expect(executions.execution(executionId)).toMatchObject({ state: 'running' })
+    expect(executions.change(executionId, 'sr-a')!.state).toBe('implementing')
+    expect(tasks.store.get(ownTask)!.status).not.toBe('cancelled')
+    expect(tasks.store.get(foreign.id)!.status).not.toBe('cancelled')
+    expect(bench.plans.events(executions.execution(executionId)!.planId).filter(event => event.kind === 'execution-stopped')).toHaveLength(0)
+  })
+
+  test('the stopped state holds the moment stop resolves; a task reopened between prepare and commit is prepared again', async () => {
+    const executionId = await runningExecution(['ss-a'])
+    const taskId = executions.change(executionId, 'ss-a')!.taskId!
+    // The first prepare sees the task open; a status change before its commit makes it stale once.
+    const original = tasks.prepareStatus.bind(tasks)
+    let prepares = 0
+    tasks.prepareStatus = async (...args: Parameters<typeof original>) => {
+      const prepared = await original(...args)
+      prepares += 1
+      if (prepares === 1) tasks.store.setStatus(taskId, 'blocked', undefined, { kind: 'human', sessionId: null })
+      return prepared
+    }
+    try {
+      const stopped = await service.stop(bench.human, { executionId, reason: 'enough', commandId: 'stop-stale' })
+      expect(stopped).toMatchObject({ ok: true, replayed: false })
+      expect(prepares).toBe(2)
+      expect(executions.execution(executionId)).toMatchObject({ state: 'finished', outcome: 'stopped' })
+      expect(executions.change(executionId, 'ss-a')!.state).toBe('cancelled')
+      expect(tasks.store.get(taskId)!.status).toBe('cancelled')
+    } finally {
+      tasks.prepareStatus = original
+    }
+  })
 })

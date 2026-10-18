@@ -103,4 +103,13 @@ describe('planSteps scheduling (§11.2)', () => {
     const groupless = steps([change('api', 'implementing', { group: null })])
     expect(groupless.dispatches).toEqual([])
   })
+
+  test('a closed task stops its change as task-closed, even when the close dead-lettered the instruction', () => {
+    const failed = { id: 'a1', state: 'failed', reason: 'task-closed' }
+    const closed = steps([withTask('implementing', { status: 'cancelled', assignment: failed })])
+    expect(closed.transitions).toMatchObject([{ change: 'api', patch: { state: 'stopped', stopReason: 'task-closed', stopDetail: { resumeState: 'implementing' } } }])
+    // An open task whose instruction failed stops as instruction-failed.
+    const open = steps([withTask('implementing', { status: 'active', assignment: failed })])
+    expect(open.transitions).toMatchObject([{ change: 'api', patch: { state: 'stopped', stopReason: 'instruction-failed', stopDetail: { resumeState: 'implementing' } } }])
+  })
 })

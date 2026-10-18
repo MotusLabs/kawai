@@ -137,7 +137,7 @@ After provisioning, the execution SHALL create one task for the change. Its crea
 - **THEN** each unlanded change gets a new task created by Kawai, and the stopped execution's cancelled tasks stay as they were
 
 ### Requirement: A failed instruction stops the change
-When an instruction Kawai dispatched for a change fails, because its mail was dead-lettered, cancelled, or discarded, the change SHALL stop as `instruction-failed`, naming the instruction and the mail's reason. Kawai SHALL NOT dispatch a replacement on its own. An instruction that Kawai itself superseded with a later stage SHALL NOT count as failed.
+When an instruction Kawai dispatched for a change fails (its mail dead-lettered, cancelled, or discarded), or a service refuses to dispatch it, the change SHALL stop as `instruction-failed`, naming the instruction or stage and the reason. Kawai SHALL NOT dispatch a replacement on its own. An instruction Kawai itself superseded with a later stage SHALL NOT count as failed.
 
 #### Scenario: The human cancels Kawai's instruction
 - **WHEN** the human cancels a queued fix instruction in the Mailbox
@@ -150,6 +150,10 @@ When an instruction Kawai dispatched for a change fails, because its mail was de
 #### Scenario: The worktree disappears under queued mail
 - **WHEN** the change's worktree is removed by hand while its fix instruction is queued
 - **THEN** the mail is dead-lettered `worktree-missing` and the change stops as `instruction-failed`, naming that reason
+
+#### Scenario: A refused dispatch is contained
+- **WHEN** the task, assignment, or result service refuses a stage's dispatch, for example because the change's group file was removed after Start
+- **THEN** the change stops as `instruction-failed`, naming the stage and the refusal, the server keeps running and its other executions keep advancing, and Retry dispatches that stage again
 
 ### Requirement: Every dispatch is an attempt with an immutable manifest
 Each implementer dispatch SHALL record an attempt with its number, its kind (implement, fix, or update), and its assignment. It SHALL also record an immutable input manifest naming:

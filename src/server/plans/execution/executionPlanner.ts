@@ -133,6 +133,18 @@ export function planSteps(snapshot: ExecutionSnapshot, _now: string): PlanSteps 
         && (change.taskId === null || (change.task !== null && change.task.assignment === null && change.task.results.length === 0))) {
         steps.dispatches.push({ executionId: change.executionId, change: change.change, group: change.group })
       }
+      // A human close of the change's task stops it (D19); Kawai's own closes
+      // happen after landing, on a change that no longer runs. Checked before
+      // the failed instruction: the close itself dead-letters queued task
+      // mail (member release), and the close is the cause.
+      if (change.task !== null && (change.task.status === 'done' || change.task.status === 'cancelled')) {
+        steps.transitions.push({
+          executionId: change.executionId, change: change.change,
+          guard: { state: change.state, generation: change.generation },
+          patch: { state: 'stopped', stopReason: 'task-closed', step: null, stopDetail: { message: `The task was ${change.task.status} by hand.`, resumeState: change.state, ...(change.taskId !== null ? { taskId: change.taskId } : {}) } },
+        })
+        continue
+      }
       // A stage instruction that failed stops the change (D12): its
       // assignment derives failed — the mail settled dead, cancelled, or
       // discarded. Only the current stage can fail it; a superseded
@@ -149,16 +161,6 @@ export function planSteps(snapshot: ExecutionSnapshot, _now: string): PlanSteps 
               resumeState: change.state,
             },
           },
-        })
-        continue
-      }
-      // A human close of the change's task stops it (D19); Kawai's own closes
-      // happen after landing, on a change that no longer runs.
-      if (change.task !== null && (change.task.status === 'done' || change.task.status === 'cancelled')) {
-        steps.transitions.push({
-          executionId: change.executionId, change: change.change,
-          guard: { state: change.state, generation: change.generation },
-          patch: { state: 'stopped', stopReason: 'task-closed', step: null, stopDetail: { message: `The task was ${change.task.status} by hand.`, resumeState: change.state, ...(change.taskId !== null ? { taskId: change.taskId } : {}) } },
         })
         continue
       }
