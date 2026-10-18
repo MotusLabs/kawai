@@ -54,14 +54,11 @@ function zaiRowLengthPrefix(unit: unknown, count: unknown): string | null {
 }
 
 /**
- * The row's label: the counted-thing word prefixed by its stated length
- * ("5-hour tokens", "Monthly tool calls"), the capitalised word alone
- * without a usable length ("Tokens", "Tool calls"), or the raw type for an
- * unknown kind.
+ * The row's label from its counted-thing word: the word prefixed by its
+ * stated length ("5-hour tokens", "Monthly tool calls"), or the capitalised
+ * word alone without a usable length ("Tokens", "Tool calls").
  */
-function zaiRowLabel(kind: string, rawType: string, unit: unknown, count: unknown): string {
-  const word = ZAI_ROW_WORDS[kind]
-  if (word === undefined) return rawType
+function zaiRowLabelFrom(word: string, unit: unknown, count: unknown): string {
   const prefix = zaiRowLengthPrefix(unit, count)
   if (prefix !== null) return `${prefix} ${word}`
   return word.charAt(0).toUpperCase() + word.slice(1)
@@ -93,10 +90,12 @@ function resetMsOf(value: unknown): number | undefined {
  * meter), labeled by what the row counts and the window it states ("5-hour
  * tokens", "Monthly tool calls"; "Tokens"/"Tool calls" without a usable
  * length; the raw type for an unknown kind), percent from percentage (already
- * 0-100), reset from the epoch-millisecond nextResetTime, and periodMs from
- * the row's own unit/number when both and the reset are usable. A row without
- * a usable percentage drops rather than renders wrong. Status is always
- * allowed: the payload carries no severity.
+ * 0-100), reset from the epoch-millisecond nextResetTime, and — for a known
+ * kind — periodMs from the row's own unit/number when both and the reset are
+ * usable. A kind the server does not know states nothing about a window: it
+ * labels as its raw type and never carries a period, even with a unit/count
+ * the table knows. A row without a usable percentage drops rather than
+ * renders wrong. Status is always allowed: the payload carries no severity.
  */
 export function parseZaiQuotaLimit(
   payload: ZaiQuotaLimitSlice | null | undefined,
@@ -115,15 +114,19 @@ export function parseZaiQuotaLimit(
     const kind = row.type.toLowerCase()
     const count = (seen.get(kind) ?? 0) + 1
     seen.set(kind, count)
+    const word = ZAI_ROW_WORDS[kind]
     const window: ChatUsageWindow = {
       key: count === 1 ? `zai:${kind}` : `zai:${kind}#${count}`,
-      label: zaiRowLabel(kind, row.type, row.unit, row.number),
+      label: word === undefined ? row.type : zaiRowLabelFrom(word, row.unit, row.number),
       percentUsed,
       resetsAt: toIsoResetsAtMs(row.nextResetTime),
     }
-    // The key stays unset rather than undefined: the wire field is optional.
-    const periodMs = providerRowPeriodMs(row.unit, row.number, resetMsOf(row.nextResetTime))
-    if (periodMs !== undefined) window.periodMs = periodMs
+    // Only a known kind has a known length; the key stays unset rather than
+    // undefined: the wire field is optional.
+    if (word !== undefined) {
+      const periodMs = providerRowPeriodMs(row.unit, row.number, resetMsOf(row.nextResetTime))
+      if (periodMs !== undefined) window.periodMs = periodMs
+    }
     windows.push(window)
   }
   return { status: 'allowed', windows, receivedAt, source: 'provider' }

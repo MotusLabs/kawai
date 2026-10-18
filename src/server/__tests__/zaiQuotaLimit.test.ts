@@ -59,9 +59,20 @@ describe('parseZaiQuotaLimit', () => {
   })
 
   test('unknown row kinds label as their raw type and carry no period', () => {
+    // unit/number/reset a known kind would honor: the unknown kind must not.
     const payload: ZaiQuotaLimitSlice = {
       success: true,
-      data: { limits: [{ type: 'CREDITS_LIMIT', percentage: 12, nextResetTime: 1791845403778 }] },
+      data: {
+        limits: [
+          {
+            type: 'CREDITS_LIMIT',
+            unit: 3,
+            number: 5,
+            percentage: 12,
+            nextResetTime: 1791845403778,
+          },
+        ],
+      },
     }
     const windows = parseZaiQuotaLimit(payload, AT)?.windows ?? []
     expect(windows).toEqual([
@@ -75,6 +86,32 @@ describe('parseZaiQuotaLimit', () => {
     for (const window of windows) {
       expect('periodMs' in window).toBe(false)
     }
+  })
+
+  test('an ISO-string reset still yields a period, like the epoch-ms form', () => {
+    const payload: ZaiQuotaLimitSlice = {
+      success: true,
+      data: {
+        limits: [
+          {
+            type: 'TOKENS_LIMIT',
+            unit: 3,
+            number: 5,
+            percentage: 30,
+            nextResetTime: '2026-10-12T09:00:00.000Z',
+          },
+        ],
+      },
+    }
+    expect(parseZaiQuotaLimit(payload, AT)?.windows).toEqual([
+      {
+        key: 'zai:tokens_limit',
+        label: '5-hour tokens',
+        percentUsed: 30,
+        resetsAt: '2026-10-12T09:00:00.000Z',
+        periodMs: 5 * 60 * 60 * 1000,
+      },
+    ])
   })
 
   test('a row without a usable percentage drops; the rest render', () => {
