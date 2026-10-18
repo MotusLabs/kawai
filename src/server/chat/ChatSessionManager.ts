@@ -74,6 +74,7 @@ import { probeSdkAvailability } from './sdkAvailability'
 import { AccountNoticeStore, credentialsPathFor } from './accountNotices'
 import { UsageLimitStore } from './usageLimits'
 import { withTextReset } from './limitSignals'
+import { providerOf } from './profileCatalog'
 import { fetchZaiUsage } from './zaiUsage'
 import { readWorkerTranscript } from './chatWorkerTranscript'
 import { isTaskOutputFile, readTaskOutputTail } from './taskOutputFile'
@@ -1063,7 +1064,10 @@ export class ChatSessionManager {
     this.turnEnds = new ChatTurnEndStore(options.db.db)
     this.provenance = new ProvenanceRecorder(options.db.db)
     this.turnUsage = new ChatTurnUsageStore(options.db.db)
-    this.metrics = new MetricsReader(options.db.db)
+    this.metrics = new MetricsReader(options.db.db, Date.now,
+      // The provider cooldown (providers-and-workers D8) resolves in the
+      // team's own catalog, so a provider event shows in every profile's tax.
+      (profileId, teamId) => providerOf(profileId, this.catalogCtx(teamId)))
     this.reports = new ProcessReportService(options.db.db, this.metrics, {
       onCommit: teamId => this.options.onProcessReportChange?.(teamId),
     })
@@ -1128,7 +1132,11 @@ export class ChatSessionManager {
       strategies: this.strategies.store,
       impact: this.impact,
       getSession: id => this.records.get(id),
-      capacityReads: { capacity: (teamId, group, worktree) => this.teamMail.staffing.capacity(teamId, group, worktree), cooldownUntil: profileId => this.teamMail.limits.cooldownUntil(profileId) },
+      capacityReads: {
+        capacity: (teamId, group, worktree) => this.teamMail.staffing.capacity(teamId, group, worktree),
+        // The profile's effective cooldown (providers-and-workers D8) in the ambient catalog.
+        cooldownUntil: profileId => this.teamMail.limits.cooldownFor(profileId, providerOf(profileId, this.catalogCtx())).until,
+      },
       caps: this.caps,
       executionCore,
       executionTeam: {
@@ -2281,14 +2289,19 @@ export class ChatSessionManager {
         // session's profile, with its current group for context. A gateway
         // that writes its reset into the error text without a zone is read in
         // the profile's `limitResetTimeZone`.
-        onLimitEvent: (signal) =>
+        onLimitEvent: (signal) => {
+          const profileId = record.claudeProfileId ?? 'default'
+          const projectPath = this.records.get(record.sessionId)?.projectPath ?? record.projectPath
           this.teamMail.limits.record({
-            ...withTextReset(signal, profileLimitResetTimeZone(
-              record.claudeProfileId, this.catalogCtx(this.records.get(record.sessionId)?.projectPath ?? record.projectPath))),
-            profileId: record.claudeProfileId ?? 'default',
+            ...withTextReset(signal, profileLimitResetTimeZone(profileId, this.catalogCtx(projectPath))),
+            profileId,
             sessionId: record.sessionId,
             groupId: this.records.get(record.sessionId)?.groupId ?? null,
-          }),
+            // The provider owning the profile at its project path (D7/D10).
+            providerId: providerOf(profileId, this.catalogCtx(projectPath)),
+            window: signal.window,
+          })
+        },
       })
       if (
         !this.records.has(record.sessionId) ||

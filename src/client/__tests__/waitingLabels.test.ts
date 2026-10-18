@@ -67,6 +67,13 @@ test('constraint labels mention their counts, names, and details', () => {
     .toBe('Starting agent (devs, glm, feat-x)')
   expect(constraintLabel({ kind: 'recipient-unavailable', detail: 'no directory' })).toContain('no directory')
   expect(constraintLabel({ kind: 'startup-failed', detail: 'lost auth' })).toContain('lost auth')
+  // The provider is named when its cooldown decided (providers-and-workers D15);
+  // the label keeps today's text without the detail.
+  const coolingUntil = new Date(Date.parse('2026-10-13T12:00:00.000Z')).toLocaleTimeString()
+  expect(constraintLabel({ kind: 'profile-cooling', detail: 'zai', retryAt: '2026-10-13T12:00:00.000Z' }))
+    .toBe(`Recipient's provider zai is cooling until ${coolingUntil}`)
+  expect(constraintLabel({ kind: 'profile-cooling', retryAt: '2026-10-13T12:00:00.000Z' }))
+    .toBe(`Recipient's provider is cooling until ${coolingUntil}`)
 })
 
 test('elapsed labels tick in minutes', () => {

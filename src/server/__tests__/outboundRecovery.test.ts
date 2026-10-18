@@ -74,6 +74,7 @@ async function startServer(spawns: Spawn[]) {
   const db = initDatabase({ path: dbPath })
   const manager = new ChatSessionManager({
     db, registry: new SessionRegistry(), onEvent: () => {}, isDirectory: () => true,
+    profileCatalogHome: tempDir,
     queryFactory: scriptedQueries(spawns),
     providerUsageFetch: (async () => { throw new Error('no provider pulls') }) as unknown as typeof fetch,
   })

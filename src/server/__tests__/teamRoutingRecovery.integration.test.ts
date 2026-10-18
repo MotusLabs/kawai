@@ -99,7 +99,7 @@ test('no-group direct work is retried automatically after the provider reset', a
     f.mailbox.outcomes.delivered('dev', message)
     const reset = new Date(Date.now() + 100).toISOString()
     f.mailbox.limits.record({ profileId: 'glm', sessionId: 'dev', groupId: null, kind: 'rate_limit',
-      final: true, status: 429, message: 'quota', resetsAt: reset })
+      final: true, status: 429, message: 'quota', resetsAt: reset, providerId: null, window: null })
     await f.mailbox.outcomes.turnEnded('dev', false)
     f.mailbox.dispatcher.notify()
     await f.mailbox.dispatcher.settled()
