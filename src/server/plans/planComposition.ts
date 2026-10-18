@@ -32,7 +32,8 @@ import { provisionAdapter } from './execution/executionProvision'
 import { roundAdapters } from './execution/executionRounds'
 import { fixtureLandingAdapters, fixtureProbe, fixtureRoundAdapters, FIXTURE_FLOOR } from './execution/fixtureAdapters'
 import { chatFixtureEnabled } from '../chat/developmentFixture'
-import { REGISTERED_LANDING_MODES } from './landing/landingMechanisms'
+import type { LandingMechanisms } from './landing/landingMechanisms'
+import { DIRECT_MECHANISMS } from './landing/directMechanism'
 import type { MemberRelease } from '../team/memberRelease'
 import type { TaskService } from '../team/TaskService'
 import type { TaskResultService } from '../team/TaskResultService'
@@ -205,6 +206,9 @@ export function composePlanServices(options: PlanServicesOptions): {
   // once recovery has ended and the running teams are woken.
   let runtime: ExecutionRuntime | null = null
   const team = options.executionTeam
+  // The registered landing mechanisms (integration-candidates D1): built once here and
+  // passed to the Start service, the executor, and the provision adapter (I1).
+  const mechanisms: LandingMechanisms = DIRECT_MECHANISMS
   const fixture = chatFixtureEnabled
   executions = new ExecutionService({
     store: executionStore,
@@ -217,7 +221,8 @@ export function composePlanServices(options: PlanServicesOptions): {
     impact: { gate: (planId, revision) => options.impact.gate(planId, revision) },
     settings: executionSettings(options.caps),
     getSession: options.getSession,
-    landingModes: () => new Set(REGISTERED_LANDING_MODES),
+    landingModes: () => new Set(mechanisms.keys()),
+    mechanisms,
     identityOf: teamId => identityOrBare(team, teamId),
     ...(team !== undefined ? {
       tasks: team.tasks,
@@ -230,6 +235,7 @@ export function composePlanServices(options: PlanServicesOptions): {
   if (team !== undefined) {
     const roundAdaptersUsed = fixture ? fixtureRoundAdapters() : roundAdapters
     const executor = new ExecutionExecutor({
+      mechanisms,
       store: executionStore,
       plans: options.plans,
       tasks: team.tasks,
@@ -255,7 +261,7 @@ export function composePlanServices(options: PlanServicesOptions): {
           .filter(condition => condition.gate === 'acceptance' && !condition.resolved)
           .map(condition => condition.text)
       },
-      adapters: { provision: provisionAdapter(executionStore) },
+      adapters: { provision: provisionAdapter(executionStore, undefined, mechanisms) },
       groupScoped: (teamId, groupId) => groupScopedOf(team, teamId, groupId),
       roundAdapters: roundAdaptersUsed,
       ...(fixture ? { landingAdapters: fixtureLandingAdapters(), tickMs: 1_000 } : {}),

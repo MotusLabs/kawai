@@ -20,7 +20,9 @@ import { assignmentState } from '../../team/assignmentStore'
 import type { MailboxStore } from '../../team/mailboxStore'
 import { githubRepoOf } from '../landing/landingProbe'
 import { recoverUnknownEffects } from './executorStartup'
-import { applyLanding, applyLandingOutcome, landingAdapters, mergeAdapter, removeWorktreeAdapter, updateBranchAdapter } from './executionLanding'
+import { landingAdapters, removeWorktreeAdapter } from './executionLanding'
+import { mechanismFor, type LandingMechanism, type LandingMechanisms } from '../landing/landingMechanisms'
+import { DIRECT_MECHANISMS } from '../landing/directMechanism'
 import type { CiCheck } from '../../../shared/planExecution'
 import { ciClass } from '../../../shared/planExecutionGates'
 import type { GhCommandOptions } from '../landing/ghCommand'
@@ -58,6 +60,8 @@ export interface ExecutorDeps {
   groupScoped: (teamId: string, groupId: string) => boolean
   /** The team's identity; without it (unknown team) a tick does nothing. */
   teamOf: (teamId: string) => TeamIdentity | undefined
+  /** The registered landing mechanisms, by mode (the composition's; direct only by default). */
+  mechanisms?: LandingMechanisms
   /** Test seam: the landing adapters (defaults to the real git/gh). */
   landingAdapters?: import('./executionLanding').LandingAdapters
   /** Test seam: effect adapters by kind (the composition passes provision's). */
@@ -263,10 +267,8 @@ export class ExecutionExecutor {
             ?? (effect.kind === 'push' ? pushAdapter(rounds)
               : effect.kind === 'open-pr' ? openPrAdapter(rounds, this.deps.ghOptions)
                 : effect.kind === 'rerun' ? rerunAdapter(rounds, this.deps.ghOptions)
-                  : effect.kind === 'update-branch' ? updateBranchAdapter(landing, this.deps.ghOptions)
-                    : effect.kind === 'merge' ? mergeAdapter(landing, this.deps.ghOptions)
-                    : effect.kind === 'remove-worktree' ? removeWorktreeAdapter()
-                      : undefined)
+                  : effect.kind === 'remove-worktree' ? removeWorktreeAdapter()
+                    : this.mechanismOf(effect.executionId).effectAdapter(effect.kind, landing, this.deps.ghOptions))
           if (adapter === undefined) {
             return { ok: false, error: { argv: ['executor', effect.kind], exitCode: 1, stderr: `no adapter for kind ${effect.kind}` } }
           }
@@ -290,7 +292,7 @@ export class ExecutionExecutor {
   private async applyLandingFollowOn(team: TeamIdentity, row: import('./executionRows').ChangeRow, effectId: string): Promise<void> {
     const effect = this.deps.store.effectsOf(row.executionId).find(entry => entry.id === effectId)
     if (effect === undefined) return
-    if (effect.state === 'done') await applyLandingOutcome(this.landingDeps(team), effect, this.deps.landingAdapters ?? landingAdapters)
+    if (effect.state === 'done') await this.mechanismOf(row.executionId).landOutcome(this.landingDeps(team), effect, this.deps.landingAdapters ?? landingAdapters)
     const execution = this.deps.store.execution(row.executionId)
     const fresh = this.deps.store.change(row.executionId, row.change)
     if (execution === null || execution.state === 'running' || fresh === null || fresh.state !== 'landing') return
@@ -304,6 +306,11 @@ export class ExecutionExecutor {
       this.deps.store.transition(row.executionId, row.change, current, { state: 'cancelled', step: null })
       prepared?.commit()
     })
+  }
+
+  /** The execution's landing mechanism, by its recorded mode (integration-candidates D1). */
+  private mechanismOf(executionId: string): LandingMechanism {
+    return mechanismFor(this.deps.mechanisms ?? DIRECT_MECHANISMS, this.deps.store.execution(executionId)?.landingMode ?? 'direct')
   }
 
   private landingDeps(team: TeamIdentity): import('./executionLanding').LandingDeps {
@@ -322,7 +329,7 @@ export class ExecutionExecutor {
     if (stage.kind === 'landing' && stage.roundId !== null) {
       const round = this.deps.store.round(stage.roundId)
       if (row.branch === null || round === null) return
-      await applyLanding(this.landingDeps(team), this.deps.landingAdapters ?? landingAdapters, row, round)
+      await this.mechanismOf(row.executionId).land(this.landingDeps(team), this.deps.landingAdapters ?? landingAdapters, row, round)
       return
     }
     if (stage.kind === 'post-ci') {

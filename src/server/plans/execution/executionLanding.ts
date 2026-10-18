@@ -24,6 +24,7 @@ import { runGit } from '../../git/gitCommand'
 import { logger } from '../../logger'
 import { refusable } from './stepRefusal'
 import { ExecutionConflict } from './executionPatch'
+import { cleanMergeCheck } from '../landing/cleanMerge'
 
 export interface LandingDeps {
   team: TeamIdentity
@@ -318,27 +319,10 @@ export async function applyLandingOutcome(deps: LandingDeps, effect: { kind: str
       if (closed) return stopClosed()
       return // not moved yet
     }
-    // The clean-merge check: parents [H, B'], the base contains B', and the
-    // tree equals merge-tree H B' — B' being the merge's own second parent,
-    // so a base that moved on after the update still passes; the next
-    // up-to-date check brings the carried head along again.
-    const cwd = row.worktree ?? deps.team.groupsRoot
-    const baseRef = `refs/heads/${execution.baseBranch}`
-    const base = await adapters.lsRemoteHead(cwd, baseRef)
-    if (!base.ok || base.sha === null) return
-    if (!(await fetchHeads(adapters, cwd, [baseRef, `refs/heads/${row.branch!}`]))) return
-    const parents = await runGit(['log', '-1', '--pretty=%P', view.data.headRefOid], { cwd })
-    const parentList = parents.ok ? parents.stdout.trim().split(/\s+/) : []
-    const secondParent = parentList.find(parent => parent !== reviewedHead) ?? ''
-    const predicted = secondParent === '' ? null : await adapters.mergeTree(cwd, reviewedHead, secondParent)
-    const secondAncestry = secondParent === '' ? null : await adapters.isAncestor(cwd, secondParent, base.sha)
-    const secondContained = secondAncestry !== null && secondAncestry.ok && secondAncestry.ancestor
-    const clean = parents.ok && predicted !== null && predicted.ok && predicted.conflicts.length === 0
-      && parentList.length === 2
-      && parentList.includes(reviewedHead)
-      && secondContained
-      && (await runGit(['rev-parse', `${view.data.headRefOid}^{tree}`], { cwd })).stdout.trim() === predicted.tree
-    if (clean) {
+    // The clean-merge check (cleanMerge.ts): parents [H, B'], the base contains B', the tree is merge-tree H B'.
+    const checked = await cleanMergeCheck(adapters, { cwd: row.worktree ?? deps.team.groupsRoot, baseBranch: execution.baseBranch, branch: row.branch!, reviewedHead, updatedHead: view.data.headRefOid })
+    if (checked === null) return
+    if (checked.clean) {
       // The carried round: CI runs on the new head (D13).
       const round = effect.roundId !== null && effect.roundId !== undefined ? store.round(effect.roundId) : null
       if (round !== null) {
@@ -351,7 +335,7 @@ export async function applyLandingOutcome(deps: LandingDeps, effect: { kind: str
       return
     }
     if (closed) return stopClosed()
-    return failedUpdate(deps, fresh, updateRound, { base: base.sha, files: [] })
+    return failedUpdate(deps, fresh, updateRound, { base: checked.base, files: [] })
   }
 
   if (effect.kind === 'merge' && outcome !== null) {

@@ -25,6 +25,8 @@ import type { PlanService } from '../PlanService'
 import type { PlanStore } from '../planStore'
 import type { ValidationStanding } from '../validation/validationStanding'
 import { compareWithOriginTree, probeLanding, validatedFilesOf, type ProbeResult } from '../landing/landingProbe'
+import type { LandingMechanisms } from '../landing/landingMechanisms'
+import { DIRECT_MECHANISMS, directMechanism } from '../landing/directMechanism'
 import { ghTreeEntries } from '../landing/github'
 import type { GhCommandOptions } from '../landing/ghCommand'
 import type { PlanExecutionSettings } from '../../team/teamCaps'
@@ -66,8 +68,10 @@ export class ExecutionService {
     getSession: (id: string) => ChatSessionRecord | null | undefined
     /** The registered landing mechanism modes (D13's registry; the wiring arrives with the landing sections). */
     landingModes: () => ReadonlySet<string>
-    /** The landing probe (D13); tests stub it. */
+    /** The landing probe (D13); tests stub it, else the plan's mechanism probes. */
     probe?: typeof probeLanding
+    /** The registered landing mechanisms, by mode (the composition's; direct only by default). */
+    mechanisms?: LandingMechanisms
     /** Kawai cancels its tasks on Stop through the task service (D12). */
     tasks?: import('../../team/TaskService').TaskService
     /** The team's identity for Kawai's own stop (D19's plan-close hook). */
@@ -154,7 +158,13 @@ export class ExecutionService {
       }
     })
     const landed = new Set(this.deps.store.landings(planId).map(landing => landing.change))
-    const probe = await (this.deps.probe ?? probeLanding)({ main: team.groupsRoot, floorChecks: settings.floorChecks, changes: names, provisioned: landed }, this.deps.ghOptions ?? {})
+    const probeInput = { main: team.groupsRoot, floorChecks: settings.floorChecks, changes: names, provisioned: landed }
+    const landing = revisionRow?.content.landing ?? { mode: 'direct' as const }
+    // An unregistered mode is refused by landing-mode-supported; direct's checks still report the repository.
+    const mechanism = (this.deps.mechanisms ?? DIRECT_MECHANISMS).get(landing.mode) ?? directMechanism
+    const probe = this.deps.probe !== undefined
+      ? await this.deps.probe(probeInput, this.deps.ghOptions ?? {})
+      : await mechanism.probe({ ...probeInput, teamId: team.teamId, planId, landing }, this.deps.ghOptions ?? {})
     let baseDiffs: Array<{ change: string; files: string[] }> = []
     if (probe.base !== null && probe.repo !== null) {
       const tree = await ghTreeEntries(probe.repo, probe.base.tree, this.deps.ghOptions ?? {})
