@@ -149,6 +149,25 @@ describe('historyWindow', () => {
     expect(window.events.map(event => ('turnId' in event ? event.turnId : undefined))).toEqual(['turn-4'])
   })
 
+  test('a page anchored on an undated unit inherits the previous dated unit time', () => {
+    const events = [
+      ...turn('turn-1', ago(100)),
+      ...turn('turn-2', ago(90)),
+      ...turn('turn-3', ago(80)),
+      ...turn('turn-4', ago(75)),
+      ...undatedTurn('turn-5'),
+      ...turn('turn-6', ago(2)),
+      ...turn('turn-7', ago(1)),
+    ]
+    // The page anchor is turn-5's INHERITED 75 h time: the 24 hours before
+    // it take turn-2, turn-3, turn-4. Without inheritance the anchor falls
+    // back to the newest event of the whole list and the page would shrink
+    // to turn-4 alone.
+    const page = historyWindow(events, { beforeId: events[4]!.id })
+    expect(page.events.map(event => ('turnId' in event ? event.turnId : undefined))).toEqual(['turn-2', 'turn-3', 'turn-4'])
+    expect(page.hasOlder).toBe(true)
+  })
+
   test('an undated unit inside the window rides along', () => {
     const events = [
       ...turn('turn-1', ago(20)),

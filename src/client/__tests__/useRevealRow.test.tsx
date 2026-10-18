@@ -196,13 +196,14 @@ describe('useRevealRow', () => {
     request('s1', 'hist-gone')
     expect(sent).toHaveLength(1)
     expect(useChatStore.getState().pendingReveal).toEqual({ sessionId: 's1', anchorId: 'hist-gone' })
-    // The page lands without the anchor: the reveal falls back silently and
-    // no second request goes out.
+    // The page lands without the anchor and still offers older history, so
+    // only the one-request guard stops a second page: removing it would page
+    // the whole history back one landing at a time (the loop D5 forbids).
     act(() => {
       useChatStore.getState().applyHistoryPage({
         type: 'chat-history-page', sessionId: 's1', beforeId: 'hist-a',
         events: [{ type: 'user_message', id: 'hist-x', sequence: 0, at: '', turnId: 't', text: 'unrelated' }],
-        hasOlder: false,
+        hasOlder: true,
       })
     })
     setEventCount(3)
