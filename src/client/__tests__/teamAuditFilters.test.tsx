@@ -57,6 +57,17 @@ describe('the committed filters', () => {
     audit.change(() => audit.byId('audit-apply-filters').props.onClick())
     expect(audit.opens()[0]!.filters).toEqual({})
   })
+
+  test('a 23 h DST day round-trips: To shows the chosen day and Apply sends its next midnight (findings-11730e60)', () => {
+    const audit = mountAudit()
+    audit.change(() => audit.byLabel('To date').props.onChange({ target: { value: '2026-03-08' } }))
+    expect(audit.byLabel('To date').props.value).toBe('2026-03-08')
+    audit.sent.length = 0
+    audit.change(() => audit.byId('audit-apply-filters').props.onClick())
+    // 2026-03-09 midnight in New York is EDT (UTC−4): 04:00Z.
+    expect(audit.opens()[0]!.filters).toEqual({ to: '2026-03-09T04:00:00.000Z' })
+    expect(audit.byLabel('To date').props.value).toBe('2026-03-08')
+  })
 })
 
 describe('disconnected', () => {

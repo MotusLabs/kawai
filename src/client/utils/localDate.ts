@@ -14,10 +14,11 @@ export function localDayOf(stamp: string): string {
 /**
  * The day the To input displays: the store's bound is the exclusive end
  * (local midnight after the chosen day), so the owner sees that day — the
- * bound minus one.
+ * day of the bound's last preceding instant. Subtracting a fixed 24 h would
+ * land on the previous day across a 23 h DST day (findings-11730e60).
  */
 export function toDisplayDay(bound: string): string {
-  return localDayOf(new Date(new Date(bound).getTime() - 24 * 60 * 60 * 1000).toISOString())
+  return localDayOf(new Date(new Date(bound).getTime() - 1).toISOString())
 }
 
 /** Local midnight of a YYYY-MM-DD, offset by whole days, as an ISO stamp. */
