@@ -27,8 +27,8 @@ Start only once `providers-and-workers` sections 4 (provider cooldown) and 5 (pe
 
 ## 4. Provider-reported turn cost
 
-- [ ] 4.1 Sum `message_delta.usage.cost` over a turn's `stream_event` frames in `ChatSessionDriver`, and emit `providerCostUsd` on `turn_completed` when any was present (additive in `src/shared/chat.ts`). Verify `chatSessionDriver.test.ts` with the spike's frames: the sum is 0.001064075 against `total_cost_usd` 0.042563, and a turn with no cost field has no `providerCostUsd`.
-- [ ] 4.2 Show `providerCostUsd` in `ChatMessages.tsx`'s completion summary in place of the estimate, with the provider-reported hover text. Verify a client test for "OpenRouter turn" and "Provider without reported cost".
+- [x] 4.1 Sum `message_delta.usage.cost` over a turn's `stream_event` frames in `ChatSessionDriver`, and emit `providerCostUsd` on `turn_completed` when any was present (additive in `src/shared/chat.ts`). Verify `chatSessionDriver.test.ts` with the spike's frames: the sum is 0.001064075 against `total_cost_usd` 0.042563, and a turn with no cost field has no `providerCostUsd`.
+- [x] 4.2 Show `providerCostUsd` in `ChatMessages.tsx`'s completion summary in place of the estimate, with the provider-reported hover text. Verify a client test for "OpenRouter turn" and "Provider without reported cost".
 
 ## 5. Integration
 
