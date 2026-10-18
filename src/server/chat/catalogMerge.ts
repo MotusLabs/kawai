@@ -18,6 +18,21 @@ export interface InheritedSettings {
   limitResetTimeZone?: string
 }
 
+/**
+ * A merged Codex profile (design D4, ruling R1): held outside every
+ * provider, since R2 derives its provider from the resolved home. `codexHome`
+ * and `network` are trusted-tier and only ever set by the base level, so no
+ * nearer file overwrites them here.
+ */
+export interface MergedCodexProfile {
+  label?: string
+  model?: string
+  codexHome?: string
+  network?: boolean
+  /** The first file that defined it, for conflict errors. */
+  originFile: string
+}
+
 export interface MergedModel {
   label?: string
   model?: string
@@ -63,6 +78,8 @@ interface KeyHolder {
   originFile: string
   /** The provider is the key's own one-model provider (legacy chain, re-home, reserved). */
   own: boolean
+  /** The key is a Codex profile, held outside every provider (R1); provider is unused. */
+  codex?: true
 }
 
 /** Provider ids taken by legacy entries naming a shipped-only provider (B1). */
@@ -73,6 +90,8 @@ export function reservedProviderId(id: string): string {
 export class CatalogMerger {
   /** Providers in first-seen (farthest file first) order. */
   readonly providers = new Map<string, MergedProvider>()
+  /** Codex profiles (R1), in first-seen order; never inside a provider. */
+  readonly codexProfiles = new Map<string, MergedCodexProfile>()
   readonly errors: string[] = []
   /** Model key → where it sits and which tier defined it. */
   private holders = new Map<string, KeyHolder>()
@@ -128,6 +147,12 @@ export class CatalogMerger {
           continue
         }
         const holder = this.holders.get(key)
+        if (holder !== undefined && holder.codex) {
+          // D4: providers.json cannot claim a Codex profile — the file is
+          // reported and the Codex profile stays usable outside it.
+          this.errors.push(`${file}: model "${key}" is defined as a Codex profile (${holder.originFile}); providers.json cannot hold it, and the model key is ignored.`)
+          continue
+        }
         if (holder !== undefined && holder.provider !== id) {
           if (holder.operator) {
             this.errors.push(`${file}: model "${key}" is already defined under provider "${holder.provider}" (${holder.originFile}); the nearer definition is ignored.`)
@@ -172,7 +197,29 @@ export class CatalogMerger {
    */
   addProfiles(file: string, shipped: boolean, entries: Map<string, PartialProfile>): void {
     for (const [id, entry] of entries) {
+      if (entry.runtime === 'codex') {
+        this.addCodexProfile(file, id, entry)
+        continue
+      }
       const holder = this.holders.get(id)
+      if (holder?.codex) {
+        // Cross-level runtime disagreement (D4): a Claude-shaped entry (an
+        // explicit runtime or any Claude-only field) cannot overlay a Codex
+        // profile. A label- or model-only entry stays runtime-neutral and
+        // overlays it instead.
+        const claudeShaped = entry.runtime === 'claude'
+          || Object.keys(entry.env).length > 0
+          || entry.executable !== undefined
+          || entry.limitResetTimeZone !== undefined
+        if (claudeShaped) {
+          this.errors.push(`${file}: profile "${id}" is a Claude entry here but a Codex entry in ${holder.originFile}; the entry is ignored.`)
+          continue
+        }
+        const codex = this.codexProfiles.get(id)!
+        codex.label = entry.label ?? codex.label
+        codex.model = entry.model ?? codex.model
+        continue
+      }
       if (holder !== undefined) {
         const holderProvider = this.providers.get(holder.provider)!
         if (holder.own) {
@@ -238,6 +285,36 @@ export class CatalogMerger {
       })
       this.setHolder(id, { provider: id, operator: !shipped, originFile: file, own: true })
     }
+  }
+
+  /**
+   * A Codex entry (D4/R1): held outside every provider. When providers.json
+   * already claims the key, that file is reported, its model key is released,
+   * and the entry stays a usable Codex profile. `codexHome` and `network`
+   * arrive only from trusted files (the parser enforces it), so a nearer
+   * overlay never overwrites them.
+   */
+  private addCodexProfile(file: string, id: string, entry: PartialProfile): void {
+    const holder = this.holders.get(id)
+    if (holder !== undefined && !holder.codex) {
+      const provider = this.providers.get(holder.provider)!
+      provider.models.delete(id)
+      this.errors.push(`${file}: profile "${id}" is a model of provider "${holder.provider}" (${holder.originFile}); providers.json cannot hold a Codex profile, so the model key is released and "${id}" stays a Codex profile.`)
+    }
+    const existing = this.codexProfiles.get(id)
+    if (existing) {
+      existing.label = entry.label ?? existing.label
+      existing.model = entry.model ?? existing.model
+      return
+    }
+    this.codexProfiles.set(id, {
+      label: entry.label,
+      model: entry.model,
+      codexHome: entry.codexHome,
+      network: entry.network,
+      originFile: file,
+    })
+    this.holders.set(id, { provider: '', operator: true, originFile: file, own: false, codex: true })
   }
 
   /** A legacy entry whose id names an existing operator provider merges into it. */

@@ -8,6 +8,10 @@
 // as one-model providers. `executable` is accepted only in operator-owned
 // files (user level / shipped default): project files are agent-writable, and
 // an executable there would run arbitrary code with the server's credentials.
+// Codex entries (design D4, ruling R1) declare `runtime: "codex"` and carry
+// label, model, and — trusted tier only, like `executable` — `codexHome` and
+// `network`; they sit outside every provider, and ruling R2 derives their
+// provider id from the hash of the resolved home.
 // A file that fails validation is reported and skipped — the rest of the
 // catalog still resolves. The shipped defaults are also embedded at build time
 // (the static JSON imports below): compiled release binaries have no config/
@@ -24,6 +28,7 @@ import {
   parseProviderCatalogValue,
   type FileParse,
 } from './catalogParse'
+import { codexHomeProviderId, resolveCodexHome } from './codexProfiles'
 
 // The file formats' validators are re-exported: callers and tests import the
 // whole catalog surface from this module.
@@ -71,6 +76,8 @@ export interface ProfileCatalogContext {
   homeDir?: string
   imageDefaultPath?: string
   imageDefaultProvidersPath?: string
+  /** The server's `CODEX_HOME`, when set; tests inject it (design D4). */
+  serverCodexHome?: string
 }
 
 /** A fully merged catalog entry: label resolved, env merged, never partial. */
@@ -82,6 +89,15 @@ export interface CatalogProfile {
   executable?: string
   /** Zone of reset times the provider writes without one (IANA or ±HH:MM). */
   limitResetTimeZone?: string
+  /**
+   * The entry's runtime (ruling R1). Absent reads as `claude`, keeping every
+   * existing profile's shape unchanged.
+   */
+  runtime?: 'claude' | 'codex'
+  /** The Codex home the user-level catalog named, if any (R1, trusted tier). */
+  codexHome?: string
+  /** Whether the Codex sandbox may reach the network (trusted tier). */
+  network?: boolean
   /** The provider owning this model: cooldown and usage key (design D10). */
   providerId: string
 }
@@ -298,6 +314,27 @@ export function resolveProfileCatalog(
         providerId,
       })
     }
+  }
+  // Codex profiles (R1) sit outside every provider: their provider id is the
+  // hash of the resolved home (R2), so cooldown and usage key on one home are
+  // shared and the path never lands in an id or a label.
+  for (const [id, codex] of merger.codexProfiles) {
+    const home = resolveCodexHome(
+      { codexHome: codex.codexHome },
+      {
+        CODEX_HOME: ctx.serverCodexHome ?? process.env.CODEX_HOME,
+        HOME: ctx.homeDir ?? process.env.HOME ?? os.homedir(),
+      },
+    )
+    profiles.set(id, {
+      label: codex.label?.trim() || id,
+      env: {},
+      ...(codex.model !== undefined ? { model: codex.model } : {}),
+      ...(codex.codexHome !== undefined ? { codexHome: codex.codexHome } : {}),
+      ...(codex.network !== undefined ? { network: codex.network } : {}),
+      runtime: 'codex',
+      providerId: codexHomeProviderId(home),
+    })
   }
   // Omitted selections resolve to `default`; it always exists, empty when no
   // file defines it (global provider environment alone).
