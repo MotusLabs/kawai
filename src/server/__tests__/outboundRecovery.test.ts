@@ -3,8 +3,8 @@
 // a send is recorded through the manager's registered PreToolUse hook, the
 // server stops before its outcome arrives, and a second manager starts over
 // the same database file through the production startup path —
-// `initDatabase` (schema versions, backups off for a plain path? no: a file
-// path takes its startup snapshot) then `new ChatSessionManager(...)` and
+// `initDatabase` (schema versions; a file path takes its startup snapshot)
+// then `new ChatSessionManager(...)` and
 // `whenRestored()`. The call reads outcome unknown, the restart constructs no
 // agent query and writes no row, and the resumed session's next push is a
 // new row with its own outcome while the earlier call stays unknown.
