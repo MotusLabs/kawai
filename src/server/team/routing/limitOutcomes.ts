@@ -366,6 +366,16 @@ export class LimitOutcomes {
       const recipient = this.options.getRecord(target.id)
       if (!recipient || this.options.teamOf(target.id) !== message.teamId) throw new Error('Handoff recipient is not a session of this team')
       if ((recipient.claudeProfileId ?? 'default') === profileId) throw new Error(`Cannot hand off work to its limited profile ${profileId}`)
+      // A session on any model of the cooling provider refuses too (D9).
+      const fromRecord = this.options.getRecord(fromSession)
+      const excludedProvider = providerOf(profileId, fromRecord?.projectPath ? { projectPath: fromRecord.projectPath } : {})
+      if (excludedProvider !== null && this.options.limits.providerCooldownUntil(excludedProvider) !== null) {
+        const recipientProvider = providerOf(recipient.claudeProfileId ?? 'default', recipient.projectPath ? { projectPath: recipient.projectPath } : {})
+        if (recipientProvider === excludedProvider) {
+          throw new Error(`Cannot hand off work to ${recipient.claudeProfileId ?? 'default'}: its provider ${excludedProvider}` +
+            ` is cooling after the limit on ${profileId}`)
+        }
+      }
       if (recipient.archivedAt) {
         if (!this.options.restoreSession) throw new Error('Restoring the handoff recipient is not available')
         this.options.restoreSession(target.id)

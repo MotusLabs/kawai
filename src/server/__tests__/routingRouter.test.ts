@@ -6,7 +6,7 @@ import type { EligibleMember, MemberExclusion } from '../team/dispatcher'
 import { parseGroupFile, type GroupDefinition } from '../team/groupFile'
 import type { TeamMessage } from '../team/mailboxStore'
 import { DECISION_LOG_SIZE, ProfileRouter, type GroupMemberRecord } from '../team/routing/router'
-import { cooldownUntil } from '../team/routing/limitEvents'
+import { cooldownUntil, providerCooldownUntil } from '../team/routing/limitEvents'
 import type { RouteContext, RouteDecision, LimitEvent } from '../../shared/routing'
 
 const T0 = Date.parse('2026-10-12T12:00:00.000Z')
@@ -59,7 +59,7 @@ function makeRouter() {
     rules: {
       rule: () => (rule ? { route: async (ctx: RouteContext) => { ruleCalls.push(ctx); return rule!(ctx) } } as never : undefined),
     },
-    limits: { forProfile: id => events[id] ?? [], cooldownFor: id => ({ until: cooldownUntil(id, providerFor?.(id) ?? null, Object.values(events).flat(), now), provider: false, providerId: null }) },
+    limits: { forProfile: id => events[id] ?? [], cooldownFor: id => ({ until: cooldownUntil(id, providerFor?.(id) ?? null, Object.values(events).flat(), now), provider: false, providerId: null }), providerCooldownUntil: providerId => providerCooldownUntil(providerId, Object.values(events).flat(), now) },
     ...(providerFor ? { providerOf: providerFor } : {}),
     usageOf: id => (id === 'claude' ? { status: 'warning', windows: [{ key: 'five_hour', label: '5h', percentUsed: 80, resetsAt: null }], receivedAt: 'r', source: 'pull' } : null),
     now: () => now,
@@ -111,6 +111,31 @@ describe('built-in routing', () => {
       .toEqual({ kind: 'member', sessionId: 'b' })
     expect(await makeRouter().route(message({ excludedProfile: 'glm' }), { eligible: [eligible('a', 50)], attempt: 0 }))
       .toMatchObject({ kind: 'none' })
+  })
+
+  test("a forward from a model-scoped limit may reach the provider's other model", async () => {
+    def = group('profiles: [opus, sonnet]\nmax: 2')
+    members = [
+      { sessionId: 'o', profileId: 'opus', cwd: '/wt' },
+      { sessionId: 's', profileId: 'sonnet', cwd: '/wt' },
+    ]
+    providerFor = () => 'claude'
+    // opus's own seven_day_opus window is model-scoped: the provider does not cool.
+    events.opus = [{ ...finalEvent('opus', new Date(T0 + 3 * 24 * 3_600_000).toISOString()), providerId: 'claude', window: 'seven_day_opus' }]
+    expect(await makeRouter().route(message({ excludedProfile: 'opus' }), { eligible: [eligible('s', 5)], attempt: 0 }))
+      .toEqual({ kind: 'member', sessionId: 's' })
+    providerFor = null
+  })
+
+  test('a spawn slot of the cooling provider is hard-filtered from a forward', async () => {
+    def = group('profiles: [glm, glm-flash]\nmax: 2')
+    providerFor = () => 'zai'
+    events.glm = [{ ...finalEvent('glm', new Date(T0 + 40 * 60_000).toISOString()), providerId: 'zai', window: null }]
+    spawnAllowed = true
+    const result = await makeRouter().route(message({ excludedProfile: 'glm' }), { eligible: [], attempt: 0 })
+    expect(result).toMatchObject({ kind: 'none' })
+    expect(spawns).toEqual([])
+    providerFor = null
   })
 
   test("a sibling model's limit cools its provider's other profile in routing", async () => {
@@ -451,7 +476,7 @@ describe('plan roles and author tags (plan-execution D15)', () => {
       excludedProfile: m => m.excludedProfile ?? undefined,
       allowedProfiles: m => m.allowedProfiles ?? null,
       rules: { rule: () => (rule ? { route: async (ctx: RouteContext) => { ruleCalls.push(ctx); return rule!(ctx) } } as never : undefined) },
-      limits: { forProfile: id => events[id] ?? [], cooldownFor: id => ({ until: cooldownUntil(id, providerFor?.(id) ?? null, Object.values(events).flat(), now), provider: false, providerId: null }) },
+      limits: { forProfile: id => events[id] ?? [], cooldownFor: id => ({ until: cooldownUntil(id, providerFor?.(id) ?? null, Object.values(events).flat(), now), provider: false, providerId: null }), providerCooldownUntil: providerId => providerCooldownUntil(providerId, Object.values(events).flat(), now) },
     ...(providerFor ? { providerOf: providerFor } : {}),
       usageOf: () => null,
       now: () => now,

@@ -41,7 +41,7 @@ export interface ProfileRouterOptions {
   targetWorktree: (message: TeamMessage) => string | null
   staffing: Pick<WorktreeStaffing, 'spawnContext' | 'spawnFor'>
   rules: Pick<RuleRegistry, 'rule'>
-  limits: Pick<LimitEventStore, 'forProfile' | 'cooldownFor'>
+  limits: Pick<LimitEventStore, 'forProfile' | 'cooldownFor' | 'providerCooldownUntil'>
   /** The provider owning a profile (providers-and-workers D10); unresolved ids stand in as their own provider. */
   providerOf?: (profileId: string) => string
   usageOf: (profileId: string) => ChatUsageReport | null
@@ -90,6 +90,15 @@ export class ProfileRouter implements GroupRouter {
       spawnAllowed: spawn?.allowed ?? false,
       spawnCwd: spawn?.worktree ?? null,
       ...(this.options.excludedProfile?.(message) ? { excludeProfile: this.options.excludedProfile(message)! } : {}),
+      // A forward also skips the excluded model's provider while it cools
+      // (providers-and-workers D9): a hard filter, so a rule cannot pick it.
+      ...(() => {
+        const excluded = this.options.excludedProfile?.(message)
+        if (excluded === undefined) return {}
+        const excludedProvider = this.options.providerOf?.(excluded) ?? excluded
+        if (this.options.limits.providerCooldownUntil(excludedProvider) === null) return {}
+        return { excludeProvider: excludedProvider, providerOf: (id: string) => this.options.providerOf?.(id) ?? id }
+      })(),
       ...(this.options.allowedProfiles?.(message) ? { allowedProfiles: this.options.allowedProfiles(message)! } : {}),
     })
     if (candidates.length === 0) {

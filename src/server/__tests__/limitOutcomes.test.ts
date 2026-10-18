@@ -259,6 +259,22 @@ describe('parking', () => {
     expect(store.get(m.id)?.state).toBe('forwarded')
     expect(() => outcomes.handOff(m.id, { kind: 'group', id: 'devs' })).toThrow('Only parked work')
   })
+
+  test('a Hand off to a session of the cooling provider refuses; another provider takes it', async () => {
+    const m = deliver()
+    work()
+    await hitLimit(40 * MIN)
+    records.set('flash', record('flash', { claudeProfileId: 'glm-flash' }))
+    // The limit named its provider zai, so the provider stands while glm-flash cools.
+    limits.record({
+      profileId: 'glm', sessionId: 'dev', groupId: 'devs', kind: 'rate_limit', final: true, status: 429,
+      message: 'quota', resetsAt: iso(T0 + 40 * MIN), providerId: 'zai', window: null,
+    })
+    expect(() => outcomes.handOff(m.id, { kind: 'session', id: 'flash' }))
+      .toThrow('its provider zai is cooling after the limit on glm')
+    records.set('clauder', record('clauder', { claudeProfileId: 'claude' }))
+    expect(outcomes.handOff(m.id, { kind: 'session', id: 'clauder' })).toMatchObject({ toId: 'clauder', excludedProfile: 'glm' })
+  })
 })
 
 describe('recovery notes', () => {

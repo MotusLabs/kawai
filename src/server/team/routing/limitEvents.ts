@@ -161,6 +161,12 @@ export class LimitEventStore {
       providerId,
     }
   }
+
+  /** The provider's own cooldown end (D8): its provider-scoped events alone. */
+  providerCooldownUntil(providerId: string | null): string | null {
+    if (providerId === null) return null
+    return providerCooldownUntil(providerId, this.forProvider(providerId), this.now())
+  }
 }
 
 /**
