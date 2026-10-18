@@ -92,17 +92,8 @@ describe('useHistoryAnchor', () => {
     expect(exposed!.skipStickOnce.current).toBe(false)
   })
 
-  test('a live append during the page load followed by a dropped page leaves the skip disarmed', () => {
-    const box = stubBox(100)
-    mount(box, false, 'e0')
-    exposed!.capture()
-    update(box, true, 'e0')
-    // While the page flies a live append lands at the bottom — the
-    // transcript grows, but its first event id is still e0. The page then
-    // resolves dropped (stale reply): a prepend-count check saw the growth
-    // and wrongly armed here; the first-event-id check does not.
-    update(box, false, 'e0')
-    expect(exposed!.skipStickOnce.current).toBe(false)
-    expect(box.scrollTop).toBe(1230)
-  })
+  // The live-append-during-a-page-load scenario is pinned at ChatView level
+  // (chatViewHistory.test.tsx): there the wiring decides which value the
+  // hook sees, and a dropped page after an append must leave the skip
+  // disarmed.
 })
