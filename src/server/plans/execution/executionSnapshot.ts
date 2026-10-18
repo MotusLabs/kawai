@@ -51,6 +51,8 @@ export interface PlannedChange {
   landing: { mergeSha: string; postCi: unknown } | null
   /** The change's newest merge or update-branch effect, any state (D13's follow-ons). */
   landingEffect: EffectRow | null
+  /** Every effect of the newest round, any state, oldest first: its push, PR, and rerun. */
+  roundEffects: EffectRow[]
 }
 
 export interface PlannedExecution {
@@ -104,7 +106,10 @@ export function executionSnapshot(teamId: string, main: string, executions: Exec
         dependsOn: facts.get(row.change)?.dependsOn ?? [],
         group: facts.get(row.change)?.group ?? null,
         task: row.taskId === null ? null : { status: taskStatusOf(row.taskId), revision: taskRevisionOf(row.taskId), results: resultsOf(row.taskId), assignment: assignmentOf(row.taskId) },
-        round: executions.rounds(row.executionId, row.change).at(-1) ?? null,
+        ...(() => {
+          const round = executions.rounds(row.executionId, row.change).at(-1) ?? null
+          return { round, roundEffects: round === null ? [] : effects.filter(effect => effect.roundId === round.id) }
+        })(),
         landing: (() => {
           const fact = executions.landings(execution.planId).find(entry => entry.change === row.change)
           return fact ? { mergeSha: fact.mergeSha, postCi: fact.postCi as unknown } : null

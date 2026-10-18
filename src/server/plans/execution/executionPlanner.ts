@@ -210,29 +210,38 @@ export function planSteps(snapshot: ExecutionSnapshot, _now: string): PlanSteps 
         continue
       }
       if (round.outcome !== null) continue
+      // A round's effects are found by the round, never by a key that
+      // carries the generation: any transition bumps it, and a round must
+      // not lose its push, its PR, or its one rerun to a bump (D10, D14).
+      const ofRound = (kind: string) => change.roundEffects.filter(effect => effect.kind === kind).at(-1) ?? null
+      const live = (effect: { state: string } | null) => effect !== null && (effect.state === 'pending' || effect.state === 'running' || effect.state === 'unknown')
+      const ciStage = () => {
+        if (!live(ofRound('rerun'))) steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'ci', roundId: round.id, resultId: null })
+      }
       if (round.carriedFrom !== null) {
         // A carried round keeps its review: CI on the new head decides it.
-        const rerunKey = `${change.executionId}:${change.change}:rerun:${round.number}:${change.generation}`
-        if (!standing.has(rerunKey)) steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'ci', roundId: round.id, resultId: null })
+        ciStage()
         continue
       }
-      const pushKey = `${change.executionId}:${change.change}:push:${round.number}:${change.generation}`
       if (round.pushedAt === null) {
-        if (!standing.has(pushKey)) steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'push', roundId: round.id, resultId: null })
+        if (!live(ofRound('push'))) steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'push', roundId: round.id, resultId: null })
         continue
       }
-      // The change's one pull request: each round re-lists (reusing an open
-      // one, stopping on a closed one — plan-landing); the per-round effect
-      // key bounds it to once per round.
-      const prKey = `${change.executionId}:${change.change}:open-pr:${round.number}:${change.generation}`
-      if (change.branch !== null && !standing.has(prKey)) {
-        steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'open-pr', roundId: round.id, resultId: null })
+      // The change's one pull request: each round re-lists once (reusing an
+      // open one, stopping on a closed one — plan-landing); CI and the review
+      // wait for it, so no review is dispatched for a round without its PR.
+      if (change.branch !== null) {
+        const pull = ofRound('open-pr')
+        if (pull === null || pull.state === 'failed' || pull.state === 'cancelled') {
+          steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'open-pr', roundId: round.id, resultId: null })
+          continue
+        }
+        if (live(pull)) continue
       }
       if (round.reviewAssignmentId !== null) {
         steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'verdict', roundId: round.id, resultId: null })
       } else {
-        const rerunKey = `${change.executionId}:${change.change}:rerun:${round.number}:${change.generation}`
-        if (!standing.has(rerunKey)) steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'ci', roundId: round.id, resultId: null })
+        ciStage()
       }
     }
   }

@@ -91,10 +91,14 @@ export function evaluateCi(checks: readonly CiCheck[], floorMap: FloorMap, timin
       detail: { message: `No reported check covers ${uncovered.join(', ')}.`, checks: uncovered },
     }
   }
-  const flaky = [...groups.entries()]
-    .filter(([, runs]) => runs.length > 1 && runs.some(run => ciClass(run) === 'fail'))
+  return { kind: 'pass', flaky: flakyChecks(checks) }
+}
+
+/** The names that failed and then passed on a newer run: flaky for a passing round (D10). */
+export function flakyChecks(checks: readonly CiCheck[]): string[] {
+  return [...runsByName(checks).entries()]
+    .filter(([, runs]) => runs.length > 1 && runs.some(run => ciClass(run) === 'fail') && ciClass(runs.at(-1)!) === 'pass')
     .map(([name]) => name)
-  return { kind: 'pass', flaky }
 }
 
 /** A findings row as the verdict reads it; `author` is the submitting session, null for the human. */

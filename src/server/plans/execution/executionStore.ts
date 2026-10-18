@@ -293,9 +293,11 @@ export class ExecutionStore {
       const prior = this.rounds(input.executionId, input.change).at(-1) ?? null
       const number = (prior?.number ?? 0) + 1
       const id = `round-${crypto.randomUUID()}`
-      this.db.prepare(`INSERT INTO plan_execution_rounds (id, execution_id, change, attempt_id, number, result_id, commit_sha, fix_round, ci_window_from)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-        id, input.executionId, input.change, input.attemptId, number, input.resultId, input.commitSha, input.fixRound ? 1 : 0, at,
+      // The CI window opens at the push (markRoundPushed), not here: a push
+      // that backs off must not eat into the round's 30 minutes (D10).
+      this.db.prepare(`INSERT INTO plan_execution_rounds (id, execution_id, change, attempt_id, number, result_id, commit_sha, fix_round)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        id, input.executionId, input.change, input.attemptId, number, input.resultId, input.commitSha, input.fixRound ? 1 : 0,
       )
       if (prior && prior.outcome === null) {
         this.db.prepare(`UPDATE plan_execution_rounds SET outcome = 'superseded', decided_at = ? WHERE id = ? AND outcome IS NULL`).run(at, prior.id)

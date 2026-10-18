@@ -25,7 +25,7 @@ import { ValidationDetailCache } from './validation/validationDetail'
 import { ExecutionStore } from './execution/executionStore'
 import { ExecutionService } from './execution/ExecutionService'
 import { executionOwnership, type ExecutionOwnership } from './execution/executionOwnership'
-import { executionViews } from './execution/executionView'
+import { executionViewReads, executionViews } from './execution/executionView'
 import { ExecutionExecutor } from './execution/executor'
 import { ExecutionRuntime, ExecutionWakes } from './execution/executionRuntime'
 import { provisionAdapter } from './execution/executionProvision'
@@ -175,6 +175,7 @@ export function composePlanServices(options: PlanServicesOptions): {
   })
   const core = options.executionCore ?? composeExecutionCore(options.db)
   const executionStore = core.executionStore
+  const viewReads = executionViewReads(options.plans, options.db)
   // D19: closing a plan stops its running executions as Kawai. The hook is
   // late-bound — the execution service needs this PlanService — and is set
   // before this function returns, so no close can find it unbound.
@@ -192,7 +193,7 @@ export function composePlanServices(options: PlanServicesOptions): {
       const execution = executionStore.execution(executionId)
       return execution ? { planId: execution.planId, revision: execution.revision } : null
     },
-    executionsOf: planId => executionViews(executionStore, planId),
+    executionsOf: planId => executionViews(executionStore, planId, viewReads),
     onPlanClosed: async planId => {
       const plan = options.plans.get(planId)
       if (plan !== null && plan !== undefined) await executions?.stopForPlan(plan.teamId, planId)

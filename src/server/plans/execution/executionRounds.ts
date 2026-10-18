@@ -159,8 +159,11 @@ async function pollCi(deps: RoundDeps, changeRow: { executionId: string; change:
   const statuses = await deps.adapters.statuses(repo, round.commitSha, deps.ghOptions)
   if (!runs.ok || !statuses.ok) return
   const checks: CiCheck[] = [...runs.data, ...statuses.data]
-  const change = store.change(changeRow.executionId, changeRow.change)
-  const rerunEffect = change === null ? null : store.effectByKey(`${changeRow.executionId}:${changeRow.change}:rerun:${round.number}:${change.generation}`)
+  // The round's one rerun (D10), whatever generation requested it: a later
+  // transition never earns the round a second one. One still settling waits.
+  const rerunEffect = store.effectsOf(changeRow.executionId)
+    .filter(effect => effect.roundId === round.id && effect.kind === 'rerun' && effect.state !== 'cancelled').at(-1) ?? null
+  if (rerunEffect !== null && rerunEffect.state !== 'done' && rerunEffect.state !== 'failed') return
   const rerunOutcome = rerunEffect !== null && rerunEffect.state === 'done' && rerunEffect.outcome !== null && typeof rerunEffect.outcome === 'object'
     ? rerunEffect.outcome as { at?: string; runIds?: number[] } : null
   const evaluation = evaluateCi(checks, execution.floor.map, {
@@ -282,10 +285,12 @@ async function decideVerdict(deps: RoundDeps, changeRow: { executionId: string; 
 export function recordPull(executions: ExecutionStore, executionId: string, change: string, pr: { number: number; url: string; openedByKawai: boolean }): void {
   const row = executions.change(executionId, change)
   if (row === null) return
-  // An unchanged PR writes nothing: the transition would bump the change's
-  // generation and churn every effect key (D14).
-  if (row.prNumber === pr.number && row.prUrl === pr.url && row.prOpenedByKawai === pr.openedByKawai) return
-  executions.transition(executionId, change, row, { prNumber: pr.number, prUrl: pr.url, prOpenedByKawai: pr.openedByKawai })
+  // A reused pull request keeps who opened it: re-listing Kawai's own PR in
+  // a later round finds it open, which never makes it someone else's.
+  const openedByKawai = pr.openedByKawai || (row.prNumber === pr.number && row.prOpenedByKawai)
+  // An unchanged PR writes nothing: the transition would bump the change's generation.
+  if (row.prNumber === pr.number && row.prUrl === pr.url && row.prOpenedByKawai === openedByKawai) return
+  executions.transition(executionId, change, row, { prNumber: pr.number, prUrl: pr.url, prOpenedByKawai: openedByKawai })
 }
 
 async function stopChange(deps: RoundDeps, changeRow: { executionId: string; change: string }, reason: StopReason, detail: StopDetail): Promise<void> {

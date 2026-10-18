@@ -11,7 +11,7 @@ import type { ExecutionSnapshot, PlannedChange } from '../plans/execution/execut
 const change = (name: string, state: ChangeState, over: Partial<PlannedChange> = {}): PlannedChange => ({
   executionId: 'e1', change: name, state, step: null, generation: 0, taskId: null,
   worktree: null, branch: null, baselineCommit: null, prNumber: null, passedAt: null, dependsOn: [], group: 'devs',
-  task: null, round: null, landing: null, landingEffect: null, ...over,
+  task: null, round: null, landing: null, landingEffect: null, roundEffects: [], ...over,
 })
 
 const withTask = (state: ChangeState, task: Partial<NonNullable<PlannedChange['task']>>, over: Partial<PlannedChange> = {}): PlannedChange =>

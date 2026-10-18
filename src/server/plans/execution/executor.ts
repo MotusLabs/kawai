@@ -168,10 +168,11 @@ export class ExecutionExecutor {
       if (snapshot.executions.length === 0) return
       const steps = planSteps(snapshot, this.deps.now?.().toISOString() ?? new Date().toISOString())
       if (steps.transitions.length === 0 && steps.effects.length === 0 && steps.dispatches.length === 0 && steps.stages.length === 0 && steps.fixes.length === 0) {
-        // Nothing new is due, but an effect the restart left pending still
-        // runs (its follow-on transition lands with its outcome, D14).
-        await this.settledRunDue(teamId)
-        return
+        // Nothing new is due, but an effect left pending (a restart, a
+        // backoff, a Retry's reset) still runs; one that ran settled a step,
+        // so the next pass plans what it made due (D14).
+        if (await this.settledRunDue(teamId) === 0) return
+        continue
       }
 
       for (const step of steps.transitions) {
@@ -237,15 +238,16 @@ export class ExecutionExecutor {
     return repo
   }
 
-  /** runDue, with a tick abandoned by `close` swallowing its late writes. */
-  private async settledRunDue(teamId: string): Promise<void> {
-    if (this.closed) return
+  /** runDue, with a tick abandoned by `close` swallowing its late writes; the count of effects run. */
+  private async settledRunDue(teamId: string): Promise<number> {
+    if (this.closed) return 0
     try {
-      await this.runner().runDue(teamId)
+      return await this.runner().runDue(teamId)
     } catch (error) {
       // A test or shutdown closed the database under an in-flight effect:
       // the tick is abandoned, not failed — the next executor resumes.
       if (!this.closed) throw error
+      return 0
     }
   }
 

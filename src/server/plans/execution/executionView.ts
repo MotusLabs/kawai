@@ -1,43 +1,52 @@
 // The wire view of a plan's executions (plan-execution D17/D18): the full
 // `PlanExecutionView` the Plans view and `plan_get` show, projected from the
 // store rows — per change the state, waiting reason, PR, counts, latest
-// round with its CI and verdict, the landing fact, and the expandable
-// effects. Pure reads; no policy.
-import type { PlanExecutionView } from '../../../shared/planExecution'
-import type { WaitingReason } from '../../../shared/planExecution'
+// round with its CI (flaky names marked) and verdict, the landing fact, and
+// the expandable effects. Pure reads; no policy.
+import type { PlanExecutionView, RoundCiView, WaitingReason } from '../../../shared/planExecution'
+import { flakyChecks } from '../../../shared/planExecutionGates'
+import type { TaskFindings } from '../../../shared/teamTasks'
+import type { Database } from 'bun:sqlite'
+import { TaskResultStore } from '../../team/taskResultStore'
+import type { PlanStore } from '../planStore'
+import type { RoundRow } from './executionRows'
 import type { ExecutionStore } from './executionStore'
 
-/** One change's waiting reason, derived from its row and slot (the pure labels live in the shared module). */
-function waitingOf(store: ExecutionStore, row: { executionId: string; change: string; state: string; step: string | null; taskId: string | null }): WaitingReason | null {
+/** What the view reads beside the store: the executed revision's dependencies and a round's findings. */
+export interface ExecutionViewReads {
+  dependsOn: (planId: string, revision: number, change: string) => string[]
+  findings: (resultId: string) => TaskFindings[]
+}
+
+/** The production reads: the plan store's revision content and the team's findings rows. */
+export function executionViewReads(plans: Pick<PlanStore, 'revision'>, db: Database): ExecutionViewReads {
+  const results = new TaskResultStore(db)
+  return {
+    dependsOn: (planId, revision, change) => plans.revision(planId, revision)?.content.changes.find(entry => entry.change === change)?.dependsOn ?? [],
+    findings: resultId => results.findingsFor(resultId),
+  }
+}
+
+const PENDING_CI = ['queued', 'in_progress', 'waiting', 'requested', 'pending']
+
+/** One change's waiting reason, derived from its row, the revision's dependencies, and the slot. */
+function waitingOf(store: ExecutionStore, reads: ExecutionViewReads, row: { executionId: string; change: string; state: string; step: string | null; stopDetail: { message?: string; session?: string } | null }): WaitingReason | null {
   const execution = store.execution(row.executionId)
   if (execution === null) return null
   if (row.state === 'waiting') {
     const states = new Map(store.changes(row.executionId).map(entry => [entry.change, entry.state]))
-    const revision = store.execution(row.executionId)!
-    void revision
-    const dependencies = store.changes(row.executionId)
-      .filter(entry => entry.state !== 'landed')
-      .map(entry => entry.change)
-      .filter(change => change !== row.change)
-    // The honest reason: a dependency that has not landed, or the parallel limit.
-    const held = dependencies.some(change => states.get(change) !== 'landed' && states.get(change) !== undefined)
-    // `dependsOn` lives in the plan content, which the caller projects; the
-    // store-side fallback names the limit only when nothing else holds.
-    void held
-    const inProgress = store.changes(row.executionId).filter(entry => ['provisioning', 'implementing', 'gating', 'landing'].includes(entry.state)).length
-    return inProgress >= execution.maxParallel
-      ? { kind: 'parallel-limit', limit: execution.maxParallel }
-      : { kind: 'dependency', changes: dependencies }
+    const unlanded = reads.dependsOn(execution.planId, execution.revision, row.change).filter(change => states.get(change) !== 'landed')
+    return unlanded.length > 0 ? { kind: 'dependency', changes: unlanded } : { kind: 'parallel-limit', limit: execution.maxParallel }
   }
   if (row.step === 'awaiting-slot') return { kind: 'slot', holder: store.slot(execution.teamId)?.holderId ?? null }
-  if (row.step === 'releasing') return { kind: 'release', member: '', reason: 'a member is not ready to release' }
+  if (row.step === 'releasing') return { kind: 'release', member: row.stopDetail?.session ?? '', reason: row.stopDetail?.message ?? 'a member is not ready to release' }
   if (row.step === 'reviewing') return { kind: 'review', claimant: null }
   if (row.state === 'gating' && row.step === null) {
     const round = store.rounds(row.executionId, row.change).at(-1) ?? null
     if (round === null) return null
     if (round.pushedAt === null) return { kind: 'effect', effect: 'push', state: 'pending', nextAt: null }
     if (round.reviewAssignmentId === null) {
-      const pending = (round.ci ?? []).filter(check => ['queued', 'in_progress', 'waiting', 'requested', 'pending'].includes(check.conclusion.toLowerCase())).map(check => check.name)
+      const pending = (round.ci ?? []).filter(check => PENDING_CI.includes(check.conclusion.toLowerCase())).map(check => check.name)
       return pending.length > 0 ? { kind: 'ci', pending } : null
     }
     return { kind: 'review', claimant: null }
@@ -45,8 +54,30 @@ function waitingOf(store: ExecutionStore, row: { executionId: string; change: st
   return null
 }
 
+/**
+ * A round's CI standing: passed once the review was dispatched (or a carried
+ * round's verdict decided it), failed when the round failed before review,
+ * stopped when the change stopped on CI with the round open, else pending.
+ */
+function ciOf(round: RoundRow, change: { state: string; stopReason: string | null }): RoundCiView | null {
+  if (round.ci === null) return null
+  const state: RoundCiView['state'] = round.reviewAssignmentId !== null || (round.carriedFrom !== null && round.outcome === 'pass') ? 'pass'
+    : round.outcome === 'fail' ? 'fail'
+      : round.outcome === null && change.state === 'stopped' && (change.stopReason === 'ci-missing' || change.stopReason === 'ci-timeout') ? 'stopped'
+        : 'pending'
+  return { checks: round.ci, flaky: state === 'pass' ? flakyChecks(round.ci) : [], rerunAt: round.rerunAt, state }
+}
+
+/** The findings that decided the round: their verdict and author. */
+function verdictOf(reads: ExecutionViewReads, round: RoundRow): { findingsId: string; verdict: 'pass' | 'fail'; reviewer: string } | null {
+  if (round.verdictFindingsId === null) return null
+  const findings = reads.findings(round.resultId).find(row => row.id === round.verdictFindingsId)
+  if (findings === undefined) return null
+  return { findingsId: findings.id, verdict: findings.verdict, reviewer: findings.author.kind === 'agent' ? findings.author.sessionId ?? '' : findings.author.kind }
+}
+
 /** The full view of the plan's executions, newest first. */
-export function executionViews(store: ExecutionStore, planId: string): PlanExecutionView[] {
+export function executionViews(store: ExecutionStore, planId: string, reads: ExecutionViewReads): PlanExecutionView[] {
   return store.executionsOf(planId).map(execution => ({
     id: execution.id,
     planId: execution.planId,
@@ -77,7 +108,7 @@ export function executionViews(store: ExecutionStore, planId: string): PlanExecu
         position: row.position,
         state: row.state,
         step: row.step,
-        waiting: waitingOf(store, row),
+        waiting: waitingOf(store, reads, row),
         stopReason: row.stopReason,
         stopDetail: row.stopDetail,
         taskId: row.taskId,
@@ -100,9 +131,9 @@ export function executionViews(store: ExecutionStore, planId: string): PlanExecu
           id: latest.id, number: latest.number, attemptId: latest.attemptId, resultId: latest.resultId,
           commit: latest.commitSha, fixRound: latest.fixRound, carriedFrom: latest.carriedFrom,
           pushedAt: latest.pushedAt,
-          ci: latest.ci === null ? null : { checks: latest.ci, flaky: [], rerunAt: latest.rerunAt, state: 'pending' as const },
+          ci: ciOf(latest, row),
           reviewAssignmentId: latest.reviewAssignmentId,
-          verdict: latest.verdictFindingsId === null ? null : { findingsId: latest.verdictFindingsId, verdict: 'pass' as const, reviewer: '' },
+          verdict: verdictOf(reads, latest),
           extraChecks: latest.extra ?? [],
           outcome: latest.outcome,
           decidedAt: latest.decidedAt,

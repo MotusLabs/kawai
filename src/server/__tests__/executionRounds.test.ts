@@ -254,9 +254,9 @@ describe('the round pipeline (§12)', () => {
     ])
     executor.wake(world.team.teamId)
     await executor.idle()
-    // The rerun effect ran through the stub adapter: the round's one rerun
-    // (round 2 below earns its own — D10's rerun is per round).
-    expect(ghStub.reruns).toEqual([21, 21])
+    // The rerun effect ran through the stub adapter: the round's one rerun,
+    // never repeated however the change's generation moves (D10).
+    expect(ghStub.reruns).toEqual([21])
     const rerunEffect = executions.effectsOf(executionId).find(effect => effect.kind === 'rerun')!
     expect(rerunEffect.state).toBe('done')
 

@@ -9,7 +9,7 @@ import { StrategyStore } from '../strategy/strategyStore'
 import { PlanService } from '../plans/PlanService'
 import { planHandlers } from '../plans/planTools'
 import { ExecutionStore } from '../plans/execution/executionStore'
-import { executionViews } from '../plans/execution/executionView'
+import { executionViewReads, executionViews } from '../plans/execution/executionView'
 import { buildTeamPrompt } from '../team/teamPrompt'
 import { createPlanBench, createPlanWorld, type PlanBench, type PlanWorld } from './planHarness'
 
@@ -30,7 +30,7 @@ beforeEach(async () => {
     getSession: id => bench.records.get(id),
     strategies: new StrategyStore(bench.db.db),
     homeDir: world.home,
-    executionsOf: planId => executionViews(executions, planId),
+    executionsOf: planId => executionViews(executions, planId, executionViewReads(bench.plans, bench.db.db)),
   })
 })
 

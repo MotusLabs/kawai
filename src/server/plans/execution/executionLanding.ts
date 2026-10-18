@@ -23,6 +23,7 @@ import type { MergeMethod } from '../../../shared/planExecution'
 import { runGit } from '../../git/gitCommand'
 import { logger } from '../../logger'
 import { refusable } from './stepRefusal'
+import { ExecutionConflict } from './executionPatch'
 
 export interface LandingDeps {
   team: TeamIdentity
@@ -80,8 +81,12 @@ export async function applyLanding(deps: LandingDeps, adapters: LandingAdapters,
     const fresh = store.change(changeRow.executionId, changeRow.change)!
     try {
       store.transition(changeRow.executionId, changeRow.change, fresh, { state: 'landing', step: 'up-to-date' })
-    } catch {
-      return // slot-taken: wait
+    } catch (error) {
+      if (!(error instanceof ExecutionConflict) || error.kind !== 'slot-taken') throw error
+      // Slot taken: the change waits, named so the view explains it (D17).
+      const waiting = store.change(changeRow.executionId, changeRow.change)!
+      if (waiting.step !== 'awaiting-slot') store.transition(changeRow.executionId, changeRow.change, waiting, { step: 'awaiting-slot' })
+      return
     }
     changeRow = { ...changeRow, state: 'landing', step: 'up-to-date' }
   }
@@ -95,6 +100,9 @@ export async function applyLanding(deps: LandingDeps, adapters: LandingAdapters,
   if (!head.ok || head.sha === null) return
   const base = await adapters.lsRemoteHead(changeRow.worktree ?? deps.team.groupsRoot, baseRef)
   if (!base.ok || base.sha === null) return
+  // Both heads may exist only on origin (a merge on GitHub, another push):
+  // fetch them before any local ancestry or merge read.
+  if (!(await fetchHeads(adapters, changeRow.worktree ?? deps.team.groupsRoot, [baseRef, headRef]))) return
   const contains = await adapters.isAncestor(changeRow.worktree ?? deps.team.groupsRoot, base.sha, head.sha)
   if (!contains.ok) return
   if (!contains.ancestor) {
@@ -128,6 +136,15 @@ export async function applyLanding(deps: LandingDeps, adapters: LandingAdapters,
     effectKey: `${changeRow.executionId}:${changeRow.change}:merge:${round.number}:${fresh.generation}`,
     command: { repo: deps.repo, pr: changeRow.prNumber ?? 0, head: head.sha, base: base.sha, baseBranch: execution.baseBranch, method: execution.mergeMethod, cwd: changeRow.worktree ?? deps.team.groupsRoot },
   })
+}
+
+/** Fetch origin's refs into the object store; false when a fetch failed (the stage is due again). */
+async function fetchHeads(adapters: Pick<LandingAdapters, 'fetch'>, cwd: string, refs: string[]): Promise<boolean> {
+  for (const ref of refs) {
+    const fetched = await adapters.fetch(cwd, 'origin', ref)
+    if (!fetched.ok) return false
+  }
+  return true
 }
 
 /** D13's update attempt: a fix handoff naming the conflict or the failed update. */
@@ -196,9 +213,12 @@ export function mergeAdapter(adapters: LandingAdapters, ghOptions?: GhCommandOpt
       const cwd = String(command.cwd ?? '')
       // The pre-merge base re-read: a base that moved returns the change to
       // the up-to-date step (the executor's done handler sees baseMoved).
-      const base = await adapters.lsRemoteHead(cwd, `refs/heads/${String(command.baseBranch ?? 'master')}`)
-      if (!base.ok) return { ok: false, error: { argv: ['git', 'ls-remote'], exitCode: 1, stderr: 'the base could not be read' } }
-      const contains = await adapters.isAncestor(cwd, base.sha!, head)
+      const baseRef = `refs/heads/${String(command.baseBranch ?? 'master')}`
+      const base = await adapters.lsRemoteHead(cwd, baseRef)
+      if (!base.ok || base.sha === null) return { ok: false, error: { argv: ['git', 'ls-remote'], exitCode: 1, stderr: 'the base could not be read' } }
+      const fetched = await adapters.fetch(cwd, 'origin', baseRef)
+      if (!fetched.ok) return { ok: false, error: fetched.error }
+      const contains = await adapters.isAncestor(cwd, base.sha, head)
       if (!contains.ok || !contains.ancestor) {
         return { ok: true, outcome: { merged: false, baseMoved: true, base: base.sha } }
       }
@@ -242,20 +262,25 @@ export async function applyLandingOutcome(deps: LandingDeps, effect: { kind: str
       return // not moved yet
     }
     // The clean-merge check: parents [H, B'], the base contains B', and the
-    // tree equals merge-tree H B'.
-    const base = await adapters.lsRemoteHead(row.worktree ?? deps.team.groupsRoot, `refs/heads/${execution.baseBranch}`)
+    // tree equals merge-tree H B' — B' being the merge's own second parent,
+    // so a base that moved on after the update still passes; the next
+    // up-to-date check brings the carried head along again.
+    const cwd = row.worktree ?? deps.team.groupsRoot
+    const baseRef = `refs/heads/${execution.baseBranch}`
+    const base = await adapters.lsRemoteHead(cwd, baseRef)
     if (!base.ok || base.sha === null) return
-    const parents = await runGit(['log', '-1', '--pretty=%P', view.data.headRefOid], { cwd: row.worktree ?? deps.team.groupsRoot })
+    if (!(await fetchHeads(adapters, cwd, [baseRef, `refs/heads/${row.branch!}`]))) return
+    const parents = await runGit(['log', '-1', '--pretty=%P', view.data.headRefOid], { cwd })
     const parentList = parents.ok ? parents.stdout.trim().split(/\s+/) : []
-    const predicted = await adapters.mergeTree(row.worktree ?? deps.team.groupsRoot, reviewedHead, base.sha)
     const secondParent = parentList.find(parent => parent !== reviewedHead) ?? ''
-    const secondAncestry = secondParent === '' ? null : await adapters.isAncestor(row.worktree ?? deps.team.groupsRoot, secondParent, base.sha)
+    const predicted = secondParent === '' ? null : await adapters.mergeTree(cwd, reviewedHead, secondParent)
+    const secondAncestry = secondParent === '' ? null : await adapters.isAncestor(cwd, secondParent, base.sha)
     const secondContained = secondAncestry !== null && secondAncestry.ok && secondAncestry.ancestor
-    const clean = parents.ok && predicted.ok
+    const clean = parents.ok && predicted !== null && predicted.ok && predicted.conflicts.length === 0
       && parentList.length === 2
       && parentList.includes(reviewedHead)
       && secondContained
-      && (await runGit(['rev-parse', `${view.data.headRefOid}^{tree}`], { cwd: row.worktree ?? deps.team.groupsRoot })).stdout.trim() === predicted.tree
+      && (await runGit(['rev-parse', `${view.data.headRefOid}^{tree}`], { cwd })).stdout.trim() === predicted.tree
     if (clean) {
       // The carried round: CI runs on the new head (D13).
       const round = effect.roundId !== null && effect.roundId !== undefined ? store.round(effect.roundId) : null
@@ -285,7 +310,7 @@ export async function applyLandingOutcome(deps: LandingDeps, effect: { kind: str
     const head = String(outcome.head ?? '')
     // tree_verified: the merge commit's tree equals the reviewed head's
     // tree. The merge commit lives on origin: fetch the base first.
-    runGit(['fetch', '--quiet', 'origin', execution.baseBranch], { cwd: row.worktree ?? deps.team.groupsRoot })
+    await adapters.fetch(row.worktree ?? deps.team.groupsRoot, 'origin', `refs/heads/${execution.baseBranch}`)
     const mergeTree_ = await runGit(['rev-parse', `${mergeCommit}^{tree}`], { cwd: row.worktree ?? deps.team.groupsRoot })
     const headTree = await runGit(['rev-parse', `${head}^{tree}`], { cwd: row.worktree ?? deps.team.groupsRoot })
     const treeVerified = mergeTree_.ok && headTree.ok && mergeTree_.stdout.trim() === headTree.stdout.trim()
