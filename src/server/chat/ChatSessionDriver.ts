@@ -118,6 +118,7 @@ import {
   retryLimitSignal,
   type ChatLimitSignal,
 } from './limitSignals'
+import { messageDeltaCost } from './providerCost'
 
 /**
  * The SDK `query()` — injected so tests run against a fake. `wire` is the
@@ -397,6 +398,8 @@ export class ChatSessionDriver {
   }
   /** Reset time from the latest rejected rate_limit_event (design D6). */
   private limitResetsAt: string | null = null
+  /** Provider-reported cost summed over the active turn's stream; null until one arrives (openrouter-provider D9). */
+  private turnProviderCost: number | null = null
   private dead = false
   /** The audit id of the agent process this driver currently runs (D7). */
   private currentSpawnId = 'ob-s-none'
@@ -469,6 +472,7 @@ export class ChatSessionDriver {
     const turnId = `turn-${this.turnCounter}`
     this.activeTurnId = turnId
     this.pendingTaskNotifications = []
+    this.turnProviderCost = null
     this.binder.turnOpened(turnId, trigger !== undefined)
     this.emit({ type: 'turn_started', turnId, ...(trigger ? { trigger } : {}) })
     return turnId
@@ -1056,6 +1060,9 @@ export class ChatSessionDriver {
   }
 
   private handlePartial(message: SDKPartialAssistantMessage): void {
+    // Cost counts every streamed call of the turn, subagents' included.
+    const cost = this.activeTurnId ? messageDeltaCost(message.event) : null
+    if (cost !== null) this.turnProviderCost = (this.turnProviderCost ?? 0) + cost
     // Worker chatter stays out of the parent transcript (design D4): its
     // stream must neither leak deltas nor hijack the parent's streaming id —
     // filtering the completed assistant message cannot undo either.
@@ -1154,6 +1161,7 @@ export class ChatSessionDriver {
       turnId,
       subtype: message.subtype,
       totalCostUsd: message.total_cost_usd,
+      ...(this.turnProviderCost !== null ? { providerCostUsd: this.turnProviderCost } : {}),
       numTurns: message.num_turns,
       ...turnUsageOf(message),
       // Final text only on a success subtype.

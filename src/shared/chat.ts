@@ -195,7 +195,10 @@ export type ChatEvent =
   | (ChatTurnEventBase & {
       type: 'turn_completed'
       subtype: ChatTurnResultSubtype
+      /** The SDK's estimate from Anthropic list prices. */
       totalCostUsd?: number
+      /** The charge the provider reported on the turn's streamed calls (openrouter-provider D9); absent when none did. */
+      providerCostUsd?: number
       numTurns?: number
       /** The turn's token counts from the SDK result (team-process-metrics D1); absent in older history. */
       usage?: ChatTurnUsage

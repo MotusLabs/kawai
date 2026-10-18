@@ -821,6 +821,36 @@ describe('ChatSessionDriver', () => {
     expect('usage' in completions()[2]!).toBe(false)
   })
 
+  test("turn_completed carries the provider-reported cost summed over the turn's stream, beside the SDK estimate", async () => {
+    const harness = createHarness()
+    const fake = () => harness.fakes.at(-1)!
+    const completions = () => harness.events.filter(event => event.type === 'turn_completed') as Array<{ totalCostUsd?: number; providerCostUsd?: number }>
+    // The spike's OpenRouter turn: one streamed call charged $0.001064075
+    // while the SDK estimated $0.042563 from list prices.
+    harness.driver.send('one')
+    fake().push(streamEvent({ type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { input_tokens: 3, output_tokens: 12, cost: 0.001064075 } }))
+    fake().push(result('success', { total_cost_usd: 0.042563 }))
+    await flush()
+    // Several calls, a subagent's streamed one included, add up.
+    harness.driver.send('two')
+    fake().push(streamEvent({ type: 'message_delta', delta: {}, usage: { output_tokens: 1, cost: 0.002 } }))
+    fake().push(streamEvent({ type: 'message_delta', delta: {}, usage: { output_tokens: 1, cost: 0.001 } }, 'toolu_task'))
+    fake().push(result('success'))
+    await flush()
+    // No cost field (or an unusable one): no provider cost, nothing carried over.
+    harness.driver.send('three')
+    fake().push(streamEvent({ type: 'message_delta', delta: {}, usage: { output_tokens: 1 } }))
+    fake().push(streamEvent({ type: 'message_delta', delta: {}, usage: { output_tokens: 1, cost: -1 } }))
+    fake().push(streamEvent({ type: 'message_delta', delta: {}, usage: { output_tokens: 1, cost: 'free' } }))
+    fake().push(result('success'))
+    await flush()
+    const [first, second, third] = completions()
+    expect(first).toMatchObject({ totalCostUsd: 0.042563, providerCostUsd: 0.001064075 })
+    expect(second!.providerCostUsd).toBeCloseTo(0.003, 12)
+    expect(third).toMatchObject({ totalCostUsd: 0.01 })
+    expect('providerCostUsd' in third!).toBe(false)
+  })
+
   test('assistant deltas map from partial stream events', async () => {
     const harness = createHarness()
     harness.driver.send('hi')
