@@ -1,7 +1,9 @@
 // Codex app-server smoke (openspec codex-chat-sessions §1). Run by hand, never
 // in CI: it drives real Codex turns on the host's own login, so the human's
 // quota pays for every prompt. Requires codex-cli >= 0.163.0 installed and
-// signed in (default CODEX_HOME; this script never reads or writes it):
+// signed in (default CODEX_HOME; the spawn itself reads nothing from it and
+// writes nothing into it — the rollout dump below only reads the recorded
+// thread's rollout file under it):
 //
 //   bun scripts/codex-smoke.ts --record /tmp/codex-smoke-raw.jsonl
 //
@@ -11,11 +13,12 @@
 // a declined out-of-sandbox write, a requestUserInput round-trip, an
 // interrupt, then thread/resume from a second process with thread/read and a
 // rollout dump. Every raw JSON-RPC line both directions lands in --record,
-// scrubbed into fixture shape at write time (scrubSmokeValue below).
+// scrubbed into fixture shape at write time (src/server/chat/codex/smokeScrub.ts).
 import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import readline from 'node:readline'
+import { scrubRawLine, scrubSmokeValue } from '../src/server/chat/codex/smokeScrub'
 
 const CODEX = (process.env.KAWAI_CODEX_PATH ?? '').trim() || 'codex'
 const CLIENT = { name: 'kawai-codex-smoke', title: 'Kawai Codex smoke', version: '0.0.0' }
@@ -65,7 +68,9 @@ class SmokeClient {
   exit: Promise<number | null>
 
   constructor(private readonly record: RawLine[]) {
-    this.proc = spawn(CODEX, ['app-server'], { stdio: ['pipe', 'pipe', 'pipe'] })
+    // Detached: the child leads its own process group, so stop() can signal
+    // the sandboxed grandchildren alongside it (review O5).
+    this.proc = spawn(CODEX, ['app-server'], { stdio: ['pipe', 'pipe', 'pipe'], detached: true })
     this.proc.on('error', (error) => this.failAll(`spawn ${CODEX} app-server: ${error.message}`))
     this.exit = new Promise((resolve) => this.proc.on('exit', (code) => resolve(code)))
     const rl = readline.createInterface({ input: this.proc.stdout!, crlfDelay: Infinity })
@@ -150,9 +155,20 @@ class SmokeClient {
   }
 
   async stop() {
-    this.proc.kill('SIGTERM')
+    // Signal the whole process group: a sandboxed app-server can leave
+    // helper grandchildren that outlive the pid alone (review O5). Falls
+    // back to the pid when the group is already gone.
+    const signalGroup = (sig: 'SIGTERM' | 'SIGKILL') => {
+      if (this.proc.pid === undefined) return
+      try {
+        process.kill(-this.proc.pid, sig)
+      } catch {
+        this.proc.kill(sig)
+      }
+    }
+    signalGroup('SIGTERM')
     await Promise.race([this.exit, timeout(3_000, 'app-server stop (SIGTERM)')]).catch(() => {
-      this.proc.kill('SIGKILL')
+      signalGroup('SIGKILL')
     })
     await this.exit.catch(() => {})
   }
@@ -267,57 +283,8 @@ const answers = {
   },
 }
 
-/**
- * Fixture hygiene (task rev 3): identifying values never reach a recorded
- * fixture. Identifying keys become fixed placeholders, every scratch
- * workspace collapses to one fixture path, and the home directory prefix is
- * rewritten, before a record is written. The committed fixture's hygiene
- * test (codexSmokeFixtureHygiene.test.ts) re-checks the committed fixture
- * against the same constants, so a new recording cannot reintroduce a leak.
- */
-export const SMOKE_SCRUB_STRINGS: Record<string, string> = {
-  serverName: 'smoke-host',
-  installationId: '00000000-0000-4000-8000-000000000001',
-  accountId: '00000000-0000-4000-8000-000000000002',
-  userId: '00000000-0000-4000-8000-000000000003',
-  orgId: '00000000-0000-4000-8000-000000000004',
-  email: 'user@example.internal',
-}
-export const SMOKE_FIXTURE_WORKSPACE = '/tmp/kawai-codex-smoke-fixture'
-export const SMOKE_FIXTURE_HOME = '/home/smoke'
-const SCRATCH_WORKSPACE = /\/tmp\/kawai-codex-smoke-[0-9A-Za-z._-]+/g
-const HOME_PATH = /\/home\/[0-9A-Za-z._-]+/g
-
-/** Deep rewrite of one parsed JSON-RPC value; strings by key, then by shape. */
-export function scrubSmokeValue(value: unknown): unknown {
-  if (typeof value === 'string') {
-    return value.replace(SCRATCH_WORKSPACE, SMOKE_FIXTURE_WORKSPACE).replace(HOME_PATH, SMOKE_FIXTURE_HOME)
-  }
-  if (Array.isArray(value)) return value.map(scrubSmokeValue)
-  if (value !== null && typeof value === 'object') {
-    const out: Record<string, unknown> = {}
-    for (const [key, entry] of Object.entries(value)) {
-      out[key] = typeof entry === 'string' && key in SMOKE_SCRUB_STRINGS
-        ? SMOKE_SCRUB_STRINGS[key]
-        : scrubSmokeValue(entry)
-    }
-    return out
-  }
-  return value
-}
-
-/** One record, scrubbed and reduced to the fixture's `{dir, line}` shape. */
-export function scrubRawLine(raw: { dir: RawLine['dir']; line: string }): { dir: RawLine['dir']; line: string } {
-  try {
-    return { dir: raw.dir, line: JSON.stringify(scrubSmokeValue(JSON.parse(raw.line))) }
-  } catch {
-    // A torn line stays raw, with the path rules still applied to its text.
-    return {
-      dir: raw.dir,
-      line: raw.line.replace(SCRATCH_WORKSPACE, SMOKE_FIXTURE_WORKSPACE).replace(HOME_PATH, SMOKE_FIXTURE_HOME),
-    }
-  }
-}
+/** The scrub rules live in src/server/chat/codex/smokeScrub.ts, shared with
+ * the committed fixture's hygiene test; this script only applies them. */
 
 function record(args: string[]): { lines: RawLine[]; resumeThreadId: string | undefined } {
   const lines: RawLine[] = []
@@ -461,36 +428,36 @@ async function main() {
     await first.stop().catch(() => {})
   }
 
-    // E (skippable): resume in a second process; are dynamic tools restored?
-    if (!process.argv.includes('--skip-e')) {
-      const second = new SmokeClient(lines)
-      try {
-        await second.request('initialize', { clientInfo: CLIENT, capabilities: { experimentalApi: true, requestAttestation: false } })
-        await phase('resume', summary, async () => {
-          const tid = String((summary.threadStart as Json).threadId)
-          const resumed = await second.request('thread/resume', resumeParams(tid, workspace, gitCommonDir))
-          const rThread = resumed.thread as Json
-          console.log(`resumed thread ${String(rThread.id)} path ${String(rThread.path)}`)
-          const e = await runTurn(second, String(rThread.id),
-            'kawai smoke E: call the kawai-team team_ping tool once more, then reply with exactly: e-resumed',
-            (method, params) => (method === 'item/tool/call' ? answers.toolCall(method, params) : { decision: 'accept' }), 'E')
-          return { threadPath: rThread.path, turn: e, requestsSeen: second.serverRequests.map((r) => r.method) }
-        })
+  // E (skippable): resume in a second process; are dynamic tools restored?
+  if (!process.argv.includes('--skip-e')) {
+    const second = new SmokeClient(lines)
+    try {
+      await second.request('initialize', { clientInfo: CLIENT, capabilities: { experimentalApi: true, requestAttestation: false } })
+      await phase('resume', summary, async () => {
+        const tid = String((summary.threadStart as Json).threadId)
+        const resumed = await second.request('thread/resume', resumeParams(tid, workspace, gitCommonDir))
+        const rThread = resumed.thread as Json
+        console.log(`resumed thread ${String(rThread.id)} path ${String(rThread.path)}`)
+        const e = await runTurn(second, String(rThread.id),
+          'kawai smoke E: call the kawai-team team_ping tool once more, then reply with exactly: e-resumed',
+          (method, params) => (method === 'item/tool/call' ? answers.toolCall(method, params) : { decision: 'accept' }), 'E')
+        return { threadPath: rThread.path, turn: e, requestsSeen: second.serverRequests.map((r) => r.method) }
+      })
 
-        await phase('threadRead', summary, async () => {
-          const tid = String((summary.threadStart as Json).threadId)
-          const read = await second.request('thread/read', { threadId: tid, includeTurns: true }, 20_000)
-          const turns = (((read as Json).thread as Json)?.turns ?? []) as Array<Json>
-          const itemTypes = new Map<string, number>()
-          for (const turn of turns) for (const item of (turn.items ?? []) as Array<Json>) itemTypes.set(String(item.type), (itemTypes.get(String(item.type)) ?? 0) + 1)
-          console.log(`thread/read: ${turns.length} turns, items ${JSON.stringify([...itemTypes])}`)
-          return { turns: turns.length, itemTypes: Object.fromEntries(itemTypes) }
-        })
-        await second.stop()
-      } finally {
-        await second.stop().catch(() => {})
-      }
+      await phase('threadRead', summary, async () => {
+        const tid = String((summary.threadStart as Json).threadId)
+        const read = await second.request('thread/read', { threadId: tid, includeTurns: true }, 20_000)
+        const turns = (((read as Json).thread as Json)?.turns ?? []) as Array<Json>
+        const itemTypes = new Map<string, number>()
+        for (const turn of turns) for (const item of (turn.items ?? []) as Array<Json>) itemTypes.set(String(item.type), (itemTypes.get(String(item.type)) ?? 0) + 1)
+        console.log(`thread/read: ${turns.length} turns, items ${JSON.stringify([...itemTypes])}`)
+        return { turns: turns.length, itemTypes: Object.fromEntries(itemTypes) }
+      })
+      await second.stop()
+    } finally {
+      await second.stop().catch(() => {})
     }
+  }
 
   // Rollout dump: row payload types, one scrub-safe sample per type.
   const rolloutPath = summary.resume && !(summary.resume as Json).error
@@ -507,7 +474,9 @@ async function main() {
     summary.rollout = { path: '<rollout>', rows: rows.length, rowTypes: [...byType.keys()], samples: [...byType.values()] }
     console.log(`rollout: ${rows.length} rows, types ${byType.size}`)
   }
-  console.log(`\nSUMMARY ${JSON.stringify(summary, null, 2)}`)
+  // The summary carries rollout samples and rate-limit reads; it gets the
+  // same scrub as the fixture before reaching stdout (review O4).
+  console.log(`\nSUMMARY ${JSON.stringify(scrubSmokeValue(summary), null, 2)}`)
 }
 
 // Guarded so the hygiene test can import the scrub without running a spike.

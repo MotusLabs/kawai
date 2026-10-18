@@ -18,15 +18,15 @@
 
 - [x] 2.1 Add `src/server/chat/provider/driver.ts` with `ChatAgentDriver` and `ChatDriverCallbacks` (design D1), including the background-task methods the manager calls (`getBackgroundTaskRecords`, `getTaskOutput`, `stopTask`). Make `ChatSessionDriver` implement it. Verify `bun run typecheck` passes and the existing driver tests pass unmodified.
 - [x] 2.2 Make `TurnQueue` generic, and type `team/sessionMailbox.ts` `getDriver` and `ChatSessionManager`'s driver map as `ChatAgentDriver`. Move the Claude-only extras behind optional capability methods. Verify the existing mailbox, manager, and chat tests pass unmodified, the background-task roster, `chat-task-output`, and `chat-task-stop` tests included.
-- [x] 2.3 Add `createChatDriver(record, deps)` choosing the driver by provider, with only Claude wired. Verify with a unit test that a `claude` record builds a `ChatSessionDriver` and an unknown provider throws.
+- [x] 2.3 Add `createChatDriver(record.runtime, deps)` choosing the driver by runtime, with only Claude wired. Verify with a unit test that a `claude` record builds a `ChatSessionDriver` and an unknown runtime throws.
 - [x] 2.4 Extract `teamToolTable(mailbox, sessionId, services)` from `team/mailboxTools.ts` and rebuild `createMailboxServer` on it. Build on master after `task-results-handoffs` (PR #136) merges, so its result, handoff, and findings tools are in the table. Verify the existing team-tool tests pass, and a new test shows the table and the MCP server expose the same tool names.
 
 ## 3. Profiles and persistence
 
-- [ ] 3.1 Extend `profileCatalog.ts` with `provider` and the per-provider field sets (`codex`: `label`, `model`, `codexHome`, `network`). Enforce the user-level-only `codexHome` rule and reject provider conflicts across levels. Verify unit tests for every scenario in the `claude-session-profiles` delta.
-- [ ] 3.2 Resolve profiles to the provider union. Add `codexProfiles.ts` that builds the Codex spawn env (`CODEX_HOME`, default `~/.codex` or the server's `CODEX_HOME`). Verify with unit tests, including that no Codex home or env reaches the profiles route payload, and that the spawn passes only `CODEX_HOME` and `-c` overrides and writes nothing into the home.
-- [ ] 3.3 Add `provider` (default `claude`), `codex_home`, and `transcript_path` columns to `chat_sessions` with an additive migration. Write `provider` and, for Codex chats, the resolved home at creation. Refuse to start on a provider or Codex home mismatch, without naming the home. Verify with `db.test.ts` migration coverage and manager tests for the legacy-chat, provider-mismatch, and home-mismatch scenarios.
-- [ ] 3.4 Send each profile's provider to the client. Label Codex profiles in the New Session dialog and chat header. Verify with a client test and `tests/e2e/chat-profiles.spec.ts` showing a Codex profile option.
+- [ ] 3.1 Extend `profileCatalog.ts` with `runtime` and the per-runtime field sets (a `codex` entry: `label`, `model`, `codexHome`, `network`). Enforce the trusted-tier `codexHome` and `network` rule (shipped default and user level only, like `executable`) and reject runtime conflicts across levels. Verify unit tests for every scenario in the `claude-session-profiles` delta.
+- [ ] 3.2 Resolve profiles to the runtime union. Add `codexProfiles.ts` that builds the Codex spawn env (`CODEX_HOME`, default `~/.codex` or the server's `CODEX_HOME`). Verify with unit tests, including that no Codex home or env reaches the profiles route payload, and that the spawn passes only `CODEX_HOME` and `-c` overrides and writes nothing into the home.
+- [ ] 3.3 Add `runtime` (default `claude`), `codex_home`, and `transcript_path` columns to `chat_sessions` with an additive migration. Write `runtime` and, for Codex chats, the resolved home at creation. Refuse to start on a runtime or Codex home mismatch, without naming the home. Verify with `db.test.ts` migration coverage and manager tests for the legacy-chat, runtime-mismatch, and home-mismatch scenarios.
+- [ ] 3.4 Send each profile's runtime to the client. Label Codex profiles in the New Session dialog and chat header. Verify with a client test and `tests/e2e/chat-profiles.spec.ts` showing a Codex profile option.
 
 ## 4. Codex executable and app-server client
 
@@ -34,7 +34,7 @@
 - [ ] 4.2 Add `codexExecutable.ts`: `KAWAI_CODEX_PATH` or `PATH` resolution, no shell, bounded `--version` gate, cache keyed by path and mtime. Wire it into Codex chat creation, and add the Codex login check per home. Verify unit tests for every scenario in the executable, version, and login requirements of the `codex-chat-sessions` spec.
 - [ ] 4.3 Add `appServerClient.ts`: spawn, newline-delimited JSON-RPC framing, request and response correlation, notification and server-request routing, wire-log recording, and process-end handling. Verify with unit tests against a scripted fake child, including a torn line and a child exit with pending requests.
 - [ ] 4.4 Add a fake app-server (`tests/fixtures/fake-codex-app-server.ts`, an executable bun script) that replays the recorded transcripts from 1.1. Verify that the client tests and a smoke test spawn it through `KAWAI_CODEX_PATH`.
-- [ ] 4.5 Label JSON-RPC frames in `src/client/utils/chatWireFrames.ts` by `method`, or `response #<id>` / `error #<id>`, and name the chat's provider in the Debug panel's direction labels. Verify `chatWireFrames.test.ts` cases for a request, a notification, a response, an error, and an unchanged Claude frame.
+- [ ] 4.5 Label JSON-RPC frames in `src/client/utils/chatWireFrames.ts` by `method`, or `response #<id>` / `error #<id>`, and name the chat's runtime in the Debug panel's direction labels. Verify `chatWireFrames.test.ts` cases for a request, a notification, a response, an error, and an unchanged Claude frame.
 
 ## 5. Codex driver core
 
@@ -55,11 +55,11 @@
 ## 6. Team tools, receipts, and replay
 
 - [ ] 6.1 Add `codexTools.ts` (design D6): a `kawai-team` namespace spec built from `teamToolTable` with `z.toJSONSchema`, plus `item/tool/call` dispatch with thread and namespace checks and Zod validation. Refuse to start when registration is rejected. Verify unit tests for a good call, a foreign thread, unknown tool, invalid arguments, and the refused-registration scenario.
-- [ ] 6.2 Make `team/receipt.ts` take a per-provider row parser. Add `codexReceiptMessageId`, and have `transcriptFor` return `transcript_path` for Codex chats. Keep the live receipt tail for Codex chats: it follows `transcript_path` and parses rows with `codexReceiptMessageId`. Verify receipt tests for a found envelope, an AGENTS.md user row that must not match, a torn file, startup reconciliation with no running agent, and pushed mail that settles delivered while the turn still runs.
+- [ ] 6.2 Make `team/receipt.ts` take a per-runtime row parser. Add `codexReceiptMessageId`, and have `transcriptFor` return `transcript_path` for Codex chats. Keep the live receipt tail for Codex chats: it follows `transcript_path` and parses rows with `codexReceiptMessageId`. Verify receipt tests for a found envelope, an AGENTS.md user row that must not match, a torn file, startup reconciliation with no running agent, and pushed mail that settles delivered while the turn still runs.
 - [ ] 6.3 Add `codexRollout.ts` for replay of archived chats, and use `thread/read` when a driver is live. Both paths emit the turn boundaries a live turn emits, `turn_completed` included. Skip only the title half of the transcript watcher for Codex chats. Verify replay tests from a recorded rollout (turn boundaries included) and the archived-chat scenario (no process spawned).
 - [ ] 6.4 Have the Codex log matcher honor `excludeSessionIds` against `session_meta.id`. Verify a log-poller test showing a chat's Codex rollout never becomes a terminal session.
 - [ ] 6.5 Document Codex chats and Codex profiles in CLAUDE.md "How It Works":
-  - provider on the profile, `codexHome`, `KAWAI_CODEX_PATH` and the baseline
+  - runtime on the profile, `codexHome`, `KAWAI_CODEX_PATH` and the baseline
   - the one sandbox and what manual means for Codex
   - team tools as dynamic tools
   - rollout receipts
@@ -68,9 +68,9 @@
 
 ## 7. Usage and limits
 
-- [ ] 7.1 Add `codexUsage.ts`: normalize `RateLimitSnapshot` to `ChatUsageReport` with duration and name labels and the limited status. Cache per resolved Codex home, and fill in with `account/rateLimits/read`. Verify unit tests for the `chat-usage-limits` delta scenarios and a `UsageBar` test showing the Codex labels.
-- [ ] 7.2 Add `codexLimits.ts`: map `codexErrorInfo` limit classes to final signals and retries to non-final ones, taking the latest known reset among all applicable exhausted windows in the latest snapshot (ignoring non-exhausted windows). In the manager, fan out each login-scoped event to every Codex profile on the session's stored home, and record a session-scoped event (`sessionBudgetExceeded`, unless 1.2 shows it is account-wide) for the session's own profile only. Verify unit tests for the `profile-limit-handling` delta scenarios, including a park and a forward that avoids the shared login. Cover simultaneous five-hour and weekly exhaustion: the event, shared-home cooldown, and parked-work resume all use the later reset. Also cover a non-exhausted weekly window with a later reset, which must not extend the cooldown, and the session-budget scenario.
-- [ ] 7.3 Document Codex limits and usage in CLAUDE.md (usage keyed per home, cooldown fan-out) and in `docs/routing/README.md` (Codex profiles are ordinary profile ids). Verify the docs name the same behaviors the tests cover.
+- [ ] 7.1 Add `codexUsage.ts`: normalize `RateLimitSnapshot` to `ChatUsageReport` with duration and name labels and the limited status. Cache per resolved Codex home under its `codex-home-<first 12 hex of sha256>` provider id (R2/R3), and fill in with `account/rateLimits/read`. Verify unit tests for the `chat-usage-limits` delta scenarios and a `UsageBar` test showing the Codex labels.
+- [ ] 7.2 Add `codexLimits.ts`: map `codexErrorInfo` limit classes to final signals and retries to non-final ones, taking the latest known reset among all applicable exhausted windows in the latest snapshot (ignoring non-exhausted windows). In the manager, record each login-scoped event once with the session's home provider id — every profile on that home cools through the shared cooldown (providers D8 `cooldownFor`; no per-profile fan-out) — and record a session-scoped event (`sessionBudgetExceeded`, unless 1.2 shows it is account-wide) for the session's own profile only. Verify unit tests for the `profile-limit-handling` delta scenarios, including a park and a forward that avoids the shared login. Cover simultaneous five-hour and weekly exhaustion: the event, shared-home cooldown, and parked-work resume all use the later reset. Also cover a non-exhausted weekly window with a later reset, which must not extend the cooldown, and the session-budget scenario.
+- [ ] 7.3 Document Codex limits and usage in CLAUDE.md (usage keyed per home, the shared home cooldown through providers D8) and in `docs/routing/README.md` (Codex profiles are ordinary profile ids). Verify the docs name the same behaviors the tests cover.
 
 ## 8. Integration checks
 

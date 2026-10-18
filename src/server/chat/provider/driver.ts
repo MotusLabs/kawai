@@ -49,27 +49,47 @@ export interface ChatSpawnInfo {
 
 /**
  * Output callbacks every chat driver reports through: today's `on*` driver
- * options minus the SDK-typed ones. Optional callbacks stay optional — a
- * driver must fire the required pair (onEvent, onStatus) and anything else
- * only when its runtime produces it.
+ * options minus the SDK-typed ones — ChatSessionDriverOptions extends this,
+ * so the signatures here are the ones every runtime type-checks against.
+ * Optional callbacks stay optional — a driver must fire the required pair
+ * (onEvent, onStatus) and anything else only when its runtime produces it.
+ * Like events' ephemeral neighbours, the rosters and activity are never
+ * sequenced, buffered, or replayed.
  */
 export interface ChatDriverCallbacks {
   onEvent: (event: ChatEvent) => void
   /** Applied immediately on every derived status change. */
   onStatus: (status: SessionStatus) => void
-  /** Live activity of the in-flight turn; null when the turn ends. */
+  /**
+   * Live activity of the in-flight turn; null when the turn ends. Fired
+   * only when the projected phase changes, and never with a placeholder.
+   */
   onActivity?: (activity: ChatActivity | null) => void
   /** An agent-emitted notification, with the frame's timeout when carried. */
   onNotification?: (notification: ChatNotification, timeoutMs?: number) => void
-  /** The agent process ended on its own (not kill/shutdown). */
+  /**
+   * The agent process ended on its own — an unexpected exit or stream
+   * failure, never kill/shutdown, whose callers already tear the session
+   * state down. Fired once per process.
+   */
   onProcessEnd?: () => void
-  /** The spawned-worker roster: the full projection, on change. */
+  /** The spawned-worker roster: the full projection, on change — never per
+   * elapsed tick; settled outcomes persist through the sidecar. */
   onWorkers?: (workers: ChatWorker[]) => void
-  /** The background-task roster: the full projection, on change. */
+  /** The background-task roster: the full projection, on change; never
+   * consulted for status. */
   onBackgroundTasks?: (tasks: ChatBackgroundTask[]) => void
-  /** The latest context-meter reading; null clears it. */
+  /**
+   * The latest context-meter reading; null clears it (a conversation reset
+   * leaves nothing measured). Before the first measurement this callback
+   * simply does not fire. `persist` marks writes that must not wait for
+   * the next turn boundary.
+   */
   onContextUsage?: (usage: ChatContextUsage | null, opts?: { persist?: boolean }) => void
-  /** The current model, when it is non-empty and differs from the last. */
+  /**
+   * The current model, when it is non-empty and differs from the last fired
+   * one — so a mid-session switch lands on the next turn.
+   */
   onModel?: (model: string) => void
   /** Plan usage: a pushed rate-limit report, whatever the turn state is. */
   onRateLimit?: (report: ChatUsageReport) => void
@@ -79,13 +99,19 @@ export interface ChatDriverCallbacks {
   onUsageNoData?: () => void
   /** Fired once when the runtime reveals its session/thread id. */
   onSdkSessionId?: (sdkSessionId: string) => void
-  /** The agent's working directory moved. */
+  /** The agent's working directory moved (main-session moves only; a
+   * driver filters its subagents' moves itself). */
   onCwdChanged?: (newCwd: string) => void
   /** Fired whenever the slash-command state meaningfully changed. */
   onCommandState?: (state: ChatCommandState) => void
-  /** A rate-limit, billing, or overload failure of this profile. */
+  /**
+   * A rate-limit, billing, or overload failure of this profile — a retried
+   * attempt or the turn's final failure — with the provider's reset time
+   * when a rejected rate-limit announcement carried one.
+   */
   onLimitEvent?: (signal: ChatLimitSignal) => void
-  /** Called once per constructed query with what the spawn launched with. */
+  /** Called once per constructed query with what the spawn launched with
+   * (agent-start provenance); observational, never fails the spawn. */
   onSpawn?: (info: ChatSpawnInfo) => void
 }
 
