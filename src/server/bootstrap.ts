@@ -6,6 +6,7 @@
 // the shutdown list run on SIGINT/SIGTERM. Nothing here lives at module
 // scope: each call boots a fresh graph (the isolated index harness re-imports
 // the entry per section and relies on that).
+import { registerMetricsRoute } from './metrics/export/route'
 import fsSync from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -369,6 +370,7 @@ export function startServer(): void {
   refreshWorkspaceSeeds()
 
   // 7. HTTP routes (static assets last).
+  registerMetricsRoute(app, chatSessionManager.observations)
   const tlsEnabled = config.tlsCert && config.tlsKey
   const tlsOptions = tlsEnabled
     ? { tls: { cert: Bun.file(config.tlsCert), key: Bun.file(config.tlsKey) } }

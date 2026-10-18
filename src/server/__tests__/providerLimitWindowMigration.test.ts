@@ -1,5 +1,5 @@
-// Schema migration 11 `provider-limit-window` (providers-and-workers D7): a
-// version-10 database keeps its events with NULL in both new columns, a fresh
+// Schema migration 12 `provider-limit-window` (providers-and-workers D7): a
+// version-11 database keeps its events with NULL in both new columns, a fresh
 // database has them, and the store records both beside the profile.
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import fs from 'node:fs'
@@ -11,7 +11,7 @@ import { MIGRATIONS } from '../dbSafety/migrations'
 import { LimitEventStore } from '../team/routing/limitEvents'
 import { schemaDb } from './schemaDb'
 
-const THROUGH_10 = MIGRATIONS.filter(migration => migration.version <= 10)
+const THROUGH_11 = MIGRATIONS.filter(migration => migration.version <= 11)
 
 let dir: string
 let dbPath: string
@@ -21,9 +21,9 @@ beforeEach(() => {
 })
 afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }) })
 
-/** A version-10 database as the build before this change leaves it: one final event, no provider or window. */
+/** A version-11 database as the build before this change leaves it: one final event, no provider or window. */
 function versionNineWithRow(): Database {
-  const session = initDatabase({ path: dbPath, migrations: THROUGH_10 })
+  const session = initDatabase({ path: dbPath, migrations: THROUGH_11 })
   session.db.prepare(`INSERT INTO profile_limit_events
     (id, profile_id, session_id, group_id, at, kind, final, status, message, resets_at)
     VALUES ('event-1', 'glm', 'session-1', 'devs', '2026-10-18T00:00:00.000Z', 'rate_limit', 1, 429, 'quota', '2026-10-18T03:00:00.000Z')`).run()
@@ -31,12 +31,12 @@ function versionNineWithRow(): Database {
   return session.db
 }
 
-test('this build registers migration 11 provider-limit-window after context-exhausted', () => {
+test('this build registers migration 12 provider-limit-window after process-observations', () => {
   expect(MIGRATIONS.map(migration => [migration.version, migration.name]).slice(-2))
-    .toEqual([[10, 'context-exhausted'], [11, 'provider-limit-window']])
+    .toEqual([[11, 'process-observations'], [12, 'provider-limit-window']])
 })
 
-test('a version-10 database keeps its events with NULL provider and window', () => {
+test('a version-11 database keeps its events with NULL provider and window', () => {
   versionNineWithRow().close()
   const session = initDatabase({ path: dbPath })
   const row = session.db.prepare('SELECT * FROM profile_limit_events WHERE id = \'event-1\'').get() as Record<string, unknown>

@@ -120,8 +120,9 @@ same worktree at once; reuse a worktree only for follow-up work on its branch.
 ## Review and completion
 
 - When a dev reports done, check the journal and `git -C <worktree> log` /
-  `diff master...<branch>`, then send the review to ONE reviewer chosen by the
-  author's model, so review is always cross-model:
+  `diff master...<branch>`, then dispatch the review with `task_handoff`
+  (`target_kind: session`) to ONE reviewer chosen by the author's model, so
+  review is always cross-model:
   - Work written on a Claude profile (`opus`, `sonnet`, `default`) goes to a
     MiMo reviewer (there are two; pick the idle one, or the one with the
     shorter queue). If any commit under review came from a Claude dev, it
@@ -129,13 +130,12 @@ same worktree at once; reuse a worktree only for follow-up work on its branch.
   - Everything else (`glm`, `glm-flash`, `mimo`, …) goes to the Claude Code
     reviewer, the default.
   - The author's profile is on its session (`chat_sessions.profile_id`, or the
-    navigator badge). Send to the chosen reviewer's session directly with
-    `send_message` and `task_id` set. Only group mail is worktree-scoped, so
-    direct task mail reaches the reviewer wherever it runs, and its header
-    carries the task's direction, acceptance, revision, and latest journal.
-    Never send a review to the `reviewers` group: it cannot pick the model
-    family. Include the worktree, branch, exact base/head SHAs, `result_id`,
-    and focus.
+    navigator badge). Name the chosen reviewer's session as the handoff's
+    `target`. Its instruction is ordinary direct task mail, so it reaches the
+    reviewer wherever it runs, and its header carries the task's direction,
+    acceptance, revision, and latest journal. Never target the `reviewers`
+    group: it cannot pick the model family. Include the worktree, branch,
+    exact base/head SHAs, `result_id`, and focus in the instructions.
 - Before requesting review, read the result and verify its commit exists,
   matches the reported HEAD, and contains the claimed acceptance edits. Check
   dirty files separately and record missing checks. If integration is needed,
@@ -143,15 +143,18 @@ same worktree at once; reuse a worktree only for follow-up work on its branch.
   branch steady until the verdict; explicitly separate any independent work
   allowed during checkpoint review.
 - Read the submitted result with `task_get`. Include its `result_id` in the
-  review request and require `task_submit_findings` bound to that result. Send
-  findings to the dev with the `task_id` and `result_id`; require a new
-  `task_submit_result` after fixes. Findings never transfer to a newer result.
-- Use `task_handoff` for review, QA, or fixes when a group target preserves
-  the intended recipient and cross-model gate. It targets groups, not
-  sessions. The mixed reviewer group cannot select a model family: keep direct
-  review routing to the chosen session and result-bound findings. Do not also
-  send duplicate work by mail after dispatching a handoff. Journal the chosen
-  stage.
+  handoff and require `task_submit_findings` bound to that result. Return the
+  examined result for fixes with a fix handoff (`target_kind: session`) to the
+  original developer's session; require a new `task_submit_result` after
+  fixes. Findings never transfer to a newer result.
+- `task_handoff` dispatches a review, QA, or fix stage to a group
+  (`target_kind` omitted, defaulting to group even for a session-shaped id) or
+  to the exact session named by `target_kind: session`. A duplicate for the
+  same task, result, and kind returns the standing assignment instead of
+  dispatching again. Keep review routing on explicit session targets — the
+  mixed reviewer group cannot select a model family — and use group targets
+  when any member of the role may take the stage. Do not also send duplicate
+  work by mail after dispatching a handoff. Journal the chosen stage.
 - Pin verdicts to exact base/head commits. Re-review changed code, including
   conflict resolutions. Fix blocking findings; journal optional follow-ups.
 - Track recurring findings by defect class. After two unsuccessful correction

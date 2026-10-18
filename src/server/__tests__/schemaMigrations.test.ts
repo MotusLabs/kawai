@@ -114,12 +114,12 @@ describe('baseline', () => {
   test('this build ships its migrations, and a database at the newest version opens applying nothing', () => {
     const newest = MIGRATIONS.at(-1)!
     expect(MIGRATIONS.map(migration => migration.name)).toEqual(
-      ['strategy-impact', 'plan-validation', 'task-status-events', 'agent-starts', 'chat-turn-usage', 'process-reports', 'plan-execution', 'outbound-audit', 'context-exhausted', 'provider-limit-window'],
+      ['strategy-impact', 'plan-validation', 'task-status-events', 'agent-starts', 'chat-turn-usage', 'process-reports', 'plan-execution', 'outbound-audit', 'context-exhausted', 'process-observations', 'provider-limit-window'],
     )
     expect(newestVersion()).toBe(newest.version)
     initDatabase({ path: dbPath }).close()
     expect(versions(dbPath).map(row => [row.version, row.name])).toEqual([
-      [1, 'baseline'], [2, 'strategy-impact'], [3, 'plan-validation'], [4, 'task-status-events'], [5, 'agent-starts'], [6, 'chat-turn-usage'], [7, 'process-reports'], [8, 'plan-execution'], [9, 'outbound-audit'], [10, 'context-exhausted'], [11, 'provider-limit-window'],
+      [1, 'baseline'], [2, 'strategy-impact'], [3, 'plan-validation'], [4, 'task-status-events'], [5, 'agent-starts'], [6, 'chat-turn-usage'], [7, 'process-reports'], [8, 'plan-execution'], [9, 'outbound-audit'], [10, 'context-exhausted'], [11, 'process-observations'], [12, 'provider-limit-window'],
     ])
     expect(Object.keys(dump(dbPath))).toEqual(expect.arrayContaining([
       'strategy_impact_proposals', 'outbound_calls', 'outbound_outcomes', 'outbound_acknowledgements',
@@ -357,9 +357,12 @@ describe('a recorded migration name the registry disagrees with (CC round 3)', (
 
   test('the pre-migration-9 backup predates the audit tables (CC round 3)', () => {
     // A database at version 8 (plan-execution) upgrades to 9; the backup
-    // taken before migration 9 holds plan-execution's tables, never the outbound ones.
+    // taken before migration 9 holds plan-execution's tables, never the
+    // outbound ones. The upgrade stops at 9 first: rotation keeps only the
+    // newest three migrations' backups, so the full upgrade to 12 would
+    // prune the pre-9 file before its content could be asserted.
     initDatabase({ path: dbPath, migrations: MIGRATIONS.filter(migration => migration.version <= 8) }).close()
-    initDatabase({ path: dbPath }).close()
+    initDatabase({ path: dbPath, migrations: MIGRATIONS.filter(migration => migration.version <= 9) }).close()
     const backup = fs.readdirSync(path.join(dir, 'backups')).find(name => name.endsWith('-pre-migration-9.db'))!
     const backupPath = path.join(dir, 'backups', backup)
     const snapshot = new Database(backupPath, { readonly: true })
@@ -369,7 +372,8 @@ describe('a recorded migration name the registry disagrees with (CC round 3)', (
     expect(tables).not.toContain('outbound_calls')
     expect(tables).not.toContain('outbound_outcomes')
     expect(tables).not.toContain('outbound_acknowledgements')
-    // The live database now has them, and running 3 again writes nothing.
+    // The full upgrade applies the rest, and running it again writes nothing.
+    initDatabase({ path: dbPath }).close()
     const live = new Database(dbPath, { readonly: true })
     const liveTables = (live.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map(row => row.name)
     live.close()

@@ -146,6 +146,8 @@ export interface ChatSpawnInfo {
 }
 
 export interface ChatSessionDriverOptions {
+  /** Opaque unique turn identity; injectable for deterministic protocol tests. */
+  createTurnId?: () => string
   /** Agentboard session id (chat-<uuid>); used for logging context only. */
   sessionId: string
   projectPath: string
@@ -237,6 +239,8 @@ export interface ChatSessionDriverOptions {
    * (no new construction would otherwise clear them).
    */
   onProcessEnd?: () => void
+  /** Structured compaction facts; observational callback, never a transcript payload. */
+  onCompaction?: (data: import('../../shared/processObservations').Measurement, sourceId?: string) => void
   /**
    * The spawned-worker roster (workers design D2): the full projection,
    * called whenever it changes — never per elapsed tick. Ephemeral like
@@ -262,7 +266,7 @@ export interface ChatSessionDriverOptions {
    */
   onContextUsage?: (
     usage: ChatContextUsage | null,
-    opts?: { persist?: boolean }
+    opts?: { persist?: boolean; thresholdSource?: string }
   ) => void
   /**
    * Current model (chat-session-model design D5): the model string of an
@@ -339,8 +343,8 @@ export class ChatSessionDriver {
   private commands = new ChatCommandTracker()
   private query: Query | null = null
   private sequence = 0
-  private turnCounter = 0
   private activeTurnId: string | null = null
+  private compactionStartedAt: number | null = null
   /**
    * Which CLI turn a result or content frame belongs to (see cliTurnBinding
    * and docs/claude-cli-contract.md): every prompt carries a client uuid the
@@ -469,8 +473,7 @@ export class ChatSessionDriver {
    * here so the buffer can never outlive the turn it should name.
    */
   private startTurn(trigger?: ChatTurnTrigger): string {
-    this.turnCounter += 1
-    const turnId = `turn-${this.turnCounter}`
+    const turnId = this.options.createTurnId?.() ?? `turn-${crypto.randomUUID()}`
     this.activeTurnId = turnId
     this.pendingTaskNotifications = []
     this.binder.turnOpened(turnId, trigger !== undefined)
@@ -740,6 +743,7 @@ export class ChatSessionDriver {
   }
 
   private spawnQuery(): void {
+    this.compactionStartedAt = null
     // D7: a fresh id per agent process; the observer holds it live until the
     // process ends, so a call with no outcome reads pending, then unknown.
     this.currentSpawnId = `ob-s-${crypto.randomUUID()}`
@@ -1187,6 +1191,18 @@ export class ChatSessionDriver {
   }
 
   private handleSystem(message: Extract<SDKMessage, { type: 'system' }>): void {
+    if (message.subtype === 'status' && message.status === 'compacting') {
+      if (this.compactionStartedAt === null) {
+        this.compactionStartedAt = Date.now()
+        try {
+          this.options.onCompaction?.({
+            trigger: 'unknown', preTokens: null, postTokens: null,
+            startedAt: new Date(this.compactionStartedAt).toISOString(),
+            endedAt: null, durationSeconds: null, outcome: 'started',
+          }, message.uuid ? `start:${message.uuid}` : undefined)
+        } catch { logger.warn('chat_compaction_observation_failed') }
+      }
+    }
     if (message.subtype === 'api_retry') {
       const { resetsAt, window } = this.currentLimit()
       this.reportLimit(retryLimitSignal(message, resetsAt, window))
@@ -1266,6 +1282,21 @@ export class ChatSessionDriver {
       return
     }
     if (message.subtype === 'compact_boundary') {
+      try {
+        const metadata = message.compact_metadata as { trigger?: string; pre_tokens?: number; post_tokens?: number } | undefined
+        const measured = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null
+        this.options.onCompaction?.({
+          trigger: metadata?.trigger === 'auto' ? 'auto' : metadata?.trigger === 'manual' ? 'manual' : 'unknown',
+          startedAt: this.compactionStartedAt === null ? null : new Date(this.compactionStartedAt).toISOString(),
+          endedAt: new Date().toISOString(), preTokens: measured(metadata?.pre_tokens),
+          postTokens: measured(metadata?.post_tokens),
+          durationSeconds: this.compactionStartedAt === null ? null : Math.max(0, (Date.now() - this.compactionStartedAt) / 1000),
+          outcome: 'completed',
+        }, message.uuid ? `boundary:${message.uuid}` : undefined)
+      } catch { logger.warn('chat_compaction_observation_failed') }
+
+      this.compactionStartedAt = null
+
       // Adopt before the notice so the fresher value is already live when
       // subscribers see it. The post-compaction size is the new reading
       // (design D3): the meter drops with the transcript, auto or manual
@@ -1278,7 +1309,8 @@ export class ChatSessionDriver {
             ? message.compact_metadata.post_tokens
             : null,
           new Date().toISOString()
-        )
+        ),
+        true
       )
       this.emit({ type: 'notice', text: 'Context compacted', kind: 'compacted' })
     }
@@ -1637,13 +1669,19 @@ export class ChatSessionDriver {
   }
 
   /** Forward a tracker step to the manager sink. */
-  private applyContextStep(step: ChatContextStep): void {
+  private applyContextStep(step: ChatContextStep, boundary = false): void {
     if (step.kind === 'none') return
     if (step.kind === 'clear') {
       this.options.onContextUsage?.(null, { persist: true })
       return
     }
-    this.options.onContextUsage?.(step.usage, { persist: step.persist })
+    const state = this.context.getState()
+    const thresholdSource = state.reportThreshold !== null
+      ? state.reportThresholdExact ? 'report-threshold' : step.usage.thresholdApproximate ? 'report-window-fallback' : 'report-window-reserve'
+      : state.profileWindow !== null
+        ? step.usage.thresholdApproximate ? 'profile-window-fallback' : 'profile-window-reserve'
+        : 'model-window-fallback'
+    this.options.onContextUsage?.(step.usage, { persist: step.persist || boundary, thresholdSource })
   }
 
   /**

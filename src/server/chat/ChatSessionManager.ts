@@ -111,6 +111,7 @@ import type { TaskResultService } from '../team/TaskResultService'
 import type { SpawnRequest, SpawnResult } from '../team/staffing'
 import { TeamCaps } from '../team/teamCaps'
 import { worktreeRootOf } from '../team/worktreeRoots'
+import { ProcessObservationService } from '../metrics/observations/service'
 import { ProvenanceRecorder } from '../metrics/provenanceRecorder'
 import { ChatTurnUsageStore, TurnUsageTracker } from './chatTurnUsageStore'
 import { MetricsReader } from '../metrics/computeMetrics'
@@ -1082,6 +1083,25 @@ export class ChatSessionManager {
         }
       },
     })
+    this.observations = new ProcessObservationService(options.db.db, id => {
+      const record = this.records.get(id)
+      const startId = this.provenance.latestStart(id)
+      const start = startId
+        ? options.db.db.prepare('SELECT model FROM agent_starts WHERE id=?').get(startId) as { model: string | null } | null
+        : null
+      return {
+        sessionId: id, teamId: this.teams.teamOf(id)?.teamId ?? null,
+        taskId: record?.taskId ?? null,
+        taskRevision: record?.taskId ? this.tasks.store.get(record.taskId)?.revision ?? null : null,
+        groupId: record?.groupId ?? null, profileId: record?.claudeProfileId ?? 'default',
+        model: start?.model ?? record?.model ?? null, startId,
+      }
+    })
+    this.observations.start([
+      notify => this.tasks.store.subscribe(task => notify(task.id)),
+      notify => this.mailbox.store.subscribe((_team, message) => notify(message?.taskId ?? undefined)),
+      notify => this.teamMail.limits.subscribe(() => notify()),
+    ])
     // Product strategy (product-strategy): constructed here, beside the
     // task service, against the same database. The strategy store's changes
     // fan out to the strategy view pushes; the team comes from the record's
@@ -1369,6 +1389,12 @@ export class ChatSessionManager {
         worktreeRoot: worktreeRootOf(info.cwd),
         env: info.env,
       })
+      const contextWindow = Number(info.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW)
+      this.observations.chat.settings(sessionId, {
+        effort: info.effort ?? null,
+        contextWindow: Number.isFinite(contextWindow) && contextWindow > 0 ? contextWindow : null,
+        driverVersion: null, thresholdSource: null,
+      })
     } catch (error) {
       logger.warn('agent_start_record_failed', { sessionId, error: error instanceof Error ? error.message : String(error) })
     }
@@ -1409,6 +1435,7 @@ export class ChatSessionManager {
   readonly provenance: ProvenanceRecorder
   /** Per-turn token usage of every chat turn (team-process-metrics D1). */
   readonly turnUsage: ChatTurnUsageStore
+  readonly observations: ProcessObservationService
   /** Process metrics (team-process-metrics D4/D5), shared by the `team_metrics` tool and the Metrics tab. */
   readonly metrics: MetricsReader
   /** Process reports and proposals (team-process-metrics D6): the report tools and the human's decide/link commands. */
@@ -1650,6 +1677,7 @@ export class ChatSessionManager {
       // exited-unexpectedly error a bare close would report.
       driver.interrupt()
       driver.kill()
+      this.observations.chat.processEnded(sessionId)
     }
     this.teamMail.settleRecipient(sessionId)
     this.drivers.delete(sessionId)
@@ -1806,6 +1834,7 @@ export class ChatSessionManager {
     const record = this.records.get(sessionId)
     if (!record) return false
     this.drivers.get(sessionId)?.kill()
+    this.observations.chat.processEnded(sessionId)
     this.teamMail.settleRecipient(sessionId)
     this.drivers.delete(sessionId)
     this.driverPromises.delete(sessionId)
@@ -1844,14 +1873,16 @@ export class ChatSessionManager {
     this.validationAdapter.dispose()
     // A restore still in flight stops at its next row (design D2).
     this.isShutDown = true
+    this.observations.stop()
     this.teamMail.close()
     // The executor stops with the server: wakes drop, the timer clears, new ticks refuse (D5).
     this.executionRuntime?.stop()
     // Provider usage refreshes die with the server: timers stop now, and the
     // in-flight continuations check isShutDown before publishing.
     this.stopProviderUsageRefresh()
-    for (const driver of this.drivers.values()) {
+    for (const [id, driver] of this.drivers) {
       driver.shutdown()
+      this.observations.chat.processEnded(id)
     }
     this.drivers.clear()
     this.driverPromises.clear()
@@ -2224,7 +2255,11 @@ export class ChatSessionManager {
         // An unexpected exit ends the process but not the session: the same
         // driver respawns internally on the next send/start, so the notices
         // die here (design D4) instead of surviving into the replacement.
-        onProcessEnd: () => this.clearAgentNotices(record.sessionId, { emit: true }),
+        onProcessEnd: () => {
+          this.observations.chat.processEnded(record.sessionId)
+          this.clearAgentNotices(record.sessionId, { emit: true })
+        },
+        onCompaction: (data, sourceId) => this.observations.chat.compaction(record.sessionId, data, sourceId),
         onWorkers: (workers) =>
           this.handleDriverWorkers(record.sessionId, workers),
         onBackgroundTasks: (tasks) =>
@@ -2273,6 +2308,7 @@ export class ChatSessionManager {
         this.records.get(record.sessionId)?.archivedAt != null
       ) {
         driver.kill()
+        this.observations.chat.processEnded(sessionId)
         return null
       }
       // A fresh process starts with a clean notice slate (design D4): any
@@ -2533,6 +2569,7 @@ export class ChatSessionManager {
     events.push(event)
     this.liveEvents.set(sessionId, events)
     this.options.onEvent(sessionId, event)
+    this.observations.chat.event(sessionId, event)
     if (event.type === 'request_resolved') this.dispatcher.notify()
     // Per-turn usage (team-process-metrics D1): pinned at turn start, written
     // at completion. Never worth a turn: a failure is logged and the
@@ -2540,6 +2577,7 @@ export class ChatSessionManager {
     if (event.type === 'turn_started' || event.type === 'peer_message' || event.type === 'turn_interrupted' || event.type === 'turn_completed') {
       try {
         this.turnUsageTracker.onEvent(sessionId, event)
+        if (event.type === 'turn_completed') this.observations.notify()
       } catch (error) {
         logger.warn('chat_turn_usage_record_failed', { sessionId, error: error instanceof Error ? error.message : String(error) })
       }
@@ -2645,16 +2683,18 @@ export class ChatSessionManager {
   private handleDriverContextUsage(
     sessionId: string,
     usage: ChatContextUsage | null,
-    opts?: { persist?: boolean }
+    opts?: { persist?: boolean; thresholdSource?: string }
   ): void {
     if (!this.records.has(sessionId)) return
     if (usage === null) {
       this.contextReadings.delete(sessionId)
+      this.observations.chat.context(sessionId, null, true)
       this.options.onContextUsage?.(sessionId, null)
       this.applyPatch(sessionId, { contextUsage: null })
       return
     }
     this.contextReadings.set(sessionId, usage)
+    this.observations.chat.context(sessionId, usage, opts?.persist === true, opts?.thresholdSource)
     this.options.onContextUsage?.(sessionId, usage)
     if (opts?.persist) this.persistContextUsage(sessionId)
   }
@@ -2737,6 +2777,7 @@ export class ChatSessionManager {
         phaseStartedAt: Date.now() - elapsedMs,
       })
     }
+    this.observations.chat.activity(sessionId, activity)
     this.options.onActivity?.(sessionId, activity)
   }
 

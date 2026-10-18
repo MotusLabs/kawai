@@ -156,10 +156,14 @@ test('urgent mail that interrupts a busy agent is parked when its delivered turn
   const resume = store.get(parked.resumeMessageId!)
   expect(resume).toMatchObject({ state: 'queued', toKind: 'session', toId: id, deliverAt: new Date(resetsAt * 1000).toISOString() })
 
-  // Turn usage lands on the turns that spent it: the interrupted turn-1 is
-  // never recorded, and the delivered turn-2 carries only its own tokens.
+  // Only the delivered turn's actual identity and usage are recorded; the
+  // interrupted turn and its late result cannot consume that identity.
   const usage = db.db.prepare('SELECT turn_id, input_tokens FROM chat_turn_usage WHERE session_id = ? ORDER BY turn_id').all(id)
-  expect(usage).toEqual([{ turn_id: 'turn-2', input_tokens: 5 }])
+  const completed=manager!.getSnapshot(id)!.events.find(event=>event.type==='turn_completed')
+  const interrupted=manager!.getSnapshot(id)!.events.find(event=>event.type==='turn_interrupted')
+  expect(completed).toBeDefined()
+  expect(completed!.turnId).not.toBe(interrupted?.turnId)
+  expect(usage).toEqual([{ turn_id: completed!.turnId, input_tokens: 5 }])
 })
 
 test('a final limit in an agent-started turn parks the work the agent last held (limit-outcomes-agent-turns)', async () => {

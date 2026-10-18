@@ -28,6 +28,7 @@ import { initDatabase } from '../db'
 import { applyBaselineSchema } from '../dbSafety/baseline'
 import { schemaShape, type SchemaShape } from './fixtures/schemaShape'
 import master from './fixtures/masterSchemaShape.json'
+import migration11 from './fixtures/processObservationSchemaShape.json'
 
 const expected = master as SchemaShape
 
@@ -292,13 +293,14 @@ const migration10 = {
 
 test('a fresh database opened by this build has the same shape plus each migration\'s delta and schema_migrations', () => {
   const session = initDatabase({ path: ':memory:' })
-  const added = { ...migration2, ...migration3, ...migration4, ...migration5, ...migration6, ...migration7, ...migration8, ...migration9, ...migration10 }
+  const added = { ...migration2, ...migration3, ...migration4, ...migration5, ...migration6, ...migration7, ...migration8, ...migration9, ...migration10, ...migration11 }
   expect(Object.keys(added).filter(table => table in expected.tables)).toEqual([])
   const messages = expected.tables.team_messages!
   const withProfiles = { ...messages, columns: [...messages.columns, optional('allowed_profiles')] }
-  // Migration 10's delta: the chat_sessions exhaustion flags. Migration 11's:
-  // limit events record their provider and window (providers-and-workers D7),
-  // both nullable, after the baseline columns.
+  // Migration 10's delta: the chat_sessions exhaustion flags; migration 11's
+  // the process-observations tables (in `added` above); migration 12's: limit
+  // events record their provider and window (providers-and-workers D7), both
+  // nullable, after the baseline columns.
   const chats = expected.tables.chat_sessions!
   const withFlag = { ...chats, columns: [...chats.columns, optional('context_exhausted_at'), optional('context_exhausted_reason')] }
   const limitEvents = expected.tables.profile_limit_events!

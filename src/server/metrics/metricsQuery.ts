@@ -87,7 +87,7 @@ export interface MetricsInputs {
   messageEvents: MetricMessageEvent[]
   usage: TurnUsageRow[]
   /**
-   * Before this, turns may be missing — usage retention's `end − 60 d`, or the
+   * Before this, turns may be missing — usage retention's `end − 90 d`, or the
    * team's first recorded turn when later (recording began then; `end` with
    * none) — so a cohort task created earlier has its tokens marked partial.
    */
