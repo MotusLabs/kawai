@@ -75,6 +75,7 @@ beforeEach(() => {
       since: () => turnEndRows,
     },
     recordOf: (sessionId: string) => records.find(record => record.sessionId === sessionId),
+    exhaustionEpisodes: () => [],
     outboundAudit: { violationGroups: () => [], windowCounts: () => ({ allowed: 0, unknown: 0, violations: 0 }) },
     teams: {
       catalogForTeam: () => catalog,

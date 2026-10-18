@@ -177,6 +177,19 @@ describe('waiting-reason diagnosis', () => {
     })
   })
 
+  test('a flagged member holding a max-1 group is named in the reason (chat-context-exhaustion D7)', async () => {
+    def = group('max: 1')
+    members = [{ sessionId: 'dead', profileId: 'glm', cwd: '/wt' }]
+    exclusions = [{ sessionId: 'dead', kind: 'context-exhausted' }]
+    expect(await diagnose()).toMatchObject({
+      kind: 'none',
+      diagnosis: [
+        { kind: 'group-cap', counts: { live: 1, cap: 1 } },
+        { kind: 'no-eligible-member', sessionIds: ['dead'], members: [{ sessionId: 'dead', cause: 'context exhausted' }] },
+      ],
+    })
+  })
+
   test('a reached profile cap reports its profile and count', async () => {
     def = group('profiles: { glm: 1, claude: 1 }\nmax: 5')
     members = [{ sessionId: 'a', profileId: 'glm', cwd: '/wt' }]

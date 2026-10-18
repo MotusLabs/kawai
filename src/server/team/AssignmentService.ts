@@ -394,14 +394,25 @@ export class AssignmentService {
 
   /**
    * A live same-team session target, or null for group targets. Refuses an
-   * unknown, archived, or other-team session before anything is written.
+   * unknown, archived, other-team, or context-exhausted session before
+   * anything is written. The flag is read after the last await, so nothing
+   * can flag the session between this check and the dispatch's commit
+   * (chat-context-exhaustion D5: its instruction would never deliver).
    */
   private async sessionTarget(team: TeamIdentity, target: AssignmentTarget): Promise<ChatSessionRecord | null> {
     if (target.kind !== 'session') return null
+    const found = this.options.getSession(target.id)
+    if (!found) throw new Error(`Unknown session: ${target.id}`)
+    if (found.archivedAt != null) throw new Error(`Session ${target.id} is archived`)
+    if ((await resolveTeam(found.projectPath)).teamId !== team.teamId) throw new Error(`Session ${target.id} belongs to another team`)
     const recipient = this.options.getSession(target.id)
     if (!recipient) throw new Error(`Unknown session: ${target.id}`)
     if (recipient.archivedAt != null) throw new Error(`Session ${target.id} is archived`)
-    if ((await resolveTeam(recipient.projectPath)).teamId !== team.teamId) throw new Error(`Session ${target.id} belongs to another team`)
+    const flag = recipient.contextExhausted
+    if (flag) {
+      throw new Error(`Session ${target.id}'s context is exhausted (${flag.reason}, since ${flag.at}); it takes no mail until ` +
+        '/compact or a successful turn clears it. Assign the task to a group or another session. Nothing was written.')
+    }
     return recipient
   }
 

@@ -48,6 +48,7 @@ import type {
   ChatUsageReport,
   ChatWorker,
 } from '../../shared/chat'
+import { turnSucceeded } from '../../shared/chat'
 import type { SessionStatus } from '../../shared/types'
 import {
   ASK_USER_QUESTION_TOOL,
@@ -1158,24 +1159,27 @@ export class ChatSessionDriver {
     const turnId = this.activeTurnId
     if (verdict === 'drop' || !turnId) return
     this.activeTurnId = null
+    const outcome = {
+      subtype: message.subtype,
+      isError: message.is_error,
+      ...(message.terminal_reason ? { terminalReason: message.terminal_reason } : {}),
+    }
+    const succeeded = turnSucceeded(outcome)
     this.emit({
       type: 'turn_completed',
       turnId,
-      subtype: message.subtype,
+      ...outcome,
       totalCostUsd: message.total_cost_usd,
       numTurns: message.num_turns,
       ...turnUsageOf(message),
-      // Final text only on a success subtype.
-      ...(message.subtype === 'success' ? { finalText: message.result } : {}),
+      // Final text only on a successful turn: under `is_error` the result is
+      // the error text (chat-context-exhaustion D1).
+      ...(succeeded && message.subtype === 'success' ? { finalText: message.result } : {}),
     })
-    if (message.subtype !== 'success') {
+    if (!succeeded) {
       // Per-turn error results keep the streaming session usable; surface the
       // failure in the transcript and return to waiting.
-      const detail =
-        'errors' in message && message.errors.length > 0
-          ? message.errors.join('; ')
-          : `The turn ended with ${message.subtype}`
-      this.emit({ type: 'error', message: detail })
+      this.emit({ type: 'error', message: resultErrorText(message) })
     }
     this.refreshStatus()
     // Turn boundary: re-resolve the threshold for the next turn (design D2).
@@ -1793,6 +1797,22 @@ function interruptQuery(query: Query, cancelQueued: boolean): Promise<SDKControl
 }
 
 /** The result's per-turn token counts (team-process-metrics D1); absent when the result carries none. */
+/**
+ * The transcript error for a failed result (chat-context-exhaustion D1): the
+ * SDK's errors, or under `is_error` its result text, or the subtype — plus
+ * the terminal reason when the CLI gave one, e.g.
+ * `Prompt is too long (blocking_limit)`.
+ */
+export function resultErrorText(message: SDKResultMessage): string {
+  const base =
+    'errors' in message && message.errors.length > 0
+      ? message.errors.join('; ')
+      : message.subtype === 'success' && message.result.trim()
+        ? message.result.trim()
+        : `The turn ended with ${message.subtype}`
+  return message.terminal_reason ? `${base} (${message.terminal_reason})` : base
+}
+
 export function turnUsageOf(message: { usage?: unknown }): { usage?: ChatTurnUsage } {
   const usage = message.usage
   if (!usage || typeof usage !== 'object') return {}

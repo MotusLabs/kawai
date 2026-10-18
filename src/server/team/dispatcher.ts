@@ -39,6 +39,8 @@ export interface MailRecipient {
   worktree?: string
   /** Holds a parked message: takes no group mail (profile-routing). */
   parked?: boolean
+  /** Flagged context-exhausted (chat-context-exhaustion D7): takes no mail, still counts toward caps. */
+  contextExhausted?: boolean
   profileId?: string
   /** Direct mail waits for provider recovery; custom group rules may override cooling. */
   cooldownUntil?: string | null
@@ -278,6 +280,9 @@ export class MailDispatcher {
             constraints.push({ kind: 'recipient-unavailable', ...(row.blockedBy ? { detail: row.blockedBy } : {}) })
           } else if (cause.kind === 'pending-card') constraints.push({ kind: 'recipient-pending-request' })
           else if (cause.kind === 'busy') constraints.push({ kind: 'recipient-busy' })
+          else if (cause.kind === 'context-exhausted') {
+            constraints.push({ kind: 'recipient-unavailable', sessionIds: [row.sessionId], detail: 'the recipient\'s context is exhausted' })
+          }
           else if (cause.kind === 'excluded-profile') {
             constraints.push({ kind: 'recipient-unavailable', detail: `the recipient is on the excluded profile ${message.excludedProfile}` })
           } else if (cause.kind === 'outside-role') {
@@ -416,7 +421,7 @@ export class MailDispatcher {
         if (!current || current.teamId !== message.teamId) return false
         const causes = memberExclusions(current, message, { targetWorktree: this.targetOf(message), now: this.now(), startupFailed: false })
         const has = (kind: MemberExclusionKind) => causes.some(cause => cause.kind === kind)
-        if (has('unavailable') || has('pending-card') || has('other-worktree')) return false
+        if (has('unavailable') || has('pending-card') || has('other-worktree') || has('context-exhausted')) return false
         if (!interrupt && has('busy')) return false
         if (message.excludedProfile && has('excluded-profile')) return false
         if (message.toKind === 'session' && has('profile-cooling')) return false

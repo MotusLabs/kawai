@@ -25,7 +25,7 @@ export interface LimitEvent {
   message: string | null
   /** Provider reset time (ISO) when known. */
   resetsAt: string | null
-  /** Provider owning the profile at record time; null on rows written before providers (migration 10). */
+  /** Provider owning the profile at record time; null on rows written before providers (migration 11). */
   providerId: string | null
   /** The rejected rate-limit report's window (`five_hour`, `seven_day_opus`, …); null when unnamed. */
   window: string | null

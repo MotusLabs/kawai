@@ -12,6 +12,7 @@ const DEAD_LETTER_LABELS: Record<string, string> = {
   'killed-recipient': 'The recipient session no longer exists',
   'killed-sender-without-group': 'The sender session no longer exists and has no group',
   'hop-limit': 'The reply chain reached its hop limit',
+  'context-exhausted': "The recipient's context was exhausted; the message was not processed",
 }
 
 /** A readable label for a dead-letter reason; the code stays visible beside it. */

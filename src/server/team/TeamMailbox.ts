@@ -69,6 +69,18 @@ export class TeamMailbox {
       'Send it without urgent to queue it, or send it to another agent.')
   }
 
+  /**
+   * Refuse direct mail and replies to a context-exhausted session
+   * (chat-context-exhaustion D5), before any restore, so mail never revives
+   * a flagged archived session; nothing is queued.
+   */
+  private refuseExhausted(recipient: ChatSessionRecord) {
+    const flag = recipient.contextExhausted
+    if (!flag) return
+    throw new Error(`Session ${recipient.sessionId}'s context is exhausted (${flag.reason}, since ${flag.at}); it takes no mail until ` +
+      '/compact or a successful turn clears it. Its task\'s dispatcher has a decision note — send the work to a group or another session.')
+  }
+
   /** A task id of the sender's team, or an error; nothing is enqueued on failure. */
   private taskOf(team: TeamIdentity, taskId: string | undefined): string | null {
     if (!taskId) return null
@@ -114,6 +126,7 @@ export class TeamMailbox {
       if ((await resolveTeam(recipient.projectPath)).teamId !== sender.team.teamId) {
         throw new Error('Recipient belongs to another team')
       }
+      this.refuseExhausted(recipient)
       this.refuseCooling(recipient, input.urgent)
       // Direct mail resumes an archived recipient, exactly as replies do:
       // otherwise the message could queue forever behind a parked session.
@@ -161,6 +174,7 @@ export class TeamMailbox {
     if (recipient && (await resolveTeam(recipient.projectPath)).teamId !== sender.team.teamId) {
       throw new Error('Recipient belongs to another team')
     }
+    if (recipient) this.refuseExhausted(recipient)
     if (recipient) this.refuseCooling(recipient, input.urgent)
     if (recipient?.archivedAt) await this.options.restoreSession?.(recipient.sessionId)
     const fallback = !toHuman && !recipient && original.fromGroup !== null

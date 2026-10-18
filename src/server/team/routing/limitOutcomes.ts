@@ -157,6 +157,25 @@ export class LimitOutcomes {
   }
 
   /**
+   * The session's turn ended with its context exhausted
+   * (chat-context-exhaustion D4): the exhaustion outcome settles the work, so
+   * no limit resolution runs. Ends the turn's bookkeeping and hands back the
+   * work it handled (a parked message's id for a resume turn) with the
+   * progress recorded since its claim; the digest is dropped with it.
+   */
+  takeExhaustedWork(sessionId: string): { messageId: string; progress: ChatHandoffPackage['progress'] } | null {
+    this.pending.delete(sessionId)
+    this.agentTurns.delete(sessionId)
+    const workId = this.active.get(sessionId)
+    this.active.delete(sessionId)
+    if (!workId) return null
+    const progress = (this.digests.get(workId) ?? new ProgressDigest()).snapshot()
+    this.digests.delete(workId)
+    if (this.lastWork.get(sessionId) === workId) this.lastWork.delete(sessionId)
+    return { messageId: workId, progress }
+  }
+
+  /**
    * The work an agent-started turn's limit parks (D2): the last work while
    * still held, else — after a restart — the newest parked, else the newest
    * held delivered message that is not a resume (a resume points at work).

@@ -222,6 +222,37 @@ test('the router chooses among eligible members; parked members are not offered'
   expect(views[0]!.attempt).toBe(0)
 })
 
+test('a flagged longest-idle member is skipped; the next idle member takes the mail (chat-context-exhaustion D7)', async () => {
+  recipients = [
+    { sessionId: 'dead', teamId: 'team', groupId: 'devs', idle: true, pendingRequest: false, available: true, contextExhausted: true },
+    { sessionId: 'live', teamId: 'team', groupId: 'devs', idle: true, pendingRequest: false, available: true },
+  ]
+  const m = send(); await dispatch()
+  expect(delivered).toEqual([{ recipient: 'live', id: m.id }])
+})
+
+test('a flagged member reports its cause and never claims, group or direct', async () => {
+  recipients = [{ sessionId: 'dead', teamId: 'team', groupId: 'devs', idle: true, pendingRequest: false, available: true, contextExhausted: true }]
+  let view: RouteView | undefined
+  const group = send(); const direct = send({ toKind: 'session', toId: 'dead' })
+  let outcome: PassOutcome | undefined
+  dispatcher.close()
+  dispatcher = new MailDispatcher(store, {
+    recipients: () => recipients, prepare: async () => {}, interrupt: async () => {},
+    deliver: () => { throw new Error('must not deliver') }, watchReceipt: () => {},
+    router: { route: async (_message, routed) => { view = routed; return { kind: 'member', sessionId: 'dead' } } },
+    afterPass: pass => { outcome = pass },
+  })
+  await dispatch()
+  expect(view!.eligible).toEqual([])
+  expect(view!.exclusions).toEqual([{ sessionId: 'dead', kind: 'context-exhausted' }])
+  expect(store.get(group.id)?.state).toBe('queued')
+  expect(store.get(direct.id)?.state).toBe('queued')
+  expect(outcome?.reasons.get(direct.id)).toEqual([
+    { kind: 'recipient-unavailable', sessionIds: ['dead'], detail: 'the recipient\'s context is exhausted' },
+  ])
+})
+
 test('a stale pick is routed again, then by attempt 2', async () => {
   recipients = [
     { sessionId: 'busy', teamId: 'team', groupId: 'devs', idle: true, pendingRequest: false, available: true },

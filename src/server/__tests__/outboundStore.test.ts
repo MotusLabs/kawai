@@ -46,7 +46,7 @@ function call(overrides: Partial<OutboundCallInsert> = {}): OutboundCallInsert {
 
 describe('the outbound-audit migration (3.3)', () => {
   test('a fresh database records every version through outbound-audit and creates the tables, twice over', () => {
-    expect(MIGRATIONS.at(-2)).toMatchObject({ name: 'outbound-audit' })
+    expect(MIGRATIONS.find(migration => migration.name === 'outbound-audit')).toMatchObject({ version: 9 })
     expect(MIGRATIONS.at(-1)).toMatchObject({ name: 'provider-limit-window' })
     for (let i = 0; i < 2; i++) {
       const db = initDatabase({ path: dbPath })

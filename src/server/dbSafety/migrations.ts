@@ -17,6 +17,7 @@
 import type { Database } from 'bun:sqlite'
 import { BUILD_VERSION } from '../version'
 import { outboundAuditMigration } from '../outbound/migration'
+import { contextExhaustedMigration } from '../chat/contextExhaustedMigration'
 import { applyBaselineSchema } from './baseline'
 import { CREATE_IMPACT_TABLES_SQL } from '../strategy/impactSchema'
 import { CREATE_VALIDATION_TABLES_SQL } from '../plans/validation/validationSchema'
@@ -60,9 +61,11 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 8, name: 'plan-execution', up: applyExecutionSchema },
   // execution-safety-recovery D6: the append-only outbound audit tables.
   outboundAuditMigration,
+  // chat-context-exhaustion D3: the session's context-exhausted flag columns.
+  contextExhaustedMigration,
   // providers-and-workers D7: limit events record their provider and the
   // rejected report's window; rows from before it read provider-less.
-  { version: 10, name: 'provider-limit-window', up: migrateProviderLimitWindow },
+  { version: 11, name: 'provider-limit-window', up: migrateProviderLimitWindow },
 ]
 
 export const RESTORE_DOC = 'docs/operations/database-backups.md'

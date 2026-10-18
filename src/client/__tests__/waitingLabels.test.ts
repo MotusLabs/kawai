@@ -52,6 +52,7 @@ test('known dead-letter codes read as sentences and unknown codes pass through',
   expect(deadLetterLabel('worktree-missing: /repo/feat-x')).toBe('The target worktree is missing')
   expect(deadLetterLabel('killed-recipient')).toBe('The recipient session no longer exists')
   expect(deadLetterLabel('killed-sender-without-group')).toBe('The sender session no longer exists and has no group')
+  expect(deadLetterLabel('context-exhausted')).toBe("The recipient's context was exhausted; the message was not processed")
   expect(deadLetterLabel('hop-limit')).toBe('The reply chain reached its hop limit')
   expect(deadLetterLabel('some-future-code')).toBe('some-future-code')
   expect(deadLetterLabel('worktree-missing: /gone')).toBe('The target worktree is missing')

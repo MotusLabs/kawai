@@ -74,7 +74,7 @@ export function ensureLimitEventSchema(db: Database): void {
 }
 
 /**
- * Migration 10 `provider-limit-window` (providers-and-workers D7): the two
+ * Migration 11 `provider-limit-window` (providers-and-workers D7): the two
  * nullable columns beside the frozen baseline table. Rows written before it
  * read with `providerId: null` — their profile alone cools. The guard keeps
  * re-application (schemaDb's versionless replay) idempotent; a real startup
