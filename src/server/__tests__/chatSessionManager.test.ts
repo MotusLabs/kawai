@@ -36,6 +36,20 @@ import {
 /** Every fictitious project path (`/tmp/proj`) counts as an existing directory. */
 const anyDirectory = () => true
 
+/** A user-level catalog with one credentialed provider (openrouter-provider D1). */
+function writeCredentialedProviderCatalog(home: string): void {
+  const dir = path.join(home, '.kawai')
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(path.join(dir, 'providers.json'), JSON.stringify({
+    or2: {
+      label: 'OR2',
+      authTokenEnv: 'OR2_KEY',
+      env: { ANTHROPIC_BASE_URL: 'https://or2.example.internal/api' },
+      models: { 'or2-opus': { model: 'opus' } },
+    },
+  }))
+}
+
 /** Minimal scriptable Query: tests push SDK messages, options are captured. */
 interface FakeHandle {
   query: Query
@@ -775,6 +789,30 @@ describe('ChatSessionManager', () => {
       const { manager } = await createHarness(db)
       expect(manager.createSession({ projectPath: '/tmp/proj' }).ok).toBe(true)
     })
+
+    test('a credentialed provider needs its own key variable, whatever host login exists', async () => {
+      writeCredentialedProviderCatalog(tempDir)
+      // A host claude.ai login and a server API key exist; neither counts.
+      fs.mkdirSync(process.env.CLAUDE_CONFIG_DIR!, { recursive: true })
+      fs.writeFileSync(path.join(process.env.CLAUDE_CONFIG_DIR!, '.credentials.json'), '{}')
+      process.env.ANTHROPIC_API_KEY = 'sk-host'
+      let providerEnv: Record<string, string> = {}
+      const handles: FakeHandle[] = []
+      const manager = await managedManager({
+        isDirectory: anyDirectory,
+        profileCatalogHome: tempDir,
+        db, registry: new SessionRegistry(), onEvent: () => {},
+        queryFactory: fakeQueryFactory(handles),
+        getProviderEnv: () => providerEnv,
+      })
+      const refused = manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'or2-opus' })
+      expect(refused).toEqual({ ok: false, error: 'Provider OR2 needs OR2_KEY in the server environment.' })
+      expect(db.getChatSessions()).toEqual([])
+      expect(handles).toHaveLength(0)
+      // The variable alone (here from Settings) authenticates.
+      providerEnv = { OR2_KEY: 'or-sentinel' }
+      expect(manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'or2-opus' }).ok).toBe(true)
+    })
   })
 
   describe('executable gate', () => {
@@ -943,13 +981,18 @@ describe('ChatSessionManager', () => {
     manager.kill(second.session.id)
   })
 
-  test('without provider env the SDK spawn omits env', async () => {
+  test('without provider env the SDK spawn gets the server env minus catalog-named key variables', async () => {
     process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
+    process.env.OPENROUTER_MANAGEMENT_KEY = 'management-sentinel'
     const { manager, handles } = await createHarness(db)
     const created = manager.createSession({ projectPath: '/tmp/proj' })
     if (!created.ok) throw new Error('create failed')
     await manager.send(created.session.id, 'hello')
-    expect('env' in handles[0]!.options).toBe(false)
+    delete process.env.OPENROUTER_MANAGEMENT_KEY
+    // The shipped catalog names OpenRouter's keys (openrouter-provider D3).
+    const env = handles[0]!.options.env as Record<string, string | undefined>
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe('test-oauth-token')
+    expect(env).not.toHaveProperty('OPENROUTER_MANAGEMENT_KEY')
     manager.kill(created.session.id)
   })
 
@@ -3966,6 +4009,24 @@ describe('ChatSessionManager notifications', () => {
       text: 'Your login expires in 2 days',
       hint: 'run /login in a Claude terminal to renew',
     })
+  })
+
+  test('a credentialed provider session shows no host-login expiry notice', async () => {
+    writeCredentials(expiringCredentials(1.4))
+    writeCredentialedProviderCatalog(tempDir)
+    process.env.OR2_KEY = 'or-sentinel'
+    try {
+      const { manager } = await noticeHarness()
+      const created = manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'or2-opus' })
+      if (!created.ok) throw new Error(created.error)
+      expect(manager.getSnapshot(created.session.id)!.notifications).toEqual([])
+      // A host-login session on the same server still sees it.
+      const host = manager.createSession({ projectPath: '/tmp/proj' })
+      if (!host.ok) throw new Error(host.error)
+      expect(manager.getSnapshot(host.session.id)!.notifications.map((n) => n.key)).toEqual(['login-expiry'])
+    } finally {
+      delete process.env.OR2_KEY
+    }
   })
 
   test('two sessions sharing a credentials path both update on a change', async () => {
