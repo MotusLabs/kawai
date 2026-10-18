@@ -2,7 +2,7 @@
 // flaky rule, the review verdict, and the extra-check split.
 import { describe, expect, test } from 'bun:test'
 import type { CiCheck, FloorMap } from '../planExecution'
-import { evaluateCi, reviewVerdict, splitExtraChecks, type CiTiming, type VerdictFindings } from '../planExecutionGates'
+import { effectiveExtraChecks, evaluateCi, reviewVerdict, splitExtraChecks, type CiTiming, type VerdictFindings } from '../planExecutionGates'
 
 const FLOOR: FloorMap = { lint: ['ci'], typecheck: ['ci'], 'unit-tests': ['ci'], 'ci-e2e': ['e2e'] }
 const T0 = '2026-10-16T10:00:00.000Z'
@@ -129,5 +129,17 @@ describe('splitExtraChecks', () => {
     const size = { name: 'bundle-size', description: 'Bundle stays small', command: 'bun run size' }
     const manual = { name: 'a11y', description: 'Screen reader pass', command: null }
     expect(splitExtraChecks([size, manual], ['ci', 'bundle-size'])).toEqual({ ci: [size], attested: [manual] })
+  })
+})
+
+describe('effectiveExtraChecks', () => {
+  test('the plan-wide checks first, then the change\'s own, deduped by name with the first kept', () => {
+    const size = { name: 'bundle-size', description: 'Bundle stays small', command: 'bun run size' }
+    const manual = { name: 'a11y', description: 'Screen reader pass', command: null }
+    const clash = { name: 'bundle-size', description: 'A change-level copy', command: null }
+    expect(effectiveExtraChecks({ extraChecks: [size] }, { extraChecks: [manual, clash] })).toEqual([size, manual])
+    expect(effectiveExtraChecks({ extraChecks: [size] }, null)).toEqual([size])
+    expect(effectiveExtraChecks(null, { extraChecks: [manual] })).toEqual([manual])
+    expect(effectiveExtraChecks(undefined, undefined)).toEqual([])
   })
 })

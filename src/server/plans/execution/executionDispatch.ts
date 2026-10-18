@@ -17,6 +17,7 @@ import type { ExecutionStore } from './executionStore'
 import type { PlanStore } from '../planStore'
 import { fixInstruction, implementInstruction } from './instructions'
 import { refusable } from './stepRefusal'
+import { effectiveExtraChecks } from '../../../shared/planExecutionGates'
 
 /** The system caller (D2): minted only inside this module. */
 function kawaiCaller(team: TeamIdentity, executionId: string): TaskCaller {
@@ -120,7 +121,7 @@ export async function dispatchImplementAttempt(deps: DispatchDeps, input: { exec
       baseline: changeRow.baselineCommit!,
       head,
       acceptance: [...entry.acceptance, ...revision.content.acceptanceRules],
-      extraChecks: entry.extraChecks.map(check => check.name),
+      extraChecks: effectiveExtraChecks(revision.content, entry).map(check => check.name),
       guidance: entry.guidance,
       taskId: taskId!,
       manifestHash: manifestHash!,
@@ -205,7 +206,7 @@ export async function dispatchFixAttempt(deps: DispatchDeps, input: {
     baseline: changeRow.baselineCommit,
     head: input.continueFrom,
     acceptance: [...entry.acceptance, ...revision.content.acceptanceRules],
-    extraChecks: entry.extraChecks.map(check => check.name),
+    extraChecks: effectiveExtraChecks(revision.content, entry).map(check => check.name),
     guidance: entry.guidance,
     taskId,
     manifestHash: manifestHash!,

@@ -336,6 +336,8 @@ The manifest is serialized with `canonicalJson` and hashed with sha256. Artifact
 
 ### D11. Review and extra checks
 
+A change's extra checks are the running revision's plan-wide checks, then the change's own (`effectiveExtraChecks`; `planChecks` keeps the names disjoint). The instructions, the CI split, the verdict, the round view, and `plan_get` all read that one list.
+
 After CI passes, the review stage runs in these steps:
 1. **Release.** When the review group's current file is worktree-scoped, each live spawned member in the worktree is checked with `MemberRelease.readiness`. A ready member is archived with `releaseNow`, journaled as Kawai. One that is not ready holds the step at `releasing`, with that member and reason shown, and is re-checked on member events. Human-created sessions are never released. Staffing's occupancy rules then decide where the review lands.
 2. **Handoff.** The review handoff is dispatched to the review group with the role's `allowedProfiles` and `author-profile:<id>` tags (D15). The instruction lists:

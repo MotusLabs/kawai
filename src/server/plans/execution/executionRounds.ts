@@ -11,7 +11,7 @@ import type { TeamIdentity } from '../../team/teamIdentity'
 import type { ChatSessionRecord } from '../../db'
 import type { TaskService } from '../../team/TaskService'
 import type { TaskResultService } from '../../team/TaskResultService'
-import { evaluateCi, reviewVerdict, splitExtraChecks } from '../../../shared/planExecutionGates'
+import { effectiveExtraChecks, evaluateCi, reviewVerdict, splitExtraChecks } from '../../../shared/planExecutionGates'
 import type { CiCheck, StopDetail, StopReason } from '../../../shared/planExecution'
 import type { PlanCheck } from '../../../shared/plans'
 import type { RoundRow } from './executionRows'
@@ -119,9 +119,9 @@ export async function applyRoundStage(deps: RoundDeps, changeRow: { executionId:
     return
   }
 
-  if (stage.kind === 'ci') return pollCi(deps, changeRow, round, entry?.extraChecks ?? [])
+  if (stage.kind === 'ci') return pollCi(deps, changeRow, round, effectiveExtraChecks(revision?.content, entry))
   if (stage.kind === 'review') return dispatchReview(deps, changeRow, round)
-  if (stage.kind === 'verdict') return decideVerdict(deps, changeRow, round, entry?.extraChecks ?? [])
+  if (stage.kind === 'verdict') return decideVerdict(deps, changeRow, round, effectiveExtraChecks(revision?.content, entry))
   if (stage.kind === 'revision') {
     await dispatchRevisionAttempt(deps, changeRow, round)
     return
@@ -254,7 +254,7 @@ async function dispatchReview(deps: RoundDeps, changeRow: { executionId: string;
     .map(result => result.submittedBy.sessionId).filter((id): id is string => id !== null)
   const outcome = await refusable('review', () => deps.results.handoff({ kind: 'system', team: deps.team, executionId: changeRow.executionId }, change.taskId!, {
     kind: 'review', resultId: round.resultId, target: { kind: 'group', id: reviewGroup },
-    instructions: reviewInstruction(deps, changeRow.change, round, entry?.extraChecks ?? [], [...entry?.acceptance ?? [], ...revision?.content.acceptanceRules ?? []]),
+    instructions: reviewInstruction(deps, changeRow.change, round, effectiveExtraChecks(revision?.content, entry), [...entry?.acceptance ?? [], ...revision?.content.acceptanceRules ?? []]),
     requestKey: `exec:${changeRow.executionId}:${changeRow.change}:round:${round.number}:review:${change.generation}`,
     ...(role.length > 0 ? { allowedProfiles: role } : {}),
     tags: [...new Set(authors.flatMap(session => sessionProfileOf(deps, session)).map(profile => `author-profile:${profile}`))],

@@ -3,7 +3,7 @@
 // review verdict that counts, and the extra checks CI decides versus those a
 // reviewer attests. The server's planner, `plan_get`, and the Plans view all
 // read these, so they agree.
-import type { PlanCheck } from './plans'
+import type { PlanChange, PlanCheck, PlanContent } from './plans'
 import type { CiCheck, FloorMap, StopDetail } from './planExecution'
 
 /** No check at all this long after the CI window opened stops as `ci-missing`. */
@@ -148,4 +148,19 @@ export function splitExtraChecks(extra: readonly PlanCheck[], reportedNames: rea
     ci: extra.filter(check => reported.has(check.name)),
     attested: extra.filter(check => !reported.has(check.name)),
   }
+}
+
+/**
+ * A change's effective extra checks (D11, spec "every extra check is
+ * satisfied"): the running revision's plan-wide checks, then the change's own,
+ * deduped by name with the first kept. planChecks keeps the two lists disjoint;
+ * the dedupe is defensive. Every execution reader goes through this one helper.
+ */
+export function effectiveExtraChecks(content: Pick<PlanContent, 'extraChecks'> | null | undefined, change: Pick<PlanChange, 'extraChecks'> | null | undefined): PlanCheck[] {
+  const seen = new Set<string>()
+  return [...content?.extraChecks ?? [], ...change?.extraChecks ?? []].filter(check => {
+    if (seen.has(check.name)) return false
+    seen.add(check.name)
+    return true
+  })
 }
