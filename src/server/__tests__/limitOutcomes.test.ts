@@ -295,6 +295,8 @@ describe('recovery notes', () => {
     expect(notes()[0]).toMatchObject({ toKind: 'session', toId: 'dev', state: 'queued' })
     expect(notes()[0]!.body).toContain('Export CSV')
     expect(notes()[0]!.body).toContain('name-dev2')
+    // The note names the profile's provider (providers-and-workers D15).
+    expect(notes()[0]!.body).toContain('Your provider zai limit has recovered')
   })
 
   test('a recovered profile waits for the forwarded work to be taken', async () => {

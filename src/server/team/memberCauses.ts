@@ -101,6 +101,6 @@ export function memberExclusions(
   if (message.excludedProfile && (recipient.profileId ?? 'default') === message.excludedProfile) add('excluded-profile')
   const outsideRole = outsideRoleExclusion(recipient.sessionId, recipient.profileId, message.allowedProfiles)
   if (outsideRole !== null) causes.push(outsideRole)
-  if (Date.parse(recipient.cooldownUntil ?? '') > options.now) add('profile-cooling')
+  if (Date.parse(recipient.cooldownUntil ?? '') > options.now) add('profile-cooling', recipient.cooldownProvider ?? undefined)
   return causes
 }

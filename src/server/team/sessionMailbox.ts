@@ -299,7 +299,13 @@ export class SessionMailbox {
       worktree: worktreeRootOf(record.projectPath),
       parked: this.mailbox.store.parkedBy(id).length > 0,
       profileId: record.claudeProfileId ?? 'default',
-      cooldownUntil: this.cooldownForSession(record.claudeProfileId ?? 'default', record).until,
+      ...(() => {
+        const cooldown = this.cooldownForSession(record.claudeProfileId ?? 'default', record)
+        return {
+          cooldownUntil: cooldown.until,
+          ...(cooldown.provider && cooldown.providerId ? { cooldownProvider: cooldown.providerId } : {}),
+        }
+      })(),
     }
   }
 

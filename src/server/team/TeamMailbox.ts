@@ -59,10 +59,13 @@ export class TeamMailbox {
   private refuseCooling(recipient: ChatSessionRecord, urgent: boolean | undefined) {
     if (!urgent) return
     const profileId = recipient.claudeProfileId ?? 'default'
-    const until = this.options.cooldownFor?.(profileId, recipient).until ?? null
+    const cooldown = this.options.cooldownFor?.(profileId, recipient)
+    const until = cooldown?.until ?? null
     if (!until) return
+    // The provider is named when its cooldown decided (providers-and-workers D15).
+    const providerPart = cooldown?.provider && cooldown.providerId ? ` of provider ${cooldown.providerId}` : ''
     const time = new Date(until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    throw new Error(`Session ${recipient.sessionId} runs on profile ${profileId}, which is cooling down after a provider limit until ${time} (${until}). ` +
+    throw new Error(`Session ${recipient.sessionId} runs on profile ${profileId}${providerPart}, which is cooling down after a provider limit until ${time} (${until}). ` +
       'Send it without urgent to queue it, or send it to another agent.')
   }
 

@@ -124,6 +124,19 @@ test('urgent direct mail to an agent whose profile is cooling is refused; normal
   expect(await handlers.send_message({ ...groupMail, urgent: true })).toMatchObject({ state: 'queued' })
 })
 
+test('urgent mail to a profile of a cooling provider is refused naming profile and provider', async () => {
+  records.get('dev')!.claudeProfileId = 'glm-flash'
+  const until = '2026-10-12T15:40:00.000Z'
+  // The provider zai cools after a glm limit; glm-flash's own events are silent.
+  mailbox = new TeamMailbox(store, { getSession: id => records.get(id), homeDir: dir,
+    cooldownFor: profileId => ({ until: profileId === 'glm-flash' ? until : null, provider: true, providerId: 'zai' }) })
+  handlers = mailboxHandlers(mailbox, 'lead')
+  const error = await handlers.send_message({ to_kind: 'session', to_id: 'dev', body: 'Now!', urgent: true }).then(() => null, e => e as Error)
+  expect(error?.message).toContain('profile glm-flash of provider zai')
+  expect(error?.message).toContain(new Date(until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))
+  expect(store.teamsWithQueuedMail()).toEqual([])
+})
+
 // release_member (member-release D6): the tool name is allowed without a
 // card, and the handler binds the caller and delegates to MemberRelease.
 import { MemberRelease } from '../team/memberRelease'

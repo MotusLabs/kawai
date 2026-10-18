@@ -59,7 +59,13 @@ function makeRouter() {
     rules: {
       rule: () => (rule ? { route: async (ctx: RouteContext) => { ruleCalls.push(ctx); return rule!(ctx) } } as never : undefined),
     },
-    limits: { forProfile: id => events[id] ?? [], cooldownFor: id => ({ until: cooldownUntil(id, providerFor?.(id) ?? null, Object.values(events).flat(), now), provider: false, providerId: null }), providerCooldownUntil: providerId => providerCooldownUntil(providerId, Object.values(events).flat(), now) },
+    limits: { forProfile: id => events[id] ?? [], cooldownFor: id => {
+      const pool = Object.values(events).flat()
+      const providerId = providerFor?.(id) ?? null
+      const until = cooldownUntil(id, providerId, pool, now)
+      const providerEnd = providerCooldownUntil(providerId, pool, now)
+      return { until, provider: providerEnd !== null && until !== null && Date.parse(providerEnd) >= Date.parse(until), providerId }
+    }, providerCooldownUntil: providerId => providerCooldownUntil(providerId, Object.values(events).flat(), now) },
     ...(providerFor ? { providerOf: providerFor } : {}),
     usageOf: id => (id === 'claude' ? { status: 'warning', windows: [{ key: 'five_hour', label: '5h', percentUsed: 80, resetsAt: null }], receivedAt: 'r', source: 'pull' } : null),
     now: () => now,
@@ -155,6 +161,11 @@ describe('built-in routing', () => {
     })
     expect(ruleCtx.profiles['glm-flash']!.cooldownUntil).toBe(new Date(T0 + 40 * 60_000).toISOString())
     expect(ruleCtx.profiles['claude']!.cooldownUntil).toBeNull()
+    // A hold names the deciding provider in the log (providers-and-workers D15).
+    members = [{ sessionId: 'f', profileId: 'glm-flash', cwd: '/wt' }]
+    const router = makeRouter()
+    expect(await router.route(message(), { eligible: [eligible('f')], attempt: 0 })).toMatchObject({ kind: 'hold' })
+    expect(router.decisions('team').some(entry => entry.decision === 'hold' && (entry.reason ?? '').includes('provider zai'))).toBe(true)
     providerFor = null
   })
 
@@ -476,7 +487,13 @@ describe('plan roles and author tags (plan-execution D15)', () => {
       excludedProfile: m => m.excludedProfile ?? undefined,
       allowedProfiles: m => m.allowedProfiles ?? null,
       rules: { rule: () => (rule ? { route: async (ctx: RouteContext) => { ruleCalls.push(ctx); return rule!(ctx) } } as never : undefined) },
-      limits: { forProfile: id => events[id] ?? [], cooldownFor: id => ({ until: cooldownUntil(id, providerFor?.(id) ?? null, Object.values(events).flat(), now), provider: false, providerId: null }), providerCooldownUntil: providerId => providerCooldownUntil(providerId, Object.values(events).flat(), now) },
+      limits: { forProfile: id => events[id] ?? [], cooldownFor: id => {
+      const pool = Object.values(events).flat()
+      const providerId = providerFor?.(id) ?? null
+      const until = cooldownUntil(id, providerId, pool, now)
+      const providerEnd = providerCooldownUntil(providerId, pool, now)
+      return { until, provider: providerEnd !== null && until !== null && Date.parse(providerEnd) >= Date.parse(until), providerId }
+    }, providerCooldownUntil: providerId => providerCooldownUntil(providerId, Object.values(events).flat(), now) },
     ...(providerFor ? { providerOf: providerFor } : {}),
       usageOf: () => null,
       now: () => now,

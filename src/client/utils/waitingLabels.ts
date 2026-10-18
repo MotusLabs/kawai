@@ -51,7 +51,7 @@ export function constraintLabel(constraint: WaitingConstraint, nameOf: (sessionI
     case 'outside-role':
       return constraint.detail ?? 'Outside the plan role\'s profiles'
     case 'profile-cooling':
-      return `Recipient's provider is cooling${constraint.retryAt ? ` until ${new Date(constraint.retryAt).toLocaleTimeString()}` : ''}`
+      return `Recipient's provider${constraint.detail ? ` ${constraint.detail}` : ''} is cooling${constraint.retryAt ? ` until ${new Date(constraint.retryAt).toLocaleTimeString()}` : ''}`
     case 'startup-failed':
       return `Agent startup failed${constraint.detail ? `: ${constraint.detail}` : ''}`
     case 'no-eligible-member':

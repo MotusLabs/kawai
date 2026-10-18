@@ -216,11 +216,18 @@ export class LimitOutcomes {
         const original = this.options.store.get(row.original_id)
         const task = original?.taskId ? this.options.taskTitle(original.taskId) : null
         const ownerName = this.options.getRecord(owner)?.name ?? owner
+        // The note names the provider when the catalog holds one for the
+        // profile (providers-and-workers D15); the parked resume keeps
+        // naming the limited profile alone.
+        const record = this.options.getRecord(row.from_session)
+        const noteCtx = record?.projectPath ? { projectPath: record.projectPath } : {}
+        const provider = providerOf(row.profile_id, noteCtx)
+        const namedProvider = provider !== row.profile_id ? ` ${provider}` : ''
         this.options.store.enqueue({
           teamId: row.team_id, toKind: 'session', toId: row.from_session, fromSession: row.from_session,
           fromGroup: recipient.groupId ?? null, originPath: recipient.projectPath, tags: ['handoff-note'],
           taskId: original?.taskId ?? null,
-          body: `Your provider limit has recovered. While it was limited, your work${task ? ` on task "${task}"` : ''} ` +
+          body: `Your provider${namedProvider} limit has recovered. While it was limited, your work${task ? ` on task "${task}"` : ''} ` +
             `(message ${row.original_id}) was handed to ${ownerName} (session ${owner}). It is theirs now; do not continue it.`,
         })
         this.markNoted(row.id)
