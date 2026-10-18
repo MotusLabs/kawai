@@ -11,6 +11,7 @@
 // (`dbSafety/migrations.ts`), frozen like every applied migration.
 import type { Database } from 'bun:sqlite'
 import type { ChatEvent, ChatTurnUsage } from '../../shared/chat'
+import { turnSucceeded } from '../../shared/chat'
 
 export const CREATE_TURN_USAGE_SQL = `
 CREATE TABLE IF NOT EXISTS chat_turn_usage (
@@ -170,7 +171,7 @@ export class TurnUsageTracker {
         ...this.deps.context(sessionId),
         taskId: pin ? pin.taskId : this.deps.sessionTask(sessionId),
         startId: pin ? pin.startId : this.deps.latestStart(sessionId),
-        ok: event.subtype === 'success',
+        ok: turnSucceeded(event),
         usage: event.usage ?? ZERO,
         numTurns: event.numTurns ?? 0,
         endedAt: event.at,

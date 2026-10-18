@@ -24,6 +24,7 @@ import type { ChatContextUsage } from '@shared/chat'
 import type { Session } from '@shared/types'
 import type { ConnectionStatus } from '../../stores/sessionStore'
 import { parkedLabel } from '../../utils/parkedLabel'
+import { contextExhaustedLabel } from '../../utils/contextExhaustedLabel'
 import { chatStatusIndicator } from '../../utils/sessionStatus'
 import { useHeaderLayout, type HeaderLayout } from '../../hooks/useHeaderLayout'
 import Users01Icon from '@untitledui-icons/react/line/esm/Users01Icon'
@@ -166,14 +167,15 @@ export default function ChatHeader({
         </p>
         <span className="ml-auto"><ChatContextMeter usage={contextUsage} compact={layout === 'menu'} /></span>
       </div>
-      {/* Row 3, task and paused context: only when present, wrapping in full. */}
-      {(session.taskId || session.parked) && (
+      {/* Row 3, task, paused, and exhausted context: only when present, wrapping in full. */}
+      {(session.taskId || session.parked || session.contextExhausted) && (
         <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-chat-meta" data-testid="chat-context-row">
           {session.taskId && <span className="min-w-0 rounded border border-border px-1.5 [overflow-wrap:anywhere]" data-testid="chat-task-chip">
             {session.spawned ? 'Spawned for task ' : 'Task '}
             <button className="text-left hover:underline" data-testid="chat-task" onClick={() => onOpenTask(session.taskId!)}>{session.taskTitle ?? session.taskId}</button>
           </span>}
           {session.parked && <span className="min-w-0 rounded border border-border px-1.5 text-amber-600 [overflow-wrap:anywhere]" data-testid="chat-paused">{parkedLabel(session.parked)}</span>}
+          {session.contextExhausted && <span className="min-w-0 rounded border border-border px-1.5 text-red-600 [overflow-wrap:anywhere]" data-testid="chat-exhausted">{contextExhaustedLabel(session.contextExhausted)}</span>}
         </div>
       )}
       <ChatKillDialog open={killOpen} name={session.name} container={headerRef}
