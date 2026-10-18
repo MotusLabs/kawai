@@ -19,7 +19,7 @@
 // migration 8 (`plan-execution`) the seven execution tables and
 // `team_messages.allowed_profiles`; migration 9 (`outbound-audit`) the three
 // outbound audit tables below; migration 10 (`context-exhausted`) the two
-// `chat_sessions` flag columns.
+// `chat_sessions` flag columns and the exhaustion episode table.
 import { expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { initDatabase } from '../db'
@@ -277,9 +277,20 @@ const migration9: SchemaShape['tables'] = {
   },
 }
 
+/** Migration 10's table: one row per context-exhausted episode (chat-context-exhaustion D6/D8). */
+const migration10 = {
+  team_exhaustion_episodes: {
+    columns: [
+      keyPart('session_id', 1), keyPart('flagged_at', 2), column('team_id'), column('reason'),
+      ...['task_id', 'dropped_id', 'recipient_session', 'note_id'].map(optional), column('created_at'),
+    ],
+    indexes: [],
+  },
+}
+
 test('a fresh database opened by this build has the same shape plus each migration\'s delta and schema_migrations', () => {
   const session = initDatabase({ path: ':memory:' })
-  const added = { ...migration2, ...migration3, ...migration4, ...migration5, ...migration6, ...migration7, ...migration8, ...migration9 }
+  const added = { ...migration2, ...migration3, ...migration4, ...migration5, ...migration6, ...migration7, ...migration8, ...migration9, ...migration10 }
   expect(Object.keys(added).filter(table => table in expected.tables)).toEqual([])
   const messages = expected.tables.team_messages!
   const withProfiles = { ...messages, columns: [...messages.columns, optional('allowed_profiles')] }

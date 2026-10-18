@@ -77,6 +77,17 @@ test('agent-owned acceptance and fixes-requested items raise no toast', () => {
   expect(toasts).toHaveLength(1)
 })
 
+test('a context-exhausted item toasts once per episode; a later episode toasts again', () => {
+  useTeamWorkspaceDataStore.getState().open('/repo')
+  route(snapshotMessage([]))
+  const first = item('context-exhausted:dev-1:2026-10-18T09:00:00.000Z')
+  route(snapshotMessage([first], 'team-workspace'))
+  route(snapshotMessage([first], 'team-workspace'))
+  expect(toasts).toHaveLength(1)
+  route(snapshotMessage([item('context-exhausted:dev-1:2026-10-18T12:00:00.000Z')], 'team-workspace'))
+  expect(toasts).toHaveLength(2)
+})
+
 test('a replayed snapshot after a reconnect converges the counts with no toast', () => {
   const store = useTeamWorkspaceDataStore.getState()
   store.open('/repo')

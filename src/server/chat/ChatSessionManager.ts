@@ -77,6 +77,7 @@ import { fetchZaiUsage } from './zaiUsage'
 import { readWorkerTranscript } from './chatWorkerTranscript'
 import { isTaskOutputFile, readTaskOutputTail } from './taskOutputFile'
 import type { BackgroundTaskRecord } from './chatBackgroundTasks'
+import type { ExhaustionEpisode } from '../team/exhaustionNotes'
 import { loadTeamGroups } from '../team/teamGroups'
 import { SessionTeams } from '../team/sessionTeams'
 import { TeamScopes } from '../team/teamScope'
@@ -1223,6 +1224,11 @@ export class ChatSessionManager {
       counts[profileId] = (counts[profileId] ?? 0) + 1
     }
     return counts
+  }
+
+  /** The team's recorded context-exhaustion episodes (chat-context-exhaustion D8); the workspace reads them. */
+  exhaustionEpisodes(teamId: string): ExhaustionEpisode[] {
+    return this.teamMail.exhaustionNotes.episodes(teamId)
   }
 
   /** Every record (live and archived) resolved to this team; the workspace reads it. */

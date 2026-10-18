@@ -36,6 +36,7 @@ import { RuleRegistry, type RuleLoadReport } from './routing/ruleLoader'
 import { ProfileRouter } from './routing/router'
 import { LimitOutcomes, type HandoffTarget } from './routing/limitOutcomes'
 import { ContextExhaustion, type ExhaustionOutcome } from './contextExhaustion'
+import { ExhaustionNotes } from './exhaustionNotes'
 import { ReasonLedger, orderConstraints, toReason } from './waitingReasons'
 import { loadTeamGroups } from './teamGroups'
 import type { ChatUsageReport } from '../../shared/chat'
@@ -61,6 +62,8 @@ export class SessionMailbox {
   readonly releases: MemberRelease
   /** The context-exhaustion outcome (chat-context-exhaustion D4). */
   readonly exhaustion: ContextExhaustion
+  /** Flagged episodes and their decision notes (chat-context-exhaustion D6). */
+  readonly exhaustionNotes: ExhaustionNotes
   /** Per-team waiting reasons (D3): in-memory, rebuilt by the first pass. */
   private readonly reasons = new ReasonLedger()
   private readonly catalogs = new Map<string, GroupCatalog>()
@@ -104,6 +107,8 @@ export class SessionMailbox {
     onRulesLoaded?: (report: RuleLoadReport) => void
     /** A profile's latest plan usage, for routing rules. */
     usageOf?: (profileId: string) => ChatUsageReport | null
+    /** HEAD of a directory for the decision note; tests inject their own. */
+    gitHead?: (cwd: string) => Promise<string | null>
     /** A routing decision was made (mailbox view). */
     onRouteDecision?: (entry: RouteDecisionLogEntry) => void
     onError: (error: unknown) => void
@@ -229,6 +234,14 @@ export class SessionMailbox {
     })
     this.exhaustion = new ContextExhaustion(db, {
       store, outcomes: this.outcomes, releases: this.releases, getRecord: options.getRecord,
+    })
+    this.exhaustionNotes = new ExhaustionNotes(db, {
+      store, tasks: taskStore, getRecord: options.getRecord,
+      teamOf: id => options.teams.teamOf(id)?.teamId,
+      groupOf: (sessionId, groupId) => options.teams.catalogOf(sessionId, this.catalogs)?.groups.get(groupId)?.group,
+      usageOf: profileId => options.usageOf?.(profileId) ?? null,
+      cooldownUntil: profileId => this.limits.cooldownUntil(profileId),
+      ...(options.gitHead ? { head: options.gitHead } : {}),
     })
     this.dispatcher = new MailDispatcher(this.mailbox.store, {
       // Cycle start (member-release D5): clear the catalog cache, keep the
@@ -459,8 +472,13 @@ export class SessionMailbox {
   contextExhausted(sessionId: string): ExhaustionOutcome {
     const outcome = this.exhaustion.turnExhausted(sessionId)
     this.dispatcher.notify()
+    // After the commit (D6): record the episode and send its note, once.
+    this.lastNote = this.exhaustionNotes.record(outcome).catch(error => { this.options.onError(error); return null })
     return outcome
   }
+
+  /** The newest decision-note send; tests await it. */
+  lastNote: Promise<TeamMessage | null> = Promise.resolve(null)
 
   /** The human hands parked work to a group or session. */
   handOff(messageId: string, target: HandoffTarget) {

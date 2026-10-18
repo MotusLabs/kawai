@@ -3,8 +3,9 @@
 // delivered, its turn fails with the context exhausted, and kawai dead-letters
 // the mail `context-exhausted`, dead-letters queued direct mail, returns parked
 // work to its group, writes no limit event, and releases the member through
-// member release's readiness and archive path (tasks 4.2 and 4.3).
-import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from 'bun:test'
+// member release's readiness and archive path (tasks 4.2 and 4.3); then the
+// decision note reaches whoever dispatched the work, once per episode (5.1).
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { schemaDb } from './schemaDb'
 import { spawnSync } from 'node:child_process'
@@ -18,6 +19,7 @@ import { SessionMailbox } from '../team/sessionMailbox'
 import { SessionTeams } from '../team/sessionTeams'
 import { clearTeamCache, resolveTeam, type TeamIdentity } from '../team/teamIdentity'
 import type { EnqueueInput } from '../team/mailboxStore'
+import { CONTEXT_EXHAUSTED_TAG } from '../team/exhaustionNotes'
 import type { SpawnRequest } from '../team/staffing'
 
 function git(args: string[], cwd?: string): string {
@@ -101,6 +103,10 @@ const makeRuntime = () => {
   },
   transcriptFor: () => null,
   homeDir: dir,
+  gitHead: async cwd => (cwd === featX ? 'head123' : null),
+  usageOf: profileId => (profileId === 'glm'
+    ? { status: 'allowed', receivedAt: '2026-10-18T08:00:00Z', windows: [{ key: 'five_hour', label: '5-hour', percentUsed: 91.6, resetsAt: '2026-10-18T10:00:00Z' }] } as never
+    : null),
   onError: error => { runtimeErrors.push(error) },
   })
 }
@@ -241,4 +247,80 @@ test('human-created and task-less sessions are never marked; a cleared flag canc
   await pass()
   expect(archived).toEqual([])
   expect(runtime.releases.pending()).toEqual([])
+})
+
+describe('the decision note (D6)', () => {
+  /** A lead-dispatched task with a spawned dev holding the go mail. */
+  async function leadDispatch() {
+    writeGroup('leads', 'canCreateTasks: true')
+    records.set('lead', record('lead', { name: 'Lead', groupId: 'leads' }))
+    const t = await runtime.tasks.create({ kind: 'agent', sessionId: 'lead' }, { title: 'Export', direction: 'd', worktree: featX })
+    records.set('dev-1', record('dev-1', { name: 'Dev one', projectPath: featX, spawned: true, taskId: t.id, claudeProfileId: 'glm' }))
+    await trackAll()
+    const dispatched = await runtime.assignments.dispatch({ kind: 'agent', sessionId: 'lead' }, {
+      taskId: t.id, target: { kind: 'group', id: 'devs' }, instruction: 'go', requestKey: 'k-1',
+    })
+    await pass()
+    const go = dispatched.message!
+    store().markDelivered(go.id)
+    store().setClaimCommit(go.id, 'abc1234')
+    runtime.toolCall('dev-1', 'Edit', { file_path: 'src/a.ts' })
+    return { t, go }
+  }
+  const notes = () => store().listForTeam(team.teamId).filter(row => row.tags.includes(CONTEXT_EXHAUSTED_TAG))
+
+  test('the lead gets one normal-priority note with the facts to decide; a repeat sends none', async () => {
+    const { t, go } = await leadDispatch()
+    exhaust('dev-1')
+    const note = await runtime.lastNote
+    expect(note).toMatchObject({
+      toKind: 'session', toId: 'lead', fromSession: 'lead', priority: 'normal', taskId: t.id, tags: [CONTEXT_EXHAUSTED_TAG],
+    })
+    for (const fact of [
+      'Session Dev one (dev-1)', 'blocking_limit', `Dropped message: ${go.id} — dead-lettered context-exhausted`,
+      '1 tool call (Edit); files touched: src/a.ts', 'Commit at claim: abc1234', 'HEAD now: head123',
+      'Task revision 1: not acknowledged by it (its last acknowledgement: none)',
+      '- glm: 5-hour 92% (resets 2026-10-18T10:00:00Z); not cooling.',
+    ]) expect(note!.body).toContain(fact)
+    expect(runtime.exhaustionNotes.episodes(team.teamId)).toMatchObject([
+      { sessionId: 'dev-1', flaggedAt: FLAG.at, taskId: t.id, droppedId: go.id, recipientSession: 'lead', noteId: note!.id },
+    ])
+    // A repeated evaluation of the same episode sends nothing.
+    exhaust('dev-1')
+    expect(await runtime.lastNote).toBeNull()
+    expect(notes()).toHaveLength(1)
+  })
+
+  test('an acknowledged revision and an unknown HEAD read as such', async () => {
+    writeGroup('leads', 'canCreateTasks: true')
+    records.set('lead', record('lead', { groupId: 'leads' }))
+    const t = await runtime.tasks.create({ kind: 'agent', sessionId: 'lead' }, { title: 'Export', direction: 'd' })
+    records.set('dev-2', record('dev-2', { projectPath: featY, spawned: true, taskId: t.id }))
+    await trackAll()
+    runtime.tasks.store.acknowledgements.record(t.id, 'dev-2', 1, null)
+    exhaust('dev-2')
+    const body = (await runtime.lastNote)!.body
+    expect(body).toContain('Task revision 1: acknowledged by it.')
+    expect(body).toContain('HEAD now: unknown')
+    expect(body).toContain('Dropped message: none tracked.')
+  })
+
+  test.each([
+    ['the human dispatched it', () => {}],
+    ['the dispatcher is archived', () => { records.get('lead')!.archivedAt = 'gone' }],
+    ['the dispatcher was killed', () => { records.delete('lead') }],
+    ['the dispatcher is flagged too', () => { records.get('lead')!.contextExhausted = FLAG }],
+  ] as const)('no note when %s', async (name, arrange) => {
+    writeGroup('leads', 'canCreateTasks: true')
+    records.set('lead', record('lead', { groupId: 'leads' }))
+    const creator = name === 'the human dispatched it' ? { kind: 'human' as const, team } : { kind: 'agent' as const, sessionId: 'lead' }
+    const t = await runtime.tasks.create(creator, { title: 'Export', direction: 'd' })
+    records.set('dev-1', record('dev-1', { projectPath: featX, spawned: true, taskId: t.id }))
+    await trackAll()
+    arrange()
+    exhaust('dev-1')
+    expect(await runtime.lastNote).toBeNull()
+    expect(notes()).toEqual([])
+    expect(runtime.exhaustionNotes.episodes(team.teamId)).toMatchObject([{ sessionId: 'dev-1', recipientSession: null, noteId: null }])
+  })
 })

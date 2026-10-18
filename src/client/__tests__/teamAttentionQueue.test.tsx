@@ -160,6 +160,7 @@ test('opening a chat from an item leaves the Tasks tab’s selection and filters
 test('pending acceptance and fixes requested have labels; an unknown kind reads as itself', () => {
   expect(attentionKindLabel('pending-acceptance')).toBe('Pending acceptance')
   expect(attentionKindLabel('fixes-requested')).toBe('Fixes requested')
+  expect(attentionKindLabel('context-exhausted')).toBe('Context exhausted')
   expect(attentionKindLabel('plan-hold')).toBe('plan-hold')
 })
 
