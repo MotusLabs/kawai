@@ -748,8 +748,10 @@ describe('ChatSessionDriver', () => {
     expect(fake.options.includePartialMessages).toBe(true)
     expect(fake.options.canUseTool).toBeTypeOf('function')
     expect(fake.options.resume).toBeUndefined()
-    // No provider overrides: env is omitted so the SDK inherits process.env.
-    expect('env' in fake.options).toBe(false)
+    // No provider overrides: the server env, minus the variables the shipped
+    // catalog names as credentials (openrouter-provider D3).
+    expect((fake.options.env as Record<string, string | undefined>).PATH).toBe(process.env.PATH)
+    expect(fake.options.env).not.toHaveProperty('OPENROUTER_API_KEY')
 
     fake.push({
       type: 'system',

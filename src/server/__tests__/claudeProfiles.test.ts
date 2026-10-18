@@ -73,6 +73,9 @@ describe('Claude profile resolution', () => {
       { id: 'haiku', label: 'Claude Haiku', providerId: 'claude', providerLabel: 'Claude' },
       { id: 'glm', label: 'GLM', providerId: 'zai', providerLabel: 'Z.AI' },
       { id: 'glm-flash', label: 'GLM Flash', providerId: 'zai', providerLabel: 'Z.AI' },
+      { id: 'openrouter-opus', label: 'OpenRouter Opus', providerId: 'openrouter', providerLabel: 'OpenRouter' },
+      { id: 'openrouter-sonnet', label: 'OpenRouter Sonnet', providerId: 'openrouter', providerLabel: 'OpenRouter' },
+      { id: 'openrouter-haiku', label: 'OpenRouter Haiku', providerId: 'openrouter', providerLabel: 'OpenRouter' },
       { id: 'minimax', label: 'MiniMax', providerId: 'minimax', providerLabel: 'MiniMax' },
       { id: 'mimo', label: 'MiMo', providerId: 'mimo', providerLabel: 'MiMo' },
       { id: 'kimi', label: 'Kimi', providerId: 'kimi', providerLabel: 'Kimi' },
@@ -110,8 +113,30 @@ describe('Claude profile resolution', () => {
       expect(errors, block.slice(0, 60)).toEqual([])
     }
   })
+  test("the docs' user-level OpenRouter block is the shipped entry and resolves with its key names", () => {
+    const doc = fs.readFileSync(path.resolve(import.meta.dir, '../../../docs/claude-session-profiles.md'), 'utf8')
+    const block = [...doc.matchAll(/```json\n([\s\S]*?)```/g)]
+      .map(match => JSON.parse(match[1]!) as Record<string, unknown>)
+      .find(value => 'openrouter' in value)
+    const shipped = JSON.parse(fs.readFileSync(path.resolve(import.meta.dir, '../../../config/providers.default.json'), 'utf8')) as Record<string, unknown>
+    expect(block).toEqual({ openrouter: shipped.openrouter })
+    const dir = path.join(tempHome, '.kawai')
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, 'providers.json'), JSON.stringify(block))
+    const { profiles, errors } = resolveProfileCatalog({ homeDir: tempHome })
+    expect(errors).toEqual([])
+    expect(profiles.get('openrouter-haiku')).toMatchObject({
+      providerId: 'openrouter', authTokenEnv: 'OPENROUTER_API_KEY', balanceKeyEnv: 'OPENROUTER_MANAGEMENT_KEY',
+    })
+  })
   test('omitted profile preserves existing Default behavior and unknown IDs fail', () => {
-    expect(resolveClaudeProfile(undefined, {}, { homeDir: tempHome })).toEqual({})
+    // The shipped catalog names OpenRouter's key variables, so Default gets
+    // an explicit environment: the server's, without those variables.
+    const launch = resolveClaudeProfile(undefined, {}, { homeDir: tempHome })
+    expect(Object.keys(launch)).toEqual(['env'])
+    expect(launch.env?.PATH).toBe(process.env.PATH)
+    expect(launch.env).not.toHaveProperty('OPENROUTER_API_KEY')
+    expect(launch.env).not.toHaveProperty('OPENROUTER_MANAGEMENT_KEY')
     expect(resolveClaudeProfile('default', { ANTHROPIC_MODEL: 'global' }, { homeDir: tempHome }).env?.ANTHROPIC_MODEL).toBe('global')
     for (const id of ['unknown', 'glm-turbo', '__proto__']) {
       expect(() => resolveClaudeProfile(id, {}, { homeDir: tempHome })).toThrow('Unknown Claude profile')
@@ -273,7 +298,7 @@ describe('catalog reporting', () => {
       // the failure reaches the reporter instead of vanishing.
       const launch = resolveClaudeProfile('default', {}, { homeDir: tempHome, projectPath: project },
         errors => reported.push(errors))
-      expect(launch).toEqual({})
+      expect(launch.settings).toBeUndefined()
       expect(reported).toHaveLength(1)
       expect(reported[0]).toHaveLength(1)
       expect(reported[0]![0]).toContain(badFile)
