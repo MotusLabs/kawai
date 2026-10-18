@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, jest, test } from 'bun:test'
 import TestRenderer, { act, type ReactTestInstance } from 'react-test-renderer'
-import type { ChatActivity, ChatBackgroundTask, ChatCommandState, ChatContextUsage, ChatEvent, ChatNotification, ChatPendingRequest, ChatUsageReport, ChatWireFrame, ChatWorker } from '@shared/chat'
+import type { ChatActivity, ChatBackgroundTask, ChatCommandState, ChatContextUsage, ChatEvent, ChatNotification, ChatPendingRequest, ChatRuntime, ChatUsageReport, ChatWireFrame, ChatWorker } from '@shared/chat'
 import type { ClientMessage, ServerMessage, Session } from '@shared/types'
 import ChatRequests from '../components/chat/ChatRequests'
 import ChatMessages from '../components/chat/ChatMessages'
@@ -536,12 +536,12 @@ describe('chat debug view', () => {
     renderer.unmount()
   })
 
-  function renderPanel(view: ChatDebugView) {
+  function renderPanel(view: ChatDebugView, runtime?: ChatRuntime) {
     const sent: ClientMessage[] = []
     let closed = 0
     let renderer!: TestRenderer.ReactTestRenderer
     act(() => {
-      renderer = TestRenderer.create(<ChatDebugPanel sessionId="chat-1" view={view} connected
+      renderer = TestRenderer.create(<ChatDebugPanel sessionId="chat-1" view={view} connected runtime={runtime}
         sendMessage={message => { sent.push(message) }} onClose={() => { closed += 1 }} />)
     })
     return { sent, renderer, closed: () => closed }
@@ -562,6 +562,20 @@ describe('chat debug view', () => {
     expect(row.findByType('pre').children.join('')).toBe(JSON.stringify(JSON.parse('{"type":"control_request","request":{"subtype":"can_use_tool"}}'), null, 2))
     act(() => row.findAllByType('button')[0]!.props.onClick())
     expect(row.findAllByType('pre')).toHaveLength(0)
+    renderer.unmount()
+  })
+
+  test('direction labels name the session runtime and JSON-RPC frames label by shape', () => {
+    const { renderer } = renderPanel(openView([
+      wireFrame(1, '{"method":"initialize","params":{}}', 'out'),
+      wireFrame(2, '{"id":0,"result":{"thread":{"id":"t1"}}}'),
+    ]), 'codex')
+    const request = renderer.root.findByProps({ 'data-frame-seq': 1 })
+    const response = renderer.root.findByProps({ 'data-frame-seq': 2 })
+    expect(textOf(request)).toContain('→ Codex')
+    expect(textOf(response)).toContain('← Codex')
+    expect(textOf(request)).toContain('initialize')
+    expect(textOf(response)).toContain('response #0')
     renderer.unmount()
   })
 

@@ -273,7 +273,8 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
       </div>
       {/* The side slot hosts only the debug panel (team-workspace-pages D4). */}
       {debugOpen && <ChatDebugPanel key={session.id} sessionId={session.id} view={debug} sendMessage={sendMessage}
-        connected={connected} onClose={toggleDebug} />}
+        connected={connected} onClose={toggleDebug}
+        runtime={catalog.profiles.find(profile => profile.id === profileId)?.runtime ?? 'claude'} />}
     </div>
   </main>
 }
