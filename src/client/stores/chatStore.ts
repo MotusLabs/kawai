@@ -29,12 +29,11 @@ import type {
   ChatContextUsage,
   ChatEvent,
   ChatNotification,
-  ChatPendingRequest,
   ChatUsageReport,
   ChatWorker,
   ChatBackgroundTask,
 } from '@shared/chat'
-import type { ClientMessage, SendClientMessage, ServerMessage, SessionStatus } from '@shared/types'
+import type { ClientMessage, SendClientMessage, ServerMessage } from '@shared/types'
 import {
   accountCloseKey,
   anchorActivity,
