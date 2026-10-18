@@ -5,7 +5,9 @@
 // validation is reported whole and skipped; the rest of the catalog still
 // resolves. Credentials are deliberately refused: catalog files stay safe
 // to commit and mount, and model entries may not set the routing base URL,
-// which belongs to the provider alone.
+// which belongs to the provider alone. Trusted providers may NAME the server
+// environment variables holding their credentials (`authTokenEnv`,
+// `balanceKeyEnv`); the values never appear in a catalog file.
 import path from 'node:path'
 import { isResetTimeZone } from './limitSignals'
 
@@ -20,6 +22,7 @@ export const PROFILE_CONTROLLED_ENV = [
   'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL',
   'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_DEFAULT_FABLE_MODEL',
   'CLAUDE_CODE_ATTRIBUTION_HEADER', 'CLAUDE_CODE_AUTO_COMPACT_WINDOW',
+  'CLAUDE_CODE_MAX_OUTPUT_TOKENS',
 ] as const
 
 export type ProfileControlledEnvName = (typeof PROFILE_CONTROLLED_ENV)[number]
@@ -31,6 +34,11 @@ const MAX_ENV_ENTRIES = 32
 const MAX_ENV_VALUE_LENGTH = 4096
 const ENTRY_FIELDS = new Set(['label', 'model', 'executable', 'env', 'limitResetTimeZone'])
 const CONTROLLED = new Set<string>(PROFILE_CONTROLLED_ENV)
+
+/** Provider fields naming a server environment variable that holds a credential. */
+export const CREDENTIAL_NAME_FIELDS = ['authTokenEnv', 'balanceKeyEnv'] as const
+const CREDENTIAL_FIELDS = new Set<string>(CREDENTIAL_NAME_FIELDS)
+const CREDENTIAL_NAME_PATTERN = /^[A-Z_][A-Z0-9_]*$/
 
 export interface PartialProfile {
   label?: string
@@ -85,6 +93,9 @@ function validateEntry(
   const source = entry as Record<string, unknown>
   const profile: PartialProfile = { env: {} }
   for (const [field, value] of Object.entries(source)) {
+    if (CREDENTIAL_FIELDS.has(field)) {
+      return `${file}: profile "${id}" field "${field}" is allowed only on a provider in the user-level ~/.kawai/providers.json.`
+    }
     if (!ENTRY_FIELDS.has(field)) {
       return `${file}: profile "${id}" has unknown field "${field}".`
     }
@@ -155,6 +166,10 @@ export interface ParsedProvider {
   env: Record<string, string>
   executable?: string
   limitResetTimeZone?: string
+  /** Server variable holding the inference token (trusted files only). */
+  authTokenEnv?: string
+  /** Server variable holding a balance-reading key, never given to agents. */
+  balanceKeyEnv?: string
   models: Map<string, ParsedModel>
 }
 
@@ -162,7 +177,7 @@ export type ProviderFileParse =
   | { ok: true; providers: Map<string, ParsedProvider> }
   | { ok: false; error: string }
 
-const PROVIDER_FIELDS = new Set(['label', 'env', 'limitResetTimeZone', 'executable', 'models'])
+const PROVIDER_FIELDS = new Set(['label', 'env', 'limitResetTimeZone', 'executable', 'models', ...CREDENTIAL_NAME_FIELDS])
 const MODEL_FIELDS = new Set(['label', 'model', 'env'])
 
 /**
@@ -210,6 +225,16 @@ export function parseProviderCatalogValue(
           return { ok: false, error: `${source}: provider "${id}" executable must be an absolute path.` }
         }
         provider.executable = fieldValue
+        continue
+      }
+      if (field === 'authTokenEnv' || field === 'balanceKeyEnv') {
+        if (!trusted) {
+          return { ok: false, error: `${source}: provider "${id}" field "${field}" is allowed only in the user-level ~/.kawai/providers.json; this file is not operator-owned.` }
+        }
+        if (typeof fieldValue !== 'string' || !CREDENTIAL_NAME_PATTERN.test(fieldValue)) {
+          return { ok: false, error: `${source}: provider "${id}" field "${field}" must name an environment variable matching ${CREDENTIAL_NAME_PATTERN}.` }
+        }
+        provider[field] = fieldValue
         continue
       }
       if (field === 'limitResetTimeZone') {

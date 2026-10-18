@@ -6,7 +6,10 @@
 // a nearer definition of a SHIPPED model key re-homes instead, starting
 // from the shipped model's flattened settings, so an existing project
 // override keeps its launch settings. Legacy entries read as one-model
-// providers (D3) unless their id names an existing provider.
+// providers (D3) unless their id names an existing provider. A provider
+// holding credential variable names from a trusted file has its route fixed
+// by the trusted tiers (openrouter-provider D2): a project file that would
+// set its base URL, or move one of its models elsewhere, is ignored whole.
 import type { ParsedProvider, PartialProfile } from './profileCatalog'
 
 /** The settings a re-homed model carries from the shipped provider it left. */
@@ -16,6 +19,8 @@ export interface InheritedSettings {
   model?: string
   executable?: string
   limitResetTimeZone?: string
+  authTokenEnv?: string
+  balanceKeyEnv?: string
 }
 
 export interface MergedModel {
@@ -30,6 +35,9 @@ export interface MergedProvider {
   env: Record<string, string>
   executable?: string
   limitResetTimeZone?: string
+  /** Credential variable names; only trusted files set them. */
+  authTokenEnv?: string
+  balanceKeyEnv?: string
   models: Map<string, MergedModel>
   /** An operator file introduced this provider; overlays never change it (F2). */
   operatorOrigin: boolean
@@ -44,6 +52,8 @@ export function flattenModel(provider: MergedProvider, model: MergedModel): {
   env: Record<string, string>
   executable?: string
   limitResetTimeZone?: string
+  authTokenEnv?: string
+  balanceKeyEnv?: string
 } {
   return {
     label: model.label ?? model.inherited?.label ?? provider.label,
@@ -51,6 +61,30 @@ export function flattenModel(provider: MergedProvider, model: MergedModel): {
     env: { ...model.inherited?.env, ...provider.env, ...model.env },
     executable: provider.executable ?? model.inherited?.executable,
     limitResetTimeZone: provider.limitResetTimeZone ?? model.inherited?.limitResetTimeZone,
+    authTokenEnv: provider.authTokenEnv ?? model.inherited?.authTokenEnv,
+    balanceKeyEnv: provider.balanceKeyEnv ?? model.inherited?.balanceKeyEnv,
+  }
+}
+
+/** Whether a provider, or a model it took over, names a credential variable. */
+export function providerCredentialed(provider: MergedProvider): boolean {
+  if (provider.authTokenEnv !== undefined || provider.balanceKeyEnv !== undefined) return true
+  for (const model of provider.models.values()) {
+    if (model.inherited?.authTokenEnv !== undefined || model.inherited?.balanceKeyEnv !== undefined) return true
+  }
+  return false
+}
+
+/** The settings a re-homed model carries away from the provider it left. */
+function inheritedFrom(flat: ReturnType<typeof flattenModel>): InheritedSettings {
+  return {
+    env: flat.env,
+    label: flat.label,
+    model: flat.model,
+    executable: flat.executable,
+    limitResetTimeZone: flat.limitResetTimeZone,
+    authTokenEnv: flat.authTokenEnv,
+    balanceKeyEnv: flat.balanceKeyEnv,
   }
 }
 
@@ -89,7 +123,14 @@ export class CatalogMerger {
    * model key (P3) against those merged facts, so JSON key order never
    * changes an outcome and a re-home carries its own level's overlay.
    */
-  addProviders(file: string, shipped: boolean, providers: Map<string, ParsedProvider>): void {
+  addProviders(file: string, shipped: boolean, providers: Map<string, ParsedProvider>, trusted = shipped): void {
+    if (!trusted) {
+      const refusal = this.untrustedProviderRefusal(file, providers)
+      if (refusal) {
+        this.errors.push(refusal)
+        return
+      }
+    }
     for (const [id, provider] of providers) {
       const merged = this.providers.get(id)
       if (!merged) {
@@ -99,6 +140,8 @@ export class CatalogMerger {
           env: { ...provider.env },
           executable: provider.executable,
           limitResetTimeZone: provider.limitResetTimeZone,
+          authTokenEnv: provider.authTokenEnv,
+          balanceKeyEnv: provider.balanceKeyEnv,
           models: new Map(),
           operatorOrigin: !shipped,
           originFile: file,
@@ -110,6 +153,8 @@ export class CatalogMerger {
       merged.env = { ...merged.env, ...provider.env }
       merged.executable = provider.executable ?? merged.executable
       merged.limitResetTimeZone = provider.limitResetTimeZone ?? merged.limitResetTimeZone
+      merged.authTokenEnv = provider.authTokenEnv ?? merged.authTokenEnv
+      merged.balanceKeyEnv = provider.balanceKeyEnv ?? merged.balanceKeyEnv
     }
     for (const [id, provider] of providers) {
       const merged = this.providers.get(id)!
@@ -143,13 +188,7 @@ export class CatalogMerger {
             label: model.label ?? flat.label,
             model: model.model ?? flat.model,
             env: model.env,
-            inherited: {
-              env: flat.env,
-              label: flat.label,
-              model: flat.model,
-              executable: flat.executable,
-              limitResetTimeZone: flat.limitResetTimeZone,
-            },
+            inherited: inheritedFrom(flat),
           })
           continue
         }
@@ -170,7 +209,14 @@ export class CatalogMerger {
    * one-model provider — one naming a shipped-only provider takes the
    * reserved `profile:<id>` id and leaves the shipped provider unchanged.
    */
-  addProfiles(file: string, shipped: boolean, entries: Map<string, PartialProfile>): void {
+  addProfiles(file: string, shipped: boolean, entries: Map<string, PartialProfile>, trusted = shipped): void {
+    if (!trusted) {
+      const refusal = this.untrustedProfilesRefusal(file, entries)
+      if (refusal) {
+        this.errors.push(refusal)
+        return
+      }
+    }
     for (const [id, entry] of entries) {
       const holder = this.holders.get(id)
       if (holder !== undefined) {
@@ -195,7 +241,7 @@ export class CatalogMerger {
             label: entry.label ?? flat.label,
             model: entry.model ?? flat.model,
             env: { ...entry.env },
-            inherited: { env: flat.env, label: flat.label, model: flat.model },
+            inherited: { ...inheritedFrom(flat), executable: undefined, limitResetTimeZone: undefined },
           }]]),
           operatorOrigin: !shipped,
           originFile: file,
@@ -238,6 +284,53 @@ export class CatalogMerger {
       })
       this.setHolder(id, { provider: id, operator: !shipped, originFile: file, own: true })
     }
+  }
+
+  /**
+   * D2 for a project `providers.json`, checked before anything merges so key
+   * order never matters: the file may not set a credentialed provider's base
+   * URL, nor re-home a model a credentialed provider holds.
+   */
+  private untrustedProviderRefusal(file: string, providers: Map<string, ParsedProvider>): string | undefined {
+    for (const [id, provider] of providers) {
+      const merged = this.providers.get(id)
+      if (merged && providerCredentialed(merged) && 'ANTHROPIC_BASE_URL' in provider.env) {
+        return routeRefusal(file, id)
+      }
+      for (const key of provider.models.keys()) {
+        const holder = this.holders.get(key)
+        if (holder === undefined || holder.provider === id || holder.operator) continue
+        if (this.keyCredentialed(holder.provider, key)) return rehomeRefusal(file, key, holder.provider)
+      }
+    }
+    return undefined
+  }
+
+  /** D2 for a project `profiles.json`: the same two refusals, by entry id. */
+  private untrustedProfilesRefusal(file: string, entries: Map<string, PartialProfile>): string | undefined {
+    for (const [id, entry] of entries) {
+      const holder = this.holders.get(id)
+      if (holder !== undefined) {
+        if (!this.keyCredentialed(holder.provider, id)) continue
+        if (holder.own) {
+          if ('ANTHROPIC_BASE_URL' in entry.env) return routeRefusal(file, holder.provider)
+          continue
+        }
+        if (!holder.operator) return rehomeRefusal(file, id, holder.provider)
+        continue
+      }
+      const provider = this.providers.get(id)
+      if (provider?.operatorOrigin && providerCredentialed(provider) && 'ANTHROPIC_BASE_URL' in entry.env) {
+        return routeRefusal(file, id)
+      }
+    }
+    return undefined
+  }
+
+  private keyCredentialed(providerId: string, key: string): boolean {
+    const provider = this.providers.get(providerId)!
+    const flat = flattenModel(provider, provider.models.get(key)!)
+    return flat.authTokenEnv !== undefined || flat.balanceKeyEnv !== undefined
   }
 
   /** A legacy entry whose id names an existing operator provider merges into it. */
@@ -290,4 +383,12 @@ export class CatalogMerger {
     })
     this.setHolder('default', { provider: 'default', operator: false, originFile: '(implicit)', own: true })
   }
+}
+
+function routeRefusal(file: string, providerId: string): string {
+  return `${file}: provider "${providerId}" has credential variables from a trusted catalog, so a project file may not set its ANTHROPIC_BASE_URL; the file is ignored.`
+}
+
+function rehomeRefusal(file: string, key: string, providerId: string): string {
+  return `${file}: model "${key}" belongs to provider "${providerId}", which has credential variables from a trusted catalog, so a project file may not move it to another provider; the file is ignored.`
 }

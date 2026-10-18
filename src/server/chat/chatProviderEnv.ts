@@ -3,7 +3,8 @@
 // spawned for chat — never to tmux terminal sessions. Seeded from
 // AGENTBOARD_CHAT_ENV, overridable from Settings. The SDK's `env` option
 // REPLACES the subprocess environment rather than merging it, so the merge
-// with process.env happens here, in one place.
+// with process.env happens here, in one place. Credential variables a
+// trusted catalog names are withheld from every launch here too.
 
 export type ChatProviderEnv = Record<string, string>
 
@@ -83,4 +84,40 @@ export function buildChatOptionsEnv(
   providerEnv: ChatProviderEnv
 ): Record<string, string | undefined> | undefined {
   return Object.keys(providerEnv).length > 0 ? effectiveChatEnv(providerEnv) : undefined
+}
+
+/** The credential-naming fields of a resolved catalog entry (openrouter-provider D1). */
+export interface CredentialNames {
+  authTokenEnv?: string
+  balanceKeyEnv?: string
+}
+
+/**
+ * Every server variable the resolved catalog names as a credential
+ * (openrouter-provider D3): no agent launch, under any profile, may inherit
+ * one under its own name. The set comes from the catalog alone — never from
+ * Settings — so removing a provider's entry stops withholding its variables.
+ */
+export function withheldCredentialNames(catalog: {
+  profiles: ReadonlyMap<string, CredentialNames>
+  providers: ReadonlyMap<string, CredentialNames>
+}): Set<string> {
+  const names = new Set<string>()
+  for (const entries of [catalog.profiles, catalog.providers]) {
+    for (const entry of entries.values()) {
+      if (entry.authTokenEnv) names.add(entry.authTokenEnv)
+      if (entry.balanceKeyEnv) names.add(entry.balanceKeyEnv)
+    }
+  }
+  return names
+}
+
+/** A copy of `env` without the withheld names. */
+export function withoutCredentials(
+  env: Record<string, string | undefined>,
+  names: ReadonlySet<string>
+): Record<string, string | undefined> {
+  const filtered = { ...env }
+  for (const name of names) delete filtered[name]
+  return filtered
 }

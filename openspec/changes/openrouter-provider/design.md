@@ -65,6 +65,8 @@ For a credentialed provider's sessions, after filtering, kawai sets:
 
 The two blanks go in both the process env and the flag-layer `settings.env`. That is the same mechanism that already neutralizes user and project settings for controlled variables, so a settings file cannot reintroduce them. The balance key is never set in any agent environment.
 
+**Verified (task 1.1, 2026-10-18, Claude Code 2.1.302).** Claude Code ran under the host config dir, with the claude.ai login present and `ANTHROPIC_AUTH_TOKEN=<sentinel>`, `ANTHROPIC_API_KEY=""` and `CLAUDE_CODE_OAUTH_TOKEN=""`. Its `/v1/messages` requests to a loopback mock gateway carried `Authorization: Bearer <sentinel>` and no `x-api-key`. The env token wins over the host login, so no per-provider `CLAUDE_CONFIG_DIR` is needed. The spike's turn against the real gateway, which succeeded and was charged to the key, covers acceptance by OpenRouter itself; task 5.2 repeats it under kawai.
+
 The name set comes from the resolved catalog, never from Settings. Removing a provider's entry therefore stops withholding its variables, and that is documented. `chatProviderEnv.ts` gains one helper, `withheldCredentialNames(catalog)`. Both the launch path and the availability probe use it, so a probe never sees more than a launch does.
 
 ### D4. Auth for a credentialed provider is its own variable

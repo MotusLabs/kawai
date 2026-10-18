@@ -1,9 +1,18 @@
 // Launch configuration for chat sessions, resolved from the layered profile
 // catalog (see profileCatalog.ts). Resolution copies inherited/global settings
-// and never changes process.env.
+// and never changes process.env. Every variable the catalog names as a
+// credential is withheld from every launch; a credentialed provider's session
+// receives its own token as ANTHROPIC_AUTH_TOKEN instead (openrouter-provider
+// D3).
 import fs from 'node:fs'
 import type { Options } from '@anthropic-ai/claude-agent-sdk'
-import { buildChatOptionsEnv, effectiveChatEnv, type ChatProviderEnv } from './chatProviderEnv'
+import {
+  buildChatOptionsEnv,
+  effectiveChatEnv,
+  withheldCredentialNames,
+  withoutCredentials,
+  type ChatProviderEnv,
+} from './chatProviderEnv'
 import {
   PROFILE_CONTROLLED_ENV,
   resolveProfileCatalog,
@@ -61,45 +70,74 @@ export function resolveClaudeProfile(
   ctx: ProfileCatalogContext = {},
   onCatalogErrors?: (errors: string[]) => void
 ): ClaudeLaunchConfiguration {
-  const { profiles, errors } = resolveProfileCatalog(ctx)
+  const catalog = resolveProfileCatalog(ctx)
   // A failed file skips silently otherwise; report it (the rest resolves).
-  if (errors.length > 0) onCatalogErrors?.(errors)
-  const profile = profiles.get(id)
+  if (catalog.errors.length > 0) onCatalogErrors?.(catalog.errors)
+  const profile = catalog.profiles.get(id)
   if (!profile) {
     throw new Error(`Unknown Claude profile "${id}". Restore its catalog file entry before resuming.`)
   }
+  const withheld = withheldCredentialNames(catalog)
+  const serverEnv = effectiveChatEnv(globalEnv)
+  // The provider's own token, read before the names are withheld (D3/D4).
+  const credential = profile.authTokenEnv !== undefined
+    ? { ANTHROPIC_AUTH_TOKEN: serverEnv[profile.authTokenEnv] ?? '', ...BLANK_OTHER_CREDENTIALS }
+    : undefined
+  const base = withoutCredentials(serverEnv, withheld)
   const hasOverrides =
     Object.keys(profile.env).length > 0 || profile.model !== undefined || profile.executable !== undefined
   // A file entry that sets nothing inherits the global environment entirely,
-  // exactly like an implicit default.
-  if (!hasOverrides) {
+  // exactly like an implicit default — filtered whenever the catalog names
+  // credentials, so a default launch never sees them either.
+  if (!hasOverrides && !credential) {
+    if (withheld.size > 0) return { env: base }
     const env = buildChatOptionsEnv(globalEnv)
     return env ? { env } : {}
   }
   if (profile.executable) {
     // The wrapper owns provider configuration: the base environment (with
-    // credentials) passes through, entry values are pre-applied, and no
-    // inline controlled settings are injected — those would override the
-    // wrapper's own exports and defeat the delegation.
+    // credentials, minus withheld ones) passes through, entry values are
+    // pre-applied, and no inline controlled settings are injected — those
+    // would override the wrapper's own exports and defeat the delegation.
     return {
-      env: { ...effectiveChatEnv(globalEnv), ...profile.env },
+      env: { ...base, ...profile.env, ...credential },
       executable: profile.executable,
       ...(profile.model !== undefined ? { model: profile.model } : {}),
     }
   }
-  const env = effectiveChatEnv(globalEnv)
+  const env = base
   const controlled: ChatProviderEnv = {}
   for (const name of PROFILE_CONTROLLED_ENV) {
     delete env[name]
     // Blank file-layer values neutralize inherited settings for absent fields.
     controlled[name] = profile.env[name] ?? ''
   }
-  Object.assign(env, profile.env)
+  Object.assign(env, profile.env, credential)
   return {
     env,
-    settings: { env: controlled },
+    // The blanks also go in the flag layer, so no settings file can restore
+    // another credential; the token itself never rides in settings (argv).
+    settings: { env: credential ? { ...controlled, ...BLANK_OTHER_CREDENTIALS } : controlled },
     ...(profile.model !== undefined ? { model: profile.model } : {}),
   }
+}
+
+/** Credentials a credentialed provider's session must not fall back to (D3). */
+const BLANK_OTHER_CREDENTIALS = { ANTHROPIC_API_KEY: '', CLAUDE_CODE_OAUTH_TOKEN: '' } as const
+
+/**
+ * The provider and token variable a profile must authenticate with, when its
+ * provider names one (openrouter-provider D4); undefined otherwise.
+ */
+export function profileCredential(
+  id: string = 'default',
+  ctx: ProfileCatalogContext = {}
+): { providerLabel: string; authTokenEnv: string } | undefined {
+  const catalog = resolveProfileCatalog(ctx)
+  const profile = catalog.profiles.get(id)
+  if (profile?.authTokenEnv === undefined) return undefined
+  const providerLabel = catalog.providers.get(profile.providerId)?.label ?? profile.providerId
+  return { providerLabel, authTokenEnv: profile.authTokenEnv }
 }
 
 /** The zone a profile's provider writes zone-less reset times in, if configured. */
