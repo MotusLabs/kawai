@@ -147,4 +147,4 @@ Group 7's matrix rows for plan execution, integration, supervision, and revision
 
 ## 8. Checks
 
-- [ ] 8.1 Run `bun run lint && bun run typecheck && bun run test` and `openspec validate execution-safety-recovery --strict`, and grep the change, docs, and tests for any non-example hostname or address. Verify that all pass and the grep finds nothing.
+- [x] 8.1 Run `bun run lint && bun run typecheck && bun run test` and `openspec validate execution-safety-recovery --strict`, and grep the change, docs, and tests for any non-example hostname or address. Verify that all pass and the grep finds nothing.
