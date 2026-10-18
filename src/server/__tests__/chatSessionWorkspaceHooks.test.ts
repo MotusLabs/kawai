@@ -161,7 +161,9 @@ test('a success result flagged is_error is a failed turn for turn ends, usage, a
         .handleDriverEvent.bind(manager)
       feed(id, { type: 'turn_started', id: 's-1', sequence: 1, turnId: 't-1', at: '2026-10-18T08:28:00Z' })
       feed(id, {
-        type: 'turn_completed', subtype: 'success', isError: true, terminalReason: 'blocking_limit',
+        // A non-exhausting reason: an exhausting one takes the exhaustion
+        // outcome instead (chatContextExhaustedFlag.test.ts).
+        type: 'turn_completed', subtype: 'success', isError: true, terminalReason: 'api_error',
         id: 'e-1', sequence: 2, turnId: 't-1', at: '2026-10-18T08:28:01Z',
       })
       expect(ended).toHaveBeenCalledWith(id, false)

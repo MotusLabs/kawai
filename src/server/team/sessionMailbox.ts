@@ -35,6 +35,7 @@ import { LimitEventStore } from './routing/limitEvents'
 import { RuleRegistry, type RuleLoadReport } from './routing/ruleLoader'
 import { ProfileRouter } from './routing/router'
 import { LimitOutcomes, type HandoffTarget } from './routing/limitOutcomes'
+import { ContextExhaustion, type ExhaustionOutcome } from './contextExhaustion'
 import { ReasonLedger, orderConstraints, toReason } from './waitingReasons'
 import { loadTeamGroups } from './teamGroups'
 import type { ChatUsageReport } from '../../shared/chat'
@@ -58,6 +59,8 @@ export class SessionMailbox {
   readonly outcomes: LimitOutcomes
   /** Pending member releases (member-release); the release tool and task-close hook. */
   readonly releases: MemberRelease
+  /** The context-exhaustion outcome (chat-context-exhaustion D4). */
+  readonly exhaustion: ContextExhaustion
   /** Per-team waiting reasons (D3): in-memory, rebuilt by the first pass. */
   private readonly reasons = new ReasonLedger()
   private readonly catalogs = new Map<string, GroupCatalog>()
@@ -223,6 +226,9 @@ export class SessionMailbox {
       taskTitle: taskId => taskStore.get(taskId)?.title ?? null,
       targetWorktree, restoreSession: options.restore,
       onError: options.onError,
+    })
+    this.exhaustion = new ContextExhaustion(db, {
+      store, outcomes: this.outcomes, releases: this.releases, getRecord: options.getRecord,
     })
     this.dispatcher = new MailDispatcher(this.mailbox.store, {
       // Cycle start (member-release D5): clear the catalog cache, keep the
@@ -444,6 +450,16 @@ export class SessionMailbox {
   /** A session's turn ended; its mail was settled first. */
   turnEnded(sessionId: string, success: boolean) {
     void this.outcomes.turnEnded(sessionId, success).then(() => this.dispatcher.notify(), this.options.onError)
+  }
+
+  /**
+   * A session's turn ended with its context exhausted; its mail was settled
+   * first. Replaces {@link turnEnded}: no limit resolution runs (D4).
+   */
+  contextExhausted(sessionId: string): ExhaustionOutcome {
+    const outcome = this.exhaustion.turnExhausted(sessionId)
+    this.dispatcher.notify()
+    return outcome
   }
 
   /** The human hands parked work to a group or session. */

@@ -25,15 +25,15 @@ Groups 1–3 depend on nothing else and may land as their own PR. Group 5's usag
 
 ## 4. The exhaustion outcome
 
-- [ ] 4.1 Add `MailboxStore.deadLetterDelivered` (`delivered` → `dead`, with its history event), and expose the session's active work from `LimitOutcomes`. Verify store tests for the event row and the refusal from other states.
-- [ ] 4.2 Implement `contextExhaustion.ts` (design D4) and call it after `settleRecipient` for a flagged turn, skipping `LimitOutcomes.turnEnded`'s limit resolution. In one transaction it:
+- [x] 4.1 Add `MailboxStore.deadLetterDelivered` (`delivered` → `dead`, with its history event), and expose the session's active work from `LimitOutcomes`. Verify store tests for the event row and the refusal from other states.
+- [x] 4.2 Implement `contextExhaustion.ts` (design D4) and call it after `settleRecipient` for a flagged turn, skipping `LimitOutcomes.turnEnded`'s limit resolution. In one transaction it:
   - dead-letters the turn's mail, whether `delivered` or still `claimed`;
   - dead-letters queued direct mail to the session;
   - releases its parked work to the group;
   - marks a spawned member's pending release with reason `context-exhausted`.
 
   Verify by an integration test replaying the incident: the go mail ends `dead`/`context-exhausted`, a parked item returns to its group, and no `profile_limit_events` row is written.
-- [ ] 4.3 Confirm the pending release archives through readiness and journals on the task, waits for a running background task, survives a restart, and never touches human-created sessions. Verify member-release tests for those four cases.
+- [x] 4.3 Confirm the pending release archives through readiness and journals on the task, waits for a running background task, survives a restart, and never touches human-created sessions. Verify member-release tests for those four cases.
 
 ## 5. Decision note and attention
 

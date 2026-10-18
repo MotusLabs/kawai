@@ -2477,14 +2477,17 @@ export class ChatSessionManager {
     if (event.type === 'error' || event.type === 'turn_completed') this.teamMail.settleRecipient(sessionId)
     // The context-exhausted flag (chat-context-exhaustion D3), set or cleared
     // before the mail outcome below reads it.
-    this.trackContextExhaustion(sessionId, event)
+    const exhausted = this.trackContextExhaustion(sessionId, event)
     // Profile routing: progress and limit outcomes for the mail a turn handles.
     if (event.type === 'tool_call') this.teamMail.toolCall(sessionId, event.tool, event.input)
     // A trigger marks a turn the agent started itself (limit-outcomes-agent-turns D1).
     if (event.type === 'turn_started') this.teamMail.turnStarted(sessionId, event.trigger !== undefined)
     if (event.type === 'turn_completed') {
       try {
-        this.teamMail.turnEnded(sessionId, turnSucceeded(event))
+        // An exhausted turn never processed its mail: the exhaustion outcome
+        // settles it instead of a limit resolution (chat-context-exhaustion D4).
+        if (exhausted) this.teamMail.contextExhausted(sessionId)
+        else this.teamMail.turnEnded(sessionId, turnSucceeded(event))
       } catch (error) {
         logger.warn('chat_turn_mail_ended_failed', {
           sessionId,
@@ -2538,19 +2541,24 @@ export class ChatSessionManager {
   /**
    * Flag a session whose turn failed on a context limit, and clear the flag
    * on the compaction notice or a successful turn (chat-context-exhaustion
-   * D3). The column is the truth: nothing re-derives it at startup.
+   * D3). The column is the truth: nothing re-derives it at startup. Returns
+   * whether the event ended an exhausted turn (its mail takes the exhaustion
+   * outcome, D4).
    */
-  private trackContextExhaustion(sessionId: string, event: ChatEvent): void {
+  private trackContextExhaustion(sessionId: string, event: ChatEvent): boolean {
     const flagged = this.records.get(sessionId)?.contextExhausted ?? null
     if (event.type === 'turn_completed') {
       if (turnSucceeded(event)) {
         if (flagged) this.applyPatch(sessionId, { contextExhausted: null })
       } else if (event.terminalReason && EXHAUSTING_REASONS.includes(event.terminalReason)) {
-        this.applyPatch(sessionId, { contextExhausted: { at: event.at || new Date().toISOString(), reason: event.terminalReason } })
+        // One episode per flag: a repeated exhausted turn keeps the first flag.
+        if (!flagged) this.applyPatch(sessionId, { contextExhausted: { at: event.at || new Date().toISOString(), reason: event.terminalReason } })
+        return true
       }
     } else if (event.type === 'notice' && event.kind === 'compacted' && flagged) {
       this.applyPatch(sessionId, { contextExhausted: null })
     }
+    return false
   }
 
   /**

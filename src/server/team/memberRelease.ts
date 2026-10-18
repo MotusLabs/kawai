@@ -7,6 +7,9 @@
 // `releaseByAgent` is the `release_member` service entry (D6): refused with
 // a reason, never deferred. Reopening the task or restoring the member
 // cancels a pending release; a human-created session is never released.
+// A spawned member flagged context-exhausted is marked by kawai too
+// (chat-context-exhaustion D4) and released on the same path unless its
+// flag clears first.
 import type { Database } from 'bun:sqlite'
 import { logger } from '../logger'
 import type { ChatSessionRecord } from '../db'
@@ -77,6 +80,9 @@ CREATE TABLE IF NOT EXISTS team_task_closers (
   closed_by_session TEXT
 );
 `
+
+/** The pending-release reason of a flagged member (chat-context-exhaustion D4). */
+const CONTEXT_EXHAUSTED = 'context-exhausted'
 
 /** Backoffs before each retry of a failed late-spawn mark: bounded, then given up with an error. */
 const LATE_MARK_RETRY_DELAYS_MS = [1_000, 5_000, 30_000] as const
@@ -222,6 +228,27 @@ export class MemberRelease {
   }
 
   /**
+   * A spawned member with a task was flagged context-exhausted
+   * (chat-context-exhaustion D4): mark it for release by kawai with reason
+   * `context-exhausted`, released through the same readiness and archive
+   * path. Human-created sessions and members without a task are never
+   * marked. Synchronous, inside the exhaustion outcome's transaction; returns
+   * whether a row was written.
+   */
+  markContextExhausted(sessionId: string): boolean {
+    const record = this.options.getRecord(sessionId)
+    if (!record || !record.spawned || !record.taskId || record.archivedAt != null) return false
+    const task = this.options.tasks.get(record.taskId)
+    if (!task) return false
+    this.db.prepare(`INSERT OR REPLACE INTO team_member_releases
+      (session_id, task_id, team_id, reason, requested_by_kind, requested_by_session, requested_at)
+      VALUES (?, ?, ?, ?, 'system', NULL, ?)`)
+      .run(sessionId, task.id, task.teamId, CONTEXT_EXHAUSTED, new Date().toISOString())
+    this.options.notify()
+    return true
+  }
+
+  /**
    * The spawn path's entry for {@link markSpawnedForClosedTask}. A failure
    * is logged with both ids and retried a bounded number of times (1 s, 5 s,
    * 30 s), each attempt through the same re-checks — so a member reopened,
@@ -275,9 +302,12 @@ export class MemberRelease {
     for (const row of this.pending()) {
       const record = this.options.getRecord(row.sessionId)
       if (!record || record.archivedAt != null) { this.cancel(row.sessionId); continue }
+      const exhausted = row.reason === CONTEXT_EXHAUSTED
+      // A recovered context (a /compact) keeps the member.
+      if (exhausted && !record.contextExhausted) { this.cancel(row.sessionId); continue }
       // The current file wins (D1): a group that opted out after the close
-      // keeps its member.
-      if (record.groupId
+      // keeps its member; the opt-out is about closes, not exhaustion.
+      if (!exhausted && record.groupId
         && this.options.cachedDefinition(row.teamId, record.groupId)?.releaseOnTaskClose === false) {
         this.cancel(row.sessionId)
         continue
@@ -286,7 +316,9 @@ export class MemberRelease {
       // A refused archive released nothing: drop the row without a journal entry.
       if (!this.options.archive(row.sessionId).ok) { this.cancel(row.sessionId); continue }
       const status = this.options.tasks.get(row.taskId)?.status ?? 'closed'
-      this.journalRelease(row.taskId, `Released ${record.name} (${row.sessionId}): task ${status} by ${actorText(row.requestedBy)}.`)
+      this.journalRelease(row.taskId, exhausted
+        ? `Released ${record.name} (${row.sessionId}): its context is exhausted (${record.contextExhausted?.reason ?? 'unknown reason'}).`
+        : `Released ${record.name} (${row.sessionId}): task ${status} by ${actorText(row.requestedBy)}.`)
       this.cancel(row.sessionId)
     }
   }

@@ -3,7 +3,7 @@
 // failures never do; the flag persists across restart, archive, and restore;
 // a compaction notice or a successful turn clears it; the wire session
 // carries it.
-import { afterEach, beforeEach, expect, test } from 'bun:test'
+import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -120,5 +120,26 @@ test('a compaction notice clears the flag; so does a successful turn', async () 
     expect(db.getChatSession(id)?.contextExhausted).not.toBeNull()
     feed(id, completed({ subtype: 'success', isError: false }))
     expect(db.getChatSession(id)?.contextExhausted).toBeNull()
+  } finally { manager.shutdown() }
+})
+
+test('an exhausted turn takes the exhaustion outcome instead of the limit resolution; a repeat keeps the first flag', async () => {
+  const manager = createManager()
+  try {
+    const id = await session(manager)
+    const mail = (manager as unknown as { teamMail: { turnEnded: (id: string, ok: boolean) => void; contextExhausted: (id: string) => unknown } }).teamMail
+    const ended = spyOn(mail, 'turnEnded')
+    const exhausted = spyOn(mail, 'contextExhausted')
+    const feed = feeder(manager)
+    feed(id, completed({ subtype: 'success', isError: true, terminalReason: 'prompt_too_long' }))
+    expect(exhausted.mock.calls).toEqual([[id]])
+    expect(ended).not.toHaveBeenCalled()
+    // A second exhausted turn runs the outcome again but keeps the episode's flag.
+    feed(id, completed({ subtype: 'success', isError: true, terminalReason: 'blocking_limit', at: '2026-10-18T09:00:00Z' }))
+    expect(exhausted).toHaveBeenCalledTimes(2)
+    expect(db.getChatSession(id)?.contextExhausted).toEqual({ at: '2026-10-18T08:28:01Z', reason: 'prompt_too_long' })
+    // An ordinary failure ends the turn as before.
+    feed(id, completed({ subtype: 'success', isError: true, terminalReason: 'api_error' }))
+    expect(ended.mock.calls).toEqual([[id, false]])
   } finally { manager.shutdown() }
 })
