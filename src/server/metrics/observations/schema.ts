@@ -23,4 +23,4 @@ CREATE TABLE process_collection_checkpoints (source TEXT PRIMARY KEY, value TEXT
 CREATE TABLE process_live_observations (session_id TEXT PRIMARY KEY, state TEXT NOT NULL);
 CREATE TABLE process_export_totals (family TEXT NOT NULL, labels TEXT NOT NULL, bucket TEXT NOT NULL, value REAL NOT NULL, PRIMARY KEY(family, labels, bucket));
 CREATE TABLE process_export_aliases (dimension TEXT NOT NULL, original TEXT NOT NULL, alias TEXT NOT NULL, PRIMARY KEY(dimension, original));
-`;
+`
