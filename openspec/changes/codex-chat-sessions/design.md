@@ -15,7 +15,7 @@ See proposal.md (Why) for motivation. The current state that shapes this design:
   - `transcriptReplay.ts` and `transcriptTitleWatcher.ts` read `~/.claude/projects/**/<sdkSessionId>.jsonl`.
   - `logPoller` keeps chat transcripts out of terminal discovery by session id (`getChatSdkSessionIds`).
 - **The profile catalog has no provider.** `profileCatalog.ts` validates entries against `ENTRY_FIELDS = {label, model, executable, env}` and an `ANTHROPIC_*`-only env allowlist.
-- **Codex facts below come from `codex app-server generate-ts --experimental`, run against the installed codex-cli 0.162.1.**
+- **Codex facts below come from `codex app-server generate-ts --experimental`, run against the installed codex-cli 0.163.0 (the §1 spike baseline; see Spike results).**
   - Transport is JSON-RPC over stdio: `initialize` with `capabilities.experimentalApi`, then `thread/start`/`thread/resume`, `turn/start`/`turn/interrupt`.
   - Notifications include `item/started|completed`, `item/agentMessage/delta`, `item/reasoning/*`, `thread/tokenUsage/updated`, `account/rateLimits/updated`, and `turn/completed` with `TurnError.codexErrorInfo`.
   - Server requests are `item/commandExecution/requestApproval`, `item/fileChange/requestApproval`, `item/permissions/requestApproval`, `item/tool/requestUserInput`, and `item/tool/call` for dynamic tools.
@@ -141,9 +141,9 @@ Dispatch on `item/tool/call`:
 3. Run the handler.
 4. Return `{ success, contentItems: [{ type: "inputText", text }] }` with the same JSON text the MCP server returns today.
 
-Dynamic tool calls bypass Codex approval, which is the spike's first question (D12). The driver never raises a Kawai card for them under either policy.
+Dynamic tool calls bypass Codex approval, which the spike confirmed (Spike results). The driver never raises a Kawai card for them under either policy.
 
-If `thread/start` rejects `dynamicTools`, the start fails with a chat error, so no Codex member runs without its team tools. On resume the stored per-thread tools are used. If the spike finds they are not restored, or the handler set changed, the driver starts a fresh thread only as an explicit, journaled fallback. That fallback is an open question below, not a silent default.
+If `thread/start` rejects `dynamicTools`, the start fails with a chat error, so no Codex member runs without its team tools — a malformed spec fails `thread/start` with a JSON-RPC error and creates no thread (spike-verified). On resume the stored per-thread tools are used; the spike confirmed they are restored, so no fresh-thread fallback exists.
 
 *Alternative:* a loopback streamable-HTTP MCP endpoint with a per-session bearer token. Rejected in exploration: identity would rest on a secret in the child's environment, a new listener would exist, and Codex would continue silently if the server failed to start. Its advantage, reuse by non-Codex agents, is not needed yet.
 
@@ -200,7 +200,7 @@ Reports are cached per Codex home, the resolved absolute `codexHome` (a session'
 
 Each signal also carries its scope:
 - `usageLimitExceeded`, `rateLimitExceeded`, and `serverOverloaded` belong to the login or provider, so they are login-scoped.
-- `sessionBudgetExceeded` names a session or thread budget, not the shared plan, so it is session-scoped. Fanning it out would cool every profile on the home and park unrelated members. It becomes login-scoped only if the spike shows the budget is account-wide (Open Questions).
+- `sessionBudgetExceeded` names a session or thread budget, not the shared plan, so it is session-scoped. Fanning it out would cool every profile on the home and park unrelated members. The spike could not observe it without spending the account budget, so it stays session-scoped (Spike results).
 
 The manager writes a login-scoped event for every Codex profile whose resolved `codexHome` equals the session's stored home. It writes a session-scoped event for the session's own profile only. Cooldown, park, release, forward, and the urgent-mail refusal then work unchanged.
 
@@ -221,7 +221,7 @@ Urgent interrupts call `turn/interrupt` and wait for `turn/completed` with statu
 
 ### D12: Spike first, then a live smoke script
 
-The first task is a scripted spike against the baseline, recorded in this design before driver work continues. It answers the open questions below. A `scripts/codex-smoke.ts`, run by hand and not in CI, exercises start, a dynamic tool call, an approval round-trip, interrupt, and resume against a real Codex. It is rerun on every baseline bump. CI uses a fake app-server that replays recorded JSON-RPC transcripts.
+The first task is a scripted spike against the baseline, recorded in this design before driver work continues; its answers are the Spike results section at the end of this document. A `scripts/codex-smoke.ts`, run by hand and not in CI, exercises start, a dynamic tool call, an approval round-trip, a question round-trip, interrupt, and resume against a real Codex. It is rerun on every baseline bump. CI uses a fake app-server that replays recorded JSON-RPC transcripts.
 
 ## Risks / Trade-offs
 
@@ -243,14 +243,83 @@ The first task is a scripted spike against the baseline, recorded in this design
 - No Codex profile ships in `config/profiles.default.json`. Operators add one to `~/.kawai/profiles.json`, so nothing changes for installations without Codex.
 - Rollback: removing Codex profiles makes Codex chats refuse to start with a provider-mismatch or unknown-profile error. Their history stays readable from `transcript_path`. Reverting the code leaves the extra columns unused.
 
-## Open Questions
+## Spike results
 
-Each answer changes only a mapping detail inside a decision above, not the specs or the task list. The spike (D12) answers them all.
+The §1 spike ran `scripts/codex-smoke.ts` against the installed codex-cli
+**0.163.0** (the design was drafted against 0.162.1; the baseline moves to
+0.163.0, whose generated types are vendored). The scrubbed transcript is
+`src/server/chat/codex/__fixtures__/smoke-transcript.jsonl`. Answers to the
+former Open Questions:
 
-- Does Codex ever route `item/tool/call` through its own approval or elicitation, and what timeout applies to dynamic calls?
-- Are dynamic tools restored on `thread/resume`, and how does resume behave when the tool set changed (D6 fallback)?
-- Is `.git` writable under `workspace-write` with the common dir as a writable root?
-- Do localhost-binding tests pass inside the sandbox with network on?
-- How do `dynamicToolCall` and `commandExecution` items appear in `thread/read` and in rollout rows for replay?
-- Which retry signal marks a non-final limit event: a `willRetry`-style flag on the `error` notification, or only HTTP status?
-- Is `sessionBudgetExceeded` scoped to the session or thread, or to the account (D9)? Until the spike answers, it cools only the session's own profile.
+- **Baseline (R6).** 0.162.1 → 0.163.0: generate-ts ran on 0.163.0, the
+  version gate checks against it, and the smoke transcript records it.
+- **Dynamic-call approval and timeout.** `item/tool/call` arrives as a plain
+  server request; no approval or elicitation precedes it (verified on a fresh
+  thread and a resumed thread). Kawai answers it synchronously over the
+  request; no timeout surfaced at millisecond latency, so handlers must
+  answer promptly. A malformed registration (bad tool name) fails
+  `thread/start` itself with a JSON-RPC error (`-32600`, "dynamic tool name
+  must match ^[a-zA-Z0-9_-]+$"), before any turn and with no thread created —
+  the refused-registration path is a start failure, exactly as D6 requires.
+- **Tool restoration on resume.** Restored: a fresh process's
+  `thread/resume` served a `kawai-team` call on the resumed thread with no
+  re-registration (`thread/resume` takes no `dynamicTools`; the stored set is
+  used). D6's fresh-thread fallback is dead code on this baseline and stays
+  unwired.
+- **`.git` writability.** Unanswerable on the smoke host: the sandbox never
+  initializes there (next bullet), so every command escalates with reason
+  "sandbox failed to initialize" — the observed git commit escalation was
+  that, not a writable-root verdict. The D5 config is still sent (the
+  `thread/start` response echoes `writableRoots`), and on hosts where the
+  sandbox does initialize the design's mitigations stand (accept the
+  escalation, or an operator's `git` exec-policy rule; Kawai never writes
+  one). The escalation reason is distinguishable text the driver can surface.
+- **Sandbox initialization on this host.** bwrap cannot create user
+  namespaces (`unshare --user` → EPERM), so every sandboxed command fails
+  init and escalates; accepted commands run unsandboxed. Under manual that is
+  a card per command; under auto Kawai accepts and the command runs without
+  the workspace-write guard. Recorded here because this host is where the
+  manual team run (8.2) happens.
+- **localhost binding.** The bind itself succeeded (`bind 200` on
+  `127.0.0.1`) — but outside the sandbox, for the same reason as above.
+  Inside a working sandbox: untested on this host; network-on profiles should
+  not rely on it until verified on such a host.
+- **Replay shapes.** `thread/read` (`includeTurns: true`) returns
+  `thread.turns[]` whose items are typed: `userMessage`, `agentMessage` (with
+  `phase`, `questions`, `delivery`), `commandExecution` (command, cwd,
+  aggregatedOutput, exitCode, status), `dynamicToolCall` (namespace, tool,
+  arguments, contentItems, success), `reasoning`, `sleep`. The rollout file's
+  rows: `session_meta` (id), `response_item:message` (user and assistant —
+  the receipt rows), `response_item:custom_tool_call`(+`_output`) for dynamic
+  tool calls, `response_item:function_call`(+`_output`) for commands,
+  `response_item:reasoning`, and `event_msg` rows (`task_started`,
+  `item_completed`, `token_count`, `task_complete`, `turn_aborted` for an
+  interrupt), plus `turn_context`, `token_usage_record`, `world_state`.
+- **The retry signal.** The `error` notification
+  (`ErrorNotification{error, willRetry, threadId, turnId}`) carries
+  `willRetry: boolean` — a non-final attempt. A turn's final failure is
+  `turn/completed` with `turn.status: "failed"` and `turn.error`. No live
+  error occurred in the spike; the shape is definitive from the pinned
+  version's generated types.
+- **`sessionBudgetExceeded` scope.** Not observed — establishing it would
+  spend the account budget, which the spike rules forbid. It stays
+  session-scoped (D9), cooling only the session's own profile.
+- **Questions arrive async (D5/D7 mapping note).** On 0.163.0 the model asks
+  through an `agentMessage` item carrying `questions: [{ title, options }]`
+  and `delivery: "async"`, then sleeps (`sleep` items) waiting for the
+  answer; the answer is `turn/start` input added to the active turn, after
+  which the same turn completes. The blocking
+  `item/tool/requestUserInput` server request exists in the protocol but
+  never fired. The driver therefore maps BOTH: an async question item raises
+  the question card and `answerQuestion` delivers the answers as
+  `turn/start` input; a blocking `requestUserInput` is answered over its
+  request as designed. Questions are never auto-answered under either
+  policy.
+- **Envelope shapes.** `turn/started` and `turn/completed` carry
+  `{ threadId, turn: { id, status, error, items } }`.
+  `account/rateLimits/read` returns
+  `{ ordinaryUsageAllowed, rateLimits: RateLimitSnapshot }`; window
+  `resetsAt` is epoch **seconds** (D9 converts to ISO). The `thread/start`
+  response echoes the applied sandbox, and a resumed thread's
+  `writableRoots` accumulate the previous ones (merge, not replace) — kawai
+  always sends its own set and ignores the accumulation.

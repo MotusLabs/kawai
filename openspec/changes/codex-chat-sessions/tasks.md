@@ -2,8 +2,8 @@
 
 ## 1. Spike against the Codex baseline
 
-- [ ] 1.1 Write `scripts/codex-smoke.ts` against the installed Codex app-server. It covers `initialize` with `experimentalApi`, `thread/start` with a `kawai-team` dynamic-tool namespace and the D5 sandbox config, a dynamic tool call, a command approval round-trip, `requestUserInput`, `turn/interrupt`, and `thread/resume` in a second process. Verify by running it locally and saving its JSON-RPC transcript under `src/server/chat/codex/__fixtures__/`.
-- [ ] 1.2 Answer every design Open Question from the smoke run:
+- [x] 1.1 Write `scripts/codex-smoke.ts` against the installed Codex app-server. It covers `initialize` with `experimentalApi`, `thread/start` with a `kawai-team` dynamic-tool namespace and the D5 sandbox config, a dynamic tool call, a command approval round-trip, `requestUserInput`, `turn/interrupt`, and `thread/resume` in a second process. Verify by running it locally and saving its JSON-RPC transcript under `src/server/chat/codex/__fixtures__/`.
+- [x] 1.2 Answer every design Open Question from the smoke run:
   - dynamic-call approval and timeout
   - tool restoration on resume
   - `.git` writability under the writable root
