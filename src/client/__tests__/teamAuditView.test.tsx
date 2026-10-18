@@ -148,7 +148,7 @@ test('every control disables while disconnected', () => {
 
 describe('the fix round (findings-bee1aa24)', () => {
   test("the linked call's row is marked selected and the dialog closes on success", () => {
-    const { renderer, sent, byId, allBy } = mount(() => {
+    const { renderer, sent, byId } = mount(() => {
       useTeamAuditStore.setState({ views: { '/repo': { ...useTeamAuditStore.getState().views['/repo']!, selected: 'obc-new' } } })
       useTeamAuditStore.getState().begin('/repo', 'r1', 'page')
       useTeamAuditStore.getState().applyPage(pageOf([
@@ -253,7 +253,8 @@ test("Apply filters leaves the selection: a changed push or reconnect sends no c
   // A reconnect likewise.
   connected = false; rerender(); connected = true; rerender()
   const afterReconnect = sent.filter(message => message.type === 'team-audit-open')
-  expect(afterReconnect.length).toBeGreaterThanOrEqual(3)
+  // Exactly one more: mount, Apply, push, reconnect.
+  expect(afterReconnect).toHaveLength(4)
   expect(afterReconnect.at(-1)).not.toHaveProperty('callId')
   // The link to the same call again re-selects and re-requests with it.
   act(() => useTeamAuditStore.getState().select('/repo', 'obc-new'))

@@ -45,6 +45,10 @@ export default function TeamAuditView({ teamPath, view, sendMessage, connected, 
   onSelectedCall?: (callId: string | null) => void
 }) {
   const requestSeq = useRef(0)
+  // The latest sender, so a new function identity from the host neither
+  // closes the subscription nor re-requests a page.
+  const send = useRef(sendMessage)
+  send.current = sendMessage
   // `callId` rides the automatic opens (URL selection): the server resolves
   // that call's group and the store adopts the filters. The owner's own
   // Apply clears the selection, so its request — and every later one —
@@ -52,41 +56,39 @@ export default function TeamAuditView({ teamPath, view, sendMessage, connected, 
   const request = (filters: OutboundAuditFilters, callId?: string) => {
     const requestId = `audit-page-${++requestSeq.current}`
     useTeamAuditStore.getState().begin(teamPath, requestId, 'page')
-    sendMessage({ type: 'team-audit-open', teamPath, requestId, filters, ...(callId !== undefined ? { callId } : {}) })
+    send.current({ type: 'team-audit-open', teamPath, requestId, filters, ...(callId !== undefined ? { callId } : {}) })
   }
-  // The tab's subscription; a reconnect drops its lost requests and asks
-  // the request effect below for a fresh page.
+  // The tab's subscription. A reconnect — the connection coming back, or a
+  // new epoch — drops the lost requests, so the request effect below (it
+  // runs after this one in the same commit) re-requests a clean first page.
+  // The edge is read before the disconnected early return, so a drop
+  // records itself.
   const wasConnected = useRef(connected)
   const lastEpoch = useRef(connectionEpoch)
-  const [reconnects, setReconnects] = useState(0)
   useEffect(() => {
-    if (!connected || !view.open) return
-    const reconnected = (!wasConnected.current && connected) || (connected && lastEpoch.current !== connectionEpoch)
+    const reconnected = connected && (!wasConnected.current || lastEpoch.current !== connectionEpoch)
     wasConnected.current = connected
     lastEpoch.current = connectionEpoch
-    if (reconnected) {
-      useTeamAuditStore.getState().reconnected(teamPath)
-      setReconnects(count => count + 1)
-    }
-    return () => sendMessage({ type: 'team-audit-close', teamPath })
-  }, [teamPath, connected, connectionEpoch, view.open, sendMessage]) // eslint-disable-line react-hooks/exhaustive-deps
+    if (!connected || !view.open) return
+    if (reconnected) useTeamAuditStore.getState().reconnected(teamPath)
+    return () => send.current({ type: 'team-audit-close', teamPath })
+  }, [teamPath, connected, connectionEpoch, view.open])
   // The one request owner (N2): mount, a URL selection, the owner's Apply,
-  // a changed push, or a reconnect — each is one keyed transition, so the
-  // tab opens exactly once on mount.
-  const lastRequested = useRef('')
+  // a changed push, or a reconnect. Each is a change of exactly one of these
+  // dependencies, so the tab opens once on mount and once per transition
+  // (several in one commit still run the effect once). `view.filters` is
+  // deliberately absent: a group page adopting its applied filters must not
+  // re-request, and Apply already bumps `filtersEpoch`.
   useEffect(() => {
     if (!connected || !view.open) return
-    const key = `${view.selected ?? ''}|${reconnects}|${view.changed}|${view.filtersEpoch}`
-    if (lastRequested.current === key) return
-    lastRequested.current = key
     request(view.filters, view.selected ?? undefined)
-  }, [view.selected, reconnects, view.changed, view.filtersEpoch, connected, view.open]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [view.selected, view.changed, view.filtersEpoch, connected, connectionEpoch, view.open]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadMore = () => {
     if (view.cursor === null) return
     const requestId = `audit-more-${++requestSeq.current}`
     useTeamAuditStore.getState().begin(teamPath, requestId, 'more')
-    sendMessage({ type: 'team-audit-more', teamPath, requestId, filters: view.filters, cursor: view.cursor })
+    send.current({ type: 'team-audit-more', teamPath, requestId, filters: view.filters, cursor: view.cursor })
   }
 
   return <div className="flex min-h-0 flex-1 flex-col overflow-y-auto" data-testid="team-audit">
@@ -105,6 +107,7 @@ export default function TeamAuditView({ teamPath, view, sendMessage, connected, 
       }
     </div>
     <AuditFilters teamPath={teamPath} view={view} connected={connected} onSelectionCleared={() => onSelectedCall?.(null)} />
+    {view.notice && <p role="status" data-testid="audit-notice" className="border-b border-border px-3 py-2 text-chat-meta text-secondary">{view.notice}</p>}
     {view.error && <p role="alert" className="border-b border-border px-3 py-2 text-chat-meta text-chat-danger">{view.error}</p>}
     <div className="flex flex-col" data-testid="audit-rows">
       {view.rows?.map(row => <AuditRow key={row.id} row={row} teamPath={teamPath} connected={connected}
@@ -241,7 +244,7 @@ function AuditRow({ row, teamPath, connected, sendMessage, selected }: {
         ? <button type="button" className="text-left underline hover:opacity-80" data-testid="audit-session"
             onClick={() => openParticipantChat(row.session.id)}>{row.session.name}</button>
         : <span data-testid="audit-session">{row.session.name}</span>}
-      <span className="text-chat-meta text-secondary">{outcomeLabel(row.outcome.state)}</span>
+      <span className="text-chat-meta text-secondary" data-testid="audit-outcome">{outcomeLabel(row.outcome.state)}</span>
       {row.verdict === 'violation' && <button type="button" className="btn ml-auto text-sm" data-testid="audit-acknowledge"
         disabled={!connected} onClick={openDialog}>Acknowledge</button>}
     </div>
