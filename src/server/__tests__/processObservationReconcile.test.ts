@@ -127,3 +127,17 @@ test('landing acceptance requires the system actor and the exact landed result r
   expect(rows.map(row => [row.data.actorKind, row.data.mechanism]).sort()).toEqual([['human', 'manual'], ['system', 'direct-landing']]);
   db.close();
 });
+test('a source row whose fact fails validation is skipped once instead of stalling its source', () => {
+  const db = schemaDb(), tasks = new TaskStore(db), service = new ProcessObservationService(db, () => ({}), () => Date.parse(accepted));
+  const task = tasks.create({ teamId: 'team', title: 't', direction: 'd', creator: { kind: 'human', sessionId: null } }, at);
+  const bad = tasks.results.insert({ teamId: 'team', taskId: task.id, taskRevision: 1, summary: 's', commit: null, diff: null, worktree: null, tests: [], limitations: null, submittedBy: { kind: 'agent', sessionId: 'dev' } }, at);
+  tasks.results.insertFindings({ teamId: 'team', taskId: task.id, resultId: bad.id, handoffId: null, kind: 'review', verdict: 'pass', findings: 'f', author: { kind: 'agent', sessionId: 'reviewer' } }, at);
+  db.prepare("UPDATE team_task_findings SET verdict=? WHERE result_id=?").run('x'.repeat(200), bad.id);
+  tasks.results.insertFindings({ teamId: 'team', taskId: task.id, resultId: bad.id, handoffId: null, kind: 'review', verdict: 'fail', findings: 'f', author: { kind: 'agent', sessionId: 'reviewer' } }, at);
+  service.reconcile.run();
+  service.reconcile.run();
+  const findings = service.store.forTeam('team').filter(row => row.kind === 'finding');
+  expect(findings.map(row => row.data.verdict)).toEqual(['fail']);
+  expect(service.recorder.failures).toBe(0);
+  db.close();
+});

@@ -49,21 +49,23 @@ export interface StoredObservation extends ProcessObservation {
 export const SOURCE_NAMES = ['task', 'managed-turn', 'structured-context', 'canonical-stage', 'provider-quota', 'canonical-incident'] as const;
 export type MeasurementSource = typeof SOURCE_NAMES[number];
 export type SourceState = 'available' | 'unsupported' | 'awaiting-integration';
+/** A fact refused at the boundary; a reconciler skips its source row instead of stalling on it. */
+export class InvalidObservationError extends Error { }
 /** Reject accidental payload copies, invalid numbers and unreasonable field sizes at the boundary. */
 export function validateObservation(row: ProcessObservation): void {
   if (!row.sourceKey || row.sourceKey.length > 1024 || !Number.isFinite(Date.parse(row.observedAt)))
-    throw new Error('Invalid observation identity/time');
+    throw new InvalidObservationError('Invalid observation identity/time');
   const fields: readonly string[] | undefined = OBSERVATION_FIELDS[row.kind];
   if (!fields)
-    throw new Error('Unknown observation kind');
+    throw new InvalidObservationError('Unknown observation kind');
   for (const [key, value] of Object.entries(row.data)) {
     if (!fields.includes(key))
-      throw new Error(`Unsupported measurement field: ${key}`);
+      throw new InvalidObservationError(`Unsupported measurement field: ${key}`);
     if (value !== null && typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean')
-      throw new Error('Non-scalar measurement');
+      throw new InvalidObservationError('Non-scalar measurement');
     if (typeof value === 'number' && (!Number.isFinite(value) || value < 0))
-      throw new Error('Invalid measurement number');
+      throw new InvalidObservationError('Invalid measurement number');
     if (typeof value === 'string' && value.length > 128)
-      throw new Error('Measurement text too large');
+      throw new InvalidObservationError('Measurement text too large');
   }
 }

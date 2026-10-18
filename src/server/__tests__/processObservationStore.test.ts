@@ -58,3 +58,17 @@ test('raw payload copies and invalid measurements are refused before a write', (
   expect(store.forTeam('a')).toEqual([]);
   db.close();
 });
+test('pruning drops keys of live chat facts with their detail but keeps durable-source keys', () => {
+  const db = schemaDb();
+  let now = Date.parse(at);
+  const store = new ObservationStore(db, () => now);
+  store.record(fact('chat:s:evt-1'));
+  store.record(fact('segment:s:t:1'));
+  store.record(fact('source:team_tasks:t1'));
+  now += 91 * 24 * 3600000;
+  expect(store.prune()).toBe(3);
+  const keys = (db.prepare('SELECT source_key FROM process_observation_keys ORDER BY source_key').all() as { source_key: string }[]).map(row => row.source_key);
+  expect(keys).toEqual(['source:team_tasks:t1']);
+  expect(store.record(fact('source:team_tasks:t1'))).toBeNull();
+  db.close();
+});

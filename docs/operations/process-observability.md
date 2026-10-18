@@ -67,8 +67,13 @@ Observation details and completed turn usage default to 90 days; pruning deletes
 at most 500 rows per pass. Hourly scans continue a backlog in later 30-second
 collection ticks (usage continues on later completed writes). Detailed observations
 age by recording time so newly reconciled historical facts remain inspectable.
-Source tasks/results/audits retain their own policies. Source identities,
-cumulative totals, aliases and collection checkpoints outlive detail pruning.
+Source tasks/results/audits retain their own policies. Durable-source identities
+(source rows, completed usage, acceptances), cumulative totals, aliases and
+collection checkpoints outlive detail pruning; keys of live chat facts (events,
+segments, context and settings samples, compactions, gaps) are never replayed
+after their turn and leave with their detail rows, so the key ledger stays
+bounded. A source row whose fact fails validation is logged and skipped rather
+than stalling its source.
 Recording start, conservative detail horizon, latest source observations,
 unresolved gaps and error counts expose coverage. Existing rolling token metrics
 use the later of the 90-day limit and the team's earliest retained usage: raising

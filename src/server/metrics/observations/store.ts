@@ -1,8 +1,13 @@
-// Atomic, idempotent observation storage. Processed keys outlive detailed retention.
+// Atomic, idempotent observation storage. Durable-source keys outlive detailed retention.
 import type { Database } from 'bun:sqlite';
 import { OBSERVATION_RETENTION_MS, OBSERVATION_VERSION, validateObservation, type ProcessObservation, type StoredObservation } from '../../../shared/processObservations';
 const COLUMNS = ['teamId', 'taskId', 'taskRevision', 'assignmentId', 'resultId', 'sessionId', 'turnId', 'startId', 'groupId', 'profileId', 'providerId', 'model', 'accountRevision', 'actorSession', 'toolCallId', 'requestId'] as const;
 const snake = (s: string) => s.replace(/[A-Z]/g, c => `_${c.toLowerCase()}`);
+/**
+ * Keys of live chat facts: unique per event, turn or a random id, never replayed once the turn ends,
+ * so they leave with their detail row. Durable-source keys (`source:`, `usage:`, `acceptance:`) stay.
+ */
+const EPHEMERAL_KEY = /^(chat|segment|turn-end|context|settings|compaction|gap|restart-gap):/;
 export class ObservationStore {
   /** The aggregate sink runs in the same transaction; failure rolls the observation back too. */
   accumulate?: (row: StoredObservation) => void;
@@ -40,12 +45,15 @@ export class ObservationStore {
   prune(retentionMs = OBSERVATION_RETENTION_MS): number {
     return this.db.transaction(() => {
       const cutoff = new Date(this.now() - Math.max(24 * 3600000, retentionMs)).toISOString();
-      const rows = this.db.prepare('SELECT seq FROM process_observations WHERE recorded_at<? LIMIT 500').all(cutoff) as {
+      const rows = this.db.prepare('SELECT seq,source_key FROM process_observations WHERE recorded_at<? LIMIT 500').all(cutoff) as {
         seq: number;
+        source_key: string;
       }[];
-      for (const { seq } of rows) {
+      for (const { seq, source_key } of rows) {
         this.db.prepare('DELETE FROM process_observation_teams WHERE seq=?').run(seq);
         this.db.prepare('DELETE FROM process_observations WHERE seq=?').run(seq);
+        if (EPHEMERAL_KEY.test(source_key))
+          this.db.prepare('DELETE FROM process_observation_keys WHERE source_key=?').run(source_key);
       }
       this.setCheckpoint('detail-retained-since', cutoff);
       return rows.length;

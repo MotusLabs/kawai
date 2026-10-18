@@ -1,6 +1,7 @@
 // Durable-source recovery: source row cursors plus stable acceptance identities, never transcript inference.
 import type { Database } from 'bun:sqlite';
-import type { ObservationKind, ObservationIdentity, Measurement } from '../../../shared/processObservations';
+import { InvalidObservationError, OBSERVATION_VERSION, type ObservationKind, type ObservationIdentity, type Measurement } from '../../../shared/processObservations';
+import { logger } from '../../logger';
 import { ObservationRecorder } from './recorder';
 type Row = Record<string, unknown>;
 const str = (v: unknown): string | null => v === null || v === undefined ? null : String(v);
@@ -21,27 +22,41 @@ export class ObservationReconciler {
             ? this.db.prepare("SELECT rowid AS observation_rowid,* FROM profile_limit_events e WHERE NOT EXISTS (SELECT 1 FROM process_observation_keys k WHERE k.source_key='source:profile_limit_events:'||e.id) ORDER BY at LIMIT 200").all()
             : this.db.prepare(`SELECT rowid AS observation_rowid,* FROM ${source} WHERE rowid>? ORDER BY rowid LIMIT 200`).all(cursor)) as Row[];
         for (const row of rows) {
-          this.fromSource(source, row);
+          this.skipInvalid(this.sourceKey(source, row), () => this.fromSource(source, row));
           this.recorder.store.setCheckpoint(`cursor:${source}`, String(row.observation_rowid));
         }
       })());
     }
     this.recorder.safe(() => this.acceptances());
   }
-  /** A post-commit task/result/assignment notification also finds acceptance updates to older rows. */
+  /** A post-commit task/result/assignment notification also finds acceptance updates to older rows; the caller runs the source pass once after. */
   task(taskId: string): void {
     this.recorder.safe(() => {
       for (const row of this.db.prepare('SELECT r.*, t.created_at AS task_created FROM team_task_results r JOIN team_tasks t ON t.id=r.task_id WHERE r.task_id=? AND r.accepted_at IS NOT NULL ORDER BY r.accepted_at,r.id LIMIT 200').all(taskId) as Row[])
-        this.accept(row);
+        this.skipInvalid(`acceptance:${row.id}`, () => this.accept(row));
     });
-    this.run();
+  }
+  /** A row whose fact fails validation would roll its batch back on every pass; reserve its key and move on. */
+  private skipInvalid(sourceKey: string, work: () => void): void {
+    try {
+      work();
+    }
+    catch (error) {
+      if (!(error instanceof InvalidObservationError))
+        throw error;
+      this.db.prepare('INSERT OR IGNORE INTO process_observation_keys VALUES (?, ?)').run(sourceKey, OBSERVATION_VERSION);
+      logger.warn('process_observation_source_row_skipped', { sourceKey, error: error.message });
+    }
+  }
+  private sourceKey(source: string, row: Row): string {
+    return source === 'chat_turn_usage' ? `usage:${row.session_id}:${row.turn_id}` : `source:${source}:${row.id ?? (source === 'team_message_events' ? `${row.message_id}:${row.seq}` : row.observation_rowid)}`;
   }
   private fromSource(source: string, row: Row): void {
     const identity = this.identity(row);
     const write = (kind: ObservationKind, at: unknown, data: Measurement, extra: ObservationIdentity = {}) => {
       const observedAt = time(at);
       if (observedAt)
-        this.recorder.store.record({ ...identity, ...extra, sourceKey: source === 'chat_turn_usage' ? `usage:${row.session_id}:${row.turn_id}` : `source:${source}:${row.id ?? (source === 'team_message_events' ? `${row.message_id}:${row.seq}` : row.observation_rowid)}`, kind, observedAt, data });
+        this.recorder.store.record({ ...identity, ...extra, sourceKey: this.sourceKey(source, row), kind, observedAt, data });
     };
     switch (source) {
       case 'team_tasks': {
@@ -108,7 +123,7 @@ export class ObservationReconciler {
     const rows = this.db.prepare("SELECT r.*,t.created_at AS task_created FROM team_task_results r JOIN team_tasks t ON t.id=r.task_id WHERE r.accepted_at IS NOT NULL AND NOT EXISTS (SELECT 1 FROM process_observation_keys k WHERE k.source_key='acceptance:'||r.id) ORDER BY r.accepted_at,r.id LIMIT 200").all() as Row[];
     this.db.transaction(() => {
       for (const row of rows)
-        this.accept(row);
+        this.skipInvalid(`acceptance:${row.id}`, () => this.accept(row));
     })();
   }
 }
