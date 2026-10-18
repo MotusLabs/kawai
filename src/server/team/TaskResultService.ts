@@ -238,7 +238,7 @@ export class TaskResultService {
         // The standing recipient is exposed (session-targeted-task-handoffs
         // D3): kind, id, and — when the request names another recipient — both
         // sides, so a retry can never look like a silent reassignment.
-        const storedTarget = { kind: standing.targetKind as 'group' | 'session', id: standing.targetId }
+        const storedTarget = { kind: standing.targetKind, id: standing.targetId }
         const asked = targetLabel(request.target)
         const mismatch = storedTarget.kind === request.target.kind && storedTarget.id === request.target.id ? '' :
           ` You asked for ${asked}, which differs from the standing ${targetLabel(storedTarget)}: no reassignment occurred — inspect the standing assignment (${standing.id}).`
