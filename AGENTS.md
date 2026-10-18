@@ -141,6 +141,7 @@ Run `bun run lint && bun run typecheck && bun run test` after changes.
 - Fix root causes, not symptoms
 - Simplicity > cleverness (even if it means bigger refactors)
 - Aim for 100% test coverage
+- Recovery matrix (execution-safety-recovery D11/D17, contract E7): `docs/recovery-matrix.md` maps each fault to its mechanism, owning change, contract, and test (`` `file` › `exact title` ``) or `gap — <reason>`; `src/server/__tests__/recoveryMatrix.test.ts` checks every citation under `bun run test`. A change that adds a recovery mechanism (a startup reconciliation, an inspector, a replay key) or an exclusive slot adds its matrix row in the same change. Every exclusive-slot holder kind ships a liveness predicate and clears orphan holders at startup and whenever the slot is found taken — never leases, epochs, or fencing tokens; results keep their revision pin.
 
 ## UI Testing
 

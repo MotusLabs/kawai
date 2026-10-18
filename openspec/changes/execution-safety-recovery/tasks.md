@@ -136,9 +136,9 @@ Group 7's matrix rows for plan execution, integration, supervision, and revision
 
 ## 7. Recovery matrix and late writers
 
-- [ ] 7.1 Write `docs/recovery-matrix.md` (D17) from the spike's Q4 tables, one row per fault, each naming its test or `gap`, including the measurements from 3.4 and 6.3. Verify by a script check that every named test file and test title exists.
-- [ ] 7.2 Write the R19-style integration test `outboundRecovery.test.ts`: a recorded send, a server stop before its outcome, and a restart. The call reads outcome unknown, nothing re-runs, and a resumed session's next push is a new row.
-- [ ] 7.3 Write the late-writer tests (D11). Verify:
+- [x] 7.1 Write `docs/recovery-matrix.md` (D17) from the spike's Q4 tables, one row per fault, each naming its test or `gap`, including the measurements from 3.4 and 6.3. Verify by a script check that every named test file and test title exists.
+- [x] 7.2 Write the R19-style integration test `outboundRecovery.test.ts`: a recorded send, a server stop before its outcome, and a restart. The call reads outcome unknown, nothing re-runs, and a resumed session's next push is a new row.
+- [x] 7.3 Write the late-writer tests (D11). Verify:
   - a superseded agent's result is readable and never changes the current assignment;
   - a stale pin reads needing re-evaluation;
   - an orphan landing-slot holder is cleared at startup (citing plan-execution's test where it exists, else adding it).
@@ -147,4 +147,4 @@ Group 7's matrix rows for plan execution, integration, supervision, and revision
 
 ## 8. Checks
 
-- [ ] 8.1 Run `bun run lint && bun run typecheck && bun run test` and `openspec validate execution-safety-recovery --strict`, and grep the change, docs, and tests for any non-example hostname or address. Verify that all pass and the grep finds nothing.
+- [x] 8.1 Run `bun run lint && bun run typecheck && bun run test` and `openspec validate execution-safety-recovery --strict`, and grep the change, docs, and tests for any non-example hostname or address. Verify that all pass and the grep finds nothing.
