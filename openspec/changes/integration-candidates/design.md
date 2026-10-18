@@ -25,6 +25,13 @@ What this change builds on:
 
   Two more are plan-execution's own assumptions, inherited unchanged: `gh pr merge --match-head-commit` merges only the named head, and the update-branch API's `expected_head_sha` refuses a head that moved.
 
+**Names reconciled with the merged `plan-execution` (task 1.1).** These names differ from the merged code, and this design uses the merged ones:
+- The effect methods live in `ExecutionEffectStore` (`executionEffectStore.ts`), the base class of `ExecutionStore`. `EffectQueue` (D3) is the runner-facing subset of that class: `dueEffects`, `markEffectRunning`, `setEffectOutcome`, `scheduleEffectRetry`, and `effect`. `EffectRunnerDeps.store` becomes `queue: EffectQueue`.
+- The clean-merge check (X4) is inline in `applyLandingOutcome`. It moves unchanged into the named function `cleanMergeCheck` in `src/server/plans/landing/cleanMerge.ts`, and both mechanisms call it.
+- The slot's holder-kind extension point is `ExecutionStore.registerHolderKind(kind, check)`.
+- Effect kinds are the `EffectKind` union in `src/shared/planExecution.ts`. Stop reasons are `StopReason` and `STOP_REASONS` there, with labels in `STOP_REASON_LABELS`.
+- Start's preconditions read `StartCheckContext`. The two appended entries add the pre-read fields `runningPromotion` and `offBaseLandings`.
+
 ## Goals / Non-Goals
 
 **Goals:**

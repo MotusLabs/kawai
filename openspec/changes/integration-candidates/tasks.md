@@ -4,9 +4,9 @@ Implement after `plan-execution` has landed on master, together with what it bui
 
 ## 1. Shared model
 
-- [ ] 1.1 Reconcile names with the merged `plan-execution` design and record any renames in this design before coding. Verify by reading its D3, D4, D12–D14, and D20 against D3, D5, D6, D8, and D14 here: `LandingMechanism`, the mechanism registry, `START_PRECONDITIONS`, `plan_landing_slots`, `plan_execution_effects`, `plan_change_landings`, `evaluateCi`, the clean-merge check, the stop-reason union, and `PlanService.recordExecutionEvent`.
-- [ ] 1.2 Create `src/shared/planIntegration.ts` with the candidate kinds and states, the promotion steps and outcomes, and the view types (D3, D13), and a header comment naming them. Verify with a typecheck.
-- [ ] 1.3 Implement `candidateChain`, `referenceCommit`, and `promotedThrough` (D4, D11). Verify with unit tests:
+- [x] 1.1 Reconcile names with the merged `plan-execution` design and record any renames in this design before coding. Verify by reading its D3, D4, D12–D14, and D20 against D3, D5, D6, D8, and D14 here: `LandingMechanism`, the mechanism registry, `START_PRECONDITIONS`, `plan_landing_slots`, `plan_execution_effects`, `plan_change_landings`, `evaluateCi`, the clean-merge check, the stop-reason union, and `PlanService.recordExecutionEvent`.
+- [x] 1.2 Create `src/shared/planIntegration.ts` with the candidate kinds and states, the promotion steps and outcomes, and the view types (D3, D13), and a header comment naming them. Verify with a typecheck.
+- [x] 1.3 Implement `candidateChain`, `referenceCommit`, and `promotedThrough` (D4, D11). Verify with unit tests:
   - the chain is newest first, and a failed candidate stays beside the one that replaced it;
   - the reference is the last landed candidate, or the creation commit when the branch was created after it or nothing has landed;
   - a superseded promotion candidate is not the reference;
