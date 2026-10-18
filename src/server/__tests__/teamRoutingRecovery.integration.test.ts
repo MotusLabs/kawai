@@ -9,6 +9,7 @@ import { SessionMailbox } from '../team/sessionMailbox'
 import { SessionTeams } from '../team/sessionTeams'
 import type { ChatSessionRecord } from '../db'
 import type { ChatSessionDriver } from '../chat/ChatSessionDriver'
+import { NULL_OWNERSHIP } from '../plans/execution/executionOwnership'
 
 async function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-routing-recovery-'))
@@ -27,6 +28,7 @@ async function fixture() {
   const pushed: Array<{ session: string; message: string }> = []
   const errors: unknown[] = []
   const mailbox = new SessionMailbox(db, {
+    ownership: NULL_OWNERSHIP, onTaskResultWrite: () => {},
     teams, records: () => records.values(), getRecord: id => records.get(id),
     getDriver: id => ({ getPendingRequests: () => [], deliver: (peer: { messageId: string }) => {
       pushed.push({ session: id, message: peer.messageId })

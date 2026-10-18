@@ -175,6 +175,18 @@ export interface PlanSummary extends Plan {
   linkedTaskCount: number
 }
 
+/** One execution of a plan, as `plan_get` shows it (plan-execution D18): state, outcome, and per-change state. */
+export interface PlanExecutionSummary {
+  id: string
+  revision: number
+  state: 'running' | 'finished'
+  outcome: 'completed' | 'stopped' | null
+  stopReason: string | null
+  startedAt: string
+  finishedAt: string | null
+  changes: Array<{ change: string; state: string; step: string | null; stopReason: string | null; fixRounds: number }>
+}
+
 export interface PlanDetail {
   plan: PlanSummary
   /** Oldest first. */
@@ -185,6 +197,8 @@ export interface PlanDetail {
   events: PlanEvent[]
   /** Every task linked to the plan, oldest first. */
   linkedTasks: PlanLinkedTask[]
+  /** The plan's executions, newest first (plan-execution D18); absent when the plans module runs without executions. */
+  executions?: import('./planExecution').PlanExecutionView[]
   /** Progress over the current approved revision; null without one. */
   progress: PlanProgress | null
 }

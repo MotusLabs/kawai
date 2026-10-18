@@ -123,14 +123,14 @@ describe('the per-kind inspections (D14 table)', () => {
   test('update-branch: the PR head is read, moved or not — the clean-merge check sorts it later', async () => {
     reads.prView = { '7': { number: 7, url: 'u', state: 'OPEN', headRefOid: 'new-head', mergeCommit: null } }
     await expect(inspect('update-branch', { repo: 'acme/app', pr: 7, head: 'old-head' })).resolves.toEqual({
-      found: 'done', outcome: { head: 'new-head', moved: true, state: 'OPEN' },
+      found: 'done', outcome: { requested: true, head: expect.any(String), newHead: 'new-head', moved: true, state: 'OPEN' },
     })
   })
 
   test('merge: a merge completed before the restart records the merge commit; open runs again; closed stops', async () => {
     reads.prView = { '7': { number: 7, url: 'u', state: 'MERGED', headRefOid: 'h7', mergeCommit: 'm1' } }
     await expect(inspect('merge', { repo: 'acme/app', pr: 7, head: 'h7' })).resolves.toEqual({
-      found: 'done', outcome: { mergeCommit: 'm1', head: 'h7' },
+      found: 'done', outcome: { merged: true, mergeCommit: 'm1', head: 'h7' },
     })
     reads.prView = { '7': { number: 7, url: 'u', state: 'OPEN', headRefOid: 'h7', mergeCommit: null } }
     await expect(inspect('merge', { repo: 'acme/app', pr: 7, head: 'h7' })).resolves.toEqual({ found: 'not-done' })

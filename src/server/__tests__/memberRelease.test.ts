@@ -19,6 +19,7 @@ import { SessionTeams } from '../team/sessionTeams'
 import { clearTeamCache, resolveTeam, type TeamIdentity } from '../team/teamIdentity'
 import type { EnqueueInput } from '../team/mailboxStore'
 import type { SpawnRequest } from '../team/staffing'
+import { NULL_OWNERSHIP } from '../plans/execution/executionOwnership'
 
 function git(args: string[], cwd?: string): string {
   const result = spawnSync('git', args, { cwd, encoding: 'utf8', env: cleanGitEnv() })
@@ -74,6 +75,7 @@ const makeRuntime = () => {
   const runtimeErrors: unknown[] = []
   errors = runtimeErrors
   return new SessionMailbox(db, {
+    ownership: NULL_OWNERSHIP, onTaskResultWrite: () => {},
   teams, records: () => records.values(), getRecord: id => records.get(id),
   getDriver: id => ({
     getPendingRequests: () => (pendingCards.has(id) ? [{ type: 'approval' }] : []),

@@ -99,6 +99,29 @@ export interface LandingRow {
   postCi: CiCheck[] | null
 }
 
+/** One gating round (D9/D10/D11): a result pushed, CI-read, reviewed, and decided. */
+export interface RoundRow {
+  id: string
+  executionId: string
+  change: string
+  attemptId: string
+  number: number
+  resultId: string
+  commitSha: string
+  fixRound: boolean
+  /** The round a clean base merge carried; a carried round keeps its attempt, result, and fix_round (D3). */
+  carriedFrom: string | null
+  pushedAt: string | null
+  ciWindowFrom: string | null
+  ci: CiCheck[] | null
+  rerunAt: string | null
+  reviewAssignmentId: string | null
+  verdictFindingsId: string | null
+  extra: Array<{ name: string; description: string; command: string | null; by: 'ci' | 'reviewer'; outcome: string | null }> | null
+  outcome: 'pass' | 'fail' | 'superseded' | null
+  decidedAt: string | null
+}
+
 /** One recorded external step (D14): written before it runs, inspected before it repeats. */
 export interface EffectRow {
   id: string
@@ -210,6 +233,29 @@ export function mapLanding(row: Row): LandingRow {
 
 /** The slot holder id of a change (D3). */
 export const changeHolderId = (executionId: string, change: string) => `${executionId}:${change}`
+
+export function mapRound(row: Row): RoundRow {
+  return {
+    id: String(row.id),
+    executionId: String(row.execution_id),
+    change: String(row.change),
+    attemptId: String(row.attempt_id),
+    number: Number(row.number),
+    resultId: String(row.result_id),
+    commitSha: String(row.commit_sha),
+    fixRound: Number(row.fix_round) === 1,
+    carriedFrom: text(row.carried_from),
+    pushedAt: text(row.pushed_at),
+    ciWindowFrom: text(row.ci_window_from),
+    ci: json<CiCheck[]>(row.ci_json),
+    rerunAt: text(row.rerun_at),
+    reviewAssignmentId: text(row.review_assignment_id),
+    verdictFindingsId: text(row.verdict_findings_id),
+    extra: json<RoundRow['extra']>(row.extra_json),
+    outcome: text(row.outcome) as RoundRow['outcome'],
+    decidedAt: text(row.decided_at),
+  }
+}
 
 export function mapEffect(row: Row): EffectRow {
   return {

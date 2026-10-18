@@ -12,6 +12,7 @@ import { SessionMailbox } from '../team/sessionMailbox'
 import { SessionTeams } from '../team/sessionTeams'
 import { messageEnvelope, formatEnvelope } from '../team/envelope'
 import { mailboxHandlers } from '../team/mailboxTools'
+import { NULL_OWNERSHIP } from '../plans/execution/executionOwnership'
 
 let dir: string
 let db: Database
@@ -31,6 +32,7 @@ beforeEach(async () => {
     await teams.track(id, dir)
   }
   runtime = new SessionMailbox(db, {
+    ownership: NULL_OWNERSHIP, onTaskResultWrite: () => {},
     teams, records: () => records.values(), getRecord: id => records.get(id), available: record => !record.archivedAt,
     getDriver: id => ({ getPendingRequests: () => [], deliver: () => { records.get(id)!.status = 'working' } }) as unknown as ChatSessionDriver,
     prepare: async () => {}, restore: () => {}, watchReceipt: () => {}, archive: () => ({ ok: true }), hasLiveWorkers: () => false, hasRunningBackgroundTasks: () => false, transcriptFor: () => file, homeDir: dir, onError: error => { throw error },

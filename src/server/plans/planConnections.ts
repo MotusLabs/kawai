@@ -77,7 +77,7 @@ export class PlanConnections {
 
   private async sendDetail(connection: ChatConnection, teamPath: string, subscription: Subscription, planId: string) {
     try {
-      const detail = this.manager.plans.store.detail(planId)
+      const detail = this.manager.plans.detailWithExecutions(planId)
       if (detail && detail.plan.teamId === subscription.teamId) {
         const impact = this.manager.impact.planImpact(subscription.teamId, planId)
         // plan-validation D11: the Validation section rides the detail, built

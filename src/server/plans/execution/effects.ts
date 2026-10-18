@@ -46,10 +46,13 @@ export class EffectRunner {
   constructor(private readonly deps: EffectRunnerDeps) {}
 
   /** Run every due pending effect of the team, one at a time (D14). */
-  async runDue(teamId: string): Promise<void> {
-    for (const effect of this.deps.store.dueEffects(teamId, this.iso())) {
+  /** Run the team's due effects; the count run, so a caller knows whether a step settled. */
+  async runDue(teamId: string): Promise<number> {
+    const due = this.deps.store.dueEffects(teamId, this.iso())
+    for (const effect of due) {
       await this.runOne(effect)
     }
+    return due.length
   }
 
   /** One effect's cycle: running → call → committed outcome. */

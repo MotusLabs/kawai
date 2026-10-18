@@ -18,6 +18,7 @@ import type { ActingParty } from '../../shared/team'
 import { SYSTEM_ACTOR } from '../../shared/team'
 import type { TaskActor, TaskDraft, TaskStatus, TeamTask, TeamTaskDetail, TeamTaskSummary } from '../../shared/teamTasks'
 import { TASK_STATUSES } from '../../shared/teamTasks'
+import { StaleTaskStatus, type PreparedTaskStatus } from './taskStatusPrepared'
 import { loadTeamGroups } from './teamGroups'
 import type { TeamIdentity } from './teamIdentity'
 import type { PublishOutcome, TaskStore } from './taskStore'
@@ -348,30 +349,50 @@ export class TaskService {
    * D5) commits its result mark and journal entry with the `done` status.
    */
   async setStatus(caller: TaskCaller, taskId: string, status: TaskStatus, note?: string, alsoWithin?: () => void): Promise<TeamTask> {
+    // The closed/open boundary is decided on a snapshot; preparing its hook
+    // awaits group definitions, so the status may move meanwhile. A stale
+    // commit prepares again on the fresh status, and refuses after a few.
+    for (let attempt = 0; attempt < STATUS_ATTEMPTS; attempt++) {
+      const prepared = await this.prepareStatus(caller, taskId, status, note)
+      try {
+        return prepared.commit(alsoWithin)
+      } catch (error) {
+        if (!(error instanceof StaleTaskStatus)) throw error
+      }
+    }
+    throw new Error(`Task ${taskId} kept changing status while this update was prepared (now ${this.store.get(taskId)?.status ?? 'gone'}); nothing changed. Try again.`)
+  }
+
+  /**
+   * The two phases of a status change (plan-execution D12). Preparing is
+   * async: it resolves the caller, checks the refusal, and prepares the
+   * transition hook (member release's close hook). `commit` is synchronous,
+   * so a caller can run it inside its own transaction; it throws
+   * StaleTaskStatus, writing nothing, when the task's status moved since
+   * the preparation. `alsoWithin` runs inside the status transaction, after
+   * the hook's closure — acceptance (task-results-handoffs D5) commits its
+   * result mark and journal entry with the `done` status.
+   */
+  async prepareStatus(caller: TaskCaller, taskId: string, status: TaskStatus, note?: string): Promise<PreparedTaskStatus> {
     const { team, actor } = await this.context(caller)
     const task = this.sameTeamTask(team, taskId)
     if (!TASK_STATUSES.includes(status)) throw new Error(`Unknown task status: ${String(status)}`)
     const refusal = statusRefusal(actor, task, status)
     if (refusal) throw new Error(refusal)
-    // The closed/open boundary is decided on a snapshot; preparing its hook
-    // awaits group definitions, so the status may move meanwhile. Re-read
-    // after the await and commit in the same tick only if it held; else
-    // prepare again on the fresh status, and refuse as stale after a few.
-    let current = task
-    for (let attempt = 0; attempt < STATUS_ATTEMPTS; attempt++) {
-      const hook = this.crossesBoundary(current.status, status)
-        ? await this.options.onStatusTransition!(current, status, actor)
-        : undefined
-      const within = hook && alsoWithin ? () => { hook(); alsoWithin() } : hook ?? alsoWithin
-      const fresh = this.store.get(taskId)
-      if (!fresh) throw new Error(`Unknown task: ${taskId}`)
-      if (fresh.status === current.status) {
+    const hook = this.crossesBoundary(task.status, status)
+      ? await this.options.onStatusTransition!(task, status, actor)
+      : undefined
+    const expected = task.status
+    return {
+      commit: (alsoWithin?: () => void): TeamTask => {
+        const fresh = this.store.get(taskId)
+        if (!fresh) throw new Error(`Unknown task: ${taskId}`)
+        if (fresh.status !== expected) throw new StaleTaskStatus(taskId, fresh.status)
+        const within = hook && alsoWithin ? () => { hook(); alsoWithin() } : hook ?? alsoWithin
         if (note?.trim()) this.store.appendJournal(taskId, actor, note.trim())
         return this.store.setStatus(taskId, status, within, actor)!
-      }
-      current = fresh
+      },
     }
-    throw new Error(`Task ${taskId} kept changing status while this update was prepared (now ${current.status}); nothing changed. Try again.`)
   }
 
   /** Whether moving from `from` to `to` crosses the closed/open boundary the transition hook handles. */

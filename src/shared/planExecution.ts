@@ -50,6 +50,8 @@ export type ChangeStep =
   | 'up-to-date'
   | 'updating'
   | 'merging'
+  /** Retry of a failed or closed stage: the stage's instruction is sent again (D12). */
+  | 'redispatch'
 
 /** Why a change stopped (X8, append-only). */
 export type StopReason =
@@ -79,6 +81,11 @@ export interface StopDetail {
   names?: string[]
   taskId?: string
   assignmentId?: string
+  /** A refused step (I2): the stage whose service call refused, and the refusal text. */
+  stage?: string
+  refusal?: string
+  /** The state the change was in when it stopped; Retry resumes it (D12). */
+  resumeState?: ChangeState
 }
 
 export type AttemptKind = 'implement' | 'fix' | 'update'

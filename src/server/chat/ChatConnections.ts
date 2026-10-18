@@ -43,6 +43,7 @@ import { MessageConnections } from '../team/messageConnections'
 import { StrategyConnections } from '../strategy/strategyConnections'
 import { WorkspaceConnections } from '../team/workspaceConnections'
 import { PlanConnections } from '../plans/planConnections'
+import { ExecutionConnections } from '../plans/execution/executionConnections'
 import { OutboundConnections } from '../outbound/outboundConnections'
 import { MetricsConnections } from '../metrics/metricsConnections'
 import type { TeamMessage } from '../../shared/team'
@@ -86,6 +87,7 @@ export class ChatConnections {
   private readonly strategyConnections: StrategyConnections
   private readonly workspaceConnections: WorkspaceConnections
   private readonly planConnections: PlanConnections
+  private readonly executionConnections: ExecutionConnections
   private readonly outboundConnections: OutboundConnections
   private readonly metricsConnections: MetricsConnections
 
@@ -100,6 +102,7 @@ export class ChatConnections {
     this.strategyConnections = new StrategyConnections(manager)
     this.workspaceConnections = new WorkspaceConnections(manager)
     this.planConnections = new PlanConnections(manager)
+    this.executionConnections = new ExecutionConnections(manager)
     this.outboundConnections = new OutboundConnections(manager)
     this.metricsConnections = new MetricsConnections(manager)
   }
@@ -565,6 +568,7 @@ export class ChatConnections {
     }
     if (message.type.startsWith('strategy-')) return this.strategyConnections.handle(connection, message as Extract<ClientMessage, { type: `strategy-${string}` }>)
     if (message.type.startsWith('team-workspace-')) return this.workspaceConnections.handle(connection, message as Extract<ClientMessage, { type: `team-workspace-${string}` }>)
+    if (message.type.startsWith('team-plan-execution-')) return this.executionConnections.handle(connection, message as Extract<ClientMessage, { type: `team-plan-execution-${string}` }>)
     if (message.type.startsWith('team-plan')) return this.planConnections.handle(connection, message as Extract<ClientMessage, { type: `team-plan${string}` }>)
     if (message.type.startsWith('team-audit-')) return this.outboundConnections.handle(connection, message as Extract<ClientMessage, { type: `team-audit-${string}` }>)
     if (message.type.startsWith('process-metrics-')) return this.metricsConnections.handle(connection, message as Extract<ClientMessage, { type: `process-metrics-${string}` }>)

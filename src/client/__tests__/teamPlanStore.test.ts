@@ -48,6 +48,20 @@ test('a reconnect snapshot replaces the list whole and drops waiting requests', 
   expect(view().plans!.map(plan => [plan.id, plan.state])).toEqual([['p2', 'ready']])
 })
 
+test('a reconnect drops pending standings and their preview requests; settled standings stay (N4)', () => {
+  store().open('/repo')
+  store().beginPreview('/repo', 'q1', 'p1:1')
+  store().beginPreview('/repo', 'q2', 'p2:1')
+  store().applyResult({ type: 'team-plan-result', teamPath: '/repo', requestId: 'q2', preview: { failures: [], ready: true } })
+  store().reconnected('/repo')
+  expect(view().pending).toEqual({})
+  expect(view().previewRequests).toEqual({})
+  expect(view().standings).toEqual({ 'p2:1': { state: 'standing', ready: true, failures: [] } })
+  // The lost answer arriving late changes nothing.
+  store().applyResult({ type: 'team-plan-result', teamPath: '/repo', requestId: 'q1', preview: { failures: [], ready: true } })
+  expect(view().standings['p1:1']).toBeUndefined()
+})
+
 test('a dialog keeps its command id while the payload is unchanged and re-mints after a change', () => {
   store().open('/repo')
   store().arm('/repo', 'finish:p1')

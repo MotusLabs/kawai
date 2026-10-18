@@ -16,9 +16,11 @@ import { loadGroupCatalog } from '../../team/groupCatalog'
 import type { PlanRevision } from '../../../shared/plans'
 import type { ImpactGate } from '../../../shared/strategyImpact'
 import { FLOOR_VERSION } from '../../../shared/planExecution'
-import type { ExecutionRow } from './executionRows'
+import type { ChangeRow, ExecutionRow } from './executionRows'
+import { logger } from '../../logger'
+import { StaleTaskStatus, type PreparedTaskStatus } from '../../team/taskStatusPrepared'
 import type { ExecutionStore } from './executionStore'
-import { PlanRefusal, type PlanRefusalReason } from '../planCommands'
+import { PlanRefusal, type PlanCommandOutcome, type PlanRefusalReason } from '../planCommands'
 import type { PlanService } from '../PlanService'
 import type { PlanStore } from '../planStore'
 import type { ValidationStanding } from '../validation/validationStanding'
@@ -57,13 +59,19 @@ export class ExecutionService {
     plans: PlanService
     validation: {
       prepareStanding: (planId: string, revision: number) => Promise<unknown> | null
-      standing: (prepared: unknown) => ValidationStanding | null
+      standing: (prepared: unknown) => unknown
     }
     impact: { gate: (planId: string, revision: number) => ImpactGate | null }
     settings: { planExecution: (teamId: string) => Promise<PlanExecutionSettings> }
     getSession: (id: string) => ChatSessionRecord | null | undefined
     /** The registered landing mechanism modes (D13's registry; the wiring arrives with the landing sections). */
     landingModes: () => ReadonlySet<string>
+    /** The landing probe (D13); tests stub it. */
+    probe?: typeof probeLanding
+    /** Kawai cancels its tasks on Stop through the task service (D12). */
+    tasks?: import('../../team/TaskService').TaskService
+    /** The team's identity for Kawai's own stop (D19's plan-close hook). */
+    identityOf: (teamId: string) => TeamIdentity
     /** Woken after a Start commits (the executor, D5); never on a replay or refusal. */
     wake?: (teamId: string) => void
     homeDir?: string
@@ -146,7 +154,7 @@ export class ExecutionService {
       }
     })
     const landed = new Set(this.deps.store.landings(planId).map(landing => landing.change))
-    const probe = await probeLanding({ main: team.groupsRoot, floorChecks: settings.floorChecks, changes: names, provisioned: landed }, this.deps.ghOptions ?? {})
+    const probe = await (this.deps.probe ?? probeLanding)({ main: team.groupsRoot, floorChecks: settings.floorChecks, changes: names, provisioned: landed }, this.deps.ghOptions ?? {})
     let baseDiffs: Array<{ change: string; files: string[] }> = []
     if (probe.base !== null && probe.repo !== null) {
       const tree = await ghTreeEntries(probe.repo, probe.base.tree, this.deps.ghOptions ?? {})
@@ -167,7 +175,8 @@ export class ExecutionService {
   } {
     const plan = this.deps.plansStore.get(request.planId)!
     const revisionRow = this.deps.plansStore.revision(request.planId, request.revision)
-    const standing = prepared !== null && prepared !== undefined ? this.deps.validation.standing(prepared) : null
+    const standingRaw = prepared !== null && prepared !== undefined ? this.deps.validation.standing(prepared) : null
+    const standing = standingRaw as ValidationStanding | null
     const report = standing !== null && 'report' in standing ? standing.report : null
     const content = revisionRow?.content
     const names = content?.changes.map(entry => entry.change) ?? []
@@ -196,4 +205,171 @@ export class ExecutionService {
     if (!prior) throw new Error(`The recorded start of ${input.commandId} left no execution`)
     return prior
   }
+
+  /**
+   * plan-execution D12: the owner retries a stopped change. One command per
+   * attempt, replayed by its id; the payload compares the execution and the
+   * change. The generation bumps, so every request key and effect key of
+   * the change is new. Retry is refused while the change's task is closed.
+   */
+  async retry(caller: ExecutionCaller, input: { executionId: string; change: string; commandId: string }): Promise<PlanCommandOutcome> {
+    if (caller.kind !== 'human') {
+      return { ok: false, reason: 'forbidden', message: 'Only the human can retry a change, from the Plans view. No agent tool can.' }
+    }
+    const execution = this.deps.store.execution(input.executionId)
+    if (execution === null || execution.teamId !== caller.team.teamId) {
+      return { ok: false, reason: 'not-found', message: `Execution not found in this team: ${input.executionId}` }
+    }
+    const outcome = this.deps.plans.recordExecutionEvent(execution.planId, {
+      kind: 'change-retried', commandId: input.commandId, executionId: input.executionId, change: input.change,
+    }, () => {
+      const row = this.deps.store.change(input.executionId, input.change)
+      if (row === null) throw new PlanRefusal('not-found', `Change not found on the execution: ${input.change}`)
+      if (row.state !== 'stopped') throw new PlanRefusal('state', `The change is ${row.state}, not stopped; nothing to retry.`)
+      if (row.taskId !== null && this.deps.tasks !== undefined) {
+        const task = this.deps.tasks.store.get(row.taskId) ?? null
+        if (task !== null && (task.status === 'done' || task.status === 'cancelled')) {
+          throw new PlanRefusal('state', `The change's task is ${task.status}; reopen it before retrying.`)
+        }
+      }
+      // The state each reason resumes in (D12), with the fix count reset:
+      // round-limit returns to its failed round, whose fix step dispatches
+      // the fix attempt; a failed or closed stage resumes the state it
+      // stopped in and sends its instruction again (`redispatch`) — a
+      // refused step needs no resend, its stage simply runs again; a
+      // name-taken change re-provisions; the rest return to gating.
+      // A landing change resumes at gating: its passed round re-enters the
+      // landing stage, which takes the slot only when it is free.
+      const stored = row.stopDetail?.resumeState ?? 'implementing'
+      const resume = stored === 'landing' ? 'gating' : stored
+      const to: Parameters<ExecutionStore['transition']>[3] = { state: 'gating', step: null, stopReason: null, stopDetail: null, fixRounds: 0 }
+      if (row.stopReason === 'instruction-failed' || row.stopReason === 'task-closed') {
+        to.state = resume
+        if (row.stopDetail?.stage === undefined) to.step = 'redispatch'
+      }
+      if (row.stopReason === 'name-taken') to.state = 'provisioning'
+      const moved = this.deps.store.transition(input.executionId, input.change, row, to)
+      if (moved === null) throw new PlanRefusal('state', 'The change moved while the retry was open; reload and retry again.')
+      const round = this.deps.store.rounds(input.executionId, input.change).at(-1) ?? null
+      if (row.stopReason === 'review-unavailable' && round !== null) this.deps.store.clearRoundReview(round.id)
+      if ((row.stopReason === 'ci-missing' || row.stopReason === 'ci-timeout') && round !== null) {
+        this.deps.store.reopenRoundWindow(round.id, new Date().toISOString())
+      }
+      if (row.stopReason === 'effect-unknown') {
+        const failed = this.deps.store.effectsOf(input.executionId)
+          .find(effect => effect.change === input.change && effect.state === 'failed')
+        if (failed !== undefined) this.deps.store.resetEffect(failed.id)
+      }
+      return { change: input.change }
+    })
+    if (outcome.ok && !outcome.replayed) this.deps.wake?.(caller.team.teamId)
+    return outcome
+  }
+
+  /**
+   * plan-execution D12: the owner stops the execution. Every unlanded change
+   * is cancelled together with its open task (as Kawai), pending effects
+   * cancel, and the execution finishes as stopped — one transaction. The
+   * task cancels are prepared first (the close hook is async) and committed
+   * inside it; a task whose status moved meanwhile rolls the whole stop back
+   * and it is prepared again, up to STOP_ATTEMPTS times, then refused. A
+   * change whose merge effect is running stays `landing`: the executor
+   * settles only that merge (landed if it merged, else cancelled with its
+   * task).
+   */
+  async stop(caller: ExecutionCaller, input: { executionId: string; reason: string; commandId: string }): Promise<PlanCommandOutcome> {
+    if (caller.kind !== 'human') {
+      return { ok: false, reason: 'forbidden', message: 'Only the human can stop an execution, from the Plans view. No agent tool can.' }
+    }
+    return this.stopAs(caller.team, input, 'human')
+  }
+
+  /**
+   * plan-execution D19: the plan-close hook. Kawai — not the human — stops
+   * the plan's running executions with the reason `plan-closed`, under
+   * deterministic command ids so a retried close replays. Awaited by the
+   * close; it never throws: a failed stop is logged.
+   */
+  async stopForPlan(teamId: string, planId: string): Promise<void> {
+    for (const execution of this.deps.store.runningForTeam(teamId)) {
+      if (execution.planId !== planId) continue
+      try {
+        const team = this.deps.identityOf(teamId)
+        const outcome = await this.stopAs(team, {
+          executionId: execution.id, reason: 'plan-closed', commandId: `exec:${execution.id}:stop-for-plan`,
+        }, 'system')
+        if (!outcome.ok) logger.warn('plan_execution_stop_for_plan_failed', { teamId, planId, executionId: execution.id, error: outcome.message })
+      } catch (error) {
+        logger.error('plan_execution_stop_for_plan_failed', { teamId, planId, executionId: execution.id, error: String(error) })
+      }
+    }
+  }
+
+  private async stopAs(team: TeamIdentity, input: { executionId: string; reason: string; commandId: string }, actor: 'human' | 'system'): Promise<PlanCommandOutcome> {
+    const execution = this.deps.store.execution(input.executionId)
+    if (execution === null || execution.teamId !== team.teamId) {
+      return { ok: false, reason: 'not-found', message: `Execution not found in this team: ${input.executionId}` }
+    }
+    const trimmed = input.reason.trim()
+    const system = { kind: 'system' as const, team, executionId: input.executionId }
+    for (let attempt = 1; attempt <= STOP_ATTEMPTS; attempt++) {
+      // Phase 1: prepare the cancel of every open task the stop will close.
+      const prepared = new Map<string, PreparedTaskStatus>()
+      const tasks = this.deps.tasks
+      if (tasks !== undefined && execution.state === 'running') {
+        for (const row of this.stoppable(input.executionId)) {
+          if (row.taskId === null || closedTask(tasks.store.get(row.taskId)?.status)) continue
+          try {
+            prepared.set(row.taskId, await tasks.prepareStatus(system, row.taskId, 'cancelled', `Execution stopped: ${trimmed}`))
+          } catch (error) {
+            return { ok: false, reason: 'state', message: `The task ${row.taskId} of ${row.change} cannot be cancelled: ${String(error instanceof Error ? error.message : error)}` }
+          }
+        }
+      }
+      // Phase 2: one transaction — task cancels, change transitions, effect cancels, finish.
+      try {
+        const outcome = this.deps.plans.recordExecutionEvent(execution.planId, {
+          kind: 'execution-stopped', commandId: input.commandId, executionId: input.executionId, reason: trimmed,
+        }, () => {
+          const current = this.deps.store.execution(input.executionId)
+          if (current === null || current.state !== 'running') {
+            throw new PlanRefusal('state', `The execution is ${current?.state ?? 'gone'}; nothing to stop.`)
+          }
+          if (trimmed === '') throw new PlanRefusal('invalid', 'Stopping an execution needs a reason.')
+          this.deps.store.cancelEffects(input.executionId)
+          for (const row of this.stoppable(input.executionId)) {
+            const cancel = () => { this.deps.store.transition(input.executionId, row.change, row, { state: 'cancelled', step: null }) }
+            const status = row.taskId === null || tasks === undefined ? undefined : tasks.store.get(row.taskId)?.status
+            if (row.taskId === null || status === undefined || closedTask(status)) { cancel(); continue }
+            const task = prepared.get(row.taskId)
+            // An open task this attempt did not prepare: it reopened meanwhile.
+            if (task === undefined) throw new StaleTaskStatus(row.taskId, status)
+            task.commit(cancel)
+          }
+          this.deps.store.finishExecution(input.executionId, 'stopped', trimmed)
+          return { executionId: input.executionId }
+        }, actor)
+        if (outcome.ok && !outcome.replayed) this.deps.wake?.(team.teamId)
+        return outcome
+      } catch (error) {
+        if (!(error instanceof StaleTaskStatus)) throw error
+      }
+    }
+    return { ok: false, reason: 'state', message: `The execution's tasks kept changing status while the stop was prepared (${STOP_ATTEMPTS} attempts); nothing changed. Try again.` }
+  }
+
+  /** The changes a stop cancels: unlanded, uncancelled, and not mid-merge. */
+  private stoppable(executionId: string): ChangeRow[] {
+    const effects = this.deps.store.effectsOf(executionId)
+    return this.deps.store.changes(executionId).filter(row => {
+      if (row.state === 'landed' || row.state === 'cancelled') return false
+      return !(row.state === 'landing' && effects.some(effect => effect.change === row.change && effect.kind === 'merge' && effect.state === 'running'))
+    })
+  }
+}
+
+const STOP_ATTEMPTS = 3
+
+function closedTask(status: string | undefined): boolean {
+  return status === 'done' || status === 'cancelled'
 }
