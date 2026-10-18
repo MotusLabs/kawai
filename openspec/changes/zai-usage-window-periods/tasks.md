@@ -2,7 +2,7 @@
 
 ## 1. Provider row periods
 
-- [ ] 1.1 Add the pure `providerRowPeriodMs(unit, number, resetsAtMs)` to `src/server/chat/usageWindowPeriods.ts` (design D1–D3: unit 3 = hours, 5 = calendar months back from the reset in UTC with the day clamped; anything else, a non-positive or non-integer count, or a missing reset → undefined) and update the file's header comment; verify with new cases in `src/server/__tests__/usageWindowPeriods.test.ts` (create it if absent): 5 hours, 1 month (Nov 3 → Oct 3), 31 Mar → Feb 28 and Feb 29 in a leap year, 2 months, unknown unit, `number` 0 / -1 / 1.5 / string, missing reset.
+- [x] 1.1 Add the pure `providerRowPeriodMs(unit, number, resetsAtMs)` to `src/server/chat/usageWindowPeriods.ts` (design D1–D3: unit 3 = hours, 5 = calendar months back from the reset in UTC with the day clamped; anything else, a non-positive or non-integer count, or a missing reset → undefined) and update the file's header comment; verify with new cases in `src/server/__tests__/usageWindowPeriods.test.ts` (create it if absent): 5 hours, 1 month (Nov 3 → Oct 3), 31 Mar → Feb 28 and Feb 29 in a leap year, 2 months, unknown unit, `number` 0 / -1 / 1.5 / string, missing reset.
 
 ## 2. Parser and labels
 

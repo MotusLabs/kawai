@@ -95,3 +95,12 @@ export function providerRowPeriodMs(
   if (unitName === 'month') return resetsAtMs - addUtcMonths(resetsAtMs, -count)
   return undefined
 }
+
+/**
+ * Length word of an observed provider-row unit code ('hour' | 'month'), else
+ * undefined — the same table providerRowPeriodMs reads, so a row's label and
+ * its period can never disagree about what its unit means.
+ */
+export function providerRowUnitWord(unit: unknown): 'hour' | 'month' | undefined {
+  return typeof unit === 'number' ? PROVIDER_ROW_UNITS[unit] : undefined
+}

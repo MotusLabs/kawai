@@ -7,7 +7,9 @@ const SEVEN_DAY_RESET = '2026-10-12T09:00:00.000Z'
 describe('parseZaiQuotaLimit', () => {
   // The 2026-10-12 capture from the operator's own gateway (live, pro plan):
   // two rows, epoch-millisecond resets, per-tool usageDetails the parser must
-  // ignore, and unit/number fields whose semantics stay unknown.
+  // ignore, and the unit/number pair each row states its window length with
+  // (2026-10-18: unit 5 = months, unit 3 = hours).
+  const MONTHLY_RESET = 1793701399997 // 2026-11-03T10:23:19.997Z
   const CAPTURE: ZaiQuotaLimitSlice = {
     code: 200,
     msg: 'Operation successful',
@@ -21,7 +23,7 @@ describe('parseZaiQuotaLimit', () => {
           currentValue: 25,
           remaining: 975,
           percentage: 2,
-          nextResetTime: 1793701399997,
+          nextResetTime: MONTHLY_RESET,
           usageDetails: [{ modelCode: 'search-prime', usage: 25 }],
         },
         { type: 'TOKENS_LIMIT', unit: 3, number: 5, percentage: 30, nextResetTime: 1791845403778 },
@@ -31,21 +33,24 @@ describe('parseZaiQuotaLimit', () => {
     success: true,
   } as unknown as ZaiQuotaLimitSlice
 
-  test('the capture yields one meter per row, labeled by kind, resets from epoch-ms', () => {
+  test('the capture maps each row to a labeled meter with its own period', () => {
     expect(parseZaiQuotaLimit(CAPTURE, AT)).toEqual({
       status: 'allowed',
       windows: [
         {
           key: 'zai:time_limit',
-          label: 'Prompts',
+          label: 'Monthly tool calls',
           percentUsed: 2,
-          resetsAt: new Date(1793701399997).toISOString(),
+          resetsAt: new Date(MONTHLY_RESET).toISOString(),
+          // One UTC calendar month back: 3 Oct, same time of day.
+          periodMs: MONTHLY_RESET - Date.UTC(2026, 9, 3, 10, 23, 19, 997),
         },
         {
           key: 'zai:tokens_limit',
-          label: 'Weekly tokens',
+          label: '5-hour tokens',
           percentUsed: 30,
           resetsAt: new Date(1791845403778).toISOString(),
+          periodMs: 5 * 60 * 60 * 1000,
         },
       ],
       receivedAt: AT,
@@ -53,12 +58,13 @@ describe('parseZaiQuotaLimit', () => {
     })
   })
 
-  test('unknown row kinds label as their raw type', () => {
+  test('unknown row kinds label as their raw type and carry no period', () => {
     const payload: ZaiQuotaLimitSlice = {
       success: true,
       data: { limits: [{ type: 'CREDITS_LIMIT', percentage: 12, nextResetTime: 1791845403778 }] },
     }
-    expect(parseZaiQuotaLimit(payload, AT)?.windows).toEqual([
+    const windows = parseZaiQuotaLimit(payload, AT)?.windows ?? []
+    expect(windows).toEqual([
       {
         key: 'zai:credits_limit',
         label: 'CREDITS_LIMIT',
@@ -66,6 +72,9 @@ describe('parseZaiQuotaLimit', () => {
         resetsAt: new Date(1791845403778).toISOString(),
       },
     ])
+    for (const window of windows) {
+      expect('periodMs' in window).toBe(false)
+    }
   })
 
   test('a row without a usable percentage drops; the rest render', () => {
@@ -108,7 +117,7 @@ describe('parseZaiQuotaLimit', () => {
     ])
   })
 
-  test('provider quota rows never carry a period', () => {
+  test('provider rows without a usable length carry no periodMs key', () => {
     const report = parseZaiQuotaLimit(
       {
         success: true,
@@ -123,6 +132,41 @@ describe('parseZaiQuotaLimit', () => {
     )
     expect(report?.windows).toHaveLength(2)
     for (const window of report?.windows ?? []) {
+      expect('periodMs' in window).toBe(false)
+    }
+  })
+
+  test('a lengthless row labels the bare word; an unusable count is never coerced', () => {
+    const payload: ZaiQuotaLimitSlice = {
+      success: true,
+      data: {
+        limits: [
+          // No unit at all, and an unknown unit: bare words, no period.
+          { type: 'TOKENS_LIMIT', percentage: 30, nextResetTime: 1791845403778 },
+          { type: 'TIME_LIMIT', unit: 7, number: 2, percentage: 5, nextResetTime: 1791845403778 },
+          // A string count stays unusable: no length, no period.
+          {
+            type: 'TOKENS_LIMIT',
+            unit: 3,
+            number: '5' as unknown as number,
+            percentage: 5,
+            nextResetTime: 1791845403778,
+          },
+          // A month count above one spells out; the label needs only
+          // unit + number, so it keeps the length even with no reset to
+          // measure a period from.
+          { type: 'TIME_LIMIT', unit: 5, number: 2, percentage: 5 },
+        ],
+      },
+    }
+    const windows = parseZaiQuotaLimit(payload, AT)?.windows ?? []
+    expect(windows.map((window) => window.label)).toEqual([
+      'Tokens',
+      'Tool calls',
+      'Tokens',
+      '2-month tool calls',
+    ])
+    for (const window of windows) {
       expect('periodMs' in window).toBe(false)
     }
   })

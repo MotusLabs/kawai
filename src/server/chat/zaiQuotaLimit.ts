@@ -1,14 +1,17 @@
 // Provider quota replies for the Z.AI coding plan (usage bar, provider
 // pull): the payload the quota endpoint returns, normalized into the same
 // Kawai-owned ChatUsageReport the other parsers produce. Pure like
-// usageLimits.ts — HTTP lives in zaiUsage.ts. The payload's unit/number
-// semantics are undocumented and are not assumed: no row is ever labeled
-// with a Claude-plan window name, and no row carries a period.
+// usageLimits.ts — HTTP lives in zaiUsage.ts. Each usable row states its own
+// window length as unit + number: the observed codes (usageWindowPeriods.ts)
+// give the row its periodMs and a label naming what it counts and its
+// window; anything else labels without a length and carries no period — no
+// marker beats a wrong one.
 import type {
   ChatUsageReport,
   ChatUsageWindow,
 } from '../../shared/chat'
 import { percentValue, toIsoResetsAt } from './usageLimits'
+import { providerRowPeriodMs, providerRowUnitWord } from './usageWindowPeriods'
 
 /** Structural slice of a provider quota-limit reply (Z.AI coding plan, SDK-free). */
 export interface ZaiQuotaLimitSlice {
@@ -25,17 +28,43 @@ export interface ZaiQuotaLimitRowSlice {
   percentage?: number | null
   /** Epoch-milliseconds reset time of the row's window. */
   nextResetTime?: number | string | null
+  /** The row's window length: the unit code (3 = hours, 5 = months, observed). */
+  unit?: number | null
+  /** The row's window length: how many units. */
+  number?: number | null
+}
+
+/** Provider row kinds → the thing the row counts; unknown kinds label as their raw type. */
+const ZAI_ROW_WORDS: Record<string, string> = {
+  time_limit: 'tool calls',
+  tokens_limit: 'tokens',
 }
 
 /**
- * Provider row kinds → display labels; unknown kinds label as their raw type.
- * The payload's unit/number semantics are undocumented and are not assumed:
- * the observed TIME_LIMIT row resets on a multi-week horizon, so no row is
- * ever labeled with a Claude-plan window name.
+ * Length prefix from the row's own unit and count (design D4): hours give
+ * "<n>-hour", months "Monthly" for one and "<n>-month" otherwise; null when
+ * the unit is unknown or the count is not a positive integer. The count is
+ * never coerced: a string stays unusable.
  */
-const ZAI_ROW_LABELS: Record<string, string> = {
-  time_limit: 'Prompts',
-  tokens_limit: 'Weekly tokens',
+function zaiRowLengthPrefix(unit: unknown, count: unknown): string | null {
+  const unitWord = providerRowUnitWord(unit)
+  if (unitWord === undefined) return null
+  if (typeof count !== 'number' || !Number.isInteger(count) || count <= 0) return null
+  return unitWord === 'hour' ? `${count}-hour` : count === 1 ? 'Monthly' : `${count}-month`
+}
+
+/**
+ * The row's label: the counted-thing word prefixed by its stated length
+ * ("5-hour tokens", "Monthly tool calls"), the capitalised word alone
+ * without a usable length ("Tokens", "Tool calls"), or the raw type for an
+ * unknown kind.
+ */
+function zaiRowLabel(kind: string, rawType: string, unit: unknown, count: unknown): string {
+  const word = ZAI_ROW_WORDS[kind]
+  if (word === undefined) return rawType
+  const prefix = zaiRowLengthPrefix(unit, count)
+  if (prefix !== null) return `${prefix} ${word}`
+  return word.charAt(0).toUpperCase() + word.slice(1)
 }
 
 /** ISO reset time from an epoch-milliseconds number, else like toIsoResetsAt. */
@@ -46,15 +75,27 @@ function toIsoResetsAtMs(value: unknown): string | null {
   return toIsoResetsAt(value)
 }
 
+/** Epoch milliseconds of the wire's reset (a number, or an ISO string); undefined when unusable. */
+function resetMsOf(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value.trim() !== '' && !Number.isNaN(Date.parse(value))) {
+    return Date.parse(value)
+  }
+  return undefined
+}
+
 /**
  * Parse a provider quota-limit reply (2026-10-12 capture). The endpoint is
  * undocumented: accept only success === true with a data.limits array and
  * ignore every other field; anything else returns null. Each usable row
  * becomes a window keyed `zai:<type>` so provider kinds never collide with
  * Claude plan kinds (a repeated type gets a #n suffix — every row is its own
- * meter), labeled by the row's own type, percent from percentage (already
- * 0-100), reset from the epoch-millisecond nextResetTime. A row without a
- * usable percentage drops rather than renders wrong. Status is always
+ * meter), labeled by what the row counts and the window it states ("5-hour
+ * tokens", "Monthly tool calls"; "Tokens"/"Tool calls" without a usable
+ * length; the raw type for an unknown kind), percent from percentage (already
+ * 0-100), reset from the epoch-millisecond nextResetTime, and periodMs from
+ * the row's own unit/number when both and the reset are usable. A row without
+ * a usable percentage drops rather than renders wrong. Status is always
  * allowed: the payload carries no severity.
  */
 export function parseZaiQuotaLimit(
@@ -74,12 +115,16 @@ export function parseZaiQuotaLimit(
     const kind = row.type.toLowerCase()
     const count = (seen.get(kind) ?? 0) + 1
     seen.set(kind, count)
-    windows.push({
+    const window: ChatUsageWindow = {
       key: count === 1 ? `zai:${kind}` : `zai:${kind}#${count}`,
-      label: ZAI_ROW_LABELS[kind] ?? row.type,
+      label: zaiRowLabel(kind, row.type, row.unit, row.number),
       percentUsed,
       resetsAt: toIsoResetsAtMs(row.nextResetTime),
-    })
+    }
+    // The key stays unset rather than undefined: the wire field is optional.
+    const periodMs = providerRowPeriodMs(row.unit, row.number, resetMsOf(row.nextResetTime))
+    if (periodMs !== undefined) window.periodMs = periodMs
+    windows.push(window)
   }
   return { status: 'allowed', windows, receivedAt, source: 'provider' }
 }
