@@ -16,10 +16,10 @@
 
 ## 2. Provider-neutral driver contract (no behavior change)
 
-- [ ] 2.1 Add `src/server/chat/provider/driver.ts` with `ChatAgentDriver` and `ChatDriverCallbacks` (design D1), including the background-task methods the manager calls (`getBackgroundTaskRecords`, `getTaskOutput`, `stopTask`). Make `ChatSessionDriver` implement it. Verify `bun run typecheck` passes and the existing driver tests pass unmodified.
-- [ ] 2.2 Make `TurnQueue` generic, and type `team/sessionMailbox.ts` `getDriver` and `ChatSessionManager`'s driver map as `ChatAgentDriver`. Move the Claude-only extras behind optional capability methods. Verify the existing mailbox, manager, and chat tests pass unmodified, the background-task roster, `chat-task-output`, and `chat-task-stop` tests included.
-- [ ] 2.3 Add `createChatDriver(record, deps)` choosing the driver by provider, with only Claude wired. Verify with a unit test that a `claude` record builds a `ChatSessionDriver` and an unknown provider throws.
-- [ ] 2.4 Extract `teamToolTable(mailbox, sessionId, services)` from `team/mailboxTools.ts` and rebuild `createMailboxServer` on it. Build on master after `task-results-handoffs` (PR #136) merges, so its result, handoff, and findings tools are in the table. Verify the existing team-tool tests pass, and a new test shows the table and the MCP server expose the same tool names.
+- [x] 2.1 Add `src/server/chat/provider/driver.ts` with `ChatAgentDriver` and `ChatDriverCallbacks` (design D1), including the background-task methods the manager calls (`getBackgroundTaskRecords`, `getTaskOutput`, `stopTask`). Make `ChatSessionDriver` implement it. Verify `bun run typecheck` passes and the existing driver tests pass unmodified.
+- [x] 2.2 Make `TurnQueue` generic, and type `team/sessionMailbox.ts` `getDriver` and `ChatSessionManager`'s driver map as `ChatAgentDriver`. Move the Claude-only extras behind optional capability methods. Verify the existing mailbox, manager, and chat tests pass unmodified, the background-task roster, `chat-task-output`, and `chat-task-stop` tests included.
+- [x] 2.3 Add `createChatDriver(record, deps)` choosing the driver by provider, with only Claude wired. Verify with a unit test that a `claude` record builds a `ChatSessionDriver` and an unknown provider throws.
+- [x] 2.4 Extract `teamToolTable(mailbox, sessionId, services)` from `team/mailboxTools.ts` and rebuild `createMailboxServer` on it. Build on master after `task-results-handoffs` (PR #136) merges, so its result, handoff, and findings tools are in the table. Verify the existing team-tool tests pass, and a new test shows the table and the MCP server expose the same tool names.
 
 ## 3. Profiles and persistence
 
