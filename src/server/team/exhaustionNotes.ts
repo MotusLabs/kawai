@@ -94,9 +94,18 @@ export class ExhaustionNotes {
         recipient?.sessionId ?? null, new Date().toISOString()).changes === 1
     if (!inserted || !task || !recipient) return null
     const head = await (this.options.head ?? gitHead)(record.projectPath).catch(() => null)
+    // The recipient may have been killed, archived, or flagged during the
+    // HEAD read: a note to it would never deliver, so the episode is left
+    // with the human instead (its attention item needs you).
+    const current = this.eligible(recipient.sessionId)
+    if (!current) {
+      this.db.prepare('UPDATE team_exhaustion_episodes SET recipient_session = NULL WHERE session_id = ? AND flagged_at = ?')
+        .run(outcome.sessionId, flag.at)
+      return null
+    }
     const note = this.options.store.enqueue({
-      teamId, toKind: 'session', toId: recipient.sessionId, fromSession: recipient.sessionId,
-      fromGroup: recipient.groupId ?? null, originPath: recipient.projectPath, tags: [CONTEXT_EXHAUSTED_TAG],
+      teamId, toKind: 'session', toId: current.sessionId, fromSession: current.sessionId,
+      fromGroup: current.groupId ?? null, originPath: current.projectPath, tags: [CONTEXT_EXHAUSTED_TAG],
       taskId: task.id,
       body: this.body(record, flag, task, outcome, head),
     })
@@ -118,7 +127,12 @@ export class ExhaustionNotes {
     const assignment = (dropped ? assignments.find(row => row.messageId === dropped.id) : undefined) ?? outstandingOf(assignments)
     const party = assignment ? assignment.createdBy : creator
     if (party.kind !== 'agent' || !party.sessionId || party.sessionId === flaggedId) return null
-    const record = this.options.getRecord(party.sessionId)
+    return this.eligible(party.sessionId)
+  }
+
+  /** The session's record when it can take the note: live, not archived, not flagged. */
+  private eligible(sessionId: string): ChatSessionRecord | null {
+    const record = this.options.getRecord(sessionId)
     if (!record || record.archivedAt != null || record.contextExhausted) return null
     return record
   }

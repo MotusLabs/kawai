@@ -60,6 +60,8 @@ let pendingCards: Set<string>
 type DeliveredEnvelope = { session: string; messageId: string; thread: number; task: string | null }
 let received: DeliveredEnvelope[]
 let spawnCalls: SpawnRequest[]
+/** Runs inside the decision note's HEAD read, before the HEAD resolves (the race the recheck guards). */
+let duringHead: (() => void) | null
 /** Errors of the current runtime only: late continuations of a torn-down one must not fail the next test. */
 let errors: unknown[]
 
@@ -103,7 +105,7 @@ const makeRuntime = () => {
   },
   transcriptFor: () => null,
   homeDir: dir,
-  gitHead: async cwd => (cwd === featX ? 'head123' : null),
+  gitHead: async cwd => { duringHead?.(); return cwd === featX ? 'head123' : null },
   usageOf: profileId => (profileId === 'glm'
     ? { status: 'allowed', receivedAt: '2026-10-18T08:00:00Z', windows: [{ key: 'five_hour', label: '5-hour', percentUsed: 91.6, resetsAt: '2026-10-18T10:00:00Z' }] } as never
     : null),
@@ -130,7 +132,7 @@ beforeEach(async () => {
   db = schemaDb(':memory:')
   records = new Map()
   teams = new SessionTeams({ homeDir: dir })
-  archived = []; liveWorkers = new Set(); runningTasks = new Set(); pendingCards = new Set(); received = []; spawnCalls = []
+  archived = []; liveWorkers = new Set(); runningTasks = new Set(); pendingCards = new Set(); received = []; spawnCalls = []; duringHead = null
   runtime = makeRuntime()
   runtime.dispatcher.release()
 })
@@ -336,5 +338,20 @@ describe('the decision note (D6)', () => {
     expect(await runtime.lastNote).toBeNull()
     expect(notes()).toEqual([])
     expect(runtime.exhaustionNotes.episodes(team.teamId)).toMatchObject([{ sessionId: 'dev-1', recipientSession: null, noteId: null }])
+  })
+
+  test.each([
+    ['flagged', () => { records.get('lead')!.contextExhausted = FLAG }],
+    ['archived', () => { records.get('lead')!.archivedAt = 'gone' }],
+    ['killed', () => { records.delete('lead') }],
+  ] as const)('a dispatcher %s while HEAD is read gets no note; the item stays with the human', async (_name, change) => {
+    const { t, go } = await leadDispatch()
+    duringHead = change
+    exhaust('dev-1')
+    expect(await runtime.lastNote).toBeNull()
+    expect(notes()).toEqual([])
+    expect(runtime.exhaustionNotes.episodes(team.teamId)).toMatchObject([
+      { sessionId: 'dev-1', taskId: t.id, droppedId: go.id, recipientSession: null, noteId: null },
+    ])
   })
 })
