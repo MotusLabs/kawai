@@ -4,7 +4,7 @@
 // refused. Snapshots carry the team's routing state (rule load status,
 // decisions); the human reloads routing rules and hands parked work off here.
 import type { ClientMessage } from '../../shared/types'
-import { unknownTeamError } from '../../shared/team'
+import { unknownTeamError, type TeamMessage } from '../../shared/team'
 import type { ChatSessionManager } from '../chat/ChatSessionManager'
 import type { ChatConnection } from '../chat/ChatConnections'
 import type { TeamIdentity } from './teamIdentity'
@@ -118,9 +118,18 @@ export class MailboxConnections {
       const result = store.cancelResult(row.id, { kind: 'human' })
       if (!result.ok) connection.send({ type: 'error', message: cancelRefusalText(result) ?? stale })
     } else if (!store[action](row.id, { kind: 'human' })) {
-      connection.send({ type: 'error', message: action === 'retry' && store.get(row.id)?.reason === 'killed-recipient' ? 'Cannot retry: the recipient session no longer exists' : stale })
+      connection.send({ type: 'error', message: action === 'retry' ? retryRefusalText(store.get(row.id)) ?? stale : stale })
     }
     this.manager.dispatcher.notify()
     this.publish(team.teamId)
   }
+}
+
+/** Why a retry was refused, when the row says so (killed or context-exhausted recipient). */
+function retryRefusalText(row: TeamMessage | null): string | null {
+  if (row?.reason === 'killed-recipient') return 'Cannot retry: the recipient session no longer exists'
+  if (row?.state === 'dead' && row.reason === 'context-exhausted' && row.toKind === 'session') {
+    return 'Cannot retry: the recipient session\'s context is exhausted; run /compact there or send the work to another session'
+  }
+  return null
 }

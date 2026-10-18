@@ -18,10 +18,10 @@ Groups 1–3 depend on nothing else and may land as their own PR. Group 5's usag
 
 ## 3. Mail and routing respect the flag
 
-- [ ] 3.1 Exclude flagged sessions from group-mail eligibility while they still count toward caps, and list them in cap and no-eligible waiting reasons. Verify dispatcher tests: a longest-idle flagged member is skipped, and a `max: 1` group with a flagged member waits with the member named.
-- [ ] 3.2 Refuse direct mail and replies to a flagged session in `TeamMailbox.send`/`reply` and the human composer, before any restore. Verify mailbox tests where an agent reply and a human send are refused naming the flag, and an archived flagged session is not restored.
-- [ ] 3.3 Refuse Retry of a session-addressed `context-exhausted` dead letter while the session is flagged, and let a group-addressed one requeue as today. Verify `retryMessage` tests for both.
-- [ ] 3.4 Add the Mailbox label for `context-exhausted` in `waitingLabels.ts`. Verify the label test.
+- [x] 3.1 Exclude flagged sessions from group-mail eligibility while they still count toward caps, and list them in cap and no-eligible waiting reasons. Verify dispatcher tests: a longest-idle flagged member is skipped, and a `max: 1` group with a flagged member waits with the member named.
+- [x] 3.2 Refuse direct mail and replies to a flagged session in `TeamMailbox.send`/`reply` and the human composer, before any restore. Verify mailbox tests where an agent reply and a human send are refused naming the flag, and an archived flagged session is not restored.
+- [x] 3.3 Refuse Retry of a session-addressed `context-exhausted` dead letter while the session is flagged, and let a group-addressed one requeue as today. Verify `retryMessage` tests for both.
+- [x] 3.4 Add the Mailbox label for `context-exhausted` in `waitingLabels.ts`. Verify the label test.
 
 ## 4. The exhaustion outcome
 

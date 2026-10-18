@@ -9,6 +9,8 @@ export interface RetryHost {
   transition(id: string, from: MessageState[], set: Record<string, string | number | null>, kind: 'retried' | 'dead-lettered', actor: StoreActor): boolean
   /** Whether a session still exists; absent = assume it does. */
   recipientExists?: (id: string) => boolean
+  /** Whether a session is flagged context-exhausted (chat-context-exhaustion D5); absent = never. */
+  recipientFlagged?: (id: string) => boolean
 }
 
 const HUMAN: StoreActor = { kind: 'human' }
@@ -16,7 +18,9 @@ const HUMAN: StoreActor = { kind: 'human' }
 /**
  * Retry a dead letter (queued again, its hop reset so the thread may continue)
  * or an uncertain message (to the same recipient only, as direct mail flagged
- * as a possible duplicate). A killed recipient dead-letters it instead.
+ * as a possible duplicate). A killed recipient dead-letters it instead. A
+ * session-addressed `context-exhausted` dead letter is refused while that
+ * session is still flagged; a group-addressed one requeues to its group.
  */
 export function retryMessage(host: RetryHost, id: string): boolean {
   const message = host.get(id)
@@ -28,6 +32,8 @@ export function retryMessage(host: RetryHost, id: string): boolean {
     }, 'dead-lettered', HUMAN)
     return false
   }
+  if (message?.state === 'dead' && message.reason === 'context-exhausted' && message.toKind === 'session' &&
+    message.toId && host.recipientFlagged?.(message.toId)) return false
   if (message?.state === 'dead') {
     return host.transition(id, ['dead'], { state: 'queued', hop: 1, reason: null }, 'retried', HUMAN)
   }

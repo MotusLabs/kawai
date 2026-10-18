@@ -50,7 +50,10 @@ export class MailboxStore {
   /** Append-only history of every transition (team-message-threads D2). */
   readonly events: MessageEventLog
   private readonly parkedCancel: ParkedCancel
-  constructor(private readonly db: Database, private readonly options: { recipientExists?: (id: string) => boolean } = {}) {
+  constructor(private readonly db: Database, private readonly options: {
+    recipientExists?: (id: string) => boolean
+    recipientFlagged?: (id: string) => boolean
+  } = {}) {
     this.events = new MessageEventLog(db)
     this.parkedCancel = new ParkedCancel({
       transaction: run => db.transaction(run)(),
@@ -315,6 +318,7 @@ export class MailboxStore {
     return retryMessage({
       get: key => this.get(key), transition: (...args) => this.transition(...args),
       ...(this.options.recipientExists ? { recipientExists: this.options.recipientExists } : {}),
+      ...(this.options.recipientFlagged ? { recipientFlagged: this.options.recipientFlagged } : {}),
     }, id)
   }
 

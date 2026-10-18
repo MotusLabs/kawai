@@ -105,7 +105,10 @@ export class SessionMailbox {
     onRouteDecision?: (entry: RouteDecisionLogEntry) => void
     onError: (error: unknown) => void
   }) {
-    const store = new MailboxStore(db, { recipientExists: id => !!options.getRecord(id) })
+    const store = new MailboxStore(db, {
+      recipientExists: id => !!options.getRecord(id),
+      recipientFlagged: id => Boolean(options.getRecord(id)?.contextExhausted),
+    })
     this.limits = new LimitEventStore(db)
     this.rules = new RuleRegistry({
       ...(options.homeDir ? { homeDir: options.homeDir } : {}),
@@ -281,6 +284,7 @@ export class SessionMailbox {
       blockedBy: this.options.startBlocker?.(record) ?? null,
       worktree: worktreeRootOf(record.projectPath),
       parked: this.mailbox.store.parkedBy(id).length > 0,
+      contextExhausted: Boolean(record.contextExhausted),
       profileId: record.claudeProfileId ?? 'default',
       cooldownUntil: this.limits.cooldownUntil(record.claudeProfileId ?? 'default'),
     }

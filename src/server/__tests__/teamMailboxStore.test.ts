@@ -194,6 +194,26 @@ test('retry to a killed direct or uncertain recipient cannot leave a queue row',
     }
   } finally { db.close() }
 })
+test('a context-exhausted dead letter: a session-addressed retry is refused while flagged, a group one requeues', () => {
+  const db = schemaDb(':memory:')
+  let flagged = true
+  const store = new MailboxStore(db, { recipientFlagged: id => flagged && id === 'dead-dev' })
+  try {
+    const base = { teamId: TEAM, fromSession: 'lead', fromGroup: null, originPath: '/repo', body: 'Go' }
+    const direct = store.enqueue({ ...base, toKind: 'session', toId: 'dead-dev' })
+    const group = store.enqueue({ ...base, toKind: 'group', toId: 'devs' })
+    store.deadLetter(direct.id, 'context-exhausted')
+    store.deadLetter(group.id, 'context-exhausted')
+    expect(store.retry(direct.id)).toBe(false)
+    expect(store.get(direct.id)).toMatchObject({ state: 'dead', reason: 'context-exhausted' })
+    expect(store.retry(group.id)).toBe(true)
+    expect(store.get(group.id)).toMatchObject({ state: 'queued', toKind: 'group', toId: 'devs' })
+    // Once the flag clears (a /compact), the session-addressed retry goes through.
+    flagged = false
+    expect(store.retry(direct.id)).toBe(true)
+    expect(store.get(direct.id)).toMatchObject({ state: 'queued', toId: 'dead-dev' })
+  } finally { db.close() }
+})
 test('thread history includes confirmed delivery only, excluding queued, cancelled and dead siblings', () => {
   const db = schemaDb(':memory:'); const store = new MailboxStore(db)
   const base = { teamId: TEAM, toKind: 'group' as const, toId: 'devs', fromSession: 'lead', fromGroup: null, originPath: '/repo', body: 'Confirmed' }
