@@ -65,7 +65,8 @@ export class ChatConnections {
   private readonly contextBatches = new Map<ChatConnection, Map<string, ChatContextUsage | null>>()
   /** Latest reported model per connection and session (chat-session-model D3). */
   private readonly modelBatches = new Map<ChatConnection, Map<string, string>>()
-  /** Latest usage report per connection and profile, sent by the next flush. */
+  /** Latest usage report per connection and session (the provider's report,
+   * keyed by session so the flush can name each session's own profile id). */
   private readonly usageBatches = new Map<ChatConnection, Map<string, ChatUsageReport | null>>()
   /** Latest worker roster per connection and session (workers design D2). */
   private readonly workerBatches = new Map<ChatConnection, Map<string, ChatWorker[]>>()
@@ -340,17 +341,19 @@ export class ChatConnections {
   }
 
   /**
-   * Queue a profile's latest plan-usage report (usage bar design D4): one
-   * message per connection subscribed to at least one session of that
-   * profile — every session of the profile renders the same data, so the
-   * report is not fanned out per session.
+   * Queue a provider's latest plan-usage report (usage bar design D4,
+   * providers-and-workers 5.1): one message per subscribed session of that
+   * provider, each named by the session's own profile id — sibling models
+   * share the report, but the client looks the meter up per profile.
    */
-  publishUsage(profileId: string, report: ChatUsageReport | null): void {
+  publishUsage(providerId: string, report: ChatUsageReport | null): void {
     for (const [connection, sessions] of this.subscriptions) {
-      if (!this.subscribesProfile(sessions, profileId)) continue
-      const latest = this.usageBatches.get(connection) ?? new Map<string, ChatUsageReport | null>()
-      latest.set(profileId, report)
-      this.usageBatches.set(connection, latest)
+      for (const sessionId of sessions) {
+        if (this.manager.providerIdOf(sessionId) !== providerId) continue
+        const latest = this.usageBatches.get(connection) ?? new Map<string, ChatUsageReport | null>()
+        latest.set(sessionId, report)
+        this.usageBatches.set(connection, latest)
+      }
     }
     this.scheduleFlush()
   }
@@ -380,14 +383,6 @@ export class ChatConnections {
       for (const sessionId of sessions) ids.add(sessionId)
     }
     return ids
-  }
-
-  /** True when one of the subscribed sessions belongs to the profile. */
-  private subscribesProfile(sessions: Set<string>, profileId: string): boolean {
-    for (const sessionId of sessions) {
-      if (this.manager.profileIdOf(sessionId) === profileId) return true
-    }
-    return false
   }
 
   private publishFrame(connection: ChatConnection, sessionId: string, frame: ChatWireFrame): void {
@@ -450,12 +445,16 @@ export class ChatConnections {
     }
     const usageBatches = new Map(this.usageBatches)
     this.usageBatches.clear()
-    for (const [connection, profiles] of usageBatches) {
+    for (const [connection, sessionReports] of usageBatches) {
       const sessions = this.subscriptions.get(connection)
       if (!sessions) continue
-      for (const [profileId, report] of profiles) {
-        if (this.subscribesProfile(sessions, profileId)) {
-          connection.send({ type: 'chat-usage', profileId, report })
+      for (const [sessionId, report] of sessionReports) {
+        if (sessions.has(sessionId)) {
+          connection.send({
+            type: 'chat-usage',
+            profileId: this.manager.profileIdOf(sessionId),
+            report,
+          })
         }
       }
     }

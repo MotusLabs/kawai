@@ -37,8 +37,8 @@
 
 ## 5. Provider usage
 
-- [ ] 5.1 Key `UsageLimitStore` by provider (`usageLimits.ts`) and look up each session's provider through `providerOf` in the snapshot, the push callbacks, and the SDK gap-fill claim, so the claim runs once per provider. Verify `usageLimits.test.ts` and `chatSessionManager.test.ts` cover "Profiles share a provider", "One pull per provider", and the existing per-profile scenarios.
-- [ ] 5.2 Move the Z.AI pull set, host-login suppression, and refresh timers to provider keys. Count live sessions on any of the provider's models, and resolve the refresh target from a live session. Verify `zaiUsage.test.ts` and `chatSessionManager.test.ts` cover "Shared plan pulled once", "A session on another profile keeps it fresh", "Pulls stop without live sessions", and "Shutdown stops refreshes".
+- [x] 5.1 Key `UsageLimitStore` by provider (`usageLimits.ts`) and look up each session's provider through `providerOf` in the snapshot, the push callbacks, and the SDK gap-fill claim, so the claim runs once per provider. Verify `usageLimits.test.ts` and `chatSessionManager.test.ts` cover "Profiles share a provider", "One pull per provider", and the existing per-profile scenarios.
+- [x] 5.2 Move the Z.AI pull set, host-login suppression, and refresh timers to provider keys. Count live sessions on any of the provider's models, and resolve the refresh target from a live session. Verify `zaiUsage.test.ts` and `chatSessionManager.test.ts` cover "Shared plan pulled once", "A session on another profile keeps it fresh", "Pulls stop without live sessions", and "Shutdown stops refreshes".
 - [ ] 5.3 Fan `chat-usage` out per subscribed session of the provider, carrying the session's `profileId` plus additive `providerId` (`ChatConnections.ts`, `src/shared/types.ts`). Verify `chatConnections.test.ts` covers "Live update during a turn" for two models of one provider, and that `chatStore.test.ts` still applies the message by profile id.
 - [ ] 5.4 Update the usage bullet of `AGENTS.md` for per-provider reports and pulls. Verify by review against the `chat-usage-limits` delta.
 

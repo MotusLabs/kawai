@@ -27,8 +27,9 @@ function harness(wireLogs?: ChatWireLogs) {
     isArchived: (_id: string) => false,
     whenRestored: () => Promise.resolve(),
     loadHistory: async (id: string) => { loadHistoryCalls.push(id) },
-    has: (id: string) => id === 'chat-1' || id === 'chat-2' || id === 'chat-3',
-    profileIdOf: (id: string) => (id === 'chat-2' ? 'glm' : 'default'),
+    has: (id: string) => id === 'chat-1' || id === 'chat-2' || id === 'chat-3' || id === 'chat-4',
+    profileIdOf: (id: string) => (id === 'chat-2' || id === 'chat-4' ? 'glm' : 'default'),
+    providerIdOf: (id: string) => (id === 'chat-2' || id === 'chat-4' ? 'zai' : 'default'),
     getSnapshot: (id: string, options: { historyFrom?: string } = {}) => {
       snapshotCalls.push({ id, options })
       return id === 'chat-2' ? null : { ...snapshot, sessionId: id }
@@ -461,7 +462,7 @@ describe('chat WebSocket subscriptions', () => {
     expect(otherMessages).toEqual([])
   })
 
-  test('usage reaches a connection once for two sessions of one profile', async () => {
+  test('a provider report fans out per subscribed session, named by each profile id', async () => {
     const h = harness()
     await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-1' })
     await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-3' })
@@ -474,15 +475,22 @@ describe('chat WebSocket subscriptions', () => {
       receivedAt: '2026-10-07T13:00:00.000Z',
     }
     h.connections.publishUsage('default', report)
-    // Several reports within one tick collapse to the latest value.
+    // Several reports within one tick collapse to the latest value per session.
     h.connections.publishUsage('default', null)
+    // A provider only its own sessions care about fans to those alone.
+    await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-4' })
+    h.connections.publishUsage('zai', report)
     await new Promise(resolve => setTimeout(resolve, 0))
+    // One message per subscribed session, each carrying that session's own
+    // profile id (providers-and-workers 5.1).
     expect(h.messages.filter(message => message.type === 'chat-usage')).toEqual([
       { type: 'chat-usage', profileId: 'default', report: null },
+      { type: 'chat-usage', profileId: 'default', report: null },
+      { type: 'chat-usage', profileId: 'glm', report },
     ])
   })
 
-  test('usage reaches only connections subscribed to the changed profile', async () => {
+  test('usage reaches only connections subscribed to the changed provider', async () => {
     const h = harness()
     const otherMessages: ServerMessage[] = []
     const other = { send: (message: ServerMessage) => otherMessages.push(message) }
@@ -500,7 +508,7 @@ describe('chat WebSocket subscriptions', () => {
     expect(h.messages.at(-1)).toEqual({ type: 'chat-usage', profileId: 'default', report })
     expect(otherMessages).toEqual([])
 
-    // Detaching the only session of the profile drops the queued report.
+    // Detaching the only session of the provider drops the queued report.
     h.connections.publishUsage('default', report)
     await h.connections.handle(h.connection, { type: 'chat-detach', sessionId: 'chat-1' })
     await new Promise(resolve => setTimeout(resolve, 0))
