@@ -2,12 +2,14 @@
 // scripted GitHub (integration-candidates 5.2, 6.1–6.3, D9–D10): Promote
 // after two landings merges with a merge commit (a squash team too) and
 // fast-forwards the integration branch to the verified head; a target that
-// moves goes back to the up-to-date step, and the third move fails; Cancel
+// moves goes back to the up-to-date step, and the third move fails; a
+// rerunnable CI failure gets its one rerun and merges flaky; Cancel
 // during CI closes the pull request and keeps the branch, during a merge it
 // comes too late; a restart after the merge was requested records it
 // without merging again; failures of open-pr and close-pr.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import type { CiCheck } from '../../shared/planExecution'
+import { flakyChecks } from '../../shared/planExecutionGates'
 import { createMatrixBench, createMatrixWorld, git, greenChecks, originHead, pushCommit, removeMatrixWorld, type MatrixBench, type MatrixWorld } from './executionMatrixHarness'
 import { createIntegrationBench, startedIntegration, type IntegrationBench } from './integrationMatrixHarness'
 import { inspectPromotionEffect } from '../plans/landing/integration/promotionEffects'
@@ -192,6 +194,24 @@ describe('promotion steps (6.1, 6.3, D10)', () => {
     expect(merged.prNumber).not.toBe(failed.prNumber)
     expect(JSON.stringify(i.store.promotion(first.id))).toBe(before)
     expect(i.store.promotionsOf(planId).map(row => row.outcome).sort()).toEqual(['failed:ci-failed', 'merged'])
+  })
+
+  test('a rerunnable CI failure asks GitHub for the one rerun, and a passing rerun merges with the name flaky', async () => {
+    const branch = `wave/promo-${n}`
+    const planId = await twoLandings(branch)
+    const [ci, e2e] = greenChecks()
+    const failure: CiCheck = { ...ci!, conclusion: 'failure' }
+    h.gh.defaultChecks = [failure, e2e!]
+    // GitHub reruns the workflow: its new run passes.
+    const rerun = h.roundAdapters.rerun
+    h.roundAdapters.rerun = async (repo, runId) => {
+      h.gh.defaultChecks = [failure, { ...ci!, startedAt: '2099-01-01T00:00:00.000Z', completedAt: '2099-01-01T00:01:00.000Z' }, e2e!]
+      return rerun(repo, runId)
+    }
+    const done = await run((await promote(planId, branch)).id)
+    expect(h.gh.reruns).toEqual([ci!.runId!])
+    expect(done).toMatchObject({ state: 'finished', outcome: 'merged' })
+    expect(flakyChecks(done.ci as CiCheck[])).toEqual(['ci'])
   })
 
   test('a predicted conflict with the target fails as promotion-conflict with the files', async () => {
