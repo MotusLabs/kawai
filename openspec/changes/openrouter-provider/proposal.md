@@ -28,7 +28,7 @@ OpenRouter serves Claude models, and others, through an Anthropic-compatible end
   - Pulls run once per provider, refresh on the existing cadence, and also refresh shortly after a turn that reported a cost.
 - **Out-of-credit is a limit.** In a Claude Code session, any final failure with HTTP status 402 is recorded as a final limit event in a `credit` window, whatever the error class. Codex sessions keep `codex-chat-sessions`' limit rules.
   - It cools the whole provider with no reset time, so limit outcomes never park delivered work on it and take the group's `otherwise` branch (forward or release).
-  - The cooldown lasts the existing one-hour fallback used when no reset is known, and ends earlier once a usage pull shows that remaining credit has grown since the event (a top-up, or a raised cap): that pull's time becomes the event's known reset.
+  - The cooldown lasts the existing one-hour fallback used when no reset is known, and ends earlier once a later usage pull shows more remaining credit than an earlier post-event pull did (a top-up, or a raised cap): that pull's time becomes the event's known reset.
 - **The provider-reported turn cost.** When a turn's stream reported `usage.cost`, `turn_completed` carries the sum, and the transcript shows it as the turn's cost instead of the SDK estimate.
 - **Not changed:**
   - `chat_turn_usage` and process metrics stay tokens-only.

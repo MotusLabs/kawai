@@ -1,14 +1,14 @@
 ## MODIFIED Requirements
 
 ### Requirement: Profiles preserve chat permissions and credential privacy
-Selecting a profile SHALL preserve the chat approval flow for server-configured profiles: a profile SHALL NOT change a session's approval policy, and only a user-chosen approval policy SHALL let tool uses run without approval cards. Profile discovery and session metadata SHALL expose identifiers and labels without credentials. An executable named by a user-level catalog entry is trusted operator configuration whose flags SHALL remain unreachable from the client API.
+Selecting a profile SHALL preserve the chat approval flow for server-configured profiles: a profile SHALL NOT change a session's approval policy, and only a user-chosen policy SHALL let tool uses run without approval cards. Profile discovery and session metadata SHALL expose identifiers and labels without credentials; catalog files SHALL hold none. An executable named by a user-level catalog entry is trusted operator configuration whose flags SHALL remain unreachable from the client API.
 
 #### Scenario: User-chosen policy sources
 - **WHEN** a user-chosen approval policy applies to a session
 - **THEN** the policy is a settings default, a creation-time value, or a later per-session switch
 
 #### Scenario: Authentication without configured credentials
-- **WHEN** authentication is checked against the effective server-side environment
+- **WHEN** authentication is checked against the effective server-side environment for a session whose provider names no `authTokenEnv`
 - **THEN** configured API-key or auth-token credentials or existing CLI login credentials are accepted, and creation is refused without configured authentication
 
 #### Scenario: Wrapper permission flag is not imported
@@ -24,7 +24,7 @@ Selecting a profile SHALL preserve the chat approval flow for server-configured 
 - **THEN** they contain only routing, model, attribution, compaction, and output-reservation configuration and, for trusted providers, the names of server environment variables holding credentials; credential values enter sessions only through the server environment layer
 
 #### Scenario: Gateway token authentication
-- **WHEN** the backend has an ANTHROPIC_AUTH_TOKEN and a user creates a named profile session
+- **WHEN** the backend has an ANTHROPIC_AUTH_TOKEN and a user creates a named profile session whose provider names no `authTokenEnv`
 - **THEN** creation passes the configured-authentication check without requiring an additional API key
 
 #### Scenario: Credentials remain server-side
@@ -34,10 +34,10 @@ Selecting a profile SHALL preserve the chat approval flow for server-configured 
 ## ADDED Requirements
 
 ### Requirement: Trusted providers may name their credential variables
-A provider defined in the shipped default or the user-level `providers.json` SHALL be able to name a server environment variable holding its auth token (`authTokenEnv`) and one holding a balance-reading key (`balanceKeyEnv`). A name SHALL be an environment-variable identifier. A project-level file, or any `profiles.json`, that sets either field SHALL be rejected with an actionable error naming the file, while the rest of the catalog still resolves.
+A provider defined in the shipped default or the user-level `providers.json` SHALL be able to name the server environment variables holding its auth token (`authTokenEnv`) and a balance-reading key (`balanceKeyEnv`). A name that is not an environment-variable identifier SHALL reject its file, naming the provider and the field. A project-level file, or any `profiles.json`, setting either field SHALL be rejected with an actionable error naming the file; the rest of the catalog still resolves.
 
 #### Scenario: User-level provider names its token variable
-- **WHEN** `~/.kawai/providers.json` defines provider `or2` with `"authTokenEnv": "OR2_KEY"` and the server environment holds `OR2_KEY`
+- **WHEN** `~/.kawai/providers.json` defines provider `or2` with base URL `https://gateway.example` and `"authTokenEnv": "OR2_KEY"`, and the server environment holds `OR2_KEY`
 - **THEN** sessions on `or2`'s models authenticate with that value
 
 #### Scenario: Project file names a credential variable
@@ -49,7 +49,7 @@ A provider defined in the shipped default or the user-level `providers.json` SHA
 - **THEN** the file is rejected with an error naming the provider and the field
 
 ### Requirement: A credentialed provider's route comes only from trusted catalogs
-When a provider has a credential variable from a trusted catalog, a project-level file SHALL NOT set its base URL, even to the empty string; such a file SHALL be rejected with an actionable error naming the provider, and the rest of the catalog SHALL still resolve. Its model mappings and labels stay overlayable. It SHALL take a non-empty base URL from a trusted tier, and neither it nor its models SHALL name an `executable`; a file breaking either rule SHALL be rejected naming the provider.
+When a provider has a credential variable from a trusted catalog, a project-level file SHALL NOT set its base URL, even to the empty string; its model mappings and labels stay overlayable. The provider SHALL take a non-empty base URL from a trusted tier, and neither it nor its models SHALL name an `executable`. A file breaking any of these rules SHALL be rejected with an actionable error naming the provider and the rule, while the rest of the catalog still resolves.
 
 #### Scenario: Project overlay redirects the credentialed provider
 - **WHEN** a project's `.kawai/providers.json` sets `ANTHROPIC_BASE_URL` for the shipped `openrouter` provider

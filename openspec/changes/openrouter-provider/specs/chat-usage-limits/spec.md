@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: OpenRouter providers are pulled from the OpenRouter key endpoint
-A session's provider whose base URL host is `openrouter.ai` or a subdomain of it has its own usage endpoint selected: the server SHALL fetch usage from `/api/v1/key` at that origin once for the provider, with the session's effective auth token, instead of the coding-plan quota endpoint. The quota-failure fallback rules SHALL NOT apply to such a provider: no quota request is made for it, and no failure of its own pulls SHALL enable the host-login usage pull.
+A provider whose base URL host is `openrouter.ai` or a subdomain has its own usage endpoint selected: once per provider, when it holds no report and a session's agent starts, the server SHALL fetch `/api/v1/key` at that origin with the session's effective auth token, never the quota endpoint. A failed pull SHALL record no data and leave the session undisturbed. The quota-failure fallback rules SHALL NOT apply: no failure of its own pulls SHALL enable the host-login usage pull.
 
 #### Scenario: OpenRouter session starts
 - **WHEN** an `openrouter-sonnet` session's agent starts and its provider holds no report
@@ -15,11 +15,11 @@ A session's provider whose base URL host is `openrouter.ai` or a subdomain of it
 - **WHEN** the key endpoint answers 404, a server error, or a body without the expected shape, or the request fails in transport
 - **THEN** no provider data is recorded, no quota request is made, and the host-login usage pull stays suppressed for the provider
 ### Requirement: An OpenRouter key's caps and budgets render as meters
-Each budget the key endpoint reports SHALL render as one usage-bar meter with its percent spent, its remaining dollars in the label, and its reset time when reported. A daily budget SHALL carry a 24-hour period and a weekly budget a 7-day period; monthly and non-resetting ones SHALL carry none. Without budgets, a key cap SHALL render as one meter. A key with neither SHALL produce no meter.
+Each budget the key endpoint reports SHALL render as one usage-bar meter labelled by its scope (an unknown scope by its raw value), with its percent spent, its remaining dollars in the label, and its reset time when reported. A daily budget SHALL carry a 24-hour period and a weekly budget a 7-day period; monthly and non-resetting ones SHALL carry none. Without budgets, a key cap SHALL render as one meter. A key with neither SHALL produce no meter.
 
 #### Scenario: Capped key
-- **WHEN** the key endpoint reports a `key_limit` budget of $0.05 with $0.0489 remaining and no reset
-- **THEN** the bar shows one meter "Key cap · $0.05 left" at about 2% used, with no reset time and no time marker
+- **WHEN** the key endpoint reports a `key_limit` budget of $0.05 with $0.04 remaining and no reset
+- **THEN** the bar shows one meter labelled by the `key_limit` scope with $0.04 left, at 20% used, with no reset time and no time marker
 
 #### Scenario: Daily budget
 - **WHEN** the key endpoint reports a daily budget of $5 with $1 spent and a reset at the next UTC midnight
@@ -34,7 +34,7 @@ Each budget the key endpoint reports SHALL render as one usage-bar meter with it
 - **THEN** its meter is labelled with the raw scope value
 
 ### Requirement: Account credits render when a balance key is configured
-When the provider's `balanceKeyEnv` variable is non-empty, the server SHALL also fetch `/api/v1/credits` with that value from the server process, and render one "Credits" meter showing the dollars left of the credits purchased. A refusal of this request SHALL drop only the credits meter, and SHALL be logged without the key.
+When the provider's `balanceKeyEnv` variable is non-empty, the server SHALL also fetch `/api/v1/credits` with that value from the server process, and render one "Credits" meter showing the dollars left of the credits purchased and the share of them used. A refusal of this request SHALL drop only the credits meter, and SHALL be logged naming the provider, without the key.
 
 #### Scenario: Management key configured
 - **WHEN** credits report $40 purchased and $15.57 used
