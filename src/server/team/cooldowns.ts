@@ -26,12 +26,17 @@ export function sessionCooldown(limits: Pick<LimitEventStore, 'cooldownFor'>, ho
   return limits.cooldownFor(profileId, providerOf(profileId, catalogCtx(homeDir, projectPath)))
 }
 
-/** A recipient row's cooldown fields (D8/D15): the effective end plus the deciding provider, when it decided. */
+/** A recipient row's cooldown fields (D8/D15): the effective end plus the deciding provider and its catalog label (O1), when it decided. */
 export function recipientCooldown(limits: Pick<LimitEventStore, 'cooldownFor'>, homeDir: string | undefined,
-  profileId: string, record: Pick<ChatSessionRecord, 'projectPath'>): { cooldownUntil: string | null; cooldownProvider?: string } {
+  profileId: string, record: Pick<ChatSessionRecord, 'projectPath'>): { cooldownUntil: string | null; cooldownProvider?: string; cooldownProviderLabel?: string } {
   const cooldown = sessionCooldown(limits, homeDir, profileId, record.projectPath)
   return {
     cooldownUntil: cooldown.until,
-    ...(cooldown.provider && cooldown.providerId ? { cooldownProvider: cooldown.providerId } : {}),
+    ...(cooldown.provider && cooldown.providerId
+      ? {
+          cooldownProvider: cooldown.providerId,
+          cooldownProviderLabel: providerLabelOf(cooldown.providerId, catalogCtx(homeDir, record.projectPath)) ?? undefined,
+        }
+      : {}),
   }
 }

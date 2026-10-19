@@ -46,6 +46,8 @@ export interface MailRecipient {
   cooldownUntil?: string | null
   /** The provider whose cooldown decided that end (providers-and-workers D15), when it did. */
   cooldownProvider?: string | null
+  /** That provider's catalog label, for the waiting reason (providers-and-workers O1). */
+  cooldownProviderLabel?: string
 }
 
 // The member-state cause reporter lives beside the predicates it sits beneath.
@@ -292,6 +294,7 @@ export class MailDispatcher {
               kind: 'profile-cooling',
               ...(row.cooldownUntil ? { retryAt: row.cooldownUntil } : {}),
               ...(cause.detail ? { detail: cause.detail } : {}),
+              ...(row.cooldownProviderLabel ? { providerLabel: row.cooldownProviderLabel } : {}),
             })
           }
         }
