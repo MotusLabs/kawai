@@ -112,8 +112,9 @@ files are never loaded. It default-exports `{ route, onLimit?, env?, timeoutMs? 
   provider's cooldown reads on each of its models), the group's caps and live
   counts, and per-profile usage (with its source) and limit events. Beside the
   per-profile entries, `ctx.providers` holds one entry per provider of those
-  profiles — its `label`, its profile ids, its usage, its provider-scoped
-  limit events, and its own `cooldownUntil`. It returns `pick`, `hold` (with
+  profiles — its `label`, its profile ids, its usage, its limit events (every
+  row recorded for the provider's profiles, model-scoped windows included),
+  and its own `cooldownUntil`. It returns `pick`, `hold` (with
   an optional finite, non-negative retry delay in milliseconds; zero retries
   next cycle), or `default`. Both `route` and `onLimit` receive the task
   worktree and `forwardedFromProfile` on carried work.

@@ -74,7 +74,7 @@ export interface RouteProviderState {
   profiles: string[]
   /** The provider's report. In memory only: null after a restart until the next update. */
   usage: RouteUsage | null
-  /** Retained provider-scoped limit events (24 hours), oldest first. */
+  /** Limit events recorded for the provider's profiles (24 hours), model-scoped windows included, oldest first. */
   limitEvents: LimitEvent[]
   /** The provider's own cooldown end (ISO), or null when not cooling. */
   cooldownUntil: string | null

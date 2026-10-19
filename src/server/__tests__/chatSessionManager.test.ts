@@ -4899,43 +4899,58 @@ describe('ChatSessionManager provider usage pull', () => {
     expect(fetchCalls).toHaveLength(settled)
   })
 
-  test('the refresh pull carries a live session\'s routing, never an archived sibling\'s', async () => {
-    // Two profiles of zai with distinct catalog routing (providers-and-workers
-    // 5.2): after the glm session archives, every pull must resolve the live
-    // glm-flash session's endpoint. Credentials cannot discriminate here —
-    // catalog files never carry them (they ride the server environment) — so
-    // the pull's base URL is the pin.
+  test('the refresh pull resolves through a live session, never an archived or driverless sibling\'s', async () => {
+    // Invariant (providers-and-workers 5.2): the refresh cadence picks its
+    // pull target from a LIVE session of the provider — a record that is
+    // neither archived nor without a started driver — never from an earlier
+    // sibling's record. Project-level provider overlays make the targets
+    // observable: zai's base URL is overlaid to zai-archived in the dead
+    // siblings' project, while the live session's project keeps the harness
+    // default (zai-live). Catalog files never carry credentials, so the
+    // pull's base URL is the pin.
     const catalog = path.join(tempDir, 'catalog-live-target')
     fs.mkdirSync(path.join(catalog, '.kawai'), { recursive: true })
     fs.writeFileSync(
       path.join(catalog, '.kawai', 'providers.json'),
       JSON.stringify({ zai: { label: 'Z.AI', models: { glm: {}, 'glm-flash': {} } } })
     )
+    const projA = path.join(tempDir, 'projA')
+    fs.mkdirSync(path.join(projA, '.kawai'), { recursive: true })
     fs.writeFileSync(
-      path.join(catalog, '.kawai', 'profiles.json'),
-      JSON.stringify({
-        glm: { label: 'GLM', env: { ANTHROPIC_BASE_URL: 'https://zai-archived.test/api/anthropic' } },
-        'glm-flash': { label: 'GLM Flash', env: { ANTHROPIC_BASE_URL: 'https://zai-live.test/api/anthropic' } },
-      })
+      path.join(projA, '.kawai', 'providers.json'),
+      JSON.stringify({ zai: { env: { ANTHROPIC_BASE_URL: 'https://zai-archived.test/api/anthropic' } } })
     )
     const { manager, fetchCalls } = await createProviderHarness(
       { ANTHROPIC_BASE_URL: 'https://zai-live.test/api/anthropic', ANTHROPIC_AUTH_TOKEN: 'sk-live' },
       [jsonResponse(CAPTURE(2)), jsonResponse(CAPTURE(50)), jsonResponse(CAPTURE(77)), jsonResponse(CAPTURE(88))],
       catalog
     )
-    const first = manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'glm' })
-    if (!first.ok) throw new Error(first.error)
-    const second = manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'glm-flash' })
-    if (!second.ok) throw new Error(second.error)
-    await manager.start(first.session.id)
-    await manager.start(second.session.id)
+    // Insertion order matters: the dead siblings sit before the live one,
+    // so a resolver that ignores liveness picks an archived target.
+    const archived = manager.createSession({ projectPath: projA, claudeProfileId: 'glm' })
+    if (!archived.ok) throw new Error(archived.error)
+    const driverless = manager.createSession({ projectPath: projA, claudeProfileId: 'glm' })
+    if (!driverless.ok) throw new Error(driverless.error)
+    const live = manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'glm-flash' })
+    if (!live.ok) throw new Error(live.error)
+    await manager.start(archived.session.id)
+    await manager.start(live.session.id)
     await flush()
 
-    await manager.archive(first.session.id)
+    await manager.archive(archived.session.id)
+    // Archive deletes the driver today, and the archivedAt filter is what
+    // keeps the pull correct if that ever stops holding: reinstate a stale
+    // driver entry artificially to pin the filter's own semantics. The stub
+    // answers the dispatch pass's eligibility probe so it stays inert.
+    ;(manager as unknown as { drivers: Map<string, unknown> }).drivers.set(archived.session.id, {
+      getPendingRequests: () => [],
+      interrupt() {},
+      deliver() {},
+    })
     // Every pull from here on runs after the archive: all must resolve the
-    // live session's endpoint, not the archived sibling's. (The first
-    // session's own start pull legitimately used its profile's URL, so only
-    // the tail asserts.)
+    // live session's endpoint, not a dead sibling's. (Each started session's
+    // own start pull legitimately used its project's URL, so only the tail
+    // asserts.)
     const afterArchive = fetchCalls.length
     await waitForCondition(() => fetchCalls.length >= afterArchive + 2)
     await flush()

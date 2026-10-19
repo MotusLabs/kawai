@@ -462,7 +462,7 @@ describe('chat WebSocket subscriptions', () => {
     expect(otherMessages).toEqual([])
   })
 
-  test('a provider report fans out per subscribed session, named by each profile id', async () => {
+  test('a provider report fans out per subscribed profile, one message per profile id', async () => {
     const h = harness()
     await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-1' })
     await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-3' })
