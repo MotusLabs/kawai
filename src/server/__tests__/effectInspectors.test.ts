@@ -118,11 +118,14 @@ describe('the per-kind inspections (D14 table)', () => {
     await expect(inspect('open-pr', { repo: 'acme/app', head: 'api', base: 'master' })).resolves.toEqual({ found: 'not-done' })
   })
 
-  test('rerun: an attempt above 1 is done; attempt 1 runs again', async () => {
-    reads.runAttempt = { '11': 2 }
-    await expect(inspect('rerun', { repo: 'acme/app', runId: 11 })).resolves.toEqual({ found: 'done', outcome: { attempt: 2 } })
-    reads.runAttempt = { '11': 1 }
-    await expect(inspect('rerun', { repo: 'acme/app', runId: 11 })).resolves.toEqual({ found: 'not-done' })
+  test('rerun: every run above attempt 1 is done with the adapter\'s { at, runIds }; any run at attempt 1 runs again', async () => {
+    // The adapter's command carries `runIds` (review L3: the inspector once read a `runId` it never got).
+    reads.runAttempt = { '11': 2, '12': 3 }
+    await expect(inspect('rerun', { repo: 'acme/app', runIds: [11, 12] })).resolves.toEqual({ found: 'done', outcome: { at: new Date(CLOCK0).toISOString(), runIds: [11, 12] } })
+    reads.runAttempt = { '11': 2, '12': 1 }
+    await expect(inspect('rerun', { repo: 'acme/app', runIds: [11, 12] })).resolves.toEqual({ found: 'not-done' })
+    reads.runAttempt = {}
+    await expect(inspect('rerun', { repo: 'acme/app', runIds: [11] })).resolves.toMatchObject({ found: 'undecidable' })
   })
 
   test('update-branch: the PR head is read, moved or not — the clean-merge check sorts it later', async () => {

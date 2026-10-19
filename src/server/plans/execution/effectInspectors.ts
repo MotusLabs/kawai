@@ -83,9 +83,15 @@ export async function inspectEffect(effect: EffectRow, reads: InspectorReads): P
         return { found: 'stop', reason: 'pr-closed', detail: { message: `Pull request ${closed.number} was closed without merging.`, names: [String(closed.number)] } }
       }
       case 'rerun': {
-        // The run's attempt number: above 1 once the rerun landed.
-        const attempt = await reads.runAttempt(text('repo'), number('runId'))
-        return attempt > 1 ? { found: 'done', outcome: { attempt } } : { found: 'not-done' }
+        // Each run's attempt number: above 1 once its rerun landed. The
+        // outcome keeps the adapter's shape ({ at, runIds }) so CI's rerun
+        // rule reads it; `at` is when the effect started (L3).
+        const runIds = Array.isArray(command.runIds) ? command.runIds.filter((id): id is number => typeof id === 'number') : []
+        if (runIds.length === 0) throw new Error("the effect's command carries no runIds")
+        for (const runId of runIds) {
+          if ((await reads.runAttempt(text('repo'), runId)) <= 1) return { found: 'not-done' }
+        }
+        return { found: 'done', outcome: { at: effect.startedAt ?? effect.createdAt, runIds } }
       }
       case 'update-branch': {
         // PR head moved: done either way — the clean-merge check (D13) sorts

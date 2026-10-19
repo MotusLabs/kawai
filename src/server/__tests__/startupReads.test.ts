@@ -1,7 +1,8 @@
 // Startup recovery's real reads (startupReads.ts) keep InspectorReads'
 // contract over real git: an answer is a value (null
 // only when absent), and a failed read rejects so the inspection is
-// undecidable (integration-candidates review F2). Never reaches GitHub.
+// undecidable (integration-candidates review F2, L3). gh is a stub on a
+// private PATH; never reaches GitHub.
 import { afterAll, beforeAll, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -72,4 +73,63 @@ test('localBranch and worktree: absent answers null or not present; a repository
   fs.mkdirSync(notRepo, { recursive: true })
   await expect(reads().localBranch(notRepo, 'master')).rejects.toThrow()
   await expect(reads().worktree(notRepo, clone)).rejects.toThrow()
+})
+
+test('worktree: a listed worktree whose HEAD cannot be read rejects instead of reading a null head (L3)', async () => {
+  const wt = path.join(fs.realpathSync(root), 'wt-gone')
+  git(['worktree', 'add', '-q', '-b', 'wt-gone', wt], clone)
+  await expect(reads().worktree(clone, wt)).resolves.toEqual({ present: true, head })
+  fs.rmSync(wt, { recursive: true, force: true })
+  try {
+    await expect(reads().worktree(clone, wt)).rejects.toThrow('could not be read')
+    await expect(inspectEffect(effect('provision', { repo: clone, path: wt, branch: 'wt-gone' }), reads())).resolves.toMatchObject({ found: 'undecidable' })
+  } finally {
+    git(['worktree', 'prune'], clone)
+  }
+})
+
+/** A stub gh on a private PATH: answers from a fixed script, or fails every call while `fail` is set. Never reaches GitHub. */
+function stubGh(): { reads: ReturnType<typeof startupReads>; fail: (on: boolean) => void } {
+  const bin = path.join(root, 'bin')
+  const modeFile = path.join(root, 'gh-mode')
+  fs.mkdirSync(bin, { recursive: true })
+  fs.writeFileSync(path.join(bin, 'gh'), [
+    '#!/bin/sh',
+    'if [ "$(cat "$GH_STUB_MODE")" = fail ]; then echo "HTTP 502: Bad Gateway" >&2; exit 1; fi',
+    'case "$1 $2" in',
+    '  "pr list") echo \'[{"number":7,"url":"https://example.internal/pr/7","state":"OPEN","headRefOid":"h7"}]\' ;;',
+    '  "pr view") echo \'{"number":7,"url":"https://example.internal/pr/7","state":"MERGED","headRefOid":"h7","mergeCommit":{"oid":"m7"}}\' ;;',
+    '  "api repos/acme/app/actions/runs/11") echo \'{"attempt":2}\' ;;',
+    '  *) echo "unexpected gh $*" >&2; exit 1 ;;',
+    'esac',
+  ].join('\n') + '\n', { mode: 0o755 })
+  fs.writeFileSync(modeFile, 'ok')
+  return {
+    reads: startupReads({ env: { PATH: `${bin}:${process.env.PATH ?? ''}`, GH_STUB_MODE: modeFile } }),
+    fail: on => fs.writeFileSync(modeFile, on ? 'fail' : 'ok'),
+  }
+}
+
+test('prList: an answer lists the pull requests; a failed gh call rejects instead of reading none (L3)', async () => {
+  const gh = stubGh()
+  await expect(gh.reads.prList('acme/app', 'api', 'master')).resolves.toEqual([{ number: 7, url: 'https://example.internal/pr/7', state: 'OPEN', headRefOid: 'h7' }])
+  gh.fail(true)
+  await expect(gh.reads.prList('acme/app', 'api', 'master')).rejects.toThrow('could not be listed')
+  await expect(inspectEffect(effect('open-pr', { repo: 'acme/app', head: 'api', base: 'master' }), gh.reads)).resolves.toMatchObject({ found: 'undecidable' })
+})
+
+test('prView: an answer is the pull request; a failed gh call rejects instead of reading an open one (L3)', async () => {
+  const gh = stubGh()
+  await expect(gh.reads.prView('acme/app', 7)).resolves.toMatchObject({ state: 'MERGED', mergeCommit: 'm7' })
+  gh.fail(true)
+  await expect(gh.reads.prView('acme/app', 7)).rejects.toThrow('could not be read')
+  await expect(inspectEffect(effect('merge', { repo: 'acme/app', pr: 7 }), gh.reads)).resolves.toMatchObject({ found: 'undecidable' })
+})
+
+test('runAttempt: an answer is the attempt; a failed gh call rejects instead of reading attempt 1 (L3)', async () => {
+  const gh = stubGh()
+  await expect(gh.reads.runAttempt('acme/app', 11)).resolves.toBe(2)
+  gh.fail(true)
+  await expect(gh.reads.runAttempt('acme/app', 11)).rejects.toThrow('could not be read')
+  await expect(inspectEffect(effect('rerun', { repo: 'acme/app', runIds: [11] }), gh.reads)).resolves.toMatchObject({ found: 'undecidable' })
 })

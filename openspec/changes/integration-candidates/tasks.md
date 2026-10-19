@@ -28,6 +28,8 @@ Implement after `plan-execution` has landed on master, together with what it bui
   - an integration plan starts, recording the integration branch as `base_branch` and the default branch as the target;
   - `landing-mode-supported` passes;
   - `changes-on-base` compares with the integration head, or with the default head while the branch is missing.
+
+  Verified by `src/server/__tests__/integrationStartService.test.ts:147` (a missing branch) and `:160` (an existing branch).
 - [x] 3.3 Implement the `create-integration` effect and its inspector (D4, D6). Verify with tests:
   - the first execution creates the branch at the default head before any `provision` effect runs;
   - a later execution reuses the branch at its head;
