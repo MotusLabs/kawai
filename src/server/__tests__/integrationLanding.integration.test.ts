@@ -24,6 +24,8 @@ import { taskHandlers } from '../team/taskTools'
 import { cleanGitEnv } from '../git/gitCommand'
 import { planInput } from '../../shared/__tests__/planFixtures'
 import { benchGhStub, benchOpenspecStub } from './planExecutionBenchStubs'
+import { PromotionRunner } from '../plans/landing/integration/promotionRunner'
+import { PromotionService } from '../plans/landing/integration/PromotionService'
 
 const FLOOR = { lint: ['ci'], typecheck: ['ci'], 'unit-tests': ['ci'], 'ci-e2e': ['e2e'] }
 const GITHUB_URL = 'https://github.com/acme/app.git'
@@ -296,5 +298,16 @@ describe('the integration-landing manager bench', () => {
     const failure = ((refused as { failures?: Array<{ name: string; message: string }> }).failures ?? []).find(entry => entry.name === 'promotion-idle')
     expect(failure?.message).toContain('promo-p')
     expect(originHead('int-p')).toBeNull()
+    // The composition registered the promotion holder kind (D10 step 3): a running promotion holds the slot, labelled by its branch.
+    expect(executions().takeSlotFor(team.teamId, 'promotion', 'promo-p')).toBe(true)
+    expect(executions().slotHolderLabel(team.teamId)).toBe('promote/int-p')
+    executions().releaseSlotFor(team.teamId, 'promotion', 'promo-p')
   }, 60_000)
+
+  test('the composition wires the promotion runner into the executor and the runtime, and the service onto the manager (I1)', () => {
+    const runtime = (manager as unknown as { executionRuntime: { promotions: unknown; deps: { executor: { deps: { promotions: unknown } } } } }).executionRuntime
+    expect(runtime.promotions).toBeInstanceOf(PromotionRunner)
+    expect(runtime.deps.executor.deps.promotions).toBe(runtime.promotions)
+    expect(manager.promotions).toBeInstanceOf(PromotionService)
+  })
 })

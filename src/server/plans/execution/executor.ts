@@ -75,6 +75,8 @@ export interface ExecutorDeps {
   ghOptions?: GhCommandOptions
   /** Test seam: the clock. */
   now?: () => Date
+  /** The promotion runner (integration-candidates D10): its startup, a pass per tick, and whether its timer stays armed. */
+  promotions?: { startup(): void; pass(teamId: string): Promise<void>; active(teamId: string): boolean }
 }
 
 export class ExecutionExecutor {
@@ -138,6 +140,7 @@ export class ExecutionExecutor {
    * wakes: the runtime wakes the running teams once its wakes are installed.
    */
   async startup(): Promise<void> {
+    this.deps.promotions?.startup()
     await recoverUnknownEffects({ store: this.deps.store, outcomes: this.outcomeDeps(), ...(this.deps.ghOptions ? { ghOptions: this.deps.ghOptions } : {}), ...(this.deps.now ? { now: this.deps.now } : {}) })
   }
 
@@ -148,8 +151,13 @@ export class ExecutionExecutor {
     this.timers.clear()
   }
 
-  /** One tick; exposed for tests, production goes through `wake`. */
+  /** One tick: the executions' passes, then the promotions' (D10); exposed for tests, production goes through `wake`. */
   async tick(teamId: string): Promise<void> {
+    await this.tickExecutions(teamId)
+    if (!this.closed) await this.deps.promotions?.pass(teamId)
+  }
+
+  private async tickExecutions(teamId: string): Promise<void> {
     const team = this.deps.teamOf(teamId)
     if (team === undefined) return
     // A settled step makes the next due: the tick loops until a pass owes
@@ -433,12 +441,12 @@ export class ExecutionExecutor {
     }
   }
 
-  /** While the team runs an execution, the 60-second timer keeps the loop alive (D5). */
+  /** While the team runs an execution or a promotion, the 60-second timer keeps the loop alive (D5). */
   private scheduleTimer(teamId: string): void {
     if (this.closed) return
     clearTimeout(this.timers.get(teamId))
     this.timers.delete(teamId)
-    if (this.deps.store.runningForTeam(teamId).length === 0) return
+    if (this.deps.store.runningForTeam(teamId).length === 0 && this.deps.promotions?.active(teamId) !== true) return
     this.timers.set(teamId, setTimeout(() => {
       this.timers.delete(teamId)
       this.wake(teamId)

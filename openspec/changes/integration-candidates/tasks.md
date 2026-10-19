@@ -65,14 +65,14 @@ Implement after `plan-execution` has landed on master, together with what it bui
 
 ## 5. Promote and Cancel
 
-- [ ] 5.1 Implement `PromotionService.preview` and `promote` with `PROMOTE_PRECONDITIONS` (D9): reads first, then one transaction with replay, preconditions, the insert, and `promotion-started` through the new `PlanService.recordPromotionEvent` (C3, C6). Verify with tests:
+- [x] 5.1 Implement `PromotionService.preview` and `promote` with `PROMOTE_PRECONDITIONS` (D9): reads first, then one transaction with replay, preconditions, the insert, and `promotion-started` through the new `PlanService.recordPromotionEvent` (C3, C6). Verify with tests:
   - each of the eight entries refuses by name and writes nothing, and every failing entry is listed;
   - a replay returns the same promotion, and a different `branch` or `fromSha` under the same id is refused naming the field;
   - two same-key Promotes that both passed the reads leave one promotion, through `UNIQUE (plan_id, command_id)`;
   - an agent caller is refused;
   - the preview lists the standing, the pinned head, the carried candidates, and outside commits;
   - a completed or cancelled plan can be promoted, and its state is unchanged.
-- [ ] 5.2 Implement `cancel` (D9), recording `promotion-cancelled` through `recordPromotionEvent` with the compared payload `promotionId` and `reason`. Verify with tests:
+- [x] 5.2 Implement `cancel` (D9), recording `promotion-cancelled` through `recordPromotionEvent` with the compared payload `promotionId` and `reason`. Verify with tests:
   - while CI runs, the promotion finishes as cancelled with the reason, its pull request is closed, and its branch is kept;
   - during a merge that completes, it finishes as merged, the fast-forward runs, and the note says the cancellation came too late;
   - after the merge is recorded, Cancel is refused naming the merge;
@@ -80,23 +80,23 @@ Implement after `plan-execution` has landed on master, together with what it bui
 
 ## 6. Promotion steps
 
-- [ ] 6.1 Implement the pure `planPromotionSteps` (D10). Verify with unit tests for every transition:
+- [x] 6.1 Implement the pure `planPromotionSteps` (D10). Verify with unit tests for every transition:
   - it waits for the slot, naming the holder;
   - a conflict, or GitHub's 422, fails as `promotion-conflict` with the files;
   - a head failing the clean-merge check fails as `effect-failed`;
   - a target that moved goes back to the up-to-date step, and the third move fails as `target-moved`;
   - CI outcomes map to `ci-failed`, `ci-missing`, and `ci-timeout`, with the flaky rule.
-- [ ] 6.2 Implement the promotion effects and their inspectors: `create-promotion-branch`, `open-pr`, `update-branch`, `rerun`, `merge`, `fast-forward`, and `close-pr`. Verify with adapter tests against a bare remote and a stub `gh`:
+- [x] 6.2 Implement the promotion effects and their inspectors: `create-promotion-branch`, `open-pr`, `update-branch`, `rerun`, `merge`, `fast-forward`, and `close-pr`. Verify with adapter tests against a bare remote and a stub `gh`:
   - a restart after the merge was requested finds it merged and records the promotion without merging again;
   - three failures to reach GitHub while opening the pull request fail as `effect-failed`;
   - a `close-pr` that fails leaves the outcome and notes that the pull request is still open.
-- [ ] 6.3 Implement the merge record and the integration fast-forward (D10 steps 7–10). Verify with tests:
+- [x] 6.3 Implement the merge record and the integration fast-forward (D10 steps 7–10). Verify with tests:
   - a squash team still merges with a merge commit, and the default branch contains each landed candidate's commit;
   - `tree_verified` is 1 normally, and 0 when the target moves between the re-read and the merge;
   - the integration branch moves to P, and the next change is provisioned from P;
   - an integration branch moved during the promotion is left as it is, with the promotion merged and its note saying why;
   - `promotion-finished` is written once under `promo:<id>:finish`.
-- [ ] 6.4 Share the landing slot with `holder_kind = 'promotion'` and the promotion's id as `holder_id`, and give `executionStore`'s orphan clearing the promotion liveness check (D10 step 3). Document promotion in an AGENTS.md bullet. That bullet is the docs for groups 5 and 6. Verify with tests and by reading the bullet against D9–D10. The tests:
+- [x] 6.4 Share the landing slot with `holder_kind = 'promotion'` and the promotion's id as `holder_id`, and give `executionStore`'s orphan clearing the promotion liveness check (D10 step 3). Document promotion in an AGENTS.md bullet. That bullet is the docs for groups 5 and 6. Verify with tests and by reading the bullet against D9–D10. The tests:
   - another plan's direct change waits, showing the promotion;
   - a promotion waits for a change holding the slot, showing that change;
   - a promotion holder whose promotion finished, has a recorded merge, or is missing is cleared and logged at startup and when the slot is found taken, while a running promotion's holder stays.

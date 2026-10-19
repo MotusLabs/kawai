@@ -94,9 +94,34 @@ export class PromotionEffectStore implements EffectQueue<PromotionEffectRow> {
     this.db.prepare("UPDATE plan_promotion_effects SET state = 'pending', tries = tries + 1, next_at = ?, error = ? WHERE id = ?").run(nextAt, error, id)
   }
 
-  /** A failure or a Cancel before the merge cancels the promotion's pending effects (D9, D10). */
+  /** A failure or a Cancel before the merge cancels the promotion's pending and uninspected effects (D9, D10). */
   cancelPromotionEffects(promotionId: string): void {
-    this.db.prepare("UPDATE plan_promotion_effects SET state = 'cancelled', finished_at = ? WHERE promotion_id = ? AND state = 'pending'").run(this.iso(), promotionId)
+    this.db.prepare("UPDATE plan_promotion_effects SET state = 'cancelled', finished_at = ? WHERE promotion_id = ? AND state IN ('pending', 'unknown')").run(this.iso(), promotionId)
+  }
+
+  /** The team's due unknown promotion effects, oldest first: each is inspected before it repeats (D14, review L1). */
+  dueUnknownEffects(teamId: string, now: string): PromotionEffectRow[] {
+    return (this.db.prepare(`SELECT e.* FROM plan_promotion_effects e
+      JOIN plan_promotions p ON p.id = e.promotion_id
+      WHERE p.team_id = ? AND e.state = 'unknown' AND (e.next_at IS NULL OR e.next_at <= ?)
+      ORDER BY e.created_at, e.rowid`).all(teamId, now) as Array<Record<string, unknown>>)
+      .map(mapEffect)
+  }
+
+  /** An inspection that found the work not done puts the effect back to pending, to run again. */
+  resetEffect(id: string): void {
+    this.db.prepare("UPDATE plan_promotion_effects SET state = 'pending', next_at = NULL WHERE id = ?").run(id)
+  }
+
+  /** An undecidable inspection stays `unknown`, one try counted, retrying at `nextAt`. */
+  scheduleInspectionRetry(id: string, nextAt: string, error: string | null): void {
+    this.db.prepare("UPDATE plan_promotion_effects SET state = 'unknown', tries = tries + 1, next_at = ?, error = ? WHERE id = ?").run(nextAt, error, id)
+  }
+
+  /** The effect running now for the promotion, if any (Cancel lets a running merge settle). */
+  runningEffect(promotionId: string): PromotionEffectRow | null {
+    const row = this.db.prepare("SELECT * FROM plan_promotion_effects WHERE promotion_id = ? AND state = 'running' ORDER BY created_at DESC LIMIT 1").get(promotionId) as Record<string, unknown> | null
+    return row ? mapEffect(row) : null
   }
 
   /** Startup recovery: a `running` promotion effect's process is gone, so it becomes `unknown` and is inspected before it repeats. */

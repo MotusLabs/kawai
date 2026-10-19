@@ -130,6 +130,7 @@ export interface PlanDraft {
 export type PlanEventKind =
   | 'created' | 'submitted' | 'approved' | 'withdrawn' | 'draft-discarded' | 'completed' | 'cancelled' | 'reopened'
   | 'execution-started' | 'execution-stopped' | 'change-retried'
+  | 'promotion-started' | 'promotion-cancelled' | 'promotion-finished'
 
 export interface PlanEvent {
   id: string

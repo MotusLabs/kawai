@@ -77,9 +77,9 @@ export const PROMOTION_STEPS: readonly PromotionStep[] = ['branch', 'pull-reques
 
 export type PromotionState = 'running' | 'finished'
 
-/** Why a promotion failed (D10). */
-export type PromotionFailure = 'promotion-conflict' | 'effect-failed' | 'target-moved' | 'ci-failed' | 'ci-missing' | 'ci-timeout'
-export const PROMOTION_FAILURES: readonly PromotionFailure[] = ['promotion-conflict', 'effect-failed', 'target-moved', 'ci-failed', 'ci-missing', 'ci-timeout']
+/** Why a promotion failed (D10, spec "A failed promotion merges nothing"). */
+export type PromotionFailure = 'promotion-conflict' | 'effect-failed' | 'effect-unknown' | 'pr-closed' | 'target-moved' | 'ci-failed' | 'ci-missing' | 'ci-timeout'
+export const PROMOTION_FAILURES: readonly PromotionFailure[] = ['promotion-conflict', 'effect-failed', 'effect-unknown', 'pr-closed', 'target-moved', 'ci-failed', 'ci-missing', 'ci-timeout']
 
 export type PromotionOutcome = 'merged' | 'cancelled' | `failed:${PromotionFailure}`
 

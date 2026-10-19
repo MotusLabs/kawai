@@ -78,7 +78,7 @@ describe('the promotion effect queue', () => {
     expect(calls).toHaveLength(4)
   })
 
-  test('a running effect becomes unknown at startup, and a pending one is cancelled with its promotion', () => {
+  test('a running effect becomes unknown at startup; a finish cancels pending and uninspected effects so nothing repeats after it', () => {
     const running = promotion('plan-1')
     const inFlight = store.insertEffect({ promotionId: running.id, kind: 'merge', effectKey: 'p1:merge', command: {} })
     const waiting = store.insertEffect({ promotionId: running.id, kind: 'fast-forward', effectKey: 'p1:ff', command: {} })
@@ -87,7 +87,8 @@ describe('the promotion effect queue', () => {
     expect(store.effect(inFlight.id)!.state).toBe('unknown')
     store.cancelPromotionEffects(running.id)
     expect(store.effect(waiting.id)!.state).toBe('cancelled')
-    expect(store.effect(inFlight.id)!.state).toBe('unknown')
+    // An uninspected effect would otherwise be reset to pending and run after the finish (L1).
+    expect(store.effect(inFlight.id)!.state).toBe('cancelled')
     expect(store.insertEffect({ promotionId: running.id, kind: 'merge', effectKey: 'p1:merge', command: { again: true } }).id).toBe(inFlight.id)
   })
 })

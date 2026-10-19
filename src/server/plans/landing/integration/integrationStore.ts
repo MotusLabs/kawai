@@ -187,6 +187,33 @@ export class IntegrationStore extends PromotionEffectStore {
     return row ? mapPromotion(row) : null
   }
 
+  /** The team's running promotions, oldest first (the executor's promotion pass). */
+  runningPromotionsForTeam(teamId: string): PromotionRow[] {
+    return (this.db.prepare("SELECT * FROM plan_promotions WHERE team_id = ? AND state = 'running' ORDER BY started_at, rowid").all(teamId) as Array<Record<string, unknown>>).map(mapPromotion)
+  }
+
+  /** Every team with a running promotion, or a finished one whose `close-pr` is still owed (the runtime's boot wake). */
+  promotionTeams(): string[] {
+    return (this.db.prepare(`SELECT DISTINCT p.team_id FROM plan_promotions p WHERE p.state = 'running'
+      OR EXISTS (SELECT 1 FROM plan_promotion_effects e WHERE e.promotion_id = p.id AND e.state IN ('pending', 'unknown', 'running'))`).all() as Array<{ team_id: string }>)
+      .map(row => row.team_id)
+  }
+
+  /** The number the plan's next promotion would take (D9's promotion-name-free reads it). */
+  nextPromotionNumber(planId: string): number {
+    return (this.db.prepare('SELECT COALESCE(MAX(number), 0) + 1 AS n FROM plan_promotions WHERE plan_id = ?').get(planId) as { n: number }).n
+  }
+
+  /** Add one note to a finished promotion's outcome detail (D10: a `close-pr` that failed); the outcome itself never changes. */
+  notePromotion(id: string, key: string, note: string): void {
+    this.atomically(() => {
+      const current = this.promotion(id)
+      if (current === null) return
+      const detail = { ...current.outcomeDetail, [key]: note }
+      this.db.prepare('UPDATE plan_promotions SET outcome_detail_json = ? WHERE id = ?').run(JSON.stringify(detail), id)
+    })
+  }
+
   promotionByCommand(planId: string, commandId: string): PromotionRow | null {
     const row = this.db.prepare('SELECT * FROM plan_promotions WHERE plan_id = ? AND command_id = ?').get(planId, commandId) as Record<string, unknown> | null
     return row ? mapPromotion(row) : null

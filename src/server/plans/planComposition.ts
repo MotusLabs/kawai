@@ -36,6 +36,8 @@ import type { LandingMechanisms } from './landing/landingMechanisms'
 import { directMechanism } from './landing/directMechanism'
 import { IntegrationStore } from './landing/integration/integrationStore'
 import { integrationMechanism } from './landing/integration/integrationMechanism'
+import { composePromotions } from './landing/integration/promotionComposition'
+import type { PromotionService } from './landing/integration/PromotionService'
 import type { MemberRelease } from '../team/memberRelease'
 import type { TaskService } from '../team/TaskService'
 import type { TaskResultService } from '../team/TaskResultService'
@@ -162,6 +164,8 @@ export function composePlanServices(options: PlanServicesOptions): {
   executionStore: ExecutionStore
   /** The execution runtime (boot, wakes, stop); null without team services. */
   runtime: ExecutionRuntime | null
+  /** Promote, Cancel, and the preview (integration-candidates D9). */
+  promotions: PromotionService
 } {
   const adapter = options.adapter ?? new OpenspecAdapter()
   const validationStore = new ValidationStore(options.db)
@@ -249,6 +253,14 @@ export function composePlanServices(options: PlanServicesOptions): {
     ...(options.executionProbe ? { probe: options.executionProbe } : fixture ? { probe: fixtureProbe } : {}),
     ...(options.homeDir ? { homeDir: options.homeDir } : {}),
   })
+  // Promotions (D9, D10): the slot holder kind, the service, and the runner the executor ticks.
+  const promotions = composePromotions({
+    integration: integrationStore, executions: executionStore, plans, plansStore: options.plans,
+    settings: executionSettings(options.caps), identityOf: teamId => identityOrBare(team, teamId),
+    wake: teamId => runtime?.command(teamId),
+    ...(options.executionGhOptions ? { ghOptions: options.executionGhOptions } : {}),
+    ...(options.executionProbe ? { probe: options.executionProbe } : {}),
+  })
   if (team !== undefined) {
     const roundAdaptersUsed = fixture ? fixtureRoundAdapters() : roundAdapters
     const executor = new ExecutionExecutor({
@@ -283,16 +295,19 @@ export function composePlanServices(options: PlanServicesOptions): {
       roundAdapters: roundAdaptersUsed,
       ...(fixture ? { landingAdapters: fixtureLandingAdapters(), tickMs: 1_000 } : {}),
       ...(options.executionGhOptions ? { ghOptions: options.executionGhOptions } : {}),
+      promotions: promotions.runner,
     })
     runtime = new ExecutionRuntime({
       executor, store: executionStore, ownership: core.ownership, wakes: core.wakes,
       taskStore: team.taskStore, mailbox: team.mailbox, records: team.records, teamOf: team.teamOfSession,
       adapters: { fixture, rounds: roundAdaptersUsed },
+      promotionTeams: () => integrationStore.promotionTeams(),
+      promotions: promotions.runner,
     })
   }
   return {
     validation, validationStore, plans, validationDetail: new ValidationDetailCache(validation), adapter, executions, executionStore,
-    runtime,
+    runtime, promotions: promotions.service,
   }
 }
 
