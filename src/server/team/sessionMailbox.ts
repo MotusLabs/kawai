@@ -177,6 +177,8 @@ export class SessionMailbox {
       worktrees: this.tasks.worktrees,
       spawn: request => options.spawn ? options.spawn(request) : Promise.resolve({ ok: false, error: 'Spawning is not available' }),
       ...(options.spawnRetryAfterMs !== undefined ? { retryAfterMs: options.spawnRetryAfterMs } : {}),
+      // The backoff reads the mailbox's clock, so a test can hold it (production: wall clock).
+      ...(options.now ? { now: options.now } : {}),
       // Recorded before the requeue notify publishes (D3), so the failure
       // snapshot already carries the backoff reason with its retry time.
       onSpawnBackoff: (message, retryAt) => {
