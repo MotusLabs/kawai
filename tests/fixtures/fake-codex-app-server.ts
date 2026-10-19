@@ -17,6 +17,13 @@
 // (exit 2), so a replay drift is a test failure, not a silent mismatch.
 import { fileURLToPath } from 'node:url'
 
+// The executable gate's probe (codexExecutable.ts): FAKE_VERSION overrides
+// the baseline the fake reports.
+if (process.argv.includes('--version')) {
+  console.log(`codex-cli ${process.env.FAKE_VERSION ?? '0.163.0'}`)
+  process.exit(0)
+}
+
 if (!process.argv.includes('app-server')) {
   console.error('fake-codex-app-server must be spawned as `<fake> app-server`')
   process.exit(2)

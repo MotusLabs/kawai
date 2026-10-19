@@ -113,7 +113,7 @@ export class CodexSessionDriver implements ChatAgentDriver {
     this.ensureClient()
     const turnId = this.startTurn()
     this.emit({ type: 'peer_message', turnId, ...envelope })
-    this.startCodexTurn(formatEnvelope(envelope))
+    this.startCodexTurn(formatEnvelope(envelope), envelope.messageId)
     this.refreshStatus()
   }
 
@@ -129,6 +129,8 @@ export class CodexSessionDriver implements ChatAgentDriver {
     this.refreshStatus()
     if (!client) return
     if (starting) await starting
+    // Killed or exited meanwhile (archive interrupts, then kills at once).
+    if (this.client !== client) return
     const codexTurnId = this.codexTurnId
     this.codexTurnId = null
     if (!codexTurnId || !this.threadId) return
@@ -281,8 +283,12 @@ export class CodexSessionDriver implements ChatAgentDriver {
     }
   }
 
-  /** Ask the app-server for a turn once the thread is ready. */
-  private startCodexTurn(text: string): void {
+  /**
+   * Ask the app-server for a turn once the thread is ready. Delivered mail
+   * passes its message id as clientUserMessageId (D8, for debugging only:
+   * receipt still comes from the rollout file).
+   */
+  private startCodexTurn(text: string, clientUserMessageId = `kawai-${crypto.randomUUID()}`): void {
     const client = this.client
     if (!client) return
     const effort = codexEffort(this.options.getEffort?.())
@@ -291,7 +297,7 @@ export class CodexSessionDriver implements ChatAgentDriver {
       const result = await client.request('turn/start', {
         threadId: this.threadId,
         input: [{ type: 'text', text, text_elements: [] }],
-        clientUserMessageId: `kawai-${crypto.randomUUID()}`,
+        clientUserMessageId,
         ...(effort ? { effort } : {}),
       }) as { turn?: { id?: unknown } }
       const id = result?.turn?.id

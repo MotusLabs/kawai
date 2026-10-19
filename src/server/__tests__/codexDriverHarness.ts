@@ -42,10 +42,10 @@ export class Script {
     return this
   }
 
-  /** initialize + thread/start (or resume) answered with THREAD_ID. */
-  boot(method: 'thread/start' | 'thread/resume' = 'thread/start', model = 'gpt-test'): this {
+  /** initialize + thread/start (or resume) answered with THREAD_ID at `rollout`. */
+  boot(method: 'thread/start' | 'thread/resume' = 'thread/start', model = 'gpt-test', rollout = ROLLOUT): this {
     return this.request('initialize', { userAgent: 'fake' })
-      .request(method, { thread: { id: THREAD_ID, path: ROLLOUT }, model })
+      .request(method, { thread: { id: THREAD_ID, path: rollout }, model })
   }
 
   /** turn/start answered, then turn/started for `codexTurn`. */
