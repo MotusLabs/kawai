@@ -45,6 +45,7 @@ function seedPlanAsAgent(sessionId: string): string {
     import { composePlanServices } from './src/server/plans/planComposition';
     import { planHandlers } from './src/server/plans/planTools';
     import { validationHandlers } from './src/server/plans/validation/validationTools';
+    import { retryOnSqliteBusy } from './src/server/__tests__/sqliteBusyRetry';
     try {
       const [file, sessionId] = JSON.parse(await Bun.stdin.text());
       const sessions = initDatabase({ path: file });
@@ -69,12 +70,14 @@ function seedPlanAsAgent(sessionId: string): string {
         ],
         roles: [{ group: 'devs', profiles: [] }, { group: 'reviewers', profiles: [] }], reviewGroup: 'reviewers',
       });
-      const created = await tools.plan_create({ title: 'Validated wave', content: content(false) });
+      // Each write re-runs whole on SQLITE_BUSY: the server is a second
+      // writer, and the deferred read→write upgrade bypasses the busy handler.
+      const created = await retryOnSqliteBusy(() => tools.plan_create({ title: 'Validated wave', content: content(false) }));
       const planId = created.plan.id;
-      const submitted = await tools.plan_submit_for_review({ plan_id: planId });
+      const submitted = await retryOnSqliteBusy(() => tools.plan_submit_for_review({ plan_id: planId }));
       if (submitted.ok === false) throw new Error('submit: ' + JSON.stringify(submitted));
-      const asked = await validation.plan_assess({ plan_id: planId, revision: submitted.revision.revision,
-        questions: [{ text: 'Which migration strategy for the schema?', mandatory: true, subject: 'conflict-a' }] });
+      const asked = await retryOnSqliteBusy(() => validation.plan_assess({ plan_id: planId, revision: submitted.revision.revision,
+        questions: [{ text: 'Which migration strategy for the schema?', mandatory: true, subject: 'conflict-a' }] }));
       if (asked.ok === false) throw new Error('assess: ' + JSON.stringify(asked));
       sessions.close();
       console.log('PLANID:' + planId);
@@ -103,6 +106,7 @@ function resubmitOrdered(sessionId: string, planId: string) {
     import { composePlanServices } from './src/server/plans/planComposition';
     import { planHandlers } from './src/server/plans/planTools';
     import { validationHandlers } from './src/server/plans/validation/validationTools';
+    import { retryOnSqliteBusy } from './src/server/__tests__/sqliteBusyRetry';
     try {
       const [file, sessionId, planId] = JSON.parse(await Bun.stdin.text());
       const sessions = initDatabase({ path: file });
@@ -122,13 +126,13 @@ function resubmitOrdered(sessionId: string, planId: string) {
       if (!draft) throw new Error('no draft for ' + sessionId);
       const content = draft.content;
       content.changes = content.changes.map(change => change.change === 'conflict-b' ? { ...change, dependsOn: ['conflict-a'] } : change);
-      await tools.plan_save_draft({ plan_id: planId, content, expected_draft_hash: draft.contentHash });
-      const submitted = await tools.plan_submit_for_review({ plan_id: planId });
+      await retryOnSqliteBusy(() => tools.plan_save_draft({ plan_id: planId, content, expected_draft_hash: draft.contentHash }));
+      const submitted = await retryOnSqliteBusy(() => tools.plan_submit_for_review({ plan_id: planId }));
       if (submitted.ok === false) throw new Error('resubmit: ' + JSON.stringify(submitted));
       // The question still stands on the resubmitted revision (records bind
       // per revision); the agent asks it again.
-      const asked = await validation.plan_assess({ plan_id: planId, revision: submitted.revision.revision,
-        questions: [{ text: 'Which migration strategy for the schema?', mandatory: true, subject: 'conflict-a' }] });
+      const asked = await retryOnSqliteBusy(() => validation.plan_assess({ plan_id: planId, revision: submitted.revision.revision,
+        questions: [{ text: 'Which migration strategy for the schema?', mandatory: true, subject: 'conflict-a' }] }));
       if (asked.ok === false) throw new Error('assess: ' + JSON.stringify(asked));
       sessions.close();
     } catch (error) {

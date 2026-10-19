@@ -50,25 +50,30 @@ function seedImpactPrerequisites(root: string, sessionId: string) {
     import { normalizeStrategyContent } from './src/shared/productStrategy';
     import { resolveTeam } from './src/server/team/teamIdentity';
     import { TeamWorktrees } from './src/server/team/worktreeRoots';
+    import { retryOnSqliteBusy } from './src/server/__tests__/sqliteBusyRetry';
     const [file, root, sessionId] = JSON.parse(await Bun.stdin.text());
     const sessions = initDatabase({ path: file });
     sessions.db.exec('PRAGMA busy_timeout = 5000');
+    // The server is a second writer on this database: each write below re-runs
+    // whole on SQLITE_BUSY, whose deferred read→write upgrade leaves the
+    // busy handler bypassed.
     const human = { kind: 'human', sessionId: null };
     const strategies = new StrategyStore(sessions.db);
     const team = await resolveTeam(root);
-    const strategy = strategies.create({
-      productId: 'impact-browser', title: 'Kawai', owner: human, teamId: team.teamId, worktrees: await new TeamWorktrees().list(team.teamId),
-    });
-    const submit = purpose => {
-      const submitted = strategies.submitRevision(strategy.id, { author: human, content: { purpose } });
+    const worktrees = await new TeamWorktrees().list(team.teamId);
+    const strategy = await retryOnSqliteBusy(() => strategies.create({
+      productId: 'impact-browser', title: 'Kawai', owner: human, teamId: team.teamId, worktrees,
+    }));
+    const submit = async purpose => {
+      const submitted = await retryOnSqliteBusy(() => strategies.submitRevision(strategy.id, { author: human, content: { purpose } }));
       if (!submitted.ok) throw new Error('submitRevision: ' + submitted.message);
       return submitted.revision.revision;
     };
-    const first = submit('Agents ship reviewed changes');
-    const approved = strategies.approve(strategy.id, {
+    const first = await submit('Agents ship reviewed changes');
+    const approved = await retryOnSqliteBusy(() => strategies.approve(strategy.id, {
       revision: first, contentHash: hashStrategyContent(normalizeStrategyContent({ purpose: 'Agents ship reviewed changes' })),
       commandId: 'seed-strategy-1', expectedCurrentRevision: null, actor: human,
-    });
+    }));
     if (!approved.ok) throw new Error('approve strategy: ' + approved.message);
     const service = new PlanService(new PlanStore(sessions.db), {
       getSession: id => sessions.getChatSession(id), strategies, homeDir: process.env.HOME,
@@ -79,15 +84,15 @@ function seedImpactPrerequisites(root: string, sessionId: string) {
       changes: [{ change: 'impact-api', group: 'lead', acceptance: ['Routes answer'] }],
       roles: [{ group: 'lead', profiles: [] }], reviewGroup: 'lead',
     };
-    const planId = (await tools.plan_create({ title: 'Wave C', content })).plan.id;
-    const submitted = await tools.plan_submit_for_review({ plan_id: planId });
+    const planId = (await retryOnSqliteBusy(() => tools.plan_create({ title: 'Wave C', content }))).plan.id;
+    const submitted = await retryOnSqliteBusy(() => tools.plan_submit_for_review({ plan_id: planId }));
     if (submitted.ok === false) throw new Error('plan_submit_for_review: ' + JSON.stringify(submitted));
-    const plan = await service.approve({ kind: 'human', team }, {
+    const plan = await retryOnSqliteBusy(() => service.approve({ kind: 'human', team }, {
       planId, revision: submitted.revision.revision, contentHash: submitted.revision.contentHash,
       expectedApprovedRevision: null, commandId: 'seed-plan-1',
-    });
+    }));
     if (!plan.ok) throw new Error('approve plan: ' + JSON.stringify(plan));
-    submit('Agents ship reviewed changes the owner can steer');
+    await submit('Agents ship reviewed changes the owner can steer');
     sessions.close();
   `], { cwd: process.cwd(), input: JSON.stringify([dbPath, root, sessionId]), encoding: 'utf8' })
 }

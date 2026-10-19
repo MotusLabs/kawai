@@ -42,6 +42,7 @@ function seedPlanAsAgent(sessionId: string) {
     import { PlanService } from './src/server/plans/PlanService';
     import { planHandlers } from './src/server/plans/planTools';
     import { StrategyStore } from './src/server/strategy/strategyStore';
+    import { retryOnSqliteBusy } from './src/server/__tests__/sqliteBusyRetry';
     const [file, sessionId] = JSON.parse(await Bun.stdin.text());
     const sessions = initDatabase({ path: file });
     sessions.db.exec('PRAGMA busy_timeout = 5000');
@@ -55,13 +56,15 @@ function seedPlanAsAgent(sessionId: string) {
       extraChecks: [{ name: 'browser-walkthrough', description: 'The Plans walkthrough is green' }],
       roles: [{ group: 'devs', profiles: [] }, { group: 'reviewers', profiles: [] }], reviewGroup: 'reviewers',
     });
-    const planId = (await tools.plan_create({ title: 'Wave C', content: content('Ship durable plans') })).plan.id;
+    // Each write re-runs whole on SQLITE_BUSY: the server is a second writer,
+    // and the deferred read→write upgrade leaves the busy handler bypassed.
+    const planId = (await retryOnSqliteBusy(() => tools.plan_create({ title: 'Wave C', content: content('Ship durable plans') }))).plan.id;
     for (const goal of ['Ship durable plans', 'Ship durable plans, revised']) {
       const stored = await tools.plan_get({ plan_id: planId });
       const draft = stored.drafts?.find(entry => entry.draftId === sessionId) ?? null;
-      const saved = await tools.plan_save_draft({ plan_id: planId, content: content(goal), expected_draft_hash: draft?.contentHash ?? null });
+      const saved = await retryOnSqliteBusy(() => tools.plan_save_draft({ plan_id: planId, content: content(goal), expected_draft_hash: draft?.contentHash ?? null }));
       if (saved.ok === false) throw new Error('plan_save_draft: ' + JSON.stringify(saved));
-      const submitted = await tools.plan_submit_for_review({ plan_id: planId });
+      const submitted = await retryOnSqliteBusy(() => tools.plan_submit_for_review({ plan_id: planId }));
       if (submitted.ok === false) throw new Error('plan_submit_for_review: ' + JSON.stringify(submitted));
     }
     sessions.close();
