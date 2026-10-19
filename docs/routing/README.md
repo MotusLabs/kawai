@@ -165,13 +165,14 @@ limit until …"); normal direct mail waits in the queue until recovery.
 A request that fails with HTTP 402 (payment required — OpenRouter's "This
 request requires more credits", any prepaid gateway's empty balance) is a
 final limit in the `credit` window, whatever error class the agent reports,
-with no reset. It cools the provider for at most one hour. The cooldown ends
-earlier once a provider usage pull after the event reports more remaining
-credit than the lowest reading since the last one before the event; without a
-reading before it, the first pull only sets that floor, because a 402 can
-leave a few cents that cannot cover a request. Readings live in memory only:
-after a restart the plain hour applies. (The OpenRouter usage pull that feeds
-them arrives with the provider usage adapter.)
+with no reset. It cools the provider for at most one hour. The first usage
+pull after the event only sets the baseline — a 402 can leave a few cents
+that cannot cover a request, and readings from before the event are ignored.
+The cooldown ends earlier once a later pull reports more remaining credit
+than the lowest earlier post-event pull. Tracking starts when the process
+records the event and lives in memory only: an event loaded after a restart
+ends at the plain hour, whatever later pulls report. (The OpenRouter usage
+pull that feeds them arrives with the provider usage adapter.)
 
 Waiting creates no credit, so credit-limited work is never parked: it takes
 the group's `otherwise` outcome (forward, the default, or release) even when

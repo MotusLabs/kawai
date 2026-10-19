@@ -9,7 +9,9 @@
 // stored, so changing the policy needs no migration; `coolingTimeline`
 // reconstructs past cooling by the same rule. A `credit` event (a 402,
 // openrouter-provider D8) can end early through an in-memory overlay fed by
-// provider usage pulls; a restart drops it and the one-hour bound applies.
+// provider usage pulls; tracking starts when this process records the event,
+// so an event loaded from the database after a restart ends only at the
+// one-hour bound, whatever later pulls report.
 import type { Database } from 'bun:sqlite'
 import type { LimitEvent } from '../../../shared/routing'
 import { CREDIT_LIMIT_WINDOW } from '../../chat/limitSignals'
@@ -99,6 +101,8 @@ export class LimitEventStore {
   private readonly listeners = new Set<(event: LimitEvent) => void>()
   /** Provider id → its remaining-credit readings, oldest first (in memory only, D8). */
   private readonly credit = new Map<string, CreditReading[]>()
+  /** Credit events this process recorded, `creditKey(event)` → the event's epoch ms (in memory only, D8). */
+  private readonly creditTracking = new Map<string, number>()
 
   constructor(private readonly db: Database, private readonly now: () => number = Date.now) {
     this.prune()
@@ -131,6 +135,7 @@ export class LimitEventStore {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       event.id, event.profileId, event.sessionId, event.groupId, event.at, event.kind,
       event.final ? 1 : 0, event.status, event.message, event.resetsAt, event.providerId, event.window)
+    if (event.window === CREDIT_LIMIT_WINDOW) this.creditTracking.set(creditKey(event), Date.parse(event.at))
     for (const listener of this.listeners) listener(event)
     return event
   }
@@ -138,7 +143,8 @@ export class LimitEventStore {
   /**
    * A provider usage pull completed and reported `remainingUsd`
    * (openrouter-provider D8). Readings older than the read window (plus the
-   * one-hour bound) are dropped; nothing is persisted.
+   * one-hour bound) are dropped, with the credit events tracked alongside
+   * them; nothing is persisted.
    */
   reportRemainingCredit(providerId: string, remainingUsd: number): void {
     if (!Number.isFinite(remainingUsd)) return
@@ -147,11 +153,20 @@ export class LimitEventStore {
     const readings = (this.credit.get(providerId) ?? []).filter(reading => reading.at >= cutoff)
     readings.push({ at: now, remainingUsd })
     this.credit.set(providerId, readings)
+    for (const [key, at] of this.creditTracking) {
+      if (at < cutoff) this.creditTracking.delete(key)
+    }
   }
 
-  /** When credit returned after `event` (epoch ms), else null: the overlay's early end. */
-  private creditReturned = (event: LimitEvent): number | null =>
-    creditReturnedAt(this.credit.get(event.providerId ?? event.profileId) ?? [], Date.parse(event.at))
+  /**
+   * When credit returned after `event` (epoch ms), else null: the overlay's
+   * early end. Only an event this process recorded is tracked (D8) — one
+   * loaded from the database after a restart ends at its one-hour bound.
+   */
+  private creditReturned = (event: LimitEvent): number | null => {
+    if (!this.creditTracking.has(creditKey(event))) return null
+    return creditReturnedAt(this.credit.get(event.providerId ?? event.profileId) ?? [], Date.parse(event.at))
+  }
 
   /** Drop events older than the retention window. */
   prune(): void {
@@ -222,20 +237,26 @@ export interface EffectiveCooldown {
   credit?: true
 }
 
+/** The credit-tracking key (D8): the provider the readings are held under, and the event's time. */
+const creditKey = (event: LimitEvent): string => `${event.providerId ?? event.profileId}\u0000${event.at}`
+
 /**
  * The overlay's early end for a credit event at `eventAt` (openrouter-provider
- * D8): the first reading after the event whose remaining credit exceeds the
- * lowest one seen from the last reading before the event on. Without a
- * reading before the event, the first one after it only sets that floor — a
- * 402 can leave a few cents that cannot cover a request. Null while none has.
+ * D8), over this process's readings: readings from before the event are
+ * ignored, the first pull after it only sets the baseline — a 402 can leave a
+ * few cents that cannot cover a request — and a later pull ends the cooldown
+ * when its amount exceeds the lowest earlier post-event pull. Null while none
+ * has.
  */
 export function creditReturnedAt(readings: readonly CreditReading[], eventAt: number): number | null {
   if (!Number.isFinite(eventAt)) return null
-  let floor: number | null = null
+  let baseline: number | null = null
+  let lowest = Number.POSITIVE_INFINITY
   for (const reading of readings) {
-    if (reading.at <= eventAt) { floor = reading.remainingUsd; continue }
-    if (floor !== null && reading.remainingUsd > floor) return reading.at
-    floor = floor === null ? reading.remainingUsd : Math.min(floor, reading.remainingUsd)
+    if (reading.at <= eventAt) continue
+    if (baseline === null) { baseline = reading.remainingUsd; lowest = reading.remainingUsd; continue }
+    if (reading.remainingUsd > lowest) return reading.at
+    lowest = Math.min(lowest, reading.remainingUsd)
   }
   return null
 }

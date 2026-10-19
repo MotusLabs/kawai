@@ -435,18 +435,17 @@ describe('credit cooldown (openrouter-provider D8)', () => {
     expect(store.providerCooldownUntil('openrouter')).toBeNull()
   })
 
-  test('a reading before the event is the floor: the first pull above it ends the cooldown', () => {
+  test('The first pull only sets the baseline: readings before the event are ignored', () => {
     store.reportRemainingCredit('openrouter', 0.5)
     now = T0 + MIN
     store.record({ ...credit, at: iso(now) })
     now = T0 + 10 * MIN
-    store.reportRemainingCredit('openrouter', 0.5)
-    expect(store.cooldownFor('openrouter-opus', 'openrouter').credit).toBe(true)
+    store.reportRemainingCredit('openrouter', 0.6)
+    // 0.6 is only the baseline: the pre-event 0.5 would have ended the cooldown.
+    expect(store.cooldownFor('openrouter-opus', 'openrouter')).toMatchObject({ until: iso(T0 + MIN + HOUR), credit: true })
     now = T0 + 20 * MIN
-    store.reportRemainingCredit('openrouter', 0.2)
-    now = T0 + 30 * MIN
-    store.reportRemainingCredit('openrouter', 0.3)
-    // 0.3 exceeds the lowest reading (0.2) since the last one before the event.
+    store.reportRemainingCredit('openrouter', 0.7)
+    // A later pull above the lowest earlier post-event pull ends the cooldown.
     expect(store.cooldownFor('openrouter-opus', 'openrouter').until).toBeNull()
   })
 
@@ -458,21 +457,23 @@ describe('credit cooldown (openrouter-provider D8)', () => {
     expect(store.cooldownFor('openrouter-opus', 'openrouter').until).toBeNull()
   })
 
-  test('Restart during a credit cooldown: a fresh store applies only the hour, until a pull shows credit grew', () => {
+  test('Restart during a credit cooldown: a fresh store applies only the hour, whatever later pulls report', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-credit-'))
     try {
       const file = path.join(dir, 'db.sqlite')
       const first = new LimitEventStore(schemaDb(file), () => now)
       first.record(credit)
       now = T0 + 10 * MIN
-      first.reportRemainingCredit('openrouter', 0.01)
+      first.reportRemainingCredit('openrouter', 0.01) // this process's baseline; the process ends here
       now = T0 + 20 * MIN
       const restarted = new LimitEventStore(schemaDb(file), () => now)
       expect(restarted.cooldownFor('openrouter-opus', 'openrouter')).toMatchObject({ until: iso(T0 + HOUR), credit: true })
       now = T0 + 25 * MIN
       restarted.reportRemainingCredit('openrouter', 0.01)
       now = T0 + 30 * MIN
-      restarted.reportRemainingCredit('openrouter', 5)
+      restarted.reportRemainingCredit('openrouter', 5) // a pull showing credit grew cannot end a DB-loaded event
+      expect(restarted.cooldownFor('openrouter-opus', 'openrouter')).toMatchObject({ until: iso(T0 + HOUR), credit: true })
+      now = T0 + HOUR
       expect(restarted.cooldownFor('openrouter-opus', 'openrouter').until).toBeNull()
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })
