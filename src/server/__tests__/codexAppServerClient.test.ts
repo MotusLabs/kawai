@@ -8,7 +8,7 @@ import { afterEach, beforeEach, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { AppServerClient, type AppServerClientOptions } from '../chat/codex/appServerClient'
+import { AppServerClient, DRAIN_BOUND_MS, type AppServerClientOptions } from '../chat/codex/appServerClient'
 import type { ChatWireRecorder } from '../chat/wireTap'
 
 const FAKE_SOURCE = `#!/usr/bin/env bun
@@ -387,6 +387,17 @@ test('an orphan grandchild holding the pipes cannot hold the exit open (R2-1)', 
   expect(exit).toEqual({ code: 3, signal: null })
   expect(Date.now() - started).toBeLessThan(1_000)
 }, 1_500)
+
+test('the default drain bound is 1 s, and an unset option uses it (T1)', async () => {
+  expect(DRAIN_BOUND_MS).toBe(1_000)
+  // No drainBoundMs: the orphan grandchild (sleep 2) holds the pipes, so
+  // the exit settles on the default bound — never before it.
+  const { client } = startClient('orphan-grandchild')
+  await client.request('ping')
+  const started = Date.now()
+  expect(await client.whenExited()).toEqual({ code: 3, signal: null })
+  expect(Date.now() - started).toBeGreaterThanOrEqual(DRAIN_BOUND_MS - 100)
+}, 4_000)
 
 test('a response a grandchild writes after the exit still resolves its request (R2-1)', async () => {
   // The parent exits 7 without answering; its grandchild writes the

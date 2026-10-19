@@ -61,8 +61,8 @@ export interface AppServerClientOptions {
 /** Default per-request deadline (N5). */
 const REQUEST_TIMEOUT_MS = 30_000
 
-/** Default drain bound (R2-1). */
-const DRAIN_BOUND_MS = 1_000
+/** Default drain bound (R2-1); exported so its value is pinned (T1). */
+export const DRAIN_BOUND_MS = 1_000
 
 interface PendingRequest {
   resolve: (result: unknown) => void
