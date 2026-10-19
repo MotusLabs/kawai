@@ -7,7 +7,6 @@
 import fs from 'node:fs'
 import type { Options } from '@anthropic-ai/claude-agent-sdk'
 import {
-  buildChatOptionsEnv,
   effectiveChatEnv,
   withheldCredentialNames,
   withoutCredentials,
@@ -16,6 +15,7 @@ import {
 import {
   PROFILE_CONTROLLED_ENV,
   resolveProfileCatalog,
+  type CatalogProfile,
   type ProfileCatalogContext,
 } from './profileCatalog'
 
@@ -79,28 +79,47 @@ export function resolveClaudeProfile(
   }
   const withheld = withheldCredentialNames(catalog)
   const serverEnv = effectiveChatEnv(globalEnv)
+  // Every launch passes an explicit, filtered environment (openrouter-provider
+  // D3): never a bare inheritance of process.env, so the catalog-named
+  // credentials stay out of default and executable-backed launches too.
+  const base = withoutCredentials(serverEnv, withheld)
+  return buildClaudeLaunch(profile, base, serverEnv)
+}
+
+/**
+ * The launch configuration for one resolved catalog profile (openrouter-provider
+ * D3): an explicit env always, the provider's own token injected for
+ * credentialed profiles, and — for every launch that receives a token — the
+ * base URL and transport variables pinned in both the env and the flag-layer
+ * settings.env, so no user or project Claude settings file can redirect or
+ * intercept the key. Exported for tests; resolveClaudeProfile is the only
+ * production caller.
+ */
+export function buildClaudeLaunch(
+  profile: CatalogProfile,
+  base: Record<string, string | undefined>,
+  serverEnv: Record<string, string | undefined>
+): ClaudeLaunchConfiguration {
   // The provider's own token, read before the names are withheld (D3/D4).
   const credential = profile.authTokenEnv !== undefined
     ? { ANTHROPIC_AUTH_TOKEN: serverEnv[profile.authTokenEnv] ?? '', ...BLANK_OTHER_CREDENTIALS }
     : undefined
-  const base = withoutCredentials(serverEnv, withheld)
   const hasOverrides =
     Object.keys(profile.env).length > 0 || profile.model !== undefined || profile.executable !== undefined
-  // A file entry that sets nothing inherits the global environment entirely,
-  // exactly like an implicit default — filtered whenever the catalog names
-  // credentials, so a default launch never sees them either.
+  // A file entry that sets nothing inherits the (filtered) global environment.
   if (!hasOverrides && !credential) {
-    if (withheld.size > 0) return { env: base }
-    const env = buildChatOptionsEnv(globalEnv)
-    return env ? { env } : {}
+    return { env: base }
   }
   if (profile.executable) {
-    // The wrapper owns provider configuration: the base environment (with
-    // credentials, minus withheld ones) passes through, entry values are
-    // pre-applied, and no inline controlled settings are injected — those
-    // would override the wrapper's own exports and defeat the delegation.
+    // The wrapper owns provider configuration: the base environment (minus
+    // withheld ones) passes through, entry values are pre-applied, and no
+    // inline controlled settings are injected — those would override the
+    // wrapper's own exports and defeat the delegation. It never receives a
+    // named credential (D2): the parser refuses credentialed executables, and
+    // a catalog that bypassed the parser must not hand the key to a wrapper
+    // that can send it anywhere. A wrapper that needs a key sets its own.
     return {
-      env: { ...base, ...profile.env, ...credential },
+      env: { ...base, ...profile.env },
       executable: profile.executable,
       ...(profile.model !== undefined ? { model: profile.model } : {}),
     }
@@ -113,17 +132,40 @@ export function resolveClaudeProfile(
     controlled[name] = profile.env[name] ?? ''
   }
   Object.assign(env, profile.env, credential)
+  if (!credential) {
+    return {
+      env,
+      settings: { env: controlled },
+      ...(profile.model !== undefined ? { model: profile.model } : {}),
+    }
+  }
+  // A launch that carries the key pins its route (D3): the provider's trusted
+  // base URL and the transport variables, in the process env and the flag
+  // layer alike, each to the server environment's own value or empty. The
+  // token itself never rides in settings (argv).
+  const pinned: ChatProviderEnv = { ANTHROPIC_BASE_URL: profile.env.ANTHROPIC_BASE_URL ?? '' }
+  for (const name of TRANSPORT_PIN_ENV) {
+    pinned[name] = serverEnv[name] ?? ''
+  }
+  Object.assign(env, pinned)
   return {
     env,
-    // The blanks also go in the flag layer, so no settings file can restore
-    // another credential; the token itself never rides in settings (argv).
-    settings: { env: credential ? { ...controlled, ...BLANK_OTHER_CREDENTIALS } : controlled },
+    settings: { env: { ...controlled, ...pinned, ...BLANK_OTHER_CREDENTIALS } },
     ...(profile.model !== undefined ? { model: profile.model } : {}),
   }
 }
 
 /** Credentials a credentialed provider's session must not fall back to (D3). */
 const BLANK_OTHER_CREDENTIALS = { ANTHROPIC_API_KEY: '', CLAUDE_CODE_OAUTH_TOKEN: '' } as const
+
+/**
+ * The route variables a settings file could otherwise use to redirect or
+ * intercept a credentialed launch (openrouter-provider D3): pinned on every
+ * launch that carries a key, to the server environment's own value or empty.
+ */
+export const TRANSPORT_PIN_ENV = [
+  'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'NODE_TLS_REJECT_UNAUTHORIZED', 'NODE_EXTRA_CA_CERTS',
+] as const
 
 /**
  * The provider and token variable a profile must authenticate with, when its
