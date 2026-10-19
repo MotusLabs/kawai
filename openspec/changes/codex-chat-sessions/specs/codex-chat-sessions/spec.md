@@ -181,11 +181,11 @@ Opening a Codex chat SHALL restore its conversation from the Codex thread, inclu
 - **THEN** its conversation shows read-only and no Codex process starts
 
 ### Requirement: Codex sessions require a Codex login
-Creating or starting a Codex chat SHALL be refused when its Codex home has no usable login, as Claude chats are without Claude credentials. The error SHALL name the Codex home and how to sign in. A refused worktree spawn SHALL follow the existing failed-spawn retry.
+Creating or starting a Codex chat SHALL be refused when its Codex home has no usable login, as Claude chats are without Claude credentials. The error SHALL name the profile and how to sign in; the home path reaches only the server log. A refused worktree spawn SHALL follow the existing failed-spawn retry.
 
 #### Scenario: Not logged in
 - **WHEN** a user creates a Codex chat for a Codex home with no login
-- **THEN** no session is created and the error names the home and how to sign in to Codex
+- **THEN** no session is created and the error names the profile and how to sign in to Codex
 
 #### Scenario: Login lost after creation
 - **WHEN** an existing Codex chat's home loses its login and the user sends a message

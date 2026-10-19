@@ -273,6 +273,8 @@ export interface WaitingConstraint {
   retryAt?: string
   /** Free-form facts: a worktree path, a profile id, an error text, a rule reason. */
   detail?: string
+  /** The provider's catalog label when the constraint names its raw id in `detail` (O1). */
+  providerLabel?: string
   /** Per-member breakdown for `no-eligible-member`: each implicated member's cause (S1). */
   members?: Array<{ sessionId: string; cause: string; detail?: string }>
   /** The spawn reservation behind `starting-agent` (D3): derived from `team_spawns`. */

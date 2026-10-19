@@ -101,6 +101,8 @@ export const SESSION_FIELD_EQUALS: {
   kind: strictEquals,
   claudeProfileId: strictEquals,
   approvalPolicy: strictEquals,
+  // Fixed at the chat's creation (R1): a row never changes runtime in place.
+  runtime: strictEquals,
   nameSource: strictEquals,
   name: strictEquals,
   tmuxWindow: strictEquals,

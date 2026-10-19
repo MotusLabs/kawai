@@ -59,7 +59,8 @@ function makeRouter() {
     rules: {
       rule: () => (rule ? { route: async (ctx: RouteContext) => { ruleCalls.push(ctx); return rule!(ctx) } } as never : undefined),
     },
-    limits: { forProfile: id => events[id] ?? [], cooldownFor: id => {
+    limits: { forProfile: id => events[id] ?? [], forProvider: providerId => Object.values(events).flat().filter(e => e.providerId === providerId),
+      cooldownFor: id => {
       const pool = Object.values(events).flat()
       const providerId = providerFor?.(id) ?? null
       const until = cooldownUntil(id, providerId, pool, now)
@@ -72,6 +73,7 @@ function makeRouter() {
     }, providerCooldownUntil: providerId => providerCooldownUntil(providerId, Object.values(events).flat(), now) },
     ...(providerFor ? { providerOf: providerFor } : {}),
     usageOf: id => (id === 'claude' ? { status: 'warning', windows: [{ key: 'five_hour', label: '5h', percentUsed: 80, resetsAt: null }], receivedAt: 'r', source: 'pull' } : null),
+    providerUsageOf: () => null,
     now: () => now,
   })
 }
@@ -469,7 +471,8 @@ describe('plan roles and author tags (plan-execution D15)', () => {
       excludedProfile: m => m.excludedProfile ?? undefined,
       allowedProfiles: m => m.allowedProfiles ?? null,
       rules: { rule: () => (rule ? { route: async (ctx: RouteContext) => { ruleCalls.push(ctx); return rule!(ctx) } } as never : undefined) },
-      limits: { forProfile: id => events[id] ?? [], cooldownFor: id => {
+      limits: { forProfile: id => events[id] ?? [], forProvider: providerId => Object.values(events).flat().filter(e => e.providerId === providerId),
+      cooldownFor: id => {
       const pool = Object.values(events).flat()
       const providerId = providerFor?.(id) ?? null
       const until = cooldownUntil(id, providerId, pool, now)
@@ -478,6 +481,7 @@ describe('plan roles and author tags (plan-execution D15)', () => {
     }, providerCooldownUntil: providerId => providerCooldownUntil(providerId, Object.values(events).flat(), now) },
     ...(providerFor ? { providerOf: providerFor } : {}),
       usageOf: () => null,
+      providerUsageOf: () => null,
       now: () => now,
     })
   }

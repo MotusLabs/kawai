@@ -288,6 +288,7 @@ describe('chat wire messages', () => {
       {
         type: 'chat-usage',
         profileId: 'default',
+        providerId: 'claude',
         report: {
           status: 'limited',
           windows: [
@@ -296,7 +297,7 @@ describe('chat wire messages', () => {
           receivedAt: '2026-10-07T13:00:00.000Z',
         },
       },
-      { type: 'chat-usage', profileId: 'glm', report: null },
+      { type: 'chat-usage', profileId: 'glm', providerId: 'zai', report: null },
     ]
     for (const message of messages) {
       const parsed = JSON.parse(JSON.stringify(message)) as ServerMessage

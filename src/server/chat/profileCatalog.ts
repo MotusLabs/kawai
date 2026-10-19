@@ -8,6 +8,10 @@
 // as one-model providers. `executable` is accepted only in operator-owned
 // files (user level / shipped default): project files are agent-writable, and
 // an executable there would run arbitrary code with the server's credentials.
+// Codex entries (design D4, ruling R1) declare `runtime: "codex"` and carry
+// label, model, and — trusted tier only, like `executable` — `codexHome` and
+// `network`; they sit outside every provider, and ruling R2 derives their
+// provider id from the hash of the resolved home.
 // A file that fails validation is reported and skipped — the rest of the
 // catalog still resolves. The shipped defaults are also embedded at build time
 // (the static JSON imports below): compiled release binaries have no config/
@@ -24,6 +28,8 @@ import {
   parseProviderCatalogValue,
   type FileParse,
 } from './catalogParse'
+import { codexHomeProviderId, resolveCodexHome } from './codexProfiles'
+import type { ChatRuntime } from '../../shared/chat'
 
 // The file formats' validators are re-exported: callers and tests import the
 // whole catalog surface from this module.
@@ -71,6 +77,8 @@ export interface ProfileCatalogContext {
   homeDir?: string
   imageDefaultPath?: string
   imageDefaultProvidersPath?: string
+  /** The server's `CODEX_HOME`, when set; tests inject it (design D4). */
+  serverCodexHome?: string
 }
 
 /** A fully merged catalog entry: label resolved, env merged, never partial. */
@@ -82,6 +90,15 @@ export interface CatalogProfile {
   executable?: string
   /** Zone of reset times the provider writes without one (IANA or ±HH:MM). */
   limitResetTimeZone?: string
+  /**
+   * The entry's runtime (ruling R1). Absent reads as `claude`, keeping every
+   * existing profile's shape unchanged.
+   */
+  runtime?: ChatRuntime
+  /** The Codex home the user-level catalog named, if any (R1, trusted tier). */
+  codexHome?: string
+  /** Whether the Codex sandbox may reach the network (trusted tier). */
+  network?: boolean
   /** The provider owning this model: cooldown and usage key (design D10). */
   providerId: string
   /** Server variable whose value is this model's bearer token (trusted tiers only). */
@@ -182,6 +199,13 @@ export type CatalogLevel = {
   shipped?: boolean
   /** When the file is missing, the embedded shipped catalog takes its place. */
   embeddedFallback?: boolean
+  /**
+   * The directory tier the file belongs to: 0 shipped, 1 the user level,
+   * then one step per project `.kawai` directory, nearer directories higher.
+   * A key's runtime origin (D4) is the tier of its first Claude placement,
+   * compared by tier, not file order — a directory's two files share one.
+   */
+  tier: number
 }
 
 /**
@@ -205,8 +229,8 @@ export function profileCatalogLevels(ctx: ProfileCatalogContext = {}): CatalogLe
     baseFiles.add(userProviders)
     baseFiles.add(userProfiles)
     levels.push(
-      { file: userProviders, kind: 'providers', trusted: true },
-      { file: userProfiles, kind: 'profiles', trusted: true }
+      { file: userProviders, kind: 'providers', trusted: true, tier: 1 },
+      { file: userProfiles, kind: 'profiles', trusted: true, tier: 1 }
     )
   } else {
     const providersFile = ctx.imageDefaultProvidersPath ?? DEFAULT_PROVIDER_CATALOG_PATH
@@ -214,8 +238,8 @@ export function profileCatalogLevels(ctx: ProfileCatalogContext = {}): CatalogLe
     baseFiles.add(providersFile)
     baseFiles.add(profilesFile)
     levels.push(
-      { file: providersFile, kind: 'providers', trusted: true, shipped: true, embeddedFallback: true },
-      { file: profilesFile, kind: 'profiles', trusted: true, shipped: true, embeddedFallback: true }
+      { file: providersFile, kind: 'providers', trusted: true, shipped: true, embeddedFallback: true, tier: 0 },
+      { file: profilesFile, kind: 'profiles', trusted: true, shipped: true, embeddedFallback: true, tier: 0 }
     )
   }
   const projectPath = ctx.projectPath?.trim()
@@ -231,6 +255,10 @@ export function profileCatalogLevels(ctx: ProfileCatalogContext = {}): CatalogLe
         file,
         kind: i % 2 === 0 ? 'providers' : 'profiles',
         trusted: false,
+        // One directory, one tier (R2-2): the files arrive in pairs —
+        // providers.json then profiles.json per .kawai directory — so a
+        // directory's two files share the tier its distance gives it.
+        tier: 2 + Math.floor(i / 2),
       })
     }
   }
@@ -252,7 +280,8 @@ export function resolveProfileCatalog(
 ): ProfileCatalog {
   const merger = new CatalogMerger()
   const errors: string[] = []
-  for (const level of profileCatalogLevels(ctx)) {
+  const levels = profileCatalogLevels(ctx)
+  for (const level of levels) {
     // Only the shipped base falls back to the embedded shipped defaults;
     // a missing project file just contributes nothing.
     if (level.kind === 'providers') {
@@ -266,7 +295,7 @@ export function resolveProfileCatalog(
         errors.push(parsed.error)
         continue
       }
-      merger.addProviders(level.file, level.shipped ?? false, parsed.providers, level.trusted)
+      merger.addProviders(level.file, level.shipped ?? false, parsed.providers, level.tier)
       continue
     }
     const parsed = parseCatalogFile(level.file, level.trusted, level.embeddedFallback
@@ -276,7 +305,7 @@ export function resolveProfileCatalog(
       errors.push(parsed.error)
       continue
     }
-    merger.addProfiles(level.file, level.shipped ?? false, parsed.entries, level.trusted)
+    merger.addProfiles(level.file, level.shipped ?? false, parsed.entries, level.tier)
   }
   merger.finish()
   errors.push(...merger.errors)
@@ -311,6 +340,27 @@ export function resolveProfileCatalog(
         ...(flat.balanceKeyEnv !== undefined ? { balanceKeyEnv: flat.balanceKeyEnv } : {}),
       })
     }
+  }
+  // Codex profiles (R1) sit outside every provider: their provider id is the
+  // hash of the resolved home (R2), so cooldown and usage key on one home are
+  // shared and the path never lands in an id or a label.
+  for (const [id, codex] of merger.codexProfiles) {
+    const home = resolveCodexHome(
+      { codexHome: codex.codexHome },
+      {
+        CODEX_HOME: ctx.serverCodexHome ?? process.env.CODEX_HOME,
+        HOME: ctx.homeDir ?? process.env.HOME ?? os.homedir(),
+      },
+    )
+    profiles.set(id, {
+      label: codex.label?.trim() || id,
+      env: {},
+      ...(codex.model !== undefined ? { model: codex.model } : {}),
+      ...(codex.codexHome !== undefined ? { codexHome: codex.codexHome } : {}),
+      ...(codex.network !== undefined ? { network: codex.network } : {}),
+      runtime: 'codex',
+      providerId: codexHomeProviderId(home),
+    })
   }
   // Omitted selections resolve to `default`; it always exists, empty when no
   // file defines it (global provider environment alone).
@@ -355,4 +405,22 @@ export function providerOf(profileId: string, ctx: ProfileCatalogContext = {}): 
     providerCache.set(key, known)
   }
   return known.get(profileId) ?? profileId
+}
+
+const labelCache = new Map<string, Map<string, string | null>>()
+
+/**
+ * The provider's catalog label (providers-and-workers D14), resolved from the
+ * catalog at the context and cached per catalog stamp like `providerOf`. A
+ * provider the catalog no longer names has no label.
+ */
+export function providerLabelOf(providerId: string, ctx: ProfileCatalogContext = {}): string | null {
+  const key = `${ctx.homeDir ?? process.env.HOME ?? os.homedir()}\n${ctx.projectPath ?? ''}\n${profileCatalogStamp(ctx)}`
+  let labels = labelCache.get(key)
+  if (!labels) {
+    if (labelCache.size >= PROVIDER_CACHE_LIMIT) labelCache.clear()
+    labels = new Map([...resolveProfileCatalog(ctx).providers].map(([id, provider]) => [id, provider.label]))
+    labelCache.set(key, labels)
+  }
+  return labels.get(providerId) ?? null
 }

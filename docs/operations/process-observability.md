@@ -12,11 +12,14 @@ quality as guardrails. No recommendation here changes a model or starts work.
 
 Migration 11 adds observation details, team associations, retained source keys,
 collection checkpoints, live interval checkpoints, opaque export aliases, and
-cumulative export totals. Schema changes use the normal pre-migration backup path.
+cumulative export totals; migration 14 indexes `chat_turn_usage.ended_at` and
+`profile_limit_events.at` for the reconciler's ordered scans of unrecorded rows.
+Schema changes use the normal pre-migration backup path.
 Task, status, assignment, result, finding, mailbox-transition, profile-limit and
 completed-turn sources reconcile after notifications and every 30 seconds, up to
 200 rows per source per pass. Notifications queue work after the operational
-transaction. Observation and aggregate writes commit together; a collection
+transaction: the first arms one pass 250 ms later and the rest join it, so a
+burst of commits costs one reconcile. Observation and aggregate writes commit together; a collection
 failure cannot undo an acceptance or mailbox settlement. Counters retry from the
 same source identity; pruning source rows cannot cause rowid reuse to lose usage
 or limit facts. Collection errors are logged without source payloads. Health checkpoint writes
@@ -63,8 +66,11 @@ accepted result does not enter this histogram.
 
 ## Retention and coverage
 
-Observation details and completed turn usage default to 90 days; pruning deletes
-at most 500 rows per pass. Hourly scans continue a backlog in later 30-second
+Fact observations (task, status, assignment, result, finding, acceptance, mail,
+limit, usage, turn end, gap, compaction, settings) and completed turn usage default
+to 90 days. Intra-turn interval detail (activity, tool, request, context samples,
+turn start and attribution) — most of the volume — is kept 14 days. Pruning
+deletes at most 500 rows per pass. Hourly scans continue a backlog in later 30-second
 collection ticks (usage continues on later completed writes). Detailed observations
 age by recording time so newly reconciled historical facts remain inspectable.
 Source tasks/results/audits retain their own policies. Durable-source identities
@@ -74,7 +80,9 @@ segments, context and settings samples, compactions, gaps) are never replayed
 after their turn and leave with their detail rows, so the key ledger stays
 bounded. A source row whose fact fails validation is logged and skipped rather
 than stalling its source.
-Recording start, conservative detail horizon, latest source observations,
+Recording start, the conservative detail horizon (the 14-day interval cutoff:
+`observation_detail_retained_since_timestamp_seconds`, checkpoint
+`detail-retained-since`; facts reach back to checkpoint `facts-retained-since`), latest source observations,
 unresolved gaps and error counts expose coverage. Existing rolling token metrics
 use the later of the 90-day limit and the team's earliest retained usage: raising
 retention cannot restore history that was already pruned. Interrupted usage and

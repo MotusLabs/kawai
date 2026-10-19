@@ -49,15 +49,22 @@ test('group picker, badge, peer replay and mailbox controls', async ({ page }, i
     const seeded = JSON.parse(execFileSync('bun', ['-e', `
       import { Database } from 'bun:sqlite';
       import { MailboxStore } from './src/server/team/mailboxStore';
+      import { retryOnSqliteBusy } from './src/server/__tests__/sqliteBusyRetry';
       const [file, team, lead, dev] = JSON.parse(await Bun.stdin.text());
       const db = new Database(file); db.exec('PRAGMA busy_timeout = 5000'); const store = new MailboxStore(db);
-      const base = { teamId: team, fromSession: lead, fromGroup: 'leads', originPath: team, body: 'Browser peer greeting', toKind: 'session', toId: dev, tags: ['review'] };
-      const peer = store.enqueue(base);
-      const queued = store.enqueue({ ...base, body: 'Queued browser mail', toKind: 'group', toId: 'unstaffed' });
-      const scheduled = store.enqueue({ ...base, body: 'Scheduled browser mail', deliverAt: new Date(Date.now()+3600000).toISOString() });
-      const dead = store.enqueue({ ...base, body: 'Dead browser mail' }); store.deadLetter(dead.id, 'killed-recipient');
-      const held = store.enqueue({ ...base, body: 'Held browser mail' }); store.claim(held.id, dev); store.markPushed(held.id); store.holdUncertain(held.id, 'transcript-unavailable-or-torn');
-      console.log(JSON.stringify({peer: peer.id, queued: queued.id, scheduled: scheduled.id, dead: dead.id, held: held.id})); db.close();
+      // One retried immediate transaction: the server is a second writer
+      // (BUSY on the deferred upgrade bypasses busy_timeout), and atomic
+      // seeding keeps it from seeing or claiming half a seed.
+      const seeded = await retryOnSqliteBusy(() => db.transaction(() => {
+        const base = { teamId: team, fromSession: lead, fromGroup: 'leads', originPath: team, body: 'Browser peer greeting', toKind: 'session', toId: dev, tags: ['review'] };
+        const peer = store.enqueue(base);
+        const queued = store.enqueue({ ...base, body: 'Queued browser mail', toKind: 'group', toId: 'unstaffed' });
+        const scheduled = store.enqueue({ ...base, body: 'Scheduled browser mail', deliverAt: new Date(Date.now()+3600000).toISOString() });
+        const dead = store.enqueue({ ...base, body: 'Dead browser mail' }); store.deadLetter(dead.id, 'killed-recipient');
+        const held = store.enqueue({ ...base, body: 'Held browser mail' }); store.claim(held.id, dev); store.markPushed(held.id); store.holdUncertain(held.id, 'transcript-unavailable-or-torn');
+        return {peer: peer.id, queued: queued.id, scheduled: scheduled.id, dead: dead.id, held: held.id};
+      }).immediate());
+      console.log(JSON.stringify(seeded)); db.close();
     `], { cwd: process.cwd(), input: JSON.stringify([dbPath, root, lead, dev]), encoding: 'utf8' }))
     // A fixture turn produces the idle notification that wakes dispatch.
     await page.getByLabel('Message Claude').fill('hello')
@@ -125,20 +132,25 @@ test('waiting reasons: starting agent, expandable blockers, dead-letter labels, 
     const seeded = JSON.parse(execFileSync('bun', ['-e', `
       import { Database } from 'bun:sqlite';
       import { MailboxStore } from './src/server/team/mailboxStore';
+      import { retryOnSqliteBusy } from './src/server/__tests__/sqliteBusyRetry';
       const [file, team, lead, rootDir] = JSON.parse(await Bun.stdin.text());
       const db = new Database(file); db.exec('PRAGMA busy_timeout = 5000'); const store = new MailboxStore(db);
-      const base = { teamId: team, fromSession: lead, fromGroup: 'leads', originPath: team, toKind: 'group', toId: 'devs', body: 'Seeded', tags: [] };
-      // A spawn held open forever (no live spawn attached): state spawning +
-      // its durable reservation, exactly what the snapshot derivation reads.
-      const starting = store.enqueue(base);
-      store.reserveForSpawn(starting.id);
-      db.prepare('INSERT INTO team_spawns (id, message_id, team_id, group_id, worktree, created_at, profile_id) VALUES (?, ?, ?, ?, ?, ?, ?)')
-        .run('seeded-res', starting.id, team, 'devs', rootDir, new Date().toISOString(), 'default');
-      // A queued row whose group does not exist yet: blocked on the missing definition.
-      const queued = store.enqueue({ ...base, toId: 'unstaffed', body: 'Waiting on a group' });
-      const dead = store.enqueue({ ...base, toKind: 'session', toId: lead, body: 'Dead browser mail' });
-      store.deadLetter(dead.id, 'worktree-missing: ' + rootDir + '/gone');
-      console.log(JSON.stringify({starting: starting.id, queued: queued.id, dead: dead.id})); db.close();
+      // Same retried immediate transaction as the mailbox seeder above.
+      const seeded = await retryOnSqliteBusy(() => db.transaction(() => {
+        const base = { teamId: team, fromSession: lead, fromGroup: 'leads', originPath: team, toKind: 'group', toId: 'devs', body: 'Seeded', tags: [] };
+        // A spawn held open forever (no live spawn attached): state spawning +
+        // its durable reservation, exactly what the snapshot derivation reads.
+        const starting = store.enqueue(base);
+        store.reserveForSpawn(starting.id);
+        db.prepare('INSERT INTO team_spawns (id, message_id, team_id, group_id, worktree, created_at, profile_id) VALUES (?, ?, ?, ?, ?, ?, ?)')
+          .run('seeded-res', starting.id, team, 'devs', rootDir, new Date().toISOString(), 'default');
+        // A queued row whose group does not exist yet: blocked on the missing definition.
+        const queued = store.enqueue({ ...base, toId: 'unstaffed', body: 'Waiting on a group' });
+        const dead = store.enqueue({ ...base, toKind: 'session', toId: lead, body: 'Dead browser mail' });
+        store.deadLetter(dead.id, 'worktree-missing: ' + rootDir + '/gone');
+        return {starting: starting.id, queued: queued.id, dead: dead.id};
+      }).immediate());
+      console.log(JSON.stringify(seeded)); db.close();
     `], { cwd: process.cwd(), input: JSON.stringify([dbPath, root, lead, root]), encoding: 'utf8' }))
     // A fixture turn ends and wakes dispatch: the queued row gets its reason.
     await page.getByLabel('Message Claude').fill('hello')

@@ -10,8 +10,9 @@ const CTX: RouteContext = {
   now: '2026-10-12T12:00:00.000Z',
   group: { id: 'devs', profiles: [], max: 1, live: 0, strategy: 'first-available' },
   message: { id: 'm1', priority: 'normal', senderGroup: null, tags: ['x'], worktree: null, taskId: null },
-  candidates: [{ id: 'member:a', kind: 'member', profileId: 'glm', sessionId: 'a', cwd: '/r' }],
+  candidates: [{ id: 'member:a', kind: 'member', profileId: 'glm', providerId: 'zai', sessionId: 'a', cwd: '/r' }],
   profiles: {},
+  providers: { zai: { label: 'Z.AI', profiles: ['glm'], usage: null, limitEvents: [], cooldownUntil: null } },
 }
 
 /**
@@ -154,7 +155,7 @@ export default {
     const host = registry!.rule('devs')!
     expect(host.hasOnLimit).toBe(true)
     const event = {
-      now: CTX.now, profileId: 'glm', sessionId: 'a', groupId: 'devs', message: CTX.message, kind: 'rate_limit',
+      now: CTX.now, profileId: 'glm', providerId: 'zai', sessionId: 'a', groupId: 'devs', message: CTX.message, kind: 'rate_limit',
       status: 429, error: null, resetsAt: null, progress: { toolCalls: 2, filesTouched: [] }, parkCount: 0,
     }
     expect(await host.onLimit(event)).toEqual({ type: 'forward', to: { kind: 'group', id: 'architects' } })
@@ -194,8 +195,12 @@ export default {
     expect(report.rules).toMatchObject([{ groupId: 'devs', ok: true }])
     const host = registry!.rule('devs')!
     expect(await host.route(CTX)).toEqual({ type: 'pick', candidateId: 'member:a' })
-    const cooling = { ...CTX, profiles: { glm: { usage: null, limitEvents: [], cooldownUntil: '2026-10-12T13:00:00.000Z' } } }
+    const cooling = { ...CTX, profiles: { glm: { providerId: 'zai', usage: null, limitEvents: [], cooldownUntil: '2026-10-12T13:00:00.000Z' } } }
     expect(await host.route(cooling)).toMatchObject({ type: 'hold', retryAfterMs: 600_000 })
+    // An earlier rule reads only candidates and per-profile entries, so the
+    // additive provider view (D14) never changes its outcome.
+    const withProvider = { ...cooling, providers: { zai: { label: 'Z.AI', profiles: ['glm'], usage: null, limitEvents: [], cooldownUntil: '2026-10-12T13:00:00.000Z' } } }
+    expect(await host.route(withProvider)).toMatchObject({ type: 'hold', retryAfterMs: 600_000 })
     expect(host.hasOnLimit).toBe(true)
   })
 

@@ -307,7 +307,9 @@ export class LimitOutcomes {
     const now = this.now()
     const resetsAt = this.resetTime(event)
     const ruled = await this.askRule(group, {
-      now: new Date(now).toISOString(), profileId: event.profileId, sessionId, groupId,
+      now: new Date(now).toISOString(), profileId: event.profileId,
+      providerId: providerOf(event.profileId, catalogCtx(this.options.homeDir, record?.projectPath)),
+      sessionId, groupId,
       message: { id: message.id, priority: message.priority, senderGroup: message.fromGroup, tags: message.tags, worktree: this.options.targetWorktree?.(message) ?? null, taskId: message.taskId,
         ...(message.handoff ? { forwardedFromProfile: message.handoff.fromProfile } : {}),
       },

@@ -66,12 +66,13 @@ test("a sibling's provider limit cools the recipient row and the urgent refusal 
     'Send it without urgent to queue it, or send it to another agent.')
   expect(runtime.mailbox.store.teamsWithQueuedMail()).toEqual([])
   // The recipient row cools with the deciding provider: a queued direct
-  // message's waiting reason carries retryAt and the provider detail.
+  // message's waiting reason carries retryAt, the provider detail, and its
+  // catalog label resolved from the shipped providers (O1).
   const direct = runtime.mailbox.store.enqueue({ teamId: dir, toKind: 'session', toId: 'flash', fromSession: 'lead', fromGroup: 'leads', originPath: dir, body: 'Later' })
   runtime.dispatcher.notify()
   await runtime.dispatcher.settled()
   const waiting = runtime.waitingFor(dir)
-  expect(waiting[direct.id]!.blocker).toEqual({ kind: 'profile-cooling', retryAt: until, detail: 'zai' })
+  expect(waiting[direct.id]!.blocker).toEqual({ kind: 'profile-cooling', retryAt: until, detail: 'zai', providerLabel: 'Z.AI' })
 })
 
 // openrouter-provider D8 through the same wiring: a credit limit on
@@ -96,7 +97,9 @@ test('a sibling out of credit: the urgent refusal and the waiting reason say out
   const direct = runtime.mailbox.store.enqueue({ teamId: dir, toKind: 'session', toId: 'or', fromSession: 'lead', fromGroup: 'leads', originPath: dir, body: 'Later' })
   runtime.dispatcher.notify()
   await runtime.dispatcher.settled()
-  expect(runtime.waitingFor(dir)[direct.id]!.blocker).toEqual({ kind: 'profile-cooling', retryAt: until, detail: 'openrouter', credit: true })
+  // The merged constraint carries the catalog label (providers-and-workers O1)
+  // beside the credit mark (openrouter-provider D8) and the raw provider id.
+  expect(runtime.waitingFor(dir)[direct.id]!.blocker).toEqual({ kind: 'profile-cooling', providerLabel: 'OpenRouter', retryAt: until, detail: 'openrouter', credit: true })
   // A pull showing credit grew ends it early, everywhere the cooldown is read.
   runtime.limits.reportRemainingCredit('openrouter', 0.01)
   await Bun.sleep(2)

@@ -48,6 +48,8 @@ export interface MailRecipient {
   cooldownProvider?: string | null
   /** That end is a credit limit's (openrouter-provider D8): out of credit, ending by then at the latest. */
   cooldownCredit?: boolean
+  /** That provider's catalog label, for the waiting reason (providers-and-workers O1). */
+  cooldownProviderLabel?: string
 }
 
 // The member-state cause reporter lives beside the predicates it sits beneath.
@@ -295,6 +297,7 @@ export class MailDispatcher {
               ...(row.cooldownUntil ? { retryAt: row.cooldownUntil } : {}),
               ...(cause.detail ? { detail: cause.detail } : {}),
               ...(row.cooldownCredit ? { credit: true as const } : {}),
+              ...(row.cooldownProviderLabel ? { providerLabel: row.cooldownProviderLabel } : {}),
             })
           }
         }

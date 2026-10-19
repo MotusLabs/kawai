@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { buildClaudeLaunch, profileCredential, resolveClaudeProfile, TRANSPORT_PIN_ENV } from '../chat/ClaudeProfiles'
+import { buildClaudeLaunch, profileCredential, resolveClaudeProfile, TRANSPORT_PIN_ENV, type ClaudeLaunchConfiguration } from '../chat/ClaudeProfiles'
 import { resolveProfileCatalog, type CatalogProfile } from '../chat/profileCatalog'
 import { withheldCredentialNames } from '../chat/chatProviderEnv'
 
@@ -15,8 +15,19 @@ const savedProcessEnv: Record<string, string | undefined> = {}
 
 const OR_URL = 'https://openrouter.ai/api'
 
+/**
+ * Every resolution in this file is a Claude entry; the helper narrows the
+ * launch union so `.env`/`.settings` read directly, failing loudly on a
+ * Codex arm (which carries no environment or flag layer at all).
+ */
+function resolveClaudeLaunch(...args: Parameters<typeof resolveClaudeProfile>): ClaudeLaunchConfiguration {
+  const launch = resolveClaudeProfile(...args)
+  if (launch.runtime !== 'claude') throw new Error(`expected a Claude launch, got ${launch.runtime}`)
+  return launch
+}
+
 /** The flag-layer env of a launch, where the pinned route must live. */
-function settingsEnvOf(launch: ReturnType<typeof resolveClaudeProfile>): Record<string, string> {
+function settingsEnvOf(launch: ClaudeLaunchConfiguration): Record<string, string> {
   return (launch.settings as { env: Record<string, string> }).env
 }
 
@@ -68,7 +79,7 @@ describe('named credential variables are withheld from every agent', () => {
   })
 
   test("another provider's session cannot read either variable", () => {
-    const launch = resolveClaudeProfile('glm', serverEnv, ctx())
+    const launch = resolveClaudeLaunch('glm', serverEnv, ctx())
     expect(launch.env).not.toHaveProperty('OR2_KEY')
     expect(launch.env).not.toHaveProperty('OR2_MANAGEMENT_KEY')
     // Its own credentials are untouched.
@@ -77,7 +88,7 @@ describe('named credential variables are withheld from every agent', () => {
 
   test('a default launch without overrides passes an explicit filtered environment', () => {
     setProcessEnv('OR2_MANAGEMENT_KEY', 'from-process-env')
-    const launch = resolveClaudeProfile('default', {}, ctx())
+    const launch = resolveClaudeLaunch('default', {}, ctx())
     expect(launch.env).toBeDefined()
     expect(launch.env).not.toHaveProperty('OR2_MANAGEMENT_KEY')
     expect(launch.env?.PATH).toBe(process.env.PATH)
@@ -85,14 +96,14 @@ describe('named credential variables are withheld from every agent', () => {
   })
 
   test('an executable-backed launch is filtered too', () => {
-    const launch = resolveClaudeProfile('wrap', serverEnv, ctx())
+    const launch = resolveClaudeLaunch('wrap', serverEnv, ctx())
     expect(launch.executable).toBe('/usr/local/bin/claude-wrap')
     expect(launch.env).not.toHaveProperty('OR2_KEY')
     expect(launch.env).not.toHaveProperty('OR2_MANAGEMENT_KEY')
   })
 
   test("a credentialed provider's session sends its own key as the bearer token", () => {
-    const launch = resolveClaudeProfile('or2-sonnet', serverEnv, ctx())
+    const launch = resolveClaudeLaunch('or2-sonnet', serverEnv, ctx())
     expect(launch.env?.ANTHROPIC_AUTH_TOKEN).toBe('or-inference-sentinel')
     expect(launch.env?.ANTHROPIC_API_KEY).toBe('')
     expect(launch.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe('')
@@ -103,7 +114,7 @@ describe('named credential variables are withheld from every agent', () => {
   })
 
   test('project settings cannot restore an API key: the flag layer blanks it', () => {
-    const launch = resolveClaudeProfile('or2-sonnet', serverEnv, ctx())
+    const launch = resolveClaudeLaunch('or2-sonnet', serverEnv, ctx())
     const settings = launch.settings as { env: Record<string, string> }
     expect(settings.env.ANTHROPIC_API_KEY).toBe('')
     expect(settings.env.CLAUDE_CODE_OAUTH_TOKEN).toBe('')
@@ -116,11 +127,11 @@ describe('named credential variables are withheld from every agent', () => {
 
   test('the token is read from process.env when Settings do not set it', () => {
     setProcessEnv('OR2_KEY', 'from-process-env')
-    expect(resolveClaudeProfile('or2-sonnet', {}, ctx()).env?.ANTHROPIC_AUTH_TOKEN).toBe('from-process-env')
+    expect(resolveClaudeLaunch('or2-sonnet', {}, ctx()).env?.ANTHROPIC_AUTH_TOKEN).toBe('from-process-env')
   })
 
   test('a missing token injects an empty bearer, never another credential', () => {
-    const launch = resolveClaudeProfile('or2-sonnet', { ANTHROPIC_API_KEY: 'server-api-key' }, ctx())
+    const launch = resolveClaudeLaunch('or2-sonnet', { ANTHROPIC_API_KEY: 'server-api-key' }, ctx())
     expect(launch.env?.ANTHROPIC_AUTH_TOKEN).toBe('')
     expect(launch.env?.ANTHROPIC_API_KEY).toBe('')
   })
@@ -133,17 +144,17 @@ describe('named credential variables are withheld from every agent', () => {
 
   test('a catalog naming no credentials keeps the unconfigured default launch explicit', () => {
     fs.writeFileSync(path.join(tempHome, '.kawai', 'providers.json'), '{}')
-    const launch = resolveClaudeProfile('default', {}, ctx())
+    const launch = resolveClaudeLaunch('default', {}, ctx())
     // D3: every launch passes an explicit environment, even with nothing to
     // withhold — never a bare inheritance of process.env.
-    expect(Object.keys(launch)).toEqual(['env'])
+    expect(Object.keys(launch).sort()).toEqual(['env', 'runtime'])
     expect(launch.env?.PATH).toBe(process.env.PATH)
   })
 })
 
 describe("a credentialed provider's base URL is pinned on every launch", () => {
   test('project settings cannot redirect the base URL: both layers carry the trusted URL', () => {
-    const launch = resolveClaudeProfile('or2-sonnet', serverEnv, ctx())
+    const launch = resolveClaudeLaunch('or2-sonnet', serverEnv, ctx())
     expect(launch.env?.ANTHROPIC_BASE_URL).toBe(OR_URL)
     expect(settingsEnvOf(launch).ANTHROPIC_BASE_URL).toBe(OR_URL)
   })
@@ -155,7 +166,7 @@ describe("a credentialed provider's base URL is pinned on every launch", () => {
     const catalog = JSON.parse(fs.readFileSync(file, 'utf8')) as { or2: { models: Record<string, object> } }
     catalog.or2.models['or2-bare'] = {}
     fs.writeFileSync(file, JSON.stringify(catalog))
-    const launch = resolveClaudeProfile('or2-bare', serverEnv, ctx())
+    const launch = resolveClaudeLaunch('or2-bare', serverEnv, ctx())
     expect(launch.env?.ANTHROPIC_AUTH_TOKEN).toBe('or-inference-sentinel')
     expect(launch.env?.ANTHROPIC_BASE_URL).toBe(OR_URL)
     expect(settingsEnvOf(launch).ANTHROPIC_BASE_URL).toBe(OR_URL)
@@ -164,12 +175,12 @@ describe("a credentialed provider's base URL is pinned on every launch", () => {
 
   test('project settings cannot add a proxy: transports pin to the server values or empty', () => {
     const blank = Object.fromEntries(TRANSPORT_PIN_ENV.map(name => [name, '']))
-    const quiet = resolveClaudeProfile('or2-sonnet', { ...serverEnv, ...blank }, ctx())
+    const quiet = resolveClaudeLaunch('or2-sonnet', { ...serverEnv, ...blank }, ctx())
     for (const name of TRANSPORT_PIN_ENV) {
       expect(quiet.env?.[name]).toBe('')
       expect(settingsEnvOf(quiet)[name]).toBe('')
     }
-    const proxied = resolveClaudeProfile('or2-sonnet', { ...serverEnv, HTTPS_PROXY: 'http://192.0.2.10:3128', NO_PROXY: 'localhost' }, ctx())
+    const proxied = resolveClaudeLaunch('or2-sonnet', { ...serverEnv, HTTPS_PROXY: 'http://192.0.2.10:3128', NO_PROXY: 'localhost' }, ctx())
     expect(proxied.env?.HTTPS_PROXY).toBe('http://192.0.2.10:3128')
     expect(proxied.env?.NO_PROXY).toBe('localhost')
     expect(settingsEnvOf(proxied).HTTPS_PROXY).toBe('http://192.0.2.10:3128')

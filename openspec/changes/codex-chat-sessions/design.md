@@ -90,6 +90,17 @@ Bumping the baseline means regenerating the types and rerunning the driver's fak
 - `codexHome` and `network` follow the `executable` rule: trusted tier only — the shipped default and the user level. A project file setting either is rejected with that file's error.
 - A profile id whose entries disagree on runtime across levels rejects the lower-level file.
 
+**Runtime origin tiers.** Each profile key K has an origin: the farthest tier at which K is defined as a Claude profile. Tiers: the shipped files and the implicit `default` are 0, the user level is 1, and project `.kawai` directories are 2 and up, nearer directories higher; a directory's `providers.json` and `profiles.json` share its tier. Files merge farthest first, each directory's `providers.json` before its `profiles.json`, so the first Claude placement of K is its origin. No key with a farther Claude origin ever resolves to Codex.
+
+- `CatalogMerger` keeps the origins apart from the holders and seeds `default` at tier 0 (`(implicit)`) — the whole `default` rule, with no special case.
+- Every Claude placement — a new `providers.json` model key, a `profiles.json` one-model or reserved `profile:<id>` provider, a re-home, the implicit default — records an origin only when K has none. Re-homes and overlays move the holder, never the origin; holders carry no tier.
+- A Codex entry for K at tier t:
+  - K is a Codex profile: the entry overlays its label and model.
+  - K has no origin: a new Codex profile.
+  - The origin is tier t: only the same directory's `providers.json` can hold K, since nearer files are not merged yet. The key is released with that file's "providers.json cannot hold a Codex profile" error and K becomes Codex, holding no origin from then on.
+  - The origin is farther: the entry is ignored with `<file>: profile "K" is a Codex entry here but a Claude entry in <origin file>`, and K stays Claude wherever its holder put it.
+- Consequently "Codex profile under a providers.json provider" holds within one level (the user level, or one project directory); a farther `providers.json` with a nearer Codex entry is a cross-level disagreement. A user-level Codex `default` is refused, since the implicit `default` is tier 0.
+
 Resolution returns a discriminated union: `{ runtime: 'claude', …SDK launch config }` or `{ runtime: 'codex', model?, codexHome, network }`.
 
 A Codex profile's provider (the account/endpoint sense) derives from its resolved home: `providerOf` is `codex-home-<first 12 hex of sha256(resolved absolute home)>`, labelled `Codex` — never the path in an id or a label; several homes are told apart by their profiles' labels. A Codex profile declared as a model of a providers.json provider is refused with that file's error.

@@ -51,10 +51,13 @@ export function constraintLabel(constraint: WaitingConstraint, nameOf: (sessionI
       return constraint.detail ? `Recipient cannot start: ${constraint.detail}` : 'Recipient is unavailable'
     case 'outside-role':
       return constraint.detail ?? 'Outside the plan role\'s profiles'
-    case 'profile-cooling':
+    case 'profile-cooling': {
+      // The provider's label reads instead of its raw id when the snapshot carries one (O1).
+      const provider = constraint.providerLabel ?? constraint.detail
       return constraint.credit
-        ? `Recipient's provider${constraint.detail ? ` ${constraint.detail}` : ''} is out of credit${constraint.retryAt ? `; retried by ${new Date(constraint.retryAt).toLocaleTimeString()} at the latest` : ''}`
-        : `Recipient's provider${constraint.detail ? ` ${constraint.detail}` : ''} is cooling${constraint.retryAt ? ` until ${new Date(constraint.retryAt).toLocaleTimeString()}` : ''}`
+        ? `Recipient's provider${provider ? ` ${provider}` : ''} is out of credit${constraint.retryAt ? `; retried by ${new Date(constraint.retryAt).toLocaleTimeString()} at the latest` : ''}`
+        : `Recipient's provider${provider ? ` ${provider}` : ''} is cooling${constraint.retryAt ? ` until ${new Date(constraint.retryAt).toLocaleTimeString()}` : ''}`
+    }
     case 'startup-failed':
       return `Agent startup failed${constraint.detail ? `: ${constraint.detail}` : ''}`
     case 'no-eligible-member':

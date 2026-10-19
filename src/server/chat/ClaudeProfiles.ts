@@ -5,13 +5,16 @@
 // receives its own token as ANTHROPIC_AUTH_TOKEN instead (openrouter-provider
 // D3).
 import fs from 'node:fs'
+import os from 'node:os'
 import type { Options } from '@anthropic-ai/claude-agent-sdk'
+import type { ClaudeProfileMetadata } from '../../shared/chat'
 import {
   effectiveChatEnv,
   withheldCredentialNames,
   withoutCredentials,
   type ChatProviderEnv,
 } from './chatProviderEnv'
+import { CODEX_PROVIDER_LABEL, resolveCodexHome, type CodexLaunchConfiguration } from './codexProfiles'
 import {
   PROFILE_CONTROLLED_ENV,
   resolveProfileCatalog,
@@ -20,27 +23,34 @@ import {
 } from './profileCatalog'
 
 export { PROFILE_CONTROLLED_ENV } from './profileCatalog'
+export type { CodexLaunchConfiguration } from './codexProfiles'
 export type { ProfileCatalogContext } from './profileCatalog'
 
 export type ClaudeLaunchConfiguration = Pick<Options, 'env' | 'model' | 'settings'> & {
   /** Operator-trusted wrapper launched in place of the standard binary. */
   executable?: string
+  /** The runtime discriminant (design D4); always `claude` here. */
+  runtime: 'claude'
 }
+
+/** What one profile resolves to: the Claude SDK launch or the Codex launch. */
+export type ChatLaunchConfiguration = ClaudeLaunchConfiguration | CodexLaunchConfiguration
 
 /** Public catalog view: picker metadata plus per-file validation failures. */
 export interface ClaudeProfileCatalogView {
-  profiles: { id: string; label: string; providerId: string; providerLabel: string }[]
+  profiles: ClaudeProfileMetadata[]
   /** Catalog file failures; the rest of the catalog remains usable. */
   errors: string[]
 }
 
 /**
- * Catalog identifiers, labels, and providers for a project path — the only
- * fields that may cross the client boundary — together with catalog file
- * failures, so invalid files are reported instead of silently skipped.
+ * Catalog identifiers, labels, providers, and runtimes for a project path —
+ * the only fields that may cross the client boundary — together with catalog
+ * file failures, so invalid files are reported instead of silently skipped.
  * Catalog order (D13): the provider holding `default` first, then providers
  * in file order, each with its models in order — so `default` always leads
- * the list.
+ * the list — then Codex entries in file order, each its own home-derived
+ * provider under the fixed Codex label (R2).
  */
 export function claudeProfileCatalog(
   ctx: ProfileCatalogContext = {}
@@ -51,8 +61,12 @@ export function claudeProfileCatalog(
     for (const modelKey of provider.models) {
       const profile = profiles.get(modelKey)
       if (!profile) continue
-      metadata.push({ id: modelKey, label: profile.label, providerId, providerLabel: provider.label })
+      metadata.push({ id: modelKey, label: profile.label, providerId, providerLabel: provider.label, runtime: 'claude' })
     }
+  }
+  for (const [id, profile] of profiles) {
+    if (profile.runtime !== 'codex') continue
+    metadata.push({ id, label: profile.label, providerId: profile.providerId, providerLabel: CODEX_PROVIDER_LABEL, runtime: 'codex' })
   }
   return { profiles: metadata, errors }
 }
@@ -60,7 +74,7 @@ export function claudeProfileCatalog(
 /** Identifier/label list only; see claudeProfileCatalog for the full view. */
 export function claudeProfileMetadata(
   ctx: ProfileCatalogContext = {}
-): { id: string; label: string; providerId: string; providerLabel: string }[] {
+): ClaudeProfileMetadata[] {
   return claudeProfileCatalog(ctx).profiles
 }
 
@@ -69,13 +83,33 @@ export function resolveClaudeProfile(
   globalEnv: ChatProviderEnv = {},
   ctx: ProfileCatalogContext = {},
   onCatalogErrors?: (errors: string[]) => void
-): ClaudeLaunchConfiguration {
+): ChatLaunchConfiguration {
   const catalog = resolveProfileCatalog(ctx)
   // A failed file skips silently otherwise; report it (the rest resolves).
   if (catalog.errors.length > 0) onCatalogErrors?.(catalog.errors)
   const profile = catalog.profiles.get(id)
   if (!profile) {
     throw new Error(`Unknown Claude profile "${id}". Restore its catalog file entry before resuming.`)
+  }
+  // Codex entries (design D4) resolve to the launch the app-server spawn
+  // needs: the home resolved exactly as the catalog's own home-provider id
+  // is (R2), so stamp and provider id can never disagree. Codex entries
+  // carry no catalog env — configuration travels as `-c` overrides. They
+  // never touch credentials: withholding covers Claude launches only, and a
+  // Codex launch's environment is the server's own (codex-chat-sessions D4).
+  if (profile.runtime === 'codex') {
+    return {
+      runtime: 'codex',
+      codexHome: resolveCodexHome(
+        { codexHome: profile.codexHome },
+        {
+          CODEX_HOME: ctx.serverCodexHome ?? process.env.CODEX_HOME,
+          HOME: ctx.homeDir ?? process.env.HOME ?? os.homedir(),
+        },
+      ),
+      network: profile.network ?? true,
+      ...(profile.model !== undefined ? { model: profile.model } : {}),
+    }
   }
   const withheld = withheldCredentialNames(catalog)
   const serverEnv = effectiveChatEnv(globalEnv)
@@ -87,13 +121,13 @@ export function resolveClaudeProfile(
 }
 
 /**
- * The launch configuration for one resolved catalog profile (openrouter-provider
- * D3): an explicit env always, the provider's own token injected for
- * credentialed profiles, and — for every launch that receives a token — the
- * base URL and transport variables pinned in both the env and the flag-layer
- * settings.env, so no user or project Claude settings file can redirect or
- * intercept the key. Exported for tests; resolveClaudeProfile is the only
- * production caller.
+ * The launch configuration for one resolved Claude catalog profile
+ * (openrouter-provider D3): an explicit env always, the provider's own token
+ * injected for credentialed profiles, and — for every launch that receives a
+ * token — the base URL and transport variables pinned in both the env and the
+ * flag-layer settings.env, so no user or project Claude settings file can
+ * redirect or intercept the key. Exported for tests; resolveClaudeProfile is
+ * the only production caller.
  */
 export function buildClaudeLaunch(
   profile: CatalogProfile,
@@ -108,7 +142,7 @@ export function buildClaudeLaunch(
     Object.keys(profile.env).length > 0 || profile.model !== undefined || profile.executable !== undefined
   // A file entry that sets nothing inherits the (filtered) global environment.
   if (!hasOverrides && !credential) {
-    return { env: base }
+    return { env: base, runtime: 'claude' }
   }
   if (profile.executable) {
     // The wrapper owns provider configuration: the base environment (minus
@@ -121,6 +155,7 @@ export function buildClaudeLaunch(
     return {
       env: { ...base, ...profile.env },
       executable: profile.executable,
+      runtime: 'claude',
       ...(profile.model !== undefined ? { model: profile.model } : {}),
     }
   }
@@ -136,6 +171,7 @@ export function buildClaudeLaunch(
     return {
       env,
       settings: { env: controlled },
+      runtime: 'claude',
       ...(profile.model !== undefined ? { model: profile.model } : {}),
     }
   }
@@ -151,6 +187,7 @@ export function buildClaudeLaunch(
   return {
     env,
     settings: { env: { ...controlled, ...pinned, ...BLANK_OTHER_CREDENTIALS } },
+    runtime: 'claude',
     ...(profile.model !== undefined ? { model: profile.model } : {}),
   }
 }

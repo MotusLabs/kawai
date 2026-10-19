@@ -2,7 +2,7 @@
 // label derived from the stream-json shape, pretty-printed content, and
 // grouping of consecutive same-type frames into collapsed display runs. The
 // raw line stays the source of truth; parsing here is display-only.
-import type { ChatWireFrame } from '@shared/chat'
+import type { ChatRuntime, ChatWireFrame } from '@shared/chat'
 
 export function parseFrame(frame: ChatWireFrame): unknown {
   try {
@@ -17,16 +17,31 @@ const obj = (value: unknown): Record<string, unknown> | undefined =>
   value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined
 
 /**
+ * JSON-RPC frames label by shape, not by the `jsonrpc` envelope: recorded
+ * Codex responses omit the envelope, so `method` names requests, server
+ * requests, and notifications, and `id` pairs a response or error with its
+ * request. Everything else stays `json`.
+ */
+const jsonRpcLabel = (value: Record<string, unknown>): string => {
+  const method = str(value.method)
+  if (method) return value.id !== undefined ? `${method} #${String(value.id)}` : method
+  if (value.error !== undefined) return `error #${String(value.id)}`
+  if (value.result !== undefined || value.id !== undefined) return `response #${String(value.id)}`
+  return 'json'
+}
+
+/**
  * `type` plus the most specific sub-kind the frame carries: `subtype`,
  * `request.subtype` / `response.subtype` (control traffic), `event.type`
- * (stream_event), or the lifecycle `event`. Non-JSON lines read as `text`.
+ * (stream_event), or the lifecycle `event`. Untyped JSON-RPC frames (Codex
+ * app-server traffic) label by shape; non-JSON lines read as `text`.
  */
 export function frameLabel(frame: ChatWireFrame): string {
   const value = obj(parseFrame(frame))
   if (!value) return 'text'
   if (frame.dir === 'lifecycle') return str(value.event) ?? 'lifecycle'
   const type = str(value.type)
-  if (!type) return 'json'
+  if (!type) return jsonRpcLabel(value)
   const detail = str(value.subtype) ??
     str(obj(value.request)?.subtype) ??
     str(obj(value.response)?.subtype) ??
@@ -40,11 +55,10 @@ export function prettyFrame(frame: ChatWireFrame): string {
   return value === undefined ? frame.raw : JSON.stringify(value, null, 2)
 }
 
-export const DIRECTION_LABELS: Record<ChatWireFrame['dir'], string> = {
-  out: '→ Claude',
-  in: '← Claude',
-  stderr: 'stderr',
-  lifecycle: 'process',
+/** Direction labels name the runtime the chat runs on (codex-chat-sessions §4.5). */
+export function directionLabels(runtime: ChatRuntime): Record<ChatWireFrame['dir'], string> {
+  const name = runtime === 'codex' ? 'Codex' : 'Claude'
+  return { out: `→ ${name}`, in: `← ${name}`, stderr: 'stderr', lifecycle: 'process' }
 }
 
 /**

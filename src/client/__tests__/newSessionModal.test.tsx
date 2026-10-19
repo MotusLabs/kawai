@@ -1860,11 +1860,11 @@ describe('NewSessionModal team group picker', () => {
 describe('profile picker groups by provider', () => {
   // Catalog order (D13): the provider holding default first, then file order.
   const groupedCatalog = [
-    { id: 'default', label: 'Default', providerId: 'claude', providerLabel: 'Claude' },
-    { id: 'opus', label: 'Claude Opus', providerId: 'claude', providerLabel: 'Claude' },
-    { id: 'glm', label: 'GLM', providerId: 'zai', providerLabel: 'Z.AI' },
-    { id: 'glm-flash', label: 'GLM Flash', providerId: 'zai', providerLabel: 'Z.AI' },
-    { id: 'mimo', label: 'MiMo', providerId: 'mimo', providerLabel: 'MiMo' },
+    { id: 'default', label: 'Default', providerId: 'claude', providerLabel: 'Claude', runtime: 'claude' },
+    { id: 'opus', label: 'Claude Opus', providerId: 'claude', providerLabel: 'Claude', runtime: 'claude' },
+    { id: 'glm', label: 'GLM', providerId: 'zai', providerLabel: 'Z.AI', runtime: 'claude' },
+    { id: 'glm-flash', label: 'GLM Flash', providerId: 'zai', providerLabel: 'Z.AI', runtime: 'claude' },
+    { id: 'mimo', label: 'MiMo', providerId: 'mimo', providerLabel: 'MiMo', runtime: 'claude' },
   ]
 
   async function openWith(profiles: unknown) {
@@ -1899,12 +1899,30 @@ describe('profile picker groups by provider', () => {
 
   test('a profiles-only catalog keeps the plain picker it has always had', async () => {
     const renderer = await openWith([
-      { id: 'default', label: 'Default', providerId: 'default', providerLabel: 'Default' },
-      { id: 'glm', label: 'GLM', providerId: 'glm', providerLabel: 'GLM' },
+      { id: 'default', label: 'Default', providerId: 'default', providerLabel: 'Default', runtime: 'claude' },
+      { id: 'glm', label: 'GLM', providerId: 'glm', providerLabel: 'GLM', runtime: 'claude' },
     ])
     const select = renderer.root.findByProps({ 'aria-label': 'Profile' })
     expect(select.findAllByType('optgroup')).toEqual([])
     expect(select.findAllByType('option').map(option => option.props.value)).toEqual(['default', 'glm'])
+    act(() => { renderer.unmount() })
+  })
+
+  test('a Codex profile is its own group under the Codex provider (task 3.4)', async () => {
+    const renderer = await openWith([
+      ...groupedCatalog,
+      // A label equal to the provider's renders plain; a distinct label sits
+      // in an optgroup named Codex.
+      { id: 'codex', label: 'Codex', providerId: 'codex-home-0123456789ab', providerLabel: 'Codex', runtime: 'codex' },
+      { id: 'work-codex', label: 'Work Codex', providerId: 'codex-home-fedcba098765', providerLabel: 'Codex', runtime: 'codex' },
+    ])
+    const select = renderer.root.findByProps({ 'aria-label': 'Profile' })
+    const groups = select.findAllByType('optgroup')
+    expect(groups.map(group => group.props.label)).toEqual(['Claude', 'Z.AI', 'Codex'])
+    expect(groups[2]!.findAllByType('option').map(option => option.props.children)).toEqual(['Work Codex'])
+    // The equal-label entry stays a plain option after its group.
+    const options = select.findAllByType('option')
+    expect(options.map(option => option.props.value)).toEqual(['default', 'opus', 'glm', 'glm-flash', 'mimo', 'codex', 'work-codex'])
     act(() => { renderer.unmount() })
   })
 })

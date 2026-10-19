@@ -658,6 +658,12 @@ export class ChatSessionDriver implements ChatAgentDriver {
           : {}),
       }
     )
+    // A Codex chat never spawns the Claude SDK: its driver (§5.6) runs the
+    // app-server instead. Until that wiring lands its start is refused
+    // upstream, so reaching here names the fault rather than mis-spawning.
+    if (launch.runtime !== 'claude') {
+      throw new Error('Codex chats start through the Codex driver, not the Claude Agent SDK.')
+    }
     // The profile-configured window (design D2 step 2) is re-read each spawn
     // so Settings changes apply to the next process. The old process's
     // observed report readings die with it — they outrank the profile, so a
