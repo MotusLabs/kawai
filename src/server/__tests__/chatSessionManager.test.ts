@@ -4892,10 +4892,12 @@ describe('ChatSessionManager provider usage pull', () => {
     expect(fetchCalls).toHaveLength(settled)
   })
 
-  test('the refresh pull carries a live session\'s credentials, never an archived sibling\'s', async () => {
-    // Two profiles of zai with distinct tokens (providers-and-workers 5.2):
-    // after the glm session archives, every pull must name the live
-    // glm-flash session's token.
+  test('the refresh pull carries a live session\'s routing, never an archived sibling\'s', async () => {
+    // Two profiles of zai with distinct catalog routing (providers-and-workers
+    // 5.2): after the glm session archives, every pull must resolve the live
+    // glm-flash session's endpoint. Credentials cannot discriminate here —
+    // catalog files never carry them (they ride the server environment) — so
+    // the pull's base URL is the pin.
     const catalog = path.join(tempDir, 'catalog-live-target')
     fs.mkdirSync(path.join(catalog, '.kawai'), { recursive: true })
     fs.writeFileSync(
@@ -4905,12 +4907,12 @@ describe('ChatSessionManager provider usage pull', () => {
     fs.writeFileSync(
       path.join(catalog, '.kawai', 'profiles.json'),
       JSON.stringify({
-        glm: { label: 'GLM', env: { ANTHROPIC_BASE_URL: 'https://zai.test/api/anthropic', ANTHROPIC_AUTH_TOKEN: 'sk-archived' } },
-        'glm-flash': { label: 'GLM Flash', env: { ANTHROPIC_BASE_URL: 'https://zai.test/api/anthropic', ANTHROPIC_AUTH_TOKEN: 'sk-live' } },
+        glm: { label: 'GLM', env: { ANTHROPIC_BASE_URL: 'https://zai-archived.test/api/anthropic' } },
+        'glm-flash': { label: 'GLM Flash', env: { ANTHROPIC_BASE_URL: 'https://zai-live.test/api/anthropic' } },
       })
     )
     const { manager, fetchCalls } = await createProviderHarness(
-      { ANTHROPIC_BASE_URL: 'https://zai.test/api/anthropic', ANTHROPIC_AUTH_TOKEN: 'sk-live' },
+      { ANTHROPIC_BASE_URL: 'https://zai-live.test/api/anthropic', ANTHROPIC_AUTH_TOKEN: 'sk-live' },
       [jsonResponse(CAPTURE(2)), jsonResponse(CAPTURE(50)), jsonResponse(CAPTURE(77)), jsonResponse(CAPTURE(88))],
       catalog
     )
@@ -4923,15 +4925,16 @@ describe('ChatSessionManager provider usage pull', () => {
     await flush()
 
     await manager.archive(first.session.id)
-    // Every pull from here on runs after the archive: all must name the live
-    // session's token, not the archived sibling's. (The first session's own
-    // start pull legitimately used its token, so only the tail asserts.)
+    // Every pull from here on runs after the archive: all must resolve the
+    // live session's endpoint, not the archived sibling's. (The first
+    // session's own start pull legitimately used its profile's URL, so only
+    // the tail asserts.)
     const afterArchive = fetchCalls.length
     await waitForCondition(() => fetchCalls.length >= afterArchive + 2)
     await flush()
     const tail = fetchCalls.slice(afterArchive)
     expect(tail.length).toBeGreaterThanOrEqual(2)
-    expect(tail.every(call => call.auth === 'sk-live')).toBe(true)
+    expect(tail.every(call => call.url === 'https://zai-live.test/api/monitor/usage/quota/limit')).toBe(true)
   })
 
   test('routing usage sources: a profile maps to its provider, a provider stays un-mapped', async () => {
