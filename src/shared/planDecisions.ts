@@ -159,6 +159,19 @@ export function fixesFieldErrors(change: string, fixes: readonly string[] | unde
   return errors
 }
 
+/**
+ * D2's read-time reference check: each `fixes` entry of the given revisions'
+ * changes that names none of the plan's fix or correction tasks becomes one
+ * warning, once per id, in content order. A warning never refuses anything.
+ */
+export function fixesReferenceWarnings(contents: ReadonlyArray<Pick<PlanContent, 'changes'>>, planFixTaskIds: ReadonlySet<string>): string[] {
+  const missing = new Set<string>()
+  for (const content of contents) {
+    for (const change of content.changes) for (const entry of change.fixes ?? []) if (entry.trim() && !planFixTaskIds.has(entry)) missing.add(entry)
+  }
+  return [...missing].map(id => `fixes names no fix or correction task of this plan: ${id}`)
+}
+
 /** The plan revisions, executions, and landing facts a fix reads (D8). */
 export interface FixPlanFacts {
   revisions: ReadonlyArray<{ revision: number; status: PlanRevisionStatus; content: Pick<PlanContent, 'changes'> }>

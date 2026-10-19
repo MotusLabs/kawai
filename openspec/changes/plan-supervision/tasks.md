@@ -39,7 +39,7 @@ Implement after `plan-execution` and `integration-candidates` have landed on mas
   - a `leadGroup` outside the roles is refused;
   - a malformed or duplicate `fixes` entry is refused, naming it;
   - one fix task named by two changes passes.
-- [ ] 2.3 Add the read-time warning for a `fixes` entry that names no fix or correction task of the plan (D2). Verify with a plan-detail test showing the warning, and an approval test that the warning does not refuse approval.
+- [x] 2.3 Add the read-time warning for a `fixes` entry that names no fix or correction task of the plan (D2). Verify with a plan-detail test showing the warning, and an approval test that the warning does not refuse approval.
 - [x] 2.4 Document `leadGroup` and `fixes` in the durable-plans AGENTS.md bullet, and the `plan_save_draft` tool description. Verify by reading both against D2.
 
 ## 3. Records
@@ -55,8 +55,8 @@ Implement after `plan-execution` and `integration-candidates` have landed on mas
 ## 4. Usage capture
 
 - [x] 4.1 Confirm `team-process-metrics` has shipped the `turn_completed.usage` mapping, the `chat_turn_usage` table, and its turn-start-pinned writer (D14); this change adds none of them. Verify by reading `chatTurnUsageStore.ts` against D14's attribution rule.
-- [ ] 4.4 Implement the plan usage read: the plan's linked tasks plus its `plan_fix_tasks`, summed by `(group, profile)` and by change, with fix and correction tasks as their own rows (D14). Verify with a test across two profiles of one role, and with tests that another plan's tasks and rows with a null `task_id` are excluded.
-- [ ] 4.5 Add the AGENTS.md usage bullet: the per-turn record, the attribution rule, no currency, and no backfill. Verify by reading it against D14.
+- [x] 4.4 Implement the plan usage read: the plan's linked tasks plus its `plan_fix_tasks`, summed by `(group, profile)` and by change, with fix and correction tasks as their own rows (D14). Verify with a test across two profiles of one role, and with tests that another plan's tasks and rows with a null `task_id` are excluded.
+- [x] 4.5 Add the AGENTS.md usage bullet: the per-turn record, the attribution rule, no currency, and no backfill. Verify by reading it against D14.
 
 ## 5. Decisions and fix tasks
 

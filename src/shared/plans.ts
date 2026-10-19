@@ -205,6 +205,12 @@ export interface PlanDetail {
   executions?: import('./planExecution').PlanExecutionView[]
   /** Progress over the current approved revision; null without one. */
   progress: PlanProgress | null
+  /**
+   * Read-time warnings that never refuse anything (plan-supervision D2): a
+   * `fixes` entry of the approved or an in-review revision naming no fix or
+   * correction task of this plan. Absent from details built elsewhere.
+   */
+  warnings?: string[]
 }
 
 const str = (value: unknown): string => (typeof value === 'string' ? value : '')
