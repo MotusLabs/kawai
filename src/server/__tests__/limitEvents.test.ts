@@ -451,6 +451,16 @@ describe('credit cooldown (openrouter-provider D8)', () => {
     expect(store.cooldownFor('openrouter-opus', 'openrouter').until).toBeNull()
   })
 
+  test('Equal post-event pulls show no growth: the cooldown keeps the event\'s hour end', () => {
+    store.record(credit)
+    now = T0 + 5 * MIN
+    store.reportRemainingCredit('openrouter', 10.01)
+    now = T0 + 15 * MIN
+    store.reportRemainingCredit('openrouter', 10.01)
+    // A pull equal to the lowest earlier post-event pull is not a top-up: only the hour bounds the cooldown.
+    expect(store.cooldownFor('openrouter-opus', 'openrouter')).toMatchObject({ until: iso(T0 + HOUR), credit: true })
+  })
+
   test('No balance source: the provider cools for one hour after the event', () => {
     store.record(credit)
     now = T0 + HOUR - 1
