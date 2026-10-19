@@ -40,6 +40,9 @@ export interface PromotionRunnerDeps extends PromotionCore {
   now?: () => Date
 }
 
+/** Effect rounds per pass: each settles at most one effect per promotion. */
+const PASS_BUDGET = 10
+
 export class PromotionRunner {
   private readonly effects: EffectRunner<PromotionEffectRow>
   private readonly adapters: PromotionAdapters
@@ -77,7 +80,12 @@ export class PromotionRunner {
     try {
       await this.inspect(teamId)
       await this.advanceAll(team)
-      if ((await this.effects.runDue(teamId)) > 0) await this.advanceAll(team)
+      // A settled effect makes the next step due (the next effect, often):
+      // loop until a pass runs nothing, bounded like the executions' passes.
+      for (let round = 0; round < PASS_BUDGET; round++) {
+        if ((await this.effects.runDue(teamId)) === 0) break
+        await this.advanceAll(team)
+      }
     } catch (error) {
       logger.error('promotion_pass_failed', { teamId, error: String(error) })
     }

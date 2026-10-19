@@ -121,7 +121,7 @@ Implement after `plan-execution` has landed on master, together with what it bui
 
 ## 9. Integration checks
 
-- [ ] 9.1 Add an integration test with a bare remote and a stub `gh`: two changes landing on the integration branch, a promotion over a default branch that moves once, and a restart in the middle of a fast-forward. It needs no docs. Verify that it passes.
+- [x] 9.1 Add an integration test with a bare remote and a stub `gh`: two changes landing on the integration branch, a promotion over a default branch that moves once, and a restart in the middle of a fast-forward. It needs no docs. Verify that it passes. — Verified: `src/server/__tests__/promotion.integration.test.ts` (a real `ChatSessionManager`, a bare origin, and the stub `gh` from `planExecutionBenchStubs.ts`; two landings then a merge-commit promotion moving the integration branch to its verified head, a target moving once, a restart mid fast-forward finishing with one `promotion-finished`, Cancel during CI closing the pull request and keeping the branch, and direct mode unchanged), 5/5. It found that a promotion pass stopped after one effect round, so each step waited for the 60 s timer; `PromotionRunner.pass` now loops up to `PASS_BUDGET` rounds like the executions' passes (reverting the loop times the bench out at `open-pr`).
 - [ ] 9.2 Run `bun run lint && bun run typecheck && bun run test` and `openspec validate integration-candidates --strict`. Verify that all pass.
 
 ## Workflow follow-up

@@ -74,12 +74,17 @@ describe('promotion steps (6.1, 6.3, D10)', () => {
     const planId = await twoLandings(branch)
     pushCommit(matrix, 'master', `owner-${n}.txt`, 'owner\n')
     const promotion = await promote(planId, branch)
-    // While the promotion branch is verified, the integration branch stays at fromSha (spec: untouched while verifying).
-    await run(promotion.id, step => step === 'merge')
-    expect(h.gh.updates.length).toBe(1)
-    expect(originHead(matrix, i.store.promotion(promotion.id)!.promotionBranch)).not.toBe(promotion.fromSha)
-    expect(originHead(matrix, branch)).toBe(promotion.fromSha)
+    // While the promotion branch is verified, the integration branch stays at fromSha (spec: untouched while verifying):
+    // observed as the merge is requested, since one pass may run several steps.
+    let atMerge: { updates: number, promotionHead: string | null, integrationHead: string | null } | null = null
+    h.gh.beforeMerge = () => {
+      h.gh.beforeMerge = null
+      atMerge = { updates: h.gh.updates.length, promotionHead: originHead(matrix, i.store.promotion(promotion.id)!.promotionBranch), integrationHead: originHead(matrix, branch) }
+    }
     const done = await run(promotion.id)
+    expect(atMerge!.updates).toBe(1)
+    expect(atMerge!.promotionHead).not.toBe(promotion.fromSha)
+    expect(atMerge!.integrationHead).toBe(promotion.fromSha)
     expect(done.outcome).toBe('merged')
     expect(h.gh.updates.length).toBe(1)
     const verified = done.headSha!
@@ -108,9 +113,14 @@ describe('promotion steps (6.1, 6.3, D10)', () => {
     const planId = await twoLandings(branch)
     pushCommit(matrix, 'master', `owner-${n}.txt`, 'owner\n')
     const promotion = await promote(planId, branch)
-    await run(promotion.id, step => step === 'fast-forward')
-    const moved = pushCommit(matrix, branch, `hand-${n}.txt`, 'by hand\n')
+    // The hand push lands just before the fast-forward is requested.
+    let moved = ''
+    i.refs.beforeFastForward = () => {
+      i.refs.beforeFastForward = null
+      moved = pushCommit(matrix, branch, `hand-${n}.txt`, 'by hand\n')
+    }
     const done = await run(promotion.id)
+    expect(moved).not.toBe('')
     expect(done).toMatchObject({ outcome: 'merged', fastForwarded: false })
     expect(done.fastForwardNote).toContain(moved)
     expect(originHead(matrix, branch)).toBe(moved)
@@ -272,13 +282,18 @@ describe('promotion effects (6.2, D14, L1)', () => {
     const branch = `wave/promo-${n}`
     const planId = await twoLandings(branch)
     const promotion = await promote(planId, branch)
-    await run(promotion.id, step => step === 'merge')
-    const merge = i.store.promotionEffects(promotion.id).find(effect => effect.kind === 'merge')!
-    expect(merge.state).toBe('pending')
-    // The crash: the merge ran on GitHub while its effect was running, and its outcome was never recorded.
-    const pulled = await h.landingAdapters.prMerge('o/r', Number(merge.command.pr), 'merge', String(merge.command.head))
-    expect(pulled.ok).toBe(true)
-    h.bench.db.db.prepare("UPDATE plan_promotion_effects SET state = 'running' WHERE id = ?").run(merge.id)
+    // The crash: the merge runs on GitHub while its effect is running, and its outcome is never recorded.
+    const prMerge = h.landingAdapters.prMerge
+    h.landingAdapters.prMerge = async (...args) => {
+      expect((await prMerge(...args)).ok).toBe(true)
+      return new Promise(() => {})
+    }
+    void p.tick()
+    const mergeEffect = () => i.store.promotionEffects(promotion.id).find(effect => effect.kind === 'merge')
+    for (let wait = 0; wait < 200 && (h.gh.merges.length === 0 || mergeEffect()?.state !== 'running'); wait++) await Bun.sleep(25)
+    h.landingAdapters.prMerge = prMerge
+    const merge = mergeEffect()!
+    expect(merge.state).toBe('running')
     p.executor.close()
     p.executor = p.restart()
     await p.executor.startup()
