@@ -98,11 +98,15 @@ At quota/context incidents Kawai SHALL freeze the eligible alternatives, routing
 - **THEN** the original incident shows B's capacity as unknown and later advice is a new assessment
 
 ### Requirement: History has bounded retention and visible coverage
-Detailed observations SHALL be retained for 90 days by default, with a configurable retention policy. Immutable recommendation evidence, decisions, interventions, digests and cumulative export totals SHALL survive detailed-data pruning. Reads SHALL identify recording start, gaps, retained horizon and usage omissions. Stored observations SHALL exclude credentials, raw prompts and raw tool output.
+Fact observations (task, acceptance, usage, turn outcome) SHALL be retained 90 days by default and intra-turn interval detail (activity, tool, request, context, turn start, attribution) 14 days, configurably. Recommendation evidence, decisions, interventions, digests and export totals SHALL survive pruning. Reads SHALL identify recording start, gaps, retained horizon and usage omissions. Stored observations SHALL exclude credentials, raw prompts and raw tool output.
 
 #### Scenario: Detail pruned
 - **WHEN** an observation referenced by an older recommendation is pruned
 - **THEN** its frozen evidence summary remains readable and its detailed link states that the record expired
+
+#### Scenario: Interval detail ages out first
+- **WHEN** a tool interval and an acceptance were both recorded 15 days ago
+- **THEN** the tool interval is pruned, the acceptance remains, and the stated detail horizon is no older than 14 days
 
 #### Scenario: Existing history
 - **WHEN** an old task has results but no recorded stage intervals

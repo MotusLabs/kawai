@@ -114,12 +114,12 @@ describe('baseline', () => {
   test('this build ships its migrations, and a database at the newest version opens applying nothing', () => {
     const newest = MIGRATIONS.at(-1)!
     expect(MIGRATIONS.map(migration => migration.name)).toEqual(
-      ['strategy-impact', 'plan-validation', 'task-status-events', 'agent-starts', 'chat-turn-usage', 'process-reports', 'plan-execution', 'outbound-audit', 'context-exhausted', 'process-observations', 'provider-limit-window', 'integration-candidates'],
+      ['strategy-impact', 'plan-validation', 'task-status-events', 'agent-starts', 'chat-turn-usage', 'process-reports', 'plan-execution', 'outbound-audit', 'context-exhausted', 'process-observations', 'provider-limit-window', 'integration-candidates', 'process-observation-indexes'],
     )
     expect(newestVersion()).toBe(newest.version)
     initDatabase({ path: dbPath }).close()
     expect(versions(dbPath).map(row => [row.version, row.name])).toEqual([
-      [1, 'baseline'], [2, 'strategy-impact'], [3, 'plan-validation'], [4, 'task-status-events'], [5, 'agent-starts'], [6, 'chat-turn-usage'], [7, 'process-reports'], [8, 'plan-execution'], [9, 'outbound-audit'], [10, 'context-exhausted'], [11, 'process-observations'], [12, 'provider-limit-window'], [13, 'integration-candidates'],
+      [1, 'baseline'], [2, 'strategy-impact'], [3, 'plan-validation'], [4, 'task-status-events'], [5, 'agent-starts'], [6, 'chat-turn-usage'], [7, 'process-reports'], [8, 'plan-execution'], [9, 'outbound-audit'], [10, 'context-exhausted'], [11, 'process-observations'], [12, 'provider-limit-window'], [13, 'integration-candidates'], [14, 'process-observation-indexes'],
     ])
     expect(Object.keys(dump(dbPath))).toEqual(expect.arrayContaining([
       'strategy_impact_proposals', 'outbound_calls', 'outbound_outcomes', 'outbound_acknowledgements',
@@ -359,7 +359,7 @@ describe('a recorded migration name the registry disagrees with (CC round 3)', (
     // A database at version 8 (plan-execution) upgrades to 9; the backup
     // taken before migration 9 holds plan-execution's tables, never the
     // outbound ones. The upgrade stops at 9 first: rotation keeps only the
-    // newest three migrations' backups, so the full upgrade to 12 would
+    // newest three migrations' backups, so the full upgrade to 14 would
     // prune the pre-9 file before its content could be asserted.
     initDatabase({ path: dbPath, migrations: MIGRATIONS.filter(migration => migration.version <= 8) }).close()
     initDatabase({ path: dbPath, migrations: MIGRATIONS.filter(migration => migration.version <= 9) }).close()

@@ -17,7 +17,7 @@
 import type { Database } from 'bun:sqlite'
 import { BUILD_VERSION } from '../version'
 import { outboundAuditMigration } from '../outbound/migration'
-import { CREATE_PROCESS_OBSERVATIONS_SQL } from '../metrics/observations/schema'
+import { CREATE_OBSERVATION_SOURCE_INDEXES_SQL, CREATE_PROCESS_OBSERVATIONS_SQL } from '../metrics/observations/schema'
 import { contextExhaustedMigration } from '../chat/contextExhaustedMigration'
 import { applyBaselineSchema } from './baseline'
 import { CREATE_IMPACT_TABLES_SQL } from '../strategy/impactSchema'
@@ -72,6 +72,8 @@ export const MIGRATIONS: readonly Migration[] = [
   // integration-candidates D3: the branch records, candidates, promotions,
   // and promotion effects, with the one-running-promotion index.
   integrationMigration,
+  // process-observability D10: the reconciler's ordered NOT EXISTS scans.
+  { version: 14, name: 'process-observation-indexes', up: db => db.exec(CREATE_OBSERVATION_SOURCE_INDEXES_SQL) },
 ]
 
 export const RESTORE_DOC = 'docs/operations/database-backups.md'
