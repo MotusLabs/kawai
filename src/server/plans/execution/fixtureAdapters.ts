@@ -8,7 +8,9 @@
 // row, and a merge reports the reviewed head as the merge commit (a
 // fast-forward landing whose tree check passes against the real head).
 // Wired only under the existing fixture switch; every other composition
-// uses the real adapters (a test pins that).
+// uses the real adapters (a test pins that). Pull requests can also be
+// closed (`fixturePrClose`), and the last probed main checkout is kept so the
+// integration fixture (`fixtureIntegrationAdapters.ts`) finds the bare origin.
 import { runGit } from '../../git/gitCommand'
 import { lsRemoteHead, pushToRemote } from '../landing/gitRemote'
 import type { GithubOutcome, PrDetail, PrSummary } from '../landing/github'
@@ -29,11 +31,35 @@ interface FixturePr {
   base: string
   headRefOid: string
   mergeCommit: string | null
+  /** `gh pr close` ran (a cancelled or failed promotion). */
+  closed: boolean
 }
 
 /** The fixture's pull-request registry (one server process, one walkthrough). */
 const registry: FixturePr[] = []
 let nextNumber = 1
+/** The main checkout the last probe read: the fixture's ref writes find its bare origin through it. */
+let fixtureMain: string | null = null
+
+/** The fixture repository's main checkout, once a probe has read it. */
+export function fixtureMainCheckout(): string | null {
+  return fixtureMain
+}
+
+/** The registry row of a fixture pull request (mutable: the promotion merge records on it), null when unknown. */
+export function fixturePullRequest(prNumber: number): FixturePr | null {
+  return registry.find(entry => entry.number === prNumber) ?? null
+}
+
+const prState = (pr: FixturePr): 'OPEN' | 'MERGED' | 'CLOSED' => pr.mergeCommit !== null ? 'MERGED' : pr.closed ? 'CLOSED' : 'OPEN'
+
+/** `gh pr close` on the fixture: the registry row reads CLOSED. */
+export async function fixturePrClose(_repo: string, prNumber: number): Promise<GithubOutcome<null>> {
+  const pr = fixturePullRequest(prNumber)
+  if (pr === null) return { ok: false, error: { argv: ['gh', 'pr', 'close'], exitCode: 1, httpStatus: 404, message: `no fixture pull request #${prNumber}` } }
+  pr.closed = true
+  return { ok: true, data: null }
+}
 
 const successCheck = (name: string): CiCheck => ({
   name, source: 'check-run', conclusion: 'success', link: null, runId: 1, startedAt: null, completedAt: '2099-01-01T00:00:00Z',
@@ -52,11 +78,11 @@ export function fixtureRoundAdapters(): RoundAdapters {
       ({ ok: true, data: [...new Set(Object.values(FIXTURE_FLOOR).flat())].map(successCheck) }),
     statuses: async (): Promise<GithubOutcome<CiCheck[]>> => ({ ok: true, data: [] }),
     prList: async (_repo: string, input: { head: string }): Promise<GithubOutcome<PrSummary[]>> =>
-      ({ ok: true, data: registry.filter(pr => pr.head === input.head).map(pr => ({ number: pr.number, url: pr.url, state: pr.mergeCommit === null ? 'OPEN' : 'MERGED', headRefOid: pr.headRefOid })) }),
+      ({ ok: true, data: registry.filter(pr => pr.head === input.head).map(pr => ({ number: pr.number, url: pr.url, state: prState(pr), headRefOid: pr.headRefOid })) }),
     prCreate: async (_repo: string, input: { head: string; base: string }): Promise<GithubOutcome<{ number: number; url: string }>> => {
-      const existing = registry.find(pr => pr.head === input.head)
+      const existing = registry.find(pr => pr.head === input.head && !pr.closed)
       if (existing !== undefined) return { ok: false, error: { argv: ['gh', 'pr', 'create'], exitCode: 1, httpStatus: 422, message: `a pull request for ${input.head} already exists as #${existing.number}` } }
-      const pr: FixturePr = { number: nextNumber++, url: `https://example.internal/pr/fixture`, head: input.head, base: input.base, headRefOid: '', mergeCommit: null }
+      const pr: FixturePr = { number: nextNumber++, url: `https://example.internal/pr/fixture`, head: input.head, base: input.base, headRefOid: '', mergeCommit: null, closed: false }
       registry.push(pr)
       return { ok: true, data: { number: pr.number, url: pr.url } }
     },
@@ -88,7 +114,7 @@ export function fixtureLandingAdapters(): LandingAdapters {
     prView: async (_repo: string, prNumber: number): Promise<GithubOutcome<PrDetail>> => {
       const pr = registry.find(entry => entry.number === prNumber)
       if (pr === undefined) return { ok: false, error: { argv: ['gh', 'pr', 'view'], exitCode: 1, httpStatus: 404, message: `no fixture pull request #${prNumber}` } }
-      return { ok: true, data: { number: pr.number, url: pr.url, state: pr.mergeCommit === null ? 'OPEN' : 'MERGED', headRefOid: pr.headRefOid, mergeCommit: pr.mergeCommit } }
+      return { ok: true, data: { number: pr.number, url: pr.url, state: prState(pr), headRefOid: pr.headRefOid, mergeCommit: pr.mergeCommit } }
     },
     updateBranch: async (): Promise<GithubOutcome<null>> => ({ ok: true, data: null }),
   }
@@ -101,6 +127,7 @@ export function fixtureLandingAdapters(): LandingAdapters {
  * origin tree comparison (its artifacts are the local ones the spec wrote).
  */
 export async function fixtureProbe(input: { main: string }): Promise<ProbeResult> {
+  fixtureMain = input.main
   const symref = await runGit(['ls-remote', '--symref', 'origin', 'HEAD'], { cwd: input.main })
   const branch = symref.ok ? (symref.stdout.match(/^ref:\s*refs\/heads\/(\S+)/m)?.[1] ?? null) : null
   if (branch === null) {

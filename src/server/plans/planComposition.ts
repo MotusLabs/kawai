@@ -30,7 +30,8 @@ import { ExecutionExecutor } from './execution/executor'
 import { ExecutionRuntime, ExecutionWakes } from './execution/executionRuntime'
 import { provisionAdapter } from './execution/executionProvision'
 import { roundAdapters } from './execution/executionRounds'
-import { fixtureLandingAdapters, fixtureProbe, fixtureRoundAdapters, FIXTURE_FLOOR } from './execution/fixtureAdapters'
+import { fixtureLandingAdapters, fixtureRoundAdapters, FIXTURE_FLOOR } from './execution/fixtureAdapters'
+import { fixtureInspectorReads, fixtureMechanisms, fixturePromotionAdapters, fixturePromotionProbe, fixturePromotionReads } from './landing/integration/fixtureIntegrationAdapters'
 import { chatFixtureEnabled } from '../chat/developmentFixture'
 import type { LandingMechanisms } from './landing/landingMechanisms'
 import { directMechanism } from './landing/directMechanism'
@@ -221,14 +222,13 @@ export function composePlanServices(options: PlanServicesOptions): {
   const team = options.executionTeam
   // The registered landing mechanisms (integration-candidates D1): built once here and
   // passed to the Start service, the executor, and the provision adapter (I1).
-  // Under the development fixture only direct registers: the integration
-  // mechanism's ref writes have no fixture adapter yet (PR B's walkthrough
-  // adds one), so Start refuses an integration plan as an unsupported mode
-  // rather than calling the real gh.
+  // Under the development fixture both probe through the fixture probe and
+  // the integration mechanism writes refs on the fixture's bare origin
+  // (`fixtureIntegrationAdapters.ts`), so nothing calls the real gh.
   const fixture = chatFixtureEnabled
-  const mechanisms: LandingMechanisms = new Map([
+  const mechanisms: LandingMechanisms = fixture ? fixtureMechanisms(integrationStore) : new Map([
     [directMechanism.mode, directMechanism],
-    ...(fixture ? [] : [['integration-branch', integrationMechanism(integrationStore)] as const]),
+    ['integration-branch', integrationMechanism(integrationStore)],
   ])
   executions = new ExecutionService({
     store: executionStore,
@@ -256,7 +256,7 @@ export function composePlanServices(options: PlanServicesOptions): {
       wake: (teamId: string) => runtime?.command(teamId),
     } : {}),
     ...(options.executionGhOptions ? { ghOptions: options.executionGhOptions } : {}),
-    ...(options.executionProbe ? { probe: options.executionProbe } : fixture ? { probe: fixtureProbe } : {}),
+    ...(options.executionProbe ? { probe: options.executionProbe } : {}),
     ...(options.homeDir ? { homeDir: options.homeDir } : {}),
   })
   // Promotions (D9, D10): the slot holder kind, the service, and the runner the executor ticks.
@@ -265,8 +265,9 @@ export function composePlanServices(options: PlanServicesOptions): {
     settings: executionSettings(options.caps), identityOf: teamId => identityOrBare(team, teamId),
     wake: teamId => runtime?.command(teamId),
     ...(options.executionGhOptions ? { ghOptions: options.executionGhOptions } : {}),
-    ...(options.executionProbe ? { probe: options.executionProbe } : {}),
-    ...(options.promotionReads ? { reads: options.promotionReads } : {}),
+    ...(options.executionProbe ? { probe: options.executionProbe } : fixture ? { probe: fixturePromotionProbe } : {}),
+    ...(options.promotionReads ? { reads: options.promotionReads } : fixture ? { reads: fixturePromotionReads() } : {}),
+    ...(fixture ? { adapters: fixturePromotionAdapters(), inspectorReads: fixtureInspectorReads() } : {}),
   })
   if (team !== undefined) {
     const roundAdaptersUsed = fixture ? fixtureRoundAdapters() : roundAdapters

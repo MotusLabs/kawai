@@ -19,7 +19,7 @@ import type { ChangeRow, EffectRow, ExecutionRow } from '../../execution/executi
 import type { ExecutionStore } from '../../execution/executionStore'
 import { afterLanded, applyLanding, applyLandingOutcome, updateBranchAdapter, type LandingDeps, type LandingAdapters } from '../../execution/executionLanding'
 import type { LandingMechanism } from '../landingMechanisms'
-import { probeIntegrationLanding } from './integrationProbe'
+import { probeIntegrationLanding, type IntegrationProbeReads } from './integrationProbe'
 import { createIntegrationAdapter, fastForwardAdapter, integrationAdapters, type IntegrationAdapters } from './integrationEffects'
 import type { IntegrationStore } from './integrationStore'
 
@@ -82,7 +82,7 @@ function stopIntegration(executions: ExecutionStore, row: ChangeRow, detail: { m
   })
 }
 
-export function integrationMechanism(store: IntegrationStore, adapters: IntegrationAdapters = integrationAdapters): LandingMechanism {
+export function integrationMechanism(store: IntegrationStore, adapters: IntegrationAdapters = integrationAdapters, probeReads: IntegrationProbeReads = {}): LandingMechanism {
   /** D5's final step, after direct's steps 1 to 3: the rewritten check, the candidate, the fast-forward. */
   async function finish(deps: LandingDeps, row: ChangeRow, at: { execution: ExecutionRow; roundId: string; resultId: string; head: string; base: string; cwd: string }): Promise<void> {
     const executions = deps.executions
@@ -183,7 +183,7 @@ export function integrationMechanism(store: IntegrationStore, adapters: Integrat
       ...input,
       branch: input.landing.mode === 'integration-branch' ? input.landing.branch : '',
       record: (teamId, branch) => store.branch(teamId, branch),
-    }, options),
+    }, options, probeReads),
     async startBase(input) {
       // D2: the integration branch's head on origin when the worktree is provisioned.
       const head = await input.lsRemoteHead(input.repo, `refs/heads/${input.execution.baseBranch}`)
