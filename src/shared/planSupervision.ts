@@ -138,8 +138,8 @@ export const NO_PROGRESS_IDLE_MS = 15 * 60 * 1000
 /** The failing checks of a round: each name's newest run fails, flaky names excluded. */
 export function failingChecks(checks: readonly CiCheck[] | null): CiCheck[] {
   if (!checks) return []
-  const flaky = new Set(flakyChecks(checks))
-  return [...runsByName(checks).values()].map(runs => runs.at(-1)!).filter(run => ciClass(run) === 'fail' && !flaky.has(run.name))
+  // A flaky name failed and then passed, so its newest run never fails: no separate exclusion is needed.
+  return [...runsByName(checks).values()].map(runs => runs.at(-1)!).filter(run => ciClass(run) === 'fail')
 }
 
 /** D11: the sorted failing check names, then `review:fail` when the review failed. */

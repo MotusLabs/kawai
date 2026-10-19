@@ -160,6 +160,19 @@ describe('fixLandings judges each landing by the revision it landed under', () =
     }))
     expect(found.landings).toEqual([])
   })
+
+  test('a landing under a revision that did not name the task leaves the change outstanding', () => {
+    const found = fixLandings(FIX, facts({
+      revisions: [
+        { revision: 1, status: 'superseded', content: content([{ change: 'api' }]) },
+        { revision: 2, status: 'approved', content: content([{ change: 'api', fixes: [FIX] }]) },
+      ],
+      currentApprovedRevision: 2,
+      executions: [{ id: 'exec-1', revision: 1, state: 'finished' }],
+      landings: [landing('api', 'exec-1', '2026-10-10T00:00:00.000Z')],
+    }))
+    expect(found).toEqual({ landings: [], outstanding: ['api'] })
+  })
 })
 
 describe('overrideCounts (M2)', () => {

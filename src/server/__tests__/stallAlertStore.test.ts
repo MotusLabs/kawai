@@ -50,3 +50,10 @@ test("reads are team-scoped and raisedSince bounds by time", () => {
   expect(store.raisedSince('t', '2026-10-19T00:30:00.000Z').map(found => found.episodeKey)).toEqual(['later'])
   expect(store.raisedSince('other', '2026-10-18T00:00:00.000Z')).toEqual([])
 })
+
+test("an episode key held by another team's row is refused, never returned", () => {
+  store.insert(alert())
+  expect(() => store.insert(alert({ teamId: 'other', messageId: 'msg-x' }))).toThrow('recorded under another team')
+  expect(store.ofPlan('other', 'p')).toEqual([])
+  expect(store.ofPlan('t', 'p').map(found => found.messageId)).toEqual(['msg-1'])
+})

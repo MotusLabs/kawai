@@ -25,11 +25,11 @@ function task(id: string, team: string, plan: string | null, change: string | nu
     VALUES (?, ?, 'T', 'open', 'human', 1, 'now', 'now', ?, ?)`).run(id, team, plan, change)
 }
 
-function usage(taskId: string | null, group: string, profile: string, tokens: number, steps = 1): void {
+function usage(taskId: string | null, group: string, profile: string, tokens: number, steps = 1, team = 't'): void {
   turn += 1
   db.prepare(`INSERT INTO chat_turn_usage (session_id, turn_id, team_id, group_id, profile_id, model, task_id, start_id, ok, input_tokens,
-    output_tokens, cache_read_tokens, cache_creation_tokens, num_turns, ended_at) VALUES ('s', ?, 't', ?, ?, 'm', ?, NULL, 1, ?, ?, ?, ?, ?, ?)`)
-    .run(`turn-${turn}`, group, profile, taskId, tokens, tokens * 2, tokens * 3, tokens * 4, steps, `2026-10-19T00:00:${String(turn).padStart(2, '0')}.000Z`)
+    output_tokens, cache_read_tokens, cache_creation_tokens, num_turns, ended_at) VALUES ('s', ?, ?, ?, ?, 'm', ?, NULL, 1, ?, ?, ?, ?, ?, ?)`)
+    .run(`turn-${turn}`, team, group, profile, taskId, tokens, tokens * 2, tokens * 3, tokens * 4, steps, `2026-10-19T00:00:${String(turn).padStart(2, '0')}.000Z`)
 }
 
 test('two profiles of one role sum apart, and by change in plan order', () => {
@@ -71,4 +71,11 @@ test("another team's read sees nothing of the plan", () => {
   usage('task-api', 'middle-devs', 'glm', 10)
   usage('task-fix', 'senior-devs', 'opus', 7)
   expect(readPlanUsage(db, 'other', 'p').total.turns).toBe(0)
+})
+
+test("a turn recorded under another team is excluded, even when pinned to this plan's task", () => {
+  usage('task-api', 'middle-devs', 'glm', 10)
+  usage('task-api', 'middle-devs', 'glm', 99, 1, 'other')
+  usage('task-fix', 'senior-devs', 'opus', 99, 1, 'other')
+  expect(readPlanUsage(db, 't', 'p').total).toMatchObject({ turns: 1, inputTokens: 10 })
 })

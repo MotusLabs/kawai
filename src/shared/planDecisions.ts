@@ -199,7 +199,7 @@ export function fixLandings(taskId: string, facts: FixPlanFacts): { landings: Fi
     return revision !== undefined && namingChanges(revision.content, taskId).includes(landing.change)
   })
   const current = facts.currentApprovedRevision === null ? undefined : revisions.get(facts.currentApprovedRevision)
-  const landed = new Set(facts.landings.map(landing => landing.change))
+  const landed = new Set(landings.map(landing => landing.change))
   const outstanding = current === undefined ? [] : namingChanges(current.content, taskId).filter(change => !landed.has(change))
   return { landings, outstanding }
 }

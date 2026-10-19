@@ -4,7 +4,8 @@
 // finds the row and raises nothing new. `insert` answers whether this call
 // wrote the row; a second insert of an episode returns the existing one
 // instead. A null `messageId` records a stall of a plan without a Lead role,
-// for which no mail is sent. Reads are scoped by team.
+// for which no mail is sent. Reads are scoped by team; an episode key held by
+// another team's row is refused rather than returned.
 import type { Database } from 'bun:sqlite'
 import type { SupervisionStall } from '../../../shared/planSupervision'
 
@@ -51,8 +52,10 @@ export class StallAlertStore {
       id, input.teamId, input.planId, input.executionId, input.change, input.kind, input.episodeKey, JSON.stringify(input.detail),
       input.messageId, this.now().toISOString(),
     ).changes
-    const row = this.db.prepare('SELECT * FROM plan_stall_alerts WHERE execution_id = ? AND change = ? AND kind = ? AND episode_key = ?')
-      .get(input.executionId, input.change, input.kind, input.episodeKey) as Row
+    const row = this.db.prepare('SELECT * FROM plan_stall_alerts WHERE team_id = ? AND execution_id = ? AND change = ? AND kind = ? AND episode_key = ?')
+      .get(input.teamId, input.executionId, input.change, input.kind, input.episodeKey) as Row | null
+    // The episode key holds another team's row: never return it across teams.
+    if (!row) throw new Error(`Stall episode ${input.executionId}/${input.change}/${input.kind} is recorded under another team.`)
     return { inserted: changes === 1, alert: mapAlert(row) }
   }
 

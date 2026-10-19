@@ -6,6 +6,7 @@ import type { CiCheck } from '../planExecution'
 import {
   causeLabel,
   changeSupervision,
+  failingChecks,
   failureSignature,
   stopReasonLabel,
   type HolderFacts,
@@ -92,6 +93,17 @@ describe('failureSignature', () => {
     expect(failureSignature({ ci: [check('unit', 'failure'), check('lint', 'failure'), check('e2e', 'success')], verdict: 'fail' })).toBe('lint,unit,review:fail')
     expect(failureSignature({ ci: [check('e2e', 'failure', ago(90)), check('e2e', 'success', ago(80)), check('unit', 'failure')], verdict: null })).toBe('unit')
     expect(failureSignature({ ci: [check('unit', 'success')], verdict: 'fail' })).toBe('review:fail')
+  })
+})
+
+describe('failingChecks', () => {
+  test("each name's newest run decides: fail then pass is flaky and passes, pass then fail fails", () => {
+    const failing = failingChecks([
+      check('e2e', 'failure', ago(90)), check('e2e', 'success', ago(80)),
+      check('unit', 'success', ago(90)), check('unit', 'failure', ago(80)),
+    ])
+    expect(failing.map(run => [run.name, run.conclusion])).toEqual([['unit', 'failure']])
+    expect(failingChecks(null)).toEqual([])
   })
 })
 

@@ -3,7 +3,8 @@
 // `team_tasks.plan_id` is the plan (execution tasks included) or to one of the
 // plan's `plan_fix_tasks` — and hands them to the pure `planUsage`. Read-only:
 // the table and its writer belong to team-process-metrics (D1). A turn with a
-// null task, or another plan's or team's task, is never counted.
+// null task, another plan's or team's task, or a turn recorded under another
+// team, is never counted.
 import type { Database } from 'bun:sqlite'
 import { planUsage, type PlanUsageTurn, type PlanUsageView } from '../../../shared/planUsage'
 import type { FixSourceKind } from '../../../shared/planDecisions'
@@ -18,8 +19,8 @@ export function planUsageTurns(db: Database, teamId: string, planId: string): Pl
     FROM chat_turn_usage u
     LEFT JOIN team_tasks t ON t.id = u.task_id AND t.team_id = ?
     LEFT JOIN plan_fix_tasks f ON f.task_id = u.task_id AND f.team_id = ? AND f.plan_id = ?
-    WHERE u.task_id IS NOT NULL AND (t.plan_id = ? OR f.task_id IS NOT NULL)
-    ORDER BY u.ended_at, u.rowid`).all(teamId, teamId, planId, planId) as Row[]
+    WHERE u.team_id = ? AND u.task_id IS NOT NULL AND (t.plan_id = ? OR f.task_id IS NOT NULL)
+    ORDER BY u.ended_at, u.rowid`).all(teamId, teamId, planId, teamId, planId) as Row[]
   return rows.map(row => ({
     taskId: String(row.task_id),
     groupId: text(row.group_id),
