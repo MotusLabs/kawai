@@ -56,8 +56,8 @@ afterEach(() => {
   fs.rmSync(tempDir, { recursive: true, force: true })
 })
 
-const createManager = () => new ChatSessionManager({
-  db, registry: new SessionRegistry(), onEvent: () => {},
+const createManager = (registry: SessionRegistry = new SessionRegistry()) => new ChatSessionManager({
+  db, registry, onEvent: () => {},
   profileCatalogHome: home, availabilityProbe: async () => {},
 })
 
@@ -69,7 +69,8 @@ const writeProfiles = (json: unknown) => {
 
 test('creation stamps the profile\'s runtime facts', async () => {
   writeProfiles({ codex: { label: 'Codex', runtime: 'codex' } })
-  const manager = createManager()
+  const registry = new SessionRegistry()
+  const manager = createManager(registry)
   try {
     const claude = await manager.createAvailableSession({ projectPath: project })
     const codex = await manager.createAvailableSession({ projectPath: project, claudeProfileId: 'codex' })
@@ -77,6 +78,10 @@ test('creation stamps the profile\'s runtime facts', async () => {
     if (!codex.ok) throw new Error(codex.error)
     expect(db.getChatSession(claude.session.id)).toMatchObject({ runtime: 'claude', codexHome: null })
     expect(db.getChatSession(codex.session.id)).toMatchObject({ runtime: 'codex', codexHome })
+    // The wire Session carries the record's fixed runtime (N4): the Debug
+    // view reads it, absent meaning claude for every older client.
+    expect(registry.getAll().find(session => session.id === codex.session.id)?.runtime).toBe('codex')
+    expect(registry.getAll().find(session => session.id === claude.session.id)?.runtime).toBeUndefined()
   } finally { manager.shutdown() }
 })
 

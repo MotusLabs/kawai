@@ -3104,6 +3104,9 @@ export class ChatSessionManager {
       kind: 'chat',
       claudeProfileId: record.claudeProfileId ?? 'default',
       approvalPolicy: record.approvalPolicy ?? 'manual',
+      // The runtime is fixed at creation (R1); absent = claude, so the
+      // Debug view reads the record instead of the live catalog (N4).
+      ...(record.runtime === 'codex' ? { runtime: record.runtime } : {}),
       // Absent provenance is treated as manual: a name we cannot attribute is
       // never handed over to a generated title (chat-session-naming design D6).
       nameSource: record.nameSource ?? 'manual',

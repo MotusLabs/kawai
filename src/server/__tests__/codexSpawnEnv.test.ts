@@ -37,16 +37,19 @@ describe('the Codex spawn environment (task 3.2, design D4)', () => {
       ANTHROPIC_API_KEY: 'not-a-real-key',
       ANTHROPIC_BASE_URL: 'https://gw.example.internal',
       CLAUDE_CODE_ATTRIBUTION_HEADER: 'x',
+      CLAUDE_CONFIG_DIR: '/home/smoke/.claude',
     }, '/srv/codex')
     // PATH and HOME survive: a `#!/usr/bin/env node` codex must start (B2).
     expect(env.PATH).toBe('/usr/bin:/bin')
     expect(env.HOME).toBe('/home/smoke')
     expect(env.LANG).toBe('C.UTF-8')
     // The provider variables never reach the child: every ANTHROPIC_* and
-    // CLAUDE_CODE_* name, and the AGENTBOARD_CHAT_ENV overrides.
+    // CLAUDE_CODE_* name, CLAUDE_CONFIG_DIR (R2-4), and the
+    // AGENTBOARD_CHAT_ENV overrides.
     expect(env.ANTHROPIC_API_KEY).toBeUndefined()
     expect(env.ANTHROPIC_BASE_URL).toBeUndefined()
     expect(env.CLAUDE_CODE_ATTRIBUTION_HEADER).toBeUndefined()
+    expect(env.CLAUDE_CONFIG_DIR).toBeUndefined()
     expect(env.AGENTBOARD_CHAT_ENV).toBeUndefined()
     expect(Object.keys(env).some(name => name.startsWith('ANTHROPIC_') || name.startsWith('CLAUDE_CODE_')))
       .toBe(false)

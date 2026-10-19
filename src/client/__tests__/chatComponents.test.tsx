@@ -491,6 +491,26 @@ describe('chat composer drafts', () => {
 describe('chat debug view', () => {
   afterEach(() => useChatDebugStore.setState({ views: {} }))
 
+  test("ChatView hands the debug panel the record's runtime, not the live catalog's (N4)", () => {
+    // The record is codex; the catalog holds no profile for the session's
+    // id, so the catalog-lookup wiring this replaces read 'claude' here.
+    useChatDebugStore.setState({
+      views: {
+        'chat-1': { ...closedDebugView(), open: true, frames: [wireFrame(1, '{"jsonrpc":"2.0","id":1,"method":"x"}', 'out')] },
+      },
+    })
+    const codexSession = { ...chatSession, runtime: 'codex' } as unknown as Session
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<ChatView
+        session={codexSession} sendMessage={() => {}}
+        connectionStatus="connected" connectionEpoch={0} error={null}
+        onClose={() => {}} onKill={() => {}} />)
+    })
+    expect(renderer.root.findByType(ChatDebugPanel).props.runtime).toBe('codex')
+    renderer.unmount()
+  })
+
   function renderView(connectionEpoch = 0) {
     const sent: ClientMessage[] = []
     const props = {

@@ -55,10 +55,10 @@ export const CODEX_PROVIDER_LABEL = 'Codex'
  * server's own environment with CODEX_HOME set — PATH and HOME survive, so
  * a `#!/usr/bin/env node` codex starts — minus the provider variables:
  * every ANTHROPIC_* and CLAUDE_CODE_* variable (PROFILE_CONTROLLED_ENV is a
- * subset) and the AGENTBOARD_CHAT_ENV overrides, which must never steer
- * another agent runtime. Configuration travels as `-c` overrides instead
- * (task 5.3's sandbox builds them), and the spawn writes nothing into the
- * home.
+ * subset), CLAUDE_CONFIG_DIR (R2-4), and the AGENTBOARD_CHAT_ENV overrides,
+ * which must never steer another agent runtime. Configuration travels as
+ * `-c` overrides instead (task 5.3's sandbox builds them), and the spawn
+ * writes nothing into the home.
  */
 export function codexSpawnEnv(
   serverEnv: Record<string, string | undefined>,
@@ -68,6 +68,7 @@ export function codexSpawnEnv(
   for (const [name, value] of Object.entries(serverEnv)) {
     if (value === undefined) continue
     if (name === 'AGENTBOARD_CHAT_ENV') continue
+    if (name === 'CLAUDE_CONFIG_DIR') continue
     if (name.startsWith('ANTHROPIC_') || name.startsWith('CLAUDE_CODE_')) continue
     env[name] = value
   }
