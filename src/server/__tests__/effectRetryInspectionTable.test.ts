@@ -204,4 +204,30 @@ describe('the stop names its effect (review N2)', () => {
     expect(h.executions.effect(push.id)).toMatchObject({ state: 'unknown' })
     expect(h.executions.effect(merge.id)).toMatchObject({ state: 'failed' })
   })
+
+  test('an exhausted inspection stops the change naming its effect, and its Retry re-opens that one', async () => {
+    const executionId = await startedExecution(h, [{ change: 'tb-exhaust' }])
+    await h.tick()
+    const effect = h.executions.insertEffect({ executionId, change: 'tb-exhaust', roundId: null, kind: 'push', effectKey: `${executionId}:tb-exhaust:push:seed:0`, command: { cwd: matrix.origin, commit: 'abc', branch: 'tb-exhaust' } })
+    h.executions.markEffectRunning(effect.id)
+    h.executions.markRunningEffectsUnknown()
+    // Three undecidable passes over D14's backoffs exhaust the inspection:
+    // the production recovery writes the stop, naming the effect.
+    const blocked = h.makeExecutor({ reads: rejecting })
+    try {
+      for (const step of [31_000, 121_000, 601_000]) {
+        await h.tick(blocked)
+        h.clock.now += step
+      }
+      await h.tick(blocked)
+    } finally {
+      blocked.close()
+    }
+    expect(h.executions.effect(effect.id)).toMatchObject({ state: 'failed' })
+    const stopped = h.executions.change(executionId, 'tb-exhaust')!
+    expect(stopped).toMatchObject({ state: 'stopped', stopReason: 'effect-unknown' })
+    expect(stopped.stopDetail?.effectId).toBe(effect.id)
+    expect(await h.service.retry(h.bench.human, { executionId, change: 'tb-exhaust', commandId: 'retry-tb-exhaust' })).toMatchObject({ ok: true })
+    expect(h.executions.effect(effect.id)).toMatchObject({ state: 'unknown' })
+  })
 })
