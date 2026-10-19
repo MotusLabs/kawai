@@ -134,7 +134,11 @@ function submitRound(root: string, mode: 'result' | 'findings', implementer: str
         const result = db.prepare('SELECT id FROM team_task_results WHERE task_id = ? ORDER BY rowid DESC').get(taskId);
         if (!result) throw new Error('no result yet');
         const asReviewer = taskHandlers(tasks, claimant, results);
-        await retryOnSqliteBusy(() => asReviewer.task_submit_findings({ task_id: taskId, result_id: result.id, kind: 'review', verdict: 'pass', findings: 'Clean: the walkthrough change is sound.' }));
+        // Not retried: submitFindings makes three autocommits (the findings
+        // INSERT, then the journal note's INSERT and UPDATE), so a BUSY after
+        // the first would duplicate them on a re-run; its statements start
+        // from TRANS_NONE and take the busy handler.
+        await asReviewer.task_submit_findings({ task_id: taskId, result_id: result.id, kind: 'review', verdict: 'pass', findings: 'Clean: the walkthrough change is sound.' });
         console.log('FINDINGS:ok:' + claimant);
       }
       sessions.close();

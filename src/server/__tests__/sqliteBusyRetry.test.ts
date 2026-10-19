@@ -22,9 +22,9 @@ function reservedHolder(dir: string): Database {
 describe('retryOnSqliteBusy', () => {
   test('retries the deferred read→write and succeeds once the holder commits', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'sqlite-busy-retry-'))
+    const holder = reservedHolder(dir)
+    const seeder = new Database(join(dir, 'db.sqlite'))
     try {
-      const holder = reservedHolder(dir)
-      const seeder = new Database(join(dir, 'db.sqlite'))
       // BUSY comes back at once, like the scripts' busy_timeout=5000 does on
       // this upgrade path — the bound must carry the waiting, not the pragma.
       seeder.exec('PRAGMA busy_timeout = 0')
@@ -42,9 +42,9 @@ describe('retryOnSqliteBusy', () => {
       expect(result).toBe('seeded')
       expect(attempts).toBe(2)
       expect(seeder.query('SELECT v FROM t').all()).toEqual([{ v: 'held' }, { v: 'seeded' }])
+    } finally {
       holder.close()
       seeder.close()
-    } finally {
       rmSync(dir, { recursive: true, force: true })
     }
   })
