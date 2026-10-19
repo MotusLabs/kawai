@@ -28,6 +28,7 @@ let records: Map<string, ChatSessionRecord>
 let groups: Map<string, GroupDefinition>
 let ruleOnLimit: ((ctx: LimitOutcomeContext) => Promise<LimitOutcome>) | null
 let errors: unknown[]
+let home: string
 
 const group = (id: string, frontmatter = '') => {
   const parsed = parseGroupFile(id, `---\n${frontmatter}\n---\nWork.`)
@@ -51,11 +52,14 @@ function makeOutcomes() {
     restoreSession: id => { records.get(id)!.archivedAt = null },
     onError: error => errors.push(error),
     now: () => now,
+    homeDir: home,
   })
 }
 
 beforeEach(() => {
   now = T0
+  // providerOf reads the catalog home the options pass, never the operator's.
+  home = fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-limit-home-'))
   db = schemaDb(':memory:')
   store = new MailboxStore(db)
   limits = new LimitEventStore(db, () => now)
@@ -67,7 +71,10 @@ beforeEach(() => {
   errors = []
   outcomes = makeOutcomes()
 })
-afterEach(() => db.close())
+afterEach(() => {
+  db.close()
+  fs.rmSync(home, { recursive: true, force: true })
+})
 
 /** Group mail claimed and delivered to `sessionId` as its current turn. */
 function deliver(sessionId = 'dev', extra: Partial<Parameters<MailboxStore['enqueue']>[0]> = {}): TeamMessage {
@@ -84,7 +91,7 @@ function deliver(sessionId = 'dev', extra: Partial<Parameters<MailboxStore['enqu
 async function hitLimit(resetInMs: number | null, sessionId = 'dev', profileId = 'glm') {
   limits.record({
     profileId, sessionId, groupId: 'devs', kind: 'rate_limit', final: true, status: 429, message: 'API Error: 429 quota',
-    resetsAt: resetInMs === null ? null : iso(now + resetInMs),
+    resetsAt: resetInMs === null ? null : iso(now + resetInMs), providerId: null, window: null,
   })
   await outcomes.turnEnded(sessionId, true)
 }
@@ -247,6 +254,22 @@ describe('parking', () => {
     expect(store.get(m.id)?.state).toBe('forwarded')
     expect(() => outcomes.handOff(m.id, { kind: 'group', id: 'devs' })).toThrow('Only parked work')
   })
+
+  test('a Hand off to a session of the cooling provider refuses; another provider takes it', async () => {
+    const m = deliver()
+    work()
+    await hitLimit(40 * MIN)
+    records.set('flash', record('flash', { claudeProfileId: 'glm-flash' }))
+    // The limit named its provider zai, so the provider stands while glm-flash cools.
+    limits.record({
+      profileId: 'glm', sessionId: 'dev', groupId: 'devs', kind: 'rate_limit', final: true, status: 429,
+      message: 'quota', resetsAt: iso(T0 + 40 * MIN), providerId: 'zai', window: null,
+    })
+    expect(() => outcomes.handOff(m.id, { kind: 'session', id: 'flash' }))
+      .toThrow('its provider zai is cooling after the limit on glm')
+    records.set('clauder', record('clauder', { claudeProfileId: 'claude' }))
+    expect(outcomes.handOff(m.id, { kind: 'session', id: 'clauder' })).toMatchObject({ toId: 'clauder', excludedProfile: 'glm' })
+  })
 })
 
 describe('recovery notes', () => {
@@ -267,6 +290,8 @@ describe('recovery notes', () => {
     expect(notes()[0]).toMatchObject({ toKind: 'session', toId: 'dev', state: 'queued' })
     expect(notes()[0]!.body).toContain('Export CSV')
     expect(notes()[0]!.body).toContain('name-dev2')
+    // The note names the profile's provider (providers-and-workers D15).
+    expect(notes()[0]!.body).toContain('Your provider zai limit has recovered')
   })
 
   test('a recovered profile waits for the forwarded work to be taken', async () => {
@@ -281,6 +306,47 @@ describe('recovery notes', () => {
     store.claim(forwarded.id, 'dev2')
     outcomes.processNotes()
     expect(store.listForTeam('team').some(row => row.tags.includes('handoff-note'))).toBe(true)
+  })
+
+  test('a model-scoped limit keeps the provider out of the note (D15 same case)', async () => {
+    const m = deliver()
+    work()
+    // opus's own seven_day_opus window: the cooldown is the profile's alone,
+    // so the note does not name claude.
+    limits.record({
+      profileId: 'opus', sessionId: 'dev', groupId: 'devs', kind: 'rate_limit', final: true, status: 429,
+      message: 'quota', resetsAt: iso(T0 + 5 * 60 * MIN), providerId: 'claude', window: 'seven_day_opus',
+    })
+    await outcomes.turnEnded('dev', true)
+    const forwardedId = store.get(m.id)!.reason!.replace('forwarded: ', '')
+    store.claim(forwardedId, 'dev2')
+    now = T0 + 5 * 60 * MIN + 1
+    outcomes.processNotes()
+    const notes = store.listForTeam('team').filter(row => row.tags.includes('handoff-note'))
+    expect(notes).toHaveLength(1)
+    expect(notes[0]!.body).toContain('Your provider limit has recovered')
+    expect(notes[0]!.body).not.toContain('claude')
+  })
+
+  test("a sibling's provider-scoped event holds the note past the original reset", async () => {
+    const m = deliver()
+    work()
+    await hitLimit(5 * 60 * MIN)
+    // glm-flash shares glm's shipped provider zai: its later provider reset
+    // holds glm's note past glm's own.
+    limits.record({
+      profileId: 'glm-flash', sessionId: 'dev2', groupId: 'devs', kind: 'rate_limit', final: true, status: 429,
+      message: 'quota', at: iso(T0 + MIN), resetsAt: iso(T0 + 6 * 60 * MIN), providerId: 'zai', window: null,
+    })
+    const forwardedId = store.get(m.id)!.reason!.replace('forwarded: ', '')
+    store.claim(forwardedId, 'dev2')
+    expect(outcomes.nextNoteAt()).toBe(T0 + 6 * 60 * MIN)
+    now = T0 + 5 * 60 * MIN + 1
+    outcomes.processNotes()
+    expect(store.listForTeam('team').some(row => row.tags.includes('handoff-note'))).toBe(false)
+    now = T0 + 6 * 60 * MIN + 1
+    outcomes.processNotes()
+    expect(store.listForTeam('team').filter(row => row.tags.includes('handoff-note'))).toHaveLength(1)
   })
 })
 
@@ -443,4 +509,32 @@ test('manual handoff wins while a resume limit rule is still running', async () 
   await pending
   expect(store.get(m.id)?.state).toBe('forwarded')
   expect(store.listForTeam('team').map(row => row.id)).toEqual([forwarded.id])
+})
+
+describe('takeExhaustedWork (chat-context-exhaustion D4)', () => {
+  test('hands back the turn\'s work with its progress and ends the turn without a limit resolution', async () => {
+    const m = deliver()
+    work('dev', 3)
+    limits.record({
+      profileId: 'glm', sessionId: 'dev', groupId: 'devs', kind: 'rate_limit', final: true, status: 429, message: 'API Error: 429',
+      resetsAt: iso(now + 10 * MIN), providerId: 'zai', window: null,
+    })
+    const taken = outcomes.takeExhaustedWork('dev')
+    expect(taken).toEqual({ messageId: m.id, progress: { toolCalls: 3, tools: ['Read', 'Edit', 'Read'], filesTouched: ['src/f0.ts', 'src/f1.ts', 'src/f2.ts'] } })
+    // The pending limit event is gone: a later turn end resolves nothing.
+    await outcomes.turnEnded('dev', false)
+    expect(store.get(m.id)?.state).toBe('delivered')
+    expect(outcomes.takeExhaustedWork('dev')).toBeNull()
+  })
+
+  test('a resume turn hands back the parked work it resumes', async () => {
+    const m = deliver()
+    work()
+    await hitLimit(40 * MIN)
+    const resume = store.get(store.get(m.id)!.resumeMessageId!)!
+    store.claim(resume.id, 'dev'); store.markPushed(resume.id); store.markDelivered(resume.id)
+    outcomes.turnStarted('dev', false)
+    outcomes.delivered('dev', store.get(resume.id)!)
+    expect(outcomes.takeExhaustedWork('dev')?.messageId).toBe(m.id)
+  })
 })

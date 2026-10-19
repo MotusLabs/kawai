@@ -316,6 +316,19 @@ export function parseTranscriptContent(
       // Other system subtypes are informational; ignored.
       continue
     }
+    if (type === 'assistant' && record.isApiErrorMessage === true) {
+      // An API-error reply (chat-context-exhaustion D2: e.g. the CLI's
+      // synthetic "Prompt is too long") replays as the error the live chat
+      // showed, never as assistant text.
+      events.push({
+        id: `hist-${lineUuid}`,
+        sequence: 0,
+        at,
+        type: 'error',
+        message: apiErrorText(contentValue),
+      })
+      continue
+    }
     if (type === 'user' || type === 'assistant') {
       if (typeof contentValue === 'string') {
         if (type === 'user') {
@@ -717,6 +730,17 @@ function historyUnavailable(
       },
     ],
   }
+}
+
+/** The text of an API-error reply: its string content or joined text blocks. */
+function apiErrorText(content: unknown): string {
+  if (typeof content === 'string' && content.trim()) return content.trim()
+  const text = (Array.isArray(content) ? content : [])
+    .map((block) => asRecord(block))
+    .map((block) => (block?.type === 'text' && typeof block.text === 'string' ? block.text : ''))
+    .join('\n')
+    .trim()
+  return text || 'The model request failed'
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

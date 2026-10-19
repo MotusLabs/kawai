@@ -14,6 +14,7 @@ import type {
   ChatEvent,
   ChatWorker,
 } from '../../shared/chat'
+import { turnSucceeded } from '../../shared/chat'
 import type { ChatWireRecorder } from '../chat/wireTap'
 import type { ChatLimitSignal } from '../chat/limitSignals'
 import type { OutboundAuditSink } from '../outbound/observer'
@@ -1245,6 +1246,89 @@ describe('ChatSessionDriver', () => {
     harness.driver.send('again')
     expect(harness.fakes).toHaveLength(1)
     expect(harness.statuses.at(-1)).toBe('working')
+  })
+
+  test('a success result with is_error completes the turn as failed (the 2026-10-18 incident frames)', async () => {
+    const harness = createHarness()
+    harness.driver.send('go')
+    const fake = harness.fakes[0]!
+    // The CLI's blocking-limit refusal: a <synthetic> reply with zero usage,
+    // then subtype success with is_error and the terminal reason.
+    fake.push({
+      type: 'assistant',
+      message: {
+        id: 'msg_synthetic',
+        model: '<synthetic>',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Prompt is too long' }],
+        usage: { input_tokens: 0, output_tokens: 0 },
+      },
+      parent_tool_use_id: null,
+      uuid: 'synthetic-uuid',
+      session_id: 'sdk-1',
+      error: 'invalid_request',
+    } as unknown as SDKMessage)
+    fake.push(
+      result('success', {
+        is_error: true,
+        result: 'Prompt is too long',
+        terminal_reason: 'blocking_limit',
+        usage: { input_tokens: 0, output_tokens: 0 },
+      })
+    )
+    await flush()
+
+    const completed = harness.events.find((e) => e.type === 'turn_completed')
+    expect(completed).toMatchObject({ subtype: 'success', isError: true, terminalReason: 'blocking_limit' })
+    expect(completed && 'finalText' in completed).toBe(false)
+    expect(completed && turnSucceeded(completed as never)).toBe(false)
+    const error = harness.events.find((e) => e.type === 'error')
+    expect(error).toMatchObject({ message: 'Prompt is too long (blocking_limit)' })
+    expect(harness.statuses.at(-1)).toBe('waiting')
+    expect(harness.driver.isDead).toBe(false)
+  })
+
+  test('a plain success result carries isError false and no error event', async () => {
+    const harness = createHarness()
+    harness.driver.send('hi')
+    harness.fakes[0]!.push(result('success'))
+    await flush()
+    const completed = harness.events.find((e) => e.type === 'turn_completed')
+    expect(completed).toMatchObject({ isError: false, finalText: 'all done' })
+    expect(completed && 'terminalReason' in completed).toBe(false)
+    expect(harness.events.some((e) => e.type === 'error')).toBe(false)
+  })
+
+  test('turn identities stay unique when the same managed session constructs a fresh driver', () => {
+    const first=createHarness({deterministicTurnIds:false})
+    const restarted=createHarness({deterministicTurnIds:false})
+    first.driver.send('first');restarted.driver.send('after restart')
+    const a=first.events.find(event=>event.type==='turn_started')!.turnId
+    const b=restarted.events.find(event=>event.type==='turn_started')!.turnId
+    expect(a).not.toBe(b)
+    expect(a).toMatch(/^turn-[0-9a-f-]{36}$/)
+    first.driver.kill();restarted.driver.kill()
+  })
+
+  test('structured compaction preserves metadata, measures only an observed start and isolates callback failure', async () => {
+    const observations: import('../../shared/processObservations').Measurement[] = []
+    const h = createHarness({onCompaction:data=>observations.push(data)})
+    h.driver.send('hi')
+    h.fakes[0]!.push(compactBoundary('auto', 100))
+    await flush()
+    expect(observations[0]).toMatchObject({trigger:'auto',preTokens:100,postTokens:null,startedAt:null,durationSeconds:null,outcome:'completed'})
+    h.fakes[0]!.push({type:'system',subtype:'status',status:'compacting'} as unknown as SDKMessage)
+    h.fakes[0]!.push(compactBoundary('manual', 200, 50))
+    await flush()
+    expect(observations[1]).toMatchObject({outcome:'started',endedAt:null})
+    expect(observations[2]).toMatchObject({trigger:'manual',preTokens:200,postTokens:50,outcome:'completed'})
+    expect(typeof observations[2]!.durationSeconds).toBe('number')
+    h.driver.kill()
+    const failing=createHarness({onCompaction:()=>{throw Error('recorder failure')}})
+    failing.driver.send('hi');failing.fakes[0]!.push(compactBoundary('auto',100,40))
+    failing.fakes[0]!.push(result('success'));await flush()
+    expect(typesOf(failing.events)).toContain('turn_completed')
+    failing.driver.kill()
   })
 
   test('trailing events after result are tolerated without killing the session', async () => {
@@ -3096,19 +3180,46 @@ describe('ChatSessionDriver limit events', () => {
     fake.push(frame({ type: 'system', subtype: 'api_retry', attempt: 2, max_retries: 10, retry_delay_ms: 500, error_status: 504, error: 'server_error' }))
     fake.push(result('success'))
     await flush()
-    expect(limits).toEqual([{ kind: 'rate_limit', final: false, status: 429, message: null, resetsAt: null }])
+    expect(limits).toEqual([{ kind: 'rate_limit', final: false, status: 429, message: null, resetsAt: null, window: null }])
   })
 
   test('a failed assistant message is the final event, with the reset a rejected rate_limit_event announced', async () => {
     const { fake, limits } = limitHarness()
     const reset = Math.floor(Date.now() / 1000) + 2400
-    fake.push(frame({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: reset } }))
+    fake.push(frame({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: reset, rateLimitType: 'seven_day_opus' } }))
     fake.push(failedAssistant('rate_limit', 'API Error: 429 {"error":"quota"}'))
     fake.push(result('success'))
     await flush()
     expect(limits).toEqual([{
       kind: 'rate_limit', final: true, status: 429, message: 'API Error: 429 {"error":"quota"}',
-      resetsAt: new Date(reset * 1000).toISOString(),
+      resetsAt: new Date(reset * 1000).toISOString(), window: 'seven_day_opus',
+    }])
+  })
+
+  test('the window follows the latest reset-bearing rejected event, nameless or not', async () => {
+    const { fake, limits } = limitHarness()
+    const first = Math.floor(Date.now() / 1000) + 2400
+    const second = first + 60
+    fake.push(frame({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: first, rateLimitType: 'seven_day_opus' } }))
+    fake.push(frame({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: second } }))
+    fake.push(failedAssistant('rate_limit', 'API Error: 429 quota'))
+    fake.push(result('success'))
+    await flush()
+    expect(limits).toEqual([{
+      kind: 'rate_limit', final: true, status: 429, message: 'API Error: 429 quota',
+      resetsAt: new Date(second * 1000).toISOString(), window: null,
+    }])
+  })
+
+  test('the window drops together with its reset once past', async () => {
+    const { fake, limits } = limitHarness()
+    const stale = Math.floor(Date.now() / 1000) - 10
+    fake.push(frame({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: stale, rateLimitType: 'five_hour' } }))
+    fake.push(failedAssistant('rate_limit', 'API Error: 429 quota'))
+    fake.push(result('success'))
+    await flush()
+    expect(limits).toEqual([{
+      kind: 'rate_limit', final: true, status: 429, message: 'API Error: 429 quota', resetsAt: null, window: null,
     }])
   })
 

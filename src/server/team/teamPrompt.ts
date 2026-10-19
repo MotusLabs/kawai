@@ -123,6 +123,8 @@ function planNote({ sessionId, group }: TeamPromptInput): string {
     '',
     "A plan's direction is its current revision that only the human approved; drafts and revisions in review are proposals, not direction.",
     `When you create a task for one of a plan's changes, pass \`plan_id\` and \`plan_change\` together to \`${tool('task_create')}\`: the change must be in the revision only the human approved, the link is fixed at creation, and task mail then names the plan, its revision, and the change.`,
+    `\`plan_get\` also shows the plan's executions: each change's state (waiting, provisioning, implementing, gating, landing, landed, stopped), its latest round's attempt, and where its review stands.`,
+    'When a running execution owns a change: only Kawai dispatches its task or hands it to its next stage — your findings on its results still count. Submit results with the commit that landed on the change\u2019s branch (Kawai checks it against the branch and origin). Reply to Kawai\u2019s instruction mail is refused: answer with a result, findings, a journal note, or a message to the responsible group. No tool of yours starts, stops, retries, or approves an execution — only the human does, from the Plans view.',
   ].join('\n')
 }
 
@@ -185,6 +187,8 @@ function mailboxNote({ sessionId, group, groups }: TeamPromptInput): string {
     '',
     ...managementLines(group, tool),
     'The human works alongside you. New mail to them is refused: only a reply to a message they sent reaches them.',
+    '',
+    'A message tagged `context-exhausted` reports that a session you dispatched work to stopped because its context is full: the work it carried was dead-lettered unprocessed, and it lists the dropped message, the progress since the claim, the claim commit and HEAD, and the providers\' usage. Decide how the work continues — dispatch it again to a group or another session (one on a provider with headroom when a limit is near; it should inspect the worktree first), or leave the session for the human to /compact. Mail and retries to a flagged session are refused, and kawai never compacts it.',
     '',
     'Sending returns a message id immediately; it never waits for an answer. Replies arrive as later turns. Do not spin waiting for them — finish your turn.',
   ].join('\n')

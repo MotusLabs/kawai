@@ -87,7 +87,7 @@ export interface MetricsInputs {
   messageEvents: MetricMessageEvent[]
   usage: TurnUsageRow[]
   /**
-   * Before this, turns may be missing — usage retention's `end − 60 d`, or the
+   * Before this, turns may be missing — usage retention's `end − 90 d`, or the
    * team's first recorded turn when later (recording began then; `end` with
    * none) — so a cohort task created earlier has its tokens marked partial.
    */
@@ -96,6 +96,8 @@ export interface MetricsInputs {
   manifests: Map<string, Record<string, string>>
   /** Per profile, `(at, rowid)` order, from `loadFrom − 24 h`. */
   limitEvents: Map<string, LimitEvent[]>
+  /** Each loaded profile's provider (providers-and-workers D8); identity when unresolved. */
+  providerIds: Map<string, string>
   /** A session's profile when no start names it (chat_sessions). */
   sessionProfiles: Map<string, string>
 }
@@ -145,12 +147,14 @@ const mapLimit = (row: Record<string, unknown>): LimitEvent => ({
   id: String(row.id), profileId: String(row.profile_id), sessionId: String(row.session_id), groupId: text(row.group_id),
   at: String(row.at), kind: String(row.kind), final: Number(row.final) === 1, status: row.status === null ? null : Number(row.status),
   message: text(row.message), resetsAt: text(row.resets_at),
+  providerId: text(row.provider_id), window: text(row.limit_window),
 })
 
 /** Park-episode event kinds: `parked` opens one, the rest close it. */
 export const PARK_END_KINDS = ['unparked', 'cancelled', 'forwarded', 'released'] as const
 
-export function loadMetricsInputs(db: Database, teamId: string, loadFrom: number, end: number): MetricsInputs {
+export function loadMetricsInputs(db: Database, teamId: string, loadFrom: number, end: number,
+  resolveProvider?: (profileId: string, teamId: string) => string): MetricsInputs {
   return db.transaction(() => {
     const from = iso(loadFrom)
     const to = iso(end)
@@ -233,11 +237,15 @@ export function loadMetricsInputs(db: Database, teamId: string, loadFrom: number
         .all(profile, limitFrom, to) as Record<string, unknown>[]).map(mapLimit))
     }
 
+    // Each loaded profile's provider (D8), resolved by the caller's catalog;
+    // unresolved ids stand in as their own provider.
+    const providerIds = new Map([...profiles].map(profile => [profile, resolveProvider?.(profile, teamId) ?? profile]))
+
     const firstTurn = (db.prepare('SELECT MIN(ended_at) AS at FROM chat_turn_usage WHERE team_id = ?').get(teamId) as { at: string | null }).at
     const usageHorizon = Math.max(end - TURN_USAGE_RETENTION_MS, firstTurn ? Date.parse(firstTurn) : end)
 
     return {
       teamId, loadFrom, end, tasks, statusEvents, results, findings, messages, messageEvents, usage,
-      usageHorizon, starts, manifests, limitEvents, sessionProfiles }
+      usageHorizon, starts, manifests, limitEvents, providerIds, sessionProfiles }
   })()
 }

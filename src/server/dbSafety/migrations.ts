@@ -17,6 +17,8 @@
 import type { Database } from 'bun:sqlite'
 import { BUILD_VERSION } from '../version'
 import { outboundAuditMigration } from '../outbound/migration'
+import { CREATE_PROCESS_OBSERVATIONS_SQL } from '../metrics/observations/schema'
+import { contextExhaustedMigration } from '../chat/contextExhaustedMigration'
 import { applyBaselineSchema } from './baseline'
 import { CREATE_IMPACT_TABLES_SQL } from '../strategy/impactSchema'
 import { CREATE_VALIDATION_TABLES_SQL } from '../plans/validation/validationSchema'
@@ -25,6 +27,7 @@ import { migrateTaskStatusEvents } from '../team/taskStatusEventsSchema'
 import { CREATE_AGENT_START_TABLES_SQL } from '../metrics/provenanceSchema'
 import { CREATE_TURN_USAGE_SQL } from '../chat/chatTurnUsageStore'
 import { CREATE_PROCESS_REPORT_TABLES_SQL } from '../metrics/reportSchema'
+import { migrateProviderLimitWindow } from '../team/routing/limitEvents'
 import type { BackupFile } from './backupFiles'
 import type { BackupOutcome } from './backups'
 
@@ -59,6 +62,12 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 8, name: 'plan-execution', up: applyExecutionSchema },
   // execution-safety-recovery D6: the append-only outbound audit tables.
   outboundAuditMigration,
+  // chat-context-exhaustion D3: the session's context-exhausted flag columns.
+  contextExhaustedMigration,
+  { version: 11, name: 'process-observations', up: db => db.exec(CREATE_PROCESS_OBSERVATIONS_SQL) },
+  // providers-and-workers D7: limit events record their provider and the
+  // rejected report's window; rows from before it read provider-less.
+  { version: 12, name: 'provider-limit-window', up: migrateProviderLimitWindow },
 ]
 
 export const RESTORE_DOC = 'docs/operations/database-backups.md'

@@ -7,7 +7,7 @@ Lets a Kawai chat session, and so a team member, run on Codex instead of Claude 
 ## ADDED Requirements
 
 ### Requirement: Codex chat sessions run a separately installed Codex executable
-A chat session whose profile's provider is Codex SHALL run a Codex CLI installed separately from the application. The executable SHALL be the path in the server-only `KAWAI_CODEX_PATH` setting when present, otherwise `codex` resolved from the server's `PATH`. The value SHALL be treated as one executable path, never as a shell command, and SHALL NOT be sent to browsers.
+A chat session whose profile's runtime is Codex SHALL run a Codex CLI installed separately from the application. The executable SHALL be the path in the server-only `KAWAI_CODEX_PATH` setting when present, otherwise `codex` resolved from the server's `PATH`. The value SHALL be treated as one executable path, never as a shell command, and SHALL NOT be sent to browsers.
 
 #### Scenario: Explicit Codex path
 - **WHEN** `KAWAI_CODEX_PATH` names an executable file and a user creates a chat with a Codex profile

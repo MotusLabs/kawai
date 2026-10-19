@@ -36,6 +36,7 @@ import type {
   ChatWorker,
   ChatBackgroundTask,
 } from '../../shared/chat'
+import { EXHAUSTING_REASONS, turnSucceeded } from '../../shared/chat'
 import type {
   ChatNameSource,
   ServerMessage,
@@ -48,6 +49,7 @@ import { generateSessionName } from '../nameGenerator'
 import { isExistingDirectory, resolveProjectDirectory } from '../paths'
 import type { SessionRegistry } from '../SessionRegistry'
 import { ChatSessionDriver, type ChatQueryFactory } from './ChatSessionDriver'
+import type { ChatAgentDriver } from './provider/driver'
 import { chatAuthErrorMessage, hasClaudeAuth } from './chatAuth'
 import { historyWindow } from './historyWindow'
 import {
@@ -72,10 +74,12 @@ import { probeSdkAvailability } from './sdkAvailability'
 import { AccountNoticeStore, credentialsPathFor } from './accountNotices'
 import { UsageLimitStore } from './usageLimits'
 import { withTextReset } from './limitSignals'
+import { providerOf } from './profileCatalog'
 import { fetchZaiUsage } from './zaiUsage'
 import { readWorkerTranscript } from './chatWorkerTranscript'
 import { isTaskOutputFile, readTaskOutputTail } from './taskOutputFile'
 import type { BackgroundTaskRecord } from './chatBackgroundTasks'
+import type { ExhaustionEpisode } from '../team/exhaustionNotes'
 import { loadTeamGroups } from '../team/teamGroups'
 import { SessionTeams } from '../team/sessionTeams'
 import { TeamScopes } from '../team/teamScope'
@@ -85,7 +89,7 @@ import { MessageQuery } from '../team/messageQuery'
 import { ChatTurnEndStore } from './chatTurnEndStore'
 import { TeamMailbox } from '../team/TeamMailbox'
 import { createMailboxServer } from '../team/mailboxTools'
-import { composePlanServices } from '../plans/planComposition'
+import { composeExecutionCore, composePlanServices } from '../plans/planComposition'
 import type { ValidationService } from '../plans/validation/ValidationService'
 import type { OpenspecAdapter } from '../plans/validation/openspecAdapter'
 import type { ValidationDetailCache } from '../plans/validation/validationDetail'
@@ -108,11 +112,12 @@ import type { TaskResultService } from '../team/TaskResultService'
 import type { SpawnRequest, SpawnResult } from '../team/staffing'
 import { TeamCaps } from '../team/teamCaps'
 import { worktreeRootOf } from '../team/worktreeRoots'
+import { ProcessObservationService } from '../metrics/observations/service'
 import { ProvenanceRecorder } from '../metrics/provenanceRecorder'
 import { ChatTurnUsageStore, TurnUsageTracker } from './chatTurnUsageStore'
 import { MetricsReader } from '../metrics/computeMetrics'
 import { ProcessReportService, type ReportCaller } from '../metrics/reportService'
-import type { ChatSpawnInfo } from './ChatSessionDriver'
+import type { ChatSpawnInfo } from './provider/driver'
 import { OutboundDestinations } from '../outbound/destinations'
 import { sessionObserver } from '../outbound/auditHooks'
 import { RepoFactsResolver } from '../outbound/repoFacts'
@@ -338,11 +343,11 @@ export type ChatTaskOutputResult =
 export class ChatSessionManager {
   private readonly options: ChatSessionManagerOptions
   private readonly records = new Map<string, ChatSessionRecord>()
-  private readonly drivers = new Map<string, ChatSessionDriver>()
+  private readonly drivers = new Map<string, ChatAgentDriver>()
   /** In-flight ensureDriver calls, so racing sends never build two drivers. */
   private readonly driverPromises = new Map<
     string,
-    Promise<ChatSessionDriver | null>
+    Promise<ChatAgentDriver | null>
   >()
   private sdkQuery: Promise<ChatQueryFactory> | null = null
   /**
@@ -1006,6 +1011,17 @@ export class ChatSessionManager {
         if (path === credentialsPath) this.emitNotifications(sessionId)
       }
     })
+    // The execution core exists before the team services: they take the
+    // ownership it mints (plan-execution D7), and the composition below
+    // reuses its store and wake hub (one ExecutionStore per server).
+    this.executionCore = composeExecutionCore(options.db.db)
+    const executionCore = this.executionCore
+    // One reader of `~/.kawai/teams.json` (N5): spawn caps for the mailbox
+    // and the plan-execution settings for the composition below.
+    this.caps = new TeamCaps({
+      ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
+      onErrors: errors => logger.warn('team_caps_file_errors', { errors }),
+    })
     this.teamMail = new SessionMailbox(options.db.db, {
       teams: this.teams, records: () => this.records.values(), getRecord: id => this.records.get(id),
       getDriver: id => this.drivers.get(id), homeDir: options.profileCatalogHome,
@@ -1019,10 +1035,7 @@ export class ChatSessionManager {
       hasLiveWorkers: id => this.hasLiveWorkers(id),
       hasRunningBackgroundTasks: id => this.hasRunningBackgroundTasks(id),
       spawn: request => this.spawnMember(request),
-      caps: new TeamCaps({
-        ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
-        onErrors: errors => logger.warn('team_caps_file_errors', { errors }),
-      }),
+      caps: this.caps,
       // A spawned member keeps the task it was spawned for; others follow
       // the task of the mail they received last.
       associateTask: (id, taskId) => {
@@ -1037,6 +1050,8 @@ export class ChatSessionManager {
       usageOf: profileId => this.usageLimits.get(profileId),
       onRulesLoaded: () => options.onRoutingRulesLoaded?.(),
       onError: error => logger.warn('team_mailbox_dispatch_failed', { error: String(error) }),
+      ownership: executionCore.ownership,
+      onTaskResultWrite: taskId => executionCore.wakes.resultWrite(taskId),
     })
     this.mailbox = this.teamMail.mailbox
     this.tasks = this.teamMail.tasks
@@ -1049,7 +1064,10 @@ export class ChatSessionManager {
     this.turnEnds = new ChatTurnEndStore(options.db.db)
     this.provenance = new ProvenanceRecorder(options.db.db)
     this.turnUsage = new ChatTurnUsageStore(options.db.db)
-    this.metrics = new MetricsReader(options.db.db)
+    this.metrics = new MetricsReader(options.db.db, Date.now,
+      // The provider cooldown (providers-and-workers D8) resolves in the
+      // team's own catalog, so a provider event shows in every profile's tax.
+      (profileId, teamId) => providerOf(profileId, this.catalogCtx(teamId)))
     this.reports = new ProcessReportService(options.db.db, this.metrics, {
       onCommit: teamId => this.options.onProcessReportChange?.(teamId),
     })
@@ -1066,6 +1084,25 @@ export class ChatSessionManager {
         }
       },
     })
+    this.observations = new ProcessObservationService(options.db.db, id => {
+      const record = this.records.get(id)
+      const startId = this.provenance.latestStart(id)
+      const start = startId
+        ? options.db.db.prepare('SELECT model FROM agent_starts WHERE id=?').get(startId) as { model: string | null } | null
+        : null
+      return {
+        sessionId: id, teamId: this.teams.teamOf(id)?.teamId ?? null,
+        taskId: record?.taskId ?? null,
+        taskRevision: record?.taskId ? this.tasks.store.get(record.taskId)?.revision ?? null : null,
+        groupId: record?.groupId ?? null, profileId: record?.claudeProfileId ?? 'default',
+        model: start?.model ?? record?.model ?? null, startId,
+      }
+    })
+    this.observations.start([
+      notify => this.tasks.store.subscribe(task => notify(task.id)),
+      notify => this.mailbox.store.subscribe((_team, message) => notify(message?.taskId ?? undefined)),
+      notify => this.teamMail.limits.subscribe(() => notify()),
+    ])
     // Product strategy (product-strategy): constructed here, beside the
     // task service, against the same database. The strategy store's changes
     // fan out to the strategy view pushes; the team comes from the record's
@@ -1095,11 +1132,32 @@ export class ChatSessionManager {
       strategies: this.strategies.store,
       impact: this.impact,
       getSession: id => this.records.get(id),
-      capacityReads: { capacity: (teamId, group, worktree) => this.teamMail.staffing.capacity(teamId, group, worktree), cooldownUntil: profileId => this.teamMail.limits.cooldownUntil(profileId) },
+      capacityReads: {
+        capacity: (teamId, group, worktree) => this.teamMail.staffing.capacity(teamId, group, worktree),
+        // The profile's effective cooldown (providers-and-workers D8) in the ambient catalog.
+        cooldownUntil: profileId => this.teamMail.limits.cooldownFor(profileId, providerOf(profileId, this.catalogCtx())).until,
+      },
+      caps: this.caps,
+      executionCore,
+      executionTeam: {
+        tasks: this.teamMail.tasks,
+        assignments: this.teamMail.assignments,
+        results: this.teamMail.results,
+        taskStore: this.teamMail.tasks.store,
+        mailbox: this.teamMail.mailbox.store,
+        releases: this.teamMail.releases,
+        records: () => this.records.values(),
+        // The executor resolves teams by id (a member-less team included);
+        // the runtime's archive wake resolves sessions.
+        identityOf: teamId => this.teams.identityFor(teamId),
+        teamOfSession: id => this.teams.teamOf(id),
+      },
       ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
     })
     this.validation = planServices.validation
     this.plans = planServices.plans
+    this.executions = planServices.executions
+    this.executionRuntime = planServices.runtime
     this.validationDetail = planServices.validationDetail
     this.validationAdapter = planServices.adapter
     // The impact assessment derives from plans, and every plan's impact gate
@@ -1110,6 +1168,12 @@ export class ChatSessionManager {
     this.plans.store.subscribe(plan => {
       this.options.onPlanChange?.(plan.teamId, plan.id)
       this.options.onStrategyChange?.(plan.teamId)
+    })
+    // Every committed execution write re-pushes the plan's detail (D17):
+    // the changes carry the execution's view, and owned-task changes ride
+    // the task store's own plan flow above.
+    planServices.executionStore.subscribe(teamId => {
+      this.options.onPlanChange?.(teamId)
     })
     this.strategies.store.subscribe(strategy => {
       const teamId = strategyTeam(strategy)
@@ -1154,9 +1218,13 @@ export class ChatSessionManager {
     // orphan pruning start only after the rows exist — pruning before the
     // restore would see an empty registry and delete every chat's wire log.
     this.restorePromise = this.restorePersisted()
-      .then(() => {
+      .then(async () => {
         if (this.isShutDown) return
         this.teamMail.start()
+        // The executor boots after the mailbox and before its wakes install:
+        // D14 recovery runs to its end, then every team with a running
+        // execution resumes (plan-execution D5).
+        await this.executionRuntime?.start()
         // Work parked before a restart keeps its sessions paused.
         for (const sessionId of this.records.keys()) this.refreshParked(sessionId)
         // Logs of sessions deleted while the server was down are orphans now.
@@ -1222,6 +1290,11 @@ export class ChatSessionManager {
       counts[profileId] = (counts[profileId] ?? 0) + 1
     }
     return counts
+  }
+
+  /** The team's recorded context-exhaustion episodes (chat-context-exhaustion D8); the workspace reads them. */
+  exhaustionEpisodes(teamId: string): ExhaustionEpisode[] {
+    return this.teamMail.exhaustionNotes.episodes(teamId)
   }
 
   /** Every record (live and archived) resolved to this team; the workspace reads it. */
@@ -1309,13 +1382,19 @@ export class ChatSessionManager {
         groupId,
         profileId: record?.claudeProfileId ?? 'default',
         model: info.model ?? record?.model ?? null,
-        effort: info.effort ?? null,
+        effort: info.effort == null ? null : String(info.effort),
         cwd: info.cwd,
         groupFile: groupId ? this.teams.catalogOf(sessionId)?.groups.get(groupId)?.file ?? null : null,
         promptAppend: info.systemPromptAppend,
         mainCheckout: team?.groupsRoot ?? worktreeRootOf(info.cwd),
         worktreeRoot: worktreeRootOf(info.cwd),
         env: info.env,
+      })
+      const contextWindow = Number(info.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW)
+      this.observations.chat.settings(sessionId, {
+        effort: info.effort ?? null,
+        contextWindow: Number.isFinite(contextWindow) && contextWindow > 0 ? contextWindow : null,
+        driverVersion: null, thresholdSource: null,
       })
     } catch (error) {
       logger.warn('agent_start_record_failed', { sessionId, error: error instanceof Error ? error.message : String(error) })
@@ -1357,6 +1436,7 @@ export class ChatSessionManager {
   readonly provenance: ProvenanceRecorder
   /** Per-turn token usage of every chat turn (team-process-metrics D1). */
   readonly turnUsage: ChatTurnUsageStore
+  readonly observations: ProcessObservationService
   /** Process metrics (team-process-metrics D4/D5), shared by the `team_metrics` tool and the Metrics tab. */
   readonly metrics: MetricsReader
   /** Process reports and proposals (team-process-metrics D6): the report tools and the human's decide/link commands. */
@@ -1364,6 +1444,14 @@ export class ChatSessionManager {
   private readonly turnUsageTracker: TurnUsageTracker
   /** Durable plans (durable-plans); the plan tools and UI actions go through it. */
   readonly plans: PlanService
+  /** Plan executions (plan-execution): the human Start/Stop/Retry commands. */
+  readonly executions: import('../plans/execution/ExecutionService').ExecutionService
+  /** The execution runtime (plan-execution D5): boot recovery, wakes, and stop. */
+  private readonly executionRuntime: import('../plans/execution/executionRuntime').ExecutionRuntime | null
+  /** The one execution store, its ownership, and its wake hub (plan-execution D5/D7). */
+  private readonly executionCore: ReturnType<typeof composeExecutionCore>
+  /** The user-level team settings (plan-execution D16's floor map lives here). */
+  readonly caps: TeamCaps
   /** Plan validation (plan-validation): reports, assessments, decisions, and the approval standing. */
   readonly validation: ValidationService
   /** The coalesced validation view for the Plans page pushes (plan-validation D11). */
@@ -1515,7 +1603,7 @@ export class ChatSessionManager {
     if (blocked) {
       return { ok: false, error: blocked }
     }
-    let driver: ChatSessionDriver | null
+    let driver: ChatAgentDriver | null
     try {
       driver = await this.ensureDriver(sessionId)
     } catch (error) {
@@ -1548,7 +1636,7 @@ export class ChatSessionManager {
     if (blocked) {
       return { ok: false, error: blocked }
     }
-    let driver: ChatSessionDriver | null
+    let driver: ChatAgentDriver | null
     try {
       driver = await this.ensureDriver(sessionId)
     } catch (error) {
@@ -1590,6 +1678,7 @@ export class ChatSessionManager {
       // exited-unexpectedly error a bare close would report.
       driver.interrupt()
       driver.kill()
+      this.observations.chat.processEnded(sessionId)
     }
     this.teamMail.settleRecipient(sessionId)
     this.drivers.delete(sessionId)
@@ -1617,6 +1706,10 @@ export class ChatSessionManager {
     // Archived by any path: a pending release is settled by the archive
     // itself (member-release D1); a later restore starts clean.
     this.teamMail.cancelPendingRelease(sessionId)
+    // Every release path lands here (member release included), so one wake
+    // covers them: an archived member frees what its execution waits on (D5).
+    // Fired only once the archive succeeded (N2).
+    this.executionCore.wakes.archived(sessionId)
     return { ok: true }
   }
 
@@ -1742,6 +1835,7 @@ export class ChatSessionManager {
     const record = this.records.get(sessionId)
     if (!record) return false
     this.drivers.get(sessionId)?.kill()
+    this.observations.chat.processEnded(sessionId)
     this.teamMail.settleRecipient(sessionId)
     this.drivers.delete(sessionId)
     this.driverPromises.delete(sessionId)
@@ -1780,12 +1874,16 @@ export class ChatSessionManager {
     this.validationAdapter.dispose()
     // A restore still in flight stops at its next row (design D2).
     this.isShutDown = true
+    this.observations.stop()
     this.teamMail.close()
+    // The executor stops with the server: wakes drop, the timer clears, new ticks refuse (D5).
+    this.executionRuntime?.stop()
     // Provider usage refreshes die with the server: timers stop now, and the
     // in-flight continuations check isShutDown before publishing.
     this.stopProviderUsageRefresh()
-    for (const driver of this.drivers.values()) {
+    for (const [id, driver] of this.drivers) {
       driver.shutdown()
+      this.observations.chat.processEnded(id)
     }
     this.drivers.clear()
     this.driverPromises.clear()
@@ -2047,7 +2145,7 @@ export class ChatSessionManager {
 
   private async ensureDriver(
     sessionId: string
-  ): Promise<ChatSessionDriver | null> {
+  ): Promise<ChatAgentDriver | null> {
     const existing = this.drivers.get(sessionId)
     if (existing) {
       if (existing.isDead) {
@@ -2059,7 +2157,7 @@ export class ChatSessionManager {
           // The executable may have been removed or moved since the last
           // spawn: surface a failure now, and respawn the path just verified.
           const executable = await this.checkExecutable()
-          existing.setClaudeExecutablePath(executable?.path)
+          existing.setClaudeExecutablePath?.(executable?.path)
         }
         if (!this.authOk(record?.claudeProfileId, record?.projectPath)) throw new Error(chatAuthErrorMessage())
       }
@@ -2158,7 +2256,11 @@ export class ChatSessionManager {
         // An unexpected exit ends the process but not the session: the same
         // driver respawns internally on the next send/start, so the notices
         // die here (design D4) instead of surviving into the replacement.
-        onProcessEnd: () => this.clearAgentNotices(record.sessionId, { emit: true }),
+        onProcessEnd: () => {
+          this.observations.chat.processEnded(record.sessionId)
+          this.clearAgentNotices(record.sessionId, { emit: true })
+        },
+        onCompaction: (data, sourceId) => this.observations.chat.compaction(record.sessionId, data, sourceId),
         onWorkers: (workers) =>
           this.handleDriverWorkers(record.sessionId, workers),
         onBackgroundTasks: (tasks) =>
@@ -2187,14 +2289,19 @@ export class ChatSessionManager {
         // session's profile, with its current group for context. A gateway
         // that writes its reset into the error text without a zone is read in
         // the profile's `limitResetTimeZone`.
-        onLimitEvent: (signal) =>
+        onLimitEvent: (signal) => {
+          const profileId = record.claudeProfileId ?? 'default'
+          const projectPath = this.records.get(record.sessionId)?.projectPath ?? record.projectPath
           this.teamMail.limits.record({
-            ...withTextReset(signal, profileLimitResetTimeZone(
-              record.claudeProfileId, this.catalogCtx(this.records.get(record.sessionId)?.projectPath ?? record.projectPath))),
-            profileId: record.claudeProfileId ?? 'default',
+            ...withTextReset(signal, profileLimitResetTimeZone(profileId, this.catalogCtx(projectPath))),
+            profileId,
             sessionId: record.sessionId,
             groupId: this.records.get(record.sessionId)?.groupId ?? null,
-          }),
+            // The provider owning the profile at its project path (D7/D10).
+            providerId: providerOf(profileId, this.catalogCtx(projectPath)),
+            window: signal.window,
+          })
+        },
       })
       if (
         !this.records.has(record.sessionId) ||
@@ -2202,6 +2309,7 @@ export class ChatSessionManager {
         this.records.get(record.sessionId)?.archivedAt != null
       ) {
         driver.kill()
+        this.observations.chat.processEnded(sessionId)
         return null
       }
       // A fresh process starts with a clean notice slate (design D4): any
@@ -2462,6 +2570,7 @@ export class ChatSessionManager {
     events.push(event)
     this.liveEvents.set(sessionId, events)
     this.options.onEvent(sessionId, event)
+    this.observations.chat.event(sessionId, event)
     if (event.type === 'request_resolved') this.dispatcher.notify()
     // Per-turn usage (team-process-metrics D1): pinned at turn start, written
     // at completion. Never worth a turn: a failure is logged and the
@@ -2469,18 +2578,25 @@ export class ChatSessionManager {
     if (event.type === 'turn_started' || event.type === 'peer_message' || event.type === 'turn_interrupted' || event.type === 'turn_completed') {
       try {
         this.turnUsageTracker.onEvent(sessionId, event)
+        if (event.type === 'turn_completed') this.observations.notify()
       } catch (error) {
         logger.warn('chat_turn_usage_record_failed', { sessionId, error: error instanceof Error ? error.message : String(error) })
       }
     }
     if (event.type === 'error' || event.type === 'turn_completed') this.teamMail.settleRecipient(sessionId)
+    // The context-exhausted flag (chat-context-exhaustion D3), set or cleared
+    // before the mail outcome below reads it.
+    const exhausted = this.trackContextExhaustion(sessionId, event)
     // Profile routing: progress and limit outcomes for the mail a turn handles.
     if (event.type === 'tool_call') this.teamMail.toolCall(sessionId, event.tool, event.input)
     // A trigger marks a turn the agent started itself (limit-outcomes-agent-turns D1).
     if (event.type === 'turn_started') this.teamMail.turnStarted(sessionId, event.trigger !== undefined)
     if (event.type === 'turn_completed') {
       try {
-        this.teamMail.turnEnded(sessionId, event.subtype === 'success')
+        // An exhausted turn never processed its mail: the exhaustion outcome
+        // settles it instead of a limit resolution (chat-context-exhaustion D4).
+        if (exhausted) this.teamMail.contextExhausted(sessionId)
+        else this.teamMail.turnEnded(sessionId, turnSucceeded(event))
       } catch (error) {
         logger.warn('chat_turn_mail_ended_failed', {
           sessionId,
@@ -2499,7 +2615,7 @@ export class ChatSessionManager {
       const taskId = this.records.get(sessionId)?.taskId
       if (taskId) {
         try {
-          this.turnEnds.record(sessionId, taskId, event.at, event.subtype === 'success')
+          this.turnEnds.record(sessionId, taskId, event.at, turnSucceeded(event))
         } catch (error) {
           logger.warn('chat_turn_end_record_failed', {
             sessionId,
@@ -2532,6 +2648,29 @@ export class ChatSessionManager {
   }
 
   /**
+   * Flag a session whose turn failed on a context limit, and clear the flag
+   * on the compaction notice or a successful turn (chat-context-exhaustion
+   * D3). The column is the truth: nothing re-derives it at startup. Returns
+   * whether the event ended an exhausted turn (its mail takes the exhaustion
+   * outcome, D4).
+   */
+  private trackContextExhaustion(sessionId: string, event: ChatEvent): boolean {
+    const flagged = this.records.get(sessionId)?.contextExhausted ?? null
+    if (event.type === 'turn_completed') {
+      if (turnSucceeded(event)) {
+        if (flagged) this.applyPatch(sessionId, { contextExhausted: null })
+      } else if (event.terminalReason && EXHAUSTING_REASONS.includes(event.terminalReason)) {
+        // One episode per flag: a repeated exhausted turn keeps the first flag.
+        if (!flagged) this.applyPatch(sessionId, { contextExhausted: { at: event.at || new Date().toISOString(), reason: event.terminalReason } })
+        return true
+      }
+    } else if (event.type === 'notice' && event.kind === 'compacted' && flagged) {
+      this.applyPatch(sessionId, { contextExhausted: null })
+    }
+    return false
+  }
+
+  /**
    * Hold the latest reading (design D5) and forward it to the broadcast sink;
    * persistence is throttled to the boundary events above — except when the
    * driver asks for a write now (`persist`): the turn-boundary probe resolves
@@ -2545,16 +2684,18 @@ export class ChatSessionManager {
   private handleDriverContextUsage(
     sessionId: string,
     usage: ChatContextUsage | null,
-    opts?: { persist?: boolean }
+    opts?: { persist?: boolean; thresholdSource?: string }
   ): void {
     if (!this.records.has(sessionId)) return
     if (usage === null) {
       this.contextReadings.delete(sessionId)
+      this.observations.chat.context(sessionId, null, true)
       this.options.onContextUsage?.(sessionId, null)
       this.applyPatch(sessionId, { contextUsage: null })
       return
     }
     this.contextReadings.set(sessionId, usage)
+    this.observations.chat.context(sessionId, usage, opts?.persist === true, opts?.thresholdSource)
     this.options.onContextUsage?.(sessionId, usage)
     if (opts?.persist) this.persistContextUsage(sessionId)
   }
@@ -2637,6 +2778,7 @@ export class ChatSessionManager {
         phaseStartedAt: Date.now() - elapsedMs,
       })
     }
+    this.observations.chat.activity(sessionId, activity)
     this.options.onActivity?.(sessionId, activity)
   }
 
@@ -2740,13 +2882,15 @@ export class ChatSessionManager {
     if (
       (patch.status !== undefined && patch.status !== record.status) ||
       patch.projectPath !== undefined || patch.archivedAt !== undefined ||
+      patch.contextExhausted !== undefined ||
       (patch.sdkSessionId !== undefined && patch.sdkSessionId !== record.sdkSessionId)
     ) this.dispatcher?.notify()
     // Fields a team view shows (team-workspace: live membership); other
     // patches (usage, activity stamps) stay silent.
     if (
       patch.status !== undefined || patch.archivedAt !== undefined || patch.projectPath !== undefined ||
-      patch.name !== undefined || patch.groupId !== undefined || patch.taskId !== undefined
+      patch.name !== undefined || patch.groupId !== undefined || patch.taskId !== undefined ||
+      patch.contextExhausted !== undefined
     ) this.options.onSessionRecordChange?.(sessionId)
     this.options.db.updateChatSession(sessionId, patch)
     // The first SDK session id makes a transcript followable: start the
@@ -2778,6 +2922,7 @@ export class ChatSessionManager {
         ? { nameSource: patch.nameSource }
         : {}),
       ...(patch.taskId !== undefined ? this.taskFields(next) : {}),
+      ...(patch.contextExhausted !== undefined ? { contextExhausted: patch.contextExhausted } : {}),
     })
   }
 
@@ -2803,6 +2948,7 @@ export class ChatSessionManager {
       ...this.taskFields(record),
       ...(record.spawned ? { spawned: true } : {}),
       ...(this.parkedShown.has(record.sessionId) ? { parked: this.parkedShown.get(record.sessionId)! } : {}),
+      ...(record.contextExhausted ? { contextExhausted: record.contextExhausted } : {}),
     }
   }
 

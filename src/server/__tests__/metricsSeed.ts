@@ -97,9 +97,10 @@ export class Seed {
       .run(team, sessionId, sessionId, ago(0))
   }
 
-  limit(profile: string, sessionId: string, hoursAgo: number, resetHoursAgo: number | null, final = true): void {
-    this.db.prepare(`INSERT INTO profile_limit_events (id, profile_id, session_id, at, kind, final, resets_at)
-      VALUES (?, ?, ?, ?, 'rate_limit', ?, ?)`).run(this.id('limit'), profile, sessionId, ago(hoursAgo), final ? 1 : 0,
-      resetHoursAgo === null ? null : ago(resetHoursAgo))
+  limit(profile: string, sessionId: string, hoursAgo: number, resetHoursAgo: number | null, final = true,
+    opts: { provider?: string | null; window?: string | null } = {}): void {
+    this.db.prepare(`INSERT INTO profile_limit_events (id, profile_id, session_id, at, kind, final, resets_at, provider_id, limit_window)
+      VALUES (?, ?, ?, ?, 'rate_limit', ?, ?, ?, ?)`).run(this.id('limit'), profile, sessionId, ago(hoursAgo), final ? 1 : 0,
+      resetHoursAgo === null ? null : ago(resetHoursAgo), opts.provider ?? null, opts.window ?? null)
   }
 }

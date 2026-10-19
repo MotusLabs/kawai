@@ -6,6 +6,7 @@ import type { EligibleMember, MemberExclusion } from '../team/dispatcher'
 import { parseGroupFile, type GroupDefinition } from '../team/groupFile'
 import type { TeamMessage } from '../team/mailboxStore'
 import { DECISION_LOG_SIZE, ProfileRouter, type GroupMemberRecord } from '../team/routing/router'
+import { cooldownUntil, providerCooldownUntil } from '../team/routing/limitEvents'
 import type { RouteContext, RouteDecision, LimitEvent } from '../../shared/routing'
 
 const T0 = Date.parse('2026-10-12T12:00:00.000Z')
@@ -39,6 +40,8 @@ let spawns: string[]
 /** Staffing facts the stub reports (team-waiting-reasons diagnosis inputs). */
 let facts: { teamSpawned: number; teamCap: number; worktreeOccupants: string[]; worktreePending: number; backoffRetryAt: number | null }
 let exclusions: MemberExclusion[]
+/** Profile → provider for the cooldown (providers-and-workers D8); identity when unset. */
+let providerFor: ((profileId: string) => string) | null = null
 
 function makeRouter() {
   return new ProfileRouter({
@@ -56,7 +59,14 @@ function makeRouter() {
     rules: {
       rule: () => (rule ? { route: async (ctx: RouteContext) => { ruleCalls.push(ctx); return rule!(ctx) } } as never : undefined),
     },
-    limits: { forProfile: id => events[id] ?? [] },
+    limits: { forProfile: id => events[id] ?? [], cooldownFor: id => {
+      const pool = Object.values(events).flat()
+      const providerId = providerFor?.(id) ?? null
+      const until = cooldownUntil(id, providerId, pool, now)
+      const providerEnd = providerCooldownUntil(providerId, pool, now)
+      return { until, provider: providerEnd !== null && until !== null && Date.parse(providerEnd) >= Date.parse(until), providerId }
+    }, providerCooldownUntil: providerId => providerCooldownUntil(providerId, Object.values(events).flat(), now) },
+    ...(providerFor ? { providerOf: providerFor } : {}),
     usageOf: id => (id === 'claude' ? { status: 'warning', windows: [{ key: 'five_hour', label: '5h', percentUsed: 80, resetsAt: null }], receivedAt: 'r', source: 'pull' } : null),
     now: () => now,
   })
@@ -64,11 +74,12 @@ function makeRouter() {
 
 const finalEvent = (profileId: string, resetsAt: string | null): LimitEvent => ({
   id: crypto.randomUUID(), profileId, sessionId: 's', groupId: 'devs', at: new Date(now).toISOString(), kind: 'rate_limit',
-  final: true, status: 429, message: 'quota', resetsAt,
+  final: true, status: 429, message: 'quota', resetsAt, providerId: null, window: null,
 })
 
 beforeEach(() => {
   now = T0
+  providerFor = null
   def = group('profiles: [claude, glm]')
   members = [
     { sessionId: 'a', profileId: 'glm', cwd: '/wt' },
@@ -162,6 +173,19 @@ describe('waiting-reason diagnosis', () => {
         { kind: 'no-eligible-member', sessionIds: ['a', 'b'], members: [
           { sessionId: 'a', cause: 'working' }, { sessionId: 'b', cause: 'working' },
         ] },
+      ],
+    })
+  })
+
+  test('a flagged member holding a max-1 group is named in the reason (chat-context-exhaustion D7)', async () => {
+    def = group('max: 1')
+    members = [{ sessionId: 'dead', profileId: 'glm', cwd: '/wt' }]
+    exclusions = [{ sessionId: 'dead', kind: 'context-exhausted' }]
+    expect(await diagnose()).toMatchObject({
+      kind: 'none',
+      diagnosis: [
+        { kind: 'group-cap', counts: { live: 1, cap: 1 } },
+        { kind: 'no-eligible-member', sessionIds: ['dead'], members: [{ sessionId: 'dead', cause: 'context exhausted' }] },
       ],
     })
   })
@@ -426,7 +450,14 @@ describe('plan roles and author tags (plan-execution D15)', () => {
       excludedProfile: m => m.excludedProfile ?? undefined,
       allowedProfiles: m => m.allowedProfiles ?? null,
       rules: { rule: () => (rule ? { route: async (ctx: RouteContext) => { ruleCalls.push(ctx); return rule!(ctx) } } as never : undefined) },
-      limits: { forProfile: id => events[id] ?? [] },
+      limits: { forProfile: id => events[id] ?? [], cooldownFor: id => {
+      const pool = Object.values(events).flat()
+      const providerId = providerFor?.(id) ?? null
+      const until = cooldownUntil(id, providerId, pool, now)
+      const providerEnd = providerCooldownUntil(providerId, pool, now)
+      return { until, provider: providerEnd !== null && until !== null && Date.parse(providerEnd) >= Date.parse(until), providerId }
+    }, providerCooldownUntil: providerId => providerCooldownUntil(providerId, Object.values(events).flat(), now) },
+    ...(providerFor ? { providerOf: providerFor } : {}),
       usageOf: () => null,
       now: () => now,
     })

@@ -25,10 +25,11 @@ goes to the Claude Code reviewer, the default. If a request reaches you that
 this rule sends to the other reviewer, report the mismatch to the Lead for
 reassignment; your verdict cannot satisfy the cross-model gate.
 
-Review requests arrive as direct task mail. The header carries the task's
-title, revision, direction, acceptance criteria, linked change, and latest
-journal. The body names the worktree, branch, base/head SHAs, `result_id`, and
-focus. For each request:
+Review requests arrive as direct task mail — the Lead's `task_handoff`
+instruction naming your session, or an ordinary assignment. The header carries
+the task's title, revision, direction, acceptance criteria, linked change, and
+latest journal. The body names the worktree, branch, base/head SHAs,
+`result_id`, and focus. For each request:
 
 1. `task_get` the task and read its acceptance criteria and, if linked, the
    OpenSpec change's proposal, design, delta specs, and tasks.
@@ -75,9 +76,11 @@ Do not edit files, commit, or message the dev directly.
 Submit `task_submit_findings` with the task id, exact `result_id`, kind
 `review` (or `qa` for a QA request), verdict `pass` or `fail`, and findings.
 Include the examined base/head SHAs, severity, and checks actually run. A mail
-report and `task_note` supplement this record; they do not replace it. If no
-result exists, ask the Lead to obtain a `task_submit_result` before recording
-a final verdict. Never attach findings to a different result.
+report and `task_note` supplement this record; they do not replace it. When
+the request arrived as a handoff whose instruction you claimed, your findings
+record that handoff as the stage they answer. If no result exists, ask the
+Lead to obtain a `task_submit_result` before recording a final verdict. Never
+attach findings to a different result.
 
 Group related failures by the violated invariant. For re-review, mark each
 prior finding closed, still open, or regressed, and identify new findings

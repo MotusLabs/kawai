@@ -28,15 +28,12 @@ import type {
   SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk'
 import type {
-  ChatActivity,
   ChatApprovalDecision,
   ChatApprovalPolicy,
   ChatTurnUsage,
   ChatBackgroundTask,
   ChatCommandState,
-  ChatContextUsage,
   ChatEvent,
-  ChatNotification,
   ChatNotificationPriority,
   ChatNotificationSeverity,
   ChatPendingRequest,
@@ -45,9 +42,9 @@ import type {
   ChatQuestionAnswer,
   ChatTurnTrigger,
   ChatTurnTriggerTask,
-  ChatUsageReport,
   ChatWorker,
 } from '../../shared/chat'
+import { turnSucceeded } from '../../shared/chat'
 import type { SessionStatus } from '../../shared/types'
 import {
   ASK_USER_QUESTION_TOOL,
@@ -115,9 +112,14 @@ import { createWireTappedSpawn, type ChatWireRecorder } from './wireTap'
 import {
   assistantLimitSignal,
   rejectedResetsAt,
+  rejectedWindow,
   retryLimitSignal,
   type ChatLimitSignal,
 } from './limitSignals'
+
+/** Spawn provenance is part of the runtime-neutral contract (design D1). */
+export type { ChatSpawnInfo } from './provider/driver'
+import type { ChatAgentDriver, ChatDriverCallbacks, ChatSpawnInfo } from './provider/driver'
 
 /**
  * The SDK `query()` — injected so tests run against a fake. `wire` is the
@@ -131,19 +133,16 @@ export type ChatQueryFactory = (params: {
   wire?: ChatWireRecorder
 }) => Query
 
-/** What one spawn launched with, for agent-start provenance. */
-export interface ChatSpawnInfo {
-  cwd: string
-  systemPromptAppend: string
-  effort: Options['effort'] | null
-  /** The profile's model, null when Claude Code settings decide. */
-  model: string | null
-  /** The launch environment (the server's own when the profile sets none). */
-  env: Record<string, string | undefined>
-  resumed: boolean
-}
-
-export interface ChatSessionDriverOptions {
+/**
+ * The Claude driver's construction options. The output callbacks come from
+ * `ChatDriverCallbacks` (the runtime-neutral contract, design D1), which
+ * this interface extends, so the contract's callback signatures are
+ * type-checked against this driver (review O2) — a contract change that
+ * this driver does not follow fails the build here.
+ */
+export interface ChatSessionDriverOptions extends ChatDriverCallbacks {
+  /** Opaque unique turn identity; injectable for deterministic protocol tests. */
+  createTurnId?: () => string
   /** Agentboard session id (chat-<uuid>); used for logging context only. */
   sessionId: string
   projectPath: string
@@ -189,12 +188,6 @@ export interface ChatSessionDriverOptions {
    * settings decide.
    */
   getEffort?: () => Options['effort']
-  /**
-   * Called once per constructed query with what this spawn launched with
-   * (team-process-metrics D2: agent-start provenance). Observational: a
-   * throw is logged and never affects the spawn.
-   */
-  onSpawn?: (info: ChatSpawnInfo) => void
   teamMcpServer?: NonNullable<Options['mcpServers']>[string]
   /**
    * Recovered roster rows (workers design D6) seeding a fresh driver, so
@@ -207,79 +200,6 @@ export interface ChatSessionDriverOptions {
    * driver, so settled outcomes survive a restart or an archive/restore.
    */
   recoveredBackgroundTasks?: BackgroundTaskRecord[]
-  onEvent: (event: ChatEvent) => void
-  /** Applied immediately on every derived status change. */
-  onStatus: (status: SessionStatus) => void
-  /**
-   * Live activity of the in-flight turn (design D3): called only when the
-   * projected phase changes, with null when the turn ends. Ephemeral — never
-   * sequenced, buffered, or replayed like events.
-   */
-  onActivity?: (activity: ChatActivity | null) => void
-  /**
-   * An agent-emitted notification (notification strip design D4): the mapped
-   * ChatNotification for each `system`/`notification` frame, with the frame's
-   * `timeout_ms` when it carried one. Ephemeral like activity: the manager
-   * holds it per session, never the event stream.
-   */
-  onNotification?: (
-    notification: ChatNotification,
-    timeoutMs?: number
-  ) => void
-  /**
-   * The agent process ended on its own (notification strip design D4): an
-   * unexpected exit or stream failure — not kill/shutdown, whose callers
-   * already tear the session state down. Fired once, from the same
-   * markDead that settles workers; the notices this process emitted die
-   * with it, because the driver object survives and respawns internally
-   * (no new construction would otherwise clear them).
-   */
-  onProcessEnd?: () => void
-  /**
-   * The spawned-worker roster (workers design D2): the full projection,
-   * called whenever it changes — never per elapsed tick. Ephemeral like
-   * activity: never sequenced, persisted only through the sidecar (D6).
-   */
-  onWorkers?: (workers: ChatWorker[]) => void
-  /**
-   * The background-task roster (background tasks design D2): the full
-   * projection, called whenever it changes. Like the worker roster it is
-   * ephemeral on the wire; settled outcomes persist through the sidecar
-   * (D6). Never consulted for status (D7).
-   */
-  onBackgroundTasks?: (tasks: ChatBackgroundTask[]) => void
-  /**
-   * Context usage (context meter designs D1/D7): the latest reading, fired
-   * when a new per-request usage lands, when compaction adopts a
-   * post-compaction size, or when a threshold correction re-scales the
-   * current reading. Never fired with a placeholder — before the first model
-   * request this callback simply does not fire (D7). A null `usage` clears
-   * the reading (a conversation reset leaves nothing measured). `persist`
-   * marks writes that must not wait for the next turn boundary: probe
-   * answers, spawn-time re-anchors, and compaction.
-   */
-  onContextUsage?: (
-    usage: ChatContextUsage | null,
-    opts?: { persist?: boolean }
-  ) => void
-  /**
-   * Current model (chat-session-model design D5): the model string of an
-   * init frame, fired only when it is non-empty and differs from the last
-   * fired one — init opens every turn, so an unchanged model never re-fires
-   * and a mid-session /model switch lands on the next turn.
-   */
-  onModel?: (model: string) => void
-  /**
-   * Plan usage (usage bar design D3): parsed report from a pushed
-   * rate_limit_event frame, whatever turn state the session is in.
-   */
-  onRateLimit?: (report: ChatUsageReport) => void
-  /**
-   * Plan usage: parsed report from an assistant message's usage_report (the
-   * structured twin of /usage). Not called when the report carries no
-   * limits at all.
-   */
-  onUsageReport?: (report: ChatUsageReport) => void
   /**
    * Claims the profile's one usage pull after a spawn (design D1); when it
    * resolves false the pull is skipped for this driver's whole lifetime. The
@@ -289,26 +209,8 @@ export interface ChatSessionDriverOptions {
    * profile.
    */
   claimUsagePull?: () => boolean | Promise<boolean>
-  /** A pull that yielded no windows (or failed) records the no-data verdict. */
-  onUsageNoData?: () => void
-  /** Fired once when the SDK init message reveals the session id. */
-  onSdkSessionId?: (sdkSessionId: string) => void
-  /**
-   * The agent's working directory moved (worktree tracking design D1):
-   * main-session CwdChanged hook firings only — subagent changes are
-   * filtered inside the driver — reporting the new directory.
-   */
-  onCwdChanged?: (newCwd: string) => void
-  /** Fired whenever the session's slash-command state meaningfully changed. */
-  onCommandState?: (state: ChatCommandState) => void
   /** Records the raw protocol of every spawned process (chat debug view). */
   wire?: ChatWireRecorder
-  /**
-   * Profile routing (design D6): a rate-limit, billing, or overload failure
-   * — a retried attempt or the turn's final failure — with the provider's
-   * reset time when a rejected rate_limit_event announced one.
-   */
-  onLimitEvent?: (signal: ChatLimitSignal) => void
 }
 
 interface PendingRequest {
@@ -330,15 +232,15 @@ type DistributiveOmit<T, K extends PropertyKey> = T extends unknown
   : never
 type ChatEventDraft = DistributiveOmit<ChatEvent, 'id' | 'sequence' | 'at'>
 
-export class ChatSessionDriver {
+export class ChatSessionDriver implements ChatAgentDriver {
   private readonly options: ChatSessionDriverOptions
   private readonly queue = new TurnQueue()
   /** Slash-command list state; this driver is its only feeder (design D2). */
   private commands = new ChatCommandTracker()
   private query: Query | null = null
   private sequence = 0
-  private turnCounter = 0
   private activeTurnId: string | null = null
+  private compactionStartedAt: number | null = null
   /**
    * Which CLI turn a result or content frame belongs to (see cliTurnBinding
    * and docs/claude-cli-contract.md): every prompt carries a client uuid the
@@ -397,6 +299,8 @@ export class ChatSessionDriver {
   }
   /** Reset time from the latest rejected rate_limit_event (design D6). */
   private limitResetsAt: string | null = null
+  /** That event's window (`seven_day_opus`, …), kept and dropped beside the reset (providers-and-workers D7). */
+  private limitWindow: string | null = null
   private dead = false
   /** The audit id of the agent process this driver currently runs (D7). */
   private currentSpawnId = 'ob-s-none'
@@ -465,8 +369,7 @@ export class ChatSessionDriver {
    * here so the buffer can never outlive the turn it should name.
    */
   private startTurn(trigger?: ChatTurnTrigger): string {
-    this.turnCounter += 1
-    const turnId = `turn-${this.turnCounter}`
+    const turnId = this.options.createTurnId?.() ?? `turn-${crypto.randomUUID()}`
     this.activeTurnId = turnId
     this.pendingTaskNotifications = []
     this.binder.turnOpened(turnId, trigger !== undefined)
@@ -736,6 +639,7 @@ export class ChatSessionDriver {
   }
 
   private spawnQuery(): void {
+    this.compactionStartedAt = null
     // D7: a fresh id per agent process; the observer holds it live until the
     // process ends, so a call with no outcome reads pending, then unknown.
     this.currentSpawnId = `ob-s-${crypto.randomUUID()}`
@@ -963,7 +867,12 @@ export class ChatSessionDriver {
         this.handleSystem(message)
         return
       case 'rate_limit_event':
-        this.limitResetsAt = rejectedResetsAt(message.rate_limit_info) ?? this.limitResetsAt
+        // A rejected event's window rides beside the reset it names
+        // (providers-and-workers D7); both drop together once past.
+        if (rejectedResetsAt(message.rate_limit_info) !== null) {
+          this.limitResetsAt = rejectedResetsAt(message.rate_limit_info)
+          this.limitWindow = rejectedWindow(message.rate_limit_info)
+        }
         // Plan usage rides these frames whatever the turn state; malformed
         // values degrade to a windowless report, never a session error.
         this.options.onRateLimit?.(
@@ -1008,7 +917,8 @@ export class ChatSessionDriver {
     const subagent = isSubagentContentFrame(message)
     if (message.error && !subagent) {
       const text = message.message.content.map(block => block.type === 'text' ? block.text : '').join('\n')
-      this.reportLimit(assistantLimitSignal(message.error, text, this.currentResetsAt()))
+      const { resetsAt, window } = this.currentLimit()
+      this.reportLimit(assistantLimitSignal(message.error, text, resetsAt, window))
     }
     for (const block of message.message.content) {
       if (block.type === 'text') {
@@ -1149,24 +1059,27 @@ export class ChatSessionDriver {
     const turnId = this.activeTurnId
     if (verdict === 'drop' || !turnId) return
     this.activeTurnId = null
+    const outcome = {
+      subtype: message.subtype,
+      isError: message.is_error,
+      ...(message.terminal_reason ? { terminalReason: message.terminal_reason } : {}),
+    }
+    const succeeded = turnSucceeded(outcome)
     this.emit({
       type: 'turn_completed',
       turnId,
-      subtype: message.subtype,
+      ...outcome,
       totalCostUsd: message.total_cost_usd,
       numTurns: message.num_turns,
       ...turnUsageOf(message),
-      // Final text only on a success subtype.
-      ...(message.subtype === 'success' ? { finalText: message.result } : {}),
+      // Final text only on a successful turn: under `is_error` the result is
+      // the error text (chat-context-exhaustion D1).
+      ...(succeeded && message.subtype === 'success' ? { finalText: message.result } : {}),
     })
-    if (message.subtype !== 'success') {
+    if (!succeeded) {
       // Per-turn error results keep the streaming session usable; surface the
       // failure in the transcript and return to waiting.
-      const detail =
-        'errors' in message && message.errors.length > 0
-          ? message.errors.join('; ')
-          : `The turn ended with ${message.subtype}`
-      this.emit({ type: 'error', message: detail })
+      this.emit({ type: 'error', message: resultErrorText(message) })
     }
     this.refreshStatus()
     // Turn boundary: re-resolve the threshold for the next turn (design D2).
@@ -1174,8 +1087,21 @@ export class ChatSessionDriver {
   }
 
   private handleSystem(message: Extract<SDKMessage, { type: 'system' }>): void {
+    if (message.subtype === 'status' && message.status === 'compacting') {
+      if (this.compactionStartedAt === null) {
+        this.compactionStartedAt = Date.now()
+        try {
+          this.options.onCompaction?.({
+            trigger: 'unknown', preTokens: null, postTokens: null,
+            startedAt: new Date(this.compactionStartedAt).toISOString(),
+            endedAt: null, durationSeconds: null, outcome: 'started',
+          }, message.uuid ? `start:${message.uuid}` : undefined)
+        } catch { logger.warn('chat_compaction_observation_failed') }
+      }
+    }
     if (message.subtype === 'api_retry') {
-      this.reportLimit(retryLimitSignal(message, this.currentResetsAt()))
+      const { resetsAt, window } = this.currentLimit()
+      this.reportLimit(retryLimitSignal(message, resetsAt, window))
     }
     if (message.subtype === 'init') {
       if (Array.isArray(message.capabilities)) {
@@ -1252,6 +1178,21 @@ export class ChatSessionDriver {
       return
     }
     if (message.subtype === 'compact_boundary') {
+      try {
+        const metadata = message.compact_metadata as { trigger?: string; pre_tokens?: number; post_tokens?: number } | undefined
+        const measured = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null
+        this.options.onCompaction?.({
+          trigger: metadata?.trigger === 'auto' ? 'auto' : metadata?.trigger === 'manual' ? 'manual' : 'unknown',
+          startedAt: this.compactionStartedAt === null ? null : new Date(this.compactionStartedAt).toISOString(),
+          endedAt: new Date().toISOString(), preTokens: measured(metadata?.pre_tokens),
+          postTokens: measured(metadata?.post_tokens),
+          durationSeconds: this.compactionStartedAt === null ? null : Math.max(0, (Date.now() - this.compactionStartedAt) / 1000),
+          outcome: 'completed',
+        }, message.uuid ? `boundary:${message.uuid}` : undefined)
+      } catch { logger.warn('chat_compaction_observation_failed') }
+
+      this.compactionStartedAt = null
+
       // Adopt before the notice so the fresher value is already live when
       // subscribers see it. The post-compaction size is the new reading
       // (design D3): the meter drops with the transcript, auto or manual
@@ -1264,7 +1205,8 @@ export class ChatSessionDriver {
             ? message.compact_metadata.post_tokens
             : null,
           new Date().toISOString()
-        )
+        ),
+        true
       )
       this.emit({ type: 'notice', text: 'Context compacted', kind: 'compacted' })
     }
@@ -1303,10 +1245,13 @@ export class ChatSessionDriver {
     // Other system subtypes are informational; ignored.
   }
 
-  /** The announced reset time while it is still ahead. */
-  private currentResetsAt(): string | null {
-    if (this.limitResetsAt && Date.parse(this.limitResetsAt) <= Date.now()) this.limitResetsAt = null
-    return this.limitResetsAt
+  /** The announced reset and its window while still ahead (providers-and-workers D7). */
+  private currentLimit(): { resetsAt: string | null; window: string | null } {
+    if (this.limitResetsAt && Date.parse(this.limitResetsAt) <= Date.now()) {
+      this.limitResetsAt = null
+      this.limitWindow = null
+    }
+    return { resetsAt: this.limitResetsAt, window: this.limitWindow }
   }
 
   private reportLimit(signal: ChatLimitSignal | null): void {
@@ -1620,13 +1565,19 @@ export class ChatSessionDriver {
   }
 
   /** Forward a tracker step to the manager sink. */
-  private applyContextStep(step: ChatContextStep): void {
+  private applyContextStep(step: ChatContextStep, boundary = false): void {
     if (step.kind === 'none') return
     if (step.kind === 'clear') {
       this.options.onContextUsage?.(null, { persist: true })
       return
     }
-    this.options.onContextUsage?.(step.usage, { persist: step.persist })
+    const state = this.context.getState()
+    const thresholdSource = state.reportThreshold !== null
+      ? state.reportThresholdExact ? 'report-threshold' : step.usage.thresholdApproximate ? 'report-window-fallback' : 'report-window-reserve'
+      : state.profileWindow !== null
+        ? step.usage.thresholdApproximate ? 'profile-window-fallback' : 'profile-window-reserve'
+        : 'model-window-fallback'
+    this.options.onContextUsage?.(step.usage, { persist: step.persist || boundary, thresholdSource })
   }
 
   /**
@@ -1780,6 +1731,22 @@ function interruptQuery(query: Query, cancelQueued: boolean): Promise<SDKControl
 }
 
 /** The result's per-turn token counts (team-process-metrics D1); absent when the result carries none. */
+/**
+ * The transcript error for a failed result (chat-context-exhaustion D1): the
+ * SDK's errors, or under `is_error` its result text, or the subtype — plus
+ * the terminal reason when the CLI gave one, e.g.
+ * `Prompt is too long (blocking_limit)`.
+ */
+export function resultErrorText(message: SDKResultMessage): string {
+  const base =
+    'errors' in message && message.errors.length > 0
+      ? message.errors.join('; ')
+      : message.subtype === 'success' && message.result.trim()
+        ? message.result.trim()
+        : `The turn ended with ${message.subtype}`
+  return message.terminal_reason ? `${base} (${message.terminal_reason})` : base
+}
+
 export function turnUsageOf(message: { usage?: unknown }): { usage?: ChatTurnUsage } {
   const usage = message.usage
   if (!usage || typeof usage !== 'object') return {}

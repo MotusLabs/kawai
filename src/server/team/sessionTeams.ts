@@ -5,6 +5,7 @@
 // Group display — label, and whether the group's file still exists — is read
 // from the team's catalog on demand, so a removed or edited file shows up the
 // next time the session is published.
+import path from 'node:path'
 import { groupCatalogStamp, loadGroupCatalog, type GroupCatalog } from './groupCatalog'
 import type { GroupEffort } from './groupFile'
 import { buildTeamPrompt } from './teamPrompt'
@@ -96,6 +97,18 @@ export class SessionTeams {
   /** Session ids whose resolved team is `teamId`. */
   membersOf(teamId: string): string[] {
     return [...this.entries].filter(([, entry]) => entry.team?.teamId === teamId).map(([id]) => id)
+  }
+
+  /**
+   * The team's identity by id — a team with no live member still resolves,
+   * its groups root read off the id the way `resolveTeam` derives it (an
+   * execution's ticks must not depend on a session existing).
+   */
+  identityFor(teamId: string): TeamIdentity | undefined {
+    const member = this.membersOf(teamId)[0]
+    if (member !== undefined) return this.teamOf(member)
+    const groupsRoot = path.basename(teamId) === '.git' ? path.dirname(teamId) : null
+    return groupsRoot === null ? undefined : { teamId, groupsRoot }
   }
 
   /**

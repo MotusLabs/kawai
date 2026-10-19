@@ -1,0 +1,347 @@
+{
+  "process_collection_checkpoints": {
+    "columns": [
+      {
+        "name": "source",
+        "type": "TEXT",
+        "notnull": 0,
+        "dflt_value": null,
+        "pk": 1
+      },
+      {
+        "name": "value",
+        "type": "TEXT",
+        "notnull": 1,
+        "dflt_value": null,
+        "pk": 0
+      }
+    ],
+    "indexes": []
+  },
+  "process_export_aliases": {
+    "columns": [
+      {
+        "name": "dimension",
+        "type": "TEXT",
+        "notnull": 1,
+        "dflt_value": null,
+        "pk": 1
+      },
+      {
+        "name": "original",
+        "type": "TEXT",
+        "notnull": 1,
+        "dflt_value": null,
+        "pk": 2
+      },
+      {
+        "name": "alias",
+        "type": "TEXT",
+        "notnull": 1,
+        "dflt_value": null,
+        "pk": 0
+      }
+    ],
+    "indexes": []
+  },
+  "process_export_totals": {
+    "columns": [
+      {
+        "name": "family",
+        "type": "TEXT",
+        "notnull": 1,
+        "dflt_value": null,
+        "pk": 1
+      },
+      {
+        "name": "labels",
+        "type": "TEXT",
+        "notnull": 1,
+        "dflt_value": null,
+        "pk": 2
+      },
+      {
+        "name": "bucket",
+        "type": "TEXT",
+        "notnull": 1,
+        "dflt_value": null,
+        "pk": 3
+      },
+      {
+        "name": "value",
+        "type": "REAL",
+        "notnull": 1,
+        "dflt_value": null,
+        "pk": 0
+      }
+    ],
+    "indexes": []
+  },
+  "process_live_observations": {
+    "columns": [
+      {
+        "name": "session_id",
+        "type": "TEXT",
+        "notnull": 0,
+        "dflt_value": null,
+        "pk": 1
+      },
+      {
+        "name": "state",
+        "type": "TEXT",
+        "notnull": 1,
+        "dflt_value": null,
+        "pk": 0
+      }
+    ],
+    "indexes": []
+  },
+  "process_observation_keys": {
+    "columns": [
+      {
+        "name": "source_key",
+        "type": "TEXT",
+        "notnull": 0,
+        "dflt_value": null,
+        "pk": 1
+      },
+      {
+        "name": "version",
+        "type": "INTEGER",
+        "notnull": 1,
+        "dflt_value": null,
+        "pk": 0
+      }
+    ],
+    "indexes": []
+  },
+  "process_observation_teams": {
+    "columns": [
+      {
+        "name": "seq",
+        "type": "INTEGER",
+        "notnull": 1,
+        "dflt_value": null,
+        "pk": 1
+      },
+      {
+        "name": "team_id",
+        "type": "TEXT",
+        "notnull": 1,
+        "dflt_value": null,
+        "pk": 2
+      }
+    ],
+    "indexes": [
+      {
+        "name": "process_observation_teams_team",
+        "unique": 0,
+        "columns": [
+          "team_id",
+          "seq"
+        ]
+      }
+    ]
+  },
+  "process_observations": {
+    "columns": [
+      {
+        "name": "seq",
+        "type": "INTEGER",
+        "notnull": 0,
+        "dflt_value": null,
+        "pk": 1
+      },
+      {
+        "name": "source_key",
+        "type": "TEXT",
+        "notnull": 1,
+        "dflt_value": null,
+        "pk": 0
+      },
+      {
+        "name": "kind",
+        "type": "TEXT",
+        "notnull": 1,
+        "dflt_value": null,
+        "pk": 0
+      },
+      {
+        "name": "observed_at",
+        "type": "TEXT",
+        "notnull": 1,
+        "dflt_value": null,
+        "pk": 0
+      },
+      {
+        "name": "recorded_at",
+        "type": "TEXT",
+        "notnull": 1,
+        "dflt_value": null,
+        "pk": 0
+      },
+      {
+        "name": "version",
+        "type": "INTEGER",
+        "notnull": 1,
+        "dflt_value": null,
+        "pk": 0
+      },
+      {
+        "name": "team_id",
+        "type": "TEXT",
+        "notnull": 0,
+        "dflt_value": null,
+        "pk": 0
+      },
+      {
+        "name": "task_id",
+        "type": "TEXT",
+        "notnull": 0,
+        "dflt_value": null,
+        "pk": 0
+      },
+      {
+        "name": "task_revision",
+        "type": "INTEGER",
+        "notnull": 0,
+        "dflt_value": null,
+        "pk": 0
+      },
+      {
+        "name": "assignment_id",
+        "type": "TEXT",
+        "notnull": 0,
+        "dflt_value": null,
+        "pk": 0
+      },
+      {
+        "name": "result_id",
+        "type": "TEXT",
+        "notnull": 0,
+        "dflt_value": null,
+        "pk": 0
+      },
+      {
+        "name": "session_id",
+        "type": "TEXT",
+        "notnull": 0,
+        "dflt_value": null,
+        "pk": 0
+      },
+      {
+        "name": "turn_id",
+        "type": "TEXT",
+        "notnull": 0,
+        "dflt_value": null,
+        "pk": 0
+      },
+      {
+        "name": "start_id",
+        "type": "TEXT",
+        "notnull": 0,
+        "dflt_value": null,
+        "pk": 0
+      },
+      {
+        "name": "group_id",
+        "type": "TEXT",
+        "notnull": 0,
+        "dflt_value": null,
+        "pk": 0
+      },
+      {
+        "name": "profile_id",
+        "type": "TEXT",
+        "notnull": 0,
+        "dflt_value": null,
+        "pk": 0
+      },
+      {
+        "name": "provider_id",
+        "type": "TEXT",
+        "notnull": 0,
+        "dflt_value": null,
+        "pk": 0
+      },
+      {
+        "name": "model",
+        "type": "TEXT",
+        "notnull": 0,
+        "dflt_value": null,
+        "pk": 0
+      },
+      {
+        "name": "account_revision",
+        "type": "TEXT",
+        "notnull": 0,
+        "dflt_value": null,
+        "pk": 0
+      },
+      {
+        "name": "actor_session",
+        "type": "TEXT",
+        "notnull": 0,
+        "dflt_value": null,
+        "pk": 0
+      },
+      {
+        "name": "tool_call_id",
+        "type": "TEXT",
+        "notnull": 0,
+        "dflt_value": null,
+        "pk": 0
+      },
+      {
+        "name": "request_id",
+        "type": "TEXT",
+        "notnull": 0,
+        "dflt_value": null,
+        "pk": 0
+      },
+      {
+        "name": "data",
+        "type": "TEXT",
+        "notnull": 1,
+        "dflt_value": null,
+        "pk": 0
+      }
+    ],
+    "indexes": [
+      {
+        "name": "process_observations_kind",
+        "unique": 0,
+        "columns": [
+          "kind",
+          "recorded_at"
+        ]
+      },
+      {
+        "name": "process_observations_task",
+        "unique": 0,
+        "columns": [
+          "task_id",
+          "seq"
+        ]
+      },
+      {
+        "name": "process_observations_team_time",
+        "unique": 0,
+        "columns": [
+          "team_id",
+          "observed_at",
+          "seq"
+        ]
+      },
+      {
+        "name": "process_observations_turn",
+        "unique": 0,
+        "columns": [
+          "session_id",
+          "turn_id",
+          "seq"
+        ]
+      }
+    ]
+  }
+}

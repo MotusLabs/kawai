@@ -1,7 +1,7 @@
 // Server-side pull of the session provider's own plan usage (usage bar,
 // provider pull): the Z.AI coding-plan quota endpoint the plan dashboard
 // itself calls — undocumented, so a reply is trusted only when it matches the
-// captured shape. HTTP lives here; usageLimits.ts stays pure. The request
+// captured shape. HTTP lives here; zaiQuotaLimit.ts stays pure. The request
 // goes to the base URL's origin with the same credentials the profile's SDK
 // sessions already use, so it creates no new trust boundary, and every
 // failure degrades to a no-pull outcome rather than ever disturbing a
@@ -9,7 +9,7 @@
 // (the host-login SDK pull still applies) from a provider that refused the
 // credentials (no usable data at all).
 import type { ChatUsageReport } from '../../shared/chat'
-import { parseZaiQuotaLimit, type ZaiQuotaLimitSlice } from './usageLimits'
+import { parseZaiQuotaLimit, type ZaiQuotaLimitSlice } from './zaiQuotaLimit'
 
 /** Origin-relative path of the coding-plan quota endpoint. */
 export const ZAI_QUOTA_PATH = '/api/monitor/usage/quota/limit'

@@ -222,6 +222,37 @@ test('the router chooses among eligible members; parked members are not offered'
   expect(views[0]!.attempt).toBe(0)
 })
 
+test('a flagged longest-idle member is skipped; the next idle member takes the mail (chat-context-exhaustion D7)', async () => {
+  recipients = [
+    { sessionId: 'dead', teamId: 'team', groupId: 'devs', idle: true, pendingRequest: false, available: true, contextExhausted: true },
+    { sessionId: 'live', teamId: 'team', groupId: 'devs', idle: true, pendingRequest: false, available: true },
+  ]
+  const m = send(); await dispatch()
+  expect(delivered).toEqual([{ recipient: 'live', id: m.id }])
+})
+
+test('a flagged member reports its cause and never claims, group or direct', async () => {
+  recipients = [{ sessionId: 'dead', teamId: 'team', groupId: 'devs', idle: true, pendingRequest: false, available: true, contextExhausted: true }]
+  let view: RouteView | undefined
+  const group = send(); const direct = send({ toKind: 'session', toId: 'dead' })
+  let outcome: PassOutcome | undefined
+  dispatcher.close()
+  dispatcher = new MailDispatcher(store, {
+    recipients: () => recipients, prepare: async () => {}, interrupt: async () => {},
+    deliver: () => { throw new Error('must not deliver') }, watchReceipt: () => {},
+    router: { route: async (_message, routed) => { view = routed; return { kind: 'member', sessionId: 'dead' } } },
+    afterPass: pass => { outcome = pass },
+  })
+  await dispatch()
+  expect(view!.eligible).toEqual([])
+  expect(view!.exclusions).toEqual([{ sessionId: 'dead', kind: 'context-exhausted' }])
+  expect(store.get(group.id)?.state).toBe('queued')
+  expect(store.get(direct.id)?.state).toBe('queued')
+  expect(outcome?.reasons.get(direct.id)).toEqual([
+    { kind: 'recipient-unavailable', sessionIds: ['dead'], detail: 'the recipient\'s context is exhausted' },
+  ])
+})
+
 test('a stale pick is routed again, then by attempt 2', async () => {
   recipients = [
     { sessionId: 'busy', teamId: 'team', groupId: 'devs', idle: true, pendingRequest: false, available: true },
@@ -405,6 +436,25 @@ test('afterPass reports each direct-mail reason from the recipient view', async 
   expect(reasons.get(blocked.id)).toEqual([{ kind: 'recipient-unavailable', detail: 'Cannot start: directory gone' }])
   expect(reasons.get(cooling.id)).toEqual([{ kind: 'profile-cooling', retryAt: new Date(2_000).toISOString() }])
   expect(outcomes.at(-1)!.waiting.has(busy.id)).toBe(true)
+})
+
+test('a recipient cooled by its provider reports the provider in the constraint detail (4.6)', async () => {
+  recipients = [
+    { sessionId: 'flash', teamId: 'team', groupId: 'devs', idle: true, pendingRequest: false, available: true,
+      cooldownUntil: new Date(2_000).toISOString(), cooldownProvider: 'zai' },
+  ]
+  const outcomes: PassOutcome[] = []
+  dispatcher.close()
+  dispatcher = new MailDispatcher(store, {
+    recipients: () => recipients, prepare: async () => {}, interrupt: async () => {},
+    deliver: () => { throw new Error('no delivery') }, watchReceipt: () => {},
+    afterPass: outcome => outcomes.push(outcome),
+    now: () => 1_000,
+  })
+  const cooling = send({ toKind: 'session', toId: 'flash' })
+  await dispatch()
+  expect(outcomes.at(-1)!.reasons.get(cooling.id))
+    .toEqual([{ kind: 'profile-cooling', retryAt: new Date(2_000).toISOString(), detail: 'zai' }])
 })
 
 test('an awaiting-request row reports its pending card and clears when delivered', async () => {

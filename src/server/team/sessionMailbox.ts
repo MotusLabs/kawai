@@ -9,8 +9,8 @@
 // failure backoff, published when it structurally changes; the failed-spawn
 // backoff's end folds into the dispatcher's wake time.
 import type { ChatSessionRecord } from '../db'
-import type { ChatSessionDriver } from '../chat/ChatSessionDriver'
-import type { TeamMessage, WaitingConstraint, WaitingReason } from '../../shared/team'
+import type { ChatAgentDriver } from '../chat/provider/driver'
+import type { TeamMessage, WaitingReason } from '../../shared/team'
 import type { GroupCatalog } from './groupCatalog'
 import type { GroupDefinition } from './groupFile'
 import type { PendingSpawnRow } from './teamRoster'
@@ -31,11 +31,13 @@ import { PlanStore } from '../plans/planStore'
 import { WorktreeStaffing, type SpawnRequest, type SpawnResult } from './staffing'
 import { TeamCaps } from './teamCaps'
 import { worktreeRootOf } from './worktreeRoots'
-import { LimitEventStore } from './routing/limitEvents'
+import { ambientProviderOf, LimitEventStore, recipientCooldown, sessionCooldown } from './cooldowns'
 import { RuleRegistry, type RuleLoadReport } from './routing/ruleLoader'
 import { ProfileRouter } from './routing/router'
 import { LimitOutcomes, type HandoffTarget } from './routing/limitOutcomes'
-import { ReasonLedger, orderConstraints, toReason } from './waitingReasons'
+import { ContextExhaustion, type ExhaustionOutcome } from './contextExhaustion'
+import { ExhaustionNotes } from './exhaustionNotes'
+import { ReasonLedger, startingAgentReason, toReason } from './waitingReasons'
 import { loadTeamGroups } from './teamGroups'
 import type { ChatUsageReport } from '../../shared/chat'
 import type { RouteDecisionLogEntry } from '../../shared/routing'
@@ -58,6 +60,10 @@ export class SessionMailbox {
   readonly outcomes: LimitOutcomes
   /** Pending member releases (member-release); the release tool and task-close hook. */
   readonly releases: MemberRelease
+  /** The context-exhaustion outcome (chat-context-exhaustion D4). */
+  readonly exhaustion: ContextExhaustion
+  /** Flagged episodes and their decision notes (chat-context-exhaustion D6). */
+  readonly exhaustionNotes: ExhaustionNotes
   /** Per-team waiting reasons (D3): in-memory, rebuilt by the first pass. */
   private readonly reasons = new ReasonLedger()
   private readonly catalogs = new Map<string, GroupCatalog>()
@@ -69,7 +75,7 @@ export class SessionMailbox {
     teams: SessionTeams
     records: () => Iterable<ChatSessionRecord>
     getRecord: (id: string) => ChatSessionRecord | undefined
-    getDriver: (id: string) => ChatSessionDriver | undefined
+    getDriver: (id: string) => ChatAgentDriver | undefined
     available: (record: ChatSessionRecord) => boolean
     /** The manager's start refusal text for the unavailable reason (D2); `available` keeps deciding. */
     startBlocker?: (record: ChatSessionRecord) => string | null
@@ -101,11 +107,24 @@ export class SessionMailbox {
     onRulesLoaded?: (report: RuleLoadReport) => void
     /** A profile's latest plan usage, for routing rules. */
     usageOf?: (profileId: string) => ChatUsageReport | null
+    /** HEAD of a directory for the decision note; tests inject their own. */
+    gitHead?: (cwd: string) => Promise<string | null>
     /** A routing decision was made (mailbox view). */
     onRouteDecision?: (entry: RouteDecisionLogEntry) => void
     onError: (error: unknown) => void
+    /**
+     * What a running execution owns (plan-execution D7): injected into the
+     * task, assignment, and result services and the delivered task context.
+     * Required (I1): tests without executions pass NULL_OWNERSHIP.
+     */
+    ownership: import('../plans/execution/executionOwnership').ExecutionOwnership
+    /** A result or findings write landed (plan-execution D5); the composition's wake hub. Required (I1). */
+    onTaskResultWrite: (taskId: string) => void
   }) {
-    const store = new MailboxStore(db, { recipientExists: id => !!options.getRecord(id) })
+    const store = new MailboxStore(db, {
+      recipientExists: id => !!options.getRecord(id),
+      recipientFlagged: id => Boolean(options.getRecord(id)?.contextExhausted),
+    })
     this.limits = new LimitEventStore(db)
     this.rules = new RuleRegistry({
       ...(options.homeDir ? { homeDir: options.homeDir } : {}),
@@ -141,6 +160,7 @@ export class SessionMailbox {
       onStatusTransition: (task, status, actor) => this.releases.transitionHook(task, status, actor),
       restoreSession: options.restore,
       plans: this.plans,
+      ownership: options.ownership,
     })
     this.management = new MailboxManagement(store, {
       getSession: options.getRecord, tasks: this.tasks, homeDir: options.homeDir,
@@ -148,7 +168,7 @@ export class SessionMailbox {
     })
     this.mailbox = new TeamMailbox(store, {
       getSession: options.getRecord, homeDir: options.homeDir, restoreSession: options.restore, tasks: taskStore,
-      cooldownUntil: profileId => this.limits.cooldownUntil(profileId),
+      cooldownFor: (profileId, record) => sessionCooldown(this.limits, this.options.homeDir, profileId, record?.projectPath),
     })
     this.staffing = new WorktreeStaffing(db, store, {
       records: options.records,
@@ -175,10 +195,13 @@ export class SessionMailbox {
       worktrees: this.tasks.worktrees,
       ...(options.homeDir ? { homeDir: options.homeDir } : {}),
       plans: this.plans,
-      cooldownUntil: profileId => this.limits.cooldownUntil(profileId),
+      cooldownUntil: profileId => sessionCooldown(this.limits, this.options.homeDir, profileId).until,
+      ownership: options.ownership,
     })
     this.results = new TaskResultService(this.tasks, { getSession: options.getRecord, assignments: this.assignments,
-      releases: this.releases, records: options.records, ...(options.homeDir ? { homeDir: options.homeDir } : {}) })
+      releases: this.releases, records: options.records, ...(options.homeDir ? { homeDir: options.homeDir } : {}),
+      ownership: options.ownership,
+      onWrite: options.onTaskResultWrite })
     // Worktree scoping (member-release D5): an unscoped group's task mail goes
     // to any member and never spawns; a missing definition stays scoped.
     const targetWorktree = (message: TeamMessage): string | null => {
@@ -206,20 +229,31 @@ export class SessionMailbox {
       targetWorktree,
       staffing: this.staffing,
       rules: this.rules,
-      limits: this.limits,
+      limits: this.limits, providerOf: ambientProviderOf(this.options.homeDir),
       usageOf: profileId => options.usageOf?.(profileId) ?? null,
       excludedProfile: message => message.excludedProfile ?? undefined,
       allowedProfiles: message => message.allowedProfiles ?? null,
       ...(options.onRouteDecision ? { onDecision: options.onRouteDecision } : {}),
     })
     this.outcomes = new LimitOutcomes(db, {
-      store, limits: this.limits, rules: this.rules,
+      store, limits: this.limits, rules: this.rules, homeDir: options.homeDir,
       getRecord: options.getRecord,
       teamOf: id => options.teams.teamOf(id)?.teamId,
       groupOf: (sessionId, groupId) => options.teams.catalogOf(sessionId, this.catalogs)?.groups.get(groupId)?.group,
       taskTitle: taskId => taskStore.get(taskId)?.title ?? null,
       targetWorktree, restoreSession: options.restore,
       onError: options.onError,
+    })
+    this.exhaustion = new ContextExhaustion(db, {
+      store, outcomes: this.outcomes, releases: this.releases, getRecord: options.getRecord,
+    })
+    this.exhaustionNotes = new ExhaustionNotes(db, {
+      store, tasks: taskStore, getRecord: options.getRecord,
+      teamOf: id => options.teams.teamOf(id)?.teamId,
+      groupOf: (sessionId, groupId) => options.teams.catalogOf(sessionId, this.catalogs)?.groups.get(groupId)?.group,
+      usageOf: profileId => options.usageOf?.(profileId) ?? null,
+      cooldownUntil: profileId => sessionCooldown(this.limits, this.options.homeDir, profileId).until,
+      ...(options.gitHead ? { head: options.gitHead } : {}),
     })
     this.dispatcher = new MailDispatcher(this.mailbox.store, {
       // Cycle start (member-release D5): clear the catalog cache, keep the
@@ -252,7 +286,7 @@ export class SessionMailbox {
         if (!driver) throw new Error('Recipient disappeared')
         driver.deliver(envelope)
       },
-      taskContext: taskId => buildTaskContext(taskStore, taskId, this.plans),
+      taskContext: taskId => buildTaskContext(taskStore, taskId, this.plans, options.ownership),
       targetWorktree,
       router: this.router,
       associateTask: (id, taskId) => options.associateTask?.(id, taskId),
@@ -281,8 +315,9 @@ export class SessionMailbox {
       blockedBy: this.options.startBlocker?.(record) ?? null,
       worktree: worktreeRootOf(record.projectPath),
       parked: this.mailbox.store.parkedBy(id).length > 0,
+      contextExhausted: Boolean(record.contextExhausted),
       profileId: record.claudeProfileId ?? 'default',
-      cooldownUntil: this.limits.cooldownUntil(record.claudeProfileId ?? 'default'),
+      ...recipientCooldown(this.limits, this.options.homeDir, record.claudeProfileId ?? 'default', record),
     }
   }
 
@@ -331,46 +366,12 @@ export class SessionMailbox {
     return out
   }
 
-  /**
-   * A `spawning` row's reason (D1/D3): Starting agent is always the blocker
-   * — its own reservation fills caps and holds the worktree, so those facts
-   * it creates itself sit among the other constraints, and an independent
-   * occupant is named there.
-   */
+  /** A `spawning` row's reason, read through the live catalog and staffing counts. */
   private startingAgentReason(teamId: string, row: TeamMessage, reservation: PendingSpawnRow | null): WaitingReason {
-    const blocker: WaitingConstraint = {
-      kind: 'starting-agent',
-      ...(reservation ? { reservation: {
-        group: reservation.groupId, profile: reservation.profileId,
-        worktree: reservation.worktree, startedAt: reservation.createdAt,
-      } } : {}),
-    }
-    const others: WaitingConstraint[] = []
-    if (reservation && row.toId !== null) {
-      const group = this.groupOfTeam(teamId, row.toId)
-      const capacity = this.staffing.capacity(teamId, row.toId, reservation.worktree, row.id)
-      if (group && capacity.groupMembers >= group.max) {
-        others.push({ kind: 'group-cap', counts: { live: capacity.groupMembers, cap: group.max } })
-      }
-      for (const entry of group?.profiles ?? []) {
-        const live = capacity.onProfile[entry.profileId] ?? 0
-        if (entry.cap !== undefined && live >= entry.cap) {
-          others.push({ kind: 'profile-cap', counts: { live, cap: entry.cap }, detail: entry.profileId })
-        }
-      }
-      if (capacity.teamSpawned >= capacity.teamCap) {
-        others.push({ kind: 'team-spawn-cap', counts: { live: capacity.teamSpawned, cap: capacity.teamCap } })
-      }
-      // Its own pending reservation holds the writer slot; independent
-      // occupants (spawned members, other reservations) are named.
-      const live = capacity.worktreeOccupants.length + capacity.worktreePending + 1
-      others.push({
-        kind: 'worktree-occupied', counts: { live, cap: 1 },
-        ...(capacity.worktreeOccupants.length > 0 ? { sessionIds: capacity.worktreeOccupants } : {}),
-        detail: reservation.worktree,
-      })
-    }
-    return { blocker, others: orderConstraints(others) }
+    return startingAgentReason(teamId, row, reservation, {
+      group: (team, id) => this.groupOfTeam(team, id),
+      capacity: (team, id, worktree, exclude) => this.staffing.capacity(team, id, worktree, exclude),
+    })
   }
 
   /** The group definition from a live member's cached catalog, when one exists. */
@@ -441,6 +442,21 @@ export class SessionMailbox {
   turnEnded(sessionId: string, success: boolean) {
     void this.outcomes.turnEnded(sessionId, success).then(() => this.dispatcher.notify(), this.options.onError)
   }
+
+  /**
+   * A session's turn ended with its context exhausted; its mail was settled
+   * first. Replaces {@link turnEnded}: no limit resolution runs (D4).
+   */
+  contextExhausted(sessionId: string): ExhaustionOutcome {
+    const outcome = this.exhaustion.turnExhausted(sessionId)
+    this.dispatcher.notify()
+    // After the commit (D6): record the episode and send its note, once.
+    this.lastNote = this.exhaustionNotes.record(outcome).catch(error => { this.options.onError(error); return null })
+    return outcome
+  }
+
+  /** The newest decision-note send; tests await it. */
+  lastNote: Promise<TeamMessage | null> = Promise.resolve(null)
 
   /** The human hands parked work to a group or session. */
   handOff(messageId: string, target: HandoffTarget) {

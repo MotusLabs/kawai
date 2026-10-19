@@ -19,7 +19,13 @@ import type { PlanDetail, PlanSummary } from '@shared/plans'
 import type { ImpactGate, PlanImpact } from '@shared/strategyImpact'
 import type { PlanRevisionValidation } from '@shared/planValidation'
 
-export type PlanAction = 'approve' | 'withdraw' | 'finish' | 'reopen' | 'validate' | 'assess' | 'decide'
+export type PlanAction = 'approve' | 'withdraw' | 'finish' | 'reopen' | 'validate' | 'assess' | 'decide' | 'start' | 'stop' | 'retry' | 'preview'
+
+/** The Start dialog's server standing for one plan revision (plan-execution D17). */
+export type PlanStanding =
+  | { state: 'pending' }
+  | { state: 'standing'; ready: boolean; failures: Array<{ name: string; message: string }> }
+  | { state: 'error'; error: string }
 
 /** One dialog's command id and the payload it was last sent with (null = not sent yet). */
 export interface ArmedPlanCommand {
@@ -49,15 +55,22 @@ export interface PlanView {
   detailImpact: PlanImpact | null
   /** The selected plan's Validation sections, per standing revision (plan-validation D11). */
   detailValidation: PlanRevisionValidation[] | null
+  /** The selected plan's executions, riding its detail (plan-execution D17). */
+  detailExecutions: PlanDetail['executions']
   /** Armed dialog command ids, by dialog slot (e.g. `approve:<plan>:<revision>`). */
   commands: Record<string, ArmedPlanCommand>
   /** Which slot each pending request was sent from. */
   commandRequests: Record<string, string>
+  /** The Start dialog's server standings, by `<planId>:<revision>` (plan-execution D17). */
+  standings: Record<string, PlanStanding>
+  /** Which standing key each preview request was sent for. */
+  previewRequests: Record<string, string>
 }
 
 export const closedPlanView = (): PlanView => ({
   open: false, loading: false, plans: null, selected: null, detail: null, pending: {}, error: null, failures: [], commands: {}, commandRequests: {},
-  refusalImpact: null, impact: {}, detailImpact: null, detailValidation: null,
+  refusalImpact: null, impact: {}, detailImpact: null, detailValidation: null, detailExecutions: undefined,
+  standings: {}, previewRequests: {},
 })
 
 interface PlanState {
@@ -72,6 +85,8 @@ interface PlanState {
   /** The command id to send from `slot` with `payload`: the armed one unless the payload changed. */
   command: (teamKey: string, slot: string, payload: string, requestId: string) => string
   begin: (teamKey: string, requestId: string, action: PlanAction) => void
+  /** The Start dialog opened for `<planId>:<revision>`: its preview request is pending (D17). */
+  beginPreview: (teamKey: string, requestId: string, standingKey: string) => void
   /** The connection came back: results of pending requests are lost, so stop waiting for them. */
   reconnected: (teamKey: string) => void
   applySnapshot: (message: Extract<ServerMessage, { type: 'team-plans-snapshot' }>) => void
@@ -140,16 +155,27 @@ export const useTeamPlanStore = create<PlanState>(set => ({
   begin: (teamKey, requestId, action) => set(state => update(state, teamKey, {
     pending: { ...state.views[teamKey]?.pending, [requestId]: action }, error: null, failures: [], refusalImpact: null,
   })),
+  beginPreview: (teamKey, requestId, standingKey) => set(state => update(state, teamKey, {
+    pending: { ...state.views[teamKey]?.pending, [requestId]: 'preview' },
+    previewRequests: { ...state.views[teamKey]?.previewRequests, [requestId]: standingKey },
+    standings: { ...state.views[teamKey]?.standings, [standingKey]: { state: 'pending' } },
+  })),
   reconnected: teamKey => set(state => {
     const view = state.views[teamKey]
     if (!view?.open || Object.keys(view.pending).length === 0) return state
-    return update(state, teamKey, { pending: {}, commandRequests: {} })
+    // A preview whose answer was lost leaves no pending standing behind: the
+    // open Start dialog asks again (N4); settled standings stay.
+    const standings = Object.fromEntries(Object.entries(view.standings).filter(([, standing]) => standing.state !== 'pending'))
+    return update(state, teamKey, { pending: {}, commandRequests: {}, previewRequests: {}, standings })
   }),
   applySnapshot: message => set(state => update(state, message.teamPath, { loading: false, plans: message.plans, impact: message.impact ?? {} })),
   applyDetail: message => set(state => {
     const view = state.views[message.teamPath]
     if (!view?.open || view.selected !== message.detail.plan.id) return state
-    return update(state, message.teamPath, { detail: message.detail, detailImpact: message.impact ?? null, detailValidation: message.validation ?? null })
+    return update(state, message.teamPath, {
+      detail: message.detail, detailImpact: message.impact ?? null, detailValidation: message.validation ?? null,
+      detailExecutions: message.detail.executions,
+    })
   }),
   applyResult: message => set(state => {
     const view = state.views[message.teamPath]
@@ -159,16 +185,27 @@ export const useTeamPlanStore = create<PlanState>(set => ({
     const commandRequests = { ...view.commandRequests }
     const slot = commandRequests[message.requestId]
     delete commandRequests[message.requestId]
+    // A preview reply lands in the Start dialog's standing slot (D17); an
+    // error keeps the dialog open with the refusal instead of a standing.
+    const previewRequests = { ...view.previewRequests }
+    const standingKey = previewRequests[message.requestId]
+    let standings = view.standings
+    if (standingKey !== undefined) {
+      delete previewRequests[message.requestId]
+      standings = { ...standings, [standingKey]: message.preview !== undefined
+        ? { state: 'standing', ready: message.preview.ready, failures: message.preview.failures }
+        : { state: 'error', error: message.error ?? 'The preview failed.' } }
+    }
     if (message.error) {
       const armed = slot ? view.commands[slot] : undefined
       const commands = armed ? { ...view.commands, [slot!]: { ...armed, refused: true } } : view.commands
       return update(state, message.teamPath, {
-        pending, commandRequests, commands, error: message.error, failures: message.failures ?? [], refusalImpact: message.impact ?? null,
+        pending, commandRequests, previewRequests, standings, commands, error: message.error, failures: message.failures ?? [], refusalImpact: message.impact ?? null,
       })
     }
     // Success retires the dialog's command: a later dialog is a new command.
     const commands = { ...view.commands }
     if (slot) delete commands[slot]
-    return update(state, message.teamPath, { pending, commandRequests, commands, error: null, failures: [], refusalImpact: null })
+    return update(state, message.teamPath, { pending, commandRequests, previewRequests, standings, commands, error: null, failures: [], refusalImpact: null })
   }),
 }))

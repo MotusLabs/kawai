@@ -67,8 +67,8 @@ test('findings, task mail of first-done tasks, starts, manifests, and session pr
 test('the usage horizon is retention when turns reach back that far, the end when none were recorded', () => {
   const s = new Seed()
   expect(loadMetricsInputs(s.db, TEAM, FROM, END).usageHorizon).toBe(END)
-  s.usage('chat-dev', 70 * 24, 1)
-  expect(loadMetricsInputs(s.db, TEAM, FROM, END).usageHorizon).toBe(END - 60 * DAY)
+  s.usage('chat-dev', 100 * 24, 1)
+  expect(loadMetricsInputs(s.db, TEAM, FROM, END).usageHorizon).toBe(END - 90 * DAY)
   s.db.close()
 })
 

@@ -17,6 +17,7 @@ const KIND_LABELS: Record<string, string> = {
   'pending-acceptance': 'Pending acceptance',
   'fixes-requested': 'Fixes requested',
   'outbound-violation': 'Outbound violation',
+  'context-exhausted': 'Context exhausted',
 }
 
 /** A known kind's label; an unrecognized kind reads as itself. */

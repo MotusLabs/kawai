@@ -5,6 +5,7 @@ import { describe, expect, test } from 'bun:test'
 import type { Plan, PlanRevision } from '../../shared/plans'
 import type { ValidationStanding } from '../plans/validation/validationStanding'
 import { START_PRECONDITIONS, evaluateStartPreconditions, type StartCheckContext } from '../plans/execution/startPreconditions'
+import { REGISTERED_LANDING_MODES } from '../plans/landing/landingMechanisms'
 
 const plan: Plan = {
   id: 'plan-1', teamId: 'team', title: 'P', lifecycle: 'open', currentApprovedRevision: 2,
@@ -100,7 +101,8 @@ describe('START_PRECONDITIONS', () => {
     expect(message).toContain('api')
   })
 
-  test('landing-mode-supported: an unregistered mode is refused; direct is shipped', () => {
+  test('landing-mode-supported: an unregistered mode is refused; direct is shipped (14.5)', () => {
+    expect(REGISTERED_LANDING_MODES).toEqual(['direct'])
     expect(check('landing-mode-supported', { landingMode: 'integration-branch' })).toContain('integration-branch')
     expect(check('landing-mode-supported', { landingMode: 'direct' })).toBeNull()
   })

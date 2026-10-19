@@ -106,6 +106,16 @@ export class PlanService {
      * store read; without it every completion refuses as not found.
      */
     executionOf?: (executionId: string) => { planId: string; revision: number } | null
+    /**
+     * plan-execution D19: called after a plan completes or cancels (after
+     * commit), so the execution module stops the plan's running executions.
+     */
+    onPlanClosed?: (planId: string, outcome: 'completed' | 'cancelled') => Promise<void>
+    /**
+     * plan-execution D18: the plan's executions for `plan_get` (and the
+     * Plans view's detail pushes); absent when no execution module is wired.
+     */
+    executionsOf?: (planId: string) => import('../../shared/planExecution').PlanExecutionView[]
     /** plan-validation D9: approval's pre-transaction gather and in-transaction standing, and its appended precondition. */
     validation?: {
       prepareStanding: (planId: string, revision: number) => Promise<unknown> | null
@@ -133,7 +143,14 @@ export class PlanService {
 
   async get(caller: PlanCaller, planId: string): Promise<PlanDetail> {
     const { team } = await this.context(caller)
-    return this.store.detail(this.teamPlan(team, planId).id)!
+    return this.detailWithExecutions(this.teamPlan(team, planId).id)
+  }
+
+  /** D18: the stored detail plus the plan's executions, when the module is wired. */
+  detailWithExecutions(planId: string): PlanDetail {
+    const detail = this.store.detail(planId)!
+    const executions = this.options.executionsOf?.(planId)
+    return executions === undefined ? detail : { ...detail, executions }
   }
 
   /** D5: the plan, its creator's draft, and a `created` event in one transaction. */
@@ -265,7 +282,11 @@ export class PlanService {
   /** Complete or cancel (human only, D8). */
   async close(caller: PlanCaller, input: PlanCloseInput): Promise<PlanCommandOutcome> {
     if (caller.kind !== 'human') return forbidden(input.outcome === 'cancelled' ? 'cancel' : 'complete')
-    return closePlan(this.store, caller.team.teamId, input)
+    const outcome = await closePlan(this.store, caller.team.teamId, input)
+    // D19: the close commits first; the hook (stopping the plan's running
+    // executions) is awaited after it and never throws.
+    if (outcome.ok && !('replayed' in outcome && outcome.replayed)) await this.options.onPlanClosed?.(input.planId, input.outcome)
+    return outcome
   }
 
   /** Reopen a completed or cancelled plan (human only, D8). */
@@ -282,10 +303,10 @@ export class PlanService {
    * returns the prior outcome without writing and never runs `within`, so
    * its result reads undefined. PlanService stays the only writer of
    * `plan_events` (C3): ExecutionService composes this and never writes that
-   * table itself. The actor is the human — Start, Stop, and Retry are the
-   * human commands, and the plan-close hook's stop follows the human's close.
+   * table itself. The actor is the human for Start, Stop, and Retry; the
+   * plan-close hook's stop is Kawai's own (`system`, D19).
    */
-  recordExecutionEvent<T>(planId: string, event: ExecutionEventInput, within: () => T): ExecutionEventOutcome<T> {
+  recordExecutionEvent<T>(planId: string, event: ExecutionEventInput, within: () => T, actor: 'human' | 'system' = 'human'): ExecutionEventOutcome<T> {
     const commandId = event.commandId.trim()
     if (!commandId) {
       return { ok: false, reason: 'invalid', result: undefined, message: 'An execution command needs a stable command id so a resend replays instead of repeating.' }
@@ -297,7 +318,7 @@ export class PlanService {
       result = within()
       ran = true
       return this.store.insertEvent(planId, {
-        kind: event.kind, actor: HUMAN, commandId, payload,
+        kind: event.kind, actor: actor === 'human' ? HUMAN : SYSTEM, commandId, payload,
         ...(event.kind === 'execution-started' ? { revision: event.revision, contentHash: event.contentHash } : {}),
         ...(event.kind === 'execution-stopped' ? { reason: event.reason.trim() || null } : {}),
       })
@@ -358,6 +379,7 @@ export class PlanService {
 }
 
 const HUMAN: PlanActor = { kind: 'human', sessionId: null }
+const SYSTEM = { kind: 'system' as const, sessionId: null }
 
 /** The compared payload of one execution kind (plan-execution D3): the command name plus its own fields. */
 function executionCommandPayload(event: ExecutionEventInput): CommandPayload {

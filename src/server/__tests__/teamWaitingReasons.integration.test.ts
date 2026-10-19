@@ -22,6 +22,7 @@ import { clearTeamCache, resolveTeam, type TeamIdentity } from '../team/teamIden
 import type { SpawnRequest, SpawnResult } from '../team/staffing'
 import type { WaitingReason } from '../../shared/team'
 import type { ChatPeerMessage } from '../../shared/chat'
+import { NULL_OWNERSHIP } from '../plans/execution/executionOwnership'
 
 function git(args: string[], cwd?: string): string {
   const result = spawnSync('git', args, { cwd, encoding: 'utf8', env: cleanGitEnv() })
@@ -123,6 +124,7 @@ beforeEach(async () => {
     groupInfo: () => ({ missing: false }),
   } as unknown as SessionTeams
   runtime = new SessionMailbox(db.db, {
+    ownership: NULL_OWNERSHIP, onTaskResultWrite: () => {},
     teams: teamsStub,
     records: () => records.values(),
     getRecord: id => records.get(id),

@@ -34,6 +34,13 @@ export interface CandidateInput {
   spawnCwd: string | null
   /** A forwarded message never goes back to the limited profile. */
   excludeProfile?: string
+  /**
+   * The excluded model's provider while it cools (providers-and-workers D9):
+   * its other models are hard-filtered too, members and spawn slots alike.
+   */
+  excludeProvider?: string
+  /** Resolves each candidate's provider for the exclusion; ids stand in as their own provider. */
+  providerOf?: (profileId: string) => string
   /** The role's profiles this mail may route to, in the role's order (plan-execution D15); null narrows nothing. */
   allowedProfiles?: string[] | null
 }
@@ -57,7 +64,9 @@ export function buildCandidates(input: CandidateInput): CandidateSet {
   for (const profileId of input.pendingSpawnProfiles) count(profileId)
   const live = input.members.length + input.pendingSpawnProfiles.length
   const allowed = group.profiles.length > 0 ? group.profiles : [{ profileId: DEFAULT_PROFILE_ID }]
-  const usable = (profileId: string) => profileId !== input.excludeProfile
+  const provider = input.providerOf ?? ((profileId: string) => profileId)
+  const usable = (profileId: string) =>
+    profileId !== input.excludeProfile && (input.excludeProvider === undefined || provider(profileId) !== input.excludeProvider)
   // A role narrows the mail: only its profiles may take it (D15).
   const inRole = (profileId: string) => input.allowedProfiles === null || input.allowedProfiles === undefined || input.allowedProfiles.includes(profileId)
 
