@@ -128,8 +128,9 @@ files are never loaded. It default-exports `{ route, onLimit?, env?, timeoutMs? 
 ## Limits
 
 Rate-limit, billing, and overload failures (and any 429) are recorded per
-profile for 24 hours, with the provider owning the profile and the window the
-rejected report named (`five_hour`, `seven_day_opus`, …). A final failure
+profile — kept for 15 days, with routing reading only the last 24 hours —
+with the provider owning the profile and the window the rejected report
+named (`five_hour`, `seven_day_opus`, …). A final failure
 starts a cooldown in every group for the profile's provider — until the
 provider's reset when known, else one hour — except a window that covers one
 model only (`seven_day_opus`, `seven_day_sonnet`), which cools that profile
