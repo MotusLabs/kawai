@@ -169,3 +169,17 @@ export function promotedThrough(promotions: readonly Pick<PromotionRecord, 'bran
 export function candidatePromoted(candidate: Pick<IntegrationCandidate, 'branch' | 'seq' | 'state'>, through: ReadonlyMap<string, number>): boolean {
   return candidate.state === 'landed' && candidate.seq <= (through.get(candidate.branch) ?? 0)
 }
+
+/** What the Promote dialog shows (D9, D13): the standing, the pinned head, what it carries, and the outside commits. */
+export interface PromotionPreview {
+  branch: string
+  targetBranch: string | null
+  /** The head Promote would pin: the branch's head on origin. */
+  head: string | null
+  failures: Array<{ name: string; message: string }>
+  /** The last landed candidate the head contains. */
+  throughSeq: number
+  /** Landed candidates not yet promoted and contained in the head, newest first. */
+  carried: IntegrationCandidate[]
+  outside: OutsideCommit[]
+}

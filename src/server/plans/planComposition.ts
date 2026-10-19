@@ -35,6 +35,7 @@ import { chatFixtureEnabled } from '../chat/developmentFixture'
 import type { LandingMechanisms } from './landing/landingMechanisms'
 import { directMechanism } from './landing/directMechanism'
 import { IntegrationStore } from './landing/integration/integrationStore'
+import { integrationViews } from './landing/integration/integrationView'
 import { integrationMechanism } from './landing/integration/integrationMechanism'
 import { composePromotions } from './landing/integration/promotionComposition'
 import type { PromotionService } from './landing/integration/PromotionService'
@@ -116,6 +117,8 @@ export interface PlanServicesOptions {
   }
   /** Test seam: replace the landing probe (defaults to the real one; the fixture switch its own). */
   executionProbe?: (input: import('./landing/landingProbe').ProbeInput, options?: import('./landing/ghCommand').GhCommandOptions) => Promise<import('./landing/landingProbe').ProbeResult>
+  /** Test seam: the Promote reads (origin heads, containment, the merge-commit setting). */
+  promotionReads?: import('./landing/integration/PromotionService').PromotionReads
   /** Test seam: the gh surface every composed gh call uses (a stub gh on a private PATH). */
   executionGhOptions?: import('./landing/ghCommand').GhCommandOptions
   /** One adapter per manager by default (one 4-slot CLI pool per process). */
@@ -166,6 +169,8 @@ export function composePlanServices(options: PlanServicesOptions): {
   runtime: ExecutionRuntime | null
   /** Promote, Cancel, and the preview (integration-candidates D9). */
   promotions: PromotionService
+  /** The integration branches, candidates, promotions, and promotion effects; its writes re-push plan details (D13). */
+  integrationStore: IntegrationStore
 } {
   const adapter = options.adapter ?? new OpenspecAdapter()
   const validationStore = new ValidationStore(options.db)
@@ -187,6 +192,7 @@ export function composePlanServices(options: PlanServicesOptions): {
   // late-bound — the execution service needs this PlanService — and is set
   // before this function returns, so no close can find it unbound.
   let executions: ExecutionService | null = null
+  const integrationStore = new IntegrationStore(options.db)
   const plans = new PlanService(options.plans, {
     getSession: options.getSession,
     strategies: options.strategies,
@@ -201,6 +207,7 @@ export function composePlanServices(options: PlanServicesOptions): {
       return execution ? { planId: execution.planId, revision: execution.revision } : null
     },
     executionsOf: planId => executionViews(executionStore, planId, viewReads),
+    integrationOf: planId => integrationViews(integrationStore, planId),
     onPlanClosed: async planId => {
       const plan = options.plans.get(planId)
       if (plan !== null && plan !== undefined) await executions?.stopForPlan(plan.teamId, planId)
@@ -219,7 +226,6 @@ export function composePlanServices(options: PlanServicesOptions): {
   // adds one), so Start refuses an integration plan as an unsupported mode
   // rather than calling the real gh.
   const fixture = chatFixtureEnabled
-  const integrationStore = new IntegrationStore(options.db)
   const mechanisms: LandingMechanisms = new Map([
     [directMechanism.mode, directMechanism],
     ...(fixture ? [] : [['integration-branch', integrationMechanism(integrationStore)] as const]),
@@ -260,6 +266,7 @@ export function composePlanServices(options: PlanServicesOptions): {
     wake: teamId => runtime?.command(teamId),
     ...(options.executionGhOptions ? { ghOptions: options.executionGhOptions } : {}),
     ...(options.executionProbe ? { probe: options.executionProbe } : {}),
+    ...(options.promotionReads ? { reads: options.promotionReads } : {}),
   })
   if (team !== undefined) {
     const roundAdaptersUsed = fixture ? fixtureRoundAdapters() : roundAdapters
@@ -307,7 +314,7 @@ export function composePlanServices(options: PlanServicesOptions): {
   }
   return {
     validation, validationStore, plans, validationDetail: new ValidationDetailCache(validation), adapter, executions, executionStore,
-    runtime, promotions: promotions.service,
+    runtime, promotions: promotions.service, integrationStore,
   }
 }
 

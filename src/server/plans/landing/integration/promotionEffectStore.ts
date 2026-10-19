@@ -36,10 +36,67 @@ function mapEffect(row: Record<string, unknown>): PromotionEffectRow {
   }
 }
 
+/** A committed write's plan: its team and, when known, the plan whose detail it changes. */
+export type IntegrationChangeListener = (teamId: string, planId: string | undefined) => void
+
 export class PromotionEffectStore implements EffectQueue<PromotionEffectRow> {
+  private readonly listeners = new Set<IntegrationChangeListener>()
+  private readonly pending = new Map<string, Set<string | undefined>>()
+  private scheduled = false
+
   constructor(readonly db: Database, protected readonly now: () => Date = () => new Date()) {}
 
   protected iso(): string { return this.now().toISOString() }
+
+  /**
+   * Every candidate, promotion, or effect write (integration-candidates D13):
+   * the plan's detail re-pushes. Notices are collected and delivered in a
+   * microtask, after the synchronous transaction that wrote them has
+   * committed or rolled back, so a view never reads a write mid-transaction.
+   */
+  subscribe(listener: IntegrationChangeListener): () => void {
+    this.listeners.add(listener)
+    return () => this.listeners.delete(listener)
+  }
+
+  protected changed(teamId: string, planId: string | undefined): void {
+    if (this.listeners.size === 0) return
+    const plans = this.pending.get(teamId) ?? new Set<string | undefined>()
+    plans.add(planId)
+    this.pending.set(teamId, plans)
+    if (this.scheduled) return
+    this.scheduled = true
+    queueMicrotask(() => {
+      this.scheduled = false
+      const batch = [...this.pending]
+      this.pending.clear()
+      for (const [team, planIds] of batch) {
+        // An unknown plan refreshes every plan of the team, so it subsumes the named ones.
+        const targets = planIds.has(undefined) ? [undefined] : [...planIds]
+        for (const target of targets) {
+          for (const listener of this.listeners) {
+            try {
+              listener(team, target)
+            } catch {
+              // A view refresh never fails a write (I2): a throwing listener is dropped for this notice.
+            }
+          }
+        }
+      }
+    })
+  }
+
+  /** Announce a write to the promotion's plan. */
+  protected promotionChanged(promotionId: string): void {
+    const row = this.db.prepare('SELECT team_id, plan_id FROM plan_promotions WHERE id = ?').get(promotionId) as { team_id: string; plan_id: string } | null
+    if (row) this.changed(row.team_id, row.plan_id)
+  }
+
+  /** Announce a write to the effect's promotion's plan. */
+  protected effectChanged(id: string): void {
+    const row = this.db.prepare('SELECT promotion_id FROM plan_promotion_effects WHERE id = ?').get(id) as { promotion_id: string } | null
+    if (row) this.promotionChanged(row.promotion_id)
+  }
 
   /** Insert one effect row; idempotent by key, like an execution effect. */
   insertEffect(input: { promotionId: string; kind: PromotionEffectKind; effectKey: string; command: Record<string, unknown> }): PromotionEffectRow {
@@ -48,6 +105,7 @@ export class PromotionEffectStore implements EffectQueue<PromotionEffectRow> {
     const id = `peffect-${crypto.randomUUID()}`
     this.db.prepare(`INSERT INTO plan_promotion_effects (id, promotion_id, kind, effect_key, command_json, state, tries, created_at)
       VALUES (?, ?, ?, ?, ?, 'pending', 0, ?)`).run(id, input.promotionId, input.kind, input.effectKey, JSON.stringify(input.command), this.iso())
+    this.promotionChanged(input.promotionId)
     return this.effect(id)!
   }
 
@@ -82,21 +140,25 @@ export class PromotionEffectStore implements EffectQueue<PromotionEffectRow> {
 
   markEffectRunning(id: string): void {
     this.db.prepare("UPDATE plan_promotion_effects SET state = 'running', started_at = COALESCE(started_at, ?) WHERE id = ?").run(this.iso(), id)
+    this.effectChanged(id)
   }
 
   setEffectOutcome(id: string, outcome: { state: 'done' | 'failed' | 'unknown' | 'cancelled'; outcome?: unknown; error?: string | null }): void {
     this.db.prepare('UPDATE plan_promotion_effects SET state = ?, outcome_json = ?, error = ?, finished_at = ? WHERE id = ?').run(
       outcome.state, outcome.outcome === undefined ? null : JSON.stringify(outcome.outcome), outcome.error ?? null, this.iso(), id,
     )
+    this.effectChanged(id)
   }
 
   scheduleEffectRetry(id: string, nextAt: string, error: string | null): void {
     this.db.prepare("UPDATE plan_promotion_effects SET state = 'pending', tries = tries + 1, next_at = ?, error = ? WHERE id = ?").run(nextAt, error, id)
+    this.effectChanged(id)
   }
 
   /** A failure or a Cancel before the merge cancels the promotion's pending and uninspected effects (D9, D10). */
   cancelPromotionEffects(promotionId: string): void {
     this.db.prepare("UPDATE plan_promotion_effects SET state = 'cancelled', finished_at = ? WHERE promotion_id = ? AND state IN ('pending', 'unknown')").run(this.iso(), promotionId)
+    this.promotionChanged(promotionId)
   }
 
   /** The team's due unknown promotion effects, oldest first: each is inspected before it repeats (D14, review L1). */
@@ -111,11 +173,13 @@ export class PromotionEffectStore implements EffectQueue<PromotionEffectRow> {
   /** An inspection that found the work not done puts the effect back to pending, to run again. */
   resetEffect(id: string): void {
     this.db.prepare("UPDATE plan_promotion_effects SET state = 'pending', next_at = NULL WHERE id = ?").run(id)
+    this.effectChanged(id)
   }
 
   /** An undecidable inspection stays `unknown`, one try counted, retrying at `nextAt`. */
   scheduleInspectionRetry(id: string, nextAt: string, error: string | null): void {
     this.db.prepare("UPDATE plan_promotion_effects SET state = 'unknown', tries = tries + 1, next_at = ?, error = ? WHERE id = ?").run(nextAt, error, id)
+    this.effectChanged(id)
   }
 
   /** The effect running now for the promotion, if any (Cancel lets a running merge settle). */
@@ -129,7 +193,10 @@ export class PromotionEffectStore implements EffectQueue<PromotionEffectRow> {
     return this.db.transaction(() => {
       const rows = (this.db.prepare("SELECT * FROM plan_promotion_effects WHERE state = 'running'").all() as Array<Record<string, unknown>>).map(mapEffect)
       const update = this.db.prepare("UPDATE plan_promotion_effects SET state = 'unknown' WHERE id = ?")
-      for (const row of rows) update.run(row.id)
+      for (const row of rows) {
+        update.run(row.id)
+        this.effectChanged(row.id)
+      }
       return rows
     })()
   }

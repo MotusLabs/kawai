@@ -106,6 +106,7 @@ export class IntegrationStore extends PromotionEffectStore {
       VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (team_id, branch) DO UPDATE SET created_by = excluded.created_by, created_sha = excluded.created_sha, created_at = excluded.created_at`)
       .run(input.teamId, input.branch, input.planId, input.targetBranch, input.executionId, input.sha, this.iso())
+    this.changed(input.teamId, input.planId)
     return this.branch(input.teamId, input.branch)!
   }
 
@@ -141,6 +142,7 @@ export class IntegrationStore extends PromotionEffectStore {
     } catch (error) {
       mapIntegrationConstraint(error)
     }
+    this.changed(input.teamId, this.branch(input.teamId, input.branch)?.planId)
   }
 
   candidate(id: string): IntegrationCandidate | null {
@@ -167,6 +169,7 @@ export class IntegrationStore extends PromotionEffectStore {
         throw new IntegrationConflict('illegal-transition', `Candidate ${current.seq} cannot go from ${current.state} to ${to}.`)
       }
       this.db.prepare('UPDATE plan_integration_candidates SET state = ?, decided_at = ? WHERE id = ? AND state = ?').run(to, this.iso(), id, current.state)
+      this.changed(current.teamId, this.branch(current.teamId, current.branch)?.planId)
       return this.candidate(id)!
     })
   }
@@ -211,6 +214,7 @@ export class IntegrationStore extends PromotionEffectStore {
       if (current === null) return
       const detail = { ...current.outcomeDetail, [key]: note }
       this.db.prepare('UPDATE plan_promotions SET outcome_detail_json = ? WHERE id = ?').run(JSON.stringify(detail), id)
+      this.changed(current.teamId, current.planId)
     })
   }
 
@@ -233,6 +237,7 @@ export class IntegrationStore extends PromotionEffectStore {
       } catch (error) {
         mapIntegrationConstraint(error)
       }
+      this.changed(input.teamId, input.planId)
       return this.promotion(id)!
     })
   }
@@ -243,18 +248,23 @@ export class IntegrationStore extends PromotionEffectStore {
     if (keys.length === 0) return false
     const sets = keys.map(key => `${PROMOTION_COLUMNS[key]} = ?`).join(', ')
     const values = keys.map(key => promotionValue(key, patch[key]))
-    return this.db.prepare(`UPDATE plan_promotions SET ${sets} WHERE id = ? AND state = 'running'`).run(...values, id).changes === 1
+    const written = this.db.prepare(`UPDATE plan_promotions SET ${sets} WHERE id = ? AND state = 'running'`).run(...values, id).changes === 1
+    if (written) this.promotionChanged(id)
+    return written
   }
 
   /** The target moved (D10 step 6): one more move counted; returns the new count. */
   countMove(id: string): number {
     this.db.prepare("UPDATE plan_promotions SET moves = moves + 1 WHERE id = ? AND state = 'running'").run(id)
+    this.promotionChanged(id)
     return this.promotion(id)?.moves ?? 0
   }
 
   /** Finish a running promotion with its outcome; false when it had already finished. */
   finishPromotion(id: string, outcome: PromotionOutcome, detail: Record<string, unknown> | null = null): boolean {
-    return this.db.prepare(`UPDATE plan_promotions SET state = 'finished', outcome = ?, outcome_detail_json = ?, finished_at = ?, step = NULL
+    const finished = this.db.prepare(`UPDATE plan_promotions SET state = 'finished', outcome = ?, outcome_detail_json = ?, finished_at = ?, step = NULL
       WHERE id = ? AND state = 'running'`).run(outcome, detail === null ? null : JSON.stringify(detail), this.iso(), id).changes === 1
+    if (finished) this.promotionChanged(id)
+    return finished
   }
 }

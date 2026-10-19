@@ -125,6 +125,7 @@ function planNote({ sessionId, group }: TeamPromptInput): string {
     `When you create a task for one of a plan's changes, pass \`plan_id\` and \`plan_change\` together to \`${tool('task_create')}\`: the change must be in the revision only the human approved, the link is fixed at creation, and task mail then names the plan, its revision, and the change.`,
     `\`plan_get\` also shows the plan's executions: each change's state (waiting, provisioning, implementing, gating, landing, landed, stopped), its latest round's attempt, and where its review stands.`,
     'When a running execution owns a change: only Kawai dispatches its task or hands it to its next stage — your findings on its results still count. Submit results with the commit that landed on the change\u2019s branch (Kawai checks it against the branch and origin). Reply to Kawai\u2019s instruction mail is refused: answer with a result, findings, a journal note, or a message to the responsible group. No tool of yours starts, stops, retries, or approves an execution — only the human does, from the Plans view.',
+    'A plan that lands on an integration branch: its change tasks start from that branch and land on it, and `plan_get` shows it under `integration` — the branch, its head, the candidate chain with states and outside commits, and the promotions. Kawai alone writes an integration branch — never push to it — and only the human promotes it into the default branch or cancels a promotion; no tool of yours does either.',
   ].join('\n')
 }
 

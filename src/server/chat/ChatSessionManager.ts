@@ -1176,6 +1176,8 @@ export class ChatSessionManager {
     planServices.executionStore.subscribe(teamId => {
       this.options.onPlanChange?.(teamId)
     })
+    // Every candidate, promotion, or promotion-effect write re-pushes the plan's detail (integration-candidates D13).
+    planServices.integrationStore.subscribe((teamId, planId) => this.options.onPlanChange?.(teamId, planId))
     this.strategies.store.subscribe(strategy => {
       const teamId = strategyTeam(strategy)
       if (!teamId) return

@@ -11,7 +11,7 @@
 // finishes the promotion at once unless its merge is in flight, which then
 // settles first (the runner finishes it).
 import { FLOOR_VERSION } from '../../../../shared/planExecution'
-import { candidateChain, promotedThrough, type IntegrationCandidate, type OutsideCommit } from '../../../../shared/planIntegration'
+import { candidateChain, promotedThrough, type IntegrationCandidate, type OutsideCommit, type PromotionPreview } from '../../../../shared/planIntegration'
 import type { TeamIdentity } from '../../../team/teamIdentity'
 import type { PlanExecutionSettings } from '../../../team/teamCaps'
 import { PlanRefusal, type PlanRefusalReason } from '../../planCommands'
@@ -31,19 +31,7 @@ type Refusal = { ok: false; reason: PlanRefusalReason; message: string; failures
 export type PromoteOutcome = { ok: true; replayed: boolean; promotion: PromotionRow } | Refusal
 export type CancelOutcome = { ok: true; replayed: boolean; promotion: PromotionRow } | Refusal
 
-/** What the Promote dialog shows (D9, D13): the standing, the pinned head, what it carries, and the outside commits. */
-export interface PromotionPreview {
-  branch: string
-  targetBranch: string | null
-  /** The head Promote would pin: the branch's head on origin. */
-  head: string | null
-  failures: Array<{ name: string; message: string }>
-  /** The last landed candidate the head contains. */
-  throughSeq: number
-  /** Landed candidates not yet promoted and contained in the head, newest first. */
-  carried: IntegrationCandidate[]
-  outside: OutsideCommit[]
-}
+export type { PromotionPreview }
 
 /** The git and gh reads Promote and the preview make; each answers null for "could not be read". */
 export interface PromotionReads {

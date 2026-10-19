@@ -17,6 +17,8 @@ export interface ImplementInstructionInput {
   guidance: string
   taskId: string
   manifestHash: string
+  /** integration-candidates D12: the plan lands on this integration branch, the change's base; Kawai alone writes it. */
+  integrationBranch?: string | null
 }
 
 const LIST_CHARS = 600
@@ -31,6 +33,7 @@ export function implementInstruction(input: ImplementInstructionInput): string {
   return [
     `Implement the OpenSpec change "${input.change}" of plan "${input.planTitle}" (revision ${input.revision}).`,
     `Worktree: ${input.worktree} (branch ${input.branch}, baseline ${input.baseline}, head ${input.head}). The branch is yours: commit to it; never force a push.`,
+    input.integrationBranch ? `Base: the integration branch ${input.integrationBranch} — your branch starts from it and lands on it. Kawai alone writes ${input.integrationBranch} (it fast-forwards it and promotes it into the default branch); never push to it.` : null,
     'Run the project setup in the worktree yourself (dependencies, build); Kawai runs no project commands.',
     input.guidance.trim() !== '' ? `Guidance: ${input.guidance.trim()}` : null,
     acceptance.text !== '' ? `Acceptance rules${acceptance.cut ? ' (cut — task_get has the rest)' : ''}:\n${acceptance.text}` : null,

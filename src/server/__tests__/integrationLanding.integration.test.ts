@@ -228,6 +228,10 @@ describe('the integration-landing manager bench', () => {
     expect(create.finishedAt! <= provisions[0]!.createdAt).toBe(true)
     expect(changeRow(executionId, 'ib-a').baselineCommit).toBe(master)
 
+    // D12: Kawai's instruction names the integration branch as the base and forbids pushing to it.
+    await waitFor(() => instruction(executionId, 'ib-a') !== undefined, 'ib-a: instruction dispatched')
+    expect(instruction(executionId, 'ib-a')!.instruction).toContain(`Base: the integration branch ${branch} — your branch starts from it and lands on it. Kawai alone writes ${branch}`)
+
     // (b) A passed change lands by a non-forced fast-forward; master is untouched.
     const commitA = await implementAndPass(executionId, 'ib-a')
     await waitFor(() => changeRow(executionId, 'ib-a').state === 'landed', 'ib-a: landed')
@@ -286,6 +290,7 @@ describe('the integration-landing manager bench', () => {
     expect(master).not.toBe(before)
     expect(executions().landings(planId)).toEqual([expect.objectContaining({ change: 'ib-e', mechanism: 'direct', mergeSha: master, treeVerified: true })])
     expect(candidates('master')).toEqual([])
+    expect(instruction(executionId, 'ib-e')!.instruction).not.toContain('integration branch')
   }, 120_000)
 
   test('Start reads the integration store\'s running promotion: promotion-idle refuses naming it', async () => {
