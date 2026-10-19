@@ -400,7 +400,8 @@ export class CatalogMerger {
    * route or a wrapper with the key, and every other provider stays usable.
    */
   private enforceTrustedCredentialInvariants(): void {
-    for (const [id, provider] of [...this.providers]) {
+    // Deleting from a Map during for…of iteration is safe, so no array copy.
+    for (const [id, provider] of this.providers) {
       const credentialedModels = [...provider.models.values()]
         .map(model => flattenModel(provider, model))
         .filter(flat => flat.authTokenEnv !== undefined || flat.balanceKeyEnv !== undefined)
