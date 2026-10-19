@@ -74,6 +74,37 @@ test("a sibling's provider limit cools the recipient row and the urgent refusal 
   expect(waiting[direct.id]!.blocker).toEqual({ kind: 'profile-cooling', retryAt: until, detail: 'zai' })
 })
 
+// openrouter-provider D8 through the same wiring: a credit limit on
+// openrouter-opus cools its openrouter-sonnet sibling, the urgent refusal says
+// out of credit, and the queued direct mail's reason carries the credit mark.
+test('a sibling out of credit: the urgent refusal and the waiting reason say out of credit', async () => {
+  records.set('lead', { sessionId: 'lead', groupId: 'leads', projectPath: dir, status: 'waiting' } as ChatSessionRecord)
+  records.set('or', { sessionId: 'or', groupId: 'devs', projectPath: dir, claudeProfileId: 'openrouter-sonnet', status: 'waiting' } as ChatSessionRecord)
+  await teams.track('lead', dir)
+  await teams.track('or', dir)
+  const at = Date.now()
+  const until = new Date(at + 3_600_000).toISOString()
+  runtime.limits.record({
+    profileId: 'openrouter-opus', sessionId: 'or', groupId: 'devs', kind: 'unknown', final: true, status: 402,
+    message: 'API Error: 402', resetsAt: null, providerId: 'openrouter', window: 'credit', at: new Date(at).toISOString(),
+  })
+  const error = await mailboxHandlers(runtime.mailbox, 'lead').send_message({ to_kind: 'session', to_id: 'or', body: 'Now!', urgent: true })
+    .then(() => null, e => e as Error)
+  const time = new Date(until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  expect(error?.message).toBe(`Session or runs on profile openrouter-sonnet of provider openrouter, which is out of credit; its cooldown ends by ${time} (${until}) at the latest. ` +
+    'Send it without urgent to queue it, or send it to another agent.')
+  const direct = runtime.mailbox.store.enqueue({ teamId: dir, toKind: 'session', toId: 'or', fromSession: 'lead', fromGroup: 'leads', originPath: dir, body: 'Later' })
+  runtime.dispatcher.notify()
+  await runtime.dispatcher.settled()
+  expect(runtime.waitingFor(dir)[direct.id]!.blocker).toEqual({ kind: 'profile-cooling', retryAt: until, detail: 'openrouter', credit: true })
+  // A pull showing credit grew ends it early, everywhere the cooldown is read.
+  runtime.limits.reportRemainingCredit('openrouter', 0.01)
+  await Bun.sleep(2)
+  runtime.limits.reportRemainingCredit('openrouter', 10)
+  expect(await mailboxHandlers(runtime.mailbox, 'lead').send_message({ to_kind: 'session', to_id: 'or', body: 'Now!', urgent: true }))
+    .toMatchObject({ state: 'queued' })
+})
+
 test('one catalog read per team per dispatch cycle despite eight recipients and claim rechecks', async () => {
   const read = spyOn(fs, 'readFileSync')
   try {

@@ -52,7 +52,9 @@ export function constraintLabel(constraint: WaitingConstraint, nameOf: (sessionI
     case 'outside-role':
       return constraint.detail ?? 'Outside the plan role\'s profiles'
     case 'profile-cooling':
-      return `Recipient's provider${constraint.detail ? ` ${constraint.detail}` : ''} is cooling${constraint.retryAt ? ` until ${new Date(constraint.retryAt).toLocaleTimeString()}` : ''}`
+      return constraint.credit
+        ? `Recipient's provider${constraint.detail ? ` ${constraint.detail}` : ''} is out of credit${constraint.retryAt ? `; retried by ${new Date(constraint.retryAt).toLocaleTimeString()} at the latest` : ''}`
+        : `Recipient's provider${constraint.detail ? ` ${constraint.detail}` : ''} is cooling${constraint.retryAt ? ` until ${new Date(constraint.retryAt).toLocaleTimeString()}` : ''}`
     case 'startup-failed':
       return `Agent startup failed${constraint.detail ? `: ${constraint.detail}` : ''}`
     case 'no-eligible-member':
@@ -64,7 +66,9 @@ export function constraintLabel(constraint: WaitingConstraint, nameOf: (sessionI
     case 'routing-hold':
       return `Routing hold${constraint.detail ? `: ${constraint.detail}` : ''}`
     case 'all-profiles-cooling':
-      return `Every candidate profile is cooling${constraint.retryAt ? ` until ${new Date(constraint.retryAt).toLocaleTimeString()}` : ''}`
+      return constraint.credit
+        ? `Every candidate profile is out of credit${constraint.retryAt ? `; retried by ${new Date(constraint.retryAt).toLocaleTimeString()} at the latest` : ''}`
+        : `Every candidate profile is cooling${constraint.retryAt ? ` until ${new Date(constraint.retryAt).toLocaleTimeString()}` : ''}`
     case 'group-missing':
       return 'The group definition is missing'
     case 'starting-agent':

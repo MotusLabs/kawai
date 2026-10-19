@@ -11,6 +11,7 @@ import { TeamMailbox } from '../team/TeamMailbox'
 import { MailboxStore } from '../team/mailboxStore'
 import { createMailboxServer, mailboxHandlers } from '../team/mailboxTools'
 import { resolveTeam } from '../team/teamIdentity'
+import { LimitEventStore } from '../team/routing/limitEvents'
 
 let dir: string
 let db: Database
@@ -154,6 +155,24 @@ test('urgent mail to a profile of a cooling provider is refused naming profile a
   expect(error?.message).toContain('profile glm-flash of provider zai')
   expect(error?.message).toContain(new Date(until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))
   expect(store.teamsWithQueuedMail()).toEqual([])
+})
+
+test('Urgent mail to a member out of credit is refused saying so and when the cooldown ends at the latest (openrouter-provider D8)', async () => {
+  records.get('dev')!.claudeProfileId = 'openrouter-opus'
+  const at = Date.parse('2026-10-12T12:00:00.000Z')
+  const limits = new LimitEventStore(schemaDb(':memory:'), () => at)
+  limits.record({ profileId: 'openrouter-opus', sessionId: 'dev', groupId: 'devs', kind: 'unknown', final: true, status: 402,
+    message: 'API Error: 402', resetsAt: null, providerId: 'openrouter', window: 'credit', at: new Date(at).toISOString() })
+  mailbox = new TeamMailbox(store, { getSession: id => records.get(id), homeDir: dir,
+    cooldownFor: profileId => limits.cooldownFor(profileId, 'openrouter') })
+  handlers = mailboxHandlers(mailbox, 'lead')
+  const until = new Date(at + 3_600_000).toISOString()
+  const error = await handlers.send_message({ to_kind: 'session', to_id: 'dev', body: 'Now!', urgent: true }).then(() => null, e => e as Error)
+  expect(error?.message).toContain('profile openrouter-opus of provider openrouter, which is out of credit')
+  expect(error?.message).toContain(`${new Date(until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} (${until}) at the latest`)
+  expect(error?.message).not.toContain('cooling down')
+  expect(store.teamsWithQueuedMail()).toEqual([])
+  expect(await handlers.send_message({ to_kind: 'session', to_id: 'dev', body: 'Later' })).toMatchObject({ state: 'queued' })
 })
 
 // release_member (member-release D6): the tool name is allowed without a

@@ -135,7 +135,7 @@ Detection depends only on the status, not on OpenRouter's message. MiMo pay-as-y
 
 ### D8. A credit cooldown is bounded and never parks
 
-A final `credit` event cools the provider through `providers-and-workers`' `cooldownFor`. It uses the existing rule when no reset is known: one hour after the event. It ends earlier once a usage pull completed after the event reports a `remainingUsd` greater than the lowest `remainingUsd` seen for that provider since the event, or greater than zero when no pull came between.
+A final `credit` event cools the provider through `providers-and-workers`' `cooldownFor`. It uses the existing rule when no reset is known: one hour after the event. It ends earlier once a usage pull completed after the event reports a `remainingUsd` greater than the lowest `remainingUsd` seen for that provider from the last pull before the event on. Without a pull before the event, the first pull after it only sets that floor: a 402 can leave a few cents that cannot cover a request, so "greater than zero" would end the cooldown while still out of credit (the "Owner tops up" scenario).
 
 The early end is an in-memory overlay on the cooldown computation, keyed by provider and event time. After a restart the plain one-hour rule applies, so no state can leave a provider cooling forever.
 

@@ -151,14 +151,19 @@ export class ProfileRouter implements GroupRouter {
           .filter(Number.isFinite)
         const retryAt = ends.length > 0 ? Math.min(...ends) : null
         // The log names the provider when its cooldown decides (providers-and-workers D15).
-        const providers = [...new Set(candidates
+        const states = candidates
           .map(candidate => this.options.limits.cooldownFor(candidate.profileId, this.options.providerOf?.(candidate.profileId) ?? candidate.profileId))
+        const providers = [...new Set(states
           .filter(state => state.provider && state.providerId !== null)
           .map(state => state.providerId!))]
+        // Out of credit only when every cooling candidate is (openrouter-provider D8).
+        const credit = states.some(state => state.until !== null) && states.every(state => state.until === null || state.credit)
         record('builtin', 'hold', providers.length > 0
           ? `every candidate profile is cooling (provider ${providers.join(', ')})`
           : 'every candidate profile is cooling')
-        return { kind: 'hold', retryAt, diagnosis: [{ kind: 'all-profiles-cooling', ...(retryAt !== null ? { retryAt: new Date(retryAt).toISOString() } : {}) }] }
+        return { kind: 'hold', retryAt, diagnosis: [{ kind: 'all-profiles-cooling',
+          ...(retryAt !== null ? { retryAt: new Date(retryAt).toISOString() } : {}),
+          ...(credit ? { credit: true as const } : {}) }] }
       }
       record('builtin', chosen.id, view.attempt === 2 ? 'stale pick retried' : undefined)
     }

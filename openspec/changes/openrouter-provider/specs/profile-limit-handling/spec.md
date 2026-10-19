@@ -12,7 +12,7 @@ A chat agent request that fails with HTTP status 402, whether the status comes f
 - **THEN** it is recorded as a final `credit` limit event
 
 ### Requirement: A credit cooldown is bounded and ends early when credit returns
-A final `credit` event SHALL cool its provider for one hour after the event. The cooldown SHALL end earlier once a usage pull completed after the event reports remaining credit greater than the lowest remaining credit reported for that provider since the event, or greater than zero when none was reported. After a restart, only the one-hour bound SHALL apply.
+A final `credit` event SHALL cool its provider for one hour after the event. The cooldown SHALL end earlier once a usage pull completed after the event reports remaining credit greater than the lowest remaining credit reported for that provider from the last report before the event on; without a report before the event, the first report after it SHALL only set that lowest value. After a restart, only the one-hour bound SHALL apply.
 
 #### Scenario: Owner tops up
 - **WHEN** a pull after a credit event reports $0.01 remaining and a later pull reports $10.01

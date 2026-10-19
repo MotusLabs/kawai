@@ -277,6 +277,8 @@ export interface WaitingConstraint {
   members?: Array<{ sessionId: string; cause: string; detail?: string }>
   /** The spawn reservation behind `starting-agent` (D3): derived from `team_spawns`. */
   reservation?: { group: string; profile: string; worktree: string; startedAt: string }
+  /** A cooling constraint whose provider is out of credit (openrouter-provider D8): `retryAt` is the latest end. */
+  credit?: true
 }
 
 /**

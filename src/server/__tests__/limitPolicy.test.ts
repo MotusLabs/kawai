@@ -38,6 +38,18 @@ describe('resolveLimit', () => {
   })
 })
 
+test('a credit limit never parks: it takes otherwise, whatever the reset or a rule\'s park (openrouter-provider D8)', () => {
+  const near = { toolCalls: 2, resetInMs: 60 * MIN, parkCount: 0, policy: DEFAULTS, credit: true }
+  expect(resolveLimit(near)).toEqual({ type: 'forward', to: null })
+  expect(resolveLimit({ ...near, ruled: { type: 'park' } })).toEqual({ type: 'forward', to: null })
+  expect(resolveLimit({ ...near, policy: { ...DEFAULTS, otherwise: 'release' } })).toEqual({ type: 'release' })
+  // A rule's explicit forward or release still decides, and no progress still releases.
+  expect(resolveLimit({ ...near, ruled: { type: 'release' } })).toEqual({ type: 'release' })
+  expect(resolveLimit({ ...near, toolCalls: 0 })).toEqual({ type: 'release' })
+  // An expired cooldown does not release progressed credit work: credit has not returned.
+  expect(resolveLimit({ ...near, resetInMs: 0 })).toEqual({ type: 'forward', to: null })
+})
+
 test.each([-MIN, 0])('default policy releases when resetInMs is %i', resetInMs => {
   expect(resolveLimit({ toolCalls: 2, resetInMs, parkCount: 0, policy: DEFAULTS })).toEqual({ type: 'release' })
 })

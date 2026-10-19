@@ -74,6 +74,11 @@ test('constraint labels mention their counts, names, and details', () => {
     .toBe(`Recipient's provider zai is cooling until ${coolingUntil}`)
   expect(constraintLabel({ kind: 'profile-cooling', retryAt: '2026-10-13T12:00:00.000Z' }))
     .toBe(`Recipient's provider is cooling until ${coolingUntil}`)
+  // Out of credit (openrouter-provider D8): the end is the latest, not a reset.
+  expect(constraintLabel({ kind: 'profile-cooling', detail: 'openrouter', retryAt: '2026-10-13T12:00:00.000Z', credit: true }))
+    .toBe(`Recipient's provider openrouter is out of credit; retried by ${coolingUntil} at the latest`)
+  expect(constraintLabel({ kind: 'all-profiles-cooling', retryAt: '2026-10-13T12:00:00.000Z', credit: true }))
+    .toBe(`Every candidate profile is out of credit; retried by ${coolingUntil} at the latest`)
 })
 
 test('elapsed labels tick in minutes', () => {
