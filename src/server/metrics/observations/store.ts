@@ -3,14 +3,23 @@
 // its team associations, and the export totals commit in one transaction, so
 // a failing aggregate sink rolls the fact back too. Durable-source keys
 // outlive detailed retention; keys of live chat facts leave with their rows.
+// Interval detail (activity, tool, request, context, turn start/attribution)
+// prunes after 14 days, every other fact after 90.
 import type { Database } from 'bun:sqlite'
 import {
+  FACT_OBSERVATION_KINDS,
+  INTERVAL_OBSERVATION_KINDS,
+  OBSERVATION_INTERVAL_RETENTION_MS,
   OBSERVATION_RETENTION_MS,
   OBSERVATION_VERSION,
   validateObservation,
+  type ObservationKind,
   type ProcessObservation,
   type StoredObservation,
 } from '../../../shared/processObservations'
+
+const DAY_MS = 24 * 3600000
+export const PRUNE_BATCH = 500
 
 const COLUMNS = [
   'teamId',
@@ -105,12 +114,18 @@ export class ObservationStore {
       .run(source, value)
   }
 
-  prune(retentionMs = OBSERVATION_RETENTION_MS): number {
+  /**
+   * Removes at most one batch: interval detail older than its retention first, then facts older
+   * than theirs. `detail-retained-since` states the later (interval) cutoff, so it never claims
+   * pruned interval coverage; `facts-retained-since` states the fact cutoff.
+   */
+  prune(retentionMs = OBSERVATION_RETENTION_MS, intervalRetentionMs = OBSERVATION_INTERVAL_RETENTION_MS): number {
     return this.db.transaction(() => {
-      const cutoff = new Date(this.now() - Math.max(24 * 3600000, retentionMs)).toISOString()
-      const rows = this.db
-        .prepare('SELECT seq,source_key FROM process_observations WHERE recorded_at<? LIMIT 500')
-        .all(cutoff) as { seq: number; source_key: string }[]
+      const factMs = Math.max(DAY_MS, retentionMs)
+      const factCutoff = new Date(this.now() - factMs).toISOString()
+      const intervalCutoff = new Date(this.now() - Math.min(factMs, Math.max(DAY_MS, intervalRetentionMs))).toISOString()
+      const rows = this.expired(INTERVAL_OBSERVATION_KINDS, intervalCutoff, PRUNE_BATCH)
+      rows.push(...this.expired(FACT_OBSERVATION_KINDS, factCutoff, PRUNE_BATCH - rows.length))
       for (const { seq, source_key } of rows) {
         this.db.prepare('DELETE FROM process_observation_teams WHERE seq=?').run(seq)
         this.db.prepare('DELETE FROM process_observations WHERE seq=?').run(seq)
@@ -118,9 +133,18 @@ export class ObservationStore {
           this.db.prepare('DELETE FROM process_observation_keys WHERE source_key=?').run(source_key)
         }
       }
-      this.setCheckpoint('detail-retained-since', cutoff)
+      this.setCheckpoint('detail-retained-since', intervalCutoff)
+      this.setCheckpoint('facts-retained-since', factCutoff)
       return rows.length
     })()
+  }
+
+  private expired(kinds: readonly ObservationKind[], cutoff: string, limit: number) {
+    if (limit <= 0) return []
+    const placeholders = kinds.map(() => '?').join(',')
+    return this.db
+      .prepare(`SELECT seq,source_key FROM process_observations WHERE kind IN (${placeholders}) AND recorded_at<? LIMIT ?`)
+      .all(...kinds, cutoff, limit) as { seq: number; source_key: string }[]
   }
 
   private map(row: Record<string, unknown>): StoredObservation {

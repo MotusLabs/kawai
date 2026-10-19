@@ -63,8 +63,11 @@ accepted result does not enter this histogram.
 
 ## Retention and coverage
 
-Observation details and completed turn usage default to 90 days; pruning deletes
-at most 500 rows per pass. Hourly scans continue a backlog in later 30-second
+Fact observations (task, status, assignment, result, finding, acceptance, mail,
+limit, usage, turn end, gap, compaction, settings) and completed turn usage default
+to 90 days. Intra-turn interval detail (activity, tool, request, context samples,
+turn start and attribution) — most of the volume — is kept 14 days. Pruning
+deletes at most 500 rows per pass. Hourly scans continue a backlog in later 30-second
 collection ticks (usage continues on later completed writes). Detailed observations
 age by recording time so newly reconciled historical facts remain inspectable.
 Source tasks/results/audits retain their own policies. Durable-source identities
@@ -74,7 +77,9 @@ segments, context and settings samples, compactions, gaps) are never replayed
 after their turn and leave with their detail rows, so the key ledger stays
 bounded. A source row whose fact fails validation is logged and skipped rather
 than stalling its source.
-Recording start, conservative detail horizon, latest source observations,
+Recording start, the conservative detail horizon (the 14-day interval cutoff:
+`observation_detail_retained_since_timestamp_seconds`, checkpoint
+`detail-retained-since`; facts reach back to checkpoint `facts-retained-since`), latest source observations,
 unresolved gaps and error counts expose coverage. Existing rolling token metrics
 use the later of the 90-day limit and the team's earliest retained usage: raising
 retention cannot restore history that was already pruned. Interrupted usage and

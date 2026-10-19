@@ -15,11 +15,10 @@ import { ExportAccumulator } from '../export/accumulator'
 import { ChatObservationTracker } from './chatTracker'
 import { ObservationReconciler } from './reconcile'
 import { ObservationRecorder } from './recorder'
-import { ObservationStore } from './store'
+import { ObservationStore, PRUNE_BATCH } from './store'
 
 const TICK_MS = 30000
 const PRUNE_INTERVAL_MS = 3600000
-const PRUNE_BATCH = 500
 
 export class ProcessObservationService {
   readonly store: ObservationStore
@@ -101,6 +100,7 @@ export class ProcessObservationService {
       lastSuccess: this.store.checkpoint('last-success'),
       recordingStart: this.store.checkpoint('recording-start'),
       retainedSince: this.store.checkpoint('detail-retained-since'),
+      factsRetainedSince: this.store.checkpoint('facts-retained-since'),
     }
   }
 

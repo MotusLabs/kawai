@@ -4,7 +4,10 @@
 // payloads never enter this model — `validateObservation` refuses any field a
 // kind does not declare, non-scalar values, invalid numbers, and long text.
 export const OBSERVATION_VERSION = 1
+/** Fact observations (task, acceptance, usage, turn outcome, …) and completed usage. */
 export const OBSERVATION_RETENTION_MS = 90 * 24 * 60 * 60 * 1000
+/** Intra-turn interval detail: the bulk of the volume, read only for recent turns. */
+export const OBSERVATION_INTERVAL_RETENTION_MS = 14 * 24 * 60 * 60 * 1000
 
 export const OBSERVATION_FIELDS = {
   task: ['revision'],
@@ -29,6 +32,19 @@ export const OBSERVATION_FIELDS = {
 } as const
 
 export type ObservationKind = keyof typeof OBSERVATION_FIELDS
+
+/** Kinds pruned after `OBSERVATION_INTERVAL_RETENTION_MS`; every other kind keeps `OBSERVATION_RETENTION_MS`. */
+export const INTERVAL_OBSERVATION_KINDS: readonly ObservationKind[] = [
+  'activity',
+  'tool',
+  'request',
+  'context',
+  'turn_started',
+  'turn_attribution',
+]
+export const FACT_OBSERVATION_KINDS: readonly ObservationKind[] = (
+  Object.keys(OBSERVATION_FIELDS) as ObservationKind[]
+).filter(kind => !INTERVAL_OBSERVATION_KINDS.includes(kind))
 export type Measurement = Record<string, string | number | boolean | null>
 
 export interface ObservationIdentity {
