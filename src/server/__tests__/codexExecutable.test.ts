@@ -233,9 +233,13 @@ describe('hasCodexLogin', () => {
     expect(hasCodexLogin(home({ OPENAI_API_KEY: null, tokens: { access_token: 'tok' } }))).toBeTrue()
   })
 
-  test('blank or null values read as no login', () => {
-    expect(hasCodexLogin(home({ OPENAI_API_KEY: '   ' }))).toBeFalse()
+  test('empty strings read as no login; any nonempty value counts (N2)', () => {
+    // Presence and type decide (N2): the value is never inspected beyond its
+    // length, so whitespace still counts and the app-server re-verifies it.
+    expect(hasCodexLogin(home({ OPENAI_API_KEY: '' }))).toBeFalse()
     expect(hasCodexLogin(home({ tokens: { access_token: '' } }))).toBeFalse()
+    expect(hasCodexLogin(home({ OPENAI_API_KEY: '   ' }))).toBeTrue()
+    expect(hasCodexLogin(home({ tokens: { access_token: '   ' } }))).toBeTrue()
     expect(hasCodexLogin(home({ tokens: null }))).toBeFalse()
   })
 
@@ -247,10 +251,16 @@ describe('hasCodexLogin', () => {
     expect(hasCodexLogin(home(['array']))).toBeFalse()
   })
 
-  test('the refusal names the home and how to sign in', () => {
+  test('the refusal names the profile, never the home path (N1)', () => {
     const dir = path.join(tempDir, 'signed-out')
-    const message = codexLoginErrorMessage(dir)
-    expect(message).toContain(dir)
+    const message = codexLoginErrorMessage('codex-a')
+    // The profile-anchored shape: the pre-fix wording ("Codex home <path> …")
+    // fails this anchor, as would any wording that echoes a path.
+    expect(message).toMatch(/^Codex profile "codex-a" has no usable login/)
     expect(message).toContain('codex login')
+    // The home path is trusted-tier filesystem layout: it stays on the
+    // server and must not reach the browser through the refusal.
+    expect(message).not.toContain(dir)
+    expect(message).not.toContain(tempDir)
   })
 })

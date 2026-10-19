@@ -18,15 +18,17 @@ interface CodexAuthSlice {
 
 /**
  * Whether one resolved Codex home holds a usable login: auth.json parses
- * and names a nonempty API key or nonempty ChatGPT access token. A missing,
+ * and names an API key or ChatGPT access token. Only the presence and type
+ * of those fields is read, never a value: a string of length > 0 counts,
+ * and its content is not inspected, stored, or logged (N2). A missing,
  * unreadable, or unparsable file reads as no login — the app-server itself
  * re-verifies whatever this gate passes.
  */
 export function hasCodexLogin(codexHome: string): boolean {
   const slice = readCodexAuth(codexHome)
   if (!slice) return false
-  if (typeof slice.OPENAI_API_KEY === 'string' && slice.OPENAI_API_KEY.trim()) return true
-  return typeof slice.tokens?.access_token === 'string' && !!slice.tokens.access_token.trim()
+  if (typeof slice.OPENAI_API_KEY === 'string' && slice.OPENAI_API_KEY.length > 0) return true
+  return typeof slice.tokens?.access_token === 'string' && slice.tokens.access_token.length > 0
 }
 
 function readCodexAuth(codexHome: string): CodexAuthSlice | null {
@@ -46,13 +48,16 @@ function readCodexAuth(codexHome: string): CodexAuthSlice | null {
 }
 
 /**
- * Actionable refusal shown when hasCodexLogin() is false (spec: the error
- * names the Codex home and how to sign in).
+ * Actionable refusal shown when hasCodexLogin() is false. It names the
+ * PROFILE whose home has no login — never the home path, which is
+ * trusted-tier filesystem layout and stays on the server (lead decision N1;
+ * claude-session-profiles' "The Codex home SHALL NOT be sent to browsers"
+ * stands). The path reaches only the server log, through the manager's
+ * refusal helper.
  */
-export function codexLoginErrorMessage(codexHome: string): string {
+export function codexLoginErrorMessage(profile: string): string {
   return (
-    `Codex home ${codexHome} has no usable login. ` +
-    'Sign in with `CODEX_HOME=<home> codex login` (ChatGPT plan or API key), ' +
-    'then retry.'
+    `Codex profile "${profile}" has no usable login in its Codex home. ` +
+    'Sign in with `codex login` (ChatGPT plan or API key), then retry.'
   )
 }

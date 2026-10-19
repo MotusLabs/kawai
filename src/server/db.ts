@@ -544,28 +544,37 @@ export function initDatabase(
     },
     // Chat sessions
     insertChatSession: (session) => {
-      insertChatStmt.run({
-        $sessionId: session.sessionId,
-        $name: session.name,
-        $projectPath: session.projectPath,
-        $sdkSessionId: session.sdkSessionId,
-        $profileId: session.claudeProfileId ?? 'default',
-        $status: session.status,
-        $createdAt: session.createdAt,
-        $lastActivityAt: session.lastActivityAt,
-        $approvalPolicy: session.approvalPolicy ?? 'manual',
-        $nameSource: session.nameSource ?? 'manual',
-        $groupId: session.groupId ?? null,
-        $taskId: session.taskId ?? null,
-        $spawned: session.spawned ? 1 : 0,
-      })
+      const insertRow = () =>
+        insertChatStmt.run({
+          $sessionId: session.sessionId,
+          $name: session.name,
+          $projectPath: session.projectPath,
+          $sdkSessionId: session.sdkSessionId,
+          $profileId: session.claudeProfileId ?? 'default',
+          $status: session.status,
+          $createdAt: session.createdAt,
+          $lastActivityAt: session.lastActivityAt,
+          $approvalPolicy: session.approvalPolicy ?? 'manual',
+          $nameSource: session.nameSource ?? 'manual',
+          $groupId: session.groupId ?? null,
+          $taskId: session.taskId ?? null,
+          $spawned: session.spawned ? 1 : 0,
+        })
       // The runtime and, for Codex, the resolved home are fixed at creation
       // (codex-chat-sessions 3.3); the transcript path arrives later (§5).
       // Written at call time and only when the record carries them, so a
       // predecessor record (the migration tests) inserts without naming the
-      // columns it predates.
-      if (session.runtime !== undefined) {
-        db.run(setChatRuntimeSql, [session.runtime, session.codexHome ?? null, session.sessionId])
+      // columns it predates. One transaction (N3): the facts land with the
+      // row or not at all — a crash between INSERT and UPDATE must never
+      // store a Codex chat as Claude.
+      const runtime = session.runtime
+      if (runtime !== undefined) {
+        db.transaction(() => {
+          insertRow()
+          db.run(setChatRuntimeSql, [runtime, session.codexHome ?? null, session.sessionId])
+        })()
+      } else {
+        insertRow()
       }
       return session
     },

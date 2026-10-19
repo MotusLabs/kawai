@@ -494,7 +494,7 @@ export class ChatSessionManager {
           return { ok: false, error: error instanceof Error ? error.message : String(error) }
         }
         if (!hasCodexLogin(launch.codexHome)) {
-          return { ok: false, error: codexLoginErrorMessage(launch.codexHome) }
+          return { ok: false, error: this.codexLoginRefusal(launch.codexHome, input.claudeProfileId ?? null) }
         }
       }
       return this.createSession(input)
@@ -1536,7 +1536,7 @@ export class ChatSessionManager {
     if (launch.runtime === 'codex') {
       // The fixture seam again: a fake runtime never checks a real login.
       if (!this.options.queryFactory && !hasCodexLogin(launch.codexHome)) {
-        return { ok: false, error: codexLoginErrorMessage(launch.codexHome) }
+        return { ok: false, error: this.codexLoginRefusal(launch.codexHome, input.claudeProfileId ?? null) }
       }
     } else if (!this.authOk(input.claudeProfileId, projectPath)) {
       return { ok: false, error: chatAuthErrorMessage() }
@@ -2035,7 +2035,7 @@ export class ChatSessionManager {
       record.codexHome &&
       !hasCodexLogin(record.codexHome)
     ) {
-      return codexLoginErrorMessage(record.codexHome)
+      return this.codexLoginRefusal(record.codexHome, record.claudeProfileId ?? null)
     }
     return null
   }
@@ -2068,8 +2068,19 @@ export class ChatSessionManager {
     // The home-mismatch check above guarantees the stored home for a
     // resolvable profile; a null home here cannot pass the launch gate.
     const home = record.codexHome
-    if (!home || !hasCodexLogin(home)) return codexLoginErrorMessage(home ?? launch.codexHome)
+    if (!home || !hasCodexLogin(home)) {
+      return this.codexLoginRefusal(home ?? launch.codexHome, record.claudeProfileId ?? null)
+    }
     return null
+  }
+
+  /**
+   * The login refusal for one Codex chat: the message names the profile
+   * (never the home path — N1); the home goes only to the server log.
+   */
+  private codexLoginRefusal(codexHome: string, profileId: string | null): string {
+    logger.warn('codex_login_missing', { profileId: profileId ?? 'default', codexHome })
+    return codexLoginErrorMessage(profileId ?? 'default')
   }
 
   /**

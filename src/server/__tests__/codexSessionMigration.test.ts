@@ -36,6 +36,22 @@ function predecessorWithChat(): SessionDatabase {
   return session
 }
 
+test('the runtime facts land in one transaction with the row (N3)', () => {
+  const session = initDatabase({ path: dbPath })
+  const originalRun = session.db.run.bind(session.db)
+  session.db.run = ((sql: string, ...rest: unknown[]) => {
+    if (sql.includes('SET runtime =')) throw new Error('injected failure')
+    return (originalRun as (...args: unknown[]) => unknown)(sql, ...rest)
+  }) as typeof session.db.run
+  // The UPDATE fails, so the INSERT must roll back with it: a crash between
+  // the two statements must never store a Codex chat as Claude.
+  expect(() => session.insertChatSession({
+    ...BASE_CHAT, sessionId: 'chat-t', name: 'T', projectPath: '/tmp/t',
+    runtime: 'codex', codexHome: '/tmp/codex-home',
+  })).toThrow('injected failure')
+  expect(session.db.prepare('SELECT COUNT(*) AS n FROM chat_sessions').get()).toEqual({ n: 0 })
+})
+
 test('this build registers codex-chat-runtime as the dense next numbered migration', () => {
   const entries = MIGRATIONS.map(migration => [migration.version, migration.name] as const)
   const at = entries.findIndex(([, name]) => name === 'codex-chat-runtime')

@@ -99,7 +99,7 @@ test('a Codex executable below the baseline refuses creation naming both version
   } finally { manager.shutdown() }
 })
 
-test('a Codex home without a login refuses creation naming the home and sign-in', async () => {
+test('a Codex home without a login refuses creation naming the profile and sign-in', async () => {
   writeProfiles(CODEX_PROFILES)
   fs.rmSync(path.join(codexHome, 'auth.json'))
   const manager = createManager()
@@ -107,7 +107,10 @@ test('a Codex home without a login refuses creation naming the home and sign-in'
     const result = await manager.createAvailableSession({ projectPath: project, claudeProfileId: 'codex' })
     expect(result.ok).toBeFalse()
     if (result.ok) throw new Error('expected the refusal')
-    expect(result.error).toContain(codexHome)
+    // The refusal names the profile (N1) — the home path stays on the
+    // server and never reaches the browser-facing error.
+    expect(result.error).toContain('"codex"')
+    expect(result.error).not.toContain(codexHome)
     expect(result.error).toContain('codex login')
     expect(db.getChatSessions()).toHaveLength(0)
   } finally { manager.shutdown() }
@@ -143,7 +146,9 @@ test('losing the login after creation blocks send, attach, and the start guard',
     const record = db.getChatSession(result.session.id)
     if (!record) throw new Error('session missing')
     const blocker = manager.startBlockerFor(record)
-    expect(blocker).toContain(codexHome)
+    // N1: the refusal names the profile; the home path never leaves the server.
+    expect(blocker).toContain('"codex"')
+    expect(blocker).not.toContain(codexHome)
     expect(blocker).toContain('codex login')
     const sent = await manager.send(result.session.id, 'kawai smoke')
     expect(sent.ok).toBeFalse()

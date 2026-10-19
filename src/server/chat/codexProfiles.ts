@@ -51,14 +51,28 @@ export function codexHomeProviderId(resolvedHome: string): string {
 export const CODEX_PROVIDER_LABEL = 'Codex'
 
 /**
- * The environment a Codex app-server spawn receives (task 3.2): exactly
- * `CODEX_HOME` at the resolved home — nothing else, so the server's Claude
- * provider configuration never reaches the Codex process. Configuration
- * travels as `-c` overrides instead (task 5.3's sandbox builds them), and
- * the spawn writes nothing into the home.
+ * The environment a Codex app-server spawn receives (design D4): the
+ * server's own environment with CODEX_HOME set — PATH and HOME survive, so
+ * a `#!/usr/bin/env node` codex starts — minus the provider variables:
+ * every ANTHROPIC_* and CLAUDE_CODE_* variable (PROFILE_CONTROLLED_ENV is a
+ * subset) and the AGENTBOARD_CHAT_ENV overrides, which must never steer
+ * another agent runtime. Configuration travels as `-c` overrides instead
+ * (task 5.3's sandbox builds them), and the spawn writes nothing into the
+ * home.
  */
-export function codexSpawnEnv(resolvedHome: string): Record<string, string> {
-  return { CODEX_HOME: resolvedHome }
+export function codexSpawnEnv(
+  serverEnv: Record<string, string | undefined>,
+  resolvedHome: string,
+): Record<string, string> {
+  const env: Record<string, string> = {}
+  for (const [name, value] of Object.entries(serverEnv)) {
+    if (value === undefined) continue
+    if (name === 'AGENTBOARD_CHAT_ENV') continue
+    if (name.startsWith('ANTHROPIC_') || name.startsWith('CLAUDE_CODE_')) continue
+    env[name] = value
+  }
+  env.CODEX_HOME = resolvedHome
+  return env
 }
 
 /**

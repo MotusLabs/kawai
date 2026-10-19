@@ -1,4 +1,5 @@
-// Task 3.2: the Codex spawn env is exactly CODEX_HOME, and no Codex home or
+// Task 3.2: the Codex spawn env is the server environment minus the
+// provider variables, plus CODEX_HOME (design D4), and no Codex home or
 // environment value ever reaches the profiles route payload — the boundary
 // the claude-session-profiles delta states as "The Codex home SHALL NOT be
 // sent to browsers".
@@ -25,10 +26,32 @@ function writeProfiles(json: unknown): void {
   fs.writeFileSync(path.join(homeDir, '.kawai', 'profiles.json'), JSON.stringify(json))
 }
 
-describe('the Codex spawn environment (task 3.2)', () => {
-  test('the spawn env is exactly CODEX_HOME at the resolved home', () => {
-    expect(codexSpawnEnv('/srv/codex')).toEqual({ CODEX_HOME: '/srv/codex' })
-    expect(Object.keys(codexSpawnEnv('/srv/codex'))).toEqual(['CODEX_HOME'])
+describe('the Codex spawn environment (task 3.2, design D4)', () => {
+  test('the spawn env carries the server env minus provider variables, plus CODEX_HOME', () => {
+    const env = codexSpawnEnv({
+      PATH: '/usr/bin:/bin',
+      HOME: '/home/smoke',
+      LANG: 'C.UTF-8',
+      CODEX_HOME: '/elsewhere',
+      AGENTBOARD_CHAT_ENV: 'ANTHROPIC_BASE_URL=https://gw.example.internal',
+      ANTHROPIC_API_KEY: 'not-a-real-key',
+      ANTHROPIC_BASE_URL: 'https://gw.example.internal',
+      CLAUDE_CODE_ATTRIBUTION_HEADER: 'x',
+    }, '/srv/codex')
+    // PATH and HOME survive: a `#!/usr/bin/env node` codex must start (B2).
+    expect(env.PATH).toBe('/usr/bin:/bin')
+    expect(env.HOME).toBe('/home/smoke')
+    expect(env.LANG).toBe('C.UTF-8')
+    // The provider variables never reach the child: every ANTHROPIC_* and
+    // CLAUDE_CODE_* name, and the AGENTBOARD_CHAT_ENV overrides.
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined()
+    expect(env.ANTHROPIC_BASE_URL).toBeUndefined()
+    expect(env.CLAUDE_CODE_ATTRIBUTION_HEADER).toBeUndefined()
+    expect(env.AGENTBOARD_CHAT_ENV).toBeUndefined()
+    expect(Object.keys(env).some(name => name.startsWith('ANTHROPIC_') || name.startsWith('CLAUDE_CODE_')))
+      .toBe(false)
+    // CODEX_HOME is the resolved home, not the server's own value.
+    expect(env.CODEX_HOME).toBe('/srv/codex')
   })
 
   test('no Codex home or env value reaches the profiles route payload', () => {
