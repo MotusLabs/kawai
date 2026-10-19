@@ -44,17 +44,17 @@ Implement after `plan-execution` and `integration-candidates` have landed on mas
 
 ## 3. Records
 
-- [ ] 3.1 Add the D3 migration for `plan_decision_cards`, `plan_decisions`, `plan_fix_tasks`, and `plan_stall_alerts` in `decisionSchema.ts` and `supervisionSchema.ts`. Verify with a migration test on a fresh database and on one that already has the plan tables, run twice.
-- [ ] 3.2 Implement `decisionStore.ts` as the only SQL writer of the decision tables, with a header comment saying so. The records need no user docs beyond it. Verify with unit tests:
+- [x] 3.1 Add the D3 migration for `plan_decision_cards`, `plan_decisions`, `plan_fix_tasks`, and `plan_stall_alerts` in `decisionSchema.ts` and `supervisionSchema.ts`. Verify with a migration test on a fresh database and on one that already has the plan tables, run twice.
+- [x] 3.2 Implement `decisionStore.ts` as the only SQL writer of the decision tables, with a header comment saying so. The records need no user docs beyond it. Verify with unit tests:
   - `UNIQUE (card_id, seq)` turns the losing insert into a refusal that names the winner;
   - `UNIQUE (plan_id, command_id)` replays a human command, while null command ids never collide;
   - `UNIQUE (source_kind, source_id)` keeps one fix task per override and one correction per promotion;
   - another team's rows read as not found.
-- [ ] 3.3 Implement the stall-alert store over `plan_stall_alerts`. Verify with tests that the unique episode key refuses a second insert, and that a row with a null `message_id` is accepted.
+- [x] 3.3 Implement the stall-alert store over `plan_stall_alerts`. Verify with tests that the unique episode key refuses a second insert, and that a row with a null `message_id` is accepted.
 
 ## 4. Usage capture
 
-- [ ] 4.1 Confirm `team-process-metrics` has shipped the `turn_completed.usage` mapping, the `chat_turn_usage` table, and its turn-start-pinned writer (D14); this change adds none of them. Verify by reading `chatTurnUsageStore.ts` against D14's attribution rule.
+- [x] 4.1 Confirm `team-process-metrics` has shipped the `turn_completed.usage` mapping, the `chat_turn_usage` table, and its turn-start-pinned writer (D14); this change adds none of them. Verify by reading `chatTurnUsageStore.ts` against D14's attribution rule.
 - [ ] 4.4 Implement the plan usage read: the plan's linked tasks plus its `plan_fix_tasks`, summed by `(group, profile)` and by change, with fix and correction tasks as their own rows (D14). Verify with a test across two profiles of one role, and with tests that another plan's tasks and rows with a null `task_id` are excluded.
 - [ ] 4.5 Add the AGENTS.md usage bullet: the per-turn record, the attribution rule, no currency, and no backfill. Verify by reading it against D14.
 
