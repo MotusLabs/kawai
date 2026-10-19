@@ -20,8 +20,11 @@
 // `team_messages.allowed_profiles`; migration 9 (`outbound-audit`) the three
 // outbound audit tables below; migration 10 (`context-exhausted`) the two
 // `chat_sessions` flag columns and the exhaustion episode table; migration
-// 11 (`provider-limit-window`) adds the nullable `provider_id` and
+// 11 (`process-observations`) the observation tables; migration 12
+// (`provider-limit-window`) adds the nullable `provider_id` and
 // `limit_window` to `profile_limit_events`; migration 13
+// (`integration-candidates`) the four integration tables and the
+// one-running-promotion index; migration 14
 // (`process-observation-indexes`) indexes `chat_turn_usage.ended_at` and
 // `profile_limit_events.at`.
 import { expect, test } from 'bun:test'
@@ -294,16 +297,56 @@ const migration10 = {
   },
 }
 
+/** Migration 13's delta: integration branches, candidates, promotions, and promotion effects (integration-candidates D3). */
+const migration13: SchemaShape['tables'] = {
+  plan_integration_branches: {
+    columns: [
+      keyPart('team_id', 1), keyPart('branch', 2),
+      ...['plan_id', 'target_branch', 'created_by', 'created_sha', 'created_at'].map(name => column(name)),
+    ],
+    indexes: [],
+  },
+  plan_integration_candidates: {
+    columns: [
+      id, column('team_id'), column('branch'), integer('seq'), column('kind'),
+      ...['execution_id', 'change', 'result_id', 'round_id', 'promotion_id'].map(optional),
+      ...['baseline_sha', 'commit_sha', 'tree_sha'].map(name => column(name)), optional('outside_json'),
+      column('state'), column('created_at'), optional('decided_at'),
+    ],
+    indexes: [],
+  },
+  plan_promotions: {
+    columns: [
+      id, ...['team_id', 'plan_id', 'branch'].map(name => column(name)), integer('number'),
+      column('command_id'), column('from_sha'), integer('through_seq'),
+      ...['target_branch', 'promotion_branch', 'floor_json'].map(name => column(name)),
+      optionalInteger('pr_number'), optional('pr_url'), optional('head_sha'), optional('step'), counter('moves', '0'),
+      ...['ci_json', 'rerun_at', 'ci_window_from'].map(optional), column('state'),
+      ...['outcome', 'outcome_detail_json', 'merge_sha'].map(optional),
+      optionalInteger('tree_verified'), optionalInteger('fast_forwarded'), optional('fast_forward_note'), optional('cancel_reason'),
+      column('started_at'), optional('finished_at'),
+    ],
+    indexes: [{ name: 'plan_promotions_one_running', unique: 1, columns: ['plan_id'] }],
+  },
+  plan_promotion_effects: {
+    columns: [
+      id, ...['promotion_id', 'kind', 'effect_key', 'command_json', 'state'].map(name => column(name)), counter('tries', '0'),
+      optional('next_at'), optional('outcome_json'), optional('error'), column('created_at'), optional('started_at'), optional('finished_at'),
+    ],
+    indexes: [],
+  },
+}
+
 test('a fresh database opened by this build has the same shape plus each migration\'s delta and schema_migrations', () => {
   const session = initDatabase({ path: ':memory:' })
-  const added = { ...migration2, ...migration3, ...migration4, ...migration5, ...migration6, ...migration7, ...migration8, ...migration9, ...migration10, ...migration11 }
+  const added = { ...migration2, ...migration3, ...migration4, ...migration5, ...migration6, ...migration7, ...migration8, ...migration9, ...migration10, ...migration11, ...migration13 }
   expect(Object.keys(added).filter(table => table in expected.tables)).toEqual([])
   const messages = expected.tables.team_messages!
   const withProfiles = { ...messages, columns: [...messages.columns, optional('allowed_profiles')] }
   // Migration 10's delta: the chat_sessions exhaustion flags; migration 11's
   // the process-observations tables (in `added` above); migration 12's: limit
   // events record their provider and window (providers-and-workers D7), both
-  // nullable, after the baseline columns; migration 13's: the `at` index here
+  // nullable, after the baseline columns; migration 14's: the `at` index here
   // and the `ended_at` index on chat_turn_usage (in migration 6's delta).
   const chats = expected.tables.chat_sessions!
   const withFlag = { ...chats, columns: [...chats.columns, optional('context_exhausted_at'), optional('context_exhausted_reason')] }

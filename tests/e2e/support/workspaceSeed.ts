@@ -27,12 +27,15 @@ export function seedMail(mail: SeedMail): string {
   return execFileSync('bun', ['-e', `
     import { Database } from 'bun:sqlite';
     import { MailboxStore } from './src/server/team/mailboxStore';
+    import { retryOnSqliteBusy } from './src/server/__tests__/sqliteBusyRetry';
     const [file, mail] = JSON.parse(await Bun.stdin.text());
     const db = new Database(file); db.exec('PRAGMA busy_timeout = 5000');
     const store = new MailboxStore(db);
     // One immediate transaction: the live e2e server polls this database, so
     // step-by-step autocommit would let it observe or claim a half-seeded row.
-    const id = db.transaction(() => {
+    // Retried whole on SQLITE_BUSY (the deferred-upgrade deadlock leaves
+    // busy_timeout helpless; a throw rolls the transaction back).
+    const id = await retryOnSqliteBusy(() => db.transaction(() => {
       const row = store.enqueue({ teamId: mail.root + '/.git', fromSession: mail.fromSession, fromGroup: mail.fromGroup,
         originPath: mail.root, body: mail.body, toKind: mail.toKind, toId: mail.toId, tags: [],
         ...(mail.priority ? { priority: mail.priority } : {}) });
@@ -41,7 +44,7 @@ export function seedMail(mail: SeedMail): string {
         store.holdUncertain(row.id, 'transcript-unavailable-or-torn');
       }
       return row.id;
-    }).immediate();
+    }).immediate());
     console.log(id); db.close();
   `], { cwd: process.cwd(), input: JSON.stringify([isolatedDb(), mail]), encoding: 'utf8' }).trim()
 }
@@ -51,12 +54,13 @@ export function discardMail(id: string): void {
   execFileSync('bun', ['-e', `
     import { Database } from 'bun:sqlite';
     import { MailboxStore } from './src/server/team/mailboxStore';
+    import { retryOnSqliteBusy } from './src/server/__tests__/sqliteBusyRetry';
     const [file, id] = JSON.parse(await Bun.stdin.text());
     const db = new Database(file); db.exec('PRAGMA busy_timeout = 5000');
     // Same atomicity as seedMail: the discard and its event row commit together.
-    db.transaction(() => {
+    await retryOnSqliteBusy(() => db.transaction(() => {
       if (!new MailboxStore(db).discard(id, { kind: 'human' }, 'e2e')) throw new Error('discard refused');
-    }).immediate();
+    }).immediate());
     db.close();
   `], { cwd: process.cwd(), input: JSON.stringify([isolatedDb(), id]), encoding: 'utf8' })
 }

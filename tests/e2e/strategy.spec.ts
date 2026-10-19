@@ -47,13 +47,16 @@ function overwriteDraftBehindServer(storedPurpose: string) {
     // review N3 moved it out of the shared template helpers.
     import { hashStrategyContent } from './src/server/strategy/strategyHash';
     import { normalizeStrategyContent } from './src/shared/productStrategy';
+    import { retryOnSqliteBusy } from './src/server/__tests__/sqliteBusyRetry';
     const [file, purpose] = JSON.parse(await Bun.stdin.text());
     const db = new Database(file); db.exec('PRAGMA busy_timeout = 5000');
     const strategy = db.query('SELECT id FROM product_strategies WHERE product_id = \\'browser-product\\'').get();
     if (!strategy) throw new Error('no strategy record');
     const content = normalizeStrategyContent({ purpose });
-    db.run('UPDATE strategy_drafts SET content_json = ?, content_hash = ?, updated_at = ? WHERE strategy_id = ? AND draft_id = \\'human\\'',
-      [JSON.stringify(content), hashStrategyContent(content), new Date().toISOString(), strategy.id]);
+    // The write re-runs whole on SQLITE_BUSY: the server is a second writer,
+    // and the deferred upgrade path leaves the busy handler bypassed.
+    await retryOnSqliteBusy(() => db.run('UPDATE strategy_drafts SET content_json = ?, content_hash = ?, updated_at = ? WHERE strategy_id = ? AND draft_id = \\'human\\'',
+      [JSON.stringify(content), hashStrategyContent(content), new Date().toISOString(), strategy.id]));
     db.close();
   `], { cwd: process.cwd(), input: JSON.stringify([dbPath, storedPurpose]), encoding: 'utf8' })
 }

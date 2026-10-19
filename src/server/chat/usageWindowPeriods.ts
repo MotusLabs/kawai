@@ -41,8 +41,14 @@ const GROUP_PERIODS_MS: Record<string, number> = {
  * undefined when neither is known.
  */
 export function windowPeriodMs(key: string, group?: string): number | undefined {
+  // Own-key lookups (as zaiRowWord): the key and the group come from the
+  // wire, so an inherited name like 'constructor' must not resolve as a
+  // period — a function would ride the window as its periodMs.
   const base = key.split(/[:#]/, 1)[0] ?? key
-  return KIND_PERIODS_MS[base] ?? (group ? GROUP_PERIODS_MS[group] : undefined)
+  if (Object.hasOwn(KIND_PERIODS_MS, base)) return KIND_PERIODS_MS[base]
+  return group && Object.hasOwn(GROUP_PERIODS_MS, group)
+    ? GROUP_PERIODS_MS[group]
+    : undefined
 }
 
 // Provider quota rows (Z.AI coding plan): the only unit codes the endpoint

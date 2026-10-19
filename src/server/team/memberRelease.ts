@@ -61,6 +61,12 @@ export interface MemberReleaseOptions {
   notify: () => void
   /** Backoffs before each retry of a failed late-spawn mark; default 1 s, 5 s, 30 s. */
   lateMarkRetryDelaysMs?: readonly number[]
+  /**
+   * Test seam: schedules one retry of a failed late-spawn mark to run after
+   * `delayMs`; the returned handle's `cancel` drops it before it runs. The
+   * default is an unref'd setTimeout with cancel = clearTimeout.
+   */
+  scheduleRetry?: (run: () => void, delayMs: number) => { cancel(): void }
 }
 
 const CREATE_TABLE_SQL = `
@@ -87,6 +93,13 @@ const CONTEXT_EXHAUSTED = 'context-exhausted'
 /** Backoffs before each retry of a failed late-spawn mark: bounded, then given up with an error. */
 const LATE_MARK_RETRY_DELAYS_MS = [1_000, 5_000, 30_000] as const
 
+/** The default retry scheduler: an unref'd setTimeout — a pending retry never holds the process open without close() — cancelled with clearTimeout. */
+const defaultScheduleRetry: NonNullable<MemberReleaseOptions['scheduleRetry']> = (run, delayMs) => {
+  const timer = setTimeout(run, delayMs)
+  timer.unref?.()
+  return { cancel: () => clearTimeout(timer) }
+}
+
 const isClosed = (status: TaskStatus) => status === 'done' || status === 'cancelled'
 
 const actorText = (actor: JournalAuthor): string =>
@@ -99,7 +112,7 @@ export function ensureMemberReleaseSchema(db: Database): void {
 
 export class MemberRelease {
   /** Scheduled retries of failed late-spawn marks, by session id. */
-  private readonly lateMarkRetries = new Map<string, ReturnType<typeof setTimeout>>()
+  private readonly lateMarkRetries = new Map<string, { cancel(): void }>()
 
   constructor(private readonly db: Database, private readonly options: MemberReleaseOptions) {}
 
@@ -133,7 +146,7 @@ export class MemberRelease {
 
   /** Shutdown: pending late-mark retries are dropped. */
   close(): void {
-    for (const timer of this.lateMarkRetries.values()) clearTimeout(timer)
+    for (const retry of this.lateMarkRetries.values()) retry.cancel()
     this.lateMarkRetries.clear()
   }
 
@@ -268,17 +281,15 @@ export class MemberRelease {
         return
       }
       logger.warn('member_release_mark_failed', { sessionId, taskId, attempt: attempt + 1, error: reason })
-      // Unref'd, so a pending retry never holds the process open without shutdown().
-      const timer = setTimeout(() => this.markLateSpawn(sessionId, taskId, attempt + 1), delays[attempt])
-      timer.unref?.()
-      this.lateMarkRetries.set(sessionId, timer)
+      const scheduleRetry = this.options.scheduleRetry ?? defaultScheduleRetry
+      this.lateMarkRetries.set(sessionId, scheduleRetry(() => this.markLateSpawn(sessionId, taskId, attempt + 1), delays[attempt]))
     }
   }
 
   private dropLateMarkRetry(sessionId: string): void {
-    const timer = this.lateMarkRetries.get(sessionId)
-    if (timer === undefined) return
-    clearTimeout(timer)
+    const retry = this.lateMarkRetries.get(sessionId)
+    if (retry === undefined) return
+    retry.cancel()
     this.lateMarkRetries.delete(sessionId)
   }
 

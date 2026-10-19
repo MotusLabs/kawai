@@ -12,7 +12,7 @@ quality as guardrails. No recommendation here changes a model or starts work.
 
 Migration 11 adds observation details, team associations, retained source keys,
 collection checkpoints, live interval checkpoints, opaque export aliases, and
-cumulative export totals; migration 13 indexes `chat_turn_usage.ended_at` and
+cumulative export totals; migration 14 indexes `chat_turn_usage.ended_at` and
 `profile_limit_events.at` for the reconciler's ordered scans of unrecorded rows.
 Schema changes use the normal pre-migration backup path.
 Task, status, assignment, result, finding, mailbox-transition, profile-limit and

@@ -30,9 +30,12 @@ function withDb(script: string, args: unknown[]): string {
     import { Database } from 'bun:sqlite';
     import { MailboxStore } from './src/server/team/mailboxStore';
     import { TaskStore } from './src/server/team/taskStore';
+    import { retryOnSqliteBusy } from './src/server/__tests__/sqliteBusyRetry';
     const [file, ...args] = JSON.parse(await Bun.stdin.text());
     const db = new Database(file); db.exec('PRAGMA busy_timeout = 5000');
-    const out = db.transaction(() => { ${script} }).immediate();
+    // One immediate transaction against the server's live database, retried
+    // whole on SQLITE_BUSY (the deferred-upgrade path skips the busy handler).
+    const out = await retryOnSqliteBusy(() => db.transaction(() => { ${script} }).immediate());
     process.stdout.write(String(out ?? '')); db.close();
   `], { cwd: process.cwd(), input: JSON.stringify([isolatedDb(), ...args]), encoding: 'utf8', env: { ...process.env, FORCE_COLOR: '0' } }).trim()
 }

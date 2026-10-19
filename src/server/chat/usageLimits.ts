@@ -34,7 +34,9 @@ const WINDOW_LABELS: Record<string, string> = {
 }
 
 function windowLabel(key: string): string {
-  return WINDOW_LABELS[key] ?? key
+  // Own-key lookup (as zaiRowWord): a wire string indexes the table, so an
+  // inherited name like 'constructor' must not resolve as a label.
+  return Object.hasOwn(WINDOW_LABELS, key) ? WINDOW_LABELS[key] : key
 }
 
 /**

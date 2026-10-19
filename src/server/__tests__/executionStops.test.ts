@@ -70,6 +70,7 @@ beforeEach(async () => {
     settings: { planExecution: async () => ({ floorChecks: FLOOR, maxParallelChanges: 2, mergeMethod: 'merge' }) },
     getSession: () => null,
     landingModes: () => new Set(['direct']),
+    promotions: { runningPromotion: () => null },
     identityOf: () => world.team,
     tasks,
   })

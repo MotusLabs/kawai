@@ -161,14 +161,21 @@ test('a terminal-only repository opens its Team page; view state survives a chat
     const seeded = JSON.parse(execFileSync('bun', ['-e', `
       import { Database } from 'bun:sqlite';
       import { MailboxStore } from './src/server/team/mailboxStore';
+      import { retryOnSqliteBusy } from './src/server/__tests__/sqliteBusyRetry';
       const [file, team] = JSON.parse(await Bun.stdin.text());
       const db = new Database(file); db.exec('PRAGMA busy_timeout = 5000'); const store = new MailboxStore(db);
-      const base = { teamId: team, fromSession: 'chat-lead', fromGroup: 'leads', originPath: team };
-      const alpha = store.enqueue({ ...base, toKind: 'group', toId: 'devs', body: 'Alpha queued browser work' });
-      const beta = store.enqueue({ ...base, toKind: 'group', toId: 'devs', body: 'Beta queued browser work' });
-      const until = new Date(Date.now() + 3600000).toISOString();
-      const later = store.enqueue({ ...base, toKind: 'group', toId: 'devs', body: 'Scheduled browser work', deliverAt: until });
-      console.log(JSON.stringify({ alpha: alpha.id, beta: beta.id, later: later.id })); db.close();
+      // One retried immediate transaction: the server is a second writer (BUSY
+      // on the deferred upgrade bypasses busy_timeout), and atomic seeding
+      // keeps it from seeing half a seed.
+      const seeded = await retryOnSqliteBusy(() => db.transaction(() => {
+        const base = { teamId: team, fromSession: 'chat-lead', fromGroup: 'leads', originPath: team };
+        const alpha = store.enqueue({ ...base, toKind: 'group', toId: 'devs', body: 'Alpha queued browser work' });
+        const beta = store.enqueue({ ...base, toKind: 'group', toId: 'devs', body: 'Beta queued browser work' });
+        const until = new Date(Date.now() + 3600000).toISOString();
+        const later = store.enqueue({ ...base, toKind: 'group', toId: 'devs', body: 'Scheduled browser work', deliverAt: until });
+        return { alpha: alpha.id, beta: beta.id, later: later.id };
+      }).immediate());
+      console.log(JSON.stringify(seeded)); db.close();
     `], { cwd: process.cwd(), input: JSON.stringify([dbPath, team]), encoding: 'utf8' })) as { alpha: string; beta: string; later: string }
     await page.reload()
     await expect(mailbox.getByTestId('mailbox-section-toggle-Queued')).toBeVisible({ timeout: 10_000 })

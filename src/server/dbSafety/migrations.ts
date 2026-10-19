@@ -28,6 +28,7 @@ import { CREATE_AGENT_START_TABLES_SQL } from '../metrics/provenanceSchema'
 import { CREATE_TURN_USAGE_SQL } from '../chat/chatTurnUsageStore'
 import { CREATE_PROCESS_REPORT_TABLES_SQL } from '../metrics/reportSchema'
 import { migrateProviderLimitWindow } from '../team/routing/limitEvents'
+import { integrationMigration } from '../plans/landing/integration/integrationSchema'
 import type { BackupFile } from './backupFiles'
 import type { BackupOutcome } from './backups'
 
@@ -68,8 +69,11 @@ export const MIGRATIONS: readonly Migration[] = [
   // providers-and-workers D7: limit events record their provider and the
   // rejected report's window; rows from before it read provider-less.
   { version: 12, name: 'provider-limit-window', up: migrateProviderLimitWindow },
+  // integration-candidates D3: the branch records, candidates, promotions,
+  // and promotion effects, with the one-running-promotion index.
+  integrationMigration,
   // process-observability D10: the reconciler's ordered NOT EXISTS scans.
-  { version: 13, name: 'process-observation-indexes', up: db => db.exec(CREATE_OBSERVATION_SOURCE_INDEXES_SQL) },
+  { version: 14, name: 'process-observation-indexes', up: db => db.exec(CREATE_OBSERVATION_SOURCE_INDEXES_SQL) },
 ]
 
 export const RESTORE_DOC = 'docs/operations/database-backups.md'

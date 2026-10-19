@@ -8,7 +8,6 @@ import { execFileSync, spawnSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { immediateTransactions } from './immediateTransactions'
 import { cleanGitEnv } from '../../../src/server/git/gitCommand'
 
 function git(args: string[], cwd?: string) {
@@ -114,12 +113,16 @@ export function seedResult(taskId: string, session: string, worktree: string | n
   return execFileSync('bun', ['-e', `
     import { Database } from 'bun:sqlite';
     import { TaskResultStore } from './src/server/team/taskResultStore';
+    import { retryOnSqliteBusy } from './src/server/__tests__/sqliteBusyRetry';
     const [file, taskId, session, worktree] = JSON.parse(await Bun.stdin.text());
-    const db = new Database(file); db.exec('PRAGMA busy_timeout = 5000'); ${immediateTransactions('db')}
+    const db = new Database(file); db.exec('PRAGMA busy_timeout = 5000');
     const task = db.query('SELECT id, team_id, revision FROM team_tasks WHERE id = ?').get(taskId);
-    const result = new TaskResultStore(db).insert({ teamId: task.team_id, taskId: task.id, summary: 'CSV export', commit: 'abc1234', diff: null,
+    // The insert reads then writes inside a DEFERRED transaction — exactly the
+    // shape whose upgrade to RESERVED fails at once with SQLITE_BUSY while the
+    // server holds RESERVED, so the whole insert re-runs on BUSY.
+    const result = await retryOnSqliteBusy(() => new TaskResultStore(db).insert({ teamId: task.team_id, taskId: task.id, summary: 'CSV export', commit: 'abc1234', diff: null,
       worktree, tests: [{ description: 'bun run test', outcome: 'pass' }], limitations: null, taskRevision: task.revision,
-      submittedBy: { kind: 'agent', sessionId: session } });
+      submittedBy: { kind: 'agent', sessionId: session } }));
     console.log(result.id); db.close();
   `], { cwd: process.cwd(), input: JSON.stringify([dbPath, taskId, session, worktree]), encoding: 'utf8' }).trim()
 }

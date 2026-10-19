@@ -32,8 +32,8 @@ function versionNineWithRow(): Database {
 }
 
 test('this build registers migration 12 provider-limit-window after process-observations', () => {
-  const versions = MIGRATIONS.map(migration => [migration.version, migration.name])
-  expect(versions.filter(([version]) => version === 11 || version === 12)).toEqual([[11, 'process-observations'], [12, 'provider-limit-window']])
+  expect(MIGRATIONS.filter(migration => migration.version === 11 || migration.version === 12).map(migration => [migration.version, migration.name]))
+    .toEqual([[11, 'process-observations'], [12, 'provider-limit-window']])
 })
 
 test('a version-11 database keeps its events with NULL provider and window', () => {

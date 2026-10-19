@@ -48,8 +48,8 @@ export interface PlannedChange {
   /** The change's newest round, decided or open. */
   round: RoundRow | null
   /** The change's landing fact, once it landed (D13). */
-  landing: { mergeSha: string; postCi: unknown } | null
-  /** The change's newest merge or update-branch effect, any state (D13's follow-ons). */
+  landing: { mergeSha: string; postCi: unknown; mechanism: string } | null
+  /** The change's newest merge, update-branch, or fast-forward effect, any state (D13's follow-ons). */
   landingEffect: EffectRow | null
   /** Every effect of the newest round, any state, oldest first: its push, PR, and rerun. */
   roundEffects: EffectRow[]
@@ -60,6 +60,8 @@ export interface PlannedExecution {
   changes: PlannedChange[]
   /** A finished (stopped) execution loaded only to settle a merge running at Stop (D12). */
   finished: boolean
+  /** The execution-level effects (X3: no change), any state, oldest first: integration's create-integration. */
+  setupEffects?: EffectRow[]
 }
 
 export interface ExecutionSnapshot {
@@ -73,6 +75,9 @@ export interface ExecutionSnapshot {
   /** Change attempts so far: `${executionId}:${change}` → count. */
   attempts: Map<string, number>
 }
+
+/** The effects a landing change settles on: direct's merge and update, integration's fast-forward. */
+const LANDING_KINDS: ReadonlySet<string> = new Set(['merge', 'update-branch', 'fast-forward'])
 
 /** Load the team's running-execution snapshot: rows, plan facts, effects, attempt counts. */
 export function executionSnapshot(teamId: string, main: string, executions: ExecutionStore, plans: PlanStore,
@@ -91,6 +96,7 @@ export function executionSnapshot(teamId: string, main: string, executions: Exec
     return {
       row: execution,
       finished: execution.state !== 'running',
+      setupEffects: effects.filter(effect => effect.change === null),
       changes: executions.changes(execution.id).map(row => ({
         executionId: row.executionId,
         change: row.change,
@@ -112,9 +118,9 @@ export function executionSnapshot(teamId: string, main: string, executions: Exec
         })(),
         landing: (() => {
           const fact = executions.landings(execution.planId).find(entry => entry.change === row.change)
-          return fact ? { mergeSha: fact.mergeSha, postCi: fact.postCi as unknown } : null
+          return fact ? { mergeSha: fact.mergeSha, postCi: fact.postCi as unknown, mechanism: fact.mechanism } : null
         })(),
-        landingEffect: effects.filter(effect => effect.change === row.change && (effect.kind === 'merge' || effect.kind === 'update-branch')).at(-1) ?? null,
+        landingEffect: effects.filter(effect => effect.change === row.change && LANDING_KINDS.has(effect.kind)).at(-1) ?? null,
       })),
     }
   })

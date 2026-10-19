@@ -103,6 +103,25 @@ with a note and tell the lead rather than pushing on.
   acceptance item; confirm each claimed edit is present in that commit.
   Paste `git rev-parse HEAD` verbatim, never reconstruct a SHA from memory.
   State any remaining uncommitted work separately.
+- Self-review before submitting; these are the classes reviews keep failing:
+  - Effective tests: for each new rule, break the line it guards (or run the
+    test on the base commit) and confirm a test fails. Doubles must check the
+    arguments they receive; a test that only pins preserved behavior does not
+    cover a change.
+  - Production wiring: grep every new class, store, and option for its
+    construction or call outside tests; no `void dep`, no optional seam left
+    unpassed. Exercise one path through the real composition.
+  - Failure paths fail closed: unreadable or missing refs, unknown kinds,
+    malformed input, every argument order and spelling the parser accepts,
+    and frame or event orderings that can race.
+  - Client effects: every id or path a request uses is in its deps (e.g.
+    `teamPath`); every cache is invalidated by each write that changes its
+    inputs. Date logic holds across DST days in a non-UTC zone.
+  - Claims match the commit: every ticked `tasks.md` item is implemented, the
+    spec and design state what the code does, commit titles describe their
+    diffs, and the branch contains `origin/master` when the direction says so.
+  - Hygiene: no new lint warnings or debug output, no file pushed past 500
+    lines, no private hostnames in the diff.
 - When acceptance criteria hold and checks pass, call `task_submit_result`
   with the task id, summary, exact full commit SHA, changed paths, checks
   actually run with outcomes, and limitations. Include the spec-to-test

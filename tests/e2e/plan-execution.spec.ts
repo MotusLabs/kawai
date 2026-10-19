@@ -15,7 +15,6 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { immediateTransactions } from './support/immediateTransactions'
 import { initPlanRepository, validateUntilReady } from './fixtures/planWalkthrough'
 
 test.skip(process.env.AGENTBOARD_CHAT_FIXTURE !== '1', 'Requires development chat fixture')
@@ -57,19 +56,25 @@ function seedPlan(root: string): void {
     import { PlanStore } from './src/server/plans/planStore';
     import { resolveTeam } from './src/server/team/teamIdentity';
     import { normalizePlanContent } from './src/shared/plans';
+    import { retryOnSqliteBusy } from './src/server/__tests__/sqliteBusyRetry';
     const sessions = initDatabase({ path: ${JSON.stringify(dbPath)} });
-    sessions.db.exec('PRAGMA busy_timeout = 5000'); ${immediateTransactions('sessions.db')}
+    sessions.db.exec('PRAGMA busy_timeout = 5000');
     const plans = new PlanStore(sessions.db);
     const teamId = (await resolveTeam(${JSON.stringify(root)})).teamId;
-    const planId = plans.insertPlan({ teamId, title: 'Execution walkthrough', creator: { kind: 'human', sessionId: null } });
-    const content = normalizePlanContent({
-      goal: 'Ship the walkthrough', successCriteria: ['The change lands through the execution'],
-      changes: [{ change: 'walk-api', dependsOn: [], group: 'devs', acceptance: [], extraChecks: [], guidance: '' }],
-      roles: [{ group: 'devs', profiles: [] }, { group: 'reviewers', profiles: [] }], reviewGroup: 'reviewers',
-    });
-    const revision = plans.atomically(() => plans.insertRevision(planId, { content, contentHash: 'walk-hash-1', pin: null, author: { kind: 'human', sessionId: null } }));
-    plans.setRevisionStatus(planId, revision, 'approved');
-    plans.setCurrentApproved(planId, revision);
+    // The server is a second writer on this database: a BUSY on the deferred
+    // read→write upgrade bypasses busy_timeout, so the whole seed runs as one
+    // transaction and re-runs on BUSY (a throw rolls everything back).
+    await retryOnSqliteBusy(() => plans.atomically(() => {
+      const planId = plans.insertPlan({ teamId, title: 'Execution walkthrough', creator: { kind: 'human', sessionId: null } });
+      const content = normalizePlanContent({
+        goal: 'Ship the walkthrough', successCriteria: ['The change lands through the execution'],
+        changes: [{ change: 'walk-api', dependsOn: [], group: 'devs', acceptance: [], extraChecks: [], guidance: '' }],
+        roles: [{ group: 'devs', profiles: [] }, { group: 'reviewers', profiles: [] }], reviewGroup: 'reviewers',
+      });
+      const revision = plans.insertRevision(planId, { content, contentHash: 'walk-hash-1', pin: null, author: { kind: 'human', sessionId: null } });
+      plans.setRevisionStatus(planId, revision, 'approved');
+      plans.setCurrentApproved(planId, revision);
+    }));
     sessions.close();
   `], { cwd: process.cwd(), encoding: 'utf8' })
 }
@@ -91,10 +96,11 @@ function submitRound(root: string, mode: 'result' | 'findings', implementer: str
     import { TaskResultService } from './src/server/team/TaskResultService';
     import { taskHandlers } from './src/server/team/taskTools';
     import { composeExecutionCore } from './src/server/plans/planComposition';
+    import { retryOnSqliteBusy } from './src/server/__tests__/sqliteBusyRetry';
     try {
       const [file, root, mode, implementer, reviewer] = JSON.parse(await Bun.stdin.text());
       const sessions = initDatabase({ path: file });
-      sessions.db.exec('PRAGMA busy_timeout = 5000'); ${immediateTransactions('sessions.db')}
+      sessions.db.exec('PRAGMA busy_timeout = 5000');
       const db = sessions.db;
       const core = composeExecutionCore(db);
       const mail = new MailboxStore(db);
@@ -112,7 +118,7 @@ function submitRound(root: string, mode: 'result' | 'findings', implementer: str
       if (mode === 'result') {
         const commit = Bun.spawnSync(['git', 'rev-parse', 'HEAD'], { cwd: join(root, '.worktrees', 'walk-api') }).stdout.toString().trim();
         const asImplementer = taskHandlers(tasks, implementer, results);
-        await asImplementer.task_submit_result({ task_id: taskId, summary: 'Implemented walk-api', commit, tests: [{ description: 'unit', outcome: 'pass' }] });
+        await retryOnSqliteBusy(() => asImplementer.task_submit_result({ task_id: taskId, summary: 'Implemented walk-api', commit, tests: [{ description: 'unit', outcome: 'pass' }] }));
         console.log('RESULT:' + commit);
       } else {
         // The verdict counts only the review handoff's claimant's findings:
@@ -128,6 +134,10 @@ function submitRound(root: string, mode: 'result' | 'findings', implementer: str
         const result = db.prepare('SELECT id FROM team_task_results WHERE task_id = ? ORDER BY rowid DESC').get(taskId);
         if (!result) throw new Error('no result yet');
         const asReviewer = taskHandlers(tasks, claimant, results);
+        // Not retried: submitFindings makes three autocommits (the findings
+        // INSERT, then the journal note's INSERT and UPDATE), so a BUSY after
+        // the first would duplicate them on a re-run; its statements start
+        // from TRANS_NONE and take the busy handler.
         await asReviewer.task_submit_findings({ task_id: taskId, result_id: result.id, kind: 'review', verdict: 'pass', findings: 'Clean: the walkthrough change is sound.' });
         console.log('FINDINGS:ok:' + claimant);
       }
@@ -149,7 +159,7 @@ async function pollExecution(root: string, until: string): Promise<boolean> {
     import { initDatabase } from './src/server/db';
     import { ExecutionStore } from './src/server/plans/execution/executionStore';
     const sessions = initDatabase({ path: ${JSON.stringify(dbPath)} });
-    sessions.db.exec('PRAGMA busy_timeout = 5000'); ${immediateTransactions('sessions.db')}
+    sessions.db.exec('PRAGMA busy_timeout = 5000');
     const db = sessions.db;
     const store = new ExecutionStore(sessions.db);
     const out = [];
@@ -256,19 +266,23 @@ test('a plan without an execution shows the empty state with the Start dialog', 
       import { PlanStore } from './src/server/plans/planStore';
       import { resolveTeam } from './src/server/team/teamIdentity';
       import { normalizePlanContent } from './src/shared/plans';
+      import { retryOnSqliteBusy } from './src/server/__tests__/sqliteBusyRetry';
       const sessions = initDatabase({ path: ${JSON.stringify(dbPath)} });
-      sessions.db.exec('PRAGMA busy_timeout = 5000'); ${immediateTransactions('sessions.db')}
+      sessions.db.exec('PRAGMA busy_timeout = 5000');
       const plans = new PlanStore(sessions.db);
       const teamId = (await resolveTeam(${JSON.stringify(root)})).teamId;
-      const planId = plans.insertPlan({ teamId, title: 'No execution yet', creator: { kind: 'human', sessionId: null } });
-      const content = normalizePlanContent({
-        goal: 'Nothing runs', successCriteria: ['The empty state shows'],
-        changes: [{ change: 'empty-api', dependsOn: [], group: 'devs', acceptance: [], extraChecks: [], guidance: '' }],
-        roles: [{ group: 'devs', profiles: [] }],
-      });
-      const revision = plans.atomically(() => plans.insertRevision(planId, { content, contentHash: 'empty-hash-1', pin: null, author: { kind: 'human', sessionId: null } }));
-      plans.setRevisionStatus(planId, revision, 'approved');
-      plans.setCurrentApproved(planId, revision);
+      // Same second-writer shape as seedPlan: one transaction, retried whole.
+      await retryOnSqliteBusy(() => plans.atomically(() => {
+        const planId = plans.insertPlan({ teamId, title: 'No execution yet', creator: { kind: 'human', sessionId: null } });
+        const content = normalizePlanContent({
+          goal: 'Nothing runs', successCriteria: ['The empty state shows'],
+          changes: [{ change: 'empty-api', dependsOn: [], group: 'devs', acceptance: [], extraChecks: [], guidance: '' }],
+          roles: [{ group: 'devs', profiles: [] }],
+        });
+        const revision = plans.insertRevision(planId, { content, contentHash: 'empty-hash-1', pin: null, author: { kind: 'human', sessionId: null } });
+        plans.setRevisionStatus(planId, revision, 'approved');
+        plans.setCurrentApproved(planId, revision);
+      }));
       sessions.close();
     `], { cwd: process.cwd(), encoding: 'utf8' })
 
