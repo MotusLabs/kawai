@@ -23,16 +23,18 @@ function QuestionForm({ request, sessionId, sendMessage, disabled }: {
           {question.options.map(option => <label key={option.label} className="flex items-start gap-2 text-chat-body">
             <input type={question.multiSelect ? 'checkbox' : 'radio'} name={`${request.requestId}-${question.header}`}
               checked={answer.options?.includes(option.label) ?? false}
-              onChange={event => update(question.question, {
-                ...answer,
-                options: question.multiSelect
-                  ? event.target.checked ? [...(answer.options ?? []), option.label] : (answer.options ?? []).filter(value => value !== option.label)
-                  : [option.label],
-              })} />
+              onChange={event => update(question.question, question.multiSelect
+                ? { ...answer, options: event.target.checked ? [...(answer.options ?? []), option.label] : (answer.options ?? []).filter(value => value !== option.label) }
+                // Single-select: an option replaces the user's own text.
+                : { options: [option.label] })} />
             <span>{option.label}{option.description && <span className="block text-chat-meta text-secondary">{option.description}</span>}</span>
           </label>)}
-          <input className="input chat-composer text-chat-body" aria-label={`Free-text answer: ${question.question}`} placeholder="Your answer"
-            value={answer.text ?? ''} onChange={event => update(question.question, { ...answer, text: event.target.value })} />
+          <input className="input chat-composer text-chat-body" aria-label={`Free-text answer: ${question.question}`}
+            placeholder={question.multiSelect ? 'Add your own answer' : 'Or type your own answer'}
+            value={answer.text ?? ''} onChange={event => update(question.question, question.multiSelect || !event.target.value.trim()
+              ? { ...answer, text: event.target.value }
+              // Single-select: typing an answer replaces the chosen option.
+              : { text: event.target.value })} />
         </div>
       </fieldset>
     })}
