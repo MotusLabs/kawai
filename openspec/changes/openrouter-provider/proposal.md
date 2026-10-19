@@ -52,7 +52,7 @@ OpenRouter serves Claude models, and others, through an Anthropic-compatible end
 ## Impact
 
 - **Depends on `providers-and-workers`.** This change needs its provider-level cooldown (section 4) and its per-provider usage store (section 5). Section 4 landed in #219. Section 5 is still pending, and implementation waits for it.
-- **Archive order:** `providers-and-workers`, then `process-observability`, then this change. Both of those changes MODIFY the `chat-usage-limits` requirements that this change also MODIFIES: "Usage is refreshed when no report has arrived" and "Provider plan usage is pulled from the provider quota endpoint". This change's blocks restate the text the two produce together, with a carve-out for providers whose own usage endpoint is selected. Archiving it earlier would lose their wording.
+- **Archive order:** `process-observability`, then `providers-and-workers`, then this change. Both of those changes MODIFY the `chat-usage-limits` requirements that this change also MODIFIES: "Usage is refreshed when no report has arrived" and "Provider plan usage is pulled from the provider quota endpoint". This change's blocks restate the text the two produce together, with a carve-out for providers whose own usage endpoint is selected. Archiving it earlier would lose their wording.
 - **Code:**
   - `src/server/chat/catalogParse.ts` and `profileCatalog.ts`: new provider fields, trust rules, the controlled variable.
   - `ClaudeProfiles.ts` and `chatProviderEnv.ts`: credential injection and withholding.

@@ -44,4 +44,4 @@
 
 ## Workflow follow-up
 
-- Archive order: `providers-and-workers`, then `process-observability`, then this change (design Risks). This change's MODIFIED `chat-usage-limits` blocks restate the text those two produce together, so archiving it earlier would drop their wording. Before archiving, diff each MODIFIED block against the then-current main spec. If either change rewrote the requirement again, re-derive the block.
+- Archive order: `process-observability`, then `providers-and-workers`, then this change (design Risks). This change's MODIFIED `chat-usage-limits` blocks restate the text those two produce together, so archiving it earlier would drop their wording. Before archiving, diff each MODIFIED block against the then-current main spec. If either change rewrote the requirement again, re-derive the block.
