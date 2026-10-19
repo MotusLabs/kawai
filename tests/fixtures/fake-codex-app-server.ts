@@ -65,7 +65,6 @@ const steps = run.map(record => ({ dir: record.dir, message: JSON.parse(record.l
 const expectedOut = steps
   .filter(step => step.dir === 'out' && step.message.method !== undefined)
   .map(step => String(step.message.method))
-const sentRequests = new Set<unknown>()
 /** The client's request ids in arrival order, to correlate responses (N6). */
 const sentIds: unknown[] = []
 const replies = new Map<unknown, unknown>()
@@ -95,7 +94,6 @@ const onClientLine = (line: string) => {
       process.exit(2)
     }
     if (message.id !== undefined) {
-      sentRequests.add(message.id)
       sentIds.push(message.id)
     }
   } else if (message.id !== undefined) {
@@ -115,12 +113,10 @@ let responseOrdinal = 0
       await waitFor(() => replies.has(message.id))
     } else if (message.method !== undefined) {
       emit(message) // notification, in order
-    } else if (message.id === undefined) {
-      await waitFor(() => sentRequests.has(message.id)) // a response follows its request
-      emit(message)
     } else {
       // N6: correlate by position — a client id drift fails loudly (exit 2)
-      // instead of hanging until the test timeout.
+      // instead of hanging until the test timeout. A step with no id at all
+      // mismatches the same way (R2-3) instead of waiting on `undefined`.
       const ordinal = responseOrdinal++
       await waitFor(() => sentIds.length > ordinal)
       if (sentIds[ordinal] !== message.id) {

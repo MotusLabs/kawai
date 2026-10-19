@@ -48,10 +48,21 @@ export interface AppServerClientOptions {
    * Default 30 000; 0 disables.
    */
   requestTimeoutMs?: number
+  /**
+   * How long after the child's exit the stdio streams may keep the exit
+   * unsettled (R2-1): an orphan grandchild can inherit the pipes and hold
+   * them open long after the app-server is gone. The exit settles when the
+   * streams close or when this bound passes, whichever comes first.
+   * Default 1 000; 0 settles at the exit itself.
+   */
+  drainBoundMs?: number
 }
 
 /** Default per-request deadline (N5). */
 const REQUEST_TIMEOUT_MS = 30_000
+
+/** Default drain bound (R2-1). */
+const DRAIN_BOUND_MS = 1_000
 
 interface PendingRequest {
   resolve: (result: unknown) => void
@@ -80,10 +91,14 @@ export class AppServerClient {
   private lastStderr = ''
   // N5: the exit settles only once the stdio streams have closed too —
   // 'exit' can precede the final stdout flush, which would cut a last
-  // notification or response off before it is routed.
+  // notification or response off before it is routed. R2-1 bounds that
+  // wait: an orphan grandchild holding the pipes must not hold the exit
+  // (and with it the respawn) open forever.
   private exitFacts: AppServerExit | null = null
   private stdoutClosed = false
   private stderrClosed = false
+  private drainBound = false
+  private drainTimer: NodeJS.Timeout | null = null
 
   constructor(private readonly options: AppServerClientOptions) {}
 
@@ -121,6 +136,20 @@ export class AppServerClient {
     })
     child.on('exit', (code, signal) => {
       this.exitFacts = { code, signal }
+      // R2-1: the streams may never close — an orphan grandchild can hold
+      // them — so the drain wait is bounded: settle on the closes or the
+      // bound, whichever comes first.
+      const bound = this.options.drainBoundMs ?? DRAIN_BOUND_MS
+      if (bound > 0) {
+        this.drainTimer = setTimeout(() => {
+          this.drainTimer = null
+          this.drainBound = true
+          this.settleWhenClosed()
+        }, bound)
+        this.drainTimer.unref?.()
+      } else {
+        this.drainBound = true
+      }
       this.settleWhenClosed()
     })
     child.stdin?.on('error', () => {
@@ -146,9 +175,13 @@ export class AppServerClient {
     })
   }
 
-  /** Settle the exit only when the streams have drained (N5). */
+  /**
+   * Settle the exit once the streams have drained (N5) or the drain bound
+   * has passed (R2-1), whichever comes first.
+   */
   private settleWhenClosed(): void {
-    if (this.exitInfo || !this.exitFacts || !this.stdoutClosed || !this.stderrClosed) return
+    if (this.exitInfo || !this.exitFacts) return
+    if (!this.drainBound && !(this.stdoutClosed && this.stderrClosed)) return
     this.settleExit(this.exitFacts)
   }
 
@@ -312,6 +345,10 @@ export class AppServerClient {
     if (this.killTimer) {
       clearTimeout(this.killTimer)
       this.killTimer = null
+    }
+    if (this.drainTimer) {
+      clearTimeout(this.drainTimer)
+      this.drainTimer = null
     }
     this.options.wire.record('lifecycle', JSON.stringify({ event: 'exit', code: exit.code, signal: exit.signal }))
     const reason = this.lastStderr ? ` (last stderr: ${this.lastStderr})` : ''

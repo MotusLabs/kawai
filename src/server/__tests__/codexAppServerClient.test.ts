@@ -81,11 +81,49 @@ const handle = (line) => {
       out({ id, result: {} })
       process.exit(0)
       break
+    case 'orphan-grandchild': {
+      // Answers, then exits while a grandchild that inherited the pipes
+      // keeps them open: the exit must settle on the drain bound (R2-1),
+      // not wait for the stream closes the grandchild controls.
+      const { spawn } = require('node:child_process')
+      spawn('sleep', ['2'], { stdio: ['ignore', 'inherit', 'inherit'] })
+      out({ id, result: {} })
+      setTimeout(() => process.exit(3), 20)
+      break
+    }
     default:
       out({ id, result: { method: message.method, sawAppServerArg: process.argv.includes('app-server'), receivedParams: message.params ?? null } })
   }
 }
 ;(async () => {
+  // The late-response mode (R2-1) owns stdin itself: on the first request
+  // it exits without answering, while a grandchild that inherited stdout
+  // writes the response a moment later and holds the pipe. The response
+  // must still be routed: settling at the exit itself would reject a
+  // request whose answer is already in flight. Two readers on one stream
+  // race, so the plain loop below stands down for it.
+  if (mode === 'late-response-grandchild') {
+    let late = ''
+    process.stdin.setEncoding('utf8')
+    process.stdin.on('data', (chunk) => {
+      late += chunk
+      let index
+      while ((index = late.indexOf('\\n')) !== -1) {
+        const line = late.slice(0, index)
+        late = late.slice(index + 1)
+        if (!line.trim()) continue
+        const message = JSON.parse(line)
+        if (message.id === undefined) continue
+        const dir = require('node:fs').mkdtempSync(require('node:path').join(require('node:os').tmpdir(), 'codex-late-'))
+        const file = require('node:path').join(dir, 'response')
+        require('node:fs').writeFileSync(file, JSON.stringify({ jsonrpc: '2.0', id: message.id, result: { late: true } }) + '\\n')
+        require('node:child_process').spawn('sh', ['-c', 'sleep 0.25; cat ' + file + '; rm -rf ' + dir + '; sleep 2'], { stdio: ['ignore', 'inherit', 'inherit'] })
+        setTimeout(() => process.exit(7), 20)
+        return
+      }
+    })
+    return
+  }
   let buffered = ''
   for await (const chunk of Bun.stdin.stream()) {
     buffered += new TextDecoder().decode(chunk)
@@ -127,7 +165,7 @@ afterEach(() => {
 
 const startClient = (
   mode: string,
-  overrides: Partial<Pick<AppServerClientOptions, 'onServerRequest' | 'killGraceMs' | 'requestTimeoutMs'>> = {},
+  overrides: Partial<Pick<AppServerClientOptions, 'onServerRequest' | 'killGraceMs' | 'requestTimeoutMs' | 'drainBoundMs'>> = {},
 ) => {
   const wire = recordingWire()
   const notifications: Array<{ method: string; params: Record<string, unknown> }> = []
@@ -141,6 +179,7 @@ const startClient = (
     onExit: exit => exits.push(exit),
     killGraceMs: overrides.killGraceMs ?? 200,
     requestTimeoutMs: overrides.requestTimeoutMs,
+    drainBoundMs: overrides.drainBoundMs,
   })
   client.start()
   clients.push(client)
@@ -335,6 +374,33 @@ test('a response that lands as the child exits still resolves, and stdout drains
   expect(inRecord).toBeGreaterThanOrEqual(0)
   expect(exitRecord).toBeGreaterThan(inRecord)
 }, 5_000)
+
+test('an orphan grandchild holding the pipes cannot hold the exit open (R2-1)', async () => {
+  // The child exits 3 while its grandchild (sleep 2, pipes inherited)
+  // keeps both streams open: the exit settles on the ~250 ms drain bound,
+  // not on the closes. The settle-only-on-closes shape this replaces can
+  // only settle when the grandchild dies (~2 s), past this timeout.
+  const { client } = startClient('orphan-grandchild', { drainBoundMs: 250 })
+  await client.request('ping')
+  const started = Date.now()
+  const exit = await client.whenExited()
+  expect(exit).toEqual({ code: 3, signal: null })
+  expect(Date.now() - started).toBeLessThan(1_000)
+}, 1_500)
+
+test('a response a grandchild writes after the exit still resolves its request (R2-1)', async () => {
+  // The parent exits 7 without answering; its grandchild writes the
+  // response ~250 ms in, well inside the ~600 ms drain bound — the bound
+  // must not outrun an answer that is already in flight. Settling at the
+  // exit itself rejects the pending request before its answer lands, so
+  // this kills the immediate-settle shape; waiting for the closes forever
+  // hangs on whenExited, so it kills that shape too.
+  const { client } = startClient('late-response-grandchild', { drainBoundMs: 600 })
+  const result = await client.request('initialize') as { late?: boolean }
+  expect(result.late).toBe(true)
+  const exit = await client.whenExited()
+  expect(exit).toEqual({ code: 7, signal: null })
+}, 2_000)
 
 test('initialize sends clientInfo and the experimental capability', async () => {
   const { client } = startClient('echo')
