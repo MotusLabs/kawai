@@ -91,7 +91,7 @@ Tasks 9.1-9.5 are the independent foundation export milestone after groups 1-2; 
 
 ## Workflow follow-up
 
-- Review the planning defaults (90-day detail, 09:00 UTC digest, ten-minute quota cadence) before implementation rollout.
+- Review the planning defaults (90-day facts, 14-day interval detail, 09:00 UTC digest, ten-minute quota cadence) before implementation rollout.
 - Foundation delivery is a milestone within this change, not completion or archive; no acceptance criterion is removed by the approved staging.
 - Archive this change only after its modified capability prerequisites exist and implementation/review are complete; preserve the explicit cross-change ordering in design D12.
 - Reassess retention volume, recommendation usefulness and metric cardinality from actual operation; do not wait for 90 days of data to begin issuing provisional advice.

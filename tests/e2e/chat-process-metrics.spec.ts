@@ -86,6 +86,7 @@ function workAndRead(root: string, ids: { lead: string; dev: string; rev1: strin
     import { metricsHandlers } from './src/server/metrics/metricsTools';
     import { METRIC_DEF_BY_ID } from './src/shared/processMetrics';
     import { formatValue } from './src/client/components/team/metrics/metricFormat';
+    import { retryOnSqliteBusy } from './src/server/__tests__/sqliteBusyRetry';
     const [file, root, ids] = JSON.parse(await Bun.stdin.text());
     const sessions = initDatabase({ path: file });
     sessions.db.exec('PRAGMA busy_timeout = 5000');
@@ -96,12 +97,20 @@ function workAndRead(root: string, ids: { lead: string; dev: string; rev1: strin
     const lead = taskHandlers(tasks, ids.lead, results);
     const dev = taskHandlers(tasks, ids.dev, results);
     const verdicts = [[ids.rev1, 'fail'], [ids.rev1, 'fail'], [ids.rev1, 'pass'], [ids.rev2, 'pass'], [ids.rev2, 'pass'], [ids.rev2, 'fail']];
+    // Each write re-runs whole on SQLITE_BUSY: the server is a second writer,
+    // and the deferred read→write upgrade bypasses the busy handler. The one
+    // exception is task_submit_findings below: it commits more than once.
     for (const [index, [reviewerId, verdict]] of verdicts.entries()) {
-      const task = await lead.task_create({ title: 'Metrics task ' + (index + 1), direction: 'Build it' });
-      await dev.task_update_status({ task_id: task.id, status: 'active' });
-      const result = await dev.task_submit_result({ task_id: task.id, summary: 'Built ' + (index + 1), commit: 'c0ffee' + index });
+      const task = await retryOnSqliteBusy(() => lead.task_create({ title: 'Metrics task ' + (index + 1), direction: 'Build it' }));
+      await retryOnSqliteBusy(() => dev.task_update_status({ task_id: task.id, status: 'active' }));
+      const result = await retryOnSqliteBusy(() => dev.task_submit_result({ task_id: task.id, summary: 'Built ' + (index + 1), commit: 'c0ffee' + index }));
+      // Not retried: submitFindings makes three autocommits (the findings
+      // INSERT, then the journal note's INSERT and UPDATE), so a BUSY after
+      // the first would duplicate them on a re-run — and a duplicated fail
+      // verdict would flip the rates this spec asserts. Autocommit statements
+      // start from TRANS_NONE and take the busy handler.
       await taskHandlers(tasks, reviewerId, results).task_submit_findings({ task_id: task.id, result_id: result.id, kind: 'review', verdict, findings: verdict === 'fail' ? 'Missing tests' : 'Looks right' });
-      await lead.task_update_status({ task_id: task.id, status: 'done' });
+      await retryOnSqliteBusy(() => lead.task_update_status({ task_id: task.id, status: 'done' }));
     }
     const teamId = (await resolveTeam(root)).teamId;
     const tool = metricsHandlers({ teamOf: () => teamId, reader: new MetricsReader(sessions.db) }, ids.lead);
