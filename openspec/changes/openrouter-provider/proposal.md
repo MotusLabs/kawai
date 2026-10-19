@@ -16,7 +16,8 @@ OpenRouter serves Claude models, and others, through an Anthropic-compatible end
 - **A per-provider credential, by reference.**
   - A provider in a trusted catalog (the user level or the shipped default) may name the server environment variable that holds its key (`authTokenEnv`). Its sessions get that value as `ANTHROPIC_AUTH_TOKEN`, with `ANTHROPIC_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN` blanked.
   - Every variable a catalog names as a credential is removed from every agent's environment, including executable-backed launches.
-  - A project-level file can neither name a credential variable nor change the base URL of a provider that has one. Agents can write those files, and either edit could send a server secret to a URL an agent chose.
+  - A project-level file can neither name a credential variable nor change the base URL of a provider that has one; an empty value counts as a change. Agents can write those files, and either edit could send a server secret to a URL an agent chose.
+  - Every launch that receives the key pins the provider's base URL, and the proxy and TLS variables, in the flag settings layer, so Claude settings files cannot redirect it either. A credentialed provider must have a trusted base URL and cannot name an `executable`.
   - The catalog file itself still holds no secret.
 - **A server-only balance credential.** A trusted provider may name a second variable (`balanceKeyEnv`). Only the server uses it, to read the account balance, and no agent ever receives it.
 - **Shipped `openrouter` provider.** It points at `https://openrouter.ai/api`, reads its key from `OPENROUTER_API_KEY` and its balance key from `OPENROUTER_MANAGEMENT_KEY`, and ships models `openrouter-opus`, `openrouter-sonnet` and `openrouter-haiku`, mapped to OpenRouter's `~anthropic/…-latest` slugs. A session cannot start while its key variable is unset; the refusal names the variable.
@@ -25,9 +26,9 @@ OpenRouter serves Claude models, and others, through an Anthropic-compatible end
   - The key's cap and each budget become meters. A budget with a known reset interval gets its period; a one-off cap gets no period.
   - With a balance key, the account's credits become one more meter.
   - Pulls run once per provider, refresh on the existing cadence, and also refresh shortly after a turn that reported a cost.
-- **Out-of-credit is a limit.** Any final failure with HTTP status 402 is recorded as a final limit event in a `credit` window, whatever the error class.
-  - It cools the whole provider with no reset time, so limit outcomes never park on it and take the group's `otherwise` branch (forward or release).
-  - The cooldown lasts the existing one-hour fallback used when no reset is known, and ends earlier once a usage pull shows that remaining credit has grown since the event (a top-up, or a raised cap).
+- **Out-of-credit is a limit.** In a Claude Code session, any final failure with HTTP status 402 is recorded as a final limit event in a `credit` window, whatever the error class. Codex sessions keep `codex-chat-sessions`' limit rules.
+  - It cools the whole provider with no reset time, so limit outcomes never park delivered work on it and take the group's `otherwise` branch (forward or release).
+  - The cooldown lasts the existing one-hour fallback used when no reset is known, and ends earlier once a later usage pull shows more remaining credit than an earlier post-event pull did (a top-up, or a raised cap): that pull's time becomes the event's known reset.
 - **The provider-reported turn cost.** When a turn's stream reported `usage.cost`, `turn_completed` carries the sum, and the transcript shows it as the turn's cost instead of the SDK estimate.
 - **Not changed:**
   - `chat_turn_usage` and process metrics stay tokens-only.
@@ -43,14 +44,15 @@ OpenRouter serves Claude models, and others, through an Anthropic-compatible end
 
 ### Modified Capabilities
 
-- `claude-session-profiles`: providers may name a credential variable and a balance variable, both withheld from agents; a credentialed provider's routing comes only from trusted catalogs; the shipped `openrouter` provider; `CLAUDE_CODE_MAX_OUTPUT_TOKENS` joins the controlled variables.
-- `chat-usage-limits`: the OpenRouter key and credits pull, its meters, precedence over the Z.AI probe, and refresh after costed turns.
-- `profile-limit-handling`: a 402 is a final `credit` limit with no reset, cooling the provider until credit returns.
+- `claude-session-profiles`: providers may name a credential variable and a balance variable, both withheld from agents; a credentialed provider's routing comes only from trusted catalogs and its base URL is pinned on every launch that carries the key; the shipped `openrouter` provider; `CLAUDE_CODE_MAX_OUTPUT_TOKENS` joins the controlled variables.
+- `chat-usage-limits`: the OpenRouter key and credits pull, its meters, its refresh cadence, and refresh after costed turns. Three existing requirements are modified: the quota-endpoint pull, the on-demand refresh, and per-provider report keeping. A provider whose own usage endpoint is selected is never probed at the quota endpoint and never falls back to the host login.
+- `profile-limit-handling`: in a Claude Code session, a 402 is a final `credit` limit with no reset, cooling the provider until credit returns.
 - `chat-sessions`: a turn's completion cost is the provider-reported charge when one was streamed.
 
 ## Impact
 
-- **Depends on `providers-and-workers`.** This change needs its provider-level cooldown (section 4) and per-provider usage store (section 5), which are being implemented on `feat/providers-and-workers-b` and are not yet on master. It lands after them, and its deltas are written against their text.
+- **Depends on `providers-and-workers`.** This change needs its provider-level cooldown (section 4) and its per-provider usage store (section 5). Section 4 landed in #219. Section 5 is still pending, and implementation waits for it.
+- **Archive order:** `process-observability`, then `providers-and-workers`, then this change. Both of those changes MODIFY the `chat-usage-limits` requirements that this change also MODIFIES: "Usage is refreshed when no report has arrived" and "Provider plan usage is pulled from the provider quota endpoint". This change's blocks restate the text the two produce together, with a carve-out for providers whose own usage endpoint is selected. Archiving it earlier would lose their wording.
 - **Code:**
   - `src/server/chat/catalogParse.ts` and `profileCatalog.ts`: new provider fields, trust rules, the controlled variable.
   - `ClaudeProfiles.ts` and `chatProviderEnv.ts`: credential injection and withholding.

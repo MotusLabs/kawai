@@ -231,14 +231,26 @@ wrappers, without hand-maintained shell scripts:
 { "lan": { "label": "LAN", "executable": "/usr/local/bin/claude-lan" } }
 ```
 
-The wrapper receives the merged base environment (credentials included); any
-entry `env` is pre-applied and the wrapper's own exports win. No inline
-controlled settings are injected for executable-backed profiles — the wrapper
-owns its provider configuration, including any permission flags it passes
-(operator trust). Catalog files discovered in the project tree cannot name
-executables: they are agent-writable, and an executable there would run
-arbitrary code with server credentials. A missing or non-executable path is
-an actionable error before any agent starts.
+The wrapper receives the merged base environment with every catalog-named
+credential variable withheld; any entry `env` is pre-applied and the
+wrapper's own exports win. No inline controlled settings are injected for
+executable-backed profiles — the wrapper owns its provider configuration,
+including any permission flags it passes (operator trust). It never receives
+a credential value: a wrapper that needs a key sets its own. Catalog files
+discovered in the project tree cannot name executables: they are
+agent-writable, and an executable there would run arbitrary code with server
+credentials. A missing or non-executable path is an actionable error before
+any agent starts.
+
+Two more refusals keep a credentialed provider's route fixed (see the
+withholding rules above): a trusted catalog file that gives a provider with
+`authTokenEnv` or `balanceKeyEnv` an `executable` — on the provider or on one
+of its models — is refused whole, naming the provider and the field, and a
+credentialed provider whose merged trusted tiers leave `ANTHROPIC_BASE_URL`
+absent or empty is dropped, naming the provider. Every launch that carries a
+provider's key pins that base URL, and the proxy and TLS variables, in both
+the process environment and the flag settings layer, so user or project
+Claude settings files cannot redirect it.
 
 Terminal commands are unaffected: kawai writes no executables, and existing
 `claude-*` wrapper scripts remain yours to maintain or delete.
