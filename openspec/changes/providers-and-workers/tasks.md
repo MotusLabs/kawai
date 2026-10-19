@@ -49,7 +49,7 @@
 
 ## 7. Integration
 
-- [ ] 7.1 Run `bun run lint && bun run typecheck && bun run test` on the final head, and `openspec validate providers-and-workers --strict`. Verify all four pass with no validator notes.
+- [x] 7.1 Run `bun run lint && bun run typecheck && bun run test` on the final head, and `openspec validate providers-and-workers --strict`. Verify all four pass with no validator notes.
 
 ## Workflow follow-up
 
