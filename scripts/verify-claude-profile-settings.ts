@@ -2,6 +2,8 @@
 // The second run drives a credentialed provider (openrouter-provider D3): its
 // named token must reach the gateway as the bearer, with no x-api-key, even
 // though the server and project settings both carry an API key.
+// The third section probes which transport variables Claude Code applies from
+// the flag layer's settings.env, against loopback gateways only.
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -92,3 +94,300 @@ try {
   server.stop(true)
   fs.rmSync(dir, { recursive: true, force: true })
 }
+
+// --- Transport-variable probe (openrouter-provider D3) ---------------------
+// Which transport variables Claude Code applies from the flag layer's
+// settings.env. Each case mutates only the resolved launch: the value rides
+// in settings.env with the variable deleted from the process env, so an
+// observation says the settings layer alone routed the request. Loopback
+// gateways only; the synthetic token from the second run.
+type TransportCase = {
+  name: string
+  scheme: 'http' | 'https'
+  settingsEnv: Record<string, string>
+  deleteFromEnv: string[]
+  serverEnv?: Record<string, string>
+  /** Proxy observation expected for the request to count as routed. */
+  expectProxy: 'connect' | 'absolute' | 'none'
+  /** When false the case only reports; a failed run is the expected outcome. */
+  expectSuccess: boolean
+}
+
+/** A minimal recording HTTP proxy: CONNECT tunnels and absolute-form requests. */
+function startRecordProxy(): { url: string; seen: string[]; stop: () => void } {
+  const seen: string[] = []
+  const pending = new Map<object, string>()
+  const tunnels = new Map<object, { upstream: { write: (d: Uint8Array) => unknown; end: () => void } }>()
+  const server = Bun.listen<{ upstream?: unknown }>({
+    hostname: '127.0.0.1',
+    port: 0,
+    socket: {
+      data(socket, chunk) {
+        const tunnel = tunnels.get(socket)
+        if (tunnel) {
+          tunnel.upstream.write(chunk)
+          return
+        }
+        const text = (pending.get(socket) ?? '') + String(chunk)
+        const headEnd = text.indexOf('\r\n\r\n')
+        if (headEnd === -1) {
+          pending.set(socket, text)
+          return
+        }
+        const head = text.slice(0, headEnd)
+        const requestLine = head.split('\r\n')[0] ?? ''
+        if (requestLine.startsWith('CONNECT')) {
+          const target = requestLine.split(' ')[1] ?? ''
+          seen.push(requestLine)
+          pending.delete(socket)
+          const [host, port] = target.split(':')
+          socket.write('HTTP/1.1 200 Connection established\r\n\r\n')
+          Bun.connect({
+            hostname: host || '127.0.0.1',
+            port: Number(port) || 443,
+            socket: {
+              data(_, upChunk) { socket.write(upChunk) },
+              error() { socket.end() },
+              close() { socket.end() },
+            },
+          }).then(upstream => {
+            tunnels.set(socket, { upstream })
+          }).catch(() => socket.end())
+          return
+        }
+        // Absolute-form request: forward it and relay the (streamed) response.
+        seen.push(requestLine)
+        pending.delete(socket)
+        const lines = head.split('\r\n')
+        const headers: Record<string, string> = {}
+        let contentLength = 0
+        for (const line of lines.slice(1)) {
+          const colon = line.indexOf(':')
+          if (colon === -1) continue
+          const name = line.slice(0, colon).trim().toLowerCase()
+          const value = line.slice(colon + 1).trim()
+          headers[name] = value
+          if (name === 'content-length') contentLength = Number(value) || 0
+        }
+        const url = requestLine.split(' ')[1] ?? ''
+        const method = requestLine.split(' ')[0] ?? 'GET'
+        const body = text.slice(headEnd + 4, headEnd + 4 + contentLength)
+        void (async () => {
+          try {
+            const response = await fetch(url, {
+              method, headers,
+              ...(body ? { body } : {}),
+            })
+            const statusText = response.status === 200 ? 'OK' : 'Error'
+            const responseHeaders = [...response.headers.entries()]
+              .filter(([name]) => !['transfer-encoding', 'content-encoding'].includes(name))
+              .map(([name, value]) => `${name}: ${value}`)
+            socket.write(`HTTP/1.1 ${response.status} ${statusText}\r\n${responseHeaders.join('\r\n')}\r\n\r\n`)
+            if (response.body) {
+              for await (const part of response.body) socket.write(part)
+            }
+          } catch {
+            socket.write('HTTP/1.1 502 Bad Gateway\r\ncontent-length: 0\r\n\r\n')
+          } finally {
+            socket.end()
+          }
+        })()
+      },
+      error(socket) { pending.delete(socket); tunnels.delete(socket) },
+      close(socket) {
+        pending.delete(socket)
+        tunnels.get(socket)?.upstream.end()
+        tunnels.delete(socket)
+      },
+    },
+  })
+  return { url: `http://127.0.0.1:${server.port}`, seen, stop: () => server.stop(true) }
+}
+
+async function runTransportProbe(): Promise<void> {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-profile-transport-'))
+  const projectDir = path.join(dir, 'project')
+  const home = path.join(dir, 'home')
+  fs.mkdirSync(path.join(projectDir, '.claude'), { recursive: true })
+  fs.mkdirSync(path.join(home, '.kawai'), { recursive: true })
+  fs.mkdirSync(path.join(projectDir, '.kawai'), { recursive: true })
+  // The project settings file must exist but stay empty: every case writes
+  // its value into the launch's flag layer directly, not into a file.
+  fs.writeFileSync(path.join(projectDir, '.claude', 'settings.json'), '{}')
+  fs.writeFileSync(path.join(home, '.kawai', 'providers.json'), '{}')
+  // A self-signed certificate for the HTTPS gateway, so the TLS-trust cases
+  // have something real to accept or reject.
+  const certPath = path.join(dir, 'cert.pem')
+  const keyPath = path.join(dir, 'key.pem')
+  const gen = Bun.spawnSync([
+    'openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '2',
+    '-keyout', keyPath, '-out', certPath, '-subj', '/CN=127.0.0.1',
+    '-addext', 'subjectAltName=IP:127.0.0.1',
+  ])
+  const tlsAvailable = gen.exitCode === 0 && fs.existsSync(certPath)
+  if (!tlsAvailable) console.log('openssl unavailable; TLS-trust cases are skipped')
+
+  const gatewayHits = { count: 0 }
+  const tlsServer = tlsAvailable
+    ? Bun.serve({
+        hostname: '127.0.0.1', port: 0,
+        tls: { cert: fs.readFileSync(certPath), key: fs.readFileSync(keyPath) },
+        async fetch(req) {
+          if (!new URL(req.url).pathname.endsWith('/messages')) return Response.json({ input_tokens: 1 })
+          gatewayHits.count++
+          return mockMessageResponse(await req.json() as Record<string, unknown>)
+        },
+      })
+    : undefined
+  const plainServer = Bun.serve({
+    hostname: '127.0.0.1', port: 0,
+    async fetch(req) {
+      if (!new URL(req.url).pathname.endsWith('/messages')) return Response.json({ input_tokens: 1 })
+      gatewayHits.count++
+      return mockMessageResponse(await req.json() as Record<string, unknown>)
+    },
+  })
+  const httpsUrl = tlsServer ? `https://127.0.0.1:${tlsServer.port}/api` : ''
+  const httpUrl = `http://127.0.0.1:${plainServer.port}/api`
+
+  const cases: TransportCase[] = [
+    { name: 'HTTPS_PROXY', scheme: 'https', settingsEnv: { HTTPS_PROXY: 'PROXY' }, deleteFromEnv: ['HTTPS_PROXY'], expectProxy: 'connect', expectSuccess: true },
+    { name: 'NO_PROXY', scheme: 'https', settingsEnv: { HTTPS_PROXY: 'PROXY', NO_PROXY: '127.0.0.1,localhost' }, deleteFromEnv: ['HTTPS_PROXY', 'NO_PROXY'], expectProxy: 'none', expectSuccess: true },
+    { name: 'HTTP_PROXY', scheme: 'http', settingsEnv: { HTTP_PROXY: 'PROXY' }, deleteFromEnv: ['HTTP_PROXY'], expectProxy: 'absolute', expectSuccess: true },
+    ...(tlsAvailable ? [
+      { name: 'NODE_TLS_REJECT_UNAUTHORIZED', scheme: 'https', settingsEnv: { NODE_TLS_REJECT_UNAUTHORIZED: '0' }, deleteFromEnv: ['NODE_TLS_REJECT_UNAUTHORIZED'], expectProxy: 'none', expectSuccess: true },
+      { name: 'NODE_EXTRA_CA_CERTS', scheme: 'https', settingsEnv: { NODE_EXTRA_CA_CERTS: certPath }, deleteFromEnv: ['NODE_EXTRA_CA_CERTS'], expectProxy: 'none', expectSuccess: true },
+    ] as TransportCase[] : []),
+  ]
+
+  const applied: string[] = []
+  const skipped: string[] = []
+  try {
+    for (const probe of cases) {
+      const proxy = startRecordProxy()
+      try {
+        const baseUrl = probe.scheme === 'https' ? httpsUrl : httpUrl
+        fs.writeFileSync(path.join(home, '.kawai', 'providers.json'), JSON.stringify({
+          mockor: {
+            label: 'Mock OR', authTokenEnv: 'MOCK_OR_KEY',
+            env: { ANTHROPIC_BASE_URL: baseUrl },
+            models: { 'mockor-sonnet': { model: 'sonnet' } },
+          },
+        }))
+        const launch = resolveClaudeProfile('mockor-sonnet', {
+          CLAUDE_CONFIG_DIR: path.join(dir, 'config'),
+          ANTHROPIC_API_KEY: '', CLAUDE_CODE_OAUTH_TOKEN: '',
+          MOCK_OR_KEY: 'synthetic-or-token',
+          CLAUDECODE: '', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+        }, { homeDir: home })
+        for (const name of probe.deleteFromEnv) delete launch.env![name]
+        Object.assign(launch.settings!.env!, Object.fromEntries(
+          Object.entries(probe.settingsEnv).map(([name, value]) => [name, value === 'PROXY' ? proxy.url : value]),
+        ))
+        const controller = new AbortController()
+        const timer = setTimeout(() => controller.abort(), 25000)
+        const hitsBefore = gatewayHits.count
+        try {
+          const { executable: _profileExecutable, ...options } = launch
+          const stream = query({
+            prompt: 'Reply with verified.',
+            options: {
+              ...options,
+              cwd: projectDir, settingSources: ['user', 'project', 'local'] as ('user' | 'project' | 'local')[],
+              permissionMode: 'default' as const,
+              canUseTool: async () => ({ behavior: 'deny' as const, message: 'Probe' }),
+              abortController: controller, maxTurns: 1,
+            },
+          })
+          for await (const event of stream) {
+            if (event.type === 'result') break
+          }
+          stream.close()
+        } finally {
+          clearTimeout(timer)
+          controller.abort()
+        }
+        const routed = gatewayHits.count > hitsBefore
+        const viaProxy = probe.expectProxy === 'none'
+          ? proxy.seen.length === 0
+          : probe.expectProxy === 'connect'
+            ? proxy.seen.some(entry => entry.startsWith('CONNECT'))
+            : proxy.seen.some(entry => !entry.startsWith('CONNECT'))
+        const ok = routed && viaProxy
+        if (ok) applied.push(probe.name)
+        else skipped.push(probe.name)
+        console.log(`Transport ${probe.name}: ${ok ? 'applied from settings env' : `NOT applied (routed=${routed}, viaProxy=${viaProxy})`}`)
+      } catch (error) {
+        skipped.push(probe.name)
+        console.log(`Transport ${probe.name}: NOT applied (run failed: ${error instanceof Error ? error.message.slice(0, 120) : error})`)
+      } finally {
+        proxy.stop()
+      }
+    }
+    console.log(`Transport variables applied from settings env: ${applied.join(', ') || '(none)'}`)
+    console.log(`Transport variables not applied: ${skipped.join(', ') || '(none)'}`)
+
+    // The pin's own guarantee, end to end: a project settings file naming a
+    // proxy must not route a credentialed launch — the flag layer's pinned
+    // empty value wins, and the request reaches the gateway directly.
+    {
+      const proxy = startRecordProxy()
+      try {
+        fs.writeFileSync(path.join(projectDir, '.claude', 'settings.json'), JSON.stringify({ env: { HTTPS_PROXY: proxy.url } }))
+        fs.writeFileSync(path.join(home, '.kawai', 'providers.json'), JSON.stringify({
+          mockor: {
+            label: 'Mock OR', authTokenEnv: 'MOCK_OR_KEY',
+            env: { ANTHROPIC_BASE_URL: httpsUrl || httpUrl },
+            models: { 'mockor-sonnet': { model: 'sonnet' } },
+          },
+        }))
+        const launch = resolveClaudeProfile('mockor-sonnet', {
+          CLAUDE_CONFIG_DIR: path.join(dir, 'config'),
+          ANTHROPIC_API_KEY: '', CLAUDE_CODE_OAUTH_TOKEN: '',
+          MOCK_OR_KEY: 'synthetic-or-token',
+          CLAUDECODE: '', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+        }, { homeDir: home })
+        if (launch.settings && typeof launch.settings === 'object' && launch.settings.env!.HTTPS_PROXY !== '') {
+          throw new Error('The pinned settings layer lost its empty HTTPS_PROXY')
+        }
+        const controller = new AbortController()
+        const timer = setTimeout(() => controller.abort(), 25000)
+        const hitsBefore = gatewayHits.count
+        try {
+          const { executable: _profileExecutable, ...options } = launch
+          const stream = query({
+            prompt: 'Reply with verified.',
+            options: {
+              ...options,
+              cwd: projectDir, settingSources: ['user', 'project', 'local'] as ('user' | 'project' | 'local')[],
+              permissionMode: 'default' as const,
+              canUseTool: async () => ({ behavior: 'deny' as const, message: 'Probe' }),
+              abortController: controller, maxTurns: 1,
+            },
+          })
+          for await (const event of stream) {
+            if (event.type === 'result') break
+          }
+          stream.close()
+        } finally {
+          clearTimeout(timer)
+          controller.abort()
+        }
+        const routed = gatewayHits.count > hitsBefore
+        if (!routed || proxy.seen.length > 0) {
+          throw new Error(`Project settings routed a credentialed launch through the proxy (routed=${routed}, proxy saw ${proxy.seen.length})`)
+        }
+        console.log('Pin defense: a project proxy setting did not route the credentialed launch')
+      } finally {
+        proxy.stop()
+        fs.writeFileSync(path.join(projectDir, '.claude', 'settings.json'), '{}')
+      }
+    }
+  } finally {
+    tlsServer?.stop(true)
+    plainServer.stop(true)
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+await runTransportProbe()
