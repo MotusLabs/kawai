@@ -436,16 +436,18 @@ describe('credit cooldown (openrouter-provider D8)', () => {
   })
 
   test('The first pull only sets the baseline: readings before the event are ignored', () => {
-    store.reportRemainingCredit('openrouter', 0.5)
+    // The failing input of the checkpoint review's finding: a pre-event low of
+    // $0.01, then a first post-event pull of $10.01, still cools.
+    store.reportRemainingCredit('openrouter', 0.01)
     now = T0 + MIN
     store.record({ ...credit, at: iso(now) })
     now = T0 + 10 * MIN
-    store.reportRemainingCredit('openrouter', 0.6)
-    // 0.6 is only the baseline: the pre-event 0.5 would have ended the cooldown.
+    store.reportRemainingCredit('openrouter', 10.01)
+    // 10.01 is only the baseline: the pre-event 0.01 would have ended the cooldown.
     expect(store.cooldownFor('openrouter-opus', 'openrouter')).toMatchObject({ until: iso(T0 + MIN + HOUR), credit: true })
     now = T0 + 20 * MIN
-    store.reportRemainingCredit('openrouter', 0.7)
-    // A later pull above the lowest earlier post-event pull ends the cooldown.
+    store.reportRemainingCredit('openrouter', 11.01)
+    // A later pull above the lowest earlier post-event pull ends the cooldown at that pull's time.
     expect(store.cooldownFor('openrouter-opus', 'openrouter').until).toBeNull()
   })
 
