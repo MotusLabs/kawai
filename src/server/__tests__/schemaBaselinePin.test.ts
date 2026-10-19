@@ -26,7 +26,9 @@
 // (`integration-candidates`) the four integration tables and the
 // one-running-promotion index; migration 14
 // (`process-observation-indexes`) indexes `chat_turn_usage.ended_at` and
-// `profile_limit_events.at`.
+// `profile_limit_events.at`; migration 15 (`codex-chat-runtime`) the
+// creation-fixed `runtime` and `codex_home` plus the `transcript_path` on
+// `chat_sessions`.
 import { expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { initDatabase } from '../db'
@@ -347,9 +349,22 @@ test('a fresh database opened by this build has the same shape plus each migrati
   // the process-observations tables (in `added` above); migration 12's: limit
   // events record their provider and window (providers-and-workers D7), both
   // nullable, after the baseline columns; migration 14's: the `at` index here
-  // and the `ended_at` index on chat_turn_usage (in migration 6's delta).
+  // and the `ended_at` index on chat_turn_usage (in migration 6's delta);
+  // migration 15's (codex-chat-sessions 3.3): the creation-fixed runtime (NOT
+  // NULL DEFAULT 'claude') and, for Codex chats, the resolved home, plus the
+  // transcript path.
   const chats = expected.tables.chat_sessions!
-  const withFlag = { ...chats, columns: [...chats.columns, optional('context_exhausted_at'), optional('context_exhausted_reason')] }
+  const withFlag = {
+    ...chats,
+    columns: [
+      ...chats.columns,
+      optional('context_exhausted_at'),
+      optional('context_exhausted_reason'),
+      { name: 'runtime', type: 'TEXT', notnull: 1, dflt_value: "'claude'", pk: 0 },
+      optional('codex_home'),
+      optional('transcript_path'),
+    ],
+  }
   const limitEvents = expected.tables.profile_limit_events!
   const withLimitContext = {
     columns: [...limitEvents.columns, optional('provider_id'), optional('limit_window')],

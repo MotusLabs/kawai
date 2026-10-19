@@ -1,4 +1,5 @@
-// Debug view of one chat session's raw Claude Code protocol: captured frames in
+// Debug view of one chat session's raw agent protocol (Claude Code stream-json
+// or Codex app-server JSON-RPC): captured frames in
 // sequence order with direction, time, and type; each expands to pretty JSON
 // and copies its exact raw line. Runs of consecutive frames with the same
 // direction and type collapse into one group row that expands to the same
@@ -6,12 +7,12 @@
 // only while the user is scrolled to the bottom.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { SendClientMessage } from '@shared/types'
-import type { ChatWireFrame } from '@shared/chat'
+import type { ChatRuntime, ChatWireFrame } from '@shared/chat'
 import { useChatDebugStore, type ChatDebugView } from '../../stores/chatDebugStore'
 import { copyText } from '../../utils/copyText'
-import { DIRECTION_LABELS, frameLabel, frameTime, groupFrames, prettyFrame } from '../../utils/chatWireFrames'
+import { directionLabels, frameLabel, frameTime, groupFrames, prettyFrame } from '../../utils/chatWireFrames'
 
-const DIRECTION_STYLES: Record<keyof typeof DIRECTION_LABELS, string> = {
+const DIRECTION_STYLES: Record<ChatWireFrame['dir'], string> = {
   out: 'text-chat-wire-out',
   in: 'text-chat-wire-in',
   stderr: 'text-chat-wire-stderr',
@@ -26,13 +27,13 @@ const DIRECTION_STYLES: Record<keyof typeof DIRECTION_LABELS, string> = {
 const groupIsOpen = (members: readonly ChatWireFrame[], expanded: ReadonlySet<number>, groupExpanded: ReadonlySet<number>): boolean =>
   members.some(member => groupExpanded.has(member.seq) || expanded.has(member.seq))
 
-function FrameRow({ frame, open, onToggle }: {
-  frame: ChatWireFrame; open: boolean; onToggle: (seq: number) => void
+function FrameRow({ frame, open, onToggle, label }: {
+  frame: ChatWireFrame; open: boolean; onToggle: (seq: number) => void; label: string
 }) {
   return <div data-frame-seq={frame.seq} className="border-b border-border">
     <button className="flex w-full items-baseline gap-2 py-1 text-left hover:bg-elevated" aria-expanded={open}
       onClick={() => onToggle(frame.seq)}>
-      <span className={`w-16 shrink-0 ${DIRECTION_STYLES[frame.dir]}`}>{DIRECTION_LABELS[frame.dir]}</span>
+      <span className={`w-16 shrink-0 ${DIRECTION_STYLES[frame.dir]}`}>{label}</span>
       <span className="shrink-0 text-muted">{frameTime(frame)}</span>
       <span className="shrink-0 text-muted">#{frame.seq}</span>
       <span className="truncate">{frameLabel(frame)}</span>
@@ -44,8 +45,9 @@ function FrameRow({ frame, open, onToggle }: {
   </div>
 }
 
-export default function ChatDebugPanel({ sessionId, view, sendMessage, connected, onClose }: {
+export default function ChatDebugPanel({ sessionId, view, sendMessage, connected, onClose, runtime = 'claude' }: {
   sessionId: string; view: ChatDebugView; sendMessage: SendClientMessage; connected: boolean; onClose: () => void
+  runtime?: ChatRuntime
 }) {
   const list = useRef<HTMLDivElement>(null)
   const following = useRef(true)
@@ -55,6 +57,7 @@ export default function ChatDebugPanel({ sessionId, view, sendMessage, connected
   // the set keeps the group expanded as it grows.
   const [groupExpanded, setGroupExpanded] = useState<ReadonlySet<number>>(new Set())
   const entries = useMemo(() => groupFrames(view.frames), [view.frames])
+  const labels = useMemo(() => directionLabels(runtime), [runtime])
   const newestSeq = view.frames.at(-1)?.seq
   useEffect(() => {
     const element = list.current
@@ -125,7 +128,8 @@ export default function ChatDebugPanel({ sessionId, view, sendMessage, connected
         {view.awaitingOpen ? 'Loading…' : 'No protocol traffic recorded for this session yet.'}
       </p>}
       {entries.map(entry => entry.kind === 'frame'
-        ? <FrameRow key={entry.frame.seq} frame={entry.frame} open={expanded.has(entry.frame.seq)} onToggle={toggle} />
+        ? <FrameRow key={entry.frame.seq} frame={entry.frame} open={expanded.has(entry.frame.seq)} onToggle={toggle}
+            label={labels[entry.frame.dir]} />
         : (() => {
           const first = entry.frames[0]!
           const last = entry.frames.at(-1)!
@@ -133,7 +137,7 @@ export default function ChatDebugPanel({ sessionId, view, sendMessage, connected
           return <div key={`group-${first.seq}`} data-group-seq={first.seq} className="border-b border-border">
             <button className="flex w-full items-baseline gap-2 py-1 text-left hover:bg-elevated" aria-expanded={open}
               onClick={() => toggleGroup(entry.frames)}>
-              <span className={`w-16 shrink-0 ${DIRECTION_STYLES[entry.dir]}`}>{DIRECTION_LABELS[entry.dir]}</span>
+              <span className={`w-16 shrink-0 ${DIRECTION_STYLES[entry.dir]}`}>{labels[entry.dir]}</span>
               <span className="shrink-0 text-muted">{frameTime(first)}–{frameTime(last)}</span>
               <span className="shrink-0 text-muted">#{first.seq}–#{last.seq}</span>
               <span className="truncate">{entry.label} ×{entry.frames.length - entry.absorbed}</span>
@@ -143,7 +147,8 @@ export default function ChatDebugPanel({ sessionId, view, sendMessage, connected
               <button className="btn mb-1 text-xs"
                 onClick={() => copyText(entry.frames.map(member => member.raw).join('\n'))}>Copy all</button>
               {entry.frames.map(member =>
-                <FrameRow key={member.seq} frame={member} open={expanded.has(member.seq)} onToggle={toggle} />)}
+                <FrameRow key={member.seq} frame={member} open={expanded.has(member.seq)} onToggle={toggle}
+                  label={labels[member.dir]} />)}
             </div>}
           </div>
         })())}

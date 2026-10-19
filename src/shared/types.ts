@@ -34,6 +34,7 @@ import type {
   ChatNotification,
   ChatPendingRequest,
   ChatQuestionAnswer,
+  ChatRuntime,
   ChatUsageReport,
   ChatWireFrame,
   ChatWorker,
@@ -57,6 +58,7 @@ export type {
   ChatPendingRequest,
   ChatRequestOutcome,
   ChatRequestDecidedBy,
+  ChatRuntime,
   ChatApprovalPolicy,
   ChatApprovalDecision,
   ChatTurnResultSubtype,
@@ -139,6 +141,8 @@ export interface Session {
   claudeProfileId?: string
   /** Chat sessions only: approval policy; absent = manual (legacy sessions). */
   approvalPolicy?: ChatApprovalPolicy
+  /** Chat sessions only: the runtime fixed at the chat's creation (R1); absent = claude. */
+  runtime?: ChatRuntime
   /** Chat sessions only: who chose `name`; absent = manual (never overwritten). */
   nameSource?: ChatNameSource
   agentType?: AgentType

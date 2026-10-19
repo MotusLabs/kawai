@@ -29,7 +29,14 @@ export const PROFILE_ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/
 
 const MAX_ENV_ENTRIES = 32
 const MAX_ENV_VALUE_LENGTH = 4096
-const ENTRY_FIELDS = new Set(['label', 'model', 'executable', 'env', 'limitResetTimeZone'])
+/** Fields a `runtime: "codex"` entry may set (design D4, ruling R1). */
+const CODEX_ENTRY_FIELDS = new Set(['label', 'model', 'codexHome', 'network'])
+/** Fields a Claude entry may set: today's set (the implicit runtime). */
+const CLAUDE_ENTRY_FIELDS = new Set(['label', 'model', 'executable', 'env', 'limitResetTimeZone'])
+/** Claude-only fields, named specifically when they land on a Codex entry. */
+const CLAUDE_ONLY_FIELDS = new Set(['env', 'executable', 'limitResetTimeZone'])
+/** Codex-only fields, named specifically when they land on a Claude entry. */
+const CODEX_ONLY_FIELDS = new Set(['codexHome', 'network'])
 const CONTROLLED = new Set<string>(PROFILE_CONTROLLED_ENV)
 
 export interface PartialProfile {
@@ -38,6 +45,12 @@ export interface PartialProfile {
   model?: string
   executable?: string
   limitResetTimeZone?: string
+  /** The entry's runtime (ruling R1); absent reads as `claude`. */
+  runtime?: 'claude' | 'codex'
+  /** A Codex home the user-level catalog names; trusted tier only. */
+  codexHome?: string
+  /** Whether the Codex sandbox may reach the network; trusted tier only. */
+  network?: boolean
 }
 
 export type FileParse =
@@ -83,9 +96,28 @@ function validateEntry(
     return `${file}: profile "${id}" must be an object.`
   }
   const source = entry as Record<string, unknown>
+  // Two passes (D4): the runtime is read first, because the field allowlist
+  // depends on it. An absent runtime reads as `claude`, keeping today's
+  // entries valid unchanged.
+  if (source.runtime !== undefined && source.runtime !== 'claude' && source.runtime !== 'codex') {
+    return `${file}: profile "${id}" runtime must be "claude" or "codex".`
+  }
+  const runtime = source.runtime ?? 'claude'
+  const allowed = runtime === 'codex' ? CODEX_ENTRY_FIELDS : CLAUDE_ENTRY_FIELDS
   const profile: PartialProfile = { env: {} }
+  // An explicitly written runtime is preserved so the merger can tell it
+  // from an absent one: `runtime: "claude"` over a Codex profile is a
+  // conflict, while a runtime-neutral (label/model-only) overlay is not.
+  if (source.runtime !== undefined) profile.runtime = runtime
   for (const [field, value] of Object.entries(source)) {
-    if (!ENTRY_FIELDS.has(field)) {
+    if (field === 'runtime') continue
+    if (!allowed.has(field)) {
+      if (CLAUDE_ONLY_FIELDS.has(field)) {
+        return `${file}: profile "${id}" declares runtime "${runtime}"; field "${field}" belongs to Claude entries.`
+      }
+      if (CODEX_ONLY_FIELDS.has(field)) {
+        return `${file}: profile "${id}" declares runtime "${runtime}"; field "${field}" belongs to Codex entries.`
+      }
       return `${file}: profile "${id}" has unknown field "${field}".`
     }
     if (field === 'env') {
@@ -112,6 +144,29 @@ function validateEntry(
         return `${file}: profile "${id}" limitResetTimeZone must be an IANA time zone (Asia/Shanghai) or a ±HH:MM offset.`
       }
       profile.limitResetTimeZone = value
+      continue
+    }
+    if (field === 'codexHome') {
+      if (typeof value !== 'string' || !value.trim()) {
+        return `${file}: profile "${id}" codexHome must be a non-empty path string.`
+      }
+      if (!trusted) {
+        return `${file}: codexHome is allowed only in the user-level catalog (~/.kawai/profiles.json); this file is not operator-owned.`
+      }
+      if (!path.isAbsolute(value) && value !== '~' && !value.startsWith('~/')) {
+        return `${file}: profile "${id}" codexHome must be an absolute path or start with ~/.`
+      }
+      profile.codexHome = value
+      continue
+    }
+    if (field === 'network') {
+      if (!trusted) {
+        return `${file}: network is allowed only in the user-level catalog (~/.kawai/profiles.json); this file is not operator-owned.`
+      }
+      if (typeof value !== 'boolean') {
+        return `${file}: profile "${id}" network must be a boolean.`
+      }
+      profile.network = value
       continue
     }
     if (typeof value !== 'string' || !value.trim()) {
@@ -243,6 +298,11 @@ export function parseProviderCatalogValue(
         }
         const model: ParsedModel = { env: {} }
         for (const [modelField, modelFieldValue] of Object.entries(modelValue)) {
+          if (modelField === 'runtime') {
+            // Ruling R2: a Codex profile cannot be a model of a providers.json
+            // provider — runtimes live on profiles.json entries alone.
+            return { ok: false, error: `${source}: model "${modelKey}" of provider "${id}" cannot declare runtime; a Codex profile cannot be a model of a providers.json provider.` }
+          }
           if (!MODEL_FIELDS.has(modelField)) {
             return { ok: false, error: `${source}: model "${modelKey}" of provider "${id}" has unknown field "${modelField}".` }
           }

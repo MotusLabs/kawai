@@ -46,6 +46,10 @@ A catalog entry SHALL declare `runtime` as `claude` or `codex`, defaulting to `c
 - **WHEN** a project file defines `codex` as a Claude entry while the user-level catalog defines it as a Codex entry
 - **THEN** the project file is reported and the user-level Codex entry remains usable
 
+#### Scenario: A nearer providers.json claim never moves a key's origin
+- **WHEN** a project directory's `providers.json` lists a model key that a farther level (the shipped default, the user level, or the implicit `default`) defines as a Claude entry, and the same directory's `profiles.json` defines that key with `runtime: "codex"`
+- **THEN** that `profiles.json` is reported and the key stays a Claude profile
+
 ### Requirement: Codex homes and network are named only at the trusted tier
 A Codex entry SHALL use `~/.codex` (or the server's `CODEX_HOME`) as its Codex home unless a user-level catalog entry names another directory. `codexHome` and `network` are trusted-tier fields: like `executable`, only the shipped default and the user level SHALL set them. A catalog file below the user level that sets either SHALL be rejected with an actionable error identifying the file. The Codex home SHALL NOT be sent to browsers.
 
