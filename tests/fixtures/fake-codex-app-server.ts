@@ -66,6 +66,8 @@ const expectedOut = steps
   .filter(step => step.dir === 'out' && step.message.method !== undefined)
   .map(step => String(step.message.method))
 const sentRequests = new Set<unknown>()
+/** The client's request ids in arrival order, to correlate responses (N6). */
+const sentIds: unknown[] = []
 const replies = new Map<unknown, unknown>()
 const waiters: Array<{ ready: () => boolean; resume: () => void }> = []
 const checkWaiters = () => {
@@ -92,7 +94,10 @@ const onClientLine = (line: string) => {
       console.error(`fake-codex-app-server: expected client ${expected ?? '<end of run>'}, got ${String(message.method)}`)
       process.exit(2)
     }
-    if (message.id !== undefined) sentRequests.add(message.id)
+    if (message.id !== undefined) {
+      sentRequests.add(message.id)
+      sentIds.push(message.id)
+    }
   } else if (message.id !== undefined) {
     // A reply to a recorded server request; the waiting step consumes it.
     replies.set(message.id, message)
@@ -100,6 +105,7 @@ const onClientLine = (line: string) => {
   checkWaiters()
 }
 
+let responseOrdinal = 0
 ;(async () => {
   for (const step of steps) {
     if (step.dir !== 'in') continue
@@ -109,8 +115,18 @@ const onClientLine = (line: string) => {
       await waitFor(() => replies.has(message.id))
     } else if (message.method !== undefined) {
       emit(message) // notification, in order
-    } else {
+    } else if (message.id === undefined) {
       await waitFor(() => sentRequests.has(message.id)) // a response follows its request
+      emit(message)
+    } else {
+      // N6: correlate by position — a client id drift fails loudly (exit 2)
+      // instead of hanging until the test timeout.
+      const ordinal = responseOrdinal++
+      await waitFor(() => sentIds.length > ordinal)
+      if (sentIds[ordinal] !== message.id) {
+        console.error(`fake-codex-app-server: recorded response id ${String(message.id)} but the client's request #${ordinal} carried ${String(sentIds[ordinal])}`)
+        process.exit(2)
+      }
       emit(message)
     }
   }

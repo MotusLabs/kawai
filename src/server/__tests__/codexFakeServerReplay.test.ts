@@ -146,6 +146,40 @@ test('every recorded run replays through the client spawned via KAWAI_CODEX_PATH
   }
 })
 
+test('a client id drift fails loudly instead of hanging (N6)', async () => {
+  const transcript = path.join(tempDir, 'drift.jsonl')
+  fs.writeFileSync(transcript, [
+    JSON.stringify({ dir: 'out', line: JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'initialize', params: {} }) }),
+    JSON.stringify({ dir: 'in', line: JSON.stringify({ id: 7, result: {} }) }),
+  ].join('\n') + '\n')
+  const executable = resolveCodexExecutable({ KAWAI_CODEX_PATH: FAKE, PATH: process.env.PATH })
+  if (!executable) throw new Error('the fake was not resolved through KAWAI_CODEX_PATH')
+  const client = new AppServerClient({
+    executable,
+    env: { PATH: process.env.PATH ?? '/usr/bin:/bin', FAKE_RUN: '1', FAKE_TRANSCRIPT: transcript },
+    wire: { record: () => {} },
+    onNotification: () => {},
+    onServerRequest: async () => ({}),
+    onExit: () => {},
+  })
+  client.start()
+  try {
+    // The client's first request carries id 1; the transcript's response is
+    // recorded for id 7 — the fake must exit 2, not wait forever. The exit
+    // also rejects the pending request.
+    try {
+      await client.request('initialize', {})
+      throw new Error('expected the drift exit to reject the pending request')
+    } catch (error) {
+      expect((error as Error).message).toContain('request 1 pending')
+    }
+    await client.whenExited()
+  } finally {
+    client.end()
+  }
+  expect(client.exit).toEqual({ code: 2, signal: null })
+}, 10_000)
+
 test('the replay carries the recorded shapes: thread ids, tool calls, approvals, questions', async () => {
   const replays: Array<Awaited<ReturnType<typeof replayRun>>> = []
   for (let index = 1; index <= runs.length; index++) replays.push(await replayRun(index))

@@ -42,11 +42,22 @@ export interface AppServerClientOptions {
   onExit(exit: AppServerExit): void
   /** SIGTERM → SIGKILL escalation delay for end(); default 3 000 ms. */
   killGraceMs?: number
+  /**
+   * Per-request deadline in ms (N5): a hung child that never answers —
+   * initialize included — fails that request instead of blocking forever.
+   * Default 30 000; 0 disables.
+   */
+  requestTimeoutMs?: number
 }
+
+/** Default per-request deadline (N5). */
+const REQUEST_TIMEOUT_MS = 30_000
 
 interface PendingRequest {
   resolve: (result: unknown) => void
   reject: (error: Error) => void
+  /** The request's deadline timer (N5); cleared when the request settles. */
+  timer?: NodeJS.Timeout
 }
 
 interface JsonRpcMessage {
@@ -67,6 +78,12 @@ export class AppServerClient {
   private killTimer: NodeJS.Timeout | null = null
   /** Last stderr line, so a failing exit's reason names what the child said. */
   private lastStderr = ''
+  // N5: the exit settles only once the stdio streams have closed too —
+  // 'exit' can precede the final stdout flush, which would cut a last
+  // notification or response off before it is routed.
+  private exitFacts: AppServerExit | null = null
+  private stdoutClosed = false
+  private stderrClosed = false
 
   constructor(private readonly options: AppServerClientOptions) {}
 
@@ -102,26 +119,44 @@ export class AppServerClient {
       this.options.wire.record('lifecycle', JSON.stringify({ event: 'error', message: error.message }))
       this.settleExit({ code: null, signal: null })
     })
-    child.on('exit', (code, signal) => this.settleExit({ code, signal }))
+    child.on('exit', (code, signal) => {
+      this.exitFacts = { code, signal }
+      this.settleWhenClosed()
+    })
     child.stdin?.on('error', () => {
       // EPIPE after the child died: the exit handler rejects the pending
       // requests; the write failure itself has nowhere better to go.
     })
     const inLines = createLineSplitter(line => this.onLine(line))
     child.stdout?.on('data', chunk => inLines.write(chunk as Buffer))
-    child.stdout?.on('close', () => inLines.end())
+    child.stdout?.on('close', () => {
+      this.stdoutClosed = true
+      inLines.end()
+      this.settleWhenClosed()
+    })
     const errLines = createLineSplitter((line) => {
       if (line.trim()) this.lastStderr = line
       this.options.wire.record('stderr', line)
     })
     child.stderr?.on('data', chunk => errLines.write(chunk as Buffer))
-    child.stderr?.on('close', () => errLines.end())
+    child.stderr?.on('close', () => {
+      this.stderrClosed = true
+      errLines.end()
+      this.settleWhenClosed()
+    })
+  }
+
+  /** Settle the exit only when the streams have drained (N5). */
+  private settleWhenClosed(): void {
+    if (this.exitInfo || !this.exitFacts || !this.stdoutClosed || !this.stderrClosed) return
+    this.settleExit(this.exitFacts)
   }
 
   /**
    * Send one request and resolve with its response `result`; rejects with
-   * the response `error`, or when the child exits with the request pending.
-   * No timeout here: turn and call deadlines are the driver's concern.
+   * the response `error`, when the child exits with the request pending, or
+   * at the request deadline (N5) — a hung child fails the request instead of
+   * blocking a turn forever.
    */
   request(method: string, params?: Record<string, unknown>): Promise<unknown> {
     if (this.exitInfo) {
@@ -129,7 +164,17 @@ export class AppServerClient {
     }
     const id = this.nextId++
     return new Promise<unknown>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject })
+      const entry: PendingRequest = { resolve, reject }
+      const timeoutMs = this.options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS
+      if (timeoutMs > 0) {
+        const timer = setTimeout(() => {
+          this.pending.delete(id)
+          reject(new Error(`Codex app-server request ${id} (${method}) timed out after ${timeoutMs} ms with no response`))
+        }, timeoutMs)
+        timer.unref?.()
+        entry.timer = timer
+      }
+      this.pending.set(id, entry)
       this.write({ jsonrpc: '2.0', id, method, ...(params !== undefined ? { params } : {}) })
     })
   }
@@ -236,10 +281,24 @@ export class AppServerClient {
   }
 
   private settleResponse(message: JsonRpcMessage): void {
+    // An error whose id is null (a parse-level failure) names no request:
+    // the transport is broken, so every pending request fails (N5,
+    // fail-closed) instead of hanging until their deadlines.
+    if (message.id === null) {
+      if (message.error === undefined) return
+      const error = new Error(`Codex app-server reported an uncorrelated error: ${JSON.stringify(message.error)}`)
+      for (const [, entry] of this.pending) {
+        if (entry.timer) clearTimeout(entry.timer)
+        entry.reject(error)
+      }
+      this.pending.clear()
+      return
+    }
     if (typeof message.id !== 'number') return
     const entry = this.pending.get(message.id)
     if (!entry) return
     this.pending.delete(message.id)
+    if (entry.timer) clearTimeout(entry.timer)
     if (message.error !== undefined) {
       entry.reject(new Error(`request ${message.id} failed: ${JSON.stringify(message.error)}`))
     } else {
@@ -257,6 +316,7 @@ export class AppServerClient {
     this.options.wire.record('lifecycle', JSON.stringify({ event: 'exit', code: exit.code, signal: exit.signal }))
     const reason = this.lastStderr ? ` (last stderr: ${this.lastStderr})` : ''
     for (const [id, entry] of this.pending) {
+      if (entry.timer) clearTimeout(entry.timer)
       entry.reject(new Error(`Codex app-server exited ${describeExit(exit)} with request ${id} pending${reason}`))
     }
     this.pending.clear()

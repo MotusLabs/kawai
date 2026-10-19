@@ -58,6 +58,29 @@ const handle = (line) => {
     case 'error':
       out({ id, error: { code: -32000, message: 'nope' } })
       break
+    case 'hang':
+      break // never answers: the request deadline decides
+    case 'null-error':
+      // A parse-level failure names no request: id null.
+      out({ id: null, error: { code: -32700, message: 'parse error' } })
+      break
+    case 'pgid': {
+      // /proc/self/stat: pid (comm) state ppid pgrp — pgrp is field 5.
+      const stat = require('node:fs').readFileSync('/proc/self/stat', 'utf8')
+      const pgrp = Number(stat.slice(stat.lastIndexOf(')') + 2).trim().split(' ')[2])
+      out({ id, result: { pid: process.pid, pgrp } })
+      break
+    }
+    case 'garbage':
+      process.stdout.write('<!doctype html>\\n')
+      out({ id, result: {} })
+      break
+    case 'flush-exit':
+      // Answers and exits at once: the exit races the final flush, and the
+      // client must still drain the response before it settles the exit.
+      out({ id, result: {} })
+      process.exit(0)
+      break
     default:
       out({ id, result: { method: message.method, sawAppServerArg: process.argv.includes('app-server'), receivedParams: message.params ?? null } })
   }
@@ -104,7 +127,7 @@ afterEach(() => {
 
 const startClient = (
   mode: string,
-  overrides: Partial<Pick<AppServerClientOptions, 'onServerRequest' | 'killGraceMs'>> = {},
+  overrides: Partial<Pick<AppServerClientOptions, 'onServerRequest' | 'killGraceMs' | 'requestTimeoutMs'>> = {},
 ) => {
   const wire = recordingWire()
   const notifications: Array<{ method: string; params: Record<string, unknown> }> = []
@@ -117,6 +140,7 @@ const startClient = (
     onServerRequest: overrides.onServerRequest ?? (async () => ({})),
     onExit: exit => exits.push(exit),
     killGraceMs: overrides.killGraceMs ?? 200,
+    requestTimeoutMs: overrides.requestTimeoutMs,
   })
   client.start()
   clients.push(client)
@@ -256,6 +280,61 @@ test('every line crosses the wire recorder, with spawn and exit lifecycle frames
   const lifecycleExit = wire.frames.filter(frame => frame.dir === 'lifecycle').at(-1)!
   expect(JSON.parse(lifecycleExit.line)).toMatchObject({ event: 'exit' })
 })
+
+test('a request without a response times out naming the method (N5)', async () => {
+  const { client } = startClient('hang', { requestTimeoutMs: 120 })
+  try {
+    await client.request('thread/start')
+    throw new Error('expected the timeout')
+  } catch (error) {
+    expect((error as Error).message).toContain('thread/start')
+    expect((error as Error).message).toContain('timed out after 120 ms')
+  }
+}, 5_000)
+
+test('an error with id null rejects every pending request (N5)', async () => {
+  const { client } = startClient('null-error', { requestTimeoutMs: 0 })
+  const first = client.request('a')
+  const second = client.request('b')
+  const settled = await Promise.allSettled([first, second])
+  expect(settled.map(outcome => outcome.status)).toEqual(['rejected', 'rejected'])
+  for (const outcome of settled) {
+    expect((outcome as PromiseRejectedResult).reason.message).toContain('-32700')
+    expect((outcome as PromiseRejectedResult).reason.message).toContain('uncorrelated')
+  }
+  // Nothing stays pending: a later exit has nothing to reject.
+  expect(client.exit).toBeNull()
+}, 5_000)
+
+test('the child leads its own process group, so end() reaches helper grandchildren (N5)', async () => {
+  const { client } = startClient('pgid')
+  const result = await client.request('x') as { pid: number; pgrp: number }
+  // Detached spawn: the child is its own group leader. A detached:false
+  // mutant shares the test runner's group and fails here.
+  expect(result.pgrp).toBe(result.pid)
+}, 5_000)
+
+test('a non-JSON line is recorded raw and never dispatched (N5)', async () => {
+  const { client, wire, notifications } = startClient('garbage')
+  await client.request('x')
+  const raw = wire.frames.find(frame => frame.dir === 'in' && frame.line.startsWith('<!doctype'))
+  expect(raw).toBeDefined()
+  expect(notifications).toEqual([])
+}, 5_000)
+
+test('a response that lands as the child exits still resolves, and stdout drains before the exit settles (N5)', async () => {
+  const { client, wire } = startClient('flush-exit')
+  // The exit settles only after the streams close, so the response is
+  // dispatched and every 'in' frame is recorded before the lifecycle exit.
+  const result = await client.request('x')
+  expect(result).toEqual({})
+  await client.whenExited()
+  expect(client.exit).toEqual({ code: 0, signal: null })
+  const inRecord = wire.frames.findIndex(frame => frame.dir === 'in')
+  const exitRecord = wire.frames.findIndex(frame => frame.dir === 'lifecycle' && frame.line.includes('"event":"exit"'))
+  expect(inRecord).toBeGreaterThanOrEqual(0)
+  expect(exitRecord).toBeGreaterThan(inRecord)
+}, 5_000)
 
 test('initialize sends clientInfo and the experimental capability', async () => {
   const { client } = startClient('echo')
