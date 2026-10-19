@@ -8,6 +8,7 @@ import { execFileSync, spawnSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { immediateTransactions } from './immediateTransactions'
 import { cleanGitEnv } from '../../../src/server/git/gitCommand'
 
 function git(args: string[], cwd?: string) {
@@ -114,7 +115,7 @@ export function seedResult(taskId: string, session: string, worktree: string | n
     import { Database } from 'bun:sqlite';
     import { TaskResultStore } from './src/server/team/taskResultStore';
     const [file, taskId, session, worktree] = JSON.parse(await Bun.stdin.text());
-    const db = new Database(file); db.exec('PRAGMA busy_timeout = 5000');
+    const db = new Database(file); db.exec('PRAGMA busy_timeout = 5000'); ${immediateTransactions('db')}
     const task = db.query('SELECT id, team_id, revision FROM team_tasks WHERE id = ?').get(taskId);
     const result = new TaskResultStore(db).insert({ teamId: task.team_id, taskId: task.id, summary: 'CSV export', commit: 'abc1234', diff: null,
       worktree, tests: [{ description: 'bun run test', outcome: 'pass' }], limitations: null, taskRevision: task.revision,

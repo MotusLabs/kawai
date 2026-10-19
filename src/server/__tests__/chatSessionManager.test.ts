@@ -81,8 +81,12 @@ async function managedManager(options: ConstructorParameters<typeof ChatSessionM
   testManagers.add(manager)
   return manager
 }
+/** Stops each manager's timers: a leaked observation tick would warn into later files' logger spies. */
 function closeDispatchers() {
-  for (const manager of testManagers) manager.dispatcher.close()
+  for (const manager of testManagers) {
+    manager.dispatcher.close()
+    manager.observations.stop()
+  }
 }
 afterEach(() => {
   closeDispatchers()

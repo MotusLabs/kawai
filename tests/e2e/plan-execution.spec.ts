@@ -15,6 +15,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { immediateTransactions } from './support/immediateTransactions'
 import { initPlanRepository, validateUntilReady } from './fixtures/planWalkthrough'
 
 test.skip(process.env.AGENTBOARD_CHAT_FIXTURE !== '1', 'Requires development chat fixture')
@@ -57,7 +58,7 @@ function seedPlan(root: string): void {
     import { resolveTeam } from './src/server/team/teamIdentity';
     import { normalizePlanContent } from './src/shared/plans';
     const sessions = initDatabase({ path: ${JSON.stringify(dbPath)} });
-    sessions.db.exec('PRAGMA busy_timeout = 5000');
+    sessions.db.exec('PRAGMA busy_timeout = 5000'); ${immediateTransactions('sessions.db')}
     const plans = new PlanStore(sessions.db);
     const teamId = (await resolveTeam(${JSON.stringify(root)})).teamId;
     const planId = plans.insertPlan({ teamId, title: 'Execution walkthrough', creator: { kind: 'human', sessionId: null } });
@@ -93,7 +94,7 @@ function submitRound(root: string, mode: 'result' | 'findings', implementer: str
     try {
       const [file, root, mode, implementer, reviewer] = JSON.parse(await Bun.stdin.text());
       const sessions = initDatabase({ path: file });
-      sessions.db.exec('PRAGMA busy_timeout = 5000');
+      sessions.db.exec('PRAGMA busy_timeout = 5000'); ${immediateTransactions('sessions.db')}
       const db = sessions.db;
       const core = composeExecutionCore(db);
       const mail = new MailboxStore(db);
@@ -148,7 +149,7 @@ async function pollExecution(root: string, until: string): Promise<boolean> {
     import { initDatabase } from './src/server/db';
     import { ExecutionStore } from './src/server/plans/execution/executionStore';
     const sessions = initDatabase({ path: ${JSON.stringify(dbPath)} });
-    sessions.db.exec('PRAGMA busy_timeout = 5000');
+    sessions.db.exec('PRAGMA busy_timeout = 5000'); ${immediateTransactions('sessions.db')}
     const db = sessions.db;
     const store = new ExecutionStore(sessions.db);
     const out = [];
@@ -256,7 +257,7 @@ test('a plan without an execution shows the empty state with the Start dialog', 
       import { resolveTeam } from './src/server/team/teamIdentity';
       import { normalizePlanContent } from './src/shared/plans';
       const sessions = initDatabase({ path: ${JSON.stringify(dbPath)} });
-      sessions.db.exec('PRAGMA busy_timeout = 5000');
+      sessions.db.exec('PRAGMA busy_timeout = 5000'); ${immediateTransactions('sessions.db')}
       const plans = new PlanStore(sessions.db);
       const teamId = (await resolveTeam(${JSON.stringify(root)})).teamId;
       const planId = plans.insertPlan({ teamId, title: 'No execution yet', creator: { kind: 'human', sessionId: null } });

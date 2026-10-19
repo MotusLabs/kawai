@@ -14,6 +14,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { immediateTransactions } from './support/immediateTransactions'
 
 test.skip(process.env.AGENTBOARD_CHAT_FIXTURE !== '1', 'Requires development chat fixture')
 
@@ -88,7 +89,7 @@ function workAndRead(root: string, ids: { lead: string; dev: string; rev1: strin
     import { formatValue } from './src/client/components/team/metrics/metricFormat';
     const [file, root, ids] = JSON.parse(await Bun.stdin.text());
     const sessions = initDatabase({ path: file });
-    sessions.db.exec('PRAGMA busy_timeout = 5000');
+    sessions.db.exec('PRAGMA busy_timeout = 5000'); ${immediateTransactions('sessions.db')}
     const deps = { getSession: id => sessions.getChatSession(id) };
     const mail = new MailboxStore(sessions.db);
     const tasks = new TaskService(new TaskStore(sessions.db, mail, new AssignmentStore(sessions.db, mail)), deps);
