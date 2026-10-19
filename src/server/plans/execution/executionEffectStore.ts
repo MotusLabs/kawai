@@ -7,6 +7,9 @@ import type { Database } from 'bun:sqlite'
 import type { EffectKind } from '../../../shared/planExecution'
 import { mapEffect, type EffectRow } from './executionRows'
 
+/** The states an effect write may still change: a settled effect (done, failed, cancelled) stays settled (O3). */
+const OPEN = "state IN ('pending', 'running', 'unknown')"
+
 export class ExecutionEffectStore {
   constructor(readonly db: Database, protected readonly now: () => Date = () => new Date()) {}
 
@@ -56,20 +59,22 @@ export class ExecutionEffectStore {
       .map(mapEffect)
   }
 
-  markEffectRunning(id: string): void {
-    this.db.prepare("UPDATE plan_execution_effects SET state = 'running', started_at = COALESCE(started_at, ?) WHERE id = ?").run(this.iso(), id)
+  /** Marks an open effect running; false when it had already settled (O3) — the runner then never calls the adapter. */
+  markEffectRunning(id: string): boolean {
+    const result = this.db.prepare(`UPDATE plan_execution_effects SET state = 'running', started_at = COALESCE(started_at, ?) WHERE id = ? AND ${OPEN}`).run(this.iso(), id)
+    return result.changes === 1
   }
 
-  /** Commit a settled outcome (done, failed, unknown, cancelled) with its facts. */
+  /** Commit a settled outcome (done, failed, unknown, cancelled) with its facts; a settled row is never rewritten. */
   setEffectOutcome(id: string, outcome: { state: 'done' | 'failed' | 'unknown' | 'cancelled'; outcome?: unknown; error?: string | null }): void {
-    this.db.prepare(`UPDATE plan_execution_effects SET state = ?, outcome_json = ?, error = ?, finished_at = ? WHERE id = ?`).run(
+    this.db.prepare(`UPDATE plan_execution_effects SET state = ?, outcome_json = ?, error = ?, finished_at = ? WHERE id = ? AND ${OPEN}`).run(
       outcome.state, outcome.outcome === undefined ? null : JSON.stringify(outcome.outcome), outcome.error ?? null, this.iso(), id,
     )
   }
 
   /** A transient failure goes back to pending, one try counted, retrying at `nextAt` (D14's backoff). */
   scheduleEffectRetry(id: string, nextAt: string, error: string | null): void {
-    this.db.prepare(`UPDATE plan_execution_effects SET state = 'pending', tries = tries + 1, next_at = ?, error = ? WHERE id = ?`).run(nextAt, error, id)
+    this.db.prepare(`UPDATE plan_execution_effects SET state = 'pending', tries = tries + 1, next_at = ?, error = ? WHERE id = ? AND ${OPEN}`).run(nextAt, error, id)
   }
 
   /** Stop cancels every pending effect of the execution (D12). */
@@ -111,11 +116,21 @@ export class ExecutionEffectStore {
 
   /** An inspection that found the work not done puts the effect back to pending, to run again (D14). */
   resetEffect(id: string): void {
-    this.db.prepare("UPDATE plan_execution_effects SET state = 'pending', next_at = NULL WHERE id = ?").run(id)
+    this.db.prepare(`UPDATE plan_execution_effects SET state = 'pending', next_at = NULL WHERE id = ? AND ${OPEN}`).run(id)
+  }
+
+  /**
+   * The human Retry's reset after an `effect-unknown` stop: the one writer a
+   * settled row obeys. Only a `failed` row re-opens — done and cancelled stay
+   * settled — and it is synchronous, in the retry's own transaction, never a
+   * late write after an await (O3).
+   */
+  retryFailedEffect(id: string): void {
+    this.db.prepare(`UPDATE plan_execution_effects SET state = 'pending', next_at = NULL WHERE id = ? AND state = 'failed'`).run(id)
   }
 
   /** An undecidable inspection stays `unknown`, one try counted, retrying at `nextAt` (D14). */
   scheduleInspectionRetry(id: string, nextAt: string, error: string | null): void {
-    this.db.prepare("UPDATE plan_execution_effects SET state = 'unknown', tries = tries + 1, next_at = ?, error = ? WHERE id = ?").run(nextAt, error, id)
+    this.db.prepare(`UPDATE plan_execution_effects SET state = 'unknown', tries = tries + 1, next_at = ?, error = ? WHERE id = ? AND ${OPEN}`).run(nextAt, error, id)
   }
 }

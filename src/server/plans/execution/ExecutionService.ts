@@ -293,7 +293,7 @@ export class ExecutionService {
       if (row.stopReason === 'effect-unknown') {
         const failed = this.deps.store.effectsOf(input.executionId)
           .find(effect => effect.change === input.change && effect.state === 'failed')
-        if (failed !== undefined) this.deps.store.resetEffect(failed.id)
+        if (failed !== undefined) this.deps.store.retryFailedEffect(failed.id)
       }
       return { change: input.change }
     })

@@ -5,8 +5,12 @@
 // the outcome (D14's rule, `effectOutcome.ts`), and commit — success as
 // `done` with its follow-on transition left to the caller, transient
 // failures back to `pending` under the 30 s / 2 m / 10 m backoff and failed
-// after three tries, permanent failures `failed` at once. Stop cancels the
-// pending rows; a cancelled effect is never run. The runner reaches its
+// after three tries, permanent failures `failed` at once. A settled effect —
+// done, failed, or cancelled — never changes state again (O3): every state
+// write touches only open rows, and the adapter runs only when marking the
+// effect running took, so a Cancel or finish that settles a due effect
+// mid-batch wins. Stop cancels the pending rows; a cancelled effect is never
+// run. The runner reaches its
 // table only through `EffectQueue` (integration-candidates D3): the
 // execution store is one queue, over `plan_execution_effects`, and the
 // promotion effect store is another, over `plan_promotion_effects`.
@@ -34,7 +38,8 @@ export interface QueuedEffect {
  */
 export interface EffectQueue<R extends QueuedEffect = EffectRow> {
   dueEffects(teamId: string, now: string): R[]
-  markEffectRunning(id: string): void
+  /** Whether the mark took: true only when the row was still open to change (O3). */
+  markEffectRunning(id: string): boolean
   setEffectOutcome(id: string, outcome: { state: 'done' | 'failed' | 'unknown' | 'cancelled'; outcome?: unknown; error?: string | null }): void
   scheduleEffectRetry(id: string, nextAt: string, error: string | null): void
   effect(id: string): R | null
@@ -67,24 +72,24 @@ class EffectTimeout extends Error {}
 export class EffectRunner<R extends QueuedEffect = EffectRow> {
   constructor(private readonly deps: EffectRunnerDeps<R>) {}
 
-  /** Run every due pending effect of the team, one at a time (D14). */
-  /** Run the team's due effects; the count run, so a caller knows whether a step settled. */
+  /** Run the team's due effects one at a time (D14); the count actually run — an effect settled mid-batch is skipped, not counted. */
   async runDue(teamId: string): Promise<number> {
     const due = this.deps.store.dueEffects(teamId, this.iso())
+    let ran = 0
     for (const effect of due) {
-      await this.runOne(effect)
+      if (await this.runOne(effect)) ran++
     }
-    return due.length
+    return ran
   }
 
-  /** One effect's cycle: running → call → committed outcome. */
-  async runOne(effect: R): Promise<void> {
-    this.deps.store.markEffectRunning(effect.id)
+  /** One effect's cycle: running → call → committed outcome; false when the row had already settled, so the adapter never ran. */
+  async runOne(effect: R): Promise<boolean> {
+    if (!this.deps.store.markEffectRunning(effect.id)) return false
     const result = await this.call(effect)
     if (result.ok) {
       this.deps.store.setEffectOutcome(effect.id, { state: 'done', outcome: result.outcome })
       this.deps.onDone?.(this.deps.store.effect(effect.id)!, result.outcome)
-      return
+      return true
     }
     const message = ('stderr' in result.error ? result.error.stderr : result.error.message).trim() || 'the effect failed'
     if (classifyEffectFailure(result.error) === 'transient') {
@@ -92,11 +97,12 @@ export class EffectRunner<R extends QueuedEffect = EffectRow> {
       const backoffs = this.deps.backoffsMs ?? DEFAULT_BACKOFFS_MS
       if (fresh.tries < backoffs.length) {
         this.deps.store.scheduleEffectRetry(effect.id, new Date(this.now().getTime() + backoffs[fresh.tries]!).toISOString(), message)
-        return
+        return true
       }
     }
     this.deps.store.setEffectOutcome(effect.id, { state: 'failed', error: message })
     this.deps.onFailed?.(this.deps.store.effect(effect.id)!, { message, transient: false })
+    return true
   }
 
   private async call(effect: R): Promise<EffectCallResult> {

@@ -141,9 +141,11 @@ export class PromotionEffectStore implements EffectQueue<PromotionEffectRow> {
       .map(mapEffect)
   }
 
-  markEffectRunning(id: string): void {
-    this.db.prepare("UPDATE plan_promotion_effects SET state = 'running', started_at = COALESCE(started_at, ?) WHERE id = ?").run(this.iso(), id)
+  /** Marks an open effect running; false when it had already settled (O3) — the runner then never calls the adapter. */
+  markEffectRunning(id: string): boolean {
+    const result = this.db.prepare(`UPDATE plan_promotion_effects SET state = 'running', started_at = COALESCE(started_at, ?) WHERE id = ? AND ${OPEN}`).run(this.iso(), id)
     this.effectChanged(id)
+    return result.changes === 1
   }
 
   /**

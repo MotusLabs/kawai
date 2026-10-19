@@ -114,15 +114,20 @@ describe('the promotion effect queue', () => {
   test('a finished promotion gets no zombie pending or unknown row; its close-pr stays due (O3)', async () => {
     const running = promotion('plan-1')
     const update = store.insertEffect({ promotionId: running.id, kind: 'update-branch', effectKey: 'p1:update', command: {} })
-    const close = store.insertEffect({ promotionId: running.id, kind: 'close-pr', effectKey: 'p1:close', command: {} })
     // The update-branch call is in flight (running, so the finish's sweep leaves it) when the promotion finishes; then it fails transiently.
     results = [{ ok: false, error: { argv: ['gh'], exitCode: 1, httpStatus: 502, message: 'Server Error' } }]
+    let closeId: string | undefined
     const queue = new EffectRunner<PromotionEffectRow>({
       store,
       adapter: {
         call: async effect => {
           calls.push(effect.effectKey)
-          if (effect.id === update.id) { store.finishPromotion(running.id, 'cancelled'); store.cancelPromotionEffects(running.id) }
+          if (effect.id === update.id) {
+            // The finish's own sequence (promotionFinish): sweep pending and unknown, then queue close-pr.
+            store.finishPromotion(running.id, 'cancelled')
+            store.cancelPromotionEffects(running.id)
+            closeId = store.insertEffect({ promotionId: running.id, kind: 'close-pr', effectKey: `promo:${running.id}:close-pr`, command: {} }).id
+          }
           return results[0]!
         },
       },
@@ -130,11 +135,17 @@ describe('the promotion effect queue', () => {
       now: () => new Date(clock),
     })
     await queue.runDue(TEAM)
-    expect(calls).toEqual(['p1:update', 'p1:close'])
+    expect(calls).toEqual(['p1:update'])
     expect(store.effect(update.id)!.state).toBe('cancelled')
-    expect(store.effect(close.id)).toMatchObject({ state: 'pending', tries: 1 })
+    expect(store.effect(closeId!)).toMatchObject({ state: 'pending', tries: 0 })
+    // The next pass runs the finish's close-pr; its transient failure retries, and the retry survives the sweep.
+    await queue.runDue(TEAM)
+    expect(calls).toHaveLength(2)
+    expect(calls[0]).toBe('p1:update')
+    expect(calls[1]!.startsWith('promo:')).toBe(true)
+    expect(store.effect(closeId!)).toMatchObject({ state: 'pending', tries: 1 })
     clock += 600_000
-    expect(store.dueEffects(TEAM, new Date(clock).toISOString()).map(row => row.id)).toEqual([close.id])
+    expect(store.dueEffects(TEAM, new Date(clock).toISOString()).map(row => row.id)).toEqual([closeId!])
     // An unknown row of a finished promotion is never inspected, and a reset of one is cancelled, not reopened.
     const stale = store.insertEffect({ promotionId: running.id, kind: 'merge', effectKey: 'p1:merge', command: {} })
     store.markEffectRunning(stale.id)
@@ -142,5 +153,32 @@ describe('the promotion effect queue', () => {
     expect(store.dueUnknownEffects(TEAM, new Date(clock).toISOString()).map(row => row.id)).toEqual([])
     store.resetEffect(stale.id)
     expect(store.effect(stale.id)!.state).toBe('cancelled')
+  })
+
+  // The final review's probe (F1): runDue snapshots two due effects; a Cancel
+  // lands while the first runs; the second must stay cancelled and its
+  // adapter must never be called — markEffectRunning does not revive it.
+  test('a Cancel between two due effects is not undone by markEffectRunning (F1)', async () => {
+    const cancelled = promotion('plan-2')
+    const merge = store.insertEffect({ promotionId: promotion('plan-1').id, kind: 'merge', effectKey: 'p1:merge', command: {} })
+    store.insertEffect({ promotionId: cancelled.id, kind: 'create-promotion-branch', effectKey: 'p2:branch', command: {} })
+    const queue = new EffectRunner<PromotionEffectRow>({
+      store,
+      adapter: {
+        call: async effect => {
+          calls.push(effect.effectKey)
+          if (effect.id === merge.id) {
+            // The human Cancels plan-2's promotion while the merge runs: the sweep settles p2's pending effect.
+            store.finishPromotion(cancelled.id, 'cancelled')
+            store.cancelPromotionEffects(cancelled.id)
+          }
+          return { ok: true, outcome: null }
+        },
+      },
+      now: () => new Date(clock),
+    })
+    await queue.runDue(TEAM)
+    expect(calls).toEqual(['p1:merge'])
+    expect(store.effectByKey('p2:branch')!.state).toBe('cancelled')
   })
 })
