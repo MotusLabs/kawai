@@ -117,7 +117,7 @@ Implement after `plan-execution` has landed on master, together with what it bui
   - progress marks two of three landed changes as promoted;
   - every control disables while disconnected.
   - Verified: `src/client/__tests__/planIntegrationUi.test.tsx` (the six clauses plus the promotion row's CI flaky marks and Cancel reason; dropping the running-execution guard or the promoted mark fails it) and `integrationAgentSurface.test.ts` (the promotion's CI view).
-- [ ] 8.3 Add a browser walkthrough `tests/e2e/plan-integration.spec.ts` with the fixture adapter, named in `.github/workflows/ci.yml`. Verify by running it alone on a spare `E2E_PORT` after `bun run build`, then checking that `curl http://localhost:4040/` still answers.
+- [x] 8.3 Add a browser walkthrough `tests/e2e/plan-integration.spec.ts` with the fixture adapter, named in `.github/workflows/ci.yml`. Verify by running it alone on a spare `E2E_PORT` after `bun run build`, then checking that `curl http://localhost:4040/` still answers. — Verified: `tests/e2e/plan-integration.spec.ts` › `a change lands on the integration branch and Promote merges it into master` (Start creates the branch on the fixture's bare origin, the round lands as a candidate while master stays, Promote pins the head and merges with a two-parent merge commit, the candidate reads promoted), on the fixture adapters of L2; passed alone in a disposable checkout after `bun run build` with `E2E_PORT=4189` (as did `tests/e2e/plan-execution.spec.ts`, 2/2), and `curl http://localhost:4040/` answered 200. Named in the CI fixture step; `.github/workflows/ci.yml` parses with `Bun.YAML.parse`, its spec set being master's plus this one.
 
 ## 9. Integration checks
 
