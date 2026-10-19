@@ -24,3 +24,11 @@ CREATE TABLE process_live_observations (session_id TEXT PRIMARY KEY, state TEXT 
 CREATE TABLE process_export_totals (family TEXT NOT NULL, labels TEXT NOT NULL, bucket TEXT NOT NULL, value REAL NOT NULL, PRIMARY KEY(family, labels, bucket));
 CREATE TABLE process_export_aliases (dimension TEXT NOT NULL, original TEXT NOT NULL, alias TEXT NOT NULL, PRIMARY KEY(dimension, original));
 `
+
+// Migration 13: the reconciler finds unrecorded usage and limit rows by a
+// NOT EXISTS scan ordered by their time; these indexes let SQLite walk that
+// order instead of sorting the whole table on every pass.
+export const CREATE_OBSERVATION_SOURCE_INDEXES_SQL = `
+CREATE INDEX chat_turn_usage_ended ON chat_turn_usage(ended_at);
+CREATE INDEX profile_limit_events_at ON profile_limit_events(at);
+`

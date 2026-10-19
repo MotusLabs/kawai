@@ -21,7 +21,9 @@
 // outbound audit tables below; migration 10 (`context-exhausted`) the two
 // `chat_sessions` flag columns and the exhaustion episode table; migration
 // 11 (`provider-limit-window`) adds the nullable `provider_id` and
-// `limit_window` to `profile_limit_events`.
+// `limit_window` to `profile_limit_events`; migration 13
+// (`process-observation-indexes`) indexes `chat_turn_usage.ended_at` and
+// `profile_limit_events.at`.
 import { expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { initDatabase } from '../db'
@@ -103,6 +105,7 @@ const migration6: SchemaShape['tables'] = {
       column('ended_at'),
     ],
     indexes: [
+      { name: 'chat_turn_usage_ended', unique: 0, columns: ['ended_at'] },
       { name: 'chat_turn_usage_task', unique: 0, columns: ['task_id'] },
       { name: 'chat_turn_usage_team', unique: 0, columns: ['team_id', 'ended_at'] },
     ],
@@ -300,11 +303,15 @@ test('a fresh database opened by this build has the same shape plus each migrati
   // Migration 10's delta: the chat_sessions exhaustion flags; migration 11's
   // the process-observations tables (in `added` above); migration 12's: limit
   // events record their provider and window (providers-and-workers D7), both
-  // nullable, after the baseline columns.
+  // nullable, after the baseline columns; migration 13's: the `at` index here
+  // and the `ended_at` index on chat_turn_usage (in migration 6's delta).
   const chats = expected.tables.chat_sessions!
   const withFlag = { ...chats, columns: [...chats.columns, optional('context_exhausted_at'), optional('context_exhausted_reason')] }
   const limitEvents = expected.tables.profile_limit_events!
-  const withLimitContext = { ...limitEvents, columns: [...limitEvents.columns, optional('provider_id'), optional('limit_window')] }
+  const withLimitContext = {
+    columns: [...limitEvents.columns, optional('provider_id'), optional('limit_window')],
+    indexes: [{ name: 'profile_limit_events_at', unique: 0, columns: ['at'] }, ...limitEvents.indexes],
+  }
   expect(schemaShape(session.db)).toEqual({
     tables: { ...expected.tables, ...added, team_messages: withProfiles, chat_sessions: withFlag, profile_limit_events: withLimitContext },
   })

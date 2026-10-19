@@ -12,11 +12,14 @@ quality as guardrails. No recommendation here changes a model or starts work.
 
 Migration 11 adds observation details, team associations, retained source keys,
 collection checkpoints, live interval checkpoints, opaque export aliases, and
-cumulative export totals. Schema changes use the normal pre-migration backup path.
+cumulative export totals; migration 13 indexes `chat_turn_usage.ended_at` and
+`profile_limit_events.at` for the reconciler's ordered scans of unrecorded rows.
+Schema changes use the normal pre-migration backup path.
 Task, status, assignment, result, finding, mailbox-transition, profile-limit and
 completed-turn sources reconcile after notifications and every 30 seconds, up to
 200 rows per source per pass. Notifications queue work after the operational
-transaction. Observation and aggregate writes commit together; a collection
+transaction: the first arms one pass 250 ms later and the rest join it, so a
+burst of commits costs one reconcile. Observation and aggregate writes commit together; a collection
 failure cannot undo an acceptance or mailbox settlement. Counters retry from the
 same source identity; pruning source rows cannot cause rowid reuse to lose usage
 or limit facts. Collection errors are logged without source payloads. Health checkpoint writes

@@ -21,6 +21,7 @@ import type {
 import type { ClaudeLaunchConfiguration } from '../chat/ClaudeProfiles'
 import { initDatabase, type SessionDatabase } from '../db'
 import { MetricsSnapshot } from '../metrics/export/snapshot'
+import { NOTIFY_DEBOUNCE_MS } from '../metrics/observations/service'
 import { OutboundStore } from '../outbound/store'
 import { SessionRegistry } from '../SessionRegistry'
 import { ChatWireLogs } from '../chat/ChatWireLogs'
@@ -453,6 +454,8 @@ describe('ChatSessionManager', () => {
     const result=h.manager.tasks.store.results.insert({teamId:'/tmp/proj',taskId:task.id,taskRevision:1,summary:'fixture accepted',commit:null,diff:null,worktree:null,tests:[],limitations:null,submittedBy:{kind:'agent',sessionId:created.session.id}})
     h.manager.tasks.store.setStatus(task.id,'done',()=>{h.manager.tasks.store.results.markAccepted(result.id,{kind:'human',sessionId:null})})
     await flush()
+    // Post-commit notifications reconcile in one debounced pass.
+    await new Promise((resolve) => setTimeout(resolve, NOTIFY_DEBOUNCE_MS + 20))
     const observations = db.db.prepare('SELECT kind,data FROM process_observations').all() as {kind:string;data:string}[]
     for(const kind of ['turn_started','turn_ended','context','compaction','usage','acceptance'])expect(observations.some(row=>row.kind===kind)).toBe(true)
     expect(h.manager.observations.recorder.failures).toBe(0)
