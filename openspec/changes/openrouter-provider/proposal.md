@@ -26,9 +26,9 @@ OpenRouter serves Claude models, and others, through an Anthropic-compatible end
   - The key's cap and each budget become meters. A budget with a known reset interval gets its period; a one-off cap gets no period.
   - With a balance key, the account's credits become one more meter.
   - Pulls run once per provider, refresh on the existing cadence, and also refresh shortly after a turn that reported a cost.
-- **Out-of-credit is a limit.** Any final failure with HTTP status 402 is recorded as a final limit event in a `credit` window, whatever the error class.
-  - It cools the whole provider with no reset time, so limit outcomes never park on it and take the group's `otherwise` branch (forward or release).
-  - The cooldown lasts the existing one-hour fallback used when no reset is known, and ends earlier once a usage pull shows that remaining credit has grown since the event (a top-up, or a raised cap).
+- **Out-of-credit is a limit.** In a Claude Code session, any final failure with HTTP status 402 is recorded as a final limit event in a `credit` window, whatever the error class. Codex sessions keep `codex-chat-sessions`' limit rules.
+  - It cools the whole provider with no reset time, so limit outcomes never park delivered work on it and take the group's `otherwise` branch (forward or release).
+  - The cooldown lasts the existing one-hour fallback used when no reset is known, and ends earlier once a usage pull shows that remaining credit has grown since the event (a top-up, or a raised cap): that pull's time becomes the event's known reset.
 - **The provider-reported turn cost.** When a turn's stream reported `usage.cost`, `turn_completed` carries the sum, and the transcript shows it as the turn's cost instead of the SDK estimate.
 - **Not changed:**
   - `chat_turn_usage` and process metrics stay tokens-only.
@@ -46,7 +46,7 @@ OpenRouter serves Claude models, and others, through an Anthropic-compatible end
 
 - `claude-session-profiles`: providers may name a credential variable and a balance variable, both withheld from agents; a credentialed provider's routing comes only from trusted catalogs and its base URL is pinned on every launch that carries the key; the shipped `openrouter` provider; `CLAUDE_CODE_MAX_OUTPUT_TOKENS` joins the controlled variables.
 - `chat-usage-limits`: the OpenRouter key and credits pull, its meters, its refresh cadence, and refresh after costed turns. Three existing requirements are modified: the quota-endpoint pull, the on-demand refresh, and per-provider report keeping. A provider whose own usage endpoint is selected is never probed at the quota endpoint and never falls back to the host login.
-- `profile-limit-handling`: a 402 is a final `credit` limit with no reset, cooling the provider until credit returns.
+- `profile-limit-handling`: in a Claude Code session, a 402 is a final `credit` limit with no reset, cooling the provider until credit returns.
 - `chat-sessions`: a turn's completion cost is the provider-reported charge when one was streamed.
 
 ## Impact

@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: A payment-required failure is a final credit limit
-A chat agent request that fails with HTTP status 402, whether the status comes from the error class or from the error text the agent shows (`API Error: 402 …`), SHALL be recorded as a final limit event for the session's profile and provider in the `credit` window, with no reset time, whatever error class the agent reports.
+A chat agent request that fails with HTTP status 402, whether the status comes from the error class or from the error text the agent shows (`API Error: 402 …`), SHALL be recorded as a final limit event for the session's profile and provider in the `credit` window, with no reset time, whatever error class the agent reports. This rule SHALL apply only to Claude Code sessions (runtime `claude`); a Codex session's failures, a 402 included, SHALL NOT be recorded by it.
 
 #### Scenario: OpenRouter balance cannot cover the request
 - **WHEN** an `openrouter-opus` turn ends with an assistant error `unknown` whose text starts `API Error: 402 This request requires more credits`
@@ -11,8 +11,12 @@ A chat agent request that fails with HTTP status 402, whether the status comes f
 - **WHEN** any provider's request fails with `billing_error` and status 402
 - **THEN** it is recorded as a final `credit` limit event
 
+#### Scenario: A Codex session's 402 is not a credit limit here
+- **WHEN** a Codex session's turn fails with HTTP 402
+- **THEN** this rule records no `credit` limit event, and the Codex limit rules alone decide what is recorded
+
 ### Requirement: A credit cooldown is bounded and ends early when credit returns
-A final `credit` event SHALL cool its provider for one hour after the event. The cooldown SHALL end earlier once a usage pull completed after the event reports remaining credit greater than the lowest remaining credit reported for that provider since the event, or greater than zero when none was reported. After a restart, only the one-hour bound SHALL apply.
+A final `credit` event has no reset when recorded, so its provider cools for one hour after it. A usage pull completed after the event that reports remaining credit greater than the lowest remaining credit reported for that provider since the event, or greater than zero when none was reported, SHALL make that pull's time the event's known reset, held in memory only. After a restart, only the one-hour bound SHALL apply.
 
 #### Scenario: Owner tops up
 - **WHEN** a pull after a credit event reports $0.01 remaining and a later pull reports $10.01
@@ -27,7 +31,7 @@ A final `credit` event SHALL cool its provider for one hour after the event. The
 - **THEN** the provider stays cooling until one hour after the event, unless a pull shows credit has grown
 
 ### Requirement: Credit limits never park work
-When the turn handling a delivered message ends after a final `credit` limit, the message SHALL be resolved as if no reset falls within any `parkIfResetWithin`: it SHALL follow the effective `otherwise` outcome (forward or release) and SHALL NOT be parked. Waiting reasons and the urgent-mail refusal for a provider cooling on credit SHALL say it is out of credit rather than naming a reset time.
+When the turn handling a delivered message in a Claude Code session ends after a final `credit` limit, the message SHALL be resolved as if no reset falls within any `parkIfResetWithin`: it SHALL follow the effective `otherwise` outcome (forward or release) and SHALL NOT be parked. Waiting reasons and the urgent-mail refusal for a provider cooling on credit SHALL say it is out of credit rather than naming a reset time.
 
 #### Scenario: Group parks short resets
 - **WHEN** a group's `onLimit` is `{ parkIfResetWithin: 3h, otherwise: forward }` and its member's message ends on a credit limit

@@ -28,7 +28,7 @@ Spike evidence (2026-10-18, Claude Code 2.1.302, one capped key deleted afterwar
 **Goals:**
 - One provider's key reaches only that provider's sessions, and no agent can read a balance key.
 - The usage bar for OpenRouter shows OpenRouter's own figures, never the host login's.
-- An exhausted balance stops routing to the provider promptly and never parks work.
+- An exhausted balance stops routing to the provider promptly and never parks delivered work.
 
 **Non-Goals:**
 - Per-session or per-group keys. The credential belongs to the provider, as cooldown and usage do.
@@ -143,6 +143,8 @@ The current `chat-usage-limits` text says the opposite for any provider with a b
 
 The report also carries, in memory only, the smallest remaining amount over its meters (`remainingUsd`). D8 uses it.
 
+**Period composition.** Master's "Usage windows carry their known period length" names two period sources: Claude window kinds and provider quota rows. OpenRouter budgets are a third, filled by the ADDED requirement "An OpenRouter key's caps and budgets render as meters". Daily (24 h) and weekly (7 d) budgets have a known length, so they carry a period. A monthly budget's length is not known, so it carries none, as that requirement's "none rather than a guess" clause directs. The monthly quota-row derivation (period from the reset back one calendar month) does not apply: "provider quota row" is the quota-endpoint term, and an OpenRouter budget is not one. "Each usage meter shows elapsed window time" then draws no marker for a meter without a period, so monthly budgets, key caps and the credits meter show fill, percent and reset only.
+
 The pulls run once per provider. While a non-archived session of the provider has a started agent, they refresh on the same 10-minute cadence as quota-serving providers, and they stop when no session qualifies. Per-provider keying comes from `providers-and-workers`. The cadence is stated in the ADDED requirement "OpenRouter usage refreshes while sessions are live and after a costed turn", because "Provider usage stays fresh while sessions are live" covers only quota-serving providers, in master's text and in both active rewrites. That requirement is left unmodified. `process-observability`'s background quota observation for configured team workers is not extended to these pulls; a later change can add an OpenRouter standalone reader. In addition, a completed turn that carried `providerCostUsd` (D9) schedules one extra pull for its provider 30 s later, at most one per provider per minute.
 
 - *Alternative: compute remaining from summed turn costs.* Rejected. It misses spend outside kawai and Claude Code's unstreamed side calls; the pull is the truth.
@@ -152,13 +154,18 @@ The pulls run once per provider. While a non-archived session of the provider ha
 
 `assistantLimitSignal` and `retryLimitSignal` treat HTTP status 402 as a limit. The status is read from the class or from the `API Error: <status>` text, as 429 is today. A 402 signal is always final; a 402 that Claude Code retries (none observed) still counts as final, because waiting does not create credit. The event is recorded with `limit_window = 'credit'` and no reset.
 
+**Scope: Claude Code sessions only.** The 402 rule applies to sessions on the Claude runtime. A Codex session's failures, a 402 included, are never recorded by it; `codex-chat-sessions`' "Codex limit failures are recorded as limit events" governs them, with the latest known reset among exhausted windows deciding cooldown and park/release/forward. A scenario pins it ("A Codex session's 402 is not a credit limit here"), and "Credit limits never park work" is scoped the same way.
+
+- *Why:* the rule describes Anthropic-compatible gateways driven by Claude Code. Codex has its own exhausted-window model, and `codex-chat-sessions` is not on master, so a scoped rule stays self-contained whichever change lands first.
+- *Alternative not taken: a precedence clause naming `codex-chat-sessions`' requirement.* It would make this change's text depend on a requirement that may be renamed or rewritten before it archives.
+
 Detection depends only on the status, not on OpenRouter's message. MiMo pay-as-you-go returns a 402 on a negative balance too (unverified), and any other prepaid gateway will be caught the same way.
 
 ### D8. A credit cooldown is bounded and never parks
 
-A final `credit` event cools the provider through `providers-and-workers`' `cooldownFor`. It uses the existing rule when no reset is known: one hour after the event. It ends earlier once a usage pull completed after the event reports a `remainingUsd` greater than the lowest `remainingUsd` seen for that provider since the event, or greater than zero when no pull came between.
+A final `credit` event cools the provider through `providers-and-workers`' `cooldownFor`. It uses the existing rule when no reset is known: one hour after the event. It ends earlier once a usage pull completed after the event reports a `remainingUsd` greater than the lowest `remainingUsd` seen for that provider since the event, or greater than zero when no pull came between: that pull's time becomes the event's known reset.
 
-The early end is an in-memory overlay on the cooldown computation, keyed by provider and event time. After a restart the plain one-hour rule applies, so no state can leave a provider cooling forever.
+The early end is expressed as a reset becoming known, so the existing cooldown rule ("until the provider's reset time when known, otherwise for one hour", master and `providers-and-workers`) still decides, and no new cooldown rule competes with it. The reset is an in-memory overlay on the cooldown computation, keyed by provider and event time, and never written to `profile_limit_events`. After a restart the plain one-hour rule applies, so no state can leave a provider cooling forever.
 
 Limit outcomes treat a credit event as having no reset within any `parkIfResetWithin`, and take the group's `otherwise` branch. Forwards skip the cooling provider, as `providers-and-workers` D9 already does. The waiting reason and the urgent-mail refusal say "out of credit" instead of naming a reset time.
 
@@ -168,6 +175,24 @@ Limit outcomes treat a credit event as having no reset within any `parkIfResetWi
 ### D9. The provider-reported turn cost
 
 The driver keeps a per-turn accumulator. Each `stream_event` whose event is `message_delta` with a finite, non-negative `usage.cost` adds to it, including subagent streams when they are streamed. On the result, `turn_completed` gains an optional `providerCostUsd` when at least one delta carried a cost. `ChatMessages.tsx` shows `$<providerCostUsd>` in place of `totalCostUsd` when it is present, with hover text saying it is the provider-reported charge, and that calls Claude Code did not stream (such as session titles) are not included. The field is additive and the SDK estimate stays on the event.
+
+## Composition sweep
+
+Each requirement and active delta that shares a capability with this change, checked against its deltas (master `openspec/specs/` at `origin/master` ab89efab; active changes in this branch). The host-login and usage-bar class (quota fallback, SDK pull, `/usage` reports) is covered in D6 and the Risks bullet below.
+
+| Requirement or delta | Result |
+|---|---|
+| master chat-usage-limits "Provider usage windows keep the provider's own identity" (:120) | No conflict. It governs quota-response rows; OpenRouter meters carry their own `openrouter:` keys and labels (ADDED meters requirement), so they stay distinguishable from Claude windows. |
+| master chat-usage-limits "Usage windows carry their known period length" (:162) | No conflict. OpenRouter budgets are a third period source; see D6 "Period composition". |
+| master chat-usage-limits "Each usage meter shows elapsed window time" (:193) | No conflict. A monthly budget, key cap or credits meter has no period, so no marker is drawn, as the requirement states. |
+| master chat-usage-limits "The time marker follows the clock" (:220) | No conflict. It applies to every marked meter, daily and weekly budgets included; nothing here changes the client clock. |
+| master chat-usage-limits "Meters state usage against elapsed time in words" (:231) | No conflict. Marked budgets expose used, elapsed and time left; unmarked meters expose percent used and reset time (none for credits, which has no reset). The ` · $<remaining> left` label suffix is the meter's label, not its hover text. |
+| codex-chat-sessions claude-session-profiles ("Users select…", "Catalog entries declare their runtime", "Codex homes and network…", "A chat's runtime is fixed…") | No conflict. Credential fields live on `providers.json` providers, and that change rejects a Codex profile as a provider's model, so `authTokenEnv` never reaches a Codex chat. Withholding (D3) covers every launch; no Codex requirement states the Codex child's environment. Different requirement from the one this change MODIFIES. |
+| codex-chat-sessions profile-limit-handling ("Codex limit failures are recorded as limit events", "Codex login limits cool the home's provider") | NEW-1, resolved: the 402 credit rule and "Credit limits never park work" apply to Claude Code sessions only; a Codex 402 follows the Codex rules (D7 "Scope"). |
+| providers-and-workers profile-limit-handling ("Limit events are recorded per profile", "Profiles cool down after a final limit event", "Forwarded work carries a handoff package", "Urgent direct mail to a cooling profile is refused") | No conflict after this round. Recording a 402 under class `unknown` adds a case; nothing says only the three classes count. The early end on a top-up was a competing cooldown rule against "otherwise for one hour"; it is now a reset becoming known, which that requirement already honours (D8). The urgent refusal still states the cooldown end, as both require. Forwards skip the cooling provider as D9 there specifies. |
+| master profile-limit-handling "Limits in agent-started turns park the current work" | No conflict. "Credit limits never park work" covers the turn handling a delivered message; an agent-started turn that hits a credit limit parks its current work as that requirement says. This change leaves its resume time to today's handling of an event with no reset, and the overview's "never parks delivered work" claims nothing more. |
+| rename-agentboard-to-kawai (chat-sessions "Operators configure the chat provider from Settings"; claude-session-profiles "Users select…", "Named profiles configure independent provider sessions") | No conflict. Different requirements from the ones touched here; this change's specs name neither `AGENTBOARD_CHAT_ENV` nor `KAWAI_CHAT_ENV`. Design prose naming `AGENTBOARD_CHAT_ENV` follows the rename when it lands. |
+| chat-context-exhaustion chat-sessions ("A result marked as an error completes the turn as failed", "Turn completion records the terminal reason", "Replayed history…", "Sessions show the context-exhausted flag") | No conflict. A 402 turn has `is_error: true` and so completes as failed, which the credit rule needs; 402 carries no exhausting terminal reason, so it never flags context exhaustion. The provider-cost field is additive on the same `turn_completed` event. |
 
 ## Risks / Trade-offs
 
