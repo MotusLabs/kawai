@@ -3,7 +3,7 @@
 // session's project path, group-level ones in the ambient catalog — the same
 // resolution each session's launch settings use. Kept beside the store so
 // no reader re-derives the context by hand.
-import { providerOf } from '../chat/profileCatalog'
+import { providerLabelOf, providerOf } from '../chat/profileCatalog'
 import type { ChatSessionRecord } from '../db'
 import type { EffectiveCooldown, LimitEventStore } from './routing/limitEvents'
 
@@ -11,6 +11,9 @@ export { LimitEventStore } from './routing/limitEvents'
 
 /** The router's per-profile provider resolver (D10) over the ambient catalog. */
 export const ambientProviderOf = (homeDir: string | undefined) => (profileId: string) => providerOf(profileId, catalogCtx(homeDir))
+
+/** The router's provider label resolver (the D14 rule context) over the ambient catalog. */
+export const ambientProviderLabel = (homeDir: string | undefined) => (providerId: string) => providerLabelOf(providerId, catalogCtx(homeDir))
 
 /** The catalog context providerOf reads: the ambient home plus a project path when one is at hand. */
 export function catalogCtx(homeDir: string | undefined, projectPath?: string | null) {

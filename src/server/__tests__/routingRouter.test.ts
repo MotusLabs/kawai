@@ -59,7 +59,8 @@ function makeRouter() {
     rules: {
       rule: () => (rule ? { route: async (ctx: RouteContext) => { ruleCalls.push(ctx); return rule!(ctx) } } as never : undefined),
     },
-    limits: { forProfile: id => events[id] ?? [], cooldownFor: id => {
+    limits: { forProfile: id => events[id] ?? [], forProvider: providerId => Object.values(events).flat().filter(e => e.providerId === providerId),
+      cooldownFor: id => {
       const pool = Object.values(events).flat()
       const providerId = providerFor?.(id) ?? null
       const until = cooldownUntil(id, providerId, pool, now)
@@ -450,7 +451,8 @@ describe('plan roles and author tags (plan-execution D15)', () => {
       excludedProfile: m => m.excludedProfile ?? undefined,
       allowedProfiles: m => m.allowedProfiles ?? null,
       rules: { rule: () => (rule ? { route: async (ctx: RouteContext) => { ruleCalls.push(ctx); return rule!(ctx) } } as never : undefined) },
-      limits: { forProfile: id => events[id] ?? [], cooldownFor: id => {
+      limits: { forProfile: id => events[id] ?? [], forProvider: providerId => Object.values(events).flat().filter(e => e.providerId === providerId),
+      cooldownFor: id => {
       const pool = Object.values(events).flat()
       const providerId = providerFor?.(id) ?? null
       const until = cooldownUntil(id, providerId, pool, now)

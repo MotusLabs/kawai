@@ -95,7 +95,7 @@ const makeRouter = (staff: WorktreeStaffing) => new ProfileRouter({
     .filter(row => row.archivedAt == null && row.groupId === groupId)
     .map(row => ({ sessionId: row.sessionId, profileId: row.claudeProfileId ?? 'default', cwd: row.projectPath })),
   targetWorktree,
-  staffing: staff, rules: { rule: () => undefined }, limits: { forProfile: () => [], cooldownFor: () => ({ until: null, provider: false, providerId: null }), providerCooldownUntil: () => null }, usageOf: () => null,
+  staffing: staff, rules: { rule: () => undefined }, limits: { forProfile: () => [], forProvider: () => [], cooldownFor: () => ({ until: null, provider: false, providerId: null }), providerCooldownUntil: () => null }, usageOf: () => null,
   now: () => clock,
 })
 /** One routing pass over due group mail; the members spawned and the mail reserved for them. */

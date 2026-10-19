@@ -31,7 +31,7 @@ import { PlanStore } from '../plans/planStore'
 import { WorktreeStaffing, type SpawnRequest, type SpawnResult } from './staffing'
 import { TeamCaps } from './teamCaps'
 import { worktreeRootOf } from './worktreeRoots'
-import { ambientProviderOf, LimitEventStore, recipientCooldown, sessionCooldown } from './cooldowns'
+import { ambientProviderLabel, ambientProviderOf, LimitEventStore, recipientCooldown, sessionCooldown } from './cooldowns'
 import { RuleRegistry, type RuleLoadReport } from './routing/ruleLoader'
 import { ProfileRouter } from './routing/router'
 import { LimitOutcomes, type HandoffTarget } from './routing/limitOutcomes'
@@ -229,7 +229,7 @@ export class SessionMailbox {
       targetWorktree,
       staffing: this.staffing,
       rules: this.rules,
-      limits: this.limits, providerOf: ambientProviderOf(this.options.homeDir),
+      limits: this.limits, providerOf: ambientProviderOf(this.options.homeDir), providerLabel: ambientProviderLabel(this.options.homeDir),
       usageOf: profileId => options.usageOf?.(profileId) ?? null,
       excludedProfile: message => message.excludedProfile ?? undefined,
       allowedProfiles: message => message.allowedProfiles ?? null,

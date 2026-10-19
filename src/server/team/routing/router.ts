@@ -11,7 +11,7 @@
 // facts, and cooldowns the decision used — never scraped from the log.
 import type { ChatUsageReport } from '../../../shared/chat'
 import type {
-  RouteCandidate, RouteContext, RouteDecisionLogEntry, RouteGroup, RouteMessage, RouteProfileState,
+  RouteCandidate, RouteContext, RouteDecisionLogEntry, RouteGroup, RouteMessage, RouteProfileState, RouteProviderState,
 } from '../../../shared/routing'
 import type { WaitingConstraint } from '../../../shared/team'
 import type { EligibleMember, GroupRouter, MemberExclusion, RouteResult, RouteView } from '../dispatcher'
@@ -41,9 +41,11 @@ export interface ProfileRouterOptions {
   targetWorktree: (message: TeamMessage) => string | null
   staffing: Pick<WorktreeStaffing, 'spawnContext' | 'spawnFor'>
   rules: Pick<RuleRegistry, 'rule'>
-  limits: Pick<LimitEventStore, 'forProfile' | 'cooldownFor' | 'providerCooldownUntil'>
+  limits: Pick<LimitEventStore, 'forProfile' | 'forProvider' | 'cooldownFor' | 'providerCooldownUntil'>
   /** The provider owning a profile (providers-and-workers D10); unresolved ids stand in as their own provider. */
   providerOf?: (profileId: string) => string
+  /** The provider's catalog label; null when unknown (the D14 rule context). */
+  providerLabel?: (providerId: string) => string | null
   usageOf: (profileId: string) => ChatUsageReport | null
   /** The profile a forwarded message must not go back to. */
   excludedProfile?: (message: TeamMessage) => string | undefined
@@ -83,21 +85,23 @@ export class ProfileRouter implements GroupRouter {
     if (spawn === 'worktree-missing') return { kind: 'none' }
     const eligible = new Map(view.eligible.map(row => [row.sessionId, row]))
     const members = this.options.members(message.teamId, group.id)
+    const providerOf = (id: string) => this.options.providerOf?.(id) ?? id
     const { candidates, group: routeGroup } = buildCandidates({
       group,
       members: members.map(member => memberState(member, eligible.get(member.sessionId))),
       pendingSpawnProfiles: spawn?.pendingProfiles ?? [],
       spawnAllowed: spawn?.allowed ?? false,
       spawnCwd: spawn?.worktree ?? null,
+      providerOf,
       ...(this.options.excludedProfile?.(message) ? { excludeProfile: this.options.excludedProfile(message)! } : {}),
       // A forward also skips the excluded model's provider while it cools
       // (providers-and-workers D9): a hard filter, so a rule cannot pick it.
       ...(() => {
         const excluded = this.options.excludedProfile?.(message)
         if (excluded === undefined) return {}
-        const excludedProvider = this.options.providerOf?.(excluded) ?? excluded
+        const excludedProvider = providerOf(excluded)
         if (this.options.limits.providerCooldownUntil(excludedProvider) === null) return {}
-        return { excludeProvider: excludedProvider, providerOf: (id: string) => this.options.providerOf?.(id) ?? id }
+        return { excludeProvider: excludedProvider }
       })(),
       ...(this.options.allowedProfiles?.(message) ? { allowedProfiles: this.options.allowedProfiles(message)! } : {}),
     })
@@ -114,6 +118,8 @@ export class ProfileRouter implements GroupRouter {
 
     const profiles = this.profileStates(group, candidates, now)
     const cooling = (profileId: string) => profiles[profileId]?.cooldownUntil != null
+    // The rule context's provider view (D14): keyed once, from the same ids.
+    const providerStates = this.providerStates(profiles)
     // With a role, profile-order ranks by the role's order (D15); the
     // candidates outside it are already filtered out.
     const order = this.options.allowedProfiles?.(message) ?? routeGroup.profiles.map(entry => entry.profileId)
@@ -125,6 +131,7 @@ export class ProfileRouter implements GroupRouter {
     if (rule) {
       const ctx: RouteContext = {
         now: new Date(now).toISOString(), group: routeGroup, message: routeMessage(message, worktree), candidates, profiles,
+        providers: providerStates,
       }
       try {
         const decision = await rule.route(ctx)
@@ -152,7 +159,7 @@ export class ProfileRouter implements GroupRouter {
         const retryAt = ends.length > 0 ? Math.min(...ends) : null
         // The log names the provider when its cooldown decides (providers-and-workers D15).
         const providers = [...new Set(candidates
-          .map(candidate => this.options.limits.cooldownFor(candidate.profileId, this.options.providerOf?.(candidate.profileId) ?? candidate.profileId))
+          .map(candidate => this.options.limits.cooldownFor(candidate.profileId, providerOf(candidate.profileId)))
           .filter(state => state.provider && state.providerId !== null)
           .map(state => state.providerId!))]
         record('builtin', 'hold', providers.length > 0
@@ -175,6 +182,7 @@ export class ProfileRouter implements GroupRouter {
       const events = this.options.limits.forProfile(id)
       const usage = this.options.usageOf(id)
       states[id] = {
+        providerId: this.providerOf(id),
         usage: usage ? {
           status: usage.status, receivedAt: usage.receivedAt, source: usage.source ?? 'unknown',
           windows: usage.windows.map(window => ({ key: window.key, percentUsed: window.percentUsed, resetsAt: window.resetsAt })),
@@ -182,10 +190,47 @@ export class ProfileRouter implements GroupRouter {
         limitEvents: events,
         // The profile's effective cooldown (providers-and-workers D8): its
         // provider's provider-scoped events cool it too.
-        cooldownUntil: this.options.limits.cooldownFor(id, this.options.providerOf?.(id) ?? id).until,
+        cooldownUntil: this.options.limits.cooldownFor(id, this.providerOf(id)).until,
       }
     }
     return states
+  }
+
+  /**
+   * The D14 provider view of a profile-state map: one entry per profile's
+   * provider, holding the account's own facts — its catalog label, its
+   * members, its report, its provider-scoped events, and its own cooldown.
+   */
+  private providerStates(profiles: Record<string, RouteProfileState>): Record<string, RouteProviderState> {
+    const byProvider = new Map<string, string[]>()
+    for (const [id, state] of Object.entries(profiles)) {
+      const members = byProvider.get(state.providerId) ?? []
+      members.push(id)
+      byProvider.set(state.providerId, members)
+    }
+    const states: Record<string, RouteProviderState> = {}
+    for (const [providerId, members] of byProvider) {
+      states[providerId] = {
+        label: this.options.providerLabel?.(providerId) ?? null,
+        profiles: members,
+        usage: this.usageOf(providerId),
+        limitEvents: this.options.limits.forProvider(providerId),
+        cooldownUntil: this.options.limits.providerCooldownUntil(providerId),
+      }
+    }
+    return states
+  }
+
+  private providerOf(profileId: string): string {
+    return this.options.providerOf?.(profileId) ?? profileId
+  }
+
+  private usageOf(profileId: string): RouteProviderState['usage'] {
+    const usage = this.options.usageOf(profileId)
+    return usage ? {
+      status: usage.status, receivedAt: usage.receivedAt, source: usage.source ?? 'unknown',
+      windows: usage.windows.map(window => ({ key: window.key, percentUsed: window.percentUsed, resetsAt: window.resetsAt })),
+    } : null
   }
 
   private record(entry: RouteDecisionLogEntry) {

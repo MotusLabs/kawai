@@ -61,6 +61,7 @@ function makeRouter() {
     },
     limits: {
       forProfile: id => events[id] ?? [],
+      forProvider: providerId => Object.values(events).flat().filter(event => event.providerId === providerId),
       cooldownFor: id => {
         const pool = Object.values(events).flat()
         const providerId = providerFor?.(id) ?? null
@@ -71,6 +72,7 @@ function makeRouter() {
       providerCooldownUntil: providerId => providerCooldownUntil(providerId, Object.values(events).flat(), now),
     },
     ...(providerFor ? { providerOf: providerFor } : {}),
+    providerLabel: providerId => (providerId === 'zai' ? 'Z.AI' : null),
     usageOf: () => null,
     now: () => now,
   })
@@ -145,6 +147,33 @@ describe('provider-cooldown routing', () => {
     const router = makeRouter()
     expect(await router.route(message(), { eligible: [eligible('f')], attempt: 0 })).toMatchObject({ kind: 'hold' })
     expect(router.decisions('team').some(entry => entry.decision === 'hold' && (entry.reason ?? '').includes('provider zai'))).toBe(true)
+    providerFor = null
+  })
+
+  test('a rule sees the cooling provider', async () => {
+    // glm and glm-flash are profiles of zai (providers-and-workers D14); glm
+    // holds the final event, so zai cools and both profiles report its end.
+    def = group('profiles: [glm, glm-flash]\nmax: 2')
+    members = [
+      { sessionId: 'g', profileId: 'glm', cwd: '/wt' },
+      { sessionId: 'f', profileId: 'glm-flash', cwd: '/wt' },
+    ]
+    providerFor = id => (id === 'glm' || id === 'glm-flash' ? 'zai' : id)
+    events.glm = [{ ...finalEvent('glm', new Date(T0 + 40 * 60_000).toISOString()), providerId: 'zai', window: null }]
+    const ruleCtx = await new Promise<RouteContext>(resolve => {
+      rule = async ctx => { resolve(ctx); return { type: 'default' } }
+      void makeRouter().route(message(), { eligible: [eligible('g', 50), eligible('f', 5)], attempt: 0 })
+    })
+    const end = new Date(T0 + 40 * 60_000).toISOString()
+    expect(ruleCtx.providers['zai']).toEqual({
+      label: 'Z.AI', profiles: ['glm', 'glm-flash'], usage: null, limitEvents: events.glm, cooldownUntil: end,
+    })
+    expect(ruleCtx.profiles['glm']!.cooldownUntil).toBe(end)
+    expect(ruleCtx.profiles['glm-flash']!.cooldownUntil).toBe(end)
+    expect(ruleCtx.candidates.map(candidate => [candidate.id, candidate.providerId])).toEqual([
+      ['member:g', 'zai'], ['member:f', 'zai'],
+    ])
+    expect(ruleCtx.group.profiles.map(profile => [profile.profileId, profile.providerId])).toEqual([['glm', 'zai'], ['glm-flash', 'zai']])
     providerFor = null
   })
 })
