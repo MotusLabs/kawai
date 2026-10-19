@@ -25,6 +25,13 @@ What this change builds on:
 
   Two more are plan-execution's own assumptions, inherited unchanged: `gh pr merge --match-head-commit` merges only the named head, and the update-branch API's `expected_head_sha` refuses a head that moved.
 
+**Names reconciled with the merged `plan-execution` (task 1.1).** These names differ from the merged code, and this design uses the merged ones:
+- The effect methods live in `ExecutionEffectStore` (`executionEffectStore.ts`), the base class of `ExecutionStore`. `EffectQueue` (D3) is the runner-facing subset of that class: `dueEffects`, `markEffectRunning`, `setEffectOutcome`, `scheduleEffectRetry`, and `effect`. `EffectRunnerDeps.store` keeps its name, and its type becomes `EffectQueue`, so plan-execution's runner tests run unchanged.
+- The clean-merge check (X4) is inline in `applyLandingOutcome`. It moves unchanged into the named function `cleanMergeCheck` in `src/server/plans/landing/cleanMerge.ts`, and both mechanisms call it.
+- The slot's holder-kind extension point is `ExecutionStore.registerHolderKind(kind, check)`.
+- Effect kinds are the `EffectKind` union in `src/shared/planExecution.ts`. Stop reasons are `StopReason` and `STOP_REASONS` there, with labels in `STOP_REASON_LABELS`.
+- Start's preconditions read `StartCheckContext`. The two appended entries add the pre-read fields `runningPromotion` and `offBaseLandings`.
+
 ## Goals / Non-Goals
 
 **Goals:**
@@ -40,10 +47,15 @@ What this change builds on:
 
 ### D1. Module layout
 
+- `src/server/plans/landing/`:
+  - `landingMechanisms.ts`: the `LandingMechanism` interface — `mode`, `probe`, `startBase`, `land`, `landOutcome`, and `effectAdapter` (the effect kinds it owns) — and the registry the executor resolves by `execution.landingMode`;
+  - `directMechanism.ts`: plan-execution's direct landing behind that interface, unchanged;
+  - `cleanMerge.ts`: the clean-merge check after `update-branch`, extracted verbatim from direct landing so both mechanisms share it.
 - `src/server/plans/landing/integration/`:
   - `integrationSchema.ts` and `integrationStore.ts`: the four tables (D3), their transitions, and the only SQL writer of them;
-  - `integrationMechanism.ts`: the `LandingMechanism` for `integration-branch` (`probe`, `baseFor`, `nextLandingStep`), registered beside `direct`;
-  - `integrationProbe.ts`: the branch rules (D2);
+  - `integrationMechanism.ts`: the `LandingMechanism` for `integration-branch`, registered beside `direct`;
+  - `integrationEffects.ts` and `githubRefs.ts`: the `create-integration` and `fast-forward` adapters over the GitHub ref API (D4, D5);
+  - `integrationProbe.ts`: the branch rules (D2), and `integrationStart.ts`: the facts the appended Start entries read (D8);
   - `candidates.ts`: candidate transitions and the moved and rewritten rules (D5, D6);
   - `PromotionService.ts`: preview, Promote, and Cancel, with `PROMOTE_PRECONDITIONS` (D9);
   - `promotionPlanner.ts`: the pure `planPromotionSteps(snapshot, now)` (D10);
@@ -53,9 +65,11 @@ What this change builds on:
 
 Each file stays under 500 lines. plan-execution's executor drives both increments and promotions in its per-team tick, so one team never has two ticks at once.
 
+*Why this interface rather than the earlier `baseFor` and `nextLandingStep`:* plan-execution shipped landing as `applyLanding` and `applyLandingOutcome` in one module, with the base fixed at Start. Wrapping those whole as direct's `land` and `landOutcome` moved them behind the registry with no behavior change (its own commit, before any integration code), and lets the integration mechanism reuse direct's steps 1 to 3 instead of re-deriving a step machine. `effectAdapter` keeps each mechanism's effect kinds out of the executor's runner.
+
 ### D2. The mechanism, its base, and its probe
 
-- **`baseFor(execution, change)`** returns the plan's integration branch, so provisioning, pull requests, the up-to-date step, and `changes-on-base` all use it. The execution records `base_branch` as that branch and `base_commit` as its head on `origin`, or the default branch's head when the branch does not exist yet. The default branch is recorded on the integration-branch row as the promotion target.
+- **The base.** The execution records `base_branch` as the plan's integration branch, so provisioning, pull requests, the up-to-date step, and `changes-on-base` all use it, and `base_commit` as its head on `origin`, or the default branch's head when the branch does not exist yet. The default branch is recorded on the integration-branch row as the promotion target. **`startBase`** resolves the commit a change's worktree starts from when it is provisioned: direct returns `base_commit` exactly as plan-execution does, and integration reads the integration branch's head on `origin` after provisioning's fetch, so a dependent starts from the head its dependencies landed on.
 - **The probe** adds four rules to direct's repository checks (git, GitHub `origin`, `gh` auth and write permission, floor map). Each failing rule is a `landing-ready` finding:
 
   | Rule | Reads |
@@ -68,6 +82,8 @@ Each file stays under 500 lines. plan-execution's executor drives both increment
   The `branch-free` check of `plan-validation` covers open plans at validation time. The record rule also covers closed plans, and it reads `origin` when Start runs.
 
 *Why the integration branch as base rather than the default branch:* dependents must see their dependencies' code, which is only on the integration branch until promotion. Pointing pull requests at it also makes GitHub's own merged state follow the landings.
+
+*Why the head is read at provision time:* direct landing starts every worktree from the Start-time base commit and brings it up to date at landing. Integration landing moves its branch on every landing, and a dependent that started from the Start-time head would lack its dependencies' code until its own update step; reading the head when the worktree is provisioned gives it that code from the first round.
 
 ### D3. Records
 
@@ -145,10 +161,10 @@ An existing branch with this plan's record is reused at its head. A deleted bran
 
 ### D5. Increments: exact candidates and the fast-forward
 
-The integration mechanism's `nextLandingStep` runs plan-execution's direct steps 1 to 3 unchanged, against the integration branch:
+The integration mechanism's `land` runs plan-execution's direct steps 1 to 3 unchanged — the same code, with the final step supplied by the mechanism — against the integration branch:
 1. the acceptance conditions;
 2. the slot, in `passed_at` order among the changes ready to merge;
-3. up to date, with the `merge-tree` prediction, `update-branch` pinned to H, and the clean-merge check.
+3. up to date, with the `merge-tree` prediction, `update-branch` pinned to H, and the shared `cleanMergeCheck` on the outcome.
 
 Steps 4 and 5 are its own:
 - **Candidate.** When the change is up to date, Kawai inserts a candidate in one transaction. Its fields:

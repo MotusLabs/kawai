@@ -78,6 +78,7 @@ export const STOP_REASON_LABELS: Record<StopReason, string> = {
   'ci-missing': 'CI checks are missing',
   'ci-timeout': 'CI did not finish in time',
   'pr-closed': 'the pull request was closed',
+  'integration-rewritten': 'the integration branch was rewritten',
 }
 
 const list = (items: readonly string[]) => items.join(', ')

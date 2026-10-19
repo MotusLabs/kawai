@@ -1,8 +1,10 @@
 import { describe, expect, test } from 'bun:test'
-import { providerRowPeriodMs } from '../chat/usageWindowPeriods'
+import { providerRowPeriodMs, windowPeriodMs } from '../chat/usageWindowPeriods'
 
 const HOUR_MS = 60 * 60 * 1000
 const DAY_MS = 24 * HOUR_MS
+const FIVE_HOURS_MS = 5 * HOUR_MS
+const SEVEN_DAYS_MS = 7 * DAY_MS
 
 describe('providerRowPeriodMs', () => {
   // The live TIME_LIMIT reset (2026-10-18 capture): 3 Nov, 10:23 UTC.
@@ -63,5 +65,32 @@ describe('providerRowPeriodMs', () => {
     expect(providerRowPeriodMs(3, 5, null)).toBeUndefined()
     expect(providerRowPeriodMs(3, 5, Number.NaN)).toBeUndefined()
     expect(providerRowPeriodMs(3, 5, '2026-11-03T10:23:19.997Z')).toBeUndefined()
+  })
+})
+
+/**
+ * The key and the /usage group come from the wire, so Object.prototype's own
+ * names must never answer: an inherited 'constructor' would ride a window as
+ * its periodMs.
+ */
+describe('windowPeriodMs own-key semantics', () => {
+  const NAMES = Object.getOwnPropertyNames(Object.prototype)
+
+  test('no inherited name answers as a kind, a scoped or numbered key, or a group', () => {
+    for (const name of NAMES) {
+      expect(windowPeriodMs(name)).toBeUndefined()
+      expect(windowPeriodMs(`${name}:scope`)).toBeUndefined()
+      expect(windowPeriodMs(`${name}#2`)).toBeUndefined()
+      expect(windowPeriodMs('brand_new_meter', name)).toBeUndefined()
+    }
+  })
+
+  test('known kinds and groups keep their periods beside the guard', () => {
+    expect(windowPeriodMs('five_hour')).toBe(FIVE_HOURS_MS)
+    expect(windowPeriodMs('weekly_scoped:Opus')).toBe(SEVEN_DAYS_MS)
+    expect(windowPeriodMs('weekly_all#2')).toBe(SEVEN_DAYS_MS)
+    expect(windowPeriodMs('brand_new_meter', 'weekly')).toBe(SEVEN_DAYS_MS)
+    expect(windowPeriodMs('brand_new_meter', 'session')).toBe(FIVE_HOURS_MS)
+    expect(windowPeriodMs('brand_new_meter', 'monthly')).toBeUndefined()
   })
 })
