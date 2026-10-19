@@ -122,6 +122,8 @@ describe('a failed late-spawn mark (MM LOW 3)', () => {
   let warn: ReturnType<typeof spyOn>
   let error: ReturnType<typeof spyOn>
   let made: MemberRelease[]
+  /** Installed by the default-scheduler spy test; afterEach restores the globals. */
+  let restoreTimers: (() => void) | undefined
   /** A closed task with a late-spawned member, and a task store whose `get` throws `failures` times; the instance is closed in afterEach. */
   const setup = (failures: number, overrides: Partial<MemberReleaseOptions> = {}) => {
     const t = task()
@@ -145,7 +147,11 @@ describe('a failed late-spawn mark (MM LOW 3)', () => {
     made = []
   })
   afterEach(() => {
+    // Close first, while a fake clearTimeout from the spy test is still
+    // installed, so fake timers never reach the real clearTimeout.
     for (const releases of made) releases.close()
+    restoreTimers?.()
+    restoreTimers = undefined
     warn.mockRestore()
     error.mockRestore()
   })
@@ -238,6 +244,40 @@ describe('a failed late-spawn mark (MM LOW 3)', () => {
     }
     expect(releases.pending().map(row => row.sessionId)).toEqual(['spawned-9'])
     expect(error).not.toHaveBeenCalled()
+  })
+
+  test('the default scheduler passes the delay to setTimeout, unrefs, and clearTimeouts on cancel and close', () => {
+    const { t, releases } = setup(2, { lateMarkRetryDelaysMs: [5000] })
+    const scheduled: { fn: () => void; delayMs: number | undefined }[] = []
+    const timers: { unrefCalls: number; unref(): void }[] = []
+    const cleared: unknown[] = []
+    const setTimeoutSpy = spyOn(globalThis, 'setTimeout').mockImplementation(((fn: () => void, delayMs?: number) => {
+      const timer: { unrefCalls: number; unref(): void } = { unrefCalls: 0, unref: () => {} }
+      timer.unref = () => { timer.unrefCalls += 1 }
+      timers.push(timer)
+      scheduled.push({ fn, delayMs })
+      return timer
+    }) as unknown as typeof setTimeout)
+    const clearTimeoutSpy = spyOn(globalThis, 'clearTimeout').mockImplementation(((timer: unknown) => {
+      cleared.push(timer)
+    }) as unknown as typeof clearTimeout)
+    restoreTimers = () => { setTimeoutSpy.mockRestore(); clearTimeoutSpy.mockRestore() }
+    // The failed attempt schedules through the production default: the
+    // configured delay and the unref reach setTimeout's timer.
+    releases.markLateSpawn('spawned-9', t.id)
+    expect(scheduled).toHaveLength(1)
+    expect(scheduled[0].delayMs).toBe(5000)
+    expect(typeof scheduled[0].fn).toBe('function')
+    expect(timers[0].unrefCalls).toBe(1)
+    expect(cleared).toEqual([])
+    // The drop path (cancel) clears that very timer...
+    releases.cancel('spawned-9')
+    expect(cleared).toEqual([timers[0]])
+    // ...and a retry scheduled again is cleared by shutdown (close).
+    releases.markLateSpawn('spawned-9', t.id)
+    expect(scheduled).toHaveLength(2)
+    releases.close()
+    expect(cleared).toEqual([timers[0], timers[1]])
   })
 })
 
