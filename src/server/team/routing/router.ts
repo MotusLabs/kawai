@@ -11,7 +11,7 @@
 // facts, and cooldowns the decision used — never scraped from the log.
 import type { ChatUsageReport } from '../../../shared/chat'
 import type {
-  RouteCandidate, RouteContext, RouteDecisionLogEntry, RouteGroup, RouteMessage, RouteProfileState, RouteProviderState,
+  RouteCandidate, RouteContext, RouteDecisionLogEntry, RouteGroup, RouteMessage, RouteProfileState, RouteProviderState, RouteUsage,
 } from '../../../shared/routing'
 import type { WaitingConstraint } from '../../../shared/team'
 import type { EligibleMember, GroupRouter, MemberExclusion, RouteResult, RouteView } from '../dispatcher'
@@ -47,6 +47,8 @@ export interface ProfileRouterOptions {
   /** The provider's catalog label; null when unknown (the D14 rule context). */
   providerLabel?: (providerId: string) => string | null
   usageOf: (profileId: string) => ChatUsageReport | null
+  /** A provider's report keyed by provider id (the D14 provider view); no profile mapping. */
+  providerUsageOf: (providerId: string) => ChatUsageReport | null
   /** The profile a forwarded message must not go back to. */
   excludedProfile?: (message: TeamMessage) => string | undefined
   /** The role's profiles execution mail may route to, in the role's order (plan-execution D15). */
@@ -180,13 +182,9 @@ export class ProfileRouter implements GroupRouter {
     const states: Record<string, RouteProfileState> = {}
     for (const id of ids) {
       const events = this.options.limits.forProfile(id)
-      const usage = this.options.usageOf(id)
       states[id] = {
         providerId: this.providerOf(id),
-        usage: usage ? {
-          status: usage.status, receivedAt: usage.receivedAt, source: usage.source ?? 'unknown',
-          windows: usage.windows.map(window => ({ key: window.key, percentUsed: window.percentUsed, resetsAt: window.resetsAt })),
-        } : null,
+        usage: usageView(this.options.usageOf(id)),
         limitEvents: events,
         // The profile's effective cooldown (providers-and-workers D8): its
         // provider's provider-scoped events cool it too.
@@ -213,7 +211,9 @@ export class ProfileRouter implements GroupRouter {
       states[providerId] = {
         label: this.options.providerLabel?.(providerId) ?? null,
         profiles: members,
-        usage: this.usageOf(providerId),
+        // Keyed by provider id (D14): a provider id can double as another
+        // provider's model key, so the profile-keyed source would re-map it.
+        usage: usageView(this.options.providerUsageOf(providerId)),
         limitEvents: this.options.limits.forProvider(providerId),
         cooldownUntil: this.options.limits.providerCooldownUntil(providerId),
       }
@@ -225,20 +225,20 @@ export class ProfileRouter implements GroupRouter {
     return this.options.providerOf?.(profileId) ?? profileId
   }
 
-  private usageOf(profileId: string): RouteProviderState['usage'] {
-    const usage = this.options.usageOf(profileId)
-    return usage ? {
-      status: usage.status, receivedAt: usage.receivedAt, source: usage.source ?? 'unknown',
-      windows: usage.windows.map(window => ({ key: window.key, percentUsed: window.percentUsed, resetsAt: window.resetsAt })),
-    } : null
-  }
-
   private record(entry: RouteDecisionLogEntry) {
     const key = `${entry.teamId}\0${entry.groupId}`
     const entries = [entry, ...(this.log.get(key) ?? [])].slice(0, DECISION_LOG_SIZE)
     this.log.set(key, entries)
     this.options.onDecision?.(entry)
   }
+}
+
+/** The rule view of a report: the window facts a rule reads, nothing else. */
+function usageView(usage: ChatUsageReport | null): RouteUsage | null {
+  return usage ? {
+    status: usage.status, receivedAt: usage.receivedAt, source: usage.source ?? 'unknown',
+    windows: usage.windows.map(window => ({ key: window.key, percentUsed: window.percentUsed, resetsAt: window.resetsAt })),
+  } : null
 }
 
 function memberState(member: GroupMemberRecord, eligible: EligibleMember | undefined) {

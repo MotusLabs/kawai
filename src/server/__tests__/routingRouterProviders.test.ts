@@ -9,7 +9,8 @@ import { parseGroupFile, type GroupDefinition } from '../team/groupFile'
 import type { TeamMessage } from '../team/mailboxStore'
 import { ProfileRouter, type GroupMemberRecord } from '../team/routing/router'
 import { cooldownUntil, providerCooldownUntil } from '../team/routing/limitEvents'
-import type { RouteContext, RouteDecision, LimitEvent } from '../../shared/routing'
+import type { RouteContext, RouteDecision, LimitEvent, RouteUsage } from '../../shared/routing'
+import type { ChatUsageReport } from '../../shared/chat'
 
 const T0 = Date.parse('2026-10-12T12:00:00.000Z')
 
@@ -42,6 +43,10 @@ let spawns: string[]
 let facts: { teamSpawned: number; teamCap: number; worktreeOccupants: string[]; worktreePending: number; backoffRetryAt: number | null }
 /** Profile → provider for the cooldown (providers-and-workers D8); identity when unset. */
 let providerFor: ((profileId: string) => string) | null = null
+/** The profile-keyed usage source, shaped like the manager's; null when unset. */
+let profileUsage: ((profileId: string) => ChatUsageReport | null) | null = null
+/** The provider-keyed usage source (the D14 provider view); null when unset. */
+let providerUsage: ((providerId: string) => ChatUsageReport | null) | null = null
 
 function makeRouter() {
   return new ProfileRouter({
@@ -73,7 +78,8 @@ function makeRouter() {
     },
     ...(providerFor ? { providerOf: providerFor } : {}),
     providerLabel: providerId => (providerId === 'zai' ? 'Z.AI' : null),
-    usageOf: () => null,
+    usageOf: profileId => profileUsage?.(profileId) ?? null,
+    providerUsageOf: providerId => providerUsage?.(providerId) ?? null,
     now: () => now,
   })
 }
@@ -81,6 +87,8 @@ function makeRouter() {
 beforeEach(() => {
   now = T0
   providerFor = null
+  profileUsage = null
+  providerUsage = null
   def = group('profiles: [claude, glm]')
   members = [
     { sessionId: 'a', profileId: 'glm', cwd: '/wt' },
@@ -97,6 +105,11 @@ beforeEach(() => {
 const finalEvent = (profileId: string, resetsAt: string | null): LimitEvent => ({
   id: crypto.randomUUID(), profileId, sessionId: 's', groupId: 'devs', at: new Date(now).toISOString(), kind: 'rate_limit',
   final: true, status: 429, message: 'quota', resetsAt, providerId: null, window: null,
+})
+
+const usageReport = (key: string, percentUsed: number): ChatUsageReport => ({
+  status: 'allowed', windows: [{ key, label: key, percentUsed, resetsAt: null }],
+  receivedAt: new Date(T0).toISOString(), source: 'provider',
 })
 
 describe('provider-cooldown routing', () => {
@@ -175,5 +188,36 @@ describe('provider-cooldown routing', () => {
     ])
     expect(ruleCtx.group.profiles.map(profile => [profile.profileId, profile.providerId])).toEqual([['glm', 'zai'], ['glm-flash', 'zai']])
     providerFor = null
+  })
+
+  test('a provider state reads its own report, not a same-named sibling profile', async () => {
+    // Provider 'glm' holds profile 'glm-air' beside provider 'zai' holding
+    // profile 'glm' (providers-and-workers D14): a provider id doubles as
+    // another provider's model key, so the provider view must key usage by
+    // provider id — the profile-keyed source would re-map 'glm' to zai.
+    def = group('profiles: [glm-air, glm]\nmax: 2')
+    members = [
+      { sessionId: 'ga', profileId: 'glm-air', cwd: '/wt' },
+      { sessionId: 'g', profileId: 'glm', cwd: '/wt' },
+    ]
+    providerFor = id => (id === 'glm-air' ? 'glm' : 'zai')
+    const glmReport = usageReport('glm:time_limit', 12)
+    const zaiReport = usageReport('zai:time_limit', 61)
+    // The manager-shaped profile usage: each profile reads its provider's report.
+    profileUsage = id => (id === 'glm-air' ? glmReport : id === 'glm' ? zaiReport : null)
+    providerUsage = id => (id === 'glm' ? glmReport : id === 'zai' ? zaiReport : null)
+    const ruleCtx = await new Promise<RouteContext>(resolve => {
+      rule = async ctx => { resolve(ctx); return { type: 'default' } }
+      void makeRouter().route(message(), { eligible: [eligible('ga', 50), eligible('g', 5)], attempt: 0 })
+    })
+    const view = (report: ChatUsageReport): RouteUsage => ({
+      status: report.status, receivedAt: report.receivedAt, source: report.source ?? 'unknown',
+      windows: report.windows.map(({ key, percentUsed, resetsAt }) => ({ key, percentUsed, resetsAt })),
+    })
+    expect(ruleCtx.providers['glm']!.usage).toEqual(view(glmReport))
+    expect(ruleCtx.providers['zai']!.usage).toEqual(view(zaiReport))
+    providerFor = null
+    profileUsage = null
+    providerUsage = null
   })
 })

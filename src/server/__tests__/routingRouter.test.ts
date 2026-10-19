@@ -69,6 +69,7 @@ function makeRouter() {
     }, providerCooldownUntil: providerId => providerCooldownUntil(providerId, Object.values(events).flat(), now) },
     ...(providerFor ? { providerOf: providerFor } : {}),
     usageOf: id => (id === 'claude' ? { status: 'warning', windows: [{ key: 'five_hour', label: '5h', percentUsed: 80, resetsAt: null }], receivedAt: 'r', source: 'pull' } : null),
+    providerUsageOf: () => null,
     now: () => now,
   })
 }
@@ -461,6 +462,7 @@ describe('plan roles and author tags (plan-execution D15)', () => {
     }, providerCooldownUntil: providerId => providerCooldownUntil(providerId, Object.values(events).flat(), now) },
     ...(providerFor ? { providerOf: providerFor } : {}),
       usageOf: () => null,
+      providerUsageOf: () => null,
       now: () => now,
     })
   }

@@ -107,6 +107,8 @@ export class SessionMailbox {
     onRulesLoaded?: (report: RuleLoadReport) => void
     /** A profile's latest plan usage, for routing rules. */
     usageOf?: (profileId: string) => ChatUsageReport | null
+    /** A provider's report keyed by provider id (the D14 provider view). */
+    providerUsageOf?: (providerId: string) => ChatUsageReport | null
     /** HEAD of a directory for the decision note; tests inject their own. */
     gitHead?: (cwd: string) => Promise<string | null>
     /** A routing decision was made (mailbox view). */
@@ -233,6 +235,7 @@ export class SessionMailbox {
       rules: this.rules,
       limits: this.limits, providerOf: ambientProviderOf(this.options.homeDir), providerLabel: ambientProviderLabel(this.options.homeDir),
       usageOf: profileId => options.usageOf?.(profileId) ?? null,
+      providerUsageOf: providerId => options.providerUsageOf?.(providerId) ?? null,
       excludedProfile: message => message.excludedProfile ?? undefined,
       allowedProfiles: message => message.allowedProfiles ?? null,
       ...(options.onRouteDecision ? { onDecision: options.onRouteDecision } : {}),

@@ -1053,9 +1053,12 @@ export class ChatSessionManager {
       onChange: options.onMailboxChange,
       onReasonsChange: options.onWaitingReasonsChange,
       // The router reads the profile's provider plan report (D14: a profile
-      // state's usage is its provider's).
+      // state's usage is its provider's), and the provider view reads its
+      // report by provider id — never re-mapped as a profile id, which a
+      // model key of another provider would be.
       usageOf: profileId =>
         this.usageLimits.get(ambientProviderOf(options.profileCatalogHome)(profileId)),
+      providerUsageOf: providerId => this.usageLimits.get(providerId),
       onRulesLoaded: () => options.onRoutingRulesLoaded?.(),
       onError: error => logger.warn('team_mailbox_dispatch_failed', { error: String(error) }),
       ownership: executionCore.ownership,
@@ -2538,10 +2541,9 @@ export class ChatSessionManager {
       return
     }
     // The pull runs with one live session's credentials (providers-and-workers
-    // 5.2); any session of the provider resolves the same endpoint.
-    const record = [...this.records.values()].find(
-      (candidate) => this.providerIdOf(candidate.sessionId) === providerId
-    )
+    // 5.2); any live session of the provider resolves the same endpoint. An
+    // archived sibling never serves the pull.
+    const record = this.liveSessionsOf(providerId)[0]
     if (!record) return
     const target = this.providerUsageTarget(record)
     if (!target) return
@@ -2554,14 +2556,19 @@ export class ChatSessionManager {
     })
   }
 
+  /** Every non-archived session on one of the provider's models with a live driver (started agent). */
+  private liveSessionsOf(providerId: string): ChatSessionRecord[] {
+    return [...this.records.values()].filter(
+      (record) =>
+        this.providerIdOf(record.sessionId) === providerId &&
+        !record.archivedAt &&
+        this.drivers.has(record.sessionId)
+    )
+  }
+
   /** Any non-archived session on one of the provider's models with a live driver (started agent). */
   private hasLiveSessionOf(providerId: string): boolean {
-    for (const record of this.records.values()) {
-      if (this.providerIdOf(record.sessionId) !== providerId) continue
-      if (record.archivedAt) continue
-      if (this.drivers.has(record.sessionId)) return true
-    }
-    return false
+    return this.liveSessionsOf(providerId).length > 0
   }
 
   /** Stop every provider usage refresh timer (server shutdown). */

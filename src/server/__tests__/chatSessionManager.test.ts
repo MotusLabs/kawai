@@ -4892,6 +4892,81 @@ describe('ChatSessionManager provider usage pull', () => {
     expect(fetchCalls).toHaveLength(settled)
   })
 
+  test('the refresh pull carries a live session\'s credentials, never an archived sibling\'s', async () => {
+    // Two profiles of zai with distinct tokens (providers-and-workers 5.2):
+    // after the glm session archives, every pull must name the live
+    // glm-flash session's token.
+    const catalog = path.join(tempDir, 'catalog-live-target')
+    fs.mkdirSync(path.join(catalog, '.kawai'), { recursive: true })
+    fs.writeFileSync(
+      path.join(catalog, '.kawai', 'providers.json'),
+      JSON.stringify({ zai: { label: 'Z.AI', models: { glm: {}, 'glm-flash': {} } } })
+    )
+    fs.writeFileSync(
+      path.join(catalog, '.kawai', 'profiles.json'),
+      JSON.stringify({
+        glm: { label: 'GLM', env: { ANTHROPIC_BASE_URL: 'https://zai.test/api/anthropic', ANTHROPIC_AUTH_TOKEN: 'sk-archived' } },
+        'glm-flash': { label: 'GLM Flash', env: { ANTHROPIC_BASE_URL: 'https://zai.test/api/anthropic', ANTHROPIC_AUTH_TOKEN: 'sk-live' } },
+      })
+    )
+    const { manager, fetchCalls } = await createProviderHarness(
+      { ANTHROPIC_BASE_URL: 'https://zai.test/api/anthropic', ANTHROPIC_AUTH_TOKEN: 'sk-live' },
+      [jsonResponse(CAPTURE(2)), jsonResponse(CAPTURE(50)), jsonResponse(CAPTURE(77)), jsonResponse(CAPTURE(88))],
+      catalog
+    )
+    const first = manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'glm' })
+    if (!first.ok) throw new Error(first.error)
+    const second = manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'glm-flash' })
+    if (!second.ok) throw new Error(second.error)
+    await manager.start(first.session.id)
+    await manager.start(second.session.id)
+    await flush()
+
+    await manager.archive(first.session.id)
+    // Every pull from here on runs after the archive: all must name the live
+    // session's token, not the archived sibling's. (The first session's own
+    // start pull legitimately used its token, so only the tail asserts.)
+    const afterArchive = fetchCalls.length
+    await waitForCondition(() => fetchCalls.length >= afterArchive + 2)
+    await flush()
+    const tail = fetchCalls.slice(afterArchive)
+    expect(tail.length).toBeGreaterThanOrEqual(2)
+    expect(tail.every(call => call.auth === 'sk-live')).toBe(true)
+  })
+
+  test('routing usage sources: a profile maps to its provider, a provider stays un-mapped', async () => {
+    // Provider 'glm' holds profile 'glm-air' beside provider 'zai' holding
+    // profile 'glm' (providers-and-workers D14): the router's profile source
+    // re-maps a profile to its provider's report, while the provider source
+    // reads by provider id and must not re-map it back to zai.
+    const catalog = path.join(tempDir, 'catalog-usage-keys')
+    fs.mkdirSync(path.join(catalog, '.kawai'), { recursive: true })
+    fs.writeFileSync(
+      path.join(catalog, '.kawai', 'providers.json'),
+      JSON.stringify({
+        zai: { label: 'Z.AI', models: { glm: {} } },
+        glm: { label: 'GLM', models: { 'glm-air': {} } },
+      })
+    )
+    const { manager } = await createProviderHarness({}, [], catalog, 3_600_000)
+    const store = (manager as unknown as {
+      usageLimits: { record(id: string, report: ChatUsageReport): void }
+    }).usageLimits
+    const at = '2026-10-12T12:00:00.000Z'
+    store.record('zai', { status: 'allowed', windows: [{ key: 'zai:time_limit', label: 'zai', percentUsed: 61, resetsAt: null }], receivedAt: at, source: 'provider' })
+    store.record('glm', { status: 'warning', windows: [{ key: 'glm:time_limit', label: 'glm', percentUsed: 12, resetsAt: null }], receivedAt: at, source: 'provider' })
+    const sources = (manager as unknown as {
+      teamMail: { router: { options: {
+        usageOf(id: string): ChatUsageReport | null
+        providerUsageOf(id: string): ChatUsageReport | null
+      } } }
+    }).teamMail.router.options
+    expect(sources.usageOf('glm')?.windows[0]).toMatchObject({ key: 'zai:time_limit' })
+    expect(sources.usageOf('glm-air')?.windows[0]).toMatchObject({ key: 'glm:time_limit' })
+    expect(sources.providerUsageOf('glm')?.windows[0]).toMatchObject({ key: 'glm:time_limit' })
+    expect(sources.providerUsageOf('zai')?.windows[0]).toMatchObject({ key: 'zai:time_limit' })
+  })
+
   test.each([
     { code: 500, msg: '404 NOT_FOUND' },
     { code: 1001, msg: 'Authentication refused' },
