@@ -6,15 +6,15 @@
 // driver records once its thread reveals it (§5). Additive, no backfill.
 //
 // The version is the next free one in the master this branch has merged
-// (the registry must stay dense; integration-candidates holds the next one
-// elsewhere) and is renumbered at the final master merge per the standing
-// MIGRATIONS rule.
+// (the registry must stay dense) and is renumbered at a later master merge
+// per the standing MIGRATIONS rule.
 import type { Database } from 'bun:sqlite'
 import type { Migration } from '../dbSafety/migrations'
 
-// Renumbered at the master merge: master's 13 is integration-candidates;
-// codex-chat-sessions lands as the next free version.
-export const CODEX_SESSION_MIGRATION_VERSION = 14
+// Renumbered at the master merge: master's 13 is integration-candidates and
+// its 14 process-observation-indexes; codex-chat-sessions lands as the next
+// free version.
+export const CODEX_SESSION_MIGRATION_VERSION = 15
 
 export function applyCodexSessionColumns(db: Database): void {
   const columns = db.prepare('PRAGMA table_info(chat_sessions)').all() as Array<{ name: string }>

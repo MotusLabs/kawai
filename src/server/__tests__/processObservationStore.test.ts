@@ -8,7 +8,7 @@ const at = '2026-10-18T00:00:00.000Z';
 const fact = (sourceKey = 'turn:1'): ProcessObservation => ({ sourceKey, kind: 'turn_started', teamId: 'a', sessionId: 's', turnId: 't', observedAt: at, data: {} });
 test('upgrade from version 10 preserves existing rows and applies the observation schema once', () => {
   const db = new Database(':memory:');
-  migrateSchema(db, ':memory:', { backups: null, migrations: MIGRATIONS.slice(0, -1) });
+  migrateSchema(db, ':memory:', { backups: null, migrations: MIGRATIONS.filter(migration => migration.version <= 10) });
   db.exec("INSERT INTO chat_turn_usage(session_id,turn_id,ok,input_tokens,output_tokens,cache_read_tokens,cache_creation_tokens,num_turns,ended_at) VALUES ('s','t',1,10,2,0,0,1,'2026-10-18')");
   migrateSchema(db, ':memory:', { backups: null });
   migrateSchema(db, ':memory:', { backups: null });
@@ -70,5 +70,42 @@ test('pruning drops keys of live chat facts with their detail but keeps durable-
   const keys = (db.prepare('SELECT source_key FROM process_observation_keys ORDER BY source_key').all() as { source_key: string }[]).map(row => row.source_key);
   expect(keys).toEqual(['source:team_tasks:t1']);
   expect(store.record(fact('source:team_tasks:t1'))).toBeNull();
+  db.close();
+});
+test('interval detail prunes after 14 days while facts and usage keep 90 days', () => {
+  const db = schemaDb();
+  let now = Date.parse(at);
+  const store = new ObservationStore(db, () => now);
+  store.record({ ...fact('chat:s:tool-1'), kind: 'tool', data: { category: 'shell', startedAt: at, durationSeconds: 1, partial: false } });
+  store.record({ ...fact('acceptance:r1'), kind: 'acceptance', data: { revision: 1, first: true } });
+  store.record({ ...fact('usage:s:t'), kind: 'usage', data: { input: 10, output: 2 } });
+  now += 15 * 24 * 3600000;
+  expect(store.prune()).toBe(1);
+  expect(store.forTeam('a').map(row => row.kind).sort()).toEqual(['acceptance', 'usage']);
+  expect(store.checkpoint('detail-retained-since')).toBe(new Date(now - 14 * 24 * 3600000).toISOString());
+  expect(store.checkpoint('facts-retained-since')).toBe(new Date(now - 90 * 24 * 3600000).toISOString());
+  const keys = (db.prepare('SELECT source_key FROM process_observation_keys ORDER BY source_key').all() as { source_key: string }[]).map(row => row.source_key);
+  expect(keys).toEqual(['acceptance:r1', 'usage:s:t']);
+  now += 76 * 24 * 3600000;
+  expect(store.prune()).toBe(2);
+  expect(store.forTeam('a')).toEqual([]);
+  expect(store.record({ ...fact('usage:s:t'), kind: 'usage', data: { input: 10 } })).toBeNull();
+  db.close();
+});
+test('a pruning backlog drains in bounded batches, interval detail first', () => {
+  const db = schemaDb();
+  let now = Date.parse(at);
+  const store = new ObservationStore(db, () => now);
+  db.transaction(() => {
+    for (let i = 0; i < 700; i++) store.record({ ...fact(`segment:s:t:${i}`), kind: 'activity', data: { phase: 'thinking' } });
+    for (let i = 0; i < 300; i++) store.record({ ...fact(`source:team_task_results:${i}`), kind: 'result', data: { revision: 1 } });
+  })();
+  now += 91 * 24 * 3600000;
+  const kinds = () => db.prepare('SELECT kind, count(*) AS n FROM process_observations GROUP BY kind ORDER BY kind').all();
+  expect(store.prune()).toBe(500);
+  expect(kinds()).toEqual([{ kind: 'activity', n: 200 }, { kind: 'result', n: 300 }]);
+  expect(store.prune()).toBe(500);
+  expect(store.forTeam('a', 0, 1000).map(row => row.kind)).toEqual([]);
+  expect(store.prune()).toBe(0);
   db.close();
 });

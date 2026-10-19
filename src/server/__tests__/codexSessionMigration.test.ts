@@ -8,9 +8,10 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { initDatabase, type SessionDatabase } from '../db'
+import { CODEX_SESSION_MIGRATION_VERSION } from '../chat/codexSessionMigration'
 import { MIGRATIONS } from '../dbSafety/migrations'
 
-const BEFORE_CODEX = MIGRATIONS.filter(migration => migration.version < 13)
+const BEFORE_CODEX = MIGRATIONS.filter(migration => migration.version < CODEX_SESSION_MIGRATION_VERSION)
 
 let dir: string
 let dbPath: string
@@ -56,7 +57,7 @@ test('this build registers codex-chat-runtime as the dense next numbered migrati
   const entries = MIGRATIONS.map(migration => [migration.version, migration.name] as const)
   const at = entries.findIndex(([, name]) => name === 'codex-chat-runtime')
   expect(entries.slice(at - 1, at + 1))
-    .toEqual([[13, 'integration-candidates'], [14, 'codex-chat-runtime']])
+    .toEqual([[14, 'process-observation-indexes'], [15, 'codex-chat-runtime']])
 })
 
 test('a predecessor database keeps its chats: the migration adds the columns and legacy rows read Claude', () => {
