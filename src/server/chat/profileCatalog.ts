@@ -196,8 +196,8 @@ export type CatalogLevel = {
   /**
    * The directory tier the file belongs to: 0 shipped, 1 the user level,
    * then one step per project `.kawai` directory, nearer directories higher.
-   * Cross-level runtime disagreements (D4) compare tiers, not file order —
-   * the user level's two files share one tier.
+   * A key's runtime origin (D4) is the tier of its first Claude placement,
+   * compared by tier, not file order — a directory's two files share one.
    */
   tier: number
 }

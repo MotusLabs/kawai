@@ -1,6 +1,6 @@
-// Tier merge for the layered catalog (design D2/D3): provider files first,
-// farthest level first, then the legacy `profiles.json` entries of each
-// level. Same-id providers merge with the nearer scalar winning and env
+// Tier merge for the layered catalog (design D2/D3): levels merge farthest
+// first, and within each level its `providers.json` before its legacy
+// `profiles.json` (see profileCatalogLevels). Same-id providers merge with the nearer scalar winning and env
 // merging per key. A model key defined under two providers of different
 // operator levels is an error naming both, the nearer definition ignored;
 // a nearer definition of a SHIPPED model key re-homes instead, starting
@@ -80,9 +80,13 @@ interface KeyHolder {
   own: boolean
   /** The key is a Codex profile, held outside every provider (R1); provider is unused. */
   codex?: true
-  /** The defining file's directory tier (see CatalogLevel.tier): cross-level
-   * runtime disagreements compare this against the challenger's tier (D4). */
+}
+
+/** Where a key was first placed as a Claude profile (D4 runtime origin tiers). */
+interface KeyOrigin {
+  /** The directory tier (see CatalogLevel.tier) of the first Claude placement. */
   tier: number
+  file: string
 }
 
 /** Provider ids taken by legacy entries naming a shipped-only provider (B1). */
@@ -96,11 +100,21 @@ export class CatalogMerger {
   /** Codex profiles (R1), in first-seen order; never inside a provider. */
   readonly codexProfiles = new Map<string, MergedCodexProfile>()
   readonly errors: string[] = []
-  /** Model key → where it sits and which tier defined it. */
+  /** Model key → where it sits now and which file put it there. */
   private holders = new Map<string, KeyHolder>()
+  /**
+   * Model key → its runtime origin (D4): the farthest tier defining it as
+   * Claude. Written once, by the first Claude placement; re-homes and
+   * overlays move the holder, never the origin, and a Codex placement
+   * writes none (a same-tier release removes it). The implicit `default` is
+   * a tier-0 Claude key from the start of the merge.
+   */
+  private origins = new Map<string, KeyOrigin>([['default', { tier: 0, file: '(implicit)' }]])
 
-  private setHolder(key: string, holder: KeyHolder): void {
+  /** Place a Claude key; its origin is recorded only by the first placement. */
+  private setHolder(key: string, holder: KeyHolder, tier: number): void {
     this.holders.set(key, holder)
+    if (!this.origins.has(key)) this.origins.set(key, { tier, file: holder.originFile })
   }
 
   /**
@@ -166,7 +180,7 @@ export class CatalogMerger {
           const holderProvider = this.providers.get(holder.provider)!
           const flat = flattenModel(holderProvider, holderProvider.models.get(key)!)
           holderProvider.models.delete(key)
-          this.setHolder(key, { provider: id, operator: !shipped, originFile: file, own: false, tier })
+          this.setHolder(key, { provider: id, operator: !shipped, originFile: file, own: false }, tier)
           merged.models.set(key, {
             label: model.label ?? flat.label,
             model: model.model ?? flat.model,
@@ -183,7 +197,7 @@ export class CatalogMerger {
         }
         // P3: a new key joins X with X's merged facts plus its own — the
         // flatten applies this provider's (already overlaid) env.
-        this.setHolder(key, { provider: id, operator: !shipped, originFile: file, own: false, tier })
+        this.setHolder(key, { provider: id, operator: !shipped, originFile: file, own: false }, tier)
         merged.models.set(key, { label: model.label, model: model.model, env: { ...model.env } })
       }
     }
@@ -250,7 +264,7 @@ export class CatalogMerger {
           operatorOrigin: !shipped,
           originFile: file,
         })
-        this.setHolder(id, { provider: id, operator: !shipped, originFile: file, own: true, tier })
+        this.setHolder(id, { provider: id, operator: !shipped, originFile: file, own: true }, tier)
         continue
       }
       const provider = this.providers.get(id)
@@ -271,7 +285,7 @@ export class CatalogMerger {
           operatorOrigin: !shipped,
           originFile: file,
         })
-        this.setHolder(id, { provider: reservedId, operator: !shipped, originFile: file, own: true, tier })
+        this.setHolder(id, { provider: reservedId, operator: !shipped, originFile: file, own: true }, tier)
         continue
       }
       // A brand-new one-model provider: the entry's env sits on the model,
@@ -286,38 +300,38 @@ export class CatalogMerger {
         operatorOrigin: !shipped,
         originFile: file,
       })
-      this.setHolder(id, { provider: id, operator: !shipped, originFile: file, own: true, tier })
+      this.setHolder(id, { provider: id, operator: !shipped, originFile: file, own: true }, tier)
     }
   }
 
   /**
-   * A Codex entry (D4/R1): held outside every provider. A same-tier
-   * providers.json model key is released for it (R2: providers.json cannot
-   * hold a Codex profile); a farther file's Claude profile never flips — the
-   * nearer Codex entry is ignored with that file's error, mirroring the
-   * Claude-over-Codex direction. `codexHome` and `network` arrive only from
+   * A Codex entry (D4/R1): held outside every provider. The key's runtime
+   * origin decides: none, and the entry is a new Codex profile; on this
+   * entry's own tier, the same directory's providers.json model key is
+   * released for it (R2: providers.json cannot hold a Codex profile); on a
+   * farther tier, the Claude profile never flips — the nearer Codex entry is
+   * ignored with that file's error, mirroring the Claude-over-Codex
+   * direction. `codexHome` and `network` arrive only from
    * trusted files (the parser enforces it), so a nearer overlay never
    * overwrites them.
    */
   private addCodexProfile(file: string, id: string, entry: PartialProfile, tier: number): void {
     const holder = this.holders.get(id)
-    if (holder === undefined && id === 'default' && tier > 0) {
-      // The implicit `default` (D4) is a tier-0 Claude holder from the start
-      // of the merge (B1), not a finish() fill-in: a nearer file claiming it
-      // as Codex is a cross-level runtime disagreement even while no holder
-      // is materialized yet, so it is refused with the same error.
-      this.errors.push(`${file}: profile "default" is a Codex entry here but a Claude entry in (implicit); the entry is ignored.`)
+    const origin = this.origins.get(id)
+    if (origin !== undefined && origin.tier < tier) {
+      // Cross-level runtime disagreement (D4): the key was first defined as
+      // Claude on a farther tier; a nearer file cannot change the runtime.
+      this.errors.push(`${file}: profile "${id}" is a Codex entry here but a Claude entry in ${origin.file}; the entry is ignored.`)
       return
     }
     if (holder !== undefined && !holder.codex) {
-      if (holder.tier < tier) {
-        // Cross-level runtime disagreement (D4): the entry's file is nearer
-        // than the Claude profile's; it cannot change the runtime.
-        this.errors.push(`${file}: profile "${id}" is a Codex entry here but a Claude entry in ${holder.originFile}; the entry is ignored.`)
-        return
-      }
+      // Same tier: only this directory's providers.json can hold the key,
+      // since nearer files are not merged yet (R2 release).
       const provider = this.providers.get(holder.provider)!
       provider.models.delete(id)
+      // The key is Codex from here on: no Claude origin remains, so a
+      // nearer Codex entry overlays it like any other Codex profile.
+      this.origins.delete(id)
       this.errors.push(`${file}: profile "${id}" is a model of provider "${holder.provider}" (${holder.originFile}); providers.json cannot hold a Codex profile, so the model key is released and "${id}" stays a Codex profile.`)
     }
     const existing = this.codexProfiles.get(id)
@@ -333,7 +347,7 @@ export class CatalogMerger {
       network: entry.network,
       originFile: file,
     })
-    this.holders.set(id, { provider: '', operator: true, originFile: file, own: false, codex: true, tier })
+    this.holders.set(id, { provider: '', operator: true, originFile: file, own: false, codex: true })
   }
 
   /** A legacy entry whose id names an existing operator provider merges into it. */
@@ -374,7 +388,7 @@ export class CatalogMerger {
     const provider = this.providers.get('default')
     if (provider) {
       provider.models.set('default', { label: 'Default', env: {} })
-      this.setHolder('default', { provider: 'default', operator: false, originFile: '(implicit)', own: true, tier: 0 })
+      this.setHolder('default', { provider: 'default', operator: false, originFile: '(implicit)', own: true }, 0)
       return
     }
     this.providers.set('default', {
@@ -384,6 +398,6 @@ export class CatalogMerger {
       operatorOrigin: false,
       originFile: '(implicit)',
     })
-    this.setHolder('default', { provider: 'default', operator: false, originFile: '(implicit)', own: true, tier: 0 })
+    this.setHolder('default', { provider: 'default', operator: false, originFile: '(implicit)', own: true }, 0)
   }
 }
