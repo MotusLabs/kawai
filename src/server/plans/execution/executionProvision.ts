@@ -2,7 +2,8 @@
 // check the change's name against worktrees, local branches, and origin —
 // a name that exists is accepted only when a done provision of an execution
 // of the same plan created it — then add the worktree from the main
-// checkout at origin's base sha, never with --force, reusing the worktree
+// checkout at the base sha the execution's landing mechanism resolves
+// (direct: the Start-time base commit), never with --force, reusing the worktree
 // or branch an earlier execution of the plan left behind. The main
 // checkout's HEAD, index, and files are never touched; fetching updates
 // only remote-tracking refs. Git comes in as the gitRemote functions, so
@@ -14,6 +15,8 @@ import type { ExecutionStore } from './executionStore'
 import { runGitAsync } from '../../git/gitCommand'
 import { gitFetch, lsRemoteHead, worktreeAdd } from '../landing/gitRemote'
 import type { GitRemoteError } from '../landing/gitRemote'
+import { mechanismFor, type LandingMechanisms } from '../landing/landingMechanisms'
+import { DIRECT_MECHANISMS } from '../landing/directMechanism'
 
 export interface ProvisionGit {
   fetch: typeof gitFetch
@@ -32,20 +35,26 @@ export class NameTaken extends Error {
 const failure = (argv: string[], stderr: string): GitRemoteError => ({ argv, exitCode: 1, stderr })
 
 /** The D6 provision, as one effect call. */
-export function provisionAdapter(store: ExecutionStore, git: ProvisionGit = { fetch: gitFetch, lsRemoteHead, worktreeAdd }): EffectAdapter {
+export function provisionAdapter(store: ExecutionStore, git: ProvisionGit = { fetch: gitFetch, lsRemoteHead, worktreeAdd }, mechanisms: LandingMechanisms = DIRECT_MECHANISMS): EffectAdapter {
   return {
     async call(effect: EffectRow): Promise<EffectCallResult> {
       const command = effect.command
       const repo = String(command.repo ?? '')
       const path = String(command.path ?? '')
       const branch = String(command.branch ?? '')
-      const base = String(command.base ?? '')
+      const recorded = String(command.base ?? '')
       const baseBranch = String(command.baseBranch ?? 'master')
       const planId = String(command.planId ?? '')
       try {
         // 1. Fetch the base ref (remote-tracking refs only).
         const fetched = await git.fetch(repo, 'origin', baseBranch)
         if (!fetched.ok) return { ok: false, error: fetched.error }
+        // The start commit, resolved now by the execution's mechanism (integration-candidates D1).
+        const execution = store.execution(effect.executionId)
+        const started = execution === null ? { ok: true as const, sha: recorded }
+          : await mechanismFor(mechanisms, execution.landingMode).startBase({ execution, recorded, repo, lsRemoteHead: git.lsRemoteHead })
+        if (!started.ok) return { ok: false, error: started.error }
+        const base = started.sha
 
         // 2. The name check (D6): worktree, local branch, origin branch.
         const worktrees = await runGitAsync(['worktree', 'list', '--porcelain'], { cwd: repo })
