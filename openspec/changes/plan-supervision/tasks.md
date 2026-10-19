@@ -4,18 +4,18 @@ Implement after `plan-execution` and `integration-candidates` have landed on mas
 
 ## 1. Shared model
 
-- [ ] 1.1 Reconcile names with the merged designs and record any renames in this design before coding. Verify by reading the designs against D3, D7, D9, D10, D13, and D17 here:
+- [x] 1.1 Reconcile names with the merged designs and record any renames in this design before coding. Verify by reading the designs against D3, D7, D9, D10, D13, and D17 here:
   - `plan-execution` D2, D3, D12, D18, and D19: the system `TaskCaller`, the change states and steps, the stop-reason union, Kawai's reply guard, and `completeBySystem`;
   - `integration-candidates` D3 and D9–D11: candidates, promotions, and their outcomes;
   - `team-workspace` D5 and D8: `ATTENTION_SOURCES`, `AttentionLink`, and the summary buckets.
-- [ ] 1.2 Create `src/shared/planDecisions.ts` with the card, decision, fix-task, and view types (D3, D15), and a header comment naming them. Implement `currentDecision`, `cardState`, `fixStatus`, `overrideCounts`, `fixDurations`, and `fixesFieldErrors` (D2, D3, D12, D13). Verify with unit tests:
+- [x] 1.2 Create `src/shared/planDecisions.ts` with the card, decision, fix-task, and view types (D3, D15), and a header comment naming them. Implement `currentDecision`, `cardState`, `fixStatus`, `overrideCounts`, `fixDurations`, and `fixesFieldErrors` (D2, D3, D12, D13). Verify with unit tests:
   - the current decision is the highest `seq`, and states are open, decided, or overridden;
   - fix status walks planning, in review, approved, running, landed, no change, and superseded;
   - M2 counts only agent `answer` and `own-call` decisions of the addressed group, and the overridden ones among them;
   - M4 measures override to newest landing, flagged when a landing is not tree-verified;
   - `fixes` entries must match `task-<uuid>`, with no duplicates within a change, and an entry that is empty after trimming is refused, not dropped.
-- [ ] 1.3 Create `src/shared/planSupervision.ts` with the outcome, cause, progress, activity, stall, and report types, and the cause and stop-reason labels (D10, D12). Verify with a typecheck, and with a test that an unknown cause or stop reason renders verbatim.
-- [ ] 1.4 Implement `changeSupervision(input, now)` (D10, D11). Verify with unit tests:
+- [x] 1.3 Create `src/shared/planSupervision.ts` with the outcome, cause, progress, activity, stall, and report types, and the cause and stop-reason labels (D10, D12). Verify with a typecheck, and with a test that an unknown cause or stop reason renders verbatim.
+- [x] 1.4 Implement `changeSupervision(input, now)` (D10, D11). Verify with unit tests:
   - the outcome precedence: landed, cancelled, stopped, waiting, a `repeating-failure` stall, then the running stages;
   - a repeating failure reads stalled during a fix round's CI wait, with the wait listed as also applying;
   - the failure signature of a round that fails CI and its review is the sorted check names followed by `review:fail`;
@@ -25,7 +25,7 @@ Implement after `plan-execution` and `integration-candidates` have landed on mas
   - `repeating-failure` needs two consecutive failed rounds with an equal signature, skips superseded rounds, follows a carried round's source, and excludes flaky checks;
   - the episode keys stay the same when only `waitEndedAt` moves;
   - a named wait never stalls.
-- [ ] 1.5 Implement `failureSignature`, `blockedDependents`, and `planReport` (D12). Verify with unit tests:
+- [x] 1.5 Implement `failureSignature`, `blockedDependents`, and `planReport` (D12). Verify with unit tests:
   - the transitive closure over `dependsOn` includes only unlanded changes;
   - the report reads "Landed N of M" with blockers, and "All M changes landed" without claiming success criteria;
   - failed and superseded candidates sit beside their change;
@@ -34,13 +34,13 @@ Implement after `plan-execution` and `integration-candidates` have landed on mas
 
 ## 2. Plan content
 
-- [ ] 2.1 Add `PlanContent.leadGroup` and `PlanChange.fixes` to the plan model, with normalization that omits each when unset (D2). Verify with a test that every pre-existing fixture revision keeps its canonical serialization and hash byte-for-byte, and that a set field round-trips.
-- [ ] 2.2 Extend `planStructureErrors` with the three D2 checks. Verify with tests:
+- [x] 2.1 Add `PlanContent.leadGroup` and `PlanChange.fixes` to the plan model, with normalization that omits each when unset (D2). Verify with a test that every pre-existing fixture revision keeps its canonical serialization and hash byte-for-byte, and that a set field round-trips.
+- [x] 2.2 Extend `planStructureErrors` with the three D2 checks. Verify with tests:
   - a `leadGroup` outside the roles is refused;
   - a malformed or duplicate `fixes` entry is refused, naming it;
   - one fix task named by two changes passes.
 - [ ] 2.3 Add the read-time warning for a `fixes` entry that names no fix or correction task of the plan (D2). Verify with a plan-detail test showing the warning, and an approval test that the warning does not refuse approval.
-- [ ] 2.4 Document `leadGroup` and `fixes` in the durable-plans AGENTS.md bullet, and the `plan_save_draft` tool description. Verify by reading both against D2.
+- [x] 2.4 Document `leadGroup` and `fixes` in the durable-plans AGENTS.md bullet, and the `plan_save_draft` tool description. Verify by reading both against D2.
 
 ## 3. Records
 
