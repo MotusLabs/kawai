@@ -37,10 +37,10 @@ The 2026-10-18 context-exhaustion incident (dev chat-e94dc0fc, see `chat-context
 
 - **`providers-and-workers`.** This change builds on it:
   - #219 landed its catalog, `workers` keys, `providerOf`, and provider cooldown (§1–4).
-  - Provider-keyed usage (§5) and `ctx.providers` in the rule contract (§6) are still pending. This change starts after them.
+  - Provider-keyed usage (§5) and `ctx.providers` (§6) landed in #241; `providers-and-workers` was archived in #242. This change builds on that landed state.
   - Before provider keys, a per-profile choice would treat two models of one account as independent, so "switch provider" would not mean anything.
 - **Plan-execution D15.** This change reuses its role filter (`team_messages.allowed_profiles`, `CandidateInput.allowedProfiles`). The worker choice narrows it rather than adding a second candidate filter (design D2).
-- **`codex-chat-sessions` (#220).** It adds Codex providers (`codex-home-<hash>`) and caches their usage per home. A choice may name one like any provider.
+- **`codex-chat-sessions` (#220 PR A, #240 PR B; change still open).** It adds Codex providers (`codex-home-<12 hex>`) and caches their usage per home. A choice may name one like any provider.
 - **`process-observability` D12.** Its recommendations call this change's eligibility check (design D10).
 
 ## Capabilities
@@ -59,7 +59,7 @@ The 2026-10-18 context-exhaustion incident (dev chat-e94dc0fc, see `chat-context
 ## Impact
 
 - `src/server/team/mailboxTools.ts`, the task tools, and `AssignmentService` (the new argument and its validation).
-- `team_messages` and `team_task_assignments` each gain a nullable column through a new numbered migration (13 or later; 12 is the latest on master).
+- `team_messages` and `team_task_assignments` each gain a nullable column through a new numbered migration (the next free number at landing; 15 `codex-chat-runtime` and 16 `plan-supervision` are taken).
 - `src/server/team/sessionMailbox.ts` and the dispatcher, which intersect the choice with the role filter that `candidates.ts` already applies.
 - `memberCauses.ts`, for the `worker-choice` cause.
 - A new pure eligibility module under `src/server/team/routing/`, which routing and `process-observability` share.

@@ -2,11 +2,11 @@
 
 ## Context
 
-See proposal.md (Why). The relevant state on master (after #219 and #220), and what is still pending:
+See proposal.md (Why). The relevant state on master (after #219, #220, and the landed `providers-and-workers`):
 
 - **Catalog (landed).** Providers own models. Model keys are unique and are the stored profile ids. `provider/model` resolves to a bare key in `groupCatalog.ts`, and `providerOf` names a profile's provider. Codex profiles (`codex-chat-sessions`) derive their provider from the resolved home (`codex-home-<12 hex>`), so a selector can name one.
 - **Cooldown (landed).** `LimitEventStore.cooldownFor(profileId, providerId)` gives a model's effective cooldown and the provider's.
-- **Usage (pending).** `UsageLimitStore` (`src/server/chat/usageLimits.ts`) is still keyed by profile. Keying it by provider is `providers-and-workers` §5. Codex reports are already cached per home provider id. `ctx.providers` in the rule contract is that change's §6, also pending.
+- **Usage (landed).** `UsageLimitStore` is keyed by provider (providers-and-workers §5, #241). `ctx.providers` is in the rule contract (§6, #241). Codex reports are cached per home provider id.
 - **Candidates and routing.** `buildCandidates` (`src/server/team/routing/candidates.ts`) is pure and already takes hard filters:
   - `excludeProfile` (limit forwards);
   - the provider-cooling exclusion;
@@ -104,7 +104,7 @@ The human decided this on PR #221. `process-observability` D12 must be able to a
 
 - [A lead pins work to a provider and forgets it] → The waiting reason names the choice and its retry time. The Mailbox lets the human or a `canManageMailbox` agent cancel the mail, and the lead can re-dispatch.
 - [Usage is unknown after a restart until the next report] → The capacity tool states unknown and its source, and the lead's prompt note says so. Kawai never invents a figure.
-- [Landing before `providers-and-workers` §5/§6] → The work is ordered after them (tasks.md). The catalog and cooldown parts have landed. Without provider-keyed usage, `team_capacity` would report per-model usage under a provider heading, which misstates shared plans.
+- [Landing before `providers-and-workers` §5/§6] → Satisfied: that change landed §5/§6 in #241 and was archived (#242). (The ordering mattered: without provider-keyed usage, `team_capacity` would report per-model usage under a provider heading, which misstates shared plans.)
 - [Wider tool surface invites over-steering] → The argument is optional, and with no choice routing is unchanged.
 
 ## Migration Plan

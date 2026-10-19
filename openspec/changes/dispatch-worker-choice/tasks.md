@@ -1,10 +1,10 @@
 # Tasks
 
-Start only after `providers-and-workers` §5 (provider-keyed usage) and §6 (`ctx.providers`) have landed on master; §1–4 already have (design Context). Rebase onto it first, and confirm `cooldownFor` and the provider-keyed `UsageLimitStore` exist.
+`providers-and-workers` §5/§6 landed in #241 and the change is archived (#242). Rebase onto current master and confirm `cooldownFor`, the provider-keyed `UsageLimitStore`, and `ctx.providers` exist (they do on master at a28d464a).
 
 ## 1. Selector and storage
 
-- [ ] 1.1 Add the next numbered migration (13 or later), adding `team_messages.worker_choice` and `team_task_assignments.worker_choice` (nullable). Verify that `schemaBaselinePin.test.ts` gains its expected delta, and that migration tests pass on a copy of a database at the previous version.
+- [ ] 1.1 Add the next numbered migration (the next free number at landing), adding `team_messages.worker_choice` and `team_task_assignments.worker_choice` (nullable). Verify that `schemaBaselinePin.test.ts` gains its expected delta, and that migration tests pass on a copy of a database at the previous version.
 - [ ] 1.2 Add a pure worker-selector module: parse and normalize against the catalog (provider; `provider/model`; bare model key → `provider/model`; refusing an ambiguous bare id; one-model provider not ambiguous) and resolve a selector to a group's model keys. Verify with unit tests covering every case in design D1 and the agent-mailbox spec's refusals.
 - [ ] 1.3 Thread `workerChoice` through `MailboxStore.enqueue`, `TeamMessage`, and the assignment store rows. Verify round-trip store tests, and that a `null` choice reads exactly as today.
 
@@ -29,7 +29,7 @@ Start only after `providers-and-workers` §5 (provider-keyed usage) and §6 (`ct
 
 ## 3. Agent tools
 
-- [ ] 3.1 Add `worker` to `send_message` and `schedule_message` (zod schema, descriptions), validated in `TeamMailbox.send` with the spec's refusals, nothing queued on refusal. Verify mailbox tool tests: group accept, refusals for direct mail, the human, an unknown worker, a worker outside the group, and an ambiguous id.
+- [ ] 3.1 Add `worker` to the `send_message` and `schedule_message` schemas only (not the shared `content` spread, which `reply` also uses), with descriptions, validated in `TeamMailbox.send` with the spec's refusals, nothing queued on refusal. Verify mailbox tool tests: group accept, refusals for direct mail, the human, an unknown worker, a worker outside the group, an ambiguous id, and a `worker` given on `reply`.
 - [ ] 3.2 Add `worker` to `task_handoff` and include it in `payloadDiff` and the standing-equivalent check. Verify task tool tests: a group handoff carries it; the same key with a different worker is refused naming `worker`; a session target refuses it. Verify that Kawai's plan-execution dispatches and handoffs (`executionDispatch.ts`, `executionLanding.ts`) never set `worker_choice`, with an execution test asserting a null choice beside the role's allowed profiles.
 - [ ] 3.3 Implement `team_capacity { group? }` from the routing objects (design D6), card-free and identity-bound. Verify tool tests: every group, one group, an unknown group refused, unknown usage as null, a cooling provider's end, and live counts including pending spawns equal to what `buildCandidates` counts.
 - [ ] 3.3a Add `sharesLoginWith` to `team_capacity`, following design D6's detection rule. Verify unit tests:
@@ -53,4 +53,4 @@ Start only after `providers-and-workers` §5 (provider-keyed usage) and §6 (`ct
 
 ## Workflow follow-up
 
-- Archive after review, and after `providers-and-workers` is archived, so the deltas apply to its final specs.
+- `providers-and-workers` is archived (#242), so these deltas apply to the main specs; archive after review.
