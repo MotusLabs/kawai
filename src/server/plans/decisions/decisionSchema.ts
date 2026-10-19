@@ -79,7 +79,7 @@ export function applyPlanSupervisionSchema(db: Database): void {
 }
 
 export const planSupervisionMigration: Migration = {
-  version: 15,
+  version: 16,
   name: 'plan-supervision',
   up: applyPlanSupervisionSchema,
 }

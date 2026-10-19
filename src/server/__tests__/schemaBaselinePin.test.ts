@@ -26,8 +26,10 @@
 // (`integration-candidates`) the four integration tables and the
 // one-running-promotion index; migration 14
 // (`process-observation-indexes`) indexes `chat_turn_usage.ended_at` and
-// `profile_limit_events.at`; migration 15 (`plan-supervision`) the decision
-// cards, decisions, fix tasks, and stall alerts.
+// `profile_limit_events.at`; migration 15 (`codex-chat-runtime`) the
+// creation-fixed `runtime` and `codex_home` plus the `transcript_path` on
+// `chat_sessions`; migration 16 (`plan-supervision`) the decision cards,
+// decisions, fix tasks, and stall alerts.
 import { expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { initDatabase } from '../db'
@@ -338,8 +340,8 @@ const migration13: SchemaShape['tables'] = {
   },
 }
 
-/** Migration 15's delta: decision cards, decisions, fix tasks, and stall alerts (plan-supervision D3). */
-const migration15: SchemaShape['tables'] = {
+/** Migration 16's delta: decision cards, decisions, fix tasks, and stall alerts (plan-supervision D3). */
+const migration16: SchemaShape['tables'] = {
   plan_decision_cards: {
     columns: [
       id, column('team_id'), column('plan_id'), optionalInteger('revision'), optional('change'), optional('task_id'),
@@ -379,7 +381,7 @@ const migration15: SchemaShape['tables'] = {
 
 test('a fresh database opened by this build has the same shape plus each migration\'s delta and schema_migrations', () => {
   const session = initDatabase({ path: ':memory:' })
-  const added = { ...migration2, ...migration3, ...migration4, ...migration5, ...migration6, ...migration7, ...migration8, ...migration9, ...migration10, ...migration11, ...migration13, ...migration15 }
+  const added = { ...migration2, ...migration3, ...migration4, ...migration5, ...migration6, ...migration7, ...migration8, ...migration9, ...migration10, ...migration11, ...migration13, ...migration16 }
   expect(Object.keys(added).filter(table => table in expected.tables)).toEqual([])
   const messages = expected.tables.team_messages!
   const withProfiles = { ...messages, columns: [...messages.columns, optional('allowed_profiles')] }
@@ -387,9 +389,22 @@ test('a fresh database opened by this build has the same shape plus each migrati
   // the process-observations tables (in `added` above); migration 12's: limit
   // events record their provider and window (providers-and-workers D7), both
   // nullable, after the baseline columns; migration 14's: the `at` index here
-  // and the `ended_at` index on chat_turn_usage (in migration 6's delta).
+  // and the `ended_at` index on chat_turn_usage (in migration 6's delta);
+  // migration 15's (codex-chat-sessions 3.3): the creation-fixed runtime (NOT
+  // NULL DEFAULT 'claude') and, for Codex chats, the resolved home, plus the
+  // transcript path.
   const chats = expected.tables.chat_sessions!
-  const withFlag = { ...chats, columns: [...chats.columns, optional('context_exhausted_at'), optional('context_exhausted_reason')] }
+  const withFlag = {
+    ...chats,
+    columns: [
+      ...chats.columns,
+      optional('context_exhausted_at'),
+      optional('context_exhausted_reason'),
+      { name: 'runtime', type: 'TEXT', notnull: 1, dflt_value: "'claude'", pk: 0 },
+      optional('codex_home'),
+      optional('transcript_path'),
+    ],
+  }
   const limitEvents = expected.tables.profile_limit_events!
   const withLimitContext = {
     columns: [...limitEvents.columns, optional('provider_id'), optional('limit_window')],

@@ -9,6 +9,7 @@
 // installed or repaired executable recovers without a server restart.
 import fs from 'node:fs'
 import path from 'node:path'
+import { compareVersions } from './executableVersion'
 
 /**
  * Minimum Claude Code version chat sessions support. Must stay equal to the
@@ -227,13 +228,6 @@ export function parseClaudeVersion(output: string): string | null {
   return match ? `${match[1]}.${match[2]}.${match[3]}` : null
 }
 
-/** Numeric triple comparison: negative when a < b, 0 when equal. */
-export function compareVersions(a: string, b: string): number {
-  const pa = a.split('.').map(Number)
-  const pb = b.split('.').map(Number)
-  for (let i = 0; i < 3; i++) {
-    if (pa[i]! < pb[i]!) return -1
-    if (pa[i]! > pb[i]!) return 1
-  }
-  return 0
-}
+/** Numeric triple comparison: negative when a < b, 0 when equal. Shared with
+ * the Codex gate in executableVersion.ts; re-exported for existing importers. */
+export { compareVersions } from './executableVersion'

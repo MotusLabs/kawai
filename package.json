@@ -22,7 +22,7 @@
     "dev:client": "vite --host",
     "build": "vite build",
     "start": "bun src/server/index.ts",
-    "lint": "oxlint .",
+    "lint": "oxlint . --ignore-pattern src/server/chat/codex/protocol/",
     "typecheck": "tsc --noEmit",
     "test": "bun scripts/test-runner.ts",
     "test:ci": "bun scripts/test-runner.ts --skip-real-tmux",

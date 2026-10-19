@@ -184,7 +184,7 @@ describe('resolution', () => {
 
   test('a rule’s onLimit decides; its failure falls back to the group policy', async () => {
     ruleOnLimit = async ctx => {
-      expect(ctx).toMatchObject({ profileId: 'glm', sessionId: 'dev', parkCount: 0, progress: { toolCalls: 0 }, status: 429 })
+      expect(ctx).toMatchObject({ profileId: 'glm', providerId: 'zai', sessionId: 'dev', parkCount: 0, progress: { toolCalls: 0 }, status: 429 })
       return { type: 'forward', to: { kind: 'group', id: 'architects' } }
     }
     const m = deliver()

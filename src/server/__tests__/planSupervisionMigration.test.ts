@@ -1,5 +1,5 @@
 // Schema migration `plan-supervision` (plan-supervision design D3), task 3.1.
-// Two databases each open twice: a fresh one, and one at version 14 that
+// Two databases each open twice: a fresh one, and one at version 15 that
 // already has the plan, execution, and turn-usage tables with rows. Each
 // gains the four tables once and keeps every earlier row.
 import { afterEach, beforeEach, expect, test } from 'bun:test'
@@ -12,7 +12,7 @@ import { MIGRATIONS, type Migration } from '../dbSafety/migrations'
 import { planSupervisionMigration } from '../plans/decisions/decisionSchema'
 
 const SUPERVISION_TABLES = ['plan_decision_cards', 'plan_decisions', 'plan_fix_tasks', 'plan_stall_alerts']
-const UP_TO_14: readonly Migration[] = MIGRATIONS.filter(migration => migration.version <= 14)
+const UP_TO_15: readonly Migration[] = MIGRATIONS.filter(migration => migration.version <= 15)
 
 let dir: string
 let dbPath: string
@@ -38,10 +38,10 @@ function versions(file: string): Array<{ version: number; name: string }> {
   } finally { db.close() }
 }
 
-test('plan-supervision is migration 15, registered right after process-observation-indexes', () => {
-  expect(planSupervisionMigration.version).toBe(15)
-  expect(MIGRATIONS.find(migration => migration.version === 15)).toBe(planSupervisionMigration)
-  expect(MIGRATIONS.find(migration => migration.version === 14)!.name).toBe('process-observation-indexes')
+test('plan-supervision is migration 16, registered right after codex-chat-runtime', () => {
+  expect(planSupervisionMigration.version).toBe(16)
+  expect(MIGRATIONS.find(migration => migration.version === 16)).toBe(planSupervisionMigration)
+  expect(MIGRATIONS.find(migration => migration.version === 15)!.name).toBe('codex-chat-runtime')
 })
 
 test('a fresh database, opened twice, gains the four tables once', () => {
@@ -49,27 +49,27 @@ test('a fresh database, opened twice, gains the four tables once', () => {
   const after = tables(dbPath)
   expect(SUPERVISION_TABLES.filter(table => table in after)).toEqual(SUPERVISION_TABLES)
   const recorded = versions(dbPath)
-  expect(recorded.filter(row => row.version === 15)).toEqual([{ version: 15, name: 'plan-supervision' }])
+  expect(recorded.filter(row => row.version === 16)).toEqual([{ version: 16, name: 'plan-supervision' }])
   expect(recorded.map(row => row.version)).toEqual(recorded.map((_, index) => index + 1))
 })
 
-test('a database at version 14 with plan rows upgrades, twice, keeping every row', () => {
-  const at14 = initDatabase({ path: dbPath, migrations: UP_TO_14 })
-  at14.db.prepare(`INSERT INTO plan_change_landings (plan_id, change, execution_id, team_id, mechanism, head_sha, base_sha, merge_sha, landed_at, tree_verified)
+test('a database at version 15 with plan rows upgrades, twice, keeping every row', () => {
+  const at15 = initDatabase({ path: dbPath, migrations: UP_TO_15 })
+  at15.db.prepare(`INSERT INTO plan_change_landings (plan_id, change, execution_id, team_id, mechanism, head_sha, base_sha, merge_sha, landed_at, tree_verified)
     VALUES ('p', 'alpha', 'e', 't', 'direct', 'h', 'b', 'm', 'now', 1)`).run()
-  at14.db.prepare(`INSERT INTO chat_turn_usage (session_id, turn_id, team_id, group_id, profile_id, model, task_id, start_id, ok, input_tokens,
+  at15.db.prepare(`INSERT INTO chat_turn_usage (session_id, turn_id, team_id, group_id, profile_id, model, task_id, start_id, ok, input_tokens,
     output_tokens, cache_read_tokens, cache_creation_tokens, num_turns, ended_at) VALUES ('s', 'turn', 't', 'g', 'p', 'm', 'task', NULL, 1, 1, 2, 3, 4, 5, 'now')`).run()
-  at14.close()
+  at15.close()
   const before = tables(dbPath)
   expect(SUPERVISION_TABLES.filter(table => table in before)).toEqual([])
   expect(['plans', 'plan_change_landings', 'plan_integration_candidates', 'chat_turn_usage'].filter(table => table in before)).toHaveLength(4)
-  expect(versions(dbPath).at(-1)!.version).toBe(14)
+  expect(versions(dbPath).at(-1)!.version).toBe(15)
 
   for (let run = 0; run < 2; run++) initDatabase({ path: dbPath, migrations: MIGRATIONS }).close()
   const after = tables(dbPath)
   for (const [table, rows] of Object.entries(before)) expect(after[table]).toEqual(rows)
   expect(Object.keys(after).filter(table => !(table in before)).sort()).toEqual(SUPERVISION_TABLES)
-  expect(versions(dbPath).filter(row => row.version === 15)).toHaveLength(1)
+  expect(versions(dbPath).filter(row => row.version === 16)).toHaveLength(1)
 })
 
 test("rerunning the migration's up is a no-op", () => {

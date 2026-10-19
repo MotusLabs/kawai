@@ -24,8 +24,9 @@ test('catalog returns identifiers and labels only', async () => {
   const data = await response.json()
   expect(data.errors).toEqual([])
   expect(data.profiles).toHaveLength(9)
-  // providerId and providerLabel ride additively (task 2.1); no env, base URL, or executable.
-  for (const item of data.profiles) expect(Object.keys(item).sort()).toEqual(['id', 'label', 'providerId', 'providerLabel'])
+  // providerId and providerLabel ride additively (task 2.1), runtime with
+  // them (task 3.4); no env, base URL, or executable.
+  for (const item of data.profiles) expect(Object.keys(item).sort()).toEqual(['id', 'label', 'providerId', 'providerLabel', 'runtime'])
 })
 
 test('catalog resolves per requested project path', async () => {
@@ -39,16 +40,26 @@ test('catalog resolves per requested project path', async () => {
     fs.mkdirSync(path.join(project, '.kawai'), { recursive: true })
     fs.writeFileSync(path.join(project, '.kawai', 'profiles.json'), JSON.stringify({
       'glm-turbo': { label: 'GLM Flash', model: 'glm-5.3-flash[1m]' },
+      codex: { label: 'Codex', runtime: 'codex' },
     }))
     const after = await createClaudeProfileRoutes().request(`/?projectPath=${encodeURIComponent(project)}`)
     const afterData = await after.json()
     const entry = afterData.profiles.find((profile: { id: string }) => profile.id === 'glm-turbo')
-    expect(entry).toEqual({ id: 'glm-turbo', label: 'GLM Flash', providerId: 'glm-turbo', providerLabel: 'GLM Flash' })
+    expect(entry).toEqual({ id: 'glm-turbo', label: 'GLM Flash', providerId: 'glm-turbo', providerLabel: 'GLM Flash', runtime: 'claude' })
+    // The Codex entry crosses with its runtime, under the home-derived
+    // provider id and the fixed Codex label (task 3.4); the default home
+    // never appears.
+    const codexRow = afterData.profiles.find((profile: { id: string }) => profile.id === 'codex')
+    expect(codexRow.label).toBe('Codex')
+    expect(codexRow.providerId).toMatch(/^codex-home-[0-9a-f]{12}$/)
+    expect(codexRow.providerLabel).toBe('Codex')
+    expect(codexRow.runtime).toBe('codex')
     // Credentials and environment maps never cross the boundary.
-    for (const item of afterData.profiles) expect(Object.keys(item).sort()).toEqual(['id', 'label', 'providerId', 'providerLabel'])
+    for (const item of afterData.profiles) expect(Object.keys(item).sort()).toEqual(['id', 'label', 'providerId', 'providerLabel', 'runtime'])
 
     // Session-create validation uses the same per-path catalog.
     expect(profileRequestError({ kind: 'chat', projectPath: project, claudeProfileId: 'glm-turbo' })).toBeNull()
+    expect(profileRequestError({ kind: 'chat', projectPath: project, claudeProfileId: 'codex' })).toBeNull()
     expect(profileRequestError({ kind: 'chat', projectPath: project, claudeProfileId: 'unknown' })).toContain('Unknown')
   } finally {
     fs.rmSync(project, { recursive: true, force: true })

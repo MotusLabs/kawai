@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import {
   parseProviderCatalogValue,
+  providerLabelOf,
   providerOf,
   resolveProfileCatalog,
   type ProfileCatalogContext,
@@ -342,5 +343,30 @@ describe('providerOf', () => {
     writeProfiles(homeDir, { glm: { label: 'Own GLM' } })
     const userCtx: ProfileCatalogContext = { homeDir }
     expect(providerOf('glm', userCtx)).toBe('glm')
+  })
+})
+
+describe('providerLabelOf', () => {
+  test('resolves a known provider label and null for an unknown provider', () => {
+    const providers = path.join(tempRoot, 'shipped', 'providers.json')
+    fs.mkdirSync(path.dirname(providers), { recursive: true })
+    fs.writeFileSync(providers, JSON.stringify({ zai: { label: 'Z.AI', models: { glm: {} } } }))
+    const profiles = path.join(tempRoot, 'shipped', 'profiles.json')
+    fs.writeFileSync(profiles, '{}')
+    const ctx = shippedCtx(providers, profiles)
+    expect(providerLabelOf('zai', ctx)).toBe('Z.AI')
+    expect(providerLabelOf('ghost', ctx)).toBeNull()
+  })
+
+  test('the cache re-derives when the providers file changes', () => {
+    const providers = path.join(tempRoot, 'shipped', 'providers.json')
+    fs.mkdirSync(path.dirname(providers), { recursive: true })
+    fs.writeFileSync(providers, JSON.stringify({ zai: { label: 'Z.AI', models: { glm: {} } } }))
+    const profiles = path.join(tempRoot, 'shipped', 'profiles.json')
+    fs.writeFileSync(profiles, '{}')
+    const ctx = shippedCtx(providers, profiles)
+    expect(providerLabelOf('zai', ctx)).toBe('Z.AI')
+    fs.writeFileSync(providers, JSON.stringify({ zai: { label: 'Zed', models: { glm: {} } } }))
+    expect(providerLabelOf('zai', ctx)).toBe('Zed')
   })
 })
