@@ -52,16 +52,38 @@ export interface RouteUsage {
 }
 
 export interface RouteProfileState {
-  /** In memory only: null after a restart until the next update. */
+  /** The provider owning the profile (providers-and-workers D14). */
+  providerId: string
+  /** The provider's report, shared by every profile of it. In memory only: null after a restart until the next update. */
   usage: RouteUsage | null
   /** Retained limit events (24 hours), oldest first. */
   limitEvents: LimitEvent[]
-  /** kawai's built-in cooldown end (ISO), or null when not cooling. */
+  /**
+   * kawai's built-in cooldown end (ISO), or null when not cooling: the
+   * profile's effective cooldown, so its provider's provider-scoped events
+   * cool it too (providers-and-workers D8).
+   */
+  cooldownUntil: string | null
+}
+
+/** One provider of the context's profiles: the account's cooldown, usage, and limit facts (providers-and-workers D14). */
+export interface RouteProviderState {
+  /** Catalog label; null for a provider the catalog no longer names. */
+  label: string | null
+  /** The provider's profile ids among the context's profiles, in context order. */
+  profiles: string[]
+  /** The provider's report. In memory only: null after a restart until the next update. */
+  usage: RouteUsage | null
+  /** Limit events recorded for the provider's profiles (24 hours), model-scoped windows included, oldest first. */
+  limitEvents: LimitEvent[]
+  /** The provider's own cooldown end (ISO), or null when not cooling. */
   cooldownUntil: string | null
 }
 
 export interface RouteGroupProfile {
   profileId: string
+  /** The provider owning the profile (providers-and-workers D14). */
+  providerId: string
   /** Live group members allowed on this profile; absent = no per-profile cap. */
   cap?: number
   /** Live (non-archived) group members on this profile now, pending spawns included. */
@@ -103,6 +125,8 @@ export interface RouteCandidate {
   id: string
   kind: 'member' | 'spawn'
   profileId: string
+  /** The provider owning the profile (providers-and-workers D14). */
+  providerId: string
   sessionId?: string
   cwd: string
   /** How long the member has been idle. */
@@ -117,6 +141,8 @@ export interface RouteContext {
   candidates: RouteCandidate[]
   /** Every profile the group allows, plus those of live members. */
   profiles: Record<string, RouteProfileState>
+  /** The providers of those profiles, keyed by provider id (providers-and-workers D14). */
+  providers: Record<string, RouteProviderState>
 }
 
 export type RouteDecision =
@@ -133,6 +159,8 @@ export type RouteDecision =
 export interface LimitOutcomeContext {
   now: string
   profileId: string
+  /** The provider owning the profile (providers-and-workers D14). */
+  providerId: string
   sessionId: string
   groupId: string | null
   message: RouteMessage

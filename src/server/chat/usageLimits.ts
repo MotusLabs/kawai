@@ -2,7 +2,9 @@
 // shapes Claude Code emits — pushed rate_limit_event frames, /usage reports
 // carried on assistant messages, and the SDK usage control reply — are
 // normalized into one Kawai-owned ChatUsageReport, and UsageLimitStore keeps
-// the latest report (or a "no data" verdict) per Claude profile. Side-effect
+// the latest report (or a "no data" verdict) per provider
+// (providers-and-workers 5.1: sibling models of one provider share the same
+// plan, so its quota is held and pulled once). Side-effect
 // free and SDK-free (sources are matched structurally, like chatActivity.ts),
 // so tests pin shapes copied from real wire captures and the direct-CLI
 // transport of replace-claude-sdk-with-cli can reuse the parsing. Claude plan
@@ -323,11 +325,11 @@ function percentWindow(
   return planWindow({ key, label, percentUsed, resetsAt: toIsoResetsAt(slice?.resets_at) })
 }
 
-// ----------------------------------------------------------------- per-profile store
+// ----------------------------------------------------------------- per-provider store
 
-/** Notified with the latest report (or null) whenever a profile's data changes. */
+/** Notified with the latest report (or null) whenever a provider's data changes. */
 export type UsageLimitListener = (
-  profileId: string,
+  providerId: string,
   report: ChatUsageReport | null
 ) => void
 
@@ -336,39 +338,41 @@ interface UsageLimitState {
   report: ChatUsageReport | null
   /** Set when a pull yielded nothing: later pulls are skipped, pushes land. */
   noDataAt: string | null
-  /** True once this profile's one pull per store lifetime has been claimed. */
+  /** True once this provider's one pull per store lifetime has been claimed. */
   pullClaimed: boolean
 }
 
 /**
- * Latest plan-usage report per Claude profile, in memory only (usage bar
- * design D3): merging keeps held windows when a report carries none, older
+ * Latest plan-usage report per provider, in memory only (usage bar design
+ * D3, providers-and-workers 5.1): sibling models of one provider share the
+ * same plan, so the key is the provider and one report serves all of its
+ * profiles. Merging keeps held windows when a report carries none, older
  * data never overwrites newer, and a "no data" verdict suppresses the pull
  * fallback until any push replaces it.
  */
 export class UsageLimitStore {
-  private readonly profiles = new Map<string, UsageLimitState>()
+  private readonly providers = new Map<string, UsageLimitState>()
   private readonly listeners = new Set<UsageLimitListener>()
 
-  /** Subscribe to profile data changes; returns an unsubscribe function. */
+  /** Subscribe to provider data changes; returns an unsubscribe function. */
   subscribe(listener: UsageLimitListener): () => void {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)
   }
 
-  /** The latest report for a profile, or null (also under a no-data verdict). */
-  get(profileId: string): ChatUsageReport | null {
-    return this.profiles.get(profileId)?.report ?? null
+  /** The latest report for a provider, or null (also under a no-data verdict). */
+  get(providerId: string): ChatUsageReport | null {
+    return this.providers.get(providerId)?.report ?? null
   }
 
   /**
-   * Claim this profile's one usage pull: true only when no pull has been
-   * claimed and the profile holds neither a report nor a no-data verdict.
+   * Claim this provider's one usage pull: true only when no pull has been
+   * claimed and the provider holds neither a report nor a no-data verdict.
    * Design D1 — the pull is gap-filling, not a poll, and a provider that
    * reports nothing must not pay a control round-trip on every turn.
    */
-  claimPull(profileId: string): boolean {
-    const state = this.state(profileId)
+  claimPull(providerId: string): boolean {
+    const state = this.state(providerId)
     if (state.pullClaimed || state.report !== null || state.noDataAt !== null) {
       return false
     }
@@ -382,8 +386,8 @@ export class UsageLimitStore {
    * it) and always clears a no-data verdict; an older report never overwrites
    * a newer one.
    */
-  record(profileId: string, report: ChatUsageReport): void {
-    const state = this.state(profileId)
+  record(providerId: string, report: ChatUsageReport): void {
+    const state = this.state(providerId)
     if (
       state.report &&
       Date.parse(state.report.receivedAt) > Date.parse(report.receivedAt)
@@ -396,33 +400,33 @@ export class UsageLimitStore {
     const changed = JSON.stringify(state.report) !== JSON.stringify(next)
     state.report = next
     state.noDataAt = null
-    if (changed) this.notify(profileId)
+    if (changed) this.notify(providerId)
   }
 
   /**
-   * Record that no usage data could be obtained for a profile. Never
+   * Record that no usage data could be obtained for a provider. Never
    * displaces a report that already landed (the pull raced a push).
    */
-  recordNoData(profileId: string, at: string = new Date().toISOString()): void {
-    const state = this.state(profileId)
+  recordNoData(providerId: string, at: string = new Date().toISOString()): void {
+    const state = this.state(providerId)
     if (state.report !== null || state.noDataAt !== null) return
     state.noDataAt = at
-    this.notify(profileId)
+    this.notify(providerId)
   }
 
-  private state(profileId: string): UsageLimitState {
-    let state = this.profiles.get(profileId)
+  private state(providerId: string): UsageLimitState {
+    let state = this.providers.get(providerId)
     if (!state) {
       state = { report: null, noDataAt: null, pullClaimed: false }
-      this.profiles.set(profileId, state)
+      this.providers.set(providerId, state)
     }
     return state
   }
 
-  private notify(profileId: string): void {
-    const report = this.get(profileId)
+  private notify(providerId: string): void {
+    const report = this.get(providerId)
     for (const listener of this.listeners) {
-      listener(profileId, report)
+      listener(providerId, report)
     }
   }
 }

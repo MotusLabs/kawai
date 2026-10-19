@@ -75,6 +75,7 @@ export function buildCandidates(input: CandidateInput): CandidateSet {
     if (!member.eligible || !usable(member.profileId) || !inRole(member.profileId)) continue
     candidates.push({
       id: memberCandidateId(member.sessionId), kind: 'member', profileId: member.profileId,
+      providerId: provider(member.profileId),
       sessionId: member.sessionId, cwd: member.cwd,
       ...(member.idleForMs !== undefined ? { idleForMs: member.idleForMs } : {}),
     })
@@ -90,7 +91,7 @@ export function buildCandidates(input: CandidateInput): CandidateSet {
       const entry = byId.get(profileId)!
       if (!usable(profileId)) continue
       if (entry.cap !== undefined && (liveOn.get(profileId) ?? 0) >= entry.cap) continue
-      candidates.push({ id: spawnCandidateId(profileId), kind: 'spawn', profileId, cwd: input.spawnCwd })
+      candidates.push({ id: spawnCandidateId(profileId), kind: 'spawn', profileId, providerId: provider(profileId), cwd: input.spawnCwd })
     }
   }
   return {
@@ -98,7 +99,7 @@ export function buildCandidates(input: CandidateInput): CandidateSet {
     group: {
       id: group.id,
       profiles: allowed.map(entry => ({
-        profileId: entry.profileId, live: liveOn.get(entry.profileId) ?? 0,
+        profileId: entry.profileId, providerId: provider(entry.profileId), live: liveOn.get(entry.profileId) ?? 0,
         ...(entry.cap !== undefined ? { cap: entry.cap } : {}),
       })),
       max: group.max,

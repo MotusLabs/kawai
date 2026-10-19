@@ -44,7 +44,7 @@ export interface CiTiming {
 const time = (value: string | null): number => (value === null ? Number.POSITIVE_INFINITY : Date.parse(value))
 
 /** Runs grouped by name, oldest first; a run not yet started is the newest. */
-function runsByName(checks: readonly CiCheck[]): Map<string, CiCheck[]> {
+export function runsByName(checks: readonly CiCheck[]): Map<string, CiCheck[]> {
   const groups = new Map<string, CiCheck[]>()
   for (const check of checks) groups.set(check.name, [...(groups.get(check.name) ?? []), check])
   for (const runs of groups.values()) runs.sort((a, b) => time(a.startedAt) - time(b.startedAt))

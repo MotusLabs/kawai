@@ -56,6 +56,8 @@ export interface PlanChange {
   extraChecks: PlanCheck[]
   /** Pins for the implementer. */
   guidance: string
+  /** Fix and correction task ids this change answers (plan-supervision D2); absent when unset. */
+  fixes?: string[]
 }
 
 export type PlanLanding = { mode: 'direct' } | { mode: 'integration-branch'; branch: string }
@@ -84,6 +86,8 @@ export interface PlanContent {
   roles: PlanRole[]
   /** Gives the floor's reviewer verdict unless a change overrides it. */
   reviewGroup: string | null
+  /** The plan's Lead role, one of `roles` (plan-supervision D2); absent when unset. */
+  leadGroup?: string
 }
 
 /** Contract C2: the strategy a revision was submitted against; null = Alignment unassessed. */
@@ -204,6 +208,12 @@ export interface PlanDetail {
   integration?: import('./planIntegration').PlanIntegrationView[]
   /** Progress over the current approved revision; null without one. */
   progress: PlanProgress | null
+  /**
+   * Read-time warnings that never refuse anything (plan-supervision D2): a
+   * `fixes` entry of the approved or an in-review revision naming no fix or
+   * correction task of this plan. Absent from details built elsewhere.
+   */
+  warnings?: string[]
 }
 
 const str = (value: unknown): string => (typeof value === 'string' ? value : '')
@@ -247,13 +257,27 @@ export function normalizePlanContent(input: unknown): PlanContent {
       acceptance: strList(entry.acceptance),
       extraChecks: normalizeChecks(entry.extraChecks),
       guidance: str(entry.guidance),
+      ...fixesField(entry.fixes),
     })),
     acceptanceRules: strList(source.acceptanceRules),
     extraChecks: normalizeChecks(source.extraChecks),
     landing: landing.mode === 'integration-branch' ? { mode: 'integration-branch', branch: name(landing.branch) } : { mode: 'direct' },
     roles: records(source.roles).map(entry => ({ group: name(entry.group), profiles: strList(entry.profiles) })),
     reviewGroup: optName(source.reviewGroup),
+    ...(name(source.leadGroup) ? { leadGroup: name(source.leadGroup) } : {}),
   }
+}
+
+/**
+ * `fixes` (plan-supervision D2): kept only as a non-empty list, each entry
+ * trimmed in order. An entry empty after trimming stays, so the structure
+ * check refuses it rather than normalization hiding it. Unset stays absent,
+ * never `[]`, so earlier revisions keep their canonical form and hash.
+ */
+function fixesField(value: unknown): { fixes?: string[] } {
+  if (!Array.isArray(value)) return {}
+  const fixes = value.filter((entry): entry is string => typeof entry === 'string').map(entry => entry.trim())
+  return fixes.length > 0 ? { fixes } : {}
 }
 
 /** The canonical draft-hash input (D2): content only. */
@@ -342,6 +366,7 @@ export const PLAN_SECTION_LABELS: Record<keyof PlanContent, string> = {
   landing: 'Landing',
   roles: 'Roles',
   reviewGroup: 'Review group',
+  leadGroup: 'Lead role',
 }
 
 /** D12's diff summary of a revision against the approved one (null base = everything is new). */

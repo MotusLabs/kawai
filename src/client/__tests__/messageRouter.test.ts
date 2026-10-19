@@ -130,7 +130,7 @@ describe('createMessageRouter dispatch coverage', () => {
       { type: 'chat-commands', sessionId: 'chat-1', state: { status: 'ready', commands: [] } },
       { type: 'chat-activity', sessionId: 'chat-1', activity: null },
       { type: 'chat-context-usage', sessionId: 'chat-1', usage: null },
-      { type: 'chat-usage', profileId: 'default', report: null },
+      { type: 'chat-usage', profileId: 'default', providerId: 'claude', report: null },
       { type: 'chat-workers', sessionId: 'chat-1', workers: [] },
       { type: 'chat-model', sessionId: 'chat-1', model: 'claude-sonnet-5-5' },
       { type: 'chat-notifications', sessionId: 'chat-1', notifications: [] },

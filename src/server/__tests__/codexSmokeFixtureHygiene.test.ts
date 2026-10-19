@@ -20,7 +20,9 @@ const HOME_SEGMENT = /\/home\/([0-9A-Za-z._-]+)/g
 const SCRATCH_SEGMENT = /\/tmp\/kawai-codex-smoke-([0-9A-Za-z._-]+)/g
 const UUID_SEGMENT = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
 const UUID_SHAPE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i
-const URL_HOST_SEGMENT = /https?:\/\/([^/:?\s"]+)/g
+// A ')' also ends the host (review N2): "(https://example.internal)" must
+// not read the closing paren into it.
+const URL_HOST_SEGMENT = /https?:\/\/([^/:?\s")]+)/g
 /** The only host a recorded URL may name (the scrub's own placeholder). */
 const URL_HOST_ALLOWLIST = new Set(['example.internal'])
 /**
@@ -38,8 +40,10 @@ const PLACEHOLDER_UUIDS = new Set(
 
 // A real host or username leaking into any recorded string must fail. A
 // username shorter than five characters (root, ci, git) is too generic for
-// a substring rule — git prints "(root-commit)" — so only longer, personal
-// usernames are scanned.
+// a scan — git prints "(root-commit)" — so only longer, personal usernames
+// are scanned, and as a whole token (review N1): "decoder" must not fail
+// for the user "coder", while /home/coder must — a name counts only when
+// neither neighbour is a username character.
 const HOSTNAME = os.hostname()
 let USERNAME = ''
 try {
@@ -47,7 +51,9 @@ try {
 } catch {
   // No passwd entry for this uid: the username scan cannot run here.
 }
-const SCAN_USERNAME = USERNAME.length >= 5
+const USERNAME_PATTERN = USERNAME.length >= 5
+  ? new RegExp(`(?<![A-Za-z0-9._-])${USERNAME.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9._-])`)
+  : null
 
 const violations: string[] = []
 
@@ -58,7 +64,7 @@ function check(where: string, scrubKey: string, key: string, value: unknown): vo
       violations.push(`${where}: ${scrubKey} holds a non-placeholder value`)
     }
     if (HOSTNAME && value.includes(HOSTNAME)) violations.push(`${where}: hostname substring`)
-    if (SCAN_USERNAME && value.includes(USERNAME)) violations.push(`${where}: username substring`)
+    if (USERNAME_PATTERN?.test(value)) violations.push(`${where}: username substring`)
     for (const match of value.matchAll(HOME_SEGMENT)) {
       if (`/home/${match[1]}` !== SMOKE_FIXTURE_HOME) violations.push(`${where}: home path ${match[0]}`)
     }

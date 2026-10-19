@@ -19,6 +19,7 @@ import { BUILD_VERSION } from '../version'
 import { outboundAuditMigration } from '../outbound/migration'
 import { CREATE_OBSERVATION_SOURCE_INDEXES_SQL, CREATE_PROCESS_OBSERVATIONS_SQL } from '../metrics/observations/schema'
 import { contextExhaustedMigration } from '../chat/contextExhaustedMigration'
+import { codexSessionMigration } from '../chat/codexSessionMigration'
 import { applyBaselineSchema } from './baseline'
 import { CREATE_IMPACT_TABLES_SQL } from '../strategy/impactSchema'
 import { CREATE_VALIDATION_TABLES_SQL } from '../plans/validation/validationSchema'
@@ -29,6 +30,7 @@ import { CREATE_TURN_USAGE_SQL } from '../chat/chatTurnUsageStore'
 import { CREATE_PROCESS_REPORT_TABLES_SQL } from '../metrics/reportSchema'
 import { migrateProviderLimitWindow } from '../team/routing/limitEvents'
 import { integrationMigration } from '../plans/landing/integration/integrationSchema'
+import { planSupervisionMigration } from '../plans/decisions/decisionSchema'
 import type { BackupFile } from './backupFiles'
 import type { BackupOutcome } from './backups'
 
@@ -74,6 +76,12 @@ export const MIGRATIONS: readonly Migration[] = [
   integrationMigration,
   // process-observability D10: the reconciler's ordered NOT EXISTS scans.
   { version: 14, name: 'process-observation-indexes', up: db => db.exec(CREATE_OBSERVATION_SOURCE_INDEXES_SQL) },
+  // codex-chat-sessions 3.3 (ruling R1): the chat's creation-fixed runtime,
+  // its resolved Codex home, and the Codex transcript path.
+  codexSessionMigration,
+  // plan-supervision D3: decision cards, decisions, fix and correction tasks,
+  // and stall alerts. Additive, no backfill.
+  planSupervisionMigration,
 ]
 
 export const RESTORE_DOC = 'docs/operations/database-backups.md'

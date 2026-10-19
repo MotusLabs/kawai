@@ -11,7 +11,11 @@ const exampleRule: RoutingRule = {
   env: ['GLM_API_KEY'],
   timeoutMs: 2000,
   async route(ctx: RouteContext) {
-    const fresh = ctx.candidates.filter(candidate => !ctx.profiles[candidate.profileId]?.cooldownUntil)
+    const fresh = ctx.candidates.filter(candidate =>
+      !ctx.profiles[candidate.profileId]?.cooldownUntil &&
+      // The provider view (providers-and-workers D14): a cooling provider's
+      // models are not fresh either.
+      !ctx.providers[candidate.providerId]?.cooldownUntil)
     const member = fresh.find(candidate => candidate.kind === 'member')
     if (member) return { type: 'pick', candidateId: member.id }
     if (fresh.length === 0) return { type: 'hold', reason: 'all cooling', retryAfterMs: 600_000 }
@@ -36,8 +40,11 @@ describe('routing contract', () => {
       now: '2026-10-12T12:00:00.000Z',
       group: { id: 'devs', profiles: [], max: 1, live: 0, strategy: 'first-available' },
       message: { id: 'm', priority: 'normal', senderGroup: null, tags: [], worktree: null, taskId: null },
-      candidates: [{ id: 'spawn:glm', kind: 'spawn', profileId: 'glm', cwd: '/repo' }],
-      profiles: { glm: { usage: null, limitEvents: [], cooldownUntil: '2026-10-12T13:00:00.000Z' } },
+      candidates: [{ id: 'spawn:glm', kind: 'spawn', profileId: 'glm', providerId: 'zai', cwd: '/repo' }],
+      profiles: { glm: { providerId: 'zai', usage: null, limitEvents: [], cooldownUntil: '2026-10-12T13:00:00.000Z' } },
+      providers: {
+        zai: { label: 'Z.AI', profiles: ['glm'], usage: null, limitEvents: [], cooldownUntil: '2026-10-12T13:00:00.000Z' },
+      },
     } satisfies RouteContext
     expect(await exampleRule.route(ctx)).toEqual({ type: 'hold', reason: 'all cooling', retryAfterMs: 600_000 })
   })

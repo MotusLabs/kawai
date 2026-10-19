@@ -12,6 +12,17 @@ See proposal.md for the motivation. Current state and constraints:
 - **The mail behind a turn.** `LimitOutcomes.delivered(sessionId, message)` (`src/server/team/routing/limitOutcomes.ts`) already tracks the mail pushed as a session's next turn, until that turn ends. It is last-write-wins per session, so a later push replaces it; D14 therefore pins a turn's mail when the turn starts.
 - **Strategy boundaries.** Usage is shown, never capped. No agent approves anything the owner decides.
 
+### Reconciliation with the merged designs (task 1.1)
+
+Read against the code on master at 9bf88c56. One rename; the rest match as written.
+- **plan-execution D2.** The system caller is `TaskCaller`'s `{ kind: 'system'; team: TeamIdentity; executionId }` (`src/server/team/TaskService.ts`), built in `ExecutionService`. D7 widens exactly this shape.
+- **plan-execution D3 / X1.** `ChangeState`, `ChangeStep`, `AttemptKind`, `RoundOutcome` (`pass | fail | superseded`), `EffectKind`, and `EffectState` in `src/shared/planExecution.ts`. A round's CI is its `CiCheck[]`; flaky names are those that failed and later passed after the rerun (D10), and a carried round names its source in `carried_from`.
+- **Rename.** plan-execution already exports `WaitingReason` (its own coarse wait in the execution view), so D10's named waits are the type `SupervisionWait` in `src/shared/planSupervision.ts`, never a second `WaitingReason`.
+- **X8.** `StopReason` has gained `integration-rewritten` (integration-candidates D6); the labels cover it.
+- **plan-execution D18.** Kawai's reply guard is `TeamMailbox`'s `from_kind = 'system'` refusal with `KAWAI_REPLY_GUIDANCE` (`src/shared/team.ts`). **D19.** `PlanService.completeBySystem(planId, executionId)`.
+- **integration-candidates D3, D9–D11.** `IntegrationCandidate` (states `verifying | passed | landed | failed | superseded`) and `PromotionRecord` with `outcome: 'merged' | 'cancelled' | failed:<PromotionFailure>` in `src/shared/planIntegration.ts`, so D8's stored form matches. The landing slot's `holder_kind` is `change` today; promotions add theirs.
+- **team-workspace D5, D8.** `AttentionKind` is an open union whose Wave C note is prose, not names; `AttentionLink.kind` is `card | task | message | chat | audit`; `ATTENTION_SOURCES` lives in `src/server/team/workspaceRead.ts`; `MorningSummary` already holds six buckets (`outbound` included), so D13 adds five more.
+
 ## Goals / Non-Goals
 
 **Goals:**

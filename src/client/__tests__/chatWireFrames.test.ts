@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { ChatWireFrame } from '@shared/chat'
-import { frameLabel, frameTime, groupFrames, prettyFrame, type FrameEntry } from '../utils/chatWireFrames'
+import { directionLabels, frameLabel, frameTime, groupFrames, prettyFrame, type FrameEntry } from '../utils/chatWireFrames'
 
 const frame = (raw: unknown, dir: ChatWireFrame['dir'] = 'in'): ChatWireFrame => ({
   seq: 1, at: '2026-10-05T12:03:07.215Z', dir, raw: typeof raw === 'string' ? raw : JSON.stringify(raw),
@@ -23,6 +23,25 @@ describe('chat wire frame helpers', () => {
     expect(frameLabel(frame('Error: something broke', 'stderr'))).toBe('text')
     expect(frameLabel(frame('[1,2]'))).toBe('text')
     expect(frameLabel(frame({ hello: 'world' }))).toBe('json')
+  })
+
+  test('labels JSON-RPC frames by shape: request, server request, response, error', () => {
+    expect(frameLabel(frame({ jsonrpc: '2.0', method: 'initialize', params: {} }, 'out'))).toBe('initialize')
+    expect(frameLabel(frame({ method: 'item/tool/call', id: 0, params: {} }))).toBe('item/tool/call #0')
+    // Recorded responses omit the `jsonrpc` envelope; the shape still labels.
+    expect(frameLabel(frame({ id: 7, result: { thread: { id: 't1' } } }, 'out'))).toBe('response #7')
+    expect(frameLabel(frame({ id: 7, result: null }, 'out'))).toBe('response #7')
+    expect(frameLabel(frame({ id: 3, error: { code: -32603, message: 'handler failed' } }, 'out'))).toBe('error #3')
+    // Untyped objects without a JSON-RPC shape stay `json`.
+    expect(frameLabel(frame({ hello: 'world' }))).toBe('json')
+  })
+
+  test('direction labels name the runtime', () => {
+    expect(directionLabels('claude')).toEqual({ out: '→ Claude', in: '← Claude', stderr: 'stderr', lifecycle: 'process' })
+    expect(directionLabels('codex').out).toBe('→ Codex')
+    expect(directionLabels('codex').in).toBe('← Codex')
+    expect(directionLabels('codex').stderr).toBe('stderr')
+    expect(directionLabels('codex').lifecycle).toBe('process')
   })
 
   test('pretty-prints JSON and leaves raw text untouched', () => {

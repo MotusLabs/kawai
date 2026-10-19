@@ -1,19 +1,16 @@
 // Codex app-server smoke (openspec codex-chat-sessions §1). Run by hand, never
 // in CI: it drives real Codex turns on the host's own login, so the human's
-// quota pays for every prompt. Requires codex-cli >= 0.163.0 installed and
-// signed in (default CODEX_HOME; the spawn itself reads nothing from it and
-// writes nothing into it — the rollout dump below only reads the recorded
-// thread's rollout file under it):
-//
+// quota pays for every prompt. Requires codex-cli >= 0.163.0, installed and
+// signed in under the default CODEX_HOME (the spawn reads nothing from it and
+// writes nothing into it — the rollout dump only reads the recorded thread's
+// rollout file). It spawns its own `codex app-server` over stdio JSON-RPC and
+// walks the §1 checklist — initialize, thread/start with a kawai-team
+// dynamic-tool namespace and the D5 sandbox, a dynamic tool call, a sandboxed
+// git commit, a declined out-of-sandbox write, a requestUserInput round-trip,
+// an interrupt, then thread/resume from a second process; every raw JSON-RPC
+// line lands in --record, scrubbed into fixture shape at write time
+// (src/server/chat/codex/smokeScrub.ts):
 //   bun scripts/codex-smoke.ts --record /tmp/codex-smoke-raw.jsonl
-//
-// It spawns its own `codex app-server` child over stdio JSON-RPC and walks the
-// §1 checklist — initialize, thread/start with a kawai-team dynamic-tool
-// namespace and the D5 sandbox, a dynamic tool call, a sandboxed git commit,
-// a declined out-of-sandbox write, a requestUserInput round-trip, an
-// interrupt, then thread/resume from a second process with thread/read and a
-// rollout dump. Every raw JSON-RPC line both directions lands in --record,
-// scrubbed into fixture shape at write time (src/server/chat/codex/smokeScrub.ts).
 import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -27,14 +24,11 @@ interface RawLine { ts: string; dir: 'out' | 'in'; line: string }
 type Json = Record<string, unknown>
 
 const fail = (reason: string): never => {
-  console.error(`smoke failed: ${reason}`)
-  process.exit(1)
+  console.error(`smoke failed: ${reason}`); process.exit(1)
 }
 
-const timeout = (ms: number, what: string) => {
-  const err = new Error(`timeout after ${ms}ms: ${what}`)
-  return new Promise<never>((_, reject) => setTimeout(() => reject(err), ms))
-}
+const timeout = (ms: number, what: string) =>
+  new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`timeout after ${ms}ms: ${what}`)), ms))
 
 /** One scratch git repo per run; writable root and sandbox workspace both. */
 function makeWorkspace(): { dir: string; gitCommonDir: string } {
@@ -57,6 +51,8 @@ function makeWorkspace(): { dir: string; gitCommonDir: string } {
  * value becomes the reply. Every raw line, both directions, is recorded.
  */
 class SmokeClient {
+  /** Every live client, so a Ctrl-C can stop the detached children (review N3). */
+  static readonly live = new Set<SmokeClient>()
   readonly proc: ChildProcess
   private nextId = 1
   private readonly pending = new Map<number, { resolve: (v: Json) => void; reject: (e: Error) => void }>()
@@ -71,6 +67,7 @@ class SmokeClient {
     // Detached: the child leads its own process group, so stop() can signal
     // the sandboxed grandchildren alongside it (review O5).
     this.proc = spawn(CODEX, ['app-server'], { stdio: ['pipe', 'pipe', 'pipe'], detached: true })
+    SmokeClient.live.add(this)
     this.proc.on('error', (error) => this.failAll(`spawn ${CODEX} app-server: ${error.message}`))
     this.exit = new Promise((resolve) => this.proc.on('exit', (code) => resolve(code)))
     const rl = readline.createInterface({ input: this.proc.stdout!, crlfDelay: Infinity })
@@ -155,6 +152,7 @@ class SmokeClient {
   }
 
   async stop() {
+    SmokeClient.live.delete(this)
     // Signal the whole process group: a sandboxed app-server can leave
     // helper grandchildren that outlive the pid alone (review O5). Falls
     // back to the pid when the group is already gone.
@@ -322,6 +320,15 @@ async function main() {
   const { dir: workspace, gitCommonDir } = makeWorkspace()
   console.log(`workspace: ${workspace}`)
 
+  // The detached child leads its own process group, so the terminal's
+  // Ctrl-C never reaches it (review N3): stop every live client's group
+  // here, then exit. stop() escalates to SIGKILL and awaits the child, so
+  // nothing is left behind; a second Ctrl-C finds the set empty and exits.
+  process.on('SIGINT', () => {
+    void Promise.allSettled([...SmokeClient.live].map((client) => client.stop()))
+      .then(() => process.exit(130))
+  })
+
   // Process 1: initialize, thread/start (or resume --thread), phases A–D.
   const first = new SmokeClient(lines)
   try {
@@ -479,7 +486,8 @@ async function main() {
   console.log(`\nSUMMARY ${JSON.stringify(scrubSmokeValue(summary), null, 2)}`)
 }
 
-// Guarded so the hygiene test can import the scrub without running a spike.
+// Main runs only on direct execution; the hygiene test imports the scrub
+// module, never this script.
 if (import.meta.main) {
   main().then(
     () => process.exit(0),

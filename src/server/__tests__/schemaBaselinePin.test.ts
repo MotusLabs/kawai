@@ -26,7 +26,10 @@
 // (`integration-candidates`) the four integration tables and the
 // one-running-promotion index; migration 14
 // (`process-observation-indexes`) indexes `chat_turn_usage.ended_at` and
-// `profile_limit_events.at`.
+// `profile_limit_events.at`; migration 15 (`codex-chat-runtime`) the
+// creation-fixed `runtime` and `codex_home` plus the `transcript_path` on
+// `chat_sessions`; migration 16 (`plan-supervision`) the decision cards,
+// decisions, fix tasks, and stall alerts.
 import { expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { initDatabase } from '../db'
@@ -337,9 +340,48 @@ const migration13: SchemaShape['tables'] = {
   },
 }
 
+/** Migration 16's delta: decision cards, decisions, fix tasks, and stall alerts (plan-supervision D3). */
+const migration16: SchemaShape['tables'] = {
+  plan_decision_cards: {
+    columns: [
+      id, column('team_id'), column('plan_id'), optionalInteger('revision'), optional('change'), optional('task_id'),
+      column('question'), column('options_json'), optional('context'), column('asked_by_session'),
+      optional('asked_by_group'), optional('asked_by_profile'), column('addressed_to'), optional('addressed_group'),
+      optional('message_id'), column('created_at'),
+    ],
+    indexes: [
+      { name: 'plan_decision_cards_plan', unique: 0, columns: ['plan_id', 'created_at'] },
+      { name: 'plan_decision_cards_task', unique: 0, columns: ['task_id'] },
+    ],
+  },
+  plan_decisions: {
+    columns: [
+      id, ...['card_id', 'plan_id', 'team_id'].map(name => column(name)), integer('seq'), column('kind'), column('choice'),
+      optionalInteger('option_index'), optional('rationale'), column('decided_by_kind'),
+      ...['decided_by_session', 'decided_by_group', 'decided_by_profile'].map(optional), column('affected_json'),
+      ...['command_id', 'payload_json', 'reply_message_id'].map(optional), column('created_at'),
+    ],
+    indexes: [{ name: 'plan_decisions_team', unique: 0, columns: ['team_id', 'created_at'] }],
+  },
+  plan_fix_tasks: {
+    columns: [{ ...column('task_id', 0, 1) }, ...['team_id', 'plan_id', 'source_kind', 'source_id', 'created_at'].map(name => column(name))],
+    indexes: [{ name: 'plan_fix_tasks_plan', unique: 0, columns: ['plan_id'] }],
+  },
+  plan_stall_alerts: {
+    columns: [
+      id, ...['team_id', 'plan_id', 'execution_id', 'change', 'kind', 'episode_key', 'detail_json'].map(name => column(name)),
+      optional('message_id'), column('raised_at'),
+    ],
+    indexes: [
+      { name: 'plan_stall_alerts_plan', unique: 0, columns: ['plan_id', 'raised_at'] },
+      { name: 'plan_stall_alerts_team', unique: 0, columns: ['team_id', 'raised_at'] },
+    ],
+  },
+}
+
 test('a fresh database opened by this build has the same shape plus each migration\'s delta and schema_migrations', () => {
   const session = initDatabase({ path: ':memory:' })
-  const added = { ...migration2, ...migration3, ...migration4, ...migration5, ...migration6, ...migration7, ...migration8, ...migration9, ...migration10, ...migration11, ...migration13 }
+  const added = { ...migration2, ...migration3, ...migration4, ...migration5, ...migration6, ...migration7, ...migration8, ...migration9, ...migration10, ...migration11, ...migration13, ...migration16 }
   expect(Object.keys(added).filter(table => table in expected.tables)).toEqual([])
   const messages = expected.tables.team_messages!
   const withProfiles = { ...messages, columns: [...messages.columns, optional('allowed_profiles')] }
@@ -347,9 +389,22 @@ test('a fresh database opened by this build has the same shape plus each migrati
   // the process-observations tables (in `added` above); migration 12's: limit
   // events record their provider and window (providers-and-workers D7), both
   // nullable, after the baseline columns; migration 14's: the `at` index here
-  // and the `ended_at` index on chat_turn_usage (in migration 6's delta).
+  // and the `ended_at` index on chat_turn_usage (in migration 6's delta);
+  // migration 15's (codex-chat-sessions 3.3): the creation-fixed runtime (NOT
+  // NULL DEFAULT 'claude') and, for Codex chats, the resolved home, plus the
+  // transcript path.
   const chats = expected.tables.chat_sessions!
-  const withFlag = { ...chats, columns: [...chats.columns, optional('context_exhausted_at'), optional('context_exhausted_reason')] }
+  const withFlag = {
+    ...chats,
+    columns: [
+      ...chats.columns,
+      optional('context_exhausted_at'),
+      optional('context_exhausted_reason'),
+      { name: 'runtime', type: 'TEXT', notnull: 1, dflt_value: "'claude'", pk: 0 },
+      optional('codex_home'),
+      optional('transcript_path'),
+    ],
+  }
   const limitEvents = expected.tables.profile_limit_events!
   const withLimitContext = {
     columns: [...limitEvents.columns, optional('provider_id'), optional('limit_window')],
