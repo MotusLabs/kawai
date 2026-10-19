@@ -129,7 +129,7 @@ describe('usage bar time marker', () => {
     jest.setSystemTime(NOW)
     const renderer = renderBar(
       report([
-        { key: 'zai:tokens_limit', label: 'Weekly tokens', percentUsed: 30, resetsAt: at(NOW + HOUR) },
+        { key: 'zai:tokens_limit', label: 'Tokens', percentUsed: 30, resetsAt: at(NOW + HOUR) },
         fiveHour({ key: 'no-reset', resetsAt: null }),
         fiveHour({ key: 'passed', resetsAt: at(NOW - HOUR) }),
       ])
@@ -142,13 +142,31 @@ describe('usage bar time marker', () => {
     renderer.unmount()
   })
 
+  test('a provider row stating its own length marks its share like a Claude window', () => {
+    jest.useFakeTimers()
+    jest.setSystemTime(NOW)
+    const renderer = renderBar(
+      report([
+        {
+          key: 'zai:tokens_limit',
+          label: '5-hour tokens',
+          percentUsed: 30,
+          resetsAt: at(NOW + 2.5 * HOUR),
+          periodMs: FIVE_HOURS,
+        },
+      ])
+    )
+    expect(percentOf(ticks(renderer)[0]!.props.style.left)).toBe(50)
+    renderer.unmount()
+  })
+
   test('hover and accessible text state used, elapsed, and time left', () => {
     jest.useFakeTimers()
     jest.setSystemTime(NOW)
     const renderer = renderBar(
       report([
         fiveHour(),
-        { key: 'zai:time_limit', label: 'Prompts', percentUsed: 2, resetsAt: at(NOW + 30 * MINUTE) },
+        { key: 'zai:time_limit', label: 'Tool calls', percentUsed: 2, resetsAt: at(NOW + 30 * MINUTE) },
       ])
     )
     const marked = meterOf(renderer, 'five_hour')
