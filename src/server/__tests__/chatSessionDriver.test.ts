@@ -2106,16 +2106,21 @@ describe('ChatSessionDriver usage', () => {
 
 describe('ChatSessionDriver context usage', () => {
   // Same pinned-home isolation as the main describe: launch resolution must
-  // not see a real ~/.kawai.
+  // not see a real ~/.kawai — and neither may an operator-level auto-compact
+  // window (an agent dev shell carries one), or the profile-window fallback
+  // would outrank the report thresholds these tests assert.
   let tempHome: string
   const originalHome = process.env.HOME
+  const originalAutoCompact = process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW
   beforeEach(() => {
     tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-chatdriver-'))
     process.env.HOME = tempHome
+    delete process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW
   })
   afterEach(() => {
     if (originalHome !== undefined) process.env.HOME = originalHome
     else delete process.env.HOME
+    if (originalAutoCompact !== undefined) process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = originalAutoCompact
     fs.rmSync(tempHome, { recursive: true, force: true })
   })
 

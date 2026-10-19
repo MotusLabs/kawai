@@ -3314,18 +3314,23 @@ describe('ChatSessionManager context usage', () => {
   let tempDir: string
   let db: SessionDatabase
   const originalHome = process.env.HOME
+  const originalAutoCompact = process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-chatmgr-context-'))
     db = initDatabase({ path: path.join(tempDir, 'test.db') })
     process.env.ANTHROPIC_API_KEY = 'sk-test-key'
     process.env.CLAUDE_CONFIG_DIR = path.join(tempDir, 'claude-config')
     // Pinned like the main describe: a real ~/.kawai must not leak into
-    // launch resolution.
+    // launch resolution — and neither may an operator-level auto-compact
+    // window (an agent dev shell carries one), or the profile-window
+    // fallback would outrank the report thresholds these tests assert.
     process.env.HOME = tempDir
+    delete process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW
   })
   afterEach(() => {
     if (originalHome !== undefined) process.env.HOME = originalHome
     else delete process.env.HOME
+    if (originalAutoCompact !== undefined) process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = originalAutoCompact
     fs.rmSync(tempDir, { recursive: true, force: true })
   })
 
