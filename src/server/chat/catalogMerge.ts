@@ -301,6 +301,14 @@ export class CatalogMerger {
    */
   private addCodexProfile(file: string, id: string, entry: PartialProfile, tier: number): void {
     const holder = this.holders.get(id)
+    if (holder === undefined && id === 'default' && tier > 0) {
+      // The implicit `default` (D4) is a tier-0 Claude holder from the start
+      // of the merge (B1), not a finish() fill-in: a nearer file claiming it
+      // as Codex is a cross-level runtime disagreement even while no holder
+      // is materialized yet, so it is refused with the same error.
+      this.errors.push(`${file}: profile "default" is a Codex entry here but a Claude entry in (implicit); the entry is ignored.`)
+      return
+    }
     if (holder !== undefined && !holder.codex) {
       if (holder.tier < tier) {
         // Cross-level runtime disagreement (D4): the entry's file is nearer

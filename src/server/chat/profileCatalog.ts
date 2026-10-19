@@ -249,7 +249,10 @@ export function profileCatalogLevels(ctx: ProfileCatalogContext = {}): CatalogLe
         file,
         kind: i % 2 === 0 ? 'providers' : 'profiles',
         trusted: false,
-        tier: 2 + i,
+        // One directory, one tier (R2-2): the files arrive in pairs —
+        // providers.json then profiles.json per .kawai directory — so a
+        // directory's two files share the tier its distance gives it.
+        tier: 2 + Math.floor(i / 2),
       })
     }
   }

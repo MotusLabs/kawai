@@ -106,6 +106,9 @@ describe('catalog entries declare their runtime (D4, R1)', () => {
     })
     expect(errors).toHaveLength(1)
     expect(errors[0]).toContain(projectProviders)
+    // N7: pin the wording — this branch (providers.json cannot hold a Codex
+    // profile), not the generic key collision, must produce the error.
+    expect(errors[0]).toContain('providers.json cannot hold')
     expect(profiles.get('codex')?.runtime).toBe('codex')
     expect(profiles.get('codex')?.model).toBe('gpt-5.3-codex')
     expect(providers.get('acme')?.models).toEqual([])
@@ -201,6 +204,77 @@ describe('catalog entries declare their runtime (D4, R1)', () => {
     expect(errors[0]).toContain(projectFile)
     // The shipped Claude default survives: provider claude, no runtime field.
     expect(profiles.get('default')).toEqual({ label: 'Default', env: {}, providerId: 'claude' })
+  })
+
+  test('a project Codex entry cannot flip a user level that lacks `default` (B1)', () => {
+    // The live host's shape: a user level exists and names no `default`, so
+    // the implicit default has no holder materialized while the project
+    // merges. The invariant (B1): the implicit default is a tier-0 Claude
+    // holder from the first merge, so this is a cross-level conflict.
+    writeProviders(homeDir, { acme: { label: 'Acme', models: { m: { label: 'M' } } } })
+    const projectFile = writeProfiles(projectDir, { default: { runtime: 'codex' } })
+    const { profiles, errors } = resolveProfileCatalog({
+      homeDir, projectPath: projectDir, serverCodexHome: '/tmp/codex-home-a',
+    })
+    expect(errors).toHaveLength(1)
+    expect(errors[0]).toContain(projectFile)
+    expect(errors[0]).toContain('(implicit)')
+    expect(errors[0]).toContain('the entry is ignored')
+    // No silent flip: the default stays the implicit Claude profile. With a
+    // user level and no shipped base, the implicit default joins a
+    // synthesized `default` provider, not the shipped claude one.
+    expect(profiles.get('default')).toEqual({ label: 'Default', env: {}, providerId: 'default' })
+    expect(profiles.get('default')?.runtime).toBeUndefined()
+  })
+
+  test('a project Codex entry cannot flip a user-level Claude default (B1)', () => {
+    writeProfiles(homeDir, {
+      default: { label: 'Mine', env: { ANTHROPIC_BASE_URL: 'https://mimo.example.internal' } },
+    })
+    const projectFile = writeProfiles(projectDir, { default: { runtime: 'codex' } })
+    const { profiles, errors } = resolveProfileCatalog({
+      homeDir, projectPath: projectDir, serverCodexHome: '/tmp/codex-home-a',
+    })
+    expect(errors).toHaveLength(1)
+    expect(errors[0]).toContain(projectFile)
+    expect(errors[0]).toContain('the entry is ignored')
+    expect(profiles.get('default')).toEqual({
+      label: 'Mine',
+      env: { ANTHROPIC_BASE_URL: 'https://mimo.example.internal' },
+      providerId: 'default',
+    })
+  })
+
+  test('a project Codex entry with a fresh id resolves normally', () => {
+    writeProfiles(homeDir, { mimo: { label: 'MiMo', env: { ANTHROPIC_BASE_URL: 'https://mimo.example.internal' } } })
+    writeProfiles(projectDir, { 'codex-p': { runtime: 'codex', model: 'gpt-5.3-codex' } })
+    const { profiles, errors } = resolveProfileCatalog({
+      homeDir, projectPath: projectDir, serverCodexHome: '/tmp/codex-home-a',
+    })
+    expect(errors).toEqual([])
+    expect(profiles.get('codex-p')).toEqual({
+      label: 'codex-p',
+      env: {},
+      model: 'gpt-5.3-codex',
+      runtime: 'codex',
+      providerId: codexHomeProviderId('/tmp/codex-home-a'),
+    })
+    expect(profiles.get('mimo')?.label).toBe('MiMo')
+  })
+
+  test('one project directory is one tier: its profiles.json releases its providers.json key (R2-2)', () => {
+    // Same directory, so the two files share a tier: the directory's
+    // profiles.json claims the model key the same directory's providers.json
+    // holds — the same-tier R2 release, not a cross-level conflict.
+    writeProviders(projectDir, { cx: { label: 'Cx', models: { cx: { label: 'Cx model' } } } })
+    writeProfiles(projectDir, { cx: { runtime: 'codex', model: 'gpt-5.3-codex' } })
+    const { profiles, providers, errors } = resolveProfileCatalog({
+      homeDir, projectPath: projectDir, serverCodexHome: '/tmp/codex-home-a',
+    })
+    expect(errors).toHaveLength(1)
+    expect(errors[0]).toContain('providers.json cannot hold')
+    expect(profiles.get('cx')?.runtime).toBe('codex')
+    expect(providers.get('cx')?.models).toEqual([])
   })
 
 describe('codex homes and network are named only at the trusted tier (D4)', () => {
