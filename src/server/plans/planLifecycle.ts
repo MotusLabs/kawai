@@ -98,7 +98,12 @@ export function closePlan(store: PlanStore, teamId: string, input: PlanCloseInpu
   })
 }
 
-export function reopenPlan(store: PlanStore, teamId: string, input: { planId: string; commandId: string }): PlanCommandOutcome {
+/**
+ * Reopen a closed plan. `within` (plan-supervision D6: an override reopening
+ * a completed plan) runs after the event in the same transaction, so its
+ * writes and the reopen commit or roll back together; a replay never runs it.
+ */
+export function reopenPlan(store: PlanStore, teamId: string, input: { planId: string; commandId: string }, within?: () => void): PlanCommandOutcome {
   const target = resolve(store, teamId, input.planId, input.commandId)
   if ('ok' in target) return target
   const { planId, commandId } = target
@@ -107,6 +112,8 @@ export function reopenPlan(store: PlanStore, teamId: string, input: { planId: st
     const plan = store.get(planId)!
     if (plan.lifecycle === 'open') throw new PlanRefusal('state', 'The plan is already open.')
     store.setLifecycle(planId, 'open')
-    return store.insertEvent(planId, { kind: 'reopened', actor: HUMAN, commandId, payload })
+    const event = store.insertEvent(planId, { kind: 'reopened', actor: HUMAN, commandId, payload })
+    within?.()
+    return event
   })
 }

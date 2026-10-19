@@ -109,6 +109,8 @@ export interface CreateTaskInput {
    * a duplicate; the same key with a different payload is refused.
    */
   requestKey?: string | null
+  /** A pre-minted id, so a fix task's direction can name it (plan-supervision D7); else minted here. */
+  id?: string
 }
 
 /** One publication (task-revision-publication D2); fields are normalized by the caller. */
@@ -187,7 +189,7 @@ export class TaskStore {
         return existing
       }
     }
-    const id = `task-${crypto.randomUUID()}`
+    const id = input.id ?? `task-${crypto.randomUUID()}`
     this.db.transaction(() => {
       this.db.prepare(`INSERT INTO team_tasks
         (id, team_id, title, status, creator_kind, creator_session, parent_id, worktree, openspec_change, plan_id, plan_change, request_key, revision, created_at, updated_at)

@@ -184,12 +184,12 @@ export class TaskService {
    * parent, or plan link. Synchronous so the override's transaction holds it;
    * `within` writes the `plan_fix_tasks` row in the task's own transaction.
    */
-  createFixTask(caller: SystemCaller, input: { title: string; direction: string; acceptance: string }, within: (task: TeamTask) => void): TeamTask {
+  createFixTask(caller: SystemCaller, input: { id?: string; title: string; direction: string; acceptance: string }, within: (task: TeamTask) => void): TeamTask {
     refuseSystem(caller, 'create-fix')
     const title = input.title.trim()
     const direction = input.direction.trim()
     if (!title || !direction) throw new Error('A fix task needs a title and a direction')
-    return this.store.create({ teamId: caller.team.teamId, title, direction, acceptance: emptyToNull(input.acceptance), creator: SYSTEM_ACTOR }, undefined, within)
+    return this.store.create({ id: input.id, teamId: caller.team.teamId, title, direction, acceptance: emptyToNull(input.acceptance), creator: SYSTEM_ACTOR }, undefined, within)
   }
 
   async get(caller: TaskCaller, taskId: string): Promise<TeamTaskDetail> {

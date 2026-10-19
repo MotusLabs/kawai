@@ -296,6 +296,16 @@ export class PlanService {
   }
 
   /**
+   * Reopen with `within` in the same transaction (plan-supervision D6: the
+   * owner's override of a decision on a completed plan). Synchronous so the
+   * override's writes join it; the compared payload is still the command alone.
+   */
+  reopenWithin(caller: PlanCaller, input: { planId: string; commandId: string }, within: () => void): PlanCommandOutcome {
+    if (caller.kind !== 'human') return forbidden('reopen')
+    return reopenPlan(this.store, caller.team.teamId, input, within)
+  }
+
+  /**
    * plan-execution D3: append one of the human execution kinds together with
    * the execution's own writes (`within`), as one transaction that replays by
    * `(plan_id, command_id)` over the compared payload — Start `revision` and

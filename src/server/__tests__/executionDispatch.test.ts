@@ -50,5 +50,9 @@ describe('only the execution module mints a system caller (deferred from 2.1, §
     const all = mints()
     expect(all.filter(mint => mint.file.startsWith(EXECUTION + path.sep) && DECISION_ORIGIN.test(mint.line)).map(mint => mint.at)).toEqual([])
     expect(all.filter(mint => mint.file === FIX_TASKS && !DECISION_ORIGIN.test(mint.line)).map(mint => mint.at)).toEqual([])
+    // Non-vacuous: the fix-task module's mint is seen, and is not exported.
+    const fixMints = all.filter(mint => mint.file === FIX_TASKS)
+    expect(fixMints.length).toBeGreaterThan(0)
+    expect(fixMints.filter(mint => /^\s*export\b/.test(mint.line)).map(mint => mint.at)).toEqual([])
   })
 })

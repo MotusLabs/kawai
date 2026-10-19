@@ -64,32 +64,32 @@ Implement after `plan-execution` and `integration-candidates` have landed on mas
   - an exhaustive-switch typecheck;
   - a test that no tool or connection path yields a system caller;
   - a test that the execution origin keeps exactly D2's rights.
-- [ ] 5.2 Implement `DecisionService.ask` (D4). Verify with tests:
+- [x] 5.2 Implement `DecisionService.ask` (D4). Verify with tests:
   - the plan resolves from the session's task, from a fix task, or from the Lead role with `plan_id`, and anything else is refused with D4's message;
   - a conflicting `plan_id` is refused, and another team's plan reads as not found;
   - a Lead-addressed card and its task-less `decision-question` mail commit in one transaction;
   - an owner-addressed card sends no mail;
   - the input limits are enforced.
-- [ ] 5.3 Implement `DecisionService.record` for card answers and own calls (D5). Verify with tests:
+- [x] 5.3 Implement `DecisionService.record` for card answers and own calls (D5). Verify with tests:
   - only the addressed group answers, and owner-addressed cards are refused;
   - the same session and choice replays, and anything else is refused naming the decider;
   - the answer goes through the reply path with the card's task passed explicitly, tagged `decision-answer`, and a killed asker's answer falls back to its group;
   - an own call needs the Lead role and creates a decided card with no mail;
   - `affected_tasks` defaults to the card's task and refuses other teams' tasks.
-- [ ] 5.4 Implement `DecisionService.answer` (D6). Verify with tests:
+- [x] 5.4 Implement `DecisionService.answer` (D6). Verify with tests:
   - agent callers are refused;
   - replay compares the D6 fields, and a different payload is refused naming the field;
   - a decided card is refused naming the decider;
   - queued or awaiting-request question mail is cancelled with the human as actor, while claimed mail is left alone;
   - the answer mail goes to the asker in the question's thread;
   - a race with `decision_record` leaves one first decision.
-- [ ] 5.5 Implement `fixTasks.ts` creation and dispatch for overrides (D7). Verify with tests:
+- [x] 5.5 Implement `fixTasks.ts` creation and dispatch for overrides (D7). Verify with tests:
   - the title, direction, and acceptance follow D7, with no worktree, change, or parent, and the instruction names `fixes: ["<the task's id>"]`;
   - the `plan_fix_tasks` row commits with the task;
   - dispatch goes to `leadGroup` with the role's profiles, the tag `plan-fix`, and the key `fix:<decisionId>`;
   - with no Lead role nothing is dispatched;
   - the origin's rights end at create, dispatch, and close.
-- [ ] 5.6 Implement `DecisionService.override` as one transaction (D6). Verify with tests:
+- [x] 5.6 Implement `DecisionService.override` as one transaction (D6). Verify with tests:
   - replay, and the CAS refusal naming the current decision;
   - an open card is refused with `answer it instead`, and a missing rationale is refused;
   - a cancelled plan is refused, and a completed one is reopened through `PlanService.reopen(…, within)` with command id `override:<commandId>:reopen`;
