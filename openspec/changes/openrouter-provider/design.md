@@ -117,7 +117,11 @@ The name set comes from the resolved catalog, never from Settings. Removing a pr
 
 `openRouterUsage.ts` sits beside `zaiUsage.ts`. It is SDK-free and checks response shapes strictly. It is chosen when the provider's effective base URL host is `openrouter.ai` or one of its subdomains. For such a provider the Z.AI probe is never made, and the host-login SDK pull is suppressed for good, even when the pull is refused.
 
-The current `chat-usage-limits` text says the opposite for any provider with a base URL: it always probes the quota endpoint and falls back to the host login when no quota data comes. This change therefore MODIFIES two requirements, "Usage is refreshed when no report has arrived" and "Provider plan usage is pulled from the provider quota endpoint", with a carve-out for "a provider whose own usage endpoint is selected". The ADDED requirement "OpenRouter providers are pulled from the OpenRouter key endpoint" defines that term and stays the specific source.
+The current `chat-usage-limits` text says the opposite for any provider with a base URL: it always probes the quota endpoint and falls back to the host login when no quota data comes. This change therefore MODIFIES three requirements, each with a carve-out for "a provider whose own usage endpoint is selected":
+
+- "Usage is refreshed when no report has arrived". Its scenarios "Gateway-routed profile with an account login" and "Session without plan limits" are narrowed to providers with no own usage endpoint selected, because an `openrouter` session would otherwise match their WHEN clauses.
+- "Provider plan usage is pulled from the provider quota endpoint".
+- "Plan usage reports are kept per provider", the name `providers-and-workers` gives it. Reports the agent emits, such as `/usage` output, can describe the host claude.ai login rather than the session's provider, so such a provider keeps none of them, only its own pulls. The ADDED requirement "OpenRouter providers are pulled from the OpenRouter key endpoint" defines that term and stays the specific source.
 
 "Quota failures distinguish missing routes from authentication refusals" is not modified. Its rules govern responses from the quota endpoint, which is never requested for such a provider. The ADDED requirement states that carve-out explicitly: the quota-failure fallback rules do not apply, and no failure of the provider's own pulls enables the host-login pull. A missing `/api/v1/key` route, a 5xx response or a transport error therefore leaves the bar empty rather than showing the Claude plan.
 
@@ -174,10 +178,28 @@ The driver keeps a per-turn accumulator. Each `stream_event` whose event is `mes
 - **[Trade-off] A key with no cap shows no key meter.** → The docs advise setting a cap or budget on the inference key; with a balance key, the credits meter still shows.
 - **[Risk] OpenRouter's response shapes are partly undocumented** (the `budgets` scopes, `is_management_key`). → A strict shape check; an unknown scope is labelled by its raw value, and anything malformed records no data rather than guessing.
 - **[Risk] Ordering with `providers-and-workers` and `process-observability`.** → Implementation starts once `providers-and-workers` section 5 (per-provider usage) is on master; section 4 (provider cooldown, `limit_window`, `cooldownFor`) landed in #219. Adding requirements alone does not avoid overlap: an ADDED rule cannot override an unconditional SHALL elsewhere in the same capability. So the two `chat-usage-limits` requirements this change contradicts are MODIFIED (D6).
-  - Both `providers-and-workers` and `process-observability` also MODIFY those requirements. `providers-and-workers` is still in flight (section 5 rewrites per-provider usage), so its blocks compose `process-observability`'s edits and it archives after that already-landed change. This change's blocks restate that composed text, with the carve-out added.
-  - Each MODIFIED block here therefore restates `process-observability`'s text for the requirement, with the carve-out added. That is the composition of both changes' edits against master, and the two do not contradict each other.
+  - Both `providers-and-workers` and `process-observability` also MODIFY those requirements. `process-observability` is implemented but not archived. `providers-and-workers` is still in flight (section 5 rewrites per-provider usage), and its blocks do not yet compose `process-observability`'s edits; its PR C docs commit will, so it archives after `process-observability`.
+  - Today each MODIFIED block here restates `process-observability`'s text, which is written over `providers-and-workers`' wording, with the carve-out added. "Plan usage reports are kept per provider" restates `providers-and-workers`' text, since `process-observability` leaves it alone. The two changes do not contradict each other.
+  - **Hard constraint:** this change archives last, after both. Before archiving, every MODIFIED block is re-derived from the then-current main spec, with the carve-out kept. Until `providers-and-workers` archives, `openspec validate` reports that archive would refuse "Plan usage reports are kept per provider" because the name is not found. That is expected, since the rename is that change's.
   - **Archive order:** `process-observability`, then `providers-and-workers`, then `openrouter-provider`. Archiving this change earlier would drop the per-provider and background-observation wording when its block replaces the requirement.
-  - The prose was condensed to stay within the 500-character requirement limit. `process-observability`'s texts for the two requirements are 545 and 501 characters, and the main spec would refuse that length after archive. Every normative clause is kept; only connective wording ("instead of waiting for one", "not the session's provider routing") is dropped, and its scenarios still carry those cases.
+  - The prose was condensed to stay within the 500-character requirement limit. `process-observability`'s texts are 545 and 501 characters, and the main spec would refuse that length after archive. Each condensed clause, and the scenario of the same block that still carries it:
+    - "Usage is refreshed…":
+      - "instead of waiting for one" → "Windows appear before the first message".
+      - "not the session's provider routing" → "Gateway-routed profile with an account login".
+      - "Without plan limits or obtainable data" became "Without obtainable data" → "Session without plan limits".
+      - "no window data SHALL be recorded and no usage bar shown" became "nothing SHALL be recorded or shown" → "Session without plan limits" and "Session whose agent has not started".
+      - "A refresh SHALL NOT replace fresher data with older data" became "Older data SHALL NOT replace fresher data" → "Stale data is not downgraded".
+    - "Provider plan usage…":
+      - "coding-plan usage" became "plan usage" → the fixed `/api/monitor/usage/quota/limit` path, plus "API-key gateway profile shows provider usage".
+      - "once for the provider" became "once per provider" → "Shared plan pulled once".
+      - "at that URL's origin" became "at its origin" → "Model API path does not prefix the quota endpoint" and "Scheme and port are preserved…".
+      - "the effective provider credentials for the qualifying session or team configuration" became "the qualifying session's or worker's effective credentials" → "Background provider configuration" (a configured team worker) and "Model API path…" ("with the same effective credentials").
+      - "Only a matching quota response SHALL produce provider window data, marked with its own usage source" became "Only a matching response SHALL yield provider windows, with their own source" → "Non-matching response records no data" and "Provider report is marked".
+    - "Plan usage reports are kept per provider":
+      - "with the time it was received" became "with its receipt time" → "Report with both plan windows".
+      - "shared by sessions on every profile of that provider" became "shared by all of that provider's profiles" → "Profiles share a provider".
+      - "for each known plan window, the percent used and the reset time" became "per known plan window, the percent used and reset time" → "Report with both plan windows".
+      - "SHALL NOT replace window data already held for that provider" became "SHALL NOT replace held windows" → "Report without window data".
   - If either change rewrites these requirements again before this change archives, re-derive the blocks from the new text.
 
 ## Migration Plan

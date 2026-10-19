@@ -68,6 +68,33 @@ While at least one non-archived session of a provider whose own usage endpoint i
 
 ## MODIFIED Requirements
 
+### Requirement: Plan usage reports are kept per provider
+The system SHALL capture each plan usage report the agent emits in a chat session and keep the most recent one per provider with its receipt time, shared by all of that provider's profiles; a provider whose own usage endpoint is selected SHALL keep none, only its own pulls. A report SHALL carry, when the agent provides them, the overall status (allowed, warning, or limited) and, per known plan window, the percent used and reset time. A report without window data SHALL NOT replace held windows.
+
+#### Scenario: Report with both plan windows
+- **WHEN** a chat session using the default profile receives a report with 5-hour and 7-day window data
+- **THEN** the latest report for the default profile's provider holds both windows, the status, and the time it was received
+
+#### Scenario: Report with a per-model weekly window
+- **WHEN** a report names a weekly window scoped to a model
+- **THEN** that window is kept alongside the 5-hour and 7-day windows as its own entry
+
+#### Scenario: Report without window data
+- **WHEN** a report contains only a status and the provider already has window data
+- **THEN** the status and received time are updated and the existing window data is kept
+
+#### Scenario: Sessions share a profile
+- **WHEN** two chat sessions use the same profile and one of them receives a report
+- **THEN** both sessions show that report
+
+#### Scenario: Profiles share a provider
+- **WHEN** sessions on `glm` and `glm-flash` of provider `zai` are attached and the `glm` session receives a report
+- **THEN** the `glm-flash` session shows that report too
+
+#### Scenario: Agent report in an own-endpoint session
+- **WHEN** an `openrouter` session's agent emits a plan usage report, such as `/usage` output, which may describe the host claude.ai login
+- **THEN** the report is not kept for `openrouter`, and its usage bar shows only the OpenRouter key and credits pulls
+
 ### Requirement: Usage is refreshed when no report has arrived
 When a provider holds no report and its chat agent has started or it qualifies for background quota observation, the system SHALL fetch plan usage on demand, once per provider: a quota-serving provider's own plan usage; for a provider whose own usage endpoint is selected, only that endpoint's data, never the host login's, even after a refusal; otherwise the agent process's logged-in account. Without obtainable data nothing SHALL be recorded or shown. Older data SHALL NOT replace fresher data.
 
@@ -84,7 +111,7 @@ When a provider holds no report and its chat agent has started or it qualifies f
 - **THEN** plan usage is fetched once, and both sessions show the result
 
 #### Scenario: Gateway-routed profile with an account login
-- **WHEN** the session's provider routes model traffic through a non-Anthropic endpoint that does not serve the provider quota endpoint while the agent process is logged in with a Claude account
+- **WHEN** the session's provider routes model traffic through a non-Anthropic endpoint that does not serve the provider quota endpoint and has no own usage endpoint selected, while the agent process is logged in with a Claude account
 - **THEN** the usage bar shows that account's plan windows
 
 #### Scenario: Gateway-routed profile whose provider serves the quota endpoint
@@ -92,7 +119,7 @@ When a provider holds no report and its chat agent has started or it qualifies f
 - **THEN** the usage bar shows the provider's plan windows, not the logged-in account's
 
 #### Scenario: Session without plan limits
-- **WHEN** the session authenticates with an API key, has no account login, and its provider serves no quota endpoint, so plan limits do not apply
+- **WHEN** the session authenticates with an API key, has no account login, and its provider serves no quota endpoint and has no own usage endpoint selected, so plan limits do not apply
 - **THEN** no usage bar is shown
 
 #### Scenario: Stale data is not downgraded

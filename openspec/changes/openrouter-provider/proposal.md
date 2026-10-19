@@ -45,7 +45,7 @@ OpenRouter serves Claude models, and others, through an Anthropic-compatible end
 ### Modified Capabilities
 
 - `claude-session-profiles`: providers may name a credential variable and a balance variable, both withheld from agents; a credentialed provider's routing comes only from trusted catalogs and its base URL is pinned on every launch that carries the key; the shipped `openrouter` provider; `CLAUDE_CODE_MAX_OUTPUT_TOKENS` joins the controlled variables.
-- `chat-usage-limits`: the OpenRouter key and credits pull, its meters, its refresh cadence, and refresh after costed turns. Two existing requirements are modified: the quota-endpoint pull and the on-demand refresh. A provider whose own usage endpoint is selected is never probed at the quota endpoint and never falls back to the host login.
+- `chat-usage-limits`: the OpenRouter key and credits pull, its meters, its refresh cadence, and refresh after costed turns. Three existing requirements are modified: the quota-endpoint pull, the on-demand refresh, and per-provider report keeping. A provider whose own usage endpoint is selected is never probed at the quota endpoint and never falls back to the host login.
 - `profile-limit-handling`: a 402 is a final `credit` limit with no reset, cooling the provider until credit returns.
 - `chat-sessions`: a turn's completion cost is the provider-reported charge when one was streamed.
 
