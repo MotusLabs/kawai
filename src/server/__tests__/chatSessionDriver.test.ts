@@ -279,24 +279,40 @@ describe('ChatSessionDriver', () => {
   })
 
   test('provider env is merged over process.env and re-read on every spawn', async () => {
-    let providerEnv: Record<string, string> = {
-      ANTHROPIC_BASE_URL: 'https://gw.example/anthropic',
-      ANTHROPIC_MODEL: 'gw-pro',
-    }
-    const harness = createHarness({ getProviderEnv: () => providerEnv })
-    harness.driver.send('hello')
-    const first = harness.fakes[0]!
-    expect(first.options.env).toEqual({ ...process.env, ...providerEnv })
+    const originalKey = process.env.OPENROUTER_API_KEY
+    const originalManagementKey = process.env.OPENROUTER_MANAGEMENT_KEY
+    process.env.OPENROUTER_API_KEY = 'test-or-key'
+    process.env.OPENROUTER_MANAGEMENT_KEY = 'test-or-mgmt'
+    try {
+      let providerEnv: Record<string, string> = {
+        ANTHROPIC_BASE_URL: 'https://gw.example/anthropic',
+        ANTHROPIC_MODEL: 'gw-pro',
+      }
+      const harness = createHarness({ getProviderEnv: () => providerEnv })
+      harness.driver.send('hello')
+      const first = harness.fakes[0]!
+      // The shipped catalog's credential names (openrouter-provider D3) never
+      // reach a launch, whatever the server environment carries.
+      const { OPENROUTER_API_KEY: _withheldKey, OPENROUTER_MANAGEMENT_KEY: _withheldManagement, ...serverEnv } = process.env
+      expect(first.options.env).toEqual({ ...serverEnv, ...providerEnv })
+      expect(first.options.env).not.toHaveProperty('OPENROUTER_API_KEY')
+      expect(first.options.env).not.toHaveProperty('OPENROUTER_MANAGEMENT_KEY')
 
-    // The query exits; the next send respawns under the updated provider.
-    first.exit()
-    await flush()
-    providerEnv = { ANTHROPIC_MODEL: 'gw-flash' }
-    harness.driver.send('again')
-    expect(harness.fakes).toHaveLength(2)
-    expect(harness.fakes[1]!.options.env?.ANTHROPIC_MODEL).toBe('gw-flash')
-    expect(harness.fakes[1]!.options.env?.ANTHROPIC_BASE_URL).toBe(process.env.ANTHROPIC_BASE_URL)
-    harness.driver.kill()
+      // The query exits; the next send respawns under the updated provider.
+      first.exit()
+      await flush()
+      providerEnv = { ANTHROPIC_MODEL: 'gw-flash' }
+      harness.driver.send('again')
+      expect(harness.fakes).toHaveLength(2)
+      expect(harness.fakes[1]!.options.env?.ANTHROPIC_MODEL).toBe('gw-flash')
+      expect(harness.fakes[1]!.options.env?.ANTHROPIC_BASE_URL).toBe(process.env.ANTHROPIC_BASE_URL)
+      harness.driver.kill()
+    } finally {
+      if (originalKey !== undefined) process.env.OPENROUTER_API_KEY = originalKey
+      else delete process.env.OPENROUTER_API_KEY
+      if (originalManagementKey !== undefined) process.env.OPENROUTER_MANAGEMENT_KEY = originalManagementKey
+      else delete process.env.OPENROUTER_MANAGEMENT_KEY
+    }
   })
 
   test('the team prompt is appended to the preset and re-read only at the next spawn', async () => {
