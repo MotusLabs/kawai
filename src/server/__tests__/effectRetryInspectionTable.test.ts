@@ -9,11 +9,12 @@
 // real bare origin with scripted reads and adapters.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import type { EffectKind } from '../../shared/planExecution'
+import type { EffectRow } from '../plans/execution/executionRows'
 import type { PrDetail } from '../plans/landing/github'
 import type { EffectAdapter } from '../plans/execution/effects'
 import type { InspectorReads } from '../plans/execution/effectInspectors'
 import {
-  createMatrixBench, createMatrixWorld, removeMatrixWorld, startedExecution,
+  createMatrixBench, createMatrixWorld, pushCommit, removeMatrixWorld, review, startedExecution, submitWork,
   type MatrixBench, type MatrixWorld,
 } from './executionMatrixHarness'
 
@@ -229,5 +230,124 @@ describe('the stop names its effect (review N2)', () => {
     expect(stopped.stopDetail?.effectId).toBe(effect.id)
     expect(await h.service.retry(h.bench.human, { executionId, change: 'tb-exhaust', commandId: 'retry-tb-exhaust' })).toMatchObject({ ok: true })
     expect(h.executions.effect(effect.id)).toMatchObject({ state: 'unknown' })
+  })
+})
+
+describe('the retry resumes at the stopped effect\'s step (A2)', () => {
+  test('a landing-kind stop re-enters landing at its own step; a push stop stays at gating', async () => {
+    const executionId = await startedExecution(h, [{ change: 'tb-rm' }, { change: 'tb-ru' }, { change: 'tb-rf' }, { change: 'tb-rp' }])
+    await h.tick()
+    // Each resumed change holds the team's one landing slot, so each is
+    // cancelled again before the next kind's retry — a resumed stage keeps
+    // the slot until it leaves landing, like any landing change.
+    const resume = async (change: string, kind: EffectKind, command: Record<string, unknown>): Promise<EffectRow> => {
+      const effect = seedUnknownStop(executionId, change, kind, command, true)
+      expect(await h.service.retry(h.bench.human, { executionId, change, commandId: `retry-${change}` })).toMatchObject({ ok: true })
+      return effect
+    }
+    const free = (change: string): void => {
+      h.executions.transition(executionId, change, h.executions.change(executionId, change)!, { state: 'cancelled' })
+    }
+    const merge = await resume('tb-rm', 'merge', { repo: 'acme/app', pr: 7, head: 'head1' })
+    expect(h.executions.change(executionId, 'tb-rm')).toMatchObject({ state: 'landing', step: 'merging' })
+    expect(h.executions.slot(matrix.world.team.teamId)?.holderId).toContain(':tb-rm')
+    free('tb-rm')
+    const update = await resume('tb-ru', 'update-branch', { repo: 'acme/app', pr: 8, head: 'head1' })
+    expect(h.executions.change(executionId, 'tb-ru')).toMatchObject({ state: 'landing', step: 'updating' })
+    free('tb-ru')
+    const forward = await resume('tb-rf', 'fast-forward', { cwd: matrix.origin, branch: 'wave/tb', sha: 'abc' })
+    expect(h.executions.change(executionId, 'tb-rf')).toMatchObject({ state: 'landing', step: 'merging' })
+    free('tb-rf')
+    // A push is not a landing kind: the retry keeps the gating default.
+    const push = await resume('tb-rp', 'push', { cwd: matrix.origin, commit: 'abc', branch: 'tb-rp' })
+    expect(h.executions.change(executionId, 'tb-rp')).toMatchObject({ state: 'gating', step: null })
+    // Nothing runs before the re-opened rows are inspected (I-A): one tick
+    // over rejecting reads runs no adapter and leaves every row unknown,
+    // each one try spent on its undecidable inspection.
+    const calls: string[] = []
+    await tickWith(() => h.makeExecutor({
+      reads: rejecting,
+      adapters: {
+        merge: recording(calls, 'merge'), 'update-branch': recording(calls, 'update-branch'),
+        'fast-forward': recording(calls, 'fast-forward'), push: recording(calls, 'push'),
+      },
+    }))
+    expect(calls).toEqual([])
+    for (const effect of [merge, update, forward, push]) {
+      expect(h.executions.effect(effect.id)).toMatchObject({ state: 'unknown' })
+      expect(h.executions.effect(effect.id)!.tries).toBe(1)
+    }
+  })
+
+  test('a landing-kind stop whose slot is taken waits at gating; the re-opened row is still the one that decides', async () => {
+    const executionId = await startedExecution(h, [{ change: 'tb-sa' }, { change: 'tb-sb' }])
+    await h.tick()
+    await submitWork(h, executionId, 'tb-sa', 'src/tb-sa.ts', 'a\n')
+    await submitWork(h, executionId, 'tb-sb', 'src/tb-sb.ts', 'b\n')
+    await h.tick()
+    // The base moves and GitHub's update never comes through: tb-sa holds
+    // the slot while updating, so tb-sb's pass waits outside it.
+    pushCommit(matrix, 'master', 'slot.txt', 'slot\n')
+    h.gh.update = () => {}
+    try {
+      await review(h, executionId, 'tb-sa', 'pass')
+      await h.tick()
+      expect(h.executions.change(executionId, 'tb-sa')).toMatchObject({ state: 'landing', step: 'updating' })
+      await review(h, executionId, 'tb-sb', 'pass')
+      await h.tick()
+      expect(h.executions.change(executionId, 'tb-sb')).toMatchObject({ state: 'gating', step: 'awaiting-slot' })
+      const merge = seedUnknownStop(executionId, 'tb-sb', 'merge', { repo: 'acme/app', pr: 999, head: 'head' }, true)
+      expect(await h.service.retry(h.bench.human, { executionId, change: 'tb-sb', commandId: 'retry-tb-sb' })).toMatchObject({ ok: true })
+      // The slot was taken: the retry waits at gating like applyLanding's
+      // step 2, and the re-opened row — not a re-derived effect — decides.
+      expect(h.executions.effect(merge.id)).toMatchObject({ state: 'unknown' })
+      expect(h.executions.change(executionId, 'tb-sb')).toMatchObject({ state: 'gating', step: 'awaiting-slot' })
+      expect(h.executions.slot(matrix.world.team.teamId)?.holderId).toContain(':tb-sa')
+      const calls: string[] = []
+      await tickWith(() => h.makeExecutor({ reads: rejecting, adapters: { merge: recording(calls, 'merge') } }))
+      expect(calls).toEqual([])
+      expect(h.executions.effect(merge.id)).toMatchObject({ state: 'unknown' })
+      expect(h.executions.change(executionId, 'tb-sb')).toMatchObject({ state: 'gating', step: 'awaiting-slot' })
+    } finally {
+      h.gh.update = null
+    }
+  })
+
+  test('the re-opened effect gets a fresh inspection budget (A3)', async () => {
+    const executionId = await startedExecution(h, [{ change: 'tb-budget' }])
+    await h.tick()
+    const effect = h.executions.insertEffect({ executionId, change: 'tb-budget', roundId: null, kind: 'push', effectKey: `${executionId}:tb-budget:push:seed:0`, command: { cwd: matrix.origin, commit: 'abc', branch: 'tb-budget' } })
+    h.executions.markEffectRunning(effect.id)
+    h.executions.markRunningEffectsUnknown()
+    // Three undecidable passes exhaust the inspection: failed, tries spent.
+    const blocked = h.makeExecutor({ reads: rejecting })
+    try {
+      for (const step of [31_000, 121_000, 601_000]) {
+        await h.tick(blocked)
+        h.clock.now += step
+      }
+      await h.tick(blocked)
+    } finally {
+      blocked.close()
+    }
+    expect(h.executions.effect(effect.id)).toMatchObject({ state: 'failed' })
+    expect(h.executions.effect(effect.id)!.tries).toBe(3)
+    expect(await h.service.retry(h.bench.human, { executionId, change: 'tb-budget', commandId: 'retry-tb-budget' })).toMatchObject({ ok: true })
+    expect(h.executions.effect(effect.id)).toMatchObject({ state: 'unknown' })
+    expect(h.executions.effect(effect.id)!.tries).toBe(0)
+    // The retry's own inspection gets the same three tries before it may
+    // settle the row effect-unknown again.
+    const retry = h.makeExecutor({ reads: rejecting })
+    try {
+      for (const step of [31_000, 121_000, 601_000]) {
+        await h.tick(retry)
+        expect(h.executions.effect(effect.id)).toMatchObject({ state: 'unknown' })
+        h.clock.now += step
+      }
+      await h.tick(retry)
+    } finally {
+      retry.close()
+    }
+    expect(h.executions.effect(effect.id)).toMatchObject({ state: 'failed' })
   })
 })

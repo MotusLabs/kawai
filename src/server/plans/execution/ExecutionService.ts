@@ -16,9 +16,11 @@ import { loadGroupCatalog } from '../../team/groupCatalog'
 import type { PlanRevision } from '../../../shared/plans'
 import type { ImpactGate } from '../../../shared/strategyImpact'
 import { FLOOR_VERSION } from '../../../shared/planExecution'
+import type { EffectKind } from '../../../shared/planExecution'
 import type { ChangeRow, ExecutionRow } from './executionRows'
 import { logger } from '../../logger'
 import { StaleTaskStatus, type PreparedTaskStatus } from '../../team/taskStatusPrepared'
+import { ExecutionConflict } from './executionStore'
 import type { ExecutionStore } from './executionStore'
 import { PlanRefusal, type PlanCommandOutcome, type PlanRefusalReason } from '../planCommands'
 import type { PlanService } from '../PlanService'
@@ -55,6 +57,16 @@ export interface StartGather {
   settings: PlanExecutionSettings
   /** integration-candidates D8: landing facts the base head lacks. */
   offBaseLandings: StartCheckContext['offBaseLandings']
+}
+
+/**
+ * A2 (effect lifecycle): the landing kinds a Retry resumes at their own step
+ * inside `landing` — the stage the change stopped in, past the slot and
+ * up-to-date steps it already passed. The re-opened row is inspected first,
+ * so the resumed stage issues nothing until its verdict decides.
+ */
+const RESUME_AT_STEP: Partial<Record<EffectKind, 'merging' | 'updating'>> = {
+  merge: 'merging', 'fast-forward': 'merging', 'update-branch': 'updating',
 }
 
 export class ExecutionService {
@@ -270,7 +282,9 @@ export class ExecutionService {
       // refused step needs no resend, its stage simply runs again; a
       // name-taken change re-provisions; the rest return to gating.
       // A landing change resumes at gating: its passed round re-enters the
-      // landing stage, which takes the slot only when it is free.
+      // landing stage, which takes the slot only when it is free — except an
+      // effect-unknown stop naming a landing effect, which resumes at that
+      // effect's own step (A2, below).
       const stored = row.stopDetail?.resumeState ?? 'implementing'
       const resume = stored === 'landing' ? 'gating' : stored
       const to: Parameters<ExecutionStore['transition']>[3] = { state: 'gating', step: null, stopReason: null, stopDetail: null, fixRounds: 0 }
@@ -283,7 +297,31 @@ export class ExecutionService {
       // waits again, and the planner issues the effect anew; integration-rewritten resumes at
       // gating, where its passed round re-enters landing and the rewritten check runs again (D6).
       if (row.stopDetail?.resumeState === 'waiting') to.state = 'waiting'
-      const moved = this.deps.store.transition(input.executionId, input.change, row, to)
+      // A2: a landing effect the stop names resumes at its own step inside
+      // `landing`, so the stage never re-runs the steps it already passed —
+      // and never re-derives the effect while the re-opened row is live (I-A).
+      const namedId = row.stopDetail?.effectId
+      const stopped = row.stopReason === 'effect-unknown' && namedId !== undefined
+        ? this.deps.store.effect(namedId)
+        : null
+      if (stopped !== null && stopped.change === input.change) {
+        const step = RESUME_AT_STEP[stopped.kind]
+        if (step !== undefined) {
+          to.state = 'landing'
+          to.step = step
+        }
+      }
+      let moved: ChangeRow | null
+      try {
+        moved = this.deps.store.transition(input.executionId, input.change, row, to)
+      } catch (error) {
+        // The slot was taken while the retry was open: like applyLanding's
+        // step 2, the change waits at gating, and the re-opened effect's
+        // verdict still decides (the planner's resumed landing window).
+        if (!(error instanceof ExecutionConflict) || error.kind !== 'slot-taken') throw error
+        moved = this.deps.store.transition(input.executionId, input.change, row,
+          { state: 'gating', step: 'awaiting-slot', stopReason: null, stopDetail: null, fixRounds: 0 })
+      }
       if (moved === null) throw new PlanRefusal('state', 'The change moved while the retry was open; reload and retry again.')
       const round = this.deps.store.rounds(input.executionId, input.change).at(-1) ?? null
       if (row.stopReason === 'review-unavailable' && round !== null) this.deps.store.clearRoundReview(round.id)
@@ -292,13 +330,14 @@ export class ExecutionService {
       }
       if (row.stopReason === 'effect-unknown') {
         // The stop names its effect (D14's recovery): Retry re-opens that
-        // one, into `unknown` — inspected before it ever runs again. Stops
-        // written before the stop carried the id fall back to the change's
-        // oldest failed effect.
-        const named = row.stopDetail?.effectId
-        const failed = this.deps.store.effectsOf(input.executionId)
-          .find(effect => effect.change === input.change && effect.state === 'failed'
-            && (named === undefined || effect.id === named))
+        // one, into `unknown` — inspected before it ever runs again, with a
+        // fresh inspection budget (A3). Stops written before the stop
+        // carried the id fall back to the change's oldest failed effect.
+        const failed = stopped !== null && stopped.state === 'failed' && stopped.change === input.change
+          ? stopped
+          : this.deps.store.effectsOf(input.executionId)
+            .find(effect => effect.change === input.change && effect.state === 'failed'
+              && (namedId === undefined || effect.id === namedId))
         if (failed !== undefined) this.deps.store.retryFailedEffect(failed.id)
       }
       return { change: input.change }

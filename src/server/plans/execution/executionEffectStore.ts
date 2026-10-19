@@ -176,11 +176,13 @@ export class ExecutionEffectStore {
    * settled — and it re-enters inspection (`unknown`), never `pending`: the
    * row stopped as unknown because its outcome could not be decided, so an
    * inspection must answer it before it ever runs again; only an inspected
-   * not-done effect returns to `pending` (resetEffect). Synchronous, in the
-   * retry's own transaction — never a late write after an await (O3).
+   * not-done effect returns to `pending` (resetEffect). The inspection budget
+   * is fresh (A3): the tries the exhausted inspection spent are not carried
+   * into the retry's own. Synchronous, in the retry's own transaction —
+   * never a late write after an await (O3).
    */
   retryFailedEffect(id: string): void {
-    this.db.prepare(`UPDATE plan_execution_effects SET state = 'unknown', next_at = NULL WHERE id = ? AND state = 'failed'`).run(id)
+    this.db.prepare(`UPDATE plan_execution_effects SET state = 'unknown', tries = 0, next_at = NULL WHERE id = ? AND state = 'failed'`).run(id)
   }
 
   /** An undecidable inspection stays `unknown`, one try counted, retrying at `nextAt` (D14). */
