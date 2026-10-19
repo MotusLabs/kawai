@@ -99,6 +99,27 @@ describe('chat components', () => {
     renderer.unmount()
   })
 
+  test('single-select question forms keep one answer: an option or own text', () => {
+    const sent: ClientMessage[] = []
+    const renderer = TestRenderer.create(<ChatRequests sessionId="chat-1" disabled={false} sendMessage={message => sent.push(message)}
+      requests={[{ kind: 'question', requestId: 'q', at: 'now', questions: [{ question: 'Pick', header: 'Pick', multiSelect: false,
+        options: [{ label: 'A' }, { label: 'B' }] }] }]} />)
+    const inputs = () => renderer.root.findAllByType('input')
+    const submit = () => act(() => renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} }))
+    act(() => inputs()[0]!.props.onChange({ target: { checked: true } }))
+    act(() => inputs()[2]!.props.onChange({ target: { value: 'my own' } }))
+    expect(inputs()[0]!.props.checked).toBe(false)
+    submit()
+    act(() => inputs()[1]!.props.onChange({ target: { checked: true } }))
+    expect(inputs()[2]!.props.value).toBe('')
+    submit()
+    expect(sent).toEqual([
+      { type: 'chat-answer', sessionId: 'chat-1', requestId: 'q', answers: { Pick: { text: 'my own' } } },
+      { type: 'chat-answer', sessionId: 'chat-1', requestId: 'q', answers: { Pick: { options: ['B'] } } },
+    ])
+    renderer.unmount()
+  })
+
   test('assistant markdown and tool activity render without executing raw HTML', () => {
     const renderer = TestRenderer.create(<ChatMessages events={[
       { type: 'assistant_text', id: 'a', sequence: 0, at: 'now', turnId: 't', messageId: 'm', text: '**Hello** <script>bad()</script>' },

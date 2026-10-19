@@ -32,9 +32,7 @@ function versionNineWithRow(): Database {
 }
 
 test('this build registers migration 12 provider-limit-window after process-observations', () => {
-  const entries = MIGRATIONS.map(migration => [migration.version, migration.name] as const)
-  const at = entries.findIndex(([, name]) => name === 'provider-limit-window')
-  expect(entries.slice(at - 1, at + 1))
+  expect(MIGRATIONS.filter(migration => migration.version === 11 || migration.version === 12).map(migration => [migration.version, migration.name]))
     .toEqual([[11, 'process-observations'], [12, 'provider-limit-window']])
 })
 

@@ -69,6 +69,11 @@ const adapters = (): InspectorReads => ({
     if (result === undefined) throw new Error('pr view failed')
     return result
   },
+  contains: async (_cwd, _ref, ancestor, descendant) => {
+    const result = (reads.contains as Record<string, boolean> | undefined)?.[`${ancestor}..${descendant}`]
+    if (result === undefined) throw new Error('ancestry read failed')
+    return result
+  },
   runAttempt: async (repo, runId) => {
     const result = (reads.runAttempt as Record<string, number> | undefined)?.[String(runId)]
     if (result === undefined) throw new Error('run view failed')
@@ -144,6 +149,37 @@ describe('the per-kind inspections (D14 table)', () => {
     reads.worktree = { '/repo/.worktrees/api': { present: true, head: 'h' } }
     await expect(inspect('remove-worktree', { repo: '/repo', path: '/repo/.worktrees/api' })).resolves.toEqual({ found: 'not-done' })
     await expect(inspect('future-kind', {})).resolves.toMatchObject({ found: 'undecidable' })
+  })
+
+  test('create-integration: a ref at the requested commit is done; missing runs again; elsewhere stops as a foreign branch (integration-candidates D6)', async () => {
+    const command = { cwd: '/repo', repo: 'acme/app', branch: 'wave/int', sha: 'def1' }
+    reads.remoteHead = { 'refs/heads/wave/int': 'def1' }
+    await expect(inspect('create-integration', command)).resolves.toEqual({ found: 'done', outcome: { created: true, sha: 'def1' } })
+    reads.remoteHead = { 'refs/heads/wave/int': null }
+    await expect(inspect('create-integration', command)).resolves.toEqual({ found: 'not-done' })
+    reads.remoteHead = { 'refs/heads/wave/int': 'foreign9' }
+    const foreign = await inspect('create-integration', command)
+    expect(foreign).toMatchObject({ found: 'stop', reason: 'effect-failed', detail: { names: ['wave/int'] } })
+    expect(foreign.found === 'stop' && foreign.detail.message).toContain('foreign-branch')
+  })
+
+  test('fast-forward: R contains C is done; C contains R runs again; otherwise refused with R (integration-candidates D6)', async () => {
+    const command = { cwd: '/repo', repo: 'acme/app', branch: 'wave/int', sha: 'c1', base: 'r0' }
+    reads.remoteHead = { 'refs/heads/wave/int': 'c1' }
+    reads.contains = { 'c1..c1': true }
+    await expect(inspect('fast-forward', command)).resolves.toEqual({ found: 'done', outcome: { fastForwarded: true, head: 'c1' } })
+    reads.remoteHead = { 'refs/heads/wave/int': 'r0' }
+    reads.contains = { 'c1..r0': false, 'r0..c1': true }
+    await expect(inspect('fast-forward', command)).resolves.toEqual({ found: 'not-done' })
+    reads.remoteHead = { 'refs/heads/wave/int': 'moved' }
+    reads.contains = { 'c1..moved': false, 'moved..c1': false }
+    await expect(inspect('fast-forward', command)).resolves.toEqual({ found: 'done', outcome: { fastForwarded: false, refused: true, head: 'moved' } })
+    reads.remoteHead = { 'refs/heads/wave/int': null }
+    await expect(inspect('fast-forward', command)).resolves.toEqual({ found: 'done', outcome: { fastForwarded: false, refused: true, head: null } })
+    // A failed ancestry read is undecidable, never a guess.
+    reads.remoteHead = { 'refs/heads/wave/int': 'moved' }
+    reads.contains = {}
+    await expect(inspect('fast-forward', command)).resolves.toMatchObject({ found: 'undecidable' })
   })
 })
 

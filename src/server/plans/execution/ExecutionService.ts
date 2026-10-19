@@ -25,10 +25,13 @@ import type { PlanService } from '../PlanService'
 import type { PlanStore } from '../planStore'
 import type { ValidationStanding } from '../validation/validationStanding'
 import { compareWithOriginTree, probeLanding, validatedFilesOf, type ProbeResult } from '../landing/landingProbe'
+import type { LandingMechanisms } from '../landing/landingMechanisms'
+import { DIRECT_MECHANISMS, directMechanism } from '../landing/directMechanism'
 import { ghTreeEntries } from '../landing/github'
 import type { GhCommandOptions } from '../landing/ghCommand'
 import type { PlanExecutionSettings } from '../../team/teamCaps'
 import { evaluateStartPreconditions, type StartCheckContext, type StartRoleFact } from './startPreconditions'
+import { readIntegrationStartFacts } from '../landing/integration/integrationStart'
 
 export type ExecutionCaller = { kind: 'human'; team: TeamIdentity } | { kind: 'agent'; sessionId: string }
 
@@ -50,6 +53,8 @@ export interface StartGather {
   roles: StartRoleFact[]
   landed: ReadonlySet<string>
   settings: PlanExecutionSettings
+  /** integration-candidates D8: landing facts the base head lacks. */
+  offBaseLandings: StartCheckContext['offBaseLandings']
 }
 
 export class ExecutionService {
@@ -66,8 +71,14 @@ export class ExecutionService {
     getSession: (id: string) => ChatSessionRecord | null | undefined
     /** The registered landing mechanism modes (D13's registry; the wiring arrives with the landing sections). */
     landingModes: () => ReadonlySet<string>
-    /** The landing probe (D13); tests stub it. */
+    /** The landing probe (D13); tests stub it, else the plan's mechanism probes. */
     probe?: typeof probeLanding
+    /** The registered landing mechanisms, by mode (the composition's; direct only by default). */
+    mechanisms?: LandingMechanisms
+    /** integration-candidates D8: the plan's running promotion (promotion-idle). */
+    promotions: { runningPromotion: (planId: string) => StartCheckContext['runningPromotion'] }
+    /** integration-candidates D8's landings-on-base pre-read; tests stub it. */
+    startFacts?: typeof readIntegrationStartFacts
     /** Kawai cancels its tasks on Stop through the task service (D12). */
     tasks?: import('../../team/TaskService').TaskService
     /** The team's identity for Kawai's own stop (D19's plan-close hook). */
@@ -109,6 +120,11 @@ export class ExecutionService {
         maxParallel: settings.maxParallelChanges, mergeMethod: settings.mergeMethod,
         changes: ctx.changes.map(change => ({ change, landed: gather.landed.has(change) })),
       })
+      // The mechanism's execution-level effects commit with the execution (integration-candidates D4).
+      const mechanism = (this.deps.mechanisms ?? DIRECT_MECHANISMS).get(ctx.landingMode)
+      for (const effect of mechanism?.startEffects?.({ execution, probe: gather.probe, main: caller.team.groupsRoot }) ?? []) {
+        this.deps.store.insertEffect({ executionId: execution.id, change: null, roundId: null, ...effect })
+      }
       return { executionId: execution.id }
     })
     if (!outcome.ok) return outcome
@@ -153,8 +169,15 @@ export class ExecutionService {
         sharedProfiles: roleProfiles.length > 0 ? roleProfiles.filter(profile => groupProfiles.includes(profile)) : groupProfiles,
       }
     })
-    const landed = new Set(this.deps.store.landings(planId).map(landing => landing.change))
-    const probe = await (this.deps.probe ?? probeLanding)({ main: team.groupsRoot, floorChecks: settings.floorChecks, changes: names, provisioned: landed }, this.deps.ghOptions ?? {})
+    const landings = this.deps.store.landings(planId)
+    const landed = new Set(landings.map(landing => landing.change))
+    const probeInput = { main: team.groupsRoot, floorChecks: settings.floorChecks, changes: names, provisioned: landed }
+    const landing = revisionRow?.content.landing ?? { mode: 'direct' as const }
+    // An unregistered mode is refused by landing-mode-supported; direct's checks still report the repository.
+    const mechanism = (this.deps.mechanisms ?? DIRECT_MECHANISMS).get(landing.mode) ?? directMechanism
+    const probe = this.deps.probe !== undefined
+      ? await this.deps.probe(probeInput, this.deps.ghOptions ?? {})
+      : await mechanism.probe({ ...probeInput, teamId: team.teamId, planId, landing }, this.deps.ghOptions ?? {})
     let baseDiffs: Array<{ change: string; files: string[] }> = []
     if (probe.base !== null && probe.repo !== null) {
       const tree = await ghTreeEntries(probe.repo, probe.base.tree, this.deps.ghOptions ?? {})
@@ -164,7 +187,12 @@ export class ExecutionService {
         baseDiffs = await compareWithOriginTree(team.groupsRoot, originTree, perChange)
       }
     }
-    return { probe, baseDiffs, roles, landed, settings }
+    const facts = await (this.deps.startFacts ?? readIntegrationStartFacts)({
+      main: team.groupsRoot, probe, landings, runningPromotion: null,
+      baseBranchOf: executionId => this.deps.store.execution(executionId)?.baseBranch ?? null,
+    })
+    const checked = facts.error === undefined ? probe : { ...probe, findings: [...probe.findings, { code: 'base-branch' as const, message: facts.error }] }
+    return { probe: checked, baseDiffs, roles, landed, settings, offBaseLandings: facts.offBaseLandings }
   }
 
   /** The precondition context, inside Start's transaction or in preview, plus the commit's own reads. */
@@ -193,6 +221,9 @@ export class ExecutionService {
       probeFindings: gather.probe.findings,
       landingMode: content?.landing.mode ?? 'direct',
       supportedLandingModes: this.deps.landingModes(),
+      runningPromotion: this.deps.promotions.runningPromotion(request.planId),
+      offBaseLandings: gather.offBaseLandings,
+      baseBranch: gather.probe.base?.branch ?? null,
       reportId: report?.id ?? null,
       inputHash: report?.inputHash ?? null,
       changes: names,
@@ -248,6 +279,10 @@ export class ExecutionService {
         if (row.stopDetail?.stage === undefined) to.step = 'redispatch'
       }
       if (row.stopReason === 'name-taken') to.state = 'provisioning'
+      // A change an execution-level effect stopped while it waited (integration-candidates D4)
+      // waits again, and the planner issues the effect anew; integration-rewritten resumes at
+      // gating, where its passed round re-enters landing and the rewritten check runs again (D6).
+      if (row.stopDetail?.resumeState === 'waiting') to.state = 'waiting'
       const moved = this.deps.store.transition(input.executionId, input.change, row, to)
       if (moved === null) throw new PlanRefusal('state', 'The change moved while the retry was open; reload and retry again.')
       const round = this.deps.store.rounds(input.executionId, input.change).at(-1) ?? null

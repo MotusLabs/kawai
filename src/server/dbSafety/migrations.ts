@@ -29,6 +29,7 @@ import { CREATE_AGENT_START_TABLES_SQL } from '../metrics/provenanceSchema'
 import { CREATE_TURN_USAGE_SQL } from '../chat/chatTurnUsageStore'
 import { CREATE_PROCESS_REPORT_TABLES_SQL } from '../metrics/reportSchema'
 import { migrateProviderLimitWindow } from '../team/routing/limitEvents'
+import { integrationMigration } from '../plans/landing/integration/integrationSchema'
 import type { BackupFile } from './backupFiles'
 import type { BackupOutcome } from './backups'
 
@@ -69,6 +70,9 @@ export const MIGRATIONS: readonly Migration[] = [
   // providers-and-workers D7: limit events record their provider and the
   // rejected report's window; rows from before it read provider-less.
   { version: 12, name: 'provider-limit-window', up: migrateProviderLimitWindow },
+  // integration-candidates D3: the branch records, candidates, promotions,
+  // and promotion effects, with the one-running-promotion index.
+  integrationMigration,
   // codex-chat-sessions 3.3 (ruling R1): the chat's creation-fixed runtime,
   // its resolved Codex home, and the Codex transcript path.
   codexSessionMigration,

@@ -56,7 +56,7 @@ test('this build registers codex-chat-runtime as the dense next numbered migrati
   const entries = MIGRATIONS.map(migration => [migration.version, migration.name] as const)
   const at = entries.findIndex(([, name]) => name === 'codex-chat-runtime')
   expect(entries.slice(at - 1, at + 1))
-    .toEqual([[12, 'provider-limit-window'], [13, 'codex-chat-runtime']])
+    .toEqual([[13, 'integration-candidates'], [14, 'codex-chat-runtime']])
 })
 
 test('a predecessor database keeps its chats: the migration adds the columns and legacy rows read Claude', () => {

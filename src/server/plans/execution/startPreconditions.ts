@@ -54,6 +54,16 @@ export interface StartCheckContext {
   landingMode: string
   /** The registry's registered mechanism modes (D13). */
   supportedLandingModes: ReadonlySet<string>
+  /** integration-candidates D8: the plan's running promotion, if any (promotion-idle). */
+  runningPromotion: { id: string; number: number; branch: string; step: string | null } | null
+  /**
+   * integration-candidates D8: the pre-read landing facts whose `merge_sha`
+   * the execution's base head lacks, with the branch each landed on
+   * (landings-on-base).
+   */
+  offBaseLandings: Array<{ change: string; branch: string }>
+  /** The base branch the execution would provision from and land on: the probe's. */
+  baseBranch: string | null
 }
 
 export interface StartPrecondition {
@@ -145,6 +155,19 @@ export const START_PRECONDITIONS: readonly StartPrecondition[] = [
     check: ({ landingMode, supportedLandingModes }) => (supportedLandingModes.has(landingMode)
       ? null
       : `The landing mode "${landingMode}" is not registered; direct is the one this build ships.`),
+  },
+  // integration-candidates D8: appended, both pre-reads like changes-on-base.
+  {
+    name: 'promotion-idle',
+    check: ({ runningPromotion }) => (runningPromotion === null
+      ? null
+      : `Promotion ${runningPromotion.number} (${runningPromotion.id}) of ${runningPromotion.branch} is running at step ${runningPromotion.step ?? 'starting'}; wait for it to finish or cancel it.`),
+  },
+  {
+    name: 'landings-on-base',
+    check: ({ offBaseLandings, baseBranch }) => (offBaseLandings.length === 0
+      ? null
+      : `The base ${baseBranch ?? 'branch'}'s head on origin lacks landed work: ${offBaseLandings.map(entry => `${entry.change} (landed on ${entry.branch})`).join(', ')}. Promote that branch first, or start a revision that lands on it.`),
   },
 ]
 

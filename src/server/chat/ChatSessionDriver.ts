@@ -1686,7 +1686,16 @@ function validateAnswers(
       return { ok: false, error: `Missing answer for "${question.question}"` }
     }
     const labels = new Set(question.options.map((option) => option.label))
+    const text = answer.text?.trim()
     if (answer.options?.length) {
+      // A single-select answer is one choice: an option or the user's own
+      // text. Refuse both rather than silently dropping the text.
+      if (!question.multiSelect && text) {
+        return {
+          ok: false,
+          error: `"${question.question}" takes one answer: choose an option or type your own, not both`,
+        }
+      }
       if (!question.multiSelect && answer.options.length > 1) {
         return {
           ok: false,
@@ -1701,10 +1710,12 @@ function validateAnswers(
           }
         }
       }
-      result[question.question] = answer.options.join(', ')
-    } else if (answer.text?.trim()) {
-      result[question.question] = answer.text.trim()
-      response = answer.text.trim()
+      // Multi-select: the user's own text is one more selection.
+      result[question.question] = [...answer.options, ...(text ? [text] : [])].join(', ')
+      if (text) response = text
+    } else if (text) {
+      result[question.question] = text
+      response = text
     }
   }
   return {

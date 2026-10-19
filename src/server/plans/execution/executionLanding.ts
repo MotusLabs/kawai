@@ -12,7 +12,7 @@ import fs from 'node:fs'
 import type { TeamIdentity } from '../../team/teamIdentity'
 import type { TaskResultService } from '../../team/TaskResultService'
 import type { EffectAdapter, EffectCallResult } from './effects'
-import type { ChangeRow, EffectRow, RoundRow } from './executionRows'
+import type { ChangeRow, EffectRow, ExecutionRow, RoundRow } from './executionRows'
 import type { ExecutionStore } from './executionStore'
 import type { PlanStore } from '../planStore'
 import type { PlanService } from '../PlanService'
@@ -24,6 +24,7 @@ import { runGit } from '../../git/gitCommand'
 import { logger } from '../../logger'
 import { refusable } from './stepRefusal'
 import { ExecutionConflict } from './executionPatch'
+import { cleanMergeCheck } from '../landing/cleanMerge'
 
 export interface LandingDeps {
   team: TeamIdentity
@@ -70,7 +71,8 @@ export const landingAdapters: LandingAdapters = {
  * passed round, or `landing` mid-flight; every stop and every exit from
  * `landing` releases the slot (the store's rule).
  */
-export async function applyLanding(deps: LandingDeps, adapters: LandingAdapters, changeRow: { executionId: string; change: string; branch: string | null; worktree: string | null; prNumber: number | null; state: string; step: string | null; taskId: string | null }, round: RoundRow): Promise<void> {
+export async function applyLanding(deps: LandingDeps, adapters: LandingAdapters, changeRow: { executionId: string; change: string; branch: string | null; worktree: string | null; prNumber: number | null; state: string; step: string | null; taskId: string | null }, round: RoundRow,
+  finish?: LandingFinish, baseMissing?: (row: ChangeRow) => void): Promise<void> {
   const store = deps.executions
   const execution = store.execution(changeRow.executionId)
   if (execution === null || changeRow.branch === null) return
@@ -107,7 +109,9 @@ export async function applyLanding(deps: LandingDeps, adapters: LandingAdapters,
   const head = await adapters.lsRemoteHead(changeRow.worktree ?? deps.team.groupsRoot, headRef)
   if (!head.ok || head.sha === null) return
   const base = await adapters.lsRemoteHead(changeRow.worktree ?? deps.team.groupsRoot, baseRef)
-  if (!base.ok || base.sha === null) return
+  if (!base.ok) return
+  // An absent base (a read that answered): the mechanism decides; direct keeps waiting as before.
+  if (base.sha === null) return baseMissing?.(store.change(changeRow.executionId, changeRow.change)!)
   // Both heads may exist only on origin (a merge on GitHub, another push):
   // fetch them before any local ancestry or merge read.
   if (!(await fetchHeads(adapters, changeRow.worktree ?? deps.team.groupsRoot, [baseRef, headRef]))) return
@@ -136,7 +140,9 @@ export async function applyLanding(deps: LandingDeps, adapters: LandingAdapters,
     return
   }
 
-  // Step 4 — Merge: pinned to the reviewed head (or the carried head).
+  // Step 4 — Merge: pinned to the reviewed head (or the carried head). A
+  // mechanism with its own final step (integration's fast-forward) runs it instead.
+  if (finish !== undefined) return finish(store.change(changeRow.executionId, changeRow.change)!, { execution, head: head.sha, base: base.sha, cwd: changeRow.worktree ?? deps.team.groupsRoot })
   const fresh = store.change(changeRow.executionId, changeRow.change)!
   if (fresh === null || fresh.step === 'merging') return
   store.transition(changeRow.executionId, changeRow.change, fresh, { step: 'merging' })
@@ -146,6 +152,9 @@ export async function applyLanding(deps: LandingDeps, adapters: LandingAdapters,
     command: { repo: deps.repo, pr: changeRow.prNumber ?? 0, head: head.sha, base: base.sha, baseBranch: execution.baseBranch, method: execution.mergeMethod, cwd: changeRow.worktree ?? deps.team.groupsRoot },
   })
 }
+
+/** A mechanism's final landing step, once the change is up to date: its head and the base head it contains. */
+export type LandingFinish = (row: ChangeRow, at: { execution: ExecutionRow; head: string; base: string; cwd: string }) => Promise<void>
 
 /** Fetch origin's refs into the object store; false when a fetch failed (the stage is due again). */
 async function fetchHeads(adapters: Pick<LandingAdapters, 'fetch'>, cwd: string, refs: string[]): Promise<boolean> {
@@ -318,27 +327,10 @@ export async function applyLandingOutcome(deps: LandingDeps, effect: { kind: str
       if (closed) return stopClosed()
       return // not moved yet
     }
-    // The clean-merge check: parents [H, B'], the base contains B', and the
-    // tree equals merge-tree H B' — B' being the merge's own second parent,
-    // so a base that moved on after the update still passes; the next
-    // up-to-date check brings the carried head along again.
-    const cwd = row.worktree ?? deps.team.groupsRoot
-    const baseRef = `refs/heads/${execution.baseBranch}`
-    const base = await adapters.lsRemoteHead(cwd, baseRef)
-    if (!base.ok || base.sha === null) return
-    if (!(await fetchHeads(adapters, cwd, [baseRef, `refs/heads/${row.branch!}`]))) return
-    const parents = await runGit(['log', '-1', '--pretty=%P', view.data.headRefOid], { cwd })
-    const parentList = parents.ok ? parents.stdout.trim().split(/\s+/) : []
-    const secondParent = parentList.find(parent => parent !== reviewedHead) ?? ''
-    const predicted = secondParent === '' ? null : await adapters.mergeTree(cwd, reviewedHead, secondParent)
-    const secondAncestry = secondParent === '' ? null : await adapters.isAncestor(cwd, secondParent, base.sha)
-    const secondContained = secondAncestry !== null && secondAncestry.ok && secondAncestry.ancestor
-    const clean = parents.ok && predicted !== null && predicted.ok && predicted.conflicts.length === 0
-      && parentList.length === 2
-      && parentList.includes(reviewedHead)
-      && secondContained
-      && (await runGit(['rev-parse', `${view.data.headRefOid}^{tree}`], { cwd })).stdout.trim() === predicted.tree
-    if (clean) {
+    // The clean-merge check (cleanMerge.ts): parents [H, B'], the base contains B', the tree is merge-tree H B'.
+    const checked = await cleanMergeCheck(adapters, { cwd: row.worktree ?? deps.team.groupsRoot, baseBranch: execution.baseBranch, branch: row.branch!, reviewedHead, updatedHead: view.data.headRefOid })
+    if (checked === null) return
+    if (checked.clean) {
       // The carried round: CI runs on the new head (D13).
       const round = effect.roundId !== null && effect.roundId !== undefined ? store.round(effect.roundId) : null
       if (round !== null) {
@@ -351,7 +343,7 @@ export async function applyLandingOutcome(deps: LandingDeps, effect: { kind: str
       return
     }
     if (closed) return stopClosed()
-    return failedUpdate(deps, fresh, updateRound, { base: base.sha, files: [] })
+    return failedUpdate(deps, fresh, updateRound, { base: checked.base, files: [] })
   }
 
   if (effect.kind === 'merge' && outcome !== null) {
@@ -375,40 +367,53 @@ export async function applyLandingOutcome(deps: LandingDeps, effect: { kind: str
       headSha: head, baseSha: String(outcome.base ?? ''), mergeSha: mergeCommit, treeVerified,
     })
     store.transition(effect.executionId, effect.change, row, { state: 'landed', step: null })
-    // Kawai accepts the landed change's result (idempotent per result) —
-    // unless the human closed the task while the merge ran (D19): Kawai
-    // never accepts again nor changes its status.
-    const status = row.taskId === null ? null : deps.taskStatusOf(row.taskId)
-    if (row.taskId !== null && status !== 'done' && status !== 'cancelled') {
-      const round = store.rounds(effect.executionId, effect.change).find(entry => entry.commitSha === head) ?? null
-      if (round !== null) {
-        // The change is landed whatever the acceptance says; a refused
-        // acceptance is logged and the task stays for the human to close.
-        await deps.results.accept({ kind: 'system', team: deps.team, executionId: effect.executionId }, row.taskId, round.resultId)
-          .catch(error => logger.warn('plan_execution_accept_failed', { executionId: effect.executionId, change: effect.change, error: String(error) }))
-      }
+    await afterLanded(deps, row, effect.executionId, head)
+  }
+}
+
+/**
+ * After a landing fact (D13 step 5, shared with integration's fast-forward):
+ * Kawai accepts the round's result, removes the worktree when safe, and
+ * completes the execution and the plan when everything landed. `row` is the
+ * change as it was before it landed.
+ */
+export async function afterLanded(deps: LandingDeps, row: ChangeRow, executionId: string, head: string): Promise<void> {
+  const store = deps.executions
+  const execution = store.execution(executionId)
+  if (execution === null) return
+  // Kawai accepts the landed change's result (idempotent per result) —
+  // unless the human closed the task while the merge ran (D19): Kawai
+  // never accepts again nor changes its status.
+  const status = row.taskId === null ? null : deps.taskStatusOf(row.taskId)
+  if (row.taskId !== null && status !== 'done' && status !== 'cancelled') {
+    const round = store.rounds(executionId, row.change).find(entry => entry.commitSha === head) ?? null
+    if (round !== null) {
+      // The change is landed whatever the acceptance says; a refused
+      // acceptance is logged and the task stays for the human to close.
+      await deps.results.accept({ kind: 'system', team: deps.team, executionId }, row.taskId, round.resultId)
+        .catch(error => logger.warn('plan_execution_accept_failed', { executionId, change: row.change, error: String(error) }))
     }
-    // Cleanup: remove the worktree only when clean and unoccupied (D13 step 6).
-    if (row.worktree !== null && fs.existsSync(row.worktree)) {
-      const dirty = runGit(['status', '--porcelain'], { cwd: row.worktree })
-      const occupied = [...deps.records()].some(record =>
-        record.archivedAt == null && (record.projectPath === row.worktree || record.projectPath.startsWith(`${row.worktree}${path.sep}`)))
-      if (dirty.ok && dirty.stdout.trim() === '' && !occupied) {
-        store.insertEffect({
-          executionId: effect.executionId, change: effect.change, roundId: null, kind: 'remove-worktree',
-          effectKey: `${effect.executionId}:${effect.change}:remove-worktree:${deps.now()}`,
-          command: { repo: deps.team.groupsRoot, path: row.worktree },
-        })
-      }
+  }
+  // Cleanup: remove the worktree only when clean and unoccupied (D13 step 6).
+  if (row.worktree !== null && fs.existsSync(row.worktree)) {
+    const dirty = runGit(['status', '--porcelain'], { cwd: row.worktree })
+    const occupied = [...deps.records()].some(record =>
+      record.archivedAt == null && (record.projectPath === row.worktree || record.projectPath.startsWith(`${row.worktree}${path.sep}`)))
+    if (dirty.ok && dirty.stdout.trim() === '' && !occupied) {
+      store.insertEffect({
+        executionId, change: row.change, roundId: null, kind: 'remove-worktree',
+        effectKey: `${executionId}:${row.change}:remove-worktree:${deps.now()}`,
+        command: { repo: deps.team.groupsRoot, path: row.worktree },
+      })
     }
-    // Completion: when every change has landed, the execution completes and
-    // the plan completes as the system (D19). A stopped execution settling
-    // its one running merge (D12) stays stopped.
-    const changes = store.changes(effect.executionId)
-    if (execution.state === 'running' && changes.length > 0 && changes.every(entry => entry.state === 'landed')) {
-      store.finishExecution(effect.executionId, 'completed')
-      const completed = deps.plansService.completeBySystem(execution.planId, effect.executionId)
-      if (!completed.ok) logger.info('plan_execution_plan_left_open', { executionId: effect.executionId, reason: completed.reason, message: completed.message })
-    }
+  }
+  // Completion: when every change has landed, the execution completes and
+  // the plan completes as the system (D19). A stopped execution settling
+  // its one running merge (D12) stays stopped.
+  const changes = store.changes(executionId)
+  if (execution.state === 'running' && changes.length > 0 && changes.every(entry => entry.state === 'landed')) {
+    store.finishExecution(executionId, 'completed')
+    const completed = deps.plansService.completeBySystem(execution.planId, executionId)
+    if (!completed.ok) logger.info('plan_execution_plan_left_open', { executionId, reason: completed.reason, message: completed.message })
   }
 }

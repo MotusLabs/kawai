@@ -12,7 +12,9 @@
 import type { Database } from 'bun:sqlite'
 import type { Migration } from '../dbSafety/migrations'
 
-export const CODEX_SESSION_MIGRATION_VERSION = 13
+// Renumbered at the master merge: master's 13 is integration-candidates;
+// codex-chat-sessions lands as the next free version.
+export const CODEX_SESSION_MIGRATION_VERSION = 14
 
 export function applyCodexSessionColumns(db: Database): void {
   const columns = db.prepare('PRAGMA table_info(chat_sessions)').all() as Array<{ name: string }>
