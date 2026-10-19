@@ -51,12 +51,20 @@ describe('PromotionService (5.1, D9)', () => {
     expect(promotionEvents(planId).map(event => [event.kind, event.commandId])).toEqual([['promotion-started', `go-${n}`]])
   })
 
-  test('a cancelled plan is promoted, and stays cancelled', async () => {
+  test('a cancelled plan is promoted carrying its two landed changes, and stays cancelled', async () => {
     const branch = `wave/svc-${n}`
     const planId = await twoLandings(h, i, p, branch, String(n))
     h.bench.db.db.prepare("UPDATE plans SET lifecycle = 'cancelled' WHERE id = ?").run(planId)
+    const landed = i.store.candidates(matrix.world.team.teamId, branch).filter(row => row.state === 'landed')
+    const throughSeq = Math.max(...landed.map(row => row.seq))
+    const preview = await p.service.preview(p.human, { planId, branch })
+    if (!preview.ok) throw new Error(preview.message)
+    expect(preview.preview.failures).toEqual([])
+    expect(preview.preview.throughSeq).toBe(throughSeq)
+    expect(preview.preview.carried.map(row => row.change)).toEqual([`b${n}`, `a${n}`])
     const outcome = await p.service.promote(p.human, { planId, branch, fromSha: originHead(matrix, branch)!, commandId: `go-${n}` })
-    expect(outcome.ok).toBe(true)
+    if (!outcome.ok) throw new Error(outcome.message)
+    expect(outcome.promotion.throughSeq).toBe(throughSeq)
     expect(h.bench.plans.get(planId)!.lifecycle).toBe('cancelled')
   })
 

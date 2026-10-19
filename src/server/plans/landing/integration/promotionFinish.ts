@@ -1,8 +1,8 @@
 // The one way a promotion finishes (integration-candidates D10 step 10 and
-// its failure rule): in one transaction it cancels the promotion's pending
+// its failure rule): in one transaction it cancels the promotion's pending and unknown
 // effects, releases the landing slot if the promotion holds it, finishes the
 // row with its outcome and detail, queues `close-pr` when a pull request was
-// opened and the promotion did not merge, and records `promotion-finished`
+// or may have been opened and the promotion did not merge, and records `promotion-finished`
 // through `PlanService.recordPromotionEvent` under `promo:<id>:finish`, so
 // the event is written exactly once whoever finishes it — the runner, a
 // Cancel, or a restart repeating the step.
@@ -37,13 +37,20 @@ export function finishPromotion(core: PromotionCore, promotion: PromotionRow, ou
   const recorded = core.plans.recordPromotionEvent(promotion.planId, { kind: 'promotion-finished', promotionId: promotion.id, outcome }, () => {
     const fresh = core.integration.promotion(promotion.id)
     if (fresh === null || fresh.state !== 'running') throw new PlanRefusal('state', `Promotion ${promotion.number} has already finished.`)
+    // An open-pr that ran but never recorded its number (a Cancel while it ran, or an effect left unknown) may
+    // have opened the pull request: close-pr then finds it by its head branch.
+    const opened = core.integration.promotionEffects(fresh.id).find(effect => effect.kind === 'open-pr')
+    const mayHavePr = fresh.prNumber !== null || (opened !== undefined && (opened.state !== 'pending' || opened.tries > 0))
     core.integration.cancelPromotionEffects(fresh.id)
     core.executions.releaseSlotFor(fresh.teamId, PROMOTION_HOLDER_KIND, fresh.id)
     core.integration.finishPromotion(fresh.id, outcome, detail)
-    if (outcome !== 'merged' && fresh.prNumber !== null) {
+    if (outcome !== 'merged' && mayHavePr) {
       core.integration.insertEffect({
         promotionId: fresh.id, kind: 'close-pr', effectKey: `promo:${fresh.id}:close-pr`,
-        command: { repo: core.repoOf(fresh.teamId), pr: fresh.prNumber, comment: closeComment(fresh, outcome, detail) },
+        command: {
+          repo: core.repoOf(fresh.teamId), pr: fresh.prNumber, head: fresh.promotionBranch, base: fresh.targetBranch,
+          comment: closeComment(fresh, outcome, detail),
+        },
       })
     }
     return true

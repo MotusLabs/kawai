@@ -8,8 +8,9 @@
 // without merging again; failures of open-pr and close-pr.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import type { CiCheck } from '../../shared/planExecution'
-import { createMatrixBench, createMatrixWorld, git, originHead, pushCommit, removeMatrixWorld, type MatrixBench, type MatrixWorld } from './executionMatrixHarness'
+import { createMatrixBench, createMatrixWorld, git, greenChecks, originHead, pushCommit, removeMatrixWorld, type MatrixBench, type MatrixWorld } from './executionMatrixHarness'
 import { createIntegrationBench, startedIntegration, type IntegrationBench } from './integrationMatrixHarness'
+import { inspectPromotionEffect } from '../plans/landing/integration/promotionEffects'
 import { createPromotionBench, twoLandings as landTwo, type PromotionBench } from './promotionMatrixHarness'
 
 let matrix: MatrixWorld
@@ -73,6 +74,11 @@ describe('promotion steps (6.1, 6.3, D10)', () => {
     const planId = await twoLandings(branch)
     pushCommit(matrix, 'master', `owner-${n}.txt`, 'owner\n')
     const promotion = await promote(planId, branch)
+    // While the promotion branch is verified, the integration branch stays at fromSha (spec: untouched while verifying).
+    await run(promotion.id, step => step === 'merge')
+    expect(h.gh.updates.length).toBe(1)
+    expect(originHead(matrix, i.store.promotion(promotion.id)!.promotionBranch)).not.toBe(promotion.fromSha)
+    expect(originHead(matrix, branch)).toBe(promotion.fromSha)
     const done = await run(promotion.id)
     expect(done.outcome).toBe('merged')
     expect(h.gh.updates.length).toBe(1)
@@ -151,6 +157,33 @@ describe('promotion steps (6.1, 6.3, D10)', () => {
     expect(originHead(matrix, branch)).toBe(done.headSha)
   })
 
+  test('CI failing fails as ci-failed, keeps its evidence, closes the pull request, and leaves the integration branch; Promoting again opens promotion 2', async () => {
+    const branch = `wave/promo-${n}`
+    const planId = await twoLandings(branch)
+    const fromSha = originHead(matrix, branch)!
+    // A failed commit status: nothing to rerun, so CI decides at once.
+    h.gh.defaultChecks = greenChecks().map(check => check.name === 'e2e' ? { ...check, conclusion: 'failure' } : check)
+    const first = await promote(planId, branch)
+    const failed = await run(first.id)
+    expect(failed).toMatchObject({ state: 'finished', outcome: 'failed:ci-failed' })
+    expect(failed.outcomeDetail).toMatchObject({ checks: ['e2e'] })
+    await p.tick()
+    expect(p.script.closes.map(close => close.pr)).toEqual([failed.prNumber!])
+    expect(originHead(matrix, branch)).toBe(fromSha)
+    expect(originHead(matrix, failed.promotionBranch)).not.toBeNull()
+    expect(h.gh.merges).toEqual([])
+    const before = JSON.stringify(i.store.promotion(first.id))
+    // Promoting again: the next number, a new branch and pull request; the failed promotion stays as it was.
+    h.gh.defaultChecks = greenChecks()
+    const second = await promote(planId, branch, `promote-again-${n}`)
+    expect(second).toMatchObject({ number: 2, promotionBranch: `${branch}--promote-2` })
+    const merged = await run(second.id)
+    expect(merged.outcome).toBe('merged')
+    expect(merged.prNumber).not.toBe(failed.prNumber)
+    expect(JSON.stringify(i.store.promotion(first.id))).toBe(before)
+    expect(i.store.promotionsOf(planId).map(row => row.outcome).sort()).toEqual(['failed:ci-failed', 'merged'])
+  })
+
   test('a predicted conflict with the target fails as promotion-conflict with the files', async () => {
     const branch = `wave/promo-${n}`
     const planId = await twoLandings(branch)
@@ -199,6 +232,33 @@ describe('Cancel (5.2, D9)', () => {
     expect(String(done.outcomeDetail?.note)).toContain('too late')
     const after = await p.service.cancel(p.human, { promotionId: promotion.id, reason: 'again', commandId: `cancel2-${n}` })
     expect(!after.ok && after.message).toContain(done.mergeSha!)
+  })
+
+  test('while open-pr runs: the pull request it opens with no recorded number is found by its head and closed', async () => {
+    const branch = `wave/promo-${n}`
+    const planId = await twoLandings(branch)
+    const promotion = await promote(planId, branch)
+    const create = h.roundAdapters.prCreate
+    let during: unknown = null
+    h.roundAdapters.prCreate = async (...args) => {
+      h.roundAdapters.prCreate = create
+      during = await p.service.cancel(p.human, { promotionId: promotion.id, reason: 'stop', commandId: `cancel-${n}` })
+      return create(...args)
+    }
+    try {
+      await run(promotion.id)
+      expect(during).toMatchObject({ ok: true, promotion: { outcome: 'cancelled' } })
+      const row = i.store.promotion(promotion.id)!
+      expect(row.prNumber).toBeNull()
+      const close = i.store.promotionEffects(promotion.id).find(effect => effect.kind === 'close-pr')!
+      expect(close.command).toMatchObject({ pr: null, head: row.promotionBranch, base: 'master' })
+      const opened = h.gh.pulls.find(pull => pull.branch === row.promotionBranch)!
+      await p.tick()
+      expect(p.script.closes.map(entry => entry.pr)).toEqual([opened.number])
+      expect(await inspectPromotionEffect(i.store.effect(close.id)!, p.inspectorReads)).toMatchObject({ found: 'done' })
+    } finally {
+      h.roundAdapters.prCreate = create
+    }
   })
 
   test('an agent caller is refused', async () => {

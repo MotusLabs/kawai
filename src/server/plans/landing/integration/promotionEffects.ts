@@ -8,9 +8,10 @@
 //   ref; a 422 is read back, and only a ref already at the requested commit
 //   is ours (Kawai never adopts a branch it did not create);
 // - `close-pr`: closes a failed or cancelled promotion's pull request with
-//   its outcome as the comment, once it is still open.
+//   its outcome as the comment, once it is still open; with no recorded
+//   number it finds the open pull request by its head branch.
 // Inspection (D14, review L1) maps each kind onto the execution inspector's
-// table; `close-pr` reads the pull request's state.
+// table; `close-pr` reads the pull request's state (or lists it by head).
 import type { EffectAdapter, EffectCallResult } from '../../execution/effects'
 import type { EffectRow } from '../../execution/executionRows'
 import { inspectEffect, type InspectionVerdict, type InspectorReads } from '../../execution/effectInspectors'
@@ -58,7 +59,15 @@ export function promotionEffectAdapter(adapters: PromotionAdapters, ghOptions?: 
         case 'fast-forward': return fastForwardAdapter(adapters.refs, ghOptions).call(asExecutionRow(effect))
         case 'close-pr': {
           const repo = String(command.repo ?? '')
-          const pr = Number(command.pr ?? 0)
+          let pr = Number(command.pr ?? 0)
+          if (pr === 0) {
+            // No number recorded: the pull request, if open-pr made one, is found by its head branch.
+            const pulls = await adapters.rounds.prList(repo, { head: String(command.head ?? ''), base: String(command.base ?? '') }, ghOptions)
+            if (!pulls.ok) return { ok: false, error: pulls.error }
+            const open = pulls.data.find(pull => pull.state === 'OPEN')
+            if (open === undefined) return { ok: true, outcome: { closed: false, state: 'none' } }
+            pr = open.number
+          }
           const view = await adapters.landing.prView(repo, pr, ghOptions)
           if (!view.ok) return { ok: false, error: view.error }
           if (view.data.state !== 'OPEN') return { ok: true, outcome: { closed: false, state: view.data.state } }
@@ -76,7 +85,13 @@ export function promotionEffectAdapter(adapters: PromotionAdapters, ghOptions?: 
 export async function inspectPromotionEffect(effect: PromotionEffectRow, reads: InspectorReads): Promise<InspectionVerdict> {
   if (effect.kind === 'close-pr') {
     try {
-      const pull = await reads.prView(String(effect.command.repo ?? ''), Number(effect.command.pr ?? 0))
+      const repo = String(effect.command.repo ?? '')
+      const pr = Number(effect.command.pr ?? 0)
+      if (pr === 0) {
+        const pulls = await reads.prList(repo, String(effect.command.head ?? ''), String(effect.command.base ?? ''))
+        return pulls.some(pull => pull.state === 'OPEN') ? { found: 'not-done' } : { found: 'done', outcome: { closed: false, state: 'none' } }
+      }
+      const pull = await reads.prView(repo, pr)
       return pull.state === 'OPEN' ? { found: 'not-done' } : { found: 'done', outcome: { closed: pull.state === 'CLOSED', state: pull.state } }
     } catch (error) {
       return { found: 'undecidable', error: error instanceof Error ? error.message : String(error) }

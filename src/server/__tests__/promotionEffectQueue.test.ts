@@ -87,7 +87,7 @@ describe('the promotion effect queue', () => {
     expect(store.effect(inFlight.id)!.state).toBe('unknown')
     store.cancelPromotionEffects(running.id)
     expect(store.effect(waiting.id)!.state).toBe('cancelled')
-    // An uninspected effect would otherwise be reset to pending and run after the finish (L1).
+    // Cleanup, not a guard: dueEffects never runs a finished promotion's effects but close-pr, and the planner reads unknown as waiting (D10).
     expect(store.effect(inFlight.id)!.state).toBe('cancelled')
     expect(store.insertEffect({ promotionId: running.id, kind: 'merge', effectKey: 'p1:merge', command: { again: true } }).id).toBe(inFlight.id)
   })

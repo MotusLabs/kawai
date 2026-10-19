@@ -31,6 +31,8 @@ export interface PromotionBench {
   script: PromotionScript
   executor: ExecutionExecutor
   human: PromotionCaller
+  /** D14's inspection reads over the scripted GitHub. */
+  inspectorReads: InspectorReads
   tick: (executor?: ExecutionExecutor) => Promise<void>
   /** A fresh executor over the same stores and runner (a restart; call `runner.startup()` through `executor.startup()`). */
   restart: () => ExecutionExecutor
@@ -107,7 +109,7 @@ export function createPromotionBench(h: MatrixBench, i: IntegrationBench): Promo
   })
   const restart = () => i.makeExecutor({ promotions: runner })
   const bench: PromotionBench = {
-    service, runner, script, executor: restart(), restart,
+    service, runner, script, inspectorReads, executor: restart(), restart,
     human: { kind: 'human', team: world.team },
     tick: async (target?: ExecutionExecutor) => {
       const executor = target ?? bench.executor
