@@ -67,14 +67,14 @@ The latest report for a session's provider SHALL be included in the chat snapsho
 - **THEN** sessions of that provider show no usage bar until the next report
 
 ### Requirement: Usage is refreshed when no report has arrived
-When a chat session's provider holds no report and its agent has started, the system SHALL fetch plan usage on demand, once per provider, instead of waiting for one. If the provider serves the quota endpoint, that data SHALL be its own plan usage; otherwise it reflects the agent process's logged-in account, not the session's provider routing. Without plan limits or obtainable data, no window data SHALL be recorded and no usage bar shown. A refresh SHALL NOT replace fresher data with older data.
+When a provider holds no report and either its chat agent has started or it qualifies for background quota observation, the system SHALL fetch plan usage on demand, once per provider. A quota-serving provider's data SHALL be its own plan usage; otherwise it reflects the agent process's logged-in account, not the session's provider routing. Without plan limits or obtainable data, no window data SHALL be recorded and no usage bar shown. A refresh SHALL NOT replace fresher data with older data.
 
 #### Scenario: Windows appear before the first message
 - **WHEN** a client attaches to a chat session, starting its agent without sending a prompt, and the provider holds no report while plan usage data is obtainable
 - **THEN** the usage bar shows the plan windows without waiting for the first turn
 
 #### Scenario: Session whose agent has not started
-- **WHEN** a chat session's provider holds no report and its agent has not started, as with a session no client has attached to, an archived chat, or a missing project directory
+- **WHEN** a chat session's provider holds no report, its agent has not started, and it does not qualify for background quota observation, as with a session no client has attached to, an archived chat, or a missing project directory
 - **THEN** no usage bar is shown
 
 #### Scenario: One pull per provider
@@ -97,8 +97,12 @@ When a chat session's provider holds no report and its agent has started, the sy
 - **WHEN** a refresh returns data older than what the provider already holds
 - **THEN** the held report is kept unchanged
 
+#### Scenario: Eligible alternative without a live chat
+- **WHEN** a configured team worker uses a provider with a standalone quota reader and no chat agent is running for it
+- **THEN** background observation can fill its quota history without starting a chat or making a model request
+
 ### Requirement: Provider plan usage is pulled from the provider quota endpoint
-When a session's provider has a base URL, the server SHALL fetch coding-plan usage from `/api/monitor/usage/quota/limit` at that URL's origin once for the provider, using the session's effective credentials, without waiting for a turn. Model API paths, queries, and fragments SHALL NOT enter the quota URL. Only a matching quota response SHALL produce provider window data, marked with its own usage source; failures SHALL leave the session undisturbed.
+When a session's provider has a base URL, the server SHALL fetch coding-plan usage from `/api/monitor/usage/quota/limit` at that URL's origin once for the provider, using the effective provider credentials for the qualifying session or team configuration. Model API paths, queries, and fragments SHALL NOT enter the quota URL. Only a matching quota response SHALL produce provider window data, marked with its own usage source; failures SHALL leave the session undisturbed.
 
 #### Scenario: API-key gateway profile shows provider usage
 - **WHEN** a session's provider routes through a base URL that serves the quota endpoint and authenticates with an API key with no host login
@@ -128,15 +132,19 @@ When a session's provider has a base URL, the server SHALL fetch coding-plan usa
 - **WHEN** the effective provider base URL is `http://gateway.example:8080/api/anthropic/?route=glm#model`
 - **THEN** the quota request goes to `http://gateway.example:8080/api/monitor/usage/quota/limit`
 
+#### Scenario: Background provider configuration
+- **WHEN** a quota-serving provider qualifies through a configured team worker rather than a started session
+- **THEN** the pull resolves that worker's effective provider configuration, records its observation identity, and never exposes credentials in the result
+
 ### Requirement: Provider usage stays fresh while sessions are live
-While at least one non-archived chat session on a profile of a quota-serving provider has a started agent, the server SHALL re-pull that provider's usage on a fixed cadence, once for all of its profiles, so a window reset appears without a turn. When no session of the provider qualifies, the server SHALL NOT contact the quota endpoint for it. A refresh SHALL NOT replace held usage with older data.
+While a quota-serving provider has a started non-archived chat session, or is an eligible worker of a configured team, the server SHALL re-pull its usage on a fixed cadence, once for all of its profiles. Removing both reasons SHALL stop polling. Background collection SHALL use a standalone quota reader and SHALL NOT start an agent or make a model request. A refresh SHALL NOT replace held usage with older data; failures SHALL leave held values at their original observation time.
 
 #### Scenario: Reset appears without a turn
 - **WHEN** a window's reset time passes while no turn runs
 - **THEN** a later scheduled refresh shows the window at its new percentage
 
 #### Scenario: Pulls stop without live sessions
-- **WHEN** every session on the provider's profiles is archived or no longer has a started agent
+- **WHEN** every session on the provider's profiles is archived or no longer has a started agent, and no configured team lists the provider as an eligible worker
 - **THEN** no further quota requests are made for that provider
 
 #### Scenario: A session on another profile keeps it fresh
@@ -154,3 +162,11 @@ While at least one non-archived chat session on a profile of a quota-serving pro
 #### Scenario: Shutdown stops refreshes
 - **WHEN** the server shuts down while a pull or refresh is in flight
 - **THEN** nothing is published for it afterwards and no further quota requests are made
+
+#### Scenario: Unused alternative stays observable
+- **WHEN** no agent is running for a quota-serving provider that remains a configured team worker
+- **THEN** scheduled quota observations continue for later incident analysis
+
+#### Scenario: No standalone reader
+- **WHEN** an eligible provider exposes usage only through a running agent and has none
+- **THEN** capacity remains unknown or stale, no agent is launched for collection, and the missing reader is reported

@@ -66,12 +66,13 @@ test("a sibling's provider limit cools the recipient row and the urgent refusal 
     'Send it without urgent to queue it, or send it to another agent.')
   expect(runtime.mailbox.store.teamsWithQueuedMail()).toEqual([])
   // The recipient row cools with the deciding provider: a queued direct
-  // message's waiting reason carries retryAt and the provider detail.
+  // message's waiting reason carries retryAt, the provider detail, and its
+  // catalog label resolved from the shipped providers (O1).
   const direct = runtime.mailbox.store.enqueue({ teamId: dir, toKind: 'session', toId: 'flash', fromSession: 'lead', fromGroup: 'leads', originPath: dir, body: 'Later' })
   runtime.dispatcher.notify()
   await runtime.dispatcher.settled()
   const waiting = runtime.waitingFor(dir)
-  expect(waiting[direct.id]!.blocker).toEqual({ kind: 'profile-cooling', retryAt: until, detail: 'zai' })
+  expect(waiting[direct.id]!.blocker).toEqual({ kind: 'profile-cooling', retryAt: until, detail: 'zai', providerLabel: 'Z.AI' })
 })
 
 test('one catalog read per team per dispatch cycle despite eight recipients and claim rechecks', async () => {

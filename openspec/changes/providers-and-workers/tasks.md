@@ -37,19 +37,19 @@
 
 ## 5. Provider usage
 
-- [ ] 5.1 Key `UsageLimitStore` by provider (`usageLimits.ts`) and look up each session's provider through `providerOf` in the snapshot, the push callbacks, and the SDK gap-fill claim, so the claim runs once per provider. Verify `usageLimits.test.ts` and `chatSessionManager.test.ts` cover "Profiles share a provider", "One pull per provider", and the existing per-profile scenarios.
-- [ ] 5.2 Move the Z.AI pull set, host-login suppression, and refresh timers to provider keys. Count live sessions on any of the provider's models, and resolve the refresh target from a live session. Verify `zaiUsage.test.ts` and `chatSessionManager.test.ts` cover "Shared plan pulled once", "A session on another profile keeps it fresh", "Pulls stop without live sessions", and "Shutdown stops refreshes".
-- [ ] 5.3 Fan `chat-usage` out per subscribed session of the provider, carrying the session's `profileId` plus additive `providerId` (`ChatConnections.ts`, `src/shared/types.ts`). Verify `chatConnections.test.ts` covers "Live update during a turn" for two models of one provider, and that `chatStore.test.ts` still applies the message by profile id.
-- [ ] 5.4 Update the usage bullet of `AGENTS.md` for per-provider reports and pulls. Verify by review against the `chat-usage-limits` delta.
+- [x] 5.1 Key `UsageLimitStore` by provider (`usageLimits.ts`) and look up each session's provider through `providerOf` in the snapshot, the push callbacks, and the SDK gap-fill claim, so the claim runs once per provider. Verify `usageLimits.test.ts` and `chatSessionManager.test.ts` cover "Profiles share a provider", "One pull per provider", and the existing per-profile scenarios.
+- [x] 5.2 Move the Z.AI pull set, host-login suppression, and refresh timers to provider keys. Count live sessions on any of the provider's models, and resolve the refresh target from a live session. Verify `zaiUsage.test.ts` and `chatSessionManager.test.ts` cover "Shared plan pulled once", "A session on another profile keeps it fresh", "Pulls stop without live sessions", and "Shutdown stops refreshes".
+- [x] 5.3 Fan `chat-usage` out per subscribed session of the provider, carrying the session's `profileId` plus additive `providerId` (`ChatConnections.ts`, `src/shared/types.ts`). Verify `chatConnections.test.ts` covers "Live update during a turn" for two models of one provider, and that `chatStore.test.ts` still applies the message by profile id.
+- [x] 5.4 Update the usage bullet of `AGENTS.md` for per-provider reports and pulls. Verify by review against the `chat-usage-limits` delta.
 
 ## 6. Rule context
 
-- [ ] 6.1 Add the D14 fields to `src/shared/routing.ts` and build `ctx.providers` and each profile's effective `cooldownUntil` in the router. Verify `routingContract.test.ts` and `routingRouter.test.ts` cover "A rule sees the cooling provider", and `routingRules.test.ts` shows `docs/routing/devs.example.ts` loading and routing unchanged ("Earlier rules keep working").
-- [ ] 6.2 Document `ctx.providers` and the effective per-profile cooldown in the Routing rules section of `docs/routing/README.md`. Verify the published `kawai-routing.d.ts` copy matches `src/shared/routing.ts` in the existing rule-types test.
+- [x] 6.1 Add the D14 fields to `src/shared/routing.ts` and build `ctx.providers` and each profile's effective `cooldownUntil` in the router. Verify `routingContract.test.ts` and `routingRouter.test.ts` cover "A rule sees the cooling provider", and `routingRules.test.ts` shows `docs/routing/devs.example.ts` loading and routing unchanged ("Earlier rules keep working"). (The named test lives in `routingRouterProviders.test.ts` — the router's provider family since the PR B split kept `routingRouter.test.ts` under 500 lines.)
+- [x] 6.2 Document `ctx.providers` and the effective per-profile cooldown in the Routing rules section of `docs/routing/README.md`. Verify the published `kawai-routing.d.ts` copy matches `src/shared/routing.ts` in the existing rule-types test.
 
 ## 7. Integration
 
-- [ ] 7.1 Run `bun run lint && bun run typecheck && bun run test` on the final head, and `openspec validate providers-and-workers --strict`. Verify all four pass with no validator notes.
+- [x] 7.1 Run `bun run lint && bun run typecheck && bun run test` on the final head, and `openspec validate providers-and-workers --strict`. Verify all four pass with no validator notes.
 
 ## Workflow follow-up
 

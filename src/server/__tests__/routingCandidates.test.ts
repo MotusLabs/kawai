@@ -28,7 +28,8 @@ describe('buildCandidates', () => {
     const set = build({ members: [member('a', 'glm', { eligible: false }), member('b', 'glm', { eligible: false })] })
     expect(ids(set.candidates)).toEqual(['spawn:mimo', 'spawn:claude'])
     expect(set.group.profiles).toEqual([
-      { profileId: 'glm', cap: 2, live: 2 }, { profileId: 'mimo', cap: 1, live: 0 }, { profileId: 'claude', cap: 1, live: 0 },
+      { profileId: 'glm', providerId: 'glm', cap: 2, live: 2 }, { profileId: 'mimo', providerId: 'mimo', cap: 1, live: 0 },
+      { profileId: 'claude', providerId: 'claude', cap: 1, live: 0 },
     ])
     expect(set.group).toMatchObject({ id: 'devs', max: 4, live: 2, strategy: 'first-available' })
   })
@@ -48,6 +49,9 @@ describe('buildCandidates', () => {
       providerOf: id => (id === 'glm' || id === 'glm-flash' ? 'zai' : 'claude'),
     })
     expect(ids(set.candidates)).toEqual(['member:h', 'spawn:haiku'])
+    // Candidates and group profiles carry their provider (providers-and-workers D14).
+    expect(set.candidates.map(candidate => candidate.providerId)).toEqual(['claude', 'claude'])
+    expect(set.group.profiles.map(profile => profile.providerId)).toEqual(['zai', 'zai', 'claude'])
   })
 
   test('without a cooling provider the exclusion narrows to the profile alone', () => {
@@ -91,7 +95,7 @@ describe('buildCandidates', () => {
       members: [member('a', 'glm', { idleForMs: 5 }), member('b', 'claude'), member('c', 'mimo', { eligible: false })],
       excludeProfile: 'claude', spawnAllowed: false,
     })
-    expect(set.candidates).toEqual([{ id: 'member:a', kind: 'member', profileId: 'glm', sessionId: 'a', cwd: '/repo/wt', idleForMs: 5 }])
+    expect(set.candidates).toEqual([{ id: 'member:a', kind: 'member', profileId: 'glm', providerId: 'glm', sessionId: 'a', cwd: '/repo/wt', idleForMs: 5 }])
   })
 
   test('no spawn slots when staffing would not spawn or no cwd is known', () => {
@@ -102,13 +106,13 @@ describe('buildCandidates', () => {
   test('a group without profiles offers the default profile under max', () => {
     const set = build({ group: group('max: 2') })
     expect(ids(set.candidates)).toEqual(['spawn:default'])
-    expect(set.group.profiles).toEqual([{ profileId: 'default', live: 0 }])
+    expect(set.group.profiles).toEqual([{ profileId: 'default', providerId: 'default', live: 0 }])
   })
 })
 
 describe('builtinPick', () => {
   const c = (id: string, kind: 'member' | 'spawn', profileId: string, idleForMs?: number): RouteCandidate =>
-    ({ id, kind, profileId, cwd: '/r', ...(kind === 'member' ? { sessionId: id } : {}), ...(idleForMs !== undefined ? { idleForMs } : {}) })
+    ({ id, kind, profileId, providerId: profileId, cwd: '/r', ...(kind === 'member' ? { sessionId: id } : {}), ...(idleForMs !== undefined ? { idleForMs } : {}) })
 
   test('first-available: the longest-idle member, else the first spawn slot', () => {
     const list = [c('s-claude', 'spawn', 'claude'), c('a', 'member', 'glm', 10), c('b', 'member', 'claude', 50)]
@@ -161,8 +165,8 @@ describe('a plan role narrows the candidates (plan-execution D15)', () => {
   })
 
   test('builtin profile-order ranks by the role\'s order', () => {
-    const glm = { id: 'member:g', kind: 'member' as const, profileId: 'glm', sessionId: 'g', cwd: '/w', idleForMs: 5 }
-    const claude = { id: 'member:c', kind: 'member' as const, profileId: 'claude', sessionId: 'c', cwd: '/w', idleForMs: 99 }
+    const glm = { id: 'member:g', kind: 'member' as const, profileId: 'glm', providerId: 'zai', sessionId: 'g', cwd: '/w', idleForMs: 5 }
+    const claude = { id: 'member:c', kind: 'member' as const, profileId: 'claude', providerId: 'claude', sessionId: 'c', cwd: '/w', idleForMs: 99 }
     expect(builtinPick('profile-order', [glm, claude], ['glm', 'mimo', 'claude'])).toMatchObject({ id: 'member:g' })
     expect(builtinPick('profile-order', [glm, claude], ['claude', 'glm'])).toMatchObject({ id: 'member:c' })
   })

@@ -393,3 +393,21 @@ export function providerOf(profileId: string, ctx: ProfileCatalogContext = {}): 
   }
   return known.get(profileId) ?? profileId
 }
+
+const labelCache = new Map<string, Map<string, string | null>>()
+
+/**
+ * The provider's catalog label (providers-and-workers D14), resolved from the
+ * catalog at the context and cached per catalog stamp like `providerOf`. A
+ * provider the catalog no longer names has no label.
+ */
+export function providerLabelOf(providerId: string, ctx: ProfileCatalogContext = {}): string | null {
+  const key = `${ctx.homeDir ?? process.env.HOME ?? os.homedir()}\n${ctx.projectPath ?? ''}\n${profileCatalogStamp(ctx)}`
+  let labels = labelCache.get(key)
+  if (!labels) {
+    if (labelCache.size >= PROVIDER_CACHE_LIMIT) labelCache.clear()
+    labels = new Map([...resolveProfileCatalog(ctx).providers].map(([id, provider]) => [id, provider.label]))
+    labelCache.set(key, labels)
+  }
+  return labels.get(providerId) ?? null
+}
