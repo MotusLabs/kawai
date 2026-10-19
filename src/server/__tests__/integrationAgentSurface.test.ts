@@ -71,6 +71,20 @@ describe('plan_get integration (7.1, D12)', () => {
     expect(detail.integration![0]!.promotedThroughSeq).toBe(3)
   })
 
+  test('a promotion carries its CI with the flaky names marked, null before CI ran', async () => {
+    const { planId, revision } = await bench.draftInReview()
+    await bench.approve(planId, revision)
+    const teamId = world.team.teamId
+    integration.recordCreation({ teamId, branch: 'wave/e', planId, targetBranch: 'master', executionId: 'exec-1', sha: sha('0') })
+    const promotion = integration.insertPromotion({ teamId, planId, branch: 'wave/e', commandId: 'cmd-1', fromSha: sha('1'), throughSeq: 1, targetBranch: 'master', floor: {} })
+    expect((await planHandlers(service, 'lead').plan_get({ plan_id: planId })).integration![0]!.promotions[0]!.ci).toBeNull()
+    const run = (conclusion: string, completedAt: string) => ({ name: 'ci', source: 'status', conclusion, link: null, startedAt: completedAt, completedAt })
+    integration.patchPromotion(promotion.id, { ci: [run('failure', '2026-01-01T00:00:00Z'), run('success', '2026-01-01T00:10:00Z')] })
+    const ci = (await planHandlers(service, 'lead').plan_get({ plan_id: planId })).integration![0]!.promotions[0]!.ci
+    expect(ci?.checks).toHaveLength(2)
+    expect(ci?.flaky).toEqual(['ci'])
+  })
+
   test('a plan with no integration branch reads an empty list; without the wiring the field is absent', async () => {
     const { planId, revision } = await bench.draftInReview()
     await bench.approve(planId, revision)

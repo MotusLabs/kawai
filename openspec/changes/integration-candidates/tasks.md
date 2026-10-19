@@ -108,14 +108,15 @@ Implement after `plan-execution` has landed on master, together with what it bui
 
 ## 8. Client
 
-- [ ] 8.1 Add integration views and per-dialog command ids to `teamPlanStore`: Promote is minted at open and again when `fromSha` changes, and Cancel has its own (D13). Verify with store tests, and by grepping that every applying method has a dispatch caller.
-- [ ] 8.2 Build `PlanIntegrationPanel.tsx`, `PlanPromoteDialog.tsx`, and `PlanPromotionRow.tsx`, plus progress's promoted marks (D11, D13), and describe the panel, the dialog, and the marks in the promotion bullet (6.4). Verify with component tests:
+- [x] 8.1 Add integration views and per-dialog command ids to `teamPlanStore`: Promote is minted at open and again when `fromSha` changes, and Cancel has its own (D13). Verify with store tests, and by grepping that every applying method has a dispatch caller. — Verified: `src/client/__tests__/teamPlanPromotionStore.test.ts` (detail integration, the preview slot, Promote minted at open and re-minted on a changed `fromSha`, Cancel separate, a reconnect, and the dispatch-caller grep).
+- [x] 8.2 Build `PlanIntegrationPanel.tsx`, `PlanPromoteDialog.tsx`, and `PlanPromotionRow.tsx`, plus progress's promoted marks (D11, D13), and describe the panel, the dialog, and the marks in the promotion bullet (6.4). Verify with component tests:
   - the chain is newest first, with the failed candidate kept beside its replacement and outside commits flagged;
   - Promote is offered only while something is left to promote and nothing of the plan runs;
   - the dialog lists the carried changes, flags an outside commit, and names the pinned head;
   - a `no-execution` refusal shows inline;
   - progress marks two of three landed changes as promoted;
   - every control disables while disconnected.
+  - Verified: `src/client/__tests__/planIntegrationUi.test.tsx` (the six clauses plus the promotion row's CI flaky marks and Cancel reason; dropping the running-execution guard or the promoted mark fails it) and `integrationAgentSurface.test.ts` (the promotion's CI view).
 - [ ] 8.3 Add a browser walkthrough `tests/e2e/plan-integration.spec.ts` with the fixture adapter, named in `.github/workflows/ci.yml`. Verify by running it alone on a spare `E2E_PORT` after `bun run build`, then checking that `curl http://localhost:4040/` still answers.
 
 ## 9. Integration checks
