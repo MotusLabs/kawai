@@ -7,13 +7,13 @@
 
 ## 2. Affected-test selection
 
-- [ ] 2.1 Add `scripts/affected-tests.ts`: changed paths from the index, `bun test --changed` for import-affected unit files, `@reads` matches, the slow tier removed, and the D2 escape list switching to `bun run check`. Unit-test it in a temporary repository with a leaf-module change, a docs change matched by `@reads`, a change nothing reaches (no tests), and a lockfile change (escape).
-- [ ] 2.2 Report the selection in the hook output: affected count, slow-tier files skipped, and when the escape fired. Verify the wording in the script's tests.
+- [ ] 2.1 Add `scripts/affected-tests.ts`: staged-path classification; staged, unstaged, and untracked paths for runtime-read matches and escapes; the D1 disjoint declaration and `--changed` execution passes over exact fast-tier paths; and the D2 escape list (including `.bun-version`) switching to `bun run check` before classification. Unit-test it in a temporary repository with a leaf-module change, a docs change matched by `@reads`, a change nothing reaches (no tests), a lockfile or Bun pin change (escape), a rename/deletion, an unstaged runtime-read edit, and an empty candidate list. Verify runtime-only declaration matches execute without `--changed`, a test selected by both routes executes once, and either pass's failure fails the hook.
+- [ ] 2.2 Report the selection in the hook output: executed file count from JUnit reports, slow-tier candidates excluded, and when the escape fired. Verify the wording in the script's tests.
 
 ## 3. Hooks
 
 - [ ] 3.1 Change `.githooks/pre-commit`: lint, typecheck, and the affected tests for source commits; lint, typecheck, and the `@reads` matches for docs-only commits; the full check on escape. Verify it with commits on a scratch branch: a one-module change runs only its tests in seconds, and an AGENTS.md edit runs the tests declaring AGENTS.md.
-- [ ] 3.2 Add `.githooks/pre-push` per D4 (record lookup by the pushed tree, a run when HEAD is that commit and the tree is clean, refusal otherwise, deletions skipped). Verify it in a temporary repository with a local bare remote, covering all four scenarios of the push requirement.
+- [ ] 3.2 Add `.githooks/pre-push` per D4 (record lookup by the pushed tree, a run when HEAD is that commit and the tree is clean, refusal otherwise, deletions skipped). Verify it in a temporary repository with a local bare remote, covering all push scenarios, including multiple refs on stdin, annotated tags, exact-key verification after a fallback, malformed/missing records, and deletion-only pushes. Verify partial checks never create a full-pass record.
 
 ## 4. Procedure and docs
 

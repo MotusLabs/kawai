@@ -7,7 +7,7 @@ Every source commit runs the full unit suite in the pre-commit hook. The 2026-10
 ## What Changes
 
 - **BREAKING (team procedure):** the pre-commit hook no longer runs the full unit suite. For a source commit it runs lint, typecheck, and the affected tests only: the files reached from the changed files by imports (`bun test --changed`), plus files that declare a runtime read of a changed path. Slow-tier files are left out. A change the import graph cannot see (the runner, scripts, hooks, lockfile, package or TypeScript config, test preloads) still runs the full check.
-- Test files that read repository files at runtime (AGENTS.md, `.kawai/groups/`, `docs/`, workflows, OpenSpec content) declare them in an `@reads` header. A guard test fails when a test names such a path without declaring it. Docs-only commits run the tests that declare a changed path, instead of the manual "run `bun run test` before touching AGENTS.md" rule.
+- Test files that read repository files at runtime (AGENTS.md, `.kawai/groups/`, `docs/`, workflows, OpenSpec content) declare them in an `@reads` header. A guard test fails when a test names such a path without declaring it. Docs-only commits run the fast-tier tests that declare a changed path, instead of the manual "run `bun run test` before touching AGENTS.md" rule.
 - The full check (`bun run check`, cached by content key since `check-dedup`) is required at two points. Devs, before submitting a task result, by procedure in the dev group files. And a new pre-push hook, mechanically: a push is refused unless the pushed commit's tree has a recorded pass, or the clean working tree at that commit passes now.
 - The commit hook needs no memory slot: devs run `git commit` directly, and only full checks go through `suite-run`.
 - AGENTS.md's Commands paragraph and the repository's dev, lead, and reviewer group files are rewritten to the new rule.
@@ -20,7 +20,7 @@ Every source commit runs the full unit suite in the pre-commit hook. The 2026-10
 
 ### Modified Capabilities
 
-- `dev-checks`: adds the per-commit affected-test check, `@reads` declarations with their guard, the full-check requirement at push, and how docs-only commits pick tests. The capability is introduced by `check-dedup`.
+- `dev-checks`: adds the per-commit affected-test check, `@reads` declarations with their guard, the full-check requirement at push, and how docs-only commits pick tests. Replaces the existing `The commit hook reuses recorded passes` requirement from `check-dedup`, whose docs-only suite skip no longer applies. The capability is introduced by `check-dedup`.
 
 ## Impact
 
