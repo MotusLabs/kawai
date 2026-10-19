@@ -108,11 +108,15 @@ files are never loaded. It default-exports `{ route, onLimit?, env?, timeoutMs? 
   worktree, task id), never the body.
 - `route(ctx)` gets the eligible candidates (idle members and spawn slots per
   allowed profile, already filtered by delivery, staffing, caps, and parking —
-  cooling profiles are included with their `cooldownUntil`), the group's caps
-  and live counts, and per-profile usage (with its source) and limit events.
-  It returns `pick`, `hold` (with an optional finite, non-negative retry delay
-  in milliseconds; zero retries next cycle), or `default`. Both `route` and
-  `onLimit` receive the task worktree and `forwardedFromProfile` on carried work.
+  cooling profiles are included with their effective `cooldownUntil`, so a
+  provider's cooldown reads on each of its models), the group's caps and live
+  counts, and per-profile usage (with its source) and limit events. Beside the
+  per-profile entries, `ctx.providers` holds one entry per provider of those
+  profiles — its `label`, its profile ids, its usage, its provider-scoped
+  limit events, and its own `cooldownUntil`. It returns `pick`, `hold` (with
+  an optional finite, non-negative retry delay in milliseconds; zero retries
+  next cycle), or `default`. Both `route` and `onLimit` receive the task
+  worktree and `forwardedFromProfile` on carried work.
 - Throws, timeouts (`timeoutMs`, default 3 s, at most 10 s), and unknown picks
   fall back to the built-in strategy and are logged. A pick that went stale
   before the claim is routed again once, then by the built-in strategy.

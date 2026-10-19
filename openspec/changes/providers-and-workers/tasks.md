@@ -44,8 +44,8 @@
 
 ## 6. Rule context
 
-- [ ] 6.1 Add the D14 fields to `src/shared/routing.ts` and build `ctx.providers` and each profile's effective `cooldownUntil` in the router. Verify `routingContract.test.ts` and `routingRouter.test.ts` cover "A rule sees the cooling provider", and `routingRules.test.ts` shows `docs/routing/devs.example.ts` loading and routing unchanged ("Earlier rules keep working").
-- [ ] 6.2 Document `ctx.providers` and the effective per-profile cooldown in the Routing rules section of `docs/routing/README.md`. Verify the published `kawai-routing.d.ts` copy matches `src/shared/routing.ts` in the existing rule-types test.
+- [x] 6.1 Add the D14 fields to `src/shared/routing.ts` and build `ctx.providers` and each profile's effective `cooldownUntil` in the router. Verify `routingContract.test.ts` and `routingRouter.test.ts` cover "A rule sees the cooling provider", and `routingRules.test.ts` shows `docs/routing/devs.example.ts` loading and routing unchanged ("Earlier rules keep working"). (The named test lives in `routingRouterProviders.test.ts` — the router's provider family since the PR B split kept `routingRouter.test.ts` under 500 lines.)
+- [x] 6.2 Document `ctx.providers` and the effective per-profile cooldown in the Routing rules section of `docs/routing/README.md`. Verify the published `kawai-routing.d.ts` copy matches `src/shared/routing.ts` in the existing rule-types test.
 
 ## 7. Integration
 
