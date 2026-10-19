@@ -81,6 +81,9 @@ describe('catalog entries declare their runtime (D4, R1)', () => {
     expect(errors).toHaveLength(1)
     expect(errors[0]).toContain(providersFile)
     expect(errors[0]).toContain('Codex profile')
+    // N7: pin the release wording — the same-tier branch, not the generic
+    // key collision, must produce this error.
+    expect(errors[0]).toContain('model key is released')
     expect(profiles.get('codex')).toEqual({
       label: 'codex',
       env: {},
@@ -168,7 +171,37 @@ describe('catalog entries declare their runtime (D4, R1)', () => {
       providerId: codexHomeProviderId('/tmp/codex-home-a'),
     })
   })
-})
+
+  test('a project Codex entry cannot flip a user-level Claude profile (cross-level conflict)', () => {
+    writeProfiles(homeDir, { mimo: { label: 'MiMo', env: { ANTHROPIC_BASE_URL: 'https://mimo.example.internal' } } })
+    const projectFile = writeProfiles(projectDir, {
+      mimo: { runtime: 'codex', model: 'gpt-5.3-codex' },
+    })
+    const { profiles, errors } = resolveProfileCatalog({
+      homeDir, projectPath: projectDir, serverCodexHome: '/tmp/codex-home-a',
+    })
+    expect(errors).toHaveLength(1)
+    expect(errors[0]).toContain(projectFile)
+    expect(errors[0]).toContain('the entry is ignored')
+    // The user-level Claude profile is untouched: same model key, same env;
+    // a Claude profile carries no runtime field at all.
+    expect(profiles.get('mimo')).toEqual({
+      label: 'MiMo',
+      env: { ANTHROPIC_BASE_URL: 'https://mimo.example.internal' },
+      providerId: 'mimo',
+    })
+  })
+
+  test('a project Codex entry cannot flip the shipped default profile', () => {
+    const projectFile = writeProfiles(projectDir, { default: { runtime: 'codex' } })
+    const { profiles, errors } = resolveProfileCatalog({
+      homeDir, projectPath: projectDir, serverCodexHome: '/tmp/codex-home-a',
+    })
+    expect(errors).toHaveLength(1)
+    expect(errors[0]).toContain(projectFile)
+    // The shipped Claude default survives: provider claude, no runtime field.
+    expect(profiles.get('default')).toEqual({ label: 'Default', env: {}, providerId: 'claude' })
+  })
 
 describe('codex homes and network are named only at the trusted tier (D4)', () => {
   test('the home resolves from the entry, then CODEX_HOME, then ~/.codex', () => {
@@ -214,6 +247,8 @@ describe('codex homes and network are named only at the trusted tier (D4)', () =
     expect(second.errors[0]).toContain(networkFile)
     expect(second.profiles.has('codex')).toBe(false)
   })
+})
+
 })
 
 describe('parse-level refusals behind the runtime rules', () => {

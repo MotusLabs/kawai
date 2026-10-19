@@ -80,6 +80,9 @@ interface KeyHolder {
   own: boolean
   /** The key is a Codex profile, held outside every provider (R1); provider is unused. */
   codex?: true
+  /** The defining file's directory tier (see CatalogLevel.tier): cross-level
+   * runtime disagreements compare this against the challenger's tier (D4). */
+  tier: number
 }
 
 /** Provider ids taken by legacy entries naming a shipped-only provider (B1). */
@@ -108,7 +111,7 @@ export class CatalogMerger {
    * model key (P3) against those merged facts, so JSON key order never
    * changes an outcome and a re-home carries its own level's overlay.
    */
-  addProviders(file: string, shipped: boolean, providers: Map<string, ParsedProvider>): void {
+  addProviders(file: string, shipped: boolean, providers: Map<string, ParsedProvider>, tier: number): void {
     for (const [id, provider] of providers) {
       const merged = this.providers.get(id)
       if (!merged) {
@@ -163,7 +166,7 @@ export class CatalogMerger {
           const holderProvider = this.providers.get(holder.provider)!
           const flat = flattenModel(holderProvider, holderProvider.models.get(key)!)
           holderProvider.models.delete(key)
-          this.setHolder(key, { provider: id, operator: !shipped, originFile: file, own: false })
+          this.setHolder(key, { provider: id, operator: !shipped, originFile: file, own: false, tier })
           merged.models.set(key, {
             label: model.label ?? flat.label,
             model: model.model ?? flat.model,
@@ -180,7 +183,7 @@ export class CatalogMerger {
         }
         // P3: a new key joins X with X's merged facts plus its own — the
         // flatten applies this provider's (already overlaid) env.
-        this.setHolder(key, { provider: id, operator: !shipped, originFile: file, own: false })
+        this.setHolder(key, { provider: id, operator: !shipped, originFile: file, own: false, tier })
         merged.models.set(key, { label: model.label, model: model.model, env: { ...model.env } })
       }
     }
@@ -195,10 +198,10 @@ export class CatalogMerger {
    * one-model provider — one naming a shipped-only provider takes the
    * reserved `profile:<id>` id and leaves the shipped provider unchanged.
    */
-  addProfiles(file: string, shipped: boolean, entries: Map<string, PartialProfile>): void {
+  addProfiles(file: string, shipped: boolean, entries: Map<string, PartialProfile>, tier: number): void {
     for (const [id, entry] of entries) {
       if (entry.runtime === 'codex') {
-        this.addCodexProfile(file, id, entry)
+        this.addCodexProfile(file, id, entry, tier)
         continue
       }
       const holder = this.holders.get(id)
@@ -247,7 +250,7 @@ export class CatalogMerger {
           operatorOrigin: !shipped,
           originFile: file,
         })
-        this.setHolder(id, { provider: id, operator: !shipped, originFile: file, own: true })
+        this.setHolder(id, { provider: id, operator: !shipped, originFile: file, own: true, tier })
         continue
       }
       const provider = this.providers.get(id)
@@ -268,7 +271,7 @@ export class CatalogMerger {
           operatorOrigin: !shipped,
           originFile: file,
         })
-        this.setHolder(id, { provider: reservedId, operator: !shipped, originFile: file, own: true })
+        this.setHolder(id, { provider: reservedId, operator: !shipped, originFile: file, own: true, tier })
         continue
       }
       // A brand-new one-model provider: the entry's env sits on the model,
@@ -283,20 +286,28 @@ export class CatalogMerger {
         operatorOrigin: !shipped,
         originFile: file,
       })
-      this.setHolder(id, { provider: id, operator: !shipped, originFile: file, own: true })
+      this.setHolder(id, { provider: id, operator: !shipped, originFile: file, own: true, tier })
     }
   }
 
   /**
-   * A Codex entry (D4/R1): held outside every provider. When providers.json
-   * already claims the key, that file is reported, its model key is released,
-   * and the entry stays a usable Codex profile. `codexHome` and `network`
-   * arrive only from trusted files (the parser enforces it), so a nearer
-   * overlay never overwrites them.
+   * A Codex entry (D4/R1): held outside every provider. A same-tier
+   * providers.json model key is released for it (R2: providers.json cannot
+   * hold a Codex profile); a farther file's Claude profile never flips — the
+   * nearer Codex entry is ignored with that file's error, mirroring the
+   * Claude-over-Codex direction. `codexHome` and `network` arrive only from
+   * trusted files (the parser enforces it), so a nearer overlay never
+   * overwrites them.
    */
-  private addCodexProfile(file: string, id: string, entry: PartialProfile): void {
+  private addCodexProfile(file: string, id: string, entry: PartialProfile, tier: number): void {
     const holder = this.holders.get(id)
     if (holder !== undefined && !holder.codex) {
+      if (holder.tier < tier) {
+        // Cross-level runtime disagreement (D4): the entry's file is nearer
+        // than the Claude profile's; it cannot change the runtime.
+        this.errors.push(`${file}: profile "${id}" is a Codex entry here but a Claude entry in ${holder.originFile}; the entry is ignored.`)
+        return
+      }
       const provider = this.providers.get(holder.provider)!
       provider.models.delete(id)
       this.errors.push(`${file}: profile "${id}" is a model of provider "${holder.provider}" (${holder.originFile}); providers.json cannot hold a Codex profile, so the model key is released and "${id}" stays a Codex profile.`)
@@ -314,7 +325,7 @@ export class CatalogMerger {
       network: entry.network,
       originFile: file,
     })
-    this.holders.set(id, { provider: '', operator: true, originFile: file, own: false, codex: true })
+    this.holders.set(id, { provider: '', operator: true, originFile: file, own: false, codex: true, tier })
   }
 
   /** A legacy entry whose id names an existing operator provider merges into it. */
@@ -355,7 +366,7 @@ export class CatalogMerger {
     const provider = this.providers.get('default')
     if (provider) {
       provider.models.set('default', { label: 'Default', env: {} })
-      this.setHolder('default', { provider: 'default', operator: false, originFile: '(implicit)', own: true })
+      this.setHolder('default', { provider: 'default', operator: false, originFile: '(implicit)', own: true, tier: 0 })
       return
     }
     this.providers.set('default', {
@@ -365,6 +376,6 @@ export class CatalogMerger {
       operatorOrigin: false,
       originFile: '(implicit)',
     })
-    this.setHolder('default', { provider: 'default', operator: false, originFile: '(implicit)', own: true })
+    this.setHolder('default', { provider: 'default', operator: false, originFile: '(implicit)', own: true, tier: 0 })
   }
 }

@@ -193,6 +193,13 @@ export type CatalogLevel = {
   shipped?: boolean
   /** When the file is missing, the embedded shipped catalog takes its place. */
   embeddedFallback?: boolean
+  /**
+   * The directory tier the file belongs to: 0 shipped, 1 the user level,
+   * then one step per project `.kawai` directory, nearer directories higher.
+   * Cross-level runtime disagreements (D4) compare tiers, not file order —
+   * the user level's two files share one tier.
+   */
+  tier: number
 }
 
 /**
@@ -216,8 +223,8 @@ export function profileCatalogLevels(ctx: ProfileCatalogContext = {}): CatalogLe
     baseFiles.add(userProviders)
     baseFiles.add(userProfiles)
     levels.push(
-      { file: userProviders, kind: 'providers', trusted: true },
-      { file: userProfiles, kind: 'profiles', trusted: true }
+      { file: userProviders, kind: 'providers', trusted: true, tier: 1 },
+      { file: userProfiles, kind: 'profiles', trusted: true, tier: 1 }
     )
   } else {
     const providersFile = ctx.imageDefaultProvidersPath ?? DEFAULT_PROVIDER_CATALOG_PATH
@@ -225,8 +232,8 @@ export function profileCatalogLevels(ctx: ProfileCatalogContext = {}): CatalogLe
     baseFiles.add(providersFile)
     baseFiles.add(profilesFile)
     levels.push(
-      { file: providersFile, kind: 'providers', trusted: true, shipped: true, embeddedFallback: true },
-      { file: profilesFile, kind: 'profiles', trusted: true, shipped: true, embeddedFallback: true }
+      { file: providersFile, kind: 'providers', trusted: true, shipped: true, embeddedFallback: true, tier: 0 },
+      { file: profilesFile, kind: 'profiles', trusted: true, shipped: true, embeddedFallback: true, tier: 0 }
     )
   }
   const projectPath = ctx.projectPath?.trim()
@@ -242,6 +249,7 @@ export function profileCatalogLevels(ctx: ProfileCatalogContext = {}): CatalogLe
         file,
         kind: i % 2 === 0 ? 'providers' : 'profiles',
         trusted: false,
+        tier: 2 + i,
       })
     }
   }
@@ -263,7 +271,8 @@ export function resolveProfileCatalog(
 ): ProfileCatalog {
   const merger = new CatalogMerger()
   const errors: string[] = []
-  for (const level of profileCatalogLevels(ctx)) {
+  const levels = profileCatalogLevels(ctx)
+  for (const level of levels) {
     // Only the shipped base falls back to the embedded shipped defaults;
     // a missing project file just contributes nothing.
     if (level.kind === 'providers') {
@@ -277,7 +286,7 @@ export function resolveProfileCatalog(
         errors.push(parsed.error)
         continue
       }
-      merger.addProviders(level.file, level.shipped ?? false, parsed.providers)
+      merger.addProviders(level.file, level.shipped ?? false, parsed.providers, level.tier)
       continue
     }
     const parsed = parseCatalogFile(level.file, level.trusted, level.embeddedFallback
@@ -287,7 +296,7 @@ export function resolveProfileCatalog(
       errors.push(parsed.error)
       continue
     }
-    merger.addProfiles(level.file, level.shipped ?? false, parsed.entries)
+    merger.addProfiles(level.file, level.shipped ?? false, parsed.entries, level.tier)
   }
   merger.finish()
   errors.push(...merger.errors)
