@@ -484,13 +484,32 @@ describe('chat WebSocket subscriptions', () => {
     await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-5' })
     h.connections.publishUsage('zai', report)
     await new Promise(resolve => setTimeout(resolve, 0))
-    // One message per subscribed session, each carrying that session's own
+    // One message per subscribed profile: the two `default` sessions collapse
+    // into one message, and each sibling model of zai is named by its own
     // profile id plus the additive provider id.
     expect(h.messages.filter(message => message.type === 'chat-usage')).toEqual([
       { type: 'chat-usage', profileId: 'default', providerId: 'default', report: null },
-      { type: 'chat-usage', profileId: 'default', providerId: 'default', report: null },
       { type: 'chat-usage', profileId: 'glm', providerId: 'zai', report },
       { type: 'chat-usage', profileId: 'glm-flash', providerId: 'zai', report },
+    ])
+  })
+
+  test('a profile message survives while a sibling session of the profile stays subscribed', async () => {
+    const h = harness()
+    await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-1' })
+    await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-3' })
+    const report = {
+      status: 'allowed' as const,
+      windows: [{ key: 'five_hour', label: '5-hour window', percentUsed: 22.37, resetsAt: null }],
+      receivedAt: '2026-10-07T13:00:00.000Z',
+    }
+    h.connections.publishUsage('default', report)
+    // One of the two same-profile sessions detaches before the flush; the
+    // other keeps the profile's message alive.
+    await h.connections.handle(h.connection, { type: 'chat-detach', sessionId: 'chat-3' })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(h.messages.filter(message => message.type === 'chat-usage')).toEqual([
+      { type: 'chat-usage', profileId: 'default', providerId: 'default', report },
     ])
   })
 
