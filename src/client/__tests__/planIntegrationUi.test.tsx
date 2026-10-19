@@ -18,6 +18,7 @@ import type { PlanExecutionView } from '@shared/planExecution'
 import type { IntegrationCandidate, PlanIntegrationView, PromotionView } from '@shared/planIntegration'
 
 const teamPath = '/repo'
+const otherTeam = '/other-repo'
 let renderer: TestRenderer.ReactTestRenderer | null = null
 let sent: ClientMessage[] = []
 const render = (node: ReturnType<typeof createElement>) => act(() => { renderer = TestRenderer.create(node) })
@@ -45,6 +46,7 @@ afterEach(() => {
   renderer = null
   sent = []
   useTeamPlanStore.getState().close(teamPath)
+  useTeamPlanStore.getState().close(otherTeam)
 })
 
 const sha = (char: string) => char.repeat(40)
@@ -63,9 +65,9 @@ const integrationView = (over: Partial<PlanIntegrationView> = {}): PlanIntegrati
   branch: 'wave/c', targetBranch: 'master', head: sha('3'), createdSha: sha('0'),
   candidates: [candidate(3, { change: 'ui' }), candidate(2, { change: 'api' })], promotions: [], promotedThroughSeq: 0, ...over,
 })
-const panel = (views: PlanIntegrationView[], options: { running?: boolean; connected?: boolean } = {}) =>
+const panel = (views: PlanIntegrationView[], options: { running?: boolean; connected?: boolean; teamPath?: string } = {}) =>
   createElement(PlanIntegrationPanel, {
-    teamPath, planId: 'plan-1', views, executionRunning: options.running ?? false, connected: options.connected ?? true,
+    teamPath: options.teamPath ?? teamPath, planId: 'plan-1', views, executionRunning: options.running ?? false, connected: options.connected ?? true,
     onSend: (message: ClientMessage) => { sent.push(message) },
   })
 const openStore = () => useTeamPlanStore.getState().open(teamPath, 'plan-1')
@@ -123,6 +125,18 @@ describe('PlanIntegrationPanel (8.2, D13)', () => {
     const promote = sent.find(message => message.type === 'team-plan-promote') as { commandId: string } | undefined
     expect(promote).toMatchObject({ planId: 'plan-1', branch: 'wave/c', fromSha: sha('3') })
     expect(promote!.commandId).toBe(useTeamPlanStore.getState().views[teamPath]!.commands['promote:plan-1:wave/c']!.commandId)
+  })
+
+  test('an open dialog re-keyed to another team asks that team for its preview (review O1)', () => {
+    openStore()
+    useTeamPlanStore.getState().open(otherTeam, 'plan-1')
+    render(panel([integrationView()]))
+    click('plan-promote-open')
+    // The team switch keeps the view mounted; the other team's slot is armed as its own open would.
+    act(() => useTeamPlanStore.getState().arm(otherTeam, 'promote:plan-1:wave/c'))
+    update(panel([integrationView()], { teamPath: otherTeam }))
+    const previews = sent.filter(message => message.type === 'team-plan-promotion-preview').map(message => (message as { teamPath: string }).teamPath)
+    expect(previews).toEqual([teamPath, otherTeam])
   })
 
   test('a no-execution refusal shows inline and turns Promote off', () => {

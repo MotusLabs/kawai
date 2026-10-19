@@ -11,7 +11,7 @@
 // finishes the promotion at once unless its merge is in flight, which then
 // settles first (the runner finishes it).
 import { FLOOR_VERSION } from '../../../../shared/planExecution'
-import { candidateChain, promotedThrough, type IntegrationCandidate, type OutsideCommit, type PromotionPreview } from '../../../../shared/planIntegration'
+import { candidateChain, promotedThrough, type PromotionPreview } from '../../../../shared/planIntegration'
 import type { TeamIdentity } from '../../../team/teamIdentity'
 import type { PlanExecutionSettings } from '../../../team/teamCaps'
 import { PlanRefusal, type PlanRefusalReason } from '../../planCommands'

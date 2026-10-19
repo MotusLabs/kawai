@@ -42,7 +42,7 @@ export default function PlanPromoteDialog({ teamPath, planId, view, connected, o
     setOpen(true)
   }
   // A reconnect drops a preview whose answer was lost: ask again while open.
-  useEffect(() => { if (open && connected && preview === undefined) requestPreview() }, [open, connected, preview]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (open && connected && preview === undefined) requestPreview() }, [open, connected, preview, teamPath]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const shown = preview?.state === 'preview' ? preview.preview : null
   const fromSha = shown?.head ?? null

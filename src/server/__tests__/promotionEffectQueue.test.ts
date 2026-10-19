@@ -5,7 +5,9 @@
 //   a finished promotion's close-pr;
 // - a transient failure backs off on the 30 s / 2 m / 10 m schedule and
 //   fails after three tries;
-// - at startup, a `running` effect becomes `unknown`.
+// - at startup, a `running` effect becomes `unknown`;
+// - a write after an await never reopens a settled effect, and a finished
+//   promotion keeps no pending or unknown row but its close-pr (review O3).
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { schemaDb } from './schemaDb'
 import { applyIntegrationSchema } from '../plans/landing/integration/integrationSchema'
@@ -78,7 +80,7 @@ describe('the promotion effect queue', () => {
     expect(calls).toHaveLength(4)
   })
 
-  test('a running effect becomes unknown at startup; a finish cancels pending and uninspected effects so nothing repeats after it', () => {
+  test('a running effect becomes unknown at startup; a finish also cancels its pending and uninspected effects as cleanup (D10)', () => {
     const running = promotion('plan-1')
     const inFlight = store.insertEffect({ promotionId: running.id, kind: 'merge', effectKey: 'p1:merge', command: {} })
     const waiting = store.insertEffect({ promotionId: running.id, kind: 'fast-forward', effectKey: 'p1:ff', command: {} })
@@ -87,8 +89,58 @@ describe('the promotion effect queue', () => {
     expect(store.effect(inFlight.id)!.state).toBe('unknown')
     store.cancelPromotionEffects(running.id)
     expect(store.effect(waiting.id)!.state).toBe('cancelled')
-    // Cleanup, not a guard: dueEffects never runs a finished promotion's effects but close-pr, and the planner reads unknown as waiting (D10).
+    // Cleanup, not a guard: dueEffects and dueUnknownEffects never pick a finished promotion's effects but close-pr, and the planner reads unknown as waiting (D10).
     expect(store.effect(inFlight.id)!.state).toBe('cancelled')
     expect(store.insertEffect({ promotionId: running.id, kind: 'merge', effectKey: 'p1:merge', command: { again: true } }).id).toBe(inFlight.id)
+  })
+
+  test('an inspection settling after a Cancel leaves the cancelled effect cancelled (O3)', () => {
+    const running = promotion('plan-1')
+    const done = store.insertEffect({ promotionId: running.id, kind: 'open-pr', effectKey: 'p1:pr', command: {} })
+    const reset = store.insertEffect({ promotionId: running.id, kind: 'update-branch', effectKey: 'p1:update', command: {} })
+    const retried = store.insertEffect({ promotionId: running.id, kind: 'create-promotion-branch', effectKey: 'p1:branch', command: {} })
+    for (const effect of [done, reset, retried]) store.markEffectRunning(effect.id)
+    store.markRunningPromotionEffectsUnknown()
+    expect(store.dueUnknownEffects(TEAM, new Date(clock).toISOString())).toHaveLength(3)
+    // The inspections read GitHub; the Cancel commits meanwhile.
+    store.finishPromotion(running.id, 'cancelled')
+    store.cancelPromotionEffects(running.id)
+    store.setEffectOutcome(done.id, { state: 'done', outcome: { number: 7 } })
+    store.resetEffect(reset.id)
+    store.scheduleInspectionRetry(retried.id, new Date(clock + 30_000).toISOString(), 'HTTP 502')
+    for (const effect of [done, reset, retried]) expect(store.effect(effect.id)).toMatchObject({ state: 'cancelled', outcome: null, tries: 0 })
+  })
+
+  test('a finished promotion gets no zombie pending or unknown row; its close-pr stays due (O3)', async () => {
+    const running = promotion('plan-1')
+    const update = store.insertEffect({ promotionId: running.id, kind: 'update-branch', effectKey: 'p1:update', command: {} })
+    const close = store.insertEffect({ promotionId: running.id, kind: 'close-pr', effectKey: 'p1:close', command: {} })
+    // The update-branch call is in flight (running, so the finish's sweep leaves it) when the promotion finishes; then it fails transiently.
+    results = [{ ok: false, error: { argv: ['gh'], exitCode: 1, httpStatus: 502, message: 'Server Error' } }]
+    const queue = new EffectRunner<PromotionEffectRow>({
+      store,
+      adapter: {
+        call: async effect => {
+          calls.push(effect.effectKey)
+          if (effect.id === update.id) { store.finishPromotion(running.id, 'cancelled'); store.cancelPromotionEffects(running.id) }
+          return results[0]!
+        },
+      },
+      backoffsMs: [30_000, 120_000, 600_000],
+      now: () => new Date(clock),
+    })
+    await queue.runDue(TEAM)
+    expect(calls).toEqual(['p1:update', 'p1:close'])
+    expect(store.effect(update.id)!.state).toBe('cancelled')
+    expect(store.effect(close.id)).toMatchObject({ state: 'pending', tries: 1 })
+    clock += 600_000
+    expect(store.dueEffects(TEAM, new Date(clock).toISOString()).map(row => row.id)).toEqual([close.id])
+    // An unknown row of a finished promotion is never inspected, and a reset of one is cancelled, not reopened.
+    const stale = store.insertEffect({ promotionId: running.id, kind: 'merge', effectKey: 'p1:merge', command: {} })
+    store.markEffectRunning(stale.id)
+    store.markRunningPromotionEffectsUnknown()
+    expect(store.dueUnknownEffects(TEAM, new Date(clock).toISOString()).map(row => row.id)).toEqual([])
+    store.resetEffect(stale.id)
+    expect(store.effect(stale.id)!.state).toBe('cancelled')
   })
 })

@@ -39,6 +39,9 @@ function mapEffect(row: Record<string, unknown>): PromotionEffectRow {
 /** A committed write's plan: its team and, when known, the plan whose detail it changes. */
 export type IntegrationChangeListener = (teamId: string, planId: string | undefined) => void
 
+/** The states an effect write may still change: a settled effect (done, failed, cancelled) stays settled (O3). */
+const OPEN = "state IN ('pending', 'running', 'unknown')"
+
 export class PromotionEffectStore implements EffectQueue<PromotionEffectRow> {
   private readonly listeners = new Set<IntegrationChangeListener>()
   private readonly pending = new Map<string, Set<string | undefined>>()
@@ -143,15 +146,32 @@ export class PromotionEffectStore implements EffectQueue<PromotionEffectRow> {
     this.effectChanged(id)
   }
 
+  /**
+   * Settles an open effect. Every write after an await is guarded on an open
+   * state (O3), so a Cancel or finish that settled the effect meanwhile wins.
+   */
   setEffectOutcome(id: string, outcome: { state: 'done' | 'failed' | 'unknown' | 'cancelled'; outcome?: unknown; error?: string | null }): void {
-    this.db.prepare('UPDATE plan_promotion_effects SET state = ?, outcome_json = ?, error = ?, finished_at = ? WHERE id = ?').run(
+    this.db.prepare(`UPDATE plan_promotion_effects SET state = ?, outcome_json = ?, error = ?, finished_at = ? WHERE id = ? AND ${OPEN}`).run(
       outcome.state, outcome.outcome === undefined ? null : JSON.stringify(outcome.outcome), outcome.error ?? null, this.iso(), id,
     )
     this.effectChanged(id)
   }
 
   scheduleEffectRetry(id: string, nextAt: string, error: string | null): void {
-    this.db.prepare("UPDATE plan_promotion_effects SET state = 'pending', tries = tries + 1, next_at = ?, error = ? WHERE id = ?").run(nextAt, error, id)
+    this.reopen(id, "UPDATE plan_promotion_effects SET state = 'pending', tries = tries + 1, next_at = ?, error = ? WHERE id = ? AND " + OPEN, nextAt, error, id)
+  }
+
+  /**
+   * Puts an open effect back in the queue — unless its promotion finished
+   * meanwhile and it is not the finish's `close-pr`: then it is cancelled
+   * like the finish's own sweep, so no zombie pending row outlives it (O3).
+   */
+  private reopen(id: string, sql: string, ...args: Array<string | null>): void {
+    this.db.transaction(() => {
+      this.db.prepare(sql).run(...args)
+      this.db.prepare(`UPDATE plan_promotion_effects SET state = 'cancelled', finished_at = ? WHERE id = ? AND state IN ('pending', 'unknown')
+        AND kind <> 'close-pr' AND NOT EXISTS (SELECT 1 FROM plan_promotions p WHERE p.id = promotion_id AND p.state = 'running')`).run(this.iso(), id)
+    })()
     this.effectChanged(id)
   }
 
@@ -165,21 +185,20 @@ export class PromotionEffectStore implements EffectQueue<PromotionEffectRow> {
   dueUnknownEffects(teamId: string, now: string): PromotionEffectRow[] {
     return (this.db.prepare(`SELECT e.* FROM plan_promotion_effects e
       JOIN plan_promotions p ON p.id = e.promotion_id
-      WHERE p.team_id = ? AND e.state = 'unknown' AND (e.next_at IS NULL OR e.next_at <= ?)
+      WHERE p.team_id = ? AND (p.state = 'running' OR e.kind = 'close-pr')
+        AND e.state = 'unknown' AND (e.next_at IS NULL OR e.next_at <= ?)
       ORDER BY e.created_at, e.rowid`).all(teamId, now) as Array<Record<string, unknown>>)
       .map(mapEffect)
   }
 
   /** An inspection that found the work not done puts the effect back to pending, to run again. */
   resetEffect(id: string): void {
-    this.db.prepare("UPDATE plan_promotion_effects SET state = 'pending', next_at = NULL WHERE id = ?").run(id)
-    this.effectChanged(id)
+    this.reopen(id, "UPDATE plan_promotion_effects SET state = 'pending', next_at = NULL WHERE id = ? AND " + OPEN, id)
   }
 
   /** An undecidable inspection stays `unknown`, one try counted, retrying at `nextAt`. */
   scheduleInspectionRetry(id: string, nextAt: string, error: string | null): void {
-    this.db.prepare("UPDATE plan_promotion_effects SET state = 'unknown', tries = tries + 1, next_at = ?, error = ? WHERE id = ?").run(nextAt, error, id)
-    this.effectChanged(id)
+    this.reopen(id, "UPDATE plan_promotion_effects SET state = 'unknown', tries = tries + 1, next_at = ?, error = ? WHERE id = ? AND " + OPEN, nextAt, error, id)
   }
 
   /** The effect running now for the promotion, if any (Cancel lets a running merge settle). */

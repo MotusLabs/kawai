@@ -281,7 +281,7 @@ A failure at any step, and a Cancel that stops the promotion before its merge:
 - finishes the promotion with its outcome and detail;
 - writes `promotion-finished` with that outcome.
 
-Cancelling `unknown` effects as well as `pending` ones is a cleanup, not a guard: `dueEffects` already never runs a finished promotion's effects other than `close-pr`, and the planner reads an `unknown` effect as waiting, so a merge or fast-forward left `unknown` can never be passed over (Cancel waits for an unknown merge to settle). Cancelling them keeps a finished promotion from holding rows that would never be due.
+Cancelling `unknown` effects as well as `pending` ones is a cleanup, not a guard: `dueEffects` and `dueUnknownEffects` never pick a finished promotion's effects other than `close-pr`, and the planner reads an `unknown` effect as waiting, so a merge or fast-forward left `unknown` can never be passed over (Cancel waits for an unknown merge to settle). Cancelling them keeps a finished promotion from holding rows that would never be due. The guard is on the writes instead: an effect write that lands after an await (an inspection's verdict, a call's retry or outcome) changes only an effect still `pending`, `running`, or `unknown`, so a Cancel or finish that settled it meanwhile wins, and a retry or reset of a finished promotion's effect other than `close-pr` cancels it rather than reopening it.
 
 A `close-pr` that fails after its retries leaves the outcome as it is, with a note that the pull request is still open. The branch and the closed pull request stay, and a later Promote takes `number + 1`.
 
