@@ -299,7 +299,7 @@ export class ExecutionExecutor {
     if (execution === null || execution.state === 'running' || fresh === null || fresh.state !== 'landing') return
     const task = fresh.taskId === null ? null : this.deps.tasks.store.get(fresh.taskId) ?? null
     const prepared = task !== null && task.status !== 'done' && task.status !== 'cancelled'
-      ? await this.deps.tasks.prepareStatus({ kind: 'system', team, executionId: row.executionId }, task.id, 'cancelled', 'Execution stopped; its merge did not complete.')
+      ? await this.deps.tasks.prepareStatus({ kind: 'system', team, origin: { kind: 'execution', executionId: row.executionId } }, task.id, 'cancelled', 'Execution stopped; its merge did not complete.')
       : null
     this.deps.store.atomically(() => {
       const current = this.deps.store.change(row.executionId, row.change)

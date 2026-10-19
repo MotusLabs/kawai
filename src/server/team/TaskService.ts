@@ -27,6 +27,9 @@ import { TeamWorktrees } from './worktreeRoots'
 import type { PlanStore } from '../plans/planStore'
 import { resolvePlanLink } from '../plans/planLink'
 import { NULL_OWNERSHIP, type ExecutionOwnership } from '../plans/execution/executionOwnership'
+import { executionOf, refuseSystem, type SystemCaller } from './systemCaller'
+import { originStatusRefusal, statusRefusal } from './taskStatusRights'
+export { statusRefusal } from './taskStatusRights'
 
 export interface TaskCreateInput {
   title: string
@@ -85,13 +88,15 @@ export interface TaskDraftInput {
 
 /**
  * Who is calling: an agent session (identity bound), the human for a team, or
- * Kawai for a plan execution (plan-execution D2). Only the execution module
- * mints the system caller; tools and connections build `agent` and `human`.
+ * Kawai (`systemCaller.ts`: a plan execution, an override, or a failed
+ * promotion, each with its own rights). Only the execution module and
+ * `fixTasks.ts` mint the system caller; tools and connections build `agent`
+ * and `human`.
  */
 export type TaskCaller =
   | { kind: 'agent'; sessionId: string }
   | { kind: 'human'; team: TeamIdentity }
-  | { kind: 'system'; team: TeamIdentity; executionId: string }
+  | SystemCaller
 
 const CHANGE_NAME = /^[a-z0-9][a-z0-9-]*$/
 
@@ -122,6 +127,7 @@ export class TaskService {
   }
 
   async create(caller: TaskCaller, input: TaskCreateInput): Promise<TeamTask> {
+    refuseSystem(caller, 'create-linked')
     const { team, actor, canCreate } = await this.context(caller)
     if (actor.kind === 'system' && !(input.plan_id && input.plan_change)) {
       throw new Error('Kawai creates a task only with its execution\'s plan-change link')
@@ -148,7 +154,8 @@ export class TaskService {
       // approved revision may have left behind (plan-execution D7). Without
       // a wiring (the team services alone) there is no execution to read,
       // and the link resolves against the current approved revision.
-      const execution = ownership.revisionOf(caller.executionId)
+      const executionId = executionOf(caller)
+      const execution = executionId === null ? null : ownership.revisionOf(executionId)
       if (execution) {
         if (input.plan_id && execution.planId !== input.plan_id.trim()) {
           throw new Error(`Kawai's tasks link to the plan of their execution (${execution.planId}), not ${input.plan_id}.`)
@@ -172,13 +179,28 @@ export class TaskService {
     })
   }
 
+  /**
+   * Kawai's fix or correction task (plan-supervision D7): no worktree, change,
+   * parent, or plan link. Synchronous so the override's transaction holds it;
+   * `within` writes the `plan_fix_tasks` row in the task's own transaction.
+   */
+  createFixTask(caller: SystemCaller, input: { title: string; direction: string; acceptance: string }, within: (task: TeamTask) => void): TeamTask {
+    refuseSystem(caller, 'create-fix')
+    const title = input.title.trim()
+    const direction = input.direction.trim()
+    if (!title || !direction) throw new Error('A fix task needs a title and a direction')
+    return this.store.create({ teamId: caller.team.teamId, title, direction, acceptance: emptyToNull(input.acceptance), creator: SYSTEM_ACTOR }, undefined, within)
+  }
+
   async get(caller: TaskCaller, taskId: string): Promise<TeamTaskDetail> {
+    refuseSystem(caller, 'read')
     const { team } = await this.context(caller)
     this.sameTeamTask(team, taskId)
     return this.store.detail(taskId)!
   }
 
   async list(caller: TaskCaller, status?: TaskStatus): Promise<TeamTaskSummary[]> {
+    refuseSystem(caller, 'read')
     const { team } = await this.context(caller)
     return this.store.list(team.teamId).filter(task => !status || task.status === status)
   }
@@ -264,6 +286,7 @@ export class TaskService {
    * no-op. Older revisions are recorded too: that is true information.
    */
   async acknowledge(caller: TaskCaller, taskId: string, revision: number): Promise<{ taskId: string; revision: number; alreadyAcknowledged: boolean }> {
+    refuseSystem(caller, 'acknowledge')
     const { team, actor } = await this.context(caller)
     if (actor.kind !== 'agent') throw new Error('Only agents acknowledge revisions')
     const task = this.sameTeamTask(team, taskId)
@@ -337,6 +360,7 @@ export class TaskService {
   }
 
   async note(caller: TaskCaller, taskId: string, text: string) {
+    refuseSystem(caller, 'note')
     const { team, actor } = await this.context(caller)
     this.sameTeamTask(team, taskId)
     if (!text.trim()) throw new Error('A journal note needs text')
@@ -377,7 +401,8 @@ export class TaskService {
     const { team, actor } = await this.context(caller)
     const task = this.sameTeamTask(team, taskId)
     if (!TASK_STATUSES.includes(status)) throw new Error(`Unknown task status: ${String(status)}`)
-    const refusal = statusRefusal(actor, task, status)
+    refuseSystem(caller, status === 'done' || status === 'cancelled' ? 'close' : 'status')
+    const refusal = statusRefusal(actor, task, status) ?? (caller.kind === 'system' ? originStatusRefusal(caller.origin, task) : null)
     if (refusal) throw new Error(refusal)
     const hook = this.crossesBoundary(task.status, status)
       ? await this.options.onStatusTransition!(task, status, actor)
@@ -455,33 +480,6 @@ export class TaskService {
       return change
     }
     throw new Error(`OpenSpec change not found: ${name} (looked in ${roots.map(root => path.join(root, 'openspec', 'changes')).join(' and ')})`)
-  }
-}
-
-/**
- * The status rights (team-tasks D2): an agent sets `done`/`cancelled` only on
- * a task it created and never reopens; the human sets anything. The one rule
- * every closing path — status changes and result acceptance — checks first.
- */
-export function statusRefusal(actor: ActingParty, task: TeamTask, status: TaskStatus): string | null {
-  const closing = status === 'done' || status === 'cancelled'
-  switch (actor.kind) {
-    case 'human':
-      return null
-    case 'system':
-      // Kawai closes only its own tasks, as their creator (plan-execution D2).
-      if (status === 'open') return 'Only the human can reopen a task'
-      return closing && task.creator.kind !== 'system' ? `Kawai sets ${status} only on the tasks it created.` : null
-    case 'agent':
-      if (status === 'open') return 'Only the human can reopen a task'
-      if (closing && task.creator.sessionId !== actor.sessionId) {
-        return `Only the task's creator can set it to ${status}. Report your result in a journal note or a message to the creator instead.`
-      }
-      return null
-    default: {
-      const never: never = actor
-      return String(never)
-    }
   }
 }
 

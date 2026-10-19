@@ -99,7 +99,7 @@ beforeEach(() => {
     staffing, caps, worktrees, homeDir: world.home, plans: bench.plans, ownership,
   })
   results = new TaskResultService(tasks, { getSession: id => bench.records.get(id), assignments, ownership })
-  system = { kind: 'system', team: world.team, executionId: '' }
+  system = { kind: 'system', team: world.team, origin: { kind: 'execution', executionId: '' } }
 })
 
 describe('the null implementation keeps the services unchanged', () => {
@@ -125,7 +125,7 @@ describe('8.2 the system create path links to the execution\'s revision', () => 
       landingMode: 'direct', baseBranch: 'master', baseCommit: 'abc', floor: { version: 1, map: FLOOR },
       maxParallel: 3, mergeMethod: 'merge', changes: [{ change: 'api', landed: false }],
     })
-    system = { kind: 'system', team: world.team, executionId: execution.id }
+    system = { kind: 'system', team: world.team, origin: { kind: 'execution', executionId: execution.id } }
     // Revision 2 drops `api`; the execution still runs revision 1.
     const second = bench.plans.atomically(() => bench.plans.insertRevision(planId, {
       content: normalizePlanContent({ goal: 'G', successCriteria: ['S'], changes: [{ change: 'ui', group: 'leads', dependsOn: [], acceptance: [], extraChecks: [], guidance: '' }], roles: [{ group: 'leads', profiles: [] }] }),
@@ -165,7 +165,7 @@ describe('8.3 only Kawai dispatches a running change\'s task', () => {
     const after = bench.db.db.prepare('SELECT COUNT(*) AS n FROM team_task_assignments').get() as { n: number }
     expect(after.n).toBe((before as { n: number }).n)
     // Kawai's own dispatch passes the guard and records it as dispatcher.
-    system = { kind: 'system', team: world.team, executionId }
+    system = { kind: 'system', team: world.team, origin: { kind: 'execution', executionId } }
     const outcome = await assignments.dispatch(system, {
       taskId, target: { kind: 'group', id: 'middle-devs' }, instruction: 'Implement api', requestKey: 'exec:attempt:1',
       allowedProfiles: ['default'], tags: ['author-profile:default'],
@@ -236,7 +236,7 @@ describe('8.4 handoffs, release, and result submission on an owned task', () => 
 describe('8.5 replies to Kawai\'s mail are refused with guidance', () => {
   test('the agent tool path and the human composer path, with nothing queued', async () => {
     const { taskId, executionId } = await ownedChange('api')
-    system = { kind: 'system', team: world.team, executionId }
+    system = { kind: 'system', team: world.team, origin: { kind: 'execution', executionId } }
     const outcome = await assignments.dispatch(system, {
       taskId, target: { kind: 'group', id: 'middle-devs' }, instruction: 'Implement api', requestKey: 'kawai-dispatch',
     })
@@ -261,7 +261,7 @@ describe('8.6 the delivered envelope names the execution', () => {
       landingMode: 'direct', baseBranch: 'master', baseCommit: 'abc', floor: { version: 1, map: FLOOR },
       maxParallel: 3, mergeMethod: 'merge', changes: [{ change: 'api', landed: false }],
     })
-    system = { kind: 'system', team: world.team, executionId: execution.id }
+    system = { kind: 'system', team: world.team, origin: { kind: 'execution', executionId: execution.id } }
     const task = await tasks.create(system, { title: 'api — Wave C', direction: 'Build it', plan_id: planId, plan_change: 'api' })
     executions.transition(execution.id, 'api', executions.change(execution.id, 'api')!, { taskId: task.id })
     const context = buildTaskContext(tasks.store, task.id, bench.plans, ownership)!

@@ -60,7 +60,7 @@ Implement after `plan-execution` and `integration-candidates` have landed on mas
 
 ## 5. Decisions and fix tasks
 
-- [ ] 5.1 Widen the system `TaskCaller` to `{ kind: 'system'; team; origin }` with the three origins, constructed only module-privately, extending plan-execution D2's exhaustive switches over `origin` (D7). Verify with:
+- [x] 5.1 Widen the system `TaskCaller` to `{ kind: 'system'; team; origin }` with the three origins, constructed only module-privately, extending plan-execution D2's exhaustive switches over `origin` (D7). Verify with:
   - an exhaustive-switch typecheck;
   - a test that no tool or connection path yields a system caller;
   - a test that the execution origin keeps exactly D2's rights.

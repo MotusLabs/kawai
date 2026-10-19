@@ -173,7 +173,8 @@ export class TaskStore {
     return task
   }
 
-  create(input: CreateTaskInput, now = nowIso()): TeamTask {
+  /** `within` runs in the insert's transaction with the new task (plan-supervision D7's `plan_fix_tasks` row). */
+  create(input: CreateTaskInput, now = nowIso(), within?: (task: TeamTask) => void): TeamTask {
     // Request identity (task-assignment D4): insert-then-read by the unique
     // key. A same-payload replay returns the prior task; a different payload
     // under the key is refused naming the differing field. Post-create
@@ -196,6 +197,7 @@ export class TaskStore {
         input.planId ?? null, input.planChange ?? null, input.requestKey ?? null, now, now,
       )
       this.insertRevision(id, 1, input.direction, input.acceptance ?? null, input.creator, now)
+      within?.(this.get(id)!)
     })()
     return this.changed(id)
   }

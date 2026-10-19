@@ -35,6 +35,7 @@ export type { DispatchHandoff } from './assignmentStore'
 import type { MailboxStore, TeamMessage } from './mailboxStore'
 import type { TaskStore } from './taskStore'
 import type { TaskCaller } from './TaskService'
+import { refuseSystem, type SystemCaller } from './systemCaller'
 import type { GroupDefinition } from './groupFile'
 import type { TeamCaps } from './teamCaps'
 import type { StaffingPreview, WorktreeStaffing } from './staffing'
@@ -117,9 +118,31 @@ export class AssignmentService {
    * reassignment — returns the prior outcome and writes nothing.
    */
   async dispatch(caller: TaskCaller, input: DispatchInput): Promise<DispatchOutcome> {
+    refuseSystem(caller, input.handoff ? 'handoff' : 'dispatch')
     const team = await this.teamOf(caller)
+    const checked = this.checkDispatch(caller, team, input)
+    const recipient = await this.sessionTarget(team, input.target)
+    return this.commitDispatch(caller, team, input, checked, recipient)
+  }
+
+  /**
+   * Kawai's dispatch of a fix or correction task inside the caller's own
+   * transaction (plan-supervision D7): a group target, so nothing awaits.
+   */
+  dispatchWithin(caller: SystemCaller, input: DispatchInput): DispatchOutcome {
+    refuseSystem(caller, input.handoff ? 'handoff' : 'dispatch')
+    if (input.target.kind !== 'group') throw new Error('Kawai dispatches a fix task to a group only')
+    return this.commitDispatch(caller, caller.team, input, this.checkDispatch(caller, caller.team, input), null)
+  }
+
+  /** The dispatch's synchronous refusals, before anything is written. */
+  private checkDispatch(caller: TaskCaller, team: TeamIdentity, input: DispatchInput): { task: TeamTask; instruction: string; requestKey: string } {
     const task = this.tasks.get(input.taskId)
     if (!task || task.teamId !== team.teamId) throw new Error(`Task not found in this team: ${input.taskId}`)
+    // A decision origin dispatches only the fix and correction tasks Kawai created (D7).
+    if (caller.kind === 'system' && caller.origin.kind !== 'execution' && (task.planId || task.creator.kind !== 'system')) {
+      throw new Error('Kawai dispatches for a decision only its own fix and correction tasks.')
+    }
     // Only Kawai dispatches a running change's task (plan-execution D7): the
     // human and agents are refused naming the execution, with the way out.
     const owner = (this.options.ownership ?? NULL_OWNERSHIP).ownerOfTask(input.taskId)
@@ -134,9 +157,13 @@ export class AssignmentService {
     const requestKey = input.requestKey.trim()
     if (!requestKey) throw new Error('A dispatch needs a request key')
     // Target validation before anything is written: a catalog group, or a
-    // live non-archived session of this team.
+    // live non-archived session of this team (sessionTarget).
     if (input.target.kind === 'group') this.groupOf(team, input.target.id)
-    const recipient = await this.sessionTarget(team, input.target)
+    return { task, instruction, requestKey }
+  }
+
+  private commitDispatch(caller: TaskCaller, team: TeamIdentity, input: DispatchInput,
+    { task, instruction, requestKey }: { task: TeamTask; instruction: string; requestKey: string }, recipient: ChatSessionRecord | null): DispatchOutcome {
     const role = input.target.kind === 'group' ? input.target.id : recipient?.groupId ?? null
 
     // The replay path resolves against committed rows before anything is
@@ -222,6 +249,7 @@ export class AssignmentService {
    * the task's worktree. Writes nothing and reserves nothing.
    */
   async preview(caller: TaskCaller, input: { taskId?: string; worktree?: string; target: AssignmentTarget }): Promise<TaskDispatchPreview> {
+    refuseSystem(caller, 'read')
     const team = await this.teamOf(caller)
     let taskWorktree: string | null = null
     if (input.taskId) {
@@ -302,6 +330,7 @@ export class AssignmentService {
    * worktree list itself stays team-wide. `archive` is excluded.
    */
   async targets(caller: TaskCaller, worktree?: string): Promise<TaskTargetOptions> {
+    refuseSystem(caller, 'read')
     const team = await this.teamOf(caller)
     const worktrees = await this.options.worktrees.entries(team.teamId)
     let chosen: string | null = null
