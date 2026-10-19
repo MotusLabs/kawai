@@ -8,7 +8,7 @@ See proposal.md (Why) for the gaps. The current state that shapes the approach:
 - **Launch.** `resolveClaudeProfile` (`ClaudeProfiles.ts`) starts from `effectiveChatEnv(globalEnv)`, which is `process.env` plus Settings or `AGENTBOARD_CHAT_ENV`, credentials included. It then blanks and re-applies the controlled variables and passes the controlled set as flag-layer settings. A profile with no overrides returns no `env`, so the SDK child inherits `process.env` whole. Agents' Bash tools inherit whatever the CLI receives.
 - **Auth gate.** `hasClaudeAuth` accepts an API key, an auth token, an OAuth token, or the host `.credentials.json`.
 - **Usage.** `ChatSessionManager.claimProfileUsagePull` probes the Z.AI quota endpoint at the base URL's origin with the session's effective token. On success it suppresses the host-login SDK pull and refreshes every 10 minutes while a session of that provider has a started agent. `providers-and-workers` section 5 moves this keying from profile to provider. Reports are `ChatUsageReport { status, windows[], receivedAt, source }`, and window labels are server text.
-- **Limits.** `limitSignals.ts` counts the classes `rate_limit`, `billing_error` and `overloaded`, plus status 429. Cooldown is the latest final event's reset, or one hour after the event when no reset is known. `providers-and-workers` section 4 adds `provider_id` and `limit_window` to `profile_limit_events`, plus provider-wide cooldown (`cooldownFor`).
+- **Limits.** `limitSignals.ts` counts the classes `rate_limit`, `billing_error` and `overloaded`, plus status 429. Cooldown is the latest final event's reset, or one hour after the event when no reset is known. `providers-and-workers` section 4, landed in #219, adds `provider_id` and `limit_window` to `profile_limit_events`, plus provider-wide cooldown (`cooldownFor`).
 - **Turn cost.** `ChatSessionDriver` maps the result's `total_cost_usd` into `turn_completed.totalCostUsd`, and `ChatMessages.tsx` prints it. The driver already runs with `includePartialMessages: true`, so raw `stream_event` frames reach it. Turn ends are not replayed (`chat_turn_ends` keeps no cost), so the cost line exists only for live turns.
 
 Spike evidence (2026-10-18, Claude Code 2.1.302, one capped key deleted afterwards):
@@ -54,6 +54,13 @@ Once a provider has `authTokenEnv` or `balanceKeyEnv` from a trusted tier, a pro
 
 Without this rule, an agent-written `.kawai/providers.json` could point `openrouter` at a host the agent controls and receive the key in `Authorization`. The same logic is why D1 refuses the name fields in project files: naming `GITHUB_TOKEN` would make a secret travel to the provider's host.
 
+The rule covers every value, the empty string included. An overlay setting `ANTHROPIC_BASE_URL: ""` is rejected like any other value, never read as "not set": a blank base URL would send the key to the CLI's default host.
+
+Two trusted-tier rules close the remaining routes:
+
+- **A credentialed provider must have a base URL.** A trusted file that gives a provider `authTokenEnv` or `balanceKeyEnv` while the merged trusted tiers leave its `ANTHROPIC_BASE_URL` absent or empty is rejected, naming the provider. The key then always has one known destination, which D3 pins.
+- **A credentialed provider cannot name an executable.** A file that sets `executable` on such a provider, or on one of its models, is rejected, naming the provider and the field. This is a refusal, not a pin. An executable-backed profile deliberately gets no flag settings layer (`ClaudeProfiles.ts`), because the wrapper owns provider configuration and inline settings would override its exports. Pinning the base URL there would defeat that delegation, and leaving it unpinned would let a settings file, or the wrapper itself, send the key anywhere. An operator who needs a wrapper keeps today's option: the wrapper sets its own key, and the provider names no `authTokenEnv`.
+
 ### D3. Withholding named credentials from every agent
 
 Every launch, under every profile, builds an explicit `env` and removes from it every variable named by any `authTokenEnv` or `balanceKeyEnv` in the catalog resolved for that project path. A launch that would otherwise inherit `process.env` (the no-override default) passes the filtered copy instead. Executable-backed profiles are filtered too; a wrapper that needs a key sets its own.
@@ -64,6 +71,14 @@ For a credentialed provider's sessions, after filtering, kawai sets:
 - `CLAUDE_CODE_OAUTH_TOKEN` to the empty string.
 
 The two blanks go in both the process env and the flag-layer `settings.env`. That is the same mechanism that already neutralizes user and project settings for controlled variables, so a settings file cannot reintroduce them. The balance key is never set in any agent environment.
+
+**The base URL is pinned on every launch that carries the key.** Any launch that sets `ANTHROPIC_AUTH_TOKEN` from an `authTokenEnv` value also sets `ANTHROPIC_BASE_URL` to the provider's trusted base URL (D2), in both the process env and the flag-layer `settings.env`. This holds whatever path `resolveClaudeProfile` takes. Today only the overrides path builds a settings layer, and the no-override path returns none. A launch that receives a key always builds the layer, even when the profile sets nothing else, and the executable path never receives a key (D2). Without the pin, user or project Claude settings `env.ANTHROPIC_BASE_URL` would outrank the process env and send the bearer token to a host an agent chose. Any agent can write a project's `.claude/settings.json`, including an agent in a GLM session that never sees the key, and the next `openrouter` session would then deliver it.
+
+The transport variables are pinned the same way, because a settings file could otherwise route or intercept the same request: `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`, `NODE_TLS_REJECT_UNAUTHORIZED` and `NODE_EXTRA_CA_CERTS`. Each is pinned to the server environment's own value, or to empty when that is unset, so an operator's proxy keeps working. Task 1.1 confirms which of them Claude Code reads from settings `env`; the set is recorded here before code lands.
+
+The token itself is never put in the flag layer. That layer is a launch argument the SDK builds, and a token there could show up in the host's process list. A settings file that sets `ANTHROPIC_AUTH_TOKEN` can at worst replace the token with another one. It cannot read this one or move it to another host.
+
+A credentialed session's own agent can still read its inference key as `ANTHROPIC_AUTH_TOKEN` through its Bash tool. That is inherent in giving the CLI the key, and it is why the key should be capped. Withholding protects every other session and the balance key; the pin protects the key against redirection by files that other agents write.
 
 The name set comes from the resolved catalog, never from Settings. Removing a provider's entry therefore stops withholding its variables, and that is documented. `chatProviderEnv.ts` gains one helper, `withheldCredentialNames(catalog)`. Both the launch path and the availability probe use it, so a probe never sees more than a launch does.
 
@@ -102,6 +117,10 @@ The name set comes from the resolved catalog, never from Settings. Removing a pr
 
 `openRouterUsage.ts` sits beside `zaiUsage.ts`. It is SDK-free and checks response shapes strictly. It is chosen when the provider's effective base URL host is `openrouter.ai` or one of its subdomains. For such a provider the Z.AI probe is never made, and the host-login SDK pull is suppressed for good, even when the pull is refused.
 
+The current `chat-usage-limits` text says the opposite for any provider with a base URL: it always probes the quota endpoint and falls back to the host login when no quota data comes. This change therefore MODIFIES two requirements, "Usage is refreshed when no report has arrived" and "Provider plan usage is pulled from the provider quota endpoint", with a carve-out for "a provider whose own usage endpoint is selected". The ADDED requirement "OpenRouter providers are pulled from the OpenRouter key endpoint" defines that term and stays the specific source.
+
+"Quota failures distinguish missing routes from authentication refusals" is not modified. Its rules govern responses from the quota endpoint, which is never requested for such a provider. The ADDED requirement states that carve-out explicitly: the quota-failure fallback rules do not apply, and no failure of the provider's own pulls enables the host-login pull. A missing `/api/v1/key` route, a 5xx response or a transport error therefore leaves the bar empty rather than showing the Claude plan.
+
 - **The key pull.** `GET <origin>/api/v1/key` with the session's effective `ANTHROPIC_AUTH_TOKEN`.
   - Each entry of `budgets[]` becomes one meter:
     - key `openrouter:<scope>[:<budget_id|guardrail_id>]`;
@@ -120,7 +139,7 @@ The name set comes from the resolved catalog, never from Settings. Removing a pr
 
 The report also carries, in memory only, the smallest remaining amount over its meters (`remainingUsd`). D8 uses it.
 
-The pulls run once per provider and refresh on the existing 10-minute cadence (per-provider keying comes from `providers-and-workers`). In addition, a completed turn that carried `providerCostUsd` (D9) schedules one extra pull for its provider 30 s later, at most one per provider per minute.
+The pulls run once per provider. While a non-archived session of the provider has a started agent, they refresh on the same 10-minute cadence as quota-serving providers, and they stop when no session qualifies. Per-provider keying comes from `providers-and-workers`. The cadence is stated in the ADDED requirement "OpenRouter usage refreshes while sessions are live and after a costed turn", because "Provider usage stays fresh while sessions are live" covers only quota-serving providers, in master's text and in both active rewrites. That requirement is left unmodified. `process-observability`'s background quota observation for configured team workers is not extended to these pulls; a later change can add an OpenRouter standalone reader. In addition, a completed turn that carried `providerCostUsd` (D9) schedules one extra pull for its provider 30 s later, at most one per provider per minute.
 
 - *Alternative: compute remaining from summed turn costs.* Rejected. It misses spend outside kawai and Claude Code's unstreamed side calls; the pull is the truth.
 - *Alternative: poll `/generation`.* Rejected. It needs the `gen-` id, which Claude Code never shows, and the stream already carries the cost.
@@ -154,7 +173,12 @@ The driver keeps a per-turn accumulator. Each `stream_event` whose event is `mes
 - **[Trade-off] Account balance needs a management key**, which can create and delete keys. → It is optional, read only by the server, never placed in an agent environment, and never logged.
 - **[Trade-off] A key with no cap shows no key meter.** → The docs advise setting a cap or budget on the inference key; with a balance key, the credits meter still shows.
 - **[Risk] OpenRouter's response shapes are partly undocumented** (the `budgets` scopes, `is_management_key`). → A strict shape check; an unknown scope is labelled by its raw value, and anything malformed records no data rather than guessing.
-- **[Risk] Ordering with `providers-and-workers`.** → This change starts only once its sections 4 and 5 are on master. Its deltas only ADD requirements to `chat-usage-limits` and `profile-limit-handling`, so they never rewrite text that change modifies.
+- **[Risk] Ordering with `providers-and-workers` and `process-observability`.** → Implementation starts once `providers-and-workers` section 5 (per-provider usage) is on master; section 4 (provider cooldown, `limit_window`, `cooldownFor`) landed in #219. Adding requirements alone does not avoid overlap: an ADDED rule cannot override an unconditional SHALL elsewhere in the same capability. So the two `chat-usage-limits` requirements this change contradicts are MODIFIED (D6).
+  - Both `providers-and-workers` and `process-observability` also MODIFY those requirements. `process-observability`'s text is written on top of `providers-and-workers`', which archives first.
+  - Each MODIFIED block here therefore restates `process-observability`'s text for the requirement, with the carve-out added. That is the composition of both changes' edits against master, and the two do not contradict each other.
+  - **Archive order:** `providers-and-workers`, then `process-observability`, then `openrouter-provider`. Archiving this change earlier would drop the per-provider and background-observation wording when its block replaces the requirement.
+  - The prose was condensed to stay within the 500-character requirement limit. `process-observability`'s texts for the two requirements are 545 and 501 characters, and the main spec would refuse that length after archive. Every normative clause is kept; only connective wording ("instead of waiting for one", "not the session's provider routing") is dropped, and its scenarios still carry those cases.
+  - If either change rewrites these requirements again before this change archives, re-derive the blocks from the new text.
 
 ## Migration Plan
 
