@@ -22,6 +22,7 @@ Non-goals:
 - Moving a running foreground command to the background from the UI (`backgroundTasks()` / Ctrl+B).
 - Streaming the full output beyond the 8 KiB tail.
 - Any change to `Agent` worker rows.
+- A cross-session or global background-task view; visibility stays within each chat session.
 
 ## Capabilities
 
