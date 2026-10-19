@@ -1201,6 +1201,37 @@ describe('ChatSessionDriver', () => {
     })
   })
 
+  test('own text with options: refused for single-select, appended for multi-select', async () => {
+    const harness = createHarness()
+    harness.driver.send('ask')
+    const fake = harness.fakes[0]!
+    const ask = (question: string, multiSelect: boolean, id: string) => fake.options.canUseTool!(
+      'AskUserQuestion',
+      { questions: [{ question, header: id, multiSelect, options: [{ label: 'x' }, { label: 'y' }] }] },
+      { signal: new AbortController().signal, toolUseID: id, requestId: 'r' }
+    )
+    const latestRequestId = () =>
+      (harness.events.filter((e) => e.type === 'question_request').at(-1) as { requestId: string }).requestId
+
+    const single: Promise<PermissionResult | null> = ask('One?', false, 'q1')
+    await flush()
+    const singleId = latestRequestId()
+    const both = harness.driver.answerQuestion(singleId, { 'One?': { options: ['x'], text: 'mine' } })
+    expect(both).toMatchObject({ ok: false })
+    expect((both as { error: string }).error).toContain('not both')
+    expect(harness.driver.answerQuestion(singleId, { 'One?': { options: ['x'], text: '   ' } })).toEqual({ ok: true })
+    await expect(single).resolves.toMatchObject({ updatedInput: { answers: { 'One?': 'x' } } })
+
+    const multi: Promise<PermissionResult | null> = ask('Many?', true, 'q2')
+    await flush()
+    expect(harness.driver.answerQuestion(latestRequestId(), {
+      'Many?': { options: ['x', 'y'], text: ' and z ' },
+    })).toEqual({ ok: true })
+    await expect(multi).resolves.toMatchObject({
+      updatedInput: { answers: { 'Many?': 'x, y, and z' }, response: 'and z' },
+    })
+  })
+
   test('two turns on one session: a result does not end the stream', async () => {
     const harness = createHarness()
     harness.driver.send('one')
