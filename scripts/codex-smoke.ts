@@ -1,19 +1,16 @@
 // Codex app-server smoke (openspec codex-chat-sessions §1). Run by hand, never
 // in CI: it drives real Codex turns on the host's own login, so the human's
-// quota pays for every prompt. Requires codex-cli >= 0.163.0 installed and
-// signed in (default CODEX_HOME; the spawn itself reads nothing from it and
-// writes nothing into it — the rollout dump below only reads the recorded
-// thread's rollout file under it):
-//
+// quota pays for every prompt. Requires codex-cli >= 0.163.0, installed and
+// signed in under the default CODEX_HOME (the spawn reads nothing from it and
+// writes nothing into it — the rollout dump only reads the recorded thread's
+// rollout file). It spawns its own `codex app-server` over stdio JSON-RPC and
+// walks the §1 checklist — initialize, thread/start with a kawai-team
+// dynamic-tool namespace and the D5 sandbox, a dynamic tool call, a sandboxed
+// git commit, a declined out-of-sandbox write, a requestUserInput round-trip,
+// an interrupt, then thread/resume from a second process; every raw JSON-RPC
+// line lands in --record, scrubbed into fixture shape at write time
+// (src/server/chat/codex/smokeScrub.ts):
 //   bun scripts/codex-smoke.ts --record /tmp/codex-smoke-raw.jsonl
-//
-// It spawns its own `codex app-server` child over stdio JSON-RPC and walks the
-// §1 checklist — initialize, thread/start with a kawai-team dynamic-tool
-// namespace and the D5 sandbox, a dynamic tool call, a sandboxed git commit,
-// a declined out-of-sandbox write, a requestUserInput round-trip, an
-// interrupt, then thread/resume from a second process with thread/read and a
-// rollout dump. Every raw JSON-RPC line both directions lands in --record,
-// scrubbed into fixture shape at write time (src/server/chat/codex/smokeScrub.ts).
 import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -27,14 +24,11 @@ interface RawLine { ts: string; dir: 'out' | 'in'; line: string }
 type Json = Record<string, unknown>
 
 const fail = (reason: string): never => {
-  console.error(`smoke failed: ${reason}`)
-  process.exit(1)
+  console.error(`smoke failed: ${reason}`); process.exit(1)
 }
 
-const timeout = (ms: number, what: string) => {
-  const err = new Error(`timeout after ${ms}ms: ${what}`)
-  return new Promise<never>((_, reject) => setTimeout(() => reject(err), ms))
-}
+const timeout = (ms: number, what: string) =>
+  new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`timeout after ${ms}ms: ${what}`)), ms))
 
 /** One scratch git repo per run; writable root and sandbox workspace both. */
 function makeWorkspace(): { dir: string; gitCommonDir: string } {
