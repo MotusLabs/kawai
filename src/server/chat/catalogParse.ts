@@ -292,6 +292,14 @@ export function parseProviderCatalogValue(
         modelHolders.set(modelKey, id)
       }
     }
+    // openrouter-provider D2: a credentialed provider cannot name an
+    // executable. The wrapper owns provider configuration, so pinning the
+    // base URL there would defeat the delegation — and leaving it unpinned
+    // would let the wrapper, or a settings file, send the key anywhere. The
+    // file is refused whole, naming the provider and the field.
+    if (provider.executable !== undefined && (provider.authTokenEnv !== undefined || provider.balanceKeyEnv !== undefined)) {
+      return { ok: false, error: `${source}: provider "${id}" has credential variables and must not set executable; the wrapper would choose where the key is sent. The file is refused.` }
+    }
     providers.set(id, provider)
   }
   return { ok: true, providers }

@@ -367,21 +367,56 @@ export class CatalogMerger {
 
   /** The implicit `default` (D4): joined to a `default` provider, else synthesized. */
   finish(): void {
-    if (this.holders.has('default')) return
+    if (this.holders.has('default')) {
+      this.enforceTrustedCredentialInvariants()
+      return
+    }
     const provider = this.providers.get('default')
     if (provider) {
       provider.models.set('default', { label: 'Default', env: {} })
       this.setHolder('default', { provider: 'default', operator: false, originFile: '(implicit)', own: true })
-      return
+    } else {
+      this.providers.set('default', {
+        label: 'Default',
+        env: {},
+        models: new Map([['default', { label: 'Default', env: {} }]]),
+        operatorOrigin: false,
+        originFile: '(implicit)',
+      })
+      this.setHolder('default', { provider: 'default', operator: false, originFile: '(implicit)', own: true })
     }
-    this.providers.set('default', {
-      label: 'Default',
-      env: {},
-      models: new Map([['default', { label: 'Default', env: {} }]]),
-      operatorOrigin: false,
-      originFile: '(implicit)',
-    })
-    this.setHolder('default', { provider: 'default', operator: false, originFile: '(implicit)', own: true })
+    this.enforceTrustedCredentialInvariants()
+  }
+
+  /**
+   * D2's trusted-tier invariants, on the merged tiers (openrouter-provider):
+   * a credentialed provider takes a non-empty base URL from a trusted tier —
+   * the key always has one known destination — and no credentialed model
+   * carries an executable, so no wrapper ever chooses where the key goes.
+   * Checked here because both facts can be assembled across the two trusted
+   * files (an executable arriving through a profiles.json entry, a base URL
+   * supplied by the sibling file). A provider breaking either is dropped
+   * whole, naming it: fail-closed, no session launches through an unknown
+   * route or a wrapper with the key, and every other provider stays usable.
+   */
+  private enforceTrustedCredentialInvariants(): void {
+    for (const [id, provider] of [...this.providers]) {
+      const credentialedModels = [...provider.models.values()]
+        .map(model => flattenModel(provider, model))
+        .filter(flat => flat.authTokenEnv !== undefined || flat.balanceKeyEnv !== undefined)
+      if (credentialedModels.length === 0) continue
+      // The flattened env is the truth: a re-homed model can carry the base
+      // URL in its inherited settings when the provider's own env lacks it.
+      if (credentialedModels.some(flat => !flat.env.ANTHROPIC_BASE_URL)) {
+        this.providers.delete(id)
+        this.errors.push(`${provider.originFile}: provider "${id}" names credential variables, but no trusted tier gives it a non-empty ANTHROPIC_BASE_URL; the provider is dropped so its key cannot leave for an unknown destination.`)
+        continue
+      }
+      if (provider.executable !== undefined || credentialedModels.some(flat => flat.executable !== undefined)) {
+        this.providers.delete(id)
+        this.errors.push(`${provider.originFile}: provider "${id}" has credential variables and must not set executable; the wrapper would choose where the key is sent. The provider is dropped.`)
+      }
+    }
   }
 }
 

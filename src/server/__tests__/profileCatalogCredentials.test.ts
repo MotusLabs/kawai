@@ -186,6 +186,88 @@ describe("a credentialed provider's route comes only from trusted catalogs", () 
   })
 })
 
+describe('a credentialed provider names no executable and takes a trusted base URL', () => {
+  test('a trusted file giving a credentialed provider an executable is refused whole, naming both', () => {
+    writeProviders(projectDir, { mine: { models: { 'mine-a': {} } } })
+    const file = writeProviders(homeDir, {
+      or2: {
+        authTokenEnv: 'OR2_KEY',
+        executable: '/usr/local/bin/claude-wrap',
+        env: { ANTHROPIC_BASE_URL: OR_URL },
+        models: { 'or2-sonnet': {} },
+      },
+      later: { env: { ANTHROPIC_BASE_URL: 'https://later.example' }, models: { 'later-a': {} } },
+    })
+    const { profiles, errors } = resolveProfileCatalog(ctx())
+    expect(errors).toHaveLength(1)
+    expect(errors[0]).toContain(file)
+    expect(errors[0]).toContain('"or2"')
+    expect(errors[0]).toContain('executable')
+    // The file is refused whole, and no session launches through the wrapper.
+    expect(profiles.has('or2-sonnet')).toBe(false)
+    expect(profiles.has('later-a')).toBe(false)
+    // Providers from other files remain usable.
+    expect(profiles.get('mine-a')?.providerId).toBe('mine')
+  })
+
+  test('a profiles.json entry adding an executable to a credentialed provider is dropped, naming the provider', () => {
+    writeCredentialedUserProvider()
+    writeProfiles(homeDir, { or2: { executable: '/usr/local/bin/claude-wrap' } })
+    const { profiles, errors } = resolveProfileCatalog(ctx())
+    expect(errors).toHaveLength(1)
+    expect(errors[0]).toContain('"or2"')
+    expect(errors[0]).toContain('executable')
+    expect(profiles.has('or2-sonnet')).toBe(false)
+  })
+
+  test('a trusted profiles.json entry re-homing a credentialed model under an executable is dropped too', () => {
+    // A shipped-style credentialed provider: only a still-shipped model key
+    // is re-homed by a profiles.json entry rather than ignored.
+    const shippedProviders = writeProviders(path.join(tempRoot, 'shipped'), {
+      or2: { authTokenEnv: 'OR2_KEY', env: { ANTHROPIC_BASE_URL: OR_URL }, models: { 'or2-haiku': { model: 'haiku' } } },
+    })
+    const shippedProfiles = writeProfiles(path.join(tempRoot, 'shipped'), {
+      'or2-haiku': { executable: '/usr/local/bin/claude-wrap' },
+    })
+    const { profiles, errors } = resolveProfileCatalog({
+      homeDir: path.join(tempRoot, 'no-home'),
+      imageDefaultProvidersPath: shippedProviders,
+      imageDefaultPath: shippedProfiles,
+      projectPath: projectDir,
+    })
+    expect(errors).toHaveLength(1)
+    expect(errors[0]).toContain(shippedProfiles)
+    expect(errors[0]).toContain('"or2-haiku"')
+    expect(errors[0]).toContain('executable')
+    // The re-homed model inherited the credential name; the provider carrying
+    // both is dropped whole.
+    expect(profiles.has('or2-haiku')).toBe(false)
+  })
+
+  test.each([
+    ['absent', {}],
+    ['empty', { ANTHROPIC_BASE_URL: '' }],
+  ])('a credentialed provider whose trusted base URL is %s is dropped, naming it', (_name, env) => {
+    writeProviders(projectDir, { mine: { models: { 'mine-a': {} } } })
+    writeProviders(homeDir, { or2: { authTokenEnv: 'OR2_KEY', env, models: { 'or2-sonnet': {} } } })
+    const { profiles, errors } = resolveProfileCatalog(ctx())
+    expect(errors).toHaveLength(1)
+    expect(errors[0]).toContain('"or2"')
+    expect(errors[0]).toContain('ANTHROPIC_BASE_URL')
+    expect(profiles.has('or2-sonnet')).toBe(false)
+    // Providers from other files remain usable.
+    expect(profiles.get('mine-a')?.providerId).toBe('mine')
+  })
+
+  test('a base URL supplied by the sibling trusted file satisfies the requirement', () => {
+    writeProviders(homeDir, { or2: { authTokenEnv: 'OR2_KEY', models: { 'or2-sonnet': {} } } })
+    writeProfiles(homeDir, { or2: { env: { ANTHROPIC_BASE_URL: OR_URL } } })
+    const { profiles, errors } = resolveProfileCatalog(ctx())
+    expect(errors).toEqual([])
+    expect(profiles.get('or2-sonnet')).toMatchObject({ authTokenEnv: 'OR2_KEY', env: { ANTHROPIC_BASE_URL: OR_URL } })
+  })
+})
+
 describe('catalogs may cap the output reservation', () => {
   test('CLAUDE_CODE_MAX_OUTPUT_TOKENS is profile-controlled and accepted on a provider', () => {
     expect(PROFILE_CONTROLLED_ENV).toContain('CLAUDE_CODE_MAX_OUTPUT_TOKENS')
