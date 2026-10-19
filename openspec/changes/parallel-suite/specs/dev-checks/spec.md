@@ -14,7 +14,7 @@ The unit suite SHALL run its test files across a fixed number of parallel worker
 - **THEN** the real-tmux integration files run one at a time after the parallel step, and are skipped where real tmux is excluded today
 
 ### Requirement: Parallel workers stay within one memory slot
-The default worker count SHALL be fixed and documented, chosen so that a full parallel run's peak memory stays within the memory one serial run used before this change. The count SHALL be overridable through an environment variable.
+The default worker count SHALL be fixed and documented, chosen so that a full parallel run's peak memory stays within the memory one serial run used before this change. The count SHALL be overridable through an environment variable. If no measured count fits the budget, the existing runner SHALL remain the default until one does. CI MUST NOT increase the measured count merely to match its CPU count.
 
 #### Scenario: Default run fits the slot
 - **WHEN** the full suite runs with the default worker count in the shared workspace
@@ -25,11 +25,15 @@ The default worker count SHALL be fixed and documented, chosen so that a full pa
 - **THEN** the suite runs with 2 workers
 
 ### Requirement: Parallel files never share runner-provided paths
-Each worker SHALL receive its own temporary database, log, Claude config, and Codex directories from the runner, so no two concurrently running files share a runner-provided path.
+Each test file SHALL receive fresh temporary database, log, Claude config, and Codex directories from the runner, including sequential files on the same worker. The parent runner SHALL clean up its run root after all child processes exit, on success or failure.
 
 #### Scenario: Concurrent files and the default database path
 - **WHEN** two files on different workers both use the runner-provided database path
 - **THEN** each opens a different file
+
+#### Scenario: Worker reused for another file
+- **WHEN** a worker finishes one file and loads another
+- **THEN** the second file receives different runner-provided paths, and both file roots are cleaned up after the run
 
 ### Requirement: Slowest files start first
 After a full run, the runner SHALL record each file's duration, and the next run SHALL schedule files longest-first from that record. A missing or unreadable record SHALL fall back to an unordered run, never a failure.

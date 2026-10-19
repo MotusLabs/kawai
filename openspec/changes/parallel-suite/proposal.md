@@ -8,7 +8,7 @@ The unit suite's wall time is one serial process. In a timed run on 2026-10-19, 
 
 - The test runner runs the unit suite as one parallel, per-file-isolated `bun test` invocation with a fixed worker count chosen from measured memory, so the run fits the same memory slot it uses today.
 - The hand-kept isolation lists (`ISOLATED_FILES`, `ISOLATED_CLIENT_FILES`, `isolated/`) fold into the parallel run once each file is shown to pass under per-file isolation. Real-tmux integration files keep their own serial step.
-- Each worker gets its own temporary data, log, and config directories, so parallel files never share runner-provided paths.
+- Each test file gets fresh temporary data, log, and config directories, including when a worker is reused, so parallel files never share runner-provided paths.
 - Recorded per-file timings from the last full run make the slowest files start first.
 - `chatSessionManager.test.ts` is split by describe block into files under the 500-line guideline, which removes the single-file floor. Its 7.5 s title-tail test moves to fake timers.
 - The slowest store and service files get profiled, and their dominant per-test setup cost is fixed where it is setup, not behavior under test.
