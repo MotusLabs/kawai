@@ -116,7 +116,7 @@ type TransportCase = {
 /** A minimal recording HTTP proxy: CONNECT tunnels and absolute-form requests. */
 function startRecordProxy(): { url: string; seen: string[]; stop: () => void } {
   const seen: string[] = []
-  const pending = new Map<object, string>()
+  const pending = new Map<object, Buffer>()
   const tunnels = new Map<object, { upstream: { write: (d: Uint8Array) => unknown; end: () => void } }>()
   const server = Bun.listen<{ upstream?: unknown }>({
     hostname: '127.0.0.1',
@@ -128,13 +128,16 @@ function startRecordProxy(): { url: string; seen: string[]; stop: () => void } {
           tunnel.upstream.write(chunk)
           return
         }
-        const text = (pending.get(socket) ?? '') + String(chunk)
+        // Buffer arithmetic throughout: content-length counts bytes, and a
+        // utf8-decoded string's length counts characters, so any multi-byte
+        // body byte would wait forever.
+        const text = Buffer.concat([pending.get(socket) ?? Buffer.alloc(0), chunk])
         const headEnd = text.indexOf('\r\n\r\n')
         if (headEnd === -1) {
           pending.set(socket, text)
           return
         }
-        const head = text.slice(0, headEnd)
+        const head = text.slice(0, headEnd).toString()
         const requestLine = head.split('\r\n')[0] ?? ''
         if (requestLine.startsWith('CONNECT')) {
           const target = requestLine.split(' ')[1] ?? ''
@@ -155,9 +158,10 @@ function startRecordProxy(): { url: string; seen: string[]; stop: () => void } {
           }).catch(() => socket.end())
           return
         }
-        // Absolute-form request: forward it and relay the (streamed) response.
-        seen.push(requestLine)
-        pending.delete(socket)
+        // Absolute-form request: wait until the declared body is fully
+        // received, then forward it and relay the whole response, so the
+        // client gets an exact content-length (fetch already decoded any
+        // transfer encoding, and a bare EOF framing reads as a broken body).
         const lines = head.split('\r\n')
         const headers: Record<string, string> = {}
         let contentLength = 0
@@ -169,26 +173,31 @@ function startRecordProxy(): { url: string; seen: string[]; stop: () => void } {
           headers[name] = value
           if (name === 'content-length') contentLength = Number(value) || 0
         }
+        const bodyEnd = headEnd + 4 + contentLength
+        if (text.length < bodyEnd) {
+          pending.set(socket, text)
+          return
+        }
+        seen.push(requestLine)
+        pending.delete(socket)
         const url = requestLine.split(' ')[1] ?? ''
         const method = requestLine.split(' ')[0] ?? 'GET'
-        const body = text.slice(headEnd + 4, headEnd + 4 + contentLength)
+        const body = text.slice(headEnd + 4, bodyEnd)
         void (async () => {
           try {
             const response = await fetch(url, {
               method, headers,
               ...(body ? { body } : {}),
             })
+            const responseBody = new Uint8Array(await response.arrayBuffer())
             const statusText = response.status === 200 ? 'OK' : 'Error'
             const responseHeaders = [...response.headers.entries()]
-              .filter(([name]) => !['transfer-encoding', 'content-encoding'].includes(name))
+              .filter(([name]) => !['transfer-encoding', 'content-encoding', 'content-length'].includes(name))
               .map(([name, value]) => `${name}: ${value}`)
-            socket.write(`HTTP/1.1 ${response.status} ${statusText}\r\n${responseHeaders.join('\r\n')}\r\n\r\n`)
-            if (response.body) {
-              for await (const part of response.body) socket.write(part)
-            }
+            socket.write(`HTTP/1.1 ${response.status} ${statusText}\r\ncontent-length: ${responseBody.length}\r\n${responseHeaders.join('\r\n')}\r\n\r\n`)
+            socket.write(responseBody)
           } catch {
             socket.write('HTTP/1.1 502 Bad Gateway\r\ncontent-length: 0\r\n\r\n')
-          } finally {
             socket.end()
           }
         })()
@@ -251,9 +260,12 @@ async function runTransportProbe(): Promise<void> {
   const httpUrl = `http://127.0.0.1:${plainServer.port}/api`
 
   const cases: TransportCase[] = [
-    { name: 'HTTPS_PROXY', scheme: 'https', settingsEnv: { HTTPS_PROXY: 'PROXY' }, deleteFromEnv: ['HTTPS_PROXY'], expectProxy: 'connect', expectSuccess: true },
-    { name: 'NO_PROXY', scheme: 'https', settingsEnv: { HTTPS_PROXY: 'PROXY', NO_PROXY: '127.0.0.1,localhost' }, deleteFromEnv: ['HTTPS_PROXY', 'NO_PROXY'], expectProxy: 'none', expectSuccess: true },
     { name: 'HTTP_PROXY', scheme: 'http', settingsEnv: { HTTP_PROXY: 'PROXY' }, deleteFromEnv: ['HTTP_PROXY'], expectProxy: 'absolute', expectSuccess: true },
+    // The tunneled cases also pin NODE_EXTRA_CA_CERTS: the tunnel must
+    // complete TLS against the self-signed gateway for the route to be
+    // observable; certificate trust is not the variable under test there.
+    { name: 'HTTPS_PROXY', scheme: 'https', settingsEnv: { HTTPS_PROXY: 'PROXY', NODE_EXTRA_CA_CERTS: tlsAvailable ? certPath : '' }, deleteFromEnv: ['HTTPS_PROXY', 'NODE_EXTRA_CA_CERTS'], expectProxy: 'connect', expectSuccess: true },
+    { name: 'NO_PROXY', scheme: 'https', settingsEnv: { HTTPS_PROXY: 'PROXY', NO_PROXY: '127.0.0.1,localhost', NODE_EXTRA_CA_CERTS: tlsAvailable ? certPath : '' }, deleteFromEnv: ['HTTPS_PROXY', 'NO_PROXY', 'NODE_EXTRA_CA_CERTS'], expectProxy: 'none', expectSuccess: true },
     ...(tlsAvailable ? [
       { name: 'NODE_TLS_REJECT_UNAUTHORIZED', scheme: 'https', settingsEnv: { NODE_TLS_REJECT_UNAUTHORIZED: '0' }, deleteFromEnv: ['NODE_TLS_REJECT_UNAUTHORIZED'], expectProxy: 'none', expectSuccess: true },
       { name: 'NODE_EXTRA_CA_CERTS', scheme: 'https', settingsEnv: { NODE_EXTRA_CA_CERTS: certPath }, deleteFromEnv: ['NODE_EXTRA_CA_CERTS'], expectProxy: 'none', expectSuccess: true },
@@ -287,6 +299,7 @@ async function runTransportProbe(): Promise<void> {
         const controller = new AbortController()
         const timer = setTimeout(() => controller.abort(), 25000)
         const hitsBefore = gatewayHits.count
+        let succeeded = false
         try {
           const { executable: _profileExecutable, ...options } = launch
           const stream = query({
@@ -300,7 +313,7 @@ async function runTransportProbe(): Promise<void> {
             },
           })
           for await (const event of stream) {
-            if (event.type === 'result') break
+            if (event.type === 'result') { succeeded = (event as { subtype?: string }).subtype === 'success'; break }
           }
           stream.close()
         } finally {
@@ -313,10 +326,10 @@ async function runTransportProbe(): Promise<void> {
           : probe.expectProxy === 'connect'
             ? proxy.seen.some(entry => entry.startsWith('CONNECT'))
             : proxy.seen.some(entry => !entry.startsWith('CONNECT'))
-        const ok = routed && viaProxy
+        const ok = routed && viaProxy && succeeded
         if (ok) applied.push(probe.name)
         else skipped.push(probe.name)
-        console.log(`Transport ${probe.name}: ${ok ? 'applied from settings env' : `NOT applied (routed=${routed}, viaProxy=${viaProxy})`}`)
+        console.log(`Transport ${probe.name}: ${ok ? 'applied from settings env' : `NOT applied (routed=${routed}, viaProxy=${viaProxy}, success=${succeeded})`}`)
       } catch (error) {
         skipped.push(probe.name)
         console.log(`Transport ${probe.name}: NOT applied (run failed: ${error instanceof Error ? error.message.slice(0, 120) : error})`)
@@ -337,7 +350,9 @@ async function runTransportProbe(): Promise<void> {
         fs.writeFileSync(path.join(home, '.kawai', 'providers.json'), JSON.stringify({
           mockor: {
             label: 'Mock OR', authTokenEnv: 'MOCK_OR_KEY',
-            env: { ANTHROPIC_BASE_URL: httpsUrl || httpUrl },
+            // The plain gateway: a direct (unproxied) request must complete,
+            // so the route is observable without certificate-trust variables.
+            env: { ANTHROPIC_BASE_URL: httpUrl },
             models: { 'mockor-sonnet': { model: 'sonnet' } },
           },
         }))
@@ -353,6 +368,7 @@ async function runTransportProbe(): Promise<void> {
         const controller = new AbortController()
         const timer = setTimeout(() => controller.abort(), 25000)
         const hitsBefore = gatewayHits.count
+        let succeeded = false
         try {
           const { executable: _profileExecutable, ...options } = launch
           const stream = query({
@@ -366,7 +382,7 @@ async function runTransportProbe(): Promise<void> {
             },
           })
           for await (const event of stream) {
-            if (event.type === 'result') break
+            if (event.type === 'result') { succeeded = (event as { subtype?: string }).subtype === 'success'; break }
           }
           stream.close()
         } finally {
@@ -374,8 +390,8 @@ async function runTransportProbe(): Promise<void> {
           controller.abort()
         }
         const routed = gatewayHits.count > hitsBefore
-        if (!routed || proxy.seen.length > 0) {
-          throw new Error(`Project settings routed a credentialed launch through the proxy (routed=${routed}, proxy saw ${proxy.seen.length})`)
+        if (!routed || proxy.seen.length > 0 || !succeeded) {
+          throw new Error(`Project settings did not deliver the launch to the gateway (routed=${routed}, proxy saw ${proxy.seen.length}, success=${succeeded})`)
         }
         console.log('Pin defense: a project proxy setting did not route the credentialed launch')
       } finally {
