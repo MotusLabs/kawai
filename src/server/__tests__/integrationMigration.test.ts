@@ -4,8 +4,9 @@
 // and process-observations' tables and rows. Each gains the four tables and the one-running-promotion
 // index exactly once and keeps every earlier row.
 //
-// The registry under test is the build's own MIGRATIONS; the version-12
-// database is opened with every entry up to 12 (providers-and-workers').
+// The registry under test is the build's own MIGRATIONS through 14 (later
+// migrations add their own tables); the version-12 database is opened with
+// every entry up to 12 (providers-and-workers').
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -17,7 +18,7 @@ import { integrationMigration } from '../plans/landing/integration/integrationSc
 
 const INTEGRATION_TABLES = ['plan_integration_branches', 'plan_integration_candidates', 'plan_promotion_effects', 'plan_promotions']
 const UP_TO_12: readonly Migration[] = MIGRATIONS.filter(migration => migration.version <= 12)
-const REGISTRY: readonly Migration[] = MIGRATIONS
+const REGISTRY: readonly Migration[] = MIGRATIONS.filter(migration => migration.version <= 14)
 
 let dir: string
 let dbPath: string
