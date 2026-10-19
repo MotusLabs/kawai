@@ -29,6 +29,9 @@ const ready = (): StartCheckContext => ({
   probeFindings: [],
   landingMode: 'direct',
   supportedLandingModes: new Set(['direct']),
+  runningPromotion: null,
+  offBaseLandings: [],
+  baseBranch: 'master',
 })
 
 const check = (name: string, overrides: Partial<StartCheckContext>): string | null => {
@@ -119,17 +122,35 @@ describe('START_PRECONDITIONS', () => {
       roles: [{ change: 'api', group: null, groupKnown: false, worktreeScoped: true, sharedProfiles: [] }],
       probeFindings: [{ code: 'gh-auth', message: 'gh is not authenticated.' }],
       landingMode: 'integration-branch',
+      runningPromotion: { id: 'promo-1', number: 1, branch: 'wave/int', step: 'ci' },
+      offBaseLandings: [{ change: 'api', branch: 'wave/int' }],
     })
     expect(failures).toEqual([
       'plan-open', 'revision-current', 'validation-current', 'one-execution', 'changes-unclaimed',
       'changes-on-base', 'roles-routable', 'landing-ready', 'landing-mode-supported',
+      'promotion-idle', 'landings-on-base',
     ])
+  })
+
+  test('promotion-idle: a running promotion is named with its number, branch, and step', () => {
+    const message = check('promotion-idle', { runningPromotion: { id: 'promo-7', number: 2, branch: 'wave/int', step: 'ci' } })
+    expect(message).toContain('Promotion 2 (promo-7) of wave/int is running at step ci')
+    expect(check('promotion-idle', { runningPromotion: null })).toBeNull()
+  })
+
+  test('landings-on-base: each off-base landing is named with the branch it landed on; none passes', () => {
+    const message = check('landings-on-base', { baseBranch: 'master', offBaseLandings: [{ change: 'api', branch: 'wave/int' }, { change: 'ui', branch: 'wave/int' }] })
+    expect(message).toContain("The base master's head on origin lacks landed work: api (landed on wave/int), ui (landed on wave/int)")
+    expect(message).toContain('Promote that branch first')
+    expect(check('landings-on-base', { offBaseLandings: [] })).toBeNull()
   })
 
   test('the shipped list is append-only in order (X5): the names D4 pins', () => {
     expect(START_PRECONDITIONS.map(entry => entry.name)).toEqual([
       'plan-open', 'revision-current', 'validation-current', 'start-conditions-resolved', 'strategy-impact',
       'one-execution', 'changes-unclaimed', 'changes-on-base', 'roles-routable', 'landing-ready', 'landing-mode-supported',
+      // integration-candidates D8, appended.
+      'promotion-idle', 'landings-on-base',
     ])
   })
 })

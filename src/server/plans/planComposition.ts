@@ -32,7 +32,10 @@ import { provisionAdapter } from './execution/executionProvision'
 import { roundAdapters } from './execution/executionRounds'
 import { fixtureLandingAdapters, fixtureProbe, fixtureRoundAdapters, FIXTURE_FLOOR } from './execution/fixtureAdapters'
 import { chatFixtureEnabled } from '../chat/developmentFixture'
-import { REGISTERED_LANDING_MODES } from './landing/landingMechanisms'
+import type { LandingMechanisms } from './landing/landingMechanisms'
+import { directMechanism } from './landing/directMechanism'
+import { IntegrationStore } from './landing/integration/integrationStore'
+import { integrationMechanism } from './landing/integration/integrationMechanism'
 import type { MemberRelease } from '../team/memberRelease'
 import type { TaskService } from '../team/TaskService'
 import type { TaskResultService } from '../team/TaskResultService'
@@ -205,7 +208,18 @@ export function composePlanServices(options: PlanServicesOptions): {
   // once recovery has ended and the running teams are woken.
   let runtime: ExecutionRuntime | null = null
   const team = options.executionTeam
+  // The registered landing mechanisms (integration-candidates D1): built once here and
+  // passed to the Start service, the executor, and the provision adapter (I1).
+  // Under the development fixture only direct registers: the integration
+  // mechanism's ref writes have no fixture adapter yet (PR B's walkthrough
+  // adds one), so Start refuses an integration plan as an unsupported mode
+  // rather than calling the real gh.
   const fixture = chatFixtureEnabled
+  const integrationStore = new IntegrationStore(options.db)
+  const mechanisms: LandingMechanisms = new Map([
+    [directMechanism.mode, directMechanism],
+    ...(fixture ? [] : [['integration-branch', integrationMechanism(integrationStore)] as const]),
+  ])
   executions = new ExecutionService({
     store: executionStore,
     plansStore: options.plans,
@@ -217,7 +231,15 @@ export function composePlanServices(options: PlanServicesOptions): {
     impact: { gate: (planId, revision) => options.impact.gate(planId, revision) },
     settings: executionSettings(options.caps),
     getSession: options.getSession,
-    landingModes: () => new Set(REGISTERED_LANDING_MODES),
+    landingModes: () => new Set(mechanisms.keys()),
+    mechanisms,
+    // D8's promotion-idle pre-read: the plan's running promotion, named with its step.
+    promotions: {
+      runningPromotion: planId => {
+        const running = integrationStore.runningPromotion(planId)
+        return running === null ? null : { id: running.id, number: running.number, branch: running.branch, step: running.step }
+      },
+    },
     identityOf: teamId => identityOrBare(team, teamId),
     ...(team !== undefined ? {
       tasks: team.tasks,
@@ -230,6 +252,7 @@ export function composePlanServices(options: PlanServicesOptions): {
   if (team !== undefined) {
     const roundAdaptersUsed = fixture ? fixtureRoundAdapters() : roundAdapters
     const executor = new ExecutionExecutor({
+      mechanisms,
       store: executionStore,
       plans: options.plans,
       tasks: team.tasks,
@@ -255,7 +278,7 @@ export function composePlanServices(options: PlanServicesOptions): {
           .filter(condition => condition.gate === 'acceptance' && !condition.resolved)
           .map(condition => condition.text)
       },
-      adapters: { provision: provisionAdapter(executionStore) },
+      adapters: { provision: provisionAdapter(executionStore, undefined, mechanisms) },
       groupScoped: (teamId, groupId) => groupScopedOf(team, teamId, groupId),
       roundAdapters: roundAdaptersUsed,
       ...(fixture ? { landingAdapters: fixtureLandingAdapters(), tickMs: 1_000 } : {}),

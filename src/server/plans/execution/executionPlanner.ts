@@ -8,7 +8,7 @@
 // change without a standing provision effect gets one (D6); an
 // `implementing` change without a task gets its task and first dispatch
 // (D7/D8), performed by the executor, not an effect row.
-import type { ChangeState } from '../../../shared/planExecution'
+import type { ChangeState, EffectKind } from '../../../shared/planExecution'
 import type { ChangePatch } from './executionStore'
 import type { ExecutionSnapshot } from './executionSnapshot'
 
@@ -21,8 +21,9 @@ export interface PlannedTransition {
 
 export interface PlannedEffect {
   executionId: string
-  change: string
-  kind: 'provision'
+  /** null for an execution-level effect issued again after a Retry (X3). */
+  change: string | null
+  kind: EffectKind
   effectKey: string
   command: Record<string, unknown>
 }
@@ -72,7 +73,7 @@ export function planSteps(snapshot: ExecutionSnapshot, _now: string): PlanSteps 
       // landed and accepted if it merged, cancelled with its task otherwise.
       for (const change of execution.changes) {
         const effect = change.landingEffect
-        if (change.state === 'landing' && effect !== null && effect.kind === 'merge' && (effect.state === 'done' || effect.state === 'failed')) {
+        if (change.state === 'landing' && effect !== null && (effect.kind === 'merge' || effect.kind === 'fast-forward') && (effect.state === 'done' || effect.state === 'failed')) {
           steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'landing-outcome', roundId: null, resultId: null, effectId: effect.id })
         }
       }
@@ -80,11 +81,25 @@ export function planSteps(snapshot: ExecutionSnapshot, _now: string): PlanSteps 
     }
     const states = new Map(execution.changes.map(change => [change.change, change.state]))
     let inProgress = execution.changes.filter(change => IN_PROGRESS.has(change.state)).length
+    // An execution-level effect (integration's create-integration, D4) holds
+    // every waiting change until it is done; a failed one stopped them, and
+    // once Retry returns one to waiting the effect is issued again under the
+    // next count, with the same command.
+    const setupEffects = execution.setupEffects ?? []
+    const setup = setupEffects.at(-1)
+    const setupStanding = setup !== undefined && (setup.state === 'pending' || setup.state === 'running' || setup.state === 'unknown')
+    if (setup !== undefined && setup.state === 'failed' && execution.changes.some(change => change.state === 'waiting')) {
+      const count = setupEffects.filter(effect => effect.kind === setup.kind).length + 1
+      const effectKey = `${execution.row.id}::${setup.kind}:${count}`
+      if (!standing.has(effectKey)) steps.effects.push({ executionId: execution.row.id, change: null, kind: setup.kind, effectKey, command: setup.command })
+    }
+    const setupHolds = setupStanding || setup?.state === 'failed'
     for (const change of execution.changes) {
       if (change.state === 'landed') {
         // D13 step 6: base-branch CI on the merge commit is polled until it
-        // finishes and lands as the landing fact's evidence.
-        if (change.landing !== null && change.landing.postCi === null) {
+        // finishes and lands as the landing fact's evidence. An integration
+        // landing is the verified commit itself: no further CI (D5).
+        if (change.landing !== null && change.landing.postCi === null && change.landing.mechanism === 'direct') {
           steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'post-ci', roundId: null, resultId: null })
         }
         continue
@@ -93,7 +108,7 @@ export function planSteps(snapshot: ExecutionSnapshot, _now: string): PlanSteps 
       if (change.state === 'waiting') {
         // A dependency that has not landed holds the change — stopped ones
         // included; independent changes elsewhere in the plan continue.
-        const held = change.dependsOn.some(dependency => states.get(dependency) !== 'landed')
+        const held = setupHolds || change.dependsOn.some(dependency => states.get(dependency) !== 'landed')
         if (held || inProgress >= execution.row.maxParallel) continue
         steps.transitions.push({
           executionId: change.executionId, change: change.change,
@@ -143,7 +158,7 @@ export function planSteps(snapshot: ExecutionSnapshot, _now: string): PlanSteps 
       const settling = change.state === 'landing' && (change.step === 'merging' || change.step === 'updating')
       if (settling) {
         if (landingEffect !== null && landingEffect.state === 'done'
-          && ((change.step === 'merging' && landingEffect.kind === 'merge') || (change.step === 'updating' && landingEffect.kind === 'update-branch'))) {
+          && ((change.step === 'merging' && (landingEffect.kind === 'merge' || landingEffect.kind === 'fast-forward')) || (change.step === 'updating' && landingEffect.kind === 'update-branch'))) {
           steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'landing-outcome', roundId: null, resultId: null, effectId: landingEffect.id })
         }
         continue

@@ -122,6 +122,7 @@ esac
     settings: { planExecution: async () => ({ floorChecks: FLOOR, maxParallelChanges: 3, mergeMethod: 'merge' }) },
     getSession: () => null,
     landingModes: () => new Set(['direct']),
+    promotions: { runningPromotion: () => null },
     identityOf: () => team,
     wake: teamId => wakes.push(teamId),
     ghOptions: { env },
@@ -193,7 +194,8 @@ describe('ExecutionService.start', () => {
     const target = approvedPlan(['docs', 'web'])
     executions.insertLanding({
       planId: target.planId, change: 'web', executionId: 'exec-earlier', teamId: team.teamId, mechanism: 'direct',
-      prNumber: 5, prUrl: 'u', headSha: 'h', baseSha: 'b', mergeSha: 'm', treeVerified: true,
+      // integration-candidates D8: a landing fact names a commit the base contains (landings-on-base).
+      prNumber: 5, prUrl: 'u', headSha: 'h', baseSha: 'b', mergeSha: git(['rev-parse', 'origin/master'], main).trim(), treeVerified: true,
     })
     const started = await start(target.planId, target.hash, 'cmd-landed')
     expect(started.ok).toBe(true)
@@ -207,6 +209,25 @@ describe('ExecutionService.start', () => {
     const mail = db.prepare('SELECT COUNT(*) AS n FROM team_messages').get() as { n: number }
     expect(tasks.n).toBe(0)
     expect(mail.n).toBe(0)
+  })
+})
+
+describe('ExecutionService.start: landings-on-base (integration-candidates D8)', () => {
+  test("a landing fact the base lacks refuses Start, naming the change and the branch it landed on; nothing is written", async () => {
+    const target = approvedPlan(['docs', 'ui'])
+    executions.insertLanding({
+      planId: target.planId, change: 'ui', executionId: 'exec-elsewhere', teamId: team.teamId, mechanism: 'integration-branch',
+      prNumber: 6, prUrl: 'u', headSha: 'h', baseSha: 'b', mergeSha: '0123456789abcdef0123456789abcdef01234567', treeVerified: true,
+    })
+    const before = executions.executionsOf(target.planId).length
+    const refused = await start(target.planId, target.hash, 'cmd-off-base')
+    expect(refused).toMatchObject({ ok: false, reason: 'precondition' })
+    if (!refused.ok) {
+      // The shared database's earlier Starts also claim docs; only this entry is the subject.
+      expect(refused.failures?.map(failure => failure.name)).toContain('landings-on-base')
+      expect(refused.message).toContain("The base master's head on origin lacks landed work: ui (landed on an unknown branch)")
+    }
+    expect(executions.executionsOf(target.planId)).toHaveLength(before)
   })
 })
 

@@ -25,12 +25,14 @@ export interface InspectorReads {
   worktree: (repo: string, path: string) => Promise<{ present: boolean; head: string | null }>
   /** `git rev-parse --verify refs/heads/<branch>`: a local branch's head. */
   localBranch: (repo: string, branch: string) => Promise<string | null>
-  /** `git ls-remote origin <ref>`: a remote ref's head, null when absent. */
+  /** `git ls-remote origin <ref>`: a remote ref's head, null only when absent; a failed read rejects. */
   remoteHead: (cwd: string, ref: string) => Promise<string | null>
   /** `gh pr list --head <change> --base <base> --state all` (D14's open-pr inspection). */
   prList: (repo: string, head: string, base: string) => Promise<PrSummary[]>
   /** `gh pr view`: state, head, and merge commit (update-branch and merge). */
   prView: (repo: string, prNumber: number) => Promise<PrDetail>
+  /** After fetching `ref`: whether `ancestor` is an ancestor of `descendant` (fast-forward, D6). */
+  contains: (cwd: string, ref: string, ancestor: string, descendant: string) => Promise<boolean>
   /** A workflow run's attempt number (rerun). */
   runAttempt: (repo: string, runId: number) => Promise<number>
 }
@@ -106,6 +108,26 @@ export async function inspectEffect(effect: EffectRow, reads: InspectorReads): P
       case 'remove-worktree': {
         const worktree = await reads.worktree(text('repo'), text('path'))
         return worktree.present ? { found: 'not-done' } : { found: 'done', outcome: null }
+      }
+      case 'create-integration': {
+        // integration-candidates D6's row: a ref at the requested commit is
+        // done; missing runs again; anywhere else is a foreign branch (D4).
+        const head = await reads.remoteHead(text('cwd'), `refs/heads/${text('branch')}`)
+        if (head === null) return { found: 'not-done' }
+        if (head === text('sha')) return { found: 'done', outcome: { created: true, sha: head } }
+        return { found: 'stop', reason: 'effect-failed', detail: { message: `foreign-branch: the integration branch "${text('branch')}" exists on origin at ${head}, not at the requested ${text('sha')}; Kawai never adopts it.`, names: [text('branch')] } }
+      }
+      case 'fast-forward': {
+        // D6's row: R contains C is done; C contains R runs again; otherwise
+        // the moved and rewritten rules apply to the refused outcome.
+        const ref = `refs/heads/${text('branch')}`
+        const head = await reads.remoteHead(text('cwd'), ref)
+        // A missing branch lacks every commit: refused with no head, which the
+        // follow-on stops as integration-rewritten (review F1).
+        if (head === null) return { found: 'done', outcome: { fastForwarded: false, refused: true, head: null } }
+        if (await reads.contains(text('cwd'), ref, text('sha'), head)) return { found: 'done', outcome: { fastForwarded: true, head: text('sha') } }
+        if (await reads.contains(text('cwd'), ref, head, text('sha'))) return { found: 'not-done' }
+        return { found: 'done', outcome: { fastForwarded: false, refused: true, head } }
       }
       default: {
         // Kinds a later mechanism adds (X3) arrive here until it ships its inspector.
