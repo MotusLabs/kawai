@@ -155,6 +155,23 @@ describe('the promotion effect queue', () => {
     expect(store.effect(stale.id)!.state).toBe('cancelled')
   })
 
+  test('a no-op mark announces nothing (N4)', async () => {
+    const changed: Array<string | undefined> = []
+    store.subscribe((_teamId, planId) => changed.push(planId))
+    const flush = () => new Promise(resolve => queueMicrotask(resolve))
+    const running = promotion('plan-1')
+    const effect = store.insertEffect({ promotionId: running.id, kind: 'merge', effectKey: 'p1:merge', command: {} })
+    expect(store.markEffectRunning(effect.id)).toBe(true)
+    await flush()
+    expect(changed).toEqual(['plan-1'])
+    store.setEffectOutcome(effect.id, { state: 'cancelled' })
+    await flush()
+    changed.length = 0
+    expect(store.markEffectRunning(effect.id)).toBe(false)
+    await flush()
+    expect(changed).toEqual([])
+  })
+
   // The final review's probe (F1): runDue snapshots two due effects; a Cancel
   // lands while the first runs; the second must stay cancelled and its
   // adapter must never be called — markEffectRunning does not revive it.

@@ -141,11 +141,12 @@ export class PromotionEffectStore implements EffectQueue<PromotionEffectRow> {
       .map(mapEffect)
   }
 
-  /** Marks an open effect running; false when it had already settled (O3) — the runner then never calls the adapter. */
+  /** Marks an open effect running; false when it had already settled (O3) — the runner then never calls the adapter, and a no-op mark announces nothing. */
   markEffectRunning(id: string): boolean {
     const result = this.db.prepare(`UPDATE plan_promotion_effects SET state = 'running', started_at = COALESCE(started_at, ?) WHERE id = ? AND ${OPEN}`).run(this.iso(), id)
-    this.effectChanged(id)
-    return result.changes === 1
+    const took = result.changes === 1
+    if (took) this.effectChanged(id)
+    return took
   }
 
   /**

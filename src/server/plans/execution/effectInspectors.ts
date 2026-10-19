@@ -155,6 +155,8 @@ export async function inspectEffect(effect: EffectRow, reads: InspectorReads): P
 export async function inspectUnknownEffects(deps: {
   store: ExecutionStore
   reads: InspectorReads
+  /** One team's unknown effects only (a tick's pass); every team's when absent (startup). */
+  teamId?: string
   backoffsMs?: readonly [number, number, number]
   now?: () => Date
   onUnknownSettled?: (effect: EffectRow, error: string) => void
@@ -162,7 +164,7 @@ export async function inspectUnknownEffects(deps: {
 }): Promise<void> {
   const backoffs = deps.backoffsMs ?? [30_000, 120_000, 600_000]
   const now = deps.now ?? (() => new Date())
-  for (const effect of deps.store.dueUnknownEffects(now().toISOString())) {
+  for (const effect of deps.store.dueUnknownEffects(now().toISOString(), deps.teamId)) {
     const verdict = await inspectEffect(effect, deps.reads)
     deps.onInspected?.(effect, verdict)
     if (verdict.found === 'done') {

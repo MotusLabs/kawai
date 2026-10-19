@@ -19,10 +19,12 @@ import { logger } from '../../logger'
 import { assignmentState } from '../../team/assignmentStore'
 import type { MailboxStore } from '../../team/mailboxStore'
 import { githubRepoOf } from '../landing/landingProbe'
-import { recoverUnknownEffects } from './executorStartup'
+import { inspectDueUnknownEffects, recoverUnknownEffects } from './executorStartup'
+import type { InspectorReads } from './effectInspectors'
 import { applyEffectFailure, applyEffectOutcome, type OutcomeDeps } from './executorOutcomes'
 import { landingAdapters, removeWorktreeAdapter } from './executionLanding'
 import { mechanismFor, type LandingMechanism, type LandingMechanisms } from '../landing/landingMechanisms'
+import { startupReads } from './startupReads'
 import { DIRECT_MECHANISMS } from '../landing/directMechanism'
 import type { CiCheck } from '../../../shared/planExecution'
 import { ciClass } from '../../../shared/planExecutionGates'
@@ -73,6 +75,8 @@ export interface ExecutorDeps {
   tickMs?: number
   /** Test seam: passed to every gh call (a stub gh on a private PATH). */
   ghOptions?: GhCommandOptions
+  /** Test seam: the inspectors' reads; defaults to the real git/gh (startupReads). */
+  reads?: InspectorReads
   /** Test seam: the clock. */
   now?: () => Date
   /** The promotion runner (integration-candidates D10): its startup, a pass per tick, and whether its timer stays armed. */
@@ -141,7 +145,7 @@ export class ExecutionExecutor {
    */
   async startup(): Promise<void> {
     this.deps.promotions?.startup()
-    await recoverUnknownEffects({ store: this.deps.store, outcomes: this.outcomeDeps(), ...(this.deps.ghOptions ? { ghOptions: this.deps.ghOptions } : {}), ...(this.deps.now ? { now: this.deps.now } : {}) })
+    await recoverUnknownEffects({ store: this.deps.store, ...(this.deps.reads ? { reads: this.deps.reads } : {}), outcomes: this.outcomeDeps(), ...(this.deps.ghOptions ? { ghOptions: this.deps.ghOptions } : {}), ...(this.deps.now ? { now: this.deps.now } : {}) })
   }
 
   /** Stop the timers (tests, shutdown); a wake's trailing schedule arms none. */
@@ -182,8 +186,8 @@ export class ExecutionExecutor {
       const steps = planSteps(snapshot, this.deps.now?.().toISOString() ?? new Date().toISOString())
       if (steps.transitions.length === 0 && steps.effects.length === 0 && steps.dispatches.length === 0 && steps.stages.length === 0 && steps.fixes.length === 0) {
         // Nothing new is due, but an effect left pending (a restart, a
-        // backoff, a Retry's reset) still runs; one that ran settled a step,
-        // so the next pass plans what it made due (D14).
+        // backoff) still runs — after its inspection answered (D14); one
+        // that ran settled a step, so the next pass plans what it made due.
         if (await this.settledRunDue(teamId) === 0) return
         continue
       }
@@ -251,10 +255,19 @@ export class ExecutionExecutor {
     return repo
   }
 
-  /** runDue, with a tick abandoned by `close` swallowing its late writes; the count of effects run. */
+  /**
+   * runDue, with a tick abandoned by `close` swallowing its late writes; the
+   * count of effects run. The due `unknown` effects are inspected first
+   * (D14) — a restart's rows and a Retry's reset after an `effect-unknown`
+   * stop are never run again before an inspection answered them.
+   */
   private async settledRunDue(teamId: string): Promise<number> {
     if (this.closed) return 0
     try {
+      await inspectDueUnknownEffects({
+        store: this.deps.store, reads: this.deps.reads ?? startupReads(this.deps.ghOptions),
+        outcomes: this.outcomeDeps(), teamId, ...(this.deps.now ? { now: this.deps.now } : {}),
+      })
       return await this.runner().runDue(teamId)
     } catch (error) {
       // A test or shutdown closed the database under an in-flight effect:

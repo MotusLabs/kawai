@@ -98,10 +98,10 @@ describe('a settled effect never changes state again (F1, F2)', () => {
   // `effect-unknown` stop re-opens the failed effect (plan-execution 13.3),
   // synchronously in the retry's own transaction — never a late write.
   describe('retryFailedEffect: the one writer a settled row obeys', () => {
-    test('a failed effect returns to pending, its error kept', () => {
+    test('a failed effect re-enters inspection as unknown, its error kept', () => {
       const { store, seeds } = executionSeeded('failed')
       store.retryFailedEffect(seeds.effectId)
-      expect(store.effect(seeds.effectId)).toMatchObject({ state: 'pending', nextAt: null, error: 'boom' })
+      expect(store.effect(seeds.effectId)).toMatchObject({ state: 'unknown', nextAt: null, error: 'boom' })
     })
 
     test('done and cancelled effects stay settled', () => {

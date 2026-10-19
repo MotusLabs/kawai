@@ -105,12 +105,13 @@ export class ExecutionEffectStore {
       .map(effect => ({ executionId: effect.executionId, command: effect.command }))
   }
 
-  /** The due `unknown` effects, oldest first — inspected before anything else for their change runs (D14). */
-  dueUnknownEffects(now: string): EffectRow[] {
+  /** The due `unknown` effects, oldest first — inspected before anything else for their change runs (D14); one team's, or every team's at startup. */
+  dueUnknownEffects(now: string, teamId?: string): EffectRow[] {
     return (this.db.prepare(`SELECT e.* FROM plan_execution_effects e
       JOIN plan_executions x ON x.id = e.execution_id
       WHERE x.state = 'running' AND e.state = 'unknown' AND (e.next_at IS NULL OR e.next_at <= ?)
-      ORDER BY e.created_at, e.rowid`).all(now) as Array<Record<string, unknown>>)
+      ${teamId === undefined ? '' : 'AND x.team_id = ?'}
+      ORDER BY e.created_at, e.rowid`).all(...(teamId === undefined ? [now] : [now, teamId])) as Array<Record<string, unknown>>)
       .map(mapEffect)
   }
 
@@ -122,11 +123,14 @@ export class ExecutionEffectStore {
   /**
    * The human Retry's reset after an `effect-unknown` stop: the one writer a
    * settled row obeys. Only a `failed` row re-opens — done and cancelled stay
-   * settled — and it is synchronous, in the retry's own transaction, never a
-   * late write after an await (O3).
+   * settled — and it re-enters inspection (`unknown`), never `pending`: the
+   * row stopped as unknown because its outcome could not be decided, so an
+   * inspection must answer it before it ever runs again; only an inspected
+   * not-done effect returns to `pending` (resetEffect). Synchronous, in the
+   * retry's own transaction — never a late write after an await (O3).
    */
   retryFailedEffect(id: string): void {
-    this.db.prepare(`UPDATE plan_execution_effects SET state = 'pending', next_at = NULL WHERE id = ? AND state = 'failed'`).run(id)
+    this.db.prepare(`UPDATE plan_execution_effects SET state = 'unknown', next_at = NULL WHERE id = ? AND state = 'failed'`).run(id)
   }
 
   /** An undecidable inspection stays `unknown`, one try counted, retrying at `nextAt` (D14). */

@@ -291,8 +291,14 @@ export class ExecutionService {
         this.deps.store.reopenRoundWindow(round.id, new Date().toISOString())
       }
       if (row.stopReason === 'effect-unknown') {
+        // The stop names its effect (D14's recovery): Retry re-opens that
+        // one, into `unknown` — inspected before it ever runs again. Stops
+        // written before the stop carried the id fall back to the change's
+        // oldest failed effect.
+        const named = row.stopDetail?.effectId
         const failed = this.deps.store.effectsOf(input.executionId)
-          .find(effect => effect.change === input.change && effect.state === 'failed')
+          .find(effect => effect.change === input.change && effect.state === 'failed'
+            && (named === undefined || effect.id === named))
         if (failed !== undefined) this.deps.store.retryFailedEffect(failed.id)
       }
       return { change: input.change }
