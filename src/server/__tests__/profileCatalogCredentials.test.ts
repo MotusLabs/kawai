@@ -268,6 +268,124 @@ describe('a credentialed provider names no executable and takes a trusted base U
   })
 })
 
+describe('every finish() path enforces the trusted invariants', () => {
+  // finish() places the implicit `default` through three branches: the key
+  // already held (the production path — the shipped `claude` holds it), a
+  // `default` provider holding only other keys, and the synthesized
+  // provider. The merged finish() returned early from the middle branch and
+  // skipped enforceTrustedCredentialInvariants, so a project file parking a
+  // keyless `default` provider kept a base-URL-less credentialed provider
+  // alive past the check. One test per branch and invariant, plus the
+  // project-file trigger.
+  const wrap = '/usr/local/bin/claude-wrap'
+
+  /** Resolve with the given files as the shipped base (no user files). */
+  const resolveShippedBase = (providers: object, profiles: object) => {
+    const shippedProviders = writeProviders(path.join(tempRoot, 'shipped'), providers)
+    const shippedProfiles = writeProfiles(path.join(tempRoot, 'shipped'), profiles)
+    return resolveProfileCatalog({
+      homeDir: path.join(tempRoot, 'no-home'),
+      imageDefaultProvidersPath: shippedProviders,
+      imageDefaultPath: shippedProfiles,
+    })
+  }
+
+  const shippedWithDefault = {
+    claude: { label: 'Claude', models: { default: { label: 'Default' } } },
+  }
+
+  test('holder placed (production path): a credentialed provider without a base URL is dropped', () => {
+    const { profiles, errors } = resolveShippedBase({
+      ...shippedWithDefault,
+      or2: { authTokenEnv: 'OR2_KEY', models: { 'or2-sonnet': { model: 'sonnet' } } },
+    }, {})
+    expect(errors).toHaveLength(1)
+    expect(errors[0]).toContain('"or2"')
+    expect(errors[0]).toContain('ANTHROPIC_BASE_URL')
+    expect(profiles.has('or2-sonnet')).toBe(false)
+    // The healthy provider holding `default` stays usable.
+    expect(profiles.get('default')?.providerId).toBe('claude')
+  })
+
+  test('holder placed (production path): an executable re-homed onto a credentialed model is dropped', () => {
+    // The executable reaches the credentialed provider across the two files
+    // (a trusted profiles.json re-home) — the cross-file assembly the
+    // finish-time invariant exists for; providers.json would refuse the
+    // file whole at parse time instead.
+    const { profiles, errors } = resolveShippedBase({
+      ...shippedWithDefault,
+      or2: { authTokenEnv: 'OR2_KEY', env: { ANTHROPIC_BASE_URL: OR_URL }, models: { 'or2-haiku': { model: 'haiku' } } },
+    }, { 'or2-haiku': { executable: wrap } })
+    expect(errors).toHaveLength(1)
+    expect(errors[0]).toContain('"or2-haiku"')
+    expect(errors[0]).toContain('executable')
+    expect(profiles.has('or2-haiku')).toBe(false)
+    // The healthy provider holding `default` stays usable.
+    expect(profiles.get('default')?.providerId).toBe('claude')
+  })
+
+  test('a keyless default provider: a credentialed provider without a base URL is dropped', () => {
+    writeProviders(homeDir, {
+      default: { label: 'Default', models: { other: {} } },
+      or2: { authTokenEnv: 'OR2_KEY', models: { 'or2-sonnet': { model: 'sonnet' } } },
+    })
+    const { profiles, errors } = resolveProfileCatalog(ctx())
+    expect(errors).toHaveLength(1)
+    expect(errors[0]).toContain('"or2"')
+    expect(errors[0]).toContain('ANTHROPIC_BASE_URL')
+    expect(profiles.has('or2-sonnet')).toBe(false)
+    // The implicit default still joins its provider.
+    expect(profiles.get('default')?.providerId).toBe('default')
+  })
+
+  test('a keyless default provider: a profiles.json executable on a credentialed provider is dropped', () => {
+    writeProviders(homeDir, {
+      default: { label: 'Default', models: { other: {} } },
+      or2: { authTokenEnv: 'OR2_KEY', env: { ANTHROPIC_BASE_URL: OR_URL }, models: { 'or2-sonnet': { model: 'sonnet' } } },
+    })
+    writeProfiles(homeDir, { or2: { executable: wrap } })
+    const { profiles, errors } = resolveProfileCatalog(ctx())
+    expect(errors).toHaveLength(1)
+    expect(errors[0]).toContain('"or2"')
+    expect(errors[0]).toContain('executable')
+    expect(profiles.has('or2-sonnet')).toBe(false)
+    expect(profiles.get('default')?.providerId).toBe('default')
+  })
+
+  test('a synthesized default: a credentialed provider without a base URL is dropped', () => {
+    writeProviders(homeDir, { or2: { authTokenEnv: 'OR2_KEY', models: { 'or2-sonnet': { model: 'sonnet' } } } })
+    const { profiles, errors } = resolveProfileCatalog(ctx())
+    expect(errors).toHaveLength(1)
+    expect(errors[0]).toContain('"or2"')
+    expect(errors[0]).toContain('ANTHROPIC_BASE_URL')
+    expect(profiles.has('or2-sonnet')).toBe(false)
+    expect(profiles.get('default')?.providerId).toBe('default')
+  })
+
+  test('a synthesized default: a profiles.json executable on a credentialed provider is dropped', () => {
+    writeProviders(homeDir, { or2: { authTokenEnv: 'OR2_KEY', env: { ANTHROPIC_BASE_URL: OR_URL }, models: { 'or2-sonnet': { model: 'sonnet' } } } })
+    writeProfiles(homeDir, { or2: { executable: wrap } })
+    const { profiles, errors } = resolveProfileCatalog(ctx())
+    expect(errors).toHaveLength(1)
+    expect(errors[0]).toContain('"or2"')
+    expect(errors[0]).toContain('executable')
+    expect(profiles.has('or2-sonnet')).toBe(false)
+    expect(profiles.get('default')?.providerId).toBe('default')
+  })
+
+  test('a project file parking a keyless default provider cannot keep a base-URL-less credentialed provider', () => {
+    writeProviders(homeDir, { or2: { authTokenEnv: 'OR2_KEY', models: { 'k-son': { model: 'sonnet' } } } })
+    writeProviders(projectDir, { default: { label: 'Default', models: { pother: {} } } })
+    const { profiles, errors } = resolveProfileCatalog(ctx())
+    expect(errors).toHaveLength(1)
+    expect(errors[0]).toContain('"or2"')
+    expect(errors[0]).toContain('ANTHROPIC_BASE_URL')
+    expect(profiles.has('k-son')).toBe(false)
+    // The harmless project provider stays usable.
+    expect(profiles.get('pother')?.providerId).toBe('default')
+  })
+})
+
 describe('catalogs may cap the output reservation', () => {
   test('CLAUDE_CODE_MAX_OUTPUT_TOKENS is profile-controlled and accepted on a provider', () => {
     expect(PROFILE_CONTROLLED_ENV).toContain('CLAUDE_CODE_MAX_OUTPUT_TOKENS')

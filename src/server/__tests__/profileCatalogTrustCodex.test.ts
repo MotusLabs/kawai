@@ -421,9 +421,9 @@ test.each([
   {
     name: 'codex profile × Codex holder: nearer entry overlays label and model only',
     base: 'shipped-with-codex',
-    projectProfiles: { cx: { label: 'CX nearer' } },
+    projectProfiles: { cx: { label: 'CX nearer', runtime: 'codex' } },
     outcome: 'merged (label overlay)',
-    parentFails: 'without the scan\'s Codex-entry skip, the parent\'s non-null keyCredentialed throws on the providerless holder',
+    parentFails: 'without both scan skips (Codex entry, Codex holder), the parent\'s non-null keyCredentialed throws on the providerless holder — either skip alone still covers this row',
     check: (catalog) => {
       expectMerged(catalog)
       const profile = profileOf(catalog, 'cx')

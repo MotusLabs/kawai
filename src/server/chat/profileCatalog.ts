@@ -295,7 +295,7 @@ export function resolveProfileCatalog(
         errors.push(parsed.error)
         continue
       }
-      merger.addProviders(level.file, level.shipped ?? false, parsed.providers, level.tier)
+      merger.addProviders(level.file, level.shipped ?? false, parsed.providers, level.tier, level.trusted)
       continue
     }
     const parsed = parseCatalogFile(level.file, level.trusted, level.embeddedFallback
@@ -305,7 +305,7 @@ export function resolveProfileCatalog(
       errors.push(parsed.error)
       continue
     }
-    merger.addProfiles(level.file, level.shipped ?? false, parsed.entries, level.tier)
+    merger.addProfiles(level.file, level.shipped ?? false, parsed.entries, level.tier, level.trusted)
   }
   merger.finish()
   errors.push(...merger.errors)

@@ -128,14 +128,6 @@ export function reservedProviderId(id: string): string {
   return `profile:${id}`
 }
 
-/**
- * The farthest trusted tier (openrouter-provider D2): the shipped base
- * (tier 0) and the user level (tier 1). Farther tiers are project files
- * agents can write, so D2's whole-file refusals apply to them alone. Kept
- * in step with the tier assignment in profileCatalogLevels.
- */
-const TRUSTED_MAX_TIER = 1
-
 export class CatalogMerger {
   /** Providers in first-seen (farthest file first) order. */
   readonly providers = new Map<string, MergedProvider>()
@@ -167,10 +159,11 @@ export class CatalogMerger {
    * model key (P3) against those merged facts, so JSON key order never
    * changes an outcome and a re-home carries its own level's overlay.
    */
-  addProviders(file: string, shipped: boolean, providers: Map<string, ParsedProvider>, tier: number): void {
-    // D2's trusted tier derives from the runtime origin tier (codex-chat-sessions
-    // D4): shipped and user level are trusted, every project tier is not.
-    if (tier > TRUSTED_MAX_TIER) {
+  addProviders(file: string, shipped: boolean, providers: Map<string, ParsedProvider>, tier: number, trusted: boolean): void {
+    // D2's whole-file refusals apply to untrusted levels only — project
+    // files agents can write; the level assembly marks shipped and user
+    // trusted (its single source, beside the tier the runtime origins use).
+    if (!trusted) {
       const refusal = this.untrustedProviderRefusal(file, providers)
       if (refusal) {
         this.errors.push(refusal)
@@ -261,10 +254,10 @@ export class CatalogMerger {
    * one-model provider — one naming a shipped-only provider takes the
    * reserved `profile:<id>` id and leaves the shipped provider unchanged.
    */
-  addProfiles(file: string, shipped: boolean, entries: Map<string, PartialProfile>, tier: number): void {
-    // D2's trusted tier derives from the runtime origin tier, as in
-    // addProviders: shipped and user level are trusted, project tiers are not.
-    if (tier > TRUSTED_MAX_TIER) {
+  addProfiles(file: string, shipped: boolean, entries: Map<string, PartialProfile>, tier: number, trusted: boolean): void {
+    // D2's whole-file refusals apply to untrusted levels only, as in
+    // addProviders: the level assembly marks shipped and user trusted.
+    if (!trusted) {
       const refusal = this.untrustedProfilesRefusal(file, entries)
       if (refusal) {
         this.errors.push(refusal)
@@ -511,24 +504,26 @@ export class CatalogMerger {
 
   /** The implicit `default` (D4): joined to a `default` provider, else synthesized. */
   finish(): void {
-    if (this.holders.has('default')) {
-      this.enforceTrustedCredentialInvariants()
-      return
-    }
-    const provider = this.providers.get('default')
-    if (provider) {
-      provider.models.set('default', { label: 'Default', env: {} })
+    if (!this.holders.has('default')) {
+      const provider = this.providers.get('default')
+      if (provider) {
+        // A `default` provider holding other keys takes the implicit one.
+        provider.models.set('default', { label: 'Default', env: {} })
+      } else {
+        // No `default` anywhere: synthesize the whole provider.
+        this.providers.set('default', {
+          label: 'Default',
+          env: {},
+          models: new Map([['default', { label: 'Default', env: {} }]]),
+          operatorOrigin: false,
+          originFile: '(implicit)',
+        })
+      }
       this.setHolder('default', { provider: 'default', operator: false, originFile: '(implicit)', own: true }, 0)
-      return
     }
-    this.providers.set('default', {
-      label: 'Default',
-      env: {},
-      models: new Map([['default', { label: 'Default', env: {} }]]),
-      operatorOrigin: false,
-      originFile: '(implicit)',
-    })
-    this.setHolder('default', { provider: 'default', operator: false, originFile: '(implicit)', own: true }, 0)
+    // D2's invariants run on every path: a `default` provider holding only
+    // other keys reaches here too, and skipping the check on that path let a
+    // project file park one to keep a base-URL-less credentialed provider.
     this.enforceTrustedCredentialInvariants()
   }
 

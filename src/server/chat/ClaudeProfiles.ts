@@ -95,8 +95,9 @@ export function resolveClaudeProfile(
   // needs: the home resolved exactly as the catalog's own home-provider id
   // is (R2), so stamp and provider id can never disagree. Codex entries
   // carry no catalog env — configuration travels as `-c` overrides. They
-  // never touch credentials: withholding covers Claude launches only, and a
-  // Codex launch's environment is the server's own (codex-chat-sessions D4).
+  // never touch credentials: withholding (D3) covers every launch — when the
+  // Codex spawn is wired, codexSpawnEnv must drop the catalog-named
+  // credential variables alongside the ANTHROPIC_*/CLAUDE_CODE_* ones.
   if (profile.runtime === 'codex') {
     return {
       runtime: 'codex',
