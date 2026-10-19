@@ -46,15 +46,22 @@ test('parked rows show a short id and Cancel; cancelling removes the work and it
     const seeded = JSON.parse(execFileSync('bun', ['-e', `
       import { Database } from 'bun:sqlite';
       import { MailboxStore } from './src/server/team/mailboxStore';
+      import { retryOnSqliteBusy } from './src/server/__tests__/sqliteBusyRetry';
       const [file, team, dev] = JSON.parse(await Bun.stdin.text());
       const db = new Database(file); db.exec('PRAGMA busy_timeout = 5000'); const store = new MailboxStore(db);
-      const base = { teamId: team, fromSession: 'chat-lead', fromGroup: 'leads', originPath: team };
-      const work = store.enqueue({ ...base, toKind: 'session', toId: dev, body: 'Parked browser work' });
-      store.claim(work.id, dev); store.markPushed(work.id); store.markDelivered(work.id);
-      const until = new Date(Date.now() + 3600000).toISOString();
-      const resume = store.enqueue({ ...base, fromSession: dev, toKind: 'session', toId: dev, body: 'Resume browser work', deliverAt: until, tags: ['resume'] });
-      store.park(work.id, until, resume.id);
-      console.log(JSON.stringify({ work: work.id, resume: resume.id })); db.close();
+      // One retried immediate transaction: the server is a second writer (BUSY
+      // on the deferred upgrade bypasses busy_timeout), and atomic seeding
+      // keeps it from seeing or claiming half a seed.
+      const seeded = await retryOnSqliteBusy(() => db.transaction(() => {
+        const base = { teamId: team, fromSession: 'chat-lead', fromGroup: 'leads', originPath: team };
+        const work = store.enqueue({ ...base, toKind: 'session', toId: dev, body: 'Parked browser work' });
+        store.claim(work.id, dev); store.markPushed(work.id); store.markDelivered(work.id);
+        const until = new Date(Date.now() + 3600000).toISOString();
+        const resume = store.enqueue({ ...base, fromSession: dev, toKind: 'session', toId: dev, body: 'Resume browser work', deliverAt: until, tags: ['resume'] });
+        store.park(work.id, until, resume.id);
+        return { work: work.id, resume: resume.id };
+      }).immediate());
+      console.log(JSON.stringify(seeded)); db.close();
     `], { cwd: process.cwd(), input: JSON.stringify([dbPath, root, dev]), encoding: 'utf8' })) as { work: string; resume: string }
 
     await page.reload()

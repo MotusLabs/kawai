@@ -4,7 +4,7 @@
 // state change (the holder commits), so nothing waits on wall-clock time.
 import { describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { BUSY_RETRY_ATTEMPTS, BUSY_RETRY_DELAY_MS, isSqliteBusyError, retryOnSqliteBusy } from './sqliteBusyRetry'
