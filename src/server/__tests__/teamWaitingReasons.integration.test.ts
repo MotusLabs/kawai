@@ -2,8 +2,10 @@
 // a real SessionMailbox — dispatcher, ProfileRouter, staffing, ledger — over a
 // git repository with linked worktrees. A spawn knob holds spawned-agent
 // startup open, fails it once, or lets it through, so `spawning` rows and
-// their backoffs are observable at real snapshot times. Every git command
-// runs under cleanGitEnv.
+// their backoffs are observable at real snapshot times. A failed spawn's
+// backoff runs on `clock`, which a test can hold, so retry instants are
+// asserted rather than raced against wall time. Every git command runs under
+// cleanGitEnv.
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -72,6 +74,16 @@ let changeSnapshots: Array<Record<string, WaitingReason>>
 let reasonPublishes: string[]
 /** Errors reported through the dispatcher/staffing error path. */
 let reportedErrors: unknown[]
+/** The backoff clock while a test holds it; undefined reads the wall clock. */
+let clockOverride: number | undefined
+const clock = () => clockOverride ?? Date.now()
+/**
+ * A held instant an hour past the wall clock, so the dispatcher's own timer
+ * (armed for the same retry instant) never fires while a test holds the clock.
+ */
+const HELD_AT = Date.now() + 60 * 60_000
+/** The failed-spawn backoff, in clock milliseconds. */
+const BACKOFF_MS = 80
 
 const writeGroup = (id: string, frontmatter: string) => {
   fs.mkdirSync(path.join(repo, '.kawai', 'groups'), { recursive: true })
@@ -117,6 +129,7 @@ beforeEach(async () => {
   changeSnapshots = []
   reasonPublishes = []
   reportedErrors = []
+  clockOverride = undefined
   await refreshCatalog()
   const teamsStub = {
     teamOf: (id: string) => (records.has(id) ? team : undefined),
@@ -136,7 +149,7 @@ beforeEach(async () => {
     watchReceipt: () => {}, archive: () => ({ ok: true }), hasLiveWorkers: () => false, hasRunningBackgroundTasks: () => false,
     spawn: async (request): Promise<SpawnResult> => {
       spawnCalls.push(request)
-      spawnAt.push(Date.now())
+      spawnAt.push(clock())
       if (spawnMode === 'hold') return new Promise(resolve => { spawnReleases.push(resolve) })
       if (spawnMode === 'fail-once') {
         spawnMode = 'ok'
@@ -146,9 +159,10 @@ beforeEach(async () => {
       records.set(sessionId, record(sessionId, { projectPath: request.projectPath, spawned: true, status: 'waiting', taskId: request.taskId ?? null, ...(request.profileId ? { claudeProfileId: request.profileId } : {}) }))
       return { ok: true, sessionId }
     },
-    spawnRetryAfterMs: 80,
+    spawnRetryAfterMs: BACKOFF_MS,
     transcriptFor: () => transcript,
     homeDir: home,
+    now: clock,
     onChange: team => { changeSnapshots.push(runtime.waitingFor(team)) },
     onReasonsChange: team => { reasonPublishes.push(team) },
     onError: error => { reportedErrors.push(error) },
@@ -288,34 +302,55 @@ test('the team spawn cap and an occupied worktree each block with the right fact
   })
 })
 
-test('a failed spawn records its backoff before the requeue publishes and retries at the backoff end', async () => {
+test('a failed spawn requeues with its backoff and holds the retry until the backoff ends', async () => {
+  clockOverride = HELD_AT
   spawnMode = 'fail-once'
   const t = await task(featX)
   const m = mail(t.id)
   await settle()
   expect(spawnCalls).toHaveLength(1)
   expect(store().get(m.id)?.state).toBe('queued')
-  const waiting = runtime.waitingFor(team.teamId)
-  // After the failure pass the full diagnosis applies: the backoff carries
-  // its retry time (the moment the retry runs), ranked among the constraints
-  // by the caps-first order (D1). Captured before any asymmetric matcher:
-  // Bun's toMatchObject mutates the received object.
-  const backoffRetryAt = [waiting[m.id]!.blocker, ...waiting[m.id]!.others]
-    .find(constraint => constraint.kind === 'spawn-backoff')?.retryAt
-  expect(typeof backoffRetryAt).toBe('string')
+  const retryAt = HELD_AT + BACKOFF_MS
   // The requeue's row-change snapshot already carried the backoff as its
-  // reason (D3): the last captured change for this message is its requeue.
-  const atRequeue = changeSnapshots.filter(snapshot => m.id in snapshot).at(-1)!
-  expect(atRequeue[m.id]!.blocker.kind).toBe('spawn-backoff')
-  // Nothing else changes; the retry runs no earlier than the backoff's end —
-  // the retry time the reason shows is the moment the retry runs. Measured
-  // against the recorded retryAt, not wall time since an arbitrary point:
-  // part of the backoff elapses during the assertions above. A retry that
-  // ignored the backoff would spawn on the requeue-chained pass, far before
-  // retryAt, and fail this comparison.
-  const retryAt = Date.parse(backoffRetryAt!)
-  expect(await until(() => spawnCalls.length === 2, 2_000)).toBe(true)
-  expect(spawnAt[1]).toBeGreaterThanOrEqual(retryAt - 10)
+  // reason, with the instant the retry runs (D3).
+  const atRequeue = changeSnapshots.find(snapshot => m.id in snapshot && snapshot[m.id]!.blocker.kind === 'spawn-backoff')!
+  expect(atRequeue[m.id]!.blocker.retryAt).toBe(new Date(retryAt).toISOString())
+  // After the failure pass the full diagnosis applies: the backoff sits among
+  // the constraints in the caps-first order (D1).
+  const waiting = runtime.waitingFor(team.teamId)
+  const backoff = [waiting[m.id]!.blocker, ...waiting[m.id]!.others].find(constraint => constraint.kind === 'spawn-backoff')
+  expect(backoff?.retryAt).toBe(new Date(retryAt).toISOString())
+  // The held clock has not reached the retry instant: a pass one millisecond
+  // early (a notify, or the requeue-chained pass) must not spawn.
+  clockOverride = retryAt - 1
+  await settle()
+  expect(spawnCalls).toHaveLength(1)
+  // At the retry instant the backoff has ended: the pass spawns, never earlier
+  // than retryAt, and the mail is delivered exactly once.
+  clockOverride = retryAt
+  await settle()
+  expect(spawnCalls).toHaveLength(2)
+  expect(spawnAt[1]).toBeGreaterThanOrEqual(retryAt)
+  expect(deliveries.filter(delivery => delivery.messageId === m.id)).toHaveLength(1)
+  confirmReceipts()
+  expect(store().get(m.id)?.state).toBe('delivered')
+})
+
+test('the dispatcher timer retries a failed spawn at its backoff end, with no unrelated change', async () => {
+  spawnMode = 'fail-once'
+  const t = await task(featX)
+  const m = mail(t.id)
+  runtime.dispatcher.notify()
+  // The requeue is read from the snapshot history: the retry moves the row on
+  // before a later read could see it.
+  expect(await until(() => changeSnapshots.some(snapshot => m.id in snapshot && snapshot[m.id]!.blocker.kind === 'spawn-backoff'), 2_000)).toBe(true)
+  const retryAtIso = changeSnapshots.find(snapshot => m.id in snapshot && snapshot[m.id]!.blocker.kind === 'spawn-backoff')![m.id]!.blocker.retryAt
+  expect(typeof retryAtIso).toBe('string')
+  const retryAt = Date.parse(retryAtIso!)
+  // Nothing notifies the dispatcher after the requeue: only the timer can run
+  // the retry, and it never runs before the recorded retry instant.
+  expect(await until(() => spawnCalls.length === 2, 10_000)).toBe(true)
+  expect(spawnAt[1]).toBeGreaterThanOrEqual(retryAt)
   await settle()
   expect(deliveries.filter(delivery => delivery.messageId === m.id)).toHaveLength(1)
   confirmReceipts()
@@ -323,6 +358,7 @@ test('a failed spawn records its backoff before the requeue publishes and retrie
 })
 
 test('a backoff whose message left the surface never arms the timer again', async () => {
+  clockOverride = HELD_AT
   spawnMode = 'fail-once'
   const m = mail((await task(featX)).id)
   await settle()
