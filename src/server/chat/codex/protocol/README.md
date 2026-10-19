@@ -6,7 +6,7 @@ installed codex-cli whose version `VERSION` records. Do not edit by hand.
 Regenerate (scratch `CODEX_HOME` so no operator configuration is read):
 
 ```
-CODEX_HOME=$(mktemp -d) codex app-server generate-ts \
+CODEX_HOME=$(mktemp -d) codex app-server generate-ts --experimental \
   --out src/server/chat/codex/protocol
 ```
 
