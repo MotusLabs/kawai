@@ -32,6 +32,7 @@ import type { GhCommandOptions } from '../landing/ghCommand'
 import { executionSnapshot } from './executionSnapshot'
 import { planSteps } from './executionPlanner'
 import { EffectRunner, type EffectAdapter } from './effects'
+import { EffectPinConflict } from './executionEffectStore'
 import type { ExecutionStore } from './executionStore'
 import type { PlanStore } from '../planStore'
 import { dispatchFixAttempt, dispatchImplementAttempt, redispatchStage, type DispatchDeps } from './executionDispatch'
@@ -196,10 +197,18 @@ export class ExecutionExecutor {
         this.deps.store.transition(step.executionId, step.change, step.guard, step.patch)
       }
       for (const step of steps.effects) {
-        this.deps.store.insertEffect({
-          executionId: step.executionId, change: step.change, roundId: null,
-          kind: step.kind, effectKey: step.effectKey, command: step.command,
-        })
+        try {
+          this.deps.store.insertEffect({
+            executionId: step.executionId, change: step.change, roundId: null,
+            kind: step.kind, effectKey: step.effectKey, command: step.command,
+          })
+        } catch (error) {
+          // A1's backstop: today no planner path can pin-conflict — a re-issue
+          // counts past a settled row, and a live row holds the standing
+          // check — so the planner re-planning next pass is enough.
+          if (!(error instanceof EffectPinConflict)) throw error
+          logger.info('plan_execution_effect_pin_conflict', { executionId: step.executionId, kind: step.kind, effectKey: step.effectKey })
+        }
       }
       // Each step runs in its own guard: a refused service call stops only
       // its change; any other throw ends the tick (the wake loop logs it).

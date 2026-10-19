@@ -16,6 +16,7 @@ import { referenceCommit } from '../../../../shared/planIntegration'
 import type { IntegrationBranchRecord, IntegrationCandidate, OutsideCommit } from '../../../../shared/planIntegration'
 import type { EffectKind } from '../../../../shared/planExecution'
 import type { ChangeRow, EffectRow, ExecutionRow } from '../../execution/executionRows'
+import { EffectPinConflict } from '../../execution/executionEffectStore'
 import type { ExecutionStore } from '../../execution/executionStore'
 import { afterLanded, applyLanding, applyLandingOutcome, updateBranchAdapter, type LandingDeps, type LandingAdapters } from '../../execution/executionLanding'
 import type { LandingMechanism } from '../landingMechanisms'
@@ -114,16 +115,30 @@ export function integrationMechanism(store: IntegrationStore, adapters: Integrat
       candidate = store.transitionCandidate(candidate.id, 'passed')
     }
     const passed = candidate
+    let refused: EffectPinConflict | null = null
     executions.atomically(() => {
       const fresh = executions.change(row.executionId, row.change)
       if (fresh === null || fresh.state !== 'landing' || fresh.step === 'merging') return
+      // The insert lands before the step transition (A1): a refused insert
+      // never flips the step — the live row settles first, the next tick
+      // re-reads.
+      try {
+        executions.insertEffect({
+          executionId: row.executionId, change: row.change, roundId: at.roundId, kind: 'fast-forward',
+          effectKey: `${row.executionId}:${row.change}:fast-forward:${passed.seq}:${fresh.generation}`,
+          command: { repo: deps.repo, branch: record.branch, sha: at.head, base: at.base, cwd: at.cwd, candidateId: passed.id },
+        })
+      } catch (error) {
+        if (error instanceof EffectPinConflict) {
+          refused = error
+          return
+        }
+        throw error
+      }
       executions.transition(row.executionId, row.change, fresh, { step: 'merging' })
-      executions.insertEffect({
-        executionId: row.executionId, change: row.change, roundId: at.roundId, kind: 'fast-forward',
-        effectKey: `${row.executionId}:${row.change}:fast-forward:${passed.seq}:${fresh.generation}`,
-        command: { repo: deps.repo, branch: record.branch, sha: at.head, base: at.base, cwd: at.cwd, candidateId: passed.id },
-      })
     })
+    const conflict = refused as EffectPinConflict | null
+    if (conflict !== null) logger.info('plan_execution_effect_pin_conflict', { executionId: row.executionId, kind: 'fast-forward', effectId: conflict.effectId })
   }
 
   /** The fast-forward's follow-on (D5, D6): landed in one transaction, or the moved and rewritten rules. */

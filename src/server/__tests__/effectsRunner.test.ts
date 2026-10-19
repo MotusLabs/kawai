@@ -68,7 +68,9 @@ const runner = () => new EffectRunner({
   onDone: (effect, outcome) => dones.push({ effectKey: effect.effectKey, outcome }),
 })
 const insert = (key = 'exec:1:api:push:1:0') => store.insertEffect({
-  executionId, change: 'api', roundId: null, kind: 'push', effectKey: key, command: { ref: key },
+  // The key's round segment is the fixture's round id, so two keys are two
+  // identities (A1) — one round's effect never adopts another's command.
+  executionId, change: 'api', roundId: `round-${key.split(':')[4]}`, kind: 'push', effectKey: key, command: { ref: key },
 })
 const advance = (ms: number) => { clock += ms }
 

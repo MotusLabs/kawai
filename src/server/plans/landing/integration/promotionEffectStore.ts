@@ -7,7 +7,9 @@
 import type { Database } from 'bun:sqlite'
 import type { PromotionEffectKind } from '../../../../shared/planIntegration'
 import type { EffectState } from '../../../../shared/planExecution'
+import { canonicalJson } from '../../../../shared/productStrategy'
 import type { EffectQueue } from '../../execution/effects'
+import { EffectPinConflict } from '../../execution/executionEffectStore'
 
 export interface PromotionEffectRow {
   id: string
@@ -41,6 +43,9 @@ export type IntegrationChangeListener = (teamId: string, planId: string | undefi
 
 /** The states an effect write may still change: a settled effect (done, failed, cancelled) stays settled (O3). */
 const OPEN = "state IN ('pending', 'running', 'unknown')"
+
+/** Whether the row is still open to change (A1's live set). */
+const isLiveEffect = (state: EffectState): boolean => state === 'pending' || state === 'running' || state === 'unknown'
 
 export class PromotionEffectStore implements EffectQueue<PromotionEffectRow> {
   private readonly listeners = new Set<IntegrationChangeListener>()
@@ -101,10 +106,20 @@ export class PromotionEffectStore implements EffectQueue<PromotionEffectRow> {
     if (row) this.promotionChanged(row.promotion_id)
   }
 
-  /** Insert one effect row; idempotent by key, like an execution effect. */
+  /**
+   * Insert one effect row; idempotent by key, like an execution effect. A1:
+   * a promotion effect's identity is (promotion, kind, moves), and the key
+   * `promo:<id>:<kind>[:<moves>]` encodes exactly that (A9) — so the
+   * exact-key row is the identity's row, and while it is live the insert
+   * adopts it only when the command matches its pin, refusing with
+   * `EffectPinConflict` otherwise.
+   */
   insertEffect(input: { promotionId: string; kind: PromotionEffectKind; effectKey: string; command: Record<string, unknown> }): PromotionEffectRow {
     const existing = this.effectByKey(input.effectKey)
-    if (existing) return existing
+    if (existing) {
+      if (isLiveEffect(existing.state) && canonicalJson(existing.command) !== canonicalJson(input.command)) throw new EffectPinConflict(existing.id, existing.kind)
+      return existing
+    }
     const id = `peffect-${crypto.randomUUID()}`
     this.db.prepare(`INSERT INTO plan_promotion_effects (id, promotion_id, kind, effect_key, command_json, state, tries, created_at)
       VALUES (?, ?, ?, ?, ?, 'pending', 0, ?)`).run(id, input.promotionId, input.kind, input.effectKey, JSON.stringify(input.command), this.iso())

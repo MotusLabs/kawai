@@ -24,6 +24,7 @@ import { runGit } from '../../git/gitCommand'
 import { logger } from '../../logger'
 import { refusable } from './stepRefusal'
 import { ExecutionConflict } from './executionPatch'
+import { EffectPinConflict } from './executionEffectStore'
 import { cleanMergeCheck } from '../landing/cleanMerge'
 
 export interface LandingDeps {
@@ -131,11 +132,18 @@ export async function applyLanding(deps: LandingDeps, adapters: LandingAdapters,
     }
     // Clean: the update-branch effect runs, pinned to the reviewed head.
     const fresh = store.change(changeRow.executionId, changeRow.change)!
-    store.insertEffect({
-      executionId: changeRow.executionId, change: changeRow.change, roundId: round.id, kind: 'update-branch',
-      effectKey: `${changeRow.executionId}:${changeRow.change}:update-branch:${round.number}:${fresh.generation}`,
-      command: { repo: deps.repo, pr: changeRow.prNumber ?? 0, head: head.sha },
-    })
+    try {
+      store.insertEffect({
+        executionId: changeRow.executionId, change: changeRow.change, roundId: round.id, kind: 'update-branch',
+        effectKey: `${changeRow.executionId}:${changeRow.change}:update-branch:${round.number}:${fresh.generation}`,
+        command: { repo: deps.repo, pr: changeRow.prNumber ?? 0, head: head.sha },
+      })
+    } catch (error) {
+      // A1: a live row of this identity with a different command decides
+      // first — the step stays where it is, and the next tick re-reads.
+      if (!(error instanceof EffectPinConflict)) throw error
+      return
+    }
     store.transition(changeRow.executionId, changeRow.change, fresh, { step: 'updating' })
     return
   }
@@ -145,12 +153,19 @@ export async function applyLanding(deps: LandingDeps, adapters: LandingAdapters,
   if (finish !== undefined) return finish(store.change(changeRow.executionId, changeRow.change)!, { execution, head: head.sha, base: base.sha, cwd: changeRow.worktree ?? deps.team.groupsRoot })
   const fresh = store.change(changeRow.executionId, changeRow.change)!
   if (fresh === null || fresh.step === 'merging') return
+  // The insert lands before the step transition: a refused insert (A1) never
+  // flips the step — the live row settles first, and the next tick re-reads.
+  try {
+    store.insertEffect({
+      executionId: changeRow.executionId, change: changeRow.change, roundId: round.id, kind: 'merge',
+      effectKey: `${changeRow.executionId}:${changeRow.change}:merge:${round.number}:${fresh.generation}`,
+      command: { repo: deps.repo, pr: changeRow.prNumber ?? 0, head: head.sha, base: base.sha, baseBranch: execution.baseBranch, method: execution.mergeMethod, cwd: changeRow.worktree ?? deps.team.groupsRoot },
+    })
+  } catch (error) {
+    if (!(error instanceof EffectPinConflict)) throw error
+    return
+  }
   store.transition(changeRow.executionId, changeRow.change, fresh, { step: 'merging' })
-  store.insertEffect({
-    executionId: changeRow.executionId, change: changeRow.change, roundId: round.id, kind: 'merge',
-    effectKey: `${changeRow.executionId}:${changeRow.change}:merge:${round.number}:${fresh.generation}`,
-    command: { repo: deps.repo, pr: changeRow.prNumber ?? 0, head: head.sha, base: base.sha, baseBranch: execution.baseBranch, method: execution.mergeMethod, cwd: changeRow.worktree ?? deps.team.groupsRoot },
-  })
 }
 
 /** A mechanism's final landing step, once the change is up to date: its head and the base head it contains. */

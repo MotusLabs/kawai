@@ -81,11 +81,13 @@ const adapters = (): InspectorReads => ({
   },
 })
 
-const effectOf = (kind: string, command: Record<string, unknown>): EffectRow =>
-  store.insertEffect({ executionId, change: 'api', roundId: null, kind: kind as EffectRow['kind'], effectKey: `exec:1:api:${kind}:1:0`, command })
+const effectOf = (kind: string, command: Record<string, unknown>, roundId: string | null = null): EffectRow =>
+  store.insertEffect({ executionId, change: 'api', roundId, kind: kind as EffectRow['kind'], effectKey: `exec:1:api:${kind}:${roundId ?? 1}:0`, command })
 
-const inspect = async (kind: string, command: Record<string, unknown>): Promise<InspectionVerdict> =>
-  inspectEffect(effectOf(kind, command), adapters())
+// An optional round id gives a scenario its own identity (A1): same kind,
+// different command, is a new effect, not a re-issue of the last one.
+const inspect = async (kind: string, command: Record<string, unknown>, roundId: string | null = null): Promise<InspectionVerdict> =>
+  inspectEffect(effectOf(kind, command, roundId), adapters())
 
 describe('the per-kind inspections (D14 table)', () => {
   test('provision: a worktree or branch that exists records its head; neither does runs again', async () => {
@@ -120,12 +122,13 @@ describe('the per-kind inspections (D14 table)', () => {
 
   test('rerun: every run above attempt 1 is done with the adapter\'s { at, runIds }; any run at attempt 1 runs again', async () => {
     // The adapter's command carries `runIds` (review L3: the inspector once read a `runId` it never got).
+    // Each scenario is its own round (A1): same kind, different command, is another identity.
     reads.runAttempt = { '11': 2, '12': 3 }
-    await expect(inspect('rerun', { repo: 'acme/app', runIds: [11, 12] })).resolves.toEqual({ found: 'done', outcome: { at: new Date(CLOCK0).toISOString(), runIds: [11, 12] } })
+    await expect(inspect('rerun', { repo: 'acme/app', runIds: [11, 12] }, 'r1')).resolves.toEqual({ found: 'done', outcome: { at: new Date(CLOCK0).toISOString(), runIds: [11, 12] } })
     reads.runAttempt = { '11': 2, '12': 1 }
-    await expect(inspect('rerun', { repo: 'acme/app', runIds: [11, 12] })).resolves.toEqual({ found: 'not-done' })
+    await expect(inspect('rerun', { repo: 'acme/app', runIds: [11, 12] }, 'r2')).resolves.toEqual({ found: 'not-done' })
     reads.runAttempt = {}
-    await expect(inspect('rerun', { repo: 'acme/app', runIds: [11] })).resolves.toMatchObject({ found: 'undecidable' })
+    await expect(inspect('rerun', { repo: 'acme/app', runIds: [11] }, 'r3')).resolves.toMatchObject({ found: 'undecidable' })
   })
 
   test('update-branch: the PR head is read, moved or not — the clean-merge check sorts it later', async () => {

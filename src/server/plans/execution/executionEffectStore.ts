@@ -5,10 +5,37 @@
 // lines — no behavior of its own.
 import type { Database } from 'bun:sqlite'
 import type { EffectKind } from '../../../shared/planExecution'
+import { canonicalJson } from '../../../shared/productStrategy'
 import { mapEffect, type EffectRow } from './executionRows'
 
 /** The states an effect write may still change: a settled effect (done, failed, cancelled) stays settled (O3). */
 const OPEN = "state IN ('pending', 'running', 'unknown')"
+
+/**
+ * A1 (effect lifecycle): a live effect of one identity was issued again with
+ * a different command. Nothing is inserted or adopted — the caller keeps its
+ * step and waits, because the live row's verdict is what decides the change
+ * (I-B); running the re-derived command instead could act twice.
+ */
+export class EffectPinConflict extends Error {
+  constructor(readonly effectId: string, readonly kind: string) {
+    super(`effect ${effectId} (${kind}) is live with a different command; waiting for it to settle`)
+    this.name = 'EffectPinConflict'
+  }
+}
+
+/** Whether the row is still open to change (A1's live set). */
+const isLive = (state: string): boolean => state === 'pending' || state === 'running' || state === 'unknown'
+
+/**
+ * Whether insertEffect applies A1's identity predicate. Every kind but
+ * `provision` has one: the round effects (push, rerun, open-pr, merge,
+ * update-branch, fast-forward, remove-worktree) key by (execution, change,
+ * kind, round), the execution-level `create-integration` by (execution,
+ * kind) — change null. Provision keeps the planner's standing check, which
+ * already serializes it (a provisioning change plans nothing else).
+ */
+const hasIdentity = (kind: EffectKind): boolean => kind !== 'provision'
 
 export class ExecutionEffectStore {
   constructor(readonly db: Database, protected readonly now: () => Date = () => new Date()) {}
@@ -17,17 +44,40 @@ export class ExecutionEffectStore {
 
   /**
    * Insert one effect row; idempotent by key — a step re-enqueued after a
-   * restart returns the recorded row and never writes a second.
+   * restart returns the recorded row and never writes a second. A1: while a
+   * live row of the same identity stands, the insert adopts it only when the
+   * command matches its pin (a re-derived command is a deterministic
+   * re-computation of the same facts) and refuses with `EffectPinConflict`
+   * otherwise; a row of another identity is never adopted.
    */
   insertEffect(input: { executionId: string; change: string | null; roundId: string | null; kind: EffectKind; effectKey: string; command: Record<string, unknown> }): EffectRow {
+    const pin = hasIdentity(input.kind) ? canonicalJson(input.command) : ''
     const existing = this.effectByKey(input.effectKey)
-    if (existing) return existing
+    if (existing) {
+      if (pin !== '' && isLive(existing.state) && canonicalJson(existing.command) !== pin) throw new EffectPinConflict(existing.id, existing.kind)
+      return existing
+    }
+    if (pin !== '') {
+      const live = this.liveOfIdentity(input.executionId, input.change, input.kind, input.roundId)
+      if (live !== null) {
+        if (canonicalJson(live.command) !== pin) throw new EffectPinConflict(live.id, live.kind)
+        return live
+      }
+    }
     const id = `effect-${crypto.randomUUID()}`
     this.db.prepare(`INSERT INTO plan_execution_effects (id, execution_id, change, round_id, kind, effect_key, command_json, state, tries, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?)`).run(
       id, input.executionId, input.change, input.roundId, input.kind, input.effectKey, JSON.stringify(input.command), this.iso(),
     )
     return this.effect(id)!
+  }
+
+  /** The newest live row of one A1 identity, or null. */
+  private liveOfIdentity(executionId: string, change: string | null, kind: EffectKind, roundId: string | null): EffectRow | null {
+    const row = this.db.prepare(`SELECT * FROM plan_execution_effects
+      WHERE execution_id = ? AND change IS ? AND kind = ? AND round_id IS ? AND ${OPEN}
+      ORDER BY created_at, rowid DESC LIMIT 1`).get(executionId, change, kind, roundId) as Record<string, unknown> | null
+    return row ? mapEffect(row) : null
   }
 
   effect(id: string): EffectRow | null {
