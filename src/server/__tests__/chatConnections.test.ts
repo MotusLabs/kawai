@@ -27,9 +27,9 @@ function harness(wireLogs?: ChatWireLogs) {
     isArchived: (_id: string) => false,
     whenRestored: () => Promise.resolve(),
     loadHistory: async (id: string) => { loadHistoryCalls.push(id) },
-    has: (id: string) => id === 'chat-1' || id === 'chat-2' || id === 'chat-3' || id === 'chat-4',
-    profileIdOf: (id: string) => (id === 'chat-2' || id === 'chat-4' ? 'glm' : 'default'),
-    providerIdOf: (id: string) => (id === 'chat-2' || id === 'chat-4' ? 'zai' : 'default'),
+    has: (id: string) => id === 'chat-1' || id === 'chat-2' || id === 'chat-3' || id === 'chat-4' || id === 'chat-5',
+    profileIdOf: (id: string) => (id === 'chat-2' || id === 'chat-4' ? 'glm' : id === 'chat-5' ? 'glm-flash' : 'default'),
+    providerIdOf: (id: string) => (id === 'chat-2' || id === 'chat-4' || id === 'chat-5' ? 'zai' : 'default'),
     getSnapshot: (id: string, options: { historyFrom?: string } = {}) => {
       snapshotCalls.push({ id, options })
       return id === 'chat-2' ? null : { ...snapshot, sessionId: id }
@@ -477,16 +477,20 @@ describe('chat WebSocket subscriptions', () => {
     h.connections.publishUsage('default', report)
     // Several reports within one tick collapse to the latest value per session.
     h.connections.publishUsage('default', null)
-    // A provider only its own sessions care about fans to those alone.
+    // A provider only its own sessions care about fans to those alone — two
+    // sibling models of zai each get the report under their own profile id
+    // (providers-and-workers 5.3).
     await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-4' })
+    await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-5' })
     h.connections.publishUsage('zai', report)
     await new Promise(resolve => setTimeout(resolve, 0))
     // One message per subscribed session, each carrying that session's own
-    // profile id (providers-and-workers 5.1).
+    // profile id plus the additive provider id.
     expect(h.messages.filter(message => message.type === 'chat-usage')).toEqual([
-      { type: 'chat-usage', profileId: 'default', report: null },
-      { type: 'chat-usage', profileId: 'default', report: null },
-      { type: 'chat-usage', profileId: 'glm', report },
+      { type: 'chat-usage', profileId: 'default', providerId: 'default', report: null },
+      { type: 'chat-usage', profileId: 'default', providerId: 'default', report: null },
+      { type: 'chat-usage', profileId: 'glm', providerId: 'zai', report },
+      { type: 'chat-usage', profileId: 'glm-flash', providerId: 'zai', report },
     ])
   })
 
@@ -505,7 +509,7 @@ describe('chat WebSocket subscriptions', () => {
     }
     h.connections.publishUsage('default', report)
     await new Promise(resolve => setTimeout(resolve, 0))
-    expect(h.messages.at(-1)).toEqual({ type: 'chat-usage', profileId: 'default', report })
+    expect(h.messages.at(-1)).toEqual({ type: 'chat-usage', profileId: 'default', providerId: 'default', report })
     expect(otherMessages).toEqual([])
 
     // Detaching the only session of the provider drops the queued report.

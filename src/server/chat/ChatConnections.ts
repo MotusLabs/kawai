@@ -453,6 +453,7 @@ export class ChatConnections {
           connection.send({
             type: 'chat-usage',
             profileId: this.manager.profileIdOf(sessionId),
+            providerId: this.manager.providerIdOf(sessionId),
             report,
           })
         }
