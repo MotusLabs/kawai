@@ -11,8 +11,9 @@
 - [ ] 2.1 Open the PR and verify each job's setup step logs Bun 1.4.3 and that the quality-gates job (lint, typecheck, `test:ci`, coverage, build) and both e2e steps pass. Record any test that passes on 1.3.14 and fails on 1.4.3, with its fix.
 - [ ] 2.2 Dispatch `local-runner-test.yml` on the branch and verify it reports Bun 1.4.3.
 - [ ] 2.3 Record the coverage delta against the last master run in the PR body.
+- [ ] 2.4 Before merging the implementation, rehearse `release.yml` with the proposed pin in a disposable checkout: build the frontend and all four platform binaries, check their formats and sizes, and boot the native binary outside `node_modules` with temporary data/config paths and a spare port. Verify the injected build version in `startup_state`; record the commands and results in the PR. Do not create a tag or publish artifacts for this rehearsal.
 
 ## Workflow follow-up
 
-- After merge, confirm the release run for the PR-numbered tag passes its boot test on the 1.4.3 runtime before the live build updates.
+- After merge, confirm the release run for the automatically created merge tag passes its boot test on the 1.4.3 runtime before the live build updates.
 - Archive the change.

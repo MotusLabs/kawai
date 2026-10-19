@@ -23,7 +23,7 @@
 
 ## Risks / Trade-offs
 
-- [A behavior difference between 1.3.14 and 1.4.3 surfaces only in CI steps not run locally (coverage, release build, e2e)] → The PR runs the full CI, including e2e and a release dry run, before merge; fix forward or revert the one-line pin.
+- [A behavior difference between 1.3.14 and 1.4.3 surfaces only in CI steps not run locally (coverage, release build, e2e)] → The implementation PR runs the full CI, including e2e. Separately, before merge, rehearse `release.yml`'s four cross-compiles, format/size checks, and native boot check in a disposable checkout with the proposed pin, without creating a tag or publishing a release. Record the commands, Bun version, and results; ordinary PR CI runs no release dry run.
 - [The compiled binary misbehaves at runtime on 1.4.3] → The release job's existing boot test (the binary must report its version) runs on every release; the live server is updated only after that passes. Rollback is reverting `.bun-version` and cutting a new release.
 - [Coverage figures shift slightly with the new runtime] → Nothing gates on an exact percentage; note the delta in the PR.
 
@@ -32,6 +32,7 @@
 1. Change `.bun-version` to 1.4.3, align `bun-types`, and refresh `bun.lock`.
 2. Open the PR; confirm the CI jobs log Bun 1.4.3 and pass, including e2e and the chat fixture e2e step.
 3. Dispatch the self-test workflow (`local-runner-test.yml`) on the branch and confirm it reports 1.4.3.
-4. After merge, confirm the release run's boot test passes for the PR-numbered tag.
+4. Before merge, rehearse the release build and native boot check from `release.yml` in a disposable checkout using 1.4.3, with no tag or publishing. Run the native binary outside a checkout containing `node_modules`, with temporary data/config paths and a spare port, as the workflow requires. Record the results in the implementation PR.
+5. After merge, confirm the automatically created release tag's build and boot test pass before adopting the live build.
 
 Rollback: revert the commit; the next merge cuts a release on 1.3.14 again.
