@@ -55,23 +55,30 @@ function seed(args: { dbPath: string; team: string; lead: string; dev: string; u
     import { Database } from 'bun:sqlite';
     import { MailboxStore } from './src/server/team/mailboxStore';
     import { TaskStore } from './src/server/team/taskStore';
+    import { retryOnSqliteBusy } from './src/server/__tests__/sqliteBusyRetry';
     const { dbPath, team, lead, dev, uncertain } = JSON.parse(await Bun.stdin.text());
     const db = new Database(dbPath); db.exec('PRAGMA busy_timeout = 5000'); const store = new MailboxStore(db); const tasks = new TaskStore(db, store);
-    const task = tasks.create({ teamId: team, title: 'Export CSV', direction: 'Ship a CSV export', creator: { kind: 'human', sessionId: null } });
-    const sent = { teamId: team, fromSession: lead, fromGroup: 'leads', originPath: team, taskId: task.id };
-    const first = store.enqueue({ ...sent, toKind: 'group', toId: 'devs', body: 'Please build the CSV export' });
-    store.claim(first.id, dev); store.markPushed(first.id, undefined, 1); store.markDelivered(first.id);
-    const reply = store.enqueue({ ...sent, toKind: 'session', toId: lead, fromSession: dev, fromGroup: 'devs', body: 'On it — the branch is ready', inReplyTo: store.get(first.id) });
-    store.claim(reply.id, lead); store.markPushed(reply.id, undefined, 1); store.markDelivered(reply.id);
-    const other = store.enqueue({ teamId: team, fromSession: lead, fromGroup: 'leads', originPath: team, toKind: 'group', toId: 'devs', body: 'Unrelated status ping' });
-    const out = { task: task.id, first: first.id, reply: reply.id, other: other.id };
-    if (uncertain) {
-      for (const body of ['Receipt evidence missing', 'Receipt evidence torn']) {
-        const held = store.enqueue({ ...sent, toKind: 'session', toId: dev, body });
-        store.claim(held.id, dev); store.markPushed(held.id); store.holdUncertain(held.id, 'transcript-unavailable-or-torn');
-        out[body.includes('missing') ? 'held' : 'torn'] = held.id;
+    // One retried immediate transaction: the server is a second writer (BUSY
+    // on the deferred upgrade bypasses busy_timeout), and atomic seeding keeps
+    // it from seeing or claiming half a seed.
+    const out = await retryOnSqliteBusy(() => db.transaction(() => {
+      const task = tasks.create({ teamId: team, title: 'Export CSV', direction: 'Ship a CSV export', creator: { kind: 'human', sessionId: null } });
+      const sent = { teamId: team, fromSession: lead, fromGroup: 'leads', originPath: team, taskId: task.id };
+      const first = store.enqueue({ ...sent, toKind: 'group', toId: 'devs', body: 'Please build the CSV export' });
+      store.claim(first.id, dev); store.markPushed(first.id, undefined, 1); store.markDelivered(first.id);
+      const reply = store.enqueue({ ...sent, toKind: 'session', toId: lead, fromSession: dev, fromGroup: 'devs', body: 'On it — the branch is ready', inReplyTo: store.get(first.id) });
+      store.claim(reply.id, lead); store.markPushed(reply.id, undefined, 1); store.markDelivered(reply.id);
+      const other = store.enqueue({ teamId: team, fromSession: lead, fromGroup: 'leads', originPath: team, toKind: 'group', toId: 'devs', body: 'Unrelated status ping' });
+      const seeded = { task: task.id, first: first.id, reply: reply.id, other: other.id };
+      if (uncertain) {
+        for (const body of ['Receipt evidence missing', 'Receipt evidence torn']) {
+          const held = store.enqueue({ ...sent, toKind: 'session', toId: dev, body });
+          store.claim(held.id, dev); store.markPushed(held.id); store.holdUncertain(held.id, 'transcript-unavailable-or-torn');
+          seeded[body.includes('missing') ? 'held' : 'torn'] = held.id;
+        }
       }
-    }
+      return seeded;
+    }).immediate());
     console.log(JSON.stringify(out)); db.close();
   `], { cwd: process.cwd(), input: JSON.stringify(args), encoding: 'utf8' })) as {
     task: string; first: string; reply: string; other: string; held?: string; torn?: string
