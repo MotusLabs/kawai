@@ -38,7 +38,7 @@ describe('the Codex spawn environment (task 3.2, design D4)', () => {
       ANTHROPIC_BASE_URL: 'https://gw.example.internal',
       CLAUDE_CODE_ATTRIBUTION_HEADER: 'x',
       CLAUDE_CONFIG_DIR: '/home/smoke/.claude',
-    }, '/srv/codex')
+    }, '/srv/codex', new Set())
     // PATH and HOME survive: a `#!/usr/bin/env node` codex must start (B2).
     expect(env.PATH).toBe('/usr/bin:/bin')
     expect(env.HOME).toBe('/home/smoke')
@@ -55,6 +55,15 @@ describe('the Codex spawn environment (task 3.2, design D4)', () => {
       .toBe(false)
     // CODEX_HOME is the resolved home, not the server's own value.
     expect(env.CODEX_HOME).toBe('/srv/codex')
+  })
+
+  test('the catalog-named credential variables never reach the child (openrouter-provider 1.8)', () => {
+    const env = codexSpawnEnv(
+      { PATH: '/usr/bin', OPENROUTER_API_KEY: 'fake-or-key', OPENROUTER_MANAGEMENT_KEY: 'fake-or-mgmt', OTHER: 'kept' },
+      '/srv/codex',
+      new Set(['OPENROUTER_API_KEY', 'OPENROUTER_MANAGEMENT_KEY']),
+    )
+    expect(Object.keys(env).sort()).toEqual(['CODEX_HOME', 'OTHER', 'PATH'])
   })
 
   test('no Codex home or env value reaches the profiles route payload', () => {

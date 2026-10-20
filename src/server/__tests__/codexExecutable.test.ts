@@ -89,6 +89,27 @@ describe('checkCodexExecutable', () => {
     expect(check.path).toBe(exe)
   })
 
+  test('the version probe gets PATH and HOME only, never a credential (openrouter-provider 1.8)', async () => {
+    const names = path.join(tempDir, 'names.txt')
+    const exe = makeExecutable(tempDir, 'codex', `#!/bin/sh\nenv | cut -d= -f1 > "${names}"\necho "codex-cli ${CODEX_MIN_VERSION}"\n`)
+    const saved = { key: process.env.OPENROUTER_API_KEY, mgmt: process.env.OPENROUTER_MANAGEMENT_KEY }
+    process.env.OPENROUTER_API_KEY = 'fake-or-key'
+    process.env.OPENROUTER_MANAGEMENT_KEY = 'fake-or-mgmt'
+    try {
+      resetCodexExecutableCache()
+      await checkCodexExecutable(exe)
+    } finally {
+      if (saved.key === undefined) delete process.env.OPENROUTER_API_KEY
+      else process.env.OPENROUTER_API_KEY = saved.key
+      if (saved.mgmt === undefined) delete process.env.OPENROUTER_MANAGEMENT_KEY
+      else process.env.OPENROUTER_MANAGEMENT_KEY = saved.mgmt
+    }
+    const received = fs.readFileSync(names, 'utf8').split('\n')
+    expect(received).toContain('PATH')
+    expect(received).not.toContain('OPENROUTER_API_KEY')
+    expect(received).not.toContain('OPENROUTER_MANAGEMENT_KEY')
+  })
+
   test('refuses a value with arguments as a missing executable', async () => {
     const error = await expectRejection(
       checkCodexExecutable(`${tempDir}/codex --flag`),

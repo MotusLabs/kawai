@@ -25,10 +25,15 @@ export class ProgressDigest {
     this.tools.push(tool)
     if (this.tools.length > DIGEST_TOOL_LIMIT) this.tools.shift()
     if (!input || typeof input !== 'object') return
-    for (const field of PATH_FIELDS) {
-      const value = (input as Record<string, unknown>)[field]
-      if (typeof value === 'string' && value.trim() !== '' && this.files.size < DIGEST_FILE_LIMIT) this.files.add(value)
-    }
+    for (const field of PATH_FIELDS) this.addFile((input as Record<string, unknown>)[field])
+    // A Codex file change names every changed file in `paths`
+    // (codex-chat-sessions D7); `file_path` holds only the first.
+    const paths = (input as Record<string, unknown>).paths
+    if (Array.isArray(paths)) for (const value of paths) this.addFile(value)
+  }
+
+  private addFile(value: unknown): void {
+    if (typeof value === 'string' && value.trim() !== '' && this.files.size < DIGEST_FILE_LIMIT) this.files.add(value)
   }
 
   snapshot(): ChatHandoffPackage['progress'] {
