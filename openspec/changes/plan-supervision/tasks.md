@@ -111,8 +111,8 @@ Implement after `plan-execution` and `integration-candidates` have landed on mas
 
 ## 7. Human connections
 
-- [ ] 7.1 Implement `decisionConnections.ts` for `team-plan-decide` and `team-plan-override`, answered by `team-plan-result`, and add both to `CHAT_CONNECTION_TYPES` (D15). Verify with connection tests: another team's plan or card is refused, a replay returns the prior decision, and a refusal shows its message.
-- [ ] 7.2 Add `decisions`, `supervision`, and `usage` to `team-plan-detail`, pushed after every decision, fix, or alert write. Verify with a connection test that an answer pushes one detail carrying the decision.
+- [x] 7.1 Implement `decisionConnections.ts` for `team-plan-decide` and `team-plan-override`, answered by `team-plan-result`, and add both to `CHAT_CONNECTION_TYPES` (D15). Verify with connection tests: another team's plan or card is refused, a replay returns the prior decision, and a refusal shows its message.
+- [x] 7.2 Add `decisions`, `supervision`, and `usage` to `team-plan-detail`, pushed after every decision, fix, or alert write. Verify with a connection test that an answer pushes one detail carrying the decision.
 
 ## 8. Supervision monitor
 

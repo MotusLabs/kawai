@@ -12,6 +12,7 @@
 // store's reads from the one impact gate, so a badge and a refusal agree.
 import type { PlanDetail, PlanEvent, PlanSummary } from './plans'
 import type { ImpactGate, PlanImpact } from './strategyImpact'
+import type { DecisionCard, PlanDecision } from './planDecisions'
 import type { AlignmentAssessment, AssessmentFinding, PlanRevisionValidation, PlanValidationReport, Question } from './planValidation'
 
 export type PlanServerMessage =
@@ -40,6 +41,8 @@ export type PlanServerMessage =
       execution?: { id: string; state: 'running' | 'finished'; outcome: 'completed' | 'stopped' | null }
       /** plan-execution D17: the preview's standing (the failing preconditions with their messages). */
       preview?: { failures: Array<{ name: string; message: string }>; ready: boolean }
+      /** plan-supervision D15: the owner's answer or override, with the fix task an override created. */
+      decision?: { card: DecisionCard; decision: PlanDecision; fixTaskId?: string | null }
     }
 
 /** The report a `team-plan-result` carries (plan-validation D11): the stored row, or a dry run with a null id. */
@@ -76,6 +79,11 @@ export type PlanClientMessage =
   | { type: 'team-plan-execution-start'; teamPath: string; requestId: string; planId: string; revision: number; contentHash: string; commandId: string }
   | { type: 'team-plan-execution-stop'; teamPath: string; requestId: string; executionId: string; reason: string; commandId: string }
   | { type: 'team-plan-execution-retry'; teamPath: string; requestId: string; executionId: string; change: string; commandId: string }
+  // plan-supervision D15: the owner answers a card addressed to the owner,
+  // or overrides a decided card naming the decision it saw; each replays
+  // by its command id, and `team-plan-result` answers with `decision`.
+  | { type: 'team-plan-decide'; teamPath: string; requestId: string; planId: string; cardId: string; choice?: string | null; optionIndex?: number | null; rationale?: string | null; commandId: string }
+  | { type: 'team-plan-override'; teamPath: string; requestId: string; planId: string; cardId: string; expectedDecisionId: string; choice?: string | null; optionIndex?: number | null; rationale: string; commandId: string }
 
 /** plan-validation D11: the shape `team-plan-assess` alignment takes (questions and findings are the agents' tools'). */
 export type PlanAssessAlignment = AlignmentAssessment
