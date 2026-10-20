@@ -2883,11 +2883,12 @@ export class ChatSessionManager {
    * Store one successful OpenRouter pull (openrouter-provider D6): meters
    * recorded, and — from a complete pull only (F3) — the smallest remaining
    * amount fed to the credit-cooldown overlay (D8); a pull without meters
-   * records the no-data verdict, so no bar shows.
+   * (follow-up N3) drops any held report and records the no-data verdict, so
+   * a key whose limit was removed stops showing its stale meters.
    */
   private recordOpenRouterPull(providerId: string, pull: OpenRouterUsagePull & { ok: true }): void {
     if (pull.report.windows.length === 0) {
-      this.usageLimits.recordNoData(providerId)
+      this.usageLimits.clearAndRecordNoData(providerId, pull.report.receivedAt)
       return
     }
     this.usageLimits.record(providerId, pull.report)
