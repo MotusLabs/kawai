@@ -57,6 +57,15 @@ function outputText(value: unknown): { output: string; isError: boolean } {
   return { output: '', isError: false }
 }
 
+/**
+ * Whether a retryable Codex notice memo may be dropped for a retry now (D8,
+ * M3): only while no live turn has begun — a re-read once live events exist
+ * would replay those turns as duplicated history. Pure, so the memo rule is
+ * table-tested; the manager only decides when to ask it.
+ */
+export const canRetryCodexMemo = (retryable: boolean, liveEvents: number): boolean =>
+  retryable && liveEvents === 0
+
 export function parseCodexRollout(content: string): ChatEvent[] {
   const events: ChatEvent[] = []
   let turnId: string | null = null

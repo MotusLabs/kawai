@@ -147,7 +147,7 @@ import {
   replayTranscriptFileAsync,
   type TranscriptReplay,
 } from './transcriptReplay'
-import { replayCodexRollout, replayCodexRolloutAsync } from './codex/codexRollout'
+import { canRetryCodexMemo, replayCodexRollout, replayCodexRolloutAsync } from './codex/codexRollout'
 import { watchTranscriptTitle, type TranscriptTitleWatcher } from './transcriptTitleWatcher'
 
 export type { ChatQueryFactory }
@@ -955,7 +955,7 @@ export class ChatSessionManager {
    * live events (before the first turn, or after a restart).
    */
   private canRetryCodexHistory(sessionId: string): boolean {
-    return this.retryableHistory.has(sessionId) && (this.liveEvents.get(sessionId) ?? []).length === 0
+    return canRetryCodexMemo(this.retryableHistory.has(sessionId), (this.liveEvents.get(sessionId) ?? []).length)
   }
 
   /**

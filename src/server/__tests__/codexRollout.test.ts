@@ -11,7 +11,7 @@ import path from 'node:path'
 import { schemaDb } from './schemaDb'
 import { MailboxStore } from '../team/mailboxStore'
 import { formatEnvelope, messageEnvelope } from '../team/envelope'
-import { parseCodexRollout, replayCodexRollout } from '../chat/codex/codexRollout'
+import { canRetryCodexMemo, parseCodexRollout, replayCodexRollout } from '../chat/codex/codexRollout'
 
 let dir: string
 let db: Database
@@ -115,4 +115,15 @@ test('a missing rollout replays as the history-unavailable notice; a readable on
   expect(replay.status).toBe('ok')
   expect(replay.cwd).toBeNull()
   expect(replay.events.filter(e => e.type === 'turn_completed')).toHaveLength(2)
+})
+
+test('the retryable-memo rule drops a retry only while no live turn exists (D8, M3)', () => {
+  // The manager consumes this at the moments it may re-read the rollout:
+  // a retryable notice with live events already flowing must never drop —
+  // the re-read would replay those live turns as history.
+  expect(canRetryCodexMemo(true, 0)).toBe(true)
+  expect(canRetryCodexMemo(true, 1)).toBe(false)
+  expect(canRetryCodexMemo(true, 7)).toBe(false)
+  expect(canRetryCodexMemo(false, 0)).toBe(false)
+  expect(canRetryCodexMemo(false, 3)).toBe(false)
 })
