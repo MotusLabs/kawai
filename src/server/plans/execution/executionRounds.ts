@@ -48,6 +48,8 @@ export const roundAdapters: RoundAdapters = {
 export interface ReleaseSeam {
   readiness: (sessionId: string) => { ready: boolean; reason: string | null }
   release: (sessionId: string) => { ok: true } | { ok: false; error: string }
+  /** The team's in-flight spawn reservations (staffing's `team_spawns`), each with its worktree root. */
+  pendingSpawns: (teamId: string) => Array<{ groupId: string; worktree: string }>
 }
 
 export interface RoundDeps {
@@ -230,9 +232,24 @@ async function dispatchReview(deps: RoundDeps, changeRow: { executionId: string;
   // wake re-checks. Human-created sessions never release. An unscoped group
   // skips the step and leaves the implementer working.
   if (change.worktree !== null && deps.groupScoped(deps.team.teamId, reviewGroup)) {
+    const worktree = change.worktree
+    const inWorktree = (dir: string) => dir === worktree || dir.startsWith(`${worktree}${path.sep}`)
+    // A spawn still starting in the worktree (the instruction's reservation)
+    // is a member the records do not list yet: dispatching now would let it
+    // arrive after the review and hold the worktree against the reviewer, so
+    // the step waits until it is a record that can be released.
+    const starting = deps.releases.pendingSpawns(deps.team.teamId)
+      .find(spawn => spawn.groupId !== reviewGroup && inWorktree(spawn.worktree))
+    if (starting !== undefined) {
+      const held = store.change(changeRow.executionId, changeRow.change)!
+      const message = `A ${starting.groupId} member is still starting in the worktree; it is released before the review`
+      if (held.step !== 'releasing' || held.stopDetail?.message !== message) {
+        store.transition(changeRow.executionId, changeRow.change, held, { step: 'releasing', stopDetail: { message } })
+      }
+      return
+    }
     const members = [...deps.records()].filter(record =>
-      record.archivedAt == null && record.spawned === true
-      && (record.projectPath === change.worktree || record.projectPath.startsWith(`${change.worktree}${path.sep}`))
+      record.archivedAt == null && record.spawned === true && inWorktree(record.projectPath)
       && record.groupId !== reviewGroup)
     for (const member of members) {
       const readiness = deps.releases.readiness(member.sessionId)

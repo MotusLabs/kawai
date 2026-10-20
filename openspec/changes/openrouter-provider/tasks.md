@@ -16,7 +16,7 @@
   - "Project settings cannot add a proxy": `settings.env.HTTPS_PROXY` is empty when the server sets none, and equals the server value when it does.
   - "Token stays out of the flag settings": `settings.env` has no `ANTHROPIC_AUTH_TOKEN` and no key value anywhere in it.
   - A no-override credentialed profile still gets the pinned layer. Break the pin and confirm these cases fail.
-- [ ] 1.8 When `codex-chat-sessions` lands its launch path, that path uses the same withholding (`withheldCredentialNames` over the catalog resolved for the project path), so no Codex agent receives a named credential variable. Verify a Codex launch test where the server environment holds `OPENROUTER_API_KEY` and `OPENROUTER_MANAGEMENT_KEY`, and the Codex agent's environment contains neither. If `codex-chat-sessions` lands first, do this within this change. Otherwise `codex-chat-sessions` takes it on. (State at the 2026-10-19 rebase: master has no Codex launch path yet, so `codex-chat-sessions` takes it on; 3.1's Codex carve-out scenario belongs to the same follow-up.)
+- [x] 1.8 When `codex-chat-sessions` lands its launch path, that path uses the same withholding (`withheldCredentialNames` over the catalog resolved for the project path), so no Codex agent receives a named credential variable. Verify a Codex launch test where the server environment holds `OPENROUTER_API_KEY` and `OPENROUTER_MANAGEMENT_KEY`, and the Codex agent's environment contains neither. If `codex-chat-sessions` lands first, do this within this change. Otherwise `codex-chat-sessions` takes it on. (State at the 2026-10-19 rebase: master has no Codex launch path yet, so `codex-chat-sessions` takes it on; 3.1's Codex carve-out scenario belongs to the same follow-up.)
 
 ## 2. OpenRouter usage
 

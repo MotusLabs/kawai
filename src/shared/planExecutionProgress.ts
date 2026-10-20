@@ -93,7 +93,7 @@ export function waitingLabel(reason: WaitingReason): string {
       : `waits for ${reason.effect} (${reason.state})`
     case 'instruction': return `instruction ${reason.state}${reason.holder ? ` with ${reason.holder}` : ''}`
     case 'ci': return reason.pending.length > 0 ? `waits for CI: ${list(reason.pending)}` : 'waits for CI checks to appear'
-    case 'release': return `waits for ${reason.member} to be released: ${reason.reason}`
+    case 'release': return `waits for ${reason.member || 'the worktree'} to be released: ${reason.reason}`
     case 'review': return reason.claimant ? `waits for the review by ${reason.claimant}` : 'waits for a reviewer to claim the review'
     case 'conditions': return `waits for acceptance conditions: ${list(reason.conditions)}`
     case 'slot': return reason.holder ? `waits for the landing slot, held by ${reason.holder}` : 'waits for the landing slot'

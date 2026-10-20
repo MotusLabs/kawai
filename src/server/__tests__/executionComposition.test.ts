@@ -136,6 +136,7 @@ async function compose(): Promise<void> {
     executionCore: core,
     executionTeam: {
       tasks, assignments, results, taskStore: bench.tasks, mailbox: mail, releases,
+      pendingSpawns: () => [],
       records: () => bench.records.values(),
       // The executor resolves by team id; the runtime's archive wake by session.
       identityOf: id => (id === world.team.teamId ? world.team : undefined),
