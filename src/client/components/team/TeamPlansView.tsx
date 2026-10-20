@@ -145,6 +145,18 @@ function PlanDetailPane({ teamPath, planId, detail, sessions, sendMessage, conne
   const loaded = detail?.plan.id === planId
   // Moving into a plan moves focus to its title, so keyboard and screen-reader users land in the detail.
   useEffect(() => { if (loaded) heading.current?.focus() }, [loaded, planId])
+  // The attention link's scroll target (plan-supervision D15): the change
+  // row and decision card effects act on it first (child effects run
+  // before their parents'), then this consumes it once — whether or not a
+  // row matched. An unknown change or a card no longer listed leaves the
+  // detail at its top, with no error and no late scroll.
+  const reveal = useTeamPlanStore(state => state.reveal)
+  useEffect(() => {
+    if (loaded && reveal && reveal.teamKey === teamPath && reveal.planId === planId) {
+      useTeamPlanStore.getState().consumeReveal(teamPath)
+    }
+  }, [loaded, reveal, teamPath, planId])
+  const revealAnchor = loaded && reveal !== null && reveal.teamKey === teamPath && reveal.planId === planId ? reveal.anchor : null
   const back = <button type="button" className="btn text-chat-meta" data-testid="plan-back" onClick={onBack}>← All plans</button>
   if (!detail || !loaded) return <div>{back}<p role="status" className="mt-2 text-chat-meta text-secondary">Loading plan…</p></div>
   const { plan } = detail
@@ -172,12 +184,13 @@ function PlanDetailPane({ teamPath, planId, detail, sessions, sendMessage, conne
       <PlanChangesSection content={shown.content} progress={shown === approved ? detail.progress : null} onOpenTask={onOpenTask} />
       <PlanPolicySection content={shown.content} />
       <PlanExecutionSection teamPath={teamPath} plan={detail.plan} detail={detail} connected={connected} onSend={sendMessage} onOpenTask={onOpenTask}
-        sessions={sessions} busy={busy} />
+        sessions={sessions} busy={busy} revealAnchor={revealAnchor} />
       {/* Supervision (plan-supervision D15): the report, the plan-level Decisions list, and the usage totals,
           each only when the detail carries it. */}
       {detail.supervision && <PlanReportSection view={detail.supervision} sessions={sessions} onOpenImpactReview={onOpenImpactReview} />}
       <PlanDecisionsList teamPath={teamPath} planId={detail.plan.id} cards={listedCards}
-        sessions={sessions} connected={connected} busy={busy} onSend={sendMessage} onOpenTask={onOpenTask ?? (() => undefined)} />
+        sessions={sessions} connected={connected} busy={busy} onSend={sendMessage} onOpenTask={onOpenTask ?? (() => undefined)}
+        revealAnchor={revealAnchor} />
       {detail.usage && <PlanUsageSection view={detail.usage} />}
     </>}
     <PlanRevisionsSection teamPath={teamPath} detail={detail} sessions={sessions} sendMessage={sendMessage} connected={connected} busy={busy}

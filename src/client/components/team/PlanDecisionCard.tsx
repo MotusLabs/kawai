@@ -7,15 +7,16 @@
 // decided ones **Override** (PlanDecisionDialog), which names the decision
 // it replaces. Cards render inline in their change's execution row and in
 // the plan-level Decisions list; the anchor id (`decision-card-<id>`) is
-// where attention links scroll to. Every control disables while
-// disconnected.
+// where a `card` attention link carrying its plan scrolls to and focuses.
+// Every control disables while disconnected.
+import { useEffect, useRef } from 'react'
 import type { SendClientMessage, Session } from '@shared/types'
 import type { PlanDecisionCardView } from '@shared/planDecisions'
 import { FIX_PHASE_LABELS } from '@shared/planDecisions'
 import PlanDecisionDialog from './PlanDecisionDialog'
 import { CARD_STATE_LABELS, DECISION_KIND_LABELS, decisionPartyLabel } from './planLabels'
 
-export default function PlanDecisionCard({ teamPath, planId, cardView, sessions, connected, busy, onSend, onOpenTask }: {
+export default function PlanDecisionCard({ teamPath, planId, cardView, sessions, connected, busy, onSend, onOpenTask, revealed = false }: {
   teamPath: string
   planId: string
   cardView: PlanDecisionCardView
@@ -24,11 +25,19 @@ export default function PlanDecisionCard({ teamPath, planId, cardView, sessions,
   busy: boolean
   onSend: SendClientMessage
   onOpenTask: (taskId: string) => void
+  /** The attention link named this card: scroll into view and take focus (plan-supervision D15). */
+  revealed?: boolean
 }) {
   const { card, state, decisions, current, fixes, commits } = cardView
   const answered = state !== 'open'
   const shortId = (taskId: string) => taskId.slice(0, 13)
-  return <li className="border border-border p-2" id={`decision-card-${card.id}`} data-testid="plan-decision-card">
+  const cardRef = useRef<HTMLLIElement | null>(null)
+  useEffect(() => {
+    if (!revealed) return
+    cardRef.current?.scrollIntoView({ block: 'center' })
+    cardRef.current?.focus()
+  }, [revealed])
+  return <li ref={cardRef} className="border border-border p-2" id={`decision-card-${card.id}`} tabIndex={-1} data-testid="plan-decision-card">
     <p className="flex flex-wrap items-baseline justify-between gap-2 text-chat-body">
       <span className="font-medium">{card.question}</span>
       <span className="text-chat-meta" data-testid="plan-decision-state">{CARD_STATE_LABELS[state]}</span>
@@ -84,7 +93,7 @@ export default function PlanDecisionCard({ teamPath, planId, cardView, sessions,
 }
 
 /** The plan-level Decisions list (D15): cards with no change — or every card when no execution gives them a change row. */
-export function PlanDecisionsList({ teamPath, planId, cards, sessions, connected, busy, onSend, onOpenTask }: {
+export function PlanDecisionsList({ teamPath, planId, cards, sessions, connected, busy, onSend, onOpenTask, revealAnchor = null }: {
   teamPath: string
   planId: string
   cards: PlanDecisionCardView[]
@@ -93,13 +102,16 @@ export function PlanDecisionsList({ teamPath, planId, cards, sessions, connected
   busy: boolean
   onSend: SendClientMessage
   onOpenTask: (taskId: string) => void
+  /** The attention link's scroll target, when it names one of these cards (plan-supervision D15). */
+  revealAnchor?: string | null
 }) {
   if (cards.length === 0) return null
   return <section className="mt-3" data-testid="plan-decisions-section" aria-labelledby="plan-decisions-heading">
     <h3 id="plan-decisions-heading" className="text-chat-meta font-medium">Decisions</h3>
     <ul className="mt-1 space-y-2">
       {cards.map(cardView => <PlanDecisionCard key={cardView.card.id} teamPath={teamPath} planId={planId}
-        cardView={cardView} sessions={sessions} connected={connected} busy={busy} onSend={onSend} onOpenTask={onOpenTask} />)}
+        cardView={cardView} sessions={sessions} connected={connected} busy={busy} onSend={onSend} onOpenTask={onOpenTask}
+        revealed={revealAnchor === `decision-card-${cardView.card.id}`} />)}
     </ul>
   </section>
 }

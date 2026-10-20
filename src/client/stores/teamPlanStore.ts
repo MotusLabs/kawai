@@ -22,7 +22,9 @@
 // the selected plan's `detail` itself. The Answer and Override dialogs arm
 // their own slots (`decide:<plan>:<cardId>`, `override:<plan>:<cardId>`); the
 // refreshed card arrives in the re-pushed detail, so the result only
-// settles the request.
+// settles the request. An attention link that names a change or card sets
+// `reveal` (like the chat search's `pendingReveal`): the plan detail scrolls
+// to it once rendered and consumes it; the URL stays the plan's.
 import { create } from 'zustand'
 import type { ServerMessage } from '@shared/types'
 import type { PlanDetail, PlanSummary } from '@shared/plans'
@@ -50,6 +52,19 @@ export interface ArmedPlanCommand {
   payload: string | null
   /** The server refused it; only reopening the dialog (a new command) can try again. */
   refused?: boolean
+}
+
+/**
+ * The attention link's one-shot scroll target (plan-supervision D15): the
+ * plan detail scrolls to it once rendered and consumes it, so the URL stays
+ * the plan's. A target no row matches is dropped silently — the detail
+ * stays at its top.
+ */
+export interface PlanReveal {
+  teamKey: string
+  planId: string
+  /** The DOM anchor: `plan-change-<change>` or `decision-card-<cardId>`. */
+  anchor: string
 }
 
 export interface PlanView {
@@ -98,11 +113,17 @@ export const closedPlanView = (): PlanView => ({
 
 interface PlanState {
   views: Record<string, PlanView>
+  /** The attention link's scroll target, until the plan detail consumes it (plan-supervision D15). */
+  reveal: PlanReveal | null
   open: (teamKey: string, planId?: string) => void
   close: (teamKey: string) => void
   /** Move a view to the chat's new team key; a view already open under the new key wins. */
   rekey: (from: string, to: string) => void
   select: (teamKey: string, planId: string | null) => void
+  /** An attention link named a change or card: remember the target, then navigate. */
+  requestReveal: (teamKey: string, planId: string, anchor: string) => void
+  /** The detail rendered: drop the target once, only when it is this team's. */
+  consumeReveal: (teamKey: string) => void
   /** A dialog opened: mint its command id (a reopened dialog is a new command). */
   arm: (teamKey: string, slot: string) => void
   /** The command id to send from `slot` with `payload`: the armed one unless the payload changed. */
@@ -127,6 +148,7 @@ const update = (state: PlanState, teamKey: string, patch: Partial<PlanView>) => 
 
 export const useTeamPlanStore = create<PlanState>(set => ({
   views: {},
+  reveal: null,
   open: (teamKey, planId) => set(state => {
     const view = state.views[teamKey] ?? closedPlanView()
     return { views: { ...state.views, [teamKey]: {
@@ -142,16 +164,22 @@ export const useTeamPlanStore = create<PlanState>(set => ({
   close: teamKey => set(state => {
     const views = { ...state.views }
     delete views[teamKey]
-    return { views }
+    const reveal = state.reveal?.teamKey === teamKey ? null : state.reveal
+    return { views, reveal }
   }),
   rekey: (from, to) => set(state => {
+    if (from === to) return state
+    // The reveal belongs to the team, so it moves even while no view is open.
+    const reveal = state.reveal?.teamKey === from ? { ...state.reveal, teamKey: to } : state.reveal
     const view = state.views[from]
-    if (!view || from === to) return state
+    if (!view) return reveal === state.reveal ? state : { reveal }
     const views = { ...state.views }
     delete views[from]
     if (!views[to]) views[to] = view
-    return { views }
+    return { views, reveal }
   }),
+  requestReveal: (teamKey, planId, anchor) => set({ reveal: { teamKey, planId, anchor } }),
+  consumeReveal: teamKey => set(state => (state.reveal?.teamKey === teamKey ? { reveal: null } : state)),
   select: (teamKey, planId) => set(state => update(state, teamKey, {
     selected: planId,
     detail: planId !== null && state.views[teamKey]?.detail?.plan.id === planId ? state.views[teamKey]!.detail : null,

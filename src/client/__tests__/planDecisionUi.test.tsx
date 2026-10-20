@@ -5,25 +5,32 @@
 // it replaces and requires a rationale; Answer takes a chosen option or
 // written text with an optional rationale; every control disables while
 // disconnected; and a refusal keeps the dialog open with Confirm off until
-// it is reopened, which arms a new command. Renderers are created inside
-// act() so later store updates re-render (the bun act trap).
+// it is reopened, which arms a new command. From the attention queue (§10.5),
+// a `plan` link with a change and a `card` link with a plan open the plan
+// scrolled to and focused on the change row or card, the one-shot reveal
+// consumed once, and an unknown target dropped silently. Renderers are
+// created inside act() so later store updates re-render (the bun act trap).
 import { afterEach, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import type { ClientMessage, Session } from '@shared/types'
 import type { PlanDetail } from '@shared/plans'
 import { normalizePlanContent } from '@shared/plans'
+import type { AttentionItem, AttentionLink } from '@shared/teamWorkspace'
 import type { DecisionCard, FixPhase, FixStatus, PlanDecision, PlanDecisionCardView } from '@shared/planDecisions'
 import type { PlanExecutionView } from '@shared/planExecution'
 import { resolveChoice } from '../../server/plans/decisions/decisionInputs'
+import TeamAttentionQueue from '../components/team/TeamAttentionQueue'
 import TeamPlansView from '../components/team/TeamPlansView'
+import { openAttentionLink } from '../components/team/attentionLinks'
 import { useTeamPlanStore } from '../stores/teamPlanStore'
 import { planSummary } from './planViewFixtures'
+import type { TeamLocation } from '../utils/teamLocation'
 
 const renderers: TestRenderer.ReactTestRenderer[] = []
 afterEach(() => {
   for (const renderer of renderers) act(() => renderer.unmount())
   renderers.length = 0
-  useTeamPlanStore.setState({ views: {} })
+  useTeamPlanStore.setState({ views: {}, reveal: null })
 })
 
 // Concatenated text of the whole tree: JSX splits a sentence across text
@@ -32,6 +39,26 @@ const textOf = (node: TestRenderer.ReactTestInstance | string): string =>
   typeof node === 'string' ? node : node.children.map(textOf).join('')
 
 const SESSIONS = [{ id: 'dev-1', name: 'Dev One' }, { id: 'lead-1', name: 'Lead One' }] as unknown as Session[]
+
+const queueItem = (id: string, link: AttentionLink): AttentionItem => ({
+  id, kind: id.split(':')[0] as AttentionItem['kind'], cause: `cause of ${id}`,
+  owner: { kind: 'human', id: null, label: 'Human' }, impact: {}, nextAction: 'Open', link, requiresHuman: true,
+})
+
+/** Click an attention item's action, routing its link like the host does (the §10.5 navigation under test). */
+function openFromQueue(link: AttentionLink, itemId: string): TeamLocation[] {
+  const navigated: TeamLocation[] = []
+  let renderer!: TestRenderer.ReactTestRenderer
+  act(() => {
+    renderer = TestRenderer.create(<TeamAttentionQueue loaded items={[queueItem(itemId, link)]}
+      onOpen={entry => openAttentionLink('/repo', entry.link, location => navigated.push(location))} />)
+  })
+  renderers.push(renderer)
+  act(() => renderer.root.findAllByProps({ 'data-testid': 'attention-action' })[0]!.props.onClick())
+  act(() => renderer.unmount())
+  renderers.pop()
+  return navigated
+}
 
 const card = (over: Partial<DecisionCard> = {}): DecisionCard => ({
   id: 'card-1', teamId: 't', planId: 'plan-1', revision: 1, change: 'api', taskId: 'task-1',
@@ -97,6 +124,10 @@ const mount = (decisionViews: PlanDecisionCardView[], connected = true) => {
   useTeamPlanStore.getState().open('/repo', 'plan-1')
   const sent: ClientMessage[] = []
   const openedTasks: string[] = []
+  /** Host elements that took focus, by their id or testid (the reveal's focus). */
+  const focusedNodes: string[] = []
+  /** Host elements scrolled into view, with the options they were given. */
+  const scrolledNodes: Array<[string, unknown]> = []
   let connectedNow = connected
   act(() => {
     useTeamPlanStore.getState().applySnapshot({ type: 'team-plans-snapshot', teamPath: '/repo', teamId: 't', plans: [detail(decisionViews).plan] })
@@ -107,7 +138,10 @@ const mount = (decisionViews: PlanDecisionCardView[], connected = true) => {
     onOpenTask={taskId => openedTasks.push(taskId)} />
   let renderer!: TestRenderer.ReactTestRenderer
   act(() => {
-    renderer = TestRenderer.create(element(), { createNodeMock: _node => ({ focus: () => {} }) })
+    renderer = TestRenderer.create(element(), { createNodeMock: node => ({
+      focus: () => focusedNodes.push(String(node.props.id ?? node.props['data-testid'] ?? '')),
+      scrollIntoView: (options: unknown) => scrolledNodes.push([String(node.props.id ?? ''), options]),
+    }) })
   })
   renderers.push(renderer)
   const rerender = (next: { connected?: boolean } = {}) => {
@@ -118,7 +152,7 @@ const mount = (decisionViews: PlanDecisionCardView[], connected = true) => {
   const byId = (testId: string) => renderer.root.findByProps({ 'data-testid': testId })
   const allById = (testId: string) => renderer.root.findAllByProps({ 'data-testid': testId })
   const cancelButton = () => renderer.root.findAllByProps({ type: 'button' }).find(button => button.props.children === 'Cancel')!
-  return { renderer, sent, openedTasks, rerender, text, byId, allById, cancelButton }
+  return { renderer, sent, openedTasks, focusedNodes, scrolledNodes, rerender, text, byId, allById, cancelButton }
 }
 
 const sectionOf = (node: TestRenderer.ReactTestInstance, testId: string): boolean => {
@@ -280,4 +314,50 @@ test('a refusal keeps the dialog open with Confirm off until it is reopened, whi
   act(() => ui.renderer.root.findByProps({ 'aria-label': 'override rationale' }).props.onChange({ target: { value: 'again' } }))
   act(() => ui.renderer.root.findByProps({ 'aria-label': 'Option 1: keep v1' }).props.onChange())
   expect(ui.byId('plan-decision-override-confirm').props.disabled).toBe(false)
+})
+
+test('the Answer dialog arms the decide:<plan>:<card> slot and its command id rides the message (N4)', () => {
+  const ui = mount(decisionsFixture())
+  act(() => ui.allById('plan-decision-answer')[0]!.props.onClick())
+  act(() => ui.renderer.root.findByProps({ 'aria-label': 'Option 2: drop v1' }).props.onChange())
+  act(() => ui.byId('plan-decision-answer-confirm').props.onClick())
+  const message = ui.sent.find(entry => entry.type === 'team-plan-decide') as { commandId: string }
+  expect(useTeamPlanStore.getState().views['/repo']!.commands['decide:plan-1:card-1']!.commandId).toBe(message.commandId)
+})
+
+test('a plan attention link with a change opens the plan scrolled to and focused on the change row (§10.5)', () => {
+  const navigated = openFromQueue({ kind: 'plan', id: 'plan-stop:exec-1:api:0', planId: 'plan-1', change: 'api' }, 'plan-stop:exec-1:api:0')
+  expect(navigated).toEqual([{ teamKey: '/repo', tab: 'plans', id: 'plan-1' }])
+  expect(useTeamPlanStore.getState().reveal).toEqual({ teamKey: '/repo', planId: 'plan-1', anchor: 'plan-change-api' })
+  // The host mounts the Plans view on that location; the loaded detail
+  // scrolls the row into view and moves focus to it, then the reveal is gone.
+  const ui = mount(decisionsFixture())
+  expect(ui.scrolledNodes).toEqual([['plan-change-api', { block: 'center' }]])
+  expect(ui.focusedNodes).toContain('plan-change-api')
+  expect(useTeamPlanStore.getState().reveal).toBeNull()
+  // The one-shot target does not scroll again on a re-render.
+  ui.rerender()
+  expect(ui.scrolledNodes).toHaveLength(1)
+})
+
+test('a card attention link opens the plan scrolled to and focused on the decision card (§10.5)', () => {
+  const navigated = openFromQueue({ kind: 'card', id: 'card-2', planId: 'plan-1' }, 'decision-question:card-2')
+  expect(navigated).toEqual([{ teamKey: '/repo', tab: 'plans', id: 'plan-1' }])
+  expect(useTeamPlanStore.getState().reveal).toEqual({ teamKey: '/repo', planId: 'plan-1', anchor: 'decision-card-card-2' })
+  const ui = mount(decisionsFixture())
+  // card-2 has no change, so it renders in the plan-level Decisions list.
+  expect(ui.scrolledNodes).toEqual([['decision-card-card-2', { block: 'center' }]])
+  expect(ui.focusedNodes).toContain('decision-card-card-2')
+  expect(useTeamPlanStore.getState().reveal).toBeNull()
+})
+
+test('a reveal naming an unknown change is dropped silently: no scroll, the detail at its top', () => {
+  const navigated = openFromQueue({ kind: 'plan', id: 'plan-stop:x:nope:0', planId: 'plan-1', change: 'nope' }, 'plan-stop:x:nope:0')
+  expect(navigated).toEqual([{ teamKey: '/repo', tab: 'plans', id: 'plan-1' }])
+  expect(useTeamPlanStore.getState().reveal).toEqual({ teamKey: '/repo', planId: 'plan-1', anchor: 'plan-change-nope' })
+  const ui = mount(decisionsFixture())
+  expect(ui.scrolledNodes).toEqual([])
+  expect(ui.focusedNodes).toEqual(['plan-title'])
+  expect(ui.text()).not.toContain('Unknown change')
+  expect(useTeamPlanStore.getState().reveal).toBeNull()
 })

@@ -37,7 +37,7 @@ const supervisionView = (): PlanSupervisionView => ({
 })
 const usageView = () => planUsage([])
 
-afterEach(() => { useTeamPlanStore.setState({ views: {} }) })
+afterEach(() => { useTeamPlanStore.setState({ views: {}, reveal: null }) })
 
 const store = () => useTeamPlanStore.getState()
 const view = () => store().views['/repo']!
@@ -177,6 +177,25 @@ test('a decide or override dialog re-mints its command id only when the payload 
   expect(view().pending).toEqual({})
   expect(view().commands['decide:p1:card-1']).toBeUndefined()
   expect(view().commands['override:p1:card-1']).toBeDefined()
+})
+
+test('the attention reveal is requested, replaced, consumed once by its team, and moved by a rekey', () => {
+  store().requestReveal('/isolated', 'p1', 'plan-change-api')
+  expect(store().reveal).toEqual({ teamKey: '/isolated', planId: 'p1', anchor: 'plan-change-api' })
+  // Another team's consume leaves it; the team's consumes it once.
+  store().consumeReveal('/other-team')
+  expect(store().reveal).not.toBeNull()
+  store().consumeReveal('/isolated')
+  expect(store().reveal).toBeNull()
+  // A second link replaces the target; a rekey moves it with the team.
+  store().requestReveal('/isolated', 'p1', 'decision-card-card-1')
+  store().requestReveal('/isolated', 'p1', 'plan-change-ui')
+  expect(store().reveal!.anchor).toBe('plan-change-ui')
+  store().rekey('/isolated', '/moved-isolated')
+  expect(store().reveal).toEqual({ teamKey: '/moved-isolated', planId: 'p1', anchor: 'plan-change-ui' })
+  // Closing the team's view drops it unconsumed.
+  store().close('/moved-isolated')
+  expect(store().reveal).toBeNull()
 })
 
 test('the WS router dispatches every plan message into the store', () => {

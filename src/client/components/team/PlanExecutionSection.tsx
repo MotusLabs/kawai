@@ -16,7 +16,7 @@ import PlanExecutionStartDialog from './PlanExecutionStartDialog'
 import PlanExecutionStopDialog from './PlanExecutionStopDialog'
 import PlanDecisionCard from './PlanDecisionCard'
 
-export default function PlanExecutionSection({ teamPath, plan, detail, connected, onSend, onOpenTask, sessions = [], busy = false }: {
+export default function PlanExecutionSection({ teamPath, plan, detail, connected, onSend, onOpenTask, sessions = [], busy = false, revealAnchor = null }: {
   teamPath: string
   plan: PlanSummary
   detail: PlanDetail
@@ -25,6 +25,8 @@ export default function PlanExecutionSection({ teamPath, plan, detail, connected
   onOpenTask?: (taskId: string) => void
   sessions?: Session[]
   busy?: boolean
+  /** The attention link's scroll target, when it names this detail's change or card (plan-supervision D15). */
+  revealAnchor?: string | null
 }) {
   const executions = detail.executions ?? []
   const newest = executions[0] ?? null
@@ -57,10 +59,12 @@ export default function PlanExecutionSection({ teamPath, plan, detail, connected
         </p>
         <ul className="mt-1">
           {newest.changes.map(row => <Fragment key={row.change}>
-            <PlanExecutionChangeRow row={row} execution={newest} promoted={promoted.has(row.change)} onOpenTask={openTask} />
+            <PlanExecutionChangeRow row={row} execution={newest} promoted={promoted.has(row.change)} onOpenTask={openTask}
+              revealed={revealAnchor === `plan-change-${row.change}`} />
             {decisions.filter(entry => entry.card.change === row.change).map(cardView =>
               <PlanDecisionCard key={cardView.card.id} teamPath={teamPath} planId={plan.id} cardView={cardView} sessions={sessions}
-                connected={connected} busy={busy} onSend={onSend} onOpenTask={openTask} />)}
+                connected={connected} busy={busy} onSend={onSend} onOpenTask={openTask}
+                revealed={revealAnchor === `decision-card-${cardView.card.id}`} />)}
           </Fragment>)}
         </ul>
         {running && <div className="mt-2"><PlanExecutionStopDialog teamPath={teamPath} execution={newest} connected={connected} onSend={onSend} /></div>}
