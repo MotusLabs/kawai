@@ -20,10 +20,12 @@ version and platform. A run whose key already passed reports the recorded
 pass — its time and worktree — and runs nothing; a failure or an interrupted
 run records nothing; `--force` reruns everything. Records are shared by every
 linked worktree and pruned after 14 days or 500 records. The pre-commit hook
-runs lint and typecheck on every commit, and the unit suite through `bun run
-check` unless the commit is docs-only (`scripts/docs-only-changes.sh`), so a
-commit that touches source is its own full check — don't run the trio just
-before it. `bun run test` stays the raw, uncached runner (typecheck keeps its
+classifies the staged change (`scripts/docs-only-changes.sh`): a docs-only
+commit runs lint and typecheck; every other commit — a source change, or an
+amend with an empty staged diff — runs `bun run check`, which reports a
+recorded pass without rerunning when this tree's content key already passed.
+A commit that touches source is therefore its own full check — don't run the
+trio just before it. `bun run test` stays the raw, uncached runner (typecheck keeps its
 build info under `node_modules/`, never committed). Run `bun run lint && bun
 run typecheck && bun run test` yourself for changes you won't commit, and run
 `bun run test` once before a docs-only commit touching `AGENTS.md`,
