@@ -85,6 +85,7 @@ import { ensureCodexExecutable } from './codex/codexExecutable'
 import { codexLoginErrorMessage, hasCodexLogin } from './codex/codexAuth'
 import { resolveCodexHome } from './codexProfiles'
 import { fetchZaiUsage } from './zaiUsage'
+import { fetchOpenRouterUsage, isOpenRouterBaseUrl, type OpenRouterUsagePull } from './openRouterUsage'
 import { ambientProviderOf, catalogCtx } from '../team/cooldowns'
 import { readWorkerTranscript } from './chatWorkerTranscript'
 import { isTaskOutputFile, readTaskOutputTail } from './taskOutputFile'
@@ -421,6 +422,15 @@ export class ChatSessionManager {
   private readonly providerUsageTimers = new Map<string, ReturnType<typeof setInterval>>()
   /** Provider usage refresh cadence (provider usage pull design D5). */
   private readonly providerUsageRefreshMs: number
+  /**
+   * Balance-key values whose credits pull was already refused (openrouter
+   * D6): each value logs once. Bounded — cleared when it grows past 64.
+   */
+  private readonly openrouterCreditsRefusals = new Set<string>()
+  /** One-shot post-turn pull timer per provider (openrouter D6). */
+  private readonly postTurnPullTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  /** When each provider's post-turn pull fired last, for the per-minute bound (openrouter D6). */
+  private readonly postTurnPullFiredAt = new Map<string, number>()
   /**
    * Latest login-expiry notice per credentials path (notification strip
    * design D2), in memory only: a restart begins with none until a check
@@ -2454,9 +2464,9 @@ export class ChatSessionManager {
         // (providers-and-workers 5.1); the store's change listener drives
         // the onUsage broadcast.
         onRateLimit: (report) =>
-          this.usageLimits.record(this.providerIdOf(record.sessionId), report),
+          this.recordProviderReport(record, report),
         onUsageReport: (report) =>
-          this.usageLimits.record(this.providerIdOf(record.sessionId), report),
+          this.recordProviderReport(record, report),
         onUsageNoData: () =>
           this.usageLimits.recordNoData(this.providerIdOf(record.sessionId)),
         onStatus: (status) => this.applyPatch(record.sessionId, { status }),
@@ -2727,6 +2737,32 @@ export class ChatSessionManager {
     const pull = await this.fetchProviderUsage(target)
     // Shutdown settles every callback: nothing publishes past it.
     if (this.isShutDown) return false
+    if (pull.ok && 'remainingUsd' in pull) {
+      // The OpenRouter endpoint answered (openrouter-provider D6): its own
+      // data decides, and no outcome of these pulls ever enables the
+      // host-login usage pull.
+      this.providerUsageProfiles.add(providerId)
+      this.recordOpenRouterPull(providerId, pull)
+      this.noteOpenRouterCreditsRefused(providerId, pull, target.balanceKey)
+      this.ensureProviderUsageRefresh(providerId)
+      return false
+    }
+    if (!pull.ok && (pull.outcome === 'refused' || pull.outcome === 'failed')) {
+      // A failed own-endpoint pull records no data and keeps the host-login
+      // pull suppressed, whatever the failure (openrouter-provider D6). The
+      // provider still counts as routed with its cadence armed: usage
+      // refreshes while sessions are live, so a transient failure only
+      // postpones the first meters to the next tick (openrouter-provider F2).
+      logger.warn('chat_openrouter_key_pull_failed', {
+        providerId,
+        outcome: pull.outcome,
+        reason: pull.reason,
+      })
+      this.providerUsageProfiles.add(providerId)
+      this.usageLimits.recordNoData(providerId)
+      this.ensureProviderUsageRefresh(providerId)
+      return false
+    }
     if (pull.ok) {
       this.providerUsageProfiles.add(providerId)
       this.usageLimits.record(providerId, pull.report)
@@ -2742,6 +2778,59 @@ export class ChatSessionManager {
   }
 
   /**
+   * Store one successful OpenRouter pull (openrouter-provider D6): meters
+   * recorded, and — from a complete pull only (F3) — the smallest remaining
+   * amount fed to the credit-cooldown overlay (D8); a pull without meters
+   * records the no-data verdict, so no bar shows.
+   */
+  private recordOpenRouterPull(providerId: string, pull: OpenRouterUsagePull & { ok: true }): void {
+    if (pull.report.windows.length === 0) {
+      this.usageLimits.recordNoData(providerId)
+      return
+    }
+    this.usageLimits.record(providerId, pull.report)
+    // Only a complete pull feeds the credit-cooldown overlay (D8): a pull
+    // whose credits meter dropped out would read the key meter's larger
+    // remainder as credit returning and end a live cooldown with no top-up
+    // (openrouter-provider F3). Credits 'skipped' (no balance key) and 'ok'
+    // are complete; 'refused' and 'failed' leave the pull partial, its
+    // meters still shown but its minimum unread.
+    const complete = pull.credits.outcome === 'ok' || pull.credits.outcome === 'skipped'
+    if (complete && pull.remainingUsd !== null) {
+      this.limitEvents.reportRemainingCredit(providerId, pull.remainingUsd)
+    }
+  }
+
+  /** Log a credits refusal once per balance-key value, naming the provider, never the key (openrouter-provider D6). */
+  private noteOpenRouterCreditsRefused(
+    providerId: string,
+    pull: OpenRouterUsagePull & { ok: true },
+    balanceKey: string | undefined
+  ): void {
+    if (pull.credits.outcome !== 'refused') return
+    const value = balanceKey ?? ''
+    if (this.openrouterCreditsRefusals.has(value)) return
+    if (this.openrouterCreditsRefusals.size >= 64) this.openrouterCreditsRefusals.clear()
+    this.openrouterCreditsRefusals.add(value)
+    logger.warn('chat_openrouter_credits_refused', { providerId, reason: pull.credits.reason })
+  }
+
+  /**
+   * Whether the session's provider is pulled from its own endpoint, so
+   * agent-emitted usage reports (which can describe the host claude.ai
+   * login) are never kept for it — only its own pulls (openrouter D6).
+   */
+  private keepsOwnEndpointPullsOnly(record: ChatSessionRecord): boolean {
+    const baseUrl = this.launchEnvOf(record.claudeProfileId, record.projectPath).ANTHROPIC_BASE_URL?.trim()
+    return baseUrl !== undefined && isOpenRouterBaseUrl(baseUrl)
+  }
+
+  private recordProviderReport(record: ChatSessionRecord, report: ChatUsageReport): void {
+    if (this.keepsOwnEndpointPullsOnly(record)) return
+    this.usageLimits.record(this.providerIdOf(record.sessionId), report)
+  }
+
+  /**
    * The quota pull target for a session's profile — the effective base URL
    * and credentials its SDK spawns receive (the same resolution the auth
    * gate and account notices read), or null when the profile has no
@@ -2749,16 +2838,34 @@ export class ChatSessionManager {
    */
   private providerUsageTarget(
     record: ChatSessionRecord
-  ): { baseUrl: string; token?: string } | null {
+  ): { baseUrl: string; token?: string; balanceKey?: string } | null {
     const env = this.launchEnvOf(record.claudeProfileId, record.projectPath)
     const baseUrl = env.ANTHROPIC_BASE_URL?.trim()
     if (!baseUrl) return null
     const token =
       env.ANTHROPIC_AUTH_TOKEN?.trim() || env.ANTHROPIC_API_KEY?.trim() || undefined
-    return { baseUrl, token }
+    // The credits pull's value comes from the server environment under the
+    // provider's `balanceKeyEnv` name (openrouter-provider D6) — the same
+    // resolution the auth gate reads. Launch environments withhold
+    // credential values, so it is never read from there.
+    const balanceKeyEnv = resolveProfileCatalog(this.catalogCtx(record.projectPath)).profiles.get(
+      record.claudeProfileId ?? 'default'
+    )?.balanceKeyEnv
+    const balanceKey = balanceKeyEnv
+      ? effectiveChatEnv(this.providerEnv())[balanceKeyEnv]?.trim() || undefined
+      : undefined
+    return { baseUrl, token, balanceKey }
   }
 
-  private fetchProviderUsage(target: { baseUrl: string; token?: string }) {
+  private fetchProviderUsage(target: { baseUrl: string; token?: string; balanceKey?: string }) {
+    if (isOpenRouterBaseUrl(target.baseUrl)) {
+      return fetchOpenRouterUsage(
+        target.baseUrl,
+        target.token,
+        target.balanceKey,
+        this.options.providerUsageFetch ?? fetch
+      )
+    }
     return fetchZaiUsage(target.baseUrl, target.token, this.options.providerUsageFetch ?? fetch)
   }
 
@@ -2798,6 +2905,11 @@ export class ChatSessionManager {
       // a failed refresh keeps the held report (store semantics); a lost
       // routing just skips the tick.
       if (this.isShutDown || !pull.ok) return
+      if ('remainingUsd' in pull) {
+        this.recordOpenRouterPull(providerId, pull)
+        this.noteOpenRouterCreditsRefused(providerId, pull, target.balanceKey)
+        return
+      }
       this.usageLimits.record(providerId, pull.report)
     })
   }
@@ -2817,10 +2929,35 @@ export class ChatSessionManager {
     return this.liveSessionsOf(providerId).length > 0
   }
 
+  /**
+   * Schedule one extra pull for a session's provider about 30 s after a
+   * costed turn (openrouter D6), at most one per provider per minute. A
+   * provider whose own usage endpoint is not selected is never scheduled:
+   * quota-serving providers refresh on their cadence alone.
+   */
+  private schedulePostTurnPull(sessionId: string): void {
+    const providerId = this.providerIdOf(sessionId)
+    const record = this.records.get(sessionId)
+    if (!record || !this.keepsOwnEndpointPullsOnly(record)) return
+    const now = Date.now()
+    const last = this.postTurnPullFiredAt.get(providerId)
+    if (last !== undefined && now - last < 60_000) return
+    if (this.postTurnPullTimers.has(providerId)) return
+    const timer = setTimeout(() => {
+      this.postTurnPullTimers.delete(providerId)
+      this.postTurnPullFiredAt.set(providerId, Date.now())
+      this.refreshProviderUsage(providerId)
+    }, 30_000)
+    timer.unref?.()
+    this.postTurnPullTimers.set(providerId, timer)
+  }
+
   /** Stop every provider usage refresh timer (server shutdown). */
   private stopProviderUsageRefresh(): void {
     for (const timer of this.providerUsageTimers.values()) clearInterval(timer)
     this.providerUsageTimers.clear()
+    for (const timer of this.postTurnPullTimers.values()) clearTimeout(timer)
+    this.postTurnPullTimers.clear()
   }
 
   /**
@@ -2911,6 +3048,12 @@ export class ChatSessionManager {
       event.type === 'question_request'
     ) {
       this.touch(sessionId)
+    }
+    // A completed turn that carried a provider-reported cost schedules one
+    // extra pull for its provider 30 s later, at most one per provider per
+    // minute (openrouter-provider D6).
+    if (event.type === 'turn_completed' && typeof event.providerCostUsd === 'number' && Number.isFinite(event.providerCostUsd)) {
+      this.schedulePostTurnPull(sessionId)
     }
     // Context-usage write points (design D5): a turn boundary, the compaction
     // notice (the driver's compact_boundary), and an error — the visible

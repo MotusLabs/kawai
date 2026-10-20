@@ -15,7 +15,7 @@ Spike evidence (2026-10-18, Claude Code 2.1.302, one capped key deleted afterwar
 
 | Probe | Observation |
 |---|---|
-| `GET /api/v1/key`, inference key with a $0.05 cap | `limit`, `limit_remaining`, `limit_reset: null`, and `budgets[]` / `effective_budget` holding a `key_limit` budget (`limit_usd`, `spend_usd`, `remaining_usd`, `reset_interval: null`, `resets_at: null`). `is_management_key: false`. |
+| `GET /api/v1/key`, inference key with a $0.05 cap | `limit`, `limit_remaining`, `limit_reset: null`, and `budgets[]` / `effective_budget` holding a `key_limit` budget (`limit_usd`, `spend_usd`, `remaining_usd`, `reset_interval: null`, `resets_at: null`). `is_management_key: false`. The docs declare these fields under a `data` wrapper (as for /credits); the adapter accepts the wrapper and the bare capture alike. |
 | `GET /api/v1/key`, management key | 200 with `is_management_key: true` and an `expires_at`. `limit` and the remaining fields are null, and `budgets` is empty. |
 | `GET /api/v1/credits` | Management key: `{ data: { total_credits, total_usage } }`. Inference key: 403 "Only management keys can fetch credits for an account". |
 | `POST /api/v1/messages` with a management key | 401 `authentication_error` "User not found." |
