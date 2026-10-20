@@ -1,0 +1,223 @@
+// The Plans view's decision cards (plan-supervision D15, §10.2): a card
+// asked from a change renders inline in that change's execution row and
+// cards without a change in the plan-level Decisions list; the decision
+// history and each override's fix status show; Override names the decision
+// it replaces and requires a rationale; Answer takes a chosen option or
+// written text with an optional rationale; every control disables while
+// disconnected; and a refusal keeps the dialog open with Confirm off until
+// it is reopened, which arms a new command. Renderers are created inside
+// act() so later store updates re-render (the bun act trap).
+import { afterEach, expect, test } from 'bun:test'
+import TestRenderer, { act } from 'react-test-renderer'
+import type { ClientMessage, Session } from '@shared/types'
+import type { PlanDetail } from '@shared/plans'
+import { normalizePlanContent } from '@shared/plans'
+import type { DecisionCard, FixPhase, FixStatus, PlanDecision, PlanDecisionCardView } from '@shared/planDecisions'
+import type { PlanExecutionView } from '@shared/planExecution'
+import TeamPlansView from '../components/team/TeamPlansView'
+import { useTeamPlanStore } from '../stores/teamPlanStore'
+import { planSummary } from './planViewFixtures'
+
+const renderers: TestRenderer.ReactTestRenderer[] = []
+afterEach(() => {
+  for (const renderer of renderers) act(() => renderer.unmount())
+  renderers.length = 0
+  useTeamPlanStore.setState({ views: {} })
+})
+
+// Concatenated text of the whole tree: JSX splits a sentence across text
+// nodes, so assertions match on the joined string.
+const textOf = (node: TestRenderer.ReactTestInstance | string): string =>
+  typeof node === 'string' ? node : node.children.map(textOf).join('')
+
+const SESSIONS = [{ id: 'dev-1', name: 'Dev One' }, { id: 'lead-1', name: 'Lead One' }] as unknown as Session[]
+
+const card = (over: Partial<DecisionCard> = {}): DecisionCard => ({
+  id: 'card-1', teamId: 't', planId: 'plan-1', revision: 1, change: 'api', taskId: 'task-1',
+  question: 'Keep the v1 endpoint?', options: ['keep v1', 'drop v1'], context: 'Callers may still use it.',
+  askedBy: { session: 'dev-1', group: 'middle-devs', profile: 'glm' },
+  addressedTo: 'lead', addressedGroup: 'lead', messageId: null, createdAt: '2026-10-14T00:00:00.000Z', ...over,
+})
+
+const decision = (over: Partial<PlanDecision> = {}): PlanDecision => ({
+  id: 'decision-1', cardId: 'card-1', planId: 'plan-1', teamId: 't', seq: 1, kind: 'answer', choice: 'drop v1', optionIndex: 2,
+  rationale: 'no callers left', decidedBy: { kind: 'agent', session: 'lead-1', group: 'lead', profile: 'glm' },
+  affected: ['task-1'], commandId: null, replyMessageId: null, createdAt: '2026-10-14T01:00:00.000Z', ...over,
+})
+
+const fixStatus = (phase: FixPhase): FixStatus => ({ phase, revision: null, executionId: null, landings: [], outstanding: [] })
+
+const cardView = (cardRow: DecisionCard, decisions: PlanDecision[], fixes: PlanDecisionCardView['fixes'] = []): PlanDecisionCardView =>
+  ({ card: cardRow, state: decisions.length === 0 ? 'open' : decisions.at(-1)!.kind === 'override' ? 'overridden' : 'decided',
+    decisions, current: decisions.at(-1) ?? null, fixes, commits: [] })
+
+const FLOOR = { version: 1 as const, map: { lint: ['ci'], typecheck: ['ci'], 'unit-tests': ['ci'], 'ci-e2e': ['e2e'] } }
+const execution = (changes: PlanExecutionView['changes']): PlanExecutionView => ({
+  id: 'exec-1', planId: 'plan-1', revision: 1, contentHash: 'h', reportId: 'r', inputHash: 'i',
+  landingMode: 'direct', baseBranch: 'master', baseCommit: 'abc', floor: FLOOR, maxParallel: 2, mergeMethod: 'merge',
+  state: 'running', outcome: null, stopReason: null, startedAt: '', finishedAt: null, changes,
+})
+const changeRow = (name: string, taskId: string): PlanExecutionView['changes'][number] => ({
+  change: name, position: 0, state: 'implementing', step: null, waiting: null, stopReason: null, stopDetail: null,
+  taskId, worktree: '/w', branch: name, baselineCommit: 'b', prNumber: null, prUrl: null,
+  fixRounds: 0, generation: 1, passedAt: null, attempts: 1, attempt: null, instruction: null,
+  latestRound: null, landing: null, effects: [],
+})
+
+// One open Lead-addressed card on `api`, one overridden card with a fix task
+// and no change, and one owner-addressed open card on `ui`.
+const decisionsFixture = (): PlanDecisionCardView[] => {
+  const leadAnswer = decision({ cardId: 'card-2', id: 'decision-2' })
+  const ownerOverride = decision({ cardId: 'card-2', id: 'decision-3', seq: 2, kind: 'override', choice: 'keep v1', optionIndex: 1,
+    rationale: 'v1 must stay', decidedBy: { kind: 'human', session: null, group: null, profile: null } })
+  return [
+    cardView(card(), []),
+    cardView(card({ id: 'card-2', change: null, taskId: null, addressedTo: 'lead', question: 'Which theme ships?' }),
+      [leadAnswer, ownerOverride],
+      [{ decisionId: 'decision-3', taskId: 'task-fix-1', status: fixStatus('planning') }]),
+    cardView(card({ id: 'card-3', change: 'ui', taskId: 'task-2', addressedTo: 'owner', addressedGroup: null }), []),
+  ]
+}
+
+const detail = (decisionViews: PlanDecisionCardView[]): PlanDetail => ({
+  plan: planSummary('plan-1', { state: 'in-progress', currentApprovedRevision: 1 }),
+  revisions: [{ revision: 1, status: 'approved', content: normalizePlanContent({ goal: 'Ship', changes: [{ change: 'api' }, { change: 'ui' }] }),
+    contentHash: 'hash-1', pin: null, author: { kind: 'agent', sessionId: 'lead' }, createdAt: '2026-10-14T00:00:00.000Z' }],
+  drafts: [], events: [], linkedTasks: [], progress: null,
+  executions: [execution([changeRow('api', 'task-1'), changeRow('ui', 'task-2')])],
+  decisions: decisionViews,
+})
+
+const mount = (decisionViews: PlanDecisionCardView[], connected = true) => {
+  useTeamPlanStore.getState().open('/repo', 'plan-1')
+  const sent: ClientMessage[] = []
+  const openedTasks: string[] = []
+  let connectedNow = connected
+  act(() => {
+    useTeamPlanStore.getState().applySnapshot({ type: 'team-plans-snapshot', teamPath: '/repo', teamId: 't', plans: [detail(decisionViews).plan] })
+    useTeamPlanStore.getState().applyDetail({ type: 'team-plan-detail', teamPath: '/repo', teamId: 't', detail: detail(decisionViews) })
+  })
+  const element = () => <TeamPlansView teamPath="/repo" view={useTeamPlanStore.getState().views['/repo']!}
+    sendMessage={message => sent.push(message)} connected={connectedNow} connectionEpoch={0} sessions={SESSIONS}
+    onOpenTask={taskId => openedTasks.push(taskId)} />
+  const renderer = TestRenderer.create(element(), { createNodeMock: _node => ({ focus: () => {} }) })
+  renderers.push(renderer)
+  const rerender = (next: { connected?: boolean } = {}) => {
+    if (next.connected !== undefined) connectedNow = next.connected
+    act(() => { renderer.update(element()) })
+  }
+  const text = () => textOf(renderer.root)
+  const byId = (testId: string) => renderer.root.findByProps({ 'data-testid': testId })
+  const allById = (testId: string) => renderer.root.findAllByProps({ 'data-testid': testId })
+  const cancelButton = () => renderer.root.findAllByProps({ type: 'button' }).find(button => button.props.children === 'Cancel')!
+  return { renderer, sent, openedTasks, rerender, text, byId, allById, cancelButton }
+}
+
+const sectionOf = (node: TestRenderer.ReactTestInstance, testId: string): boolean => {
+  let parent = node.parent
+  while (parent !== null) {
+    if (parent.props['data-testid'] === testId) return true
+    parent = parent.parent
+  }
+  return false
+}
+
+test('a card asked from a change renders inline in its execution row; cards without a change render in the Decisions list', () => {
+  const ui = mount(decisionsFixture())
+  const cards = ui.allById('plan-decision-card')
+  // Tree order: the execution section's inline cards, then the Decisions list.
+  expect(cards.map(node => node.props.id)).toEqual(['decision-card-card-1', 'decision-card-card-3', 'decision-card-card-2'])
+  const inline = cards.filter(node => sectionOf(node, 'plan-execution-section'))
+  expect(inline.map(node => node.props.id)).toEqual(['decision-card-card-1', 'decision-card-card-3'])
+  const listed = cards.filter(node => sectionOf(node, 'plan-decisions-section'))
+  expect(listed.map(node => node.props.id)).toEqual(['decision-card-card-2'])
+  expect(ui.text()).toContain('Keep the v1 endpoint?')
+  expect(ui.text()).toContain('Which theme ships?')
+  expect(ui.text()).toContain('asked by Dev One · middle-devs · glm')
+  expect(ui.text()).toContain('addressed to the owner')
+})
+
+test('the history and the fix status show on an overridden card', () => {
+  const ui = mount(decisionsFixture())
+  expect(ui.text()).toContain('#1 Answer: drop v1 — Lead One · lead · glm — no callers left (superseded)')
+  expect(ui.text()).toContain('#2 Override: keep v1 — Human (owner) — v1 must stay')
+  expect(ui.text()).toContain('Forward fix task')
+  expect(ui.text()).toContain('Planning')
+  act(() => ui.allById('plan-decision-fix-task')[0]!.props.onClick())
+  expect(ui.openedTasks).toEqual(['task-fix-1'])
+})
+
+test('Override names the decision it replaces and requires a rationale before confirming', () => {
+  const ui = mount(decisionsFixture())
+  act(() => ui.allById('plan-decision-override')[0]!.props.onClick())
+  expect(ui.text()).toContain("Override Human (owner)'s decision")
+  expect(ui.byId('plan-decision-override-confirm').props.disabled).toBe(true)
+  act(() => ui.renderer.root.findByProps({ 'aria-label': 'override rationale' }).props.onChange({ target: { value: 'wrong call' } }))
+  expect(ui.byId('plan-decision-override-confirm').props.disabled).toBe(true)
+  act(() => ui.renderer.root.findByProps({ 'aria-label': 'Option 1: keep v1' }).props.onChange())
+  expect(ui.byId('plan-decision-override-confirm').props.disabled).toBe(false)
+  act(() => ui.byId('plan-decision-override-confirm').props.onClick())
+  const message = ui.sent.find(entry => entry.type === 'team-plan-override') as { commandId: string } | undefined
+  expect(message).toMatchObject({
+    teamPath: '/repo', planId: 'plan-1', cardId: 'card-2', expectedDecisionId: 'decision-3',
+    choice: 'keep v1', optionIndex: 1, rationale: 'wrong call',
+  })
+  const armed = useTeamPlanStore.getState().views['/repo']!.commands['override:plan-1:card-2']
+  expect(message?.commandId).toBe(armed?.commandId)
+})
+
+test('Answer takes a chosen option or written text with an optional rationale', () => {
+  const ui = mount(decisionsFixture())
+  expect(ui.allById('plan-decision-answer')).toHaveLength(2)
+  act(() => ui.allById('plan-decision-answer')[0]!.props.onClick())
+  // No rationale needed: choosing an option arms the confirm.
+  act(() => ui.renderer.root.findByProps({ 'aria-label': 'Option 2: drop v1' }).props.onChange())
+  expect(ui.byId('plan-decision-answer-confirm').props.disabled).toBe(false)
+  act(() => ui.byId('plan-decision-answer-confirm').props.onClick())
+  expect(ui.sent.find(entry => entry.type === 'team-plan-decide')).toMatchObject({
+    planId: 'plan-1', cardId: 'card-1', choice: 'drop v1', optionIndex: 2, rationale: null,
+  })
+  // The answered card's dialog stays open until its command settles; close it,
+  // then answer the ui card (the last opener in tree order) in writing.
+  expect(ui.allById('plan-decision-answer')).toHaveLength(1)
+  act(() => ui.cancelButton().props.onClick())
+  expect(ui.allById('plan-decision-answer')).toHaveLength(2)
+  act(() => ui.allById('plan-decision-answer').at(-1)!.props.onClick())
+  act(() => ui.renderer.root.findByProps({ 'aria-label': 'Another choice' }).props.onChange({ target: { value: 'ship as is' } }))
+  act(() => ui.byId('plan-decision-answer-confirm').props.onClick())
+  expect(ui.sent.filter(entry => entry.type === 'team-plan-decide').at(-1)).toMatchObject({
+    cardId: 'card-3', choice: 'ship as is', optionIndex: null,
+  })
+})
+
+test('controls disable while disconnected', () => {
+  const ui = mount(decisionsFixture(), false)
+  for (const button of ui.allById('plan-decision-answer')) expect(button.props.disabled).toBe(true)
+  for (const button of ui.allById('plan-decision-override')) expect(button.props.disabled).toBe(true)
+  ui.rerender({ connected: true })
+  expect(ui.allById('plan-decision-answer')[0]!.props.disabled).toBe(false)
+})
+
+test('a refusal keeps the dialog open with Confirm off until it is reopened, which arms a new command', () => {
+  const ui = mount(decisionsFixture())
+  act(() => ui.allById('plan-decision-override')[0]!.props.onClick())
+  const firstCommandId = useTeamPlanStore.getState().views['/repo']!.commands['override:plan-1:card-2']!.commandId
+  act(() => ui.renderer.root.findByProps({ 'aria-label': 'override rationale' }).props.onChange({ target: { value: 'again' } }))
+  act(() => ui.renderer.root.findByProps({ 'aria-label': 'Option 1: keep v1' }).props.onChange())
+  act(() => ui.byId('plan-decision-override-confirm').props.onClick())
+  const requestId = (ui.sent.at(-1) as { requestId: string }).requestId
+  act(() => useTeamPlanStore.getState().applyResult({
+    type: 'team-plan-result', teamPath: '/repo', requestId, error: 'overrides a decision that is no longer current',
+  }))
+  expect(ui.text()).toContain('Refused')
+  expect(ui.text()).toContain('no longer current')
+  expect(ui.byId('plan-decision-override-confirm').props.disabled).toBe(true)
+  // Closing and reopening arms a new command id; after refilling, Confirm works again.
+  act(() => ui.cancelButton().props.onClick())
+  act(() => ui.allById('plan-decision-override')[0]!.props.onClick())
+  const secondCommandId = useTeamPlanStore.getState().views['/repo']!.commands['override:plan-1:card-2']!.commandId
+  expect(secondCommandId).not.toBe(firstCommandId)
+  act(() => ui.renderer.root.findByProps({ 'aria-label': 'override rationale' }).props.onChange({ target: { value: 'again' } }))
+  act(() => ui.renderer.root.findByProps({ 'aria-label': 'Option 1: keep v1' }).props.onChange())
+  expect(ui.byId('plan-decision-override-confirm').props.disabled).toBe(false)
+})

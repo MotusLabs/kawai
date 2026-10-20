@@ -21,6 +21,9 @@ import PlanIntentSection from './PlanIntentSection'
 import PlanChangesSection from './PlanChangesSection'
 import PlanPolicySection from './PlanPolicySection'
 import PlanExecutionSection from './PlanExecutionSection'
+import PlanReportSection from './PlanReportSection'
+import PlanUsageSection from './PlanUsageSection'
+import { PlanDecisionsList } from './PlanDecisionCard'
 import PlanRevisionsSection from './PlanRevisionsSection'
 import PlanLifecycleControls from './PlanLifecycleControls'
 import { pinLabel, planActorLabel } from './planLabels'
@@ -145,6 +148,13 @@ function PlanDetailPane({ teamPath, planId, detail, sessions, sendMessage, conne
   const back = <button type="button" className="btn text-chat-meta" data-testid="plan-back" onClick={onBack}>← All plans</button>
   if (!detail || !loaded) return <div>{back}<p role="status" className="mt-2 text-chat-meta text-secondary">Loading plan…</p></div>
   const { plan } = detail
+  // Cards with a change render inline in that change's execution row (D15); the
+  // Decisions list takes the rest — cards without a change, every card when no
+  // execution lists change rows, and any whose change has no row there.
+  const newestExecution = detail.executions?.[0] ?? null
+  const listedCards = (detail.decisions ?? []).filter(entry =>
+    entry.card.change === null || newestExecution === null
+    || !newestExecution.changes.some(row => row.change === entry.card.change))
   const approved = detail.revisions.find(revision => revision.revision === plan.currentApprovedRevision) ?? null
   const shown = approved ?? detail.revisions.filter(revision => revision.status === 'in_review').at(-1) ?? null
   return <article data-testid="plan-detail" aria-labelledby="plan-title">
@@ -161,7 +171,14 @@ function PlanDetailPane({ teamPath, planId, detail, sessions, sendMessage, conne
       <PlanIntentSection content={shown.content} pin={shown.pin} />
       <PlanChangesSection content={shown.content} progress={shown === approved ? detail.progress : null} onOpenTask={onOpenTask} />
       <PlanPolicySection content={shown.content} />
-      <PlanExecutionSection teamPath={teamPath} plan={detail.plan} detail={detail} connected={connected} onSend={sendMessage} onOpenTask={onOpenTask} />
+      <PlanExecutionSection teamPath={teamPath} plan={detail.plan} detail={detail} connected={connected} onSend={sendMessage} onOpenTask={onOpenTask}
+        sessions={sessions} busy={busy} />
+      {/* Supervision (plan-supervision D15): the report, the plan-level Decisions list, and the usage totals,
+          each only when the detail carries it. */}
+      {detail.supervision && <PlanReportSection view={detail.supervision} sessions={sessions} onOpenImpactReview={onOpenImpactReview} />}
+      <PlanDecisionsList teamPath={teamPath} planId={detail.plan.id} cards={listedCards}
+        sessions={sessions} connected={connected} busy={busy} onSend={sendMessage} onOpenTask={onOpenTask ?? (() => undefined)} />
+      {detail.usage && <PlanUsageSection view={detail.usage} />}
     </>}
     <PlanRevisionsSection teamPath={teamPath} detail={detail} sessions={sessions} sendMessage={sendMessage} connected={connected} busy={busy}
       validation={validation} onCaptureStrategy={onCaptureStrategy} />
