@@ -245,7 +245,8 @@ it) selects the OpenRouter usage endpoint (`src/server/chat/openRouterUsage.ts`)
 - Pulls refresh every 10 minutes while a session of the provider has a
   started agent, and stop when none does. A completed turn that carried a
   provider-reported cost adds one pull 30 seconds later, at most one per
-  provider per minute.
+  provider per minute; a turn inside that minute is dropped, not deferred,
+  so its spend shows at the next cadence tick.
 
 ## Operator-named executables
 
