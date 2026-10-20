@@ -106,7 +106,7 @@ Implement after `plan-execution` and `integration-candidates` have landed on mas
   - a reply after the decision is queued;
   - `DecisionService`'s answers bypass the guard;
   - the null guard passes everything.
-- [ ] 6.3 Extend `plan_get` with `decisions`, `supervision`, and `usage` (D16). Verify with a tool test on a plan with a stalled change and a decided card.
+- [x] 6.3 Extend `plan_get` with `decisions`, `supervision`, and `usage` (D16). Verify with a tool test on a plan with a stalled change and a decided card.
 - [ ] 6.4 Add the decision and supervision text to the plan note in `teamPrompt.ts` (D16). Verify with a prompt test that the note names both tools, the refused reply, the stall alerts, and the owner's rights, and claims no agent can override, retry, or stop.
 
 ## 7. Human connections

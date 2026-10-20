@@ -110,6 +110,8 @@ import type { TeamMessage, TeamWorktreeOccupancy, WaitingReason } from '../../sh
 import { MailDispatcher } from '../team/dispatcher'
 import { receiptMessageId } from '../team/receipt'
 import type { LimitEventStore } from '../team/routing/limitEvents'
+import { sessionCooldown } from '../team/cooldowns'
+import { supervisionRuntime } from '../plans/supervision/supervisionRuntime'
 import type { HandoffTarget } from '../team/routing/limitOutcomes'
 import type { RuleLoadReport, TeamRoutingState } from '../../shared/routing'
 import { SessionMailbox } from '../team/sessionMailbox'
@@ -1189,6 +1191,14 @@ export class ChatSessionManager {
         // the runtime's archive wake resolves sessions.
         identityOf: teamId => this.teams.identityFor(teamId),
         teamOfSession: id => this.teams.teamOf(id),
+        // The supervision detail's runtime facts (plan-supervision D10).
+        supervision: supervisionRuntime({
+          db: options.db.db, mail: this.teamMail.mailbox.store, getRecord: id => this.records.get(id),
+          pendingRequests: id => this.drivers.get(id)?.getPendingRequests() ?? [],
+          hasLiveWorkers: id => this.hasLiveWorkers(id), hasRunningBackgroundTasks: id => this.hasRunningBackgroundTasks(id),
+          waitingFor: teamId => this.teamMail.waitingFor(teamId),
+          cooldownUntil: record => sessionCooldown(this.teamMail.limits, options.profileCatalogHome, record.claudeProfileId ?? 'default', record.projectPath).until,
+        }),
       },
       ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
     })

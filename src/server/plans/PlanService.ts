@@ -116,6 +116,8 @@ export class PlanService {
      * Plans view's detail pushes); absent when no execution module is wired.
      */
     executionsOf?: (planId: string) => import('../../shared/planExecution').PlanExecutionView[]
+    /** plan-supervision D15/D16: the decisions, supervision, and usage of a plan of the team; null for none. */
+    supervisionOf?: (teamId: string, planId: string) => import('../../shared/planReport').PlanSupervisionDetail | null
     /** plan-validation D9: approval's pre-transaction gather and in-transaction standing, and its appended precondition. */
     validation?: {
       prepareStanding: (planId: string, revision: number) => Promise<unknown> | null
@@ -146,11 +148,12 @@ export class PlanService {
     return this.detailWithExecutions(this.teamPlan(team, planId).id)
   }
 
-  /** D18: the stored detail plus the plan's executions, when the module is wired. */
+  /** D18: the stored detail plus the plan's executions and its supervision (plan-supervision D15/D16), when those modules are wired. */
   detailWithExecutions(planId: string): PlanDetail {
     const detail = this.store.detail(planId)!
     const executions = this.options.executionsOf?.(planId)
-    return executions === undefined ? detail : { ...detail, executions }
+    const supervision = this.options.supervisionOf?.(detail.plan.teamId, planId) ?? null
+    return { ...detail, ...(executions === undefined ? {} : { executions }), ...supervision }
   }
 
   /** D5: the plan, its creator's draft, and a `created` event in one transaction. */

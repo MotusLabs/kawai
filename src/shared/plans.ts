@@ -211,6 +211,12 @@ export interface PlanDetail {
    * correction task of this plan. Absent from details built elsewhere.
    */
   warnings?: string[]
+  /** Decision cards with history, fix status, and derived commits (plan-supervision D15); absent without the decision module. */
+  decisions?: import('./planDecisions').PlanDecisionCardView[]
+  /** Each change's supervision and the report (plan-supervision D15); absent without the decision module. */
+  supervision?: import('./planReport').PlanSupervisionView
+  /** The plan's token usage (plan-supervision D14); absent without the decision module. */
+  usage?: import('./planUsage').PlanUsageView
 }
 
 const str = (value: unknown): string => (typeof value === 'string' ? value : '')

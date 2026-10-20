@@ -116,3 +116,17 @@ export function planReport(input: PlanReportInput): PlanReport {
     }))),
   }
 }
+
+/** The detail's and `plan_get`'s supervision (D15, D16): each change in plan order, the report, and when it was derived. */
+export interface PlanSupervisionView {
+  changes: ChangeSupervision[]
+  report: PlanReport
+  computedAt: string
+}
+
+/** The three fields `team-plan-detail` and `plan_get` add to a plan (D15, D16). */
+export interface PlanSupervisionDetail {
+  decisions: import('./planDecisions').PlanDecisionCardView[]
+  supervision: PlanSupervisionView
+  usage: import('./planUsage').PlanUsageView
+}

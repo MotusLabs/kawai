@@ -20,6 +20,7 @@ import type { ExecutionRow, RoundRow } from '../execution/executionRows'
 import type { ExecutionStore } from '../execution/executionStore'
 import type { IntegrationStore } from '../landing/integration/integrationStore'
 import type { PlanStore } from '../planStore'
+import type { PlanRevision } from '../../../shared/plans'
 
 /** The runtime facts the session and mailbox modules expose (D10). */
 export interface SupervisionRuntime {
@@ -66,12 +67,17 @@ function notStarted(change: string, dependsOn: string[]): SupervisionInput {
   }
 }
 
+/** The plan's newest execution of the team and the revision it runs, else the current approved revision. */
+export function supervisedRevision(reads: Pick<SupervisionReads, 'executions' | 'plans'>, teamId: string, planId: string): { execution: ExecutionRow | null; revision: PlanRevision | null } {
+  const execution = reads.executions.executionsOf(planId).find(row => row.teamId === teamId) ?? null
+  return { execution, revision: execution ? reads.plans.revision(planId, execution.revision) : reads.plans.approvedRevision(planId) }
+}
+
 /** Every change's input in the revision's order; dependency outcomes are filled by `readPlanSupervision`. */
 export function readSupervisionInputs(reads: SupervisionReads, teamId: string, planId: string): PlanSupervisionRead | null {
   const plan = reads.plans.forTeam(teamId, planId)
   if (plan === null) return null
-  const execution: ExecutionRow | null = reads.executions.executionsOf(planId).find(row => row.teamId === teamId) ?? null
-  const revision = execution ? reads.plans.revision(planId, execution.revision) : reads.plans.approvedRevision(planId)
+  const { execution, revision } = supervisedRevision(reads, teamId, planId)
   if (revision === null) return { executionId: execution?.id ?? null, revision: null, inputs: [] }
   const landings = new Map(reads.executions.landings(planId).map(row => [row.change, row]))
   const landingOf = (change: string): SupervisionInput['landing'] => {
