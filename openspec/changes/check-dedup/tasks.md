@@ -13,7 +13,7 @@
 ## 3. Hook and typecheck
 
 - [ ] 3.1 Change `.githooks/pre-commit` to run `bun run check` for non-docs commits and keep lint and typecheck only for docs-only ones. Verify by committing the same content twice in a scratch branch (an amend with no edit) and confirming that the second commit reports the recorded pass and takes seconds.
-- [ ] 3.2 Set `incremental` and `tsBuildInfoFile` (`node_modules/.cache/kawai/tsc.tsbuildinfo`) in `tsconfig.json`. Verify that a second `bun run typecheck` is faster, that an introduced type error shows the same diagnostics as `tsc --noEmit --incremental false`, and that `git status` stays clean.
+- [x] 3.2 Set `incremental` and `tsBuildInfoFile` (`node_modules/.cache/kawai/tsc.tsbuildinfo`) in `tsconfig.json`. Verify that a second `bun run typecheck` is faster, that an introduced type error shows the same diagnostics as `tsc --noEmit --incremental false`, and that `git status` stays clean.
 
 ## 4. CI
 
