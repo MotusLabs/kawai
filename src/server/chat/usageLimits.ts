@@ -414,6 +414,22 @@ export class UsageLimitStore {
     this.notify(providerId)
   }
 
+  /**
+   * Record the authoritative no-data verdict of a pull that succeeded but
+   * carried no meters (an OpenRouter key whose cap was removed): the report
+   * held is dropped, so stale meters do not outlive the key's limit, and the
+   * verdict stands until a later record replaces it. With nothing held it
+   * behaves exactly like recordNoData.
+   */
+  clearAndRecordNoData(providerId: string, at: string = new Date().toISOString()): void {
+    const state = this.state(providerId)
+    // A verdict already standing over nothing held: recordNoData's no-op.
+    if (state.report === null && state.noDataAt !== null) return
+    state.report = null
+    state.noDataAt = at
+    this.notify(providerId)
+  }
+
   private state(providerId: string): UsageLimitState {
     let state = this.providers.get(providerId)
     if (!state) {
