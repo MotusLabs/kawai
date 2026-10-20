@@ -25,11 +25,12 @@ commit runs lint and typecheck; every other commit — a source change, or an
 amend with an empty staged diff — runs `bun run check`, which reports a
 recorded pass without rerunning when this tree's content key already passed.
 A commit that touches source is therefore its own full check — don't run the
-trio just before it. `bun run test` stays the raw, uncached runner (typecheck keeps its
-build info under `node_modules/`, never committed). Run `bun run lint && bun
-run typecheck && bun run test` yourself for changes you won't commit, and run
-`bun run test` once before a docs-only commit touching `AGENTS.md`,
-`.kawai/groups/`, `docs/`, or any other file a test reads.
+trio just before it. `bun run test` stays the raw, uncached runner
+(typecheck keeps its build info under `node_modules/`, never committed).
+Run `bun run lint && bun run typecheck && bun run test` yourself for
+changes you won't commit, and run `bun run test` once before a docs-only
+commit touching `AGENTS.md`, `.kawai/groups/`, `docs/`, or any other file
+a test reads.
 
 ## How It Works
 
