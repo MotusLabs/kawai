@@ -41,7 +41,7 @@ export default function PlanExecutionStartDialog({ teamPath, planId, revision, c
     setOpen(true)
   }
   // A reconnect drops a preview whose answer was lost (N4): ask again while open.
-  useEffect(() => { if (open && standing === undefined) requestPreview() }, [open, standing]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (open && standing === undefined) requestPreview() }, [open, standing, teamPath]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const send = () => {
     const store = useTeamPlanStore.getState()

@@ -64,6 +64,10 @@ export interface ExecutionRuntimeDeps {
   teamOf: (sessionId: string) => TeamIdentity | undefined
   /** Which adapters the executor runs (the default composition proves its identity). */
   adapters?: { fixture: boolean; rounds: unknown }
+  /** Teams with promotion work (integration-candidates D10): woken at boot beside the running ones. */
+  promotionTeams?: () => string[]
+  /** The composed promotion runner, exposed so the composition test can prove its wiring (I1). */
+  promotions?: unknown
 }
 
 export class ExecutionRuntime {
@@ -73,9 +77,11 @@ export class ExecutionRuntime {
 
   /** The adapters the composed executor runs: the real module objects, or the fixture's. */
   readonly adapters: { fixture: boolean; rounds: unknown }
+  readonly promotions: unknown
 
   constructor(private readonly deps: ExecutionRuntimeDeps) {
     this.adapters = deps.adapters ?? { fixture: false, rounds: null }
+    this.promotions = deps.promotions ?? null
   }
 
   /**
@@ -92,7 +98,8 @@ export class ExecutionRuntime {
     this.deps.store.clearOrphanSlots()
     this.install()
     this.started = true
-    for (const teamId of this.deps.store.runningTeams()) this.deps.executor.wake(teamId)
+    const teams = new Set([...this.deps.store.runningTeams(), ...(this.deps.promotionTeams?.() ?? [])])
+    for (const teamId of teams) this.deps.executor.wake(teamId)
   }
 
   /** A committed Start, Stop, or Retry command (D5): wakes once boot has ended. */

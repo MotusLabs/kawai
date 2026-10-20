@@ -6,7 +6,9 @@
 import { describe, expect, test } from 'bun:test'
 import type { ChangeState } from '../../shared/planExecution'
 import { planSteps } from '../plans/execution/executionPlanner'
+import type { EffectRow, RoundRow } from '../plans/execution/executionRows'
 import type { ExecutionSnapshot, PlannedChange } from '../plans/execution/executionSnapshot'
+import type { PlannedStage } from '../plans/execution/executionPlanner'
 
 const change = (name: string, state: ChangeState, over: Partial<PlannedChange> = {}): PlannedChange => ({
   executionId: 'e1', change: name, state, step: null, generation: 0, taskId: null,
@@ -111,5 +113,79 @@ describe('planSteps scheduling (§11.2)', () => {
     // An open task whose instruction failed stops as instruction-failed.
     const open = steps([withTask('implementing', { status: 'active', assignment: failed })])
     expect(open.transitions).toMatchObject([{ change: 'api', patch: { state: 'stopped', stopReason: 'instruction-failed', stopDetail: { resumeState: 'implementing' } } }])
+  })
+})
+
+describe('the resumed landing windows (A2\'s fallback; effect lifecycle)', () => {
+  const round = (): RoundRow => ({
+    id: 'r1', executionId: 'e1', change: 'api', attemptId: 'a1', number: 1, resultId: 'res-1', commitSha: 'c1',
+    fixRound: false, carriedFrom: null, pushedAt: 't', ciWindowFrom: null, ci: null, rerunAt: null,
+    reviewAssignmentId: null, verdictFindingsId: null, extra: null, outcome: 'pass', decidedAt: 't',
+  })
+  const effect = (over: Partial<EffectRow>): EffectRow => ({
+    id: 'fx1', executionId: 'e1', change: 'api', roundId: 'r1', kind: 'merge', effectKey: 'k', command: {},
+    state: 'done', tries: 0, nextAt: null, outcome: { merged: true }, error: null, createdAt: '', startedAt: null, finishedAt: null, ...over,
+  })
+  const resumed = (landingEffect: EffectRow | null, over: Partial<PlannedChange> = {}): PlannedChange =>
+    change('api', 'gating', {
+      step: 'awaiting-slot', taskId: 't1', passedAt: 't', round: round(), landingEffect,
+      task: { status: 'active', revision: 1, results: [], assignment: null }, ...over,
+    })
+  const verdict = (result: ReturnType<typeof planSteps>): PlannedStage | undefined =>
+    result.stages.find(stage => stage.kind === 'landing-outcome')
+
+  test('a live row plans nothing until it settles (I-A); a pending one waits for the slot', () => {
+    for (const state of ['running', 'unknown'] as const) {
+      const result = steps([resumed(effect({ state }))])
+      expect(verdict(result)).toBeUndefined()
+      expect(result.stages).toEqual([])
+    }
+    const pending = steps([resumed(effect({ state: 'pending' }))])
+    expect(verdict(pending)).toBeUndefined()
+    // The passed round's landing stage plans, waits for the slot, and the
+    // stage adopts the queued row (A1) when it re-enters.
+    expect(pending.stages.map(stage => stage.kind)).toEqual(['landing'])
+  })
+
+  test('a done verdict of any landing kind is applied, a refused merge included', () => {
+    expect(verdict(steps([resumed(effect({}))]))).toMatchObject({ change: 'api', effectId: 'fx1' })
+    expect(verdict(steps([resumed(effect({ outcome: { merged: false, baseMoved: true } }))]))).toMatchObject({ effectId: 'fx1' })
+    expect(verdict(steps([resumed(effect({ kind: 'fast-forward', outcome: { fastForwarded: false, refused: true, head: 'h' } }))]))).toMatchObject({ effectId: 'fx1' })
+    expect(verdict(steps([resumed(effect({ kind: 'update-branch', outcome: { requested: true } }))]))).toMatchObject({ effectId: 'fx1' })
+  })
+
+  test('a failed row is applied only when its outcome carries a stop verdict', () => {
+    expect(verdict(steps([resumed(effect({ state: 'failed', outcome: { stop: 'pr-closed', detail: { message: 'closed' } }, error: 'stopped as pr-closed' }))]))).toMatchObject({ effectId: 'fx1' })
+    const plainly = steps([resumed(effect({ state: 'failed', outcome: null, error: 'rejected' }))])
+    expect(verdict(plainly)).toBeUndefined()
+  })
+
+  test('the window needs the effect of the change\'s current round', () => {
+    expect(verdict(steps([resumed(effect({ roundId: 'r0' }))]))).toBeUndefined()
+    // No landing effect at all: an ordinary waiting change — the passed
+    // round's landing stage plans.
+    expect(steps([resumed(null)]).stages.map(stage => stage.kind)).toEqual(['landing'])
+  })
+
+  test('no newer result supersedes the round while the resumed row stands', () => {
+    const withNewer = steps([resumed(effect({ state: 'pending' }), {
+      task: { status: 'active', revision: 1, results: [{ id: 'res-2', commit: 'c2', taskRevision: 1, submittedBySession: null }], assignment: null },
+    })])
+    expect(withNewer.stages.filter(stage => stage.kind === 'result')).toEqual([])
+  })
+
+  test('a verdict that settled behind an up-to-date step is applied: a merged merge, a moved update', () => {
+    const drifted = (kind: EffectRow['kind'], outcome: unknown): PlannedChange =>
+      change('api', 'landing', {
+        step: 'up-to-date', taskId: 't1', passedAt: 't', round: round(),
+        landingEffect: effect({ kind, outcome }),
+        task: { status: 'active', revision: 1, results: [], assignment: null },
+      })
+    expect(verdict(steps([drifted('merge', { merged: true })]))).toMatchObject({ effectId: 'fx1' })
+    expect(verdict(steps([drifted('update-branch', { requested: true, moved: true })]))).toMatchObject({ effectId: 'fx1' })
+    // A refused merge re-runs the stage from the up-to-date step instead.
+    const refused = steps([drifted('merge', { merged: false })])
+    expect(verdict(refused)).toBeUndefined()
+    expect(refused.stages.map(stage => stage.kind)).toEqual(['landing'])
   })
 })

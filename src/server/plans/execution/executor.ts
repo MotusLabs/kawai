@@ -19,10 +19,12 @@ import { logger } from '../../logger'
 import { assignmentState } from '../../team/assignmentStore'
 import type { MailboxStore } from '../../team/mailboxStore'
 import { githubRepoOf } from '../landing/landingProbe'
-import { recoverUnknownEffects } from './executorStartup'
+import { inspectDueUnknownEffects, recoverUnknownEffects } from './executorStartup'
+import type { InspectorReads } from './effectInspectors'
 import { applyEffectFailure, applyEffectOutcome, type OutcomeDeps } from './executorOutcomes'
 import { landingAdapters, removeWorktreeAdapter } from './executionLanding'
 import { mechanismFor, type LandingMechanism, type LandingMechanisms } from '../landing/landingMechanisms'
+import { startupReads } from './startupReads'
 import { DIRECT_MECHANISMS } from '../landing/directMechanism'
 import type { CiCheck } from '../../../shared/planExecution'
 import { ciClass } from '../../../shared/planExecutionGates'
@@ -30,6 +32,8 @@ import type { GhCommandOptions } from '../landing/ghCommand'
 import { executionSnapshot } from './executionSnapshot'
 import { planSteps } from './executionPlanner'
 import { EffectRunner, type EffectAdapter } from './effects'
+import { EffectPinConflict } from './executionEffectStore'
+import { ExecutionConflict } from './executionStore'
 import type { ExecutionStore } from './executionStore'
 import type { PlanStore } from '../planStore'
 import { dispatchFixAttempt, dispatchImplementAttempt, redispatchStage, type DispatchDeps } from './executionDispatch'
@@ -73,8 +77,12 @@ export interface ExecutorDeps {
   tickMs?: number
   /** Test seam: passed to every gh call (a stub gh on a private PATH). */
   ghOptions?: GhCommandOptions
+  /** Test seam: the inspectors' reads; defaults to the real git/gh (startupReads). */
+  reads?: InspectorReads
   /** Test seam: the clock. */
   now?: () => Date
+  /** The promotion runner (integration-candidates D10): its startup, a pass per tick, and whether its timer stays armed. */
+  promotions?: { startup(): void; pass(teamId: string): Promise<void>; active(teamId: string): boolean }
 }
 
 export class ExecutionExecutor {
@@ -138,7 +146,8 @@ export class ExecutionExecutor {
    * wakes: the runtime wakes the running teams once its wakes are installed.
    */
   async startup(): Promise<void> {
-    await recoverUnknownEffects({ store: this.deps.store, outcomes: this.outcomeDeps(), ...(this.deps.ghOptions ? { ghOptions: this.deps.ghOptions } : {}), ...(this.deps.now ? { now: this.deps.now } : {}) })
+    this.deps.promotions?.startup()
+    await recoverUnknownEffects({ store: this.deps.store, ...(this.deps.reads ? { reads: this.deps.reads } : {}), outcomes: this.outcomeDeps(), ...(this.deps.ghOptions ? { ghOptions: this.deps.ghOptions } : {}), ...(this.deps.now ? { now: this.deps.now } : {}) })
   }
 
   /** Stop the timers (tests, shutdown); a wake's trailing schedule arms none. */
@@ -148,8 +157,13 @@ export class ExecutionExecutor {
     this.timers.clear()
   }
 
-  /** One tick; exposed for tests, production goes through `wake`. */
+  /** One tick: the executions' passes, then the promotions' (D10); exposed for tests, production goes through `wake`. */
   async tick(teamId: string): Promise<void> {
+    await this.tickExecutions(teamId)
+    if (!this.closed) await this.deps.promotions?.pass(teamId)
+  }
+
+  private async tickExecutions(teamId: string): Promise<void> {
     const team = this.deps.teamOf(teamId)
     if (team === undefined) return
     // A settled step makes the next due: the tick loops until a pass owes
@@ -174,8 +188,8 @@ export class ExecutionExecutor {
       const steps = planSteps(snapshot, this.deps.now?.().toISOString() ?? new Date().toISOString())
       if (steps.transitions.length === 0 && steps.effects.length === 0 && steps.dispatches.length === 0 && steps.stages.length === 0 && steps.fixes.length === 0) {
         // Nothing new is due, but an effect left pending (a restart, a
-        // backoff, a Retry's reset) still runs; one that ran settled a step,
-        // so the next pass plans what it made due (D14).
+        // backoff) still runs — after its inspection answered (D14); one
+        // that ran settled a step, so the next pass plans what it made due.
         if (await this.settledRunDue(teamId) === 0) return
         continue
       }
@@ -184,10 +198,18 @@ export class ExecutionExecutor {
         this.deps.store.transition(step.executionId, step.change, step.guard, step.patch)
       }
       for (const step of steps.effects) {
-        this.deps.store.insertEffect({
-          executionId: step.executionId, change: step.change, roundId: null,
-          kind: step.kind, effectKey: step.effectKey, command: step.command,
-        })
+        try {
+          this.deps.store.insertEffect({
+            executionId: step.executionId, change: step.change, roundId: null,
+            kind: step.kind, effectKey: step.effectKey, command: step.command,
+          })
+        } catch (error) {
+          // A1's backstop: today no planner path can pin-conflict — a re-issue
+          // counts past a settled row, and a live row holds the standing
+          // check — so the planner re-planning next pass is enough.
+          if (!(error instanceof EffectPinConflict)) throw error
+          logger.info('plan_execution_effect_pin_conflict', { executionId: step.executionId, kind: step.kind, effectKey: step.effectKey })
+        }
       }
       // Each step runs in its own guard: a refused service call stops only
       // its change; any other throw ends the tick (the wake loop logs it).
@@ -243,10 +265,19 @@ export class ExecutionExecutor {
     return repo
   }
 
-  /** runDue, with a tick abandoned by `close` swallowing its late writes; the count of effects run. */
+  /**
+   * runDue, with a tick abandoned by `close` swallowing its late writes; the
+   * count of effects run. The due `unknown` effects are inspected first
+   * (D14) — a restart's rows and a Retry's reset after an `effect-unknown`
+   * stop are never run again before an inspection answered them.
+   */
   private async settledRunDue(teamId: string): Promise<number> {
     if (this.closed) return 0
     try {
+      await inspectDueUnknownEffects({
+        store: this.deps.store, reads: this.deps.reads ?? startupReads(this.deps.ghOptions),
+        outcomes: this.outcomeDeps(), teamId, ...(this.deps.now ? { now: this.deps.now } : {}),
+      })
       return await this.runner().runDue(teamId)
     } catch (error) {
       // A test or shutdown closed the database under an in-flight effect:
@@ -286,14 +317,34 @@ export class ExecutionExecutor {
   }
 
   /**
-   * A settled merge or update-branch effect's follow-on (D13). A stopped
+   * A settled merge or update-branch effect's follow-on (D13). A change the
+   * Retry left waiting for the slot (A2's fallback) re-enters landing at its
+   * effect's step first, so the verdict's landing guards see the stage — the
+   * slot taken meanwhile leaves it waiting for the next tick. A stopped
    * execution's merge that did not complete leaves the change cancelled,
    * with Kawai's task, in one transaction (D12).
    */
   private async applyLandingFollowOn(team: TeamIdentity, row: import('./executionRows').ChangeRow, effectId: string): Promise<void> {
     const effect = this.deps.store.effectsOf(row.executionId).find(entry => entry.id === effectId)
     if (effect === undefined) return
+    const waiting = this.deps.store.change(row.executionId, row.change)
+    if (waiting !== null && waiting.state === 'gating' && waiting.step === 'awaiting-slot'
+      && (effect.state === 'done' || (effect.state === 'failed' && (effect.outcome as { stop?: unknown } | null)?.stop !== undefined))) {
+      try {
+        this.deps.store.transition(row.executionId, row.change, waiting, {
+          state: 'landing', step: effect.kind === 'update-branch' ? 'updating' : 'merging',
+        })
+      } catch (error) {
+        if (!(error instanceof ExecutionConflict) || error.kind !== 'slot-taken') throw error
+        return
+      }
+    }
     if (effect.state === 'done') await this.mechanismOf(row.executionId).landOutcome(this.landingDeps(team), effect, this.deps.landingAdapters ?? landingAdapters)
+    else if (effect.state === 'failed' && (effect.outcome as { stop?: unknown } | null)?.stop !== undefined) {
+      // An inspection's stop verdict for a resumed change (pr-closed, a
+      // foreign branch): the same stop a run's failure would have written.
+      applyEffectFailure(this.outcomeDeps(), effect)
+    }
     const execution = this.deps.store.execution(row.executionId)
     const fresh = this.deps.store.change(row.executionId, row.change)
     if (execution === null || execution.state === 'running' || fresh === null || fresh.state !== 'landing') return
@@ -433,12 +484,12 @@ export class ExecutionExecutor {
     }
   }
 
-  /** While the team runs an execution, the 60-second timer keeps the loop alive (D5). */
+  /** While the team runs an execution or a promotion, the 60-second timer keeps the loop alive (D5). */
   private scheduleTimer(teamId: string): void {
     if (this.closed) return
     clearTimeout(this.timers.get(teamId))
     this.timers.delete(teamId)
-    if (this.deps.store.runningForTeam(teamId).length === 0) return
+    if (this.deps.store.runningForTeam(teamId).length === 0 && this.deps.promotions?.active(teamId) !== true) return
     this.timers.set(teamId, setTimeout(() => {
       this.timers.delete(teamId)
       this.wake(teamId)

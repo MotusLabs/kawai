@@ -12,19 +12,30 @@
 // connection never leaves the view busy. The impact fields
 // (strategy-revision-impact D6) ride beside the plans: each plan's badge
 // from the snapshot, the selected plan's from its detail, and the gate a
-// `strategy-pin-current` refusal names.
+// `strategy-pin-current` refusal names. The integration views
+// (integration-candidates D13) ride the selected plan's detail; the Promote
+// dialog's preview lands in `promotionPreviews`, and Promote (slot
+// `promote:<plan>:<branch>`, payload naming `fromSha`, so a changed head
+// re-mints) and Cancel (`cancel-promotion:<id>`) arm their own command ids.
 import { create } from 'zustand'
 import type { ServerMessage } from '@shared/types'
 import type { PlanDetail, PlanSummary } from '@shared/plans'
 import type { ImpactGate, PlanImpact } from '@shared/strategyImpact'
 import type { PlanRevisionValidation } from '@shared/planValidation'
+import type { PlanIntegrationView, PromotionPreview } from '@shared/planIntegration'
 
-export type PlanAction = 'approve' | 'withdraw' | 'finish' | 'reopen' | 'validate' | 'assess' | 'decide' | 'start' | 'stop' | 'retry' | 'preview'
+export type PlanAction = 'approve' | 'withdraw' | 'finish' | 'reopen' | 'validate' | 'assess' | 'decide' | 'start' | 'stop' | 'retry' | 'preview' | 'promote' | 'cancel-promotion'
 
 /** The Start dialog's server standing for one plan revision (plan-execution D17). */
 export type PlanStanding =
   | { state: 'pending' }
   | { state: 'standing'; ready: boolean; failures: Array<{ name: string; message: string }> }
+  | { state: 'error'; error: string }
+
+/** The Promote dialog's server preview for one `<planId>:<branch>` (D9, D13). */
+export type PromotionStanding =
+  | { state: 'pending' }
+  | { state: 'preview'; preview: PromotionPreview }
   | { state: 'error'; error: string }
 
 /** One dialog's command id and the payload it was last sent with (null = not sent yet). */
@@ -57,6 +68,8 @@ export interface PlanView {
   detailValidation: PlanRevisionValidation[] | null
   /** The selected plan's executions, riding its detail (plan-execution D17). */
   detailExecutions: PlanDetail['executions']
+  /** The selected plan's integration branches, riding its detail (integration-candidates D13). */
+  detailIntegration: PlanIntegrationView[] | undefined
   /** Armed dialog command ids, by dialog slot (e.g. `approve:<plan>:<revision>`). */
   commands: Record<string, ArmedPlanCommand>
   /** Which slot each pending request was sent from. */
@@ -65,12 +78,16 @@ export interface PlanView {
   standings: Record<string, PlanStanding>
   /** Which standing key each preview request was sent for. */
   previewRequests: Record<string, string>
+  /** The Promote dialog's previews, by `<planId>:<branch>`. */
+  promotionPreviews: Record<string, PromotionStanding>
+  /** Which preview key each promotion preview request was sent for. */
+  promotionPreviewRequests: Record<string, string>
 }
 
 export const closedPlanView = (): PlanView => ({
   open: false, loading: false, plans: null, selected: null, detail: null, pending: {}, error: null, failures: [], commands: {}, commandRequests: {},
   refusalImpact: null, impact: {}, detailImpact: null, detailValidation: null, detailExecutions: undefined,
-  standings: {}, previewRequests: {},
+  standings: {}, previewRequests: {}, detailIntegration: undefined, promotionPreviews: {}, promotionPreviewRequests: {},
 })
 
 interface PlanState {
@@ -87,6 +104,8 @@ interface PlanState {
   begin: (teamKey: string, requestId: string, action: PlanAction) => void
   /** The Start dialog opened for `<planId>:<revision>`: its preview request is pending (D17). */
   beginPreview: (teamKey: string, requestId: string, standingKey: string) => void
+  /** The Promote dialog opened for `<planId>:<branch>`: its preview request is pending (D13). */
+  beginPromotionPreview: (teamKey: string, requestId: string, previewKey: string) => void
   /** The connection came back: results of pending requests are lost, so stop waiting for them. */
   reconnected: (teamKey: string) => void
   applySnapshot: (message: Extract<ServerMessage, { type: 'team-plans-snapshot' }>) => void
@@ -110,6 +129,7 @@ export const useTeamPlanStore = create<PlanState>(set => ({
         selected: planId, detail: view.detail?.plan.id === planId ? view.detail : null,
         detailImpact: view.detail?.plan.id === planId ? view.detailImpact : null,
         detailValidation: view.detail?.plan.id === planId ? view.detailValidation : null,
+        detailIntegration: view.detail?.plan.id === planId ? view.detailIntegration : undefined,
       } : {}),
     } } }
   }),
@@ -131,6 +151,7 @@ export const useTeamPlanStore = create<PlanState>(set => ({
     detail: planId !== null && state.views[teamKey]?.detail?.plan.id === planId ? state.views[teamKey]!.detail : null,
     detailImpact: planId !== null && state.views[teamKey]?.detail?.plan.id === planId ? state.views[teamKey]!.detailImpact : null,
     detailValidation: planId !== null && state.views[teamKey]?.detail?.plan.id === planId ? state.views[teamKey]!.detailValidation : null,
+    detailIntegration: planId !== null && state.views[teamKey]?.detail?.plan.id === planId ? state.views[teamKey]!.detailIntegration : undefined,
     error: null, failures: [], refusalImpact: null,
   })),
   arm: (teamKey, slot) => set(state => {
@@ -160,13 +181,19 @@ export const useTeamPlanStore = create<PlanState>(set => ({
     previewRequests: { ...state.views[teamKey]?.previewRequests, [requestId]: standingKey },
     standings: { ...state.views[teamKey]?.standings, [standingKey]: { state: 'pending' } },
   })),
+  beginPromotionPreview: (teamKey, requestId, previewKey) => set(state => update(state, teamKey, {
+    pending: { ...state.views[teamKey]?.pending, [requestId]: 'preview' },
+    promotionPreviewRequests: { ...state.views[teamKey]?.promotionPreviewRequests, [requestId]: previewKey },
+    promotionPreviews: { ...state.views[teamKey]?.promotionPreviews, [previewKey]: { state: 'pending' } },
+  })),
   reconnected: teamKey => set(state => {
     const view = state.views[teamKey]
     if (!view?.open || Object.keys(view.pending).length === 0) return state
     // A preview whose answer was lost leaves no pending standing behind: the
     // open Start dialog asks again (N4); settled standings stay.
     const standings = Object.fromEntries(Object.entries(view.standings).filter(([, standing]) => standing.state !== 'pending'))
-    return update(state, teamKey, { pending: {}, commandRequests: {}, previewRequests: {}, standings })
+    const promotionPreviews = Object.fromEntries(Object.entries(view.promotionPreviews).filter(([, preview]) => preview.state !== 'pending'))
+    return update(state, teamKey, { pending: {}, commandRequests: {}, previewRequests: {}, standings, promotionPreviewRequests: {}, promotionPreviews })
   }),
   applySnapshot: message => set(state => update(state, message.teamPath, { loading: false, plans: message.plans, impact: message.impact ?? {} })),
   applyDetail: message => set(state => {
@@ -174,7 +201,7 @@ export const useTeamPlanStore = create<PlanState>(set => ({
     if (!view?.open || view.selected !== message.detail.plan.id) return state
     return update(state, message.teamPath, {
       detail: message.detail, detailImpact: message.impact ?? null, detailValidation: message.validation ?? null,
-      detailExecutions: message.detail.executions,
+      detailExecutions: message.detail.executions, detailIntegration: message.detail.integration,
     })
   }),
   applyResult: message => set(state => {
@@ -196,16 +223,27 @@ export const useTeamPlanStore = create<PlanState>(set => ({
         ? { state: 'standing', ready: message.preview.ready, failures: message.preview.failures }
         : { state: 'error', error: message.error ?? 'The preview failed.' } }
     }
+    const promotionPreviewRequests = { ...view.promotionPreviewRequests }
+    const previewKey = promotionPreviewRequests[message.requestId]
+    let promotionPreviews = view.promotionPreviews
+    if (previewKey !== undefined) {
+      delete promotionPreviewRequests[message.requestId]
+      promotionPreviews = { ...promotionPreviews, [previewKey]: message.promotionPreview !== undefined
+        ? { state: 'preview', preview: message.promotionPreview }
+        : { state: 'error', error: message.error ?? 'The preview failed.' } }
+      // A preview answer settles the dialog's preview only; it never refuses or retires a command.
+      return update(state, message.teamPath, { pending, commandRequests, promotionPreviewRequests, promotionPreviews })
+    }
     if (message.error) {
       const armed = slot ? view.commands[slot] : undefined
       const commands = armed ? { ...view.commands, [slot!]: { ...armed, refused: true } } : view.commands
       return update(state, message.teamPath, {
-        pending, commandRequests, previewRequests, standings, commands, error: message.error, failures: message.failures ?? [], refusalImpact: message.impact ?? null,
+        pending, commandRequests, previewRequests, standings, promotionPreviewRequests, commands, error: message.error, failures: message.failures ?? [], refusalImpact: message.impact ?? null,
       })
     }
     // Success retires the dialog's command: a later dialog is a new command.
     const commands = { ...view.commands }
     if (slot) delete commands[slot]
-    return update(state, message.teamPath, { pending, commandRequests, previewRequests, standings, commands, error: null, failures: [], refusalImpact: null })
+    return update(state, message.teamPath, { pending, commandRequests, previewRequests, standings, promotionPreviewRequests, commands, error: null, failures: [], refusalImpact: null })
   }),
 }))

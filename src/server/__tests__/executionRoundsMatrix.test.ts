@@ -294,12 +294,12 @@ describe('one stop per reason, each retried (13.3)', () => {
     expect(h.executions.change(executionId, 'if-a')!.state).toBe('implementing')
   })
 
-  test('effect-unknown: Retry resets the undecidable effect, which runs again', async () => {
+  test('effect-unknown: Retry re-enters inspection, which finds it not done and runs it again', async () => {
     const executionId = await startedExecution(h, [{ change: 'eu-a' }])
     await h.tick()
     const commit = await submitWork(h, executionId, 'eu-a', 'src/e.ts', 'e\n')
     // The push's outcome could not be decided (D14's inspection): its effect
-    // failed and the change stopped as effect-unknown.
+    // failed and the change stopped as effect-unknown, naming the effect.
     const failing = h.makeExecutor({ adapters: { push: { call: async () => ({ ok: false, error: { argv: ['git', 'push'], exitCode: 128, stderr: 'remote end hung up unexpectedly' } }) } } })
     try {
       await h.tick(failing)
@@ -308,9 +308,9 @@ describe('one stop per reason, each retried (13.3)', () => {
     }
     const push = h.executions.effectsOf(executionId).find(effect => effect.kind === 'push')!
     expect(push.state).toBe('failed')
-    h.executions.transition(executionId, 'eu-a', h.executions.change(executionId, 'eu-a')!, { state: 'stopped', stopReason: 'effect-unknown', stopDetail: { message: 'the push could not be inspected' } })
+    h.executions.transition(executionId, 'eu-a', h.executions.change(executionId, 'eu-a')!, { state: 'stopped', stopReason: 'effect-unknown', stopDetail: { message: 'the push could not be inspected', effectId: push.id } })
     expect(await h.service.retry(h.bench.human, { executionId, change: 'eu-a', commandId: 'retry-eu' })).toMatchObject({ ok: true })
-    expect(h.executions.effect(push.id)!.state).toBe('pending')
+    expect(h.executions.effect(push.id)!.state).toBe('unknown')
     await h.tick()
     expect(h.executions.effect(push.id)!.state).toBe('done')
     expect(originHead(matrix, 'eu-a')).toBe(commit)

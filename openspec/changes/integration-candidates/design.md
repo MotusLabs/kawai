@@ -246,7 +246,7 @@ Both are pre-reads, like `changes-on-base`, and run in the same read phase. An i
   | `landing-ready` | the probe's repository checks and floor map pass |
   | `promotion-name-free` | `<branch>--promote-<number>` is absent on `origin` |
 
-- **Cancel** refuses non-human callers, and is refused once the merge is recorded, naming the merge. Otherwise it records `promotion-cancelled` through `recordPromotionEvent`, with the compared payload `promotionId` and the trimmed `reason`. It marks pending promotion effects `cancelled`, and finishes the promotion as `cancelled` unless a merge effect is running. In that case the merge settles first. A completed merge finishes the promotion as `merged`, with a note that the cancellation came too late, and its fast-forward still runs, because it belongs to recording the merge. A merge that did not happen finishes it as `cancelled`.
+- **Cancel** refuses non-human callers, and is refused once the merge is recorded, naming the merge. Otherwise it records `promotion-cancelled` through `recordPromotionEvent`, with the compared payload `promotionId` and the trimmed `reason`. It marks pending and `unknown` promotion effects `cancelled`, and finishes the promotion as `cancelled` unless a merge effect is running. In that case the merge settles first. A completed merge finishes the promotion as `merged`, with a note that the cancellation came too late, and its fast-forward still runs, because it belongs to recording the merge. A merge that did not happen finishes it as `cancelled`.
 
 Plan state is not a precondition. A completed plan is the usual one to promote, and a cancelled plan's landed work may still be wanted.
 
@@ -276,10 +276,12 @@ Plan state is not a precondition. A completed plan is the usual one to promote, 
 10. **Finish.** `promotion-finished` with outcome `merged`, and actor `system`, under the command id `promo:<id>:finish`, through `recordPromotionEvent` like the human kinds.
 
 A failure at any step, and a Cancel that stops the promotion before its merge:
-- cancels its pending effects and releases the slot;
-- runs the `close-pr` effect, `gh pr close <n> --comment <outcome>`, when the pull request is still open;
+- cancels its pending effects, and those still `unknown`, and releases the slot;
+- runs the `close-pr` effect, `gh pr close <n> --comment <outcome>`, when the pull request is still open. When no number was recorded but `open-pr` ran (a Cancel while it ran, or an effect left `unknown`), `close-pr` finds the open pull request by its head branch;
 - finishes the promotion with its outcome and detail;
 - writes `promotion-finished` with that outcome.
+
+Cancelling `unknown` effects as well as `pending` ones is a cleanup, not a guard: `dueEffects` and `dueUnknownEffects` never pick a finished promotion's effects other than `close-pr`, and the planner reads an `unknown` effect as waiting, so a merge or fast-forward left `unknown` can never be passed over (Cancel waits for an unknown merge to settle). Cancelling them keeps a finished promotion from holding rows that would never be due. The guard is on the writes instead: an effect write that lands after an await (an inspection's verdict, a call's retry or outcome) changes only an effect still `pending`, `running`, or `unknown`, so a Cancel or finish that settled it meanwhile wins, and a retry or reset of a finished promotion's effect other than `close-pr` cancels it rather than reopening it.
 
 A `close-pr` that fails after its retries leaves the outcome as it is, with a note that the pull request is still open. The branch and the closed pull request stay, and a later Promote takes `number + 1`.
 

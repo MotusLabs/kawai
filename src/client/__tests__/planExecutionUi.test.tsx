@@ -28,6 +28,7 @@ afterEach(() => {
   act(() => renderer?.unmount())
   renderer = null
   useTeamPlanStore.getState().close('/repo')
+  useTeamPlanStore.getState().close('/other-repo')
 })
 
 const FLOOR = { version: 1 as const, map: { lint: ['ci'], typecheck: ['ci'], 'unit-tests': ['ci'], 'ci-e2e': ['e2e'] } }
@@ -161,6 +162,24 @@ describe('PlanExecutionStartDialog after a reconnect', () => {
       type: 'team-plan-result', teamPath: '/repo', requestId: sent[1]!.requestId, preview: { failures: [], ready: true },
     }))
     expect(renderer!.root.findByProps({ 'data-testid': 'plan-execution-start-confirm' }).props.disabled).toBe(false)
+  })
+})
+
+describe('PlanExecutionStartDialog re-keyed to another team', () => {
+  test('an open dialog asks the new team for its standing (review O1)', () => {
+    useTeamPlanStore.getState().open('/repo')
+    useTeamPlanStore.getState().open('/other-repo')
+    const sent: Array<{ type: string; teamPath: string }> = []
+    const dialog = (teamPath: string) => createElement(PlanExecutionStartDialog, {
+      teamPath, planId: 'plan-1', revision: 1, contentHash: 'h', connected: true,
+      onSend: message => sent.push(message as { type: string; teamPath: string }),
+    })
+    act(() => render(dialog('/repo')))
+    act(() => renderer!.root.findByProps({ 'data-testid': 'plan-execution-start-button' }).props.onClick())
+    // The team switch keeps the view mounted; the other team's slot is armed as its own open would.
+    act(() => useTeamPlanStore.getState().arm('/other-repo', 'start:plan-1:1'))
+    act(() => renderer!.update(dialog('/other-repo')))
+    expect(sent.filter(message => message.type === 'team-plan-execution-preview').map(message => message.teamPath)).toEqual(['/repo', '/other-repo'])
   })
 })
 

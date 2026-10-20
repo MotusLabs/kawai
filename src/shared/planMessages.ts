@@ -11,6 +11,7 @@
 // (strategy-revision-impact D6) are additive and composed beside the plan
 // store's reads from the one impact gate, so a badge and a refusal agree.
 import type { PlanDetail, PlanEvent, PlanSummary } from './plans'
+import type { PromotionPreview } from './planIntegration'
 import type { ImpactGate, PlanImpact } from './strategyImpact'
 import type { DecisionCard, PlanDecision } from './planDecisions'
 import type { AlignmentAssessment, AssessmentFinding, PlanRevisionValidation, PlanValidationReport, Question } from './planValidation'
@@ -41,6 +42,10 @@ export type PlanServerMessage =
       execution?: { id: string; state: 'running' | 'finished'; outcome: 'completed' | 'stopped' | null }
       /** plan-execution D17: the preview's standing (the failing preconditions with their messages). */
       preview?: { failures: Array<{ name: string; message: string }>; ready: boolean }
+      /** integration-candidates D13: the Promote dialog's preview — the standing, the pinned head, what it carries. */
+      promotionPreview?: PromotionPreview
+      /** integration-candidates D13: the promotion a Promote or Cancel started or finished. */
+      promotion?: { id: string; number: number; promotionBranch: string; state: 'running' | 'finished'; outcome: string | null }
       /** plan-supervision D15: the owner's answer or override, with the fix task an override created. */
       decision?: { card: DecisionCard; decision: PlanDecision; fixTaskId?: string | null }
     }
@@ -79,6 +84,12 @@ export type PlanClientMessage =
   | { type: 'team-plan-execution-start'; teamPath: string; requestId: string; planId: string; revision: number; contentHash: string; commandId: string }
   | { type: 'team-plan-execution-stop'; teamPath: string; requestId: string; executionId: string; reason: string; commandId: string }
   | { type: 'team-plan-execution-retry'; teamPath: string; requestId: string; executionId: string; change: string; commandId: string }
+  // integration-candidates D9, D13: the human promotion commands. Promote
+  // and Cancel replay by their command id; `team-plan-result` answers with
+  // `promotionPreview` or `promotion`, or `error` with the failing entries.
+  | { type: 'team-plan-promotion-preview'; teamPath: string; requestId: string; planId: string; branch: string }
+  | { type: 'team-plan-promote'; teamPath: string; requestId: string; planId: string; branch: string; fromSha: string; commandId: string }
+  | { type: 'team-plan-promotion-cancel'; teamPath: string; requestId: string; promotionId: string; reason: string; commandId: string }
   // plan-supervision D15: the owner answers a card addressed to the owner,
   // or overrides a decided card naming the decision it saw; each replays
   // by its command id, and `team-plan-result` answers with `decision`.
