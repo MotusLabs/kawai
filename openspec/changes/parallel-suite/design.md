@@ -13,7 +13,7 @@ main batch   449 files, one process, serial          411.8 s
 ~33 one-file processes (isolated, real-tmux, client)     ~30 s
 ```
 
-- The workspace exposes 16 CPUs and has a 12 GiB memory limit with OOM-group kill. Heavy commands are limited to two concurrent slots for memory.
+- The workspace reports 16 CPUs (`nproc`, `os.availableParallelism()`), but its cgroup CPU quota is 6 (`cpu.max` reads `600000 100000`). Its memory limit is 18 GiB with OOM-group kill (12 GiB until 2026-10-19). Heavy commands share three concurrent slots (two until 2026-10-19), so up to three full suites can run at once on 6 CPUs. A serial suite keeps about one CPU busy.
 - Bun 1.4's `bun test` offers `--parallel=<n>`, which implies `--isolate`: per-file global and module registry; `--no-isolate` keeps one per worker. It also offers `--timings=<file>` (per-file durations that make `--parallel` start the slowest first) and `--changed`.
 - The runner sets one `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `LOG_FILE`, and `AGENTBOARD_DB_PATH` for the whole run. Tests reference these variables in 256 places. Many set their own, but any that rely on the runner's value would collide under parallel workers.
 - Hand-kept isolation lists exist only because Bun 1.3's single process leaked module mocks and global patches between files. Each list entry has a comment describing such a leak.
@@ -28,7 +28,7 @@ main batch   449 files, one process, serial          411.8 s
 **Non-Goals:**
 - Changing which tests exist or what they assert, beyond the split and the setup fixes below.
 - Parallelizing e2e (Playwright stays `--workers=1`).
-- Raising the team's slot count. That's a separate decision once memory is measured.
+- Changing the team's slot count (three since 2026-10-19). Slots are workspace procedure outside the repository; D2's loaded measurement gives the evidence to revisit them.
 
 ## Decisions
 
@@ -36,7 +36,12 @@ main batch   449 files, one process, serial          411.8 s
 The runner passes every unit file (server, shared, client, and the former isolated sets) to a single `bun test --parallel=$KAWAI_TEST_WORKERS`, then runs the real-tmux files serially as today. A file that fails only under the parallel run stays in a one-file serial step, listed with its reason, until fixed. The list is expected to be empty. Alternatives: sharding by hand across processes, rejected because it duplicates what Bun now does with scheduling. `--no-isolate`, rejected because it brings the leaks back.
 
 ### D2. Worker count from measurement, default fixed
-Measure peak RSS (cgroup `memory.peak`, or the summed RSS sampled by `memsample.sh`) for the serial runner and for N = 2, 4, 6, 8. Include N = 1 as well, and pick the largest measured N whose peak is at most the serial peak. If none fits, retain the existing runner by default and treat parallel activation as blocked until memory is reduced; do not silently raise the budget. Fix it as the default in the runner, documented beside the measurement, and allow override through `KAWAI_TEST_WORKERS`. CI uses the same measured default, capped by the available CPU count; it does not automatically raise the count to the runner's CPU count. Any higher CI override needs its own memory measurement within that runner's budget. Alternative: deriving N from free memory at run time, rejected because it is nondeterministic and racy against the other slot.
+Measure peak RSS (cgroup `memory.peak`, or the summed RSS sampled by `memsample.sh`) for the serial runner and for N = 2, 4, 6, 8. Include N = 1 as well, and pick the largest measured N whose peak is at most the serial peak. If none fits, retain the existing runner by default and treat parallel activation as blocked until memory is reduced; do not silently raise the budget. Fix it as the default in the runner, documented beside the measurement, and allow override through `KAWAI_TEST_WORKERS`. CI uses the same measured default, capped by the available CPU count; it does not automatically raise the count to the runner's CPU count. Any higher CI override needs its own memory measurement within that runner's budget. Alternative: deriving N from free memory at run time, rejected because it is nondeterministic and racy against the other slots.
+
+The CPU quota bounds N as well. Three suites at N = 6 would queue 18 workers on 6 CPUs, stretching each test toward Bun's 5 s per-test timeout, a known flake source under host load. So:
+- The default is capped at the cgroup CPU quota (`cpu.max`, or `os.availableParallelism()` where no quota is set), never at the CPU count the platform reports. CPU counts above the quota are not measured.
+- Each N is measured alone. The chosen N is then run three times with two serial full suites running beside it, standing in for the other slots. If any of those runs fails a test on its timeout, step down to the next measured N.
+- The loaded wall time is recorded beside the alone one. Whether a lone parallel run's gain survives a busy workspace is then evidence, not an assumption.
 
 ### D3. Per-file temporary directories
 A preload creates a fresh temporary root on every isolated file load and points the four variables at it before application imports. A worker index alone is insufficient: sequential files on a reused worker must also get fresh paths. The parent runner owns a unique run root, each preload creates its file root beneath it, and the parent removes the run root after all children exit, including failure paths. Verify that the preload re-runs under `--parallel=1` as well as multiple workers. Before turning on parallelism, audit tests that read the runner's values without setting their own.
@@ -56,7 +61,8 @@ The `*.integration.test.ts` suffix exists already, on 26 files. The slow tier is
 ## Risks / Trade-offs
 
 - [A test relies on running after another file (hidden order coupling)] → Per-file isolation exposes it as a failure. Fix the test, or park it in the serial list with a reason. Leaving it hidden is the worse outcome.
-- [Memory peaks higher than measured under real load (two parallel suites at once)] → N is chosen against the serial peak, so two parallel runs cost what two serial runs cost today. Re-measure after adoption using `memsample.log`.
+- [Memory peaks higher than measured under real load (several parallel suites at once)] → N is chosen against the serial peak, so concurrent parallel runs cost what concurrent serial runs cost today. Re-measure after adoption using `memsample.log`.
+- [Several slots run parallel suites at once on the 6-CPU quota] → The default is capped by the quota and validated beside two serial suites (D2). A test that still nears its timeout under that load moves to the slow tier, or gets an explicit timeout with a reason; the timings report shows it.
 - [Coverage under `--parallel` may not merge per-worker data] → Verify early (task 1.2). If it doesn't merge, the coverage run (master-only after `check-dedup`) keeps a serial invocation.
 - [Bun 1.4 parallel-runner bugs] → The runner keeps `KAWAI_TEST_WORKERS=1` for serial scheduling with per-file isolation. Verify it independently: it does not reproduce the old shared-global main batch. Retain the legacy runner until the isolated path passes the migration checks.
 - [Fixed ports or shared external resources (tmux sockets, HTTP ports) clash across workers] → Real-tmux files stay serial. Port-binding unit tests use port 0. The audit in D3 also lists fixed ports.
