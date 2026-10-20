@@ -5518,8 +5518,101 @@ describe('ChatSessionManager provider usage pull', () => {
       jest.advanceTimersByTime(600_000)
       await drainNow()
       expect(fetchCalls).toHaveLength(2)
-      expect(usage).toHaveLength(1)
+      expect(usage).toHaveLength(2)
       expect(manager.getSnapshot(id)!.usage?.source).toBe('provider')
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  test('a failed first pull still arms the cadence; the next tick shows the meters', async () => {
+    jest.useFakeTimers()
+    const warnings: Array<{ event: string; data?: Record<string, unknown> }> = []
+    logger.warn = (event: string, data?: Record<string, unknown>) => {
+      warnings.push({ event, data })
+    }
+    try {
+      let healthy = false
+      const { manager, handles, usage, fetchCalls } = await createOpenRouterHarness(
+        {
+          '/api/v1/key': () =>
+            healthy ? jsonResponse(OR_KEY_BODY) : jsonResponse({ error: 'boom' }, 503),
+        },
+        false,
+        600_000
+      )
+      const id = startOpenRouterSession(manager)
+      expect(await manager.start(id)).toEqual({ ok: true })
+      await drainNow()
+      // The transient failure records no data and is logged once…
+      expect(fetchCalls).toHaveLength(1)
+      expect(usage).toEqual([{ providerId: 'openrouter', report: null }])
+      expect(manager.getSnapshot(id)!.usage).toBeNull()
+      expect(warnings.filter(entry => entry.event === 'chat_openrouter_key_pull_failed')).toHaveLength(1)
+      // …but the provider is routed: the next cadence tick recovers the meters.
+      healthy = true
+      jest.advanceTimersByTime(600_000)
+      await drainNow()
+      expect(fetchCalls).toHaveLength(2)
+      expect(usage[1]?.report?.windows[0]).toMatchObject({ label: 'Key cap · $0.04 left' })
+      // The host-login pull stays suppressed through both outcomes.
+      expect(handles[0]!.usageCalls).toEqual([])
+    } finally {
+      logger.warn = orOriginalWarn
+      jest.useRealTimers()
+    }
+  })
+
+  test('a pull whose credits meter dropped out does not end a credit cooldown (probe B)', async () => {
+    jest.useFakeTimers()
+    try {
+      let creditsStatus = 200
+      let creditsUsed = 39.99
+      const { manager, fetchCalls } = await createOpenRouterHarness(
+        {
+          '/api/v1/key': () => jsonResponse(OR_KEY_BODY),
+          '/api/v1/credits': () =>
+            creditsStatus === 200
+              ? jsonResponse({ data: { total_credits: 40, total_usage: creditsUsed } })
+              : jsonResponse({ error: 'boom' }, creditsStatus),
+        },
+        true,
+        600_000
+      )
+      manager.limitEvents.record({
+        profileId: 'openrouter-sonnet',
+        sessionId: 'sdk-or',
+        groupId: null,
+        kind: 'billing_error',
+        final: true,
+        status: 402,
+        message: 'API Error: 402 out of credit',
+        resetsAt: null,
+        providerId: 'openrouter',
+        window: 'credit',
+      })
+      // The frozen fake clock stamps the event and the first pull's reading
+      // at one millisecond; move the clock so the event strictly precedes the
+      // first post-event reading (the overlay ignores such a reading).
+      jest.advanceTimersByTime(1)
+      const id = startOpenRouterSession(manager)
+      expect(await manager.start(id)).toEqual({ ok: true })
+      await drainNow()
+      // The complete first pull (key $0.04, credits $0.01 left) only sets the overlay's baseline.
+      expect(manager.limitEvents.cooldownFor('openrouter-sonnet', 'openrouter').until).not.toBeNull()
+      // The credits meter drops out: the key's larger $0.04 must not read as credit returning.
+      creditsStatus = 502
+      jest.advanceTimersByTime(600_000)
+      await drainNow()
+      expect(fetchCalls).toHaveLength(4)
+      expect(manager.limitEvents.cooldownFor('openrouter-sonnet', 'openrouter').until).not.toBeNull()
+      // A later complete pull reading more left than the baseline still ends it.
+      creditsStatus = 200
+      creditsUsed = 30
+      jest.advanceTimersByTime(600_000)
+      await drainNow()
+      expect(fetchCalls).toHaveLength(6)
+      expect(manager.limitEvents.cooldownFor('openrouter-sonnet', 'openrouter').until).toBeNull()
     } finally {
       jest.useRealTimers()
     }

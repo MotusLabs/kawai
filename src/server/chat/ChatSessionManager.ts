@@ -2689,13 +2689,18 @@ export class ChatSessionManager {
     }
     if (!pull.ok && (pull.outcome === 'refused' || pull.outcome === 'failed')) {
       // A failed own-endpoint pull records no data and keeps the host-login
-      // pull suppressed, whatever the failure (openrouter-provider D6).
+      // pull suppressed, whatever the failure (openrouter-provider D6). The
+      // provider still counts as routed with its cadence armed: usage
+      // refreshes while sessions are live, so a transient failure only
+      // postpones the first meters to the next tick (openrouter-provider F2).
       logger.warn('chat_openrouter_key_pull_failed', {
         providerId,
         outcome: pull.outcome,
         reason: pull.reason,
       })
+      this.providerUsageProfiles.add(providerId)
       this.usageLimits.recordNoData(providerId)
+      this.ensureProviderUsageRefresh(providerId)
       return false
     }
     if (pull.ok) {
@@ -2714,9 +2719,9 @@ export class ChatSessionManager {
 
   /**
    * Store one successful OpenRouter pull (openrouter-provider D6): meters
-   * with the smallest remaining amount fed to the credit-cooldown overlay
-   * (D8); a pull without meters records the no-data verdict, so no bar
-   * shows.
+   * recorded, and — from a complete pull only (F3) — the smallest remaining
+   * amount fed to the credit-cooldown overlay (D8); a pull without meters
+   * records the no-data verdict, so no bar shows.
    */
   private recordOpenRouterPull(providerId: string, pull: OpenRouterUsagePull & { ok: true }): void {
     if (pull.report.windows.length === 0) {
@@ -2724,7 +2729,14 @@ export class ChatSessionManager {
       return
     }
     this.usageLimits.record(providerId, pull.report)
-    if (pull.remainingUsd !== null) {
+    // Only a complete pull feeds the credit-cooldown overlay (D8): a pull
+    // whose credits meter dropped out would read the key meter's larger
+    // remainder as credit returning and end a live cooldown with no top-up
+    // (openrouter-provider F3). Credits 'skipped' (no balance key) and 'ok'
+    // are complete; 'refused' and 'failed' leave the pull partial, its
+    // meters still shown but its minimum unread.
+    const complete = pull.credits.outcome === 'ok' || pull.credits.outcome === 'skipped'
+    if (complete && pull.remainingUsd !== null) {
       this.limitEvents.reportRemainingCredit(providerId, pull.remainingUsd)
     }
   }
