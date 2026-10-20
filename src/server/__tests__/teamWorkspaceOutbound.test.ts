@@ -10,7 +10,8 @@ import path from 'node:path'
 import { OutboundService, type OutboundViolationGroup } from '../outbound/service'
 import { OutboundStore, type OutboundCallInsert } from '../outbound/store'
 import { initDatabase } from '../db'
-import { WorkspaceRead, attentionItems, morningSummary } from '../team/workspaceRead'
+import { WorkspaceRead, attentionItems } from '../team/workspaceRead'
+import { morningSummary } from '../team/workspaceSummary'
 
 // The outbound window test reads a real store (findings-8134cc45 PC1): a
 // stubbed windowCounts cannot catch a mutant on the snapshot's `since`.

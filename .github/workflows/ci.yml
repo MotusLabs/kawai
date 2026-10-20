@@ -36,11 +36,16 @@ jobs:
       - name: Test
         run: bun run test:ci
 
+      # Pull requests run the unit suite once (test:ci also covers the isolated
+      # files the coverage run skips); master pushes add the coverage pass and
+      # the artifact. The upload keeps always() so a failed suite still leaves
+      # its coverage behind — but only on push.
       - name: Test (coverage)
+        if: github.event_name == 'push'
         run: bun run test:coverage
 
       - name: Upload coverage artifact
-        if: always()
+        if: always() && github.event_name == 'push'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: coverage-lcov

@@ -145,16 +145,16 @@ Implement after `plan-execution` and `integration-candidates` have landed on mas
 
 ## 9. Team workspace
 
-- [ ] 9.1 Extend `AttentionKind` with the six kinds and `AttentionLink` with `plan` and an optional `planId` and `change` (D13). Verify with a typecheck and a shared-type test.
-- [ ] 9.2 Implement `planAttention.ts` and register its sources in `ATTENTION_SOURCES` (D13). Verify with one test per kind:
+- [x] 9.1 Extend `AttentionKind` with the six kinds and `AttentionLink` with `plan` and an optional `planId` and `change` (D13). Verify with a typecheck and a shared-type test.
+- [x] 9.2 Implement `planAttention.ts` and register its sources in `ATTENTION_SOURCES` (D13). Verify with one test per kind:
   - the owner, next action, and link follow the D13 table;
   - a fix task's owner follows its phase;
   - each item clears when its cause clears;
   - a correction task's owner follows the same phases as a fix task's;
   - the `plan-promotion` item is absent while a correction for it is open, and returns when that correction closes with no later promotion started;
   - another team's plans never appear.
-- [ ] 9.3 Add the five summary buckets to `MorningSummary` over team-workspace's 24-hour window (D13). Verify with a test that they read only durable rows inside the window, and that they survive a restart.
-- [ ] 9.4 Extend the team-workspace AGENTS.md bullet with the plan sources and buckets. Verify by reading it against D13.
+- [x] 9.3 Add the five summary buckets to `MorningSummary` over team-workspace's 24-hour window (D13). Verify with a test that they read only durable rows inside the window, and that they survive a restart.
+- [x] 9.4 Extend the team-workspace AGENTS.md bullet with the plan sources and buckets. Verify by reading it against D13.
 
 ## 10. Plans view
 
