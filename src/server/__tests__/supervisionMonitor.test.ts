@@ -10,6 +10,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:tes
 import fs from 'node:fs'
 import type { ChangeSupervision } from '../../shared/planSupervision'
 import { SupervisionMonitor, type DerivedPlan, type SupervisionMonitorDeps } from '../plans/supervision/SupervisionMonitor'
+import { detailViewKey } from '../plans/supervision/monitorComposition'
+import type { PlanSupervisionDetail } from '../../shared/planReport'
 import { createPlanWorld, type PlanWorld } from './planHarness'
 import { createSupervisionBench, MIN, T0, type SupervisionBench } from './supervisionHarness'
 
@@ -293,5 +295,25 @@ describe('the production composition', () => {
     bench.clock.at = T0 + 5 * 60 * MIN
     expect(api().outcome).toBe('stalled')
     monitor.stop()
+  })
+})
+
+describe('detailViewKey', () => {
+  const detail = (computedAt: string, liveAt: string, turnAt = '2026-01-01T00:00:00.000Z') => ({
+    decisions: [], usage: null,
+    supervision: {
+      computedAt,
+      changes: [
+        { ...change('api', { kind: 'not-started' }), activity: { kind: 'live-turn' as const, at: liveAt } },
+        { ...change('ui', { kind: 'not-started' }), activity: { kind: 'turn' as const, at: turnAt } },
+      ],
+    },
+  }) as unknown as PlanSupervisionDetail
+
+  test('two derivations differing only in computedAt and a live turn\'s clock give one key; any other change gives another (8.6)', () => {
+    const first = detailViewKey(detail('2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'))
+    expect(detailViewKey(detail('2026-01-01T00:01:00.000Z', '2026-01-01T00:01:00.000Z'))).toBe(first)
+    expect(detailViewKey(detail('2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', '2026-01-01T00:05:00.000Z'))).not.toBe(first)
+    expect(detailViewKey(null)).toBeNull()
   })
 })

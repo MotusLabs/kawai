@@ -381,7 +381,7 @@ With no Lead role, the row is written with a null `message_id` and no mail. Repl
 - **Triggers.** A sweep runs:
   - at startup;
   - on plan, execution, landing, promotion, task, and mailbox notifications for the team;
-  - on a 60-second timer, while the team has a running execution, a running promotion, or an open fix or correction task.
+  - on a 60-second timer, while the team has a running execution, a running promotion, an open fix or correction task, or a failed promotion still owed a correction.
 - **The sweep:**
   1. derives supervision for the newest execution of each plan;
   2. raises new stall alerts;
