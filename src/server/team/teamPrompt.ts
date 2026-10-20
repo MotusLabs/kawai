@@ -99,7 +99,7 @@ function strategyNote({ sessionId }: TeamPromptInput): string {
   ].join('\n')
 }
 
-/** The plan note (durable-plans 6.2): tools, the creation right, owner-only approval, direction, task links. */
+/** The plan note (durable-plans 6.2, plan-supervision D16): tools, the creation right, owner-only approval, direction, task links, decisions, and stall alerts. */
 function planNote({ sessionId, group }: TeamPromptInput): string {
   const tool = (name: string) => `mcp__${TEAM_MCP_SERVER}__${name}`
   const creation = group?.canCreatePlans
@@ -126,6 +126,13 @@ function planNote({ sessionId, group }: TeamPromptInput): string {
     `\`plan_get\` also shows the plan's executions: each change's state (waiting, provisioning, implementing, gating, landing, landed, stopped), its latest round's attempt, and where its review stands.`,
     'When a running execution owns a change: only Kawai dispatches its task or hands it to its next stage — your findings on its results still count. Submit results with the commit that landed on the change\u2019s branch (Kawai checks it against the branch and origin). Reply to Kawai\u2019s instruction mail is refused: answer with a result, findings, a journal note, or a message to the responsible group. No tool of yours starts, stops, retries, or approves an execution — only the human does, from the Plans view.',
     'A plan that lands on an integration branch: its change tasks start from that branch and land on it, and `plan_get` shows it under `integration` — the branch, its head, the candidate chain with states and outside commits, and the promotions. Kawai alone writes an integration branch — never push to it — and only the human promotes it into the default branch or cancels a promotion; no tool of yours does either.',
+    '',
+    `On plan work, ask decisions with \`${tool('decision_ask')}\`, not with a question to the human in prose. The plan comes from your session — your plan task, your fix task, or \`plan_id\` in the plan's Lead role. The card goes to the Lead role when the plan has one and you are outside it, else to the owner; the answer arrives as mail in the question's thread, so continue other work or end your turn meanwhile.`,
+    `In the plan's Lead role, decide a card addressed to your group with \`${tool('decision_record')}\`, giving a choice (or \`option_index\`) and a rationale, and record your own calls the same way, without \`card_id\`. The first decision wins.`,
+    'A reply to an open card\u2019s question is refused and nothing is sent: decide it with `decision_record` instead. Once the card is decided, replies pass.',
+    'Stall alerts come from Kawai: when a change makes no progress past its deadline or repeats a failure, the plan\u2019s Lead role gets mail tagged `plan-stall`. Act on it — investigate, ask or decide, or message the responsible group — rather than replying to Kawai.',
+    '`plan_get` also shows the plan\u2019s decision cards (history, fix status, commits since the decision), each change\u2019s supervision (outcome, cause, progress, stall) with the report, and its token usage.',
+    'Only the owner answers a card addressed to the owner, overrides a decision (which creates a fix task for the Lead role), retries, or stops, from the Plans view. No agent can override, retry, or stop: no tool of yours does.',
   ].join('\n')
 }
 

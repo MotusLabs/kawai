@@ -97,7 +97,7 @@ Bumping the baseline means regenerating the types and rerunning the driver's fak
 - A Codex entry for K at tier t:
   - K is a Codex profile: the entry overlays its label and model.
   - K has no origin: a new Codex profile.
-  - The origin is tier t: only the same directory's `providers.json` can hold K, since nearer files are not merged yet. The key is released with that file's "providers.json cannot hold a Codex profile" error and K becomes Codex, holding no origin from then on.
+  - The origin is tier t: only the same directory's `providers.json` can hold K, since nearer files are not merged yet. The key is released, the Codex entry's own `profiles.json` reporting the error (naming the provider and its `providers.json`, "providers.json cannot hold a Codex profile"), and K becomes Codex, holding no origin from then on.
   - The origin is farther: the entry is ignored with `<file>: profile "K" is a Codex entry here but a Claude entry in <origin file>`, and K stays Claude wherever its holder put it.
 - Consequently "Codex profile under a providers.json provider" holds within one level (the user level, or one project directory); a farther `providers.json` with a nearer Codex entry is a cross-level disagreement. A user-level Codex `default` is refused, since the implicit `default` is tier 0.
 

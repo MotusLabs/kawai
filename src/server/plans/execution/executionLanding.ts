@@ -218,7 +218,7 @@ async function dispatchUpdateAttempt(deps: LandingDeps, changeRow: { executionId
   if (group === null) return
   const roleProfiles = revision?.content.roles.find(role => role.group === group)?.profiles ?? []
   const generation = deps.executions.change(changeRow.executionId, changeRow.change)?.generation ?? 0
-  await refusable('update', () => deps.results.handoff({ kind: 'system', team: deps.team, executionId: changeRow.executionId }, taskId, {
+  await refusable('update', () => deps.results.handoff({ kind: 'system', team: deps.team, origin: { kind: 'execution', executionId: changeRow.executionId } }, taskId, {
     kind: 'fix', resultId: round.resultId, target: { kind: 'group', id: group },
     ...(roleProfiles.length > 0 ? { allowedProfiles: roleProfiles } : {}),
     instructions: [
@@ -432,7 +432,7 @@ export async function afterLanded(deps: LandingDeps, row: ChangeRow, executionId
     if (round !== null) {
       // The change is landed whatever the acceptance says; a refused
       // acceptance is logged and the task stays for the human to close.
-      await deps.results.accept({ kind: 'system', team: deps.team, executionId }, row.taskId, round.resultId)
+      await deps.results.accept({ kind: 'system', team: deps.team, origin: { kind: 'execution', executionId } }, row.taskId, round.resultId)
         .catch(error => logger.warn('plan_execution_accept_failed', { executionId, change: row.change, error: String(error) }))
     }
   }

@@ -197,13 +197,16 @@ const originHead = (branch: string): string | null => {
 
 describe('the plan-execution manager bench', () => {
   test('(a) Start dispatches the implement attempt with the execution in its envelope; (b) a tool-submitted result pushes; (f) a manual assign is refused for the human and an agent', async () => {
-    const { revision, executionId } = await started('bench-a')
+    const { planId, revision, executionId } = await started('bench-a')
     const member = await implementer(executionId, 'bench-a')
     const message = manager.mailbox.store.get(instruction(executionId, 'bench-a')!.messageId!)!
     // (a) The delivered envelope names the execution and its revision (D7).
     const transcripts = fs.readdirSync(transcriptDir).map(file => fs.readFileSync(path.join(transcriptDir, file), 'utf8'))
     const delivered = transcripts.find(text => text.includes(message.id))
     expect(delivered).toContain(`Execution: ${executionId} running plan revision ${revision}`)
+    // The composed detail supervises it with the manager's runtime facts (plan-supervision D10/D15).
+    const supervised = manager.plans.detailWithExecutions(planId).supervision!.changes.find(entry => entry.change === 'bench-a')!
+    expect(supervised).toMatchObject({ stage: 'implement', holder: { session: member } })
 
     // (b) The result write alone wakes the executor: the round pushes to origin.
     const { commit, resultId } = await submit(executionId, 'bench-a', member)

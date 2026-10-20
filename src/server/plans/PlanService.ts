@@ -128,6 +128,8 @@ export class PlanService {
     executionsOf?: (planId: string) => import('../../shared/planExecution').PlanExecutionView[]
     /** integration-candidates D12, D13: the plan's integration branches, candidates, and promotions. */
     integrationOf?: (planId: string) => import('../../shared/planIntegration').PlanIntegrationView[]
+    /** plan-supervision D15/D16: the decisions, supervision, and usage of a plan of the team; null for none. */
+    supervisionOf?: (teamId: string, planId: string) => import('../../shared/planReport').PlanSupervisionDetail | null
     /** plan-validation D9: approval's pre-transaction gather and in-transaction standing, and its appended precondition. */
     validation?: {
       prepareStanding: (planId: string, revision: number) => Promise<unknown> | null
@@ -158,15 +160,17 @@ export class PlanService {
     return this.detailWithExecutions(this.teamPlan(team, planId).id)
   }
 
-  /** D18: the stored detail plus the plan's executions and integration branches, when those modules are wired. */
+  /** D18: the stored detail plus the plan's executions, integration branches, and its supervision (plan-supervision D15/D16), when those modules are wired. */
   detailWithExecutions(planId: string): PlanDetail {
     const detail = this.store.detail(planId)!
     const executions = this.options.executionsOf?.(planId)
     const integration = this.options.integrationOf?.(planId)
+    const supervision = this.options.supervisionOf?.(detail.plan.teamId, planId) ?? null
     return {
       ...detail,
       ...(executions === undefined ? {} : { executions }),
       ...(integration === undefined ? {} : { integration }),
+      ...supervision,
     }
   }
 
@@ -310,6 +314,16 @@ export class PlanService {
   async reopen(caller: PlanCaller, input: { planId: string; commandId: string }): Promise<PlanCommandOutcome> {
     if (caller.kind !== 'human') return forbidden('reopen')
     return reopenPlan(this.store, caller.team.teamId, input)
+  }
+
+  /**
+   * Reopen with `within` in the same transaction (plan-supervision D6: the
+   * owner's override of a decision on a completed plan). Synchronous so the
+   * override's writes join it; the compared payload is still the command alone.
+   */
+  reopenWithin(caller: PlanCaller, input: { planId: string; commandId: string }, within: () => void): PlanCommandOutcome {
+    if (caller.kind !== 'human') return forbidden('reopen')
+    return reopenPlan(this.store, caller.team.teamId, input, within)
   }
 
   /**

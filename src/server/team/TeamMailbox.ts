@@ -18,6 +18,9 @@ import type { TaskStore } from './taskStore'
 /** Who is sending: an agent session (identity bound) or the human for a team. */
 export type MailCaller = { kind: 'agent'; sessionId: string } | { kind: 'human'; team: TeamIdentity }
 
+/** A reply refusal (plan-supervision D9): the guidance text, or null to let the reply through. */
+export type ReplyGuard = (parent: TeamMessage, caller: MailCaller) => string | null
+
 export interface MailInput {
   /**
    * Routing vocabulary (D4). `human` is accepted so the refusal can teach the
@@ -42,6 +45,12 @@ export interface MailReplyInput {
 
 import type { EffectiveCooldown } from './routing/limitEvents'
 
+/** A checked send or reply: write it with `commit` (inside any transaction), then announce it with `after`. */
+export interface PreparedMail {
+  commit(): TeamMessage
+  after(message: TeamMessage): Promise<TeamMessage>
+}
+
 const START_TO_HUMAN = 'New mail to the human is not a thing. Reply to a message they sent instead — that reply reaches them.'
 
 export class TeamMailbox {
@@ -53,6 +62,8 @@ export class TeamMailbox {
     tasks?: TaskStore
     /** The recipient profile's effective cooldown (providers-and-workers D8), or null. */
     cooldownFor?: (profileId: string, record: ChatSessionRecord) => EffectiveCooldown
+    /** Refuses some replies before anything is written; decision answers bypass it (plan-supervision D9). */
+    replyGuard?: ReplyGuard
   }) {}
 
   /** Refuse urgent direct mail to an agent whose profile is cooling; nothing is queued. */
@@ -123,6 +134,16 @@ export class TeamMailbox {
   }
 
   async send(caller: MailCaller, input: MailInput, deliverAt?: string): Promise<TeamMessage> {
+    const prepared = await this.prepareSend(caller, input, deliverAt)
+    return prepared.after(prepared.commit())
+  }
+
+  /**
+   * A send's checks, run now; its write (`commit`, synchronous, so a caller
+   * may run it inside its own transaction) and its announcement (`after`,
+   * once that transaction committed) are the caller's to run.
+   */
+  async prepareSend(caller: MailCaller, input: MailInput, deliverAt?: string): Promise<PreparedMail> {
     const sender = await this.context(caller)
     const taskId = this.taskOf(sender.team, input.task_id)
     const target = this.targetOf(sender, input)
@@ -137,13 +158,16 @@ export class TeamMailbox {
       // otherwise the message could queue forever behind a parked session.
       if (recipient.archivedAt) await this.options.restoreSession?.(recipient.sessionId)
     }
-    return this.publish(this.store.enqueue({
-      teamId: sender.team.teamId, toKind: target.kind, toId: target.id,
-      fromKind: sender.fromKind, fromSession: sender.fromSession, fromGroup: sender.fromGroup,
-      originPath: sender.originPath, body: input.body,
-      priority: input.urgent ? 'urgent' : 'normal', tags: input.tags,
-      hopLimit: sender.hopLimit, deliverAt, taskId,
-    }))
+    return {
+      commit: () => this.store.enqueue({
+        teamId: sender.team.teamId, toKind: target.kind, toId: target.id,
+        fromKind: sender.fromKind, fromSession: sender.fromSession, fromGroup: sender.fromGroup,
+        originPath: sender.originPath, body: input.body,
+        priority: input.urgent ? 'urgent' : 'normal', tags: input.tags,
+        hopLimit: sender.hopLimit, deliverAt, taskId,
+      }),
+      after: async message => this.publish(this.store.get(message.id) ?? message),
+    }
   }
 
   async schedule(caller: MailCaller, input: MailInput & { deliver_at?: string; delay_seconds?: number }) {
@@ -159,15 +183,32 @@ export class TeamMailbox {
   }
 
   async reply(caller: MailCaller, input: MailReplyInput) {
+    const prepared = await this.prepareReply(caller, input)
+    return prepared.after(prepared.commit())
+  }
+
+  /**
+   * A reply's checks, run now; `commit` writes it (synchronously) and
+   * `after` announces it. With `answer` the reply is a decision answer
+   * written by `DecisionService` (plan-supervision D5, D6): the
+   * received-by-this-session rule does not apply, an archived asker is
+   * restored only after the caller's transaction commits, and an asker whose
+   * context is exhausted gets the answer dead-lettered `context-exhausted`
+   * instead of refusing the decision it carries.
+   */
+  async prepareReply(caller: MailCaller, input: MailReplyInput, options: { answer?: boolean } = {}): Promise<PreparedMail> {
+    const answer = options.answer === true
     const sender = await this.context(caller)
     const explicitTask = this.taskOf(sender.team, input.task_id)
     const original = this.store.get(input.message_id)
     if (!original || original.teamId !== sender.team.teamId) {
       throw new Error('Can only reply to a message of this team')
     }
+    const refusal = answer ? null : this.options.replyGuard?.(original, caller) ?? null
+    if (refusal !== null) throw new Error(refusal)
     // An agent answers only mail it actually received; the human sees the
     // team's threads and may answer any of them.
-    if (caller.kind === 'agent' && (original.claimedBy !== caller.sessionId || original.deliveredAt === null)) {
+    if (!answer && caller.kind === 'agent' && (original.claimedBy !== caller.sessionId || original.deliveredAt === null)) {
       throw new Error('Can only reply to a message received by this session')
     }
     // A human sender has no session to claim or push the reply (D5): it is
@@ -179,28 +220,40 @@ export class TeamMailbox {
     if (recipient && (await resolveTeam(recipient.projectPath)).teamId !== sender.team.teamId) {
       throw new Error('Recipient belongs to another team')
     }
-    if (recipient) this.refuseExhausted(recipient)
+    const exhausted = answer && Boolean(recipient?.contextExhausted)
+    if (recipient && !exhausted) this.refuseExhausted(recipient)
     if (recipient) this.refuseCooling(recipient, input.urgent)
-    if (recipient?.archivedAt) await this.options.restoreSession?.(recipient.sessionId)
+    const restore = recipient?.archivedAt && !exhausted ? recipient.sessionId : null
+    if (restore && !answer) await this.options.restoreSession?.(restore)
     const fallback = !toHuman && !recipient && original.fromGroup !== null
-    const message = this.store.enqueue({
-      teamId: sender.team.teamId,
-      toKind: toHuman ? 'human' : fallback ? 'group' : 'session',
-      toId: toHuman ? null : fallback ? original.fromGroup : original.fromSession,
-      fromKind: sender.fromKind, fromSession: sender.fromSession, fromGroup: sender.fromGroup,
-      originPath: sender.originPath, body: input.body,
-      priority: input.urgent ? 'urgent' : 'normal', tags: input.tags,
-      inReplyTo: original, attachThread: fallback,
-      taskId: explicitTask ?? original.taskId,
-      hopLimit: sender.hopLimit,
-    })
-    if (toHuman) {
-      const task = message.taskId ? this.options.tasks?.get(message.taskId) : null
-      this.store.deliverOnSend(message.id, task?.revision ?? null)
-    } else if (!recipient && (!fallback || !sender.catalog.groups.has(original.fromGroup!))) {
-      this.store.deadLetter(message.id, 'killed-sender-without-group')
+    return {
+      commit: () => {
+        const message = this.store.enqueue({
+          teamId: sender.team.teamId,
+          toKind: toHuman ? 'human' : fallback ? 'group' : 'session',
+          toId: toHuman ? null : fallback ? original.fromGroup : original.fromSession,
+          fromKind: sender.fromKind, fromSession: sender.fromSession, fromGroup: sender.fromGroup,
+          originPath: sender.originPath, body: input.body,
+          priority: input.urgent ? 'urgent' : 'normal', tags: input.tags,
+          inReplyTo: original, attachThread: fallback,
+          taskId: explicitTask ?? original.taskId,
+          hopLimit: sender.hopLimit,
+        })
+        if (toHuman) {
+          const task = message.taskId ? this.options.tasks?.get(message.taskId) : null
+          this.store.deliverOnSend(message.id, task?.revision ?? null)
+        } else if (exhausted) {
+          this.store.deadLetter(message.id, 'context-exhausted')
+        } else if (!recipient && (!fallback || !sender.catalog.groups.has(original.fromGroup!))) {
+          this.store.deadLetter(message.id, 'killed-sender-without-group')
+        }
+        return this.store.get(message.id)!
+      },
+      after: async message => {
+        if (restore && answer) await this.options.restoreSession?.(restore)
+        return this.publish(this.store.get(message.id) ?? message)
+      },
     }
-    return this.publish(this.store.get(message.id)!)
   }
 
   /**

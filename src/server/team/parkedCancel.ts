@@ -32,6 +32,9 @@ export interface ParkedCancelHost {
 
 /** `reason` column update for an agent's cancel or discard; humans write none. */
 export function actionReason(actor: StoreActor, verb: 'cancelled' | 'discarded', reason?: string): { reason?: string } {
+  // The human's own action records a reason only when Kawai acts for them
+  // with one (plan-supervision D6: "answered by the owner"); the panel gives none.
+  if (actor.kind === 'human') return reason?.trim() ? { reason: reason.trim().slice(0, REASON_LIMIT) } : {}
   if (actor.kind !== 'agent') return {}
   return { reason: `${verb} by ${actor.sessionId}: ${(reason ?? '').trim().slice(0, REASON_LIMIT)}` }
 }

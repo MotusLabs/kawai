@@ -15,6 +15,7 @@ import { targetLabel, type AssignmentService } from './AssignmentService'
 import type { MemberRelease } from './memberRelease'
 import { TaskRelease } from './taskRelease'
 import { statusRefusal, type TaskCaller, type TaskService } from './TaskService'
+import { refuseSystem } from './systemCaller'
 import { worktreeRootOf } from './worktreeRoots'
 
 export interface ResultSubmission {
@@ -116,6 +117,7 @@ export class TaskResultService {
    * the task's status alone: a submitted result is not a finished task.
    */
   async submit(caller: TaskCaller, taskId: string, input: ResultSubmission): Promise<TaskResult> {
+    refuseSystem(caller, 'submit')
     const { team, actor } = await this.tasks.context(caller)
     if (actor.kind !== 'agent') throw new Error('Results are submitted by the agent that did the work, with task_submit_result')
     const task = this.tasks.sameTeamTask(team, taskId)
@@ -154,6 +156,7 @@ export class TaskResultService {
    * result records its id (the attempt's identity).
    */
   async submitFindings(caller: TaskCaller, taskId: string, input: FindingsSubmission): Promise<TaskFindings> {
+    refuseSystem(caller, 'submit')
     const { team, actor } = await this.tasks.context(caller)
     if (actor.kind !== 'agent') throw new Error('Findings are submitted by the reviewing agent, with task_submit_findings')
     this.tasks.sameTeamTask(team, taskId)
@@ -182,6 +185,7 @@ export class TaskResultService {
    * per task: no parent is touched.
    */
   async accept(caller: TaskCaller, taskId: string, resultId: string, reason?: string): Promise<AcceptOutcome> {
+    refuseSystem(caller, 'accept')
     const { team, actor } = await this.tasks.context(caller)
     const task = this.tasks.sameTeamTask(team, taskId)
     const refusal = statusRefusal(actor, task, 'done')
@@ -217,6 +221,7 @@ export class TaskResultService {
    * notice instead of dispatching again; a failed one loses standing.
    */
   async handoff(caller: TaskCaller, taskId: string, request: HandoffRequest): Promise<HandoffOutcome> {
+    refuseSystem(caller, 'handoff')
     const { team } = await this.tasks.context(caller)
     this.tasks.sameTeamTask(team, taskId)
     // Only Kawai hands a running change's task to its next stage (plan-execution D7).

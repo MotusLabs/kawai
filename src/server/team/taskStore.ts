@@ -109,6 +109,8 @@ export interface CreateTaskInput {
    * a duplicate; the same key with a different payload is refused.
    */
   requestKey?: string | null
+  /** A pre-minted id, so a fix task's direction can name it (plan-supervision D7); else minted here. */
+  id?: string
 }
 
 /** One publication (task-revision-publication D2); fields are normalized by the caller. */
@@ -173,7 +175,8 @@ export class TaskStore {
     return task
   }
 
-  create(input: CreateTaskInput, now = nowIso()): TeamTask {
+  /** `within` runs in the insert's transaction with the new task (plan-supervision D7's `plan_fix_tasks` row). */
+  create(input: CreateTaskInput, now = nowIso(), within?: (task: TeamTask) => void): TeamTask {
     // Request identity (task-assignment D4): insert-then-read by the unique
     // key. A same-payload replay returns the prior task; a different payload
     // under the key is refused naming the differing field. Post-create
@@ -186,7 +189,7 @@ export class TaskStore {
         return existing
       }
     }
-    const id = `task-${crypto.randomUUID()}`
+    const id = input.id ?? `task-${crypto.randomUUID()}`
     this.db.transaction(() => {
       this.db.prepare(`INSERT INTO team_tasks
         (id, team_id, title, status, creator_kind, creator_session, parent_id, worktree, openspec_change, plan_id, plan_change, request_key, revision, created_at, updated_at)
@@ -196,6 +199,7 @@ export class TaskStore {
         input.planId ?? null, input.planChange ?? null, input.requestKey ?? null, now, now,
       )
       this.insertRevision(id, 1, input.direction, input.acceptance ?? null, input.creator, now)
+      within?.(this.get(id)!)
     })()
     return this.changed(id)
   }

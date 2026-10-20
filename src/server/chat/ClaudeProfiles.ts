@@ -78,6 +78,15 @@ export function claudeProfileMetadata(
   return claudeProfileCatalog(ctx).profiles
 }
 
+/**
+ * The credential variables the catalog resolved at `ctx`'s project path
+ * names (openrouter-provider D3): the set every launch withholds. The Codex
+ * launch path reads it here, since its configuration carries no env.
+ */
+export function withheldCredentialNamesAt(ctx: ProfileCatalogContext = {}): Set<string> {
+  return withheldCredentialNames(resolveProfileCatalog(ctx))
+}
+
 export function resolveClaudeProfile(
   id: string = 'default',
   globalEnv: ChatProviderEnv = {},
@@ -95,9 +104,9 @@ export function resolveClaudeProfile(
   // needs: the home resolved exactly as the catalog's own home-provider id
   // is (R2), so stamp and provider id can never disagree. Codex entries
   // carry no catalog env — configuration travels as `-c` overrides. They
-  // never touch credentials: withholding (D3) covers every launch — when the
-  // Codex spawn is wired, codexSpawnEnv must drop the catalog-named
-  // credential variables alongside the ANTHROPIC_*/CLAUDE_CODE_* ones.
+  // never touch credentials: withholding (D3) covers every launch — the
+  // Codex spawn drops withheldCredentialNamesAt's set in codexSpawnEnv,
+  // alongside the ANTHROPIC_*/CLAUDE_CODE_* variables.
   if (profile.runtime === 'codex') {
     return {
       runtime: 'codex',

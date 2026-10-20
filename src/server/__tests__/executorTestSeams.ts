@@ -4,7 +4,7 @@
 import type { ExecutorDeps } from '../plans/execution/executor'
 
 export const neutralExecutorSeams: Pick<ExecutorDeps, 'releases' | 'conditionsOf' | 'groupScoped'> = {
-  releases: { readiness: () => ({ ready: true, reason: null }), release: () => ({ ok: true }) },
+  releases: { readiness: () => ({ ready: true, reason: null }), release: () => ({ ok: true }), pendingSpawns: () => [] },
   conditionsOf: () => [],
   groupScoped: () => true,
 }

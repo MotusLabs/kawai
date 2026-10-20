@@ -33,7 +33,7 @@ let results: TaskResultService
 let executions: ExecutionStore
 let service: ExecutionService
 let executor: ExecutionExecutor
-let system: { kind: 'system'; team: typeof world.team; executionId: string }
+let system: import('../team/systemCaller').SystemCaller
 
 beforeAll(async () => {
   world = await createPlanWorld('kawai-stops-')
@@ -81,7 +81,7 @@ beforeEach(async () => {
     teamOf: id => (id === world.team.teamId ? world.team : undefined),
     adapters: { provision: provisionAdapter(executions) },
   })
-  system = { kind: 'system', team: world.team, executionId: '' }
+  system = { kind: 'system', team: world.team, origin: { kind: 'execution', executionId: '' } }
 })
 afterEach(() => executor.close())
 
@@ -107,7 +107,7 @@ async function runningExecution(changes: string[]): Promise<string> {
     const effect = executions.effectByKey(`${execution.id}:${change}:provision:1:0`)!
     executions.setEffectOutcome(effect.id, { state: 'done', outcome: { path: path.join(world.repo, '.worktrees', change), branch: change, baseline: 'abc' } })
     const moved = executions.change(execution.id, change)!
-    const task = await tasks.create({ ...system, executionId: execution.id }, {
+    const task = await tasks.create({ ...system, origin: { kind: 'execution', executionId: execution.id } }, {
       title: `${change} — plan`, direction: 'Build it', plan_id: planId, plan_change: change,
     })
     executions.transition(execution.id, change, moved, { state: 'implementing', taskId: task.id, worktree: task.worktree, branch: change, baselineCommit: 'abc' })

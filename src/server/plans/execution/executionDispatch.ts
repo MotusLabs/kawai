@@ -21,7 +21,7 @@ import { effectiveExtraChecks } from '../../../shared/planExecutionGates'
 
 /** The system caller (D2): minted only inside this module. */
 function kawaiCaller(team: TeamIdentity, executionId: string): TaskCaller {
-  return { kind: 'system', team, executionId }
+  return { kind: 'system', team, origin: { kind: 'execution', executionId } }
 }
 
 export interface DispatchDeps {

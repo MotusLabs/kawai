@@ -60,63 +60,63 @@ Implement after `plan-execution` and `integration-candidates` have landed on mas
 
 ## 5. Decisions and fix tasks
 
-- [ ] 5.1 Widen the system `TaskCaller` to `{ kind: 'system'; team; origin }` with the three origins, constructed only module-privately, extending plan-execution D2's exhaustive switches over `origin` (D7). Verify with:
+- [x] 5.1 Widen the system `TaskCaller` to `{ kind: 'system'; team; origin }` with the three origins, constructed only module-privately, extending plan-execution D2's exhaustive switches over `origin` (D7). Verify with:
   - an exhaustive-switch typecheck;
   - a test that no tool or connection path yields a system caller;
   - a test that the execution origin keeps exactly D2's rights.
-- [ ] 5.2 Implement `DecisionService.ask` (D4). Verify with tests:
+- [x] 5.2 Implement `DecisionService.ask` (D4). Verify with tests:
   - the plan resolves from the session's task, from a fix task, or from the Lead role with `plan_id`, and anything else is refused with D4's message;
   - a conflicting `plan_id` is refused, and another team's plan reads as not found;
   - a Lead-addressed card and its task-less `decision-question` mail commit in one transaction;
   - an owner-addressed card sends no mail;
   - the input limits are enforced.
-- [ ] 5.3 Implement `DecisionService.record` for card answers and own calls (D5). Verify with tests:
+- [x] 5.3 Implement `DecisionService.record` for card answers and own calls (D5). Verify with tests:
   - only the addressed group answers, and owner-addressed cards are refused;
   - the same session and choice replays, and anything else is refused naming the decider;
   - the answer goes through the reply path with the card's task passed explicitly, tagged `decision-answer`, and a killed asker's answer falls back to its group;
   - an own call needs the Lead role and creates a decided card with no mail;
   - `affected_tasks` defaults to the card's task and refuses other teams' tasks.
-- [ ] 5.4 Implement `DecisionService.answer` (D6). Verify with tests:
+- [x] 5.4 Implement `DecisionService.answer` (D6). Verify with tests:
   - agent callers are refused;
   - replay compares the D6 fields, and a different payload is refused naming the field;
   - a decided card is refused naming the decider;
   - queued or awaiting-request question mail is cancelled with the human as actor, while claimed mail is left alone;
   - the answer mail goes to the asker in the question's thread;
   - a race with `decision_record` leaves one first decision.
-- [ ] 5.5 Implement `fixTasks.ts` creation and dispatch for overrides (D7). Verify with tests:
+- [x] 5.5 Implement `fixTasks.ts` creation and dispatch for overrides (D7). Verify with tests:
   - the title, direction, and acceptance follow D7, with no worktree, change, or parent, and the instruction names `fixes: ["<the task's id>"]`;
   - the `plan_fix_tasks` row commits with the task;
   - dispatch goes to `leadGroup` with the role's profiles, the tag `plan-fix`, and the key `fix:<decisionId>`;
   - with no Lead role nothing is dispatched;
   - the origin's rights end at create, dispatch, and close.
-- [ ] 5.6 Implement `DecisionService.override` as one transaction (D6). Verify with tests:
+- [x] 5.6 Implement `DecisionService.override` as one transaction (D6). Verify with tests:
   - replay, and the CAS refusal naming the current decision;
   - an open card is refused with `answer it instead`, and a missing rationale is refused;
   - a cancelled plan is refused, and a completed one is reopened through `PlanService.reopen(…, within)` with command id `override:<commandId>:reopen`;
   - an earlier open fix task is cancelled with a note;
   - the new fix task is created and dispatched;
   - a failure at any step writes nothing.
-- [ ] 5.7 Add the AGENTS.md decisions bullet: the Lead role, cards, the two tools, owner answers and overrides, and fix tasks. Verify by reading it against D3–D7.
+- [x] 5.7 Add the AGENTS.md decisions bullet: the Lead role, cards, the two tools, owner answers and overrides, and fix tasks. Verify by reading it against D3–D7.
 
 ## 6. Agent surface
 
-- [ ] 6.1 Add `decision_ask` and `decision_record` to the `kawai-team` server, allowed without cards, identity-bound like the task tools (D16). Verify with tool tests that call through the server and see D4's and D5's refusals.
-- [ ] 6.2 Implement `decisionReplyGuard.ts` and wire it into the `reply` tool and the human composer's reply path (D9). Verify with tests:
+- [x] 6.1 Add `decision_ask` and `decision_record` to the `kawai-team` server, allowed without cards, identity-bound like the task tools (D16). Verify with tool tests that call through the server and see D4's and D5's refusals.
+- [x] 6.2 Implement `decisionReplyGuard.ts` and wire it into the `reply` tool and the human composer's reply path (D9). Verify with tests:
   - a reply to an open card's question is refused with guidance, and nothing is queued, for an agent and for the human;
   - a reply after the decision is queued;
   - `DecisionService`'s answers bypass the guard;
   - the null guard passes everything.
-- [ ] 6.3 Extend `plan_get` with `decisions`, `supervision`, and `usage` (D16). Verify with a tool test on a plan with a stalled change and a decided card.
-- [ ] 6.4 Add the decision and supervision text to the plan note in `teamPrompt.ts` (D16). Verify with a prompt test that the note names both tools, the refused reply, the stall alerts, and the owner's rights, and claims no agent can override, retry, or stop.
+- [x] 6.3 Extend `plan_get` with `decisions`, `supervision`, and `usage` (D16). Verify with a tool test on a plan with a stalled change and a decided card.
+- [x] 6.4 Add the decision and supervision text to the plan note in `teamPrompt.ts` (D16). Verify with a prompt test that the note names both tools, the refused reply, the stall alerts, and the owner's rights, and claims no agent can override, retry, or stop.
 
 ## 7. Human connections
 
-- [ ] 7.1 Implement `decisionConnections.ts` for `team-plan-decide` and `team-plan-override`, answered by `team-plan-result`, and add both to `CHAT_CONNECTION_TYPES` (D15). Verify with connection tests: another team's plan or card is refused, a replay returns the prior decision, and a refusal shows its message.
-- [ ] 7.2 Add `decisions`, `supervision`, and `usage` to `team-plan-detail`, pushed after every decision, fix, or alert write. Verify with a connection test that an answer pushes one detail carrying the decision.
+- [x] 7.1 Implement `decisionConnections.ts` for `team-plan-decide` and `team-plan-override`, answered by `team-plan-result`, and add both to `CHAT_CONNECTION_TYPES` (D15). Verify with connection tests: another team's plan or card is refused, a replay returns the prior decision, and a refusal shows its message.
+- [x] 7.2 Add `decisions`, `supervision`, and `usage` to `team-plan-detail`, pushed after every decision, fix, or alert write. Verify with a connection test that an answer pushes one detail carrying the decision.
 
 ## 8. Supervision monitor
 
-- [ ] 8.1 Implement `supervisionRead.ts`, the loader that feeds `changeSupervision`: change rows, rounds, effects, assignments, mailbox reasons, session facts, the slot holder, cards, conditions, candidates, turn ends, and task mail (D10). Verify with a store-backed test per named wait.
+- [x] 8.1 Implement `supervisionRead.ts`, the loader that feeds `changeSupervision`: change rows, rounds, effects, assignments, mailbox reasons, session facts, the slot holder, cards, conditions, candidates, turn ends, and task mail (D10). Verify with a store-backed test per named wait.
 - [ ] 8.2 Implement `SupervisionMonitor.ts`: one per team, single-flight sweeps at startup, on the D11 notifications, and on a 60 s timer while there is work. Verify with tests:
   - the timer stops when the team has no running execution or promotion and no open fix or correction task;
   - a sweep error is logged and the next trigger retries;

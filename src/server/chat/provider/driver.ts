@@ -107,6 +107,12 @@ export interface ChatDriverCallbacks {
   onUsageNoData?: () => void
   /** Fired once when the runtime reveals its session/thread id. */
   onSdkSessionId?: (sdkSessionId: string) => void
+  /**
+   * The runtime's own transcript file (codex-chat-sessions D8: a Codex
+   * thread's rollout `Thread.path`), as soon as it is known. Claude chats
+   * derive theirs from the session id and never fire it.
+   */
+  onTranscriptPath?: (path: string) => void
   /** The agent's working directory moved (main-session moves only; a
    * driver filters its subagents' moves itself). */
   onCwdChanged?: (newCwd: string) => void

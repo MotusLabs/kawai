@@ -188,6 +188,20 @@ describe('buildTeamPrompt plan note (durable-plans 6.2)', () => {
     expect(creator).toContain('Draft ids default to your session id (`chat-p1`)')
   })
 
+  test('the note teaches decisions and stall alerts and claims no agent overrides, retries, or stops (plan-supervision 6.4)', () => {
+    for (const prompt of [creator, member, groupless]) {
+      expect(prompt).toContain('ask decisions with `mcp__kawai-team__decision_ask`, not with a question to the human')
+      expect(prompt).toContain("decide a card addressed to your group with `mcp__kawai-team__decision_record`, giving a choice")
+      expect(prompt).toContain('A reply to an open card\u2019s question is refused and nothing is sent')
+      expect(prompt).toContain('Stall alerts come from Kawai')
+      expect(prompt).toContain('rather than replying to Kawai')
+      expect(prompt).toContain('Only the owner answers a card addressed to the owner, overrides a decision')
+      expect(prompt).toContain('No agent can override, retry, or stop')
+      expect(prompt).not.toMatch(/(?<!No )agents? (can|may) (override|retry|stop)/i)
+      expect(prompt).not.toMatch(/decision_(answer|override|dismiss)|plan_(retry|stop)/)
+    }
+  })
+
   test('the creation right follows canCreatePlans', () => {
     expect(creator).toContain('Your group may create plans: `mcp__kawai-team__plan_create`')
     for (const prompt of [member, groupless]) {

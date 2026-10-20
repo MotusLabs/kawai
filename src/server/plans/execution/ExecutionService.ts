@@ -391,7 +391,7 @@ export class ExecutionService {
       return { ok: false, reason: 'not-found', message: `Execution not found in this team: ${input.executionId}` }
     }
     const trimmed = input.reason.trim()
-    const system = { kind: 'system' as const, team, executionId: input.executionId }
+    const system = { kind: 'system' as const, team, origin: { kind: 'execution' as const, executionId: input.executionId } }
     for (let attempt = 1; attempt <= STOP_ATTEMPTS; attempt++) {
       // Phase 1: prepare the cancel of every open task the stop will close.
       const prepared = new Map<string, PreparedTaskStatus>()

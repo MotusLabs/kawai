@@ -19,6 +19,9 @@ import { AssignmentService } from '../team/AssignmentService'
 import { AssignmentStore } from '../team/assignmentStore'
 import { MailboxStore } from '../team/mailboxStore'
 import { MemberRelease } from '../team/memberRelease'
+import { TeamMailbox } from '../team/TeamMailbox'
+import type { PlanService } from '../plans/PlanService'
+import type { DecisionService } from '../plans/decisions/DecisionService'
 import { TaskService } from '../team/TaskService'
 import { TaskResultService } from '../team/TaskResultService'
 import { TeamWorktrees } from '../team/worktreeRoots'
@@ -31,6 +34,7 @@ import type { ExecutionRuntime } from '../plans/execution/executionRuntime'
 import type { ExecutionStore } from '../plans/execution/executionStore'
 import { roundAdapters } from '../plans/execution/executionRounds'
 import type { ExecutionService } from '../plans/execution/ExecutionService'
+import { LEAD_ROLES } from './decisionHarness'
 import { createPlanBench, createPlanWorld, sessionRow, writeGroup, type PlanBench, type PlanWorld } from './planHarness'
 
 const FLOOR = { lint: ['ci'], typecheck: ['ci'], 'unit-tests': ['ci'], 'ci-e2e': ['e2e'] }
@@ -51,6 +55,9 @@ let releases: MemberRelease
 let store: ExecutionStore
 let service: ExecutionService
 let runtime: ExecutionRuntime
+let teamMailbox: TeamMailbox
+let composedPlans: PlanService
+let decisions: DecisionService | null
 let main: string
 let origin: string
 let baseSha: string
@@ -129,17 +136,20 @@ async function compose(): Promise<void> {
   const impact = new ImpactService(new ImpactStore(bench.db.db), {
     strategies: bench.strategies, plans: bench.plans, mail, getSession: id => bench.records.get(id),
   })
+  teamMailbox = new TeamMailbox(mail, { getSession: id => bench.records.get(id), homeDir: world.home, tasks: bench.tasks })
   const composed = composePlanServices({
     db: bench.db.db, plans: bench.plans, strategies: bench.strategies, impact,
     getSession: id => bench.records.get(id),
     caps: { planExecution: async () => ({ floorChecks: FLOOR, maxParallelChanges: 2, mergeMethod: 'merge' }) },
     executionCore: core,
     executionTeam: {
-      tasks, assignments, results, taskStore: bench.tasks, mailbox: mail, releases,
+      tasks, assignments, results, taskStore: bench.tasks, mailbox: mail, teamMailbox, releases,
+      pendingSpawns: () => [],
       records: () => bench.records.values(),
       // The executor resolves by team id; the runtime's archive wake by session.
       identityOf: id => (id === world.team.teamId ? world.team : undefined),
       teamOfSession: teamOf,
+      supervision: { holder: () => null, blocker: () => null },
     },
     executionValidation: {
       prepareStanding: async () => ({}),
@@ -149,6 +159,8 @@ async function compose(): Promise<void> {
   })
   store = composed.executionStore
   service = composed.executions
+  decisions = composed.decisions
+  composedPlans = composed.plans
   runtime = composed.runtime!
   await runtime.start()
 }
@@ -229,6 +241,48 @@ describe('the composed execution stack (rev 3)', () => {
   test('the default composition carries the real adapters', () => {
     expect(runtime.adapters.fixture).toBe(false)
     expect(runtime.adapters.rounds).toBe(roundAdapters)
+  })
+
+  test('the composed decision service writes through the team mailbox and announces the plan (plan-supervision 6.1)', async () => {
+    expect(decisions!.deps.mailbox).toBe(teamMailbox)
+    const { planId, revision } = await bench.draftInReview(LEAD_ROLES)
+    await bench.approve(planId, revision)
+    const announced: string[] = []
+    const unsubscribe = bench.plans.subscribe(plan => announced.push(plan.id))
+    try {
+      const { card } = await decisions!.ask({ kind: 'agent', sessionId: 'lead' }, { question: 'Ship now?', plan_id: planId })
+      expect(card).toMatchObject({ planId, addressedTo: 'owner' })
+      expect(announced).toEqual([planId])
+    } finally {
+      unsubscribe()
+    }
+  })
+
+  test("the composed detail carries decisions, supervision, and usage; a fix task's status re-pushes it (plan-supervision 6.3, 7.2)", async () => {
+    const { planId, revision } = await bench.draftInReview(LEAD_ROLES)
+    await bench.approve(planId, revision)
+    const { card } = await decisions!.ask({ kind: 'agent', sessionId: 'lead' }, { question: 'Ship now?', options: ['yes', 'no'], plan_id: planId })
+    const decided = await decisions!.answer(bench.human, { planId, cardId: card.id, optionIndex: 1, commandId: 'c-ans' })
+    const overridden = await decisions!.override(bench.human, { planId, cardId: card.id, expectedDecisionId: decided.decision.id, optionIndex: 2, rationale: 'not yet', commandId: 'c-ovr' })
+    const detail = composedPlans.detailWithExecutions(planId)
+    expect(detail.decisions!.map(view => [view.card.id, view.state])).toEqual([[card.id, 'overridden']])
+    expect(detail.decisions![0]!.fixes[0]).toMatchObject({ taskId: overridden.fixTaskId, status: { phase: 'planning' } })
+    expect(detail.supervision!.changes.map(entry => entry.outcome)).toEqual(detail.supervision!.changes.map(() => 'not-started'))
+    expect(detail.usage).toBeDefined()
+    const announced: string[] = []
+    const unsubscribe = bench.plans.subscribe(plan => announced.push(plan.id))
+    try {
+      bench.tasks.setStatus(overridden.fixTaskId!, 'cancelled')
+      expect(announced).toEqual([planId])
+      expect(composedPlans.detailWithExecutions(planId).decisions![0]!.fixes[0]!.status.phase).toBe('cancelled')
+      announced.length = 0
+      // An ordinary task's change announces nothing through the fix rule.
+      const other = bench.tasks.create({ teamId: world.team.teamId, title: 'other', direction: 'd', creator: { kind: 'human' } } as never)
+      bench.tasks.setStatus(other.id, 'active')
+      expect(announced).toEqual([])
+    } finally {
+      unsubscribe()
+    }
   })
 
   test('Start leads to the first implement dispatch', async () => {

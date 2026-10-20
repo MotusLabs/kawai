@@ -164,7 +164,7 @@ describe('release before review (12.4)', () => {
   test('an unscoped review group leaves the implementer working; a human-created session is never released', async () => {
     const released: string[] = []
     const executor = h.makeExecutor({
-      releases: { readiness: () => ({ ready: true, reason: null }), release: id => { released.push(id); return { ok: true } } },
+      releases: { readiness: () => ({ ready: true, reason: null }), release: id => { released.push(id); return { ok: true } }, pendingSpawns: () => [] },
       groupScoped: (_team, group) => group !== 'reviewers',
     })
     try {
@@ -179,7 +179,7 @@ describe('release before review (12.4)', () => {
 
       // Scoped now, but the session in the worktree was created by the human.
       const scoped = h.makeExecutor({
-        releases: { readiness: () => ({ ready: true, reason: null }), release: id => { released.push(id); return { ok: true } } },
+        releases: { readiness: () => ({ ready: true, reason: null }), release: id => { released.push(id); return { ok: true } }, pendingSpawns: () => [] },
         groupScoped: () => true,
       })
       try {
@@ -201,7 +201,7 @@ describe('release before review (12.4)', () => {
 
   test('a refused release holds the step at releasing with its error (N3)', async () => {
     const executor = h.makeExecutor({
-      releases: { readiness: () => ({ ready: true, reason: null }), release: () => ({ ok: false, error: 'archive refused: pending approval' }) },
+      releases: { readiness: () => ({ ready: true, reason: null }), release: () => ({ ok: false, error: 'archive refused: pending approval' }), pendingSpawns: () => [] },
       groupScoped: () => true,
     })
     try {

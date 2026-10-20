@@ -47,9 +47,11 @@ import type {
 } from '../../shared/types'
 import type { ChatSessionRecord, SessionDatabase } from '../db'
 import { generateSessionName } from '../nameGenerator'
+import { existsSync } from 'node:fs'
 import { isExistingDirectory, resolveProjectDirectory } from '../paths'
 import type { SessionRegistry } from '../SessionRegistry'
-import { ChatSessionDriver, type ChatQueryFactory } from './ChatSessionDriver'
+import type { ChatQueryFactory } from './ChatSessionDriver'
+import { createChatDriver, type ChatDriverSharedOptions } from './provider/createChatDriver'
 import type { ChatAgentDriver, ChatRuntime } from './provider/driver'
 import { chatAuthErrorMessage, hasClaudeAuth } from './chatAuth'
 import { historyWindow } from './historyWindow'
@@ -68,6 +70,7 @@ import {
   profileLimitResetTimeZone,
   claudeLaunchKey,
   verifyProfileExecutable,
+  withheldCredentialNamesAt,
   type ChatLaunchConfiguration,
   type ClaudeLaunchConfiguration,
   type ProfileCatalogContext,
@@ -82,6 +85,7 @@ import { ensureCodexExecutable } from './codex/codexExecutable'
 import { codexLoginErrorMessage, hasCodexLogin } from './codex/codexAuth'
 import { resolveCodexHome } from './codexProfiles'
 import { fetchZaiUsage } from './zaiUsage'
+import { fetchOpenRouterUsage, isOpenRouterBaseUrl, type OpenRouterUsagePull } from './openRouterUsage'
 import { ambientProviderOf, catalogCtx } from '../team/cooldowns'
 import { readWorkerTranscript } from './chatWorkerTranscript'
 import { isTaskOutputFile, readTaskOutputTail } from './taskOutputFile'
@@ -98,6 +102,7 @@ import { TeamMailbox } from '../team/TeamMailbox'
 import { createMailboxServer } from '../team/mailboxTools'
 import { composeExecutionCore, composePlanServices } from '../plans/planComposition'
 import type { ValidationService } from '../plans/validation/ValidationService'
+import type { DecisionService } from '../plans/decisions/DecisionService'
 import type { OpenspecAdapter } from '../plans/validation/openspecAdapter'
 import type { ValidationDetailCache } from '../plans/validation/validationDetail'
 import type { MailboxManagement } from '../team/mailboxManagement'
@@ -110,6 +115,8 @@ import type { TeamMessage, TeamWorktreeOccupancy, WaitingReason } from '../../sh
 import { MailDispatcher } from '../team/dispatcher'
 import { receiptMessageId } from '../team/receipt'
 import type { LimitEventStore } from '../team/routing/limitEvents'
+import { sessionCooldown } from '../team/cooldowns'
+import { supervisionRuntime } from '../plans/supervision/supervisionRuntime'
 import type { HandoffTarget } from '../team/routing/limitOutcomes'
 import type { RuleLoadReport, TeamRoutingState } from '../../shared/routing'
 import { SessionMailbox } from '../team/sessionMailbox'
@@ -415,6 +422,15 @@ export class ChatSessionManager {
   private readonly providerUsageTimers = new Map<string, ReturnType<typeof setInterval>>()
   /** Provider usage refresh cadence (provider usage pull design D5). */
   private readonly providerUsageRefreshMs: number
+  /**
+   * Balance-key values whose credits pull was already refused (openrouter
+   * D6): each value logs once. Bounded — cleared when it grows past 64.
+   */
+  private readonly openrouterCreditsRefusals = new Set<string>()
+  /** One-shot post-turn pull timer per provider (openrouter D6). */
+  private readonly postTurnPullTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  /** When each provider's post-turn pull fired last, for the per-minute bound (openrouter D6). */
+  private readonly postTurnPullFiredAt = new Map<string, number>()
   /**
    * Latest login-expiry notice per credentials path (notification strip
    * design D2), in memory only: a restart begins with none until a check
@@ -1185,16 +1201,27 @@ export class ChatSessionManager {
         results: this.teamMail.results,
         taskStore: this.teamMail.tasks.store,
         mailbox: this.teamMail.mailbox.store,
+        teamMailbox: this.teamMail.mailbox,
         releases: this.teamMail.releases,
+        pendingSpawns: teamId => this.teamMail.staffing.pendingFor(teamId),
         records: () => this.records.values(),
         // The executor resolves teams by id (a member-less team included);
         // the runtime's archive wake resolves sessions.
         identityOf: teamId => this.teams.identityFor(teamId),
         teamOfSession: id => this.teams.teamOf(id),
+        // The supervision detail's runtime facts (plan-supervision D10).
+        supervision: supervisionRuntime({
+          db: options.db.db, mail: this.teamMail.mailbox.store, getRecord: id => this.records.get(id),
+          pendingRequests: id => this.drivers.get(id)?.getPendingRequests() ?? [],
+          hasLiveWorkers: id => this.hasLiveWorkers(id), hasRunningBackgroundTasks: id => this.hasRunningBackgroundTasks(id),
+          waitingFor: teamId => this.teamMail.waitingFor(teamId),
+          cooldownUntil: record => sessionCooldown(this.teamMail.limits, options.profileCatalogHome, record.claudeProfileId ?? 'default', record.projectPath).until,
+        }),
       },
       ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
     })
     this.validation = planServices.validation
+    this.decisions = planServices.decisions
     this.plans = planServices.plans
     this.executions = planServices.executions
     this.executionRuntime = planServices.runtime
@@ -1499,6 +1526,8 @@ export class ChatSessionManager {
   readonly caps: TeamCaps
   /** Plan validation (plan-validation): reports, assessments, decisions, and the approval standing. */
   readonly validation: ValidationService
+  /** Plan decisions (plan-supervision D4–D7): cards, the Lead's record, the owner's answer and override, fix tasks. */
+  readonly decisions: DecisionService | null
   /** The coalesced validation view for the Plans page pushes (plan-validation D11). */
   readonly validationDetail: ValidationDetailCache
   /** The one OpenSpec adapter (plan-validation D3); its probe is cached in-process. */
@@ -2014,17 +2043,22 @@ export class ChatSessionManager {
   private startBlocker(record: ChatSessionRecord): string | null {
     if (record.archivedAt != null) return ARCHIVED_SESSION_ERROR
     const spawning = !this.driverPromises.has(record.sessionId)
+    // A Codex thread's transcript is the rollout its start reported
+    // (codex-chat-sessions D8), never a Claude `<id>.jsonl`.
+    const codexRollout = record.runtime === 'codex' && !this.options.queryFactory
     if (
       record.sdkSessionId &&
       // Sync discovery acceptable: a per-request existence check, not the
       // boot path (async-transcript-parsing design D4).
       !this.drivers.has(record.sessionId) &&
       spawning &&
-      !findTranscriptPath(record.sdkSessionId)
+      !(codexRollout
+        ? record.transcriptPath != null && existsSync(record.transcriptPath)
+        : findTranscriptPath(record.sdkSessionId))
     ) {
       return (
         'Cannot resume this conversation: the agent transcript is missing. ' +
-        `Restore ${record.sdkSessionId}.jsonl or create a new chat session.`
+        `Restore ${codexRollout ? record.transcriptPath ?? `the rollout of ${record.sdkSessionId}` : `${record.sdkSessionId}.jsonl`} or create a new chat session.`
       )
     }
     const live = this.drivers.get(record.sessionId)
@@ -2264,6 +2298,9 @@ export class ChatSessionManager {
     if (this.titleWatchers.has(sessionId)) return
     const record = this.records.get(sessionId)
     if (!record || record.archivedAt != null || !record.sdkSessionId) return
+    // A Codex thread has no Claude transcript; its rollout replay and
+    // receipts arrive with codex-chat-sessions §6.
+    if (record.runtime === 'codex') return
     // Sync discovery acceptable: a per-attach watcher setup, not the boot
     // path (async-transcript-parsing design D4).
     const filePath = findTranscriptPath(record.sdkSessionId)
@@ -2351,24 +2388,29 @@ export class ChatSessionManager {
     // strip design D3).
     this.refreshAccountNotice(record.sessionId)
     const promise = (async () => {
+      // A Codex chat runs the app-server driver (codex-chat-sessions 5.6);
+      // the fixture seam (an injected fake runtime) keeps the fake SDK
+      // driver, which starts no Codex child.
+      const codex = record.runtime === 'codex' && !this.options.queryFactory
       // A profile executable replaces the standard binary (already verified
-      // above); otherwise every spawn runs the checked Claude Code install.
-      // A Codex launch never reaches an SDK spawn — spawnQuery refuses it.
+      // above); otherwise every Claude spawn runs the checked Claude Code
+      // install, and a Codex spawn the gated Codex executable.
+      const codexExecutable = codex ? (await ensureCodexExecutable()).path : null
       const executable =
-        launch.runtime === 'claude' && launch.executable ? null : await this.checkExecutable()
-      const queryFactory = await this.resolveQueryFactory()
+        codex || (launch.runtime === 'claude' && launch.executable) ? null : await this.checkExecutable()
+      const queryFactory = codex ? null : await this.resolveQueryFactory()
       // The team must be known before the first spawn reads its prompt.
       await this.teams.track(record.sessionId, this.records.get(record.sessionId)?.projectPath ?? record.projectPath)
-      const teamMcpServer = await createMailboxServer(this.mailbox, record.sessionId, {
-        tasks: this.tasks, results: this.results, strategies: this.strategies, plans: this.plans, validation: this.validation, releases: this.teamMail.releases, management: this.management,
+      const teamMcpServer = codex ? null : await createMailboxServer(this.mailbox, record.sessionId, {
+        tasks: this.tasks, results: this.results, strategies: this.strategies, plans: this.plans, validation: this.validation, ...(this.decisions ? { decisions: this.decisions } : {}), releases: this.teamMail.releases, management: this.management,
         metrics: { teamOf: id => this.teams.teamOf(id)?.teamId ?? null, reader: this.metrics },
         reports: { caller: id => this.reportCaller(id), service: this.reports },
       })
-      const driver = new ChatSessionDriver({
+      // The options both runtimes share: identity, the audit observer, the
+      // prompt/effort/policy readers, and every output callback.
+      const shared: ChatDriverSharedOptions = {
         sessionId: record.sessionId,
         projectPath: record.projectPath,
-        queryFactory,
-        teamMcpServer,
         // The session's observer (D7) constructs in src/server/outbound/;
         // the manager registers it with its own live context getters. Its
         // writes notify the team's views only when a row was committed (D9).
@@ -2397,31 +2439,10 @@ export class ChatSessionManager {
           this.records.get(record.sessionId)?.claudeProfileId ?? 'default'
         ),
         onSpawn: info => this.recordAgentStart(record.sessionId, info),
-        getProviderEnv: () => this.providerEnv(),
         // Read per request so a live policy switch reaches the next
         // canUseTool call without a respawn (design D2).
         getApprovalPolicy: () =>
           this.records.get(record.sessionId)?.approvalPolicy ?? 'manual',
-        claudeProfileId: record.claudeProfileId,
-        ...(this.options.profileCatalogHome
-          ? { profileCatalogHome: this.options.profileCatalogHome }
-          : {}),
-        ...(executable ? { claudeExecutablePath: executable.path } : {}),
-        ...(this.options.wireLogs
-          ? { wire: this.options.wireLogs.get(record.sessionId) }
-          : {}),
-        ...(record.sdkSessionId
-          ? { resumeSessionId: record.sdkSessionId }
-          : {}),
-        // Workers design D6: a fresh driver carries the recovered rows, so a
-        // restart or archive/restore keeps earlier outcomes in the roster and
-        // the sidecar instead of replacing them with an empty one.
-        ...(this.workerRows.has(record.sessionId)
-          ? { recoveredWorkers: this.workerRows.get(record.sessionId) ?? [] }
-          : {}),
-        ...(this.backgroundTaskRecords.has(record.sessionId)
-          ? { recoveredBackgroundTasks: this.backgroundTaskRecords.get(record.sessionId) ?? [] }
-          : {}),
         onEvent: (event) => this.handleDriverEvent(record.sessionId, event),
         onCommandState: (state) =>
           this.options.onCommandState?.(record.sessionId, state),
@@ -2448,11 +2469,9 @@ export class ChatSessionManager {
         // (providers-and-workers 5.1); the store's change listener drives
         // the onUsage broadcast.
         onRateLimit: (report) =>
-          this.usageLimits.record(this.providerIdOf(record.sessionId), report),
+          this.recordProviderReport(record, report),
         onUsageReport: (report) =>
-          this.usageLimits.record(this.providerIdOf(record.sessionId), report),
-        claimUsagePull: () =>
-          this.claimProviderUsagePull(record),
+          this.recordProviderReport(record, report),
         onUsageNoData: () =>
           this.usageLimits.recordNoData(this.providerIdOf(record.sessionId)),
         onStatus: (status) => this.applyPatch(record.sessionId, { status }),
@@ -2460,6 +2479,8 @@ export class ChatSessionManager {
           // Persist immediately: a crash right after the first turn must not
           // lose the ability to resume the conversation.
           this.applyPatch(record.sessionId, { sdkSessionId }),
+        // A Codex thread's rollout file (design D8), stored for replay.
+        onTranscriptPath: (transcriptPath) => this.applyPatch(record.sessionId, { transcriptPath }),
         onCwdChanged: (newCwd) =>
           this.handleDriverCwdChanged(record.sessionId, newCwd),
         // Profile routing (design D6): limit failures count against the
@@ -2479,7 +2500,56 @@ export class ChatSessionManager {
             window: signal.window,
           })
         },
-      })
+      }
+      const wire = this.options.wireLogs?.get(record.sessionId)
+      // The gates above guarantee a Codex launch with the stored home.
+      const codexLaunch = codex && launch.runtime === 'codex' && record.codexHome ? { ...launch, codexHome: record.codexHome } : null
+      if (codex && !codexLaunch) throw new Error('Cannot start the agent: this chat\'s Codex profile no longer resolves')
+      const driver = codexLaunch
+        ? createChatDriver({
+            runtime: 'codex',
+            options: {
+              ...shared,
+              executable: codexExecutable!,
+              codexHome: codexLaunch.codexHome,
+              network: codexLaunch.network,
+              ...(codexLaunch.model ? { model: codexLaunch.model } : {}),
+              wire: wire ?? { record: () => {} },
+              // The catalog at the chat's path names the credentials (D3).
+              withheldCredentials: withheldCredentialNamesAt(this.catalogCtx(record.projectPath)),
+              ...(record.sdkSessionId ? { resumeThreadId: record.sdkSessionId } : {}),
+            },
+          })
+        : createChatDriver({
+            runtime: 'claude',
+            options: {
+              ...shared,
+              queryFactory: queryFactory!,
+              ...(teamMcpServer ? { teamMcpServer } : {}),
+              getProviderEnv: () => this.providerEnv(),
+              claudeProfileId: record.claudeProfileId,
+              ...(this.options.profileCatalogHome
+                ? { profileCatalogHome: this.options.profileCatalogHome }
+                : {}),
+              ...(executable ? { claudeExecutablePath: executable.path } : {}),
+              ...(wire ? { wire } : {}),
+              ...(record.sdkSessionId
+                ? { resumeSessionId: record.sdkSessionId }
+                : {}),
+              // Workers design D6: a fresh driver carries the recovered rows, so a
+              // restart or archive/restore keeps earlier outcomes in the roster and
+              // the sidecar instead of replacing them with an empty one.
+              ...(this.workerRows.has(record.sessionId)
+                ? { recoveredWorkers: this.workerRows.get(record.sessionId) ?? [] }
+                : {}),
+              ...(this.backgroundTaskRecords.has(record.sessionId)
+                ? { recoveredBackgroundTasks: this.backgroundTaskRecords.get(record.sessionId) ?? [] }
+                : {}),
+              // The SDK's usage pull is Claude's alone (providers-and-workers).
+              claimUsagePull: () =>
+                this.claimProviderUsagePull(record),
+            },
+          })
       if (
         !this.records.has(record.sessionId) ||
         // Archived while the import was resolving: same discard as kill.
@@ -2672,6 +2742,32 @@ export class ChatSessionManager {
     const pull = await this.fetchProviderUsage(target)
     // Shutdown settles every callback: nothing publishes past it.
     if (this.isShutDown) return false
+    if (pull.ok && 'remainingUsd' in pull) {
+      // The OpenRouter endpoint answered (openrouter-provider D6): its own
+      // data decides, and no outcome of these pulls ever enables the
+      // host-login usage pull.
+      this.providerUsageProfiles.add(providerId)
+      this.recordOpenRouterPull(providerId, pull)
+      this.noteOpenRouterCreditsRefused(providerId, pull, target.balanceKey)
+      this.ensureProviderUsageRefresh(providerId)
+      return false
+    }
+    if (!pull.ok && (pull.outcome === 'refused' || pull.outcome === 'failed')) {
+      // A failed own-endpoint pull records no data and keeps the host-login
+      // pull suppressed, whatever the failure (openrouter-provider D6). The
+      // provider still counts as routed with its cadence armed: usage
+      // refreshes while sessions are live, so a transient failure only
+      // postpones the first meters to the next tick (openrouter-provider F2).
+      logger.warn('chat_openrouter_key_pull_failed', {
+        providerId,
+        outcome: pull.outcome,
+        reason: pull.reason,
+      })
+      this.providerUsageProfiles.add(providerId)
+      this.usageLimits.recordNoData(providerId)
+      this.ensureProviderUsageRefresh(providerId)
+      return false
+    }
     if (pull.ok) {
       this.providerUsageProfiles.add(providerId)
       this.usageLimits.record(providerId, pull.report)
@@ -2687,6 +2783,59 @@ export class ChatSessionManager {
   }
 
   /**
+   * Store one successful OpenRouter pull (openrouter-provider D6): meters
+   * recorded, and — from a complete pull only (F3) — the smallest remaining
+   * amount fed to the credit-cooldown overlay (D8); a pull without meters
+   * records the no-data verdict, so no bar shows.
+   */
+  private recordOpenRouterPull(providerId: string, pull: OpenRouterUsagePull & { ok: true }): void {
+    if (pull.report.windows.length === 0) {
+      this.usageLimits.recordNoData(providerId)
+      return
+    }
+    this.usageLimits.record(providerId, pull.report)
+    // Only a complete pull feeds the credit-cooldown overlay (D8): a pull
+    // whose credits meter dropped out would read the key meter's larger
+    // remainder as credit returning and end a live cooldown with no top-up
+    // (openrouter-provider F3). Credits 'skipped' (no balance key) and 'ok'
+    // are complete; 'refused' and 'failed' leave the pull partial, its
+    // meters still shown but its minimum unread.
+    const complete = pull.credits.outcome === 'ok' || pull.credits.outcome === 'skipped'
+    if (complete && pull.remainingUsd !== null) {
+      this.limitEvents.reportRemainingCredit(providerId, pull.remainingUsd)
+    }
+  }
+
+  /** Log a credits refusal once per balance-key value, naming the provider, never the key (openrouter-provider D6). */
+  private noteOpenRouterCreditsRefused(
+    providerId: string,
+    pull: OpenRouterUsagePull & { ok: true },
+    balanceKey: string | undefined
+  ): void {
+    if (pull.credits.outcome !== 'refused') return
+    const value = balanceKey ?? ''
+    if (this.openrouterCreditsRefusals.has(value)) return
+    if (this.openrouterCreditsRefusals.size >= 64) this.openrouterCreditsRefusals.clear()
+    this.openrouterCreditsRefusals.add(value)
+    logger.warn('chat_openrouter_credits_refused', { providerId, reason: pull.credits.reason })
+  }
+
+  /**
+   * Whether the session's provider is pulled from its own endpoint, so
+   * agent-emitted usage reports (which can describe the host claude.ai
+   * login) are never kept for it — only its own pulls (openrouter D6).
+   */
+  private keepsOwnEndpointPullsOnly(record: ChatSessionRecord): boolean {
+    const baseUrl = this.launchEnvOf(record.claudeProfileId, record.projectPath).ANTHROPIC_BASE_URL?.trim()
+    return baseUrl !== undefined && isOpenRouterBaseUrl(baseUrl)
+  }
+
+  private recordProviderReport(record: ChatSessionRecord, report: ChatUsageReport): void {
+    if (this.keepsOwnEndpointPullsOnly(record)) return
+    this.usageLimits.record(this.providerIdOf(record.sessionId), report)
+  }
+
+  /**
    * The quota pull target for a session's profile — the effective base URL
    * and credentials its SDK spawns receive (the same resolution the auth
    * gate and account notices read), or null when the profile has no
@@ -2694,16 +2843,34 @@ export class ChatSessionManager {
    */
   private providerUsageTarget(
     record: ChatSessionRecord
-  ): { baseUrl: string; token?: string } | null {
+  ): { baseUrl: string; token?: string; balanceKey?: string } | null {
     const env = this.launchEnvOf(record.claudeProfileId, record.projectPath)
     const baseUrl = env.ANTHROPIC_BASE_URL?.trim()
     if (!baseUrl) return null
     const token =
       env.ANTHROPIC_AUTH_TOKEN?.trim() || env.ANTHROPIC_API_KEY?.trim() || undefined
-    return { baseUrl, token }
+    // The credits pull's value comes from the server environment under the
+    // provider's `balanceKeyEnv` name (openrouter-provider D6) — the same
+    // resolution the auth gate reads. Launch environments withhold
+    // credential values, so it is never read from there.
+    const balanceKeyEnv = resolveProfileCatalog(this.catalogCtx(record.projectPath)).profiles.get(
+      record.claudeProfileId ?? 'default'
+    )?.balanceKeyEnv
+    const balanceKey = balanceKeyEnv
+      ? effectiveChatEnv(this.providerEnv())[balanceKeyEnv]?.trim() || undefined
+      : undefined
+    return { baseUrl, token, balanceKey }
   }
 
-  private fetchProviderUsage(target: { baseUrl: string; token?: string }) {
+  private fetchProviderUsage(target: { baseUrl: string; token?: string; balanceKey?: string }) {
+    if (isOpenRouterBaseUrl(target.baseUrl)) {
+      return fetchOpenRouterUsage(
+        target.baseUrl,
+        target.token,
+        target.balanceKey,
+        this.options.providerUsageFetch ?? fetch
+      )
+    }
     return fetchZaiUsage(target.baseUrl, target.token, this.options.providerUsageFetch ?? fetch)
   }
 
@@ -2743,6 +2910,11 @@ export class ChatSessionManager {
       // a failed refresh keeps the held report (store semantics); a lost
       // routing just skips the tick.
       if (this.isShutDown || !pull.ok) return
+      if ('remainingUsd' in pull) {
+        this.recordOpenRouterPull(providerId, pull)
+        this.noteOpenRouterCreditsRefused(providerId, pull, target.balanceKey)
+        return
+      }
       this.usageLimits.record(providerId, pull.report)
     })
   }
@@ -2762,10 +2934,35 @@ export class ChatSessionManager {
     return this.liveSessionsOf(providerId).length > 0
   }
 
+  /**
+   * Schedule one extra pull for a session's provider about 30 s after a
+   * costed turn (openrouter D6), at most one per provider per minute. A
+   * provider whose own usage endpoint is not selected is never scheduled:
+   * quota-serving providers refresh on their cadence alone.
+   */
+  private schedulePostTurnPull(sessionId: string): void {
+    const providerId = this.providerIdOf(sessionId)
+    const record = this.records.get(sessionId)
+    if (!record || !this.keepsOwnEndpointPullsOnly(record)) return
+    const now = Date.now()
+    const last = this.postTurnPullFiredAt.get(providerId)
+    if (last !== undefined && now - last < 60_000) return
+    if (this.postTurnPullTimers.has(providerId)) return
+    const timer = setTimeout(() => {
+      this.postTurnPullTimers.delete(providerId)
+      this.postTurnPullFiredAt.set(providerId, Date.now())
+      this.refreshProviderUsage(providerId)
+    }, 30_000)
+    timer.unref?.()
+    this.postTurnPullTimers.set(providerId, timer)
+  }
+
   /** Stop every provider usage refresh timer (server shutdown). */
   private stopProviderUsageRefresh(): void {
     for (const timer of this.providerUsageTimers.values()) clearInterval(timer)
     this.providerUsageTimers.clear()
+    for (const timer of this.postTurnPullTimers.values()) clearTimeout(timer)
+    this.postTurnPullTimers.clear()
   }
 
   /**
@@ -2856,6 +3053,12 @@ export class ChatSessionManager {
       event.type === 'question_request'
     ) {
       this.touch(sessionId)
+    }
+    // A completed turn that carried a provider-reported cost schedules one
+    // extra pull for its provider 30 s later, at most one per provider per
+    // minute (openrouter-provider D6).
+    if (event.type === 'turn_completed' && typeof event.providerCostUsd === 'number' && Number.isFinite(event.providerCostUsd)) {
+      this.schedulePostTurnPull(sessionId)
     }
     // Context-usage write points (design D5): a turn boundary, the compaction
     // notice (the driver's compact_boundary), and an error — the visible
