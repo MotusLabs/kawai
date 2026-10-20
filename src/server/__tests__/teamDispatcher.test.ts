@@ -441,6 +441,27 @@ test('afterPass reports each direct-mail reason from the recipient view', async 
 test('a recipient cooled by its provider reports the provider in the constraint detail (4.6)', async () => {
   recipients = [
     { sessionId: 'flash', teamId: 'team', groupId: 'devs', idle: true, pendingRequest: false, available: true,
+      cooldownUntil: new Date(2_000).toISOString(), cooldownProvider: 'zai', cooldownProviderLabel: 'Z.AI' },
+  ]
+  const outcomes: PassOutcome[] = []
+  dispatcher.close()
+  dispatcher = new MailDispatcher(store, {
+    recipients: () => recipients, prepare: async () => {}, interrupt: async () => {},
+    deliver: () => { throw new Error('no delivery') }, watchReceipt: () => {},
+    afterPass: outcome => outcomes.push(outcome),
+    now: () => 1_000,
+  })
+  const cooling = send({ toKind: 'session', toId: 'flash' })
+  await dispatch()
+  // The label rides beside the raw id (providers-and-workers O1); without one
+  // the constraint keeps today's shape.
+  expect(outcomes.at(-1)!.reasons.get(cooling.id))
+    .toEqual([{ kind: 'profile-cooling', retryAt: new Date(2_000).toISOString(), detail: 'zai', providerLabel: 'Z.AI' }])
+})
+
+test('a cooling constraint without a provider label keeps its shape', async () => {
+  recipients = [
+    { sessionId: 'flash', teamId: 'team', groupId: 'devs', idle: true, pendingRequest: false, available: true,
       cooldownUntil: new Date(2_000).toISOString(), cooldownProvider: 'zai' },
   ]
   const outcomes: PassOutcome[] = []

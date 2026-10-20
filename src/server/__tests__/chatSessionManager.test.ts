@@ -181,7 +181,7 @@ interface ManagerHarness {
   contextUsage: Array<{ sessionId: string; usage: ChatContextUsage | null }>
   /** Model publishes (chat-session-model design D5), in order. */
   models: Array<{ sessionId: string; model: string }>
-  usage: Array<{ profileId: string; report: ChatUsageReport | null }>
+  usage: Array<{ providerId: string; report: ChatUsageReport | null }>
   /** Worker-roster publishes, in order (workers design D2). */
   workers: Array<{ sessionId: string; workers: ChatWorker[] }>
   /** Background-task roster publishes, in order (background tasks D2). */
@@ -197,7 +197,8 @@ async function createHarness(
   titleLocateIntervalMs?: number,
   contextImpl?: FakeContextControl,
   cwdRefreshDebounceMs?: number,
-  workerStore?: ChatWorkerStore
+  workerStore?: ChatWorkerStore,
+  catalogHome?: string
 ): Promise<ManagerHarness> {
   const registry = new SessionRegistry()
   const handles: FakeHandle[] = []
@@ -205,7 +206,7 @@ async function createHarness(
   const activities: Array<{ sessionId: string; activity: ChatActivity | null }> = []
   const contextUsage: Array<{ sessionId: string; usage: ChatContextUsage | null }> = []
   const models: Array<{ sessionId: string; model: string }> = []
-  const usage: Array<{ profileId: string; report: ChatUsageReport | null }> = []
+  const usage: Array<{ providerId: string; report: ChatUsageReport | null }> = []
   const workers: Array<{ sessionId: string; workers: ChatWorker[] }> = []
   const backgroundTasks: Array<{ sessionId: string; tasks: ChatBackgroundTask[] }> = []
   const refreshes: string[] = []
@@ -217,7 +218,7 @@ async function createHarness(
     onActivity: (sessionId, activity) => activities.push({ sessionId, activity }),
     onContextUsage: (sessionId, reading) => contextUsage.push({ sessionId, usage: reading }),
     onModel: (sessionId, model) => models.push({ sessionId, model }),
-    onUsage: (profileId, report) => usage.push({ profileId, report }),
+    onUsage: (providerId, report) => usage.push({ providerId, report }),
     onWorkers: (sessionId, roster) => workers.push({ sessionId, workers: roster }),
     onBackgroundTasks: (sessionId, tasks) => backgroundTasks.push({ sessionId, tasks }),
     queryFactory: fakeQueryFactory(handles, usageImpl, contextImpl),
@@ -225,6 +226,7 @@ async function createHarness(
     ...(cwdRefreshDebounceMs !== undefined ? { cwdRefreshDebounceMs } : {}),
     requestWorkspaceRefresh: (projectPath) => refreshes.push(projectPath),
     ...(workerStore !== undefined ? { workerStore } : {}),
+    ...(catalogHome ? { profileCatalogHome: catalogHome } : {}),
   })
   return { manager, registry, handles, events, activities, contextUsage, models, usage, workers, backgroundTasks, refreshes }
 }
@@ -3011,7 +3013,7 @@ describe('ChatSessionManager usage', () => {
     },
   }
 
-  test('pushed reports are stored per profile, shared by its sessions, and snapshotted', async () => {
+  test('pushed reports are stored per provider, shared by its sessions, and snapshotted', async () => {
     const { manager, handles, usage } = await createHarness(db)
     const first = manager.createSession({ projectPath: '/tmp/proj' })
     if (!first.ok) throw new Error('create failed')
@@ -3027,8 +3029,8 @@ describe('ChatSessionManager usage', () => {
     await flush()
 
     expect(usage).toHaveLength(2)
-    expect(usage[0]).toEqual({ profileId: 'default', report: null })
-    expect(usage[1]).toMatchObject({ profileId: 'default' })
+    expect(usage[0]).toEqual({ providerId: 'claude', report: null })
+    expect(usage[1]).toMatchObject({ providerId: 'claude' })
     expect(usage[1].report?.windows.map((window) => window.key)).toEqual([
       'five_hour',
       'seven_day',
@@ -3161,8 +3163,14 @@ describe('ChatSessionManager usage', () => {
     manager.shutdown()
   })
 
-  test('an assistant usage_report is stored for the session profile', async () => {
-    const { manager, handles, usage } = await createHarness(db)
+  test('an assistant usage_report is stored for the session profile provider', async () => {
+    // glm maps to zai in a pinned catalog: the report is held per provider,
+    // whatever host catalog the suite would otherwise read.
+    const catalog = path.join(tempDir, 'catalog-glm')
+    fs.mkdirSync(path.join(catalog, '.kawai'), { recursive: true })
+    fs.writeFileSync(path.join(catalog, '.kawai', 'providers.json'), JSON.stringify({ zai: { label: 'Z.AI', models: { glm: {} } } }))
+    fs.writeFileSync(path.join(catalog, '.kawai', 'profiles.json'), JSON.stringify({ glm: { label: 'GLM' } }))
+    const { manager, handles, usage } = await createHarness(db, anyDirectory, undefined, undefined, undefined, undefined, undefined, catalog)
     const created = manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'glm' })
     if (!created.ok) throw new Error('create failed')
     await manager.send(created.session.id, 'hello')
@@ -3186,13 +3194,13 @@ describe('ChatSessionManager usage', () => {
     } as unknown as SDKMessage)
     await flush()
     expect(usage).toHaveLength(2)
-    expect(usage[0]).toEqual({ profileId: 'glm', report: null }) // spawn verdict
-    expect(usage[1]).toMatchObject({ profileId: 'glm' })
+    expect(usage[0]).toEqual({ providerId: 'zai', report: null }) // spawn verdict
+    expect(usage[1]).toMatchObject({ providerId: 'zai' })
     expect(usage[1].report?.windows).toHaveLength(1)
     expect(manager.getSnapshot(created.session.id)!.usage).toBe(usage[1].report)
   })
 
-  test('the pull fallback fills usage before any push and only once per profile', async () => {
+  test('the pull fallback fills usage before any push and only once per provider', async () => {
     const { manager, handles, usage } = await createHarness(
       db,
       anyDirectory,
@@ -3227,7 +3235,7 @@ describe('ChatSessionManager usage', () => {
     await manager.send(first.session.id, 'hello')
     await flush()
     // The verdict broadcasts as null and keeps the snapshot empty.
-    expect(usage).toEqual([{ profileId: 'default', report: null }])
+    expect(usage).toEqual([{ providerId: 'claude', report: null }])
     expect(manager.getSnapshot(first.session.id)!.usage).toBeNull()
 
     // Another session of the profile spawns: the verdict skips the pull.
@@ -4647,13 +4655,15 @@ describe('ChatSessionManager provider usage pull', () => {
   interface ProviderHarness {
     manager: ChatSessionManager
     handles: FakeHandle[]
-    usage: Array<{ profileId: string; report: ChatUsageReport | null }>
+    usage: Array<{ providerId: string; report: ChatUsageReport | null }>
     fetchCalls: Array<{ url: string; auth?: string }>
   }
 
   async function createProviderHarness(
     providerEnv: Record<string, string>,
-    responses: Array<Response>
+    responses: Array<Response>,
+    catalogHome?: string,
+    refreshMs = 50
   ): Promise<ProviderHarness> {
     const fetchCalls: Array<{ url: string; auth?: string }> = []
     const canned = [...responses]
@@ -4665,17 +4675,18 @@ describe('ChatSessionManager provider usage pull', () => {
       return next
     }) as unknown as typeof fetch
     const handles: FakeHandle[] = []
-    const usage: Array<{ profileId: string; report: ChatUsageReport | null }> = []
+    const usage: Array<{ providerId: string; report: ChatUsageReport | null }> = []
     const manager = await managedManager({
       isDirectory: anyDirectory,
       registry: new SessionRegistry(),
       db,
       onEvent: () => {},
-      onUsage: (profileId, report) => usage.push({ profileId, report }),
+      onUsage: (providerId, report) => usage.push({ providerId, report }),
       queryFactory: fakeQueryFactory(handles, () => Promise.resolve(SDK_PULL)),
       ...(Object.keys(providerEnv).length > 0 ? { getProviderEnv: () => providerEnv } : {}),
+      ...(catalogHome ? { profileCatalogHome: catalogHome } : {}),
       providerUsageFetch,
-      providerUsageRefreshMs: 50,
+      providerUsageRefreshMs: refreshMs,
     })
     return { manager, handles, usage, fetchCalls }
   }
@@ -4717,6 +4728,54 @@ describe('ChatSessionManager provider usage pull', () => {
     expect(manager.getSnapshot(created.session.id)!.status).toBe('waiting')
   })
 
+  test('profiles share a provider: one pull serves sibling models', async () => {
+    // glm and glm-flash are models of zai in this pinned catalog; the
+    // sibling sessions share one pull, one report, and one refresh cadence
+    // (providers-and-workers 5.1).
+    const catalog = path.join(tempDir, 'catalog')
+    fs.mkdirSync(path.join(catalog, '.kawai'), { recursive: true })
+    fs.writeFileSync(
+      path.join(catalog, '.kawai', 'providers.json'),
+      JSON.stringify({ zai: { label: 'Z.AI', models: { glm: {}, 'glm-flash': {} } } })
+    )
+    fs.writeFileSync(
+      path.join(catalog, '.kawai', 'profiles.json'),
+      JSON.stringify({
+        glm: { label: 'GLM', env: { ANTHROPIC_BASE_URL: 'https://zai.test/api/anthropic', ANTHROPIC_AUTH_TOKEN: 'sk-glm-token' } },
+        'glm-flash': { label: 'GLM Flash', env: { ANTHROPIC_BASE_URL: 'https://zai.test/api/anthropic', ANTHROPIC_AUTH_TOKEN: 'sk-glm-token' } },
+      })
+    )
+    const { manager, handles, usage, fetchCalls } = await createProviderHarness(
+      { ANTHROPIC_BASE_URL: 'https://zai.test/api/anthropic', ANTHROPIC_AUTH_TOKEN: 'sk-glm-token' },
+      [jsonResponse(CAPTURE(2))],
+      catalog,
+      // No cadence tick inside the test: the counts below are claim-driven.
+      3_600_000
+    )
+    const first = manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'glm' })
+    if (!first.ok) throw new Error(first.error)
+    const second = manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'glm-flash' })
+    if (!second.ok) throw new Error(second.error)
+    await manager.start(first.session.id)
+    await flush()
+
+    // Exactly one provider pull — the second profile's claim resolves to the
+    // same already-routed provider.
+    expect(fetchCalls).toHaveLength(1)
+    expect(usage).toHaveLength(1)
+    expect(usage[0]!.providerId).toBe('zai')
+    expect(usage[0]!.report?.source).toBe('provider')
+
+    // The sibling session attaches: no second claim, no SDK pull, and its
+    // own snapshot reads the provider's report under its own profile id.
+    await manager.start(second.session.id)
+    await flush()
+    expect(fetchCalls).toHaveLength(1)
+    expect(handles[1]!.usageCalls).toEqual([])
+    expect(manager.getSnapshot(second.session.id)!.usage?.source).toBe('provider')
+    expect(manager.getSnapshot(second.session.id)!.usage?.windows[0]).toMatchObject({ key: 'zai:time_limit', percentUsed: 2 })
+  })
+
   test.each([401, 403, 1001])('a provider auth code %s records no data and skips the SDK pull', async code => {
     const { manager, handles, usage } = await createProviderHarness(
       { ANTHROPIC_BASE_URL: 'https://zai.test/api/anthropic', ANTHROPIC_AUTH_TOKEN: 'sk-glm-token' },
@@ -4727,7 +4786,7 @@ describe('ChatSessionManager provider usage pull', () => {
     await manager.send(created.session.id, 'hello')
     await flush()
 
-    expect(usage).toEqual([{ profileId: 'default', report: null }])
+    expect(usage).toEqual([{ providerId: 'claude', report: null }])
     expect(handles[0]!.usageCalls).toEqual([])
     expect(manager.getSnapshot(created.session.id)!.usage).toBeNull()
   })
@@ -4795,6 +4854,144 @@ describe('ChatSessionManager provider usage pull', () => {
     expect(handles[0]!.usageCalls).toEqual([])
   })
 
+  test('a session on another profile keeps the provider fresh after the first archives', async () => {
+    // glm and glm-flash share zai (providers-and-workers 5.2): archiving the
+    // glm session must not stop the pulls while the glm-flash session lives,
+    // and archiving the last one does.
+    const catalog = path.join(tempDir, 'catalog-fresh')
+    fs.mkdirSync(path.join(catalog, '.kawai'), { recursive: true })
+    fs.writeFileSync(
+      path.join(catalog, '.kawai', 'providers.json'),
+      JSON.stringify({ zai: { label: 'Z.AI', models: { glm: {}, 'glm-flash': {} } } })
+    )
+    fs.writeFileSync(
+      path.join(catalog, '.kawai', 'profiles.json'),
+      JSON.stringify({
+        glm: { label: 'GLM', env: { ANTHROPIC_BASE_URL: 'https://zai.test/api/anthropic', ANTHROPIC_AUTH_TOKEN: 'sk-glm-token' } },
+        'glm-flash': { label: 'GLM Flash', env: { ANTHROPIC_BASE_URL: 'https://zai.test/api/anthropic', ANTHROPIC_AUTH_TOKEN: 'sk-glm-token' } },
+      })
+    )
+    const { manager, usage, fetchCalls } = await createProviderHarness(
+      { ANTHROPIC_BASE_URL: 'https://zai.test/api/anthropic', ANTHROPIC_AUTH_TOKEN: 'sk-glm-token' },
+      [jsonResponse(CAPTURE(2)), jsonResponse(CAPTURE(50)), jsonResponse(CAPTURE(77))],
+      catalog
+    )
+    const first = manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'glm' })
+    if (!first.ok) throw new Error(first.error)
+    const second = manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'glm-flash' })
+    if (!second.ok) throw new Error(second.error)
+    await manager.start(first.session.id)
+    await manager.start(second.session.id)
+    await flush()
+
+    await manager.archive(first.session.id)
+    // The glm-flash session alone keeps the cadence alive: a fresh pull
+    // lands after the archive.
+    await waitForCondition(() => fetchCalls.length >= 3)
+    await flush()
+    expect(usage.at(-1)!.report?.windows[0]).toMatchObject({ percentUsed: 77 })
+    expect(manager.getSnapshot(second.session.id)!.usage?.windows[0]).toMatchObject({ percentUsed: 77 })
+
+    // With no live session of the provider left, the cadence stops.
+    await manager.archive(second.session.id)
+    const settled = fetchCalls.length
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    expect(fetchCalls).toHaveLength(settled)
+  })
+
+  test('the refresh pull resolves through a live session, never an archived or driverless sibling\'s', async () => {
+    // Invariant (providers-and-workers 5.2): the refresh cadence picks its
+    // pull target from a LIVE session of the provider — a record that is
+    // neither archived nor without a started driver — never from an earlier
+    // sibling's record. Project-level provider overlays make the targets
+    // observable: zai's base URL is overlaid to zai-archived in the dead
+    // siblings' project, while the live session's project keeps the harness
+    // default (zai-live). Catalog files never carry credentials, so the
+    // pull's base URL is the pin.
+    const catalog = path.join(tempDir, 'catalog-live-target')
+    fs.mkdirSync(path.join(catalog, '.kawai'), { recursive: true })
+    fs.writeFileSync(
+      path.join(catalog, '.kawai', 'providers.json'),
+      JSON.stringify({ zai: { label: 'Z.AI', models: { glm: {}, 'glm-flash': {} } } })
+    )
+    const projA = path.join(tempDir, 'projA')
+    fs.mkdirSync(path.join(projA, '.kawai'), { recursive: true })
+    fs.writeFileSync(
+      path.join(projA, '.kawai', 'providers.json'),
+      JSON.stringify({ zai: { env: { ANTHROPIC_BASE_URL: 'https://zai-archived.test/api/anthropic' } } })
+    )
+    const { manager, fetchCalls } = await createProviderHarness(
+      { ANTHROPIC_BASE_URL: 'https://zai-live.test/api/anthropic', ANTHROPIC_AUTH_TOKEN: 'sk-live' },
+      [jsonResponse(CAPTURE(2)), jsonResponse(CAPTURE(50)), jsonResponse(CAPTURE(77)), jsonResponse(CAPTURE(88))],
+      catalog
+    )
+    // Insertion order matters: the dead siblings sit before the live one,
+    // so a resolver that ignores liveness picks an archived target.
+    const archived = manager.createSession({ projectPath: projA, claudeProfileId: 'glm' })
+    if (!archived.ok) throw new Error(archived.error)
+    const driverless = manager.createSession({ projectPath: projA, claudeProfileId: 'glm' })
+    if (!driverless.ok) throw new Error(driverless.error)
+    const live = manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'glm-flash' })
+    if (!live.ok) throw new Error(live.error)
+    await manager.start(archived.session.id)
+    await manager.start(live.session.id)
+    await flush()
+
+    await manager.archive(archived.session.id)
+    // Archive deletes the driver today, and the archivedAt filter is what
+    // keeps the pull correct if that ever stops holding: reinstate a stale
+    // driver entry artificially to pin the filter's own semantics. The stub
+    // answers the dispatch pass's eligibility probe so it stays inert.
+    ;(manager as unknown as { drivers: Map<string, unknown> }).drivers.set(archived.session.id, {
+      getPendingRequests: () => [],
+      interrupt() {},
+      deliver() {},
+    })
+    // Every pull from here on runs after the archive: all must resolve the
+    // live session's endpoint, not a dead sibling's. (Each started session's
+    // own start pull legitimately used its project's URL, so only the tail
+    // asserts.)
+    const afterArchive = fetchCalls.length
+    await waitForCondition(() => fetchCalls.length >= afterArchive + 2)
+    await flush()
+    const tail = fetchCalls.slice(afterArchive)
+    expect(tail.length).toBeGreaterThanOrEqual(2)
+    expect(tail.every(call => call.url === 'https://zai-live.test/api/monitor/usage/quota/limit')).toBe(true)
+  })
+
+  test('routing usage sources: a profile maps to its provider, a provider stays un-mapped', async () => {
+    // Provider 'glm' holds profile 'glm-air' beside provider 'zai' holding
+    // profile 'glm' (providers-and-workers D14): the router's profile source
+    // re-maps a profile to its provider's report, while the provider source
+    // reads by provider id and must not re-map it back to zai.
+    const catalog = path.join(tempDir, 'catalog-usage-keys')
+    fs.mkdirSync(path.join(catalog, '.kawai'), { recursive: true })
+    fs.writeFileSync(
+      path.join(catalog, '.kawai', 'providers.json'),
+      JSON.stringify({
+        zai: { label: 'Z.AI', models: { glm: {} } },
+        glm: { label: 'GLM', models: { 'glm-air': {} } },
+      })
+    )
+    const { manager } = await createProviderHarness({}, [], catalog, 3_600_000)
+    const store = (manager as unknown as {
+      usageLimits: { record(id: string, report: ChatUsageReport): void }
+    }).usageLimits
+    const at = '2026-10-12T12:00:00.000Z'
+    store.record('zai', { status: 'allowed', windows: [{ key: 'zai:time_limit', label: 'zai', percentUsed: 61, resetsAt: null }], receivedAt: at, source: 'provider' })
+    store.record('glm', { status: 'warning', windows: [{ key: 'glm:time_limit', label: 'glm', percentUsed: 12, resetsAt: null }], receivedAt: at, source: 'provider' })
+    const sources = (manager as unknown as {
+      teamMail: { router: { options: {
+        usageOf(id: string): ChatUsageReport | null
+        providerUsageOf(id: string): ChatUsageReport | null
+      } } }
+    }).teamMail.router.options
+    expect(sources.usageOf('glm')?.windows[0]).toMatchObject({ key: 'zai:time_limit' })
+    expect(sources.usageOf('glm-air')?.windows[0]).toMatchObject({ key: 'glm:time_limit' })
+    expect(sources.providerUsageOf('glm')?.windows[0]).toMatchObject({ key: 'glm:time_limit' })
+    expect(sources.providerUsageOf('zai')?.windows[0]).toMatchObject({ key: 'zai:time_limit' })
+  })
+
   test.each([
     { code: 500, msg: '404 NOT_FOUND' },
     { code: 1001, msg: 'Authentication refused' },
@@ -4854,13 +5051,13 @@ describe('ChatSessionManager provider usage pull', () => {
 
   async function createManualHarness(providerUsageFetch: typeof fetch) {
     const handles: FakeHandle[] = []
-    const usage: Array<{ profileId: string; report: ChatUsageReport | null }> = []
+    const usage: Array<{ providerId: string; report: ChatUsageReport | null }> = []
     const manager = await managedManager({
       isDirectory: anyDirectory,
       registry: new SessionRegistry(),
       db,
       onEvent: () => {},
-      onUsage: (profileId, report) => usage.push({ profileId, report }),
+      onUsage: (providerId, report) => usage.push({ providerId, report }),
       queryFactory: fakeQueryFactory(handles, () => Promise.resolve(SDK_PULL)),
       getProviderEnv: () => ({
         ANTHROPIC_BASE_URL: 'https://zai.test',

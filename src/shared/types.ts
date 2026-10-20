@@ -385,10 +385,12 @@ export type ServerMessage =
   // Ephemeral live activity for an in-flight chat turn (design D1): sent only
   // on phase changes, unordered with events, never persisted or replayed.
   | { type: 'chat-activity'; sessionId: string; activity: ChatActivity | null }
-  // Latest plan usage for a Claude profile (usage bar design D4): sent once to
-  // every connection subscribed to at least one session of the profile when a
-  // new report is captured. Additive and ephemeral like chat-activity.
-  | { type: 'chat-usage'; profileId: string; report: ChatUsageReport | null }
+  // Latest plan usage for a session's provider (usage bar design D4,
+  // providers-and-workers 5.3): fanned out per subscribed session of the
+  // provider on each new report, each message named by that session's own
+  // `profileId` — the client keys its meter per profile — with `providerId`
+  // additive for clients that group by provider. Ephemeral like chat-activity.
+  | { type: 'chat-usage'; profileId: string; providerId: string; report: ChatUsageReport | null }
   // Latest context-usage reading for a chat session (context meter design D5):
   // coalesced like chat-activity — only the latest value survives until the
   // flush — additive, never sequenced or replayed. A null `usage` clears the

@@ -83,6 +83,7 @@ import { ensureCodexExecutable } from './codex/codexExecutable'
 import { codexLoginErrorMessage, hasCodexLogin } from './codex/codexAuth'
 import { resolveCodexHome } from './codexProfiles'
 import { fetchZaiUsage } from './zaiUsage'
+import { ambientProviderOf, catalogCtx } from '../team/cooldowns'
 import { readWorkerTranscript } from './chatWorkerTranscript'
 import { isTaskOutputFile, readTaskOutputTail } from './taskOutputFile'
 import type { BackgroundTaskRecord } from './chatBackgroundTasks'
@@ -208,7 +209,8 @@ export interface ChatSessionManagerOptions {
    * (or null) whenever a profile's held data changes. Wired to the WS
    * broadcast in index.ts; usage is ephemeral and never persisted.
    */
-  onUsage?: (profileId: string, report: ChatUsageReport | null) => void
+  /** The provider's latest plan report changed (providers-and-workers 5.1). */
+  onUsage?: (providerId: string, report: ChatUsageReport | null) => void
   /**
    * Worker-roster sink (workers design D2): the full projection whenever a
    * live session's roster changes. Wired to the WS broadcast in index.ts;
@@ -577,7 +579,9 @@ export class ChatSessionManager {
       // Stored with the row (design D4): applyPatch keeps the record current,
       // so this is the last reported model, null before the first one.
       model: this.records.get(sessionId)?.model ?? null,
-      usage: this.usageLimits.get(this.profileIdOf(sessionId) ?? 'default'),
+      // The provider's plan report (providers-and-workers 5.1): sibling
+      // models of one provider share the same plan usage.
+      usage: this.usageLimits.get(this.providerIdOf(sessionId)),
       // The spawned-worker roster (workers design D2); live entries hold the
       // session at working, settled ones carry their persisted outcomes.
       workers: this.getWorkers(sessionId),
@@ -1027,9 +1031,10 @@ export class ChatSessionManager {
       teams: this.teams,
       repositories: () => options.workspaceRepositories?.() ?? [],
     })
-    // Profile usage changes drive the chat-usage broadcast (design D4).
-    this.usageLimits.subscribe((profileId, report) =>
-      this.options.onUsage?.(profileId, report)
+    // Provider usage changes drive the chat-usage broadcast (design D4,
+    // providers-and-workers 5.1).
+    this.usageLimits.subscribe((providerId, report) =>
+      this.options.onUsage?.(providerId, report)
     )
     // An account-notice change fans out to every session mapped to that
     // credentials path (notification strip design D5).
@@ -1074,7 +1079,13 @@ export class ChatSessionManager {
       transcriptFor: id => { const sdkId = this.records.get(id)?.sdkSessionId; return sdkId ? findTranscriptPath(sdkId) : null },
       onChange: options.onMailboxChange,
       onReasonsChange: options.onWaitingReasonsChange,
-      usageOf: profileId => this.usageLimits.get(profileId),
+      // The router reads the profile's provider plan report (D14: a profile
+      // state's usage is its provider's), and the provider view reads its
+      // report by provider id — never re-mapped as a profile id, which a
+      // model key of another provider would be.
+      usageOf: profileId =>
+        this.usageLimits.get(ambientProviderOf(options.profileCatalogHome)(profileId)),
+      providerUsageOf: providerId => this.usageLimits.get(providerId),
       onRulesLoaded: () => options.onRoutingRulesLoaded?.(),
       onError: error => logger.warn('team_mailbox_dispatch_failed', { error: String(error) }),
       ownership: executionCore.ownership,
@@ -1603,8 +1614,22 @@ export class ChatSessionManager {
    * The session's Claude profile id (usage scoping, usage bar design D4):
    * plan usage is tracked and broadcast per profile, never per session.
    */
-  profileIdOf(sessionId: string): string | undefined {
+  profileIdOf(sessionId: string): string {
     return this.records.get(sessionId)?.claudeProfileId ?? 'default'
+  }
+
+  /**
+   * The provider the session's profile belongs to (providers-and-workers
+   * 5.1): plan usage is held and pulled per provider, so sibling models of
+   * one provider read the same report. An unknown profile stands in as its
+   * own provider, like the routing helpers.
+   */
+  providerIdOf(sessionId: string): string {
+    const record = this.records.get(sessionId)
+    return providerOf(
+      record?.claudeProfileId ?? 'default',
+      catalogCtx(this.options.profileCatalogHome, record?.projectPath)
+    )
   }
 
   /**
@@ -2401,14 +2426,15 @@ export class ChatSessionManager {
         onContextUsage: (usage, opts) =>
           this.handleDriverContextUsage(record.sessionId, usage, opts),
         onModel: (model) => this.handleDriverModel(record.sessionId, model),
-        // Plan usage is recorded against the session's profile (design D3);
-        // the store's change listener drives the onUsage broadcast.
+        // Plan usage is recorded against the session's provider
+        // (providers-and-workers 5.1); the store's change listener drives
+        // the onUsage broadcast.
         onRateLimit: (report) =>
-          this.usageLimits.record(record.claudeProfileId ?? 'default', report),
+          this.usageLimits.record(this.providerIdOf(record.sessionId), report),
         onUsageReport: (report) =>
-          this.usageLimits.record(record.claudeProfileId ?? 'default', report),
+          this.usageLimits.record(this.providerIdOf(record.sessionId), report),
         onUsageNoData: () =>
-          this.usageLimits.recordNoData(record.claudeProfileId ?? 'default'),
+          this.usageLimits.recordNoData(this.providerIdOf(record.sessionId)),
         onStatus: (status) => this.applyPatch(record.sessionId, { status }),
         onSdkSessionId: (sdkSessionId) =>
           // Persist immediately: a crash right after the first turn must not
@@ -2478,8 +2504,9 @@ export class ChatSessionManager {
               ...(this.backgroundTaskRecords.has(record.sessionId)
                 ? { recoveredBackgroundTasks: this.backgroundTaskRecords.get(record.sessionId) ?? [] }
                 : {}),
+              // The SDK's usage pull is Claude's alone (providers-and-workers).
               claimUsagePull: () =>
-                this.claimProfileUsagePull(record),
+                this.claimProviderUsagePull(record),
             },
           })
       if (
@@ -2643,21 +2670,22 @@ export class ChatSessionManager {
   // ----------------------------------------------------------- provider usage pull
 
   /**
-   * The gap-fill pull slot (usage bar design D1, provider pull design D4):
-   * the profile's one pull per store lifetime. A profile whose base URL
-   * serves the provider quota endpoint is pulled here, marked routed, and
-   * the host-login SDK pull is skipped — its data would only mislead. A
-   * provider refusal records the no-data verdict; anything else falls
-   * through to the SDK pull exactly as before. An already-routed profile
-   * just restarts its refresh timer.
+   * The gap-fill pull slot (usage bar design D1, provider pull design D4,
+   * providers-and-workers 5.1): the provider's one pull per store lifetime.
+   * A session whose base URL serves the provider quota endpoint has its
+   * provider pulled here, marked routed, and the host-login SDK pull is
+   * skipped — its data would only mislead. A provider refusal records the
+   * no-data verdict; anything else falls through to the SDK pull exactly as
+   * before. An already-routed provider just restarts its refresh timer, so
+   * a sibling profile's first session costs no second pull.
    */
-  private async claimProfileUsagePull(record: ChatSessionRecord): Promise<boolean> {
-    const profileId = record.claudeProfileId ?? 'default'
-    if (this.providerUsageProfiles.has(profileId)) {
-      this.ensureProviderUsageRefresh(profileId)
+  private async claimProviderUsagePull(record: ChatSessionRecord): Promise<boolean> {
+    const providerId = this.providerIdOf(record.sessionId)
+    if (this.providerUsageProfiles.has(providerId)) {
+      this.ensureProviderUsageRefresh(providerId)
       return false
     }
-    if (!this.usageLimits.claimPull(profileId)) return false
+    if (!this.usageLimits.claimPull(providerId)) return false
     const target = this.providerUsageTarget(record)
     // No provider base URL: the endpoint is never contacted, and the SDK
     // pull answers as before.
@@ -2666,13 +2694,13 @@ export class ChatSessionManager {
     // Shutdown settles every callback: nothing publishes past it.
     if (this.isShutDown) return false
     if (pull.ok) {
-      this.providerUsageProfiles.add(profileId)
-      this.usageLimits.record(profileId, pull.report)
-      this.ensureProviderUsageRefresh(profileId)
+      this.providerUsageProfiles.add(providerId)
+      this.usageLimits.record(providerId, pull.report)
+      this.ensureProviderUsageRefresh(providerId)
       return false
     }
     if (pull.outcome === 'provider-refused') {
-      this.usageLimits.recordNoData(profileId)
+      this.usageLimits.recordNoData(providerId)
       return false
     }
     // Not provider-shaped or unreachable: the host-login SDK pull applies.
@@ -2702,31 +2730,32 @@ export class ChatSessionManager {
 
   /**
    * Provider usage has no pushes (provider pull design D5): a timer per
-   * routed profile re-pulls on a fixed cadence while at least one of its
-   * sessions has a started agent. A tick without a qualifying session makes
-   * no request and stops the timer; the next spawn of a routed profile
-   * restarts it.
+   * routed provider re-pulls on a fixed cadence while at least one session
+   * on any of the provider's models has a started agent. A tick without a
+   * qualifying session makes no request and stops the timer; the next
+   * spawn of a routed provider restarts it.
    */
-  private ensureProviderUsageRefresh(profileId: string): void {
-    if (this.providerUsageTimers.has(profileId)) return
+  private ensureProviderUsageRefresh(providerId: string): void {
+    if (this.providerUsageTimers.has(providerId)) return
     const timer = setInterval(
-      () => this.refreshProviderUsage(profileId),
+      () => this.refreshProviderUsage(providerId),
       this.providerUsageRefreshMs
     )
     timer.unref?.()
-    this.providerUsageTimers.set(profileId, timer)
+    this.providerUsageTimers.set(providerId, timer)
   }
 
-  private refreshProviderUsage(profileId: string): void {
-    if (!this.hasLiveSessionOf(profileId)) {
-      const timer = this.providerUsageTimers.get(profileId)
+  private refreshProviderUsage(providerId: string): void {
+    if (!this.hasLiveSessionOf(providerId)) {
+      const timer = this.providerUsageTimers.get(providerId)
       if (timer) clearInterval(timer)
-      this.providerUsageTimers.delete(profileId)
+      this.providerUsageTimers.delete(providerId)
       return
     }
-    const record = [...this.records.values()].find(
-      (candidate) => (candidate.claudeProfileId ?? 'default') === profileId
-    )
+    // The pull runs with one live session's credentials (providers-and-workers
+    // 5.2); any live session of the provider resolves the same endpoint. An
+    // archived sibling never serves the pull.
+    const record = this.liveSessionsOf(providerId)[0]
     if (!record) return
     const target = this.providerUsageTarget(record)
     if (!target) return
@@ -2735,18 +2764,23 @@ export class ChatSessionManager {
       // a failed refresh keeps the held report (store semantics); a lost
       // routing just skips the tick.
       if (this.isShutDown || !pull.ok) return
-      this.usageLimits.record(profileId, pull.report)
+      this.usageLimits.record(providerId, pull.report)
     })
   }
 
-  /** Any non-archived session of the profile with a live driver (started agent). */
-  private hasLiveSessionOf(profileId: string): boolean {
-    for (const record of this.records.values()) {
-      if ((record.claudeProfileId ?? 'default') !== profileId) continue
-      if (record.archivedAt) continue
-      if (this.drivers.has(record.sessionId)) return true
-    }
-    return false
+  /** Every non-archived session on one of the provider's models with a live driver (started agent). */
+  private liveSessionsOf(providerId: string): ChatSessionRecord[] {
+    return [...this.records.values()].filter(
+      (record) =>
+        this.providerIdOf(record.sessionId) === providerId &&
+        !record.archivedAt &&
+        this.drivers.has(record.sessionId)
+    )
+  }
+
+  /** Any non-archived session on one of the provider's models with a live driver (started agent). */
+  private hasLiveSessionOf(providerId: string): boolean {
+    return this.liveSessionsOf(providerId).length > 0
   }
 
   /** Stop every provider usage refresh timer (server shutdown). */

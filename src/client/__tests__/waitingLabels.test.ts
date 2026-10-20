@@ -74,6 +74,9 @@ test('constraint labels mention their counts, names, and details', () => {
     .toBe(`Recipient's provider zai is cooling until ${coolingUntil}`)
   expect(constraintLabel({ kind: 'profile-cooling', retryAt: '2026-10-13T12:00:00.000Z' }))
     .toBe(`Recipient's provider is cooling until ${coolingUntil}`)
+  // The catalog label reads instead of the raw id when the snapshot carries one (O1).
+  expect(constraintLabel({ kind: 'profile-cooling', providerLabel: 'Z.AI', detail: 'zai', retryAt: '2026-10-13T12:00:00.000Z' }))
+    .toBe(`Recipient's provider Z.AI is cooling until ${coolingUntil}`)
 })
 
 test('elapsed labels tick in minutes', () => {

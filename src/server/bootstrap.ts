@@ -168,7 +168,7 @@ export function startServer(): void {
     onActivity: (sessionId, activity) => chatConnections.publishActivity(sessionId, activity),
     onContextUsage: (sessionId, usage) => chatConnections.publishContextUsage(sessionId, usage),
     onModel: (sessionId, model) => chatConnections.publishModel(sessionId, model),
-    onUsage: (profileId, report) => chatConnections.publishUsage(profileId, report),
+    onUsage: (providerId, report) => chatConnections.publishUsage(providerId, report),
     onWorkers: (sessionId, workers) => chatConnections.publishWorkers(sessionId, workers),
     onBackgroundTasks: (sessionId, tasks) => chatConnections.publishBackgroundTasks(sessionId, tasks),
     onNotifications: (sessionId, notifications) =>

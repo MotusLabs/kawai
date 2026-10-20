@@ -73,12 +73,12 @@ describe('UsageLimitStore', () => {
     expect(store.claimPull('lan')).toBe(true)
   })
 
-  test('listeners hear changes per profile and stop on unsubscribe', () => {
+  test('listeners hear changes per provider and stop on unsubscribe', () => {
     const store = new UsageLimitStore()
-    const seen: Array<{ profileId: string; report: ChatUsageReport | null }> = []
-    store.subscribe((profileId, rep) => seen.push({ profileId, report: rep }))
+    const seen: Array<{ providerId: string; report: ChatUsageReport | null }> = []
+    store.subscribe((providerId, rep) => seen.push({ providerId, report: rep }))
     const noisy: string[] = []
-    const unsubscribe = store.subscribe((profileId) => noisy.push(profileId))
+    const unsubscribe = store.subscribe((providerId) => noisy.push(providerId))
     unsubscribe()
 
     store.record('default', report())
@@ -86,9 +86,31 @@ describe('UsageLimitStore', () => {
     // An ignored older report notifies nobody.
     store.record('default', report({ receivedAt: '2026-10-06T00:00:00.000Z' }))
     expect(seen).toEqual([
-      { profileId: 'default', report: store.get('default') },
-      { profileId: 'glm', report: null },
+      { providerId: 'default', report: store.get('default') },
+      { providerId: 'glm', report: null },
     ])
     expect(noisy).toEqual([])
+  })
+
+  test('profiles share a provider: one key holds the report for every sibling model', () => {
+    const store = new UsageLimitStore()
+    // glm and glm-flash both resolve to zai; the store holds one entry per
+    // provider (providers-and-workers 5.1).
+    store.record('zai', report())
+    expect(store.get('zai')?.receivedAt).toBe(AT)
+    // A profile id is not a provider key: nothing is held under it.
+    expect(store.get('glm')).toBeNull()
+    expect(store.get('glm-flash')).toBeNull()
+  })
+
+  test('one pull per provider: a sibling claim hits the same claimed key', () => {
+    const store = new UsageLimitStore()
+    // The first session's profile (glm → zai) claims.
+    expect(store.claimPull('zai')).toBe(true)
+    // A sibling profile's session (glm-flash → zai) resolves to the same
+    // claimed provider and is refused.
+    expect(store.claimPull('zai')).toBe(false)
+    // A different provider still grants.
+    expect(store.claimPull('claude')).toBe(true)
   })
 })
