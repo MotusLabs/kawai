@@ -345,6 +345,32 @@ describe('merge × Retry, decided by the real GitHub truth (table rows 1–10)',
     expect(h.executions.effect(merge.id)).toMatchObject({ state: 'unknown' })
     expect(h.executions.change(executionId, 'tb-guard')).toMatchObject({ state: 'landing', step: 'up-to-date' })
   }, 30_000)
+
+  test('a live update-branch of the change blocks the landing stage’s merge insert (the merge step’s guard)', async () => {
+    const executionId = await startedExecution(h, [{ change: 'tb-mguard' }])
+    await passedChange(h, executionId, 'tb-mguard')
+    // The crash window: a live update-branch row of the change, parked past
+    // its inspection, while the change is still gating. The base is up to
+    // date, so the stage reaches the merge step — the live row settles
+    // first (A1 is kind-scoped, so the store predicate alone does not
+    // substitute: the guard is what keeps the merge row out here).
+    const live = h.executions.insertEffect({
+      executionId, change: 'tb-mguard', roundId: null, kind: 'update-branch',
+      effectKey: `${executionId}:tb-mguard:update-branch:mguard:0`,
+      command: { repo: 'o/r', pr: 1, head: 'stale-head' },
+    })
+    h.executions.scheduleInspectionRetry(live.id, '2099-01-01T00:00:00.000Z', null)
+    const calls: string[] = []
+    const recorder = h.makeExecutor({ reads: ghReads(), adapters: recorders(calls) })
+    try {
+      await h.tick(recorder)
+      await h.tick(recorder)
+    } finally { recorder.close() }
+    expect(calls).toEqual([])
+    expect(mergeRows(executionId)).toHaveLength(0)
+    expect(h.executions.effect(live.id)).toMatchObject({ state: 'unknown' })
+    expect(h.executions.change(executionId, 'tb-mguard')).toMatchObject({ state: 'landing', step: 'up-to-date' })
+  }, 30_000)
 })
 
 describe('mergeAdapter refuses a base the clean-merge check did not see (F2/A8ii unit)', () => {
