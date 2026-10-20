@@ -94,6 +94,8 @@ export interface OpenRouterKeySlice {
   effective_budget?: unknown
   is_management_key?: unknown
   expires_at?: unknown
+  /** The documented body wraps these fields in `data`, like /credits; the parser accepts the wrapper and the bare body. */
+  data?: OpenRouterKeySlice | null
 }
 
 export interface OpenRouterBudgetSlice {
@@ -193,12 +195,18 @@ export function parseOpenRouterKey(
   receivedAt: string = new Date().toISOString()
 ): { report: ChatUsageReport; remainingUsd: number | null } | null {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null
-  // A body carrying none of the key fields is not the key endpoint's shape
-  // (a foreign reply, a wrapped error) even though it is an object.
-  if (payload.budgets === undefined && payload.limit === undefined && payload.limit_remaining === undefined) {
+  // OpenRouter's docs declare the key fields under a `data` wrapper, like
+  // /credits; it is unwrapped when present, and the bare body accepted as
+  // captured (openrouter-provider F1). Either way a body carrying none of
+  // the key fields is not the key endpoint's shape (a foreign reply, a
+  // wrapped error).
+  const data = payload.data
+  const body =
+    data !== null && typeof data === 'object' && !Array.isArray(data) ? data : payload
+  if (body.budgets === undefined && body.limit === undefined && body.limit_remaining === undefined) {
     return null
   }
-  const budgets = payload.budgets
+  const budgets = body.budgets
   if (budgets !== undefined && budgets !== null && !Array.isArray(budgets)) return null
   const windows: ChatUsageWindow[] = []
   const remainings: number[] = []
@@ -215,7 +223,7 @@ export function parseOpenRouterKey(
     }
   }
   if (windows.length === 0) {
-    const cap = capMeter(payload)
+    const cap = capMeter(body)
     if (cap) {
       windows.push(cap.window)
       remainings.push(cap.remainingUsd)

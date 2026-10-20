@@ -5182,8 +5182,8 @@ describe('ChatSessionManager provider usage pull', () => {
   const OR_MGMT = 'sk-or-management-fake'
   const orOriginalWarn = logger.warn
 
-  /** The spike's capped-key capture, as the key endpoint answers it. */
-  const OR_KEY_BODY = {
+  /** The spike's capped-key capture, under the `data` wrapper OpenRouter's docs declare. */
+  const OR_KEY_FIELDS = {
     limit: 0.05,
     limit_remaining: 0.04,
     limit_reset: null,
@@ -5200,6 +5200,7 @@ describe('ChatSessionManager provider usage pull', () => {
     effective_budget: null,
     is_management_key: false,
   }
+  const OR_KEY_BODY = { data: OR_KEY_FIELDS }
 
   function writeOpenRouterCatalog(withBalanceKey: boolean): string {
     const root = path.join(tempDir, 'catalog-openrouter')
@@ -5399,7 +5400,7 @@ describe('ChatSessionManager provider usage pull', () => {
   test('a pulled remaining amount feeds the credit-cooldown overlay (openrouter-provider D8)', async () => {
     let remaining = 0.04
     const keyBody = () =>
-      jsonResponse({ ...OR_KEY_BODY, limit_remaining: remaining, budgets: [{ ...OR_KEY_BODY.budgets[0], remaining_usd: remaining }] })
+      jsonResponse({ data: { ...OR_KEY_FIELDS, limit_remaining: remaining, budgets: [{ ...OR_KEY_FIELDS.budgets[0], remaining_usd: remaining }] } })
     const { manager } = await createOpenRouterHarness({ '/api/v1/key': keyBody }, false, 25)
     manager.limitEvents.record({
       profileId: 'openrouter-sonnet',
@@ -5474,7 +5475,7 @@ describe('ChatSessionManager provider usage pull', () => {
       const { manager, fetchCalls } = await createOpenRouterHarness(
         {
           '/api/v1/key': () =>
-            jsonResponse({ ...OR_KEY_BODY, limit_remaining: remaining, budgets: [{ ...OR_KEY_BODY.budgets[0], remaining_usd: remaining }] }),
+            jsonResponse({ data: { ...OR_KEY_FIELDS, limit_remaining: remaining, budgets: [{ ...OR_KEY_FIELDS.budgets[0], remaining_usd: remaining }] } }),
         },
         false,
         600_000

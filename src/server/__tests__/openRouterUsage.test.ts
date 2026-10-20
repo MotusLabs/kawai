@@ -254,6 +254,18 @@ describe('parseOpenRouterKey', () => {
     const parsed = parseOpenRouterKey({ limit: null, limit_remaining: null, budgets: [], is_management_key: true, expires_at: '2027-01-01T00:00:00.000Z' }, RECEIVED)
     expect(parsed?.report.windows).toEqual([])
   })
+
+  test('the documented data wrapper parses exactly like the bare body', () => {
+    // OpenRouter's docs declare GET /api/v1/key as { data: { … } }, like
+    // /credits; the spike's bare capture stays accepted beside it.
+    expect(parseOpenRouterKey({ data: CAPPED_KEY }, RECEIVED)).toEqual(
+      parseOpenRouterKey(CAPPED_KEY, RECEIVED)
+    )
+  })
+
+  test('a wrapped foreign body records no data', () => {
+    expect(parseOpenRouterKey({ data: { hello: true } } as unknown as OpenRouterKeySlice, RECEIVED)).toBeNull()
+  })
 })
 
 describe('parseOpenRouterCredits', () => {
