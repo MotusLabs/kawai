@@ -31,6 +31,7 @@ const envelopeOf = (mail: ReturnType<typeof claim>) => formatEnvelope(messageEnv
 const message = (role: string, type: string, text: string) =>
   JSON.stringify({ timestamp: '2026-10-20T00:00:00Z', type: 'response_item', payload: { type: 'message', role, content: [{ type, text }] } })
 const userRow = (text: string) => message('user', 'input_text', text)
+const codexFile = (_session: string, id: string) => transcriptReceipt(file, id, codexReceiptMessageId)
 const write = (...rows: string[]) => fs.writeFileSync(file, rows.map(row => `${row}\n`).join(''))
 
 test('a rollout user message carrying the envelope is the receipt', () => {
@@ -67,19 +68,22 @@ test('rows that only quote the envelope, and AGENTS.md user rows, never match', 
 test('a torn or missing rollout holds pushed mail as uncertain at reconciliation', () => {
   const torn = claim()
   write(userRow('hello'), '{"type":"response_item","payload":{"type":"mess')
-  reconcileMailbox(store, () => file, () => codexReceiptMessageId)
+  reconcileMailbox(store, () => file, codexFile)
   expect(store.get(torn.id)?.state).toBe('uncertain')
 
   const missing = claim()
-  reconcileMailbox(store, () => path.join(dir, 'absent.jsonl'), () => codexReceiptMessageId)
+  reconcileMailbox(store, () => null, (_session, id) => transcriptReceipt(path.join(dir, 'absent.jsonl'), id, codexReceiptMessageId))
   expect(store.get(missing.id)?.state).toBe('uncertain')
 })
 
+// The single-file reader under the Codex parser; the manager's reader adds
+// every rollout of the thread and the proven-reader rule
+// (codexRolloutReceipt.test.ts).
 test('reconciliation with the Codex parser delivers found mail and requeues a complete rollout without it', () => {
   const found = claim()
   const absent = claim()
   write(userRow(envelopeOf(found)))
-  reconcileMailbox(store, () => file, () => codexReceiptMessageId)
+  reconcileMailbox(store, () => file, codexFile)
   expect(store.get(found.id)?.state).toBe('delivered')
   expect(store.get(absent.id)?.state).toBe('queued')
 })

@@ -113,7 +113,8 @@ import { ImpactService } from '../strategy/ImpactService'
 import { ImpactStore } from '../strategy/impactStore'
 import type { TeamMessage, TeamWorktreeOccupancy, WaitingReason } from '../../shared/team'
 import { MailDispatcher } from '../team/dispatcher'
-import { codexReceiptMessageId, receiptMessageId } from '../team/receipt'
+import { codexReceiptMessageId, receiptMessageId, transcriptReceipt } from '../team/receipt'
+import { codexRolloutReceipt } from '../team/codexReceipt'
 import type { LimitEventStore } from '../team/routing/limitEvents'
 import { sessionCooldown } from '../team/cooldowns'
 import { supervisionRuntime } from '../plans/supervision/supervisionRuntime'
@@ -1095,8 +1096,14 @@ export class ChatSessionManager {
       // Sync discovery is fine here: a per-event lookup, not the boot path
       // (async-transcript-parsing design D4).
       transcriptFor: id => this.receiptTranscript(id),
-      // A Codex chat's receipt rows are its rollout's user messages (D8).
-      receiptParserFor: id => this.records.get(id)?.runtime === 'codex' ? codexReceiptMessageId : receiptMessageId,
+      // A Codex chat's receipts are its rollouts' user messages (D8), read
+      // over every rollout file of its thread (PR D decision 2, M1–M2).
+      receiptFor: (id, messageId) => {
+        const record = this.records.get(id)
+        return record?.runtime === 'codex'
+          ? codexRolloutReceipt({ transcriptPath: record.transcriptPath, codexHome: record.codexHome, threadId: record.sdkSessionId }, messageId)
+          : transcriptReceipt(this.receiptTranscript(id), messageId)
+      },
       onChange: options.onMailboxChange,
       onReasonsChange: options.onWaitingReasonsChange,
       // The router reads the profile's provider plan report (D14: a profile

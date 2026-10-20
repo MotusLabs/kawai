@@ -14,7 +14,8 @@ import { CodexSessionDriver, type CodexSessionDriverOptions } from '../chat/code
 export const FAKE_CODEX = path.resolve(import.meta.dir, '../../../tests/fixtures/fake-codex-app-server.ts')
 
 export const THREAD_ID = 'thread-0001'
-export const ROLLOUT = '/codex-home/sessions/rollout-thread-0001.jsonl'
+// The observed nested layout (spike, 0.163.0): sessions/YYYY/MM/DD/rollout-<ts>-<thread>.jsonl.
+export const ROLLOUT = '/codex-home/sessions/2026/10/18/rollout-2026-10-18T17-46-05-thread-0001.jsonl'
 
 type Line = { dir: 'out' | 'in'; line: string } | { fake: 'append'; file: string; line?: string } | { fake: 'gate'; path: string }
 

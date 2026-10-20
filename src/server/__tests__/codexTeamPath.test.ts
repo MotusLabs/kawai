@@ -18,6 +18,7 @@ import type { ChatWireLogs } from '../chat/ChatWireLogs'
 import { resetCodexExecutableCache } from '../chat/codex/codexExecutable'
 import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
+import { formatEnvelope, messageEnvelope } from '../team/envelope'
 import { FAKE_CODEX, Script, THREAD_ID, until } from './codexDriverHarness'
 
 const ENV_KEYS = [
@@ -153,4 +154,73 @@ test('a Codex chat serves kawai-team send_message on its thread, refuses a forei
 
   fs.writeFileSync(gate, '')
   await until(() => events.filter(event => event.type === 'turn_completed').length === 2)
+})
+
+test('a receipt written to an older rollout of the thread settles at turn end, not from the tail of the newest', async () => {
+  const events: ChatEvent[] = []
+  const wire: Wire = []
+  manager = createManager(events, wire)
+  await manager.whenRestored()
+  const created = await manager.createAvailableSession({ projectPath: project, claudeProfileId: 'codex', name: 'Codex dev' })
+  if (!created.ok) throw new Error(created.error)
+  const id = created.session.id
+  // As after a resume that moved the rollout: transcript_path names the
+  // newest file, and the delivery row lands in the thread's older one.
+  const older = path.join(codexHome, 'sessions', '2026', '10', '19', `rollout-2026-10-19T00-00-00-${THREAD_ID}.jsonl`)
+  fs.mkdirSync(path.dirname(older), { recursive: true })
+  const script = new Script().boot('thread/start', 'gpt-test', rollout)
+    .turn('ct-1')
+    .serverRequest(900, 'item/tool/call', call(THREAD_ID, 'note to self', id))
+    .completed('ct-1')
+    .turn('ct-2')
+    .append(older)
+    .gate(gate)
+    .completed('ct-2')
+  process.env.FAKE_TRANSCRIPT = script.write(tempDir)
+
+  expect((await manager.start(id)).ok).toBe(true)
+  expect((await manager.send(id, 'go')).ok).toBe(true)
+  await until(() => replyTo(wire, 900) !== undefined)
+  const messageId = JSON.parse(replyTo(wire, 900).result.contentItems[0].text).id as string
+  await until(() => fs.existsSync(older) && fs.readFileSync(older, 'utf8').includes(messageId))
+  // The tail follows the newest file only: the turn is open and the mail
+  // still reads pushed.
+  await Bun.sleep(150)
+  expect(manager.mailbox.store.get(messageId)?.state).toBe('claimed')
+  expect(db.getChatSession(id)?.transcriptPath).toBe(rollout)
+
+  fs.writeFileSync(gate, '')
+  await until(() => events.filter(event => event.type === 'turn_completed').length === 2)
+  await until(() => manager!.mailbox.store.get(messageId)?.state === 'delivered')
+})
+
+test('startup reconciliation settles a Codex chat\'s pushed mail from its rollouts with no agent running', async () => {
+  const wire: Wire = []
+  manager = createManager([], wire)
+  await manager.whenRestored()
+  const created = await manager.createAvailableSession({ projectPath: project, claudeProfileId: 'codex', name: 'Codex dev' })
+  if (!created.ok) throw new Error(created.error)
+  const id = created.session.id
+  process.env.FAKE_TRANSCRIPT = new Script().boot('thread/start', 'gpt-test', rollout).write(tempDir)
+  expect((await manager.start(id)).ok).toBe(true)
+  await until(() => db.getChatSession(id)?.transcriptPath === rollout)
+  const store = manager.mailbox.store
+  const pushed = (body: string) => {
+    const mail = store.enqueue({ teamId: 'team-x', toKind: 'group', toId: 'nobody', fromSession: 'lead', fromGroup: null, originPath: project, body })
+    store.claim(mail.id, id); store.markPushed(mail.id)
+    return store.get(mail.id)!
+  }
+  const found = pushed('found')
+  const absent = pushed('absent')
+  fs.appendFileSync(rollout, `${JSON.stringify({ timestamp: '2026-10-20T00:00:00.000Z', type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: formatEnvelope(messageEnvelope(found)) }] } })}\n`)
+  manager.shutdown()
+
+  const restartWire: Wire = []
+  manager = createManager([], restartWire)
+  await manager.whenRestored()
+  expect(manager.mailbox.store.get(found.id)?.state).toBe('delivered')
+  // The rollout proves the reader, so the complete-but-absent mail requeues.
+  expect(manager.mailbox.store.get(absent.id)?.state).toBe('queued')
+  // No agent was started to settle them.
+  expect(restartWire).toEqual([])
 })
