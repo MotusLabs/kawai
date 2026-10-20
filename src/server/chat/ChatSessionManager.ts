@@ -2796,7 +2796,7 @@ export class ChatSessionManager {
    */
   private recordOpenRouterPull(providerId: string, pull: OpenRouterUsagePull & { ok: true }): void {
     if (pull.report.windows.length === 0) {
-      this.usageLimits.clearAndRecordNoData(providerId)
+      this.usageLimits.clearAndRecordNoData(providerId, pull.report.receivedAt)
       return
     }
     this.usageLimits.record(providerId, pull.report)

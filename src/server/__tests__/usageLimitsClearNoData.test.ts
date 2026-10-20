@@ -59,6 +59,21 @@ describe('UsageLimitStore.clearAndRecordNoData', () => {
     expect(store.get('openrouter')?.windows).toEqual(report().windows)
   })
 
+  test('a zero-meter pull older than the held report leaves the report held', () => {
+    const store = new UsageLimitStore()
+    const seen = recorder(store)
+    store.record('openrouter', report({ receivedAt: '2026-10-07T17:00:00.000Z' }))
+    seen.length = 0
+
+    // Mirrors record's ordering guard: an older pull never displaces
+    // newer held data.
+    store.clearAndRecordNoData('openrouter', '2026-10-07T16:00:00.000Z')
+
+    expect(store.get('openrouter')?.receivedAt).toBe('2026-10-07T17:00:00.000Z')
+    expect(store.get('openrouter')?.windows).toEqual(report().windows)
+    expect(seen).toEqual([])
+  })
+
   test('with nothing held it behaves like recordNoData', () => {
     const cleared = new UsageLimitStore()
     const noop = new UsageLimitStore()

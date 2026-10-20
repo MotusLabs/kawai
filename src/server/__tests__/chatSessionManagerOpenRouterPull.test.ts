@@ -139,6 +139,9 @@ describe('ChatSessionManager OpenRouter pull recording (follow-up N3)', () => {
     for (const manager of managers) {
       manager.dispatcher.close()
       manager.observations.stop()
+      // Settles every driver and stops the 25 ms provider-usage refresh
+      // timers — without it they keep fetching for the rest of the process.
+      manager.shutdown()
     }
     managers.clear()
     db.close()
