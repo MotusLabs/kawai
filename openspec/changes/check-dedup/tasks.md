@@ -17,7 +17,7 @@
 
 ## 4. CI
 
-- [ ] 4.1 Make `Test (coverage)` and `Upload coverage artifact` in `ci.yml` run only on `push`. Parse the file with `Bun.YAML.parse` and check indentation with `cat -A`, then confirm on the PR that the quality-gates job runs no coverage step and gets faster by about the coverage step's time.
+- [x] 4.1 Make `Test (coverage)` and `Upload coverage artifact` in `ci.yml` run only on `push`. Parse the file with `Bun.YAML.parse` and check indentation with `cat -A`, then confirm on the PR that the quality-gates job runs no coverage step and gets faster by about the coverage step's time.
 
 ## Workflow follow-up
 
