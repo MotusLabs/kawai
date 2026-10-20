@@ -4,7 +4,8 @@
 // with the "what stopped and why" report; and the plan's token usage. Derived
 // at read time from the stores (the loader in `supervisionRead.ts`, the
 // decision store, results, and `readPlanUsage`); nothing is stored.
-import { cardState, currentDecision, fixStatus, type FixPlanFacts, type PlanDecisionCardView } from '../../../shared/planDecisions'
+import { cardState, currentDecision, fixStatus, type PlanDecisionCardView } from '../../../shared/planDecisions'
+import { fixPlanFacts } from '../decisions/fixFacts'
 import { planReport, type PlanSupervisionDetail } from '../../../shared/planReport'
 import type { PlanImpact } from '../../../shared/strategyImpact'
 import type { TeamTask } from '../../../shared/teamTasks'
@@ -24,12 +25,7 @@ export interface SupervisionDetailReads extends SupervisionReads {
 export function decisionCardViews(reads: SupervisionDetailReads, teamId: string, planId: string): PlanDecisionCardView[] {
   const plan = reads.plans.forTeam(teamId, planId)
   if (plan === null) return []
-  const facts: FixPlanFacts = {
-    revisions: reads.plans.revisions(planId).map(revision => ({ revision: revision.revision, status: revision.status, content: revision.content })),
-    currentApprovedRevision: plan.currentApprovedRevision,
-    executions: reads.executions.executionsOf(planId).filter(row => row.teamId === teamId).map(row => ({ id: row.id, revision: row.revision, state: row.state })),
-    landings: reads.executions.landings(planId).map(row => ({ change: row.change, executionId: row.executionId, mergeSha: row.mergeSha, landedAt: row.landedAt, treeVerified: row.treeVerified })),
-  }
+  const facts = fixPlanFacts(reads, teamId, plan)
   const results = new TaskResultStore(reads.db)
   return reads.decisions.cardsOfPlan(teamId, planId).map(card => {
     const decisions = reads.decisions.decisionsOfCard(teamId, card.id)

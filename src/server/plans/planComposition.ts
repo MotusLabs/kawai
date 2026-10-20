@@ -50,6 +50,8 @@ import { DecisionService } from './decisions/DecisionService'
 import { DecisionStore } from './decisions/decisionStore'
 import { readPlanSupervisionDetail, type SupervisionDetailReads } from './supervision/planSupervisionDetail'
 import type { SupervisionRuntime } from './supervision/supervisionRead'
+import { composeSupervisionMonitor, type MonitorCompositionOptions } from './supervision/monitorComposition'
+import type { SupervisionMonitor } from './supervision/SupervisionMonitor'
 import type { TaskStore } from '../team/taskStore'
 import type { PlanExecutionSettings } from '../team/teamCaps'
 
@@ -129,6 +131,8 @@ export interface PlanServicesOptions {
   }
   /** Test seam: replace the landing probe (defaults to the real one; the fixture switch its own). */
   executionProbe?: (input: import('./landing/landingProbe').ProbeInput, options?: import('./landing/ghCommand').GhCommandOptions) => Promise<import('./landing/landingProbe').ProbeResult>
+  /** Test seam: the supervision monitor's clock, timer, debounce, and log. */
+  monitor?: MonitorCompositionOptions['monitor']
   /** Test seam: the Promote reads (origin heads, containment, the merge-commit setting). */
   promotionReads?: import('./landing/integration/PromotionService').PromotionReads
   /** Test seam: the gh surface every composed gh call uses (a stub gh on a private PATH). */
@@ -185,6 +189,8 @@ export function composePlanServices(options: PlanServicesOptions): {
   integrationStore: IntegrationStore
   /** The decision service (plan-supervision D4–D7); null without team services. */
   decisions: DecisionService | null
+  /** The supervision monitor (plan-supervision D11); null without team services' supervision runtime. Started by its owner. */
+  monitor: SupervisionMonitor | null
 } {
   const adapter = options.adapter ?? new OpenspecAdapter()
   const validationStore = new ValidationStore(options.db)
@@ -340,11 +346,20 @@ export function composePlanServices(options: PlanServicesOptions): {
     tasks: team.tasks, taskStore: team.taskStore, assignments: team.assignments, mailbox: team.teamMailbox, getSession: options.getSession,
     ...(options.homeDir ? { homeDir: options.homeDir } : {}), onChange: planId => options.plans.announce(planId),
   }) : null
+  let monitor: SupervisionMonitor | null = null
   if (team?.supervision) {
-    supervisionReads = {
-      db: options.db, mail: team.mailbox, executions: executionStore, plans: options.plans, decisions: decisionStore, integration: integrationStore,
-      conditionsOf, runtime: team.supervision, tasks: team.taskStore, impact: (teamId, planId) => options.impact.planImpact(teamId, planId),
-    }
+    // The detail and the monitor's sweeps read one loader with the monitor's own `waitEndedAt` (D11).
+    const composed = composeSupervisionMonitor({
+      db: options.db, plans: options.plans, executions: executionStore, decisions: decisionStore, mailbox: team.mailbox,
+      tasks: team.tasks, taskStore: team.taskStore, assignments: team.assignments, integration: integrationStore, identityOf: team.identityOf,
+      reads: {
+        db: options.db, mail: team.mailbox, executions: executionStore, plans: options.plans, decisions: decisionStore, integration: integrationStore,
+        conditionsOf, runtime: team.supervision, tasks: team.taskStore, impact: (teamId, planId) => options.impact.planImpact(teamId, planId),
+      },
+      ...(options.monitor ? { monitor: options.monitor } : {}),
+    })
+    monitor = composed.monitor
+    supervisionReads = composed.reads
     // A fix task carries no plan link, so its status changes re-push the plan through its fix row (D15).
     team.taskStore.subscribe(task => {
       const fix = decisionStore.fixTask(task.teamId, task.id)
@@ -353,7 +368,7 @@ export function composePlanServices(options: PlanServicesOptions): {
   }
   return {
     validation, validationStore, plans, validationDetail: new ValidationDetailCache(validation), adapter, executions, executionStore,
-    runtime, decisions, promotions: promotions.service, integrationStore,
+    runtime, decisions, monitor, promotions: promotions.service, integrationStore,
   }
 }
 
