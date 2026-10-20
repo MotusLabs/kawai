@@ -114,12 +114,12 @@ describe('baseline', () => {
   test('this build ships its migrations, and a database at the newest version opens applying nothing', () => {
     const newest = MIGRATIONS.at(-1)!
     expect(MIGRATIONS.map(migration => migration.name)).toEqual(
-      ['strategy-impact', 'plan-validation', 'task-status-events', 'agent-starts', 'chat-turn-usage', 'process-reports', 'plan-execution', 'outbound-audit', 'context-exhausted', 'process-observations', 'provider-limit-window', 'integration-candidates', 'process-observation-indexes', 'codex-chat-runtime'],
+      ['strategy-impact', 'plan-validation', 'task-status-events', 'agent-starts', 'chat-turn-usage', 'process-reports', 'plan-execution', 'outbound-audit', 'context-exhausted', 'process-observations', 'provider-limit-window', 'integration-candidates', 'process-observation-indexes', 'codex-chat-runtime', 'plan-supervision'],
     )
     expect(newestVersion()).toBe(newest.version)
     initDatabase({ path: dbPath }).close()
     expect(versions(dbPath).map(row => [row.version, row.name])).toEqual([
-      [1, 'baseline'], [2, 'strategy-impact'], [3, 'plan-validation'], [4, 'task-status-events'], [5, 'agent-starts'], [6, 'chat-turn-usage'], [7, 'process-reports'], [8, 'plan-execution'], [9, 'outbound-audit'], [10, 'context-exhausted'], [11, 'process-observations'], [12, 'provider-limit-window'], [13, 'integration-candidates'], [14, 'process-observation-indexes'], [15, 'codex-chat-runtime'],
+      [1, 'baseline'], [2, 'strategy-impact'], [3, 'plan-validation'], [4, 'task-status-events'], [5, 'agent-starts'], [6, 'chat-turn-usage'], [7, 'process-reports'], [8, 'plan-execution'], [9, 'outbound-audit'], [10, 'context-exhausted'], [11, 'process-observations'], [12, 'provider-limit-window'], [13, 'integration-candidates'], [14, 'process-observation-indexes'], [15, 'codex-chat-runtime'], [16, 'plan-supervision'],
     ])
     expect(Object.keys(dump(dbPath))).toEqual(expect.arrayContaining([
       'strategy_impact_proposals', 'outbound_calls', 'outbound_outcomes', 'outbound_acknowledgements',
