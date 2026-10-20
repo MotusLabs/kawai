@@ -215,6 +215,34 @@ describe('runCheck', () => {
     expect(fake.count()).toBe(3)
   })
 
+  test('a recompute failure after a full pass records nothing and the pass still stands', async () => {
+    // The index copy stands in for the hook's GIT_INDEX_FILE: the initial
+    // key computation reads a valid index, the last step corrupts it, and
+    // the post-run recompute — the same call — throws.
+    const indexCopy = path.join(tempRoot, 'hook-index')
+    fs.copyFileSync(path.join(repo, '.git', 'index'), indexCopy)
+    let corrupted = false
+    const corrupting = async (request: SpawnRequest): Promise<number | null> => {
+      if (request.command[1] === 'test') {
+        fs.writeFileSync(indexCopy, 'not an index file')
+        corrupted = true
+      }
+      return 0
+    }
+    const outcome = await runCheck({
+      cwd: repo,
+      steps: STEPS,
+      spawn: corrupting,
+      indexFile: indexCopy,
+    })
+    expect(corrupted).toBe(true)
+    expect(outcome.kind).toBe('passed')
+    if (outcome.kind !== 'passed') return
+    expect(outcome.recorded).toBe(false)
+    expect(outcome.unrecordedBecause).toContain('could not be re-verified')
+    expect(recordJsonNames(recordsDir(repo))).toEqual([])
+  })
+
   test('--force runs every step despite a record and refreshes it', async () => {
     // Anchored near now: readRecord refuses records older than the TTL, so an
     // epoch-based clock would make the refreshed record read as stale.
