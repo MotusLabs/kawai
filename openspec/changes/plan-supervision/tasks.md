@@ -135,7 +135,7 @@ Implement after `plan-execution` and `integration-candidates` have landed on mas
   - a later revision that adds another naming change keeps the task open until that change lands;
   - a superseded fix stays cancelled;
   - an owner-accepted no-change result leaves the task done, Kawai writes nothing for it, and `fixStatus` reads no change.
-- [ ] 8.5 Create and complete correction tasks for failed promotions (D8). Verify with tests:
+- [x] 8.5 Create and complete correction tasks for failed promotions (D8). Verify with tests:
   - a promotion stored as `failed:promotion-conflict` or `failed:ci-failed` gets one correction task with the D8 title and evidence, and its instruction names `fixes`, also across a restart;
   - the other failures and a cancellation create none;
   - a landed change naming the correction closes it by the 8.4 rule;
