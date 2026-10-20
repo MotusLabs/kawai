@@ -269,7 +269,7 @@ async function dispatchReview(deps: RoundDeps, changeRow: { executionId: string;
   const role = revision?.content.roles.find(candidate => candidate.group === reviewGroup)?.profiles ?? []
   const authors = (change.taskId ? deps.tasks.store.results.listByTask(change.taskId) : [])
     .map(result => result.submittedBy.sessionId).filter((id): id is string => id !== null)
-  const outcome = await refusable('review', () => deps.results.handoff({ kind: 'system', team: deps.team, executionId: changeRow.executionId }, change.taskId!, {
+  const outcome = await refusable('review', () => deps.results.handoff({ kind: 'system', team: deps.team, origin: { kind: 'execution', executionId: changeRow.executionId } }, change.taskId!, {
     kind: 'review', resultId: round.resultId, target: { kind: 'group', id: reviewGroup },
     instructions: reviewInstruction(deps, changeRow.change, round, effectiveExtraChecks(revision?.content, entry), [...entry?.acceptance ?? [], ...revision?.content.acceptanceRules ?? []]),
     requestKey: `exec:${changeRow.executionId}:${changeRow.change}:round:${round.number}:review:${change.generation}`,

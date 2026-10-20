@@ -101,6 +101,7 @@ import { TeamMailbox } from '../team/TeamMailbox'
 import { createMailboxServer } from '../team/mailboxTools'
 import { composeExecutionCore, composePlanServices } from '../plans/planComposition'
 import type { ValidationService } from '../plans/validation/ValidationService'
+import type { DecisionService } from '../plans/decisions/DecisionService'
 import type { OpenspecAdapter } from '../plans/validation/openspecAdapter'
 import type { ValidationDetailCache } from '../plans/validation/validationDetail'
 import type { MailboxManagement } from '../team/mailboxManagement'
@@ -113,6 +114,8 @@ import type { TeamMessage, TeamWorktreeOccupancy, WaitingReason } from '../../sh
 import { MailDispatcher } from '../team/dispatcher'
 import { receiptMessageId } from '../team/receipt'
 import type { LimitEventStore } from '../team/routing/limitEvents'
+import { sessionCooldown } from '../team/cooldowns'
+import { supervisionRuntime } from '../plans/supervision/supervisionRuntime'
 import type { HandoffTarget } from '../team/routing/limitOutcomes'
 import type { RuleLoadReport, TeamRoutingState } from '../../shared/routing'
 import { SessionMailbox } from '../team/sessionMailbox'
@@ -1188,6 +1191,7 @@ export class ChatSessionManager {
         results: this.teamMail.results,
         taskStore: this.teamMail.tasks.store,
         mailbox: this.teamMail.mailbox.store,
+        teamMailbox: this.teamMail.mailbox,
         releases: this.teamMail.releases,
         pendingSpawns: teamId => this.teamMail.staffing.pendingFor(teamId),
         records: () => this.records.values(),
@@ -1195,10 +1199,19 @@ export class ChatSessionManager {
         // the runtime's archive wake resolves sessions.
         identityOf: teamId => this.teams.identityFor(teamId),
         teamOfSession: id => this.teams.teamOf(id),
+        // The supervision detail's runtime facts (plan-supervision D10).
+        supervision: supervisionRuntime({
+          db: options.db.db, mail: this.teamMail.mailbox.store, getRecord: id => this.records.get(id),
+          pendingRequests: id => this.drivers.get(id)?.getPendingRequests() ?? [],
+          hasLiveWorkers: id => this.hasLiveWorkers(id), hasRunningBackgroundTasks: id => this.hasRunningBackgroundTasks(id),
+          waitingFor: teamId => this.teamMail.waitingFor(teamId),
+          cooldownUntil: record => sessionCooldown(this.teamMail.limits, options.profileCatalogHome, record.claudeProfileId ?? 'default', record.projectPath).until,
+        }),
       },
       ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
     })
     this.validation = planServices.validation
+    this.decisions = planServices.decisions
     this.plans = planServices.plans
     this.executions = planServices.executions
     this.executionRuntime = planServices.runtime
@@ -1498,6 +1511,8 @@ export class ChatSessionManager {
   readonly caps: TeamCaps
   /** Plan validation (plan-validation): reports, assessments, decisions, and the approval standing. */
   readonly validation: ValidationService
+  /** Plan decisions (plan-supervision D4–D7): cards, the Lead's record, the owner's answer and override, fix tasks. */
+  readonly decisions: DecisionService | null
   /** The coalesced validation view for the Plans page pushes (plan-validation D11). */
   readonly validationDetail: ValidationDetailCache
   /** The one OpenSpec adapter (plan-validation D3); its probe is cached in-process. */
@@ -2372,7 +2387,7 @@ export class ChatSessionManager {
       // The team must be known before the first spawn reads its prompt.
       await this.teams.track(record.sessionId, this.records.get(record.sessionId)?.projectPath ?? record.projectPath)
       const teamMcpServer = codex ? null : await createMailboxServer(this.mailbox, record.sessionId, {
-        tasks: this.tasks, results: this.results, strategies: this.strategies, plans: this.plans, validation: this.validation, releases: this.teamMail.releases, management: this.management,
+        tasks: this.tasks, results: this.results, strategies: this.strategies, plans: this.plans, validation: this.validation, ...(this.decisions ? { decisions: this.decisions } : {}), releases: this.teamMail.releases, management: this.management,
         metrics: { teamOf: id => this.teams.teamOf(id)?.teamId ?? null, reader: this.metrics },
         reports: { caller: id => this.reportCaller(id), service: this.reports },
       })

@@ -17,6 +17,7 @@ import { unknownTeamError } from '../../shared/team'
 import type { ChatSessionManager } from '../chat/ChatSessionManager'
 import type { ChatConnection } from '../chat/ChatConnections'
 import type { PlanCommandOutcome } from './planCommands'
+import { handleDecisionCommand, isDecisionCommand } from './decisions/decisionConnections'
 
 type PlanClientMessage = Extract<ClientMessage, { type: `team-plan${string}` }>
 type PlanCommandMessage = Extract<PlanClientMessage, { type: (typeof PLAN_COMMAND_TYPES)[number] }>
@@ -96,6 +97,7 @@ export class PlanConnections {
   async handle(connection: ChatConnection, message: PlanClientMessage) {
     if (isCommand(message)) return this.act(connection, message)
     if (isValidationCommand(message)) return this.actValidation(connection, message)
+    if (isDecisionCommand(message)) return handleDecisionCommand(this.manager, connection, message)
     const { teamPath } = message
     const planId = 'planId' in message ? message.planId : undefined
     const target = `${teamPath}\0${planId ?? ''}`

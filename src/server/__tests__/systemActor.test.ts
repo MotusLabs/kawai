@@ -52,7 +52,7 @@ beforeEach(() => {
     staffing, caps, worktrees, homeDir: world.home, plans: bench.plans,
   })
   results = new TaskResultService(tasks, { getSession: id => bench.records.get(id), assignments })
-  system = { kind: 'system', team: world.team, executionId: 'exec-1' }
+  system = { kind: 'system', team: world.team, origin: { kind: 'execution', executionId: 'exec-1' } }
 })
 
 async function kawaiTask() {

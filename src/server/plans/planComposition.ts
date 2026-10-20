@@ -41,6 +41,11 @@ import type { TaskService } from '../team/TaskService'
 import type { TaskResultService } from '../team/TaskResultService'
 import type { AssignmentService } from '../team/AssignmentService'
 import type { MailboxStore } from '../team/mailboxStore'
+import type { TeamMailbox } from '../team/TeamMailbox'
+import { DecisionService } from './decisions/DecisionService'
+import { DecisionStore } from './decisions/decisionStore'
+import { readPlanSupervisionDetail, type SupervisionDetailReads } from './supervision/planSupervisionDetail'
+import type { SupervisionRuntime } from './supervision/supervisionRead'
 import type { TaskStore } from '../team/taskStore'
 import type { PlanExecutionSettings } from '../team/teamCaps'
 
@@ -58,6 +63,10 @@ export interface ExecutionTeamServices {
   /** The task store (TaskStore.changed wakes) and the mailbox (owned mail wakes). */
   taskStore: TaskStore
   mailbox: MailboxStore
+  /** The team mailbox whose prepared send/reply paths carry decision mail (plan-supervision D4–D6). */
+  teamMailbox: TeamMailbox
+  /** The holder facts and mailbox blockers the supervision detail reads (plan-supervision D10); absent, the detail carries no supervision. */
+  supervision?: SupervisionRuntime
   /** Member release's readiness and release (the D11 release-before-review seam). */
   releases: MemberRelease
   /** Staffing's in-flight spawn reservations: a member still starting holds the D11 release step. */
@@ -164,6 +173,8 @@ export function composePlanServices(options: PlanServicesOptions): {
   executionStore: ExecutionStore
   /** The execution runtime (boot, wakes, stop); null without team services. */
   runtime: ExecutionRuntime | null
+  /** The decision service (plan-supervision D4–D7); null without team services. */
+  decisions: DecisionService | null
 } {
   const adapter = options.adapter ?? new OpenspecAdapter()
   const validationStore = new ValidationStore(options.db)
@@ -185,6 +196,18 @@ export function composePlanServices(options: PlanServicesOptions): {
   // late-bound — the execution service needs this PlanService — and is set
   // before this function returns, so no close can find it unbound.
   let executions: ExecutionService | null = null
+  // The execution's unresolved acceptance conditions (V2): landing and supervision read the same ones.
+  const conditionsOf = (executionId: string): string[] => {
+    const execution = executionStore.execution(executionId)
+    if (execution === null) return []
+    const assessments = validationStore.assessments(execution.planId, execution.revision)
+    const decisions = validationStore.decisions(execution.planId, execution.revision)
+    return carriedConditionsOf(assessments, decisions)
+      .filter(condition => condition.gate === 'acceptance' && !condition.resolved)
+      .map(condition => condition.text)
+  }
+  // Set once the team services exist; the detail reads it at each push (plan-supervision D15/D16).
+  let supervisionReads: SupervisionDetailReads | null = null
   const plans = new PlanService(options.plans, {
     getSession: options.getSession,
     strategies: options.strategies,
@@ -199,6 +222,7 @@ export function composePlanServices(options: PlanServicesOptions): {
       return execution ? { planId: execution.planId, revision: execution.revision } : null
     },
     executionsOf: planId => executionViews(executionStore, planId, viewReads),
+    supervisionOf: (teamId, planId) => (supervisionReads === null ? null : readPlanSupervisionDetail(supervisionReads, teamId, planId, new Date())),
     onPlanClosed: async planId => {
       const plan = options.plans.get(planId)
       if (plan !== null && plan !== undefined) await executions?.stopForPlan(plan.teamId, planId)
@@ -272,15 +296,7 @@ export function composePlanServices(options: PlanServicesOptions): {
         release: sessionId => team.releases.releaseNow(sessionId, ' before the review handoff (plan-execution D11)'),
         pendingSpawns: team.pendingSpawns,
       },
-      conditionsOf: executionId => {
-        const execution = executionStore.execution(executionId)
-        if (execution === null) return []
-        const assessments = validationStore.assessments(execution.planId, execution.revision)
-        const decisions = validationStore.decisions(execution.planId, execution.revision)
-        return carriedConditionsOf(assessments, decisions)
-          .filter(condition => condition.gate === 'acceptance' && !condition.resolved)
-          .map(condition => condition.text)
-      },
+      conditionsOf,
       adapters: { provision: provisionAdapter(executionStore, undefined, mechanisms) },
       groupScoped: (teamId, groupId) => groupScopedOf(team, teamId, groupId),
       roundAdapters: roundAdaptersUsed,
@@ -293,9 +309,28 @@ export function composePlanServices(options: PlanServicesOptions): {
       adapters: { fixture, rounds: roundAdaptersUsed },
     })
   }
+  // Decisions write their cards, decisions, and mail in one transaction, and
+  // every committed write announces the plan so its detail is re-pushed (D15).
+  const decisionStore = new DecisionStore(options.db)
+  const decisions = team ? new DecisionService({
+    db: options.db, decisions: decisionStore, plans: options.plans, planService: plans,
+    tasks: team.tasks, taskStore: team.taskStore, assignments: team.assignments, mailbox: team.teamMailbox, getSession: options.getSession,
+    ...(options.homeDir ? { homeDir: options.homeDir } : {}), onChange: planId => options.plans.announce(planId),
+  }) : null
+  if (team?.supervision) {
+    supervisionReads = {
+      db: options.db, mail: team.mailbox, executions: executionStore, plans: options.plans, decisions: decisionStore, integration: integrationStore,
+      conditionsOf, runtime: team.supervision, tasks: team.taskStore, impact: (teamId, planId) => options.impact.planImpact(teamId, planId),
+    }
+    // A fix task carries no plan link, so its status changes re-push the plan through its fix row (D15).
+    team.taskStore.subscribe(task => {
+      const fix = decisionStore.fixTask(task.teamId, task.id)
+      if (fix !== null) options.plans.announce(fix.planId)
+    })
+  }
   return {
     validation, validationStore, plans, validationDetail: new ValidationDetailCache(validation), adapter, executions, executionStore,
-    runtime,
+    runtime, decisions,
   }
 }
 
