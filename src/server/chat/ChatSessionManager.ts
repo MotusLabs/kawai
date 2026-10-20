@@ -99,7 +99,7 @@ import { MessageFeed } from '../team/messageFeed'
 import { MessageQuery } from '../team/messageQuery'
 import { ChatTurnEndStore } from './chatTurnEndStore'
 import { TeamMailbox } from '../team/TeamMailbox'
-import { createMailboxServer } from '../team/mailboxTools'
+import { createMailboxServer, teamToolTable, type MailboxServerServices } from '../team/mailboxTools'
 import { composeExecutionCore, composePlanServices } from '../plans/planComposition'
 import type { ValidationService } from '../plans/validation/ValidationService'
 import type { DecisionService } from '../plans/decisions/DecisionService'
@@ -113,7 +113,7 @@ import { ImpactService } from '../strategy/ImpactService'
 import { ImpactStore } from '../strategy/impactStore'
 import type { TeamMessage, TeamWorktreeOccupancy, WaitingReason } from '../../shared/team'
 import { MailDispatcher } from '../team/dispatcher'
-import { receiptMessageId } from '../team/receipt'
+import { codexReceiptMessageId, receiptMessageId } from '../team/receipt'
 import type { LimitEventStore } from '../team/routing/limitEvents'
 import { sessionCooldown } from '../team/cooldowns'
 import { supervisionRuntime } from '../plans/supervision/supervisionRuntime'
@@ -1094,7 +1094,9 @@ export class ChatSessionManager {
       },
       // Sync discovery is fine here: a per-event lookup, not the boot path
       // (async-transcript-parsing design D4).
-      transcriptFor: id => { const sdkId = this.records.get(id)?.sdkSessionId; return sdkId ? findTranscriptPath(sdkId) : null },
+      transcriptFor: id => this.receiptTranscript(id),
+      // A Codex chat's receipt rows are its rollout's user messages (D8).
+      receiptParserFor: id => this.records.get(id)?.runtime === 'codex' ? codexReceiptMessageId : receiptMessageId,
       onChange: options.onMailboxChange,
       onReasonsChange: options.onWaitingReasonsChange,
       // The router reads the profile's provider plan report (D14: a profile
@@ -2298,12 +2300,10 @@ export class ChatSessionManager {
     if (this.titleWatchers.has(sessionId)) return
     const record = this.records.get(sessionId)
     if (!record || record.archivedAt != null || !record.sdkSessionId) return
-    // A Codex thread has no Claude transcript; its rollout replay and
-    // receipts arrive with codex-chat-sessions §6.
-    if (record.runtime === 'codex') return
-    // Sync discovery acceptable: a per-attach watcher setup, not the boot
-    // path (async-transcript-parsing design D4).
-    const filePath = findTranscriptPath(record.sdkSessionId)
+    // A Codex chat's tail follows its rollout for receipts only: its name
+    // is Kawai's, so the title half is skipped (codex-chat-sessions D8).
+    const codex = record.runtime === 'codex'
+    const filePath = this.receiptTranscript(sessionId)
     if (!filePath) {
       const base = this.options.titleLocateIntervalMs ?? 2_000
       const timer = setTimeout(
@@ -2317,17 +2317,32 @@ export class ChatSessionManager {
       this.titleWatchers.set(sessionId, { close: () => clearTimeout(timer) })
       return
     }
+    const parse = codex ? codexReceiptMessageId : receiptMessageId
     const watcher: TranscriptTitleWatcher = watchTranscriptTitle(
       filePath,
-      (title, source) => this.applyTranscriptTitle(sessionId, title, source),
+      (title, source) => { if (!codex) this.applyTranscriptTitle(sessionId, title, source) },
       line => {
-        const id = receiptMessageId(line)
+        const id = parse(line)
         if (!id) return
         const message = this.mailbox.store.get(id)
         if (message?.claimedBy === sessionId) this.mailbox.store.markDelivered(id)
       }
     )
     this.titleWatchers.set(sessionId, watcher)
+  }
+
+  /**
+   * The file a session's mail receipts are read from: a Codex chat's stored
+   * rollout (`transcript_path`, D8), else the Claude transcript found by
+   * its SDK id. Sync discovery is fine: a per-event lookup, not the boot
+   * path (async-transcript-parsing design D4).
+   */
+  private receiptTranscript(sessionId: string): string | null {
+    const record = this.records.get(sessionId)
+    if (!record?.sdkSessionId) return null
+    // A missing file reads null either way: uncertain for a receipt, retried by the tail.
+    if (record.runtime === 'codex') return record.transcriptPath && existsSync(record.transcriptPath) ? record.transcriptPath : null
+    return findTranscriptPath(record.sdkSessionId)
   }
 
   /** Stop following a session's transcript (kill, archive, shutdown). */
@@ -2401,11 +2416,13 @@ export class ChatSessionManager {
       const queryFactory = codex ? null : await this.resolveQueryFactory()
       // The team must be known before the first spawn reads its prompt.
       await this.teams.track(record.sessionId, this.records.get(record.sessionId)?.projectPath ?? record.projectPath)
-      const teamMcpServer = codex ? null : await createMailboxServer(this.mailbox, record.sessionId, {
+      // Both runtimes build their team tools from one table (D6).
+      const teamServices: MailboxServerServices = {
         tasks: this.tasks, results: this.results, strategies: this.strategies, plans: this.plans, validation: this.validation, ...(this.decisions ? { decisions: this.decisions } : {}), releases: this.teamMail.releases, management: this.management,
         metrics: { teamOf: id => this.teams.teamOf(id)?.teamId ?? null, reader: this.metrics },
         reports: { caller: id => this.reportCaller(id), service: this.reports },
-      })
+      }
+      const teamMcpServer = codex ? null : await createMailboxServer(this.mailbox, record.sessionId, teamServices)
       // The options both runtimes share: identity, the audit observer, the
       // prompt/effort/policy readers, and every output callback.
       const shared: ChatDriverSharedOptions = {
@@ -2517,6 +2534,7 @@ export class ChatSessionManager {
               wire: wire ?? { record: () => {} },
               // The catalog at the chat's path names the credentials (D3).
               withheldCredentials: withheldCredentialNamesAt(this.catalogCtx(record.projectPath)),
+              teamTools: teamToolTable(this.mailbox, record.sessionId, teamServices),
               ...(record.sdkSessionId ? { resumeThreadId: record.sdkSessionId } : {}),
             },
           })
@@ -3323,6 +3341,12 @@ export class ChatSessionManager {
     // The first SDK session id makes a transcript followable: start the
     // title tail for the now-live conversation (design D4).
     if (patch.sdkSessionId !== undefined) {
+      this.watchSessionTitle(sessionId)
+    }
+    // A Codex rollout path that is new or moved (D8): the receipt tail
+    // follows the stored file from now on.
+    if (patch.transcriptPath !== undefined && patch.transcriptPath !== record.transcriptPath) {
+      this.releaseTitleWatch(sessionId)
       this.watchSessionTitle(sessionId)
     }
     // A moved cwd may leave the team (another repository); re-resolve.

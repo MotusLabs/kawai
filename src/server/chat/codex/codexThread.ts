@@ -6,6 +6,7 @@
 // turn/start, and the context reading a token-usage update yields.
 import type { ChatApprovalPolicy, ChatContextUsage } from '../../../shared/chat'
 import type { OutboundAuditSink } from '../../outbound/observer'
+import type { TeamToolSpec } from '../../team/mailboxTools'
 import type { ChatDriverCallbacks, ChatEffort } from '../provider/driver'
 import type { ChatWireRecorder } from '../wireTap'
 import type { AppServerClient, AppServerClientOptions } from './appServerClient'
@@ -34,6 +35,11 @@ export interface CodexSessionDriverOptions extends ChatDriverCallbacks {
   getSystemPromptAppend?: () => string | undefined
   /** turn/start effort, read at every turn. */
   getEffort?: () => ChatEffort | undefined
+  /**
+   * The kawai-team tools (D6), registered as one dynamic-tool namespace at
+   * thread start and served on `item/tool/call` for this thread only.
+   */
+  teamTools?: readonly TeamToolSpec[]
   /** Observes commands and external MCP calls (design D13); observational. */
   outbound?: OutboundAuditSink
   wire: ChatWireRecorder
