@@ -24,6 +24,17 @@ The default worker count SHALL be fixed and documented, chosen so that a full pa
 - **WHEN** the worker-count variable is set to 2
 - **THEN** the suite runs with 2 workers
 
+### Requirement: Parallel workers stay within the CPU quota
+The default worker count SHALL NOT exceed the CPU quota the workspace grants, read from the cgroup quota where one is set rather than from the CPU count the platform reports. The default SHALL be validated with other full suites running at the same time, as the shared workspace runs them.
+
+#### Scenario: Quota below the reported CPU count
+- **WHEN** the cgroup CPU quota is 6 and the platform reports 16 CPUs
+- **THEN** the default worker count is at most 6
+
+#### Scenario: Busy workspace
+- **WHEN** the full suite runs with the default worker count while two serial full suites run in the same workspace
+- **THEN** no test fails on its timeout
+
 ### Requirement: Parallel files never share runner-provided paths
 Each test file SHALL receive fresh temporary database, log, Claude config, and Codex directories from the runner, including sequential files on the same worker. The parent runner SHALL clean up its run root after all child processes exit, on success or failure.
 
