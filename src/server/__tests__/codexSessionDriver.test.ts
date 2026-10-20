@@ -150,3 +150,25 @@ test('effort maps onto Codex levels: max becomes xhigh, numbers are dropped', ()
   expect(codexEffort(3)).toBeUndefined()
   expect(codexEffort(undefined)).toBeUndefined()
 })
+
+test('per-item state lives one turn: a long session keeps only the open turn’s tool calls', async () => {
+  const command = (id: string) => ({ type: 'commandExecution', id, command: 'true', cwd: '', status: 'inProgress', aggregatedOutput: null, exitCode: null })
+  const script = new Script().boot()
+  for (const n of [1, 2, 3]) {
+    script.turn(`ct-${n}`)
+      .item('started', `ct-${n}`, command(`cmd-${n}`))
+      .item('completed', `ct-${n}`, { ...command(`cmd-${n}`), status: 'completed', aggregatedOutput: '', exitCode: 0 })
+      .completed(`ct-${n}`, 'completed', [])
+  }
+  harness = startHarness(script)
+  for (const n of [1, 2, 3]) {
+    harness.driver.send(`turn ${n}`)
+    await until(() => completedOf(harness!.events).length === n)
+    // The just-ended turn's call is still listed until the next turn begins …
+    expect([...harness.driver.getSeenToolCallIds()]).toEqual([`cmd-${n}`])
+    const held = harness.driver as unknown as { itemInputs: Map<string, unknown> }
+    expect([...held.itemInputs.keys()]).toEqual([`cmd-${n}`])
+  }
+  // … so three turns never accumulate three calls.
+  expect(harness.events.filter(event => event.type === 'tool_call')).toHaveLength(3)
+})

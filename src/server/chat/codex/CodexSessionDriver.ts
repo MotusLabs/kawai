@@ -448,6 +448,13 @@ export class CodexSessionDriver implements ChatAgentDriver {
 
   private startTurn(trigger?: ChatTurnTrigger): string {
     const turnId = this.options.createTurnId?.() ?? `turn-${crypto.randomUUID()}`
+    // Per-item state lives one turn (bounded however long the session): an
+    // item's approval and question arrive within its turn, and outside a
+    // turn no item is recorded. The ids a live replay must not cancel are
+    // the open turn's — an ended turn's outcome is final in its rollout.
+    this.seenToolCallIds.clear()
+    this.itemInputs.clear()
+    this.askedItems.clear()
     this.activeTurnId = turnId
     this.emit({ type: 'turn_started', turnId, ...(trigger ? { trigger } : {}) })
     return turnId
