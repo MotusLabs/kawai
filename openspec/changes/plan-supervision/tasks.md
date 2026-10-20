@@ -117,17 +117,17 @@ Implement after `plan-execution` and `integration-candidates` have landed on mas
 ## 8. Supervision monitor
 
 - [x] 8.1 Implement `supervisionRead.ts`, the loader that feeds `changeSupervision`: change rows, rounds, effects, assignments, mailbox reasons, session facts, the slot holder, cards, conditions, candidates, turn ends, and task mail (D10). Verify with a store-backed test per named wait.
-- [ ] 8.2 Implement `SupervisionMonitor.ts`: one per team, single-flight sweeps at startup, on the D11 notifications, and on a 60 s timer while there is work. Verify with tests:
+- [x] 8.2 Implement `SupervisionMonitor.ts`: one per team, single-flight sweeps at startup, on the D11 notifications, and on a 60 s timer while there is work. Verify with tests:
   - the timer stops when the team has no running execution or promotion and no open fix or correction task;
   - a sweep error is logged and the next trigger retries;
   - a sweep never writes execution rows.
-- [ ] 8.3 Raise stall alerts (D11). Verify with tests:
+- [x] 8.3 Raise stall alerts (D11). Verify with tests:
   - the alert row and Kawai's mail commit in one transaction, tagged `plan-stall` and `stall:<kind>`, with the role's `allowed_profiles` and the D11 body;
   - a restart during a stall sends nothing new;
   - new progress then a new stall sends a second alert;
   - with no Lead role, a row with a null message is written and no mail is sent;
   - a reply to the alert hits Kawai's reply guard.
-- [ ] 8.4 Complete fix and correction tasks in the sweep by the D8 rule. A change counts as landed when it has a landing fact and its definition in the landing execution's revision names the task; it counts as outstanding when the current approved revision names the task and it has no landing fact. Verify with tests:
+- [x] 8.4 Complete fix and correction tasks in the sweep by the D8 rule. A change counts as landed when it has a landing fact and its definition in the landing execution's revision names the task; it counts as outstanding when the current approved revision names the task and it has no landing fact. Verify with tests:
   - the task closes once a naming change has landed and none is outstanding, with a note naming the merge commits;
   - one change landed of two keeps it open;
   - a revision naming the task with nothing landed keeps it open;
@@ -135,13 +135,13 @@ Implement after `plan-execution` and `integration-candidates` have landed on mas
   - a later revision that adds another naming change keeps the task open until that change lands;
   - a superseded fix stays cancelled;
   - an owner-accepted no-change result leaves the task done, Kawai writes nothing for it, and `fixStatus` reads no change.
-- [ ] 8.5 Create and complete correction tasks for failed promotions (D8). Verify with tests:
+- [x] 8.5 Create and complete correction tasks for failed promotions (D8). Verify with tests:
   - a promotion stored as `failed:promotion-conflict` or `failed:ci-failed` gets one correction task with the D8 title and evidence, and its instruction names `fixes`, also across a restart;
   - the other failures and a cancellation create none;
   - a landed change naming the correction closes it by the 8.4 rule;
   - a later merged promotion closes it with a note.
-- [ ] 8.6 Push `team-plan-detail` after a sweep that changed a plan's derived view, and only then. Verify with a test that two sweeps with no change push once.
-- [ ] 8.7 Add the AGENTS.md supervision bullet: outcomes, named waits, progress versus activity, the two stalls and their deadlines, alerts, and the report. Verify by reading it against D10–D12.
+- [x] 8.6 Push `team-plan-detail` after a sweep that changed a plan's derived view, and only then. Verify with a test that two sweeps with no change push once.
+- [x] 8.7 Add the AGENTS.md supervision bullet: outcomes, named waits, progress versus activity, the two stalls and their deadlines, alerts, and the report. Verify by reading it against D10–D12.
 
 ## 9. Team workspace
 

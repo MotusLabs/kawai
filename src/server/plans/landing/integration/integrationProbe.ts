@@ -13,7 +13,7 @@
 // The base it returns is the integration branch's head on `origin`, or the
 // default head while the branch is missing (D2).
 import type { IntegrationBranchRecord } from '../../../../shared/planIntegration'
-import { ghCommitTree } from '../github'
+import { ghCommitTree, type GithubOutcome } from '../github'
 import type { GhCommandOptions } from '../ghCommand'
 import { lsRemoteHead } from '../gitRemote'
 import { probeLanding, type ProbeFinding, type ProbeInput, type ProbeResult } from '../landingProbe'
@@ -56,13 +56,19 @@ export async function integrationBranchFindings(
   return { findings, head: remote.sha }
 }
 
+/** The probe's GitHub-facing reads: direct's checks and a commit's tree (the development fixture passes its own). */
+export interface IntegrationProbeReads {
+  direct?: (input: ProbeInput, options: GhCommandOptions) => Promise<ProbeResult>
+  commitTree?: (repo: string, sha: string, options: GhCommandOptions) => Promise<GithubOutcome<string>>
+}
+
 /**
  * The integration mechanism's probe (D2): direct's checks, then the branch
  * rules. The base becomes the integration branch at its head on origin, or
  * at the default head (and tree) while the branch is missing.
  */
-export async function probeIntegrationLanding(input: IntegrationProbeInput, options: GhCommandOptions = {}): Promise<ProbeResult> {
-  const direct = await probeLanding(input, options)
+export async function probeIntegrationLanding(input: IntegrationProbeInput, options: GhCommandOptions = {}, reads: IntegrationProbeReads = {}): Promise<ProbeResult> {
+  const direct = await (reads.direct ?? probeLanding)(input, options)
   const defaultBase = direct.base
   const rules = await integrationBranchFindings(input, defaultBase?.branch ?? null)
   const findings = [...direct.findings, ...rules.findings]
@@ -71,7 +77,9 @@ export async function probeIntegrationLanding(input: IntegrationProbeInput, opti
   if (rules.head === null) {
     return { findings, repo: direct.repo, base: { branch: input.branch, head: defaultBase.head, tree: defaultBase.tree }, integration }
   }
-  const tree = direct.repo === null ? null : await ghCommitTree(direct.repo, rules.head, options)
+  // GitHub needs the repository; an injected reader (the fixture's) answers without one.
+  const tree = direct.repo === null && reads.commitTree === undefined ? null
+    : await (reads.commitTree ?? ghCommitTree)(direct.repo ?? '', rules.head, options)
   if (tree === null || !tree.ok) {
     findings.push({ code: 'base-branch', message: `The integration branch's tree could not be read${tree !== null && !tree.ok ? `: ${tree.error.message}` : '.'}` })
     return { findings, repo: direct.repo, base: null, integration }

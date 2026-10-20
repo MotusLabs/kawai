@@ -28,6 +28,8 @@ Implement after `plan-execution` has landed on master, together with what it bui
   - an integration plan starts, recording the integration branch as `base_branch` and the default branch as the target;
   - `landing-mode-supported` passes;
   - `changes-on-base` compares with the integration head, or with the default head while the branch is missing.
+
+  Verified by `src/server/__tests__/integrationStartService.test.ts:147` (a missing branch) and `:160` (an existing branch).
 - [x] 3.3 Implement the `create-integration` effect and its inspector (D4, D6). Verify with tests:
   - the first execution creates the branch at the default head before any `provision` effect runs;
   - a later execution reuses the branch at its head;
@@ -63,14 +65,14 @@ Implement after `plan-execution` has landed on master, together with what it bui
 
 ## 5. Promote and Cancel
 
-- [ ] 5.1 Implement `PromotionService.preview` and `promote` with `PROMOTE_PRECONDITIONS` (D9): reads first, then one transaction with replay, preconditions, the insert, and `promotion-started` through the new `PlanService.recordPromotionEvent` (C3, C6). Verify with tests:
+- [x] 5.1 Implement `PromotionService.preview` and `promote` with `PROMOTE_PRECONDITIONS` (D9): reads first, then one transaction with replay, preconditions, the insert, and `promotion-started` through the new `PlanService.recordPromotionEvent` (C3, C6). Verify with tests:
   - each of the eight entries refuses by name and writes nothing, and every failing entry is listed;
   - a replay returns the same promotion, and a different `branch` or `fromSha` under the same id is refused naming the field;
   - two same-key Promotes that both passed the reads leave one promotion, through `UNIQUE (plan_id, command_id)`;
   - an agent caller is refused;
   - the preview lists the standing, the pinned head, the carried candidates, and outside commits;
   - a completed or cancelled plan can be promoted, and its state is unchanged.
-- [ ] 5.2 Implement `cancel` (D9), recording `promotion-cancelled` through `recordPromotionEvent` with the compared payload `promotionId` and `reason`. Verify with tests:
+- [x] 5.2 Implement `cancel` (D9), recording `promotion-cancelled` through `recordPromotionEvent` with the compared payload `promotionId` and `reason`. Verify with tests:
   - while CI runs, the promotion finishes as cancelled with the reason, its pull request is closed, and its branch is kept;
   - during a merge that completes, it finishes as merged, the fast-forward runs, and the note says the cancellation came too late;
   - after the merge is recorded, Cancel is refused naming the merge;
@@ -78,48 +80,49 @@ Implement after `plan-execution` has landed on master, together with what it bui
 
 ## 6. Promotion steps
 
-- [ ] 6.1 Implement the pure `planPromotionSteps` (D10). Verify with unit tests for every transition:
+- [x] 6.1 Implement the pure `planPromotionSteps` (D10). Verify with unit tests for every transition:
   - it waits for the slot, naming the holder;
   - a conflict, or GitHub's 422, fails as `promotion-conflict` with the files;
   - a head failing the clean-merge check fails as `effect-failed`;
   - a target that moved goes back to the up-to-date step, and the third move fails as `target-moved`;
   - CI outcomes map to `ci-failed`, `ci-missing`, and `ci-timeout`, with the flaky rule.
-- [ ] 6.2 Implement the promotion effects and their inspectors: `create-promotion-branch`, `open-pr`, `update-branch`, `rerun`, `merge`, `fast-forward`, and `close-pr`. Verify with adapter tests against a bare remote and a stub `gh`:
+- [x] 6.2 Implement the promotion effects and their inspectors: `create-promotion-branch`, `open-pr`, `update-branch`, `rerun`, `merge`, `fast-forward`, and `close-pr`. Verify with adapter tests against a bare remote and a stub `gh`:
   - a restart after the merge was requested finds it merged and records the promotion without merging again;
   - three failures to reach GitHub while opening the pull request fail as `effect-failed`;
   - a `close-pr` that fails leaves the outcome and notes that the pull request is still open.
-- [ ] 6.3 Implement the merge record and the integration fast-forward (D10 steps 7–10). Verify with tests:
+- [x] 6.3 Implement the merge record and the integration fast-forward (D10 steps 7–10). Verify with tests:
   - a squash team still merges with a merge commit, and the default branch contains each landed candidate's commit;
   - `tree_verified` is 1 normally, and 0 when the target moves between the re-read and the merge;
   - the integration branch moves to P, and the next change is provisioned from P;
   - an integration branch moved during the promotion is left as it is, with the promotion merged and its note saying why;
   - `promotion-finished` is written once under `promo:<id>:finish`.
-- [ ] 6.4 Share the landing slot with `holder_kind = 'promotion'` and the promotion's id as `holder_id`, and give `executionStore`'s orphan clearing the promotion liveness check (D10 step 3). Document promotion in an AGENTS.md bullet. That bullet is the docs for groups 5 and 6. Verify with tests and by reading the bullet against D9–D10. The tests:
+- [x] 6.4 Share the landing slot with `holder_kind = 'promotion'` and the promotion's id as `holder_id`, and give `executionStore`'s orphan clearing the promotion liveness check (D10 step 3). Document promotion in an AGENTS.md bullet. That bullet is the docs for groups 5 and 6. Verify with tests and by reading the bullet against D9–D10. The tests:
   - another plan's direct change waits, showing the promotion;
   - a promotion waits for a change holding the slot, showing that change;
   - a promotion holder whose promotion finished, has a recorded merge, or is missing is cleared and logged at startup and when the slot is found taken, while a running promotion's holder stays.
 
 ## 7. Agent surface and protocol
 
-- [ ] 7.1 Add `integration` to `plan_get`, and name the integration branch as the base in the execution-task instruction and plan note (D12). Add `plan_get`'s `integration` field and the base-branch instruction to the integration bullet (4.5). Verify with tool tests: the result lists the branch, head, candidates, and promotions, and the tool list has no promote or cancel tool.
-- [ ] 7.2 Add `team-plan-promotion-preview`, `team-plan-promote`, and `team-plan-promotion-cancel` to the shared types and `CHAT_CONNECTION_TYPES`, wire them in `promotionConnections.ts`, and push `team-plan-detail.integration` after every write (D13), naming the three messages in the promotion bullet (6.4). Verify with connection tests: each type routes, refusals come back in `team-plan-result`, and a candidate write pushes the detail.
+- [x] 7.1 Add `integration` to `plan_get`, and name the integration branch as the base in the execution-task instruction and plan note (D12). Add `plan_get`'s `integration` field and the base-branch instruction to the integration bullet (4.5). Verify with tool tests: the result lists the branch, head, candidates, and promotions, and the tool list has no promote or cancel tool. (Verified: `integrationAgentSurface.test.ts` — plan_get lists branch/head/candidates/promotions, no promote/cancel/integration-write tool, instructions and plan note; `integrationLanding.integration.test.ts` (a) checks the dispatched instruction names the base, (e) that direct names none.)
+- [x] 7.2 Add `team-plan-promotion-preview`, `team-plan-promote`, and `team-plan-promotion-cancel` to the shared types and `CHAT_CONNECTION_TYPES`, wire them in `promotionConnections.ts`, and push `team-plan-detail.integration` after every write (D13), naming the three messages in the promotion bullet (6.4). Verify with connection tests: each type routes, refusals come back in `team-plan-result`, and a candidate write pushes the detail. — Verified: `src/server/__tests__/promotionConnections.test.ts` (router listing, preview/Promote/Cancel answers and replays, refusals with every failing entry and no write, unknown path and other team refused with no data, candidate and promotion writes push `integration`; dropping the route or a store notice fails it).
 
 ## 8. Client
 
-- [ ] 8.1 Add integration views and per-dialog command ids to `teamPlanStore`: Promote is minted at open and again when `fromSha` changes, and Cancel has its own (D13). Verify with store tests, and by grepping that every applying method has a dispatch caller.
-- [ ] 8.2 Build `PlanIntegrationPanel.tsx`, `PlanPromoteDialog.tsx`, and `PlanPromotionRow.tsx`, plus progress's promoted marks (D11, D13), and describe the panel, the dialog, and the marks in the promotion bullet (6.4). Verify with component tests:
+- [x] 8.1 Add integration views and per-dialog command ids to `teamPlanStore`: Promote is minted at open and again when `fromSha` changes, and Cancel has its own (D13). Verify with store tests, and by grepping that every applying method has a dispatch caller. — Verified: `src/client/__tests__/teamPlanPromotionStore.test.ts` (detail integration, the preview slot, Promote minted at open and re-minted on a changed `fromSha`, Cancel separate, a reconnect, and the dispatch-caller grep).
+- [x] 8.2 Build `PlanIntegrationPanel.tsx`, `PlanPromoteDialog.tsx`, and `PlanPromotionRow.tsx`, plus progress's promoted marks (D11, D13), and describe the panel, the dialog, and the marks in the promotion bullet (6.4). Verify with component tests:
   - the chain is newest first, with the failed candidate kept beside its replacement and outside commits flagged;
   - Promote is offered only while something is left to promote and nothing of the plan runs;
   - the dialog lists the carried changes, flags an outside commit, and names the pinned head;
   - a `no-execution` refusal shows inline;
   - progress marks two of three landed changes as promoted;
   - every control disables while disconnected.
-- [ ] 8.3 Add a browser walkthrough `tests/e2e/plan-integration.spec.ts` with the fixture adapter, named in `.github/workflows/ci.yml`. Verify by running it alone on a spare `E2E_PORT` after `bun run build`, then checking that `curl http://localhost:4040/` still answers.
+  - Verified: `src/client/__tests__/planIntegrationUi.test.tsx` (the six clauses plus the promotion row's CI flaky marks and Cancel reason; dropping the running-execution guard or the promoted mark fails it) and `integrationAgentSurface.test.ts` (the promotion's CI view).
+- [x] 8.3 Add a browser walkthrough `tests/e2e/plan-integration.spec.ts` with the fixture adapter, named in `.github/workflows/ci.yml`. Verify by running it alone on a spare `E2E_PORT` after `bun run build`, then checking that `curl http://localhost:4040/` still answers. — Verified: `tests/e2e/plan-integration.spec.ts` › `a change lands on the integration branch and Promote merges it into master` (Start creates the branch on the fixture's bare origin, the round lands as a candidate while master stays, Promote pins the head and merges with a two-parent merge commit, the candidate reads promoted), on the fixture adapters of L2; passed alone in a disposable checkout after `bun run build` with `E2E_PORT=4189` (as did `tests/e2e/plan-execution.spec.ts`, 2/2), and `curl http://localhost:4040/` answered 200. Named in the CI fixture step; `.github/workflows/ci.yml` parses with `Bun.YAML.parse`, its spec set being master's plus this one.
 
 ## 9. Integration checks
 
-- [ ] 9.1 Add an integration test with a bare remote and a stub `gh`: two changes landing on the integration branch, a promotion over a default branch that moves once, and a restart in the middle of a fast-forward. It needs no docs. Verify that it passes.
-- [ ] 9.2 Run `bun run lint && bun run typecheck && bun run test` and `openspec validate integration-candidates --strict`. Verify that all pass.
+- [x] 9.1 Add an integration test with a bare remote and a stub `gh`: two changes landing on the integration branch, a promotion over a default branch that moves once, and a restart in the middle of a fast-forward. It needs no docs. Verify that it passes. — Verified: `src/server/__tests__/promotion.integration.test.ts` (a real `ChatSessionManager`, a bare origin, and the stub `gh` from `planExecutionBenchStubs.ts`; two landings then a merge-commit promotion moving the integration branch to its verified head, a target moving once, a restart mid fast-forward finishing with one `promotion-finished`, Cancel during CI closing the pull request and keeping the branch, and direct mode unchanged), 5/5. It found that a promotion pass stopped after one effect round, so each step waited for the 60 s timer; `PromotionRunner.pass` now loops up to `PASS_BUDGET` rounds like the executions' passes (reverting the loop times the bench out at `open-pr`).
+- [x] 9.2 Run `bun run lint && bun run typecheck && bun run test` and `openspec validate integration-candidates --strict`. Verify that all pass. — Verified at the merge of origin/master (ab04d109): the pre-commit hook ran lint (5 warnings, equal to master 9bf88c56's 5), typecheck, and the unit suite (31 batches, 0 failures); `openspec validate integration-candidates --strict` is valid. A mutation table over the runner and EffectQueue wiring, each promotion effect kind, the slot holder and liveness, every `PROMOTE_PRECONDITIONS` entry, the three protocol types, and the strict startup reads turns a named test red for every mutant.
 
 ## Workflow follow-up
 

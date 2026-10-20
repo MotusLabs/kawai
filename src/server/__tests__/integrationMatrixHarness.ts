@@ -31,6 +31,8 @@ export interface RefScript {
 export interface IntegrationBench {
   store: IntegrationStore
   refs: RefScript
+  /** The GitHub ref API on the bare origin. */
+  adapters: IntegrationAdapters
   mechanisms: LandingMechanisms
   makeExecutor: (overrides?: Partial<ExecutorDeps>) => ExecutionExecutor
   executor: ExecutionExecutor
@@ -72,7 +74,7 @@ export function createIntegrationBench(h: MatrixBench): IntegrationBench {
   })
   // `tick` drives whichever executor the bench holds now (a test may restart it).
   const bench: IntegrationBench = {
-    store, refs, mechanisms, makeExecutor, executor: makeExecutor(),
+    store, refs, adapters, mechanisms, makeExecutor, executor: makeExecutor(),
     tick: async (target?: ExecutionExecutor) => {
       const executor = target ?? bench.executor
       executor.wake(h.matrix.world.team.teamId)

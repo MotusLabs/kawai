@@ -31,11 +31,14 @@ export class PlanRefusal extends Error {
 /**
  * The compared payload: the command name first, then its own fields (D7).
  * The execution names (plan-execution D3) belong to the human execution
- * commands and the system completion, all replayed the same way.
+ * commands and the system completion, and the promotion names
+ * (integration-candidates D9, D10) to Promote, Cancel, and Kawai's finish,
+ * all replayed the same way.
  */
 export type CommandPayload = {
   command: 'approve' | 'withdraw' | 'close' | 'reopen'
     | 'execution-start' | 'execution-stop' | 'change-retry' | 'complete-by-system'
+    | 'promotion-start' | 'promotion-cancel' | 'promotion-finish'
 } & Record<string, unknown>
 
 /** The first field whose value differs between a recorded payload and a resend; null when they match. */

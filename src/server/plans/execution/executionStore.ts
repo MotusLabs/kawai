@@ -20,7 +20,7 @@ import {
   changeHolderId, mapAttempt, mapChange, mapExecution, mapLanding, mapRound, mapSlot,
   type AttemptRow, type ChangeRow, type ExecutionRow, type LandingRow, type RoundRow, type SlotRow,
 } from './executionRows'
-import { mapConstraint, patchAssignments, type ChangeGuard, type ChangePatch, type NewExecution } from './executionPatch'
+import { ExecutionConflict, mapConstraint, patchAssignments, type ChangeGuard, type ChangePatch, type NewExecution } from './executionPatch'
 import { ExecutionEffectStore } from './executionEffectStore'
 
 // The write vocabulary lives in `executionPatch.ts` and the effect rows in
@@ -36,6 +36,7 @@ export type SlotHolderCheck = (holderId: string) => boolean
 
 export class ExecutionStore extends ExecutionEffectStore {
   private readonly holderChecks = new Map<string, SlotHolderCheck>()
+  private readonly holderLabels = new Map<string, (holderId: string) => string>()
   private readonly listeners = new Set<(teamId: string) => void>()
 
   /** A committed execution write (D17): the team's plan views re-push. */
@@ -49,9 +50,17 @@ export class ExecutionStore extends ExecutionEffectStore {
   }
 
   /** Register a mechanism's slot holder kind (X6); `change` is built in. */
-  registerHolderKind(kind: string, check: SlotHolderCheck): void {
+  registerHolderKind(kind: string, check: SlotHolderCheck, label?: (holderId: string) => string): void {
     if (kind === 'change') throw new Error('the change holder kind is built in')
     this.holderChecks.set(kind, check)
+    if (label) this.holderLabels.set(kind, label)
+  }
+
+  /** Who holds the team's slot, as a waiting change shows it: a change's id, or the kind's own label (a promotion's branch). */
+  slotHolderLabel(teamId: string): string | null {
+    const slot = this.slot(teamId)
+    if (slot === null) return null
+    return this.holderLabels.get(slot.holderKind)?.(slot.holderId) ?? slot.holderId
   }
 
   // --- executions ---
@@ -205,9 +214,9 @@ export class ExecutionStore extends ExecutionEffectStore {
     return row ? mapSlot(row) : null
   }
 
-  private takeSlot(teamId: string, holderId: string, at: string): void {
-    const insert = () => this.db.prepare("INSERT INTO plan_landing_slots (team_id, holder_kind, holder_id, since) VALUES (?, 'change', ?, ?)")
-      .run(teamId, holderId, at)
+  private takeSlot(teamId: string, holderId: string, at: string, kind = 'change'): void {
+    const insert = () => this.db.prepare('INSERT INTO plan_landing_slots (team_id, holder_kind, holder_id, since) VALUES (?, ?, ?, ?)')
+      .run(teamId, kind, holderId, at)
     try {
       insert()
     } catch (error) {
@@ -217,8 +226,31 @@ export class ExecutionStore extends ExecutionEffectStore {
     }
   }
 
-  private releaseSlot(teamId: string, holderId: string): void {
-    this.db.prepare("DELETE FROM plan_landing_slots WHERE team_id = ? AND holder_kind = 'change' AND holder_id = ?").run(teamId, holderId)
+  private releaseSlot(teamId: string, holderId: string, kind = 'change'): void {
+    this.db.prepare('DELETE FROM plan_landing_slots WHERE team_id = ? AND holder_kind = ? AND holder_id = ?').run(teamId, kind, holderId)
+  }
+
+  /**
+   * A registered holder kind takes the team's slot (integration-candidates
+   * D10 step 3): true when it now holds it (or already did), false while a
+   * live holder keeps it — an orphan is cleared first, as for a change.
+   */
+  takeSlotFor(teamId: string, kind: string, holderId: string): boolean {
+    if (!this.holderChecks.has(kind)) throw new Error(`unregistered slot holder kind ${kind}`)
+    const held = this.slot(teamId)
+    if (held !== null && held.holderKind === kind && held.holderId === holderId) return true
+    try {
+      this.takeSlot(teamId, holderId, this.iso(), kind)
+      return true
+    } catch (error) {
+      if (error instanceof ExecutionConflict && error.kind === 'slot-taken') return false
+      throw error
+    }
+  }
+
+  /** A registered holder kind gives the slot back; a slot it does not hold is untouched. */
+  releaseSlotFor(teamId: string, kind: string, holderId: string): void {
+    this.releaseSlot(teamId, holderId, kind)
   }
 
   /** Whether a slot row's holder still needs it; an unknown mechanism kind is kept (no check to judge it by). */

@@ -80,7 +80,7 @@ test('a wake never ticks inside the caller\'s synchronous work', async () => {
 
 test('startup recovers and never wakes: no tick and no timer until the runtime wakes (N6)', async () => {
   let ticks = 0
-  const store = { runningForTeam: () => [{ id: 'e1' }], markRunningEffectsUnknown: () => [], execution: () => null }
+  const store = { runningForTeam: () => [{ id: 'e1' }], markRunningEffectsUnknown: () => [], dueUnknownEffects: () => [], execution: () => null }
   executor = new ExecutionExecutor({ store, tickMs: 60_000 } as unknown as ExecutorDeps)
   ;(executor as unknown as { tick: (teamId: string) => Promise<void> }).tick = async () => { ticks += 1 }
   await executor.startup()

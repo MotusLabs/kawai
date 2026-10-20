@@ -30,12 +30,16 @@ import { ExecutionExecutor } from './execution/executor'
 import { ExecutionRuntime, ExecutionWakes } from './execution/executionRuntime'
 import { provisionAdapter } from './execution/executionProvision'
 import { roundAdapters } from './execution/executionRounds'
-import { fixtureLandingAdapters, fixtureProbe, fixtureRoundAdapters, FIXTURE_FLOOR } from './execution/fixtureAdapters'
+import { fixtureLandingAdapters, fixtureRoundAdapters, FIXTURE_FLOOR } from './execution/fixtureAdapters'
+import { fixtureInspectorReads, fixtureMechanisms, fixturePromotionAdapters, fixturePromotionProbe, fixturePromotionReads } from './landing/integration/fixtureIntegrationAdapters'
 import { chatFixtureEnabled } from '../chat/developmentFixture'
 import type { LandingMechanisms } from './landing/landingMechanisms'
 import { directMechanism } from './landing/directMechanism'
 import { IntegrationStore } from './landing/integration/integrationStore'
+import { integrationViews } from './landing/integration/integrationView'
 import { integrationMechanism } from './landing/integration/integrationMechanism'
+import { composePromotions } from './landing/integration/promotionComposition'
+import type { PromotionService } from './landing/integration/PromotionService'
 import type { MemberRelease } from '../team/memberRelease'
 import type { TaskService } from '../team/TaskService'
 import type { TaskResultService } from '../team/TaskResultService'
@@ -46,6 +50,8 @@ import { DecisionService } from './decisions/DecisionService'
 import { DecisionStore } from './decisions/decisionStore'
 import { readPlanSupervisionDetail, type SupervisionDetailReads } from './supervision/planSupervisionDetail'
 import type { SupervisionRuntime } from './supervision/supervisionRead'
+import { composeSupervisionMonitor, type MonitorCompositionOptions } from './supervision/monitorComposition'
+import type { SupervisionMonitor } from './supervision/SupervisionMonitor'
 import type { TaskStore } from '../team/taskStore'
 import type { PlanExecutionSettings } from '../team/teamCaps'
 
@@ -125,6 +131,10 @@ export interface PlanServicesOptions {
   }
   /** Test seam: replace the landing probe (defaults to the real one; the fixture switch its own). */
   executionProbe?: (input: import('./landing/landingProbe').ProbeInput, options?: import('./landing/ghCommand').GhCommandOptions) => Promise<import('./landing/landingProbe').ProbeResult>
+  /** Test seam: the supervision monitor's clock, timer, debounce, and log. */
+  monitor?: MonitorCompositionOptions['monitor']
+  /** Test seam: the Promote reads (origin heads, containment, the merge-commit setting). */
+  promotionReads?: import('./landing/integration/PromotionService').PromotionReads
   /** Test seam: the gh surface every composed gh call uses (a stub gh on a private PATH). */
   executionGhOptions?: import('./landing/ghCommand').GhCommandOptions
   /** One adapter per manager by default (one 4-slot CLI pool per process). */
@@ -173,8 +183,14 @@ export function composePlanServices(options: PlanServicesOptions): {
   executionStore: ExecutionStore
   /** The execution runtime (boot, wakes, stop); null without team services. */
   runtime: ExecutionRuntime | null
+  /** Promote, Cancel, and the preview (integration-candidates D9). */
+  promotions: PromotionService
+  /** The integration branches, candidates, promotions, and promotion effects; its writes re-push plan details (D13). */
+  integrationStore: IntegrationStore
   /** The decision service (plan-supervision D4–D7); null without team services. */
   decisions: DecisionService | null
+  /** The supervision monitor (plan-supervision D11); null without team services' supervision runtime. Started by its owner. */
+  monitor: SupervisionMonitor | null
 } {
   const adapter = options.adapter ?? new OpenspecAdapter()
   const validationStore = new ValidationStore(options.db)
@@ -196,6 +212,7 @@ export function composePlanServices(options: PlanServicesOptions): {
   // late-bound — the execution service needs this PlanService — and is set
   // before this function returns, so no close can find it unbound.
   let executions: ExecutionService | null = null
+  const integrationStore = new IntegrationStore(options.db)
   // The execution's unresolved acceptance conditions (V2): landing and supervision read the same ones.
   const conditionsOf = (executionId: string): string[] => {
     const execution = executionStore.execution(executionId)
@@ -222,6 +239,7 @@ export function composePlanServices(options: PlanServicesOptions): {
       return execution ? { planId: execution.planId, revision: execution.revision } : null
     },
     executionsOf: planId => executionViews(executionStore, planId, viewReads),
+    integrationOf: planId => integrationViews(integrationStore, planId),
     supervisionOf: (teamId, planId) => (supervisionReads === null ? null : readPlanSupervisionDetail(supervisionReads, teamId, planId, new Date())),
     onPlanClosed: async planId => {
       const plan = options.plans.get(planId)
@@ -236,15 +254,13 @@ export function composePlanServices(options: PlanServicesOptions): {
   const team = options.executionTeam
   // The registered landing mechanisms (integration-candidates D1): built once here and
   // passed to the Start service, the executor, and the provision adapter (I1).
-  // Under the development fixture only direct registers: the integration
-  // mechanism's ref writes have no fixture adapter yet (PR B's walkthrough
-  // adds one), so Start refuses an integration plan as an unsupported mode
-  // rather than calling the real gh.
+  // Under the development fixture both probe through the fixture probe and
+  // the integration mechanism writes refs on the fixture's bare origin
+  // (`fixtureIntegrationAdapters.ts`), so nothing calls the real gh.
   const fixture = chatFixtureEnabled
-  const integrationStore = new IntegrationStore(options.db)
-  const mechanisms: LandingMechanisms = new Map([
+  const mechanisms: LandingMechanisms = fixture ? fixtureMechanisms(integrationStore) : new Map([
     [directMechanism.mode, directMechanism],
-    ...(fixture ? [] : [['integration-branch', integrationMechanism(integrationStore)] as const]),
+    ['integration-branch', integrationMechanism(integrationStore)],
   ])
   executions = new ExecutionService({
     store: executionStore,
@@ -272,8 +288,18 @@ export function composePlanServices(options: PlanServicesOptions): {
       wake: (teamId: string) => runtime?.command(teamId),
     } : {}),
     ...(options.executionGhOptions ? { ghOptions: options.executionGhOptions } : {}),
-    ...(options.executionProbe ? { probe: options.executionProbe } : fixture ? { probe: fixtureProbe } : {}),
+    ...(options.executionProbe ? { probe: options.executionProbe } : {}),
     ...(options.homeDir ? { homeDir: options.homeDir } : {}),
+  })
+  // Promotions (D9, D10): the slot holder kind, the service, and the runner the executor ticks.
+  const promotions = composePromotions({
+    integration: integrationStore, executions: executionStore, plans, plansStore: options.plans,
+    settings: executionSettings(options.caps), identityOf: teamId => identityOrBare(team, teamId),
+    wake: teamId => runtime?.command(teamId),
+    ...(options.executionGhOptions ? { ghOptions: options.executionGhOptions } : {}),
+    ...(options.executionProbe ? { probe: options.executionProbe } : fixture ? { probe: fixturePromotionProbe } : {}),
+    ...(options.promotionReads ? { reads: options.promotionReads } : fixture ? { reads: fixturePromotionReads() } : {}),
+    ...(fixture ? { adapters: fixturePromotionAdapters(), inspectorReads: fixtureInspectorReads() } : {}),
   })
   if (team !== undefined) {
     const roundAdaptersUsed = fixture ? fixtureRoundAdapters() : roundAdapters
@@ -302,11 +328,14 @@ export function composePlanServices(options: PlanServicesOptions): {
       roundAdapters: roundAdaptersUsed,
       ...(fixture ? { landingAdapters: fixtureLandingAdapters(), tickMs: 1_000 } : {}),
       ...(options.executionGhOptions ? { ghOptions: options.executionGhOptions } : {}),
+      promotions: promotions.runner,
     })
     runtime = new ExecutionRuntime({
       executor, store: executionStore, ownership: core.ownership, wakes: core.wakes,
       taskStore: team.taskStore, mailbox: team.mailbox, records: team.records, teamOf: team.teamOfSession,
       adapters: { fixture, rounds: roundAdaptersUsed },
+      promotionTeams: () => integrationStore.promotionTeams(),
+      promotions: promotions.runner,
     })
   }
   // Decisions write their cards, decisions, and mail in one transaction, and
@@ -317,11 +346,20 @@ export function composePlanServices(options: PlanServicesOptions): {
     tasks: team.tasks, taskStore: team.taskStore, assignments: team.assignments, mailbox: team.teamMailbox, getSession: options.getSession,
     ...(options.homeDir ? { homeDir: options.homeDir } : {}), onChange: planId => options.plans.announce(planId),
   }) : null
+  let monitor: SupervisionMonitor | null = null
   if (team?.supervision) {
-    supervisionReads = {
-      db: options.db, mail: team.mailbox, executions: executionStore, plans: options.plans, decisions: decisionStore, integration: integrationStore,
-      conditionsOf, runtime: team.supervision, tasks: team.taskStore, impact: (teamId, planId) => options.impact.planImpact(teamId, planId),
-    }
+    // The detail and the monitor's sweeps read one loader with the monitor's own `waitEndedAt` (D11).
+    const composed = composeSupervisionMonitor({
+      db: options.db, plans: options.plans, executions: executionStore, decisions: decisionStore, mailbox: team.mailbox,
+      tasks: team.tasks, taskStore: team.taskStore, assignments: team.assignments, integration: integrationStore, identityOf: team.identityOf,
+      reads: {
+        db: options.db, mail: team.mailbox, executions: executionStore, plans: options.plans, decisions: decisionStore, integration: integrationStore,
+        conditionsOf, runtime: team.supervision, tasks: team.taskStore, impact: (teamId, planId) => options.impact.planImpact(teamId, planId),
+      },
+      ...(options.monitor ? { monitor: options.monitor } : {}),
+    })
+    monitor = composed.monitor
+    supervisionReads = composed.reads
     // A fix task carries no plan link, so its status changes re-push the plan through its fix row (D15).
     team.taskStore.subscribe(task => {
       const fix = decisionStore.fixTask(task.teamId, task.id)
@@ -330,7 +368,7 @@ export function composePlanServices(options: PlanServicesOptions): {
   }
   return {
     validation, validationStore, plans, validationDetail: new ValidationDetailCache(validation), adapter, executions, executionStore,
-    runtime, decisions,
+    runtime, decisions, monitor, promotions: promotions.service, integrationStore,
   }
 }
 

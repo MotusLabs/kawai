@@ -38,7 +38,7 @@ function waitingOf(store: ExecutionStore, reads: ExecutionViewReads, row: { exec
     const unlanded = reads.dependsOn(execution.planId, execution.revision, row.change).filter(change => states.get(change) !== 'landed')
     return unlanded.length > 0 ? { kind: 'dependency', changes: unlanded } : { kind: 'parallel-limit', limit: execution.maxParallel }
   }
-  if (row.step === 'awaiting-slot') return { kind: 'slot', holder: store.slot(execution.teamId)?.holderId ?? null }
+  if (row.step === 'awaiting-slot') return { kind: 'slot', holder: store.slotHolderLabel(execution.teamId) }
   if (row.step === 'releasing') return { kind: 'release', member: row.stopDetail?.session ?? '', reason: row.stopDetail?.message ?? 'a member is not ready to release' }
   if (row.step === 'reviewing') return { kind: 'review', claimant: null }
   if (row.state === 'gating' && row.step === null) {

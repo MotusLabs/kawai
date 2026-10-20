@@ -125,6 +125,7 @@ export async function dispatchImplementAttempt(deps: DispatchDeps, input: { exec
       guidance: entry.guidance,
       taskId: taskId!,
       manifestHash: manifestHash!,
+      integrationBranch: integrationBranchOf(execution),
     }),
     requestKey,
     ...(roleProfiles.length > 0 ? { allowedProfiles: roleProfiles } : {}),
@@ -210,6 +211,7 @@ export async function dispatchFixAttempt(deps: DispatchDeps, input: {
     guidance: entry.guidance,
     taskId,
     manifestHash: manifestHash!,
+    integrationBranch: integrationBranchOf(execution),
     failingChecks: input.failingChecks,
     findings: input.findingsTexts,
     fixRounds: input.fixRounds,
@@ -270,4 +272,9 @@ export async function redispatchStage(deps: DispatchDeps, row: { executionId: st
   }
   const fresh = deps.executions.change(row.executionId, row.change)
   if (fresh !== null && fresh.step === 'redispatch') deps.executions.transition(row.executionId, row.change, fresh, { step: null })
+}
+
+/** The integration branch an execution lands on (D12), named in its instructions; null under direct landing. */
+function integrationBranchOf(execution: { landingMode: string; baseBranch: string }): string | null {
+  return execution.landingMode === 'integration-branch' ? execution.baseBranch : null
 }

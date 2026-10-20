@@ -13,7 +13,7 @@ import type { PlanService } from './PlanService'
 export const PLAN_TOOL_NAMES = ['plan_list', 'plan_get', 'plan_create', 'plan_save_draft', 'plan_submit_for_review'] as const
 
 /** Every name an agent might reach for that must NOT exist (D11). */
-export const PLAN_FORBIDDEN_TOOL_NAMES = ['plan_approve', 'plan_withdraw', 'plan_close', 'plan_reopen', 'plan_complete', 'plan_cancel', 'plan_discard_draft'] as const
+export const PLAN_FORBIDDEN_TOOL_NAMES = ['plan_approve', 'plan_withdraw', 'plan_close', 'plan_reopen', 'plan_complete', 'plan_cancel', 'plan_discard_draft', 'plan_promote', 'plan_promotion_cancel', 'plan_cancel_promotion', 'integration_create', 'integration_fast_forward', 'integration_promote'] as const
 
 export const planSchemas = {
   plan_list: z.object({ status: z.string().optional() }),
@@ -32,7 +32,7 @@ export const planSchemas = {
 
 export const planDescriptions: Record<(typeof PLAN_TOOL_NAMES)[number], string> = {
   plan_list: "List this team's plans with lifecycle (open/completed/cancelled), displayed state, approved revision, strategy pin, and linked-task count. Optional status filters by lifecycle or state (draft, ready, in-progress, completed, cancelled).",
-  plan_get: 'Read one plan in full: the record, every revision with content, hash, and strategy pin, the drafts, the event history, linked tasks, and per-change progress of the approved revision.',
+  plan_get: 'Read one plan in full: the record, every revision with content, hash, and strategy pin, the drafts, the event history, linked tasks, per-change progress of the approved revision, its executions, and its integration branches with their candidates and promotions.',
   plan_create: 'Create a plan (only if your group sets canCreatePlans: true): a title and optional template content (goal, success criteria, non-goals, approach, alignment, changes, acceptance, checks, landing, roles, review group). Your draft holds the content; nothing is approved.',
   plan_save_draft: 'Save a plan draft (template content; structural faults are refused with every violation). Optional content.leadGroup names the plan\'s Lead role, one of its roles; unset, questions and fixes go to the owner. A change\'s optional fixes lists the fix or correction task ids (task-<uuid>, no repeats) it answers; one task may span several changes, and an id that is no fix or correction task of the plan only warns. Pass expected_draft_hash (and optionally expected_base_revision) from your last read: a mismatch writes nothing and returns the stored draft — reconcile, do not overwrite. Never changes an approved revision.',
   plan_submit_for_review: 'Submit your draft (or draft_id) as the next numbered revision in review, pinned to the team\'s current approved strategy revision. Only the human approves, withdraws, completes, cancels, or reopens a plan — no tool of yours can.',
