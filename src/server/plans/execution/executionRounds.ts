@@ -83,11 +83,15 @@ export async function applyRoundStage(deps: RoundDeps, changeRow: { executionId:
     if (attempt === undefined) return
     const commit = deps.tasks.store.results.get(stage.resultId)?.commit
     if (commit === null || commit === undefined) return
+    // A7: the superseded round's live push, PR, and rerun rows are
+    // cancelled — they never run after the newer result nor decide anything.
+    const prior = store.rounds(changeRow.executionId, changeRow.change).at(-1) ?? null
     store.insertRound({
       executionId: changeRow.executionId, change: changeRow.change,
       attemptId: attempt.id, resultId: stage.resultId, commitSha: commit,
       fixRound: attempt.kind !== 'implement',
     })
+    if (prior !== null && prior.outcome === null) store.cancelLiveRoundEffects(changeRow.executionId, prior.id)
     return
   }
 
@@ -151,6 +155,8 @@ export async function dispatchRevisionAttempt(deps: RoundDeps, changeRow: { exec
   const execution = store.execution(changeRow.executionId)
   if (change === null || execution === null) return false
   store.supersedeRound(round.id)
+  // A7: the superseded round's live round-effect rows never run after it.
+  store.cancelLiveRoundEffects(changeRow.executionId, round.id)
   store.transition(changeRow.executionId, changeRow.change, change, { state: 'implementing', step: null })
   const group = deps.plans.revision(execution.planId, execution.revision)?.content.changes.find(entry => entry.change === changeRow.change)?.group
   if (group === null || group === undefined) return true

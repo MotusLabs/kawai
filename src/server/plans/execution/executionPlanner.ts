@@ -167,6 +167,12 @@ export function planSteps(snapshot: ExecutionSnapshot, _now: string): PlanSteps 
           && ((change.step === 'merging' && (landingEffect.kind === 'merge' || landingEffect.kind === 'fast-forward')) || (change.step === 'updating' && landingEffect.kind === 'update-branch'))) {
           steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'landing-outcome', roundId: null, resultId: null, effectId: landingEffect.id })
         }
+        if (landingEffect !== null && landingEffect.state === 'failed'
+          && (landingEffect.outcome as { stop?: unknown } | null)?.stop !== undefined) {
+          // An inspection's stop verdict on a settling change (pr-closed, a
+          // foreign branch): the same stop a run's failure would have written.
+          steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'landing-outcome', roundId: null, resultId: null, effectId: landingEffect.id })
+        }
         continue
       }
       if (resumedWait) {

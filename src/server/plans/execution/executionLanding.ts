@@ -131,7 +131,12 @@ export async function applyLanding(deps: LandingDeps, adapters: LandingAdapters,
       return dispatchUpdateAttempt(deps, changeRow, round, { kind: 'conflict', files: prediction.conflicts, base: base.sha })
     }
     // Clean: the update-branch effect runs, pinned to the reviewed head.
+    // The pre-guard (A1): a live landing-kind row of another identity —
+    // another round or kind — settles first; the step stays and the next
+    // tick re-reads. The same identity is inserted and adopted (A1).
     const fresh = store.change(changeRow.executionId, changeRow.change)!
+    const live = store.liveLandingEffect(changeRow.executionId, changeRow.change)
+    if (live !== null && !(live.kind === 'update-branch' && live.roundId === round.id)) return
     try {
       store.insertEffect({
         executionId: changeRow.executionId, change: changeRow.change, roundId: round.id, kind: 'update-branch',
@@ -153,6 +158,11 @@ export async function applyLanding(deps: LandingDeps, adapters: LandingAdapters,
   if (finish !== undefined) return finish(store.change(changeRow.executionId, changeRow.change)!, { execution, head: head.sha, base: base.sha, cwd: changeRow.worktree ?? deps.team.groupsRoot })
   const fresh = store.change(changeRow.executionId, changeRow.change)!
   if (fresh === null || fresh.step === 'merging') return
+  // The pre-guard (A1): a live landing-kind row of another identity settles
+  // first — the step stays and the next tick re-reads. The same identity is
+  // inserted and adopted (A1).
+  const live = store.liveLandingEffect(changeRow.executionId, changeRow.change)
+  if (live !== null && !(live.kind === 'merge' && live.roundId === round.id)) return
   // The insert lands before the step transition: a refused insert (A1) never
   // flips the step — the live row settles first, and the next tick re-reads.
   try {
@@ -276,6 +286,15 @@ export function mergeAdapter(adapters: LandingAdapters, ghOptions?: GhCommandOpt
       if (!contains.ok || !contains.ancestor) {
         return { ok: true, outcome: { merged: false, baseMoved: true, base: base.sha } }
       }
+      // A8(ii): the pin is the base the clean-merge check saw, carried by
+      // the direct landing's merge command (`base`). A base that moved or
+      // was rewritten past it never merges — the outcome sends the change
+      // back to the up-to-date step, which re-checks and re-pins. A command
+      // without a pin (the promotion's merge, which verifies its target at
+      // its own re-read step) skips this check.
+      if (typeof command.base === 'string' && command.base !== '' && base.sha !== command.base) {
+        return { ok: true, outcome: { merged: false, baseMoved: true, base: base.sha } }
+      }
       // The execution's merge method (D16), snapshotted at Start.
       const method = String(command.method ?? 'merge') as MergeMethod
       const merged = await adapters.prMerge(repo, pr, method, head, ghOptions)
@@ -349,10 +368,14 @@ export async function applyLandingOutcome(deps: LandingDeps, effect: { kind: str
       // The carried round: CI runs on the new head (D13).
       const round = effect.roundId !== null && effect.roundId !== undefined ? store.round(effect.roundId) : null
       if (round !== null) {
+        // A7: an open prior round superseded by the carried one loses its
+        // live round-effect rows with it.
+        const prior = store.rounds(effect.executionId, effect.change).at(-1) ?? null
         store.insertCarriedRound({
           executionId: effect.executionId, change: effect.change, attemptId: round.attemptId,
           resultId: round.resultId, commitSha: view.data.headRefOid, carriedFrom: round.id, ciWindowFrom: deps.now(),
         })
+        if (prior !== null && prior.outcome === null) store.cancelLiveRoundEffects(effect.executionId, prior.id)
         store.transition(effect.executionId, effect.change, fresh, { step: 'up-to-date', passedAt: null })
       }
       return
@@ -396,6 +419,10 @@ export async function afterLanded(deps: LandingDeps, row: ChangeRow, executionId
   const store = deps.executions
   const execution = store.execution(executionId)
   if (execution === null) return
+  // A7: the landing fact is written — a live landing-kind row of the change
+  // (a sibling update-branch, a Retry's re-opened merge) never decides after
+  // it. The settled done merge that landed this change is untouched (O3).
+  store.cancelLiveLandingEffects(executionId, row.change)
   // Kawai accepts the landed change's result (idempotent per result) —
   // unless the human closed the task while the merge ran (D19): Kawai
   // never accepts again nor changes its status.

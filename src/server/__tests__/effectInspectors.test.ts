@@ -131,11 +131,13 @@ describe('the per-kind inspections (D14 table)', () => {
     await expect(inspect('rerun', { repo: 'acme/app', runIds: [11] }, 'r3')).resolves.toMatchObject({ found: 'undecidable' })
   })
 
-  test('update-branch: the PR head is read, moved or not — the clean-merge check sorts it later', async () => {
+  test('update-branch: a moved head is done; an unmoved head is not-done and runs again (row 12)', async () => {
     reads.prView = { '7': { number: 7, url: 'u', state: 'OPEN', headRefOid: 'new-head', mergeCommit: null } }
     await expect(inspect('update-branch', { repo: 'acme/app', pr: 7, head: 'old-head' })).resolves.toEqual({
       found: 'done', outcome: { requested: true, head: expect.any(String), newHead: 'new-head', moved: true, state: 'OPEN' },
     })
+    reads.prView = { '7': { number: 7, url: 'u', state: 'OPEN', headRefOid: 'old-head', mergeCommit: null } }
+    await expect(inspect('update-branch', { repo: 'acme/app', pr: 7, head: 'old-head' })).resolves.toEqual({ found: 'not-done' })
   })
 
   test('merge: a merge completed before the restart records the merge commit; open runs again; closed stops', async () => {

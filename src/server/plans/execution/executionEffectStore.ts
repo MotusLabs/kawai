@@ -138,6 +138,37 @@ export class ExecutionEffectStore {
     this.db.prepare("UPDATE plan_execution_effects SET state = 'cancelled', finished_at = ? WHERE execution_id = ? AND state = 'pending'").run(this.iso(), executionId)
   }
 
+  /** The newest live landing-kind effect of one change, any round (the landing stage's pre-guard). */
+  liveLandingEffect(executionId: string, change: string): EffectRow | null {
+    const row = this.db.prepare(`SELECT * FROM plan_execution_effects
+      WHERE execution_id = ? AND change = ? AND kind IN ('merge', 'update-branch', 'fast-forward')
+        AND state IN ('pending', 'running', 'unknown')
+      ORDER BY created_at DESC, rowid DESC LIMIT 1`).get(executionId, change) as Record<string, unknown> | null
+    return row === null ? null : mapEffect(row)
+  }
+
+  /**
+   * A7: a superseded round's live push, pull-request, and rerun rows are
+   * cancelled, so they never run after a newer result nor decide the
+   * change. Landing kinds are never cancelled here — supersession cannot
+   * run while a landing row is live (the planner's gate), and the verdict
+   * the row carries is what decides. The adapter's later settle is dropped
+   * by the OPEN guard on `setEffectOutcome` (O3); its side effect — a push
+   * that already moved the remote — is unrecorded.
+   */
+  cancelLiveRoundEffects(executionId: string, roundId: string): void {
+    this.db.prepare(`UPDATE plan_execution_effects SET state = 'cancelled', finished_at = ?
+      WHERE execution_id = ? AND round_id = ? AND kind IN ('push', 'open-pr', 'rerun') AND ${OPEN}`)
+      .run(this.iso(), executionId, roundId)
+  }
+
+  /** A landed change's live landing-kind rows are cancelled: the landing fact is written, nothing decides after it. */
+  cancelLiveLandingEffects(executionId: string, change: string): void {
+    this.db.prepare(`UPDATE plan_execution_effects SET state = 'cancelled', finished_at = ?
+      WHERE execution_id = ? AND change = ? AND kind IN ('merge', 'update-branch', 'fast-forward') AND ${OPEN}`)
+      .run(this.iso(), executionId, change)
+  }
+
   /** Startup recovery (D14): a `running` effect's process is gone — it becomes `unknown`, inspected before it repeats. */
   markRunningEffectsUnknown(): EffectRow[] {
     return this.db.transaction(() => {

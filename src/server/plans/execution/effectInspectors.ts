@@ -94,11 +94,15 @@ export async function inspectEffect(effect: EffectRow, reads: InspectorReads): P
         return { found: 'done', outcome: { at: effect.startedAt ?? effect.createdAt, runIds } }
       }
       case 'update-branch': {
-        // PR head moved: done either way — the clean-merge check (D13) sorts
-        // carried rounds from update attempts on the new head. The outcome
-        // keeps the adapter's shape: `head` is the reviewed head it pinned.
+        // PR head moved: done — the clean-merge check (D13) sorts carried
+        // rounds from update attempts on the new head. The outcome keeps the
+        // adapter's shape: `head` is the reviewed head it pinned. An unmoved
+        // head is not-done (row 12): the update has not happened, so it runs
+        // again against the pin — a repeat update-branch call is safe, and a
+        // call GitHub is still completing would have moved the head here.
         const pull = await reads.prView(text('repo'), number('pr'))
-        return { found: 'done', outcome: { requested: true, head: text('head'), newHead: pull.headRefOid, moved: pull.headRefOid !== text('head'), state: pull.state } }
+        if (pull.headRefOid === text('head')) return { found: 'not-done' }
+        return { found: 'done', outcome: { requested: true, head: text('head'), newHead: pull.headRefOid, moved: true, state: pull.state } }
       }
       case 'merge': {
         // PR state and merge commit: a completed merge is the landing fact's input.
