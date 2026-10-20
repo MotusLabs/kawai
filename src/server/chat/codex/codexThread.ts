@@ -3,8 +3,12 @@
 // `approvalPolicy: "on-request"` with `approvalsReviewer: "user"` so every
 // escalation reaches Kawai whatever the home's configuration says, and the
 // prompt append as developerInstructions — the effort mapping for
-// turn/start, and the context reading a token-usage update yields.
+// turn/start, and the context reading a token-usage update yields. The
+// driver's observational side-reports live here too (spawn provenance,
+// compaction facts, an async question's answer), so CodexSessionDriver stays
+// the state machine.
 import type { ChatApprovalPolicy, ChatContextUsage } from '../../../shared/chat'
+import { logger } from '../../logger'
 import type { OutboundAuditSink } from '../../outbound/observer'
 import type { TeamToolSpec } from '../../team/mailboxTools'
 import type { ChatDriverCallbacks, ChatEffort } from '../provider/driver'
@@ -92,4 +96,43 @@ export function codexContextUsage(last: TokenUsageBreakdown, window: number): Ch
     at: new Date().toISOString(),
     thresholdApproximate: true,
   }
+}
+
+/** Agent-start provenance (team-process-metrics D2): one observational report per constructed query; a throw never fails the spawn. */
+export function reportSpawn(
+  options: Pick<CodexSessionDriverOptions, 'sessionId' | 'model' | 'onSpawn'>,
+  input: { cwd: string; instructions: string; effort: ChatEffort | undefined; env: Record<string, string>; resumed: boolean },
+): void {
+  try {
+    options.onSpawn?.({
+      cwd: input.cwd,
+      systemPromptAppend: input.instructions,
+      effort: input.effort ?? null,
+      model: options.model ?? null,
+      env: input.env,
+      resumed: input.resumed,
+    })
+  } catch (error) {
+    logger.warn('chat_spawn_hook_failed', { sessionId: options.sessionId, error: error instanceof Error ? error.message : String(error) })
+  }
+}
+
+/** Compaction facts for process observability (observation/reconciliation); observational like the spawn report. */
+export function reportCompaction(options: Pick<CodexSessionDriverOptions, 'onCompaction'>, itemId: string): void {
+  try {
+    options.onCompaction?.({
+      trigger: 'auto', startedAt: null, endedAt: new Date().toISOString(), preTokens: null, postTokens: null,
+      durationSeconds: null, outcome: 'completed',
+    }, `boundary:${itemId}`)
+  } catch {
+    logger.warn('chat_compaction_observation_failed')
+  }
+}
+
+/** An async question's answer: a text input on the same turn (item/tool/call D6); a dead process surfaces through onExit. */
+export function answerAsyncQuestion(client: CodexClient | null, threadId: string | null, text: string): void {
+  if (!client || !threadId) return
+  client.request('turn/start', { threadId, input: [{ type: 'text', text, text_elements: [] }] }).catch(() => {
+    // The process is ending; nothing to answer.
+  })
 }

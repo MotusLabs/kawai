@@ -28,7 +28,7 @@ import { formatEnvelope } from '../../team/envelope'
 import { activityBody, initialChatActivityState, projectActivity, reduceActivity, type ChatActivityInput } from '../chatActivity'
 import type { BackgroundTaskRecord } from '../chatBackgroundTasks'
 import { codexSpawnEnv } from '../codexProfiles'
-import type { ChatAgentDriver, ChatDriverCallbacks, ChatEffort } from '../provider/driver'
+import type { ChatAgentDriver, ChatDriverCallbacks } from '../provider/driver'
 import { AppServerClient, type AppServerClientOptions, type AppServerExit } from './appServerClient'
 import { auditDeniedCard, auditItem, auditSpawnEnd } from './codexAudit'
 import { dispatchTeamToolCall, teamNamespaceSpec } from './codexTools'
@@ -36,7 +36,7 @@ import type { DynamicToolCallParams } from './protocol/v2/DynamicToolCallParams'
 import type { DynamicToolSpec } from './protocol/v2/DynamicToolSpec'
 import { mapCodexNotification, turnCompletedDrafts, turnUsageBetween, type CodexEventDraft, type CodexOutput } from './codexEvents'
 import { CodexRequests } from './codexRequests'
-import { CLIENT_INFO, codexContextUsage, codexEffort, threadParams, type CodexClient, type CodexSessionDriverOptions } from './codexThread'
+import { answerAsyncQuestion, CLIENT_INFO, codexContextUsage, codexEffort, reportCompaction, reportSpawn, threadParams, type CodexClient, type CodexSessionDriverOptions } from './codexThread'
 import type { ThreadItem } from './protocol/v2/ThreadItem'
 import type { TokenUsageBreakdown } from './protocol/v2/TokenUsageBreakdown'
 import type { Turn } from './protocol/v2/Turn'
@@ -260,7 +260,7 @@ export class CodexSessionDriver implements ChatAgentDriver {
       }
       if (typeof thread.path === 'string' && thread.path) this.options.onTranscriptPath?.(thread.path)
       if (typeof result.model === 'string') this.reportModel(result.model)
-      this.reportSpawn({ instructions, effort, env, resumed })
+      reportSpawn(this.options, { cwd: this.projectPath, instructions, effort, env, resumed })
       return true
     } catch (error) {
       if (this.client !== client) return false
@@ -270,21 +270,6 @@ export class CodexSessionDriver implements ChatAgentDriver {
       this.endActiveTurn()
       client.end()
       return false
-    }
-  }
-
-  private reportSpawn(input: { instructions: string; effort: ChatEffort | undefined; env: Record<string, string>; resumed: boolean }): void {
-    try {
-      this.options.onSpawn?.({
-        cwd: this.projectPath,
-        systemPromptAppend: input.instructions,
-        effort: input.effort ?? null,
-        model: this.options.model ?? null,
-        env: input.env,
-        resumed: input.resumed,
-      })
-    } catch (error) {
-      logger.warn('chat_spawn_hook_failed', { sessionId: this.options.sessionId, error: error instanceof Error ? error.message : String(error) })
     }
   }
 
@@ -346,7 +331,7 @@ export class CodexSessionDriver implements ChatAgentDriver {
       case 'question': {
         if (this.askedItems.has(output.itemId)) return
         this.askedItems.add(output.itemId)
-        this.requests.asyncQuestion(output.questions, text => this.answerAsync(text))
+        this.requests.asyncQuestion(output.questions, text => answerAsyncQuestion(this.client, this.threadId, text))
         return
       }
       case 'compaction':
@@ -375,15 +360,6 @@ export class CodexSessionDriver implements ChatAgentDriver {
     auditItem(phase, item, { sink: this.options.outbound, spawnId: this.spawnId, cwd: this.projectPath })
   }
 
-  /** An async question's answer: input added to the active turn. */
-  private answerAsync(text: string): void {
-    const client = this.client
-    if (!client || !this.threadId) return
-    client.request('turn/start', { threadId: this.threadId, input: [{ type: 'text', text, text_elements: [] }] }).catch(() => {
-      // A dead process surfaces through onExit.
-    })
-  }
-
   private completeTurn(turn: Turn): void {
     if (this.interrupted.delete(turn.id)) return
     const turnId = this.activeTurnId
@@ -407,15 +383,7 @@ export class CodexSessionDriver implements ChatAgentDriver {
   }
 
   private onCompacted(itemId: string): void {
-    try {
-      const now = new Date().toISOString()
-      this.options.onCompaction?.({
-        trigger: 'auto', startedAt: null, endedAt: now, preTokens: null, postTokens: null,
-        durationSeconds: null, outcome: 'completed',
-      }, `boundary:${itemId}`)
-    } catch {
-      logger.warn('chat_compaction_observation_failed')
-    }
+    reportCompaction(this.options, itemId)
     this.emit({ type: 'notice', text: 'Context compacted', kind: 'compacted' })
   }
 
