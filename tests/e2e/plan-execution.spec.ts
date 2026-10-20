@@ -219,7 +219,8 @@ test('Start runs the composed executor through to a fixture landing', async ({ p
     const section = panel.getByTestId('plan-execution-section')
     await section.getByTestId('plan-execution-start-button').click()
     await expect(section.getByTestId('plan-execution-start-dialog')).toBeVisible()
-    await expect(section.getByTestId('plan-execution-preview-pending')).toBeVisible()
+    // Not asserted: the transient "Checking the standing…" line — the server
+    // can answer before the dialog is first observed (a flake when it did).
     await expect(section.getByTestId('plan-execution-start-ready')).toBeVisible({ timeout: 20_000 })
     await section.getByTestId('plan-execution-start-confirm').click()
 

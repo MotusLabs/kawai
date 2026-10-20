@@ -1186,6 +1186,7 @@ export class ChatSessionManager {
         taskStore: this.teamMail.tasks.store,
         mailbox: this.teamMail.mailbox.store,
         releases: this.teamMail.releases,
+        pendingSpawns: teamId => this.teamMail.staffing.pendingFor(teamId),
         records: () => this.records.values(),
         // The executor resolves teams by id (a member-less team included);
         // the runtime's archive wake resolves sessions.
