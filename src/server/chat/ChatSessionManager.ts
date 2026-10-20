@@ -47,9 +47,11 @@ import type {
 } from '../../shared/types'
 import type { ChatSessionRecord, SessionDatabase } from '../db'
 import { generateSessionName } from '../nameGenerator'
+import { existsSync } from 'node:fs'
 import { isExistingDirectory, resolveProjectDirectory } from '../paths'
 import type { SessionRegistry } from '../SessionRegistry'
-import { ChatSessionDriver, type ChatQueryFactory } from './ChatSessionDriver'
+import type { ChatQueryFactory } from './ChatSessionDriver'
+import { createChatDriver, type ChatDriverSharedOptions } from './provider/createChatDriver'
 import type { ChatAgentDriver, ChatRuntime } from './provider/driver'
 import { chatAuthErrorMessage, hasClaudeAuth } from './chatAuth'
 import { historyWindow } from './historyWindow'
@@ -64,9 +66,11 @@ import type { ChatWorkerStore } from './chatWorkerStore'
 import type { ChatTaskStore } from './chatTaskStore'
 import {
   resolveClaudeProfile,
+  profileCredential,
   profileLimitResetTimeZone,
   claudeLaunchKey,
   verifyProfileExecutable,
+  withheldCredentialNamesAt,
   type ChatLaunchConfiguration,
   type ClaudeLaunchConfiguration,
   type ProfileCatalogContext,
@@ -504,7 +508,8 @@ export class ChatSessionManager {
       }
       return this.createSession(input)
     }
-    if (!this.authOk(input.claudeProfileId, project.path)) return { ok: false, error: chatAuthErrorMessage() }
+    const projectAuthRefusal = this.authRefusal(input.claudeProfileId, project.path)
+    if (projectAuthRefusal) return { ok: false, error: projectAuthRefusal }
     try {
       await this.probeAvailability(input.claudeProfileId, project.path)
     } catch (error) {
@@ -796,9 +801,11 @@ export class ChatSessionManager {
     if (!record) return
     let credentialsPath: string | null = null
     try {
-      credentialsPath = credentialsPathFor(
-        this.launchEnvOf(record.claudeProfileId, record.projectPath)
-      )
+      // A credentialed provider's session does not use the host login, so
+      // its expiry is not this session's notice (openrouter-provider D4).
+      credentialsPath = profileCredential(record.claudeProfileId, this.catalogCtx(record.projectPath))
+        ? null
+        : credentialsPathFor(this.launchEnvOf(record.claudeProfileId, record.projectPath))
     } catch {
       credentialsPath = null
     }
@@ -1186,6 +1193,7 @@ export class ChatSessionManager {
         mailbox: this.teamMail.mailbox.store,
         teamMailbox: this.teamMail.mailbox,
         releases: this.teamMail.releases,
+        pendingSpawns: teamId => this.teamMail.staffing.pendingFor(teamId),
         records: () => this.records.values(),
         // The executor resolves teams by id (a member-less team included);
         // the runtime's archive wake resolves sessions.
@@ -1564,8 +1572,9 @@ export class ChatSessionManager {
       if (!this.options.queryFactory && !hasCodexLogin(launch.codexHome)) {
         return { ok: false, error: this.codexLoginRefusal(launch.codexHome, input.claudeProfileId ?? null) }
       }
-    } else if (!this.authOk(input.claudeProfileId, projectPath)) {
-      return { ok: false, error: chatAuthErrorMessage() }
+    } else {
+      const authRefusal = this.authRefusal(input.claudeProfileId, projectPath)
+      if (authRefusal) return { ok: false, error: authRefusal }
     }
     // The runtime facts are fixed at creation (codex-chat-sessions 3.3,
     // ruling R1): a later profile edit never moves an existing chat to
@@ -2019,17 +2028,22 @@ export class ChatSessionManager {
   private startBlocker(record: ChatSessionRecord): string | null {
     if (record.archivedAt != null) return ARCHIVED_SESSION_ERROR
     const spawning = !this.driverPromises.has(record.sessionId)
+    // A Codex thread's transcript is the rollout its start reported
+    // (codex-chat-sessions D8), never a Claude `<id>.jsonl`.
+    const codexRollout = record.runtime === 'codex' && !this.options.queryFactory
     if (
       record.sdkSessionId &&
       // Sync discovery acceptable: a per-request existence check, not the
       // boot path (async-transcript-parsing design D4).
       !this.drivers.has(record.sessionId) &&
       spawning &&
-      !findTranscriptPath(record.sdkSessionId)
+      !(codexRollout
+        ? record.transcriptPath != null && existsSync(record.transcriptPath)
+        : findTranscriptPath(record.sdkSessionId))
     ) {
       return (
         'Cannot resume this conversation: the agent transcript is missing. ' +
-        `Restore ${record.sdkSessionId}.jsonl or create a new chat session.`
+        `Restore ${codexRollout ? record.transcriptPath ?? `the rollout of ${record.sdkSessionId}` : `${record.sdkSessionId}.jsonl`} or create a new chat session.`
       )
     }
     const live = this.drivers.get(record.sessionId)
@@ -2269,6 +2283,9 @@ export class ChatSessionManager {
     if (this.titleWatchers.has(sessionId)) return
     const record = this.records.get(sessionId)
     if (!record || record.archivedAt != null || !record.sdkSessionId) return
+    // A Codex thread has no Claude transcript; its rollout replay and
+    // receipts arrive with codex-chat-sessions §6.
+    if (record.runtime === 'codex') return
     // Sync discovery acceptable: a per-attach watcher setup, not the boot
     // path (async-transcript-parsing design D4).
     const filePath = findTranscriptPath(record.sdkSessionId)
@@ -2326,7 +2343,8 @@ export class ChatSessionManager {
             const executable = await this.checkExecutable()
             existing.setClaudeExecutablePath?.(executable?.path)
           }
-          if (!this.authOk(record?.claudeProfileId, record?.projectPath)) throw new Error(chatAuthErrorMessage())
+          const authRefusal = this.authRefusal(record?.claudeProfileId, record?.projectPath)
+          if (authRefusal) throw new Error(authRefusal)
         }
       }
       return existing
@@ -2348,30 +2366,36 @@ export class ChatSessionManager {
       if (launch.runtime === 'claude' && launch.executable) {
         verifyProfileExecutable(record.claudeProfileId ?? 'default', launch.executable)
       }
-      if (!this.authOk(record.claudeProfileId, record.projectPath)) throw new Error(chatAuthErrorMessage())
+      const authRefusal = this.authRefusal(record.claudeProfileId, record.projectPath)
+      if (authRefusal) throw new Error(authRefusal)
     }
     // Agent start is one of the account-notice check points (notification
     // strip design D3).
     this.refreshAccountNotice(record.sessionId)
     const promise = (async () => {
+      // A Codex chat runs the app-server driver (codex-chat-sessions 5.6);
+      // the fixture seam (an injected fake runtime) keeps the fake SDK
+      // driver, which starts no Codex child.
+      const codex = record.runtime === 'codex' && !this.options.queryFactory
       // A profile executable replaces the standard binary (already verified
-      // above); otherwise every spawn runs the checked Claude Code install.
-      // A Codex launch never reaches an SDK spawn — spawnQuery refuses it.
+      // above); otherwise every Claude spawn runs the checked Claude Code
+      // install, and a Codex spawn the gated Codex executable.
+      const codexExecutable = codex ? (await ensureCodexExecutable()).path : null
       const executable =
-        launch.runtime === 'claude' && launch.executable ? null : await this.checkExecutable()
-      const queryFactory = await this.resolveQueryFactory()
+        codex || (launch.runtime === 'claude' && launch.executable) ? null : await this.checkExecutable()
+      const queryFactory = codex ? null : await this.resolveQueryFactory()
       // The team must be known before the first spawn reads its prompt.
       await this.teams.track(record.sessionId, this.records.get(record.sessionId)?.projectPath ?? record.projectPath)
-      const teamMcpServer = await createMailboxServer(this.mailbox, record.sessionId, {
+      const teamMcpServer = codex ? null : await createMailboxServer(this.mailbox, record.sessionId, {
         tasks: this.tasks, results: this.results, strategies: this.strategies, plans: this.plans, validation: this.validation, ...(this.decisions ? { decisions: this.decisions } : {}), releases: this.teamMail.releases, management: this.management,
         metrics: { teamOf: id => this.teams.teamOf(id)?.teamId ?? null, reader: this.metrics },
         reports: { caller: id => this.reportCaller(id), service: this.reports },
       })
-      const driver = new ChatSessionDriver({
+      // The options both runtimes share: identity, the audit observer, the
+      // prompt/effort/policy readers, and every output callback.
+      const shared: ChatDriverSharedOptions = {
         sessionId: record.sessionId,
         projectPath: record.projectPath,
-        queryFactory,
-        teamMcpServer,
         // The session's observer (D7) constructs in src/server/outbound/;
         // the manager registers it with its own live context getters. Its
         // writes notify the team's views only when a row was committed (D9).
@@ -2400,31 +2424,10 @@ export class ChatSessionManager {
           this.records.get(record.sessionId)?.claudeProfileId ?? 'default'
         ),
         onSpawn: info => this.recordAgentStart(record.sessionId, info),
-        getProviderEnv: () => this.providerEnv(),
         // Read per request so a live policy switch reaches the next
         // canUseTool call without a respawn (design D2).
         getApprovalPolicy: () =>
           this.records.get(record.sessionId)?.approvalPolicy ?? 'manual',
-        claudeProfileId: record.claudeProfileId,
-        ...(this.options.profileCatalogHome
-          ? { profileCatalogHome: this.options.profileCatalogHome }
-          : {}),
-        ...(executable ? { claudeExecutablePath: executable.path } : {}),
-        ...(this.options.wireLogs
-          ? { wire: this.options.wireLogs.get(record.sessionId) }
-          : {}),
-        ...(record.sdkSessionId
-          ? { resumeSessionId: record.sdkSessionId }
-          : {}),
-        // Workers design D6: a fresh driver carries the recovered rows, so a
-        // restart or archive/restore keeps earlier outcomes in the roster and
-        // the sidecar instead of replacing them with an empty one.
-        ...(this.workerRows.has(record.sessionId)
-          ? { recoveredWorkers: this.workerRows.get(record.sessionId) ?? [] }
-          : {}),
-        ...(this.backgroundTaskRecords.has(record.sessionId)
-          ? { recoveredBackgroundTasks: this.backgroundTaskRecords.get(record.sessionId) ?? [] }
-          : {}),
         onEvent: (event) => this.handleDriverEvent(record.sessionId, event),
         onCommandState: (state) =>
           this.options.onCommandState?.(record.sessionId, state),
@@ -2454,8 +2457,6 @@ export class ChatSessionManager {
           this.usageLimits.record(this.providerIdOf(record.sessionId), report),
         onUsageReport: (report) =>
           this.usageLimits.record(this.providerIdOf(record.sessionId), report),
-        claimUsagePull: () =>
-          this.claimProviderUsagePull(record),
         onUsageNoData: () =>
           this.usageLimits.recordNoData(this.providerIdOf(record.sessionId)),
         onStatus: (status) => this.applyPatch(record.sessionId, { status }),
@@ -2463,6 +2464,8 @@ export class ChatSessionManager {
           // Persist immediately: a crash right after the first turn must not
           // lose the ability to resume the conversation.
           this.applyPatch(record.sessionId, { sdkSessionId }),
+        // A Codex thread's rollout file (design D8), stored for replay.
+        onTranscriptPath: (transcriptPath) => this.applyPatch(record.sessionId, { transcriptPath }),
         onCwdChanged: (newCwd) =>
           this.handleDriverCwdChanged(record.sessionId, newCwd),
         // Profile routing (design D6): limit failures count against the
@@ -2482,7 +2485,56 @@ export class ChatSessionManager {
             window: signal.window,
           })
         },
-      })
+      }
+      const wire = this.options.wireLogs?.get(record.sessionId)
+      // The gates above guarantee a Codex launch with the stored home.
+      const codexLaunch = codex && launch.runtime === 'codex' && record.codexHome ? { ...launch, codexHome: record.codexHome } : null
+      if (codex && !codexLaunch) throw new Error('Cannot start the agent: this chat\'s Codex profile no longer resolves')
+      const driver = codexLaunch
+        ? createChatDriver({
+            runtime: 'codex',
+            options: {
+              ...shared,
+              executable: codexExecutable!,
+              codexHome: codexLaunch.codexHome,
+              network: codexLaunch.network,
+              ...(codexLaunch.model ? { model: codexLaunch.model } : {}),
+              wire: wire ?? { record: () => {} },
+              // The catalog at the chat's path names the credentials (D3).
+              withheldCredentials: withheldCredentialNamesAt(this.catalogCtx(record.projectPath)),
+              ...(record.sdkSessionId ? { resumeThreadId: record.sdkSessionId } : {}),
+            },
+          })
+        : createChatDriver({
+            runtime: 'claude',
+            options: {
+              ...shared,
+              queryFactory: queryFactory!,
+              ...(teamMcpServer ? { teamMcpServer } : {}),
+              getProviderEnv: () => this.providerEnv(),
+              claudeProfileId: record.claudeProfileId,
+              ...(this.options.profileCatalogHome
+                ? { profileCatalogHome: this.options.profileCatalogHome }
+                : {}),
+              ...(executable ? { claudeExecutablePath: executable.path } : {}),
+              ...(wire ? { wire } : {}),
+              ...(record.sdkSessionId
+                ? { resumeSessionId: record.sdkSessionId }
+                : {}),
+              // Workers design D6: a fresh driver carries the recovered rows, so a
+              // restart or archive/restore keeps earlier outcomes in the roster and
+              // the sidecar instead of replacing them with an empty one.
+              ...(this.workerRows.has(record.sessionId)
+                ? { recoveredWorkers: this.workerRows.get(record.sessionId) ?? [] }
+                : {}),
+              ...(this.backgroundTaskRecords.has(record.sessionId)
+                ? { recoveredBackgroundTasks: this.backgroundTaskRecords.get(record.sessionId) ?? [] }
+                : {}),
+              // The SDK's usage pull is Claude's alone (providers-and-workers).
+              claimUsagePull: () =>
+                this.claimProviderUsagePull(record),
+            },
+          })
       if (
         !this.records.has(record.sessionId) ||
         // Archived while the import was resolving: same discard as kill.
@@ -2605,10 +2657,21 @@ export class ChatSessionManager {
     return resolveClaudeProfile(profileId, this.providerEnv(), this.catalogCtx(projectPath), report)
   }
 
-  private authOk(profileId: string = 'default', projectPath?: string): boolean {
-    return this.options.authCheck
-      ? this.options.authCheck()
-      : hasClaudeAuth(this.launchEnvOf(profileId, projectPath))
+  /**
+   * Why a profile cannot authenticate, or undefined when it can. A provider
+   * naming `authTokenEnv` authenticates only with that variable — never the
+   * host login or another credential (openrouter-provider D4).
+   */
+  private authRefusal(profileId: string = 'default', projectPath?: string): string | undefined {
+    if (this.options.authCheck) return this.options.authCheck() ? undefined : chatAuthErrorMessage()
+    const credential = profileCredential(profileId, this.catalogCtx(projectPath))
+    if (credential) {
+      const value = effectiveChatEnv(this.providerEnv())[credential.authTokenEnv]
+      return value?.trim()
+        ? undefined
+        : `Provider ${credential.providerLabel} needs ${credential.authTokenEnv} in the server environment.`
+    }
+    return hasClaudeAuth(this.launchEnvOf(profileId, projectPath)) ? undefined : chatAuthErrorMessage()
   }
 
   /**
@@ -2628,12 +2691,9 @@ export class ChatSessionManager {
     // Claude credential consumers (account notices, provider usage) see an
     // empty environment for a Codex profile.
     if (launch.runtime === 'codex') return {}
-    const overrides = Object.fromEntries(
-      Object.entries(launch.env ?? {}).filter(
-        (entry): entry is [string, string] => entry[1] !== undefined
-      )
-    )
-    const merged = effectiveChatEnv(overrides)
+    // A set SDK `env` replaces the child's environment whole (credentials
+    // withheld); only an unset one inherits process.env.
+    const merged = launch.env ?? effectiveChatEnv({})
     return Object.fromEntries(
       Object.entries(merged).filter(
         (entry): entry is [string, string] => entry[1] !== undefined

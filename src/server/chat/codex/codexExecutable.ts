@@ -165,12 +165,16 @@ function versionCacheKey(executablePath: string, stats: fs.Stats): string {
  * Run `<executable> --version` under a deadline. On expiry the child is
  * killed and reaped. The stream reads race the deadline too: a killed
  * child's own grandchild can keep the pipes open, so awaiting them
- * unconditionally would outlive the bound.
+ * unconditionally would outlive the bound. The probe gets PATH and HOME
+ * only (what a `#!/usr/bin/env node` codex needs): it is a launch too, and
+ * no launch may inherit a catalog-named credential (openrouter-provider D3,
+ * task 1.8) or a provider variable.
  */
 async function probeVersion(executablePath: string, timeoutMs: number): Promise<string> {
   let proc: Bun.Subprocess<'ignore', 'pipe', 'pipe'>
   try {
     proc = Bun.spawn([executablePath, '--version'], {
+      env: probeEnv(),
       stdin: 'ignore',
       stdout: 'pipe',
       stderr: 'pipe',
@@ -227,6 +231,15 @@ async function probeVersion(executablePath: string, timeoutMs: number): Promise<
  * `codex-cli 0.163.0` — the version follows the product name, unlike
  * Claude's leading version — so the match is unanchored.
  */
+function probeEnv(): Record<string, string> {
+  const env: Record<string, string> = {}
+  for (const name of ['PATH', 'HOME'] as const) {
+    const value = process.env[name]
+    if (value !== undefined) env[name] = value
+  }
+  return env
+}
+
 export function parseCodexVersion(output: string): string | null {
   const match = output.match(/v?(\d+)\.(\d+)\.(\d+)/)
   return match ? `${match[1]}.${match[2]}.${match[3]}` : null

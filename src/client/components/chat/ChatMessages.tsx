@@ -227,12 +227,25 @@ function ChatMessagesView({ events, projectPath, sessionId, sendMessage, connect
         return <p key={event.id} className="text-chat-meta text-secondary">Request {event.outcome}</p>
       }
       case 'turn_completed': return <p key={event.id} className="text-chat-meta text-muted">
-        Turn complete · {event.subtype}{event.totalCostUsd !== undefined ? ` · $${event.totalCostUsd.toFixed(4)}` : ''}
+        Turn complete · {event.subtype}<TurnCost estimate={event.totalCostUsd} provider={event.providerCostUsd} />
         {event.numTurns !== undefined ? ` · ${event.numTurns} turns` : ''}
       </p>
       default: return null
     }
   }
+}
+
+/**
+ * A completed turn's cost: the provider-reported charge when the provider
+ * streamed one (openrouter-provider D9), else the SDK's list-price estimate.
+ */
+function TurnCost({ estimate, provider }: { estimate?: number; provider?: number }) {
+  if (provider !== undefined) {
+    const title = 'Charged by the provider for this turn\'s streamed calls; calls Claude Code did not stream (such as session titles) are not included.'
+      + (estimate !== undefined ? ` Claude Code's list-price estimate: $${estimate.toFixed(4)}.` : '')
+    return <span title={title} data-testid="turn-provider-cost">{` · $${provider.toFixed(4)}`}</span>
+  }
+  return estimate !== undefined ? <>{` · $${estimate.toFixed(4)}`}</> : null
 }
 
 // Normal prop comparison retains updates to names, archive state, and paths.

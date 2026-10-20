@@ -19,12 +19,23 @@ The shipped default catalog, grouped by provider:
 | minimax | MiniMax | MiniMax | `https://api.minimax.io/anthropic`; starts on `MiniMax-M3`; every Claude tier maps to `MiniMax-M3` ([reference](https://platform.minimax.io/docs/token-plan/claude-code)) |
 | mimo | MiMo | MiMo | `https://api.xiaomimimo.com/anthropic`; starts on `mimo-v2.6-pro`; Sonnet maps to `mimo-v2.6-flash`, Opus/Haiku/Fable to `mimo-v2.6-pro` ([reference](https://mimo.mi.com/docs/en-US/tokenplan/integration/claudecode)) |
 | kimi | Kimi | Kimi | `https://api.moonshot.ai/anthropic`; starts on `kimi-k3[1m]`; every Claude tier maps to `kimi-k3[1m]`; auto-compact window `1000000` ([reference](https://platform.kimi.ai/docs/guide/claude-code-kimi#configuration-reference)) |
+| openrouter-opus | OpenRouter Opus | OpenRouter | starts on Opus; Opus and Fable map to `~anthropic/claude-opus-latest[1m]` — provider env below |
+| openrouter-sonnet | OpenRouter Sonnet | OpenRouter | starts on Sonnet; Sonnet maps to `~anthropic/claude-sonnet-latest[1m]` — provider env below |
+| openrouter-haiku | OpenRouter Haiku | OpenRouter | starts on Haiku; Haiku maps to `~anthropic/claude-haiku-latest` — provider env below |
 
 Provider Z.AI carries the pair's shared routing at the provider level:
 base URL `https://api.z.ai/api/anthropic`, the four tier maps above,
 auto-compact window `1000000`, and reset zone `Asia/Shanghai` — every model
 of the provider launches with it, and the provider's cooldown and usage are
 shared.
+
+Provider OpenRouter routes through `https://openrouter.ai/api` and maps every
+tier: Opus and Fable to `~anthropic/claude-opus-latest[1m]` (OpenRouter
+documents no Fable slug), Sonnet to `~anthropic/claude-sonnet-latest[1m]`,
+Haiku to `~anthropic/claude-haiku-latest` ([reference](https://openrouter.ai/docs/guides/community/anthropic-agent-sdk)).
+`[1m]` only tells Claude Code the context window; OpenRouter strips it before
+routing. Its sessions authenticate with the server's `OPENROUTER_API_KEY` —
+see [Provider credentials](#provider-credentials).
 
 ## Catalog files
 
@@ -63,7 +74,8 @@ values winning per key. A model entry may not set `ANTHROPIC_BASE_URL` — the
 base URL belongs to the provider, so every model of a provider reaches the
 same endpoint; a file whose model sets it fails validation with an error
 naming the file, provider, and model, and the rest of the catalog stays
-usable. Credentials are refused at both levels. `executable` stays
+usable. Credential values are refused at both levels; a trusted provider may
+only *name* its credential variables (see [Provider credentials](#provider-credentials)). `executable` stays
 provider-level and operator-trusted (see below).
 
 Same-id providers merge across levels with the nearer file winning per key,
@@ -119,12 +131,81 @@ home before discovery, so the picker and creation read the same files.
 
 Catalog `env` keys are restricted to the profile-controlled variables
 (PROFILE_CONTROLLED_ENV): routing, models, attribution, compaction.
-Credentials are never allowed in catalog files; they enter sessions only
-through the server environment or global provider Settings, so catalog files
-stay safe to commit and mount. A file that fails validation is skipped, and
+Credential values are never allowed in catalog files; they enter sessions
+only through the server environment or global provider Settings, so catalog
+files stay safe to commit and mount. `CLAUDE_CODE_MAX_OUTPUT_TOKENS` is
+profile-controlled too: a provider may cap the output reservation Claude Code
+asks for (pay-per-token gateways such as OpenRouter refuse a request whose
+reservation exceeds the remaining credit). A file that fails validation is skipped, and
 the rest of the catalog still resolves — the failure is never silent: the
 picker shows it as a warning next to the profile list, and every launch
 resolution logs it (`chat_profile_catalog_errors` in agentboard.log).
+
+## Provider credentials
+
+A provider in a **trusted** `providers.json` — the shipped default or the
+user-level `~/.kawai/providers.json` — may name the server environment
+variables that hold its keys. Names only, never values; each must match
+`^[A-Z_][A-Z0-9_]*$`:
+
+- `authTokenEnv` — the inference key. A session of the provider's models
+  launches with `ANTHROPIC_AUTH_TOKEN` set from this variable (Claude Code
+  then sends it as `Authorization: Bearer`), and with `ANTHROPIC_API_KEY` and
+  `CLAUDE_CODE_OAUTH_TOKEN` blanked both in its environment and in the SDK
+  flag settings layer, so neither the host's claude.ai login nor a key in
+  project settings can take over. The token itself never enters the flag
+  settings (they reach the process's argv).
+- `balanceKeyEnv` — an account-level key (for OpenRouter, a management key)
+  that only the server reads, for the provider's account credits.
+
+Trust and withholding:
+
+- A project `.kawai/providers.json` naming either field, and any
+  `profiles.json` naming one, is rejected whole, naming the file and field:
+  project files are agent-writable.
+- A project file may not set `ANTHROPIC_BASE_URL` on a credentialed provider,
+  nor re-home one of its models to another provider — either would send the
+  key elsewhere. The whole file is rejected; model mappings and labels can
+  still be overlaid from a file that does not redirect.
+- Every variable the resolved catalog names is removed from every agent
+  launch — under any profile, Default and executable-backed profiles
+  included — so no agent can read another provider's key, or the balance key
+  at all, from its environment.
+- Creating a session on a credentialed provider needs its `authTokenEnv`
+  variable in the server environment (or global provider Settings), whatever
+  host login exists: otherwise creation is refused with "Provider OpenRouter
+  needs OPENROUTER_API_KEY in the server environment." Such sessions show no
+  claude.ai login-expiry notice.
+
+Use two OpenRouter keys: an **inference** key in `OPENROUTER_API_KEY` (create
+it with a spending limit — the cap bounds what agents can spend), and,
+optionally, a **management** key in `OPENROUTER_MANAGEMENT_KEY`, which can
+create and delete keys and so must never reach an agent.
+
+A user-level `providers.json` replaces both shipped files, so on a server
+that has one, copy the entry there to offer OpenRouter:
+
+```json
+{
+  "openrouter": {
+    "label": "OpenRouter",
+    "authTokenEnv": "OPENROUTER_API_KEY",
+    "balanceKeyEnv": "OPENROUTER_MANAGEMENT_KEY",
+    "env": {
+      "ANTHROPIC_BASE_URL": "https://openrouter.ai/api",
+      "ANTHROPIC_DEFAULT_OPUS_MODEL": "~anthropic/claude-opus-latest[1m]",
+      "ANTHROPIC_DEFAULT_SONNET_MODEL": "~anthropic/claude-sonnet-latest[1m]",
+      "ANTHROPIC_DEFAULT_HAIKU_MODEL": "~anthropic/claude-haiku-latest",
+      "ANTHROPIC_DEFAULT_FABLE_MODEL": "~anthropic/claude-opus-latest[1m]"
+    },
+    "models": {
+      "openrouter-opus": { "label": "OpenRouter Opus", "model": "opus" },
+      "openrouter-sonnet": { "label": "OpenRouter Sonnet", "model": "sonnet" },
+      "openrouter-haiku": { "label": "OpenRouter Haiku", "model": "haiku" }
+    }
+  }
+}
+```
 
 ## Provider reset time zone
 
@@ -150,14 +231,26 @@ wrappers, without hand-maintained shell scripts:
 { "lan": { "label": "LAN", "executable": "/usr/local/bin/claude-lan" } }
 ```
 
-The wrapper receives the merged base environment (credentials included); any
-entry `env` is pre-applied and the wrapper's own exports win. No inline
-controlled settings are injected for executable-backed profiles — the wrapper
-owns its provider configuration, including any permission flags it passes
-(operator trust). Catalog files discovered in the project tree cannot name
-executables: they are agent-writable, and an executable there would run
-arbitrary code with server credentials. A missing or non-executable path is
-an actionable error before any agent starts.
+The wrapper receives the merged base environment with every catalog-named
+credential variable withheld; any entry `env` is pre-applied and the
+wrapper's own exports win. No inline controlled settings are injected for
+executable-backed profiles — the wrapper owns its provider configuration,
+including any permission flags it passes (operator trust). It never receives
+a credential value: a wrapper that needs a key sets its own. Catalog files
+discovered in the project tree cannot name executables: they are
+agent-writable, and an executable there would run arbitrary code with server
+credentials. A missing or non-executable path is an actionable error before
+any agent starts.
+
+Two more refusals keep a credentialed provider's route fixed (see the
+withholding rules above): a trusted catalog file that gives a provider with
+`authTokenEnv` or `balanceKeyEnv` an `executable` — on the provider or on one
+of its models — is refused whole, naming the provider and the field, and a
+credentialed provider whose merged trusted tiers leave `ANTHROPIC_BASE_URL`
+absent or empty is dropped, naming the provider. Every launch that carries a
+provider's key pins that base URL, and the proxy and TLS variables, in both
+the process environment and the flag settings layer, so user or project
+Claude settings files cannot redirect it.
 
 Terminal commands are unaffected: kawai writes no executables, and existing
 `claude-*` wrapper scripts remain yours to maintain or delete.
@@ -190,7 +283,8 @@ credentials and unrelated runtime variables from it. Provide suitable API keys,
 auth tokens, OAuth tokens, or an authenticated CLI configuration on the server
 or through global provider Settings; credentials are not stored in the catalog
 or included in metadata. Credential presence does not prove gateway acceptance.
-Per-profile credential management is outside this feature.
+A provider that names its own key variable (see [Provider credentials](#provider-credentials))
+uses that key instead of the shared credentials.
 
 `GET /api/chat/profiles?projectPath=…` returns a JSON object:
 `{ profiles: [{id, label}, …], errors: [file failures, …] }`, resolved for

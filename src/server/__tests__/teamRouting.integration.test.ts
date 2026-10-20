@@ -35,10 +35,15 @@ test('a glm limit forwards progressed work to the default member, and later mail
   if (git.status !== 0) throw new Error(git.stderr)
   const priorConfig = process.env.CLAUDE_CONFIG_DIR
   const priorHold = process.env.AGENTBOARD_CHAT_FIXTURE_HOLD_MS
+  // The fixture keys glm detection on the launch env's opus mapping; an
+  // ambient one (an agent dev shell carries GLM values) would mark the
+  // default-profile member as glm and its turns would never succeed.
+  const priorOpus = process.env.ANTHROPIC_DEFAULT_OPUS_MODEL
   // The handoff header mentions tool calls, which plays the fixture's tool turn.
   process.env.AGENTBOARD_CHAT_FIXTURE_HOLD_MS = '0'
   const configDir = path.join(root, 'claude')
   process.env.CLAUDE_CONFIG_DIR = configDir
+  delete process.env.ANTHROPIC_DEFAULT_OPUS_MODEL
   const transcriptDir = path.join(configDir, 'projects', 'fixture')
   fs.mkdirSync(transcriptDir, { recursive: true })
   fs.mkdirSync(path.join(repo, '.kawai/groups'), { recursive: true })
@@ -123,6 +128,8 @@ test('a glm limit forwards progressed work to the default member, and later mail
     else process.env.CLAUDE_CONFIG_DIR = priorConfig
     if (priorHold === undefined) delete process.env.AGENTBOARD_CHAT_FIXTURE_HOLD_MS
     else process.env.AGENTBOARD_CHAT_FIXTURE_HOLD_MS = priorHold
+    if (priorOpus === undefined) delete process.env.ANTHROPIC_DEFAULT_OPUS_MODEL
+    else process.env.ANTHROPIC_DEFAULT_OPUS_MODEL = priorOpus
     fs.rmSync(root, { recursive: true, force: true })
   }
 }, 20_000)

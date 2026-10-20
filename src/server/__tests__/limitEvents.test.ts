@@ -408,3 +408,104 @@ describe('coolingTimeline', () => {
     }
   })
 })
+
+describe('credit cooldown (openrouter-provider D8)', () => {
+  const MIN = 60_000
+  const HOUR = 60 * MIN
+  const credit = { ...base, profileId: 'openrouter-opus', providerId: 'openrouter', kind: 'unknown', status: 402, window: 'credit', final: true }
+  let now: number
+  let store: LimitEventStore
+  beforeEach(() => {
+    now = T0
+    store = new LimitEventStore(schemaDb(':memory:'), () => now)
+  })
+
+  test('Owner tops up: the provider leaves cooldown at the pull that shows credit grew', () => {
+    store.record(credit)
+    expect(store.cooldownFor('openrouter-opus', 'openrouter')).toEqual({ until: iso(T0 + HOUR), provider: true, providerId: 'openrouter', credit: true })
+    now = T0 + 5 * MIN
+    // A 402 can leave cents that cannot cover a request: the first reading only sets the floor.
+    store.reportRemainingCredit('openrouter', 0.01)
+    expect(store.cooldownFor('openrouter-opus', 'openrouter').until).toBe(iso(T0 + HOUR))
+    now = T0 + 15 * MIN
+    store.reportRemainingCredit('openrouter', 10.01)
+    expect(store.cooldownFor('openrouter-opus', 'openrouter')).toEqual({ until: null, provider: false, providerId: 'openrouter' })
+    // Another model of the provider recovers with it.
+    expect(store.cooldownFor('openrouter-sonnet', 'openrouter').until).toBeNull()
+    expect(store.providerCooldownUntil('openrouter')).toBeNull()
+  })
+
+  test('The first pull only sets the baseline: readings before the event are ignored', () => {
+    // The failing input of the checkpoint review's finding: a pre-event low of
+    // $0.01, then a first post-event pull of $10.01, still cools.
+    store.reportRemainingCredit('openrouter', 0.01)
+    now = T0 + MIN
+    store.record({ ...credit, at: iso(now) })
+    now = T0 + 10 * MIN
+    store.reportRemainingCredit('openrouter', 10.01)
+    // 10.01 is only the baseline: the pre-event 0.01 would have ended the cooldown.
+    expect(store.cooldownFor('openrouter-opus', 'openrouter')).toMatchObject({ until: iso(T0 + MIN + HOUR), credit: true })
+    now = T0 + 20 * MIN
+    store.reportRemainingCredit('openrouter', 11.01)
+    // A later pull above the lowest earlier post-event pull ends the cooldown at that pull's time.
+    expect(store.cooldownFor('openrouter-opus', 'openrouter').until).toBeNull()
+  })
+
+  test('Equal post-event pulls show no growth: the cooldown keeps the event\'s hour end', () => {
+    store.record(credit)
+    now = T0 + 5 * MIN
+    store.reportRemainingCredit('openrouter', 10.01)
+    now = T0 + 15 * MIN
+    store.reportRemainingCredit('openrouter', 10.01)
+    // A pull equal to the lowest earlier post-event pull is not a top-up: only the hour bounds the cooldown.
+    expect(store.cooldownFor('openrouter-opus', 'openrouter')).toMatchObject({ until: iso(T0 + HOUR), credit: true })
+  })
+
+  test('No balance source: the provider cools for one hour after the event', () => {
+    store.record(credit)
+    now = T0 + HOUR - 1
+    expect(store.cooldownFor('openrouter-opus', 'openrouter').until).toBe(iso(T0 + HOUR))
+    now = T0 + HOUR
+    expect(store.cooldownFor('openrouter-opus', 'openrouter').until).toBeNull()
+  })
+
+  test('Restart during a credit cooldown: a fresh store applies only the hour, whatever later pulls report', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-credit-'))
+    try {
+      const file = path.join(dir, 'db.sqlite')
+      const first = new LimitEventStore(schemaDb(file), () => now)
+      first.record(credit)
+      now = T0 + 10 * MIN
+      first.reportRemainingCredit('openrouter', 0.01) // this process's baseline; the process ends here
+      now = T0 + 20 * MIN
+      const restarted = new LimitEventStore(schemaDb(file), () => now)
+      expect(restarted.cooldownFor('openrouter-opus', 'openrouter')).toMatchObject({ until: iso(T0 + HOUR), credit: true })
+      now = T0 + 25 * MIN
+      restarted.reportRemainingCredit('openrouter', 0.01)
+      now = T0 + 30 * MIN
+      restarted.reportRemainingCredit('openrouter', 5) // a pull showing credit grew cannot end a DB-loaded event
+      expect(restarted.cooldownFor('openrouter-opus', 'openrouter')).toMatchObject({ until: iso(T0 + HOUR), credit: true })
+      now = T0 + HOUR
+      expect(restarted.cooldownFor('openrouter-opus', 'openrouter').until).toBeNull()
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('readings never shorten another window, and a later reset still decides', () => {
+    store.record({ ...base, profileId: 'openrouter-opus', providerId: 'openrouter', final: true, resetsAt: iso(T0 + 2 * HOUR), window: null })
+    store.record(credit)
+    now = T0 + MIN
+    store.reportRemainingCredit('openrouter', 0)
+    now = T0 + 2 * MIN
+    store.reportRemainingCredit('openrouter', 20)
+    // The credit window ended; the rate limit's reset still cools, and it is not a credit end.
+    expect(store.cooldownFor('openrouter-opus', 'openrouter')).toEqual({ until: iso(T0 + 2 * HOUR), provider: true, providerId: 'openrouter' })
+  })
+
+  test('the deciding end names credit only when a credit event set it', () => {
+    store.record({ ...base, profileId: 'openrouter-opus', providerId: 'openrouter', final: true, resetsAt: iso(T0 + 10 * MIN), window: null })
+    store.record(credit)
+    expect(store.cooldownFor('openrouter-opus', 'openrouter')).toMatchObject({ until: iso(T0 + HOUR), credit: true })
+  })
+})

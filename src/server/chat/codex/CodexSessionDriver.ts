@@ -1,0 +1,491 @@
+// The Codex chat driver (codex-chat-sessions design D2/D5/D7, tasks §5):
+// one `codex app-server` child per chat, one persisted thread per session.
+// The first spawn starts the thread (`ephemeral: false`) and reports its id
+// and rollout path; every later spawn resumes it with the same sandbox,
+// policy, and instructions. Kawai owns turn ids: a send or delivery opens a
+// Kawai turn and calls `turn/start` (a send during a turn steers it, as the
+// app-server adds the input to the active turn), `turn/started` binds the
+// Codex turn id — or opens an agent-started turn — and `turn/completed`
+// closes it. Approvals and questions go through codexRequests, the item
+// mapping through codexEvents, the outbound audit through codexAudit.
+// Status is derived like the Claude driver's: permission, else working,
+// else waiting. A process exit marks the driver dead; the next send or
+// start respawns and resumes the thread.
+import type {
+  ChatApprovalDecision,
+  ChatApprovalPolicy,
+  ChatBackgroundTask,
+  ChatCommandState,
+  ChatPeerMessage,
+  ChatPendingRequest,
+  ChatQuestionAnswer,
+  ChatTurnTrigger,
+  ChatWorker,
+} from '../../../shared/chat'
+import type { SessionStatus } from '../../../shared/types'
+import { logger } from '../../logger'
+import { formatEnvelope } from '../../team/envelope'
+import { activityBody, initialChatActivityState, projectActivity, reduceActivity, type ChatActivityInput } from '../chatActivity'
+import type { BackgroundTaskRecord } from '../chatBackgroundTasks'
+import { codexSpawnEnv } from '../codexProfiles'
+import type { ChatAgentDriver, ChatDriverCallbacks, ChatEffort } from '../provider/driver'
+import { AppServerClient, type AppServerClientOptions, type AppServerExit } from './appServerClient'
+import { auditDeniedCard, auditItem, auditSpawnEnd } from './codexAudit'
+import { mapCodexNotification, turnCompletedDrafts, turnUsageBetween, type CodexEventDraft, type CodexOutput } from './codexEvents'
+import { CodexRequests } from './codexRequests'
+import { CLIENT_INFO, codexContextUsage, codexEffort, threadParams, type CodexClient, type CodexSessionDriverOptions } from './codexThread'
+import type { ThreadItem } from './protocol/v2/ThreadItem'
+import type { TokenUsageBreakdown } from './protocol/v2/TokenUsageBreakdown'
+import type { Turn } from './protocol/v2/Turn'
+
+export { codexEffort, type CodexSessionDriverOptions } from './codexThread'
+
+const UNAVAILABLE_COMMANDS: ChatCommandState = { status: 'unavailable', commands: [] }
+
+export class CodexSessionDriver implements ChatAgentDriver {
+  private client: CodexClient | null = null
+  /** Resolves once the thread is started or resumed on the current client. */
+  private ready: Promise<boolean> = Promise.resolve(false)
+  private threadId: string | null
+  private dead = false
+  private killed = false
+  private sequence = 0
+  private activeTurnId: string | null = null
+  private codexTurnId: string | null = null
+  /** A turn/start in flight, so interrupt can learn the Codex turn id. */
+  private turnStarting: Promise<void> | null = null
+  /** Interrupted Codex turns whose late frames and completion are dropped. */
+  private readonly interrupted = new Set<string>()
+  private lastStatus: SessionStatus | null = null
+  private activity = initialChatActivityState()
+  private spawnId = 'ob-s-none'
+  private projectPath: string
+  private readonly seenToolCallIds = new Set<string>()
+  private readonly itemInputs = new Map<string, Record<string, unknown>>()
+  private readonly askedItems = new Set<string>()
+  private turnStartTotal: TokenUsageBreakdown | null = null
+  private latestTotal: TokenUsageBreakdown | null = null
+  private lastModel: string | null = null
+  private readonly requests: CodexRequests
+
+  constructor(private readonly options: CodexSessionDriverOptions) {
+    this.threadId = options.resumeThreadId ?? null
+    this.projectPath = options.projectPath
+    this.requests = new CodexRequests({
+      emit: draft => this.emit(draft),
+      refreshStatus: () => this.refreshStatus(),
+      policy: () => this.options.getApprovalPolicy?.() ?? 'manual',
+      turnId: () => this.activeTurnId ?? this.startTurn({ kind: 'resumed' }),
+      itemInput: itemId => this.itemInputs.get(itemId),
+      denied: use => auditDeniedCard(this.options.outbound, use, { spawnId: this.spawnId, cwd: this.projectPath }),
+    })
+  }
+
+  get isDead(): boolean {
+    return this.dead
+  }
+
+  getCommandState(): ChatCommandState {
+    return UNAVAILABLE_COMMANDS
+  }
+
+  start(): void {
+    if (this.killed) return
+    this.ensureClient()
+  }
+
+  setProjectPath(path: string): void {
+    this.projectPath = path
+  }
+
+  send(text: string): void {
+    if (this.killed) return
+    this.ensureClient()
+    const turnId = this.activeTurnId ?? this.startTurn()
+    this.emit({ type: 'user_message', turnId, text })
+    this.startCodexTurn(text)
+    this.refreshStatus()
+  }
+
+  deliver(envelope: ChatPeerMessage): void {
+    if (this.killed) throw new Error('Recipient was killed')
+    if (this.activeTurnId || this.requests.size) throw new Error('Recipient is not idle')
+    this.ensureClient()
+    const turnId = this.startTurn()
+    this.emit({ type: 'peer_message', turnId, ...envelope })
+    this.startCodexTurn(formatEnvelope(envelope), envelope.messageId)
+    this.refreshStatus()
+  }
+
+  async interrupt(): Promise<void> {
+    this.requests.cancelAll()
+    const client = this.client
+    const starting = this.turnStarting
+    if (this.activeTurnId) {
+      const turnId = this.activeTurnId
+      this.activeTurnId = null
+      this.emit({ type: 'turn_interrupted', turnId })
+    }
+    this.refreshStatus()
+    if (!client) return
+    if (starting) await starting
+    // Killed or exited meanwhile (archive interrupts, then kills at once).
+    if (this.client !== client) return
+    const codexTurnId = this.codexTurnId
+    this.codexTurnId = null
+    if (!codexTurnId || !this.threadId) return
+    this.interrupted.add(codexTurnId)
+    const ack = client.request('turn/interrupt', { threadId: this.threadId, turnId: codexTurnId }).then(() => undefined)
+    let timer: NodeJS.Timeout | undefined
+    const bound = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, this.options.interruptTimeoutMs ?? 5_000)
+      timer.unref?.()
+    })
+    await Promise.race([ack, bound]).catch(() => {
+      // The process may already be gone; the exit handler settles the rest.
+    }).finally(() => clearTimeout(timer))
+  }
+
+  kill(): void {
+    this.killed = true
+    this.stop()
+  }
+
+  shutdown(): void {
+    this.killed = true
+    this.stop()
+  }
+
+  onApprovalPolicyChanged(policy: ChatApprovalPolicy): void {
+    this.requests.policyChanged(policy)
+  }
+
+  resolveApproval(requestId: string, decision: ChatApprovalDecision): { ok: true } | { ok: false; error: string } {
+    return this.requests.resolveApproval(requestId, decision)
+  }
+
+  answerQuestion(requestId: string, answers: Record<string, ChatQuestionAnswer>): { ok: true } | { ok: false; error: string } {
+    return this.requests.answerQuestion(requestId, answers)
+  }
+
+  getPendingRequests(): ChatPendingRequest[] {
+    return this.requests.snapshot()
+  }
+
+  getSeenToolCallIds(): Set<string> {
+    return new Set(this.seenToolCallIds)
+  }
+
+  // Non-goals for Codex chats (design D7): no worker roster, no background tasks.
+  getWorkers(): ChatWorker[] {
+    return []
+  }
+
+  getBackgroundTasks(): ChatBackgroundTask[] {
+    return []
+  }
+
+  getBackgroundTaskRecords(): BackgroundTaskRecord[] {
+    return []
+  }
+
+  getTaskOutput(): Promise<null> {
+    return Promise.resolve(null)
+  }
+
+  stopTask(): Promise<boolean> {
+    return Promise.resolve(false)
+  }
+
+  // ---------------------------------------------------------------- internals
+
+  private stop(): void {
+    this.requests.cancelAll()
+    if (this.activeTurnId) {
+      const turnId = this.activeTurnId
+      this.activeTurnId = null
+      this.emit({ type: 'turn_interrupted', turnId })
+    }
+    const client = this.client
+    this.client = null
+    client?.end()
+    if (client) auditSpawnEnd(this.options.outbound, this.spawnId)
+    this.refreshStatus()
+  }
+
+  private ensureClient(): void {
+    this.dead = false
+    if (this.client) return
+    this.spawnId = `ob-s-${crypto.randomUUID()}`
+    const env = codexSpawnEnv(this.options.serverEnv ?? process.env, this.options.codexHome, this.options.withheldCredentials)
+    const clientOptions: AppServerClientOptions = {
+      executable: this.options.executable,
+      env,
+      wire: this.options.wire,
+      onNotification: (method, params) => {
+        if (this.client === client) this.onNotification(method, params)
+      },
+      onServerRequest: (method, params) => this.onServerRequest(method, params),
+      onExit: exit => this.onExit(client, exit),
+    }
+    const client = (this.options.createClient ?? (o => new AppServerClient(o)))(clientOptions)
+    this.client = client
+    client.start()
+    this.ready = this.boot(client, env)
+  }
+
+  /** initialize, then thread/start or thread/resume; false on failure. */
+  private async boot(client: CodexClient, env: Record<string, string>): Promise<boolean> {
+    const resumed = this.threadId !== null
+    const instructions = this.options.getSystemPromptAppend?.() ?? ''
+    const effort = this.options.getEffort?.()
+    try {
+      await client.initialize(CLIENT_INFO)
+      const params = await threadParams({ cwd: this.projectPath, network: this.options.network, instructions, model: this.options.model })
+      const result = await client.request(
+        resumed ? 'thread/resume' : 'thread/start',
+        resumed ? { ...params, threadId: this.threadId } : { ...params, ephemeral: false },
+      ) as { thread?: { id?: unknown; path?: unknown }; model?: unknown }
+      if (this.client !== client) return false
+      const thread = result?.thread
+      if (typeof thread?.id !== 'string') throw new Error('Codex app-server returned no thread')
+      if (!resumed) {
+        this.threadId = thread.id
+        this.options.onSdkSessionId?.(thread.id)
+      }
+      if (typeof thread.path === 'string' && thread.path) this.options.onTranscriptPath?.(thread.path)
+      if (typeof result.model === 'string') this.reportModel(result.model)
+      this.reportSpawn({ instructions, effort, env, resumed })
+      return true
+    } catch (error) {
+      if (this.client !== client) return false
+      const message = error instanceof Error ? error.message : String(error)
+      logger.warn('codex_thread_start_failed', { sessionId: this.options.sessionId, error: message })
+      this.emit({ type: 'error', message: `Codex could not ${resumed ? 'resume' : 'start'} the thread: ${message}` })
+      this.endActiveTurn()
+      client.end()
+      return false
+    }
+  }
+
+  private reportSpawn(input: { instructions: string; effort: ChatEffort | undefined; env: Record<string, string>; resumed: boolean }): void {
+    try {
+      this.options.onSpawn?.({
+        cwd: this.projectPath,
+        systemPromptAppend: input.instructions,
+        effort: input.effort ?? null,
+        model: this.options.model ?? null,
+        env: input.env,
+        resumed: input.resumed,
+      })
+    } catch (error) {
+      logger.warn('chat_spawn_hook_failed', { sessionId: this.options.sessionId, error: error instanceof Error ? error.message : String(error) })
+    }
+  }
+
+  /**
+   * Ask the app-server for a turn once the thread is ready. Delivered mail
+   * passes its message id as clientUserMessageId (D8, for debugging only:
+   * receipt still comes from the rollout file).
+   */
+  private startCodexTurn(text: string, clientUserMessageId = `kawai-${crypto.randomUUID()}`): void {
+    const client = this.client
+    if (!client) return
+    const effort = codexEffort(this.options.getEffort?.())
+    const starting = this.ready.then(async (ok) => {
+      if (!ok || this.client !== client || !this.threadId) return
+      const result = await client.request('turn/start', {
+        threadId: this.threadId,
+        input: [{ type: 'text', text, text_elements: [] }],
+        clientUserMessageId,
+        ...(effort ? { effort } : {}),
+      }) as { turn?: { id?: unknown } }
+      const id = result?.turn?.id
+      // Bound even when an interrupt already closed the Kawai turn: the
+      // interrupt waits for this response to learn which turn to stop.
+      if (typeof id === 'string' && !this.interrupted.has(id)) this.codexTurnId ??= id
+    }).catch((error: unknown) => {
+      if (this.client !== client) return
+      this.emit({ type: 'error', message: `Codex refused the turn: ${error instanceof Error ? error.message : String(error)}` })
+      this.endActiveTurn()
+    }).finally(() => {
+      if (this.turnStarting === starting) this.turnStarting = null
+    })
+    this.turnStarting = starting
+  }
+
+  private onNotification(method: string, params: Record<string, unknown>): void {
+    const frameTurn = typeof params.turnId === 'string' ? params.turnId : undefined
+    if (frameTurn && this.interrupted.has(frameTurn)) return
+    const turnId = this.activeTurnId ?? ''
+    if (method === 'error' && params.willRetry === true) {
+      this.feedActivity({ type: 'api_retry', attempt: 1, maxRetries: 1 })
+    }
+    for (const output of mapCodexNotification(method, params, turnId)) this.apply(output, method, params)
+  }
+
+  private apply(output: CodexOutput, method: string, params: Record<string, unknown>): void {
+    switch (output.kind) {
+      case 'turn_started':
+        if (this.interrupted.has(output.codexTurnId)) return
+        if (!this.activeTurnId) this.startTurn({ kind: 'resumed' })
+        this.codexTurnId = output.codexTurnId
+        this.turnStartTotal = this.latestTotal
+        return
+      case 'turn_completed':
+        this.completeTurn(output.turn)
+        return
+      case 'token_usage':
+        this.onTokenUsage(output.usage.total, output.usage.last, output.usage.modelContextWindow)
+        return
+      case 'question': {
+        if (this.askedItems.has(output.itemId)) return
+        this.askedItems.add(output.itemId)
+        this.requests.asyncQuestion(output.questions, text => this.answerAsync(text))
+        return
+      }
+      case 'compaction':
+        this.onCompacted(output.itemId)
+        return
+      case 'activity':
+        this.feedActivity(output.input)
+        return
+      case 'event': {
+        if (!this.activeTurnId) return
+        const draft = output.draft
+        if (draft.type === 'tool_call') {
+          this.seenToolCallIds.add(draft.toolCallId)
+          this.itemInputs.set(draft.toolCallId, draft.input as Record<string, unknown>)
+        }
+        this.emit(draft)
+        const item = (params as { item?: ThreadItem }).item
+        if (draft.type === 'tool_call' && method === 'item/started') this.audit('started', item)
+        if (draft.type === 'tool_result' && method === 'item/completed') this.audit('completed', item)
+        return
+      }
+    }
+  }
+
+  private audit(phase: 'started' | 'completed', item: ThreadItem | undefined): void {
+    auditItem(phase, item, { sink: this.options.outbound, spawnId: this.spawnId, cwd: this.projectPath })
+  }
+
+  /** An async question's answer: input added to the active turn. */
+  private answerAsync(text: string): void {
+    const client = this.client
+    if (!client || !this.threadId) return
+    client.request('turn/start', { threadId: this.threadId, input: [{ type: 'text', text, text_elements: [] }] }).catch(() => {
+      // A dead process surfaces through onExit.
+    })
+  }
+
+  private completeTurn(turn: Turn): void {
+    if (this.interrupted.delete(turn.id)) return
+    const turnId = this.activeTurnId
+    if (!turnId) return
+    if (this.codexTurnId && turn.id !== this.codexTurnId) return
+    this.activeTurnId = null
+    this.codexTurnId = null
+    if (turn.status === 'interrupted') {
+      this.emit({ type: 'turn_interrupted', turnId })
+    } else {
+      for (const draft of turnCompletedDrafts(turn, turnId, turnUsageBetween(this.turnStartTotal, this.latestTotal))) this.emit(draft)
+    }
+    this.turnStartTotal = this.latestTotal
+    this.refreshStatus()
+  }
+
+  private onTokenUsage(total: TokenUsageBreakdown, last: TokenUsageBreakdown, window: number | null): void {
+    this.latestTotal = total
+    if (!window || window <= 0 || !this.options.onContextUsage) return
+    this.options.onContextUsage(codexContextUsage(last, window), { thresholdSource: 'model-window-fallback' })
+  }
+
+  private onCompacted(itemId: string): void {
+    try {
+      const now = new Date().toISOString()
+      this.options.onCompaction?.({
+        trigger: 'auto', startedAt: null, endedAt: now, preTokens: null, postTokens: null,
+        durationSeconds: null, outcome: 'completed',
+      }, `boundary:${itemId}`)
+    } catch {
+      logger.warn('chat_compaction_observation_failed')
+    }
+    this.emit({ type: 'notice', text: 'Context compacted', kind: 'compacted' })
+  }
+
+  private onServerRequest(method: string, params: Record<string, unknown>): Promise<unknown> {
+    if (this.requests.handles(method)) return this.requests.serverRequest(method, params)
+    if (method === 'item/tool/call') {
+      // The kawai-team dynamic tools arrive with PR D; refuse rather than hang.
+      return Promise.resolve({ success: false, contentItems: [{ type: 'inputText', text: 'Kawai team tools are not available in this build.' }] })
+    }
+    return Promise.reject(new Error(`Kawai does not handle ${method}`))
+  }
+
+  private onExit(client: CodexClient, exit: AppServerExit): void {
+    if (this.client !== client) return
+    this.client = null
+    this.dead = true
+    this.ready = Promise.resolve(false)
+    auditSpawnEnd(this.options.outbound, this.spawnId)
+    this.requests.cancelAll()
+    this.endActiveTurn()
+    this.options.onProcessEnd?.()
+    const how = exit.signal ? `on ${exit.signal}` : exit.code !== null ? `with code ${exit.code}` : 'without starting'
+    this.emit({ type: 'error', message: `The Codex app-server exited ${how}` })
+    this.refreshStatus()
+  }
+
+  /** A failed start or a dead process: the open turn ends as an error. */
+  private endActiveTurn(): void {
+    const turnId = this.activeTurnId
+    this.activeTurnId = null
+    this.codexTurnId = null
+    if (turnId) this.emit({ type: 'turn_completed', turnId, subtype: 'error_during_execution', isError: true })
+    this.refreshStatus()
+  }
+
+  private startTurn(trigger?: ChatTurnTrigger): string {
+    const turnId = this.options.createTurnId?.() ?? `turn-${crypto.randomUUID()}`
+    // Per-item state lives one turn (bounded however long the session): an
+    // item's approval and question arrive within its turn, and outside a
+    // turn no item is recorded. The ids a live replay must not cancel are
+    // the open turn's — an ended turn's outcome is final in its rollout.
+    this.seenToolCallIds.clear()
+    this.itemInputs.clear()
+    this.askedItems.clear()
+    this.activeTurnId = turnId
+    this.emit({ type: 'turn_started', turnId, ...(trigger ? { trigger } : {}) })
+    return turnId
+  }
+
+  private reportModel(model: string): void {
+    if (!model || model === this.lastModel) return
+    this.lastModel = model
+    this.options.onModel?.(model)
+  }
+
+  private refreshStatus(): void {
+    const next: SessionStatus = this.requests.size > 0 ? 'permission' : this.activeTurnId ? 'working' : 'waiting'
+    if (next === this.lastStatus) return
+    this.lastStatus = next
+    this.options.onStatus(next)
+  }
+
+  private feedActivity(input: ChatActivityInput): void {
+    const previous = this.activity
+    this.activity = reduceActivity(this.activity, input)
+    const changed = JSON.stringify(activityBody(previous)) !== JSON.stringify(activityBody(this.activity))
+      || previous.phaseStartedAt !== this.activity.phaseStartedAt
+    if (changed) this.options.onActivity?.(projectActivity(this.activity))
+  }
+
+  private emit(draft: CodexEventDraft): void {
+    this.sequence += 1
+    this.options.onEvent({ ...draft, id: `evt-${crypto.randomUUID()}`, sequence: this.sequence, at: new Date().toISOString() } as Parameters<ChatDriverCallbacks['onEvent']>[0])
+    if (draft.type === 'turn_started') this.feedActivity({ type: 'turn_started' })
+    else if (draft.type === 'turn_completed' || draft.type === 'turn_interrupted') this.feedActivity({ type: 'turn_end' })
+    else if (draft.type === 'request_resolved') this.feedActivity({ type: 'request_resolved' })
+  }
+}

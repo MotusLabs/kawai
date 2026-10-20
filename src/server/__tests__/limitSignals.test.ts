@@ -31,11 +31,28 @@ describe('limit signals', () => {
 
   test('failed assistant messages read the status from the error text', () => {
     expect(assistantLimitSignal('billing_error', 'API Error: 402 pay up', null))
-      .toEqual({ kind: 'billing_error', final: true, status: 402, message: 'API Error: 402 pay up', resetsAt: null, window: null })
+      .toEqual({ kind: 'billing_error', final: true, status: 402, message: 'API Error: 402 pay up', resetsAt: null, window: 'credit' })
     expect(assistantLimitSignal('rate_limit', '  ', null)).toMatchObject({ status: null, message: null })
     expect(assistantLimitSignal('invalid_request', 'API Error: 429 x', null)).toMatchObject({ status: 429 })
     expect(assistantLimitSignal('invalid_request', 'API Error: 400 x', null)).toBeNull()
     expect(assistantLimitSignal(undefined, 'API Error: 429', null)).toBeNull()
+  })
+
+  test("a 402 is a final credit limit whatever the class: OpenRouter's frame through Claude Code", () => {
+    // The spike's assistant frame: Claude Code wraps OpenRouter's 402 as
+    // error "unknown" with no api_retry before it.
+    const text = 'API Error: 402 This request requires more credits, or fewer max_tokens. You requested up to 32000 tokens, but can only afford 9957. To increase, visit https://openrouter.ai/settings/keys and create a key with a higher total limit'
+    expect(assistantLimitSignal('unknown', text, null))
+      .toEqual({ kind: 'unknown', final: true, status: 402, message: text, resetsAt: null, window: 'credit' })
+    // A known reset never applies to credit: waiting creates none.
+    expect(assistantLimitSignal('billing_error', 'API Error: 402 pay up', '2026-10-18T12:00:00.000Z'))
+      .toMatchObject({ final: true, resetsAt: null, window: 'credit' })
+    // A retried 402 (none observed) is still final.
+    expect(retryLimitSignal({ error: 'unknown', error_status: 402 }, 'r'))
+      .toEqual({ kind: 'unknown', final: true, status: 402, message: null, resetsAt: null, window: 'credit' })
+    // Other limits carry the window they are given, none here.
+    expect(retryLimitSignal({ error: 'rate_limit', error_status: 429 }, null)).toMatchObject({ window: null })
+    expect(assistantLimitSignal('rate_limit', 'API Error: 429 x', null)).toMatchObject({ window: null })
   })
 
   test('a zone-less reset in the error text is read in the profile zone', () => {

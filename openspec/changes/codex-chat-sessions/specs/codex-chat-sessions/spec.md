@@ -151,6 +151,33 @@ A Codex chat SHALL have the same `kawai-team` tools as a Claude chat, with ident
 - **WHEN** the installed Codex refuses the team tool registration
 - **THEN** the chat's agent does not start and the chat shows the refusal
 
+### Requirement: Codex tool use is audited like Claude tool use
+A Codex chat SHALL feed every command execution and every external MCP tool call to the outbound observer that audits Claude Bash and MCP calls, with the same classification, withholding, and redaction. The feed SHALL be observation only: it SHALL never block, delay, or deny a call. Team tool calls SHALL NOT be recorded, and a file change SHALL NOT be a send. Codex developer instructions SHALL carry the same outbound-actions security note as the Claude prompt.
+
+#### Scenario: Command execution is observed
+- **WHEN** a Codex member runs a shell command that sends to a destination
+- **THEN** the outbound audit records the call with its verdict and outcome, and the command runs exactly as it would unobserved
+
+#### Scenario: External MCP call is observed
+- **WHEN** a Codex member calls a tool of an external MCP server
+- **THEN** the outbound audit records one MCP call row for it
+
+#### Scenario: Observer failure
+- **WHEN** the outbound observer throws while a Codex command runs
+- **THEN** the command still runs and the turn continues
+
+#### Scenario: Team tools are exempt
+- **WHEN** a Codex member calls a `kawai-team` tool
+- **THEN** no outbound audit row is written for the call
+
+#### Scenario: A file change is not a send
+- **WHEN** a Codex member changes files
+- **THEN** no outbound audit row is written for the change
+
+#### Scenario: Security note in developer instructions
+- **WHEN** a Codex chat's agent starts or resumes
+- **THEN** its developer instructions end with the outbound-actions security note rendered from the configured destinations
+
 ### Requirement: Codex members receive their role and team context
 A Codex chat that belongs to a group SHALL receive the same role body, mailbox note, task note, and strategy note a Claude member of that group receives, read when its agent starts. A group's reasoning effort SHALL apply to its Codex members' turns.
 

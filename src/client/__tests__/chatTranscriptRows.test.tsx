@@ -213,6 +213,34 @@ describe('mixed transcript keeps every value and control (D3)', () => {
     act(() => renderer.unmount())
   })
 
+  const renderCompletion = (event: Record<string, unknown>) => {
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<ChatMessages sessionId={SESSION} sendMessage={() => {}} connected
+        archived={false} sessions={live} projectPath="/repo"
+        events={[{ id: 'done', sequence: 0, at: at(1), type: 'turn_completed', turnId: 't1', subtype: 'success', numTurns: 1, ...event }] as ChatEvent[]} />)
+    })
+    return renderer
+  }
+
+  test('OpenRouter turn: the provider-reported charge replaces the estimate, explained on hover', () => {
+    const renderer = renderCompletion({ totalCostUsd: 0.042563, providerCostUsd: 0.001064075 })
+    expect(textOf(renderer.root)).toContain('Turn complete · success · $0.0011 · 1 turns')
+    expect(textOf(renderer.root)).not.toContain('$0.0426 ·')
+    const [cost] = byTestId(renderer.root, 'turn-provider-cost')
+    expect(String(cost!.props.title)).toContain('Charged by the provider')
+    expect(String(cost!.props.title)).toContain('not included')
+    expect(String(cost!.props.title)).toContain('$0.0426')
+    act(() => renderer.unmount())
+  })
+
+  test('Provider without reported cost: the SDK estimate shows as before', () => {
+    const renderer = renderCompletion({ totalCostUsd: 0.1234 })
+    expect(textOf(renderer.root)).toContain('Turn complete · success · $0.1234 · 1 turns')
+    expect(byTestId(renderer.root, 'turn-provider-cost')).toHaveLength(0)
+    act(() => renderer.unmount())
+  })
+
   test('archived: the same details remain, but no task Stop', () => {
     const renderer = renderMixed(true)
     const text = textOf(renderer.root)

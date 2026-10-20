@@ -121,5 +121,8 @@ describe('executionProgress', () => {
     const labels = reasons.map(waitingLabel)
     expect(new Set(labels).size).toBe(reasons.length)
     expect(labels.every(label => !/idle/i.test(label))).toBe(true)
+    // A member still starting has no session yet: the worktree is named instead.
+    expect(waitingLabel({ kind: 'release', member: '', reason: 'a devs member is still starting' }))
+      .toBe('waits for the worktree to be released: a devs member is still starting')
   })
 })

@@ -4,10 +4,16 @@
 // final failure. Both count when the error class is `rate_limit`,
 // `billing_error`, or `overloaded`, or when the HTTP status is 429 whatever
 // the class — gateways often report quota exhaustion under another class, so
-// the raw status and message ride along for routing rules to inspect.
+// the raw status and message ride along for routing rules to inspect. HTTP
+// 402 (payment required: out of credit) is always a final limit in the
+// `credit` window, whatever the class or retry (openrouter-provider D7):
+// waiting creates no credit.
 
 /** Error classes that always count as a limit. */
 export const LIMIT_ERROR_CLASSES: ReadonlySet<string> = new Set(['rate_limit', 'billing_error', 'overloaded'])
+
+/** The window a 402 counts against: no reset, ended by new credit. */
+export const CREDIT_LIMIT_WINDOW = 'credit'
 
 /** One limit failure as the driver sees it; the session adds identity. */
 export interface ChatLimitSignal {
@@ -16,9 +22,15 @@ export interface ChatLimitSignal {
   status: number | null
   message: string | null
   resetsAt: string | null
-  /** The rejected rate-limit report's window (`seven_day_opus`, …); null when unnamed. */
+  /**
+   * The limit window: the rejected rate-limit report's (`seven_day_opus`, …),
+   * `credit` for a 402, or null when unnamed.
+   */
   window: string | null
 }
+
+/** The fields a 402 forces: final, credit window, no reset. */
+const CREDIT = { final: true, resetsAt: null, window: CREDIT_LIMIT_WINDOW } as const
 
 /** Structural slice of a `system/api_retry` frame. */
 export interface ApiRetrySlice {
@@ -29,6 +41,7 @@ export interface ApiRetrySlice {
 export function retryLimitSignal(frame: ApiRetrySlice, resetsAt: string | null, window: string | null = null): ChatLimitSignal | null {
   const status = typeof frame.error_status === 'number' ? frame.error_status : null
   const kind = frame.error ?? 'unknown'
+  if (status === 402) return { kind, status, message: null, ...CREDIT }
   if (!LIMIT_ERROR_CLASSES.has(kind) && status !== 429) return null
   return { kind, final: false, status, message: null, resetsAt, window }
 }
@@ -46,8 +59,10 @@ export function assistantLimitSignal(
   if (!error) return null
   const match = /API Error:\s*(\d{3})\b/.exec(text)
   const status = match ? Number(match[1]) : null
+  const message = text.trim() || null
+  if (status === 402) return { kind: error, status, message, ...CREDIT }
   if (!LIMIT_ERROR_CLASSES.has(error) && status !== 429) return null
-  return { kind: error, final: true, status, message: text.trim() || null, resetsAt, window }
+  return { kind: error, final: true, status, message, resetsAt, window }
 }
 
 const FIXED_OFFSET = /^([+-])(\d{2}):(\d{2})$/

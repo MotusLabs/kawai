@@ -56,17 +56,21 @@ export const CODEX_PROVIDER_LABEL = 'Codex'
  * a `#!/usr/bin/env node` codex starts — minus the provider variables:
  * every ANTHROPIC_* and CLAUDE_CODE_* variable (PROFILE_CONTROLLED_ENV is a
  * subset), CLAUDE_CONFIG_DIR (R2-4), and the AGENTBOARD_CHAT_ENV overrides,
- * which must never steer another agent runtime. Configuration travels as
+ * which must never steer another agent runtime — and every variable the
+ * catalog names as a credential (openrouter-provider D3, task 1.8), so no
+ * Codex agent inherits another provider's key. Configuration travels as
  * `-c` overrides instead (task 5.3's sandbox builds them), and the spawn
  * writes nothing into the home.
  */
 export function codexSpawnEnv(
   serverEnv: Record<string, string | undefined>,
   resolvedHome: string,
+  withheld: ReadonlySet<string>,
 ): Record<string, string> {
   const env: Record<string, string> = {}
   for (const [name, value] of Object.entries(serverEnv)) {
     if (value === undefined) continue
+    if (withheld.has(name)) continue
     if (name === 'AGENTBOARD_CHAT_ENV') continue
     if (name === 'CLAUDE_CONFIG_DIR') continue
     if (name.startsWith('ANTHROPIC_') || name.startsWith('CLAUDE_CODE_')) continue

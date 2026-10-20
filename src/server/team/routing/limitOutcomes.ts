@@ -17,7 +17,9 @@
 // A final limit in a turn the agent started itself (limit-outcomes-agent-turns)
 // parks the session's current work — the newest message delivered to, parked
 // on, or resumed by it that it still holds — and never releases or forwards
-// it: that instruction may already be complete.
+// it: that instruction may already be complete. A credit limit (a 402,
+// openrouter-provider D8) never parks: delivered work takes `otherwise`, and
+// an agent-started turn's work is left where it is.
 import type { Database } from 'bun:sqlite'
 import type { ChatSessionRecord } from '../../db'
 import type { ChatHandoffPackage } from '../../../shared/team'
@@ -29,6 +31,7 @@ import { DEFAULT_PARK_IF_RESET_WITHIN_MS } from '../groupFile'
 import type { MailboxStore, TeamMessage } from '../mailboxStore'
 import { ProgressDigest } from './handoff'
 import { DEFAULT_COOLDOWN_MS, isModelScoped, type LimitEventStore } from './limitEvents'
+import { CREDIT_LIMIT_WINDOW } from '../../chat/limitSignals'
 import { providerOf } from '../../chat/profileCatalog'
 import { catalogCtx } from '../cooldowns'
 import { MAX_PARKS, resolveLimit, type LimitResolution } from './limitPolicy'
@@ -193,6 +196,8 @@ export class LimitOutcomes {
 
   /** A final limit in an agent-started turn parks the current work (D3). */
   private parkCurrent(sessionId: string, event: LimitEvent): void {
+    // Waiting creates no credit, and this work is never released or forwarded (D2).
+    if (event.window === CREDIT_LIMIT_WINDOW) return
     const work = this.currentWork(sessionId)
     if (!work) return
     const resetsAt = this.resetTime(event)
@@ -316,6 +321,7 @@ export class LimitOutcomes {
     const resolution: LimitResolution = resolveLimit({
       toolCalls: digest.toolCalls, resetInMs: Date.parse(resetsAt) - now, parkCount: message.parkCount, policy,
       ...(ruled ? { ruled } : {}),
+      ...(event.window === CREDIT_LIMIT_WINDOW ? { credit: true } : {}),
     })
     // If recovery has already happened, retry without briefly pausing the agent.
     if (resolution.type === 'park' && Date.parse(resetsAt) > this.now()) {

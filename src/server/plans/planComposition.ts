@@ -69,6 +69,8 @@ export interface ExecutionTeamServices {
   supervision?: SupervisionRuntime
   /** Member release's readiness and release (the D11 release-before-review seam). */
   releases: MemberRelease
+  /** Staffing's in-flight spawn reservations: a member still starting holds the D11 release step. */
+  pendingSpawns: (teamId: string) => Array<{ groupId: string; worktree: string }>
   records: () => Iterable<ChatSessionRecord>
   /** The team's identity by team id — the executor's ticks resolve teams this way. */
   identityOf: (teamId: string) => TeamIdentity | undefined
@@ -292,6 +294,7 @@ export function composePlanServices(options: PlanServicesOptions): {
           return readiness.ready ? { ready: true, reason: null } : { ready: false, reason: readiness.reason }
         },
         release: sessionId => team.releases.releaseNow(sessionId, ' before the review handoff (plan-execution D11)'),
+        pendingSpawns: team.pendingSpawns,
       },
       conditionsOf,
       adapters: { provision: provisionAdapter(executionStore, undefined, mechanisms) },

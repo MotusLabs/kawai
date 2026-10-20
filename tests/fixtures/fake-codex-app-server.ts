@@ -8,19 +8,31 @@
 // FAKE_RUN=<n> picks the run (1-based; the transcript splits on each fresh
 // `initialize` request; default 1). FAKE_TRANSCRIPT overrides the path.
 // FAKE_EXIT_AFTER_REPLAY=1 exits 0 once the run is replayed; the default
-// stays alive until stdin closes (the driver's end()).
+// stays alive until stdin closes (the driver's end()). FAKE_ENV_NAMES=<file>
+// writes the NAMES of the variables the child received (never a value), so
+// a test can check what a launch withheld.
 //
 // Causality: a recorded response waits until the client sent the request
 // with that id; a recorded server request is emitted and then waits for the
 // client's reply with that id; notifications emit in order. A client request
 // whose method does not match the run's recorded sequence fails loudly
 // (exit 2), so a replay drift is a test failure, not a silent mismatch.
+import { writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+
+// The executable gate's probe (codexExecutable.ts): FAKE_VERSION overrides
+// the baseline the fake reports.
+if (process.argv.includes('--version')) {
+  console.log(`codex-cli ${process.env.FAKE_VERSION ?? '0.163.0'}`)
+  process.exit(0)
+}
 
 if (!process.argv.includes('app-server')) {
   console.error('fake-codex-app-server must be spawned as `<fake> app-server`')
   process.exit(2)
 }
+
+if (process.env.FAKE_ENV_NAMES) writeFileSync(process.env.FAKE_ENV_NAMES, Object.keys(process.env).sort().join('\n'))
 
 const runNumber = Number(process.env.FAKE_RUN ?? '1')
 const defaultTranscript = fileURLToPath(
