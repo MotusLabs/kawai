@@ -39,7 +39,7 @@
 
 ## 5. Integration
 
-- [ ] 5.1 Run `bun run lint && bun run typecheck && bun run test` on the final head, and `openspec validate openrouter-provider --strict`. Verify all pass.
+- [x] 5.1 Run `bun run lint && bun run typecheck && bun run test` on the final head, and `openspec validate openrouter-provider --strict`. Verify all pass.
 - [ ] 5.2 Do a live check with a capped inference key in `OPENROUTER_API_KEY` and a management key in `OPENROUTER_MANAGEMENT_KEY`. An `openrouter-haiku` chat completes a turn; the usage bar shows the key cap and credits meters; the completion summary shows the provider-reported cost; a Bash tool `env` in an `openrouter` and in a GLM session shows neither key variable. Spending the cap records a `credit` event and cools `openrouter`. Delete the test key afterwards. Verify by recording the observations in the PR description, with no key material.
 
 ## Workflow follow-up
