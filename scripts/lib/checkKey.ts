@@ -49,6 +49,16 @@ function gitOrThrow(args: string[], cwd: string, env?: Record<string, string>): 
 }
 
 /**
+ * The repository's index path. `git rev-parse --git-path` answers relative to
+ * the git process's cwd, so a relative answer is joined to that cwd — never
+ * to this process's own working directory, which may be anywhere.
+ */
+export function resolveIndexPath(cwd: string): string {
+  const answer = gitOrThrow(['rev-parse', '--git-path', 'index'], cwd)
+  return path.isAbsolute(answer) ? answer : path.join(cwd, answer)
+}
+
+/**
  * Compute the working tree's content key. Throws outside a repository, on a
  * git failure (a conflicted index, for example), or when the index path
  * cannot be resolved — a check must never cache under a key it could not
@@ -59,16 +69,6 @@ function gitOrThrow(args: string[], cwd: string, env?: Record<string, string>): 
  *   from the environment before the check strips GIT_* from step
  *   environments), so the key still reflects the commit's staged content.
  */
-/**
- * The repository's index path. `git rev-parse --git-path` answers relative to
- * the git process's cwd, so a relative answer is joined to that cwd — never
- * to this process's own working directory, which may be anywhere.
- */
-export function resolveIndexPath(cwd: string): string {
-  const answer = gitOrThrow(['rev-parse', '--git-path', 'index'], cwd)
-  return path.isAbsolute(answer) ? answer : path.join(cwd, answer)
-}
-
 export function computeContentKey(options: { cwd: string; indexFile?: string }): ContentKey {
   const { cwd, indexFile } = options
   const sourceIndex = indexFile ?? resolveIndexPath(cwd)

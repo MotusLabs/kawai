@@ -115,7 +115,8 @@ describe('computeContentKey', () => {
     expect(fs.existsSync(resolveIndexPath(repo))).toBe(true)
   })
 
-  test('an explicit indexFile is used as the copy source', () => {    const hookIndex = path.join(tempRoot, 'hook-index')
+  test('an explicit indexFile is used as the copy source', () => {
+    const hookIndex = path.join(tempRoot, 'hook-index')
     fs.copyFileSync(path.join(repo, '.git', 'index'), hookIndex)
     expect(computeContentKey({ cwd: repo, indexFile: hookIndex }).key).toBe(key())
   })
