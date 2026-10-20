@@ -151,16 +151,53 @@ export function planSteps(snapshot: ExecutionSnapshot, _now: string): PlanSteps 
       // D13's follow-ons: a settled merge or update-branch effect of a
       // landing change is applied by the tick (merge → landed, or back to
       // up-to-date; update → the clean-merge check, polled until the head
-      // moves); a standing one is left to settle. Checked before a human
-      // close (D19): like Stop for that one change, the running effect
-      // settles and is recorded first, and a completed merge lands.
+      // moves); a standing one is left to settle. A change the Retry left
+      // waiting for the slot (A2's fallback) is a resumed landing: its
+      // re-opened row — any landing kind of the current round — is what
+      // decides (I-B), so a settled one is applied and a live or pending one
+      // is never re-derived. Checked before a human close (D19): like Stop
+      // for that one change, the running effect settles and is recorded
+      // first, and a completed merge lands.
       const landingEffect = change.landingEffect
+      const roundMatched = landingEffect !== null && change.round !== null && landingEffect.roundId === change.round.id
       const settling = change.state === 'landing' && (change.step === 'merging' || change.step === 'updating')
+      const resumedWait = change.state === 'gating' && change.step === 'awaiting-slot' && roundMatched
       if (settling) {
         if (landingEffect !== null && landingEffect.state === 'done'
           && ((change.step === 'merging' && (landingEffect.kind === 'merge' || landingEffect.kind === 'fast-forward')) || (change.step === 'updating' && landingEffect.kind === 'update-branch'))) {
           steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'landing-outcome', roundId: null, resultId: null, effectId: landingEffect.id })
         }
+        continue
+      }
+      if (resumedWait) {
+        if (landingEffect !== null && landingEffect.state === 'done') {
+          // Any landing verdict: merged, refused (merged:false), a
+          // fast-forward's moved or rewritten answer — the follow-on applies
+          // what happened, never what a re-derivation would now compute.
+          steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'landing-outcome', roundId: null, resultId: null, effectId: landingEffect.id })
+          continue
+        }
+        if (landingEffect !== null && landingEffect.state === 'failed'
+          && (landingEffect.outcome as { stop?: unknown } | null)?.stop !== undefined) {
+          // An inspection's stop verdict (pr-closed, a foreign branch): the
+          // change stops through the same path a run's failure would.
+          steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'landing-outcome', roundId: null, resultId: null, effectId: landingEffect.id })
+          continue
+        }
+        // Live (running, or unknown awaiting its inspection): the row decides
+        // first — nothing is planned (I-A). A pending row is queued for the
+        // slot: the normal landing stage below waits for the slot and adopts
+        // the row (A1) when it re-enters.
+        if (landingEffect !== null && (landingEffect.state === 'running' || landingEffect.state === 'unknown')) continue
+      }
+      // A verdict that settled behind the change's step: a merge that merged
+      // (or an update that moved the head) while the stage read up-to-date
+      // again is applied instead of re-derived; a refused merge re-runs the
+      // stage from the up-to-date step.
+      if (change.state === 'landing' && change.step === 'up-to-date' && roundMatched && landingEffect !== null && landingEffect.state === 'done'
+        && (landingEffect.kind === 'update-branch'
+          || (landingEffect.kind === 'merge' && (landingEffect.outcome as { merged?: unknown } | null)?.merged === true))) {
+        steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'landing-outcome', roundId: null, resultId: null, effectId: landingEffect.id })
         continue
       }
       // A human close of the change's task stops it (D19); Kawai's own closes
@@ -197,9 +234,10 @@ export function planSteps(snapshot: ExecutionSnapshot, _now: string): PlanSteps 
       if (change.task === null) continue
       // The round pipeline (D9-D11): a result becomes a round, a round is
       // pushed, PR'd, CI-read, reviewed, and decided. A landing change holds
-      // the slot for its base merge, so no newer result supersedes its round.
+      // the slot for its base merge, so no newer result supersedes its round;
+      // a resumed landing keeps its round until its re-opened row decides.
       const newest = change.task.results.at(-1) ?? null
-      if (change.state !== 'landing' && newest !== null && (change.round === null || change.round.resultId !== newest.id)) {
+      if (change.state !== 'landing' && !resumedWait && newest !== null && (change.round === null || change.round.resultId !== newest.id)) {
         steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'result', roundId: null, resultId: newest.id })
         continue
       }

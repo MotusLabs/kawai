@@ -303,10 +303,17 @@ describe('the retry resumes at the stopped effect\'s step (A2)', () => {
       expect(h.executions.effect(merge.id)).toMatchObject({ state: 'unknown' })
       expect(h.executions.change(executionId, 'tb-sb')).toMatchObject({ state: 'gating', step: 'awaiting-slot' })
       expect(h.executions.slot(matrix.world.team.teamId)?.holderId).toContain(':tb-sa')
+      // The inspection answers: the PR is unmerged, so the row is queued to
+      // run — and the slot rule keeps it queued while tb-sb holds no slot.
       const calls: string[] = []
-      await tickWith(() => h.makeExecutor({ reads: rejecting, adapters: { merge: recording(calls, 'merge') } }))
+      const log: string[] = []
+      await tickWith(() => h.makeExecutor({
+        reads: answering(log, { prView: async () => openPull(999, 'head') }),
+        adapters: { merge: recording(calls, 'merge') },
+      }))
+      expect(log.length).toBeGreaterThan(0)
       expect(calls).toEqual([])
-      expect(h.executions.effect(merge.id)).toMatchObject({ state: 'unknown' })
+      expect(h.executions.effect(merge.id)).toMatchObject({ state: 'pending' })
       expect(h.executions.change(executionId, 'tb-sb')).toMatchObject({ state: 'gating', step: 'awaiting-slot' })
     } finally {
       h.gh.update = null

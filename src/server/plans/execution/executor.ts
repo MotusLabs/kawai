@@ -33,6 +33,7 @@ import { executionSnapshot } from './executionSnapshot'
 import { planSteps } from './executionPlanner'
 import { EffectRunner, type EffectAdapter } from './effects'
 import { EffectPinConflict } from './executionEffectStore'
+import { ExecutionConflict } from './executionStore'
 import type { ExecutionStore } from './executionStore'
 import type { PlanStore } from '../planStore'
 import { dispatchFixAttempt, dispatchImplementAttempt, redispatchStage, type DispatchDeps } from './executionDispatch'
@@ -316,14 +317,34 @@ export class ExecutionExecutor {
   }
 
   /**
-   * A settled merge or update-branch effect's follow-on (D13). A stopped
+   * A settled merge or update-branch effect's follow-on (D13). A change the
+   * Retry left waiting for the slot (A2's fallback) re-enters landing at its
+   * effect's step first, so the verdict's landing guards see the stage — the
+   * slot taken meanwhile leaves it waiting for the next tick. A stopped
    * execution's merge that did not complete leaves the change cancelled,
    * with Kawai's task, in one transaction (D12).
    */
   private async applyLandingFollowOn(team: TeamIdentity, row: import('./executionRows').ChangeRow, effectId: string): Promise<void> {
     const effect = this.deps.store.effectsOf(row.executionId).find(entry => entry.id === effectId)
     if (effect === undefined) return
+    const waiting = this.deps.store.change(row.executionId, row.change)
+    if (waiting !== null && waiting.state === 'gating' && waiting.step === 'awaiting-slot'
+      && (effect.state === 'done' || (effect.state === 'failed' && (effect.outcome as { stop?: unknown } | null)?.stop !== undefined))) {
+      try {
+        this.deps.store.transition(row.executionId, row.change, waiting, {
+          state: 'landing', step: effect.kind === 'update-branch' ? 'updating' : 'merging',
+        })
+      } catch (error) {
+        if (!(error instanceof ExecutionConflict) || error.kind !== 'slot-taken') throw error
+        return
+      }
+    }
     if (effect.state === 'done') await this.mechanismOf(row.executionId).landOutcome(this.landingDeps(team), effect, this.deps.landingAdapters ?? landingAdapters)
+    else if (effect.state === 'failed' && (effect.outcome as { stop?: unknown } | null)?.stop !== undefined) {
+      // An inspection's stop verdict for a resumed change (pr-closed, a
+      // foreign branch): the same stop a run's failure would have written.
+      applyEffectFailure(this.outcomeDeps(), effect)
+    }
     const execution = this.deps.store.execution(row.executionId)
     const fresh = this.deps.store.change(row.executionId, row.change)
     if (execution === null || execution.state === 'running' || fresh === null || fresh.state !== 'landing') return

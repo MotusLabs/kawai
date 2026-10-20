@@ -99,12 +99,18 @@ export class ExecutionEffectStore {
    * The team's due pending effects, oldest first, across its running
    * executions (D5: one at a time per team). A finished execution's cleanup
    * (`remove-worktree`) stays due: the completion must not strand it.
+   * A8's slot rule: a landing-kind row of a change runs only while the
+   * change holds the landing slot (`landing`) — a row left waiting by the
+   * Retry's slot-taken fallback settles first, and its verdict is applied
+   * when the change holds the slot again.
    */
   dueEffects(teamId: string, now: string): EffectRow[] {
     return (this.db.prepare(`SELECT e.* FROM plan_execution_effects e
       JOIN plan_executions x ON x.id = e.execution_id
+      LEFT JOIN plan_execution_changes c ON c.execution_id = e.execution_id AND c.change = e.change
       WHERE x.team_id = ? AND (x.state = 'running' OR e.kind = 'remove-worktree')
         AND e.state = 'pending' AND (e.next_at IS NULL OR e.next_at <= ?)
+        AND NOT (e.kind IN ('merge', 'update-branch', 'fast-forward') AND e.change IS NOT NULL AND (c.state IS NULL OR c.state <> 'landing'))
       ORDER BY e.created_at, e.rowid`).all(teamId, now) as Array<Record<string, unknown>>)
       .map(mapEffect)
   }
@@ -155,11 +161,18 @@ export class ExecutionEffectStore {
       .map(effect => ({ executionId: effect.executionId, command: effect.command }))
   }
 
-  /** The due `unknown` effects, oldest first — inspected before anything else for their change runs (D14); one team's, or every team's at startup. */
+  /**
+   * The due `unknown` effects, oldest first — inspected before anything else
+   * for their change runs (D14); one team's, or every team's at startup.
+   * A4: every execution's unknowns are due, a stopped or completed one
+   * included — a row left unknown when its execution finished is still
+   * inspected until it settles or its inspection exhausts, never forever
+   * (the backoff bounds it); running them stays gated by `dueEffects`.
+   */
   dueUnknownEffects(now: string, teamId?: string): EffectRow[] {
     return (this.db.prepare(`SELECT e.* FROM plan_execution_effects e
       JOIN plan_executions x ON x.id = e.execution_id
-      WHERE x.state = 'running' AND e.state = 'unknown' AND (e.next_at IS NULL OR e.next_at <= ?)
+      WHERE e.state = 'unknown' AND (e.next_at IS NULL OR e.next_at <= ?)
       ${teamId === undefined ? '' : 'AND x.team_id = ?'}
       ORDER BY e.created_at, e.rowid`).all(...(teamId === undefined ? [now] : [now, teamId])) as Array<Record<string, unknown>>)
       .map(mapEffect)
