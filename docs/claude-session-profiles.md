@@ -221,6 +221,32 @@ always wins; without the field the text is ignored.
 { "glm": { "label": "GLM", "limitResetTimeZone": "Asia/Shanghai" } }
 ```
 
+## Provider usage
+
+The usage bar shows a provider's own figures when the provider has its own
+usage source. A base URL whose host is `openrouter.ai` (or a subdomain of
+it) selects the OpenRouter usage endpoint (`src/server/chat/openRouterUsage.ts`):
+
+- The server pulls `/api/v1/key` at the base URL's origin with the session's
+  effective token. Each budget the key reports renders as one meter,
+  labelled by its scope with percent used, remaining dollars and reset time
+  (a daily budget carries a 24-hour period, a weekly one 7 days); a bare
+  `limit` renders as one "Key cap" meter; an uncapped key renders none.
+- When the provider names `balanceKeyEnv` and that variable is non-empty in
+  the server environment, the server also pulls `/api/v1/credits` with that
+  value (the management key — it never reaches an agent) for one "Credits"
+  meter. A 401 or 403 from this pull drops only the credits meter and is
+  logged once per key value, naming the provider, never the key.
+- A meter with nothing left reads as limited.
+- These providers keep none of the agent's own usage reports (a
+  `rate_limit_event` push or `/usage` report can describe the host claude.ai
+  login), and no failure of their own pulls ever shows the host login's plan
+  instead.
+- Pulls refresh every 10 minutes while a session of the provider has a
+  started agent, and stop when none does. A completed turn that carried a
+  provider-reported cost adds one pull 30 seconds later, at most one per
+  provider per minute.
+
 ## Operator-named executables
 
 A **user-level** catalog entry may name an `executable` launched in place of
