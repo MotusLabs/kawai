@@ -172,3 +172,42 @@ test('per-item state lives one turn: a long session keeps only the open turn’s
   // … so three turns never accumulate three calls.
   expect(harness.events.filter(event => event.type === 'tool_call')).toHaveLength(3)
 })
+
+test('a rejected dynamic-tool registration refuses the start; no turn is asked', async () => {
+  // thread/start answered with a JSON-RPC error: the boot fails, the
+  // refusal names the server's message, and no turn/start follows.
+  const script = new Script().request('initialize', { userAgent: 'fake' })
+  script.lines.push({ dir: 'out', line: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'thread/start', params: {} }) })
+  script.lines.push({ dir: 'in', line: JSON.stringify({ id: 2, error: { code: -32602, message: 'dynamic tools rejected' } }) })
+  harness = startHarness(script)
+  harness.driver.start()
+  await until(() => harness!.events.some(event => event.type === 'error' && event.message.includes('dynamic tools rejected')))
+  // The failed boot's cleanup may add its own exit error after this one.
+  const boot = harness.events.find(event => event.type === 'error' && event.message.includes('dynamic tools rejected'))
+  expect(boot).toMatchObject({ type: 'error', message: expect.stringContaining('dynamic tools rejected') })
+  expect(harness.transcriptPaths).toEqual([])
+  expect(harness.sessionIds).toEqual([])
+  expect(sentRequest(harness, 'turn/start')).toBeUndefined()
+})
+
+test('a second turn reusing a question item id raises the card again', async () => {
+  // startTurn clears the per-item state (askedItems among it), so an item
+  // id a later turn reuses asks again instead of being swallowed.
+  const asking = (id: string) => ({
+    type: 'agentMessage', id, text: '', questions: [{ title: 'Proceed?', options: ['yes', 'no'] }],
+  })
+  const script = new Script().boot()
+    .turn('ct-1')
+    .item('started', 'ct-1', asking('q-1'))
+    .completed('ct-1')
+    .turn('ct-2')
+    .item('started', 'ct-2', asking('q-1'))
+    .completed('ct-2')
+  harness = startHarness(script)
+  harness.driver.send('one')
+  await until(() => completedOf(harness!.events).length === 1)
+  expect(harness.events.filter(event => event.type === 'question_request')).toHaveLength(1)
+  harness.driver.send('two')
+  await until(() => completedOf(harness!.events).length === 2)
+  expect(harness.events.filter(event => event.type === 'question_request')).toHaveLength(2)
+})
