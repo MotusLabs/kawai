@@ -5374,8 +5374,8 @@ describe('ChatSessionManager provider usage pull', () => {
     try {
       const { manager, usage, fetchCalls } = await createOpenRouterHarness(
         {
-          '/api/v1/key': jsonResponse(OR_KEY_BODY),
-          '/api/v1/credits': jsonResponse({ error: 'Only management keys' }, 403),
+          '/api/v1/key': () => jsonResponse(OR_KEY_BODY),
+          '/api/v1/credits': () => jsonResponse({ error: 'Only management keys' }, 403),
         },
         true,
         25
@@ -5389,8 +5389,10 @@ describe('ChatSessionManager provider usage pull', () => {
       expect(refusals[0]!.data).toMatchObject({ providerId: 'openrouter' })
       expect(JSON.stringify(warnings).includes(OR_MGMT)).toBe(false)
       expect(JSON.stringify(warnings).includes(OR_TOKEN)).toBe(false)
-      // A later refresh carrying the same value does not log again.
-      await waitForCondition(() => fetchCalls.length >= 4)
+      // A later refresh carrying the same value recurs on the credits
+      // endpoint (fresh responses each pull) and still does not log again.
+      await waitForCondition(() => fetchCalls.filter(call => call.url.endsWith('/api/v1/credits')).length >= 2)
+      expect(fetchCalls.filter(call => call.url.endsWith('/api/v1/credits')).length).toBeGreaterThanOrEqual(2)
       expect(warnings.filter(entry => entry.event === 'chat_openrouter_credits_refused')).toHaveLength(1)
     } finally {
       logger.warn = orOriginalWarn
@@ -5500,17 +5502,18 @@ describe('ChatSessionManager provider usage pull', () => {
     jest.useFakeTimers()
     try {
       const { manager, usage, fetchCalls } = await createOpenRouterHarness(
-        { '/api/v1/key': jsonResponse(OR_KEY_BODY) },
+        { '/api/v1/key': () => jsonResponse(OR_KEY_BODY) },
         false,
         600_000
       )
       const id = startOpenRouterSession(manager)
       expect(await manager.start(id)).toEqual({ ok: true })
       await drainNow()
-      // One cadence tick pulls; archiving stops every later one.
+      // One cadence tick pulls (and records); archiving stops every later one.
       jest.advanceTimersByTime(600_000)
       await drainNow()
       expect(fetchCalls).toHaveLength(2)
+      expect(usage).toHaveLength(2)
 
       await manager.archive(id)
       jest.advanceTimersByTime(600_000)
@@ -5635,7 +5638,7 @@ describe('ChatSessionManager provider usage pull', () => {
     jest.useFakeTimers()
     try {
       const { manager, handles, fetchCalls } = await createOpenRouterHarness(
-        { '/api/v1/key': jsonResponse(OR_KEY_BODY) },
+        { '/api/v1/key': () => jsonResponse(OR_KEY_BODY) },
         false,
         3_600_000
       )
