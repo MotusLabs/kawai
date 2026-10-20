@@ -8,16 +8,26 @@
 bun run dev        # frontend + backend
 bun run build      # production build
 bun run lint       # oxlint
-bun run typecheck  # tsc --noEmit
+bun run typecheck  # tsc --noEmit (incremental)
 bun run test       # unit tests
+bun run check      # lint + typecheck + tests, cached by content
 ```
 
-The pre-commit hook runs lint and typecheck on every commit, and the unit
-suite unless the commit is docs-only (`scripts/docs-only-changes.sh`), so a
+`bun run check` runs lint, typecheck, and the unit suite in order and records
+a full pass under `<git-common-dir>/kawai-checks/`, keyed by a content hash of
+the working tree (tracked and untracked non-ignored files) plus the Bun
+version and platform. A run whose key already passed reports the recorded
+pass — its time and worktree — and runs nothing; a failure or an interrupted
+run records nothing; `--force` reruns everything. Records are shared by every
+linked worktree and pruned after 14 days or 500 records. The pre-commit hook
+runs lint and typecheck on every commit, and the unit suite through `bun run
+check` unless the commit is docs-only (`scripts/docs-only-changes.sh`), so a
 commit that touches source is its own full check — don't run the trio just
-before it. Run `bun run lint && bun run typecheck && bun run test` yourself for
-changes you won't commit, and run `bun run test` once before a docs-only commit
-touching `AGENTS.md`, `.kawai/groups/`, `docs/`, or any other file a test reads.
+before it. `bun run test` stays the raw, uncached runner (typecheck keeps its
+build info under `node_modules/`, never committed). Run `bun run lint && bun
+run typecheck && bun run test` yourself for changes you won't commit, and run
+`bun run test` once before a docs-only commit touching `AGENTS.md`,
+`.kawai/groups/`, `docs/`, or any other file a test reads.
 
 ## How It Works
 
