@@ -279,24 +279,40 @@ describe('ChatSessionDriver', () => {
   })
 
   test('provider env is merged over process.env and re-read on every spawn', async () => {
-    let providerEnv: Record<string, string> = {
-      ANTHROPIC_BASE_URL: 'https://gw.example/anthropic',
-      ANTHROPIC_MODEL: 'gw-pro',
-    }
-    const harness = createHarness({ getProviderEnv: () => providerEnv })
-    harness.driver.send('hello')
-    const first = harness.fakes[0]!
-    expect(first.options.env).toEqual({ ...process.env, ...providerEnv })
+    const originalKey = process.env.OPENROUTER_API_KEY
+    const originalManagementKey = process.env.OPENROUTER_MANAGEMENT_KEY
+    process.env.OPENROUTER_API_KEY = 'test-or-key'
+    process.env.OPENROUTER_MANAGEMENT_KEY = 'test-or-mgmt'
+    try {
+      let providerEnv: Record<string, string> = {
+        ANTHROPIC_BASE_URL: 'https://gw.example/anthropic',
+        ANTHROPIC_MODEL: 'gw-pro',
+      }
+      const harness = createHarness({ getProviderEnv: () => providerEnv })
+      harness.driver.send('hello')
+      const first = harness.fakes[0]!
+      // The shipped catalog's credential names (openrouter-provider D3) never
+      // reach a launch, whatever the server environment carries.
+      const { OPENROUTER_API_KEY: _withheldKey, OPENROUTER_MANAGEMENT_KEY: _withheldManagement, ...serverEnv } = process.env
+      expect(first.options.env).toEqual({ ...serverEnv, ...providerEnv })
+      expect(first.options.env).not.toHaveProperty('OPENROUTER_API_KEY')
+      expect(first.options.env).not.toHaveProperty('OPENROUTER_MANAGEMENT_KEY')
 
-    // The query exits; the next send respawns under the updated provider.
-    first.exit()
-    await flush()
-    providerEnv = { ANTHROPIC_MODEL: 'gw-flash' }
-    harness.driver.send('again')
-    expect(harness.fakes).toHaveLength(2)
-    expect(harness.fakes[1]!.options.env?.ANTHROPIC_MODEL).toBe('gw-flash')
-    expect(harness.fakes[1]!.options.env?.ANTHROPIC_BASE_URL).toBe(process.env.ANTHROPIC_BASE_URL)
-    harness.driver.kill()
+      // The query exits; the next send respawns under the updated provider.
+      first.exit()
+      await flush()
+      providerEnv = { ANTHROPIC_MODEL: 'gw-flash' }
+      harness.driver.send('again')
+      expect(harness.fakes).toHaveLength(2)
+      expect(harness.fakes[1]!.options.env?.ANTHROPIC_MODEL).toBe('gw-flash')
+      expect(harness.fakes[1]!.options.env?.ANTHROPIC_BASE_URL).toBe(process.env.ANTHROPIC_BASE_URL)
+      harness.driver.kill()
+    } finally {
+      if (originalKey !== undefined) process.env.OPENROUTER_API_KEY = originalKey
+      else delete process.env.OPENROUTER_API_KEY
+      if (originalManagementKey !== undefined) process.env.OPENROUTER_MANAGEMENT_KEY = originalManagementKey
+      else delete process.env.OPENROUTER_MANAGEMENT_KEY
+    }
   })
 
   test('the team prompt is appended to the preset and re-read only at the next spawn', async () => {
@@ -749,8 +765,10 @@ describe('ChatSessionDriver', () => {
     expect(fake.options.includePartialMessages).toBe(true)
     expect(fake.options.canUseTool).toBeTypeOf('function')
     expect(fake.options.resume).toBeUndefined()
-    // No provider overrides: env is omitted so the SDK inherits process.env.
-    expect('env' in fake.options).toBe(false)
+    // No provider overrides: the server env, minus the variables the shipped
+    // catalog names as credentials (openrouter-provider D3).
+    expect((fake.options.env as Record<string, string | undefined>).PATH).toBe(process.env.PATH)
+    expect(fake.options.env).not.toHaveProperty('OPENROUTER_API_KEY')
 
     fake.push({
       type: 'system',
@@ -818,6 +836,36 @@ describe('ChatSessionDriver', () => {
       undefined,
     ])
     expect('usage' in completions()[2]!).toBe(false)
+  })
+
+  test("turn_completed carries the provider-reported cost summed over the turn's stream, beside the SDK estimate", async () => {
+    const harness = createHarness()
+    const fake = () => harness.fakes.at(-1)!
+    const completions = () => harness.events.filter(event => event.type === 'turn_completed') as Array<{ totalCostUsd?: number; providerCostUsd?: number }>
+    // The spike's OpenRouter turn: one streamed call charged $0.001064075
+    // while the SDK estimated $0.042563 from list prices.
+    harness.driver.send('one')
+    fake().push(streamEvent({ type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { input_tokens: 3, output_tokens: 12, cost: 0.001064075 } }))
+    fake().push(result('success', { total_cost_usd: 0.042563 }))
+    await flush()
+    // Several calls, a subagent's streamed one included, add up.
+    harness.driver.send('two')
+    fake().push(streamEvent({ type: 'message_delta', delta: {}, usage: { output_tokens: 1, cost: 0.002 } }))
+    fake().push(streamEvent({ type: 'message_delta', delta: {}, usage: { output_tokens: 1, cost: 0.001 } }, 'toolu_task'))
+    fake().push(result('success'))
+    await flush()
+    // No cost field (or an unusable one): no provider cost, nothing carried over.
+    harness.driver.send('three')
+    fake().push(streamEvent({ type: 'message_delta', delta: {}, usage: { output_tokens: 1 } }))
+    fake().push(streamEvent({ type: 'message_delta', delta: {}, usage: { output_tokens: 1, cost: -1 } }))
+    fake().push(streamEvent({ type: 'message_delta', delta: {}, usage: { output_tokens: 1, cost: 'free' } }))
+    fake().push(result('success'))
+    await flush()
+    const [first, second, third] = completions()
+    expect(first).toMatchObject({ totalCostUsd: 0.042563, providerCostUsd: 0.001064075 })
+    expect(second!.providerCostUsd).toBeCloseTo(0.003, 12)
+    expect(third).toMatchObject({ totalCostUsd: 0.01 })
+    expect('providerCostUsd' in third!).toBe(false)
   })
 
   test('assistant deltas map from partial stream events', async () => {
@@ -2105,16 +2153,21 @@ describe('ChatSessionDriver usage', () => {
 
 describe('ChatSessionDriver context usage', () => {
   // Same pinned-home isolation as the main describe: launch resolution must
-  // not see a real ~/.kawai.
+  // not see a real ~/.kawai — and neither may an operator-level auto-compact
+  // window (an agent dev shell carries one), or the profile-window fallback
+  // would outrank the report thresholds these tests assert.
   let tempHome: string
   const originalHome = process.env.HOME
+  const originalAutoCompact = process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW
   beforeEach(() => {
     tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-chatdriver-'))
     process.env.HOME = tempHome
+    delete process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW
   })
   afterEach(() => {
     if (originalHome !== undefined) process.env.HOME = originalHome
     else delete process.env.HOME
+    if (originalAutoCompact !== undefined) process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = originalAutoCompact
     fs.rmSync(tempHome, { recursive: true, force: true })
   })
 

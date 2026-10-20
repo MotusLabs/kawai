@@ -101,10 +101,16 @@ export interface CatalogProfile {
   network?: boolean
   /** The provider owning this model: cooldown and usage key (design D10). */
   providerId: string
+  /** Server variable whose value is this model's bearer token (trusted tiers only). */
+  authTokenEnv?: string
+  /** Server variable holding the provider's balance-reading key; never given to agents. */
+  balanceKeyEnv?: string
 }
 
 export interface CatalogProvider {
   label: string
+  authTokenEnv?: string
+  balanceKeyEnv?: string
   /** This provider's model keys, in catalog order. */
   models: string[]
 }
@@ -289,7 +295,7 @@ export function resolveProfileCatalog(
         errors.push(parsed.error)
         continue
       }
-      merger.addProviders(level.file, level.shipped ?? false, parsed.providers, level.tier)
+      merger.addProviders(level.file, level.shipped ?? false, parsed.providers, level.tier, level.trusted)
       continue
     }
     const parsed = parseCatalogFile(level.file, level.trusted, level.embeddedFallback
@@ -299,7 +305,7 @@ export function resolveProfileCatalog(
       errors.push(parsed.error)
       continue
     }
-    merger.addProfiles(level.file, level.shipped ?? false, parsed.entries, level.tier)
+    merger.addProfiles(level.file, level.shipped ?? false, parsed.entries, level.tier, level.trusted)
   }
   merger.finish()
   errors.push(...merger.errors)
@@ -313,7 +319,12 @@ export function resolveProfileCatalog(
   const defaultHolder = view.findIndex(([, p]) => p.models.has('default'))
   if (defaultHolder > 0) view.unshift(...view.splice(defaultHolder, 1))
   for (const [providerId, provider] of view) {
-    providers.set(providerId, { label: provider.label?.trim() || providerId, models: [...provider.models.keys()] })
+    providers.set(providerId, {
+      label: provider.label?.trim() || providerId,
+      ...(provider.authTokenEnv !== undefined ? { authTokenEnv: provider.authTokenEnv } : {}),
+      ...(provider.balanceKeyEnv !== undefined ? { balanceKeyEnv: provider.balanceKeyEnv } : {}),
+      models: [...provider.models.keys()],
+    })
   }
   for (const [providerId, provider] of merger.providers) {
     for (const [modelKey, model] of provider.models) {
@@ -325,6 +336,8 @@ export function resolveProfileCatalog(
         ...(flat.executable !== undefined ? { executable: flat.executable } : {}),
         ...(flat.limitResetTimeZone !== undefined ? { limitResetTimeZone: flat.limitResetTimeZone } : {}),
         providerId,
+        ...(flat.authTokenEnv !== undefined ? { authTokenEnv: flat.authTokenEnv } : {}),
+        ...(flat.balanceKeyEnv !== undefined ? { balanceKeyEnv: flat.balanceKeyEnv } : {}),
       })
     }
   }

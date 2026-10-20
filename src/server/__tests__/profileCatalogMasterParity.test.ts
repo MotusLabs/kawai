@@ -60,6 +60,8 @@ const SHIPPED: Record<string, Omit<CatalogProfile, 'providerId'>> = {
   default: DEFAULT, glm: GLM, 'glm-flash': GLM_FLASH, minimax: MINIMAX, mimo: MIMO, kimi: KIMI, opus: OPUS, sonnet: SONNET, haiku: HAIKU,
 }
 
+const ADDED_SINCE_MASTER = new Set(['openrouter-opus', 'openrouter-sonnet', 'openrouter-haiku'])
+
 let root: string
 let home: string
 
@@ -84,7 +86,10 @@ const projectWith = (name: string, files: Record<string, unknown>): string => {
 const expectParity = (project: string, master: Record<string, Omit<CatalogProfile, 'providerId'>>) => {
   const head = resolveProfileCatalog({ homeDir: home, projectPath: project })
   expect(head.errors).toEqual([])
-  expect([...head.profiles.keys()].sort()).toEqual(Object.keys(master).sort())
+  // The shipped `openrouter` provider (openrouter-provider D5) postdates
+  // master; its keys are covered by shippedCatalog.test.ts.
+  const keys = [...head.profiles.keys()].filter(key => !ADDED_SINCE_MASTER.has(key))
+  expect(keys.sort()).toEqual(Object.keys(master).sort())
   for (const [key, masterProfile] of Object.entries(master)) {
     const { providerId: _providerId, ...settings } = head.profiles.get(key) ?? ({} as CatalogProfile)
     expect({ key, settings }).toEqual({ key, settings: masterProfile })

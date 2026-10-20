@@ -70,9 +70,32 @@ describe('grouped shipped default on a fresh HOME', () => {
     expect(profiles.get('kimi')?.model).toBe('kimi-k3[1m]')
   })
 
+  test('the three OpenRouter models resolve to provider openrouter with its key names and mappings', () => {
+    const { profiles, providers, errors } = resolveProfileCatalog(freshHomeCtx())
+    expect(errors).toEqual([])
+    const env = {
+      ANTHROPIC_BASE_URL: 'https://openrouter.ai/api',
+      ANTHROPIC_DEFAULT_OPUS_MODEL: '~anthropic/claude-opus-latest[1m]',
+      ANTHROPIC_DEFAULT_SONNET_MODEL: '~anthropic/claude-sonnet-latest[1m]',
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: '~anthropic/claude-haiku-latest',
+      ANTHROPIC_DEFAULT_FABLE_MODEL: '~anthropic/claude-opus-latest[1m]',
+    }
+    const credentials = { authTokenEnv: 'OPENROUTER_API_KEY', balanceKeyEnv: 'OPENROUTER_MANAGEMENT_KEY' }
+    for (const [id, label, model] of [
+      ['openrouter-opus', 'OpenRouter Opus', 'opus'],
+      ['openrouter-sonnet', 'OpenRouter Sonnet', 'sonnet'],
+      ['openrouter-haiku', 'OpenRouter Haiku', 'haiku'],
+    ]) {
+      expect(profiles.get(id!)).toEqual({ label, model, env, providerId: 'openrouter', ...credentials })
+    }
+    expect(providers.get('openrouter')).toEqual({
+      label: 'OpenRouter', models: ['openrouter-opus', 'openrouter-sonnet', 'openrouter-haiku'], ...credentials,
+    })
+  })
+
   test('the providers view orders the default-holder first, then file order (D13)', () => {
     const { providers } = resolveProfileCatalog(freshHomeCtx())
-    expect([...providers.keys()]).toEqual(['claude', 'zai', 'minimax', 'mimo', 'kimi'])
+    expect([...providers.keys()]).toEqual(['claude', 'zai', 'openrouter', 'minimax', 'mimo', 'kimi'])
     expect(providers.get('minimax')).toEqual({ label: 'MiniMax', models: ['minimax'] })
   })
 

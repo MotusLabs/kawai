@@ -5,7 +5,9 @@
 // validation is reported whole and skipped; the rest of the catalog still
 // resolves. Credentials are deliberately refused: catalog files stay safe
 // to commit and mount, and model entries may not set the routing base URL,
-// which belongs to the provider alone.
+// which belongs to the provider alone. Trusted providers may NAME the server
+// environment variables holding their credentials (`authTokenEnv`,
+// `balanceKeyEnv`); the values never appear in a catalog file.
 import path from 'node:path'
 import { isResetTimeZone } from './limitSignals'
 
@@ -20,6 +22,7 @@ export const PROFILE_CONTROLLED_ENV = [
   'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL',
   'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_DEFAULT_FABLE_MODEL',
   'CLAUDE_CODE_ATTRIBUTION_HEADER', 'CLAUDE_CODE_AUTO_COMPACT_WINDOW',
+  'CLAUDE_CODE_MAX_OUTPUT_TOKENS',
 ] as const
 
 export type ProfileControlledEnvName = (typeof PROFILE_CONTROLLED_ENV)[number]
@@ -38,6 +41,11 @@ const CLAUDE_ONLY_FIELDS = new Set(['env', 'executable', 'limitResetTimeZone'])
 /** Codex-only fields, named specifically when they land on a Claude entry. */
 const CODEX_ONLY_FIELDS = new Set(['codexHome', 'network'])
 const CONTROLLED = new Set<string>(PROFILE_CONTROLLED_ENV)
+
+/** Provider fields naming a server environment variable that holds a credential. */
+export const CREDENTIAL_NAME_FIELDS = ['authTokenEnv', 'balanceKeyEnv'] as const
+const CREDENTIAL_FIELDS = new Set<string>(CREDENTIAL_NAME_FIELDS)
+const CREDENTIAL_NAME_PATTERN = /^[A-Z_][A-Z0-9_]*$/
 
 export interface PartialProfile {
   label?: string
@@ -111,6 +119,11 @@ function validateEntry(
   if (source.runtime !== undefined) profile.runtime = runtime
   for (const [field, value] of Object.entries(source)) {
     if (field === 'runtime') continue
+    // Credentials live on providers.json providers alone (openrouter-provider
+    // D1): never valid on a profiles.json entry, whatever its runtime.
+    if (CREDENTIAL_FIELDS.has(field)) {
+      return `${file}: profile "${id}" field "${field}" is allowed only on a provider in the user-level ~/.kawai/providers.json.`
+    }
     if (!allowed.has(field)) {
       if (CLAUDE_ONLY_FIELDS.has(field)) {
         return `${file}: profile "${id}" declares runtime "${runtime}"; field "${field}" belongs to Claude entries.`
@@ -210,6 +223,10 @@ export interface ParsedProvider {
   env: Record<string, string>
   executable?: string
   limitResetTimeZone?: string
+  /** Server variable holding the inference token (trusted files only). */
+  authTokenEnv?: string
+  /** Server variable holding a balance-reading key, never given to agents. */
+  balanceKeyEnv?: string
   models: Map<string, ParsedModel>
 }
 
@@ -217,7 +234,7 @@ export type ProviderFileParse =
   | { ok: true; providers: Map<string, ParsedProvider> }
   | { ok: false; error: string }
 
-const PROVIDER_FIELDS = new Set(['label', 'env', 'limitResetTimeZone', 'executable', 'models'])
+const PROVIDER_FIELDS = new Set(['label', 'env', 'limitResetTimeZone', 'executable', 'models', ...CREDENTIAL_NAME_FIELDS])
 const MODEL_FIELDS = new Set(['label', 'model', 'env'])
 
 /**
@@ -265,6 +282,16 @@ export function parseProviderCatalogValue(
           return { ok: false, error: `${source}: provider "${id}" executable must be an absolute path.` }
         }
         provider.executable = fieldValue
+        continue
+      }
+      if (field === 'authTokenEnv' || field === 'balanceKeyEnv') {
+        if (!trusted) {
+          return { ok: false, error: `${source}: provider "${id}" field "${field}" is allowed only in the user-level ~/.kawai/providers.json; this file is not operator-owned.` }
+        }
+        if (typeof fieldValue !== 'string' || !CREDENTIAL_NAME_PATTERN.test(fieldValue)) {
+          return { ok: false, error: `${source}: provider "${id}" field "${field}" must name an environment variable matching ${CREDENTIAL_NAME_PATTERN}.` }
+        }
+        provider[field] = fieldValue
         continue
       }
       if (field === 'limitResetTimeZone') {
@@ -326,6 +353,14 @@ export function parseProviderCatalogValue(
         provider.models.set(modelKey, model)
         modelHolders.set(modelKey, id)
       }
+    }
+    // openrouter-provider D2: a credentialed provider cannot name an
+    // executable. The wrapper owns provider configuration, so pinning the
+    // base URL there would defeat the delegation — and leaving it unpinned
+    // would let the wrapper, or a settings file, send the key anywhere. The
+    // file is refused whole, naming the provider and the field.
+    if (provider.executable !== undefined && (provider.authTokenEnv !== undefined || provider.balanceKeyEnv !== undefined)) {
+      return { ok: false, error: `${source}: provider "${id}" has credential variables and must not set executable; the wrapper would choose where the key is sent. The file is refused.` }
     }
     providers.set(id, provider)
   }

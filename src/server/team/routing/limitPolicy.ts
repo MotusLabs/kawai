@@ -4,7 +4,9 @@
 // frontmatter, which defaults to: park when the agent made progress and the
 // reset is within `parkIfResetWithin` (3h), `otherwise` (forward) when it made
 // progress and the reset is later, release when it made none. A message
-// already parked three times is released whatever anyone says.
+// already parked three times is released whatever anyone says. A credit
+// limit (a 402, openrouter-provider D8) never parks: waiting creates no
+// credit, so it takes `otherwise` whatever its reset or a rule's park.
 import type { LimitOutcome } from '../../../shared/routing'
 import type { GroupLimitPolicy } from '../groupFile'
 
@@ -23,16 +25,22 @@ export interface LimitPolicyInput {
   policy: GroupLimitPolicy
   /** The rule's answer; absent when the group has no `onLimit` rule or it failed. */
   ruled?: LimitOutcome
+  /** The limit is a credit limit: no reset falls within any `parkIfResetWithin`. */
+  credit?: boolean
 }
 
 export function resolveLimit(input: LimitPolicyInput): LimitResolution {
   if (input.parkCount >= MAX_PARKS) return { type: 'release' }
+  const otherwise: LimitResolution = input.policy.otherwise === 'release' ? { type: 'release' } : { type: 'forward', to: null }
   const ruled = input.ruled
   if (ruled && ruled.type !== 'default') {
     if (ruled.type === 'forward') return { type: 'forward', to: ruled.to ?? null }
+    if (ruled.type === 'park' && input.credit) return otherwise
     return { type: ruled.type }
   }
-  if (input.toolCalls === 0 || input.resetInMs <= 0) return { type: 'release' }
+  if (input.toolCalls === 0) return { type: 'release' }
+  if (input.credit) return otherwise
+  if (input.resetInMs <= 0) return { type: 'release' }
   if (input.resetInMs <= input.policy.parkIfResetWithinMs) return { type: 'park' }
-  return input.policy.otherwise === 'release' ? { type: 'release' } : { type: 'forward', to: null }
+  return otherwise
 }
