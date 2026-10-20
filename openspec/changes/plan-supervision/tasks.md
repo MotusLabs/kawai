@@ -116,7 +116,7 @@ Implement after `plan-execution` and `integration-candidates` have landed on mas
 
 ## 8. Supervision monitor
 
-- [ ] 8.1 Implement `supervisionRead.ts`, the loader that feeds `changeSupervision`: change rows, rounds, effects, assignments, mailbox reasons, session facts, the slot holder, cards, conditions, candidates, turn ends, and task mail (D10). Verify with a store-backed test per named wait.
+- [x] 8.1 Implement `supervisionRead.ts`, the loader that feeds `changeSupervision`: change rows, rounds, effects, assignments, mailbox reasons, session facts, the slot holder, cards, conditions, candidates, turn ends, and task mail (D10). Verify with a store-backed test per named wait.
 - [ ] 8.2 Implement `SupervisionMonitor.ts`: one per team, single-flight sweeps at startup, on the D11 notifications, and on a 60 s timer while there is work. Verify with tests:
   - the timer stops when the team has no running execution or promotion and no open fix or correction task;
   - a sweep error is logged and the next trigger retries;
