@@ -7,9 +7,14 @@
 // can read a 7-day window with its 7-day baseline; routing still reads only
 // the last 24 hours. Cooldown is computed from them on read and never
 // stored, so changing the policy needs no migration; `coolingTimeline`
-// reconstructs past cooling by the same rule.
+// reconstructs past cooling by the same rule. A `credit` event (a 402,
+// openrouter-provider D8) can end early through an in-memory overlay fed by
+// provider usage pulls; tracking starts when this process records the event,
+// so an event loaded from the database after a restart ends only at the
+// one-hour bound, whatever later pulls report.
 import type { Database } from 'bun:sqlite'
 import type { LimitEvent } from '../../../shared/routing'
+import { CREDIT_LIMIT_WINDOW } from '../../chat/limitSignals'
 
 export type { LimitEvent } from '../../../shared/routing'
 
@@ -86,8 +91,18 @@ export function migrateProviderLimitWindow(db: Database): void {
   if (!columns.has('limit_window')) db.exec('ALTER TABLE profile_limit_events ADD COLUMN limit_window TEXT')
 }
 
+/** One remaining-credit reading from a provider usage pull, epoch ms and USD. */
+interface CreditReading {
+  at: number
+  remainingUsd: number
+}
+
 export class LimitEventStore {
   private readonly listeners = new Set<(event: LimitEvent) => void>()
+  /** Provider id → its remaining-credit readings, oldest first (in memory only, D8). */
+  private readonly credit = new Map<string, CreditReading[]>()
+  /** Credit events this process recorded, `creditKey(event)` → the event's epoch ms (in memory only, D8). */
+  private readonly creditTracking = new Map<string, number>()
 
   constructor(private readonly db: Database, private readonly now: () => number = Date.now) {
     this.prune()
@@ -120,8 +135,37 @@ export class LimitEventStore {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       event.id, event.profileId, event.sessionId, event.groupId, event.at, event.kind,
       event.final ? 1 : 0, event.status, event.message, event.resetsAt, event.providerId, event.window)
+    if (event.window === CREDIT_LIMIT_WINDOW) this.creditTracking.set(creditKey(event), Date.parse(event.at))
     for (const listener of this.listeners) listener(event)
     return event
+  }
+
+  /**
+   * A provider usage pull completed and reported `remainingUsd`
+   * (openrouter-provider D8). Readings older than the read window (plus the
+   * one-hour bound) are dropped, with the credit events tracked alongside
+   * them; nothing is persisted.
+   */
+  reportRemainingCredit(providerId: string, remainingUsd: number): void {
+    if (!Number.isFinite(remainingUsd)) return
+    const now = this.now()
+    const cutoff = now - LIMIT_EVENT_READ_WINDOW_MS - DEFAULT_COOLDOWN_MS
+    const readings = (this.credit.get(providerId) ?? []).filter(reading => reading.at >= cutoff)
+    readings.push({ at: now, remainingUsd })
+    this.credit.set(providerId, readings)
+    for (const [key, at] of this.creditTracking) {
+      if (at < cutoff) this.creditTracking.delete(key)
+    }
+  }
+
+  /**
+   * When credit returned after `event` (epoch ms), else null: the overlay's
+   * early end. Only an event this process recorded is tracked (D8) — one
+   * loaded from the database after a restart ends at its one-hour bound.
+   */
+  private creditReturned = (event: LimitEvent): number | null => {
+    if (!this.creditTracking.has(creditKey(event))) return null
+    return creditReturnedAt(this.credit.get(event.providerId ?? event.profileId) ?? [], Date.parse(event.at))
   }
 
   /** Drop events older than the retention window. */
@@ -153,19 +197,21 @@ export class LimitEventStore {
     const now = this.now()
     const own = this.forProfile(profileId)
     const providerEvents = providerId === null ? [] : this.forProvider(providerId)
-    const until = cooldownUntil(profileId, providerId, [...own, ...providerEvents], now)
-    const providerEnd = providerCooldownUntil(providerId, providerEvents, now)
+    const end = latestCoolingEnd(relevantEvents([...own, ...providerEvents], profileId, providerId), now, this.creditReturned)
+    const until = end?.until ?? null
+    const providerEnd = providerCooldownUntil(providerId, providerEvents, now, this.creditReturned)
     return {
       until,
       provider: providerEnd !== null && until !== null && Date.parse(providerEnd) >= Date.parse(until),
       providerId,
+      ...(end?.credit ? { credit: true } : {}),
     }
   }
 
   /** The provider's own cooldown end (D8): its provider-scoped events alone. */
   providerCooldownUntil(providerId: string | null): string | null {
     if (providerId === null) return null
-    return providerCooldownUntil(providerId, this.forProvider(providerId), this.now())
+    return providerCooldownUntil(providerId, this.forProvider(providerId), this.now(), this.creditReturned)
   }
 }
 
@@ -187,6 +233,32 @@ export interface EffectiveCooldown {
   until: string | null
   provider: boolean
   providerId: string | null
+  /** Set when a credit limit's end decides (openrouter-provider D8): out of credit, ending by `until` at the latest. */
+  credit?: true
+}
+
+/** The credit-tracking key (D8): the provider the readings are held under, and the event's time. */
+const creditKey = (event: LimitEvent): string => `${event.providerId ?? event.profileId}\u0000${event.at}`
+
+/**
+ * The overlay's early end for a credit event at `eventAt` (openrouter-provider
+ * D8), over this process's readings: readings from before the event are
+ * ignored, the first pull after it only sets the baseline — a 402 can leave a
+ * few cents that cannot cover a request — and a later pull ends the cooldown
+ * when its amount exceeds the lowest earlier post-event pull. Null while none
+ * has.
+ */
+export function creditReturnedAt(readings: readonly CreditReading[], eventAt: number): number | null {
+  if (!Number.isFinite(eventAt)) return null
+  let baseline: number | null = null
+  let lowest = Number.POSITIVE_INFINITY
+  for (const reading of readings) {
+    if (reading.at <= eventAt) continue
+    if (baseline === null) { baseline = reading.remainingUsd; lowest = reading.remainingUsd; continue }
+    if (reading.remainingUsd > lowest) return reading.at
+    lowest = Math.min(lowest, reading.remainingUsd)
+  }
+  return null
 }
 
 /**
@@ -201,14 +273,18 @@ export function relevantEvents(events: readonly LimitEvent[], profileId: string,
     (providerId !== null && event.providerId === providerId && !isModelScoped(event.window)))
 }
 
+/** The overlay seam: when credit returned after a credit event, else null. */
+type CreditReturned = (event: LimitEvent) => number | null
+
 /**
  * The built-in cooldown end over one event set (D8): grouped by window, with
  * none as one group, the latest final event of each group sets its end — its
- * reset, else (unknown or unparseable) one hour after it — and the profile
- * cools until the latest end still in the future. Retried attempts never
- * cool. Null once over.
+ * reset, else (unknown or unparseable) one hour after it, or for a credit
+ * event the earlier of that and when credit returned — and the profile cools
+ * until the latest end still in the future, `credit` saying a credit event
+ * set it. Retried attempts never cool. Null once over.
  */
-function latestCoolingEnd(events: readonly LimitEvent[], now: number): string | null {
+function latestCoolingEnd(events: readonly LimitEvent[], now: number, creditReturned?: CreditReturned): { until: string; credit: boolean } | null {
   const latest = new Map<string, LimitEvent>()
   for (const event of events) {
     if (!event.final) continue
@@ -216,24 +292,29 @@ function latestCoolingEnd(events: readonly LimitEvent[], now: number): string | 
     const prev = latest.get(key)
     if (prev === undefined || Date.parse(event.at) >= Date.parse(prev.at)) latest.set(key, event)
   }
-  let end: number | null = null
+  let end: { at: number; credit: boolean } | null = null
   for (const event of latest.values()) {
     const reset = event.resetsAt ? Date.parse(event.resetsAt) : NaN
-    const until = Number.isFinite(reset) ? reset : Date.parse(event.at) + DEFAULT_COOLDOWN_MS
-    if (Number.isFinite(until) && until > now && (end === null || until > end)) end = until
+    let until = Number.isFinite(reset) ? reset : Date.parse(event.at) + DEFAULT_COOLDOWN_MS
+    const credit = event.window === CREDIT_LIMIT_WINDOW
+    const returned = credit ? creditReturned?.(event) ?? null : null
+    if (returned !== null) until = Math.min(until, returned)
+    if (Number.isFinite(until) && until > now && (end === null || until > end.at)) end = { at: until, credit }
   }
-  return end === null ? null : new Date(end).toISOString()
+  return end === null ? null : { until: new Date(end.at).toISOString(), credit: end.credit }
 }
 
 /** The profile's effective cooldown end (D8) over a read window's events. */
-export function cooldownUntil(profileId: string, providerId: string | null, events: readonly LimitEvent[], now: number): string | null {
-  return latestCoolingEnd(relevantEvents(events, profileId, providerId), now)
+export function cooldownUntil(profileId: string, providerId: string | null, events: readonly LimitEvent[], now: number,
+  creditReturned?: CreditReturned): string | null {
+  return latestCoolingEnd(relevantEvents(events, profileId, providerId), now, creditReturned)?.until ?? null
 }
 
 /** The provider's own cooldown end (D8): its provider-scoped events alone decide it. */
-export function providerCooldownUntil(providerId: string | null, events: readonly LimitEvent[], now: number): string | null {
+export function providerCooldownUntil(providerId: string | null, events: readonly LimitEvent[], now: number,
+  creditReturned?: CreditReturned): string | null {
   if (providerId === null) return null
-  return latestCoolingEnd(events.filter(event => event.providerId === providerId && !isModelScoped(event.window)), now)
+  return latestCoolingEnd(events.filter(event => event.providerId === providerId && !isModelScoped(event.window)), now, creditReturned)?.until ?? null
 }
 
 /** One interval during which the router saw a profile as cooling, epoch ms, half-open. */

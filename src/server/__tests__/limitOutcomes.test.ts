@@ -205,6 +205,51 @@ describe('resolution', () => {
   })
 })
 
+describe('credit limits (openrouter-provider D8)', () => {
+  const creditLimit = async (sessionId = 'dev') => {
+    limits.record({
+      profileId: 'openrouter-opus', sessionId, groupId: 'devs', kind: 'unknown', final: true, status: 402,
+      message: 'API Error: 402 This request requires more credits', resetsAt: null, providerId: 'openrouter', window: 'credit',
+    })
+    await outcomes.turnEnded(sessionId, true)
+  }
+  beforeEach(() => { records.set('dev', record('dev', { claudeProfileId: 'openrouter-opus' })) })
+
+  test('Group parks short resets: a credit limit forwards with a handoff package outside the cooling provider, never parks', async () => {
+    group('devs', 'onLimit: { parkIfResetWithin: 3h, otherwise: forward }')
+    const m = deliver()
+    work()
+    await creditLimit()
+    expect(store.get(m.id)).toMatchObject({ state: 'forwarded' })
+    expect(store.parkedBy('dev')).toEqual([])
+    const forwardedId = store.get(m.id)!.reason!.replace('forwarded: ', '')
+    expect(store.get(forwardedId)).toMatchObject({
+      state: 'queued', toKind: 'group', toId: 'devs', excludedProfile: 'openrouter-opus',
+      handoff: { fromSession: 'dev', fromProfile: 'openrouter-opus', lastError: 'API Error: 402 This request requires more credits' },
+    })
+    // Routing keeps every openrouter model out while the provider cools on credit (D9).
+    expect(limits.providerCooldownUntil('openrouter')).toBe(iso(T0 + 60 * MIN))
+    expect(limits.cooldownFor('openrouter-sonnet', 'openrouter')).toMatchObject({ provider: true, credit: true })
+  })
+
+  test('otherwise: release returns credit-limited work to the group queue', async () => {
+    group('devs', 'onLimit: { parkIfResetWithin: 3h, otherwise: release }')
+    const m = deliver()
+    work()
+    await creditLimit()
+    expect(store.get(m.id)).toMatchObject({ state: 'queued', toKind: 'group', toId: 'devs' })
+  })
+
+  test('an agent-started turn ending on a credit limit leaves its work unparked', async () => {
+    const m = deliver()
+    await outcomes.turnEnded('dev', true)
+    outcomes.turnStarted('dev', true)
+    await creditLimit()
+    expect(store.get(m.id)).toMatchObject({ state: 'delivered', parkCount: 0 })
+    expect(store.parkedBy('dev')).toEqual([])
+  })
+})
+
 describe('parking', () => {
   test('the resume turn continues the parked work; success unparks it', async () => {
     const m = deliver()

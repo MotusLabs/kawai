@@ -65,7 +65,11 @@ function makeRouter() {
       const providerId = providerFor?.(id) ?? null
       const until = cooldownUntil(id, providerId, pool, now)
       const providerEnd = providerCooldownUntil(providerId, pool, now)
-      return { until, provider: providerEnd !== null && until !== null && Date.parse(providerEnd) >= Date.parse(until), providerId }
+      // Credit decides here only when the profile's own events are all credit limits (the store derives it exactly).
+      const own = pool.filter(event => event.profileId === id && event.final)
+      const credit = until !== null && own.length > 0 && own.every(event => event.window === 'credit')
+      return { until, provider: providerEnd !== null && until !== null && Date.parse(providerEnd) >= Date.parse(until), providerId,
+        ...(credit ? { credit: true as const } : {}) }
     }, providerCooldownUntil: providerId => providerCooldownUntil(providerId, Object.values(events).flat(), now) },
     ...(providerFor ? { providerOf: providerFor } : {}),
     usageOf: id => (id === 'claude' ? { status: 'warning', windows: [{ key: 'five_hour', label: '5h', percentUsed: 80, resetsAt: null }], receivedAt: 'r', source: 'pull' } : null),
@@ -304,6 +308,21 @@ describe('waiting-reason diagnosis', () => {
       kind: 'hold',
       diagnosis: [{ kind: 'all-profiles-cooling', retryAt: new Date(T0 + 40 * 60_000).toISOString() }],
     })
+  })
+
+  test('every candidate out of credit holds saying so; one cooling on a rate limit keeps the plain hold (openrouter-provider D8)', async () => {
+    def = group('profiles: [openrouter-opus, glm]\nmax: 2')
+    members = [{ sessionId: 'a', profileId: 'openrouter-opus', cwd: '/wt' }, { sessionId: 'b', profileId: 'glm', cwd: '/wt' }]
+    events['openrouter-opus'] = [{ ...finalEvent('openrouter-opus', null), status: 402, window: 'credit' }]
+    events.glm = [{ ...finalEvent('glm', null), status: 402, window: 'credit' }]
+    const view = { eligible: [eligible('a'), eligible('b')], attempt: 0 }
+    expect(await makeRouter().route(message(), view)).toMatchObject({
+      kind: 'hold', diagnosis: [{ kind: 'all-profiles-cooling', retryAt: new Date(T0 + 3_600_000).toISOString(), credit: true }],
+    })
+    events.glm = [finalEvent('glm', new Date(T0 + 40 * 60_000).toISOString())]
+    const hold = await makeRouter().route(message(), view)
+    expect(hold).toMatchObject({ kind: 'hold', diagnosis: [{ kind: 'all-profiles-cooling' }] })
+    expect(hold.kind === 'hold' ? hold.diagnosis?.[0]?.credit : 'not a hold').toBeUndefined()
   })
 
   test('the built-in fallback after a rule throw still diagnoses', async () => {

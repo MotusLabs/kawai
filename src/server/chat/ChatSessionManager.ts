@@ -64,6 +64,7 @@ import type { ChatWorkerStore } from './chatWorkerStore'
 import type { ChatTaskStore } from './chatTaskStore'
 import {
   resolveClaudeProfile,
+  profileCredential,
   profileLimitResetTimeZone,
   claudeLaunchKey,
   verifyProfileExecutable,
@@ -501,7 +502,8 @@ export class ChatSessionManager {
       }
       return this.createSession(input)
     }
-    if (!this.authOk(input.claudeProfileId, project.path)) return { ok: false, error: chatAuthErrorMessage() }
+    const projectAuthRefusal = this.authRefusal(input.claudeProfileId, project.path)
+    if (projectAuthRefusal) return { ok: false, error: projectAuthRefusal }
     try {
       await this.probeAvailability(input.claudeProfileId, project.path)
     } catch (error) {
@@ -793,9 +795,11 @@ export class ChatSessionManager {
     if (!record) return
     let credentialsPath: string | null = null
     try {
-      credentialsPath = credentialsPathFor(
-        this.launchEnvOf(record.claudeProfileId, record.projectPath)
-      )
+      // A credentialed provider's session does not use the host login, so
+      // its expiry is not this session's notice (openrouter-provider D4).
+      credentialsPath = profileCredential(record.claudeProfileId, this.catalogCtx(record.projectPath))
+        ? null
+        : credentialsPathFor(this.launchEnvOf(record.claudeProfileId, record.projectPath))
     } catch {
       credentialsPath = null
     }
@@ -1549,8 +1553,9 @@ export class ChatSessionManager {
       if (!this.options.queryFactory && !hasCodexLogin(launch.codexHome)) {
         return { ok: false, error: this.codexLoginRefusal(launch.codexHome, input.claudeProfileId ?? null) }
       }
-    } else if (!this.authOk(input.claudeProfileId, projectPath)) {
-      return { ok: false, error: chatAuthErrorMessage() }
+    } else {
+      const authRefusal = this.authRefusal(input.claudeProfileId, projectPath)
+      if (authRefusal) return { ok: false, error: authRefusal }
     }
     // The runtime facts are fixed at creation (codex-chat-sessions 3.3,
     // ruling R1): a later profile edit never moves an existing chat to
@@ -2311,7 +2316,8 @@ export class ChatSessionManager {
             const executable = await this.checkExecutable()
             existing.setClaudeExecutablePath?.(executable?.path)
           }
-          if (!this.authOk(record?.claudeProfileId, record?.projectPath)) throw new Error(chatAuthErrorMessage())
+          const authRefusal = this.authRefusal(record?.claudeProfileId, record?.projectPath)
+          if (authRefusal) throw new Error(authRefusal)
         }
       }
       return existing
@@ -2333,7 +2339,8 @@ export class ChatSessionManager {
       if (launch.runtime === 'claude' && launch.executable) {
         verifyProfileExecutable(record.claudeProfileId ?? 'default', launch.executable)
       }
-      if (!this.authOk(record.claudeProfileId, record.projectPath)) throw new Error(chatAuthErrorMessage())
+      const authRefusal = this.authRefusal(record.claudeProfileId, record.projectPath)
+      if (authRefusal) throw new Error(authRefusal)
     }
     // Agent start is one of the account-notice check points (notification
     // strip design D3).
@@ -2590,10 +2597,21 @@ export class ChatSessionManager {
     return resolveClaudeProfile(profileId, this.providerEnv(), this.catalogCtx(projectPath), report)
   }
 
-  private authOk(profileId: string = 'default', projectPath?: string): boolean {
-    return this.options.authCheck
-      ? this.options.authCheck()
-      : hasClaudeAuth(this.launchEnvOf(profileId, projectPath))
+  /**
+   * Why a profile cannot authenticate, or undefined when it can. A provider
+   * naming `authTokenEnv` authenticates only with that variable — never the
+   * host login or another credential (openrouter-provider D4).
+   */
+  private authRefusal(profileId: string = 'default', projectPath?: string): string | undefined {
+    if (this.options.authCheck) return this.options.authCheck() ? undefined : chatAuthErrorMessage()
+    const credential = profileCredential(profileId, this.catalogCtx(projectPath))
+    if (credential) {
+      const value = effectiveChatEnv(this.providerEnv())[credential.authTokenEnv]
+      return value?.trim()
+        ? undefined
+        : `Provider ${credential.providerLabel} needs ${credential.authTokenEnv} in the server environment.`
+    }
+    return hasClaudeAuth(this.launchEnvOf(profileId, projectPath)) ? undefined : chatAuthErrorMessage()
   }
 
   /**
@@ -2613,12 +2631,9 @@ export class ChatSessionManager {
     // Claude credential consumers (account notices, provider usage) see an
     // empty environment for a Codex profile.
     if (launch.runtime === 'codex') return {}
-    const overrides = Object.fromEntries(
-      Object.entries(launch.env ?? {}).filter(
-        (entry): entry is [string, string] => entry[1] !== undefined
-      )
-    )
-    const merged = effectiveChatEnv(overrides)
+    // A set SDK `env` replaces the child's environment whole (credentials
+    // withheld); only an unset one inherits process.env.
+    const merged = launch.env ?? effectiveChatEnv({})
     return Object.fromEntries(
       Object.entries(merged).filter(
         (entry): entry is [string, string] => entry[1] !== undefined
