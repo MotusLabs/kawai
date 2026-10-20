@@ -60,6 +60,20 @@ latest journal. The body names the worktree, branch, base/head SHAs,
    verdict is sent. In the dev's worktree, use only read-only git
    (`git -C <worktree> log`, `diff`, `show`, `status`): the dev may be
    working there. Never `bun run test:e2e`.
+6. Run mutation checks only on the diff's wiring and decision points: call
+   sites passing values, guards, filters, ordering, and defaults. Run at most
+   5 mutants per review, and none for docs, proposals, archives, measurement
+   work, or small fixes.
+   - Setup: copy the head with
+     `git archive <head> | tar -x -C /tmp/<dir>`, symlink `node_modules`, and
+     copy `config/`.
+   - Running: apply one mutant at a time. Run only the affected test files,
+     with raw `OPENROUTER_API_KEY=x OPENROUTER_MANAGEMENT_KEY=y bun test <files>`.
+     Never mutate in a worktree, and never run the full suite.
+   - Report one row per mutant: `file:line`, the change, and the outcome:
+     killed by `file › exact title`, survived, or equivalent (with the reason).
+   - A survivor blocks only when production wiring or a specified behavior has
+     no test. Every other survivor is a follow-up.
 
 Report with `send_message` to the `lead` group, without `task_id`; put the
 task id in the body. Group addressing keeps reports reaching whoever leads now
