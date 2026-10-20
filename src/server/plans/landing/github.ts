@@ -121,6 +121,12 @@ export async function ghPrMerge(repo: string, prNumber: number, method: MergeMet
   return result.ok ? { ok: true, data: null } : result
 }
 
+/** Close a failed or cancelled promotion's pull request with its outcome as the comment (integration-candidates D10); nothing is deleted. */
+export async function ghPrClose(repo: string, prNumber: number, comment: string, options: GhCommandOptions = {}): Promise<GithubOutcome<null>> {
+  const result = await call(['pr', 'close', String(prNumber), '-R', repo, '--comment', comment], options)
+  return result.ok ? { ok: true, data: null } : result
+}
+
 // --- Ref writes (integration-candidates D4, D5) ---
 
 /** `POST repos/{repo}/git/refs`: the branch at `sha`; a 422 means the ref already exists. */
@@ -143,18 +149,23 @@ export async function ghAuthStatus(options: GhCommandOptions = {}): Promise<Gith
   return result.ok ? { ok: true, data: null } : result
 }
 
-/** The repository as gh reads it: its default branch (the direct mechanism's base) and the viewer's write permission. */
-export async function ghRepo(repo: string, options: GhCommandOptions = {}): Promise<GithubOutcome<{ defaultBranch: string | null; canPush: boolean }>> {
+/**
+ * The repository as gh reads it: its default branch (the direct mechanism's
+ * base), the viewer's write permission, and whether merge commits are allowed
+ * (integration-candidates D9; null when GitHub did not report the setting).
+ */
+export async function ghRepo(repo: string, options: GhCommandOptions = {}): Promise<GithubOutcome<{ defaultBranch: string | null; canPush: boolean; allowMergeCommit: boolean | null }>> {
   const args = ['api', `repos/${repo}`]
   const result = await call(args, options)
   if (!result.ok) return result
-  const parsed = json<{ default_branch?: unknown; permissions?: { push?: unknown } }>(result.stdout)
+  const parsed = json<{ default_branch?: unknown; permissions?: { push?: unknown }; allow_merge_commit?: unknown }>(result.stdout)
   if (!parsed.ok) return { ok: false, error: { argv: ['gh', ...args], exitCode: 0, httpStatus: null, message: parsed.error } }
   return {
     ok: true,
     data: {
       defaultBranch: typeof parsed.data.default_branch === 'string' && parsed.data.default_branch !== '' ? parsed.data.default_branch : null,
       canPush: parsed.data.permissions?.push === true,
+      allowMergeCommit: typeof parsed.data.allow_merge_commit === 'boolean' ? parsed.data.allow_merge_commit : null,
     },
   }
 }

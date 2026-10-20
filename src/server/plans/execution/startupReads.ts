@@ -4,9 +4,9 @@
 // rejects, so its inspection is undecidable and retried under the backoff —
 // never mistaken for "absent" or "not done" (integration-candidates review
 // F2: a failed ls-remote once read as a missing branch). The git reads keep
-// it; the gh reads still answer a failure as plan-execution shipped them
-// (no pull requests, an open one, attempt 1 — each runs its effect again,
-// which GitHub then refuses or repeats harmlessly), pending the lead's call.
+// it, and so do the gh reads: a failed `pr list`, `pr view`, or run read
+// rejects instead of answering no pull requests, an open one, or attempt 1
+// (integration-candidates L3), so a failed read never runs its effect again.
 import { runGit } from '../../git/gitCommand'
 import { ghPrList, ghPrView, ghRunAttempt } from '../landing/github'
 import type { GhCommandOptions } from '../landing/ghCommand'
@@ -18,10 +18,11 @@ export function startupReads(ghOptions?: GhCommandOptions): InspectorReads {
     worktree: async (repo, wt) => {
       const listed = await runGit(['worktree', 'list', '--porcelain'], { cwd: repo })
       if (!listed.ok) throw new Error(`the worktrees of ${repo} could not be listed`)
-      const present = listed.stdout.split('\n').some(line => line.startsWith('worktree ') && line.slice(8) === wt)
+      const present = listed.stdout.split('\n').some(line => line.startsWith('worktree ') && line.slice('worktree '.length) === wt)
       if (!present) return { present: false, head: null }
       const head = await runGit(['rev-parse', 'HEAD'], { cwd: wt })
-      return { present: true, head: head.ok ? head.stdout.trim() : null }
+      if (!head.ok) throw new Error(`the head of the worktree ${wt} could not be read`)
+      return { present: true, head: head.stdout.trim() }
     },
     localBranch: async (repo, branch) => {
       const result = await runGit(['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], { cwd: repo })
@@ -37,11 +38,13 @@ export function startupReads(ghOptions?: GhCommandOptions): InspectorReads {
     },
     prList: async (repo, head) => {
       const pulls = await ghPrList(repo, { head, base: '' }, ghOptions)
-      return pulls.ok ? pulls.data : []
+      if (!pulls.ok) throw new Error(`the pull requests of ${head} could not be listed: ${pulls.error.message}`)
+      return pulls.data
     },
     prView: async (repo, pr) => {
       const view = await ghPrView(repo, pr, ghOptions)
-      return view.ok ? view.data : { number: pr, url: '', state: 'OPEN', headRefOid: '', mergeCommit: null }
+      if (!view.ok) throw new Error(`pull request ${pr} could not be read: ${view.error.message}`)
+      return view.data
     },
     contains: async (cwd, ref, ancestor, descendant) => {
       if (!(await gitFetch(cwd, 'origin', ref)).ok) throw new Error(`the fetch of ${ref} failed`)
@@ -51,7 +54,8 @@ export function startupReads(ghOptions?: GhCommandOptions): InspectorReads {
     },
     runAttempt: async (repo, runId) => {
       const attempt = await ghRunAttempt(repo, runId, ghOptions)
-      return attempt.ok ? attempt.data : 1
+      if (!attempt.ok) throw new Error(`run ${runId} could not be read: ${attempt.error.message}`)
+      return attempt.data
     },
   }
 }

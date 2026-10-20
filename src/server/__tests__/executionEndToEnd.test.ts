@@ -43,6 +43,9 @@ let executions: ExecutionStore
 let plansService: PlanService
 let executor: ExecutionExecutor
 let gitRoot: string
+/** Startup recovery's gh reads go to a stub on a private PATH: `pr view <n>` prints `<ghState>/pr-<n>.json`; anything else fails. */
+let ghBin: string
+let ghState: string
 let origin: string
 let baseSha: string
 
@@ -116,6 +119,15 @@ beforeAll(async () => {
   writeGroup(world, 'reviewers', '---\nmax: 2\n---\nReview.')
   gitRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-exec-e2e-git-'))
   origin = path.join(gitRoot, 'origin.git')
+  ghBin = path.join(gitRoot, 'bin')
+  ghState = path.join(gitRoot, 'gh-state')
+  fs.mkdirSync(ghBin)
+  fs.mkdirSync(ghState)
+  fs.writeFileSync(path.join(ghBin, 'gh'), [
+    '#!/bin/sh',
+    'if [ "$1 $2" = "pr view" ] && [ -f "$GH_STATE/pr-$3.json" ]; then cat "$GH_STATE/pr-$3.json"; exit 0; fi',
+    'echo "unexpected gh $*" >&2; exit 1',
+  ].join('\n') + '\n', { mode: 0o755 })
   git(['init', '-q', '--bare', '-b', 'master', origin], gitRoot)
   fs.writeFileSync(path.join(world.repo, 'seed.txt'), 'seed\n')
   for (const change of ['dep-a', 'flaky-b']) {
@@ -179,6 +191,7 @@ function makeExecutor(): ExecutionExecutor {
     teamOf: id => (id === world.team.teamId ? world.team : undefined),
     adapters: { provision: provisionAdapter(executions) },
     plansService,
+    ghOptions: { env: { PATH: `${ghBin}:${process.env.PATH ?? ''}`, GH_STATE: ghState } },
     roundAdapters: {
       lsRemoteHead: async () => ({ ok: true as const, sha: null as string | null }),
       push: async (cwd: string, source: string, branch: string) => {
@@ -299,9 +312,11 @@ describe('the executed plan end to end (§17.1)', () => {
     executor.close()
     gh.mergeGate = null
     executor = makeExecutor()
-    // The restart flips the running merge to unknown; the inspection finds
-    // the pull request still open (nothing merged), so the merge re-runs and
-    // this time it completes — one real merge, never two.
+    // The restart flips the running merge to unknown; the inspection reads
+    // the pull request from the stub gh and finds it still open (nothing
+    // merged), so the merge re-runs and this time it completes — one real
+    // merge, never two. A failed read would be undecidable, never "open" (L3).
+    fs.writeFileSync(path.join(ghState, 'pr-7.json'), JSON.stringify({ number: 7, url: 'https://example.internal/pr/7', state: 'OPEN', headRefOid: gh.pulls[0]!.headRefOid, mergeCommit: null }))
     await executor.startup()
     executor.wake(world.team.teamId)
     await executor.idle()

@@ -2,7 +2,8 @@
 // waiting reason, task, PR, fix-round count, the latest round's CI with its
 // flaky marks, the verdict, each extra check labeled verified by CI or
 // attested by the reviewer, the landing fact flagged when its tree was not
-// verified, and the change's effects, expandable.
+// verified (and marked promoted once a merged promotion carried it into the
+// target), and the change's effects, expandable.
 import { useState } from 'react'
 import type { ExecutionChangeView, PlanExecutionView } from '@shared/planExecution'
 import { CHANGE_STATE_LABELS, CHANGE_STEP_LABELS } from '@shared/planExecutionProgress'
@@ -24,9 +25,11 @@ const waitingLabel = (row: ExecutionChangeView): string | null => {
   }
 }
 
-export default function PlanExecutionChangeRow({ row, execution, onOpenTask }: {
+export default function PlanExecutionChangeRow({ row, execution, promoted = false, onOpenTask }: {
   row: ExecutionChangeView
   execution: PlanExecutionView
+  /** A merged promotion carried this change's landing into the target (D11). */
+  promoted?: boolean
   onOpenTask: (taskId: string) => void
 }) {
   const [effectsOpen, setEffectsOpen] = useState(false)
@@ -61,6 +64,7 @@ export default function PlanExecutionChangeRow({ row, execution, onOpenTask }: {
     </ul>}
     {row.landing !== null && <p className="text-chat-meta" data-testid="plan-execution-landing">
       landed{row.landing.treeVerified ? '' : ' — tree not verified, base moved at the last moment'}
+      {promoted && <span data-testid="plan-execution-promoted">{' · promoted'}</span>}
       {row.landing.postCi !== null && row.landing.postCi.length > 0 ? ` · base CI: ${row.landing.postCi.map(check => `${check.name}=${check.conclusion}`).join(', ')}` : ''}
     </p>}
     {row.effects.length > 0 && <div className="mt-1">

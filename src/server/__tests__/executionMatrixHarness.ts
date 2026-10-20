@@ -139,6 +139,9 @@ export interface MatrixBench {
   /** Build another executor over the same services (a restart, or other seams). */
   makeExecutor: (overrides?: Partial<ExecutorDeps>) => ExecutionExecutor
   tick: (executor?: ExecutionExecutor) => Promise<void>
+  /** The scripted GitHub as adapters, for benches that compose more than the executor (promotions). */
+  roundAdapters: RoundAdapters
+  landingAdapters: LandingAdapters
 }
 
 export function createMatrixBench(matrix: MatrixWorld): MatrixBench {
@@ -270,7 +273,7 @@ export function createMatrixBench(matrix: MatrixWorld): MatrixBench {
     target.wake(world.team.teamId)
     await target.idle()
   }
-  return { matrix, bench, mail, tasks, assignments, results, executions, service, plansService, executor, gh, clock, conditions, makeExecutor, tick }
+  return { matrix, bench, mail, tasks, assignments, results, executions, service, plansService, executor, gh, clock, conditions, makeExecutor, tick, roundAdapters, landingAdapters }
 }
 
 /** One approved plan of the given changes and its running execution (not yet ticked). */

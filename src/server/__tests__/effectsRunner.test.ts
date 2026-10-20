@@ -68,7 +68,9 @@ const runner = () => new EffectRunner({
   onDone: (effect, outcome) => dones.push({ effectKey: effect.effectKey, outcome }),
 })
 const insert = (key = 'exec:1:api:push:1:0') => store.insertEffect({
-  executionId, change: 'api', roundId: null, kind: 'push', effectKey: key, command: { ref: key },
+  // The key's round segment is the fixture's round id, so two keys are two
+  // identities (A1) — one round's effect never adopts another's command.
+  executionId, change: 'api', roundId: `round-${key.split(':')[4]}`, kind: 'push', effectKey: key, command: { ref: key },
 })
 const advance = (ms: number) => { clock += ms }
 
@@ -137,6 +139,28 @@ describe('EffectRunner', () => {
     const again = insert('exec:1:api:open-pr:1:0')
     expect(again.id).toBe(first.id)
     expect(store.effectsOf(executionId)).toHaveLength(1)
+  })
+
+  test('an effect settled mid-batch is skipped: its adapter never runs and runDue does not count it (N3)', async () => {
+    const first = insert('exec:1:api:push:1:0')
+    const second = insert('exec:1:api:push:2:0')
+    fake.results = [ok(null)]
+    // The first effect's run sweeps the queue like a Stop (O3): the second
+    // settles while the first runs.
+    const run = new EffectRunner({
+      store,
+      adapter: {
+        call: async effect => {
+          if (effect.id === first.id) store.cancelEffects(executionId)
+          return fake.call(effect)
+        },
+      },
+      backoffsMs: [30_000, 120_000, 600_000],
+      now: () => new Date(clock),
+    })
+    expect(await run.runDue('team')).toBe(1)
+    expect(fake.calls).toEqual([first.effectKey])
+    expect(store.effect(second.id)).toMatchObject({ state: 'cancelled' })
   })
 
   test('a call that times out reads as transient', async () => {

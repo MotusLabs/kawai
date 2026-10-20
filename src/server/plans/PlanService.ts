@@ -65,6 +65,16 @@ export type ExecutionEventInput =
   | { kind: 'execution-stopped'; commandId: string; executionId: string; reason: string }
   | { kind: 'change-retried'; commandId: string; executionId: string; change: string }
 
+/**
+ * The promotion kinds (integration-candidates D9, D10, C6). A promotion
+ * belongs to no execution, so it records through `recordPromotionEvent`;
+ * Kawai's finish replays under `promo:<id>:finish`.
+ */
+export type PromotionEventInput =
+  | { kind: 'promotion-started'; commandId: string; branch: string; fromSha: string }
+  | { kind: 'promotion-cancelled'; commandId: string; promotionId: string; reason: string }
+  | { kind: 'promotion-finished'; promotionId: string; outcome: string }
+
 /** `recordExecutionEvent`'s outcome: the command's, plus `within`'s result when it ran. */
 export type ExecutionEventOutcome<T> = PlanCommandOutcome & { result: T | undefined }
 
@@ -116,6 +126,8 @@ export class PlanService {
      * Plans view's detail pushes); absent when no execution module is wired.
      */
     executionsOf?: (planId: string) => import('../../shared/planExecution').PlanExecutionView[]
+    /** integration-candidates D12, D13: the plan's integration branches, candidates, and promotions. */
+    integrationOf?: (planId: string) => import('../../shared/planIntegration').PlanIntegrationView[]
     /** plan-supervision D15/D16: the decisions, supervision, and usage of a plan of the team; null for none. */
     supervisionOf?: (teamId: string, planId: string) => import('../../shared/planReport').PlanSupervisionDetail | null
     /** plan-validation D9: approval's pre-transaction gather and in-transaction standing, and its appended precondition. */
@@ -148,12 +160,18 @@ export class PlanService {
     return this.detailWithExecutions(this.teamPlan(team, planId).id)
   }
 
-  /** D18: the stored detail plus the plan's executions and its supervision (plan-supervision D15/D16), when those modules are wired. */
+  /** D18: the stored detail plus the plan's executions, integration branches, and its supervision (plan-supervision D15/D16), when those modules are wired. */
   detailWithExecutions(planId: string): PlanDetail {
     const detail = this.store.detail(planId)!
     const executions = this.options.executionsOf?.(planId)
+    const integration = this.options.integrationOf?.(planId)
     const supervision = this.options.supervisionOf?.(detail.plan.teamId, planId) ?? null
-    return { ...detail, ...(executions === undefined ? {} : { executions }), ...supervision }
+    return {
+      ...detail,
+      ...(executions === undefined ? {} : { executions }),
+      ...(integration === undefined ? {} : { integration }),
+      ...supervision,
+    }
   }
 
   /** D5: the plan, its creator's draft, and a `created` event in one transaction. */
@@ -334,6 +352,39 @@ export class PlanService {
         kind: event.kind, actor: actor === 'human' ? HUMAN : SYSTEM, commandId, payload,
         ...(event.kind === 'execution-started' ? { revision: event.revision, contentHash: event.contentHash } : {}),
         ...(event.kind === 'execution-stopped' ? { reason: event.reason.trim() || null } : {}),
+      })
+    })
+    return { ...outcome, result: ran ? result : undefined }
+  }
+
+  /**
+   * integration-candidates D9, D10 (C3, C6): append a promotion kind together
+   * with the promotion's own writes (`within`), as one transaction replaying
+   * by `(plan_id, command_id)` over the compared payload — Promote `branch`
+   * and `fromSha`, Cancel `promotionId` and the trimmed `reason`, the finish
+   * `promotionId` and `outcome`. A replay never runs `within`. Promote and
+   * Cancel are the human's; the finish is Kawai's (`system`) under the
+   * deterministic command id `promo:<id>:finish`, so it is written once.
+   * Plan state is never read: a completed or cancelled plan promotes too.
+   */
+  recordPromotionEvent<T>(planId: string, event: PromotionEventInput, within: () => T): ExecutionEventOutcome<T> {
+    const commandId = event.kind === 'promotion-finished' ? `promo:${event.promotionId}:finish` : event.commandId.trim()
+    if (!commandId) {
+      return { ok: false, reason: 'invalid', result: undefined, message: 'A promotion command needs a stable command id so a resend replays instead of repeating.' }
+    }
+    const payload: CommandPayload = event.kind === 'promotion-started'
+      ? { command: 'promotion-start', branch: event.branch, fromSha: event.fromSha }
+      : event.kind === 'promotion-cancelled'
+        ? { command: 'promotion-cancel', promotionId: event.promotionId, reason: event.reason.trim() }
+        : { command: 'promotion-finish', promotionId: event.promotionId, outcome: event.outcome }
+    let result: T | undefined
+    let ran = false
+    const outcome = runPlanCommand(this.store, planId, commandId, payload, () => {
+      result = within()
+      ran = true
+      return this.store.insertEvent(planId, {
+        kind: event.kind, actor: event.kind === 'promotion-finished' ? SYSTEM : HUMAN, commandId, payload,
+        ...(event.kind === 'promotion-cancelled' ? { reason: event.reason.trim() || null } : {}),
       })
     })
     return { ...outcome, result: ran ? result : undefined }

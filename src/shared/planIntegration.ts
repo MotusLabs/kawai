@@ -8,7 +8,10 @@
 // - `candidateChain`: a branch's candidates, newest first;
 // - `referenceCommit`: the commit the rewritten check and outside commits
 //   compare with (D4);
-// - `promotedThrough`: how far merged promotions carried each branch (D11).
+// - `promotedThrough`: how far merged promotions carried each branch (D11);
+// - `promotedChanges` and `somethingToPromote`: the Plans view's promoted
+//   marks and whether Promote is offered (D11, D13).
+import type { CiCheck } from './planExecution'
 
 /** An increment lands a change; a promotion records the head a promotion verified (D3, D10). */
 export type CandidateKind = 'increment' | 'promotion'
@@ -77,9 +80,9 @@ export const PROMOTION_STEPS: readonly PromotionStep[] = ['branch', 'pull-reques
 
 export type PromotionState = 'running' | 'finished'
 
-/** Why a promotion failed (D10). */
-export type PromotionFailure = 'promotion-conflict' | 'effect-failed' | 'target-moved' | 'ci-failed' | 'ci-missing' | 'ci-timeout'
-export const PROMOTION_FAILURES: readonly PromotionFailure[] = ['promotion-conflict', 'effect-failed', 'target-moved', 'ci-failed', 'ci-missing', 'ci-timeout']
+/** Why a promotion failed (D10, spec "A failed promotion merges nothing"). */
+export type PromotionFailure = 'promotion-conflict' | 'effect-failed' | 'effect-unknown' | 'pr-closed' | 'target-moved' | 'ci-failed' | 'ci-missing' | 'ci-timeout'
+export const PROMOTION_FAILURES: readonly PromotionFailure[] = ['promotion-conflict', 'effect-failed', 'effect-unknown', 'pr-closed', 'target-moved', 'ci-failed', 'ci-missing', 'ci-timeout']
 
 export type PromotionOutcome = 'merged' | 'cancelled' | `failed:${PromotionFailure}`
 
@@ -120,6 +123,9 @@ export interface PromotionRecord {
   finishedAt: string | null
 }
 
+/** A promotion as the view shows it: the record plus its CI on the floor snapshot (null before CI ran). */
+export type PromotionView = PromotionRecord & { ci: { checks: CiCheck[]; flaky: string[] } | null }
+
 /** One integration branch as the Plans view and `plan_get` show it (D12, D13). */
 export interface PlanIntegrationView {
   branch: string
@@ -129,7 +135,8 @@ export interface PlanIntegrationView {
   createdSha: string
   /** Newest first (`candidateChain`). */
   candidates: IntegrationCandidate[]
-  promotions: PromotionRecord[]
+  /** Newest first, each with its CI evidence (the flaky names marked). */
+  promotions: PromotionView[]
   /** The highest promoted `seq`; 0 when nothing was promoted. */
   promotedThroughSeq: number
 }
@@ -168,4 +175,35 @@ export function promotedThrough(promotions: readonly Pick<PromotionRecord, 'bran
 /** Whether a landed candidate's change counts as promoted: its `seq` is at most the branch's promoted `through_seq` (D11). */
 export function candidatePromoted(candidate: Pick<IntegrationCandidate, 'branch' | 'seq' | 'state'>, through: ReadonlyMap<string, number>): boolean {
   return candidate.state === 'landed' && candidate.seq <= (through.get(candidate.branch) ?? 0)
+}
+
+/** The changes whose landed increment a merged promotion carried into the target (D11). */
+export function promotedChanges(views: readonly PlanIntegrationView[]): Set<string> {
+  const promoted = new Set<string>()
+  for (const view of views) {
+    for (const candidate of view.candidates) {
+      if (candidate.kind === 'increment' && candidate.change !== null && candidate.state === 'landed' && candidate.seq <= view.promotedThroughSeq) promoted.add(candidate.change)
+    }
+  }
+  return promoted
+}
+
+/** Promote is offered (D13): a landed increment is not yet promoted and no promotion of the branch runs. */
+export function somethingToPromote(view: PlanIntegrationView): boolean {
+  if (view.promotions.some(promotion => promotion.state === 'running')) return false
+  return view.candidates.some(candidate => candidate.kind === 'increment' && candidate.state === 'landed' && candidate.seq > view.promotedThroughSeq)
+}
+
+/** What the Promote dialog shows (D9, D13): the standing, the pinned head, what it carries, and the outside commits. */
+export interface PromotionPreview {
+  branch: string
+  targetBranch: string | null
+  /** The head Promote would pin: the branch's head on origin. */
+  head: string | null
+  failures: Array<{ name: string; message: string }>
+  /** The last landed candidate the head contains. */
+  throughSeq: number
+  /** Landed candidates not yet promoted and contained in the head, newest first. */
+  carried: IntegrationCandidate[]
+  outside: OutsideCommit[]
 }

@@ -83,16 +83,26 @@ export async function inspectEffect(effect: EffectRow, reads: InspectorReads): P
         return { found: 'stop', reason: 'pr-closed', detail: { message: `Pull request ${closed.number} was closed without merging.`, names: [String(closed.number)] } }
       }
       case 'rerun': {
-        // The run's attempt number: above 1 once the rerun landed.
-        const attempt = await reads.runAttempt(text('repo'), number('runId'))
-        return attempt > 1 ? { found: 'done', outcome: { attempt } } : { found: 'not-done' }
+        // Each run's attempt number: above 1 once its rerun landed. The
+        // outcome keeps the adapter's shape ({ at, runIds }) so CI's rerun
+        // rule reads it; `at` is when the effect started (L3).
+        const runIds = Array.isArray(command.runIds) ? command.runIds.filter((id): id is number => typeof id === 'number') : []
+        if (runIds.length === 0) throw new Error("the effect's command carries no runIds")
+        for (const runId of runIds) {
+          if ((await reads.runAttempt(text('repo'), runId)) <= 1) return { found: 'not-done' }
+        }
+        return { found: 'done', outcome: { at: effect.startedAt ?? effect.createdAt, runIds } }
       }
       case 'update-branch': {
-        // PR head moved: done either way — the clean-merge check (D13) sorts
-        // carried rounds from update attempts on the new head. The outcome
-        // keeps the adapter's shape: `head` is the reviewed head it pinned.
+        // PR head moved: done — the clean-merge check (D13) sorts carried
+        // rounds from update attempts on the new head. The outcome keeps the
+        // adapter's shape: `head` is the reviewed head it pinned. An unmoved
+        // head is not-done (row 12): the update has not happened, so it runs
+        // again against the pin — a repeat update-branch call is safe, and a
+        // call GitHub is still completing would have moved the head here.
         const pull = await reads.prView(text('repo'), number('pr'))
-        return { found: 'done', outcome: { requested: true, head: text('head'), newHead: pull.headRefOid, moved: pull.headRefOid !== text('head'), state: pull.state } }
+        if (pull.headRefOid === text('head')) return { found: 'not-done' }
+        return { found: 'done', outcome: { requested: true, head: text('head'), newHead: pull.headRefOid, moved: true, state: pull.state } }
       }
       case 'merge': {
         // PR state and merge commit: a completed merge is the landing fact's input.
@@ -149,6 +159,8 @@ export async function inspectEffect(effect: EffectRow, reads: InspectorReads): P
 export async function inspectUnknownEffects(deps: {
   store: ExecutionStore
   reads: InspectorReads
+  /** One team's unknown effects only (a tick's pass); every team's when absent (startup). */
+  teamId?: string
   backoffsMs?: readonly [number, number, number]
   now?: () => Date
   onUnknownSettled?: (effect: EffectRow, error: string) => void
@@ -156,7 +168,7 @@ export async function inspectUnknownEffects(deps: {
 }): Promise<void> {
   const backoffs = deps.backoffsMs ?? [30_000, 120_000, 600_000]
   const now = deps.now ?? (() => new Date())
-  for (const effect of deps.store.dueUnknownEffects(now().toISOString())) {
+  for (const effect of deps.store.dueUnknownEffects(now().toISOString(), deps.teamId)) {
     const verdict = await inspectEffect(effect, deps.reads)
     deps.onInspected?.(effect, verdict)
     if (verdict.found === 'done') {

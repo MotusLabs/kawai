@@ -218,6 +218,8 @@ describe('a missing branch or record stops, never loops (review F1)', () => {
     const stopped = await stoppedAs(executionId, `d${n}`)
     expect(stopped.stopDetail?.names).toEqual([`refs/heads/${branch}`, created])
     expect(stopped.stopDetail?.message).toContain('missing on origin')
+    // The stop leaves the newest candidate standing: a rewrite is the owner's call, never a supersession (review N1).
+    expect(candidates().filter(candidate => candidate.change === `d${n}`).at(-1)!.state).not.toBe('superseded')
     git(['update-ref', `refs/heads/${branch}`, created], matrix.origin)
     expect((await h.service.retry({ kind: 'human', team: h.matrix.world.team }, { executionId, change: `d${n}`, commandId: `retry-d-${n}` })).ok).toBe(true)
     await until(landed(executionId, `d${n}`))

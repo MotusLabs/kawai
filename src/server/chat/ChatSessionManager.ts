@@ -1226,6 +1226,7 @@ export class ChatSessionManager {
     this.executions = planServices.executions
     this.executionRuntime = planServices.runtime
     this.supervisionMonitor = planServices.monitor
+    this.promotions = planServices.promotions
     this.validationDetail = planServices.validationDetail
     this.validationAdapter = planServices.adapter
     // The impact assessment derives from plans, and every plan's impact gate
@@ -1243,6 +1244,8 @@ export class ChatSessionManager {
     planServices.executionStore.subscribe(teamId => {
       this.options.onPlanChange?.(teamId)
     })
+    // Every candidate, promotion, or promotion-effect write re-pushes the plan's detail (integration-candidates D13).
+    planServices.integrationStore.subscribe((teamId, planId) => this.options.onPlanChange?.(teamId, planId))
     this.strategies.store.subscribe(strategy => {
       const teamId = strategyTeam(strategy)
       if (!teamId) return
@@ -1519,6 +1522,8 @@ export class ChatSessionManager {
   /** The execution runtime (plan-execution D5): boot recovery, wakes, and stop. */
   private readonly executionRuntime: import('../plans/execution/executionRuntime').ExecutionRuntime | null
   private readonly supervisionMonitor: import('../plans/supervision/SupervisionMonitor').SupervisionMonitor | null
+  /** Promote, Cancel, and the promotion preview (integration-candidates D9). */
+  readonly promotions: import('../plans/landing/integration/PromotionService').PromotionService
   /** The one execution store, its ownership, and its wake hub (plan-execution D5/D7). */
   private readonly executionCore: ReturnType<typeof composeExecutionCore>
   /** The user-level team settings (plan-execution D16's floor map lives here). */

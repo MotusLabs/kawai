@@ -16,10 +16,11 @@ import { referenceCommit } from '../../../../shared/planIntegration'
 import type { IntegrationBranchRecord, IntegrationCandidate, OutsideCommit } from '../../../../shared/planIntegration'
 import type { EffectKind } from '../../../../shared/planExecution'
 import type { ChangeRow, EffectRow, ExecutionRow } from '../../execution/executionRows'
+import { EffectPinConflict } from '../../execution/executionEffectStore'
 import type { ExecutionStore } from '../../execution/executionStore'
 import { afterLanded, applyLanding, applyLandingOutcome, updateBranchAdapter, type LandingDeps, type LandingAdapters } from '../../execution/executionLanding'
 import type { LandingMechanism } from '../landingMechanisms'
-import { probeIntegrationLanding } from './integrationProbe'
+import { probeIntegrationLanding, type IntegrationProbeReads } from './integrationProbe'
 import { createIntegrationAdapter, fastForwardAdapter, integrationAdapters, type IntegrationAdapters } from './integrationEffects'
 import type { IntegrationStore } from './integrationStore'
 
@@ -82,7 +83,7 @@ function stopIntegration(executions: ExecutionStore, row: ChangeRow, detail: { m
   })
 }
 
-export function integrationMechanism(store: IntegrationStore, adapters: IntegrationAdapters = integrationAdapters): LandingMechanism {
+export function integrationMechanism(store: IntegrationStore, adapters: IntegrationAdapters = integrationAdapters, probeReads: IntegrationProbeReads = {}): LandingMechanism {
   /** D5's final step, after direct's steps 1 to 3: the rewritten check, the candidate, the fast-forward. */
   async function finish(deps: LandingDeps, row: ChangeRow, at: { execution: ExecutionRow; roundId: string; resultId: string; head: string; base: string; cwd: string }): Promise<void> {
     const executions = deps.executions
@@ -114,16 +115,36 @@ export function integrationMechanism(store: IntegrationStore, adapters: Integrat
       candidate = store.transitionCandidate(candidate.id, 'passed')
     }
     const passed = candidate
+    let refused: EffectPinConflict | null = null
     executions.atomically(() => {
       const fresh = executions.change(row.executionId, row.change)
       if (fresh === null || fresh.state !== 'landing' || fresh.step === 'merging') return
+      // The pre-guard (A1): a live landing-kind row of another identity —
+      // another kind or round — settles first; the step stays and the next
+      // tick re-reads. The same identity is inserted and adopted (A1).
+      const live = executions.liveLandingEffect(row.executionId, row.change)
+      if (live !== null && !(live.kind === 'fast-forward' && live.roundId === at.roundId)) return
+      // The insert lands before the step transition (A1): a refused insert
+      // never flips the step — the live row settles first, the next tick
+      // re-reads. A refused round re-issues here under the next candidate
+      // seq, a Retry re-adopts the re-opened row by its key — idempotent (R4).
+      try {
+        executions.insertEffect({
+          executionId: row.executionId, change: row.change, roundId: at.roundId, kind: 'fast-forward',
+          effectKey: `${row.executionId}:${row.change}:fast-forward:${passed.seq}:${fresh.generation}`,
+          command: { repo: deps.repo, branch: record.branch, sha: at.head, base: at.base, cwd: at.cwd, candidateId: passed.id },
+        })
+      } catch (error) {
+        if (error instanceof EffectPinConflict) {
+          refused = error
+          return
+        }
+        throw error
+      }
       executions.transition(row.executionId, row.change, fresh, { step: 'merging' })
-      executions.insertEffect({
-        executionId: row.executionId, change: row.change, roundId: at.roundId, kind: 'fast-forward',
-        effectKey: `${row.executionId}:${row.change}:fast-forward:${passed.seq}:${fresh.generation}`,
-        command: { repo: deps.repo, branch: record.branch, sha: at.head, base: at.base, cwd: at.cwd, candidateId: passed.id },
-      })
     })
+    const conflict = refused as EffectPinConflict | null
+    if (conflict !== null) logger.info('plan_execution_effect_pin_conflict', { executionId: row.executionId, kind: 'fast-forward', effectId: conflict.effectId })
   }
 
   /** The fast-forward's follow-on (D5, D6): landed in one transaction, or the moved and rewritten rules. */
@@ -183,7 +204,7 @@ export function integrationMechanism(store: IntegrationStore, adapters: Integrat
       ...input,
       branch: input.landing.mode === 'integration-branch' ? input.landing.branch : '',
       record: (teamId, branch) => store.branch(teamId, branch),
-    }, options),
+    }, options, probeReads),
     async startBase(input) {
       // D2: the integration branch's head on origin when the worktree is provisioned.
       const head = await input.lsRemoteHead(input.repo, `refs/heads/${input.execution.baseBranch}`)
@@ -198,6 +219,8 @@ export function integrationMechanism(store: IntegrationStore, adapters: Integrat
       if (probe.integration === undefined || probe.integration.exists || probe.repo === null) return []
       return [{
         kind: 'create-integration' as EffectKind,
+        // The first issuance; after a settled failure the planner re-issues
+        // under the next count, idempotently (R4).
         effectKey: `${execution.id}::create-integration:1`,
         command: { repo: probe.repo, branch: probe.integration.branch, sha: execution.baseCommit, target: probe.integration.target, planId: execution.planId, teamId: execution.teamId, cwd: main },
       }]

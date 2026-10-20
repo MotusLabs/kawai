@@ -134,6 +134,7 @@ export interface PlanDraft {
 export type PlanEventKind =
   | 'created' | 'submitted' | 'approved' | 'withdrawn' | 'draft-discarded' | 'completed' | 'cancelled' | 'reopened'
   | 'execution-started' | 'execution-stopped' | 'change-retried'
+  | 'promotion-started' | 'promotion-cancelled' | 'promotion-finished'
 
 export interface PlanEvent {
   id: string
@@ -203,6 +204,8 @@ export interface PlanDetail {
   linkedTasks: PlanLinkedTask[]
   /** The plan's executions, newest first (plan-execution D18); absent when the plans module runs without executions. */
   executions?: import('./planExecution').PlanExecutionView[]
+  /** The plan's integration branches with their candidate chains and promotions (integration-candidates D12, D13); absent without the module. */
+  integration?: import('./planIntegration').PlanIntegrationView[]
   /** Progress over the current approved revision; null without one. */
   progress: PlanProgress | null
   /**
