@@ -12,6 +12,11 @@ bun run typecheck  # tsc --noEmit
 bun run test       # unit tests
 ```
 
+`bun run test` gives each test file fresh temporary database, log, and config
+directories and runs files with per-file isolation; a bare `bun test` keeps
+the old shared-process mode. `bun run test <file…>` runs just those test
+files through the same machinery.
+
 The pre-commit hook runs lint and typecheck on every commit, and the unit
 suite unless the commit is docs-only (`scripts/docs-only-changes.sh`), so a
 commit that touches source is its own full check — don't run the trio just
