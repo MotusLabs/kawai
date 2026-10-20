@@ -18,7 +18,8 @@ import {
   planAttentionFacts, planSummaryRows, type PlanAttentionFact, type PlanAttentionReads, type PlanChangeFact,
   type PlanFixFact, type PlanSummaryRowReads,
 } from '../team/planAttention'
-import { attentionItems, morningSummary, type AttentionInput } from '../team/workspaceRead'
+import { attentionItems, type AttentionInput } from '../team/workspaceRead'
+import { morningSummary } from '../team/workspaceSummary'
 import { DecisionStore } from '../plans/decisions/decisionStore'
 import { ExecutionStore } from '../plans/execution/executionStore'
 import { PlanStore } from '../plans/planStore'

@@ -12,7 +12,8 @@ import { attentionLinkLabel, openAttentionLink } from '../components/team/attent
 // Server-built shapes (S2): the items and summary rows below are the server
 // functions' own output, never hand-written copies of server shapes.
 import { decisionQuestionItems, planStopItems, planSummaryRows, type PlanAttentionFact } from '../../server/team/planAttention'
-import { attentionItems, morningSummary, type AttentionInput } from '../../server/team/workspaceRead'
+import { attentionItems, type AttentionInput } from '../../server/team/workspaceRead'
+import { morningSummary } from '../../server/team/workspaceSummary'
 import type { ChangeSupervision } from '../../shared/planSupervision'
 import { useSessionStore } from '../stores/sessionStore'
 import { useTeamTaskStore } from '../stores/teamTaskStore'

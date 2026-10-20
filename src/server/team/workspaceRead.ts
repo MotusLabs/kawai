@@ -8,9 +8,6 @@
 import type { ChatPendingRequest } from '../../shared/chat'
 import type {
   AttentionItem,
-  MorningSummary,
-  SummaryBucket,
-  SummaryItem,
   TeamMemberRow,
   TeamMemberSession,
   TaskAcknowledgementBadge,
@@ -19,43 +16,21 @@ import type {
 } from '../../shared/teamWorkspace'
 import { attentionItemId } from '../../shared/teamWorkspace'
 import type { OutboundViolationGroup } from '../outbound/service'
-import { outboundAttentionItems, outboundSummaryItems } from './workspaceOutbound'
+import { outboundAttentionItems } from './workspaceOutbound'
 import { teamTaskStage } from '../../shared/teamTaskStage'
 import type { TeamMessage, WaitingConstraint, WaitingReason } from '../../shared/team'
-import { stopReasonLabel } from '../../shared/planSupervision'
 import type { TeamTaskSummary } from '../../shared/teamTasks'
 import type { ChatSessionRecord } from '../db'
 import type { ChatSessionManager } from '../chat/ChatSessionManager'
 import { acceptanceItems, taskImpact, type PendingAcceptance } from './attentionAcceptance'
 import { exhaustionAttentionItems, type ExhaustionFact } from './workspaceExhaustion'
+import { CAPACITY_CONSTRAINT_KINDS, capacityConstraintLabel, morningSummary } from './workspaceSummary'
 import {
   decisionQuestionItems, planConditionItems, planFixItems, planPromotionItems, planStallItems, planStopItems,
   type PlanAttentionFact, type PlanSummaryRows,
 } from './planAttention'
 import type { GroupCatalog } from './groupCatalog'
 import type { TeamIdentity } from './teamIdentity'
-
-/**
- * The constraint kinds that make mail wait on capacity (team-waiting-reasons
- * D1's ordering names them the capacity band): the attention queue's
- * agent-owned staffing waits and the summary's capacity bucket both read
- * exactly these.
- */
-const CAPACITY_CONSTRAINT_KINDS: ReadonlySet<WaitingConstraint['kind']> = new Set([
-  'group-cap', 'profile-cap', 'team-spawn-cap', 'worktree-occupied',
-])
-
-/** A capacity constraint as one line; mirrors the client's label vocabulary. */
-export function capacityConstraintLabel(constraint: WaitingConstraint): string {
-  const counts = constraint.counts ? ` (${constraint.counts.live}/${constraint.counts.cap})` : ''
-  switch (constraint.kind) {
-    case 'group-cap': return `Group is at capacity${counts}`
-    case 'profile-cap': return `Profile ${constraint.detail ?? ''} is at capacity${counts}`
-    case 'team-spawn-cap': return `Team spawn cap reached${counts}`
-    case 'worktree-occupied': return `Worktree ${constraint.detail ?? ''} is held${counts}`
-    default: return `${constraint.kind}${counts}`
-  }
-}
 
 /** The provider holding the model, for the Members tab's grouping (D13). */
 function providerLabelOf(catalog: GroupCatalog, profileId: string): { id: string; label: string } | undefined {
@@ -307,138 +282,6 @@ export function attentionItems(
   sources: readonly AttentionSource[] = ATTENTION_SOURCES,
 ): AttentionItem[] {
   return sources.flatMap(source => source(input)).sort((a, b) => a.id.localeCompare(b.id))
-}
-
-/** What the morning summary reads (D8): durable rows plus the runtime ledger. */
-export interface SummaryInput {
-  /** Read time, ISO; the window is the 24 hours before it. */
-  now: string
-  sessions: Array<{ record: ChatSessionRecord; requests: ChatPendingRequest[] }>
-  messages: TeamMessage[]
-  /** One message's recorded events, oldest first (for the hold time). */
-  messageEvents: (messageId: string) => Array<{ kind: string; createdAt: string }>
-  waiting: Record<string, WaitingReason>
-  /** Persisted turn-end rows of the team's task-bound sessions (D8). */
-  turnEnds: Array<{ sessionId: string; taskId: string | null; at: string }>
-  nameOf: (sessionId: string) => string
-  /** Whether a result row exists for a session's task; such a turn is not "without a result". */
-  hasResult: (sessionId: string, taskId: string | null) => boolean
-  /** Outstanding results submitted in the window, each with its accepted state. */
-  results: Array<{ resultId: string; taskId: string; taskTitle: string | null; submitter: string; accepted: boolean }>
-  /** The audit records' row counts over the window (execution-safety-recovery D10). */
-  outboundCounts: { allowed: number; unknown: number; violations: number }
-  /** The window's durable plan rows (plan-supervision D13). */
-  plans?: PlanSummaryRows
-}
-
-const bucket = (items: SummaryItem[], runtimeOnly = false): SummaryBucket =>
-  runtimeOnly ? { items, runtimeOnly: true } : { items }
-
-/**
- * The morning summary (task 4.3): a rolling 24-hour window ending at read
- * time (Q1/Q9). Capacity waits read the in-memory ledger only — after a
- * restart that bucket lists waits the running server has observed, which its
- * `runtimeOnly` label states; the other buckets read durable rows. A
- * finished turn with no submitted result never lands in a completion bucket
- * (E13): completed results come from result rows only.
- */
-export function morningSummary(input: SummaryInput): MorningSummary {
-  const { now, sessions, messages, messageEvents, waiting, turnEnds, nameOf, hasResult, results, outboundCounts } = input
-  const since = new Date(Date.parse(now) - 24 * 60 * 60 * 1000).toISOString()
-  const inWindow = (at: string) => Date.parse(at) >= Date.parse(since)
-  const planRows = input.plans ?? { landings: [], stops: [], stallAlerts: [], decisions: [], overrides: [] }
-
-  const approvals = sessions.flatMap(({ record, requests }) =>
-    requests.flatMap(request => {
-      if (request.kind !== 'approval' || !inWindow(request.at)) return []
-      return [{
-        id: `approval:${record.sessionId}:${request.requestId}`,
-        label: `${record.name}: ${request.tool}`,
-        link: { kind: 'chat' as const, id: record.sessionId },
-      }]
-    })
-  )
-
-  // An uncertain delivery stays listed while it is still uncertain; a retried
-  // or delivered row leaves (E13). The hold event names when it turned
-  // uncertain, and keeps the bucket to the window.
-  const uncertainDeliveries = messages
-    .filter(message => message.state === 'uncertain')
-    .filter(message => {
-      const held = messageEvents(message.id)
-        .filter(event => event.kind === 'held-uncertain')
-        .map(event => event.createdAt)
-        .filter(inWindow)
-      return held.length > 0
-    })
-    .map(message => ({
-      id: `uncertain-delivery:${message.id}`,
-      label: `Delivery uncertain${message.reason ? `: ${message.reason}` : ''}`,
-      link: { kind: 'message' as const, id: message.id },
-    }))
-
-  const capacityWaits = Object.entries(waiting)
-    .filter(([, reason]) => CAPACITY_CONSTRAINT_KINDS.has(reason.blocker.kind))
-    .map(([messageId, reason]) => ({
-      id: `staffing-wait:${messageId}`,
-      label: capacityConstraintLabel(reason.blocker),
-      link: { kind: 'message' as const, id: messageId },
-    }))
-
-  const withoutResult = new Map<string, { name: string; taskId: string | null; count: number }>()
-  for (const end of turnEnds) {
-    if (!inWindow(end.at) || hasResult(end.sessionId, end.taskId)) continue
-    const existing = withoutResult.get(end.sessionId)
-    if (existing) existing.count += 1
-    else withoutResult.set(end.sessionId, { name: nameOf(end.sessionId), taskId: end.taskId, count: 1 })
-  }
-  const finishedTurnsWithoutResult = [...withoutResult.entries()].map(([sessionId, fact]) => ({
-    id: `finished-turn:${sessionId}`,
-    label: `${fact.name}: ${fact.count} turn${fact.count === 1 ? '' : 's'} finished with no result`,
-    link: { kind: 'chat' as const, id: sessionId },
-  }))
-
-  // Submitted, not accepted: each result states which (D8, Q5).
-  const completedResults = results.map(result => ({
-    id: `result:${result.resultId}`,
-    label: `${result.taskTitle ?? result.taskId}: result by ${result.submitter} — ${result.accepted ? 'accepted' : 'awaiting acceptance'}`,
-    link: { kind: 'task' as const, id: result.taskId },
-  }))
-
-  // The audit records' row counts (execution-safety-recovery D10; workspaceOutbound.ts).
-  const outbound = outboundSummaryItems(outboundCounts)
-
-  // The plan rows arrive pre-filtered to the window from their durable
-  // tables (plan-supervision D13); every item links to its plan.
-  const planItem = (id: string, label: string, planId: string, change?: string): SummaryItem =>
-    ({ id, label, link: { kind: 'plan', id: planId, planId, ...(change === undefined ? {} : { change }) } })
-  const landings = planRows.landings.map(row =>
-    planItem(`landing:${row.planId}:${row.change}:${row.landedAt}`, `Change ${row.change} of plan "${row.planTitle ?? row.planId}" landed`, row.planId, row.change))
-  const stops = planRows.stops.map(row =>
-    planItem(`stop:${row.planId}:${row.change}:${row.stoppedAt}`,
-      `Change ${row.change} of plan "${row.planTitle ?? row.planId}" stopped${row.reason ? `: ${stopReasonLabel(row.reason)}` : ''}`,
-      row.planId, row.change))
-  const stallAlerts = planRows.stallAlerts.map(row =>
-    planItem(`stall-alert:${row.id}`, `Stall alert (${row.kind}) on change ${row.change} of plan "${row.planTitle ?? row.planId}"`, row.planId, row.change))
-  const decisions = planRows.decisions.map(row =>
-    planItem(`decision:${row.decisionId}`, `Decision recorded on plan "${row.planTitle ?? row.planId}"`, row.planId))
-  const overrides = planRows.overrides.map(row =>
-    planItem(`override:${row.decisionId}`, `Decision overridden on plan "${row.planTitle ?? row.planId}"`, row.planId))
-
-  return {
-    since,
-    completedResults: bucket(completedResults),
-    capacityWaits: bucket(capacityWaits, true),
-    approvals: bucket(approvals),
-    uncertainDeliveries: bucket(uncertainDeliveries),
-    finishedTurnsWithoutResult: bucket(finishedTurnsWithoutResult),
-    outbound: bucket(outbound),
-    landings: bucket(landings),
-    stops: bucket(stops),
-    stallAlerts: bucket(stallAlerts),
-    decisions: bucket(decisions),
-    overrides: bucket(overrides),
-  }
 }
 
 /**

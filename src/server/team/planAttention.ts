@@ -7,7 +7,7 @@
 // projection like every other attention source. Every item links to its
 // plan (and change, when it has one) and clears when its cause clears —
 // derived at read time, nothing stored.
-import { attentionItemId } from '../../shared/teamWorkspace'
+import { attentionItemId, type SummaryItem } from '../../shared/teamWorkspace'
 import { FIX_PHASE_LABELS, cardState, fixStatus, type DecisionCard, type FixStatus, type PlanFixTask } from '../../shared/planDecisions'
 import { stopReasonLabel, type ChangeSupervision } from '../../shared/planSupervision'
 import { taskImpact } from './attentionAcceptance'
@@ -277,6 +277,9 @@ export interface PlanSummaryRowReads {
 /** The window's plan rows for one team, from durable records only. */
 export function planSummaryRows(reads: PlanSummaryRowReads, teamId: string, since: string): PlanSummaryRows {
   const titled = (planId: string): PlanSummaryRow => ({ planId, planTitle: reads.plans.get(planId)?.title ?? null })
+  // One window query, partitioned by kind (D13): answers and own-calls are
+  // decisions, overrides their own bucket. The edge is inclusive.
+  const windowed = reads.decisions.decisionsSince(teamId, since)
   return {
     landings: reads.executions.landingsSince(teamId, since).map(row => ({
       ...titled(row.planId), change: row.change, landedAt: row.landedAt,
@@ -287,11 +290,31 @@ export function planSummaryRows(reads: PlanSummaryRowReads, teamId: string, sinc
     stallAlerts: reads.alerts.raisedSince(teamId, since).map(row => ({
       ...titled(row.planId), id: row.id, change: row.change, kind: row.kind, raisedAt: row.raisedAt,
     })),
-    decisions: reads.decisions.decisionsSince(teamId, since)
+    decisions: windowed
       .filter(decision => decision.kind === 'answer' || decision.kind === 'own-call')
       .map(decision => ({ ...titled(decision.planId), decisionId: decision.id, createdAt: decision.createdAt })),
-    overrides: reads.decisions.decisionsSince(teamId, since)
+    overrides: windowed
       .filter(decision => decision.kind === 'override')
       .map(decision => ({ ...titled(decision.planId), decisionId: decision.id, createdAt: decision.createdAt })),
+  }
+}
+
+/** The summary's plan items (plan-supervision D13): every row links to its plan. */
+export function planSummaryItems(rows: PlanSummaryRows): Record<'landings' | 'stops' | 'stallAlerts' | 'decisions' | 'overrides', SummaryItem[]> {
+  const planItem = (id: string, label: string, planId: string, change?: string): SummaryItem =>
+    ({ id, label, link: { kind: 'plan', id: planId, planId, ...(change === undefined ? {} : { change }) } })
+  return {
+    landings: rows.landings.map(row =>
+      planItem(`landing:${row.planId}:${row.change}:${row.landedAt}`, `Change ${row.change} of plan "${row.planTitle ?? row.planId}" landed`, row.planId, row.change)),
+    stops: rows.stops.map(row =>
+      planItem(`stop:${row.planId}:${row.change}:${row.stoppedAt}`,
+        `Change ${row.change} of plan "${row.planTitle ?? row.planId}" stopped${row.reason ? `: ${stopReasonLabel(row.reason)}` : ''}`,
+        row.planId, row.change)),
+    stallAlerts: rows.stallAlerts.map(row =>
+      planItem(`stall-alert:${row.id}`, `Stall alert (${row.kind}) on change ${row.change} of plan "${row.planTitle ?? row.planId}"`, row.planId, row.change)),
+    decisions: rows.decisions.map(row =>
+      planItem(`decision:${row.decisionId}`, `Decision recorded on plan "${row.planTitle ?? row.planId}"`, row.planId)),
+    overrides: rows.overrides.map(row =>
+      planItem(`override:${row.decisionId}`, `Decision overridden on plan "${row.planTitle ?? row.planId}"`, row.planId)),
   }
 }
