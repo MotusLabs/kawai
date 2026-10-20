@@ -21,6 +21,8 @@ import type { TeamIdentity } from '../team/teamIdentity'
 import type { TeamTaskRow, TeamWorkspaceSnapshot } from '../../shared/teamWorkspace'
 import type { ClientMessage, ServerMessage } from '../../shared/types'
 import type { ChatSessionRecord } from '../db'
+import type { PlanAttentionFact, PlanSummaryRows } from '../team/planAttention'
+import type { ChangeSupervision } from '../../shared/planSupervision'
 
 let dir: string
 let db: SessionDatabase
@@ -34,6 +36,9 @@ let records: Array<ChatSessionRecord & { teamId: string }>
 let pendingRequests: Map<string, unknown[]>
 let turnEndRows: Array<{ sessionId: string; taskId: string; endedAt: string }>
 let catalog: GroupCatalog
+// The plan-side facts the manager seam exposes (plan-supervision D13).
+let planFacts: PlanAttentionFact[]
+let planRows: PlanSummaryRows
 
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-workspace-connections-'))
@@ -50,6 +55,8 @@ beforeEach(() => {
   records = []
   pendingRequests = new Map()
   turnEndRows = []
+  planFacts = []
+  planRows = { landings: [], stops: [], stallAlerts: [], decisions: [], overrides: [] }
   messages = []
   connection = { send: message => messages.push(message) }
   // Known team paths (team-workspace-pages D1): this repository (two paths,
@@ -76,6 +83,9 @@ beforeEach(() => {
     },
     recordOf: (sessionId: string) => records.find(record => record.sessionId === sessionId),
     exhaustionEpisodes: () => [],
+    planAttentionFacts: (teamId: string) => (teamId === 'team' ? planFacts : []),
+    planSummaryRows: (teamId: string) => (teamId === 'team' ? planRows : { landings: [], stops: [], stallAlerts: [], decisions: [], overrides: [] }),
+    validationDetail: { invalidate: () => {} },
     outboundAudit: { violationGroups: () => [], windowCounts: () => ({ allowed: 0, unknown: 0, violations: 0 }) },
     teams: {
       catalogForTeam: () => catalog,
@@ -101,6 +111,20 @@ const recordOf = (overrides: Partial<ChatSessionRecord & { teamId: string }> = {
   sessionId: 'chat-1', name: 'Dev one', projectPath: '/repo', sdkSessionId: null,
   status: 'waiting', createdAt: '2026-10-14T00:00:00Z', lastActivityAt: '2026-10-14T01:00:00Z',
   groupId: 'devs', teamId: 'team', ...overrides,
+})
+
+/** One gathered fact with a stopped change (the store interface, plan-supervision D13). */
+const stoppedFact = (): PlanAttentionFact => ({
+  teamId: 'team', planId: 'plan-1', planTitle: 'Wave D', leadGroup: null, executionId: 'exec-1',
+  changes: [{
+    taskId: null, generation: 0,
+    supervision: {
+      change: 'api', outcome: 'stopped',
+      cause: { kind: 'stopped', reason: 'ci-timeout', detail: null },
+      alsoApplying: [], stage: null, holder: null, progress: null, activity: null, stall: null, landing: null, lastRound: null,
+    } satisfies ChangeSupervision,
+  }],
+  openCards: [], fixes: [], failedPromotion: null, correctionOpen: false,
 })
 
 test('open snapshots the team; a team with no tasks serializes empty lists', async () => {
@@ -208,6 +232,25 @@ test('a pending approval appears live when the workspace is open', async () => {
   connections.publishWorkspace('team')
   await connections.flushWorkspace()
   expect(last('team-workspace')!.attention.map(item => item.id)).toEqual(['approval:our-dev:req-1'])
+})
+
+test('a plan write re-pushes the workspace with its attention item and summary bucket; unchanged facts stay quiet (plan-supervision D13, B1)', async () => {
+  await send({ type: 'team-workspace-open', teamPath: '/repo' })
+  expect(last('team-workspace-snapshot')!.attention).toEqual([])
+  // An execution-side write (a stopped change) lands without any task or mail
+  // change: publishPlans must re-project the workspace with the new item.
+  planFacts = [stoppedFact()]
+  planRows = { landings: [], stops: [{ planId: 'plan-1', planTitle: 'Wave D', change: 'api', stoppedAt: recent(30), reason: 'ci-timeout' }], stallAlerts: [], decisions: [], overrides: [] }
+  connections.publishPlans('team', 'plan-1')
+  await connections.flushWorkspace()
+  const push = last('team-workspace')!
+  expect(push.attention.map(item => item.id)).toEqual(['plan-stop:exec-1:api:0'])
+  expect(push.summary.stops.items.map(item => item.id)).toEqual([`stop:plan-1:api:${planRows.stops[0]!.stoppedAt}`])
+  // The same facts again: the workspace diff keeps the team quiet.
+  const count = messages.length
+  connections.publishPlans('team', 'plan-1')
+  await connections.flushWorkspace()
+  expect(messages).toHaveLength(count)
 })
 
 test('observeChatEvent maps request and turn events to workspace pushes (review item 4)', async () => {
