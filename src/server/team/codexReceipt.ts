@@ -52,10 +52,10 @@ export function threadRolloutFiles(home: string, threadId: string): { files: str
 type FileRead = { found: boolean; proven: boolean; intact: boolean }
 
 function readRollout(file: string, messageId: string): FileRead {
+  let found = false
+  let proven = false
   try {
     const lines = fs.readFileSync(file, 'utf8').split('\n').filter(line => line.trim())
-    let found = false
-    let proven = false
     for (const line of lines) {
       const id = codexReceiptMessageId(line)
       if (id) proven = true
@@ -63,7 +63,12 @@ function readRollout(file: string, messageId: string): FileRead {
     }
     for (const line of lines) JSON.parse(line)
     return { found, proven, intact: true }
-  } catch { return { found: false, proven: false, intact: false } }
+  } catch {
+    // A torn tail beside a delivered row is still a delivery (found wins
+    // before the integrity check, as transcriptReceipt reads a Claude
+    // transcript); only absence loses its intactness, and that holds.
+    return { found, proven, intact: false }
+  }
 }
 
 export function codexRolloutReceipt(source: CodexReceiptSource, messageId: string): Receipt {

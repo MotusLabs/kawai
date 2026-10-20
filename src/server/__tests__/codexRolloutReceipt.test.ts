@@ -159,6 +159,23 @@ test('a torn or unreadable rollout, a missing column file, or no thread id holds
   expect(codexRolloutReceipt(source(null), absent.id)).toBe('uncertain')
 })
 
+// F1 (codexReceipt.readRollout): a torn line only clears `intact` — a found
+// envelope beside it is still a delivery, as transcriptReceipt reads a
+// Claude transcript (found before the integrity loop).
+test('a found envelope beside a torn tail in the same file reads found; absence beside it stays uncertain', () => {
+  const delivered = claim()
+  const absent = claim()
+  const torn = '{"timestamp":"2026-10-20T00:00:01.000Z","type":"response_item","payload":{"type":"mess'
+  const file = rollout(NESTED, [meta(), userRow(envelopeOf(delivered)), torn], THREAD, '2026-10-20T02-00-00')
+  expect(codexRolloutReceipt(source(file), delivered.id)).toBe('found')
+  expect(codexRolloutReceipt(source(file), absent.id)).toBe('uncertain')
+  // The settle path delivers on the same evidence (a hold here would invite
+  // a Retry that duplicates the mail); the absent mail holds.
+  reconcile(source(file))
+  expect(store.get(delivered.id)?.state).toBe('delivered')
+  expect(store.get(absent.id)?.state).toBe('uncertain')
+})
+
 test('an unreadable sessions directory holds absent mail: a receipt may hide there', () => {
   const proving = claim()
   const absent = claim()
