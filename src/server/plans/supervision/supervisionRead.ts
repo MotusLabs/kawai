@@ -8,7 +8,8 @@
 // outcomes. The holder's session facts and the instruction's mailbox blocker
 // are runtime facts, injected through `SupervisionRuntime`; `waitEndedAt` is
 // the monitor's in-memory fact (D11), read through the optional `waitEndedAt`
-// seam and null without it. Reads only; no writes.
+// seam and null without it. Reads only, all in one read transaction (O1),
+// so a write committing meanwhile is wholly in the view or wholly out of it.
 import type { Database } from 'bun:sqlite'
 import { cardState } from '../../../shared/planDecisions'
 import { ciClass, runsByName } from '../../../shared/planExecutionGates'
@@ -78,6 +79,12 @@ export function supervisedRevision(reads: Pick<SupervisionReads, 'executions' | 
 
 /** Every change's input in the revision's order; dependency outcomes are filled by `readPlanSupervision`. */
 export function readSupervisionInputs(reads: SupervisionReads, teamId: string, planId: string): PlanSupervisionRead | null {
+  // One read transaction (O1): a write committing between these reads can
+  // never show one change a fact another change's read missed.
+  return reads.db.transaction(() => readInputs(reads, teamId, planId))()
+}
+
+function readInputs(reads: SupervisionReads, teamId: string, planId: string): PlanSupervisionRead | null {
   const plan = reads.plans.forTeam(teamId, planId)
   if (plan === null) return null
   const { execution, revision } = supervisedRevision(reads, teamId, planId)
