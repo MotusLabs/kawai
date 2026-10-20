@@ -1,6 +1,6 @@
 // The attention queue, morning summary, and bands (team-workspace 6.2/6.4):
 // human-required items apart from agent waits, an unrecognized kind rendered
-// not dropped, links that go to their source, five summary buckets with the
+// not dropped, links that go to their source, eleven summary buckets with the
 // runtime-only label, and bands that collapse per team.
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
@@ -9,6 +9,11 @@ import TeamAttentionQueue, { attentionKindLabel, focusAfterRemoval } from '../co
 import TeamMorningSummary from '../components/team/TeamMorningSummary'
 import TeamWorkspaceBands from '../components/team/TeamWorkspaceBands'
 import { attentionLinkLabel, openAttentionLink } from '../components/team/attentionLinks'
+// Server-built shapes (S2): the items and summary rows below are the server
+// functions' own output, never hand-written copies of server shapes.
+import { decisionQuestionItems, planStopItems, planSummaryRows, type PlanAttentionFact } from '../../server/team/planAttention'
+import { attentionItems, morningSummary, type AttentionInput } from '../../server/team/workspaceRead'
+import type { ChangeSupervision } from '../../shared/planSupervision'
 import { useSessionStore } from '../stores/sessionStore'
 import { useTeamTaskStore } from '../stores/teamTaskStore'
 import { useTeamWorkspaceStore } from '../stores/teamWorkspaceStore'
@@ -103,7 +108,7 @@ test('a plan link opens the named plan, preferring planId over the item id', () 
   expect(attentionLinkLabel({ kind: 'plan', id: 'plan-1' })).toBe('Open plan')
 })
 
-test('the summary shows six buckets, the runtime-only label, and links', () => {
+test('the summary shows all eleven buckets, the runtime-only label, and links', () => {
   const opened: string[] = []
   let renderer!: TestRenderer.ReactTestRenderer
   act(() => {
@@ -116,6 +121,7 @@ test('the summary shows six buckets, the runtime-only label, and links', () => {
   const buckets = byId(renderer, 'summary-bucket')
   expect(buckets.map(bucket => bucket.props['data-bucket'])).toEqual([
     'Completed results', 'Capacity waits', 'Approvals', 'Uncertain deliveries', 'Finished turns without a result', 'Outbound sends',
+    'Landings', 'Stopped changes', 'Stall alerts', 'Lead decisions', 'Overridden decisions',
   ])
   expect(textOf(buckets[1]!)).toContain('Runtime only')
   expect(textOf(buckets[0]!)).toContain('None.')
@@ -187,4 +193,101 @@ test('a fixes-requested item renders under agent-owned waits with its label and 
   const kinds = byId(renderer, 'attention-kind').map(textOf)
   expect(kinds).toEqual(['Fixes requested'])
   expect(textOf(renderer.root)).toContain('Wait for fixes')
+})
+
+test('the plan buckets render their items, none runtime-only (plan-supervision D13, B2)', () => {
+  let renderer!: TestRenderer.ReactTestRenderer
+  act(() => {
+    renderer = TestRenderer.create(<TeamMorningSummary onOpen={() => {}} summary={summary({
+      landings: { items: [{ id: 'landing:p:api:t', label: 'Change api of plan "Wave D" landed', link: { kind: 'plan', id: 'p', planId: 'p', change: 'api' } }] },
+      stops: { items: [{ id: 'stop:p:api:t', label: 'Change api of plan "Wave D" stopped: CI did not finish in time', link: { kind: 'plan', id: 'p', planId: 'p', change: 'api' } }] },
+      stallAlerts: { items: [{ id: 'stall-alert:a', label: 'Stall alert (no-progress) on change api of plan "Wave D"', link: { kind: 'plan', id: 'p', planId: 'p', change: 'api' } }] },
+      decisions: { items: [{ id: 'decision:d', label: 'Decision recorded on plan "Wave D"', link: { kind: 'plan', id: 'p', planId: 'p' } }] },
+      overrides: { items: [{ id: 'override:d', label: 'Decision overridden on plan "Wave D"', link: { kind: 'plan', id: 'p', planId: 'p' } }] },
+    })} />)
+  })
+  const buckets = byId(renderer, 'summary-bucket')
+  expect(textOf(buckets[6]!)).toContain('Change api of plan "Wave D" landed')
+  expect(textOf(buckets[7]!)).toContain('CI did not finish in time')
+  expect(textOf(buckets[8]!)).toContain('Stall alert (no-progress)')
+  expect(textOf(buckets[9]!)).toContain('Decision recorded')
+  expect(textOf(buckets[10]!)).toContain('Decision overridden')
+  expect(byId(renderer, 'summary-runtime-only')).toHaveLength(1) // capacity waits only
+})
+
+test('a decision card carrying its plan opens the plan, labelled Open plan (plan-supervision D13, S1)', () => {
+  const navigated: TeamLocation[] = []
+  const navigate = (location: TeamLocation) => navigated.push(location)
+  openAttentionLink('/repo', { kind: 'card', id: 'card-1', planId: 'plan-1' }, navigate)
+  expect(navigated).toEqual([{ teamKey: '/repo', tab: 'plans', id: 'plan-1' }])
+  expect(attentionLinkLabel({ kind: 'card', id: 'card-1', planId: 'plan-1' })).toBe('Open plan')
+  // A session-shaped card (no plan) keeps its chat.
+  openAttentionLink('/repo', { kind: 'card', id: 'chat-8' }, navigate)
+  expect(navigated).toHaveLength(1)
+  expect(useSessionStore.getState().selectedSessionId).toBe('chat-8')
+})
+
+test('server-built plan items and summary rows flow through the queue, links, and summary (S2, D13)', () => {
+  // The facts are the store interface the gatherer fills; everything item-
+  // shaped below is the server's own sources' output.
+  const supervision: ChangeSupervision = {
+    change: 'api', outcome: 'stopped',
+    cause: { kind: 'stopped', reason: 'ci-timeout', detail: null },
+    alsoApplying: [], stage: null, holder: null, progress: null, activity: null, stall: null, landing: null, lastRound: null,
+  }
+  const plans: PlanAttentionFact[] = [{
+    teamId: 'team', planId: 'plan-1', planTitle: 'Wave D', leadGroup: 'lead', executionId: 'exec-1',
+    changes: [{ taskId: 'task-1', generation: 0, supervision }],
+    openCards: [{
+      id: 'card-1', teamId: 'team', planId: 'plan-1', revision: 2, change: 'api', taskId: 'task-1',
+      question: 'Which schema?', options: ['A', 'B'], context: null,
+      askedBy: { session: 'chat-dev', group: 'middle-devs', profile: 'glm' },
+      addressedTo: 'lead', addressedGroup: 'lead', messageId: null, createdAt: '2026-10-20T09:00:00.000Z',
+    }],
+    fixes: [], failedPromotion: null, correctionOpen: false,
+  }]
+  const input = {
+    sessions: [], messages: [], waiting: {}, taskTitle: () => null, nameOf: (id: string) => id,
+    pendingAcceptance: [], outboundViolations: [], plans,
+  } as unknown as AttentionInput
+  const built = attentionItems(input)
+  expect(built.filter(item => item.kind === 'plan-stop' || item.kind === 'decision-question')).toHaveLength(2)
+  // The queue renders the server-built causes; the stop's link opens the plan,
+  // and the card's planId makes its label Open plan (S1).
+  const navigated: TeamLocation[] = []
+  const navigate = (location: TeamLocation) => navigated.push(location)
+  let renderer!: TestRenderer.ReactTestRenderer
+  act(() => {
+    renderer = TestRenderer.create(<TeamAttentionQueue loaded onOpen={() => {}} items={built} />)
+  })
+  const rendered = textOf(renderer.root)
+  expect(rendered).toContain('Change api of plan "Wave D" stopped')
+  expect(rendered).toContain('Decision card asks: Which schema?')
+  const stop = built.find(item => item.kind === 'plan-stop')!
+  openAttentionLink('/repo', stop.link, navigate)
+  expect(navigated).toEqual([{ teamKey: '/repo', tab: 'plans', id: 'plan-1' }])
+  const cardItem = built.find(item => item.kind === 'decision-question')!
+  expect(attentionLinkLabel(cardItem.link)).toBe('Open plan')
+  // The summary's plan buckets render their server-built rows, linked to the plan.
+  const rows = planSummaryRows({
+    plans: { get: () => null },
+    executions: {
+      landingsSince: () => [],
+      stoppedChangesSince: () => [{ planId: 'plan-1', change: 'api', updatedAt: '2026-10-20T10:00:00.000Z', stopReason: 'ci-timeout' }],
+    },
+    decisions: { decisionsSince: () => [] },
+    alerts: { raisedSince: () => [] },
+  } as never, 'team', '2026-10-19T12:00:00.000Z')
+  const sum = morningSummary({
+    now: '2026-10-20T12:00:00.000Z', sessions: [], messages: [], messageEvents: () => [], waiting: {}, turnEnds: [],
+    nameOf: (id: string) => id, hasResult: () => false, results: [], outboundCounts: { allowed: 0, unknown: 0, violations: 0 },
+    plans: rows,
+  })
+  expect(sum.stops.items.map(item => item.id)).toEqual(['stop:plan-1:api:2026-10-20T10:00:00.000Z'])
+  let summaryRenderer!: TestRenderer.ReactTestRenderer
+  act(() => {
+    summaryRenderer = TestRenderer.create(<TeamMorningSummary onOpen={() => {}} summary={sum} />)
+  })
+  // The stub reads hold no plan row, so the label names the plan by id.
+  expect(textOf(summaryRenderer.root)).toContain('Change api of plan "plan-1" stopped: CI did not finish in time')
 })

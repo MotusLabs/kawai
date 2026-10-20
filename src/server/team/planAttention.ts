@@ -203,7 +203,9 @@ export const planFixItems: AttentionSource = ({ plans, taskTitle }: AttentionInp
         impact: taskImpact(fix.taskId, taskTitle),
         nextAction,
         link: planLink(fact),
-        requiresHuman: owner.kind === 'human',
+        // While the fix runs it is a wait, never a Needs-you: both the Lead
+        // role and the human wait until it lands (plan-supervision D13).
+        requiresHuman: phase !== 'running' && owner.kind === 'human',
       }
     }))
 

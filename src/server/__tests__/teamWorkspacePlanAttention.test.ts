@@ -196,7 +196,9 @@ describe('plan-fix (D13)', () => {
       cause: 'Fix task "Forward fix: schema" of plan "Wave D" is running',
     })
     const [unled] = byKind(items([fact({ leadGroup: null, fixes: [fix({ status: fixStatus('running', 3) })] })]), 'plan-fix')
-    expect(unled).toMatchObject({ owner: { kind: 'human' }, requiresHuman: true })
+    // While the fix runs it is a wait on agents even unassigned (D13, S3):
+    // Needs you is for unassigned, awaiting approval, or approved-not-running.
+    expect(unled).toMatchObject({ owner: { kind: 'human' }, requiresHuman: false })
   })
 
   test('closing the task, or its changes landing while it is open, clears the item', () => {
