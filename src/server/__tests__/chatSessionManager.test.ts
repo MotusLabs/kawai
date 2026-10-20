@@ -5455,46 +5455,60 @@ describe('ChatSessionManager provider usage pull', () => {
   })
 
   test('a topped-up balance appears through the scheduled pull without a turn', async () => {
-    let remaining = 0.04
-    const { manager, fetchCalls } = await createOpenRouterHarness(
-      {
-        '/api/v1/key': () =>
-          jsonResponse({ ...OR_KEY_BODY, limit_remaining: remaining, budgets: [{ ...OR_KEY_BODY.budgets[0], remaining_usd: remaining }] }),
-      },
-      false,
-      25
-    )
-    const id = startOpenRouterSession(manager)
-    expect(await manager.start(id)).toEqual({ ok: true })
-    await flush()
-    expect(manager.getSnapshot(id)!.usage?.windows[0]).toMatchObject({ label: 'Key cap · $0.04 left' })
+    jest.useFakeTimers()
+    try {
+      let remaining = 0.04
+      const { manager, fetchCalls } = await createOpenRouterHarness(
+        {
+          '/api/v1/key': () =>
+            jsonResponse({ ...OR_KEY_BODY, limit_remaining: remaining, budgets: [{ ...OR_KEY_BODY.budgets[0], remaining_usd: remaining }] }),
+        },
+        false,
+        600_000
+      )
+      const id = startOpenRouterSession(manager)
+      expect(await manager.start(id)).toEqual({ ok: true })
+      await drainNow()
+      expect(manager.getSnapshot(id)!.usage?.windows[0]).toMatchObject({ label: 'Key cap · $0.04 left' })
 
-    remaining = 0.03
-    await waitForCondition(
-      () => manager.getSnapshot(id)!.usage?.windows[0]?.label === 'Key cap · $0.03 left',
-      2_000
-    )
-    expect(fetchCalls.length).toBeGreaterThanOrEqual(2)
+      // The owner tops up; the next 10-minute cadence tick shows it — no turn ran.
+      remaining = 0.03
+      jest.advanceTimersByTime(600_000)
+      await drainNow()
+      expect(fetchCalls).toHaveLength(2)
+      expect(manager.getSnapshot(id)!.usage?.windows[0]).toMatchObject({ label: 'Key cap · $0.03 left' })
+    } finally {
+      jest.useRealTimers()
+    }
   })
 
   test('archiving the last live session stops the OpenRouter pulls', async () => {
-    const { manager, usage, fetchCalls } = await createOpenRouterHarness(
-      { '/api/v1/key': jsonResponse(OR_KEY_BODY) },
-      false,
-      25
-    )
-    const id = startOpenRouterSession(manager)
-    expect(await manager.start(id)).toEqual({ ok: true })
-    await flush()
-    await waitForCondition(() => fetchCalls.length >= 3)
-    const beforeArchive = fetchCalls.length
+    jest.useFakeTimers()
+    try {
+      const { manager, usage, fetchCalls } = await createOpenRouterHarness(
+        { '/api/v1/key': jsonResponse(OR_KEY_BODY) },
+        false,
+        600_000
+      )
+      const id = startOpenRouterSession(manager)
+      expect(await manager.start(id)).toEqual({ ok: true })
+      await drainNow()
+      // One cadence tick pulls; archiving stops every later one.
+      jest.advanceTimersByTime(600_000)
+      await drainNow()
+      expect(fetchCalls).toHaveLength(2)
 
-    await manager.archive(id)
-    // Several cadences pass: the tick clears the timer without a request.
-    await new Promise((resolve) => setTimeout(resolve, 200))
-    expect(fetchCalls).toHaveLength(beforeArchive)
-    expect(usage).toHaveLength(1)
-    expect(manager.getSnapshot(id)!.usage?.source).toBe('provider')
+      await manager.archive(id)
+      jest.advanceTimersByTime(600_000)
+      await drainNow()
+      jest.advanceTimersByTime(600_000)
+      await drainNow()
+      expect(fetchCalls).toHaveLength(2)
+      expect(usage).toHaveLength(1)
+      expect(manager.getSnapshot(id)!.usage?.source).toBe('provider')
+    } finally {
+      jest.useRealTimers()
+    }
   })
 
   const costFrame = (cost: number): SDKMessage => ({
