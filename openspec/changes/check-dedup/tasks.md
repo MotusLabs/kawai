@@ -7,7 +7,7 @@
 
 ## 2. `bun run check`
 
-- [ ] 2.1 Add `scripts/check.ts` and the `check` script: lint, typecheck, `bun run test` in order, stopping at the first failure; record only a full pass; report a hit with its time and worktree; `--force`; `GIT_*` hook variables stripped from step environments. Verify with tests covering a pass that records, a failure that doesn't, a hit that runs nothing, and `--force` running everything.
+- [x] 2.1 Add `scripts/check.ts` and the `check` script: lint, typecheck, `bun run test` in order, stopping at the first failure; record only a full pass; report a hit with its time and worktree; `--force`; `GIT_*` hook variables stripped from step environments. Verify with tests covering a pass that records, a failure that doesn't, a hit that runs nothing, and `--force` running everything.
 - [ ] 2.2 Document `bun run check` in AGENTS.md's Commands block and paragraph (what it caches, where records live, `--force`, `bun run test` staying raw), and run `bun run test` once because a test reads AGENTS.md.
 
 ## 3. Hook and typecheck
