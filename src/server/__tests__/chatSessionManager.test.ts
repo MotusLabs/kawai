@@ -5315,18 +5315,31 @@ describe('ChatSessionManager provider usage pull', () => {
     ['a foreign body', jsonResponse({ hello: true })],
     ['a transport error', new Error('offline')],
   ])('a failing key endpoint (%s) records no data and keeps the host-login pull suppressed', async (_name, response) => {
-    const { manager, handles, usage, fetchCalls } = await createOpenRouterHarness({
-      '/api/v1/key': response,
-    })
-    const id = startOpenRouterSession(manager)
-    expect(await manager.start(id)).toEqual({ ok: true })
-    await flush()
+    const warnings: Array<{ event: string; data?: Record<string, unknown> }> = []
+    logger.warn = (event: string, data?: Record<string, unknown>) => {
+      warnings.push({ event, data })
+    }
+    try {
+      const { manager, handles, usage, fetchCalls } = await createOpenRouterHarness({
+        '/api/v1/key': response,
+      })
+      const id = startOpenRouterSession(manager)
+      expect(await manager.start(id)).toEqual({ ok: true })
+      await flush()
 
-    expect(fetchCalls).toHaveLength(1)
-    expect(fetchCalls[0]!.url).toBe('https://openrouter.ai/api/v1/key')
-    expect(usage).toEqual([{ providerId: 'openrouter', report: null }])
-    expect(handles[0]!.usageCalls).toEqual([])
-    expect(manager.getSnapshot(id)!.usage).toBeNull()
+      expect(fetchCalls).toHaveLength(1)
+      expect(fetchCalls[0]!.url).toBe('https://openrouter.ai/api/v1/key')
+      expect(usage).toEqual([{ providerId: 'openrouter', report: null }])
+      expect(handles[0]!.usageCalls).toEqual([])
+      expect(manager.getSnapshot(id)!.usage).toBeNull()
+      // The failure log (both outcomes land here) names the host and status,
+      // never the key (openrouter-provider 2.2).
+      const failures = warnings.filter(entry => entry.event === 'chat_openrouter_key_pull_failed')
+      expect(failures.length).toBeGreaterThanOrEqual(1)
+      expect(JSON.stringify(warnings).includes(OR_TOKEN)).toBe(false)
+    } finally {
+      logger.warn = orOriginalWarn
+    }
   })
 
   test('a balance key pulls credits with the management value and merges the credits meter', async () => {
