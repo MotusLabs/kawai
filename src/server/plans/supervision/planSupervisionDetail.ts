@@ -15,8 +15,8 @@ import { readPlanSupervision, supervisedRevision, type SupervisionReads } from '
 import { readPlanUsage } from './planUsageRead'
 
 export interface SupervisionDetailReads extends SupervisionReads {
-  plans: Pick<PlanStore, 'forTeam' | 'revision' | 'approvedRevision' | 'revisions'>
-  tasks: { get: (id: string) => Pick<TeamTask, 'status'> | null }
+  plans: Pick<PlanStore, 'forTeam' | 'revision' | 'approvedRevision' | 'revisions' | 'openPlans'>
+  tasks: { get: (id: string) => Pick<TeamTask, 'status' | 'title'> | null }
   /** The plan's strategy impact, for the report's disposition line (C-I3). */
   impact?: (teamId: string, planId: string) => PlanImpact | null
 }

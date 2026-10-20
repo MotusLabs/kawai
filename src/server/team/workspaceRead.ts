@@ -22,11 +22,16 @@ import type { OutboundViolationGroup } from '../outbound/service'
 import { outboundAttentionItems, outboundSummaryItems } from './workspaceOutbound'
 import { teamTaskStage } from '../../shared/teamTaskStage'
 import type { TeamMessage, WaitingConstraint, WaitingReason } from '../../shared/team'
+import { stopReasonLabel } from '../../shared/planSupervision'
 import type { TeamTaskSummary } from '../../shared/teamTasks'
 import type { ChatSessionRecord } from '../db'
 import type { ChatSessionManager } from '../chat/ChatSessionManager'
 import { acceptanceItems, taskImpact, type PendingAcceptance } from './attentionAcceptance'
 import { exhaustionAttentionItems, type ExhaustionFact } from './workspaceExhaustion'
+import {
+  decisionQuestionItems, planConditionItems, planFixItems, planPromotionItems, planStallItems, planStopItems,
+  type PlanAttentionFact, type PlanSummaryRows,
+} from './planAttention'
 import type { GroupCatalog } from './groupCatalog'
 import type { TeamIdentity } from './teamIdentity'
 
@@ -206,6 +211,8 @@ export interface AttentionInput {
   outboundViolations: OutboundViolationGroup[]
   /** Recorded context-exhaustion episodes with their resolution facts (chat-context-exhaustion D8). */
   exhaustion?: ExhaustionFact[]
+  /** Each open plan's attention facts, gathered once per snapshot (plan-supervision D13). */
+  plans?: PlanAttentionFact[]
 }
 
 /** One attention source: a pure function over the input (D5's registry). */
@@ -285,11 +292,14 @@ const exhaustionItems: AttentionSource = ({ exhaustion, taskTitle, nameOf }) =>
   exhaustionAttentionItems(exhaustion ?? [], taskTitle, nameOf)
 
 /**
- * The source registry (task 4.1). Wave C sources (plan holds, stalls, Lead
- * decision cards) add entries the same way — an item of an unrecognized kind
- * is data like any other and never dropped.
+ * The source registry (task 4.1; the plan sources join in plan-supervision
+ * D13) — an item of an unrecognized kind is data like any other and never
+ * dropped.
  */
-export const ATTENTION_SOURCES: readonly AttentionSource[] = [requestItems, uncertainItems, staffingItems, acceptanceItems, outboundItems, exhaustionItems]
+export const ATTENTION_SOURCES: readonly AttentionSource[] = [
+  requestItems, uncertainItems, staffingItems, acceptanceItems, outboundItems, exhaustionItems,
+  planStopItems, planStallItems, decisionQuestionItems, planFixItems, planConditionItems, planPromotionItems,
+]
 
 /** Every attention item the current state yields, in a stable order. */
 export function attentionItems(
@@ -317,6 +327,8 @@ export interface SummaryInput {
   results: Array<{ resultId: string; taskId: string; taskTitle: string | null; submitter: string; accepted: boolean }>
   /** The audit records' row counts over the window (execution-safety-recovery D10). */
   outboundCounts: { allowed: number; unknown: number; violations: number }
+  /** The window's durable plan rows (plan-supervision D13). */
+  plans?: PlanSummaryRows
 }
 
 const bucket = (items: SummaryItem[], runtimeOnly = false): SummaryBucket =>
@@ -334,6 +346,7 @@ export function morningSummary(input: SummaryInput): MorningSummary {
   const { now, sessions, messages, messageEvents, waiting, turnEnds, nameOf, hasResult, results, outboundCounts } = input
   const since = new Date(Date.parse(now) - 24 * 60 * 60 * 1000).toISOString()
   const inWindow = (at: string) => Date.parse(at) >= Date.parse(since)
+  const planRows = input.plans ?? { landings: [], stops: [], stallAlerts: [], decisions: [], overrides: [] }
 
   const approvals = sessions.flatMap(({ record, requests }) =>
     requests.flatMap(request => {
@@ -395,6 +408,23 @@ export function morningSummary(input: SummaryInput): MorningSummary {
   // The audit records' row counts (execution-safety-recovery D10; workspaceOutbound.ts).
   const outbound = outboundSummaryItems(outboundCounts)
 
+  // The plan rows arrive pre-filtered to the window from their durable
+  // tables (plan-supervision D13); every item links to its plan.
+  const planItem = (id: string, label: string, planId: string, change?: string): SummaryItem =>
+    ({ id, label, link: { kind: 'plan', id: planId, planId, ...(change === undefined ? {} : { change }) } })
+  const landings = planRows.landings.map(row =>
+    planItem(`landing:${row.planId}:${row.change}:${row.landedAt}`, `Change ${row.change} of plan "${row.planTitle ?? row.planId}" landed`, row.planId, row.change))
+  const stops = planRows.stops.map(row =>
+    planItem(`stop:${row.planId}:${row.change}:${row.stoppedAt}`,
+      `Change ${row.change} of plan "${row.planTitle ?? row.planId}" stopped${row.reason ? `: ${stopReasonLabel(row.reason)}` : ''}`,
+      row.planId, row.change))
+  const stallAlerts = planRows.stallAlerts.map(row =>
+    planItem(`stall-alert:${row.id}`, `Stall alert (${row.kind}) on change ${row.change} of plan "${row.planTitle ?? row.planId}"`, row.planId, row.change))
+  const decisions = planRows.decisions.map(row =>
+    planItem(`decision:${row.decisionId}`, `Decision recorded on plan "${row.planTitle ?? row.planId}"`, row.planId))
+  const overrides = planRows.overrides.map(row =>
+    planItem(`override:${row.decisionId}`, `Decision overridden on plan "${row.planTitle ?? row.planId}"`, row.planId))
+
   return {
     since,
     completedResults: bucket(completedResults),
@@ -403,6 +433,11 @@ export function morningSummary(input: SummaryInput): MorningSummary {
     uncertainDeliveries: bucket(uncertainDeliveries),
     finishedTurnsWithoutResult: bucket(finishedTurnsWithoutResult),
     outbound: bucket(outbound),
+    landings: bucket(landings),
+    stops: bucket(stops),
+    stallAlerts: bucket(stallAlerts),
+    decisions: bucket(decisions),
+    overrides: bucket(overrides),
   }
 }
 
@@ -451,6 +486,8 @@ export class WorkspaceRead {
       sessions, messages, waiting, taskTitle, nameOf, pendingAcceptance,
       // The audit records' unacknowledged violations (execution-safety-recovery D10).
       outboundViolations: manager.outboundAudit.violationGroups(teamId),
+      // The plan sources' facts, gathered over the supervision reads (plan-supervision D13).
+      plans: manager.planAttentionFacts?.(teamId) ?? [],
       exhaustion: manager.exhaustionEpisodes(teamId).map(episode => {
         const record = records.find(row => row.sessionId === episode.sessionId)
         const task = episode.taskId ? store.get(episode.taskId) : null
@@ -498,6 +535,10 @@ export class WorkspaceRead {
           accepted: result.acceptedAt !== null,
         })),
         outboundCounts: manager.outboundAudit.windowCounts(teamId, since, now),
+        // The window's durable plan rows (plan-supervision D13).
+        plans: manager.planSummaryRows?.(teamId, since) ?? {
+          landings: [], stops: [], stallAlerts: [], decisions: [], overrides: [],
+        },
       }),
       directory,
     }

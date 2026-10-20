@@ -8,7 +8,7 @@ import type { AttentionItem, MorningSummary, TeamWorkspaceSnapshot } from '@shar
 import TeamAttentionQueue, { attentionKindLabel, focusAfterRemoval } from '../components/team/TeamAttentionQueue'
 import TeamMorningSummary from '../components/team/TeamMorningSummary'
 import TeamWorkspaceBands from '../components/team/TeamWorkspaceBands'
-import { openAttentionLink } from '../components/team/attentionLinks'
+import { attentionLinkLabel, openAttentionLink } from '../components/team/attentionLinks'
 import { useSessionStore } from '../stores/sessionStore'
 import { useTeamTaskStore } from '../stores/teamTaskStore'
 import { useTeamWorkspaceStore } from '../stores/teamWorkspaceStore'
@@ -27,7 +27,9 @@ const byId = (root: TestRenderer.ReactTestRenderer, id: string) => root.root.fin
 const summary = (extra: Partial<MorningSummary> = {}): MorningSummary => ({
   since: '2026-10-14T00:00:00.000Z',
   completedResults: { items: [] }, capacityWaits: { items: [], runtimeOnly: true }, approvals: { items: [] },
-  uncertainDeliveries: { items: [] }, finishedTurnsWithoutResult: { items: [] }, outbound: { items: [] }, ...extra,
+  uncertainDeliveries: { items: [] }, finishedTurnsWithoutResult: { items: [] }, outbound: { items: [] },
+  landings: { items: [] }, stops: { items: [] }, stallAlerts: { items: [] }, decisions: { items: [] }, overrides: { items: [] },
+  ...extra,
 })
 const snapshotOf = (attention: AttentionItem[], extra: Partial<MorningSummary> = {}): TeamWorkspaceSnapshot =>
   ({ tasks: [], attention, members: [], directory: [], summary: summary(extra) })
@@ -87,6 +89,18 @@ test('links go to their source: a task, a mailbox row, a chat', () => {
   expect(useTeamWorkspaceStore.getState().views['/repo']?.tabs.mailbox.expanded).toEqual(['m-1'])
   // A chat link selects the chat (which leaves the Team page).
   expect(useSessionStore.getState().selectedSessionId).toBe('chat-8')
+})
+
+test('a plan link opens the named plan, preferring planId over the item id', () => {
+  const navigated: TeamLocation[] = []
+  const navigate = (location: TeamLocation) => navigated.push(location)
+  openAttentionLink('/repo', { kind: 'plan', id: 'plan-stop:exec-1:api:0', planId: 'plan-1', change: 'api' }, navigate)
+  openAttentionLink('/repo', { kind: 'plan', id: 'plan-2' }, navigate)
+  expect(navigated).toEqual([
+    { teamKey: '/repo', tab: 'plans', id: 'plan-1' },
+    { teamKey: '/repo', tab: 'plans', id: 'plan-2' },
+  ])
+  expect(attentionLinkLabel({ kind: 'plan', id: 'plan-1' })).toBe('Open plan')
 })
 
 test('the summary shows six buckets, the runtime-only label, and links', () => {

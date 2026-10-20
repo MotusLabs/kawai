@@ -91,6 +91,8 @@ import { readWorkerTranscript } from './chatWorkerTranscript'
 import { isTaskOutputFile, readTaskOutputTail } from './taskOutputFile'
 import type { BackgroundTaskRecord } from './chatBackgroundTasks'
 import type { ExhaustionEpisode } from '../team/exhaustionNotes'
+import { planAttentionFacts, planSummaryRows, type PlanAttentionFact, type PlanAttentionReads, type PlanSummaryRowReads, type PlanSummaryRows } from '../team/planAttention'
+import { StallAlertStore } from '../plans/supervision/stallAlertStore'
 import { loadTeamGroups } from '../team/teamGroups'
 import { SessionTeams } from '../team/sessionTeams'
 import { TeamScopes } from '../team/teamScope'
@@ -1229,6 +1231,17 @@ export class ChatSessionManager {
     this.promotions = planServices.promotions
     this.validationDetail = planServices.validationDetail
     this.validationAdapter = planServices.adapter
+    // The plan attention's gatherer reads (plan-supervision D13): the same
+    // supervision reads the monitor sweeps over, plus the promotion listing.
+    this.planAttentionReads = planServices.supervisionReads === null ? null
+      : { ...planServices.supervisionReads, promotions: planServices.integrationStore }
+    // The summary's window reads (plan-supervision D13): durable stores only.
+    this.planSummaryReads = planServices.supervisionReads === null ? null : {
+      plans: planServices.plans.store,
+      executions: planServices.executionStore,
+      decisions: planServices.supervisionReads.decisions,
+      alerts: new StallAlertStore(options.db.db),
+    }
     // The impact assessment derives from plans, and every plan's impact gate
     // from the strategy and the impact records (strategy-revision-impact D9):
     // each of the three stores refreshes both views of its team.
@@ -1368,6 +1381,19 @@ export class ChatSessionManager {
   /** The team's recorded context-exhaustion episodes (chat-context-exhaustion D8); the workspace reads them. */
   exhaustionEpisodes(teamId: string): ExhaustionEpisode[] {
     return this.teamMail.exhaustionNotes.episodes(teamId)
+  }
+
+  /** Each open plan's attention facts (plan-supervision D13); none without team services. */
+  planAttentionFacts(teamId: string): PlanAttentionFact[] {
+    const reads = this.planAttentionReads
+    return reads === null ? [] : planAttentionFacts(reads, teamId, new Date())
+  }
+
+  /** The summary window's durable plan rows (plan-supervision D13). */
+  planSummaryRows(teamId: string, since: string): PlanSummaryRows {
+    const reads = this.planSummaryReads
+    if (reads === null) return { landings: [], stops: [], stallAlerts: [], decisions: [], overrides: [] }
+    return planSummaryRows(reads, teamId, since)
   }
 
   /** Every record (live and archived) resolved to this team; the workspace reads it. */
@@ -1532,6 +1558,10 @@ export class ChatSessionManager {
   readonly validation: ValidationService
   /** Plan decisions (plan-supervision D4–D7): cards, the Lead's record, the owner's answer and override, fix tasks. */
   readonly decisions: DecisionService | null
+  /** The plan attention's gatherer reads (plan-supervision D13); null without team services. */
+  private readonly planAttentionReads: PlanAttentionReads | null
+  /** The summary window's durable reads (plan-supervision D13); null without team services. */
+  private readonly planSummaryReads: PlanSummaryRowReads | null
   /** The coalesced validation view for the Plans page pushes (plan-validation D11). */
   readonly validationDetail: ValidationDetailCache
   /** The one OpenSpec adapter (plan-validation D3); its probe is cached in-process. */

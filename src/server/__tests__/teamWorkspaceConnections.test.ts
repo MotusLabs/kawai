@@ -273,6 +273,7 @@ describe('publishes coalesce and share one read per team', () => {
     summary: {
       since: '2026-10-13T00:00:00Z', completedResults: { items: [] }, capacityWaits: { items: [] },
       approvals: { items: [] }, uncertainDeliveries: { items: [] }, finishedTurnsWithoutResult: { items: [] }, outbound: { items: [] },
+      landings: { items: [] }, stops: { items: [] }, stallAlerts: { items: [] }, decisions: { items: [] }, overrides: { items: [] },
     },
   })
   const make = () => {
