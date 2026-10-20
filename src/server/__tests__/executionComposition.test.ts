@@ -22,6 +22,7 @@ import { MemberRelease } from '../team/memberRelease'
 import { TeamMailbox } from '../team/TeamMailbox'
 import type { PlanService } from '../plans/PlanService'
 import type { DecisionService } from '../plans/decisions/DecisionService'
+import type { SupervisionMonitor } from '../plans/supervision/SupervisionMonitor'
 import { TaskService } from '../team/TaskService'
 import { TaskResultService } from '../team/TaskResultService'
 import { TeamWorktrees } from '../team/worktreeRoots'
@@ -40,7 +41,7 @@ import { createPlanBench, createPlanWorld, sessionRow, writeGroup, type PlanBenc
 const FLOOR = { lint: ['ci'], typecheck: ['ci'], 'unit-tests': ['ci'], 'ci-e2e': ['e2e'] }
 const GITHUB_URL = 'https://github.com/acme/app.git'
 /** One change name per test: the probe's name check sees earlier tests' worktrees and branches. */
-const CHANGES = ['ship-a', 'ship-b', 'ship-c', 'ship-d', 'ship-e', 'ship-f']
+const CHANGES = ['ship-a', 'ship-b', 'ship-c', 'ship-d', 'ship-e', 'ship-f', 'ship-g']
 let changeSerial = 0
 const nextChange = (): string => CHANGES[changeSerial++ % CHANGES.length]!
 
@@ -58,6 +59,7 @@ let runtime: ExecutionRuntime
 let teamMailbox: TeamMailbox
 let composedPlans: PlanService
 let decisions: DecisionService | null
+let monitor: SupervisionMonitor | null
 let main: string
 let origin: string
 let baseSha: string
@@ -160,6 +162,7 @@ async function compose(): Promise<void> {
   store = composed.executionStore
   service = composed.executions
   decisions = composed.decisions
+  monitor = composed.monitor
   composedPlans = composed.plans
   runtime = composed.runtime!
   await runtime.start()
@@ -283,6 +286,22 @@ describe('the composed execution stack (rev 3)', () => {
     } finally {
       unsubscribe()
     }
+  })
+
+  test('the composition carries the supervision monitor; its startup seeds the running changes it sweeps (plan-supervision 8.2)', async () => {
+    const change = nextChange()
+    const executionId = await startedExecution(change)
+    expect(monitor).not.toBeNull()
+    expect(monitor!.waitEndedAt(executionId, change)).toBeNull()
+    monitor!.start()
+    try {
+      expect(monitor!.waitEndedAt(executionId, change)).not.toBeNull()
+      await monitor!.idle()
+      expect(monitor!.timerArmed(world.team.teamId)).toBe(true)
+    } finally {
+      monitor!.stop()
+    }
+    expect(monitor!.timerArmed(world.team.teamId)).toBe(false)
   })
 
   test('Start leads to the first implement dispatch', async () => {

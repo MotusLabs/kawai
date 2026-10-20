@@ -1225,6 +1225,7 @@ export class ChatSessionManager {
     this.plans = planServices.plans
     this.executions = planServices.executions
     this.executionRuntime = planServices.runtime
+    this.supervisionMonitor = planServices.monitor
     this.validationDetail = planServices.validationDetail
     this.validationAdapter = planServices.adapter
     // The impact assessment derives from plans, and every plan's impact gate
@@ -1292,6 +1293,8 @@ export class ChatSessionManager {
         // D14 recovery runs to its end, then every team with a running
         // execution resumes (plan-execution D5).
         await this.executionRuntime?.start()
+        // Supervision sweeps once recovery has ended (plan-supervision D11).
+        if (!this.isShutDown) this.supervisionMonitor?.start()
         // Work parked before a restart keeps its sessions paused.
         for (const sessionId of this.records.keys()) this.refreshParked(sessionId)
         // Logs of sessions deleted while the server was down are orphans now.
@@ -1515,6 +1518,7 @@ export class ChatSessionManager {
   readonly executions: import('../plans/execution/ExecutionService').ExecutionService
   /** The execution runtime (plan-execution D5): boot recovery, wakes, and stop. */
   private readonly executionRuntime: import('../plans/execution/executionRuntime').ExecutionRuntime | null
+  private readonly supervisionMonitor: import('../plans/supervision/SupervisionMonitor').SupervisionMonitor | null
   /** The one execution store, its ownership, and its wake hub (plan-execution D5/D7). */
   private readonly executionCore: ReturnType<typeof composeExecutionCore>
   /** The user-level team settings (plan-execution D16's floor map lives here). */
@@ -1982,6 +1986,7 @@ export class ChatSessionManager {
     this.teamMail.close()
     // The executor stops with the server: wakes drop, the timer clears, new ticks refuse (D5).
     this.executionRuntime?.stop()
+    this.supervisionMonitor?.stop()
     // Provider usage refreshes die with the server: timers stop now, and the
     // in-flight continuations check isShutDown before publishing.
     this.stopProviderUsageRefresh()

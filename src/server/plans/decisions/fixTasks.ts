@@ -6,9 +6,13 @@
 // do only what `systemCaller.ts` grants those origins: create the fix,
 // dispatch it, and close its earlier fix as creator. `prepareOverrideFix`
 // runs the asynchronous parts first; its `commit` runs inside the
-// override's transaction.
+// override's transaction. `completeFixTasks` is the monitor's D8 completion:
+// an open fix or correction task closes as `done`, by its own origin as its
+// creator, once a change naming it has landed (judged by the revision its
+// landing execution ran) and no change of the current approved revision
+// naming it is unlanded.
 import type { Database } from 'bun:sqlite'
-import type { DecisionCard, PlanDecision } from '../../../shared/planDecisions'
+import { fixLandings, type DecisionCard, type PlanDecision, type PlanFixTask } from '../../../shared/planDecisions'
 import type { Plan, PlanRevision } from '../../../shared/plans'
 import type { TeamIdentity } from '../../team/teamIdentity'
 import type { TaskService } from '../../team/TaskService'
@@ -18,8 +22,14 @@ import type { PreparedTaskStatus } from '../../team/taskStatusPrepared'
 import type { SystemCaller } from '../../team/systemCaller'
 import type { DecisionStore } from './decisionStore'
 import { deciderName } from './decisionInputs'
+import { fixPlanFacts, type FixFactReads } from './fixFacts'
+import type { PlanStore } from '../planStore'
 
 const overrideCaller = (team: TeamIdentity, decisionId: string): SystemCaller => ({ kind: 'system', team, origin: { kind: 'override', decisionId } })
+const promotionCaller = (team: TeamIdentity, promotionId: string): SystemCaller => ({ kind: 'system', team, origin: { kind: 'promotion', promotionId } })
+/** The fix row's own origin: Kawai closes the task as the creator that made it. */
+const sourceCaller = (team: TeamIdentity, fix: PlanFixTask): SystemCaller =>
+  (fix.sourceKind === 'override' ? overrideCaller(team, fix.sourceId) : promotionCaller(team, fix.sourceId))
 
 const QUESTION_CUT = 80
 const OPEN = new Set(['open', 'active', 'blocked'])
@@ -120,4 +130,33 @@ export async function prepareOverrideFix(deps: FixDeps, input: OverrideFixInput)
       return { taskId: task.id, dispatched: true }
     },
   }
+}
+
+export interface FixCompletionDeps extends FixFactReads {
+  decisions: Pick<DecisionStore, 'fixTasksOfTeam'>
+  tasks: Pick<TaskService, 'setStatus'>
+  taskStore: Pick<TaskStore, 'get'>
+  plans: Pick<PlanStore, 'revisions' | 'forTeam'>
+}
+
+/**
+ * D8 completion over the team's open fix and correction tasks: each closes
+ * in its own transaction (`setStatus`), so a repeat sweep finds it done and
+ * writes nothing. Returns the closed task ids.
+ */
+export async function completeFixTasks(deps: FixCompletionDeps, team: TeamIdentity): Promise<Array<{ taskId: string; planId: string }>> {
+  const closed: Array<{ taskId: string; planId: string }> = []
+  for (const fix of deps.decisions.fixTasksOfTeam(team.teamId)) {
+    const task = deps.taskStore.get(fix.taskId)
+    if (task === null || !OPEN.has(task.status)) continue
+    const plan = deps.plans.forTeam(team.teamId, fix.planId)
+    if (plan === null) continue
+    const { landings, outstanding } = fixLandings(fix.taskId, fixPlanFacts(deps, team.teamId, plan))
+    if (landings.length === 0 || outstanding.length > 0) continue
+    const kind = fix.sourceKind === 'override' ? 'fix' : 'correction'
+    const landed = landings.map(landing => `${landing.change} (merge ${landing.mergeSha})`).join(', ')
+    await deps.tasks.setStatus(sourceCaller(team, fix), fix.taskId, 'done', `Kawai closes this ${kind} task: ${landed} landed naming it in \`fixes\`, and no change of the current approved revision naming it is unlanded.`)
+    closed.push({ taskId: fix.taskId, planId: fix.planId })
+  }
+  return closed
 }
