@@ -188,6 +188,12 @@ export class DecisionStore {
     return (this.db.prepare('SELECT * FROM plan_decisions WHERE plan_id = ? AND team_id = ? ORDER BY card_id, seq').all(planId, teamId) as Row[]).map(mapDecision)
   }
 
+  /** The team's decisions recorded since `since` (the summary window, plan-supervision D13). */
+  decisionsSince(teamId: string, since: string): PlanDecision[] {
+    return (this.db.prepare('SELECT * FROM plan_decisions WHERE team_id = ? AND created_at >= ? ORDER BY created_at, rowid')
+      .all(teamId, since) as Row[]).map(mapDecision)
+  }
+
   /** The decision a human command recorded, with its compared payload. */
   decisionByCommand(teamId: string, planId: string, commandId: string): { decision: PlanDecision; payload: Record<string, unknown> | null } | null {
     const row = this.db.prepare('SELECT * FROM plan_decisions WHERE plan_id = ? AND command_id = ? AND team_id = ?').get(planId, commandId, teamId) as Row | null

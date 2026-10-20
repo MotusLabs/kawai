@@ -307,6 +307,19 @@ export class ExecutionStore extends ExecutionEffectStore {
       .map(mapLanding)
   }
 
+  /** The team's landing facts since `since` (the summary window, plan-supervision D13). */
+  landingsSince(teamId: string, since: string): LandingRow[] {
+    return (this.db.prepare('SELECT * FROM plan_change_landings WHERE team_id = ? AND landed_at >= ? ORDER BY landed_at, rowid')
+      .all(teamId, since) as Array<Record<string, unknown>>).map(mapLanding)
+  }
+
+  /** The team's change rows stopped since `since` (the summary window, plan-supervision D13), with their execution's plan. */
+  stoppedChangesSince(teamId: string, since: string): Array<ChangeRow & { planId: string }> {
+    return (this.db.prepare(`SELECT c.*, e.plan_id AS plan_id FROM plan_execution_changes c JOIN plan_executions e ON e.id = c.execution_id
+      WHERE c.team_id = ? AND c.state = 'stopped' AND c.updated_at >= ? ORDER BY c.updated_at, c.rowid`)
+      .all(teamId, since) as Array<Record<string, unknown>>).map(row => ({ ...mapChange(row), planId: String(row.plan_id) }))
+  }
+
   // --- rounds (D9/D10/D11) ---
 
   /**

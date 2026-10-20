@@ -10,10 +10,11 @@ import type { TaskStatus } from './teamTasks'
  * approvals, questions, uncertain deliveries, and staffing waits;
  * `pending-acceptance` joins with `task-results-handoffs`, and
  * `fixes-requested` (a failing review awaiting its submitter's fixes) with
- * `attention-acceptance-ownership`. Wave C kinds
- * (plan holds, stalls, Lead decision cards) extend this list — the type
- * stays open to plain strings so an unrecognized kind renders instead of
- * being dropped.
+ * `attention-acceptance-ownership`. The plan-supervision kinds
+ * (plan-supervision D13) cover the plan sources: a stopped change, a stall,
+ * an open decision card, an open fix or correction task, an acceptance
+ * condition, and a failed promotion. The type stays open to plain strings so
+ * an unrecognized kind renders instead of being dropped.
  */
 export type AttentionKind =
   | 'approval'
@@ -26,6 +27,14 @@ export type AttentionKind =
   // (execution-safety-recovery D10): nothing waits on it, only the human
   // clears it, and it never stops execution, supervision, or dispatch.
   | 'outbound-violation'
+  // The plan sources (plan-supervision D13), each raised by one source in
+  // the server's `planAttention.ts` and cleared when its cause clears.
+  | 'plan-stop'
+  | 'plan-stall'
+  | 'decision-question'
+  | 'plan-fix'
+  | 'plan-condition'
+  | 'plan-promotion'
   | (string & {})
 
 /** Who an attention item is waiting on: the human, one session, or a group. */
@@ -44,12 +53,23 @@ export interface AttentionImpact {
   groupId?: string
 }
 
-/** D11: a link names where the existing human action lives — never a new one. */
+/**
+ * D11: a link names where the existing human action lives — never a new one.
+ * `plan` (plan-supervision D13) is the Plans tab's plan detail, named by
+ * `planId`; `change` scopes it to one change when the item has one. A `card`
+ * link is a decision card and carries its `planId`.
+ */
 export interface AttentionLink {
   kind: 'card' | 'task' | 'message' | 'chat'
   /** `audit` (execution-safety-recovery D10): the Audit tab, `id` a call id or '' for the tab. */
   | 'audit'
+  /** `plan` (plan-supervision D13): the plan detail; `id` is the plan id. */
+  | 'plan'
   id: string
+  /** The plan a `plan` or `card` link opens. */
+  planId?: string
+  /** The change of the plan the link scrolls to, when the item has one. */
+  change?: string
 }
 
 export interface AttentionItem {
@@ -256,7 +276,9 @@ export interface SummaryBucket {
 /**
  * The morning summary's 24-hour window (D8, Q1/Q9): a rolling window ending
  * at read time, recomputed while the workspace is open. A finished turn with
- * no submitted result never lands in a completion bucket (E13).
+ * no submitted result never lands in a completion bucket (E13). The five
+ * plan buckets (plan-supervision D13) read durable rows only — a restart
+ * never empties them.
  */
 export interface MorningSummary {
   /** Window start (read time minus 24 h), ISO. */
@@ -276,6 +298,16 @@ export interface MorningSummary {
    * from the durable audit records — a restart never empties it.
    */
   outbound: SummaryBucket
+  /** Landing facts by landed_at (plan-supervision D13). */
+  landings: SummaryBucket
+  /** Change rows stopped, by updated_at (plan-supervision D13). */
+  stops: SummaryBucket
+  /** Stall-alert rows by raised_at (plan-supervision D13). */
+  stallAlerts: SummaryBucket
+  /** Recorded decisions of kind answer or own-call (plan-supervision D13). */
+  decisions: SummaryBucket
+  /** Recorded decisions of kind override (plan-supervision D13). */
+  overrides: SummaryBucket
 }
 
 /** What `team-workspace-open` answers and every change push replaces (D1). */
