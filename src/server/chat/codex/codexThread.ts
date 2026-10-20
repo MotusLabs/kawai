@@ -40,6 +40,12 @@ export interface CodexSessionDriverOptions extends ChatDriverCallbacks {
   createTurnId?: () => string
   /** The server environment the child's env derives from; default process.env. */
   serverEnv?: Record<string, string | undefined>
+  /**
+   * The catalog-named credential variables the child never inherits
+   * (openrouter-provider D3, task 1.8); required, so no launch path can
+   * forget it.
+   */
+  withheldCredentials: ReadonlySet<string>
   /** Builds the app-server client; default the real AppServerClient. */
   createClient?: (options: AppServerClientOptions) => CodexClient
   /** How long interrupt waits for the app-server's acknowledgement. */

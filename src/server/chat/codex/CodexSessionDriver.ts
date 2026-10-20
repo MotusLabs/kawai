@@ -217,7 +217,7 @@ export class CodexSessionDriver implements ChatAgentDriver {
     this.dead = false
     if (this.client) return
     this.spawnId = `ob-s-${crypto.randomUUID()}`
-    const env = codexSpawnEnv(this.options.serverEnv ?? process.env, this.options.codexHome)
+    const env = codexSpawnEnv(this.options.serverEnv ?? process.env, this.options.codexHome, this.options.withheldCredentials)
     const clientOptions: AppServerClientOptions = {
       executable: this.options.executable,
       env,

@@ -115,6 +115,7 @@ export function startHarness(
     codexHome: dirs.home,
     network: true,
     wire: { record: (dir, raw) => wire.push({ dir, raw }) },
+    withheldCredentials: new Set(),
     serverEnv: { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: dirs.dir, FAKE_TRANSCRIPT: transcript },
     createTurnId: () => `turn-${++turn}`,
     onEvent: event => events.push(event),

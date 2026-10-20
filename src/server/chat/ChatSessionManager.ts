@@ -70,6 +70,7 @@ import {
   profileLimitResetTimeZone,
   claudeLaunchKey,
   verifyProfileExecutable,
+  withheldCredentialNamesAt,
   type ChatLaunchConfiguration,
   type ClaudeLaunchConfiguration,
   type ProfileCatalogContext,
@@ -2483,6 +2484,8 @@ export class ChatSessionManager {
               network: codexLaunch.network,
               ...(codexLaunch.model ? { model: codexLaunch.model } : {}),
               wire: wire ?? { record: () => {} },
+              // The catalog at the chat's path names the credentials (D3).
+              withheldCredentials: withheldCredentialNamesAt(this.catalogCtx(record.projectPath)),
               ...(record.sdkSessionId ? { resumeThreadId: record.sdkSessionId } : {}),
             },
           })

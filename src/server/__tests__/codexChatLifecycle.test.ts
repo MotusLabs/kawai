@@ -18,7 +18,10 @@ import { SessionRegistry } from '../SessionRegistry'
 import { SECURITY_NOTE_BODY } from '../team/teamPrompt'
 import { FAKE_CODEX, Script, THREAD_ID, until } from './codexDriverHarness'
 
-const ENV_KEYS = ['CODEX_HOME', 'KAWAI_CODEX_PATH', 'FAKE_TRANSCRIPT', 'FAKE_RUN', 'ANTHROPIC_API_KEY'] as const
+const ENV_KEYS = [
+  'CODEX_HOME', 'KAWAI_CODEX_PATH', 'FAKE_TRANSCRIPT', 'FAKE_RUN', 'FAKE_ENV_NAMES', 'ANTHROPIC_API_KEY',
+  'OPENROUTER_API_KEY', 'OPENROUTER_MANAGEMENT_KEY', 'KAWAI_TEST_PASSTHROUGH',
+] as const
 const original = Object.fromEntries(ENV_KEYS.map(key => [key, process.env[key]]))
 
 let tempDir: string
@@ -135,4 +138,30 @@ test('a Codex chat is created, attached, sent to, archived, restored, resumed, a
 
   expect(manager.kill(id)).toBe(true)
   expect(db.getChatSession(id)).toBeFalsy()
+})
+
+test('a Codex launch withholds the catalog-named credentials (openrouter-provider 1.8)', async () => {
+  writeTranscript()
+  // The user catalog carries the shipped OpenRouter provider, which names
+  // both variables as its credentials; their values here are fakes.
+  const shipped = JSON.parse(fs.readFileSync(path.resolve(import.meta.dir, '../../../config/providers.default.json'), 'utf8'))
+  fs.writeFileSync(path.join(home, '.kawai', 'providers.json'), JSON.stringify({ openrouter: shipped.openrouter }))
+  process.env.OPENROUTER_API_KEY = 'fake-or-key'
+  process.env.OPENROUTER_MANAGEMENT_KEY = 'fake-or-mgmt'
+  process.env.KAWAI_TEST_PASSTHROUGH = '1'
+  const names = path.join(tempDir, 'env-names.txt')
+  process.env.FAKE_ENV_NAMES = names
+  manager = createManager([], [])
+  await manager.whenRestored()
+  const created = await manager.createAvailableSession({ projectPath: project, claudeProfileId: 'codex' })
+  if (!created.ok) throw new Error(created.error)
+  expect((await manager.start(created.session.id)).ok).toBe(true)
+  await until(() => db.getChatSession(created.session.id)?.sdkSessionId === THREAD_ID)
+  const received = fs.readFileSync(names, 'utf8').split('\n')
+  // The child got the server env (non-vacuity) and its own home …
+  expect(received).toContain('KAWAI_TEST_PASSTHROUGH')
+  expect(received).toContain('CODEX_HOME')
+  // … but neither credential the catalog names.
+  expect(received).not.toContain('OPENROUTER_API_KEY')
+  expect(received).not.toContain('OPENROUTER_MANAGEMENT_KEY')
 })

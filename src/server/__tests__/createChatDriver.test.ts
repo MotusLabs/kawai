@@ -26,7 +26,7 @@ describe('createChatDriver', () => {
   test('the codex runtime builds a CodexSessionDriver without spawning', () => {
     const driver = createChatDriver({
       runtime: 'codex',
-      options: { ...deps, executable: '/nonexistent/codex', codexHome: '/tmp/kawai-codex-home', network: true, wire: { record: () => {} } },
+      options: { ...deps, executable: '/nonexistent/codex', codexHome: '/tmp/kawai-codex-home', network: true, wire: { record: () => {} }, withheldCredentials: new Set() },
     })
     expect(driver).toBeInstanceOf(CodexSessionDriver)
     // Codex has no slash commands (design D7): unavailable from the start.
