@@ -143,3 +143,14 @@ Every workflow SHALL install the Bun version named in the repository's single ve
 #### Scenario: Changing the pin moves every workflow together
 - **WHEN** a change edits only the version file
 - **THEN** CI, the release build, and the self-test workflow all install the new version, with no other workflow edit
+
+### Requirement: Pull-request CI runs the unit suite once
+On pull requests the quality-gates job SHALL run the unit suite exactly once, without the coverage pass. On pushes to master it SHALL also run the coverage pass and upload the coverage artifact. Coverage MUST NOT gate either run.
+
+#### Scenario: Pull request
+- **WHEN** CI runs for a pull request
+- **THEN** the quality-gates job runs the unit suite once and runs no coverage pass
+
+#### Scenario: Push to master
+- **WHEN** CI runs for a push to master
+- **THEN** the quality-gates job runs the unit suite and the coverage pass, and uploads the coverage artifact
