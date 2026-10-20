@@ -54,7 +54,9 @@ export function constraintLabel(constraint: WaitingConstraint, nameOf: (sessionI
     case 'profile-cooling': {
       // The provider's label reads instead of its raw id when the snapshot carries one (O1).
       const provider = constraint.providerLabel ?? constraint.detail
-      return `Recipient's provider${provider ? ` ${provider}` : ''} is cooling${constraint.retryAt ? ` until ${new Date(constraint.retryAt).toLocaleTimeString()}` : ''}`
+      return constraint.credit
+        ? `Recipient's provider${provider ? ` ${provider}` : ''} is out of credit${constraint.retryAt ? `; retried by ${new Date(constraint.retryAt).toLocaleTimeString()} at the latest` : ''}`
+        : `Recipient's provider${provider ? ` ${provider}` : ''} is cooling${constraint.retryAt ? ` until ${new Date(constraint.retryAt).toLocaleTimeString()}` : ''}`
     }
     case 'startup-failed':
       return `Agent startup failed${constraint.detail ? `: ${constraint.detail}` : ''}`
@@ -67,7 +69,9 @@ export function constraintLabel(constraint: WaitingConstraint, nameOf: (sessionI
     case 'routing-hold':
       return `Routing hold${constraint.detail ? `: ${constraint.detail}` : ''}`
     case 'all-profiles-cooling':
-      return `Every candidate profile is cooling${constraint.retryAt ? ` until ${new Date(constraint.retryAt).toLocaleTimeString()}` : ''}`
+      return constraint.credit
+        ? `Every candidate profile is out of credit${constraint.retryAt ? `; retried by ${new Date(constraint.retryAt).toLocaleTimeString()} at the latest` : ''}`
+        : `Every candidate profile is cooling${constraint.retryAt ? ` until ${new Date(constraint.retryAt).toLocaleTimeString()}` : ''}`
     case 'group-missing':
       return 'The group definition is missing'
     case 'starting-agent':

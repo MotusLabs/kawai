@@ -22,6 +22,7 @@ import type {
   PlanSummary,
 } from '../../shared/plans'
 import { planDisplayState, planProgress } from '../../shared/plans'
+import { fixesReferenceWarnings } from '../../shared/planDecisions'
 import { mapPlan, mapPlanDraft, mapPlanEvent, mapPlanRevision } from './planSchema'
 
 export interface NewPlanEvent {
@@ -143,7 +144,16 @@ export class PlanStore {
       events: this.events(id),
       linkedTasks,
       progress: approved ? planProgress(approved.content, linkedTasks) : null,
+      warnings: this.fixesWarnings(id, revisions),
     }
+  }
+
+  /** plan-supervision D2: `fixes` entries of the standing revisions that name none of the plan's fix or correction tasks. */
+  private fixesWarnings(planId: string, revisions: PlanRevision[]): string[] {
+    const standing = revisions.filter(revision => revision.status === 'approved' || revision.status === 'in_review')
+    if (!standing.some(revision => revision.content.changes.some(change => change.fixes?.length))) return []
+    const ids = (this.db.prepare('SELECT task_id FROM plan_fix_tasks WHERE plan_id = ?').all(planId) as Array<{ task_id: string }>).map(row => row.task_id)
+    return fixesReferenceWarnings(standing.map(revision => revision.content), new Set(ids))
   }
 
   revisions(planId: string): PlanRevision[] {

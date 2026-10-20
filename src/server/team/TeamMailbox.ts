@@ -65,6 +65,11 @@ export class TeamMailbox {
     // The provider is named when its cooldown decided (providers-and-workers D15).
     const providerPart = cooldown?.provider && cooldown.providerId ? ` of provider ${cooldown.providerId}` : ''
     const time = new Date(until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    // A credit limit (openrouter-provider D8) ends early once credit returns.
+    if (cooldown?.credit) {
+      throw new Error(`Session ${recipient.sessionId} runs on profile ${profileId}${providerPart}, which is out of credit; its cooldown ends by ${time} (${until}) at the latest. ` +
+        'Send it without urgent to queue it, or send it to another agent.')
+    }
     throw new Error(`Session ${recipient.sessionId} runs on profile ${profileId}${providerPart}, which is cooling down after a provider limit until ${time} (${until}). ` +
       'Send it without urgent to queue it, or send it to another agent.')
   }

@@ -3,10 +3,13 @@
 // never only the first. Environment facts — whether a named OpenSpec change,
 // group, or profile exists, or a branch is free — are deliberately absent:
 // they belong to plan validation, because a plan legitimately names changes
-// still being proposed. Pure and SDK-free, shared by server and client.
+// still being proposed. plan-supervision D2 adds the Lead role and `fixes`
+// format checks; whether a `fixes` id names a fix task is a read-time warning.
+// Pure and SDK-free, shared by server and client.
 import type { StrategyContent } from './productStrategy'
 import type { PlanCheck, PlanContent } from './plans'
 import { PLAN_CHECK_FLOOR, effectiveReviewGroup } from './plans'
+import { fixesFieldErrors } from './planDecisions'
 
 const KEBAB = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 const BRANCH = /^[A-Za-z0-9._/-]+$/
@@ -140,6 +143,10 @@ export function planStructureErrors(content: PlanContent): string[] {
     if (group && !roleSet.has(group)) errors.push(`${where} names group "${group}", which is missing from the roles; add it to the roles or pick a listed group.`)
   }
   missing(content.reviewGroup, 'The plan review group')
+  // plan-supervision D2: the Lead role is one of the roles; `fixes` entries are
+  // task ids, unique within a change (one task may span several changes).
+  missing(content.leadGroup ?? null, 'The plan Lead role')
+  for (const change of content.changes) errors.push(...fixesFieldErrors(change.change, change.fixes))
   for (const change of content.changes) {
     missing(change.group, `Change "${change.change}" (implementing group)`)
     missing(change.reviewGroup, `Change "${change.change}" (review group)`)

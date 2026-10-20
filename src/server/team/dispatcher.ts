@@ -46,6 +46,8 @@ export interface MailRecipient {
   cooldownUntil?: string | null
   /** The provider whose cooldown decided that end (providers-and-workers D15), when it did. */
   cooldownProvider?: string | null
+  /** That end is a credit limit's (openrouter-provider D8): out of credit, ending by then at the latest. */
+  cooldownCredit?: boolean
   /** That provider's catalog label, for the waiting reason (providers-and-workers O1). */
   cooldownProviderLabel?: string
 }
@@ -294,6 +296,7 @@ export class MailDispatcher {
               kind: 'profile-cooling',
               ...(row.cooldownUntil ? { retryAt: row.cooldownUntil } : {}),
               ...(cause.detail ? { detail: cause.detail } : {}),
+              ...(row.cooldownCredit ? { credit: true as const } : {}),
               ...(row.cooldownProviderLabel ? { providerLabel: row.cooldownProviderLabel } : {}),
             })
           }

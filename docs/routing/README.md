@@ -166,6 +166,29 @@ cooldown end time, naming the provider when its cooldown decided ("runs on
 profile `glm-flash` of provider `zai`, which is cooling down after a provider
 limit until …"); normal direct mail waits in the queue until recovery.
 
+### Credit limits (HTTP 402)
+
+A request that fails with HTTP 402 (payment required — OpenRouter's "This
+request requires more credits", any prepaid gateway's empty balance) is a
+final limit in the `credit` window, whatever error class the agent reports,
+with no reset. It cools the provider for at most one hour. The first usage
+pull after the event only sets the baseline — a 402 can leave a few cents
+that cannot cover a request, and readings from before the event are ignored.
+The cooldown ends earlier once a later pull reports more remaining credit
+than the lowest earlier post-event pull. Tracking starts when the process
+records the event and lives in memory only: an event loaded after a restart
+ends at the plain hour, whatever later pulls report. (The OpenRouter usage
+pull that feeds them arrives with the provider usage adapter.)
+
+Waiting creates no credit, so credit-limited work is never parked: it takes
+the group's `otherwise` outcome (forward, the default, or release) even when
+`parkIfResetWithin` would cover the hour, and a rule's `park` answer is read
+as `otherwise` too. A credit limit in a turn the agent started itself leaves
+its work where it is. Waiting reasons say the provider is out of credit and
+when it is retried at the latest, and urgent direct mail is refused with "…
+which is out of credit; its cooldown ends by … at the latest."
+
+
 ## Plan roles and author tags
 
 Mail Kawai dispatches for a plan execution carries the plan role's profiles
