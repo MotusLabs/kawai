@@ -45,10 +45,11 @@ export function recordsDir(cwd: string): string {
   return path.join(dir, RECORDS_DIR_NAME)
 }
 
-/** The record for `key`, or null when there is none, it is unreadable, or it
- * does not describe a pass for this key. A mangled file never reads as a
- * recorded pass. */
-export function readRecord(dir: string, key: string): CheckRecord | null {
+/** The record for `key`, or null when there is none, it is unreadable, it is
+ * older than the TTL (judged by the record's own `at`, which travels with the
+ * file across worktrees, unlike mtime), or it does not describe a pass for
+ * this key. A mangled file never reads as a recorded pass. */
+export function readRecord(dir: string, key: string, now = Date.now()): CheckRecord | null {
   if (!KEY_PATTERN.test(key)) return null
   let raw: string
   try {
@@ -66,6 +67,8 @@ export function readRecord(dir: string, key: string): CheckRecord | null {
   const record = parsed as Record<string, unknown>
   if (record.key !== key) return null
   if (typeof record.at !== 'string' || record.at === '') return null
+  const atMs = Date.parse(record.at)
+  if (!Number.isFinite(atMs) || now - atMs >= RECORD_TTL_MS) return null
   if (typeof record.worktree !== 'string' || record.worktree === '') return null
   if (!Array.isArray(record.steps)) return null
   if (!record.steps.every((step) => isStep(step))) return null
@@ -89,6 +92,18 @@ function isStep(step: unknown): step is CheckStep {
     typeof (step as CheckStep).ms === 'number' &&
     Number.isFinite((step as CheckStep).ms)
   )
+}
+
+/** Remove the record for `key`, whatever wrote it. Best-effort: a file that
+ * is already absent, or a store that cannot be written, is fine — removal
+ * must never turn a failing check into a crash. */
+export function removeRecord(dir: string, key: string): void {
+  if (!KEY_PATTERN.test(key)) return
+  try {
+    fs.unlinkSync(path.join(dir, `${key}.json`))
+  } catch {
+    // Already absent, or unwritable: nothing left to remove.
+  }
 }
 
 /** Write a record atomically and prune the directory. The rename makes a

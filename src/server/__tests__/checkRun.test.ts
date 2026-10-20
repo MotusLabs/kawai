@@ -13,7 +13,12 @@ import {
   type SpawnRequest,
 } from '../../../scripts/lib/checkRun'
 import { computeContentKey } from '../../../scripts/lib/checkKey'
-import { readRecord, recordsDir } from '../../../scripts/lib/checkRecords'
+import {
+  readRecord,
+  recordsDir,
+  writeRecord,
+  type CheckRecord,
+} from '../../../scripts/lib/checkRecords'
 
 /** Record files in the store, or none when the store was never created — a
  * run that never passed leaves not even the directory behind. */
@@ -55,6 +60,23 @@ function git(...args: string[]) {
     throw new Error(`git ${args.join(' ')} failed: ${result.stderr.trim()}`)
   }
   return result.stdout
+}
+
+function seededRecord(key: string): CheckRecord {
+  return {
+    key,
+    treeId: 'tree-1',
+    bun: Bun.version ?? '1.4.3',
+    platform: process.platform,
+    arch: process.arch,
+    at: new Date().toISOString(),
+    worktree: path.resolve(repo),
+    steps: [
+      { name: 'lint', ms: 1 },
+      { name: 'typecheck', ms: 1 },
+      { name: 'test', ms: 1 },
+    ],
+  }
 }
 
 beforeEach(() => {
@@ -113,9 +135,57 @@ describe('runCheck', () => {
     expect(recordJsonNames(recordsDir(repo))).toEqual([])
   })
 
+  test('a failed forced run removes the older record, and the next check reruns in full', async () => {
+    const first = await runCheck({ cwd: repo, steps: STEPS, spawn: fakeSpawn([0]).spawn })
+    expect(first.kind).toBe('passed')
+    const forced = await runCheck({ cwd: repo, steps: STEPS, spawn: fakeSpawn([1]).spawn, force: true })
+    expect(forced.kind).toBe('failed')
+    expect(recordJsonNames(recordsDir(repo))).toEqual([])
+    const fake = fakeSpawn([0, 0, 0])
+    const next = await runCheck({ cwd: repo, steps: STEPS, spawn: fake.spawn })
+    expect(next.kind).toBe('passed')
+    expect(fake.count()).toBe(3)
+  })
+
+  test('a forced run that dies mid-step leaves no earlier record behind', async () => {
+    const first = await runCheck({ cwd: repo, steps: STEPS, spawn: fakeSpawn([0]).spawn })
+    expect(first.kind).toBe('passed')
+    const crashing = async (): Promise<number | null> => {
+      throw new Error('interrupted mid-step')
+    }
+    let crashed = false
+    try {
+      await runCheck({ cwd: repo, steps: STEPS, spawn: crashing, force: true })
+    } catch {
+      crashed = true
+    }
+    expect(crashed).toBe(true)
+    expect(recordJsonNames(recordsDir(repo))).toEqual([])
+  })
+
+  test('a failed plain run removes a record that appeared for its key mid-run', async () => {
+    const first = await runCheck({ cwd: repo, steps: STEPS, spawn: fakeSpawn([0]).spawn })
+    expect(first.kind).toBe('passed')
+    if (first.kind !== 'passed') return
+    const key = first.key
+    // The race: the record is absent when the plain run reads (so it runs the
+    // steps), and a concurrent writer's pass for the same key lands mid-run.
+    fs.rmSync(path.join(recordsDir(repo), `${key}.json`))
+    const racing = async (): Promise<number | null> => {
+      writeRecord(recordsDir(repo), seededRecord(key))
+      return 1
+    }
+    const outcome = await runCheck({ cwd: repo, steps: STEPS, spawn: racing })
+    expect(outcome.kind).toBe('failed')
+    expect(recordJsonNames(recordsDir(repo))).toEqual([])
+  })
+
   test('--force runs every step despite a record and refreshes it', async () => {
-    let clock = 1_000
-    const now = () => new Date(clock++ * 1000)
+    // Anchored near now: readRecord refuses records older than the TTL, so an
+    // epoch-based clock would make the refreshed record read as stale.
+    const base = Date.now()
+    let tick = 0
+    const now = () => new Date(base + tick++ * 1000)
     const first = await runCheck({ cwd: repo, steps: STEPS, spawn: fakeSpawn([0]).spawn, now })
     expect(first.kind).toBe('passed')
     const fake = fakeSpawn([0, 0, 0])
@@ -123,7 +193,7 @@ describe('runCheck', () => {
     expect(forced.kind).toBe('passed')
     expect(fake.count()).toBe(3)
     const refreshed = readRecord(recordsDir(repo), forced.kind === 'passed' ? forced.key : '')
-    expect(refreshed?.at).toBe(new Date(1_001 * 1000).toISOString())
+    expect(refreshed?.at).toBe(new Date(base + 1_000).toISOString())
   })
 
   test('step environments carry no GIT_* variables and keep the rest', async () => {

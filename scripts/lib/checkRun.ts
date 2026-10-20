@@ -3,7 +3,8 @@
 // Computes the working tree's content key, reuses a recorded pass when one
 // exists, otherwise runs lint, typecheck, and the unit suite in order,
 // stopping at the first failure, and records a full pass. Only a completed
-// pass is recorded: a failing or interrupted step leaves the store untouched.
+// pass is recorded: a failing or interrupted run also drops any earlier
+// record of its key, so the next check on the same tree runs in full.
 //
 // The GIT_* variables a pre-commit hook exports are stripped from every
 // step's environment; the hook's GIT_INDEX_FILE reaches the key computation
@@ -14,6 +15,7 @@ import { computeContentKey } from './checkKey'
 import {
   readRecord,
   recordsDir,
+  removeRecord,
   writeRecord,
   type CheckRecord,
   type CheckStep,
@@ -103,7 +105,12 @@ export async function runCheck(options: CheckRunOptions): Promise<CheckOutcome> 
     return { kind: 'error', message: error instanceof Error ? error.message : String(error) }
   }
 
-  if (!force) {
+  if (force) {
+    // A forced run reruns everything, so its key's earlier pass must not
+    // outlive it: dropping it up front means even a run killed mid-step
+    // (SIGINT, SIGTERM, a crash) leaves no stale pass behind.
+    removeRecord(dir, contentKey.key)
+  } else {
     const recorded = readRecord(dir, contentKey.key)
     if (recorded) return { kind: 'recorded', record: recorded }
   }
@@ -115,7 +122,11 @@ export async function runCheck(options: CheckRunOptions): Promise<CheckOutcome> 
     const exitCode = await spawn({ command: step.command, cwd, env })
     stepDurations.push({ name: step.name, ms: Math.round(performance.now() - started) })
     if (exitCode !== 0) {
-      // A failed or interrupted run records nothing.
+      // A failed or interrupted run leaves no pass record for its key — the
+      // next check on the same tree runs in full. A plain run can race a
+      // concurrent writer that records this key mid-run, so this runs on the
+      // plain path too, not only under --force.
+      removeRecord(dir, contentKey.key)
       return { kind: 'failed', step: step.name, exitCode }
     }
   }

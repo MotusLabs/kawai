@@ -34,7 +34,9 @@ function record(overrides: Partial<CheckRecord> = {}): CheckRecord {
     bun: '1.4.3',
     platform: 'linux',
     arch: 'x64',
-    at: '2026-10-20T08:00:00.000Z',
+    // Relative to now: readRecord refuses records older than the TTL, so a
+    // fixed timestamp would expire this fixture out of the suite.
+    at: new Date().toISOString(),
     worktree: '/somewhere/impl-feature',
     steps: [
       { name: 'lint', ms: 900 },
@@ -108,6 +110,29 @@ describe('readRecord', () => {
     expect(readRecord(dir, 'd'.repeat(64))).toBeNull()
   })
 
+  test('a record whose body names another key reads as none under its own name', () => {
+    // a.json exists but describes key b: the key guard, not a missing file,
+    // must reject it.
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(
+      path.join(dir, `${'a'.repeat(64)}.json`),
+      JSON.stringify(record({ key: 'b'.repeat(64) }))
+    )
+    expect(readRecord(dir, 'a'.repeat(64))).toBeNull()
+  })
+
+  test('a record older than the TTL reads as none, an unparseable time too', () => {
+    const stale = record({ at: new Date(Date.now() - RECORD_TTL_MS - 1_000).toISOString() })
+    writeRecord(dir, stale)
+    expect(readRecord(dir, stale.key)).toBeNull()
+    const fresh = record({ at: new Date(Date.now() - 1_000).toISOString() })
+    writeRecord(dir, fresh)
+    expect(readRecord(dir, fresh.key)).toEqual(fresh)
+    const unparseable = record({ at: 'not-a-time' })
+    writeRecord(dir, unparseable)
+    expect(readRecord(dir, unparseable.key)).toBeNull()
+  })
+
   test('a record without steps, time, or worktree reads as none', () => {
     fs.mkdirSync(dir, { recursive: true })
     const partial = { key: 'e'.repeat(64), at: '2026-10-20T08:00:00.000Z' }
@@ -131,8 +156,8 @@ describe('writeRecord', () => {
   })
 
   test('overwrites a previous record for the same key', () => {
-    writeRecord(dir, record({ at: '2026-10-19T08:00:00.000Z' }))
-    const refreshed = record({ at: '2026-10-20T09:00:00.000Z' })
+    writeRecord(dir, record({ at: new Date(Date.now() - 3_600_000).toISOString() }))
+    const refreshed = record()
     writeRecord(dir, refreshed)
     expect(readRecord(dir, refreshed.key)?.at).toBe(refreshed.at)
   })
