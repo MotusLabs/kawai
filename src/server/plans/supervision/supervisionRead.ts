@@ -7,7 +7,8 @@
 // and result rows; dependencies are derived first, so each change sees their
 // outcomes. The holder's session facts and the instruction's mailbox blocker
 // are runtime facts, injected through `SupervisionRuntime`; `waitEndedAt` is
-// the monitor's in-memory fact and reads null here. Reads only; no writes.
+// the monitor's in-memory fact (D11), read through the optional `waitEndedAt`
+// seam and null without it. Reads only; no writes.
 import type { Database } from 'bun:sqlite'
 import { cardState } from '../../../shared/planDecisions'
 import { ciClass, runsByName } from '../../../shared/planExecutionGates'
@@ -40,6 +41,8 @@ export interface SupervisionReads {
   /** The execution's unresolved acceptance conditions (V2), as landing reads them. */
   conditionsOf: (executionId: string) => string[]
   runtime: SupervisionRuntime
+  /** The monitor's last sight of the change in a named wait (D11, in memory); null without a monitor. */
+  waitEndedAt?: (executionId: string, change: string) => string | null
 }
 
 export interface PlanSupervisionRead {
@@ -152,7 +155,7 @@ export function readSupervisionInputs(reads: SupervisionReads, teamId: string, p
         slotHolder: slot ? { kind: slot.holderKind, id: slot.holderId } : null,
         candidates: candidates.filter(candidate => candidate.change === entry.change).map(candidate => ({ state: candidate.state, createdAt: candidate.createdAt, decidedAt: candidate.decidedAt })),
         results: row.taskId === null ? [] : results.listByTask(row.taskId).map(result => ({ createdAt: result.createdAt })),
-        waitEndedAt: null,
+        waitEndedAt: reads.waitEndedAt?.(execution.id, entry.change) ?? null,
       }
     })
     return { executionId: execution.id, revision: revision.revision, inputs }
@@ -163,8 +166,13 @@ export function readSupervisionInputs(reads: SupervisionReads, teamId: string, p
 
 /** Each change's derived supervision in the revision's order, dependencies before their dependents. */
 export function readPlanSupervision(reads: SupervisionReads, teamId: string, planId: string, now: Date): ChangeSupervision[] {
+  return derivePlanSupervision(reads, teamId, planId, now)?.changes ?? []
+}
+
+/** The loader's read with each change's derivation beside its input; null for another team's or an unknown plan. */
+export function derivePlanSupervision(reads: SupervisionReads, teamId: string, planId: string, now: Date): (PlanSupervisionRead & { changes: ChangeSupervision[] }) | null {
   const read = readSupervisionInputs(reads, teamId, planId)
-  if (read === null) return []
+  if (read === null) return null
   const byChange = new Map(read.inputs.map(input => [input.change, input]))
   const derived = new Map<string, ChangeSupervision>()
   const visiting = new Set<string>()
@@ -182,5 +190,5 @@ export function readPlanSupervision(reads: SupervisionReads, teamId: string, pla
     return supervision.outcome
   }
   for (const input of read.inputs) derive(input.change)
-  return read.inputs.map(input => derived.get(input.change)!)
+  return { ...read, changes: read.inputs.map(input => derived.get(input.change)!) }
 }
