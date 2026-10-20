@@ -119,9 +119,15 @@ export function integrationMechanism(store: IntegrationStore, adapters: Integrat
     executions.atomically(() => {
       const fresh = executions.change(row.executionId, row.change)
       if (fresh === null || fresh.state !== 'landing' || fresh.step === 'merging') return
+      // The pre-guard (A1): a live landing-kind row of another identity —
+      // another kind or round — settles first; the step stays and the next
+      // tick re-reads. The same identity is inserted and adopted (A1).
+      const live = executions.liveLandingEffect(row.executionId, row.change)
+      if (live !== null && !(live.kind === 'fast-forward' && live.roundId === at.roundId)) return
       // The insert lands before the step transition (A1): a refused insert
       // never flips the step — the live row settles first, the next tick
-      // re-reads.
+      // re-reads. A refused round re-issues here under the next candidate
+      // seq, a Retry re-adopts the re-opened row by its key — idempotent (R4).
       try {
         executions.insertEffect({
           executionId: row.executionId, change: row.change, roundId: at.roundId, kind: 'fast-forward',
@@ -213,6 +219,8 @@ export function integrationMechanism(store: IntegrationStore, adapters: Integrat
       if (probe.integration === undefined || probe.integration.exists || probe.repo === null) return []
       return [{
         kind: 'create-integration' as EffectKind,
+        // The first issuance; after a settled failure the planner re-issues
+        // under the next count, idempotently (R4).
         effectKey: `${execution.id}::create-integration:1`,
         command: { repo: probe.repo, branch: probe.integration.branch, sha: execution.baseCommit, target: probe.integration.target, planId: execution.planId, teamId: execution.teamId, cwd: main },
       }]
