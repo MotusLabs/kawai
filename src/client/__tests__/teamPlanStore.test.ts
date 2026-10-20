@@ -132,29 +132,29 @@ test('success retires the slot, a refusal keeps it marked refused with the failu
   expect(view().pending).toEqual({})
 })
 
-test('supervision detail fields ride the selected plan and drop when the selection changes', () => {
+test('the supervision detail rides the selected plan and drops when the selection changes', () => {
   const detail = planDetail(planSummary('p1'), { decisions: [cardView()], supervision: supervisionView(), usage: usageView() })
   store().open('/repo')
   // An unselected detail applies nothing (the whole detail is dropped)…
   store().applyDetail(detailMessage(detail))
-  expect(view().detailDecisions).toBeUndefined()
+  expect(view().detail).toBeNull()
   store().select('/repo', 'p1')
   store().applyDetail(detailMessage(detail))
-  expect(view().detailDecisions!.map(row => row.card.id)).toEqual(['card-1'])
-  expect(view().detailSupervision!.report.delivery).toBe('All 0 changes landed')
-  expect(view().detailUsage!.notes.length).toBeGreaterThan(0)
-  // Re-selecting the same plan keeps the held fields; another plan drops all three.
+  expect(view().detail!.decisions!.map(row => row.card.id)).toEqual(['card-1'])
+  expect(view().detail!.supervision!.report.delivery).toBe('All 0 changes landed')
+  expect(view().detail!.usage!.notes.length).toBeGreaterThan(0)
+  // Re-selecting the same plan keeps the held detail; another plan drops it.
   store().select('/repo', 'p1')
-  expect(view().detailDecisions).toHaveLength(1)
+  expect(view().detail!.decisions).toHaveLength(1)
   store().select('/repo', 'p2')
-  expect(view()).toMatchObject({ detail: null, detailDecisions: undefined, detailSupervision: undefined, detailUsage: undefined })
-  // Reopening the view naming another plan drops them too; they return with the plan's next detail.
+  expect(view().detail).toBeNull()
+  // Reopening the view naming another plan drops it too; it returns with the plan's next detail.
   store().open('/repo', 'p2')
   store().applyDetail(detailMessage(detail))
-  expect(view().detailDecisions).toBeUndefined()
+  expect(view().detail).toBeNull()
   store().open('/repo', 'p1')
   store().applyDetail(detailMessage(detail))
-  expect(view().detailSupervision!.report.delivery).toBe('All 0 changes landed')
+  expect(view().detail!.supervision!.report.delivery).toBe('All 0 changes landed')
 })
 
 test('a decide or override dialog re-mints its command id only when the payload changes', () => {
@@ -187,9 +187,9 @@ test('the WS router dispatches every plan message into the store', () => {
   store().select('/repo', 'p1')
   route(detailMessage(planDetail(planSummary('p1'), { decisions: [cardView()], supervision: supervisionView(), usage: usageView() })))
   expect(view().detail!.plan.id).toBe('p1')
-  expect(view().detailDecisions!.map(row => row.card.id)).toEqual(['card-1'])
-  expect(view().detailSupervision!.report.total).toBe(0)
-  expect(view().detailUsage!.notes.length).toBeGreaterThan(0)
+  expect(view().detail!.decisions!.map(row => row.card.id)).toEqual(['card-1'])
+  expect(view().detail!.supervision!.report.total).toBe(0)
+  expect(view().detail!.usage!.notes.length).toBeGreaterThan(0)
   store().begin('/repo', 'r1', 'withdraw')
   route({ type: 'team-plan-result', teamPath: '/repo', requestId: 'r1', error: 'nope' })
   expect(view()).toMatchObject({ pending: {}, error: 'nope' })

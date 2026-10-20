@@ -17,11 +17,10 @@
 // dialog's preview lands in `promotionPreviews`, and Promote (slot
 // `promote:<plan>:<branch>`, payload naming `fromSha`, so a changed head
 // re-mints) and Cancel (`cancel-promotion:<id>`) arm their own command ids.
-// The supervision fields (plan-supervision D15) ride the selected plan's
-// detail beside them: the decision cards (`detailDecisions`), each change's
-// derived supervision with the report (`detailSupervision`), and the usage
-// totals (`detailUsage`). The Answer and Override dialogs arm their own
-// slots (`decide:<plan>:<cardId>`, `override:<plan>:<cardId>`); the
+// The supervision fields (plan-supervision D15) — decision cards, each
+// change's derived supervision with the report, and the usage totals — ride
+// the selected plan's `detail` itself. The Answer and Override dialogs arm
+// their own slots (`decide:<plan>:<cardId>`, `override:<plan>:<cardId>`); the
 // refreshed card arrives in the re-pushed detail, so the result only
 // settles the request.
 import { create } from 'zustand'
@@ -77,12 +76,6 @@ export interface PlanView {
   detailExecutions: PlanDetail['executions']
   /** The selected plan's integration branches, riding its detail (integration-candidates D13). */
   detailIntegration: PlanIntegrationView[] | undefined
-  /** The selected plan's decision cards, riding its detail (plan-supervision D15). */
-  detailDecisions: PlanDetail['decisions']
-  /** The selected plan's per-change supervision and report, riding its detail (plan-supervision D15). */
-  detailSupervision: PlanDetail['supervision']
-  /** The selected plan's usage totals, riding its detail (plan-supervision D14). */
-  detailUsage: PlanDetail['usage']
   /** Armed dialog command ids, by dialog slot (e.g. `approve:<plan>:<revision>`). */
   commands: Record<string, ArmedPlanCommand>
   /** Which slot each pending request was sent from. */
@@ -101,7 +94,6 @@ export const closedPlanView = (): PlanView => ({
   open: false, loading: false, plans: null, selected: null, detail: null, pending: {}, error: null, failures: [], commands: {}, commandRequests: {},
   refusalImpact: null, impact: {}, detailImpact: null, detailValidation: null, detailExecutions: undefined,
   standings: {}, previewRequests: {}, detailIntegration: undefined, promotionPreviews: {}, promotionPreviewRequests: {},
-  detailDecisions: undefined, detailSupervision: undefined, detailUsage: undefined,
 })
 
 interface PlanState {
@@ -144,9 +136,6 @@ export const useTeamPlanStore = create<PlanState>(set => ({
         detailImpact: view.detail?.plan.id === planId ? view.detailImpact : null,
         detailValidation: view.detail?.plan.id === planId ? view.detailValidation : null,
         detailIntegration: view.detail?.plan.id === planId ? view.detailIntegration : undefined,
-        detailDecisions: view.detail?.plan.id === planId ? view.detailDecisions : undefined,
-        detailSupervision: view.detail?.plan.id === planId ? view.detailSupervision : undefined,
-        detailUsage: view.detail?.plan.id === planId ? view.detailUsage : undefined,
       } : {}),
     } } }
   }),
@@ -169,9 +158,6 @@ export const useTeamPlanStore = create<PlanState>(set => ({
     detailImpact: planId !== null && state.views[teamKey]?.detail?.plan.id === planId ? state.views[teamKey]!.detailImpact : null,
     detailValidation: planId !== null && state.views[teamKey]?.detail?.plan.id === planId ? state.views[teamKey]!.detailValidation : null,
     detailIntegration: planId !== null && state.views[teamKey]?.detail?.plan.id === planId ? state.views[teamKey]!.detailIntegration : undefined,
-    detailDecisions: planId !== null && state.views[teamKey]?.detail?.plan.id === planId ? state.views[teamKey]!.detailDecisions : undefined,
-    detailSupervision: planId !== null && state.views[teamKey]?.detail?.plan.id === planId ? state.views[teamKey]!.detailSupervision : undefined,
-    detailUsage: planId !== null && state.views[teamKey]?.detail?.plan.id === planId ? state.views[teamKey]!.detailUsage : undefined,
     error: null, failures: [], refusalImpact: null,
   })),
   arm: (teamKey, slot) => set(state => {
@@ -222,7 +208,6 @@ export const useTeamPlanStore = create<PlanState>(set => ({
     return update(state, message.teamPath, {
       detail: message.detail, detailImpact: message.impact ?? null, detailValidation: message.validation ?? null,
       detailExecutions: message.detail.executions, detailIntegration: message.detail.integration,
-      detailDecisions: message.detail.decisions, detailSupervision: message.detail.supervision, detailUsage: message.detail.usage,
     })
   }),
   applyResult: message => set(state => {

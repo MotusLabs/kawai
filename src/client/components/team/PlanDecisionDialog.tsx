@@ -32,7 +32,10 @@ export default function PlanDecisionDialog({ teamPath, planId, card, mode, curre
   const [choiceIndex, setChoiceIndex] = useState<number | null>(null)
   const [custom, setCustom] = useState('')
   const [rationale, setRationale] = useState('')
-  const slot = `${mode}:${planId}:${card.id}`
+  // The server resolves exactly one of choice and optionIndex (decisionInputs
+  // resolveChoice refuses both), so an option pick sends the 1-based index
+  // with a null choice and written text the reverse.
+  const slot = `${mode === 'answer' ? 'decide' : 'override'}:${planId}:${card.id}`
   const armed = useTeamPlanStore(state => state.views[teamPath]?.commands[slot])
   const error = useTeamPlanStore(state => state.views[teamPath]?.error)
   useEffect(() => {
@@ -49,9 +52,9 @@ export default function PlanDecisionDialog({ teamPath, planId, card, mode, curre
     </button>
   }
   const refused = armed?.refused === true
-  const choice = custom.trim() ? { choice: custom.trim(), optionIndex: null } : choiceIndex !== null
-    ? { choice: card.options[choiceIndex]!, optionIndex: choiceIndex + 1 }
-    : null
+  const choice: { choice: string | null; optionIndex: number | null } | null = custom.trim()
+    ? { choice: custom.trim(), optionIndex: null }
+    : choiceIndex !== null ? { choice: null, optionIndex: choiceIndex + 1 } : null
   const rationaleTrimmed = rationale.trim()
   const blocked = !connected || busy || refused || choice === null
     || (mode === 'override' && (rationaleTrimmed === '' || current === null))

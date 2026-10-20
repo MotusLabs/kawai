@@ -14,6 +14,7 @@ import type { PlanDetail } from '@shared/plans'
 import { normalizePlanContent } from '@shared/plans'
 import type { DecisionCard, FixPhase, FixStatus, PlanDecision, PlanDecisionCardView } from '@shared/planDecisions'
 import type { PlanExecutionView } from '@shared/planExecution'
+import { resolveChoice } from '../../server/plans/decisions/decisionInputs'
 import TeamPlansView from '../components/team/TeamPlansView'
 import { useTeamPlanStore } from '../stores/teamPlanStore'
 import { planSummary } from './planViewFixtures'
@@ -47,9 +48,10 @@ const decision = (over: Partial<PlanDecision> = {}): PlanDecision => ({
 
 const fixStatus = (phase: FixPhase): FixStatus => ({ phase, revision: null, executionId: null, landings: [], outstanding: [] })
 
-const cardView = (cardRow: DecisionCard, decisions: PlanDecision[], fixes: PlanDecisionCardView['fixes'] = []): PlanDecisionCardView =>
+const cardView = (cardRow: DecisionCard, decisions: PlanDecision[], fixes: PlanDecisionCardView['fixes'] = [],
+  commits: PlanDecisionCardView['commits'] = []): PlanDecisionCardView =>
   ({ card: cardRow, state: decisions.length === 0 ? 'open' : decisions.at(-1)!.kind === 'override' ? 'overridden' : 'decided',
-    decisions, current: decisions.at(-1) ?? null, fixes, commits: [] })
+    decisions, current: decisions.at(-1) ?? null, fixes, commits })
 
 const FLOOR = { version: 1 as const, map: { lint: ['ci'], typecheck: ['ci'], 'unit-tests': ['ci'], 'ci-e2e': ['e2e'] } }
 const execution = (changes: PlanExecutionView['changes']): PlanExecutionView => ({
@@ -65,16 +67,19 @@ const changeRow = (name: string, taskId: string): PlanExecutionView['changes'][n
 })
 
 // One open Lead-addressed card on `api`, one overridden card with a fix task
-// and no change, and one owner-addressed open card on `ui`.
+// and no change (its two affected tasks: one with commits, one without), and
+// one owner-addressed open card on `ui`.
 const decisionsFixture = (): PlanDecisionCardView[] => {
   const leadAnswer = decision({ cardId: 'card-2', id: 'decision-2' })
   const ownerOverride = decision({ cardId: 'card-2', id: 'decision-3', seq: 2, kind: 'override', choice: 'keep v1', optionIndex: 1,
-    rationale: 'v1 must stay', decidedBy: { kind: 'human', session: null, group: null, profile: null } })
+    rationale: 'v1 must stay', decidedBy: { kind: 'human', session: null, group: null, profile: null },
+    affected: ['task-1', 'task-nocommit'] })
   return [
     cardView(card(), []),
     cardView(card({ id: 'card-2', change: null, taskId: null, addressedTo: 'lead', question: 'Which theme ships?' }),
       [leadAnswer, ownerOverride],
-      [{ decisionId: 'decision-3', taskId: 'task-fix-1', status: fixStatus('planning') }]),
+      [{ decisionId: 'decision-3', taskId: 'task-fix-1', status: fixStatus('planning') }],
+      [{ taskId: 'task-1', commits: ['abc1234567'] }]),
     cardView(card({ id: 'card-3', change: 'ui', taskId: 'task-2', addressedTo: 'owner', addressedGroup: null }), []),
   ]
 }
@@ -100,7 +105,10 @@ const mount = (decisionViews: PlanDecisionCardView[], connected = true) => {
   const element = () => <TeamPlansView teamPath="/repo" view={useTeamPlanStore.getState().views['/repo']!}
     sendMessage={message => sent.push(message)} connected={connectedNow} connectionEpoch={0} sessions={SESSIONS}
     onOpenTask={taskId => openedTasks.push(taskId)} />
-  const renderer = TestRenderer.create(element(), { createNodeMock: _node => ({ focus: () => {} }) })
+  let renderer!: TestRenderer.ReactTestRenderer
+  act(() => {
+    renderer = TestRenderer.create(element(), { createNodeMock: _node => ({ focus: () => {} }) })
+  })
   renderers.push(renderer)
   const rerender = (next: { connected?: boolean } = {}) => {
     if (next.connected !== undefined) connectedNow = next.connected
@@ -147,20 +155,72 @@ test('the history and the fix status show on an overridden card', () => {
   expect(ui.openedTasks).toEqual(['task-fix-1'])
 })
 
+test('every affected task is named, with its commits or the statement it has none', () => {
+  const ui = mount(decisionsFixture())
+  const affected = ui.allById('plan-decision-affected-task')
+  expect(affected.map(node => textOf(node))).toEqual(['task-1…', 'task-nocommit…'])
+  expect(ui.text()).toContain('commits since the decision: abc1234567')
+  expect(ui.text()).toContain('— no commits since the decision')
+  act(() => affected[1]!.props.onClick())
+  expect(ui.openedTasks.at(-1)).toBe('task-nocommit')
+})
+
+// B1's contract: whatever the dialogs send must pass the server's own
+// resolver — exactly one of choice and optionIndex — for an option pick and
+// a written answer, in both Answer and Override.
+test('every sent choice resolves through the server resolveChoice in both modes', () => {
+  const ui = mount(decisionsFixture())
+  const confirm = () => act(() => ui.byId('plan-decision-override-confirm').props.onClick())
+  act(() => ui.allById('plan-decision-override')[0]!.props.onClick())
+  act(() => ui.renderer.root.findByProps({ 'aria-label': 'Option 1: keep v1' }).props.onChange())
+  act(() => ui.renderer.root.findByProps({ 'aria-label': 'override rationale' }).props.onChange({ target: { value: 'wrong call' } }))
+  confirm()
+  act(() => ui.cancelButton().props.onClick())
+  act(() => ui.allById('plan-decision-override')[0]!.props.onClick())
+  act(() => ui.renderer.root.findByProps({ 'aria-label': 'override rationale' }).props.onChange({ target: { value: 'still wrong' } }))
+  act(() => ui.renderer.root.findByProps({ 'aria-label': 'Another choice' }).props.onChange({ target: { value: 'custom plan' } }))
+  confirm()
+  act(() => ui.cancelButton().props.onClick())
+  act(() => ui.allById('plan-decision-answer')[0]!.props.onClick())
+  act(() => ui.renderer.root.findByProps({ 'aria-label': 'Option 2: drop v1' }).props.onChange())
+  act(() => ui.byId('plan-decision-answer-confirm').props.onClick())
+  act(() => ui.cancelButton().props.onClick())
+  act(() => ui.allById('plan-decision-answer').at(-1)!.props.onClick())
+  act(() => ui.renderer.root.findByProps({ 'aria-label': 'Another choice' }).props.onChange({ target: { value: 'ship as is' } }))
+  act(() => ui.byId('plan-decision-answer-confirm').props.onClick())
+  const options = (cardId: string) => decisionsFixture().find(view => view.card.id === cardId)!.card.options
+  const resolved = ui.sent
+    .filter(entry => entry.type === 'team-plan-decide' || entry.type === 'team-plan-override')
+    .map(message => {
+      const choice = (message as { choice?: string | null }).choice
+      const optionIndex = (message as { optionIndex?: number | null }).optionIndex
+      // The decision connection forwards exactly these fields to resolveChoice.
+      return resolveChoice(options((message as { cardId: string }).cardId), { choice: choice ?? null, option_index: optionIndex ?? null })
+    })
+  expect(resolved).toEqual([
+    { choice: 'keep v1', optionIndex: 1 },
+    { choice: 'custom plan', optionIndex: null },
+    { choice: 'drop v1', optionIndex: 2 },
+    { choice: 'ship as is', optionIndex: null },
+  ])
+})
+
 test('Override names the decision it replaces and requires a rationale before confirming', () => {
   const ui = mount(decisionsFixture())
   act(() => ui.allById('plan-decision-override')[0]!.props.onClick())
   expect(ui.text()).toContain("Override Human (owner)'s decision")
   expect(ui.byId('plan-decision-override-confirm').props.disabled).toBe(true)
-  act(() => ui.renderer.root.findByProps({ 'aria-label': 'override rationale' }).props.onChange({ target: { value: 'wrong call' } }))
-  expect(ui.byId('plan-decision-override-confirm').props.disabled).toBe(true)
+  // A choice without a rationale still cannot confirm — the rationale is
+  // required on its own, not just as one of several missing fields.
   act(() => ui.renderer.root.findByProps({ 'aria-label': 'Option 1: keep v1' }).props.onChange())
+  expect(ui.byId('plan-decision-override-confirm').props.disabled).toBe(true)
+  act(() => ui.renderer.root.findByProps({ 'aria-label': 'override rationale' }).props.onChange({ target: { value: 'wrong call' } }))
   expect(ui.byId('plan-decision-override-confirm').props.disabled).toBe(false)
   act(() => ui.byId('plan-decision-override-confirm').props.onClick())
   const message = ui.sent.find(entry => entry.type === 'team-plan-override') as { commandId: string } | undefined
   expect(message).toMatchObject({
     teamPath: '/repo', planId: 'plan-1', cardId: 'card-2', expectedDecisionId: 'decision-3',
-    choice: 'keep v1', optionIndex: 1, rationale: 'wrong call',
+    choice: null, optionIndex: 1, rationale: 'wrong call',
   })
   const armed = useTeamPlanStore.getState().views['/repo']!.commands['override:plan-1:card-2']
   expect(message?.commandId).toBe(armed?.commandId)
@@ -175,7 +235,7 @@ test('Answer takes a chosen option or written text with an optional rationale', 
   expect(ui.byId('plan-decision-answer-confirm').props.disabled).toBe(false)
   act(() => ui.byId('plan-decision-answer-confirm').props.onClick())
   expect(ui.sent.find(entry => entry.type === 'team-plan-decide')).toMatchObject({
-    planId: 'plan-1', cardId: 'card-1', choice: 'drop v1', optionIndex: 2, rationale: null,
+    planId: 'plan-1', cardId: 'card-1', choice: null, optionIndex: 2, rationale: null,
   })
   // The answered card's dialog stays open until its command settles; close it,
   // then answer the ui card (the last opener in tree order) in writing.

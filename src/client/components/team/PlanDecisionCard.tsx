@@ -1,8 +1,9 @@
 // One decision card in the Plans view (plan-supervision D15): its question,
 // options, and context; the current decision with who made it; the full
 // decision history with superseded decisions beside the current one; each
-// override's fix task with its derived status; and the affected tasks'
-// result commits since the current decision. Open cards offer **Answer**,
+// override's fix task with its derived status; and every affected task —
+// each opening its task — with its result commits since the decision, or
+// the statement that it has none. Open cards offer **Answer**,
 // decided ones **Override** (PlanDecisionDialog), which names the decision
 // it replaces. Cards render inline in their change's execution row and in
 // the plan-level Decisions list; the anchor id (`decision-card-<id>`) is
@@ -63,9 +64,16 @@ export default function PlanDecisionCard({ teamPath, planId, cardView, sessions,
         {fix.status.landings.some(landing => !landing.treeVerified) ? ' · landing not tree-verified' : ''}
       </li>)}
     </ul>}
-    {commits.map(entry => <p key={entry.taskId} className="mt-1 text-chat-meta text-secondary">
-      task {shortId(entry.taskId)}… commits since the decision: {entry.commits.join(', ')}
-    </p>)}
+    {current && current.affected.length > 0 && <ul className="mt-1 text-chat-meta text-secondary" data-testid="plan-decision-affected">
+      {current.affected.map(taskId => {
+        const entry = commits.find(row => row.taskId === taskId)
+        return <li key={taskId}>
+          <button type="button" className="link" data-testid="plan-decision-affected-task"
+            onClick={() => onOpenTask(taskId)}>{shortId(taskId)}…</button>
+          {entry && entry.commits.length > 0 ? ` commits since the decision: ${entry.commits.join(', ')}` : ' — no commits since the decision'}
+        </li>
+      })}
+    </ul>}
     <div className="mt-2">
       {!answered && <PlanDecisionDialog teamPath={teamPath} planId={planId} card={card} mode="answer" current={null}
         sessions={sessions} connected={connected} busy={busy} onSend={onSend} />}

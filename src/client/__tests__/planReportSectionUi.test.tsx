@@ -7,7 +7,7 @@
 // fix durations, and a non-continue strategy disposition linked to its
 // review. The section mounts in the plan detail only when the detail
 // carries it.
-import { afterEach, expect, test } from 'bun:test'
+import { afterEach, expect, jest, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import type { Session } from '@shared/types'
 import type { PlanDetail } from '@shared/plans'
@@ -109,11 +109,30 @@ test('a stalled plan shows the stall kind with progress apart from activity', ()
   ])
   const ui = section(supervision)
   expect(ui.text()).toContain('api · Stalled')
+  // The cause line renders the labeled cause (never the raw kind).
+  expect(textOf(ui.renderer.root.findByProps({ 'data-testid': 'plan-supervision-cause-api' }))).toBe('Stalled: repeating failure')
   expect(ui.text()).toContain('Stalled: repeating failure — ci / unit-tests,review:fail')
   expect(ui.text()).toContain('also applying: Waiting for CI: ci / unit-tests')
   expect(ui.text()).toContain('Progress 3 h ago (ci pass)')
   expect(ui.text()).toContain('activity 0 min ago (live turn)')
   expect(ui.text()).toContain('held by Dev One (glm)')
+})
+
+test('the progress elapsed time ticks with the client clock (D15)', () => {
+  jest.useFakeTimers()
+  try {
+    const supervision = view([row({
+      change: 'api', outcome: 'running',
+      progress: { kind: 'result', at: new Date(Date.now() - 30 * 60000).toISOString() },
+      activity: { kind: 'turn', at: new Date(Date.now() - 30 * 60000).toISOString() },
+    })])
+    const ui = section(supervision)
+    expect(ui.text()).toContain('Progress 30 min ago')
+    act(() => { jest.advanceTimersByTime(60_000) })
+    expect(ui.text()).toContain('Progress 31 min ago')
+  } finally {
+    jest.useRealTimers()
+  }
 })
 
 test('a fully landed plan reads All landed, the override count, fix durations, and the disposition', () => {
