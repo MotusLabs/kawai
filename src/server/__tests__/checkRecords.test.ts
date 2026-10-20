@@ -9,7 +9,9 @@ import { runGit } from '../git/gitCommand'
 import {
   MAX_RECORDS,
   RECORD_TTL_MS,
+  TMP_TTL_MS,
   type CheckRecord,
+  pruneRecords,
   readRecord,
   recordsDir,
   writeRecord,
@@ -55,6 +57,27 @@ function seedRecord(key: string, mtime: number) {
   fs.mkdirSync(dir, { recursive: true })
   const file = path.join(dir, `${key}.json`)
   fs.writeFileSync(file, JSON.stringify(record({ key })))
+  fs.utimesSync(file, mtime / 1000, mtime / 1000)
+}
+
+/** The pid of a process that has exited, verified gone. */
+function deadPid(): number {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const pid = Bun.spawnSync({ cmd: ['true'], stdout: 'ignore', stderr: 'ignore' }).pid
+    try {
+      process.kill(pid, 0)
+    } catch {
+      return pid
+    }
+  }
+  throw new Error('no dead pid found')
+}
+
+/** A temp file shaped the way writeRecord's interrupted write leaves one. */
+function seedTmp(pid: number, mtime: number) {
+  fs.mkdirSync(dir, { recursive: true })
+  const file = path.join(dir, `.${'a'.repeat(64)}.${pid}.tmp`)
+  fs.writeFileSync(file, '{"key":"') // the partial body of a crashed write
   fs.utimesSync(file, mtime / 1000, mtime / 1000)
 }
 
@@ -202,6 +225,38 @@ describe('pruning', () => {
     fs.writeFileSync(path.join(dir, 'notes.txt'), 'not a record')
     writeRecord(dir, record())
     expect(fs.existsSync(path.join(dir, 'notes.txt'))).toBe(true)
+  })
+
+  test('a fresh temp file whose writer pid is dead is removed', () => {
+    const pid = deadPid()
+    seedTmp(pid, Date.now())
+    pruneRecords(dir)
+    expect(fs.existsSync(path.join(dir, `.${'a'.repeat(64)}.${pid}.tmp`))).toBe(false)
+  })
+
+  test('a temp file older than an hour is removed even while its writer lives', () => {
+    // pid reuse would otherwise keep the file forever, so age decides.
+    seedTmp(process.pid, Date.now() - TMP_TTL_MS - 60_000)
+    pruneRecords(dir)
+    expect(fs.existsSync(path.join(dir, `.${'a'.repeat(64)}.${process.pid}.tmp`))).toBe(false)
+  })
+
+  test('a fresh temp file of a live writer is kept, and so is any other shape', () => {
+    seedTmp(process.pid, Date.now())
+    const other = path.join(dir, '.not-ours.tmp')
+    fs.writeFileSync(other, 'x')
+    pruneRecords(dir)
+    expect(fs.existsSync(path.join(dir, `.${'a'.repeat(64)}.${process.pid}.tmp`))).toBe(true)
+    expect(fs.existsSync(other)).toBe(true)
+  })
+
+  test('temp-file pruning leaves the records untouched', () => {
+    const kept = record({ key: 'b'.repeat(64) })
+    writeRecord(dir, kept)
+    seedTmp(deadPid(), Date.now())
+    pruneRecords(dir)
+    expect(readRecord(dir, kept.key)).toEqual(kept)
+    expect(fs.readdirSync(dir)).toEqual([`${kept.key}.json`])
   })
 })
 
