@@ -6,9 +6,17 @@
 // do only what `systemCaller.ts` grants those origins: create the fix,
 // dispatch it, and close its earlier fix as creator. `prepareOverrideFix`
 // runs the asynchronous parts first; its `commit` runs inside the
-// override's transaction.
+// override's transaction. `completeFixTasks` is the monitor's D8 completion:
+// an open fix or correction task closes as `done`, by its own origin as its
+// creator, once a change naming it has landed (judged by the revision its
+// landing execution ran) and no change of the current approved revision
+// naming it is unlanded; a correction also closes once a later promotion
+// of its plan merged. `createCorrectionTasks` is D8's correction creation:
+// one task per promotion stored as `failed:promotion-conflict` or
+// `failed:ci-failed`, its fix row and its dispatch to the Lead role in one
+// transaction, so the unique source makes it exactly-once across restarts.
 import type { Database } from 'bun:sqlite'
-import type { DecisionCard, PlanDecision } from '../../../shared/planDecisions'
+import { fixLandings, type DecisionCard, type PlanDecision, type PlanFixTask } from '../../../shared/planDecisions'
 import type { Plan, PlanRevision } from '../../../shared/plans'
 import type { TeamIdentity } from '../../team/teamIdentity'
 import type { TaskService } from '../../team/TaskService'
@@ -18,8 +26,17 @@ import type { PreparedTaskStatus } from '../../team/taskStatusPrepared'
 import type { SystemCaller } from '../../team/systemCaller'
 import type { DecisionStore } from './decisionStore'
 import { deciderName } from './decisionInputs'
+import { fixPlanFacts, type FixFactReads } from './fixFacts'
+import type { PlanStore } from '../planStore'
+import type { IntegrationStore, PromotionRow } from '../landing/integration/integrationStore'
+import { CORRECTED_OUTCOMES, CORRECTION_ACCEPTANCE, correctionDirection, correctionTitle } from './correctionText'
+import { DecisionConflict } from './decisionStore'
 
 const overrideCaller = (team: TeamIdentity, decisionId: string): SystemCaller => ({ kind: 'system', team, origin: { kind: 'override', decisionId } })
+const promotionCaller = (team: TeamIdentity, promotionId: string): SystemCaller => ({ kind: 'system', team, origin: { kind: 'promotion', promotionId } })
+/** The fix row's own origin: Kawai closes the task as the creator that made it. */
+const sourceCaller = (team: TeamIdentity, fix: PlanFixTask): SystemCaller =>
+  (fix.sourceKind === 'override' ? overrideCaller(team, fix.sourceId) : promotionCaller(team, fix.sourceId))
 
 const QUESTION_CUT = 80
 const OPEN = new Set(['open', 'active', 'blocked'])
@@ -120,4 +137,111 @@ export async function prepareOverrideFix(deps: FixDeps, input: OverrideFixInput)
       return { taskId: task.id, dispatched: true }
     },
   }
+}
+
+export interface FixCompletionDeps extends FixFactReads {
+  decisions: Pick<DecisionStore, 'fixTasksOfTeam'>
+  tasks: Pick<TaskService, 'setStatus'>
+  taskStore: Pick<TaskStore, 'get'>
+  plans: Pick<PlanStore, 'revisions' | 'forTeam'>
+  /** The promotions a correction is judged by; without it only the landing rule closes one. */
+  promotions?: Pick<IntegrationStore, 'promotion' | 'promotionsOf'>
+}
+
+/** A later promotion of the correction's plan that merged, if any (D8). */
+function mergedAfter(deps: FixCompletionDeps, fix: PlanFixTask): PromotionRow | null {
+  if (fix.sourceKind !== 'promotion' || !deps.promotions) return null
+  const failed = deps.promotions.promotion(fix.sourceId)
+  if (failed === null) return null
+  return deps.promotions.promotionsOf(fix.planId).find(row => row.number > failed.number && row.outcome === 'merged') ?? null
+}
+
+/**
+ * D8 completion over the team's open fix and correction tasks: each closes
+ * in its own transaction (`setStatus`), so a repeat sweep finds it done and
+ * writes nothing. Returns the closed task ids.
+ */
+export async function completeFixTasks(deps: FixCompletionDeps, team: TeamIdentity): Promise<Array<{ taskId: string; planId: string }>> {
+  const closed: Array<{ taskId: string; planId: string }> = []
+  for (const fix of deps.decisions.fixTasksOfTeam(team.teamId)) {
+    const task = deps.taskStore.get(fix.taskId)
+    if (task === null || !OPEN.has(task.status)) continue
+    const plan = deps.plans.forTeam(team.teamId, fix.planId)
+    if (plan === null) continue
+    const { landings, outstanding } = fixLandings(fix.taskId, fixPlanFacts(deps, team.teamId, plan))
+    const kind = fix.sourceKind === 'override' ? 'fix' : 'correction'
+    let note: string
+    if (landings.length > 0 && outstanding.length === 0) {
+      const landed = landings.map(landing => `${landing.change} (merge ${landing.mergeSha})`).join(', ')
+      note = `Kawai closes this ${kind} task: ${landed} landed naming it in \`fixes\`, and no change of the current approved revision naming it is unlanded.`
+    } else {
+      const merged = mergedAfter(deps, fix)
+      if (merged === null) continue
+      note = `Kawai closes this correction task: promotion ${merged.number} (${merged.id}) of the plan merged${merged.mergeSha ? ` as ${merged.mergeSha}` : ''}.`
+    }
+    await deps.tasks.setStatus(sourceCaller(team, fix), fix.taskId, 'done', note)
+    closed.push({ taskId: fix.taskId, planId: fix.planId })
+  }
+  return closed
+}
+
+export interface CorrectionDeps {
+  db: Database
+  decisions: Pick<DecisionStore, 'insertFixTask'>
+  tasks: Pick<TaskService, 'createFixTask'>
+  assignments: Pick<AssignmentService, 'dispatchWithin'>
+  plans: Pick<PlanStore, 'forTeam' | 'approvedRevision'>
+  promotions: Pick<IntegrationStore, 'promotion'>
+}
+
+/** Finished promotions whose outcome gets a correction and that have none yet; `?` stands for each of CORRECTED_OUTCOMES. */
+export const UNCORRECTED_PROMOTIONS = `FROM plan_promotions p WHERE p.state = 'finished' AND p.outcome IN (${CORRECTED_OUTCOMES.map(() => '?').join(', ')})
+  AND NOT EXISTS (SELECT 1 FROM plan_fix_tasks f WHERE f.source_kind = 'promotion' AND f.source_id = p.id)`
+
+/** The team's promotions still owed a correction, oldest first. */
+export function uncorrectedPromotionIds(db: Database, teamId: string): string[] {
+  return (db.prepare(`SELECT p.id ${UNCORRECTED_PROMOTIONS} AND p.team_id = ? ORDER BY p.finished_at, p.rowid`)
+    .all(...CORRECTED_OUTCOMES, teamId) as Array<{ id: string }>).map(row => row.id)
+}
+
+/**
+ * D8 correction creation: for each uncorrected promotion, one transaction
+ * creates the task (origin `promotion`), its `plan_fix_tasks` row, and —
+ * with a Lead role — its dispatch under `correct:<promotionId>`, tagged
+ * `plan-fix`; without one it stays unassigned for the owner. A source
+ * another writer took first rolls back and is skipped. Returns the created tasks.
+ */
+export function createCorrectionTasks(deps: CorrectionDeps, team: TeamIdentity): Array<{ taskId: string; planId: string }> {
+  const created: Array<{ taskId: string; planId: string }> = []
+  for (const promotionId of uncorrectedPromotionIds(deps.db, team.teamId)) {
+    const promotion = deps.promotions.promotion(promotionId)
+    if (promotion === null || !CORRECTED_OUTCOMES.includes(promotion.outcome!)) continue
+    const plan = deps.plans.forTeam(team.teamId, promotion.planId)
+    if (plan === null) continue
+    const content = deps.plans.approvedRevision(plan.id)?.content
+    const lead = content?.leadGroup ?? null
+    const role = lead ? content!.roles.find(entry => entry.group === lead) : undefined
+    const caller = promotionCaller(team, promotion.id)
+    try {
+      const taskId = deps.db.transaction(() => {
+        const id = `task-${crypto.randomUUID()}`
+        const direction = correctionDirection(plan, promotion, id)
+        const task = deps.tasks.createFixTask(caller, { id, title: correctionTitle(promotion, plan.title), direction, acceptance: CORRECTION_ACCEPTANCE }, made => {
+          deps.decisions.insertFixTask({ taskId: made.id, teamId: team.teamId, planId: plan.id, sourceKind: 'promotion', sourceId: promotion.id })
+        })
+        if (lead) {
+          deps.assignments.dispatchWithin(caller, {
+            taskId: task.id, target: { kind: 'group', id: lead }, instruction: direction, requestKey: `correct:${promotion.id}`,
+            allowedProfiles: role?.profiles.length ? role.profiles : undefined, tags: ['plan-fix'],
+          })
+        }
+        return task.id
+      })()
+      created.push({ taskId, planId: plan.id })
+    } catch (error) {
+      if (error instanceof DecisionConflict && error.kind === 'fix-source-taken') continue
+      throw error
+    }
+  }
+  return created
 }
