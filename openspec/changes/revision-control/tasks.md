@@ -4,7 +4,7 @@ Implement after these have landed on master: `plan-execution`, `integration-cand
 
 ## 1. Shared model and contracts
 
-- [ ] 1.1 Reconcile names with the merged designs, and record any renames in this design before coding. Verify by reading against D3–D5, D10–D11, and D13–D16 here:
+- [x] 1.1 Reconcile names with the merged designs, and record any renames in this design before coding. Verify by reading against D3–D5, D10–D11, and D13–D16 here:
   - plan-execution's D3, D4, D9, D12, D14, D18, and D20: `planSteps` and its decide/dispatch split, `START_PRECONDITIONS`, `plan_landing_slots`, the effect kinds and inspectors, `AttemptManifest`, `recordExecutionEvent`, and `TaskService.setStatus(…, alsoWithin)`;
   - integration-candidates' D5, D9, and I2: the fast-forward, `PROMOTE_PRECONDITIONS`, and the promotion steps;
   - plan-supervision's D10, D13, and S1–S4: the cause list and its order, `ATTENTION_SOURCES` kinds, the `plan` link, `fixStatus`, and the system caller's origins;
