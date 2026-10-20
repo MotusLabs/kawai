@@ -2,7 +2,7 @@
 
 ## 1. Content key and records
 
-- [ ] 1.1 Add the content-key function (temporary index copy, `git add -A`, `git write-tree`, plus the Bun version and platform; explicit `GIT_INDEX_FILE` for its own git calls only) with unit tests in a temporary repository: an unchanged tree gives the same key, an edit, an untracked file, or a different Bun version changes it, an ignored file does not, and the real index is byte-identical afterward. All of them spawn git with `cleanGitEnv`.
+- [x] 1.1 Add the content-key function (temporary index copy, `git add -A`, `git write-tree`, plus the Bun version and platform; explicit `GIT_INDEX_FILE` for its own git calls only) with unit tests in a temporary repository: an unchanged tree gives the same key, an edit, an untracked file, or a different Bun version changes it, an ignored file does not, and the real index is byte-identical afterward. All of them spawn git with `cleanGitEnv`.
 - [ ] 1.2 Add the record store under `<git-common-dir>/kawai-checks/` (atomic write, lookup, pruning past 14 days or 500 records) with unit tests, including a lookup from a second linked worktree of the same temporary repository.
 
 ## 2. `bun run check`
