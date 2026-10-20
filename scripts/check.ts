@@ -1,8 +1,9 @@
 // check.ts - `bun run check` (check-dedup D3): lint, typecheck, and the unit
 // suite against the working tree, reusing a recorded pass keyed by content
-// (see scripts/lib/checkRun.ts). Failures are never recorded; --force runs
-// every step regardless of records. `bun run test` stays the raw, uncached
-// runner.
+// (see scripts/lib/checkRun.ts). Failures are never recorded, and a pass
+// records only when the tree is unchanged since the run started; --force
+// runs every step regardless of records. `bun run test` stays the raw,
+// uncached runner.
 
 import { runGit } from '../src/server/git/gitCommand'
 import { runCheck } from './lib/checkRun'
@@ -36,7 +37,11 @@ if (outcome.kind === 'passed') {
   for (const step of outcome.steps) {
     console.log(`check: ${step.name} ok in ${step.ms}ms`)
   }
-  console.log(`check: pass recorded ${outcome.key.slice(0, 12)}…`)
+  if (outcome.recorded) {
+    console.log(`check: pass recorded ${outcome.key.slice(0, 12)}…`)
+  } else {
+    console.log(`check: ${outcome.unrecordedBecause}; nothing recorded`)
+  }
   process.exit(0)
 }
 

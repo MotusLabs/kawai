@@ -180,6 +180,41 @@ describe('runCheck', () => {
     expect(recordJsonNames(recordsDir(repo))).toEqual([])
   })
 
+  test('a failed run removes only its own key, not another key\'s record', async () => {
+    fs.writeFileSync(path.join(repo, 'other.ts'), 'export const other = 1\n')
+    const other = await runCheck({ cwd: repo, steps: STEPS, spawn: fakeSpawn([0]).spawn })
+    expect(other.kind).toBe('passed')
+    if (other.kind !== 'passed') return
+    // A different tree fails; key A's cleanup must not touch key B's record.
+    fs.writeFileSync(path.join(repo, 'broken.ts'), 'export const broken = 1\n')
+    const failed = await runCheck({ cwd: repo, steps: STEPS, spawn: fakeSpawn([1]).spawn })
+    expect(failed.kind).toBe('failed')
+    expect(readRecord(recordsDir(repo), other.key)).not.toBeNull()
+    expect(recordJsonNames(recordsDir(repo))).toEqual([`${other.key}.json`])
+  })
+
+  test('a tree that changes mid-run passes but records nothing', async () => {
+    const editing = async (request: SpawnRequest): Promise<number | null> => {
+      if (request.command[1] === 'test') {
+        // The last step edits a tracked file while it "runs".
+        fs.writeFileSync(path.join(repo, 'README.md'), '# edited mid-run\n')
+      }
+      return 0
+    }
+    const outcome = await runCheck({ cwd: repo, steps: STEPS, spawn: editing })
+    expect(outcome.kind).toBe('passed')
+    if (outcome.kind !== 'passed') return
+    expect(outcome.recorded).toBe(false)
+    expect(recordJsonNames(recordsDir(repo))).toEqual([])
+    // Nothing was recorded, so the next plain run executes every step again.
+    const fake = fakeSpawn([0, 0, 0])
+    const next = await runCheck({ cwd: repo, steps: STEPS, spawn: fake.spawn })
+    expect(next.kind).toBe('passed')
+    if (next.kind !== 'passed') return
+    expect(next.recorded).toBe(true)
+    expect(fake.count()).toBe(3)
+  })
+
   test('--force runs every step despite a record and refreshes it', async () => {
     // Anchored near now: readRecord refuses records older than the TTL, so an
     // epoch-based clock would make the refreshed record read as stale.

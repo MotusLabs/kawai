@@ -3,8 +3,9 @@
 // Computes the working tree's content key, reuses a recorded pass when one
 // exists, otherwise runs lint, typecheck, and the unit suite in order,
 // stopping at the first failure, and records a full pass. Only a completed
-// pass is recorded: a failing or interrupted run also drops any earlier
-// record of its key, so the next check on the same tree runs in full.
+// pass over an unchanged tree is recorded: a failing or interrupted run also
+// drops any earlier record of its key (so the next check on the same tree
+// runs in full), and a tree that changed mid-run is credited to no key.
 //
 // The GIT_* variables a pre-commit hook exports are stripped from every
 // step's environment; the hook's GIT_INDEX_FILE reaches the key computation
@@ -34,7 +35,16 @@ export const DEFAULT_STEPS: CheckStepSpec[] = [
 
 export type CheckOutcome =
   | { kind: 'recorded'; record: CheckRecord }
-  | { kind: 'passed'; key: string; steps: CheckStep[] }
+  | {
+      kind: 'passed'
+      key: string
+      steps: CheckStep[]
+      /** False when the pass was not recorded: the tree changed during the
+       * run (or the key could not be re-verified), so the steps checked a
+       * mix of contents and no key owns this pass. */
+      recorded: boolean
+      unrecordedBecause?: string
+    }
   | { kind: 'failed'; step: string; exitCode: number | null }
   | { kind: 'error'; message: string }
 
@@ -131,6 +141,31 @@ export async function runCheck(options: CheckRunOptions): Promise<CheckOutcome> 
     }
   }
 
+  // The record must name only content the steps actually checked: a step or
+  // a concurrent writer can edit the tree mid-run, and a pass over a mix of
+  // trees is no key's pass. Recompute the key over the finished tree and
+  // record only when it still matches the one the steps ran under.
+  try {
+    const finalKey = computeContentKey({ cwd, indexFile }).key
+    if (finalKey !== contentKey.key) {
+      return {
+        kind: 'passed',
+        key: contentKey.key,
+        steps: stepDurations,
+        recorded: false,
+        unrecordedBecause: 'the tree changed during the run',
+      }
+    }
+  } catch {
+    return {
+      kind: 'passed',
+      key: contentKey.key,
+      steps: stepDurations,
+      recorded: false,
+      unrecordedBecause: 'the key could not be re-verified after the run',
+    }
+  }
+
   const record: CheckRecord = {
     key: contentKey.key,
     treeId: contentKey.treeId,
@@ -142,5 +177,5 @@ export async function runCheck(options: CheckRunOptions): Promise<CheckOutcome> 
     steps: stepDurations,
   }
   writeRecord(dir, record)
-  return { kind: 'passed', key: contentKey.key, steps: stepDurations }
+  return { kind: 'passed', key: contentKey.key, steps: stepDurations, recorded: true }
 }
