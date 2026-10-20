@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { isProcDead } from './fixtures/runnerProbe/procState'
 import {
   buildBunTestArgs,
   forwardSignalAndReap,
@@ -171,6 +172,32 @@ describe('forwardSignalAndReap', () => {
     await forwardSignalAndReap(child, 'SIGTERM', root, 150)
     expect(Date.now() - started).toBeLessThan(5_000)
     expect(await child.exited).toBe(137)
+    expect(fs.existsSync(root)).toBe(false)
+  }, 15_000)
+
+  test('the escalation kills a grandchild of a child that ignores SIGTERM (T2)', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'runner-reap-probe-'))
+    const ready = path.join(root, 'ready')
+    const gcPidFile = path.join(root, 'gc.pid')
+    const heartbeat = path.join(root, 'hb.txt')
+    // detached, like the runner spawns every bun test child: the child leads
+    // its own process group, so the group kill reaches the grandchild.
+    const child = Bun.spawn(
+      [process.execPath, path.join(import.meta.dir, 'fixtures', 'runnerProbe', 'ignoreTerm.ts')],
+      {
+        stdout: 'ignore',
+        stderr: 'ignore',
+        detached: true,
+        env: { ...process.env, READY_FILE: ready, GC_HEARTBEAT_FILE: heartbeat, GC_PID_FILE: gcPidFile },
+      }
+    )
+    const deadline = Date.now() + 5_000
+    while ((!fs.existsSync(ready) || !fs.existsSync(gcPidFile)) && Date.now() < deadline) await Bun.sleep(20)
+    expect(fs.existsSync(gcPidFile), 'fixture never spawned its grandchild').toBe(true)
+    const gcPid = Number(fs.readFileSync(gcPidFile, 'utf8'))
+    await forwardSignalAndReap(child, 'SIGTERM', root, 150)
+    expect(await child.exited).toBe(137)
+    expect(isProcDead(gcPid)).toBe(true)
     expect(fs.existsSync(root)).toBe(false)
   }, 15_000)
 

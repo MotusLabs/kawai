@@ -6,8 +6,10 @@
 // the four runner-provided variables beneath that root. Every child also
 // gets a 20 s default per-test timeout: per-file isolation pays cold-start
 // costs the shared process used to amortize. Stale run roots from killed
-// runs are swept at startup, and SIGINT/SIGTERM remove the root after a
-// bounded kill.
+// runs are swept at startup, and SIGINT/SIGTERM are forwarded to the
+// child's whole process group before the root is removed after a bounded
+// kill; a finished batch's leftover processes are killed before the next
+// batch starts or the root is removed (decision D-g).
 
 import fs from 'node:fs'
 import os from 'node:os'
@@ -26,6 +28,7 @@ const UNMARKED_ROOT_MAX_AGE_MS = 24 * 60 * 60 * 1000
 const DEFAULT_TEST_TIMEOUT_MS = 20_000
 
 interface RunnerChild {
+  pid: number
   kill(signal: NodeJS.Signals): unknown
   exited: Promise<number>
 }
@@ -183,9 +186,31 @@ function toTestFilePath(file: string): string {
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
-// Forwards the signal to the child, escalates to SIGKILL once the grace
-// passes, then removes the run root (decision D-b). The caller picks the
-// exit code (130 for SIGINT, 143 for SIGTERM).
+// Sends a signal to the child's whole process group: every bun test worker
+// and every process a test spawned is a member and dies with it (decision
+// D-g). ESRCH means the group is already gone.
+function killGroup(pgid: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(-pgid, signal)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
+  }
+}
+
+function groupHasMembers(pgid: number): boolean {
+  try {
+    process.kill(-pgid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+// Forwards the signal to the child and its whole process group, escalates to
+// a group SIGKILL once the grace passes, then removes the run root (decision
+// D-g). The detached child no longer receives anything sent to the runner's
+// own group, so the runner forwards it. The caller picks the exit code
+// (130 for SIGINT, 143 for SIGTERM).
 export async function forwardSignalAndReap(
   child: RunnerChild | null,
   signal: NodeJS.Signals,
@@ -194,12 +219,14 @@ export async function forwardSignalAndReap(
 ): Promise<void> {
   if (child !== null) {
     child.kill(signal)
+    killGroup(child.pid, signal)
     const outcome = await Promise.race([
       child.exited.then(() => 'exited' as const),
       sleep(graceMs).then(() => 'timeout' as const),
     ])
     if (outcome === 'timeout') {
       child.kill('SIGKILL')
+      killGroup(child.pid, 'SIGKILL')
       await child.exited
     }
   }
@@ -260,16 +287,28 @@ function resolveFileArgs(fileArgs: string[]): { parallel: string[]; realTmux: st
 
 let currentChild: RunnerChild | null = null
 
-async function runCommand(cmd: string[], env: NodeJS.ProcessEnv) {
+async function runCommand(cmd: string[], env: NodeJS.ProcessEnv, batch: string) {
+  // detached: the child leads its own process group, so the group kills in
+  // forwardSignalAndReap and below reach its workers and every process a
+  // test spawned (decision D-g).
   const proc = Bun.spawn({
     cmd,
     env,
     stdout: 'inherit',
     stderr: 'inherit',
+    detached: true,
   })
   currentChild = proc
   const exitCode = await proc.exited
   currentChild = null
+  // A finished batch may leave processes behind (a fixture's server, a
+  // spawned tmux). Kill any group survivor before the next batch starts or
+  // the run root is removed: no live process of a batch may write into a
+  // removed root.
+  if (groupHasMembers(proc.pid)) {
+    killGroup(proc.pid, 'SIGKILL')
+    console.error(`[test-runner] killed leftover processes of batch: ${batch}`)
+  }
   if (exitCode !== 0) {
     throw new Error(`Command failed (${exitCode}): ${cmd.join(' ')}`)
   }
@@ -299,8 +338,10 @@ async function main() {
 
   // Clear stale roots before creating this run's own root (decision D-b).
   sweepStaleRoots()
+  // Parsed before the run root exists: a bad KAWAI_TEST_WORKERS exits
+  // non-zero and leaves no run root behind (follow-up F1).
+  const workers = workersFromEnv()
   const runRoot = fs.mkdtempSync(path.join(os.tmpdir(), RUN_ROOT_PREFIX))
-  writeOwnerMarker(runRoot)
   runRootPath = runRoot
   installSignalHandlers()
 
@@ -317,15 +358,16 @@ async function main() {
     AGENTBOARD_SKIP_MATCHING_PATTERNS: '',
     KAWAI_TEST_RUN_ROOT: runRoot,
   }
-  const workers = workersFromEnv()
 
   try {
+    writeOwnerMarker(runRoot)
     if (args.fileArgs.length > 0) {
       const { parallel, realTmux } = resolveFileArgs(args.fileArgs)
       if (parallel.length > 0) {
         await runCommand(
           ['bun', 'test', ...buildBunTestArgs({ workers, files: parallel, passthrough: args.passthrough })],
-          env
+          env,
+          'explicit files'
         )
       }
       if (!args.skipRealTmux) {
@@ -340,7 +382,8 @@ async function main() {
               ...stripCoverageArgs(args.passthrough),
               toTestFilePath(file),
             ],
-            env
+            env,
+            `real-tmux: ${file}`
           )
         }
       }
@@ -358,7 +401,8 @@ async function main() {
           passthrough: args.passthrough,
         }),
       ],
-      env
+      env,
+      'main batch'
     )
 
     // Always run global-mutating tests in a separate process to prevent races.
@@ -367,7 +411,8 @@ async function main() {
     for (const file of ISOLATED_FILES) {
       await runCommand(
         ['bun', 'test', '--preload', PRELOAD_ARG, `--timeout=${DEFAULT_TEST_TIMEOUT_MS}`, ...args.passthrough, `src/server/__tests__/${file}`],
-        env
+        env,
+        `isolated: ${file}`
       )
     }
 
@@ -384,7 +429,8 @@ async function main() {
             ...argsWithoutCoverage,
             `src/server/__tests__/${file}`,
           ],
-          env
+          env,
+          `real-tmux: ${file}`
         )
       }
     }
@@ -392,7 +438,8 @@ async function main() {
     for (const file of ISOLATED_CLIENT_FILES) {
       await runCommand(
         ['bun', 'test', '--preload', PRELOAD_ARG, `--timeout=${DEFAULT_TEST_TIMEOUT_MS}`, ...args.passthrough, `src/client/__tests__/${file}`],
-        env
+        env,
+        `client-isolated: ${file}`
       )
     }
 
@@ -410,7 +457,7 @@ async function main() {
       }
       isolatedTests.sort()
       for (const file of isolatedTests) {
-        await runCommand(['bun', 'test', '--preload', PRELOAD_ARG, `--timeout=${DEFAULT_TEST_TIMEOUT_MS}`, ...args.passthrough, file], env)
+        await runCommand(['bun', 'test', '--preload', PRELOAD_ARG, `--timeout=${DEFAULT_TEST_TIMEOUT_MS}`, ...args.passthrough, file], env, `isolated/: ${file}`)
       }
     }
   } finally {

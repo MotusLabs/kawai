@@ -16,7 +16,10 @@ bun run check      # lint + typecheck + tests, cached by content
 `bun run test` gives each test file fresh temporary database, log, and config
 directories and runs files with per-file isolation; a bare `bun test` keeps
 the old shared-process mode. `bun run test <file…>` runs just those test
-files through the same machinery.
+files through the same machinery. The runner passes `--timeout=20000` to
+every `bun test` child (per-file isolation pays cold-start costs the shared
+process amortized); a bare `bun test` keeps Bun's 5 s default, and a later
+`--timeout=<ms>` overrides the runner's value.
 
 `bun run check` runs lint, typecheck, and the unit suite in order and records
 a full pass under `<git-common-dir>/kawai-checks/`, keyed by a content hash of

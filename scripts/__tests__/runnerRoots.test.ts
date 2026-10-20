@@ -7,6 +7,7 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { isProcDead } from './fixtures/runnerProbe/procState'
 
 const REPO_ROOT = path.resolve(import.meta.dir, '..', '..')
 const RUNNER = path.join(REPO_ROOT, 'scripts', 'test-runner.ts')
@@ -138,5 +139,89 @@ describe('the real runner gives each file its own root', () => {
     expect(code).toBe(143)
     expect(fs.existsSync(entry.claude)).toBe(false)
   }, 45_000)
+
+  // T1 (decision D-g): the fixture's heartbeat grandchild stands in for the
+  // tmux, git, or spawned-server processes real tests start. The runner must
+  // forward the signal to the child's whole process group, so the grandchild
+  // dies with it and the run root is removed. A zombie counts as dead.
+  async function signalKillsWholeGroup(signal: 'SIGTERM' | 'SIGINT'): Promise<void> {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'runner-gc-probe-'))
+    probeDirs.push(dir)
+    const ready = path.join(dir, 'ready.json')
+    const heartbeat = path.join(dir, 'hb.txt')
+    const proc = spawnRunner(['--skip-real-tmux', path.join(FIXTURE_DIR, 'spawnGcProbe.test.ts')], {
+      KAWAI_TEST_WORKERS: '1',
+      GC_READY_FILE: ready,
+      GC_HEARTBEAT_FILE: heartbeat,
+    })
+    const deadline = Date.now() + 20_000
+    // The grandchild must have written its first heartbeat line before the
+    // signal: the group kill may otherwise land before the writer starts.
+    while ((!fs.existsSync(ready) || !fs.existsSync(heartbeat)) && Date.now() < deadline) {
+      await Bun.sleep(50)
+    }
+    expect(fs.existsSync(ready), 'fixture never spawned its grandchild').toBe(true)
+    expect(fs.existsSync(heartbeat), 'grandchild never wrote a heartbeat').toBe(true)
+    const { pid: gcPid, runRoot } = JSON.parse(fs.readFileSync(ready, 'utf8')) as {
+      pid: number
+      runRoot: string
+    }
+    expect(runRoot, 'fixture saw no run root').toBeTruthy()
+    process.kill(proc.pid, signal)
+    const { code, stderr } = await drainAndExit(proc)
+    expect(code, stderr.slice(-2000)).toBe(signal === 'SIGINT' ? 130 : 143)
+    expect(fs.existsSync(runRoot)).toBe(false)
+    const deadDeadline = Date.now() + 5_000
+    while (!isProcDead(gcPid) && Date.now() < deadDeadline) await Bun.sleep(50)
+    expect(isProcDead(gcPid)).toBe(true)
+    // The heartbeat stopped: two samples taken after the runner exited (so
+    // after the group kill) must agree.
+    const count = () => fs.readFileSync(heartbeat, 'utf8').trim().split('\n').filter(Boolean).length
+    const sample = count()
+    expect(sample).toBeGreaterThan(0)
+    await Bun.sleep(1_500)
+    expect(count()).toBe(sample)
+  }
+
+  test('SIGTERM kills the whole child group: the grandchild dies and the heartbeat stops', async () => {
+    await signalKillsWholeGroup('SIGTERM')
+  }, 60_000)
+
+  test('SIGINT kills the whole child group: the grandchild dies and the heartbeat stops', async () => {
+    await signalKillsWholeGroup('SIGINT')
+  }, 60_000)
+
+  // T3 (decision D-g): a passing file may leave processes behind; the runner
+  // kills them before it removes the run root.
+  test('a leftover sleeper from a passing file is dead after the runner exits 0', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'runner-leak-probe-'))
+    probeDirs.push(dir)
+    const pidFile = path.join(dir, 'sleeper.pid')
+    const proc = spawnRunner(['--skip-real-tmux', path.join(FIXTURE_DIR, 'leakSleeper.test.ts')], {
+      KAWAI_TEST_WORKERS: '1',
+      SLEEPER_PID_FILE: pidFile,
+    })
+    const { code, stderr } = await drainAndExit(proc)
+    expect(code, stderr.slice(-2000)).toBe(0)
+    expect(stderr).toContain('[test-runner] killed leftover processes of batch:')
+    const sleeperPid = Number(fs.readFileSync(pidFile, 'utf8'))
+    const deadline = Date.now() + 5_000
+    while (!isProcDead(sleeperPid) && Date.now() < deadline) await Bun.sleep(50)
+    expect(isProcDead(sleeperPid)).toBe(true)
+  }, 45_000)
+
+  // F1 (checkpoint-2 decision Q2): a bad KAWAI_TEST_WORKERS is refused
+  // before the run root exists.
+  test('a bad KAWAI_TEST_WORKERS exits non-zero and leaves no run root', async () => {
+    const before = new Set(fs.readdirSync(os.tmpdir()).filter((name) => name.startsWith(ROOT_PREFIX)))
+    const proc = spawnRunner(['--skip-real-tmux', ...PASSING_PROBES], { KAWAI_TEST_WORKERS: 'x' })
+    const { code, stderr } = await drainAndExit(proc)
+    expect(code, stderr.slice(-2000)).not.toBe(0)
+    expect(stderr).toContain('KAWAI_TEST_WORKERS')
+    const fresh = fs
+      .readdirSync(os.tmpdir())
+      .filter((name) => name.startsWith(ROOT_PREFIX) && !before.has(name))
+    expect(fresh).toEqual([])
+  }, 30_000)
 })
 
