@@ -351,7 +351,7 @@ export function composePlanServices(options: PlanServicesOptions): {
     // The detail and the monitor's sweeps read one loader with the monitor's own `waitEndedAt` (D11).
     const composed = composeSupervisionMonitor({
       db: options.db, plans: options.plans, executions: executionStore, decisions: decisionStore, mailbox: team.mailbox,
-      tasks: team.tasks, taskStore: team.taskStore, identityOf: team.identityOf,
+      tasks: team.tasks, taskStore: team.taskStore, assignments: team.assignments, integration: integrationStore, identityOf: team.identityOf,
       reads: {
         db: options.db, mail: team.mailbox, executions: executionStore, plans: options.plans, decisions: decisionStore, integration: integrationStore,
         conditionsOf, runtime: team.supervision, tasks: team.taskStore, impact: (teamId, planId) => options.impact.planImpact(teamId, planId),

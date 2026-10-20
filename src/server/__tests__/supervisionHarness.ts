@@ -54,6 +54,7 @@ export function createSupervisionBench(world: PlanWorld): SupervisionBench {
   bench.plans.subscribe(plan => announced.push(plan.id))
   const compose = () => composeSupervisionMonitor({
     db: bench.db.db, plans: bench.plans, executions, decisions: bench.decisions, mailbox: bench.mail, tasks: bench.taskService, taskStore: bench.tasks,
+    assignments: bench.assignments, integration,
     identityOf: teamId => (teamId === world.team.teamId ? world.team : undefined),
     reads: {
       db: bench.db.db, mail: bench.mail, executions, plans: bench.plans, decisions: bench.decisions, integration, tasks: bench.tasks,
