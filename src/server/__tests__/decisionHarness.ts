@@ -13,6 +13,7 @@ import { TeamCaps } from '../team/teamCaps'
 import { TeamWorktrees } from '../team/worktreeRoots'
 import { DecisionStore } from '../plans/decisions/decisionStore'
 import { DecisionService } from '../plans/decisions/DecisionService'
+import { decisionReplyGuard } from '../plans/decisions/decisionReplyGuard'
 import { planInput } from '../../shared/__tests__/planFixtures'
 import { createPlanBench, type PlanBench, type PlanWorld } from './planHarness'
 
@@ -47,8 +48,9 @@ export function createDecisionBench(world: PlanWorld): DecisionBench {
   const assignments = new AssignmentService(bench.db.db, new AssignmentStore(bench.db.db, mail), bench.tasks, mail, {
     getSession, records: () => bench.records.values(), teamOf, staffing, caps, worktrees, homeDir: world.home, plans: bench.plans,
   })
-  const mailbox = new TeamMailbox(mail, { getSession, homeDir: world.home, tasks: bench.tasks })
   const decisions = new DecisionStore(bench.db.db)
+  // The production mailbox carries the decision reply guard (D9).
+  const mailbox = new TeamMailbox(mail, { getSession, homeDir: world.home, tasks: bench.tasks, replyGuard: decisionReplyGuard(decisions) })
   const changes: string[] = []
   const decide = new DecisionService({
     db: bench.db.db, decisions, plans: bench.plans, planService: bench.service, tasks: taskService, taskStore: bench.tasks,

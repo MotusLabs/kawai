@@ -18,6 +18,9 @@ import type { TaskStore } from './taskStore'
 /** Who is sending: an agent session (identity bound) or the human for a team. */
 export type MailCaller = { kind: 'agent'; sessionId: string } | { kind: 'human'; team: TeamIdentity }
 
+/** A reply refusal (plan-supervision D9): the guidance text, or null to let the reply through. */
+export type ReplyGuard = (parent: TeamMessage, caller: MailCaller) => string | null
+
 export interface MailInput {
   /**
    * Routing vocabulary (D4). `human` is accepted so the refusal can teach the
@@ -59,6 +62,8 @@ export class TeamMailbox {
     tasks?: TaskStore
     /** The recipient profile's effective cooldown (providers-and-workers D8), or null. */
     cooldownFor?: (profileId: string, record: ChatSessionRecord) => EffectiveCooldown
+    /** Refuses some replies before anything is written; decision answers bypass it (plan-supervision D9). */
+    replyGuard?: ReplyGuard
   }) {}
 
   /** Refuse urgent direct mail to an agent whose profile is cooling; nothing is queued. */
@@ -194,6 +199,8 @@ export class TeamMailbox {
     if (!original || original.teamId !== sender.team.teamId) {
       throw new Error('Can only reply to a message of this team')
     }
+    const refusal = answer ? null : this.options.replyGuard?.(original, caller) ?? null
+    if (refusal !== null) throw new Error(refusal)
     // An agent answers only mail it actually received; the human sees the
     // team's threads and may answer any of them.
     if (!answer && caller.kind === 'agent' && (original.claimedBy !== caller.sessionId || original.deliveredAt === null)) {

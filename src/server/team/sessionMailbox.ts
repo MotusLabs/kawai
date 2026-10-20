@@ -42,6 +42,7 @@ import { loadTeamGroups } from './teamGroups'
 import type { ChatUsageReport } from '../../shared/chat'
 import type { RouteDecisionLogEntry } from '../../shared/routing'
 import type { Database } from 'bun:sqlite'
+import { decisionReplyGuardOver } from '../plans/decisions/decisionReplyGuard'
 
 export class SessionMailbox {
   readonly mailbox: TeamMailbox
@@ -169,7 +170,7 @@ export class SessionMailbox {
       waitingFor: teamId => this.waitingFor(teamId), ...(options.now ? { now: options.now } : {}),
     })
     this.mailbox = new TeamMailbox(store, {
-      getSession: options.getRecord, homeDir: options.homeDir, restoreSession: options.restore, tasks: taskStore,
+      getSession: options.getRecord, homeDir: options.homeDir, restoreSession: options.restore, tasks: taskStore, replyGuard: decisionReplyGuardOver(db),
       cooldownFor: (profileId, record) => sessionCooldown(this.limits, this.options.homeDir, profileId, record?.projectPath),
     })
     this.staffing = new WorktreeStaffing(db, store, {

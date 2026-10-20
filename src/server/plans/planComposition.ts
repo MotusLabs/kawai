@@ -41,6 +41,9 @@ import type { TaskService } from '../team/TaskService'
 import type { TaskResultService } from '../team/TaskResultService'
 import type { AssignmentService } from '../team/AssignmentService'
 import type { MailboxStore } from '../team/mailboxStore'
+import type { TeamMailbox } from '../team/TeamMailbox'
+import { DecisionService } from './decisions/DecisionService'
+import { DecisionStore } from './decisions/decisionStore'
 import type { TaskStore } from '../team/taskStore'
 import type { PlanExecutionSettings } from '../team/teamCaps'
 
@@ -58,6 +61,8 @@ export interface ExecutionTeamServices {
   /** The task store (TaskStore.changed wakes) and the mailbox (owned mail wakes). */
   taskStore: TaskStore
   mailbox: MailboxStore
+  /** The team mailbox whose prepared send/reply paths carry decision mail (plan-supervision D4–D6). */
+  teamMailbox: TeamMailbox
   /** Member release's readiness and release (the D11 release-before-review seam). */
   releases: MemberRelease
   records: () => Iterable<ChatSessionRecord>
@@ -162,6 +167,8 @@ export function composePlanServices(options: PlanServicesOptions): {
   executionStore: ExecutionStore
   /** The execution runtime (boot, wakes, stop); null without team services. */
   runtime: ExecutionRuntime | null
+  /** The decision service (plan-supervision D4–D7); null without team services. */
+  decisions: DecisionService | null
 } {
   const adapter = options.adapter ?? new OpenspecAdapter()
   const validationStore = new ValidationStore(options.db)
@@ -290,9 +297,16 @@ export function composePlanServices(options: PlanServicesOptions): {
       adapters: { fixture, rounds: roundAdaptersUsed },
     })
   }
+  // Decisions write their cards, decisions, and mail in one transaction, and
+  // every committed write announces the plan so its detail is re-pushed (D15).
+  const decisions = team ? new DecisionService({
+    db: options.db, decisions: new DecisionStore(options.db), plans: options.plans, planService: plans,
+    tasks: team.tasks, taskStore: team.taskStore, assignments: team.assignments, mailbox: team.teamMailbox, getSession: options.getSession,
+    ...(options.homeDir ? { homeDir: options.homeDir } : {}), onChange: planId => options.plans.announce(planId),
+  }) : null
   return {
     validation, validationStore, plans, validationDetail: new ValidationDetailCache(validation), adapter, executions, executionStore,
-    runtime,
+    runtime, decisions,
   }
 }
 

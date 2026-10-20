@@ -21,6 +21,7 @@ import { loadTeamGroups } from '../../team/teamGroups'
 import { DecisionConflict, type DecisionStore } from './decisionStore'
 import { answerBody, askInput, deciderName, DecisionRefusal, questionBody, rationaleOf, resolveChoice } from './decisionInputs'
 import { cardScope, leadOf, teamPlan } from './decisionScope'
+import { QUESTION_TAG } from './decisionReplyGuard'
 import { answerAsOwner, overrideAsOwner, type OwnerAnswerInput, type OwnerOverrideInput } from './ownerDecisions'
 
 export type DecisionCaller = { kind: 'agent'; sessionId: string } | { kind: 'human'; team: TeamIdentity }
@@ -81,7 +82,7 @@ export class DecisionService {
     }
     // No task on the question (D4): `lead` is worktree-scoped, and the card carries the task.
     const prepared = toLead
-      ? await this.deps.mailbox.prepareSend(caller, { to_kind: 'group', to_id: lead, body: questionBody(draft, scope.plan.title), tags: ['decision-question'] })
+      ? await this.deps.mailbox.prepareSend(caller, { to_kind: 'group', to_id: lead, body: questionBody(draft, scope.plan.title), tags: [QUESTION_TAG] })
       : null
     const { card, message } = this.deps.decisions.atomically(() => {
       const message = prepared?.commit() ?? null

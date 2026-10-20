@@ -97,6 +97,7 @@ import { TeamMailbox } from '../team/TeamMailbox'
 import { createMailboxServer } from '../team/mailboxTools'
 import { composeExecutionCore, composePlanServices } from '../plans/planComposition'
 import type { ValidationService } from '../plans/validation/ValidationService'
+import type { DecisionService } from '../plans/decisions/DecisionService'
 import type { OpenspecAdapter } from '../plans/validation/openspecAdapter'
 import type { ValidationDetailCache } from '../plans/validation/validationDetail'
 import type { MailboxManagement } from '../team/mailboxManagement'
@@ -1181,6 +1182,7 @@ export class ChatSessionManager {
         results: this.teamMail.results,
         taskStore: this.teamMail.tasks.store,
         mailbox: this.teamMail.mailbox.store,
+        teamMailbox: this.teamMail.mailbox,
         releases: this.teamMail.releases,
         records: () => this.records.values(),
         // The executor resolves teams by id (a member-less team included);
@@ -1191,6 +1193,7 @@ export class ChatSessionManager {
       ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
     })
     this.validation = planServices.validation
+    this.decisions = planServices.decisions
     this.plans = planServices.plans
     this.executions = planServices.executions
     this.executionRuntime = planServices.runtime
@@ -1490,6 +1493,8 @@ export class ChatSessionManager {
   readonly caps: TeamCaps
   /** Plan validation (plan-validation): reports, assessments, decisions, and the approval standing. */
   readonly validation: ValidationService
+  /** Plan decisions (plan-supervision D4–D7): cards, the Lead's record, the owner's answer and override, fix tasks. */
+  readonly decisions: DecisionService | null
   /** The coalesced validation view for the Plans page pushes (plan-validation D11). */
   readonly validationDetail: ValidationDetailCache
   /** The one OpenSpec adapter (plan-validation D3); its probe is cached in-process. */
@@ -2348,7 +2353,7 @@ export class ChatSessionManager {
       // The team must be known before the first spawn reads its prompt.
       await this.teams.track(record.sessionId, this.records.get(record.sessionId)?.projectPath ?? record.projectPath)
       const teamMcpServer = await createMailboxServer(this.mailbox, record.sessionId, {
-        tasks: this.tasks, results: this.results, strategies: this.strategies, plans: this.plans, validation: this.validation, releases: this.teamMail.releases, management: this.management,
+        tasks: this.tasks, results: this.results, strategies: this.strategies, plans: this.plans, validation: this.validation, ...(this.decisions ? { decisions: this.decisions } : {}), releases: this.teamMail.releases, management: this.management,
         metrics: { teamOf: id => this.teams.teamOf(id)?.teamId ?? null, reader: this.metrics },
         reports: { caller: id => this.reportCaller(id), service: this.reports },
       })

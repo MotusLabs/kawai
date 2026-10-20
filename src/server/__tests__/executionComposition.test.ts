@@ -19,6 +19,8 @@ import { AssignmentService } from '../team/AssignmentService'
 import { AssignmentStore } from '../team/assignmentStore'
 import { MailboxStore } from '../team/mailboxStore'
 import { MemberRelease } from '../team/memberRelease'
+import { TeamMailbox } from '../team/TeamMailbox'
+import type { DecisionService } from '../plans/decisions/DecisionService'
 import { TaskService } from '../team/TaskService'
 import { TaskResultService } from '../team/TaskResultService'
 import { TeamWorktrees } from '../team/worktreeRoots'
@@ -31,6 +33,7 @@ import type { ExecutionRuntime } from '../plans/execution/executionRuntime'
 import type { ExecutionStore } from '../plans/execution/executionStore'
 import { roundAdapters } from '../plans/execution/executionRounds'
 import type { ExecutionService } from '../plans/execution/ExecutionService'
+import { LEAD_ROLES } from './decisionHarness'
 import { createPlanBench, createPlanWorld, sessionRow, writeGroup, type PlanBench, type PlanWorld } from './planHarness'
 
 const FLOOR = { lint: ['ci'], typecheck: ['ci'], 'unit-tests': ['ci'], 'ci-e2e': ['e2e'] }
@@ -51,6 +54,8 @@ let releases: MemberRelease
 let store: ExecutionStore
 let service: ExecutionService
 let runtime: ExecutionRuntime
+let teamMailbox: TeamMailbox
+let decisions: DecisionService | null
 let main: string
 let origin: string
 let baseSha: string
@@ -129,13 +134,14 @@ async function compose(): Promise<void> {
   const impact = new ImpactService(new ImpactStore(bench.db.db), {
     strategies: bench.strategies, plans: bench.plans, mail, getSession: id => bench.records.get(id),
   })
+  teamMailbox = new TeamMailbox(mail, { getSession: id => bench.records.get(id), homeDir: world.home, tasks: bench.tasks })
   const composed = composePlanServices({
     db: bench.db.db, plans: bench.plans, strategies: bench.strategies, impact,
     getSession: id => bench.records.get(id),
     caps: { planExecution: async () => ({ floorChecks: FLOOR, maxParallelChanges: 2, mergeMethod: 'merge' }) },
     executionCore: core,
     executionTeam: {
-      tasks, assignments, results, taskStore: bench.tasks, mailbox: mail, releases,
+      tasks, assignments, results, taskStore: bench.tasks, mailbox: mail, teamMailbox, releases,
       records: () => bench.records.values(),
       // The executor resolves by team id; the runtime's archive wake by session.
       identityOf: id => (id === world.team.teamId ? world.team : undefined),
@@ -149,6 +155,7 @@ async function compose(): Promise<void> {
   })
   store = composed.executionStore
   service = composed.executions
+  decisions = composed.decisions
   runtime = composed.runtime!
   await runtime.start()
 }
@@ -229,6 +236,21 @@ describe('the composed execution stack (rev 3)', () => {
   test('the default composition carries the real adapters', () => {
     expect(runtime.adapters.fixture).toBe(false)
     expect(runtime.adapters.rounds).toBe(roundAdapters)
+  })
+
+  test('the composed decision service writes through the team mailbox and announces the plan (plan-supervision 6.1)', async () => {
+    expect(decisions!.deps.mailbox).toBe(teamMailbox)
+    const { planId, revision } = await bench.draftInReview(LEAD_ROLES)
+    await bench.approve(planId, revision)
+    const announced: string[] = []
+    const unsubscribe = bench.plans.subscribe(plan => announced.push(plan.id))
+    try {
+      const { card } = await decisions!.ask({ kind: 'agent', sessionId: 'lead' }, { question: 'Ship now?', plan_id: planId })
+      expect(card).toMatchObject({ planId, addressedTo: 'owner' })
+      expect(announced).toEqual([planId])
+    } finally {
+      unsubscribe()
+    }
   })
 
   test('Start leads to the first implement dispatch', async () => {

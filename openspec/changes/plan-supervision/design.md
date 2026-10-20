@@ -529,7 +529,7 @@ Published:
 
 ## Migration Plan
 
-- An additive migration creates the five tables; nothing is backfilled.
+- An additive migration creates the four tables; nothing is backfilled.
 - `turn_completed.usage` and the new `team-plan-detail` fields are optional, so older clients ignore them.
 - Rollback: the previous build ignores the tables. Fix and correction tasks remain ordinary tasks, created by Kawai.
 

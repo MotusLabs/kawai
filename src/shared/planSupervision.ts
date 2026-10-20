@@ -135,7 +135,7 @@ export const NO_PROGRESS_ATTEMPT_MS = 2 * 60 * 60 * 1000
 export const NO_PROGRESS_REVIEW_MS = 60 * 60 * 1000
 export const NO_PROGRESS_IDLE_MS = 15 * 60 * 1000
 
-/** The failing checks of a round: each name's newest run fails, flaky names excluded. */
+/** The failing checks of a round: each name whose newest run fails (a flaky name failed and then passed, so it never counts). */
 export function failingChecks(checks: readonly CiCheck[] | null): CiCheck[] {
   if (!checks) return []
   // A flaky name failed and then passed, so its newest run never fails: no separate exclusion is needed.

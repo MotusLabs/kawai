@@ -96,12 +96,12 @@ Implement after `plan-execution` and `integration-candidates` have landed on mas
   - an earlier open fix task is cancelled with a note;
   - the new fix task is created and dispatched;
   - a failure at any step writes nothing.
-- [ ] 5.7 Add the AGENTS.md decisions bullet: the Lead role, cards, the two tools, owner answers and overrides, and fix tasks. Verify by reading it against D3–D7.
+- [x] 5.7 Add the AGENTS.md decisions bullet: the Lead role, cards, the two tools, owner answers and overrides, and fix tasks. Verify by reading it against D3–D7.
 
 ## 6. Agent surface
 
-- [ ] 6.1 Add `decision_ask` and `decision_record` to the `kawai-team` server, allowed without cards, identity-bound like the task tools (D16). Verify with tool tests that call through the server and see D4's and D5's refusals.
-- [ ] 6.2 Implement `decisionReplyGuard.ts` and wire it into the `reply` tool and the human composer's reply path (D9). Verify with tests:
+- [x] 6.1 Add `decision_ask` and `decision_record` to the `kawai-team` server, allowed without cards, identity-bound like the task tools (D16). Verify with tool tests that call through the server and see D4's and D5's refusals.
+- [x] 6.2 Implement `decisionReplyGuard.ts` and wire it into the `reply` tool and the human composer's reply path (D9). Verify with tests:
   - a reply to an open card's question is refused with guidance, and nothing is queued, for an agent and for the human;
   - a reply after the decision is queued;
   - `DecisionService`'s answers bypass the guard;
