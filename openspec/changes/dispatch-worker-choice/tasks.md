@@ -4,28 +4,28 @@
 
 ## 1. Selector and storage
 
-- [ ] 1.1 Add the next numbered migration (the next free number at landing), adding `team_messages.worker_choice` and `team_task_assignments.worker_choice` (nullable). Verify that `schemaBaselinePin.test.ts` gains its expected delta, and that migration tests pass on a copy of a database at the previous version.
-- [ ] 1.2 Add a pure worker-selector module: parse and normalize against the catalog (provider; `provider/model`; bare model key → `provider/model`; refusing an ambiguous bare id; one-model provider not ambiguous) and resolve a selector to a group's model keys. Verify with unit tests covering every case in design D1 and the agent-mailbox spec's refusals.
-- [ ] 1.3 Thread `workerChoice` through `MailboxStore.enqueue`, `TeamMessage`, and the assignment store rows. Verify round-trip store tests, and that a `null` choice reads exactly as today.
+- [x] 1.1 Add the next numbered migration (the next free number at landing), adding `team_messages.worker_choice` and `team_task_assignments.worker_choice` (nullable). Verify that `schemaBaselinePin.test.ts` gains its expected delta, and that migration tests pass on a copy of a database at the previous version.
+- [x] 1.2 Add a pure worker-selector module: parse and normalize against the catalog (provider; `provider/model`; bare model key → `provider/model`; refusing an ambiguous bare id; one-model provider not ambiguous) and resolve a selector to a group's model keys. Verify with unit tests covering every case in design D1 and the agent-mailbox spec's refusals.
+- [x] 1.3 Thread `workerChoice` through `MailboxStore.enqueue`, `TeamMessage`, and the assignment store rows. Verify round-trip store tests, and that a `null` choice reads exactly as today.
 
 ## 2. Routing and staffing
 
-- [ ] 2.0 Add the pure eligibility check `workerEligibility.ts` (design D10). It takes a stated routing state and returns the eligible candidates in preference order, plus every excluded alternative with its constraint kinds. It does no I/O and reads no clock. Then rebuild `buildCandidates` and `memberCauses.ts` on it. Verify with unit tests:
+- [x] 2.0 Add the pure eligibility check `workerEligibility.ts` (design D10). It takes a stated routing state and returns the eligible candidates in preference order, plus every excluded alternative with its constraint kinds. It does no I/O and reads no clock. Then rebuild `buildCandidates` and `memberCauses.ts` on it. Verify with unit tests:
   - each exclusion reason;
   - an evaluation at a past time with the cooldowns then in force;
   - existing candidates, router and waiting-reasons suites pass unchanged, with the same answers as before;
   - a structural test that the module imports no store, filesystem or clock.
-- [ ] 2.1 Resolve the selector on each pass, and intersect it with the message's role list in the router's `allowedProfiles` option (`sessionMailbox.ts`), keeping the role's order. Report `worker-choice` versus `outside-role` per member through the eligibility check, testing the role first. Verify candidates and router tests:
+- [x] 2.1 Resolve the selector on each pass, and intersect it with the message's role list in the router's `allowedProfiles` option (`sessionMailbox.ts`), keeping the role's order. Report `worker-choice` versus `outside-role` per member through the eligibility check, testing the role first. Verify candidates and router tests:
   - members on other workers are skipped;
   - spawn slots are limited and ordered;
   - an unset choice changes nothing;
   - a choice with a role list keeps only the intersection, with each member's cause.
-- [ ] 2.2 Wire the intersection through the dispatcher's pass. Verify a dispatcher test where a chosen provider's member is picked over a longer-idle member elsewhere, and a staffing test where a capped chosen worker waits instead of spawning on another worker.
-- [ ] 2.3 Treat a rule pick outside the filtered set as unknown. Verify a router test with a rule naming a filtered-out candidate falling back to the built-in pick.
-- [ ] 2.4 Add the `worker-choice` waiting constraint (detail selector, `retryAt` on cooldown) and its ordering. Verify `waitingReasons` tests for a cooling hold (retry at the cooldown end) and a cap hold (`profile-cap` plus `worker-choice`), and a dispatcher test where the message routes at the cooldown end without any other change.
-- [ ] 2.5 Make `LimitOutcomes.forward` drop the choice. Verify a limit-outcome test where a forwarded message has no choice and still excludes the limited worker, while a released message keeps its choice.
-- [ ] 2.6 Add the optional `worker` to `RouteContext.message` and `LimitOutcomeContext.message` in `src/shared/routing.ts`. Verify a rule-host test where a rule sees it, and that the published `kawai-routing.d.ts` copy matches.
-- [ ] 2.7 Document the choice in `docs/routing/README.md` (filter, holds, forwards). Verify the README examples match the rule types.
+- [x] 2.2 Wire the intersection through the dispatcher's pass. Verify a dispatcher test where a chosen provider's member is picked over a longer-idle member elsewhere, and a staffing test where a capped chosen worker waits instead of spawning on another worker.
+- [x] 2.3 Treat a rule pick outside the filtered set as unknown. Verify a router test with a rule naming a filtered-out candidate falling back to the built-in pick.
+- [x] 2.4 Add the `worker-choice` waiting constraint (detail selector, `retryAt` on cooldown) and its ordering. Verify `waitingReasons` tests for a cooling hold (retry at the cooldown end) and a cap hold (`profile-cap` plus `worker-choice`), and a dispatcher test where the message routes at the cooldown end without any other change.
+- [x] 2.5 Make `LimitOutcomes.forward` drop the choice. Verify a limit-outcome test where a forwarded message has no choice and still excludes the limited worker, while a released message keeps its choice.
+- [x] 2.6 Add the optional `worker` to `RouteContext.message` and `LimitOutcomeContext.message` in `src/shared/routing.ts`. Verify a rule-host test where a rule sees it, and that the published `kawai-routing.d.ts` copy matches.
+- [x] 2.7 Document the choice in `docs/routing/README.md` (filter, holds, forwards). Verify the README examples match the rule types.
 
 ## 3. Agent tools
 

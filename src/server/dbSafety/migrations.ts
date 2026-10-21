@@ -30,6 +30,7 @@ import { CREATE_TURN_USAGE_SQL } from '../chat/chatTurnUsageStore'
 import { CREATE_PROCESS_REPORT_TABLES_SQL } from '../metrics/reportSchema'
 import { migrateProviderLimitWindow } from '../team/routing/limitEvents'
 import { integrationMigration } from '../plans/landing/integration/integrationSchema'
+import { workerChoiceMigration } from '../team/workerChoiceMigration'
 import { planSupervisionMigration } from '../plans/decisions/decisionSchema'
 import { revisionControlMigration } from '../plans/revisionControl/revisionControlSchema'
 import type { BackupFile } from './backupFiles'
@@ -87,6 +88,9 @@ export const MIGRATIONS: readonly Migration[] = [
   // targets, checkpoints, and an execution's revision history with its
   // publication rows, backfilled with seq 1 from every existing execution.
   revisionControlMigration,
+  // dispatch-worker-choice D1: the sender's worker choice on group mail and
+  // on dispatches. Additive, no backfill.
+  workerChoiceMigration,
 ]
 
 export const RESTORE_DOC = 'docs/operations/database-backups.md'

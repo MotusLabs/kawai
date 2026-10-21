@@ -35,6 +35,11 @@ export interface EnqueueInput {
    * without the limited profile.
    */
   allowedProfiles?: string[] | null
+  /**
+   * The sender's canonical worker selector for group mail
+   * (dispatch-worker-choice D1), already validated; a forward never carries it.
+   */
+  workerChoice?: string | null
   /** Who caused the send (event log): the human through a composer, else the system. */
   actor?: 'system' | 'human'
   /** The revision a notice announces (task-revision-publication D3); absent for every other row. */

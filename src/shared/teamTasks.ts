@@ -194,6 +194,8 @@ export interface TeamTaskAssignment {
   resultId?: string | null
   /** What the handoff expects back (e.g. findings, a new result); null when unstated. */
   expectedResponse?: string | null
+  /** The dispatch's worker choice for group mail (dispatch-worker-choice D1); absent when none. */
+  workerChoice?: string | null
 }
 
 /** A handoff's kind (task-results-handoffs D3): review, QA, or a return for fixes. */

@@ -146,6 +146,28 @@ export default {
     expect(registry!.rule('devs')!.timeoutMs).toBe(10_000)
   })
 
+  test('a rule reads the message\'s worker choice, and the published types carry it (dispatch-worker-choice 2.6)', async () => {
+    write('devs.ts', `import type { RoutingRule } from './kawai-routing'
+const rule: RoutingRule = {
+  route: ctx => ctx.message.worker === 'zai' ? { type: 'pick', candidateId: ctx.candidates[0]!.id } : { type: 'default' },
+  onLimit: e => e.message.worker ? { type: 'release' } : { type: 'park' },
+}
+export default rule`)
+    await open().reload()
+    const host = registry!.rule('devs')!
+    expect(await host.route({ ...CTX, message: { ...CTX.message, worker: 'zai' } })).toEqual({ type: 'pick', candidateId: 'member:a' })
+    expect(await host.route(CTX)).toEqual({ type: 'default' })
+    const event = {
+      now: CTX.now, profileId: 'glm', providerId: 'zai', sessionId: 'a', groupId: 'devs', message: { ...CTX.message, worker: 'zai/glm' },
+      kind: 'rate_limit', status: 429, error: null, resetsAt: null, progress: { toolCalls: 0, filesTouched: [] }, parkCount: 0,
+    }
+    expect(await host.onLimit(event)).toEqual({ type: 'release' })
+    expect(await host.onLimit({ ...event, message: CTX.message })).toEqual({ type: 'park' })
+    const published = fs.readFileSync(path.join(home, '.kawai', 'routing', 'kawai-routing.d.ts'), 'utf8')
+    expect(published).toBe(fs.readFileSync(path.resolve(import.meta.dir, '../../shared/routing.ts'), 'utf8'))
+    expect(published).toMatch(/interface RouteMessage \{[^}]*\n {2}worker\?: string\n\}/)
+  })
+
   test('onLimit is called and validated', async () => {
     write('devs.ts', `export default {
   route: () => ({ type: 'default' }),

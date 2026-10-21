@@ -4,31 +4,12 @@
 // subsets of these causes, so this module reports and never decides.
 import type { TeamMessage } from './mailboxStore'
 import type { MailRecipient } from './dispatcher'
+import { memberStateCauses, outsideRoleExclusion, type MemberExclusion, type MemberExclusionKind } from './routing/workerEligibility'
 
-export type MemberExclusionKind =
-  | 'busy'
-  | 'pending-card'
-  | 'parked'
-  | 'context-exhausted'
-  | 'other-worktree'
-  | 'unavailable'
-  | 'startup-failed'
-  | 'excluded-profile'
-  | 'outside-role'
-  | 'profile-cooling'
-
-export interface MemberExclusion {
-  sessionId: string
-  kind: MemberExclusionKind
-  /** A fact for the reason: where the member is, or the start error. */
-  detail?: string
-}
-
-/** The plan-role exclusion (plan-execution D15), shared by both builders; null inside the role or with none set. */
-export function outsideRoleExclusion(sessionId: string, profileId: string | null | undefined, allowedProfiles: string[] | null | undefined): MemberExclusion | null {
-  if (allowedProfiles === null || allowedProfiles === undefined || allowedProfiles.includes(profileId ?? 'default')) return null
-  return { sessionId, kind: 'outside-role', detail: `plan role allows only ${allowedProfiles.join(', ')}` }
-}
+// The cause vocabulary and the plan-role exclusion live in the one pure
+// eligibility check (dispatch-worker-choice D10); this module adapts them.
+export type { MemberExclusion, MemberExclusionKind }
+export { outsideRoleExclusion }
 
 /**
  * The per-message breakdown the router's diagnosis reads (team-waiting-reasons
@@ -77,33 +58,13 @@ export function messageExclusions(input: {
  * rejects its own subset (busy unless interrupting, cooling only for direct
  * mail, parked only for unreserved group mail). Cooling is reported but never
  * a group-path rejection — cooling members stay candidates; only direct mail
- * excludes a cooling recipient. An unavailable session's busy/card state is
- * noise beneath the reason it cannot start at all.
+ * excludes a cooling recipient. The causes are the eligibility check's
+ * member-state layer (`memberStateCauses`).
  */
 export function memberExclusions(
   recipient: MailRecipient,
   message: TeamMessage,
   options: { targetWorktree: string | null; now: number; startupFailed: boolean }
 ): MemberExclusion[] {
-  const causes: MemberExclusion[] = []
-  const add = (kind: MemberExclusionKind, detail?: string) =>
-    causes.push({ sessionId: recipient.sessionId, kind, ...(detail !== undefined ? { detail } : {}) })
-  if (!recipient.available) {
-    add('unavailable')
-  } else {
-    if (recipient.pendingRequest) add('pending-card')
-    if (!recipient.idle) add('busy')
-  }
-  if (recipient.parked) add('parked')
-  // A context-exhausted session (chat-context-exhaustion D7) takes no mail.
-  if (recipient.contextExhausted) add('context-exhausted')
-  if (options.startupFailed) add('startup-failed')
-  if (message.toKind === 'group' && options.targetWorktree !== null && recipient.worktree !== options.targetWorktree) {
-    add('other-worktree', recipient.worktree)
-  }
-  if (message.excludedProfile && (recipient.profileId ?? 'default') === message.excludedProfile) add('excluded-profile')
-  const outsideRole = outsideRoleExclusion(recipient.sessionId, recipient.profileId, message.allowedProfiles)
-  if (outsideRole !== null) causes.push(outsideRole)
-  if (Date.parse(recipient.cooldownUntil ?? '') > options.now) add('profile-cooling', recipient.cooldownProvider ?? undefined)
-  return causes
+  return memberStateCauses(recipient, message, options)
 }
