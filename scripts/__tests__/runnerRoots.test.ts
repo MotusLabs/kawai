@@ -230,18 +230,50 @@ describe('the real runner gives each file its own root', () => {
     expect(entries[0].pid).toBe(entries[1].pid)
   }, 30_000)
 
+  // F5 (review): a signal handled while the main batch runs must stop the
+  // batch loop — spawning the next batch would orphan it when the handler's
+  // process.exit lands. The main-batch file ignores SIGTERM and exits 0, so
+  // only the signalHandled guard keeps the serial batch from starting. The
+  // serial fixture's basename classifies it as a real-tmux batch, but it
+  // runs no tmux: it only marks that it started.
+  test('a handled signal stops the batch loop: the serial batch never starts', async () => {
+    const out = makeProbeOut()
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'runner-signal-race-'))
+    probeDirs.push(dir)
+    const pidFile = path.join(dir, 'serial-batch.pid')
+    const proc = spawnRunner(
+      [
+        path.join(FIXTURE_DIR, 'signalRaceProbe.test.ts'),
+        path.join(FIXTURE_DIR, 'integration.test.ts'),
+      ],
+      { KAWAI_TEST_WORKERS: '1', KAWAI_PROBE_OUT: out, SERIAL_BATCH_PID_FILE: pidFile }
+    )
+    await readProbeEntries(out, 1, 20_000)
+    process.kill(proc.pid, 'SIGTERM')
+    const { code, stderr } = await drainAndExit(proc)
+    expect(code, stderr.slice(-2000)).toBe(143)
+    const deadline = Date.now() + 4_000
+    while (!fs.existsSync(pidFile) && Date.now() < deadline) await Bun.sleep(50)
+    expect(fs.existsSync(pidFile), 'the serial batch started after a handled signal').toBe(
+      false
+    )
+  }, 45_000)
+
   // F1 (checkpoint-2 decision Q2): a bad KAWAI_TEST_WORKERS is refused
-  // before the run root exists.
+  // before the run root exists. The runner gets its own TMPDIR so the
+  // assertion is about this run only — a concurrent runner's roots in the
+  // shared tmpdir must not matter (review F4).
   test('a bad KAWAI_TEST_WORKERS exits non-zero and leaves no run root', async () => {
-    const before = new Set(fs.readdirSync(os.tmpdir()).filter((name) => name.startsWith(ROOT_PREFIX)))
-    const proc = spawnRunner(['--skip-real-tmux', ...PASSING_PROBES], { KAWAI_TEST_WORKERS: 'x' })
+    const privateTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'runner-tmp-probe-'))
+    probeDirs.push(privateTmp)
+    const proc = spawnRunner(['--skip-real-tmux', ...PASSING_PROBES], {
+      KAWAI_TEST_WORKERS: 'x',
+      TMPDIR: privateTmp,
+    })
     const { code, stderr } = await drainAndExit(proc)
     expect(code, stderr.slice(-2000)).not.toBe(0)
     expect(stderr).toContain('KAWAI_TEST_WORKERS')
-    const fresh = fs
-      .readdirSync(os.tmpdir())
-      .filter((name) => name.startsWith(ROOT_PREFIX) && !before.has(name))
-    expect(fresh).toEqual([])
+    expect(fs.readdirSync(privateTmp)).toEqual([])
   }, 30_000)
 })
 

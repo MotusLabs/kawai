@@ -76,9 +76,9 @@ export function readCpuQuota(): number | null {
 }
 
 // The cap: the cgroup CPU quota where one is set, else the platform's
-// reported parallelism (2.3).
-export function effectiveQuota(): number {
-  return readCpuQuota() ?? os.availableParallelism()
+// reported parallelism (2.3). The reader is injectable for tests (review F7).
+export function effectiveQuota(readQuota: () => number | null = readCpuQuota): number {
+  return readQuota() ?? os.availableParallelism()
 }
 
 // The effective default: the measured count, never above the workspace's
@@ -289,6 +289,12 @@ function resolveFileArgs(fileArgs: string[]): { parallel: string[]; realTmux: st
 let currentChild: RunnerChild | null = null
 
 async function runCommand(cmd: string[], env: NodeJS.ProcessEnv, batch: string) {
+  // A handled signal owns the exit (decision D-g): its handler reaps the
+  // current child and process.exit()s. Spawning a further batch first would
+  // orphan it, so the loop stops here instead (review F5).
+  if (signalHandled) {
+    throw new Error(`Signal handled; not starting batch: ${batch}`)
+  }
   // detached: the child leads its own process group, so the group kills in
   // forwardSignalAndReap and below reach its workers and every process a
   // test spawned (decision D-g).
