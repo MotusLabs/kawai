@@ -5,6 +5,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, existsSync }
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { killChat, toggleDebug } from './support/chatHeader'
+import { killPrivateTmuxServer } from './fixtures/privateTmux'
 
 // Chat regression against the externally installed Claude Code executable.
 // Everything runs against a loopback mock Anthropic endpoint with a
@@ -147,9 +148,15 @@ test('external CLI chat: streaming, approvals, question, interrupt, debug, resum
     ...extra,
   })
   let server: ChildProcess | null = null
+  // One exit promise per spawned server, its listener attached at spawn
+  // time: stop() awaits it whatever ended the server, including a signal
+  // kill before stop(), where exitCode is null but the exit already fired
+  // and a listener attached only at stop() would never resolve.
+  let exited: Promise<void> = Promise.resolve()
   let diagnostics = ''
   const start = async (extra: Record<string, string | undefined> = {}) => {
     server = spawn('bun', ['src/server/index.ts'], { cwd: process.cwd(), env: serverEnv(extra), stdio: ['ignore', 'pipe', 'pipe'] })
+    exited = new Promise<void>(resolve => { server!.once('exit', () => resolve()) })
     server.stdout?.on('data', chunk => { diagnostics = (diagnostics + String(chunk)).slice(-6000) })
     server.stderr?.on('data', chunk => { diagnostics = (diagnostics + String(chunk)).slice(-6000) })
     await expect.poll(async () => {
@@ -157,10 +164,9 @@ test('external CLI chat: streaming, approvals, question, interrupt, debug, resum
     }, { timeout: 30_000 }).toBe(true)
   }
   const stop = async () => {
-    if (!server || server.exitCode !== null) return
-    const stopped = new Promise<void>(resolve => server!.once('exit', () => resolve()))
-    server.kill('SIGTERM')
-    await stopped
+    if (!server) return
+    if (server.exitCode === null && server.signalCode === null) server.kill('SIGTERM')
+    await exited
     server = null
   }
   const send = async (text: string) => {
@@ -217,8 +223,14 @@ test('external CLI chat: streaming, approvals, question, interrupt, debug, resum
     await page.getByRole('button', { name: 'Allow', exact: true }).click()
     await expect.poll(() => existsSync(markerAllow), { timeout: 30_000 }).toBe(true)
     await completed()
-    await expect(transcript).toContainText('Tool: Bash')
-    await expect(transcript).toContainText('Request allowed')
+    // The tool row renders the bare tool name (SummaryLabel; the approval
+    // card's label is "Approval · Bash", never exactly "Bash"), with the
+    // call's description beside it — proof the Bash tool call ran and rendered.
+    await expect(transcript.getByText('Bash', { exact: true }).first()).toBeVisible()
+    // A user-settled request renders "Allowed/Denied by user"
+    // (ChatMessages' request_resolved row); "Request <outcome>" is only the
+    // non-user fallback, e.g. "Request answered" below.
+    await expect(transcript).toContainText('Allowed by user')
 
     // Approval deny: the tool never runs.
     completed = await nextCompletion()
@@ -226,7 +238,7 @@ test('external CLI chat: streaming, approvals, question, interrupt, debug, resum
     await expect(page.getByRole('button', { name: 'Deny', exact: true })).toBeVisible()
     await page.getByRole('button', { name: 'Deny', exact: true }).click()
     await completed()
-    await expect(transcript).toContainText('Request denied')
+    await expect(transcript).toContainText('Denied by user')
     expect(existsSync(markerDeny)).toBe(false)
     await page.screenshot({ path: info.outputPath('denied.png') })
 
@@ -316,14 +328,11 @@ test('external CLI chat: streaming, approvals, question, interrupt, debug, resum
     throw error
   } finally {
     await stop()
-    // The server leaves its private tmux server (TMUX_TMPDIR=root) running —
-    // including across the mid-test restarts, which reuse the same socket —
-    // and that daemon's cwd is this checkout: every run would leak one and
-    // pin the directory. Kill it through its own socket path, built from this
-    // spec's root and uid, so no other tmux server is ever addressed. A
-    // socket with no server just errors and is ignored: spawnSync never
-    // throws, so unlike team-page.spec.ts no try/catch is needed.
-    spawnSync('tmux', ['-S', join(root, `tmux-${process.getuid()}`, 'default'), 'kill-server'], { stdio: 'ignore' })
+    // The single unconditional kill: every path that ends this server — a
+    // normal stop, a server that already exited, a failed start — reaches it,
+    // including across the mid-test restarts, which reuse the same socket.
+    // The daemon's cwd is this checkout, so a leak would pin the directory.
+    killPrivateTmuxServer(root)
     await mock.close()
     if (!process.env.KAWAI_EXTERNAL_CLI_KEEP) rmSync(root, { recursive: true, force: true })
     else console.error('KEEP_ROOT', root)

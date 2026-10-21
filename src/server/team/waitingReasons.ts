@@ -31,9 +31,13 @@ const KIND_ORDER: Record<WaitingConstraintKind, number> = {
   'outside-role': 10,
   'profile-cooling': 11,
   'spawn-backoff': 12,
-  'routing-hold': 13,
-  'all-profiles-cooling': 14,
-  'starting-agent': 15,
+  // A routing specific after the capacity constraints (dispatch-worker-choice
+  // D5): a capped chosen worker's `profile-cap` stays the blocker, and a
+  // cooling choice names itself ahead of the generic all-cooling hold.
+  'worker-choice': 13,
+  'routing-hold': 14,
+  'all-profiles-cooling': 15,
+  'starting-agent': 16,
 }
 
 /** Constraints in blocker-first order; the sort is stable within a kind. */

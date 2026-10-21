@@ -312,6 +312,7 @@ export class LimitOutcomes {
       sessionId, groupId,
       message: { id: message.id, priority: message.priority, senderGroup: message.fromGroup, tags: message.tags, worktree: this.options.targetWorktree?.(message) ?? null, taskId: message.taskId,
         ...(message.handoff ? { forwardedFromProfile: message.handoff.fromProfile } : {}),
+        ...(message.workerChoice ? { worker: message.workerChoice } : {}),
       },
       kind: event.kind, status: event.status, error: event.message, resetsAt, parkCount: message.parkCount,
       progress: { toolCalls: digest.toolCalls, filesTouched: [...digest.files] },
@@ -432,6 +433,9 @@ export class LimitOutcomes {
       handoff, excludedProfile: profileId,
       // The role keeps narrowing the forward, without the limited profile (plan-execution D15).
       allowedProfiles: message.allowedProfiles?.filter(profile => profile !== profileId) ?? null,
+      // The sender's worker choice is dropped (dispatch-worker-choice D4): a
+      // choice pinned to the limited provider would wait out its reset.
+      workerChoice: null,
     })
     store.replaceResume(message.id)
     store.markForwarded(message.id, `forwarded: ${forwarded.id}`)

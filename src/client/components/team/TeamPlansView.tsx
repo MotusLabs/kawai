@@ -21,6 +21,9 @@ import PlanIntentSection from './PlanIntentSection'
 import PlanChangesSection from './PlanChangesSection'
 import PlanPolicySection from './PlanPolicySection'
 import PlanExecutionSection from './PlanExecutionSection'
+import PlanReportSection from './PlanReportSection'
+import PlanUsageSection from './PlanUsageSection'
+import { PlanDecisionsList } from './PlanDecisionCard'
 import PlanRevisionsSection from './PlanRevisionsSection'
 import PlanLifecycleControls from './PlanLifecycleControls'
 import { pinLabel, planActorLabel } from './planLabels'
@@ -140,11 +143,39 @@ function PlanDetailPane({ teamPath, planId, detail, sessions, sendMessage, conne
 }) {
   const heading = useRef<HTMLHeadingElement | null>(null)
   const loaded = detail?.plan.id === planId
+  // The attention link's scroll target (plan-supervision D15): the change
+  // row and decision card effects act on it first (child effects run
+  // before their parents'), then this consumes it once — whether or not a
+  // row matched. An unknown change or a card no longer listed leaves the
+  // detail at its top, with no error and no late scroll.
+  const reveal = useTeamPlanStore(state => state.reveal)
+  const revealAnchor = loaded && reveal !== null && reveal.teamKey === teamPath && reveal.planId === planId ? reveal.anchor : null
+  // Whether that target is an element this loaded detail renders (a change
+  // row of the newest execution, or a decision card). Read by the
+  // title-focus effect through a ref set during render, so it sees its own
+  // commit's value without re-running on every detail push.
+  const titleYieldsToReveal = useRef(false)
+  titleYieldsToReveal.current = revealAnchor !== null && detail !== null && revealTargetRendered(revealAnchor, detail)
   // Moving into a plan moves focus to its title, so keyboard and screen-reader users land in the detail.
-  useEffect(() => { if (loaded) heading.current?.focus() }, [loaded, planId])
+  // A pending reveal whose rendered target wins instead: the child effects scroll and focus the row or
+  // card first, and exactly one element ends focused — the revealed target when the detail renders it,
+  // else the title (plan-supervision D15).
+  useEffect(() => { if (loaded && !titleYieldsToReveal.current) heading.current?.focus() }, [loaded, planId])
+  useEffect(() => {
+    if (loaded && reveal && reveal.teamKey === teamPath && reveal.planId === planId) {
+      useTeamPlanStore.getState().consumeReveal(teamPath)
+    }
+  }, [loaded, reveal, teamPath, planId])
   const back = <button type="button" className="btn text-chat-meta" data-testid="plan-back" onClick={onBack}>← All plans</button>
   if (!detail || !loaded) return <div>{back}<p role="status" className="mt-2 text-chat-meta text-secondary">Loading plan…</p></div>
   const { plan } = detail
+  // Cards with a change render inline in that change's execution row (D15); the
+  // Decisions list takes the rest — cards without a change, every card when no
+  // execution lists change rows, and any whose change has no row there.
+  const newestExecution = detail.executions?.[0] ?? null
+  const listedCards = (detail.decisions ?? []).filter(entry =>
+    entry.card.change === null || newestExecution === null
+    || !newestExecution.changes.some(row => row.change === entry.card.change))
   const approved = detail.revisions.find(revision => revision.revision === plan.currentApprovedRevision) ?? null
   const shown = approved ?? detail.revisions.filter(revision => revision.status === 'in_review').at(-1) ?? null
   return <article data-testid="plan-detail" aria-labelledby="plan-title">
@@ -161,10 +192,36 @@ function PlanDetailPane({ teamPath, planId, detail, sessions, sendMessage, conne
       <PlanIntentSection content={shown.content} pin={shown.pin} />
       <PlanChangesSection content={shown.content} progress={shown === approved ? detail.progress : null} onOpenTask={onOpenTask} />
       <PlanPolicySection content={shown.content} />
-      <PlanExecutionSection teamPath={teamPath} plan={detail.plan} detail={detail} connected={connected} onSend={sendMessage} onOpenTask={onOpenTask} />
+      <PlanExecutionSection teamPath={teamPath} plan={detail.plan} detail={detail} connected={connected} onSend={sendMessage} onOpenTask={onOpenTask}
+        sessions={sessions} busy={busy} revealAnchor={revealAnchor} />
+      {/* Supervision (plan-supervision D15): the report, the plan-level Decisions list, and the usage totals,
+          each only when the detail carries it. */}
+      {detail.supervision && <PlanReportSection view={detail.supervision} sessions={sessions} onOpenImpactReview={onOpenImpactReview} />}
+      <PlanDecisionsList teamPath={teamPath} planId={detail.plan.id} cards={listedCards}
+        sessions={sessions} connected={connected} busy={busy} onSend={sendMessage} onOpenTask={onOpenTask ?? (() => undefined)}
+        revealAnchor={revealAnchor} />
+      {detail.usage && <PlanUsageSection view={detail.usage} />}
     </>}
     <PlanRevisionsSection teamPath={teamPath} detail={detail} sessions={sessions} sendMessage={sendMessage} connected={connected} busy={busy}
       validation={validation} onCaptureStrategy={onCaptureStrategy} />
     <PlanLifecycleControls teamPath={teamPath} detail={detail} sendMessage={sendMessage} connected={connected} busy={busy} />
   </article>
+}
+
+/** Whether the reveal's anchor names an element this detail renders (plan-supervision D15): a change row of the newest execution, or a decision card — every card renders, inline beneath its change's row or in the plan-level Decisions list. Nothing renders when no revision is shown. */
+function revealTargetRendered(anchor: string, detail: PlanDetail): boolean {
+  const approved = detail.plan.currentApprovedRevision === null
+    ? null : detail.revisions.find(revision => revision.revision === detail.plan.currentApprovedRevision) ?? null
+  const shown = approved ?? detail.revisions.filter(revision => revision.status === 'in_review').at(-1) ?? null
+  if (shown === null) return false
+  if (anchor.startsWith('plan-change-')) {
+    const change = anchor.slice('plan-change-'.length)
+    const newest = detail.executions?.[0]
+    return newest !== undefined && newest.changes.some(row => row.change === change)
+  }
+  if (anchor.startsWith('decision-card-')) {
+    const id = anchor.slice('decision-card-'.length)
+    return (detail.decisions ?? []).some(entry => entry.card.id === id)
+  }
+  return false
 }

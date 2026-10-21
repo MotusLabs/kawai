@@ -158,21 +158,21 @@ Implement after `plan-execution` and `integration-candidates` have landed on mas
 
 ## 10. Plans view
 
-- [ ] 10.1 Extend `teamPlanStore` with decisions, supervision, and usage, plus one command id per open Answer or Override dialog (D15). Verify with store tests: an id is re-minted only when the payload changes, a reconnect replays under the same id, and every apply method has a dispatch caller.
-- [ ] 10.2 Build `PlanDecisionCard.tsx` and `PlanDecisionDialog.tsx`. Verify with component tests:
+- [x] 10.1 Extend `teamPlanStore` with decisions, supervision, and usage, plus one command id per open Answer or Override dialog (D15). Verify with store tests: an id is re-minted only when the payload changes, a reconnect replays under the same id, and every apply method has a dispatch caller.
+- [x] 10.2 Build `PlanDecisionCard.tsx` and `PlanDecisionDialog.tsx`. Verify with component tests:
   - cards render inline in their change row, and in the Decisions list when they have no change;
   - the history and fix status show;
   - Override names the decision it replaces and requires a rationale;
   - controls disable while disconnected, and refusals show inline.
-- [ ] 10.3 Build `PlanReportSection.tsx`: outcome counts, named waits, progress and activity with ticked elapsed times, stops with blocked dependents, partial delivery, candidates, the disposition, and M2/M4 (D12). Verify with component tests for a stopped, a stalled, and a fully landed plan.
-- [ ] 10.4 Build `PlanUsageSection.tsx`: the group × profile table, the per-change rows, and the note on what is not counted (task-less turns and Task subagent calls), with no currency (D14). Verify with a component test.
-- [ ] 10.5 Navigate `plan` and `card` attention links to the plan detail, scrolled to the change or card (D15). Verify with a navigation test from the attention queue.
-- [ ] 10.6 Describe the cards, the report, and the usage section in the Plans AGENTS.md bullet. Verify by reading it against D15.
+- [x] 10.3 Build `PlanReportSection.tsx`: outcome counts, named waits, progress and activity with ticked elapsed times, stops with blocked dependents, partial delivery, candidates, the disposition, and M2/M4 (D12). Verify with component tests for a stopped, a stalled, and a fully landed plan.
+- [x] 10.4 Build `PlanUsageSection.tsx`: the group × profile table, the per-change rows, and the note on what is not counted (task-less turns and Task subagent calls), with no currency (D14). Verify with a component test.
+- [x] 10.5 Navigate `plan` and `card` attention links to the plan detail, scrolled to the change or card (D15). Verify with a navigation test from the attention queue.
+- [x] 10.6 Describe the cards, the report, and the usage section in the Plans AGENTS.md bullet. Verify by reading it against D15.
 
 ## 11. Integration
 
-- [ ] 11.1 Add a fixture walkthrough, `tests/e2e/plan-supervision.spec.ts`, and name it in `.github/workflows/ci.yml`. It shows a seeded execution with a Lead-answered card, then an owner override that creates a fix task and puts a `plan-fix` item in the attention queue, then a stall in the report. Verify by running it alone on a spare `E2E_PORT` after `bun run build`, then checking that `http://localhost:4040/` still answers.
-- [ ] 11.2 Run `bun run lint && bun run typecheck && bun run test` and `openspec validate plan-supervision --strict`. Verify that all pass, and that no new file exceeds 500 LOC.
+- [x] 11.1 Add a fixture walkthrough, `tests/e2e/plan-supervision.spec.ts`, and name it in `.github/workflows/ci.yml`. It shows a seeded execution with a Lead-answered card, then an owner override that creates a fix task and puts a `plan-fix` item in the attention queue, then a stall in the report. Verify by running it alone on a spare `E2E_PORT` after `bun run build`, then checking that `http://localhost:4040/` still answers.
+- [x] 11.2 Run `bun run lint && bun run typecheck && bun run test` and `openspec validate plan-supervision --strict`. Verify that all pass, and that no new file exceeds 500 LOC.
 
 ## Workflow follow-up
 

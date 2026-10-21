@@ -60,6 +60,9 @@ test('known dead-letter codes read as sentences and unknown codes pass through',
 
 test('constraint labels mention their counts, names, and details', () => {
   expect(constraintLabel({ kind: 'group-cap', counts: { live: 2, cap: 2 } })).toContain('2/2')
+  expect(constraintLabel({ kind: 'worker-choice', detail: 'zai/glm' })).toBe('Waiting for the chosen worker zai/glm')
+  expect(constraintLabel({ kind: 'worker-choice', detail: 'zai', retryAt: '2026-10-13T12:00:00.000Z' }))
+    .toMatch(/^Waiting for the chosen worker zai \(cooling until .+\)$/)
   expect(constraintLabel({ kind: 'worktree-occupied', detail: '/repo/feat-x', sessionIds: ['s1'] }, () => 'dev-1'))
     .toBe('Worktree /repo/feat-x is held by dev-1')
   expect(constraintLabel({ kind: 'worktree-occupied', detail: '/repo/feat-x' })).toBe('Worktree /repo/feat-x is held by a pending spawn')

@@ -112,6 +112,12 @@ export interface RouteMessage {
   taskId: string | null
   /** Set when the message is being forwarded after a limit. */
   forwardedFromProfile?: string
+  /**
+   * The sender's worker choice: a provider id or `provider/model`; absent
+   * when the message has none. A constraint, not a hint: the candidates are
+   * already limited to it, and a pick outside them is unknown.
+   */
+  worker?: string
 }
 
 /**

@@ -460,5 +460,12 @@ export class SessionRefreshLoop {
     // Load dormant sessions after startup verification so the list reflects the
     // final active/hibernating/history split without auto-waking anything.
     this.updateDormantAgentSessions()
+    // Settle marker: logged once the startup view (hydration or its skip, plus
+    // the dormant split) is final, so startup diagnostics and tests can await
+    // a stable session view instead of polling for any registry write.
+    logger.info('startup_verification_complete', {
+      activeSessionCount: activeSessions.length,
+      localSessionCount: localSessions.length,
+    })
   }
 }

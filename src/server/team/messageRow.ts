@@ -50,6 +50,8 @@ export function mapRow(row: Record<string, unknown>): TeamMessage {
     excludedProfile: text(row.excluded_profile),
     revisionNotice: parseRevisionNotice(row.revision_notice),
     allowedProfiles,
+    // Absent, not null, on a row without a choice: it reads as before (D1).
+    ...(typeof row.worker_choice === 'string' && row.worker_choice !== '' ? { workerChoice: row.worker_choice } : {}),
   }
 }
 

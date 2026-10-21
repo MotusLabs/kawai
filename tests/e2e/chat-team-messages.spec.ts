@@ -14,6 +14,7 @@ import { existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { killChat } from './support/chatHeader'
+import { killPrivateTmuxServer } from './fixtures/privateTmux'
 
 test.skip(process.env.AGENTBOARD_CHAT_FIXTURE !== '1', 'Requires development chat fixture')
 
@@ -231,6 +232,11 @@ test('E11 slice: uncertain retry keeps its recipient, history, and survives a re
   const url = `http://127.0.0.1:${port}`
   const dbPath = join(root, 'agentboard.db')
   let server: ChildProcess | null = null
+  // One exit promise per spawned server, its listener attached at spawn
+  // time: stop() awaits it whatever ended the server, including a signal
+  // kill before stop(), where exitCode is null but the exit already fired
+  // and a listener attached only at stop() would never resolve.
+  let exited: Promise<void> = Promise.resolve()
   let diagnostics = ''
   const start = async () => {
     // Same guard as playwright.config.ts's webServer command: the server pins
@@ -252,6 +258,7 @@ test('E11 slice: uncertain retry keeps its recipient, history, and survives a re
         AGENTBOARD_REMOTE_HOSTS: '', CLAUDE_CODE_OAUTH_TOKEN: '', ANTHROPIC_API_KEY: '',
       },
     })
+    exited = new Promise<void>(resolve => { server!.once('exit', () => resolve()) })
     server.stdout?.on('data', chunk => { diagnostics = (diagnostics + String(chunk)).slice(-6000) })
     server.stderr?.on('data', chunk => { diagnostics = (diagnostics + String(chunk)).slice(-6000) })
     await expect.poll(async () => {
@@ -259,20 +266,13 @@ test('E11 slice: uncertain retry keeps its recipient, history, and survives a re
     }, { timeout: 30_000 }).toBe(true)
   }
   const stop = async () => {
-    if (!server || server.exitCode !== null) return
-    const stopped = new Promise<void>(resolve => server!.once('exit', () => resolve()))
-    server.kill('SIGTERM')
-    await stopped
-    // The server leaves its private tmux server (TMUX_TMPDIR=root) running,
-    // and that daemon's cwd is this checkout — every run would leak one and
-    // pin the directory. Kill it through its own socket path, built from this
-    // spec's root and uid, so no other tmux server is ever addressed; a
-    // socket with no server just errors and is ignored.
-    try {
-      execFileSync('tmux', ['-S', join(root, `tmux-${process.getuid()}`, 'default'), 'kill-server'], { stdio: 'ignore' })
-    } catch {
-      // No server on that socket — nothing to clean up.
-    }
+    if (server && server.exitCode === null && server.signalCode === null) server.kill('SIGTERM')
+    await exited
+    // Every path that ends this server — a normal stop, a server that
+    // already exited, a failed start — kills the root's private tmux server
+    // before the root is removed: the daemon outlives the server and pins
+    // this checkout (see tests/e2e/fixtures/privateTmux.ts).
+    killPrivateTmuxServer(root)
     server = null
   }
   try {

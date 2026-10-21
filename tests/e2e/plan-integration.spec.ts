@@ -98,6 +98,7 @@ function submitRound(root: string, mode: 'result' | 'findings', implementer: str
     import { TaskResultService } from './src/server/team/TaskResultService';
     import { taskHandlers } from './src/server/team/taskTools';
     import { composeExecutionCore } from './src/server/plans/planComposition';
+    import { retryOnSqliteBusy } from './src/server/__tests__/sqliteBusyRetry';
     try {
       const [file, root, mode, implementer, change] = JSON.parse(await Bun.stdin.text());
       const sessions = initDatabase({ path: file });
@@ -118,7 +119,11 @@ function submitRound(root: string, mode: 'result' | 'findings', implementer: str
       const taskId = row.task_id;
       if (mode === 'result') {
         const commit = Bun.spawnSync(['git', 'rev-parse', 'HEAD'], { cwd: join(root, '.worktrees', change) }).stdout.toString().trim();
-        await taskHandlers(tasks, implementer, results).task_submit_result({ task_id: taskId, summary: 'Implemented ' + change, commit, tests: [{ description: 'unit', outcome: 'pass' }] });
+        // The server is a second writer on this database: a BUSY on the
+        // result INSERT rolls its transaction back whole, so re-run the
+        // submission (planWalkthrough's submitRound, #236). The findings
+        // path stays unwrapped: it autocommits three statements.
+        await retryOnSqliteBusy(() => taskHandlers(tasks, implementer, results).task_submit_result({ task_id: taskId, summary: 'Implemented ' + change, commit, tests: [{ description: 'unit', outcome: 'pass' }] }));
         console.log('RESULT:' + commit);
       } else {
         let claimant = null;
@@ -127,7 +132,19 @@ function submitRound(root: string, mode: 'result' | 'findings', implementer: str
           claimant = row?.claimed_by ?? null;
           if (claimant === null) await new Promise(resolve => setTimeout(resolve, 1000));
         }
-        if (claimant === null) throw new Error('the review handoff was never claimed');
+        if (claimant === null) {
+          // Self-diagnosing: a CI timeout names its cause. A stopped change
+          // dispatches no review; a dispatched one names its mail state.
+          const stopped = db.prepare('SELECT state, step, stop_reason, stop_detail_json FROM plan_execution_changes WHERE change = ? AND task_id = ? ORDER BY rowid DESC').get(change, taskId) ?? {};
+          const handoff = db.prepare("SELECT m.state AS mail_state, m.reason AS mail_reason FROM team_task_assignments a LEFT JOIN team_messages m ON m.id = a.message_id WHERE a.task_id = ? AND a.handoff_kind = 'review' AND a.superseded_by IS NULL ORDER BY a.rowid DESC").get(taskId) ?? null;
+          const stage = stopped.state === 'stopped'
+            ? 'the change stopped (' + (stopped.stop_reason ?? 'unknown') + (stopped.stop_detail_json ? ' — ' + stopped.stop_detail_json : '') + ')'
+            : 'the change is ' + (stopped.state ?? 'unknown') + (stopped.step ? ' at step ' + stopped.step : '');
+          const dispatch = handoff
+            ? 'the review was dispatched, its mail ' + (handoff.mail_state ?? 'unknown') + (handoff.mail_reason ? ' (' + handoff.mail_reason + ')' : '')
+            : 'the review was never dispatched';
+          throw new Error('the review handoff was never claimed in 60s: ' + stage + '; ' + dispatch);
+        }
         const result = db.prepare('SELECT id FROM team_task_results WHERE task_id = ? ORDER BY rowid DESC').get(taskId);
         if (!result) throw new Error('no result yet');
         await taskHandlers(tasks, claimant, results).task_submit_findings({ task_id: taskId, result_id: result.id, kind: 'review', verdict: 'pass', findings: 'Clean.' });

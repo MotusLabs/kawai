@@ -1075,8 +1075,8 @@ describe('ChatSessionManager', () => {
     expect(fs.existsSync(logFile)).toBe(true)
 
     manager.kill(sessionId)
-    await flush()
-    expect(fs.existsSync(logFile)).toBe(false)
+    // Deletion runs on the log's async chain; poll instead of trusting fixed timers.
+    await waitForCondition(() => !fs.existsSync(logFile))
   })
 
   test('startup prunes wire logs of sessions that no longer exist', async () => {
@@ -1460,6 +1460,8 @@ describe('ChatSessionManager', () => {
       await flush()
       handles[0]!.wire!.record('in', '{"type":"system"}')
       await flush()
+      // The append is scheduled on a timer; wait for it deterministically.
+      await wireLogs.get(sessionId).flush()
 
       expect(manager.archive(sessionId)).toEqual({ ok: true })
       expect(handles[0]!.closed).toBe(true)
@@ -1616,10 +1618,12 @@ describe('ChatSessionManager', () => {
 
       // Kill on an archived session removes row and protocol log.
       const logFile = wireLogs.get(sessionId).currentPath
+      // The append is scheduled on a timer; wait for it deterministically.
+      await wireLogs.get(sessionId).flush()
       expect(fs.existsSync(logFile)).toBe(true)
       expect(managerB.kill(sessionId)).toBe(true)
-      await flush()
-      expect(fs.existsSync(logFile)).toBe(false)
+      // Deletion runs on the log's async chain; poll instead of trusting fixed timers.
+      await waitForCondition(() => !fs.existsSync(logFile))
       expect(db.getChatSession(sessionId)).toBeNull()
       expect(registryB.get(sessionId)).toBeUndefined()
       managerB.shutdown()

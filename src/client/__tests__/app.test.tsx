@@ -89,6 +89,8 @@ mock.module('../hooks/useWebSocket', () => ({
 
 const { resetTeamLocationForTests } = await import('../hooks/useTeamLocation')
 
+const { useTeamWorkspaceStore } = await import('../stores/teamWorkspaceStore')
+
 const { default: App } = await import('../App')
 
 function createStorage(): Storage {
@@ -172,6 +174,11 @@ beforeEach(() => {
   mockConnectionEpoch = 0
   setupDom()
   activeRenderer = null
+
+  // No test may depend on another test's module state: the team workspace
+  // store remembers the tab last used for a team, and a shuffled order would
+  // open the Team page on that tab instead of the Tasks default.
+  useTeamWorkspaceStore.setState(useTeamWorkspaceStore.getInitialState())
 
   useSessionStore.setState({
     sessions: [],
