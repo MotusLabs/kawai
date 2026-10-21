@@ -102,28 +102,16 @@ Every test this change adds for a spec scenario carries its `// @covers:` annota
   Verify each scenario of "Newly archived changes have covered scenarios" over fixture trees, and that the real repository passes.
 - [ ] 5.3 Add one AGENTS.md bullet for annotations and the archive rule. Verify that `bun run test` passes.
 
-## 6. Fixture e2e list (PR F)
+## 6. Procedure (PR F)
 
-- [ ] 6.1 Add `scripts/e2e-fixture-specs.ts` and its guard test (D9). The guard checks that:
-  - the output equals the gated specs;
-  - in a spec without the gate, every use of the variable in code (comments aside) sets it to `'0'`;
-  - an empty list exits non-zero;
-  - the parsed `ci.yml` fixture step calls the lister and names no spec path.
-
-  Verify each scenario of "CI runs every fixture-gated e2e spec".
-- [ ] 6.2 Run `chat-activity.spec.ts`, `chat-auto-approve.spec.ts`, and `chat-workers.spec.ts` once under the fixture recipe: after `bun run build`, with a fresh HOME, a spare `E2E_PORT`, and `--workers=1`, and never through `bun run test:e2e`. Fix any failure, or stop and report it before CI switches. Verify that all three pass locally.
-- [ ] 6.3 Switch the CI fixture step to the lister, and update the AGENTS.md note on fixture specs. Verify that the pull request's fixture step runs every gated spec, the three among them, and that `bun run test` passes.
-
-## 7. Procedure (PR G)
-
-- [ ] 7.1 Update the dev group files (D11):
+- [ ] 6.1 Update the dev group files (D11):
   - the map goes in `coverage`, never in prose;
   - tests that cover spec scenarios carry annotations;
   - `tasks.md` checkboxes are left for the archive PR;
   - `scripts/verify-result.ts` runs before each submission.
 
   Verify that `bun run test` passes, since tests read `.kawai/groups/`.
-- [ ] 7.2 Update the reviewer group files with the blind-first order (D11). List the owner's follow-ups in the PR body: the user-level `reviewers-claude` and `reviewers-mimo` files, and the lead's archive procedure. Verify that `bun run test` passes.
+- [ ] 6.2 Update the reviewer group files with the blind-first order (D11). List the owner's follow-ups in the PR body: the user-level `reviewers-claude` and `reviewers-mimo` files, and the lead's archive procedure. Verify that `bun run test` passes.
 
 ## Workflow follow-up
 

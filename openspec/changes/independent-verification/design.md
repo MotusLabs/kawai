@@ -16,9 +16,6 @@ See proposal.md (Why) for the motivation. The current state that shapes this des
   - `scripts/test-runner.ts` runs the suite. It writes no machine-readable report today; `per-result-suite` D1 adds JUnit reports for its affected-test passes.
   - About 6,500 `test`/`it` calls exist, 7 of them `test.skip`.
 - **Test titles.** `src/server/__tests__/recoveryMatrix.test.ts` resolves citations of the form `` `file` › `exact title` `` with a literal-title extractor (`testTitles`), which allows modifiers and skips template literals.
-- **The CI fixture step.**
-  - One `run:` line in `ci.yml` names 26 fixture specs.
-  - 32 specs mention `AGENTBOARD_CHAT_FIXTURE`. Three of them (`chat-activity`, `chat-auto-approve`, `chat-workers`) gate on it but are not listed, so the main e2e step skips them and the fixture step never runs them.
 - **Git.**
   - `refs/remotes/origin/HEAD` names origin's default branch.
   - Server git calls go through `runGitAsync`, with a 10-second timeout and `cleanGitEnv`.
@@ -29,7 +26,7 @@ See proposal.md (Why) for the motivation. The current state that shapes this des
 - Every fact the lead checks by hand before a review is computed by Kawai from the repository and kept with the result.
 - A coverage claim becomes checkable, both per result and across the repository.
 - A reviewer's account of coverage is formed before the author's is seen.
-- Parallel branches stop colliding on the CI fixture list and on task ticks.
+- Parallel branches stop colliding on task ticks.
 
 **Non-Goals:**
 - A check never gates anything: not submission, handoff, findings, acceptance, execution, or landing. A later change can add a gate once the checks have a track record.
@@ -189,17 +186,9 @@ All storage arrives in the next free migration. master is at 14 today; coordinat
   - A baseline of uncovered scenarios: it is thousands of lines, and an archive PR that merges on green could add to it unreviewed.
   - Citations written into the spec text: they couple requirements to file layout.
 
-### D9. The fixture lister and its guards
+### D9. The fixture list moved to `ci-fixture-specs`
 
-- **The lister.** `scripts/e2e-fixture-specs.ts` prints, sorted, every `tests/e2e/*.spec.ts` that contains the gate `test.skip(process.env.AGENTBOARD_CHAT_FIXTURE !== '1'` (whitespace-insensitive).
-  - An empty list exits non-zero, because a bare `playwright test` would run everything.
-  - The CI step becomes `bunx playwright test $(bun scripts/e2e-fixture-specs.ts) --workers=1`.
-- **The guards.** A unit test asserts:
-  - the lister's output equals the set of gated specs;
-  - in a spec without the gate, every use of the variable in code (comments aside) sets it to `'0'`;
-  - the fixture step's `run`, parsed with `Bun.YAML.parse`, calls the lister and names no `tests/e2e/` path.
-- **Rejected:** a `*.fixture.spec.ts` rename. It churns 26 files, and forgetting the suffix fails silently in the same way.
-- **The three never-run specs** run locally under the fixture recipe before CI switches (task 6.2).
+The fixture-spec lister and its guards are now the sibling change `ci-fixture-specs`, which is small and independent of this one. D10 to D12 keep their numbers.
 
 ### D10. One module, two front ends
 
@@ -241,7 +230,6 @@ All storage arrives in the next free migration. master is at 14 today; coordinat
 - [A record is local evidence that an agent could fabricate] → It is labeled as a recorded pass on this host, not as Kawai's run. CI runs the suite independently at the PR.
 - [The seal leaks through prose, journal notes, or annotations] → Its limit is stated (D6). The procedure keeps maps out of prose, and the reviewer derives clauses from the spec first.
 - [Up to 30 merge-trees per result add host load] → They run one team at a time, only on submission and recheck, are read-only, and use no slot.
-- [The three never-run specs fail on their first run] → Task 6.2 runs them first, then fixes them or stops for a decision before CI switches.
 - [An archive PR now fails when its change's scenarios lack annotations] → That is intended: green now means covered. The fix is a test PR before the archive.
 - [Annotations go stale on renames] → The guard names the file and line, and the fix is mechanical.
 
@@ -251,8 +239,8 @@ All storage arrives in the next free migration. master is at 14 today; coordinat
 2. **PR B:** server checks, storage, recheck, the result card, and the recovery-matrix row (2.x), after PR A. It reads today's records, which have no test lists, so citations read "ran: unknown" until PR D.
 3. **PR C:** coverage maps, the seal, and the comparison (3.x), after PR B.
 4. **PR D:** test lists beside records, and the local script (4.x), after PR A and once `per-result-suite` PR A's JUnit reader and `parallel-suite`'s runner are on master.
-5. **PR E and PR F**, in parallel with B–D: the coverage guard (5.x), after PR A, and the fixture lister (6.x), independent.
-6. **PR G:** procedure and docs (7.x), last.
+5. **PR E:** the coverage guard (5.x), after PR A, in parallel with B–D.
+6. **PR F:** procedure and docs (6.x), last.
 
 Rollback: every part is additive. Reverting a PR leaves its tables in place, since migrations only move forward, and they are unused. Results from before this change show no checks.
 
