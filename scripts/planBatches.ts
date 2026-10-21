@@ -51,6 +51,8 @@ export function buildBunTestArgs(options: {
   workers: number
   files: string[]
   passthrough: string[]
+  timingsPath?: string
+  updateTimings?: boolean
 }): string[] {
   // --parallel is passed even for 1: it implies --isolate, the per-file
   // isolation the suite now relies on (decision D-c). Leaving it out would
@@ -61,6 +63,12 @@ export function buildBunTestArgs(options: {
     '--preload',
     PRELOAD_ARG,
   ]
+  // The timings record (D4): read the previous run's durations and, on a
+  // full run, rewrite the snapshot with the measured ones.
+  if (options.timingsPath !== undefined) {
+    args.push(`--timings=${options.timingsPath}`)
+    if (options.updateTimings) args.push('--update-timings')
+  }
   args.push(...options.passthrough, ...options.files.map(toTestFilePath))
   return args
 }
@@ -84,7 +92,9 @@ export function stripCoverageArgs(args: string[]) {
 // The main batch first (with --parallel, skipped when it has no files), then
 // each real-tmux file as its own later batch: serial, without --parallel, and
 // without any --coverage* argument — coverage on Linux CI can stall PTY
-// attach readiness. `--skip-real-tmux` yields no tmux batch.
+// attach readiness. `--skip-real-tmux` yields no tmux batch. The timings
+// flags ride the main batch only: the serial files are one-file processes
+// whose scheduling never reorders.
 export function planBatches(options: {
   workers: number
   mainFiles: string[]
@@ -92,6 +102,8 @@ export function planBatches(options: {
   passthrough: string[]
   skipRealTmux: boolean
   mainLabel?: string
+  timingsPath?: string
+  updateTimings?: boolean
 }): PlannedBatch[] {
   const batches: PlannedBatch[] = []
   if (options.mainFiles.length > 0) {
@@ -105,6 +117,8 @@ export function planBatches(options: {
           workers: options.workers,
           files: options.mainFiles,
           passthrough: options.passthrough,
+          timingsPath: options.timingsPath,
+          updateTimings: options.updateTimings,
         }),
       ],
     })

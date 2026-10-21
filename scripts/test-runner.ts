@@ -13,7 +13,13 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { recordsDir } from './lib/checkRecords'
 import { REAL_TMUX_FILES, isRealTmuxFile, planBatches } from './planBatches'
+import {
+  publishTimingsSnapshot,
+  readTimingsSeed,
+  seedTimingsSnapshot,
+} from './testTimings'
 
 const RUN_ROOT_PREFIX = 'agentboard-tests-'
 const OWNER_MARKER = 'owner.json'
@@ -47,6 +53,19 @@ export function parseRunArgs(args: string[]): RunArgs {
     else parsed.passthrough.push(arg)
   }
   return parsed
+}
+
+// A test-name filter selects a subset just like explicit file arguments do,
+// so a filtered run must not overwrite the timings record (D4): only the
+// selected files' durations would be measured.
+export function hasTestNameFilter(passthrough: string[]): boolean {
+  return passthrough.some(
+    (arg) =>
+      arg === '-t' ||
+      arg.startsWith('-t=') ||
+      arg === '--test-name-pattern' ||
+      arg.startsWith('--test-name-pattern=')
+  )
 }
 
 // The measured default (2.3, design D2): 4 is the largest N whose alone-run
@@ -382,6 +401,20 @@ async function main() {
       serialFiles = [...REAL_TMUX_FILES].map((file) => `src/server/__tests__/${file}`)
       mainLabel = 'main batch'
     }
+    // The timings record rides full runs only (D4): a filtered run — explicit
+    // files or a test-name filter — measures a subset and must not overwrite
+    // the record. A records directory that cannot be resolved (no git) only
+    // costs the scheduling order, never the run.
+    const fullRun = args.fileArgs.length === 0 && !hasTestNameFilter(args.passthrough)
+    let timingsSnapshot: string | null = null
+    if (fullRun) {
+      try {
+        timingsSnapshot = seedTimingsSnapshot(runRoot, readTimingsSeed(recordsDir(process.cwd())))
+      } catch (error) {
+        console.error(`[test-runner] timings record unavailable: ${String(error)}`)
+      }
+    }
+    let published = false
     for (const batch of planBatches({
       workers,
       mainFiles,
@@ -389,8 +422,20 @@ async function main() {
       passthrough: args.passthrough,
       skipRealTmux: args.skipRealTmux,
       mainLabel,
+      timingsPath: timingsSnapshot ?? undefined,
+      updateTimings: timingsSnapshot !== null,
     })) {
       await runCommand(batch.cmd, env, batch.label)
+      // The main batch wrote the fresh snapshot (--update-timings). Publish
+      // it now — a later serial batch failing must not lose it.
+      if (timingsSnapshot !== null && !published) {
+        published = true
+        try {
+          publishTimingsSnapshot(recordsDir(process.cwd()), timingsSnapshot)
+        } catch (error) {
+          console.error(`[test-runner] timings record not published: ${String(error)}`)
+        }
+      }
     }
   } finally {
     fs.rmSync(runRoot, { recursive: true, force: true })

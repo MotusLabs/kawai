@@ -66,4 +66,19 @@ describe('planBatches', () => {
     const explicit = planBatches({ ...BASE, mainLabel: 'explicit files' })
     expect(explicit[0].label).toBe('explicit files')
   })
+
+  test('the timings record rides the main batch only (3.1, D4)', () => {
+    const withTimings = planBatches({ ...BASE, timingsPath: '/run/root/timings.json', updateTimings: true })
+    expect(withTimings[0].cmd).toContain('--timings=/run/root/timings.json')
+    expect(withTimings[0].cmd).toContain('--update-timings')
+    for (const batch of withTimings.filter((candidate) => candidate.kind === 'real-tmux')) {
+      expect(batch.cmd.some((arg) => arg.startsWith('--timings'))).toBe(false)
+      expect(batch.cmd).not.toContain('--update-timings')
+    }
+    // No record, no flags: the default planning never mentions timings.
+    for (const batch of planBatches(BASE)) {
+      expect(batch.cmd.some((arg) => arg.startsWith('--timings'))).toBe(false)
+      expect(batch.cmd).not.toContain('--update-timings')
+    }
+  })
 })

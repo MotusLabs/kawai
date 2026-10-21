@@ -8,6 +8,7 @@ import {
   defaultWorkers,
   effectiveQuota,
   forwardSignalAndReap,
+  hasTestNameFilter,
   isOwnerAlive,
   parseCpuQuota,
   parseRunArgs,
@@ -24,6 +25,17 @@ describe('parseRunArgs', () => {
     expect(parsed.skipRealTmux).toBe(true)
     expect(parsed.fileArgs).toEqual(['a.test.ts', 'deep/b.test.tsx'])
     expect(parsed.passthrough).toEqual(['--coverage'])
+  })
+})
+
+describe('hasTestNameFilter', () => {
+  test('detects every -t and --test-name-pattern spelling the parser accepts', () => {
+    expect(hasTestNameFilter([])).toBe(false)
+    expect(hasTestNameFilter(['--coverage', '--rerun-each=2'])).toBe(false)
+    expect(hasTestNameFilter(['-t'])).toBe(true)
+    expect(hasTestNameFilter(['-t=refresh'])).toBe(true)
+    expect(hasTestNameFilter(['--test-name-pattern'])).toBe(true)
+    expect(hasTestNameFilter(['--test-name-pattern=refresh'])).toBe(true)
   })
 })
 
@@ -102,6 +114,20 @@ describe('buildBunTestArgs', () => {
     // Relative files are './'-prefixed: Bun reads a bare relative path
     // outside the bunfig test root as a filter, not a path.
     expect(args.slice(-2)).toEqual(['./b.test.ts', './a.test.ts'])
+  })
+
+  test('carries the timings record before the passthrough and file arguments (3.1)', () => {
+    const args = buildBunTestArgs({
+      workers: 4,
+      files: ['a.test.ts'],
+      passthrough: ['--coverage'],
+      timingsPath: '/run/root/timings.json',
+      updateTimings: true,
+    })
+    const timings = args.indexOf('--timings=/run/root/timings.json')
+    expect(timings).toBeGreaterThan(-1)
+    expect(args[timings + 1]).toBe('--update-timings')
+    expect(args.indexOf('--coverage')).toBeGreaterThan(timings + 1)
   })
 })
 
