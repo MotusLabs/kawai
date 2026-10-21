@@ -42,7 +42,8 @@ describe('planBatches', () => {
     for (const [index, batch] of tmux.entries()) {
       expect(batch.label).toBe(`real-tmux: src/server/__tests__/${REAL_TMUX_FILES[index]}`)
       expect(batch.cmd.join(' ')).not.toContain('--coverage')
-      expect(batch.cmd).not.toContain('--parallel=4')
+      // No --parallel of any spelling: the tmux batches are serial (N4).
+      expect(batch.cmd.some((arg) => arg.startsWith('--parallel'))).toBe(false)
       expect(batch.cmd).toContain(`./src/server/__tests__/${REAL_TMUX_FILES[index]}`)
     }
   })

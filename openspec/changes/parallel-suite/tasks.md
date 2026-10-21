@@ -15,7 +15,7 @@
 
 ## 3. Scheduling and the floor
 
-- [ ] 3.1 Write per-file timings to `<git-common-dir>/kawai-checks/timings.json` after full runs and pass it with `--timings`. Use a per-run snapshot and atomic writes with unique temporary names. Verify concurrent writers never expose partial JSON, and that a missing or malformed file runs unordered without failing.
+- [x] 3.1 Write per-file timings to `<git-common-dir>/kawai-checks/timings.json` after full runs and pass it with `--timings`. Use a per-run snapshot and atomic writes with unique temporary names. Verify concurrent writers never expose partial JSON, and that a missing or malformed file runs unordered without failing.
 - [ ] 3.2 Split `chatSessionManager.test.ts` into files of at most 500 lines plus a shared harness module. Verify that the test count before and after is identical (compare the names from the JUnit report) and that no new file takes over 20 s.
 - [ ] 3.3 Move the title-tail test to fake timers or an injected clock. Verify that it finishes in under 0.5 s and still fails when the title-tail arming is removed (a mutation check).
 
@@ -23,7 +23,7 @@
 
 - [x] 4.1 Profile `teamAssignmentStore`, `teamTaskService`, and `executionLandingMatrix` and record where per-test time goes.
 - [x] 4.2 Where setup dominates, share it per file or use `schemaDb()`, keeping file-backed setup for migration and backup subjects. Verify that each touched file's test names and count are unchanged and that its time drops.
-- [ ] 4.3 Add the slow-tier selection option to the runner and the misplaced-file report (over 5 s outside the tier and not listed). Rename or list each file it reports. Verify that the option excludes every `*.integration.test.ts` and real-tmux file.
+- [x] 4.3 Add the slow-tier selection option to the runner and the misplaced-file report (over 5 s outside the tier and not listed). Rename or list each file it reports. Verify that the option excludes every `*.integration.test.ts` and real-tmux file.
 
 ## 5. Integration check
 
