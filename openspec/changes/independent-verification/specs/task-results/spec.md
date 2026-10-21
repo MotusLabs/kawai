@@ -37,16 +37,16 @@ Kawai SHALL NOT fetch, run tests, or change the worktree.
 
 #### Scenario: Result without a commit
 - **WHEN** a result names only a diff reference
-- **THEN** the check records that there is no commit to check
+- **THEN** the check records that there is no commit to check, and marks each citation of its coverage map as unresolved for that reason
 
 #### Scenario: Worktree removed
 - **WHEN** the result's worktree no longer exists
 - **THEN** the commit and its tree are checked from the repository, and HEAD and cleanliness are recorded as unknown, with the reason
 
 ### Requirement: Kawai checks a result against the base and other open branches
-Kawai SHALL check whether the result's commit merges cleanly into origin's default branch, as the repository last fetched it. It SHALL name that base commit and how many of its commits the result lacks.
+Kawai SHALL check whether the result's commit merges cleanly into origin's default branch as last fetched, naming that base commit and how many of its commits the result lacks.
 
-Kawai SHALL also check whether the commit merges cleanly with the branch head of each other open task of the team, naming the conflicting files and the files both change. Heads already contained in the base or in the result SHALL be skipped.
+It SHALL also check the commit against the branch head of each other open task of the team, naming the conflicting files and the files both change. It SHALL skip heads that the base or the result contains, compare at most 30 heads, newest task first, and name at most 20 files in each list, counting the rest.
 
 #### Scenario: Clean against the base
 - **WHEN** the commit merges cleanly into the base and lacks three of the base's commits
@@ -72,8 +72,12 @@ Kawai SHALL also check whether the commit merges cleanly with the branch head of
 - **WHEN** a task of another team has an open branch
 - **THEN** that branch is never compared or named
 
+#### Scenario: More open branches than the cap
+- **WHEN** 35 other open tasks of the team have distinct heads that the base and the result do not contain
+- **THEN** the check compares the heads of the 30 newest tasks, and counts the 5 it did not compare
+
 ### Requirement: Result checks never block or gate
-Checks SHALL run after the result's transaction commits, and SHALL NOT delay, fail, or refuse the submission. A check that cannot finish SHALL be recorded as unavailable, with its reason.
+Kawai SHALL record a pending check in the result's own transaction, and SHALL run the check only after that transaction commits. Running a check SHALL NOT delay, fail, or refuse the submission. A check that cannot finish SHALL be recorded as unavailable, with its reason.
 
 Checks SHALL NOT change acceptance, handoffs, findings, task status, execution ownership, or landing. A check still pending when the server stops SHALL run once after startup.
 
@@ -103,9 +107,9 @@ Each check SHALL be recorded beside the earlier ones, which stay readable, and t
 - **THEN** the pending check is returned, and no second check runs
 
 ### Requirement: Results carry a coverage map
-`task_submit_result` SHALL accept an optional coverage map. Each clause in it is a spec scenario or a task's verify clause, and cites the tests that cover it as `` `file` › `title` ``, or cites none. The map SHALL be stored with the result as the submitter's claim.
+`task_submit_result` SHALL accept an optional coverage map. Each clause, a spec scenario or a task's verify clause, cites its tests as `` `file` › `title` `` or cites none. The map SHALL be stored with the result as the submitter's claim.
 
-Kawai's check SHALL resolve each citation at the result's commit:
+Kawai's check SHALL resolve each citation at the result's commit, and derive each clause's status from them:
 - the file exists and holds a test with that literal title;
 - when the tree's recorded pass lists its tests, that test ran and passed.
 
@@ -118,12 +122,16 @@ Kawai's check SHALL resolve each citation at the result's commit:
 - **THEN** the check marks the citation as not found, and the clause as not covered
 
 #### Scenario: Cited test was skipped
-- **WHEN** the recorded pass lists the cited test as skipped
-- **THEN** the check marks the citation as not run
+- **WHEN** a clause's only citation names a test that the recorded pass lists as skipped
+- **THEN** the check marks the citation as not run, and the clause as not covered
+
+#### Scenario: Partly covered clause
+- **WHEN** a clause cites two tests, the recorded pass lists the first as passed, and the second does not exist at the commit
+- **THEN** the check marks the first citation as ran and passed, the second as not found, and the clause as partly covered
 
 #### Scenario: Record without a test list
-- **WHEN** the tree's recorded pass lists no tests
-- **THEN** the check marks each existing citation as found, and whether it ran as unknown
+- **WHEN** the tree's recorded pass lists no tests, and every citation of a clause exists at the commit
+- **THEN** the check marks each citation as found with whether it ran unknown, and the clause as covered with its run unknown
 
 #### Scenario: Declared uncovered
 - **WHEN** a clause cites no tests
@@ -136,7 +144,7 @@ Kawai's check SHALL resolve each citation at the result's commit:
 ### Requirement: Reviewers record their own coverage map first
 A team member SHALL be able to record its own coverage map for a result with `task_submit_coverage`, allowed without an approval card.
 
-While a session holds a review handoff for a result and has recorded no map for it, the task record that session reads SHALL withhold the submitter's map, stating how many clauses it has. Once that session has recorded its map, the task record SHALL show both maps and their differences.
+While a session holds a task's outstanding review handoff for a result and has recorded no map for that result, the task record that session reads SHALL withhold the submitter's map of every result of the task, stating how many clauses each has. Once that session has recorded its map, the task record SHALL show the maps and their differences.
 
 #### Scenario: Map withheld from the reviewer
 - **WHEN** a reviewer holding the review handoff for a result reads the task before recording its own map
@@ -148,6 +156,10 @@ While a session holds a review handoff for a result and has recorded no map for 
   - the clauses only one map names;
   - for each clause, the tests only one side cites;
   - the clauses that one side calls uncovered while the other cites tests for them
+
+#### Scenario: A newer result's map is withheld too
+- **WHEN** the submitter submits a newer result while the reviewer holds the review handoff for the earlier one and has recorded no map for it
+- **THEN** the newer result's map is withheld from that reviewer as well
 
 #### Scenario: Others see the submitter's map
 - **WHEN** the human, or a session without that review handoff, reads the task

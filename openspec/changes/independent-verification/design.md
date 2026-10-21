@@ -41,6 +41,7 @@ See proposal.md (Why) for the motivation. The current state that shapes this des
 
 - **Scheduling.**
   - `submit` inserts a `pending` check row in the same transaction as the result. After commit, a new `onResult` callback hands the row to `ResultCheckService`.
+  - The pending row is the only check write in that transaction, and nothing the check reads or computes runs inside it. The row can fail to insert only the way the result's own insert can, and then the submission fails as it does today.
   - The service runs a team's pending checks one at a time, oldest first. Each git call has the existing 10-second timeout, and the whole check has a 120-second budget.
   - A check that throws, times out, or overruns is stored as `unavailable` with its reason. The tool call that submitted the result returned long before.
 - **Startup.** Every `pending` row runs once after startup. Because the row commits with its result, a crash between the commit and the run loses nothing. This is a new recovery mechanism, so it gets a row in `docs/recovery-matrix.md`.
@@ -93,7 +94,7 @@ The only write is `git merge-tree --write-tree`, which adds unreferenced objects
 
 ### D4. Storage, rechecks, and the one-pending rule
 
-All storage arrives in the next free migration. master is at 14 today; coordinate the number with the open branches at implementation.
+All storage arrives in the next free migration. At this proposal's base, 35d2d30b, master's newest migration is 18 (`worker-choice`). Coordinate the number with the open branches at implementation.
 
 - **`team_task_result_checks`.** Columns: `id`, `team_id`, `task_id`, `result_id`, `seq`, `trigger` (`submit` or `recheck`), `requested_by_kind`, `requested_by_session`, `status` (`pending`, `done`, or `unavailable`), `facts`, `reason`, `created_at`, `finished_at`.
   - `UNIQUE (result_id, seq)`.
@@ -117,24 +118,33 @@ All storage arrives in the next free migration. master is at 14 today; coordinat
   - A task clause is written as its task number plus `Verify` (for example `2.1 Verify`).
 - **Citations.** A citation uses the recovery-matrix grammar, `` `path` › `title` ``, with the path relative to the repository root.
 - **Resolution at the commit.**
-  - `git show <sha>:<path>` must exist, and `testTitles` must find the title as a `test` or `it` title.
-  - The tree's newest record with a test list (D7) then classifies the citation:
+  - A result without a commit resolves nothing: each citation reads **unresolved**, with the reason that there is no commit.
+  - `git show <sha>:<path>` must exist, and `testTitles` must find the title as a `test` or `it` title. Otherwise the citation is **not found**.
+  - The tree's newest record with a test list (D7) then classifies each found citation:
     - **ran and passed:** some entry with that file and title passed, and none was skipped;
     - **not run:** every matching entry was skipped or a todo;
     - **not in the run:** no entry matches;
-    - **unknown:** no record has a test list.
-- **Clause status.** A clause is one of:
-  - **covered:** every citation was found and ran;
-  - **partly covered**;
-  - **not covered:** a citation was not found;
-  - **declared uncovered:** it cites nothing.
+    - **found, run unknown:** no record of the tree has a test list.
+- **Clause status** derives from the clause's citation outcomes.
+  - A citation is **good** when it ran and passed, or when it was found and no test list exists.
+  - It is **bad** when it was not found, not run, or not in the run.
+
+  The first status that matches wins:
+  1. **declared uncovered:** the clause cites nothing;
+  2. **unresolved:** the result has no commit;
+  3. **covered:** every citation ran and passed;
+  4. **covered, run unknown:** every citation was found, and no test list exists;
+  5. **partly covered:** at least one citation is good, and at least one is bad;
+  6. **not covered:** every citation is bad.
+
+  Because a tree either has a test list or has none, one clause never mixes "ran and passed" with "found, run unknown".
 
 ### D6. The blind-first seal
 
-- **Who is sealed.** A reading session S is sealed from result R's map when both hold:
-  - S holds R's outstanding review handoff: the assignment's `handoff_kind` is `review`, its `result_id` is R, and S is either its session target or its claimant.
+- **Who is sealed.** A reading session S is sealed from the submitter's maps of task T when both hold:
+  - S holds T's outstanding review handoff for some result R: the assignment's `handoff_kind` is `review`, its `result_id` is R, and S is either its session target or its claimant.
   - S has no row for R in `team_task_coverage_maps`.
-- **What sealing does.** For S, `task_get` replaces R's map with `{ withheld: true, clauses: n }`.
+- **What sealing does.** For S, `task_get` replaces the map of every result of T with `{ withheld: true, clauses: n }`. This includes results newer than R, since an author who submits again may carry its map over.
 - **What is never sealed.**
   - `handoffInstruction` builds the review instruction and already names only the result, its commit, and the summary. A test pins that it never renders the map.
   - The human and every other session always see the map.
@@ -165,17 +175,18 @@ All storage arrives in the next free migration. master is at 14 today; coordinat
   - An annotation is a line `// @covers: <capability> › <requirement> › <scenario>`, using the U+203A separator with spaces as in the recovery matrix.
   - Several annotations may stack. The next line that is neither blank nor a comment must open a `test(` or `it(` call, with modifiers.
   - The guard scans `src/**/*.test.ts(x)`, `scripts/**/*.test.ts`, and `tests/e2e/**/*.spec.ts`.
-- **Scenario index.**
-  - Main specs: every `### Requirement:` and its `#### Scenario:` lines in `openspec/specs/*/spec.md`.
-  - Active change deltas: every section.
-  - Archived deltas: the `ADDED` and `MODIFIED` sections only.
+- **What an annotation may name.** The scenario index holds:
+  - main specs: every `### Requirement:` and its `#### Scenario:` lines in `openspec/specs/*/spec.md`;
+  - active change deltas: every section.
+
+  Archived deltas are not in the index. So an annotation that names a renamed or removed scenario fails as stale, even while an archived delta still holds the old name.
 
   A name that itself contains ` › ` cannot be annotated, and the guard reports it.
-- **The required set.**
+- **The required set** is the only part that reads archived deltas.
   - It is every (capability, requirement, scenario) that both:
     - appears in the `ADDED` or `MODIFIED` sections of an archive dated on or after `since` and not exempt;
     - still exists in the main specs.
-  - Matching by current names means a later rename or removal drops the old name instead of failing on it.
+  - Matching by current names means a later rename or removal drops the old name instead of failing on it. Every required scenario is therefore one an annotation may name.
 - **Configuration.** `openspec/coverage.json` holds `{ "since": "YYYY-MM-DD", "exempt": [<change names>] }`.
   - `since` is the day the guard lands.
   - `exempt` lists the changes active on that day, so no in-flight change is blocked by a rule it was not written for.
@@ -222,7 +233,10 @@ The fixture-spec lister and its guards are now the sibling change `ci-fixture-sp
 - **The human.**
   - `TaskResultCard` shows "Checked by Kawai · <time>", with each fact's status and detail, and a Recheck button.
   - It shows the map with the "claimed" label, beside each citation's checked outcome, and the reviewers' maps with the comparison.
-- **Guards.** A structural test keeps the execution, landing, dispatch, acceptance, and staffing modules free of `verification/` imports, so no check can become an input to them.
+- **Guards.**
+  - A structural test keeps the execution, landing, dispatch, staffing, and routing modules free of `verification/` imports, so no check can become an input to them. That is the module list `outboundIsolation.test.ts` guards against the outbound store.
+  - Acceptance lives in `TaskResultService.ts`, which also writes the pending row (D1). A file-level guard therefore cannot cover it; the test for the scenario "A failing check does not gate" pins it instead.
+  - The seal and the comparison are pure functions in `src/shared/coverageMaps.ts`, which the task read side imports.
 
 ## Risks / Trade-offs
 
@@ -238,7 +252,7 @@ The fixture-spec lister and its guards are now the sibling change `ci-fixture-sp
 1. **PR A:** move the record, key, and title modules (tasks 1.x). It depends on nothing open.
 2. **PR B:** server checks, storage, recheck, the result card, and the recovery-matrix row (2.x), after PR A. It reads today's records, which have no test lists, so citations read "ran: unknown" until PR D.
 3. **PR C:** coverage maps, the seal, and the comparison (3.x), after PR B.
-4. **PR D:** test lists beside records, and the local script (4.x), after PR A and once `per-result-suite` PR A's JUnit reader and `parallel-suite`'s runner are on master.
+4. **PR D:** test lists beside records, and the local script (4.x), after PR C, and once `per-result-suite` PR A's JUnit reader and `parallel-suite`'s runner are on master. Task 4.3 extends the citation check that PR C adds (3.1), and the script's `--coverage` reads it.
 5. **PR E:** the coverage guard (5.x), after PR A, in parallel with B–D.
 6. **PR F:** procedure and docs (6.x), last.
 

@@ -32,7 +32,7 @@ Each collision costs a master merge, a new head, a CI rerun and a re-review.
   - Kawai checks that each cited test exists at the commit. Where the tree's recorded pass lists its tests, it also checks that the test ran and passed.
 - **Blind-first review.**
   - A new tool, `task_submit_coverage`, records a reviewer's own map.
-  - Kawai withholds the author's map from a reviewer holding the review handoff until that reviewer records its own.
+  - Kawai withholds the author's maps of the task from a reviewer holding its outstanding review handoff, until that reviewer records its own.
   - Afterwards Kawai shows both maps and where they differ.
 - **Check records list their tests.** A full pass also records every test that ran, and its outcome, beside the record.
 - **Spec coverage is checked.**

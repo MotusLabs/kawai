@@ -22,7 +22,7 @@ The unit suite SHALL fail, naming the file and line, when an annotation either:
 - **THEN** the suite accepts it
 
 #### Scenario: Stale annotation
-- **WHEN** a scenario is renamed and an annotation still names it by the old name
+- **WHEN** a scenario is renamed and an annotation still names it by the old name, which an archived change's delta still holds
 - **THEN** the suite fails, naming the annotation's file and line
 
 #### Scenario: Annotation away from a test

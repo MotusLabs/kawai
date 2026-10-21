@@ -47,7 +47,7 @@ Every test this change adds for a spec scenario carries its `// @covers:` annota
 - [ ] 2.5 Surface the checks (D12):
   - `task_get` carries each result's newest check and the count of earlier ones;
   - `TaskResultCard` shows "Checked by Kawai", with each fact and a Recheck control, while the test list stays labeled claimed;
-  - the structural test keeps the execution, landing, dispatch, acceptance, and staffing modules free of `verification/` imports.
+  - the structural test keeps the execution, landing, dispatch, staffing, and routing modules free of `verification/` imports (D12).
 
   Verify with:
   - the client tests and the structural test;
@@ -57,13 +57,14 @@ Every test this change adds for a spec scenario carries its `// @covers:` annota
 
 ## 3. Coverage maps and the blind-first seal (PR C)
 
-- [ ] 3.1 Accept `coverage` on `task_submit_result`, with D5's limits and citation grammar, and store it. Resolve its citations in the check as found, ran and passed, not run, not in the run, or unknown. Verify:
+- [ ] 3.1 Accept `coverage` on `task_submit_result`, with D5's limits and citation grammar, and store it. In the check, resolve each citation as not found, ran and passed, not run, not in the run, found with its run unknown, or unresolved without a commit, and derive each clause's status (D5). Verify:
   - one test per scenario of "Results carry a coverage map";
   - a malformed citation is refused, naming its clause index.
-- [ ] 3.2 Add `task_submit_coverage`, the seal in `task_get` (D6), and the derived comparison. Verify each scenario of "Reviewers record their own coverage map first", covering:
+- [ ] 3.2 Add `task_submit_coverage`, the seal in `task_get` (D6), and the derived comparison, with the seal and the comparison as pure functions in `src/shared/coverageMaps.ts` (D12). Verify each scenario of "Reviewers record their own coverage map first", covering:
   - a reviewer that is the session target of a review handoff;
   - a reviewer that claimed a group-target handoff;
   - the human, and a third session;
+  - a newer result of the task, whose map is withheld too;
   - the three kinds of difference.
 
   Also verify with a `handoffInstruction` test that pins that no map is ever rendered.
@@ -89,10 +90,10 @@ Every test this change adds for a spec scenario carries its `// @covers:` annota
 
 ## 5. Spec coverage guard (PR E)
 
-- [ ] 5.1 Add the annotation parser and the scenario index (D8), over the main specs, active deltas, and the ADDED and MODIFIED sections of archived deltas. Verify with fixture trees:
+- [ ] 5.1 Add the annotation parser and the scenario index (D8), over the main specs and active deltas. Archived deltas feed only the required set (5.2). Verify with fixture trees:
   - an annotation that resolves;
   - an annotation naming an active change's scenario;
-  - a stale annotation;
+  - a stale annotation whose old name an archived delta still holds;
   - an annotation away from a test;
   - a scenario name containing ` › `.
 - [ ] 5.2 Add the guard test and `openspec/coverage.json`:
