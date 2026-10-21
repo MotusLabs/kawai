@@ -24,6 +24,7 @@ import { ValidationStore } from './validation/validationStore'
 import { ValidationDetailCache } from './validation/validationDetail'
 import { ExecutionStore } from './execution/executionStore'
 import { ExecutionService } from './execution/ExecutionService'
+import { ExecutionRevisionStore } from './revisionControl/executionRevisionStore'
 import { executionOwnership, type ExecutionOwnership } from './execution/executionOwnership'
 import { executionViewReads, executionViews } from './execution/executionView'
 import { ExecutionExecutor } from './execution/executor'
@@ -266,6 +267,8 @@ export function composePlanServices(options: PlanServicesOptions): {
     store: executionStore,
     plansStore: options.plans,
     plans,
+    // revision-control D2: Start records the execution's seq-1 revision.
+    executionRevisions: new ExecutionRevisionStore(options.db),
     validation: options.executionValidation ?? {
       prepareStanding: (planId: string, revision: number) => validation.prepareStanding(planId, revision),
       standing: (prepared: unknown) => validation.standing(prepared as Parameters<ValidationService['standing']>[0]),

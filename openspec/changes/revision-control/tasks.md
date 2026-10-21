@@ -27,6 +27,7 @@ Implement after these have landed on master: `plan-execution`, `integration-cand
   - the execution revision primary key maps to `execution-revision-unchanged`;
   - superseding a checkpoint keeps the earlier one readable.
 - [x] 2.3 Add `PlanService.recordRevisionControlEvent` and the six D3 kinds (C3, C6). Verify with unit tests: each kind replays by `(plan_id, command_id)` over its compared payload, and is refused naming the first differing field.
+- [x] 2.4 Start writes the seq-1 execution revision (D2): the inserted execution's columns in Start's transaction through `ExecutionRevisionStore`; a replayed Start writes none. Verify with a test through the composed stack (`executionComposition.test.ts` › "Start writes the seq-1 revision row in its transaction; a replay writes none and record takes seq 2"): exactly one seq-1 row equal to the execution's columns, none on replay, and a later `record()` at seq 2.
 
 ## 3. Holds
 

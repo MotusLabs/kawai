@@ -142,7 +142,7 @@ CREATE TABLE plan_execution_publication_changes (
 - the execution revision primary key makes two concurrent Applies on the same base collide, and the loser maps to `execution-revision-unchanged`;
 - guarded `UPDATE … WHERE paused_at IS NULL` and `WHERE decision IS NULL` record Paused and decisions once.
 
-The backfill inserts `seq = 1` for every execution from its row.
+The backfill inserts `seq = 1` for every execution from its row. Start inserts seq 1 in its transaction; the migration's backfill covers executions started before migration 17.
 
 ### D3. Commands, replay, and plan events
 
