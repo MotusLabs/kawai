@@ -10,6 +10,7 @@ import { Database } from 'bun:sqlite'
 import { initDatabase } from '../db'
 import { MIGRATIONS, type Migration } from '../dbSafety/migrations'
 import { planSupervisionMigration } from '../plans/decisions/decisionSchema'
+import { REVISION_CONTROL_TABLES } from '../plans/revisionControl/revisionControlSchema'
 
 const SUPERVISION_TABLES = ['plan_decision_cards', 'plan_decisions', 'plan_fix_tasks', 'plan_stall_alerts']
 const UP_TO_15: readonly Migration[] = MIGRATIONS.filter(migration => migration.version <= 15)
@@ -68,7 +69,7 @@ test('a database at version 15 with plan rows upgrades, twice, keeping every row
   for (let run = 0; run < 2; run++) initDatabase({ path: dbPath, migrations: MIGRATIONS }).close()
   const after = tables(dbPath)
   for (const [table, rows] of Object.entries(before)) expect(after[table]).toEqual(rows)
-  expect(Object.keys(after).filter(table => !(table in before)).sort()).toEqual(SUPERVISION_TABLES)
+  expect(Object.keys(after).filter(table => !(table in before)).sort()).toEqual([...SUPERVISION_TABLES, ...REVISION_CONTROL_TABLES].sort())
   expect(versions(dbPath).filter(row => row.version === 16)).toHaveLength(1)
 })
 

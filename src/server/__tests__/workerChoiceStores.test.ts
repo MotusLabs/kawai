@@ -1,7 +1,7 @@
 // The worker choice on stored rows (dispatch-worker-choice D1, task 1.3):
 // group mail and dispatches round-trip their canonical selector; a row
 // without one reads exactly as before (no `workerChoice` key at all); a
-// release back to the group keeps it; a store opened before migration 17
+// release back to the group keeps it; a store opened before migration 18
 // still enqueues ordinary mail.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import type { Database } from 'bun:sqlite'
@@ -56,7 +56,7 @@ describe('team_messages.worker_choice', () => {
 })
 
 test('a store opened on a version-16 database still enqueues mail without a choice', () => {
-  const session = initDatabase({ path: ':memory:', migrations: MIGRATIONS.filter(migration => migration.version <= 16) })
+  const session = initDatabase({ path: ':memory:', migrations: MIGRATIONS.filter(migration => migration.version <= 17) })
   const store = new MailboxStore(session.db)
   const sent = store.enqueue({ teamId: TEAM, toKind: 'group', toId: 'devs', fromSession: null, fromGroup: null, originPath: '/repo', body: 'Old build' })
   expect('workerChoice' in sent).toBe(false)

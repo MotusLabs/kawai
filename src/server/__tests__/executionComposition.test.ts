@@ -35,13 +35,14 @@ import type { ExecutionRuntime } from '../plans/execution/executionRuntime'
 import type { ExecutionStore } from '../plans/execution/executionStore'
 import { roundAdapters } from '../plans/execution/executionRounds'
 import type { ExecutionService } from '../plans/execution/ExecutionService'
+import { ExecutionRevisionStore } from '../plans/revisionControl/executionRevisionStore'
 import { LEAD_ROLES } from './decisionHarness'
 import { createPlanBench, createPlanWorld, sessionRow, writeGroup, type PlanBench, type PlanWorld } from './planHarness'
 
 const FLOOR = { lint: ['ci'], typecheck: ['ci'], 'unit-tests': ['ci'], 'ci-e2e': ['e2e'] }
 const GITHUB_URL = 'https://github.com/acme/app.git'
 /** One change name per test: the probe's name check sees earlier tests' worktrees and branches. */
-const CHANGES = ['ship-a', 'ship-b', 'ship-c', 'ship-d', 'ship-e', 'ship-f', 'ship-g']
+const CHANGES = ['ship-a', 'ship-b', 'ship-c', 'ship-d', 'ship-e', 'ship-f', 'ship-g', 'ship-h']
 let changeSerial = 0
 const nextChange = (): string => CHANGES[changeSerial++ % CHANGES.length]!
 
@@ -241,6 +242,32 @@ async function implement(executionId: string, change: string): Promise<{ taskId:
 }
 
 describe('the composed execution stack (rev 3)', () => {
+  // revision-control D2: seq 1 is the revision Start recorded; the migration's
+  // backfill covers executions started before migration 17.
+  test('Start writes the seq-1 revision row in its transaction; a replay writes none and record takes seq 2', async () => {
+    const change = nextChange()
+    const { planId, revision, hash } = await bench.draftInReview({
+      changes: [{ change, dependsOn: [], group: 'middle-devs', acceptance: [], extraChecks: [], guidance: '' }],
+      reviewGroup: 'reviewers',
+    })
+    await bench.approve(planId, revision)
+    const started = await service.start(bench.human, { planId, revision, contentHash: hash, commandId: `start-${change}` })
+    if (!started.ok) throw new Error(`start refused: ${started.message}`)
+    const execution = store.execution(started.execution.id)!
+    const revisions = new ExecutionRevisionStore(bench.db.db)
+    expect(revisions.history(started.execution.id)).toEqual([{
+      executionId: started.execution.id, seq: 1, revision: execution.revision, contentHash: execution.contentHash,
+      reportId: execution.reportId, inputHash: execution.inputHash, rationale: null, commandId: null,
+      payload: null, appliedAt: execution.startedAt,
+    }])
+    // A replayed Start replays through the plan event and writes no second row (R17).
+    const replay = await service.start(bench.human, { planId, revision, contentHash: hash, commandId: `start-${change}` })
+    expect(replay.ok && replay.replayed).toBe(true)
+    expect(revisions.history(started.execution.id)).toHaveLength(1)
+    // The next revision appends at seq 2.
+    const next = revisions.record({ executionId: started.execution.id, revision, contentHash: hash, reportId: execution.reportId, inputHash: execution.inputHash, appliedAt: execution.startedAt, rationale: 'apply', commandId: 'apply-tbl', payload: null }, [])
+    expect(next.seq).toBe(2)
+  })
   test('the default composition carries the real adapters', () => {
     expect(runtime.adapters.fixture).toBe(false)
     expect(runtime.adapters.rounds).toBe(roundAdapters)

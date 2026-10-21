@@ -9,7 +9,7 @@
 import type { Database } from 'bun:sqlite'
 import type { Migration } from '../dbSafety/migrations'
 
-export const WORKER_CHOICE_MIGRATION_VERSION = 17
+export const WORKER_CHOICE_MIGRATION_VERSION = 18
 
 export function applyWorkerChoiceColumns(db: Database): void {
   for (const table of ['team_messages', 'team_task_assignments']) {
