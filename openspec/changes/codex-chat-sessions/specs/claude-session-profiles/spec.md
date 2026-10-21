@@ -3,7 +3,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: Users select a predefined chat profile
-The system SHALL offer the profiles resolved from the catalog files for the session's project path when creating a chat session, Claude and Codex profiles alike, each identified by its runtime. The selection SHALL apply to the created session and remain visible in its chat view. Omitted selections SHALL use Default. Terminal session creation SHALL retain its existing behavior.
+The system SHALL offer the profiles resolved from the catalog files for the session's project path, grouped under their providers, when creating a chat session, Claude and Codex profiles alike, each identified by its runtime. The selection SHALL apply to the created session, and its chat view SHALL identify the session's provider and profile. Omitted selections SHALL use Default. Terminal session creation SHALL retain its existing behavior.
 
 #### Scenario: Select a provider profile
 - **WHEN** a user creates a chat session with MiMo selected from the resolved catalog
