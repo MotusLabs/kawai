@@ -3,7 +3,9 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { initDatabase, type SessionDatabase } from '../db'
-import { createHarness, flush, initMessage, resultWithWindow, writeTranscript } from './helpers/chatSessionManagerHarness'
+import { createHarness, flush, initMessage, resultWithWindow, writeTranscript, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+
+installManagerCleanup()
 
 describe('ChatSessionManager model', () => {
   let tempDir: string

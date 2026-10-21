@@ -7,7 +7,9 @@ import type { ChatEvent } from '../../shared/chat'
 import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
 import { ChatTaskStore } from '../chat/chatTaskStore'
-import { anyDirectory, FakeHandle, managedManager, fakeQueryFactory, createHarness, flush, waitForCondition } from './helpers/chatSessionManagerHarness'
+import { anyDirectory, FakeHandle, managedManager, fakeQueryFactory, createHarness, flush, waitForCondition, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+
+installManagerCleanup()
 
 describe('ChatSessionManager background-task roster (background tasks D2)', () => {
   let tempDir: string

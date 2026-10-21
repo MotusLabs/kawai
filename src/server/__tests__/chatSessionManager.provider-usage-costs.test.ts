@@ -7,7 +7,9 @@ import type { ChatEvent, ChatUsageReport } from '../../shared/chat'
 import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
 import { ChatSessionManager } from '../chat/ChatSessionManager'
-import { anyDirectory, FakeHandle, managedManager, closeDispatchers, fakeQueryFactory, createHarness, flush, initMessage, resultWithWindow, writeTranscript, drainNow } from './helpers/chatSessionManagerHarness'
+import { anyDirectory, FakeHandle, managedManager, closeDispatchers, fakeQueryFactory, createHarness, flush, initMessage, resultWithWindow, writeTranscript, drainNow, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+
+installManagerCleanup()
 
 describe('ChatSessionManager provider usage pull', () => {
 

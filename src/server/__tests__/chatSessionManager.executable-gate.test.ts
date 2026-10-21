@@ -5,7 +5,9 @@ import path from 'node:path'
 import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
 import { ClaudeExecutableError } from '../chat/claudeExecutable'
-import { anyDirectory, FakeHandle, managedManager, closeDispatchers, fakeQueryFactory, createHarness, flush, initMessage } from './helpers/chatSessionManagerHarness'
+import { anyDirectory, FakeHandle, managedManager, closeDispatchers, fakeQueryFactory, createHarness, flush, initMessage, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+
+installManagerCleanup()
 
 describe('ChatSessionManager', () => {
 

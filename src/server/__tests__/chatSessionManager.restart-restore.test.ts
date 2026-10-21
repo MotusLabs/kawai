@@ -3,7 +3,9 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { initDatabase, type SessionDatabase } from '../db'
-import { closeDispatchers, createHarness, flush, initMessage, writeTranscript } from './helpers/chatSessionManagerHarness'
+import { closeDispatchers, createHarness, flush, initMessage, writeTranscript, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+
+installManagerCleanup()
 
 describe('ChatSessionManager', () => {
 

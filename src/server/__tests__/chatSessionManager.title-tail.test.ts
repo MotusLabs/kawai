@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { initDatabase, type SessionDatabase } from '../db'
 import { OutboundStore } from '../outbound/store'
-import { anyDirectory, closeDispatchers, createHarness, flush, waitForCondition, initMessage, writeTranscript } from './helpers/chatSessionManagerHarness'
+import { anyDirectory, closeDispatchers, createHarness, flush, waitForCondition, initMessage, writeTranscript, installManagerCleanup } from './helpers/chatSessionManagerHarness'
 
 // Advance fake timers in small steps, draining microtasks between steps so a
 // fired timer's continuations settle before the next advance (flush uses a
@@ -15,6 +15,8 @@ const settle = async (rounds: number, stepMs = 1): Promise<void> => {
     for (let r = 0; r < 40; r++) await Promise.resolve()
   }
 }
+
+installManagerCleanup()
 
 describe('ChatSessionManager', () => {
 

@@ -7,7 +7,9 @@ import type { ChatWorker } from '../../shared/chat'
 import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
 import { ChatWorkerStore } from '../chat/chatWorkerStore'
-import { anyDirectory, FakeHandle, managedManager, closeDispatchers, fakeQueryFactory, createHarness, flush, waitForCondition, initMessage, writeTranscript } from './helpers/chatSessionManagerHarness'
+import { anyDirectory, FakeHandle, managedManager, closeDispatchers, fakeQueryFactory, createHarness, flush, waitForCondition, initMessage, writeTranscript, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+
+installManagerCleanup()
 
 describe('ChatSessionManager worker sidecar', () => {
   let tempDir: string

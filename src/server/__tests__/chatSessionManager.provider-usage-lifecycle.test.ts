@@ -6,7 +6,9 @@ import type { ChatUsageReport } from '../../shared/chat'
 import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
 import { ChatSessionManager } from '../chat/ChatSessionManager'
-import { anyDirectory, FakeHandle, managedManager, closeDispatchers, fakeQueryFactory, flush, waitForCondition } from './helpers/chatSessionManagerHarness'
+import { anyDirectory, FakeHandle, managedManager, closeDispatchers, fakeQueryFactory, flush, waitForCondition, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+
+installManagerCleanup()
 
 describe('ChatSessionManager provider usage pull', () => {
 

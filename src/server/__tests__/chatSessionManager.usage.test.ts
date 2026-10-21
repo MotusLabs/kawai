@@ -4,7 +4,9 @@ import os from 'node:os'
 import path from 'node:path'
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import { initDatabase, type SessionDatabase } from '../db'
-import { anyDirectory, closeDispatchers, createHarness, flush } from './helpers/chatSessionManagerHarness'
+import { anyDirectory, closeDispatchers, createHarness, flush, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+
+installManagerCleanup()
 
 describe('ChatSessionManager usage', () => {
   let tempDir: string

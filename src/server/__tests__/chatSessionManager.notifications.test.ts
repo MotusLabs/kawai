@@ -7,7 +7,9 @@ import type { ChatNotification } from '../../shared/chat'
 import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
 import { ChatSessionManager } from '../chat/ChatSessionManager'
-import { anyDirectory, writeCredentialedProviderCatalog, FakeHandle, testManagers, managedManager, closeDispatchers, fakeQueryFactory } from './helpers/chatSessionManagerHarness'
+import { anyDirectory, writeCredentialedProviderCatalog, FakeHandle, testManagers, managedManager, closeDispatchers, fakeQueryFactory, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+
+installManagerCleanup()
 
 describe('ChatSessionManager notifications', () => {
   let tempDir: string

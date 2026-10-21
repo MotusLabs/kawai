@@ -6,7 +6,9 @@ import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
 import { ChatWireLogs } from '../chat/ChatWireLogs'
-import { anyDirectory, FakeHandle, managedManager, closeDispatchers, fakeQueryFactory, createHarness, flush, waitForCondition } from './helpers/chatSessionManagerHarness'
+import { anyDirectory, FakeHandle, managedManager, closeDispatchers, fakeQueryFactory, createHarness, flush, waitForCondition, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+
+installManagerCleanup()
 
 describe('ChatSessionManager', () => {
 
@@ -139,11 +141,12 @@ describe('ChatSessionManager', () => {
       seed.get(id).record('in', 'frame')
       await seed.get(id).flush()
     }
-    managedManager({
+    await managedManager({
       isDirectory: anyDirectory,
       db, registry: new SessionRegistry(), onEvent: () => {}, wireLogs: new ChatWireLogs({ dir }),
     })
-    await flush()
+    // The prune's rm runs on an async chain; poll instead of trusting fixed timers.
+    await waitForCondition(() => fs.readdirSync(dir).length === 1)
     expect(fs.readdirSync(dir)).toEqual([`${kept.session.id}.jsonl`])
   })
 

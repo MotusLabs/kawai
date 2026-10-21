@@ -5,7 +5,9 @@ import path from 'node:path'
 import type { ChatEvent } from '../../shared/chat'
 import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
-import { anyDirectory, managedManager, closeDispatchers, createHarness, flush } from './helpers/chatSessionManagerHarness'
+import { anyDirectory, managedManager, closeDispatchers, createHarness, flush, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+
+installManagerCleanup()
 
 describe('ChatSessionManager', () => {
 

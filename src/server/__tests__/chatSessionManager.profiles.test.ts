@@ -5,7 +5,9 @@ import path from 'node:path'
 import { initDatabase, type SessionDatabase } from '../db'
 import { MetricsSnapshot } from '../metrics/export/snapshot'
 import { NOTIFY_DEBOUNCE_MS } from '../metrics/observations/service'
-import { closeDispatchers, createHarness, flush, initMessage, assistantUsage, resultWithWindow, compactBoundary, writeTranscript } from './helpers/chatSessionManagerHarness'
+import { closeDispatchers, createHarness, flush, initMessage, assistantUsage, resultWithWindow, compactBoundary, writeTranscript, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+
+installManagerCleanup()
 
 describe('ChatSessionManager', () => {
 

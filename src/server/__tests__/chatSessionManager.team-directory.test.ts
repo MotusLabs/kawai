@@ -3,13 +3,15 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { initDatabase, type SessionDatabase } from '../db'
-import { createHarness, flush, waitForCondition, initMessage, writeTranscript } from './helpers/chatSessionManagerHarness'
+import { createHarness, flush, waitForCondition, initMessage, writeTranscript, installManagerCleanup } from './helpers/chatSessionManagerHarness'
 
 /**
  * Last-known identity (team-message-threads D3): creation and every rename
  * path keep `team_session_directory` current, and kill or archive never write
  * there — the row is what still names a participant after the session is gone.
  */
+installManagerCleanup()
+
 describe('ChatSessionManager team session directory', () => {
   let tempDir: string
   let db: SessionDatabase

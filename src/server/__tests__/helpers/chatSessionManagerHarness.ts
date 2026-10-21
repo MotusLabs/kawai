@@ -76,10 +76,18 @@ export function closeDispatchers() {
     manager.observations.stop()
   }
 }
-afterEach(() => {
-  closeDispatchers()
-  testManagers.clear()
-})
+/**
+ * Registers the per-test cleanup in the importing file's own scope. Bun caches
+ * this module across a shared-process `bun test` run, so an import-time
+ * afterEach would reach the first importing file only; each split file calls
+ * this once at its top level instead (B1 review F1).
+ */
+export function installManagerCleanup(): void {
+  afterEach(() => {
+    closeDispatchers()
+    testManagers.clear()
+  })
+}
 
 export function fakeQueryFactory(
   handles: FakeHandle[],

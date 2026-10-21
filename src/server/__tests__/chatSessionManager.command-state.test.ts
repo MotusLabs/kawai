@@ -6,7 +6,9 @@ import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { ChatEvent } from '../../shared/chat'
 import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
-import { anyDirectory, FakeHandle, managedManager, closeDispatchers, fakeQueryFactory, flush } from './helpers/chatSessionManagerHarness'
+import { anyDirectory, FakeHandle, managedManager, closeDispatchers, fakeQueryFactory, flush, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+
+installManagerCleanup()
 
 describe('ChatSessionManager', () => {
 

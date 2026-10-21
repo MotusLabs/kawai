@@ -7,7 +7,9 @@ import { initDatabase, type SessionDatabase } from '../db'
 import { logger } from '../logger'
 import { SessionRegistry } from '../SessionRegistry'
 import { ChatSessionManager } from '../chat/ChatSessionManager'
-import { anyDirectory, FakeHandle, managedManager, closeDispatchers, fakeQueryFactory, drainNow } from './helpers/chatSessionManagerHarness'
+import { anyDirectory, FakeHandle, managedManager, closeDispatchers, fakeQueryFactory, drainNow, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+
+installManagerCleanup()
 
 describe('ChatSessionManager provider usage pull', () => {
 

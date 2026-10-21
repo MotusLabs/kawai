@@ -5,7 +5,9 @@ import path from 'node:path'
 import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
 import { hasClaudeAuth } from '../chat/ChatSessionManager'
-import { anyDirectory, writeCredentialedProviderCatalog, FakeHandle, managedManager, closeDispatchers, fakeQueryFactory, createHarness, flush } from './helpers/chatSessionManagerHarness'
+import { anyDirectory, writeCredentialedProviderCatalog, FakeHandle, managedManager, closeDispatchers, fakeQueryFactory, createHarness, flush, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+
+installManagerCleanup()
 
 describe('ChatSessionManager', () => {
 
