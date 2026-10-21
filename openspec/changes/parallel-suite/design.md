@@ -18,6 +18,42 @@ main batch   449 files, one process, serial          411.8 s
 - The runner sets one `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `LOG_FILE`, and `AGENTBOARD_DB_PATH` for the whole run. Tests reference these variables in 256 places. Many set their own, but any that rely on the runner's value would collide under parallel workers.
 - Hand-kept isolation lists exist only because Bun 1.3's single process leaked module mocks and global patches between files. Each list entry has a comment describing such a leak.
 
+### Measurements
+
+Recorded 2026-10-21 in one exclusive window (`suite-run -x`; evidence under `/home/coder/kawai-lead/logs/ps-window/`, `<label>.summary`/`.load1`/`.exit`/`.jsonl` per run, `A.log`–`D2.log`, `22-runs/`, `24-runs/`). Peak memory is the sampler's process-tree PSS sum at 1 Hz; every run's summary also records the cgroup `memory.current` baseline, `memory.oom.group = 0`, and `cpu.max 600000 100000` (a 6-CPU quota).
+
+**1.1 baseline** — the old runner, serial:
+
+| Run | Exit | Wall | Peak PSS (kB) | Notes |
+|---|---|---|---|---|
+| Alone | 0 | 466.4 s | 1,079,656 | the D2 bar; cgroup peak anon 5.75 GB, load1 1.42 |
+| Beside two old-runner suites | 0 | 1320.7 s | 961,796 | load1 1.12 |
+
+**2.3, new runner, alone:**
+
+| N | Wall | Peak PSS (kB) | load1 at start | Note |
+|---|---|---|---|---|
+| 1 | 474.5 s | 766,174 | 1.46 | |
+| 2 | 524.8 s | 758,402 | 1.44 | |
+| 4 | 357.2 s | 1,047,611 | 1.46 | |
+| 6 | 246.2 s | 1,427,926 | 0.69 | 1.32× the serial peak, so excluded |
+
+**2.3, loaded** — N=4 three times, each beside two N=1 suites; every run exit 0, no test failed at the 20 s default:
+
+| Run | Wall | Peak PSS (kB) | load1 |
+|---|---|---|---|
+| 1 | 409.2 s | 1,016,900 | 1.69 |
+| 2 | 408.1 s | 981,301 | 2.63 |
+| 3 | 380.8 s | 991,373 | 1.33 |
+
+**The chosen N is 4**: the largest measured N whose alone peak stays within the serial run's peak (N=6 exceeds it), its loaded triple passed, and the 6-CPU quota is above 4. This is the D2 rationale for the runner's `MEASURED_WORKERS = 4`, capped at the quota.
+
+**Worker count**: the window's sampler recorded no worker pids (it matched the root's cmdline; the workers' argv differs — a sampler defect, the peaks are unaffected). The count is established instead by the hand probe (N=1, 2, 4, 6 each report exactly N distinct `--test-worker` pids and max=N; `logs/ps-a-probe.log`) and held by `scripts/__tests__/parallelWorkers.test.ts`; the window's argv record agrees (`parallelArgMax`: n6=6, each loaded run 4). For the short 2.4 ordering runs (~4 s) the 1 Hz sampler sometimes catches fewer pids than were spawned, so those runs are gated on exit, file count, and `parallelArgMax`, not on `distinctWorkerPids`.
+
+**N=2 observation** (open): N=2 showed no speedup over N=1 in five runs at the same peak. It does not change the choice.
+
+**1.1 per-file timings** — new runner at N=1, per-file isolation (`logs/ps-window/timings-n1.json`, written by `--timings --update-timings` on a full serial run; 573 files, 524.2 s summed). The 20 slowest, 49.2% of the total: chatSessionManager 51.0 s, throttled-reconnect.integration 30.3 s, promotionSteps 19.9 s, executionLandingMatrix 19.9 s, copy-mode-async.integration 12.7 s, executionRoundsMatrix 11.2 s, planExecution.integration 9.9 s, executionRounds 9.6 s, integrationLandingRules 9.5 s, executionScenarioMatrix 9.3 s, taskRevisionE09.integration 9.2 s, effectLifecycleTable 8.8 s, promotionService 8.5 s, integrationLanding 8.4 s, executionPlanWideChecks 8.1 s, promotion.integration 6.9 s, impactService 6.5 s, taskResultsE08.integration 6.5 s, integrationLanding.integration 6.2 s, effectResumeRounds 5.2 s.
+
 ## Goals / Non-Goals
 
 **Goals:**
