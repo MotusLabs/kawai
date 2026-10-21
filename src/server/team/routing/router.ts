@@ -356,5 +356,6 @@ function routeMessage(message: TeamMessage, worktree: string | null): RouteMessa
     id: message.id, priority: message.priority, senderGroup: message.fromGroup, tags: message.tags,
     worktree, taskId: message.taskId,
     ...(message.handoff ? { forwardedFromProfile: message.handoff.fromProfile } : {}),
+    ...(message.workerChoice ? { worker: message.workerChoice } : {}),
   }
 }

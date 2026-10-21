@@ -189,3 +189,17 @@ describe('a rule pick outside the filtered set (2.3)', () => {
     expect(router.decisions('team')[1]).toMatchObject({ source: 'fallback', reason: 'rule picked unknown candidate member:b' })
   })
 })
+
+describe('rules see the worker choice (2.6)', () => {
+  test('the route context names the choice beside the other metadata, and omits it without one', async () => {
+    const seen: RouteContext[] = []
+    rule = async ctx => { seen.push(ctx); return { type: 'default' } }
+    const router = makeRouter()
+    await router.route(message({ workerChoice: 'zai' }), { eligible: [eligible('a', 5)], attempt: 0 })
+    await router.route(message(), { eligible: [eligible('a', 5)], attempt: 0 })
+    const { worker, ...rest } = seen[0]!.message
+    expect(worker).toBe('zai')
+    expect(rest).toEqual(seen[1]!.message)
+    expect('worker' in seen[1]!.message).toBe(false)
+  })
+})

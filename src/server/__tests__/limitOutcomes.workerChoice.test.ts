@@ -8,6 +8,7 @@ import { MailboxStore, type TeamMessage } from '../team/mailboxStore'
 import { LimitEventStore } from '../team/routing/limitEvents'
 import { LimitOutcomes } from '../team/routing/limitOutcomes'
 import { parseGroupFile, type GroupDefinition } from '../team/groupFile'
+import type { LimitOutcome, LimitOutcomeContext } from '../../shared/routing'
 import { schemaDb } from './schemaDb'
 
 const MIN = 60_000
@@ -20,6 +21,8 @@ let limits: LimitEventStore
 let outcomes: LimitOutcomes
 let records: Map<string, ChatSessionRecord>
 let groups: Map<string, GroupDefinition>
+/** A group rule's onLimit, when the test installs one. */
+let onLimit: ((ctx: LimitOutcomeContext) => Promise<LimitOutcome>) | null
 
 const group = (id: string, frontmatter = '') => {
   const parsed = parseGroupFile(id, `---\n${frontmatter}\n---\nWork.`)
@@ -37,9 +40,10 @@ beforeEach(() => {
   limits = new LimitEventStore(db, () => T0)
   records = new Map([['dev', record('dev')], ['lead', record('lead', { groupId: 'leads' })]])
   groups = new Map()
+  onLimit = null
   outcomes = new LimitOutcomes(db, {
     store, limits,
-    rules: { rule: () => undefined },
+    rules: { rule: () => (onLimit ? { hasOnLimit: true, onLimit } as never : undefined) },
     getRecord: id => records.get(id),
     teamOf: id => (records.has(id) ? 'team' : undefined),
     groupOf: (_sessionId, groupId) => groups.get(groupId),
@@ -87,5 +91,13 @@ describe('a worker choice across limit outcomes (2.5)', () => {
     group('devs', 'onLimit: { otherwise: release }')
     const message = await limitedChoice()
     expect(store.get(message.id)).toMatchObject({ state: 'queued', toKind: 'group', toId: 'devs', workerChoice: 'zai' })
+  })
+
+  test('the onLimit rule sees the choice (2.6)', async () => {
+    group('devs')
+    const seen: LimitOutcomeContext[] = []
+    onLimit = async ctx => { seen.push(ctx); return { type: 'release' } }
+    await limitedChoice()
+    expect(seen.map(ctx => ctx.message.worker)).toEqual(['zai'])
   })
 })
