@@ -16,6 +16,7 @@ import { attentionItems, type AttentionInput } from '../../server/team/workspace
 import { morningSummary } from '../../server/team/workspaceSummary'
 import type { ChangeSupervision } from '../../shared/planSupervision'
 import { useSessionStore } from '../stores/sessionStore'
+import { useTeamPlanStore } from '../stores/teamPlanStore'
 import { useTeamTaskStore } from '../stores/teamTaskStore'
 import { useTeamWorkspaceStore } from '../stores/teamWorkspaceStore'
 import type { TeamLocation } from '../utils/teamLocation'
@@ -44,7 +45,11 @@ beforeEach(() => {
   useTeamWorkspaceStore.setState({ views: {} })
   useSessionStore.setState({ selectedSessionId: null })
 })
-afterEach(() => useTeamWorkspaceStore.setState({ views: {} }))
+afterEach(() => {
+  useTeamWorkspaceStore.setState({ views: {} })
+  // The plan and card links set the Plans view's scroll target (plan-supervision D15).
+  useTeamPlanStore.setState({ reveal: null })
+})
 
 test('human-required items are separated from agent-owned waits, with counts', () => {
   const opened: string[] = []
