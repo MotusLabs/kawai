@@ -3,8 +3,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { isProcDead } from './fixtures/runnerProbe/procState'
+import { buildBunTestArgs } from '../planBatches'
 import {
-  buildBunTestArgs,
   defaultWorkers,
   forwardSignalAndReap,
   isOwnerAlive,
