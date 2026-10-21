@@ -16,8 +16,8 @@
 ## 3. Scheduling and the floor
 
 - [ ] 3.1 Write per-file timings to `<git-common-dir>/kawai-checks/timings.json` after full runs and pass it with `--timings`. Use a per-run snapshot and atomic writes with unique temporary names. Verify concurrent writers never expose partial JSON, and that a missing or malformed file runs unordered without failing.
-- [ ] 3.2 Split `chatSessionManager.test.ts` into files of at most 500 lines plus a shared harness module. Verify that the test count before and after is identical (compare the names from the JUnit report) and that no new file takes over 20 s.
-- [ ] 3.3 Move the title-tail test to fake timers or an injected clock. Verify that it finishes in under 0.5 s and still fails when the title-tail arming is removed (a mutation check).
+- [x] 3.2 Split `chatSessionManager.test.ts` into files of at most 500 lines plus a shared harness module. Verify that the test count before and after is identical (compare the names from the JUnit report) and that no new file takes over 20 s.
+- [x] 3.3 Move the title-tail test to fake timers or an injected clock. Verify that it finishes in under 0.5 s and still fails when the title-tail arming is removed (a mutation check).
 
 ## 4. Setup costs and tiers
 

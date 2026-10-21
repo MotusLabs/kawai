@@ -4,7 +4,8 @@
 // that marks the driver dead so the next send respawns and resumes.
 import { afterEach, expect, test } from 'bun:test'
 import { z } from 'zod'
-import type { ChatEvent } from '../../shared/chat'
+import type { ChatEvent, ChatUsageReport } from '../../shared/chat'
+import type { ChatLimitSignal } from '../chat/limitSignals'
 import { codexEffort } from '../chat/codex/CodexSessionDriver'
 import { eventTypes, ROLLOUT, Script, sentRequest, startHarness, THREAD_ID, until, type Harness } from './codexDriverHarness'
 
@@ -217,4 +218,129 @@ test('a second turn reusing a question item id raises the card again', async () 
   harness.driver.send('two')
   await until(() => completedOf(harness!.events).length === 2)
   expect(harness.events.filter(event => event.type === 'question_request')).toHaveLength(2)
+})
+
+// --- PR E (codex-chat-sessions 7.1): usage wiring ---
+
+const RATE_LIMITS = {
+  limitId: 'codex',
+  limitName: null,
+  normalModelSlug: null,
+  primary: { usedPercent: 40, windowDurationMins: 300, resetsAt: 1792337450 },
+  secondary: { usedPercent: 12, windowDurationMins: 10080, resetsAt: 1792879251 },
+  credits: null,
+  individualLimit: null,
+  spendControlReached: null,
+  planType: 'plus',
+  rateLimitReachedType: null,
+}
+
+test('a rate-limits push reports the normalized windows through onRateLimit', async () => {
+  const script = new Script().boot().turn('ct-1')
+    .notify('account/rateLimits/updated', { rateLimits: RATE_LIMITS })
+    .completed('ct-1')
+  const reports: ChatUsageReport[] = []
+  harness = startHarness(script, { onRateLimit: report => reports.push(report) })
+  harness.driver.send('hi')
+  await until(() => reports.length === 1)
+  expect(reports[0]!.source).toBe('push')
+  expect(reports[0]!.windows.map(window => window.key)).toEqual(['codex:primary', 'codex:secondary'])
+})
+
+test('the boot fill read is claim-gated: a claim reads once and reports as a provider pull', async () => {
+  let claims = 0
+  const script = new Script().boot()
+    .request('account/rateLimits/read', { rateLimits: RATE_LIMITS })
+    .turn('ct-1')
+    .completed('ct-1')
+  const reports: ChatUsageReport[] = []
+  harness = startHarness(script, {
+    claimRateLimitsRead: () => {
+      claims += 1
+      return claims === 1
+    },
+    onRateLimit: report => reports.push(report),
+  })
+  harness.driver.send('hi')
+  await until(() => reports.length === 1)
+  expect(reports[0]!.source).toBe('provider')
+  expect(reports[0]!.windows).toHaveLength(2)
+  expect(sentRequest(harness!, 'account/rateLimits/read')).toEqual({})
+  expect(claims).toBe(1)
+})
+
+test('without a claim the boot sends no rate-limits read', async () => {
+  const script = new Script().boot().turn('ct-1').completed('ct-1')
+  harness = startHarness(script, { claimRateLimitsRead: () => false })
+  harness.driver.send('hi')
+  await until(() => completedOf(harness!.events).length === 1)
+  expect(harness!.sent.map(message => message.method)).not.toContain('account/rateLimits/read')
+})
+
+test('a read without a usable snapshot reports no data', async () => {
+  const script = new Script().boot()
+    .request('account/rateLimits/read', {})
+    .turn('ct-1')
+    .completed('ct-1')
+  let noData = 0
+  harness = startHarness(script, { claimRateLimitsRead: () => true, onUsageNoData: () => { noData += 1 } })
+  harness.driver.send('hi')
+  await until(() => noData === 1)
+})
+
+// --- PR E (codex-chat-sessions 7.2): limit signals ---
+
+const EXHAUSTED = {
+  limitId: 'codex',
+  limitName: null,
+  normalModelSlug: null,
+  primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: 1792337450 },
+  secondary: { usedPercent: 100, windowDurationMins: 10080, resetsAt: 1792879251 },
+  credits: null,
+  individualLimit: null,
+  spendControlReached: null,
+  planType: 'plus',
+  rateLimitReachedType: 'rate_limit_reached',
+}
+
+const turnError = (codexErrorInfo: unknown) =>
+  ({ message: 'limit reached', codexErrorInfo, additionalDetails: null, misalignment: null })
+
+test('a failed limit turn reports a final signal through onLimitEvent (PR E 7.2)', async () => {
+  const script = new Script().boot().turn('ct-1')
+    .notify('account/rateLimits/updated', { rateLimits: EXHAUSTED })
+    .completed('ct-1', 'failed', [], turnError('usageLimitExceeded'))
+  const signals: ChatLimitSignal[] = []
+  harness = startHarness(script, { onLimitEvent: signal => signals.push(signal) })
+  harness.driver.send('hi')
+  await until(() => signals.length === 1)
+  // Both windows exhausted: the weekly 2-day reset decides.
+  expect(signals[0]).toMatchObject({
+    kind: 'usageLimitExceeded',
+    final: true,
+    resetsAt: new Date(1792879251 * 1000).toISOString(),
+    window: null,
+  })
+})
+
+test('a retrying error notification reports a non-final signal', async () => {
+  const script = new Script().boot().turn('ct-1')
+    .notify('error', { error: turnError('rateLimitExceeded'), willRetry: true, threadId: THREAD_ID, turnId: 'ct-1' })
+    .completed('ct-1')
+  const signals: ChatLimitSignal[] = []
+  harness = startHarness(script, { onLimitEvent: signal => signals.push(signal) })
+  harness.driver.send('hi')
+  await until(() => signals.length === 1)
+  expect(signals[0]).toMatchObject({ kind: 'rateLimitExceeded', final: false })
+})
+
+test('a not-retrying error and an unrelated failure record no signal', async () => {
+  const script = new Script().boot().turn('ct-1')
+    .notify('error', { error: turnError('rateLimitExceeded'), willRetry: false, threadId: THREAD_ID, turnId: 'ct-1' })
+    .completed('ct-1', 'failed', [], turnError('contextWindowExceeded'))
+  const signals: ChatLimitSignal[] = []
+  harness = startHarness(script, { onLimitEvent: signal => signals.push(signal) })
+  harness.driver.send('hi')
+  await until(() => completedOf(harness!.events).length === 1)
+  expect(signals).toEqual([])
 })

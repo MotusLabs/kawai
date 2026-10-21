@@ -2434,14 +2434,18 @@ describe('ChatSessionDriver context usage', () => {
   test('a report landing after the turn boundary republishes as a correction', async () => {
     let threshold = 200_000
     let calls = 0
+    // The boundary probe resolves when the test releases it, never on a
+    // timer: a wall-clock race could land the report after the assertions.
+    let releaseBoundaryProbe: (() => void) | null = null
     const harness = createHarness({
       contextImpl: () => {
-        // The attach probe answers at once; every boundary probe resolves
-        // late — after turn_completed has already published the reading.
+        // The attach probe answers at once; the boundary probe resolves
+        // late — after turn_completed has already published the reading —
+        // only once the test releases it below.
         calls += 1
         if (calls === 1) return Promise.resolve(contextReport({ autoCompactThreshold: threshold }))
         return new Promise((resolve) => {
-          setTimeout(() => resolve(contextReport({ autoCompactThreshold: threshold })), 25)
+          releaseBoundaryProbe = () => resolve(contextReport({ autoCompactThreshold: threshold }))
         })
       },
     })
@@ -2455,7 +2459,8 @@ describe('ChatSessionDriver context usage', () => {
     expect(harness.contextCorrections.at(-1)).toBe(false)
 
     threshold = 100_000
-    await new Promise((resolve) => setTimeout(resolve, 40))
+    releaseBoundaryProbe!()
+    await flush()
     // The late report re-scales the same used count as a correction, so the
     // manager can persist the new denominator without another boundary.
     expect(harness.contextUsage.at(-1)).toMatchObject({ usedTokens: 157_900, thresholdTokens: 100_000, percentage: 157.9 })

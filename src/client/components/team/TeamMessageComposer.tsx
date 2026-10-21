@@ -53,9 +53,12 @@ export default function TeamMessageComposer({ teamPath, mode, groups = [], sessi
   const [taskId, setTaskId] = useState('')
   const [urgent, setUrgent] = useState(false)
   const pending = Object.keys(view.pending).length > 0
-  const disabled = !connected || pending || !body.trim()
+  // Controls disable while offline or a send is in flight; only the send
+  // button also waits for a body — an empty-body textarea must stay typeable.
+  const disabled = !connected || pending
+  const sendDisabled = disabled || !body.trim()
   const send = () => {
-    if (disabled) return
+    if (sendDisabled) return
     const requestId = crypto.randomUUID()
     useTeamMessageStore.getState().beginSend(teamPath, requestId)
     sendMessage({
@@ -111,7 +114,7 @@ export default function TeamMessageComposer({ teamPath, mode, groups = [], sessi
       once any pending approval resolves, or goes to the first idle member of a group.
     </p>
     {view.error && <p role="alert" className="text-chat-meta text-chat-danger" data-testid="composer-error">{view.error}</p>}
-    <button className="btn btn-primary self-start" disabled={disabled}>
+    <button className="btn btn-primary self-start" disabled={sendDisabled}>
       {pending ? 'Sending…' : mode.kind === 'reply' ? 'Send reply' : 'Send message'}
     </button>
     {!connected && <p role="status" className="text-chat-meta text-secondary">Disconnected — reconnect to send.</p>}
