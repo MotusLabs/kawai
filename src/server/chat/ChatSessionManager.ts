@@ -100,6 +100,7 @@ import { SessionDirectory } from '../team/sessionDirectory'
 import { MessageFeed } from '../team/messageFeed'
 import { MessageQuery } from '../team/messageQuery'
 import { ChatTurnEndStore } from './chatTurnEndStore'
+import { DriverMailGuard } from './driverMailGuard'
 import { TeamMailbox } from '../team/TeamMailbox'
 import { createMailboxServer, teamToolTable, type MailboxServerServices } from '../team/mailboxTools'
 import { composeExecutionCore, composePlanServices } from '../plans/planComposition'
@@ -1608,6 +1609,8 @@ export class ChatSessionManager {
   /** Process reports and proposals (team-process-metrics D6): the report tools and the human's decide/link commands. */
   readonly reports: ProcessReportService
   private readonly turnUsageTracker: TurnUsageTracker
+  /** Guards the teamMail calls on the driver-event path (never throws; a failed settle is retried). */
+  private readonly mailGuard = new DriverMailGuard()
   /** Durable plans (durable-plans); the plan tools and UI actions go through it. */
   readonly plans: PlanService
   /** Plan executions (plan-execution): the human Start/Stop/Retry commands. */
@@ -2094,6 +2097,7 @@ export class ChatSessionManager {
     // A restore still in flight stops at its next row (design D2).
     this.isShutDown = true
     this.observations.stop()
+    this.mailGuard.close()
     this.teamMail.close()
     // The executor stops with the server: wakes drop, the timer clears, new ticks refuse (D5).
     this.executionRuntime?.stop()
@@ -3132,14 +3136,25 @@ export class ChatSessionManager {
         logger.warn('chat_turn_usage_record_failed', { sessionId, error: error instanceof Error ? error.message : String(error) })
       }
     }
-    if (event.type === 'error' || event.type === 'turn_completed') this.teamMail.settleRecipient(sessionId)
+    // Every teamMail call below is guarded (driverMailGuard): their writes run
+    // on the shared rollback-journal connection, and a throw here used to
+    // escape the driver's emit and kill the process. The settle is retried on
+    // the guard's timer; the rest log and continue.
+    if (event.type === 'error' || event.type === 'turn_completed') {
+      this.mailGuard.settleRecipient(sessionId, () => this.teamMail.settleRecipient(sessionId))
+    }
     // The context-exhausted flag (chat-context-exhaustion D3), set or cleared
-    // before the mail outcome below reads it.
-    const exhausted = this.trackContextExhaustion(sessionId, event)
+    // before the mail outcome below reads it. A failed write degrades to a
+    // normal turn end (fallback false).
+    const exhausted = this.mailGuard.guardResult(false, 'chat_context_exhaustion_track_failed', () => this.trackContextExhaustion(sessionId, event), { sessionId })
     // Profile routing: progress and limit outcomes for the mail a turn handles.
-    if (event.type === 'tool_call') this.teamMail.toolCall(sessionId, event.tool, event.input)
+    if (event.type === 'tool_call') {
+      this.mailGuard.guard('chat_mail_tool_call_failed', () => this.teamMail.toolCall(sessionId, event.tool, event.input), { sessionId })
+    }
     // A trigger marks a turn the agent started itself (limit-outcomes-agent-turns D1).
-    if (event.type === 'turn_started') this.teamMail.turnStarted(sessionId, event.trigger !== undefined)
+    if (event.type === 'turn_started') {
+      this.mailGuard.guard('chat_mail_turn_started_failed', () => this.teamMail.turnStarted(sessionId, event.trigger !== undefined), { sessionId })
+    }
     if (event.type === 'turn_completed') {
       try {
         // An exhausted turn never processed its mail: the exhaustion outcome
