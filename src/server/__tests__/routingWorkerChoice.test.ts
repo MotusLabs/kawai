@@ -169,6 +169,22 @@ describe('the eligibility check states each member\'s cause (2.1)', () => {
     expect(evaluateEligibility(state({ workerChoice: null }))).toEqual(evaluateEligibility(state({})))
   })
 
+  test('exclusion reasons per alternative: the off-choice member by worker-choice, the capped chosen slot by profile-cap', () => {
+    const result = evaluateEligibility(state({
+      group: { id: 'devs', profiles: [{ profileId: 'sonnet' }, { profileId: 'glm', cap: 1 }], max: 8, strategy: 'profile-order' },
+      members: [
+        { sessionId: 's', profileId: 'sonnet', cwd: '/wt', eligible: true },
+        { sessionId: 'busy', profileId: 'glm', cwd: '/wt', eligible: false },
+      ],
+      workerChoice: { selector: 'zai', profiles: resolveWorkerSelector('zai', ['sonnet', 'glm'], providerOf) },
+    }))
+    expect(result.candidates).toEqual([])
+    const reasonsOf = (key: string) => result.excluded.find(entry => (entry.alternative.kind === 'member'
+      ? `member:${entry.alternative.sessionId}` : `spawn:${entry.alternative.profileId}`) === key)?.reasons
+    expect(reasonsOf('member:s')).toEqual([{ kind: 'worker-choice', detail: 'zai' }])
+    expect(reasonsOf('spawn:glm')).toEqual([{ kind: 'profile-cap', counts: { live: 1, cap: 1 }, detail: 'glm' }])
+  })
+
   test('an empty intersection excludes every alternative with a reason', () => {
     const result = evaluateEligibility(state({ allowedProfiles: ['opus'], workerChoice: choice('zai') }))
     expect(result.candidates).toEqual([])
