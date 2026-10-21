@@ -432,6 +432,9 @@ export class LimitOutcomes {
       handoff, excludedProfile: profileId,
       // The role keeps narrowing the forward, without the limited profile (plan-execution D15).
       allowedProfiles: message.allowedProfiles?.filter(profile => profile !== profileId) ?? null,
+      // The sender's worker choice is dropped (dispatch-worker-choice D4): a
+      // choice pinned to the limited provider would wait out its reset.
+      workerChoice: null,
     })
     store.replaceResume(message.id)
     store.markForwarded(message.id, `forwarded: ${forwarded.id}`)
