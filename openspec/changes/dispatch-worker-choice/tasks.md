@@ -10,7 +10,7 @@
 
 ## 2. Routing and staffing
 
-- [ ] 2.0 Add the pure eligibility check `workerEligibility.ts` (design D10). It takes a stated routing state and returns the eligible candidates in preference order, plus every excluded alternative with its constraint kinds. It does no I/O and reads no clock. Then rebuild `buildCandidates` and `memberCauses.ts` on it. Verify with unit tests:
+- [x] 2.0 Add the pure eligibility check `workerEligibility.ts` (design D10). It takes a stated routing state and returns the eligible candidates in preference order, plus every excluded alternative with its constraint kinds. It does no I/O and reads no clock. Then rebuild `buildCandidates` and `memberCauses.ts` on it. Verify with unit tests:
   - each exclusion reason;
   - an evaluation at a past time with the cooldowns then in force;
   - existing candidates, router and waiting-reasons suites pass unchanged, with the same answers as before;
