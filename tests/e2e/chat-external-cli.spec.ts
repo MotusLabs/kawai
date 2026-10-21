@@ -316,6 +316,14 @@ test('external CLI chat: streaming, approvals, question, interrupt, debug, resum
     throw error
   } finally {
     await stop()
+    // The server leaves its private tmux server (TMUX_TMPDIR=root) running —
+    // including across the mid-test restarts, which reuse the same socket —
+    // and that daemon's cwd is this checkout: every run would leak one and
+    // pin the directory. Kill it through its own socket path, built from this
+    // spec's root and uid, so no other tmux server is ever addressed. A
+    // socket with no server just errors and is ignored: spawnSync never
+    // throws, so unlike team-page.spec.ts no try/catch is needed.
+    spawnSync('tmux', ['-S', join(root, `tmux-${process.getuid()}`, 'default'), 'kill-server'], { stdio: 'ignore' })
     await mock.close()
     if (!process.env.KAWAI_EXTERNAL_CLI_KEEP) rmSync(root, { recursive: true, force: true })
     else console.error('KEEP_ROOT', root)
