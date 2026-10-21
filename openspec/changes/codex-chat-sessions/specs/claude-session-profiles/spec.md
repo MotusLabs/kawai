@@ -9,6 +9,10 @@ The system SHALL offer the profiles resolved from the catalog files for the sess
 - **WHEN** a user creates a chat session with MiMo selected from the resolved catalog
 - **THEN** the session is created with MiMo as its profile and the chat view identifies it as MiMo
 
+#### Scenario: Models are grouped by provider
+- **WHEN** the resolved catalog's provider Z.AI holds models GLM and GLM Flash
+- **THEN** the picker lists both under Z.AI, and a session created on GLM Flash is identified by Z.AI and GLM Flash
+
 #### Scenario: Select a Codex profile
 - **WHEN** a user creates a chat session with a Codex profile selected
 - **THEN** the session is created as a Codex chat and the picker and chat view identify its profile as Codex
