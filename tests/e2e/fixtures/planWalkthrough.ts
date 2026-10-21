@@ -28,15 +28,17 @@ export async function createChat(page: Page, root: string, name: string, group: 
   return (await page.locator('[data-session-id^="chat-"]').filter({ hasText: name }).first().getAttribute('data-session-id'))!
 }
 
-/** A bare origin behind a GitHub-shaped remote, so the fixture probe reads a base. */
-export function initOrigin(root: string, origin: string): void {
+/** A bare origin behind a GitHub-shaped remote, so the fixture probe reads a
+ * base. The remote URL defaults to GITHUB_URL; pass another so a second
+ * walkthrough team's fixture PRs live in their own repository. */
+export function initOrigin(root: string, origin: string, githubUrl: string = GITHUB_URL): void {
   git(['init', '-q', '--bare', '-b', 'master', origin])
   git(['add', '-A'], root)
   git(['-c', 'user.email=t@e', '-c', 'user.name=T', 'commit', '-q', '-m', 'base'], root)
   git(['remote', 'add', 'origin', origin], root)
   git(['push', '-q', 'origin', 'master'], root)
-  git(['remote', 'set-url', 'origin', GITHUB_URL], root)
-  git(['config', `url.${origin}.insteadOf`, GITHUB_URL], root)
+  git(['remote', 'set-url', 'origin', githubUrl], root)
+  git(['config', `url.${origin}.insteadOf`, githubUrl], root)
 }
 
 /** One canned delta touch the stub serves for a change. */
@@ -197,7 +199,7 @@ export function submitRound(root: string, mode: 'result' | 'findings', implement
         if (claimant === null) {
           // Self-diagnosing: a CI timeout names its cause. A stopped change
           // dispatches no review; a dispatched one names its mail state.
-          const change = db.prepare("SELECT state, step, stop_reason, stop_detail_json FROM plan_execution_changes WHERE change = 'walk-api' ORDER BY rowid DESC").get() ?? {};
+          const change = db.prepare("SELECT state, step, stop_reason, stop_detail_json FROM plan_execution_changes WHERE change = 'walk-api' AND task_id = ? ORDER BY rowid DESC").get(taskId) ?? {};
           const handoff = db.prepare("SELECT m.state AS mail_state, m.reason AS mail_reason FROM team_task_assignments a LEFT JOIN team_messages m ON m.id = a.message_id WHERE a.task_id = ? AND a.handoff_kind = 'review' AND a.superseded_by IS NULL ORDER BY a.rowid DESC").get(taskId) ?? null;
           const stage = change.state === 'stopped'
             ? 'the change stopped (' + (change.stop_reason ?? 'unknown') + (change.stop_detail_json ? ' — ' + change.stop_detail_json : '') + ')'

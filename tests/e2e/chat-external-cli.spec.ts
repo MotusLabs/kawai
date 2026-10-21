@@ -148,9 +148,15 @@ test('external CLI chat: streaming, approvals, question, interrupt, debug, resum
     ...extra,
   })
   let server: ChildProcess | null = null
+  // One exit promise per spawned server, its listener attached at spawn
+  // time: stop() awaits it whatever ended the server, including a signal
+  // kill before stop(), where exitCode is null but the exit already fired
+  // and a listener attached only at stop() would never resolve.
+  let exited: Promise<void> = Promise.resolve()
   let diagnostics = ''
   const start = async (extra: Record<string, string | undefined> = {}) => {
     server = spawn('bun', ['src/server/index.ts'], { cwd: process.cwd(), env: serverEnv(extra), stdio: ['ignore', 'pipe', 'pipe'] })
+    exited = new Promise<void>(resolve => { server!.once('exit', () => resolve()) })
     server.stdout?.on('data', chunk => { diagnostics = (diagnostics + String(chunk)).slice(-6000) })
     server.stderr?.on('data', chunk => { diagnostics = (diagnostics + String(chunk)).slice(-6000) })
     await expect.poll(async () => {
@@ -158,10 +164,9 @@ test('external CLI chat: streaming, approvals, question, interrupt, debug, resum
     }, { timeout: 30_000 }).toBe(true)
   }
   const stop = async () => {
-    if (!server || server.exitCode !== null) return
-    const stopped = new Promise<void>(resolve => server!.once('exit', () => resolve()))
-    server.kill('SIGTERM')
-    await stopped
+    if (!server) return
+    if (server.exitCode === null && server.signalCode === null) server.kill('SIGTERM')
+    await exited
     server = null
   }
   const send = async (text: string) => {

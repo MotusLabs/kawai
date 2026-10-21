@@ -118,7 +118,6 @@ export const SLOW_TIER_EXCEPTIONS: ReadonlyArray<{ file: string; reason: string 
   // belongs in the tier (renamed to *.integration.test.ts); the entries here read
   // under 5 s at N=1 and only cross it under N=4 worker contention, or are pinned
   // by work this change must not touch.
-  { file: 'src/server/__tests__/chatSessionManager.test.ts', reason: '51.0 s at N=1, durably slow; B1 (chatSessionManager split) owns the file — renamed there, not here' },
   { file: 'src/server/__tests__/promotionSlot.test.ts', reason: '4.8 s at N=1; 17.4 s only under N=4 worker contention' },
   { file: 'src/server/__tests__/chatNameSourceDb.test.ts', reason: '2.3 s at N=1; 15.8 s only under N=4 worker contention' },
   { file: 'src/server/__tests__/decisionAsk.test.ts', reason: '2.9 s at N=1; 15.8 s only under N=4 worker contention' },

@@ -66,6 +66,9 @@ export function constraintLabel(constraint: WaitingConstraint, nameOf: (sessionI
         : constraint.detail ? ` — ${constraint.detail}` : ''}`
     case 'spawn-backoff':
       return `A failed spawn retries${constraint.retryAt ? ` at ${new Date(constraint.retryAt).toLocaleTimeString()}` : ''}`
+    case 'worker-choice':
+      return `Waiting for the chosen worker ${constraint.detail ?? ''}`.trimEnd()
+        + (constraint.retryAt ? ` (cooling until ${new Date(constraint.retryAt).toLocaleTimeString()})` : '')
     case 'routing-hold':
       return `Routing hold${constraint.detail ? `: ${constraint.detail}` : ''}`
     case 'all-profiles-cooling':

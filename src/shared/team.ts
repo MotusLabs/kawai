@@ -105,6 +105,12 @@ export interface TeamMessage {
   excludedProfile: string | null
   /** The role's profiles this mail may route to, in the role's order (plan-execution D15); absent on ordinary mail. */
   allowedProfiles?: string[] | null
+  /**
+   * The sender's worker choice for group mail (dispatch-worker-choice D1): a
+   * provider id or `provider/model`, resolved to the group's workers at route
+   * time; absent when the message has none.
+   */
+  workerChoice?: string | null
   /** A revision notice (task-revision-publication D3): the revision it announces; absent = not a notice. */
   revisionNotice?: RevisionNotice | null
 }
@@ -250,6 +256,8 @@ export type WaitingConstraintKind =
   | 'recipient-pending-request'
   | 'recipient-unavailable'
   | 'outside-role'
+  /** Group mail held by its worker choice (dispatch-worker-choice D5): `detail` is the selector, `retryAt` a cooldown end. */
+  | 'worker-choice'
   | 'profile-cooling'
   | 'startup-failed'
   | 'no-eligible-member'
