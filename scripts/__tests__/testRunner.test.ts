@@ -14,10 +14,20 @@ import {
   parseRunArgs,
   readOwnerMarker,
   readProcStartTime,
+  refuseBatchAfterSignal,
   sweepStaleRoots,
   workersFromEnv,
   writeOwnerMarker,
 } from '../test-runner'
+
+describe('refuseBatchAfterSignal', () => {
+  test('a handled signal refuses the batch with its name; otherwise it passes (N1)', () => {
+    expect(() => refuseBatchAfterSignal(false, 'main batch')).not.toThrow()
+    expect(() => refuseBatchAfterSignal(true, 'real-tmux: integration.test.ts')).toThrow(
+      'Signal handled; not starting batch: real-tmux: integration.test.ts'
+    )
+  })
+})
 
 describe('parseRunArgs', () => {
   test('splits flags, file arguments, and passthrough', () => {

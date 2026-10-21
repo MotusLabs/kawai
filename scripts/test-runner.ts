@@ -318,13 +318,24 @@ function resolveFileArgs(fileArgs: string[]): { parallel: string[]; realTmux: st
 
 let currentChild: RunnerChild | null = null
 
+// The last gate before a batch spawns (review F5, N1): a handled signal owns
+// the exit (decision D-g) — its handler sets the flag synchronously when the
+// signal arrives and process.exit()s after reaping — so no further batch may
+// start. The handler's synchronous section always precedes any code that
+// could spawn a next batch (the current one ends only in response to the
+// forwarded signal), so the loop's continuation evaluates this after the flag
+// is set. Kept a pure helper so testRunner.test.ts asserts the gate directly.
+export function refuseBatchAfterSignal(signalHandled: boolean, batch: string): void {
+  if (signalHandled) {
+    throw new Error(`Signal handled; not starting batch: ${batch}`)
+  }
+}
+
 async function runCommand(cmd: string[], env: NodeJS.ProcessEnv, batch: string) {
   // A handled signal owns the exit (decision D-g): its handler reaps the
   // current child and process.exit()s. Spawning a further batch first would
   // orphan it, so the loop stops here instead (review F5).
-  if (signalHandled) {
-    throw new Error(`Signal handled; not starting batch: ${batch}`)
-  }
+  refuseBatchAfterSignal(signalHandled, batch)
   // detached: the child leads its own process group, so the group kills in
   // forwardSignalAndReap and below reach its workers and every process a
   // test spawned (decision D-g).

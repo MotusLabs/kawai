@@ -232,10 +232,14 @@ describe('the real runner gives each file its own root', () => {
 
   // F5 (review): a signal handled while the main batch runs must stop the
   // batch loop — spawning the next batch would orphan it when the handler's
-  // process.exit lands. The main-batch file ignores SIGTERM and exits 0, so
-  // only the signalHandled guard keeps the serial batch from starting. The
-  // serial fixture's basename classifies it as a real-tmux batch, but it
-  // runs no tmux: it only marks that it started.
+  // process.exit lands. This is not a race the guard barely wins: the
+  // handler sets the flag synchronously when the signal arrives, and the
+  // main batch ends only in response to the forwarded signal, so the loop's
+  // continuation always finds the flag already set — the ordering stops the
+  // serial batch on its own, and the refusal in runCommand (exported as
+  // refuseBatchAfterSignal, unit-tested in testRunner.test.ts) is defense in
+  // depth on that ordering. The serial fixture's basename classifies it as a
+  // real-tmux batch, but it runs no tmux: it only marks that it started.
   test('a handled signal stops the batch loop: the serial batch never starts', async () => {
     const out = makeProbeOut()
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'runner-signal-race-'))
