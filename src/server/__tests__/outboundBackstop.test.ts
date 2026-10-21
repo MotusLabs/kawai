@@ -144,16 +144,26 @@ describe('round 7 regressions and controls (task 3.6)', () => {
   })
 })
 
-/** The best of several timings of `run` (warm, least noisy). */
-function bestTime(run: () => unknown): number {
-  run()
-  let best = Infinity
-  for (let i = 0; i < 5; i++) {
-    const started = performance.now()
-    run()
-    best = Math.min(best, performance.now() - started)
+/** The best timing of each fn over interleaved rounds: alternating the two
+ * sizes keeps a load spike in one phase from inflating only one side of the
+ * ratio, and the minimum of each side is the least noisy reading (warm, full
+ * gc before every timed run so a collection never lands inside one). */
+function bestTimes(large: () => unknown, small: () => unknown, rounds = 7): { large: number; small: number } {
+  large()
+  small()
+  let bestLarge = Infinity
+  let bestSmall = Infinity
+  for (let i = 0; i < rounds; i++) {
+    Bun.gc(true)
+    let started = performance.now()
+    large()
+    bestLarge = Math.min(bestLarge, performance.now() - started)
+    Bun.gc(true)
+    started = performance.now()
+    small()
+    bestSmall = Math.min(bestSmall, performance.now() - started)
   }
-  return best
+  return { large: bestLarge, small: bestSmall }
 }
 
 describe('linearity (task 3.6, D8)', () => {
@@ -165,18 +175,21 @@ describe('linearity (task 3.6, D8)', () => {
     const headers = (n: number) => `curl ${'-H "X-Trace-Id: v1" '.repeat(n)}https://example.internal/hook`
     const small = headers(20_000)
     const large = headers(40_000)
-    expect(bestTime(() => redact(large)) / bestTime(() => redact(small))).toBeLessThan(RATIO)
+    const times = bestTimes(() => redact(large), () => redact(small))
+    expect(times.large / times.small).toBeLessThan(RATIO)
   })
 
   test('withholding: a full pass over 40,000 header words takes at most about twice 20,000', () => {
     // No early trigger: every word is read.
     const words = (n: number) => `echo ${'X-Trace-Id v1 '.repeat(n)}`
     expect(withholdReason(words(10))).toBeNull()
-    expect(bestTime(() => withholdReason(words(40_000))) / bestTime(() => withholdReason(words(20_000)))).toBeLessThan(RATIO)
+    const times = bestTimes(() => withholdReason(words(40_000)), () => withholdReason(words(20_000)))
+    expect(times.large / times.small).toBeLessThan(RATIO)
   })
 
   test('the backstop: 40,000 words take at most about twice 20,000', () => {
     const text = (n: number) => 'word https://host.example.org '.repeat(n)
-    expect(bestTime(() => backstopEntries(text(40_000))) / bestTime(() => backstopEntries(text(20_000)))).toBeLessThan(RATIO)
+    const times = bestTimes(() => backstopEntries(text(40_000)), () => backstopEntries(text(20_000)))
+    expect(times.large / times.small).toBeLessThan(RATIO)
   })
 })
