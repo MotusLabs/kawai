@@ -1618,10 +1618,12 @@ describe('ChatSessionManager', () => {
 
       // Kill on an archived session removes row and protocol log.
       const logFile = wireLogs.get(sessionId).currentPath
+      // The append is scheduled on a timer; wait for it deterministically.
+      await wireLogs.get(sessionId).flush()
       expect(fs.existsSync(logFile)).toBe(true)
       expect(managerB.kill(sessionId)).toBe(true)
-      await flush()
-      expect(fs.existsSync(logFile)).toBe(false)
+      // Deletion runs on the log's async chain; poll instead of trusting fixed timers.
+      await waitForCondition(() => !fs.existsSync(logFile))
       expect(db.getChatSession(sessionId)).toBeNull()
       expect(registryB.get(sessionId)).toBeUndefined()
       managerB.shutdown()
