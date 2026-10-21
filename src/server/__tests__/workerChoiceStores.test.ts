@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import type { Database } from 'bun:sqlite'
 import { initDatabase } from '../db'
 import { MIGRATIONS } from '../dbSafety/migrations'
+import { WORKER_CHOICE_MIGRATION_VERSION } from '../team/workerChoiceMigration'
 import { AssignmentStore } from '../team/assignmentStore'
 import { MailboxStore } from '../team/mailboxStore'
 import { TaskStore } from '../team/taskStore'
@@ -55,8 +56,8 @@ describe('team_messages.worker_choice', () => {
   })
 })
 
-test('a store opened on a version-16 database still enqueues mail without a choice', () => {
-  const session = initDatabase({ path: ':memory:', migrations: MIGRATIONS.filter(migration => migration.version <= 17) })
+test('a store opened on a version-17 database still enqueues mail without a choice', () => {
+  const session = initDatabase({ path: ':memory:', migrations: MIGRATIONS.filter(migration => migration.version < WORKER_CHOICE_MIGRATION_VERSION) })
   const store = new MailboxStore(session.db)
   const sent = store.enqueue({ teamId: TEAM, toKind: 'group', toId: 'devs', fromSession: null, fromGroup: null, originPath: '/repo', body: 'Old build' })
   expect('workerChoice' in sent).toBe(false)
@@ -89,5 +90,20 @@ describe('team_task_assignments.worker_choice', () => {
     const { assignment } = insert('k2')
     expect('workerChoice' in assignment).toBe(false)
     expect(db.prepare('SELECT worker_choice FROM team_task_assignments WHERE id = ?').get(assignment.id)).toEqual({ worker_choice: null })
+  })
+
+  test('the row and its choice commit together: a choice that cannot be written leaves no row', () => {
+    // A database before the worker-choice migration has no column, so the
+    // choice's write fails; the store's own transaction takes the row back.
+    const session = initDatabase({ path: ':memory:', migrations: MIGRATIONS.filter(migration => migration.version < WORKER_CHOICE_MIGRATION_VERSION) })
+    const mail = new MailboxStore(session.db)
+    const old = new AssignmentStore(session.db, mail)
+    const oldTask = new TaskStore(session.db, mail, old).create({ teamId: TEAM, title: 'T', direction: 'go', creator: { kind: 'human', sessionId: null } }).id
+    expect(() => old.insert({
+      teamId: TEAM, taskId: oldTask, requestKey: 'k3', targetKind: 'group', targetId: 'devs', role: 'devs', instruction: 'Do it',
+      creator: { kind: 'human', sessionId: null }, workerChoice: 'zai',
+    })).toThrow('worker_choice')
+    expect(session.db.prepare('SELECT COUNT(*) AS n FROM team_task_assignments').get()).toEqual({ n: 0 })
+    session.close()
   })
 })

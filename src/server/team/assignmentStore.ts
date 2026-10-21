@@ -147,17 +147,25 @@ export class AssignmentStore {
    */
   insert(input: DispatchInsert, now = nowIso()): InsertOutcome {
     const id = `assignment-${crypto.randomUUID()}`
-    const inserted = this.db.prepare(`INSERT OR IGNORE INTO team_task_assignments
+    // The row and its worker choice in one transaction of the store's own (a
+    // savepoint inside the caller's dispatch transaction); the choice is
+    // written at call time so a store on a database before migration 18 still
+    // prepares (D1).
+    const inserted = this.db.transaction(() => {
+      const changes = this.db.prepare(`INSERT OR IGNORE INTO team_task_assignments
       (id, team_id, task_id, request_key, target_kind, target_id, role, instruction, created_by_kind, created_by_session, message_id,
        handoff_kind, result_id, expected_response, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       id, input.teamId, input.taskId, input.requestKey, input.targetKind, input.targetId, input.role,
       input.instruction, input.creator.kind, input.creator.sessionId, input.messageId ?? null,
       input.handoff?.kind ?? null, input.handoff?.resultId ?? null, input.handoff?.expectedResponse ?? null, now, now,
-    ).changes
+      ).changes
+      if (changes === 1 && input.workerChoice) {
+        this.db.prepare('UPDATE team_task_assignments SET worker_choice = ? WHERE id = ?').run(input.workerChoice, id)
+      }
+      return changes
+    })()
     if (inserted === 1) {
-      // Written beside the insert, inside the caller's dispatch transaction.
-      if (input.workerChoice) this.db.prepare('UPDATE team_task_assignments SET worker_choice = ? WHERE id = ?').run(input.workerChoice, id)
       return { replay: false, assignment: this.row(id)! }
     }
     const existing = this.byKey(input.teamId, input.requestKey)
