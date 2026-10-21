@@ -120,24 +120,24 @@ All storage arrives in the next free migration. At this proposal's base, 35d2d30
 - **Resolution at the commit.**
   - A result without a commit resolves nothing: each citation reads **unresolved**, with the reason that there is no commit.
   - `git show <sha>:<path>` must exist, and `testTitles` must find the title as a `test` or `it` title. Otherwise the citation is **not found**.
-  - The tree's newest record with a test list (D7) then classifies each found citation:
+  - The tree's newest record with a usable test list (D7) then classifies each found citation:
     - **ran and passed:** some entry with that file and title passed, and none was skipped;
     - **not run:** every matching entry was skipped or a todo;
     - **not in the run:** no entry matches;
-    - **found, run unknown:** no record of the tree has a test list.
+    - **found, run unknown:** no record of the tree has a usable test list. A missing, unreadable, or mismatched list is not usable (D7).
 - **Clause status** derives from the clause's citation outcomes.
-  - A citation is **good** when it ran and passed, or when it was found and no test list exists.
+  - A citation is **good** when it ran and passed, or when it was found and no usable test list exists.
   - It is **bad** when it was not found, not run, or not in the run.
 
   The first status that matches wins:
   1. **declared uncovered:** the clause cites nothing;
   2. **unresolved:** the result has no commit;
   3. **covered:** every citation ran and passed;
-  4. **covered, run unknown:** every citation was found, and no test list exists;
+  4. **covered, run unknown:** every citation was found, and no usable test list exists;
   5. **partly covered:** at least one citation is good, and at least one is bad;
   6. **not covered:** every citation is bad.
 
-  Because a tree either has a test list or has none, one clause never mixes "ran and passed" with "found, run unknown".
+  Because a tree either has a usable test list or has none, one clause never mixes "ran and passed" with "found, run unknown".
 
 ### D6. The blind-first seal
 
@@ -155,6 +155,7 @@ All storage arrives in the next free migration. At this proposal's base, 35d2d30
 
   Clauses match by normalized text: trimmed, whitespace collapsed, backticks dropped, case-folded. Citations match by normalized path and title.
 - **Limitation.** The seal hides Kawai's copy only. A map the author repeats in the summary, a journal note, or a commit stays visible, and `@covers` annotations in the diff are visible by design. So the procedure (D11) keeps maps out of prose, and the reviewer builds its clause list from the spec before reading the tests.
+- **The unclaimed window.** Before a group-target review handoff is claimed, no session holds it, so a member may read the task, maps included, and claim the handoff afterwards. The seal covers only the holder; D11's order, which records the map before reading the task, keeps such a reviewer blind.
 
 ### D7. Test lists beside full-pass records
 
@@ -181,7 +182,7 @@ All storage arrives in the next free migration. At this proposal's base, 35d2d30
 
   Archived deltas are not in the index. So an annotation that names a renamed or removed scenario fails as stale, even while an archived delta still holds the old name.
 
-  A name that itself contains ` › ` cannot be annotated, and the guard reports it.
+  A requirement or scenario name that itself contains ` › ` cannot be annotated, so the guard fails, naming the spec file and line. No main spec or active delta has such a name today.
 - **The required set** is the only part that reads archived deltas.
   - It is every (capability, requirement, scenario) that both:
     - appears in the `ADDED` or `MODIFIED` sections of an archive dated on or after `since` and not exempt;
@@ -234,7 +235,7 @@ The fixture-spec lister and its guards are now the sibling change `ci-fixture-sp
   - `TaskResultCard` shows "Checked by Kawai · <time>", with each fact's status and detail, and a Recheck button.
   - It shows the map with the "claimed" label, beside each citation's checked outcome, and the reviewers' maps with the comparison.
 - **Guards.**
-  - A structural test keeps the execution, landing, dispatch, staffing, and routing modules free of `verification/` imports, so no check can become an input to them. That is the module list `outboundIsolation.test.ts` guards against the outbound store.
+  - A structural test keeps the execution, landing, dispatch, staffing, routing, and plan-supervision modules free of `verification/` imports, so no check can become an input to them or a supervision cause. That is the module list `outboundIsolation.test.ts` guards against the outbound store, plus `src/server/plans/supervision/`.
   - Acceptance lives in `TaskResultService.ts`, which also writes the pending row (D1). A file-level guard therefore cannot cover it; the test for the scenario "A failing check does not gate" pins it instead.
   - The seal and the comparison are pure functions in `src/shared/coverageMaps.ts`, which the task read side imports.
 

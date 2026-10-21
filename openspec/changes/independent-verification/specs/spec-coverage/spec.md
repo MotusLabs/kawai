@@ -13,6 +13,8 @@ The unit suite SHALL fail, naming the file and line, when an annotation either:
 - names no scenario of the main specs or of an active change's delta specs; or
 - is not directly above a test.
 
+It SHALL also fail, naming the spec file and line, when a requirement or scenario name in those specs contains ` › `.
+
 #### Scenario: Annotation resolves
 - **WHEN** an annotation names a scenario defined in `openspec/specs/`
 - **THEN** the suite counts that test as covering the scenario
@@ -28,6 +30,10 @@ The unit suite SHALL fail, naming the file and line, when an annotation either:
 #### Scenario: Annotation away from a test
 - **WHEN** an annotation is followed by something other than a test call, comments and blank lines aside
 - **THEN** the suite fails, naming the file and line
+
+#### Scenario: Name containing the separator
+- **WHEN** a requirement or scenario name in a main spec or an active change's delta contains ` › `
+- **THEN** the suite fails, naming the spec file and line
 
 ### Requirement: Newly archived changes have covered scenarios
 This requirement applies to every change archived on or after the coverage start date and not listed as exempt. Each scenario of its ADDED or MODIFIED delta requirements that still exists in the main specs SHALL be covered by at least one annotation.

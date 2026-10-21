@@ -47,7 +47,7 @@ Every test this change adds for a spec scenario carries its `// @covers:` annota
 - [ ] 2.5 Surface the checks (D12):
   - `task_get` carries each result's newest check and the count of earlier ones;
   - `TaskResultCard` shows "Checked by Kawai", with each fact and a Recheck control, while the test list stays labeled claimed;
-  - the structural test keeps the execution, landing, dispatch, staffing, and routing modules free of `verification/` imports (D12).
+  - the structural test keeps the execution, landing, dispatch, staffing, routing, and plan-supervision modules free of `verification/` imports (D12).
 
   Verify with:
   - the client tests and the structural test;
@@ -58,7 +58,7 @@ Every test this change adds for a spec scenario carries its `// @covers:` annota
 ## 3. Coverage maps and the blind-first seal (PR C)
 
 - [ ] 3.1 Accept `coverage` on `task_submit_result`, with D5's limits and citation grammar, and store it. In the check, resolve each citation as not found, ran and passed, not run, not in the run, found with its run unknown, or unresolved without a commit, and derive each clause's status (D5). Verify:
-  - one test per scenario of "Results carry a coverage map";
+  - one test per scenario of "Results carry a coverage map", "Citations without a commit" included;
   - a malformed citation is refused, naming its clause index.
 - [ ] 3.2 Add `task_submit_coverage`, the seal in `task_get` (D6), and the derived comparison, with the seal and the comparison as pure functions in `src/shared/coverageMaps.ts` (D12). Verify each scenario of "Reviewers record their own coverage map first", covering:
   - a reviewer that is the session target of a review handoff;
@@ -95,7 +95,7 @@ Every test this change adds for a spec scenario carries its `// @covers:` annota
   - an annotation naming an active change's scenario;
   - a stale annotation whose old name an archived delta still holds;
   - an annotation away from a test;
-  - a scenario name containing ` › `.
+  - a requirement or scenario name containing ` › `, which fails, naming the spec file and line.
 - [ ] 5.2 Add the guard test and `openspec/coverage.json`:
   - `since` is the landing day;
   - `exempt` lists every change active that day, except this one.

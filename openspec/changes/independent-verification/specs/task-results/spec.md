@@ -37,7 +37,7 @@ Kawai SHALL NOT fetch, run tests, or change the worktree.
 
 #### Scenario: Result without a commit
 - **WHEN** a result names only a diff reference
-- **THEN** the check records that there is no commit to check, and marks each citation of its coverage map as unresolved for that reason
+- **THEN** the check records that there is no commit to check
 
 #### Scenario: Worktree removed
 - **WHEN** the result's worktree no longer exists
@@ -136,6 +136,10 @@ Kawai's check SHALL resolve each citation at the result's commit, and derive eac
 #### Scenario: Declared uncovered
 - **WHEN** a clause cites no tests
 - **THEN** the check lists the clause as uncovered, by the submitter's own statement
+
+#### Scenario: Citations without a commit
+- **WHEN** a result that names only a diff reference carries a coverage map
+- **THEN** the check marks each citation as unresolved, because there is no commit, and each clause that cites tests as unresolved
 
 #### Scenario: The map is a claim
 - **WHEN** a result carries a coverage map
