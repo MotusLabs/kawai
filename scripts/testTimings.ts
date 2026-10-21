@@ -5,7 +5,10 @@
 // changes ordering, never which tests run or what they assert. The snapshot
 // bun writes lives in the run root; the runner copies it into the shared
 // directory through a unique temporary file and renames it into place, so a
-// concurrent suite always reads one whole record or finds none.
+// concurrent suite always reads one whole record or finds none. Each
+// published full run also keeps its own snapshot beside the record (D7), so
+// the misplaced-file report judges a file on its shortest kept duration
+// instead of one possibly load-inflated run.
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -68,8 +71,10 @@ export function seedTimingsSnapshot(runRoot: string, seedText: string | null): s
 // into place, so a concurrent suite reads one whole record or finds none —
 // never a partial one. Throws on a filesystem failure; the runner logs that
 // and keeps running (a lost update affects scheduling only). Returns the
-// published record, or null when the snapshot is missing or malformed — a
-// failed batch leaves no usable snapshot, and the previous record stands.
+// published record, or null when the snapshot is missing or malformed. The
+// runner publishes only after a batch passed — bun writes the snapshot even
+// when the batch exits non-zero — so a failed run never overwrites the
+// record; the ordering is main()'s publish gate, not this function's.
 export function publishTimingsSnapshot(
   recordsDir: string,
   snapshotPath: string,
@@ -91,121 +96,85 @@ export function publishTimingsSnapshot(
   if (parsed === null) return null
   const files: Record<string, number> = {}
   for (const [file, ms] of Object.entries(parsed.files)) {
-    // The predicate sees the normalized key: bun records paths as they were
-    // spelled on the command line, with a leading './'.
+    // Keys keep the spelling the invocation used ('./'-prefixed — the runner
+    // passes toTestFilePath paths); the predicate checks the normalized one.
     if (fileExists(file.startsWith('./') ? file.slice(2) : file)) files[file] = ms
   }
   fs.mkdirSync(recordsDir, { recursive: true })
-  const final = path.join(recordsDir, TIMINGS_FILE_NAME)
-  // Same shape checkRecords uses, so a crash between the write and the
-  // rename leaves a recognizable temporary behind.
-  const temporary = path.join(recordsDir, `.${TIMINGS_FILE_NAME}.${process.pid}.${Date.now()}.tmp`)
-  fs.writeFileSync(temporary, JSON.stringify({ version: 1, files }))
-  fs.renameSync(temporary, final)
+  // The record bun reads back with --timings: Bun's own shape. Last writer
+  // wins — the per-run snapshots keep every sample (D7).
+  writeWholeFile(recordsDir, TIMINGS_FILE_NAME, JSON.stringify({ version: 1, files }))
+  // This run's own snapshot (D7): a file of its own, so a concurrent
+  // publisher never loses a sample; then prune older runs by name.
+  writeWholeFile(recordsDir, runSnapshotName(), JSON.stringify({ version: 1, files }))
+  pruneRunSnapshots(recordsDir)
   return { version: 1, files }
+}
+
+// --- per-run snapshots (design D7) ---
+
+// The newest five run snapshots are kept; older ones are pruned.
+export const KEPT_RUN_SNAPSHOTS = 5
+
+// Names sort by their UTC stamp, so pruning by name is pruning by age.
+export function runSnapshotName(now: Date = new Date()): string {
+  const stamp = now
+    .toISOString()
+    .replaceAll('-', '')
+    .replaceAll(':', '')
+    .replace(/\.\d{3}Z$/, 'Z')
+  return `timings-${stamp}-${process.pid}.json`
+}
+
+export function isRunSnapshotName(name: string): boolean {
+  return /^timings-\d{8}T\d{6}Z-.+\.json$/.test(name)
+}
+
+// One whole file via a unique temporary and a rename: a concurrent reader of
+// this directory parses the file or finds it absent, never a torn one. The
+// temporary carries the final name, so a crash between the write and the
+// rename leaves a recognizable leftover.
+function writeWholeFile(dir: string, name: string, text: string): void {
+  const temporary = path.join(dir, `.${name}.${process.pid}.${Date.now()}.tmp`)
+  fs.writeFileSync(temporary, text)
+  fs.renameSync(temporary, path.join(dir, name))
+}
+
+// Keeps the newest KEPT_RUN_SNAPSHOTS snapshots by name and removes the rest.
+// Best effort: a snapshot lost to a racing prune or a failed unlink costs one
+// sample of the shortest-duration report, nothing more.
+export function pruneRunSnapshots(recordsDir: string, keep: number = KEPT_RUN_SNAPSHOTS): void {
+  let names: string[]
+  try {
+    names = fs.readdirSync(recordsDir)
+  } catch {
+    return
+  }
+  const snapshots = names.filter(isRunSnapshotName).sort()
+  for (const name of snapshots.slice(0, Math.max(0, snapshots.length - keep))) {
+    try {
+      fs.unlinkSync(path.join(recordsDir, name))
+    } catch {
+      // another publisher's prune got there first
+    }
+  }
 }
 
 // --- the misplaced-file report (design D7) ---
 
 export const SLOW_TIER_THRESHOLD_MS = 5_000
 
-// Files over the threshold that stay outside the slow tier on purpose. Each
-// entry carries its reason; the report matches by basename, so a path's
-// spelling never hides an exception.
-export const SLOW_TIER_EXCEPTIONS: ReadonlyArray<{ file: string; reason: string }> = [
-  // Measured 2026-10-21: the N=1 reference record (logs/ps-window/timings-n1.json)
-  // against an exclusive N=4 full run. A file over 5 s at N=1 is durably slow and
-  // belongs in the tier (renamed to *.integration.test.ts); the entries here read
-  // under 5 s at N=1 and only cross it under N=4 worker contention, or are pinned
-  // by work this change must not touch.
-  { file: 'src/server/__tests__/promotionSlot.test.ts', reason: '4.8 s at N=1; 17.4 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/chatNameSourceDb.test.ts', reason: '2.3 s at N=1; 15.8 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/decisionAsk.test.ts', reason: '2.9 s at N=1; 15.8 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/outboundService.test.ts', reason: '3.2 s at N=1; 13.7 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/planValidationService.test.ts', reason: '2.4 s at N=1; 13.5 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/planValidationRun.test.ts', reason: '2.4 s at N=1; 12.8 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/ownerDecisions.test.ts', reason: '2.3 s at N=1; 11.7 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/teamMessageEvents.test.ts', reason: '1.7 s at N=1; 11.6 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/executionLanding.test.ts', reason: '2.4 s at N=1; 11.6 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/taskResults.test.ts', reason: '2.0 s at N=1; 11.1 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/executionComposition.test.ts', reason: '2.8 s at N=1; 10.7 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/db.test.ts', reason: '1.7 s at N=1; 10.6 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/chatSessionGroups.test.ts', reason: '2.1 s at N=1; 10.5 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/databaseBackups.test.ts', reason: '2.4 s at N=1; 10.0 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/teamWorkspaceConnections.test.ts', reason: '2.1 s at N=1; 10.0 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/planService.test.ts', reason: '2.5 s at N=1; 9.9 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/chatSessionWorkspaceHooks.test.ts', reason: '1.8 s at N=1; 9.7 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/outboundConnections.test.ts', reason: '1.7 s at N=1; 9.4 s only under N=4 worker contention' },
-  { file: 'scripts/__tests__/runnerRoots.test.ts', reason: '3.7 s at N=1; 9.3 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/codexRolloutReplay.test.ts', reason: '9.1 s at N=4, no N=1 entry; touched by open branch feat/codex-chat-sessions-e — never renamed here' },
-  { file: 'src/server/__tests__/systemActor.test.ts', reason: '1.6 s at N=1; 9.0 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/planPreconditions.test.ts', reason: '1.5 s at N=1; 8.3 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/planLifecycle.test.ts', reason: '2.4 s at N=1; 8.2 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/taskPublication.test.ts', reason: '1.5 s at N=1; 8.1 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/planTaskLink.test.ts', reason: '1.4 s at N=1; 8.1 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/codexTeamPath.test.ts', reason: '8.1 s at N=4, no N=1 entry; touched by open branch feat/codex-chat-sessions-e — never renamed here' },
-  { file: 'src/server/__tests__/teamTaskMessages.test.ts', reason: '1.4 s at N=1; 8.0 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/planConnections.test.ts', reason: '1.9 s at N=1; 7.9 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/fixCompletion.test.ts', reason: '3.4 s at N=1; 7.9 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/effectRetryInspectionTable.test.ts', reason: '4.5 s at N=1; 7.8 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/chatSessionTasks.test.ts', reason: '1.4 s at N=1; 7.7 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/stallAlerts.test.ts', reason: '1.8 s at N=1; 7.6 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/correctionTasks.test.ts', reason: '1.5 s at N=1; 7.5 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/schemaMigrations.test.ts', reason: '1.4 s at N=1; 7.4 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/chatAsyncRestore.test.ts', reason: '1.3 s at N=1; 7.3 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/limitEvents.test.ts', reason: '2.3 s at N=1; 7.2 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/teamStaffing.test.ts', reason: '4.6 s at N=1; 7.2 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/teamMessageSchema.test.ts', reason: '0.9 s at N=1; 7.1 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/planStore.test.ts', reason: '1.6 s at N=1; 7.0 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/executionOwnership.test.ts', reason: '2.7 s at N=1; 7.0 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/decisionTools.test.ts', reason: '1.4 s at N=1; 6.8 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/teamTaskConnections.test.ts', reason: '2.7 s at N=1; 6.7 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/outboundStore.test.ts', reason: '1.2 s at N=1; 6.7 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/supervisionRead.test.ts', reason: '3.1 s at N=1; 6.6 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/chatProviderEnvRoutes.test.ts', reason: '1.5 s at N=1; 6.4 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/systemCallerOrigins.test.ts', reason: '1.4 s at N=1; 6.4 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/integrationLifecycleTable.test.ts', reason: '2.1 s at N=1; 6.4 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/taskResultStore.test.ts', reason: '1.4 s at N=1; 6.3 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/teamTaskStore.test.ts', reason: '2.8 s at N=1; 6.2 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/effectResumeLanding.test.ts', reason: '2.0 s at N=1; 6.2 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/impactGate.test.ts', reason: '4.0 s at N=1; 6.2 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/effectInspectors.test.ts', reason: '0.9 s at N=1; 6.0 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/effectsRunner.test.ts', reason: '0.7 s at N=1; 6.0 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/planApproval.test.ts', reason: '1.3 s at N=1; 6.0 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/mailboxManagement.test.ts', reason: '4.2 s at N=1; 5.9 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/taskRelease.test.ts', reason: '1.1 s at N=1; 5.8 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/chatGroupDb.test.ts', reason: '1.0 s at N=1; 5.8 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/planExecutionStore.test.ts', reason: '1.0 s at N=1; 5.7 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/planTools.test.ts', reason: '1.1 s at N=1; 5.7 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/executionExecutor.test.ts', reason: '1.4 s at N=1; 5.6 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/chatContextExhaustedFlag.test.ts', reason: '1.2 s at N=1; 5.5 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/impactConnections.test.ts', reason: '2.1 s at N=1; 5.4 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/taskHandoffs.test.ts', reason: '3.6 s at N=1; 5.4 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/codexSessionGates.test.ts', reason: '1.6 s at N=1; 5.3 s at N=4; touched by open branch feat/codex-chat-sessions-e — never renamed here' },
-  { file: 'src/server/__tests__/taskNotices.test.ts', reason: '3.9 s at N=1; 5.3 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/chatContextDb.test.ts', reason: '1.0 s at N=1; 5.1 s only under N=4 worker contention' },  // A second full run (commit 3's hook, N=4 with concurrent suite slots) flagged
-  // these over 5 s as well — all under 5 s at N=1 and under 5 s in the exclusive
-  // run, so they stay outside the tier: shared-slot contention, listed here.
-  { file: 'src/server/__tests__/teamMailboxParkedCancel.test.ts', reason: '2.3 s at N=1; 16.9 s under a shared-slot N=4 run (not over 5 s exclusive)' },
-  { file: 'src/server/__tests__/strategyStore.test.ts', reason: '2.4 s at N=1; 15.6 s under a shared-slot N=4 run (not over 5 s exclusive)' },
-  { file: 'src/server/__tests__/strategyService.test.ts', reason: '2.4 s at N=1; 14.1 s under a shared-slot N=4 run (not over 5 s exclusive)' },
-  { file: 'src/server/__tests__/supervisionMonitor.test.ts', reason: '2.2 s at N=1; 11.5 s under a shared-slot N=4 run (not over 5 s exclusive)' },
-  { file: 'src/server/__tests__/teamMailboxStore.test.ts', reason: '1.5 s at N=1; 10.5 s under a shared-slot N=4 run (not over 5 s exclusive)' },
-  { file: 'src/server/__tests__/chatSessionSearchSource.test.ts', reason: '1.1 s at N=1; 6.0 s under a shared-slot N=4 run (not over 5 s exclusive)' },
-  { file: 'src/server/__tests__/decisionReplyGuard.test.ts', reason: '1.2 s at N=1; 5.8 s under a shared-slot N=4 run (not over 5 s exclusive)' },
-  { file: 'src/server/__tests__/taskResultConnections.test.ts', reason: '1.0 s at N=1; 5.7 s under a shared-slot N=4 run (not over 5 s exclusive)' },
-  { file: 'src/server/__tests__/planSupervisionDetail.test.ts', reason: '1.0 s at N=1; 5.6 s under a shared-slot N=4 run (not over 5 s exclusive)' },
-  { file: 'src/server/__tests__/planValidationTools.test.ts', reason: '1.1 s at N=1; 5.5 s under a shared-slot N=4 run (not over 5 s exclusive)' },
-  { file: 'src/server/__tests__/chatModelDb.test.ts', reason: '0.7 s at N=1; 5.5 s under a shared-slot N=4 run (not over 5 s exclusive)' },
-  { file: 'src/server/__tests__/strategyConnections.test.ts', reason: '0.9 s at N=1; 5.3 s under a shared-slot N=4 run (not over 5 s exclusive)' },
-  { file: 'src/server/__tests__/integrationAgentSurface.test.ts', reason: '2.5 s at N=1; 5.3 s under a shared-slot N=4 run (not over 5 s exclusive)' },
-  { file: 'src/server/__tests__/chatApprovalPolicyDb.test.ts', reason: '1.2 s at N=1; 5.3 s under a shared-slot N=4 run (not over 5 s exclusive)' },
-  { file: 'src/server/__tests__/executionConnections.test.ts', reason: '2.2 s at N=1; 5.2 s under a shared-slot N=4 run (not over 5 s exclusive)' },
-  { file: 'src/client/__tests__/terminalFocusSteal.test.tsx', reason: '4.7 s at N=1; 5.0 s under a shared-slot N=4 run (not over 5 s exclusive)' },
-  { file: 'src/server/__tests__/promotionConnections.test.ts', reason: '0.9 s at N=1; 5.1 s under a shared-slot N=4 run (not over 5 s exclusive)' },
-  { file: 'src/server/__tests__/chatArchiveDb.test.ts', reason: '0.7 s at N=1; 5.0 s under a shared-slot N=4 run (not over 5 s exclusive)' },
-  { file: 'src/server/__tests__/chatSessionRuntime.test.ts', reason: '0.8 s at N=1; 5.5 s under a shared-slot N=4 run (not over 5 s exclusive)' },
-]
+// Files over the threshold that stay outside the slow tier on purpose: a
+// file over 5 s alone at N=1 is durably slow and belongs in the tier
+// (renamed to *.integration.test.ts) — an entry is only for one an open
+// branch keeps from renaming, with its measured N=1 time and the branch as
+// the reason. Every entry the earlier rule listed was contention-only (its
+// N=1 time is under 5 s; only a shared-slot run inflated it) and was
+// deleted with that rule; the shortest-duration judgment below keeps them
+// visible to the report instead. Empty today: the two files over 5 s alone
+// with no N=1 record entry (codexRolloutReplay, codexTeamPath) turned out
+// unpinned by any open branch and are renamed into the tier.
+export const SLOW_TIER_EXCEPTIONS: ReadonlyArray<{ file: string; reason: string }> = []
 
 export interface MisplacedFile {
   file: string
@@ -234,6 +203,60 @@ export function misplacedFiles(options: {
   }
   misplaced.sort((a, b) => b.ms - a.ms)
   return misplaced
+}
+
+// Every timing sample the report may judge: the record itself first, then
+// each whole kept run snapshot. A malformed file is skipped; a directory
+// that cannot be read yields only what does parse.
+export function loadTimingSamples(recordsDir: string): Array<Record<string, number>> {
+  const read = (name: string): Record<string, number> | null => {
+    try {
+      const parsed = parseTimingsRecord(fs.readFileSync(path.join(recordsDir, name), 'utf8'))
+      return parsed === null ? null : parsed.files
+    } catch {
+      return null
+    }
+  }
+  const samples: Array<Record<string, number>> = []
+  const record = read(TIMINGS_FILE_NAME)
+  if (record !== null) samples.push(record)
+  let names: string[]
+  try {
+    names = fs.readdirSync(recordsDir)
+  } catch {
+    return samples
+  }
+  for (const name of names.filter(isRunSnapshotName).sort()) {
+    const sample = read(name)
+    if (sample !== null) samples.push(sample)
+  }
+  return samples
+}
+
+// The report's figure per file (D7): the shortest duration the file showed
+// in any kept sample — one load-inflated run must not name a file.
+export function shortestAcross(samples: Array<Record<string, number>>): Record<string, number> {
+  const shortest: Record<string, number> = {}
+  for (const sample of samples) {
+    for (const [file, ms] of Object.entries(sample)) {
+      const seen = shortest[file]
+      if (seen === undefined || ms < seen) shortest[file] = ms
+    }
+  }
+  return shortest
+}
+
+// The misplaced-file report over the kept samples (D7): a file is misplaced
+// when its shortest kept duration is over 5 s, it sits outside the slow
+// tier, and no exception lists it. Null when there is no sample to judge —
+// the caller prints nothing rather than a clean bill with no evidence.
+export function misplacedFromRecords(
+  recordsDir: string,
+  isSlowTier: (file: string) => boolean
+): MisplacedFile[] | null {
+  const samples = loadTimingSamples(recordsDir)
+  if (samples.length === 0) return null
+  return misplacedFiles({ files: shortestAcross(samples), isSlowTier })
 }
 
 // The lines the runner prints after a published full run: the dispositions

@@ -23,7 +23,7 @@ import { recordsDir } from './lib/checkRecords'
 import { REAL_TMUX_FILES, isRealTmuxFile, isSlowTierFile, planBatches } from './planBatches'
 import {
   formatMisplacedReport,
-  misplacedFiles,
+  misplacedFromRecords,
   publishTimingsSnapshot,
   readTimingsSeed,
   seedTimingsSnapshot,
@@ -511,16 +511,18 @@ async function main() {
       await runCommand(batch.cmd, env, batch.label)
       // The main batch wrote the fresh snapshot (--update-timings). Publish
       // it now — a later serial batch failing must not lose it — and report
-      // files the kept runs show over 5 s outside the slow tier (D7). This
-      // point is only reached after runCommand resolved: a failed batch
-      // throws before it, so a failed run never publishes.
+      // files whose shortest kept duration sits over 5 s outside the slow
+      // tier (D7). This point is only reached after runCommand resolved: a
+      // failed batch throws before it, so a failed run never publishes.
       if (plan.publishTimings && plan.batchOptions.timingsPath !== undefined && !published) {
         published = true
         try {
           const record = publishTimingsSnapshot(recordsDir(process.cwd()), plan.batchOptions.timingsPath)
           if (record !== null) {
-            const misplaced = misplacedFiles({ files: record.files, isSlowTier: isSlowTierFile })
-            for (const line of formatMisplacedReport(misplaced)) console.log(line)
+            const misplaced = misplacedFromRecords(recordsDir(process.cwd()), isSlowTierFile)
+            if (misplaced !== null) {
+              for (const line of formatMisplacedReport(misplaced)) console.log(line)
+            }
           }
         } catch (error) {
           console.error(`[test-runner] timings record not published: ${String(error)}`)

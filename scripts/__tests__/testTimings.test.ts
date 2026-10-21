@@ -3,14 +3,20 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
+  KEPT_RUN_SNAPSHOTS,
   SLOW_TIER_EXCEPTIONS,
   TIMINGS_FILE_NAME,
   formatMisplacedReport,
+  isRunSnapshotName,
+  loadTimingSamples,
   misplacedFiles,
+  misplacedFromRecords,
   parseTimingsRecord,
+  pruneRunSnapshots,
   publishTimingsSnapshot,
   readTimingsSeed,
   seedTimingsSnapshot,
+  shortestAcross,
 } from '../testTimings'
 import { isSlowTierFile } from '../planBatches'
 
@@ -96,7 +102,14 @@ describe('publishTimingsSnapshot', () => {
       files: { './scripts/planBatches.ts': 12_345, './scripts/test-runner.ts': 678 },
     })
     expect(parseTimingsRecord(fs.readFileSync(path.join(dir, TIMINGS_FILE_NAME), 'utf8'))).toEqual(record)
-    expect(fs.readdirSync(dir)).toEqual([TIMINGS_FILE_NAME])
+    // The run's own snapshot (D7) sits beside the record, and both parse.
+    const written = fs.readdirSync(dir)
+    expect(written.length).toBe(2)
+    expect(written).toContain(TIMINGS_FILE_NAME)
+    const snapshotName = written.find((name) => name !== TIMINGS_FILE_NAME)
+    expect(snapshotName, 'the run snapshot is the second file').toBeDefined()
+    expect(isRunSnapshotName(snapshotName!)).toBe(true)
+    expect(parseTimingsRecord(fs.readFileSync(path.join(dir, snapshotName!), 'utf8'))).toEqual(record)
     fs.rmSync(dir, { recursive: true, force: true })
     fs.rmSync(runRoot, { recursive: true, force: true })
   })
@@ -132,17 +145,20 @@ describe('publishTimingsSnapshot', () => {
     fs.rmSync(runRoot, { recursive: true, force: true })
   })
 
-  test('concurrent writers never expose partial JSON', async () => {
+  test('concurrent writers never expose partial JSON, and both leave whole run snapshots', async () => {
     const dir = makeRecordsDir()
     const runRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'timings-runroot-'))
     // Two writer processes, like two suite-run slots publishing at once. The
-    // payloads are large enough that a non-atomic write would open a window
-    // a reader could catch: the contract is that every read of the record
-    // parses or finds no file, never an empty or torn one.
+    // predicate keeps every key, so each written record is the full payload:
+    // large enough that a non-atomic write would open a window a reader
+    // could catch. The contract is that every read of the record or of a
+    // run snapshot parses or finds no file, never an empty or torn one, and
+    // that each publisher's snapshot survives the other's pruning (D7).
     const writerScript = `
       const { publishTimingsSnapshot } = await import(${JSON.stringify(path.resolve(import.meta.dir, '../testTimings.ts'))})
       const end = Date.now() + Number(process.env.WRITER_MS)
-      while (Date.now() < end) publishTimingsSnapshot(process.env.WRITER_DIR, process.env.WRITER_SNAPSHOT)
+      while (Date.now() < end)
+        publishTimingsSnapshot(process.env.WRITER_DIR, process.env.WRITER_SNAPSHOT, () => true)
     `
     const snapshots = [0, 1].map((writer) => {
       const snapshot = path.join(runRoot, `writer-${writer}.json`)
@@ -168,8 +184,9 @@ describe('publishTimingsSnapshot', () => {
       })
     )
     let reads = 0
-    let missing = 0
     let poisoned: string | null = null
+    let poisonedSnapshot: string | null = null
+    const seenPublishers = new Set<string>()
     // The writers run 1.5 s; the reader polls past their deadline so the
     // last rename is also observed.
     const deadline = Date.now() + 1_700
@@ -179,17 +196,124 @@ describe('publishTimingsSnapshot', () => {
         reads += 1
         if (parseTimingsRecord(text) === null) poisoned = text
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') missing += 1
-        else throw error
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      }
+      // Every run snapshot ever observed must parse whole, and both
+      // publishers' snapshots must appear (pruning may remove older ones;
+      // a name listed then unlinked before the read is a prune race, not a
+      // torn file).
+      let names: string[] = []
+      try {
+        names = fs.readdirSync(dir)
+      } catch {
+        // directory not created yet
+      }
+      for (const name of names) {
+        if (!isRunSnapshotName(name)) continue
+        seenPublishers.add(name.replace(/^timings-\d{8}T\d{6}Z-/, '').replace(/\.json$/, ''))
+        try {
+          const text = fs.readFileSync(path.join(dir, name), 'utf8')
+          if (parseTimingsRecord(text) === null) poisonedSnapshot = name
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+        }
       }
       await Bun.sleep(0)
     }
     await Promise.all(writers.map((writer) => writer.exited))
     expect(poisoned, `a reader saw partial JSON: ${String(poisoned).slice(0, 80)}`).toBeNull()
+    expect(poisonedSnapshot, `a reader saw a torn run snapshot: ${String(poisonedSnapshot)}`).toBeNull()
     expect(reads).toBeGreaterThan(0)
+    expect(seenPublishers.size).toBe(2)
     fs.rmSync(dir, { recursive: true, force: true })
     fs.rmSync(runRoot, { recursive: true, force: true })
   }, 20_000)
+})
+
+describe('run snapshots and the shortest-duration rule (D7)', () => {
+  function writeSample(dir: string, name: string, files: Record<string, number>): void {
+    fs.writeFileSync(path.join(dir, name), JSON.stringify({ version: 1, files }))
+  }
+
+  test('pruning keeps the newest five snapshots by name', () => {
+    const dir = makeRecordsDir()
+    for (let index = 1; index <= 7; index += 1) {
+      const stamp = `20261022T00000${index}Z`
+      writeSample(dir, `timings-${stamp}-1.json`, { './a.test.ts': index })
+    }
+    pruneRunSnapshots(dir)
+    const kept = fs.readdirSync(dir).sort()
+    expect(kept.length).toBe(KEPT_RUN_SNAPSHOTS)
+    expect(kept[0]).toBe('timings-20261022T000003Z-1.json')
+    expect(kept.at(-1)).toBe('timings-20261022T000007Z-1.json')
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  test('the report judges the shortest kept duration: a load spike is not named, a durably slow file is', () => {
+    const dir = makeRecordsDir()
+    // c is over 5 s in the record and every kept run; a spikes over 5 s in
+    // one kept run but is under 5 s in the other (and in the record).
+    writeSample(dir, TIMINGS_FILE_NAME, { './src/a.test.ts': 4_000, './src/c.test.ts': 8_000 })
+    writeSample(dir, 'timings-20261022T000001Z-1.json', {
+      './src/a.test.ts': 6_500,
+      './src/b.test.ts': 7_000,
+      './src/c.test.ts': 8_100,
+    })
+    writeSample(dir, 'timings-20261022T000002Z-2.json', {
+      './src/a.test.ts': 4_500,
+      './src/b.test.ts': 7_500,
+      './src/c.test.ts': 8_200,
+    })
+    const misplaced = misplacedFromRecords(dir, isSlowTierFile)
+    // The report names normalized paths (the leading './' stripped).
+    expect(misplaced).toEqual([
+      { file: 'src/c.test.ts', ms: 8_000 },
+      { file: 'src/b.test.ts', ms: 7_000 },
+    ])
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  test('a malformed snapshot is skipped, and the record alone judges when it is the only sample', () => {
+    const dir = makeRecordsDir()
+    writeSample(dir, TIMINGS_FILE_NAME, { './src/x.test.ts': 6_000 })
+    fs.writeFileSync(path.join(dir, 'timings-20261022T000001Z-1.json'), '{torn')
+    writeSample(dir, 'timings-20261022T000002Z-2.json', { './src/y.test.ts': 9_000 })
+    // The torn snapshot contributes nothing: x is named only from the record,
+    // and the whole snapshot still judges y.
+    expect(loadTimingSamples(dir)).toEqual([
+      { './src/x.test.ts': 6_000 },
+      { './src/y.test.ts': 9_000 },
+    ])
+    expect(misplacedFromRecords(dir, isSlowTierFile)).toEqual([
+      { file: 'src/y.test.ts', ms: 9_000 },
+      { file: 'src/x.test.ts', ms: 6_000 },
+    ])
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  test('no snapshots: the record alone is the judgment; no samples: nothing to judge', () => {
+    const dir = makeRecordsDir()
+    writeSample(dir, TIMINGS_FILE_NAME, { './src/x.test.ts': 6_000 })
+    expect(loadTimingSamples(dir)).toEqual([{ './src/x.test.ts': 6_000 }])
+    expect(misplacedFromRecords(dir, isSlowTierFile)).toEqual([{ file: 'src/x.test.ts', ms: 6_000 }])
+    fs.rmSync(dir, { recursive: true, force: true })
+
+    const empty = makeRecordsDir()
+    expect(loadTimingSamples(empty)).toEqual([])
+    expect(misplacedFromRecords(empty, isSlowTierFile)).toBeNull()
+    fs.rmSync(empty, { recursive: true, force: true })
+  })
+
+  test('shortestAcross takes the minimum per file across samples', () => {
+    expect(
+      shortestAcross([
+        { './a.test.ts': 6_000, './b.test.ts': 7_000 },
+        { './a.test.ts': 4_500 },
+        { './c.test.ts': 8_000 },
+      ])
+    ).toEqual({ './a.test.ts': 4_500, './b.test.ts': 7_000, './c.test.ts': 8_000 })
+    expect(shortestAcross([])).toEqual({})
+  })
 })
 
 describe('misplacedFiles', () => {
@@ -239,7 +363,7 @@ describe('misplacedFiles', () => {
 })
 
 describe('SLOW_TIER_EXCEPTIONS', () => {
-  test('every entry names an existing non-tier file, once', () => {
+  test('every entry names an existing non-tier file, once, with its N=1 time', () => {
     const seen = new Set<string>()
     for (const entry of SLOW_TIER_EXCEPTIONS) {
       expect(entry.reason.trim()).not.toBe('')
@@ -249,7 +373,18 @@ describe('SLOW_TIER_EXCEPTIONS', () => {
       // the report forever.
       expect(fs.existsSync(entry.file), `${entry.file} no longer exists`).toBe(true)
       expect(isSlowTierFile(entry.file), `${entry.file} belongs to the slow tier now`).toBe(false)
+      // Only a file over 5 s alone at N=1 may be listed (D7): the reason
+      // states that measurement.
+      expect(entry.reason, `${entry.file} states no N=1 time`).toMatch(/\d+(?:\.\d+)? s at N=1/)
     }
-    expect(SLOW_TIER_EXCEPTIONS.length).toBeGreaterThan(50)
+  })
+
+  test('the renamed codex files belong to the slow tier now', () => {
+    expect(isSlowTierFile('src/server/__tests__/codexRolloutReplay.integration.test.ts')).toBe(true)
+    expect(isSlowTierFile('src/server/__tests__/codexTeamPath.integration.test.ts')).toBe(true)
+    expect(fs.existsSync('src/server/__tests__/codexRolloutReplay.integration.test.ts')).toBe(true)
+    expect(fs.existsSync('src/server/__tests__/codexTeamPath.integration.test.ts')).toBe(true)
+    expect(fs.existsSync('src/server/__tests__/codexRolloutReplay.test.ts')).toBe(false)
+    expect(fs.existsSync('src/server/__tests__/codexTeamPath.test.ts')).toBe(false)
   })
 })
