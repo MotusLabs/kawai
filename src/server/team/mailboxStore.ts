@@ -112,7 +112,7 @@ export class MailboxStore {
       $allowedProfiles: input.allowedProfiles ? JSON.stringify(input.allowedProfiles) : null,
     })
     // The choice is written at call time, never in the eagerly prepared
-    // insert, so a store opened on a database before migration 17 still
+    // insert, so a store opened on a database before migration 18 (`worker-choice`) still
     // prepares (D1); with the insert in one transaction.
     if (input.workerChoice) {
       const choice = input.workerChoice
