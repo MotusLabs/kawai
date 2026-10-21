@@ -26,6 +26,7 @@ export type MemberExclusionKind =
   | 'startup-failed'
   | 'excluded-profile'
   | 'outside-role'
+  | 'worker-choice'
   | 'profile-cooling'
 
 export interface MemberExclusion {
@@ -150,6 +151,12 @@ export interface EligibilityState {
   providerOf?: (profileId: string) => string
   /** The role's profiles, in the role's order (plan-execution D15); null narrows nothing. */
   allowedProfiles?: string[] | null
+  /**
+   * The sender's worker choice (dispatch-worker-choice D2): its canonical
+   * selector and the group's model keys it resolves to this pass. It narrows
+   * within the role, never widens it; null narrows nothing.
+   */
+  workerChoice?: { selector: string; profiles: readonly string[] } | null
   /** Each profile's effective cooldown end (ISO) in force at `now`; absent = not cooling. */
   cooldowns?: Readonly<Record<string, string | null>>
   /** Evaluation time, epoch ms. */
@@ -191,12 +198,19 @@ export function evaluateEligibility(state: EligibilityState): EligibilityResult 
   const workers = group.profiles.length > 0 ? group.profiles : [{ profileId: DEFAULT_PROFILE_ID }]
   const provider = state.providerOf ?? ((profileId: string) => profileId)
 
-  /** The message's filters, role first (D2): the reasons a profile may not take it. */
+  /**
+   * The message's filters, role first (D2): the reasons a profile may not
+   * take it. A profile outside the role reports only `outside-role`; one
+   * inside it but outside the worker choice reports `worker-choice`.
+   */
   const filterReasons = (profileId: string): EligibilityReason[] => {
     const reasons: EligibilityReason[] = []
     const role = state.allowedProfiles
+    const choice = state.workerChoice
     if (role !== null && role !== undefined && !role.includes(profileId)) {
       reasons.push({ kind: 'outside-role', detail: `plan role allows only ${role.join(', ')}` })
+    } else if (choice && !choice.profiles.includes(profileId)) {
+      reasons.push({ kind: 'worker-choice', detail: choice.selector })
     }
     if (profileId === state.excludeProfile) reasons.push({ kind: 'excluded-profile', detail: profileId })
     else if (state.excludeProvider !== undefined && provider(profileId) === state.excludeProvider) {
@@ -226,7 +240,8 @@ export function evaluateEligibility(state: EligibilityState): EligibilityResult 
   }
 
   if (state.spawnCwd !== null) {
-    // Spawn slots follow the role's order when one is set, else the group's (D15).
+    // Spawn slots follow the role's order when one is set, else the group's
+    // (D15); the worker choice only drops slots, so the order is kept (D3).
     const byId = new Map(workers.map(entry => [entry.profileId, entry]))
     const order = state.allowedProfiles
       ? [...state.allowedProfiles.filter(profileId => byId.has(profileId)), ...workers.map(entry => entry.profileId).filter(id => !state.allowedProfiles!.includes(id))]

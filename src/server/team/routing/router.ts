@@ -19,7 +19,9 @@ import type { GroupDefinition } from '../groupFile'
 import type { TeamMessage } from '../mailboxStore'
 import type { SpawnContext, WorktreeStaffing } from '../staffing'
 import { builtinPick } from './builtin'
-import { buildCandidates, DEFAULT_PROFILE_ID } from './candidates'
+import { DEFAULT_PROFILE_ID } from './candidates'
+import { evaluateEligibility } from './workerEligibility'
+import { resolveWorkerSelector } from './workerSelector'
 import type { LimitEventStore } from './limitEvents'
 import type { RuleRegistry } from './ruleLoader'
 
@@ -88,7 +90,15 @@ export class ProfileRouter implements GroupRouter {
     const eligible = new Map(view.eligible.map(row => [row.sessionId, row]))
     const members = this.options.members(message.teamId, group.id)
     const providerOf = (id: string) => this.options.providerOf?.(id) ?? id
-    const { candidates, group: routeGroup } = buildCandidates({
+    // The sender's worker choice (dispatch-worker-choice D1/D2), resolved to
+    // the group's model keys on each pass, so a group or catalog edit after
+    // sending applies the way every other group edit does.
+    const workerChoice = message.workerChoice ? {
+      selector: message.workerChoice,
+      profiles: resolveWorkerSelector(message.workerChoice,
+        group.profiles.length > 0 ? group.profiles.map(entry => entry.profileId) : [DEFAULT_PROFILE_ID], providerOf),
+    } : null
+    const { candidates, group: routeGroup, excluded } = evaluateEligibility({
       group,
       members: members.map(member => memberState(member, eligible.get(member.sessionId))),
       pendingSpawnProfiles: spawn?.pendingProfiles ?? [],
@@ -106,10 +116,20 @@ export class ProfileRouter implements GroupRouter {
         return { excludeProvider: excludedProvider }
       })(),
       ...(this.options.allowedProfiles?.(message) ? { allowedProfiles: this.options.allowedProfiles(message)! } : {}),
+      workerChoice,
     })
     if (candidates.length === 0) {
       this.holds.delete(message.id)
-      return { kind: 'none', diagnosis: diagnoseNone(routeGroup, spawn, view) }
+      // Members the dispatcher found eligible but the choice filtered out
+      // name it in the breakdown (D2); the others keep their own cause.
+      const listed = new Set((view.exclusions ?? []).map(entry => entry.sessionId))
+      const choiceExclusions: MemberExclusion[] = excluded.flatMap(entry => entry.alternative.kind === 'member' &&
+        eligible.has(entry.alternative.sessionId) && !listed.has(entry.alternative.sessionId) &&
+        entry.reasons.some(reason => reason.kind === 'worker-choice')
+        ? [{ sessionId: entry.alternative.sessionId, kind: 'worker-choice' as const, detail: workerChoice!.selector }]
+        : [])
+      const breakdown = choiceExclusions.length > 0 ? { ...view, exclusions: [...(view.exclusions ?? []), ...choiceExclusions] } : view
+      return { kind: 'none', diagnosis: diagnoseNone(routeGroup, spawn, breakdown) }
     }
     const signature = candidates.map(candidate => candidate.id).sort().join(',')
     const held = this.holds.get(message.id)
@@ -264,6 +284,7 @@ const CAUSE_LABELS: Record<MemberExclusion['kind'], string> = {
   'startup-failed': 'startup failed',
   'excluded-profile': 'on the excluded profile',
   'outside-role': 'outside the plan role\'s profiles',
+  'worker-choice': 'not on the chosen worker',
   'profile-cooling': 'cooling',
 }
 

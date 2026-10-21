@@ -1,6 +1,9 @@
 // Route candidates for one group message (profile-routing design D4/D4a),
-// an adapter over the pure eligibility check (`workerEligibility.ts`). Pure: the dispatcher supplies the group's live members (already judged
-// eligible or not by delivery rules, worktree, and parking) and whether
+// an adapter over the pure eligibility check (`workerEligibility.ts`) that
+// returns only the candidates and counts; the router reads the check itself,
+// for the excluded alternatives its diagnosis names. Pure: the dispatcher
+// supplies the group's live members (already judged eligible or not by
+// delivery rules, worktree, and parking) and whether
 // staffing may spawn at all (worktree task mail, team cap, one spawned
 // writer per worktree); this module applies the per-profile caps and the
 // group `max`, and reports the live counts rules see. Cooling profiles stay
@@ -44,6 +47,8 @@ export interface CandidateInput {
   providerOf?: (profileId: string) => string
   /** The role's profiles this mail may route to, in the role's order (plan-execution D15); null narrows nothing. */
   allowedProfiles?: string[] | null
+  /** The sender's worker choice, resolved to the group's model keys (dispatch-worker-choice D2); null narrows nothing. */
+  workerChoice?: { selector: string; profiles: readonly string[] } | null
 }
 
 export interface CandidateSet {
