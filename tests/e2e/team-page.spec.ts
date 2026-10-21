@@ -9,11 +9,11 @@
 // navigator holds only this spec's sessions; written for CI, and locally only
 // on a spare port — never run test:e2e against a live kawai.
 import { expect, test, type Page } from '@playwright/test'
-import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
+import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { killPrivateTmuxServer } from './fixtures/privateTmux'
+import { ServerProcess } from './fixtures/serverProcess'
 
 test.skip(process.env.AGENTBOARD_CHAT_FIXTURE !== '1', 'Requires development chat fixture')
 
@@ -41,13 +41,7 @@ function useIsolatedServer(root: string) {
   const port = process.env.KAWAI_TEAM_PAGE_PORT || String((Number(process.env.E2E_PORT) || 4173) + 100)
   const url = `http://127.0.0.1:${port}`
   const dbPath = join(root, 'agentboard.db')
-  let server: ChildProcess | null = null
-  // One exit promise per spawned server, its listener attached at spawn
-  // time: stop() awaits it whatever ended the server, including a signal
-  // kill before stop(), where exitCode is null but the exit already fired
-  // and a listener attached only at stop() would never resolve.
-  let exited: Promise<void> = Promise.resolve()
-  let diagnostics = ''
+  const proc = new ServerProcess()
   const start = async (page: Page) => {
     // Same guard as playwright.config.ts's webServer command: the server pins
     // AGENTBOARD_STATIC_DIR, so a clean tree has to build before it can serve.
@@ -61,7 +55,7 @@ function useIsolatedServer(root: string) {
     execFileSync('tmux', ['new-session', '-d', '-s', 'kawai-team-page'], {
       env: { ...process.env, TMUX_TMPDIR: root, TMUX: '' },
     })
-    server = spawn('bun', ['src/server/index.ts'], {
+    proc.spawn('bun', ['src/server/index.ts'], {
       cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'],
       env: {
         ...process.env,
@@ -75,25 +69,19 @@ function useIsolatedServer(root: string) {
         AGENTBOARD_REMOTE_HOSTS: '', CLAUDE_CODE_OAUTH_TOKEN: '', ANTHROPIC_API_KEY: '',
       },
     })
-    exited = new Promise<void>(resolve => { server!.once('exit', () => resolve()) })
-    server.stdout?.on('data', chunk => { diagnostics = (diagnostics + String(chunk)).slice(-6000) })
-    server.stderr?.on('data', chunk => { diagnostics = (diagnostics + String(chunk)).slice(-6000) })
     await expect.poll(async () => {
       try { return (await page.request.get(url, { timeout: 1000 })).ok() } catch { return false }
     }, { timeout: 30_000 }).toBe(true)
     return url
   }
   const stop = async () => {
-    if (server && server.exitCode === null && server.signalCode === null) server.kill('SIGTERM')
-    await exited
     // Every path that ends this server — a normal stop, a server that
-    // already exited, a failed start — kills the root's private tmux server
-    // before the root is removed: the daemon outlives the server and pins
-    // this checkout (see tests/e2e/fixtures/privateTmux.ts).
-    killPrivateTmuxServer(root)
-    server = null
+    // already exited, a failed start — goes through the shared bounded
+    // sequence, which kills the root's private tmux server before the root
+    // is removed: the daemon outlives the server and pins this checkout.
+    await proc.stop({ tmuxRoot: root })
   }
-  return { start, stop, url: () => url, dbPath: () => dbPath, diagnostics: () => diagnostics }
+  return { start, stop, url: () => url, dbPath: () => dbPath, diagnostics: () => proc.diagnostics() }
 }
 
 /** Expand a Mailbox section — idempotent, since kept collapse state survives the open. */

@@ -1,11 +1,12 @@
 import { expect, test } from '@playwright/test'
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import { createServer } from 'node:http'
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { killChat, toggleDebug } from './support/chatHeader'
 import { killPrivateTmuxServer } from './fixtures/privateTmux'
+import { ServerProcess } from './fixtures/serverProcess'
 
 // Chat regression against the externally installed Claude Code executable.
 // Everything runs against a loopback mock Anthropic endpoint with a
@@ -147,27 +148,17 @@ test('external CLI chat: streaming, approvals, question, interrupt, debug, resum
     AGENTBOARD_CHAT_ENV: `ANTHROPIC_BASE_URL=http://127.0.0.1:${mockPort}/probe;ANTHROPIC_API_KEY=synthetic-external-cli-key`,
     ...extra,
   })
-  let server: ChildProcess | null = null
-  // One exit promise per spawned server, its listener attached at spawn
-  // time: stop() awaits it whatever ended the server, including a signal
-  // kill before stop(), where exitCode is null but the exit already fired
-  // and a listener attached only at stop() would never resolve.
-  let exited: Promise<void> = Promise.resolve()
-  let diagnostics = ''
+  const proc = new ServerProcess()
   const start = async (extra: Record<string, string | undefined> = {}) => {
-    server = spawn('bun', ['src/server/index.ts'], { cwd: process.cwd(), env: serverEnv(extra), stdio: ['ignore', 'pipe', 'pipe'] })
-    exited = new Promise<void>(resolve => { server!.once('exit', () => resolve()) })
-    server.stdout?.on('data', chunk => { diagnostics = (diagnostics + String(chunk)).slice(-6000) })
-    server.stderr?.on('data', chunk => { diagnostics = (diagnostics + String(chunk)).slice(-6000) })
+    proc.spawn('bun', ['src/server/index.ts'], { cwd: process.cwd(), env: serverEnv(extra), stdio: ['ignore', 'pipe', 'pipe'] })
     await expect.poll(async () => {
       try { return (await page.request.get(url, { timeout: 1000 })).ok() } catch { return false }
     }, { timeout: 30_000 }).toBe(true)
   }
   const stop = async () => {
-    if (!server) return
-    if (server.exitCode === null && server.signalCode === null) server.kill('SIGTERM')
-    await exited
-    server = null
+    // No tmuxRoot here: this spec's mid-test restarts reuse the same socket,
+    // so the one unconditional kill stays in the finally block below.
+    await proc.stop()
   }
   const send = async (text: string) => {
     await page.getByLabel('Message Claude').fill(text)
@@ -323,7 +314,7 @@ test('external CLI chat: streaming, approvals, question, interrupt, debug, resum
     await page.screenshot({ path: info.outputPath('missing-executable.png') })
     expect(readChatSessions(dbPath)).toHaveLength(0)
   } catch (error) {
-    console.error('server diagnostics:', diagnostics)
+    console.error('server diagnostics:', proc.diagnostics())
     console.error('ws events:', seenEvents.join(' '))
     throw error
   } finally {
