@@ -21,8 +21,8 @@ import type { MailboxStore } from '../../team/mailboxStore'
 import { githubRepoOf } from '../landing/landingProbe'
 import { inspectDueUnknownEffects, recoverUnknownEffects } from './executorStartup'
 import type { InspectorReads } from './effectInspectors'
-import { applyEffectFailure, applyEffectOutcome, type OutcomeDeps } from './executorOutcomes'
-import { landingAdapters, removeWorktreeAdapter } from './executionLanding'
+import { applyEffectFailure, type OutcomeDeps } from './executorOutcomes'
+import { landingAdapters } from './executionLanding'
 import { mechanismFor, type LandingMechanism, type LandingMechanisms } from '../landing/landingMechanisms'
 import { startupReads } from './startupReads'
 import { DIRECT_MECHANISMS } from '../landing/directMechanism'
@@ -31,7 +31,6 @@ import { ciClass } from '../../../shared/planExecutionGates'
 import type { GhCommandOptions } from '../landing/ghCommand'
 import { executionSnapshot } from './executionSnapshot'
 import { planSteps } from './executionPlanner'
-import { EffectRunner, type EffectAdapter } from './effects'
 import { EffectPinConflict } from './executionEffectStore'
 import { ExecutionConflict } from './executionStore'
 import type { ExecutionStore } from './executionStore'
@@ -39,7 +38,8 @@ import type { PlanStore } from '../planStore'
 import { dispatchFixAttempt, dispatchImplementAttempt, redispatchStage, type DispatchDeps } from './executionDispatch'
 import { StepRefusal } from './stepRefusal'
 import { fixRoundOutcome } from '../../../shared/planExecutionProgress'
-import { applyRoundStage, dispatchRevisionAttempt, type ReleaseSeam, openPrAdapter, pushAdapter, rerunAdapter, roundAdapters } from './executionRounds'
+import { applyRoundStage, type ReleaseSeam, roundAdapters } from './executionRounds'
+import { dispatchDeps as dispatchDepsOf, effectRunner, landingDeps as landingDepsOf, outcomeDeps as outcomeDepsOf, roundDeps as roundDepsOf } from './executorDeps'
 
 /** D5's polling interval while a team has a running execution. */
 export const EXECUTOR_TICK_MS = 60_000
@@ -70,7 +70,7 @@ export interface ExecutorDeps {
   /** Test seam: the landing adapters (defaults to the real git/gh). */
   landingAdapters?: import('./executionLanding').LandingAdapters
   /** Test seam: effect adapters by kind (the composition passes provision's). */
-  adapters?: Partial<Record<string, EffectAdapter>>
+  adapters?: Partial<Record<string, import('./effects').EffectAdapter>>
   /** Test seam: round-pipeline adapters (push, PRs, CI, rerun); defaults to the real gh/git. */
   roundAdapters?: typeof roundAdapters
   /** The tick interval while a team runs an execution; the development fixture shortens it. */
@@ -237,21 +237,7 @@ export class ExecutionExecutor {
   }
 
   private roundDeps(team: TeamIdentity): import('./executionRounds').RoundDeps {
-    return {
-      team,
-      repo: this.repoOf(team),
-      executions: this.deps.store,
-      plans: this.deps.plans,
-      tasks: this.deps.tasks,
-      results: this.deps.results,
-      assignments: this.deps.assignments,
-      adapters: this.deps.roundAdapters ?? roundAdapters,
-      records: this.deps.records,
-      ...(this.deps.ghOptions ? { ghOptions: this.deps.ghOptions } : {}),
-      releases: this.deps.releases,
-      groupScoped: this.deps.groupScoped,
-      now: () => (this.deps.now?.() ?? new Date()).toISOString(),
-    }
+    return roundDepsOf(this.deps, team, this.repoOf(team))
   }
 
   /** origin as owner/repo, read once from the main checkout's remote (the probe's fact). */
@@ -287,33 +273,8 @@ export class ExecutionExecutor {
     }
   }
 
-  private runner(): EffectRunner {
-    return new EffectRunner({
-      store: this.deps.store,
-      adapter: {
-        call: async effect => {
-          const adapters = this.deps.adapters ?? {}
-          const rounds = this.deps.roundAdapters ?? roundAdapters
-          const landing = this.deps.landingAdapters ?? landingAdapters
-          const adapter = adapters[effect.kind]
-            ?? (effect.kind === 'push' ? pushAdapter(rounds)
-              : effect.kind === 'open-pr' ? openPrAdapter(rounds, this.deps.ghOptions)
-                : effect.kind === 'rerun' ? rerunAdapter(rounds, this.deps.ghOptions)
-                  : effect.kind === 'remove-worktree' ? removeWorktreeAdapter()
-                    : this.mechanismOf(effect.executionId).effectAdapter(effect.kind, landing, this.deps.ghOptions))
-          if (adapter === undefined) {
-            return { ok: false, error: { argv: ['executor', effect.kind], exitCode: 1, stderr: `no adapter for kind ${effect.kind}` } }
-          }
-          return adapter.call(effect)
-        },
-      },
-      // A done effect's follow-on transition commits with its outcome (D14);
-      // merge and update-branch outcomes are applied by the next pass's
-      // landing-outcome stage, inside the single-flight tick.
-      onDone: effect => applyEffectOutcome(this.outcomeDeps(), effect),
-      onFailed: effect => applyEffectFailure(this.outcomeDeps(), effect),
-      ...(this.deps.now ? { now: this.deps.now } : {}),
-    })
+  private runner(): import('./effects').EffectRunner {
+    return effectRunner(this.deps, executionId => this.mechanismOf(executionId))
   }
 
   /**
@@ -366,14 +327,7 @@ export class ExecutionExecutor {
   }
 
   private landingDeps(team: TeamIdentity): import('./executionLanding').LandingDeps {
-    return {
-      team, repo: this.repoOf(team), executions: this.deps.store, plans: this.deps.plans,
-      results: this.deps.results, plansService: this.deps.plansService, conditionsOf: this.deps.conditionsOf, records: this.deps.records,
-      ...(this.deps.ghOptions ? { ghOptions: this.deps.ghOptions } : {}),
-      now: () => (this.deps.now?.() ?? new Date()).toISOString(),
-      revisionAttempt: (changeRow, round, update) => dispatchRevisionAttempt(this.roundDeps(team), changeRow, round, update),
-      taskStatusOf: taskId => this.deps.tasks.store.get(taskId)?.status ?? null,
-    }
+    return landingDepsOf(this.deps, team, this.repoOf(team), () => this.roundDeps(team))
   }
 
   /** The landing stages (D13): a passed change lands; a landed change's base CI lands as evidence. */
@@ -447,7 +401,7 @@ export class ExecutionExecutor {
   }
 
   private dispatchDeps(team: TeamIdentity): DispatchDeps {
-    return { team, executions: this.deps.store, plans: this.deps.plans, tasks: this.deps.tasks, assignments: this.deps.assignments, results: this.deps.results }
+    return dispatchDepsOf(this.deps, team)
   }
 
   /** Run one step; a StepRefusal stops its change as instruction-failed, anything else propagates. */
@@ -476,12 +430,7 @@ export class ExecutionExecutor {
   }
 
   private outcomeDeps(): OutcomeDeps {
-    return {
-      store: this.deps.store,
-      taskStatusOf: taskId => this.deps.tasks.store.get(taskId)?.status ?? null,
-      mechanismOf: executionId => this.mechanismOf(executionId),
-      now: () => this.deps.now?.() ?? new Date(),
-    }
+    return outcomeDepsOf(this.deps, executionId => this.mechanismOf(executionId))
   }
 
   /** While the team runs an execution or a promotion, the 60-second timer keeps the loop alive (D5). */
