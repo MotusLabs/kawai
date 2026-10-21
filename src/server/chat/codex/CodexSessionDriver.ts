@@ -37,7 +37,9 @@ import type { DynamicToolSpec } from './protocol/v2/DynamicToolSpec'
 import { mapCodexNotification, turnCompletedDrafts, turnUsageBetween, type CodexEventDraft, type CodexOutput } from './codexEvents'
 import { CodexRequests } from './codexRequests'
 import { answerAsyncQuestion, CLIENT_INFO, codexContextUsage, codexEffort, reportCompaction, reportSpawn, threadParams, type CodexClient, type CodexSessionDriverOptions } from './codexThread'
+import { codexRetryLimitSignal, codexTurnLimitSignal } from './codexLimits'
 import { normalizeRateLimitSnapshot, snapshotOfRateLimitsRead } from './codexUsage'
+import type { RateLimitSnapshot } from './protocol/v2/RateLimitSnapshot'
 import type { ThreadItem } from './protocol/v2/ThreadItem'
 import type { TokenUsageBreakdown } from './protocol/v2/TokenUsageBreakdown'
 import type { Turn } from './protocol/v2/Turn'
@@ -69,6 +71,8 @@ export class CodexSessionDriver implements ChatAgentDriver {
   private readonly askedItems = new Set<string>()
   private turnStartTotal: TokenUsageBreakdown | null = null
   private latestTotal: TokenUsageBreakdown | null = null
+  /** The latest rate-limit snapshot this session received, for the limit reset (PR E 7.2). */
+  private latestRateLimits: RateLimitSnapshot | null = null
   private lastModel: string | null = null
   private readonly requests: CodexRequests
 
@@ -312,6 +316,8 @@ export class CodexSessionDriver implements ChatAgentDriver {
     const turnId = this.activeTurnId ?? ''
     if (method === 'error' && params.willRetry === true) {
       this.feedActivity({ type: 'api_retry', attempt: 1, maxRetries: 1 })
+      const retry = codexRetryLimitSignal(params, this.latestRateLimits)
+      if (retry) this.options.onLimitEvent?.(retry)
     }
     for (const output of mapCodexNotification(method, params, turnId)) this.apply(output, method, params)
   }
@@ -331,6 +337,7 @@ export class CodexSessionDriver implements ChatAgentDriver {
         this.onTokenUsage(output.usage.total, output.usage.last, output.usage.modelContextWindow)
         return
       case 'rate_limits':
+        this.latestRateLimits = output.snapshot
         this.options.onRateLimit?.(normalizeRateLimitSnapshot(output.snapshot))
         return
       case 'question': {
@@ -373,7 +380,8 @@ export class CodexSessionDriver implements ChatAgentDriver {
     if (!this.options.claimRateLimitsRead?.()) return
     client.request('account/rateLimits/read', {}).then((result) => {
       if (this.client !== client) return
-      const report = normalizeRateLimitSnapshot(snapshotOfRateLimitsRead(result), undefined, 'provider')
+      this.latestRateLimits = snapshotOfRateLimitsRead(result)
+      const report = normalizeRateLimitSnapshot(this.latestRateLimits, undefined, 'provider')
       if (report.windows.length > 0) this.options.onRateLimit?.(report)
       else this.options.onUsageNoData?.()
     }).catch(() => {
@@ -392,6 +400,8 @@ export class CodexSessionDriver implements ChatAgentDriver {
     if (turn.status === 'interrupted') {
       this.emit({ type: 'turn_interrupted', turnId })
     } else {
+      const limit = codexTurnLimitSignal(turn, this.latestRateLimits)
+      if (limit) this.options.onLimitEvent?.(limit)
       for (const draft of turnCompletedDrafts(turn, turnId, turnUsageBetween(this.turnStartTotal, this.latestTotal))) this.emit(draft)
     }
     this.turnStartTotal = this.latestTotal

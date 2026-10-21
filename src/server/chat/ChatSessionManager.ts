@@ -83,6 +83,7 @@ import { withTextReset } from './limitSignals'
 import { providerOf, resolveProfileCatalog } from './profileCatalog'
 import { ensureCodexExecutable } from './codex/codexExecutable'
 import { codexLoginErrorMessage, hasCodexLogin } from './codex/codexAuth'
+import { codexLimitProviderId } from './codex/codexLimits'
 import { resolveCodexHome } from './codexProfiles'
 import { fetchZaiUsage } from './zaiUsage'
 import { fetchOpenRouterUsage, isOpenRouterBaseUrl, type OpenRouterUsagePull } from './openRouterUsage'
@@ -2591,8 +2592,10 @@ export class ChatSessionManager {
             profileId,
             sessionId: record.sessionId,
             groupId: this.records.get(record.sessionId)?.groupId ?? null,
-            // The provider owning the profile at its project path (D7/D10).
-            providerId: providerOf(profileId, this.catalogCtx(projectPath)),
+            // The provider owning the profile at its project path (D7/D10);
+            // a Codex login limit records once for the home, the session's
+            // own budget for the profile alone (codex-chat-sessions D9).
+            providerId: codexLimitProviderId(signal.kind, providerOf(profileId, this.catalogCtx(projectPath))),
             window: signal.window,
           })
         },

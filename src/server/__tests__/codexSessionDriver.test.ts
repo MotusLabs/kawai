@@ -4,6 +4,7 @@
 // that marks the driver dead so the next send respawns and resumes.
 import { afterEach, expect, test } from 'bun:test'
 import type { ChatEvent, ChatUsageReport } from '../../shared/chat'
+import type { ChatLimitSignal } from '../chat/limitSignals'
 import { codexEffort } from '../chat/codex/CodexSessionDriver'
 import { eventTypes, ROLLOUT, Script, sentRequest, startHarness, THREAD_ID, until, type Harness } from './codexDriverHarness'
 
@@ -278,4 +279,61 @@ test('a read without a usable snapshot reports no data', async () => {
   harness = startHarness(script, { claimRateLimitsRead: () => true, onUsageNoData: () => { noData += 1 } })
   harness.driver.send('hi')
   await until(() => noData === 1)
+})
+
+// --- PR E (codex-chat-sessions 7.2): limit signals ---
+
+const EXHAUSTED = {
+  limitId: 'codex',
+  limitName: null,
+  normalModelSlug: null,
+  primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: 1792337450 },
+  secondary: { usedPercent: 100, windowDurationMins: 10080, resetsAt: 1792879251 },
+  credits: null,
+  individualLimit: null,
+  spendControlReached: null,
+  planType: 'plus',
+  rateLimitReachedType: 'rate_limit_reached',
+}
+
+const turnError = (codexErrorInfo: unknown) =>
+  ({ message: 'limit reached', codexErrorInfo, additionalDetails: null, misalignment: null })
+
+test('a failed limit turn reports a final signal through onLimitEvent (PR E 7.2)', async () => {
+  const script = new Script().boot().turn('ct-1')
+    .notify('account/rateLimits/updated', { rateLimits: EXHAUSTED })
+    .completed('ct-1', 'failed', [], turnError('usageLimitExceeded'))
+  const signals: ChatLimitSignal[] = []
+  harness = startHarness(script, { onLimitEvent: signal => signals.push(signal) })
+  harness.driver.send('hi')
+  await until(() => signals.length === 1)
+  // Both windows exhausted: the weekly 2-day reset decides.
+  expect(signals[0]).toMatchObject({
+    kind: 'usageLimitExceeded',
+    final: true,
+    resetsAt: new Date(1792879251 * 1000).toISOString(),
+    window: null,
+  })
+})
+
+test('a retrying error notification reports a non-final signal', async () => {
+  const script = new Script().boot().turn('ct-1')
+    .notify('error', { error: turnError('rateLimitExceeded'), willRetry: true, threadId: THREAD_ID, turnId: 'ct-1' })
+    .completed('ct-1')
+  const signals: ChatLimitSignal[] = []
+  harness = startHarness(script, { onLimitEvent: signal => signals.push(signal) })
+  harness.driver.send('hi')
+  await until(() => signals.length === 1)
+  expect(signals[0]).toMatchObject({ kind: 'rateLimitExceeded', final: false })
+})
+
+test('a not-retrying error and an unrelated failure record no signal', async () => {
+  const script = new Script().boot().turn('ct-1')
+    .notify('error', { error: turnError('rateLimitExceeded'), willRetry: false, threadId: THREAD_ID, turnId: 'ct-1' })
+    .completed('ct-1', 'failed', [], turnError('contextWindowExceeded'))
+  const signals: ChatLimitSignal[] = []
+  harness = startHarness(script, { onLimitEvent: signal => signals.push(signal) })
+  harness.driver.send('hi')
+  await until(() => completedOf(harness!.events).length === 1)
+  expect(signals).toEqual([])
 })

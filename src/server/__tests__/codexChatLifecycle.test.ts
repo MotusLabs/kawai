@@ -13,6 +13,7 @@ import type { ChatEvent } from '../../shared/chat'
 import { ChatSessionManager } from '../chat/ChatSessionManager'
 import type { ChatWireLogs } from '../chat/ChatWireLogs'
 import { resetCodexExecutableCache } from '../chat/codex/codexExecutable'
+import { providerOf } from '../chat/profileCatalog'
 import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
 import { SECURITY_NOTE_BODY } from '../team/teamPrompt'
@@ -205,6 +206,132 @@ test('usage is kept per home: the fill read lands before a message and both prof
   if (!claude.ok) throw new Error(claude.error)
   expect(started.providerIdOf(claude.session.id)).not.toBe(started.providerIdOf(first.session.id))
   expect(started.getSnapshot(claude.session.id)!.usage).toBeNull()
+})
+
+// --- PR E (codex-chat-sessions 7.2): limit events through the manager ---
+
+const EXHAUSTED = {
+  limitId: 'codex',
+  limitName: null,
+  normalModelSlug: null,
+  primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: 1792337450 },
+  secondary: { usedPercent: 100, windowDurationMins: 10080, resetsAt: 1792879251 },
+  credits: null,
+  individualLimit: null,
+  spendControlReached: null,
+  planType: 'plus',
+  rateLimitReachedType: 'rate_limit_reached',
+}
+
+const turnError = (codexErrorInfo: unknown) =>
+  ({ message: 'limit reached', codexErrorInfo, additionalDetails: null, misalignment: null })
+
+/** A failed turn, after an optional rate-limits push; the fresh store's one fill read is scripted empty. */
+function writeLimitTranscript(codexErrorInfo: unknown, snapshot: Record<string, unknown> | null): void {
+  const script = new Script().boot('thread/start', 'gpt-test', rollout)
+    .request('account/rateLimits/read', {})
+  if (snapshot) script.turn('ct-1').notify('account/rateLimits/updated', { rateLimits: snapshot })
+  else script.turn('ct-1')
+  script.completed('ct-1', 'failed', [], turnError(codexErrorInfo))
+  process.env.FAKE_TRANSCRIPT = script.write(tempDir)
+  process.env.FAKE_RUN = '1'
+}
+
+async function startLimitSession(events: ChatEvent[]): Promise<string> {
+  const created = await manager!.createAvailableSession({ projectPath: project, claudeProfileId: 'codex', name: 'Codex dev' })
+  if (!created.ok) throw new Error(created.error)
+  if (!(await manager!.start(created.session.id)).ok) throw new Error('start failed')
+  // The failed turn runs on the session's first send.
+  if (!(await manager!.send(created.session.id, 'run it')).ok) throw new Error('send failed')
+  return created.session.id
+}
+
+const catalogCtx = () => ({ homeDir: home, projectPath: project })
+
+test('a usage-limit turn failure records one final event for the home with the latest exhausted reset', async () => {
+  writeLimitTranscript('usageLimitExceeded', EXHAUSTED)
+  const events: ChatEvent[] = []
+  manager = createManager(events, [])
+  await manager.whenRestored()
+  const id = await startLimitSession(events)
+  const homeProvider = providerOf('codex', catalogCtx())
+  await until(() => manager!.limitEvents.forProfile('codex').length > 0)
+  const [event] = manager.limitEvents.forProfile('codex')
+  expect(event).toMatchObject({
+    profileId: 'codex', sessionId: id, kind: 'usageLimitExceeded', final: true,
+    resetsAt: new Date(1792879251 * 1000).toISOString(), window: null, status: null,
+  })
+  expect(event.providerId).toBe(homeProvider)
+  // One event for the home, none copied to the sibling profile. Both windows
+  // were exhausted; the weekly 2-day reset (1792879251) decides, not the
+  // five-hour 1-hour one (1792337450).
+  expect(manager.limitEvents.forProvider(homeProvider)).toHaveLength(1)
+  expect(manager.limitEvents.forProfile('codex-fast')).toEqual([])
+})
+
+test('a login limit cools both profiles on the home and none on another home', async () => {
+  // codex-2 resolves its own home, so its provider differs from the default home's.
+  const home2 = path.join(tempDir, 'codex-home-2')
+  fs.mkdirSync(home2, { recursive: true })
+  fs.writeFileSync(path.join(home, '.kawai', 'profiles.json'), JSON.stringify({
+    codex: { label: 'Codex', runtime: 'codex' },
+    'codex-fast': { label: 'Codex Fast', runtime: 'codex' },
+    'codex-2': { label: 'Codex 2', runtime: 'codex', codexHome: home2 },
+  }))
+  writeLimitTranscript('rateLimitExceeded', EXHAUSTED)
+  const events: ChatEvent[] = []
+  manager = createManager(events, [])
+  await manager.whenRestored()
+  await startLimitSession(events)
+  const homeProvider = providerOf('codex', catalogCtx())
+  const home2Provider = providerOf('codex-2', catalogCtx())
+  expect(home2Provider).not.toBe(homeProvider)
+  await until(() => manager!.limitEvents.forProfile('codex').length > 0)
+  expect(manager.limitEvents.cooldownFor('codex', homeProvider).until).not.toBeNull()
+  expect(manager.limitEvents.cooldownFor('codex-fast', homeProvider).until).not.toBeNull()
+  // A separate home stays cold, as does an unrelated provider.
+  expect(manager.limitEvents.cooldownFor('codex-2', home2Provider).until).toBeNull()
+  expect(manager.limitEvents.cooldownFor('default', 'default').until).toBeNull()
+})
+
+test('a session budget failure records for its profile alone, with no provider', async () => {
+  writeLimitTranscript('sessionBudgetExceeded', EXHAUSTED)
+  const events: ChatEvent[] = []
+  manager = createManager(events, [])
+  await manager.whenRestored()
+  await startLimitSession(events)
+  const homeProvider = providerOf('codex', catalogCtx())
+  await until(() => manager!.limitEvents.forProfile('codex').length > 0)
+  const [event] = manager.limitEvents.forProfile('codex')
+  expect(event).toMatchObject({ kind: 'sessionBudgetExceeded', final: true, providerId: null })
+  // The profile cools through its own event; the home's other profile does not.
+  expect(manager.limitEvents.cooldownFor('codex', homeProvider).until).not.toBeNull()
+  expect(manager.limitEvents.cooldownFor('codex-fast', homeProvider).until).toBeNull()
+  expect(manager.limitEvents.forProvider(homeProvider)).toEqual([])
+})
+
+test('an unrelated failure records no limit event', async () => {
+  writeLimitTranscript('contextWindowExceeded', EXHAUSTED)
+  const events: ChatEvent[] = []
+  manager = createManager(events, [])
+  await manager.whenRestored()
+  await startLimitSession(events)
+  await until(() => events.some(event => event.type === 'turn_completed'))
+  expect(manager.limitEvents.forProfile('codex')).toEqual([])
+  expect(manager.limitEvents.forProvider(providerOf('codex', catalogCtx()))).toEqual([])
+})
+
+test("a Codex 402 records no credit limit event (openrouter-provider 3.1)", async () => {
+  // The Claude paths force window 'credit' on a 402 (limitSignals.ts); a
+  // Codex turn's 402-shaped failure records nothing through the manager.
+  writeLimitTranscript({ responseStreamConnectionFailed: { httpStatusCode: 402 } }, EXHAUSTED)
+  const events: ChatEvent[] = []
+  manager = createManager(events, [])
+  await manager.whenRestored()
+  await startLimitSession(events)
+  await until(() => events.some(event => event.type === 'turn_completed'))
+  expect(manager.limitEvents.forProfile('codex')).toEqual([])
+  expect(manager.limitEvents.forProvider(providerOf('codex', catalogCtx()))).toEqual([])
 })
 
 test('a Codex launch withholds the catalog-named credentials (openrouter-provider 1.8)', async () => {
