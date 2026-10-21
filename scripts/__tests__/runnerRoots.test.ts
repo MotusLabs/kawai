@@ -210,6 +210,26 @@ describe('the real runner gives each file its own root', () => {
     expect(isProcDead(sleeperPid)).toBe(true)
   }, 45_000)
 
+  // F2 (review, spec Req 1): a module mock does not leak between files.
+  // mockLeakA mocks a local module; mockLeakB must observe the real export.
+  // Same worker pid proves both files ran in this run's worker.
+  test('a module mock does not leak into the next file on the same worker', async () => {
+    const out = makeProbeOut()
+    const proc = spawnRunner(
+      [
+        '--skip-real-tmux',
+        path.join(FIXTURE_DIR, 'mockLeakA.test.ts'),
+        path.join(FIXTURE_DIR, 'mockLeakB.test.ts'),
+      ],
+      { KAWAI_TEST_WORKERS: '1', KAWAI_PROBE_OUT: out }
+    )
+    const { code, stderr } = await drainAndExit(proc)
+    expect(code, stderr.slice(-2000)).toBe(0)
+    const entries = await readProbeEntries(out, 2, 1_000)
+    expect(entries.map((entry) => entry.name)).toEqual(['mockLeakA', 'mockLeakB'])
+    expect(entries[0].pid).toBe(entries[1].pid)
+  }, 30_000)
+
   // F1 (checkpoint-2 decision Q2): a bad KAWAI_TEST_WORKERS is refused
   // before the run root exists.
   test('a bad KAWAI_TEST_WORKERS exits non-zero and leaves no run root', async () => {
