@@ -2,8 +2,11 @@
 // class with its changed fields, `metadata` for a landed change differing
 // only in `dependsOn` or `fixes`, the execution-wide findings (`landing-changed`,
 // `plan-rules-changed` only once something landed, `landed-changed` ignoring
-// `dependsOn`, `lead-changed` informational), and the choice reading for a
-// waiting changed change.
+// `dependsOn`, `lead-changed` informational), the choice reading for a
+// waiting changed change, and the roles tests — a role profiles change of a
+// change's implementing or effective review group marks it `changed` with
+// `roles`, an unrelated group's role change leaves it unchanged, and
+// reordering the roles array changes nothing.
 import { describe, expect, test } from 'bun:test'
 import type { PlanChange, PlanContent } from '../../shared/plans'
 import { revisionDelta } from '../plans/revisionControl/revisionDelta'
