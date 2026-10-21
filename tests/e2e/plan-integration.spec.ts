@@ -91,6 +91,7 @@ function submitRound(root: string, mode: 'result' | 'findings', implementer: str
   const script = `
     import { join } from 'node:path';
     import { initDatabase } from './src/server/db';
+    import { resolveTeam } from './src/server/team/teamIdentity';
     import { MailboxStore } from './src/server/team/mailboxStore';
     import { AssignmentStore } from './src/server/team/assignmentStore';
     import { TaskStore } from './src/server/team/taskStore';
@@ -114,7 +115,12 @@ function submitRound(root: string, mode: 'result' | 'findings', implementer: str
       const results = new TaskResultService(tasks, {
         getSession: id => sessions.getChatSession(id), ownership: core.ownership, records: () => [],
       });
-      const row = db.prepare('SELECT task_id FROM plan_execution_changes WHERE change = ? AND task_id IS NOT NULL ORDER BY rowid DESC').get(change);
+      // CI's one-server fixture run shares one database across walkthrough
+      // teams, and two name their change walk-api: scope to this spec's own
+      // team (one execution per team owns the change), so another team's
+      // row can never answer between provisioning and task creation.
+      const teamId = (await resolveTeam(root)).teamId;
+      const row = db.prepare('SELECT task_id FROM plan_execution_changes WHERE team_id = ? AND change = ? AND task_id IS NOT NULL ORDER BY rowid DESC').get(teamId, change);
       if (!row) throw new Error('no owned task yet');
       const taskId = row.task_id;
       if (mode === 'result') {
