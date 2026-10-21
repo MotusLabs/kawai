@@ -3,6 +3,7 @@
 // turn completion, activity, interrupt, a failed turn, and the process exit
 // that marks the driver dead so the next send respawns and resumes.
 import { afterEach, expect, test } from 'bun:test'
+import { z } from 'zod'
 import type { ChatEvent, ChatUsageReport } from '../../shared/chat'
 import type { ChatLimitSignal } from '../chat/limitSignals'
 import { codexEffort } from '../chat/codex/CodexSessionDriver'
@@ -180,9 +181,15 @@ test('a rejected dynamic-tool registration refuses the start; no turn is asked',
   const script = new Script().request('initialize', { userAgent: 'fake' })
   script.lines.push({ dir: 'out', line: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'thread/start', params: {} }) })
   script.lines.push({ dir: 'in', line: JSON.stringify({ id: 2, error: { code: -32602, message: 'dynamic tools rejected' } }) })
-  harness = startHarness(script)
+  // The registration itself carries the namespace: the team table rides the
+  // thread/start params even though the server refuses them (N2).
+  harness = startHarness(script, {
+    teamTools: [{ name: 'send_message', description: 'send', schema: z.object({}), handler: () => ({}) }],
+  })
   harness.driver.start()
   await until(() => harness!.events.some(event => event.type === 'error' && event.message.includes('dynamic tools rejected')))
+  const startParams = sentRequest(harness, 'thread/start') as { dynamicTools?: Array<Record<string, unknown>> } | undefined
+  expect(startParams?.dynamicTools?.[0]).toMatchObject({ type: 'namespace', name: 'kawai-team' })
   // The failed boot's cleanup may add its own exit error after this one.
   const boot = harness.events.find(event => event.type === 'error' && event.message.includes('dynamic tools rejected'))
   expect(boot).toMatchObject({ type: 'error', message: expect.stringContaining('dynamic tools rejected') })

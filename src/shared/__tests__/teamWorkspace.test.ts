@@ -1,9 +1,13 @@
 // The shared team workspace model (team-workspace 1.1/3.3): attention item
-// identity, and the task-row filter's default exclusion of closed tasks.
+// identity, the task-row filter's default exclusion of closed tasks, and the
+// plan-supervision kinds and links (plan-supervision D13).
 import { describe, expect, test } from 'bun:test'
 import {
   attentionItemId,
   filterTeamTaskRows,
+  type AttentionItem,
+  type AttentionKind,
+  type AttentionLink,
   type TeamTaskRow,
 } from '../teamWorkspace'
 
@@ -29,6 +33,41 @@ describe('attentionItemId', () => {
     expect(attentionItemId('uncertain-delivery', 'msg-3')).toBe('uncertain-delivery:msg-3')
     // A Wave C kind typed as a plain string still forms the same shape.
     expect(attentionItemId('plan-hold', 'plan-2')).toBe('plan-hold:plan-2')
+  })
+
+  test('the six plan kinds (plan-supervision D13) are members and form their ids', () => {
+    // Typed as the union: removing a member from AttentionKind fails the typecheck.
+    const kinds: AttentionKind[] = ['plan-stop', 'plan-stall', 'decision-question', 'plan-fix', 'plan-condition', 'plan-promotion']
+    expect(kinds.map(kind => attentionItemId(kind, 'x'))).toEqual([
+      'plan-stop:x', 'plan-stall:x', 'decision-question:x', 'plan-fix:x', 'plan-condition:x', 'plan-promotion:x',
+    ])
+  })
+})
+
+describe('AttentionLink.plan (plan-supervision D13)', () => {
+  test('a plan link names its plan and change; a card link carries its planId', () => {
+    // Typed as the union: dropping `plan` or the optional fields fails the typecheck.
+    const links: AttentionLink[] = [
+      { kind: 'plan', id: 'plan-1', planId: 'plan-1', change: 'api' },
+      { kind: 'plan', id: 'plan-1', planId: 'plan-1' },
+      { kind: 'card', id: 'card-9', planId: 'plan-1' },
+    ]
+    expect(links.map(link => `${link.kind}:${link.id}:${link.planId ?? ''}:${link.change ?? ''}`)).toEqual([
+      'plan:plan-1:plan-1:api', 'plan:plan-1:plan-1:', 'card:card-9:plan-1:',
+    ])
+  })
+
+  test('a plan item carries its link whole (compile-time shape over the item contract)', () => {
+    const item: AttentionItem = {
+      id: 'plan-stop:exec-1:api:0', kind: 'plan-stop', cause: 'Change api stopped',
+      owner: { kind: 'human', id: null, label: 'Human' }, impact: {},
+      nextAction: 'Retry or stop execution',
+      link: { kind: 'plan', id: 'plan-1', planId: 'plan-1', change: 'api' },
+      requiresHuman: true,
+    }
+    expect(item.link.kind).toBe('plan')
+    expect(item.link.planId).toBe('plan-1')
+    expect(item.link.change).toBe('api')
   })
 })
 

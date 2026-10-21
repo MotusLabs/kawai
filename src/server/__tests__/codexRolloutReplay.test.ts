@@ -209,6 +209,88 @@ test('an unreadable rollout shows the notice, then reads once without duplicatin
   expect(snapshot.events.filter(e => e.type === 'turn_started')).toHaveLength(1)
 })
 
+// Pins loadHistory's live-guard (the canRetryCodexMemo call at the load's
+// entry and inside its closure — ChatSessionManager ~:981/:987) on the
+// manager path, in the one window MiMo F2 reached: startBlocker only checks
+// existsSync, so a rollout replaced by a directory lets a turn run while
+// every capture re-takes the retryable notice memo — retryable and live
+// events coexist, and only the live>0 half of the predicate holds the memo.
+// The mid-turn load must keep that memo: the probe (logs/codex-d-probes/
+// probe-live-window.ts) shows the windowed snapshot hides the notice — it
+// sits before the live turn's unit and historyWindow's turn-aligned slice
+// drops it — so the memo is asserted through snapshotHistory, not the
+// snapshot.
+test('a retryable memo and live events coexist while the rollout reads EISDIR — a mid-turn load keeps the memo', async () => {
+  const gate = path.join(tempDir, 'gate')
+  const script = new Script().boot('thread/start', 'gpt-test', rollout)
+  const second = new Script().boot('thread/resume', 'gpt-test', rollout)
+    .turn('ct-2')
+    .gate(gate)
+    .completed('ct-2')
+  script.lines.push(...second.lines)
+  const wire: Wire = []
+  const id = await startedSession(wire, script)
+  fs.writeFileSync(rollout, `${turn(NOW, 't2', 'recent question', 'recent answer').join('\n')}\n`)
+  manager!.shutdown()
+
+  // The rollout becomes a directory: it exists (startBlocker passes) but
+  // every read fails EISDIR — the retryable 'unparseable' memo.
+  fs.rmSync(rollout)
+  fs.mkdirSync(rollout)
+  manager = createManager([], [])
+  await manager.whenRestored()
+  await manager.loadHistory(id)
+  expect(manager.getSnapshot(id)!.events.map(e => e.type)).toEqual(['notice'])
+
+  // A turn runs while the rollout is still unreadable: the send's capture
+  // retries the notice memo at live=0 and re-fails into a fresh retryable
+  // memo, which then coexists with the turn's live events.
+  process.env.FAKE_RUN = '2'
+  expect((await manager.send(id, 'go again')).ok).toBe(true)
+  const internals = manager as unknown as { retryableHistory: Set<string>; snapshotHistory: Map<string, ChatEvent[]>; liveEvents: Map<string, ChatEvent[]> }
+  await until(() => internals.liveEvents.get(id)?.some(e => e.type === 'user_message') ?? false)
+  expect(internals.retryableHistory.has(id)).toBe(true)
+  expect((internals.liveEvents.get(id) ?? []).length).toBeGreaterThan(0)
+
+  // The rollout becomes readable again — now holding the live turn's rows —
+  // while the turn is still live: the mid-turn load must keep the memo, or
+  // the re-read replays the live turn as duplicated history.
+  fs.rmdirSync(rollout)
+  fs.writeFileSync(rollout, `${turn(NOW, 't2', 'recent question', 'recent answer').join('\n')}\n${turn(NOW, 't3', 'go again', 'done').join('\n')}\n`)
+  await manager.loadHistory(id)
+  expect(internals.retryableHistory.has(id)).toBe(true)
+  expect([...(internals.snapshotHistory.get(id) ?? []).map(e => e.type)]).toEqual(['notice'])
+  const snapshot = manager.getSnapshot(id)!
+  expect(userTexts(snapshot.events)).toEqual(['go again'])
+  expect(snapshot.events.filter(e => e.type === 'user_message')).toHaveLength(1)
+
+  fs.writeFileSync(gate, '')
+  await until(() => db.getChatSession(id)?.status === 'waiting')
+})
+
+// Pins the post-await guard in loadHistory's Codex branch (ChatSessionManager
+// ~:1006, the `!snapshotHistory.has` check after replayCodexRolloutAsync): a
+// send's synchronous captureHistory that lands while the read is still
+// awaiting keeps its memo; the load discards its own older replay. The
+// Claude branch's copy is pinned by chatAsyncRestore's race test.
+test('a synchronous capture that wins the race keeps its memo — the async Codex replay discards its own result', async () => {
+  const wire: Wire = []
+  const id = await startedSession(wire, new Script().boot('thread/start', 'gpt-test', rollout))
+  fs.writeFileSync(rollout, `${turn(NOW, 't2', 'recent question', 'recent answer').join('\n')}\n`)
+  manager!.shutdown()
+
+  manager = createManager([], [])
+  await manager.whenRestored()
+  const loading = manager.loadHistory(id)
+  // The synchronous capture runs while the async read is still awaiting.
+  manager.getSnapshot(id)
+  const memo = (manager as unknown as { snapshotHistory: Map<string, ChatEvent[]> }).snapshotHistory.get(id)
+  expect(memo).toBeTruthy()
+  await loading
+  expect((manager as unknown as { snapshotHistory: Map<string, ChatEvent[]> }).snapshotHistory.get(id)).toBe(memo)
+  expect(userTexts(manager.getSnapshot(id)!.events)).toEqual(['recent question'])
+})
+
 test('a load while a live turn runs keeps the memo — the replay never duplicates live events', async () => {
   const gate = path.join(tempDir, 'gate')
   // Run 2 is the respawn after the restart: a resume whose rollout row (the
@@ -244,7 +326,11 @@ test('a load while a live turn runs keeps the memo — the replay never duplicat
   await until(() => fs.existsSync(rollout) && fs.readFileSync(rollout, 'utf8').includes('go again'))
 
   // A load mid-turn must not re-read: the rollout now holds the row the live
-  // turn is also streaming, and a re-read would replay it twice.
+  // turn is also streaming, and a re-read would replay it twice. (The memo
+  // here is NOT retryable — the send's capture consumed the notice memo at
+  // live=0 and replaced it with the successful pre-turn replay; the
+  // retryable-memo-plus-live-events window is pinned by the EISDIR test
+  // above.)
   await manager.loadHistory(id)
   const snapshot = manager.getSnapshot(id)!
   expect(snapshot.events.some(e => e.type === 'notice')).toBe(false)

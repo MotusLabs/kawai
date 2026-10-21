@@ -198,6 +198,65 @@ test('a receipt written to an older rollout of the thread settles at turn end, n
   await until(() => manager!.mailbox.store.get(messageId)?.state === 'delivered')
 })
 
+// Pins applyPatch's re-watch branch (ChatSessionManager: a transcriptPath
+// patch that differs from the stored one releases the tail and re-arms it —
+// ~:3428–3432): a resume that MOVES the rollout must point the receipt tail
+// at the new file, or pushed mail waits for the turn-end settle and the
+// spec's "receipt while the turn runs" is lost for every resumed chat.
+test('a resume that moves transcript_path re-arms the receipt tail — mail settles from the new rollout mid-turn', async () => {
+  const events: ChatEvent[] = []
+  const wire: Wire = []
+  manager = createManager(events, wire)
+  await manager.whenRestored()
+  const created = await manager.createAvailableSession({ projectPath: project, claudeProfileId: 'codex', name: 'Codex dev' })
+  if (!created.ok) throw new Error(created.error)
+  const id = created.session.id
+  // Run 1 boots the thread on the first rollout; run 2 resumes the same
+  // thread onto a NEW rollout (same thread id, newer file) and holds its
+  // turn behind the gate.
+  const moved = path.join(codexHome, 'sessions', '2026', '10', '20', `rollout-2026-10-20T01-00-00-${THREAD_ID}.jsonl`)
+  // Each boot's fill read (PR E 7.1): both runs' stores start empty, so
+  // both spawns claim one `account/rateLimits/read` right after the boot.
+  const script = new Script().boot('thread/start', 'gpt-test', rollout)
+    .request('account/rateLimits/read', {})
+  const second = new Script().boot('thread/resume', 'gpt-test', moved)
+    .request('account/rateLimits/read', {})
+    .turn('ct-1')
+    .gate(gate)
+    .completed('ct-1')
+  script.lines.push(...second.lines)
+  process.env.FAKE_TRANSCRIPT = script.write(tempDir)
+  expect((await manager.start(id)).ok).toBe(true)
+  await until(() => db.getChatSession(id)?.transcriptPath === rollout)
+  // Both files exist before the resume reports the move, so the restored
+  // tail binds the old file at once and the re-armed one binds the new file
+  // at once (neither via the locate-retry timer).
+  fs.writeFileSync(rollout, `${JSON.stringify({ timestamp: '2026-10-20T00:00:00.000Z', type: 'session_meta', payload: { id: THREAD_ID } })}\n`)
+  fs.writeFileSync(moved, '')
+  manager.shutdown()
+
+  const restartEvents: ChatEvent[] = []
+  manager = createManager(restartEvents, [])
+  await manager.whenRestored()
+  process.env.FAKE_RUN = '2'
+  expect((await manager.send(id, 'go')).ok).toBe(true)
+  await until(() => db.getChatSession(id)?.transcriptPath === moved)
+
+  // Mail pushed while the gated turn runs, its envelope row appended to the
+  // NEW rollout: the re-armed tail settles it delivered before the gate
+  // opens (the turn-end settle reads every rollout of the thread and would
+  // only reach it after the turn).
+  const store = manager.mailbox.store
+  const mail = store.enqueue({ teamId: 'team-x', toKind: 'group', toId: 'nobody', fromSession: 'lead', fromGroup: null, originPath: project, body: 'receipt on the moved rollout' })
+  store.claim(mail.id, id); store.markPushed(mail.id)
+  fs.appendFileSync(moved, `${JSON.stringify({ timestamp: '2026-10-20T01:05:00.000Z', type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: formatEnvelope(messageEnvelope(mail)) }] } })}\n`)
+  await until(() => store.get(mail.id)?.state === 'delivered')
+  expect(db.getChatSession(id)?.status).toBe('working')
+
+  fs.writeFileSync(gate, '')
+  await until(() => restartEvents.filter(event => event.type === 'turn_completed').length === 1)
+})
+
 test('startup reconciliation settles a Codex chat\'s pushed mail from its rollouts with no agent running', async () => {
   const wire: Wire = []
   manager = createManager([], wire)

@@ -30,8 +30,14 @@ export interface CheckRecord {
 export const RECORDS_DIR_NAME = 'kawai-checks'
 export const RECORD_TTL_MS = 14 * 24 * 60 * 60 * 1000
 export const MAX_RECORDS = 500
+/** A temp file older than this is removed even while its writer's pid still
+ * answers: pids are reused, so age is the final judge. */
+export const TMP_TTL_MS = 60 * 60 * 1000
 
 const KEY_PATTERN = /^[0-9a-f]{64}$/
+/** The temporaries writeRecord leaves behind on a crash between the write
+ * and the rename: `.<key>.<pid>.tmp` (writeRecord builds the same shape). */
+const TMP_NAME = /^\.([0-9a-f]{64})\.(\d+)\.tmp$/
 
 /** The shared records directory for the repository behind `cwd`. Throws when
  * git cannot resolve a common directory (outside a repository). */
@@ -120,9 +126,46 @@ export function writeRecord(dir: string, record: CheckRecord): void {
   pruneRecords(dir)
 }
 
+/** True when `pid` names a live process. Signal 0 probes existence without
+ * signalling; EPERM means the process exists under another user. */
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
+/** Remove the temp files of crashed writers. A live writer may still rename
+ * its temporary, so one is removed only when its pid is gone or the file is
+ * older than TMP_TTL_MS — the records directory is shared by every linked
+ * worktree, and an eager removal would break a concurrent writer's rename.
+ * Files of any other shape are not ours and stay. */
+function pruneTempFiles(dir: string, names: string[], now: number): void {
+  for (const name of names) {
+    const match = TMP_NAME.exec(name)
+    if (!match) continue
+    const absolute = path.join(dir, name)
+    let mtime: number
+    try {
+      mtime = fs.statSync(absolute).mtimeMs
+    } catch {
+      continue // Vanished between readdir and stat.
+    }
+    if (pidAlive(Number(match[2])) && now - mtime < TMP_TTL_MS) continue
+    try {
+      fs.unlinkSync(absolute)
+    } catch {
+      // Already gone; pruning is best-effort.
+    }
+  }
+}
+
 /** Keep records newer than the TTL, and at most MAX_RECORDS of those, the
- * newest by mtime. Only files shaped `<key>.json` are records; anything else
- * in the directory is left alone. */
+ * newest by mtime, and remove the temp files of crashed writers. Only files
+ * shaped `<key>.json` are records; anything else in the directory is left
+ * alone except those temporaries. */
 export function pruneRecords(dir: string, now = Date.now()): void {
   let names: string[]
   try {
@@ -130,6 +173,7 @@ export function pruneRecords(dir: string, now = Date.now()): void {
   } catch {
     return
   }
+  pruneTempFiles(dir, names, now)
   const records: { name: string; mtime: number }[] = []
   for (const name of names) {
     if (!/^[0-9a-f]{64}\.json$/.test(name)) continue

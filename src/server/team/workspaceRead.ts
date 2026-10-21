@@ -8,9 +8,6 @@
 import type { ChatPendingRequest } from '../../shared/chat'
 import type {
   AttentionItem,
-  MorningSummary,
-  SummaryBucket,
-  SummaryItem,
   TeamMemberRow,
   TeamMemberSession,
   TaskAcknowledgementBadge,
@@ -19,7 +16,7 @@ import type {
 } from '../../shared/teamWorkspace'
 import { attentionItemId } from '../../shared/teamWorkspace'
 import type { OutboundViolationGroup } from '../outbound/service'
-import { outboundAttentionItems, outboundSummaryItems } from './workspaceOutbound'
+import { outboundAttentionItems } from './workspaceOutbound'
 import { teamTaskStage } from '../../shared/teamTaskStage'
 import type { TeamMessage, WaitingConstraint, WaitingReason } from '../../shared/team'
 import type { TeamTaskSummary } from '../../shared/teamTasks'
@@ -27,30 +24,13 @@ import type { ChatSessionRecord } from '../db'
 import type { ChatSessionManager } from '../chat/ChatSessionManager'
 import { acceptanceItems, taskImpact, type PendingAcceptance } from './attentionAcceptance'
 import { exhaustionAttentionItems, type ExhaustionFact } from './workspaceExhaustion'
+import { CAPACITY_CONSTRAINT_KINDS, capacityConstraintLabel, morningSummary } from './workspaceSummary'
+import {
+  decisionQuestionItems, planConditionItems, planFixItems, planPromotionItems, planStallItems, planStopItems,
+  type PlanAttentionFact, type PlanSummaryRows,
+} from './planAttention'
 import type { GroupCatalog } from './groupCatalog'
 import type { TeamIdentity } from './teamIdentity'
-
-/**
- * The constraint kinds that make mail wait on capacity (team-waiting-reasons
- * D1's ordering names them the capacity band): the attention queue's
- * agent-owned staffing waits and the summary's capacity bucket both read
- * exactly these.
- */
-const CAPACITY_CONSTRAINT_KINDS: ReadonlySet<WaitingConstraint['kind']> = new Set([
-  'group-cap', 'profile-cap', 'team-spawn-cap', 'worktree-occupied',
-])
-
-/** A capacity constraint as one line; mirrors the client's label vocabulary. */
-export function capacityConstraintLabel(constraint: WaitingConstraint): string {
-  const counts = constraint.counts ? ` (${constraint.counts.live}/${constraint.counts.cap})` : ''
-  switch (constraint.kind) {
-    case 'group-cap': return `Group is at capacity${counts}`
-    case 'profile-cap': return `Profile ${constraint.detail ?? ''} is at capacity${counts}`
-    case 'team-spawn-cap': return `Team spawn cap reached${counts}`
-    case 'worktree-occupied': return `Worktree ${constraint.detail ?? ''} is held${counts}`
-    default: return `${constraint.kind}${counts}`
-  }
-}
 
 /** The provider holding the model, for the Members tab's grouping (D13). */
 function providerLabelOf(catalog: GroupCatalog, profileId: string): { id: string; label: string } | undefined {
@@ -206,6 +186,8 @@ export interface AttentionInput {
   outboundViolations: OutboundViolationGroup[]
   /** Recorded context-exhaustion episodes with their resolution facts (chat-context-exhaustion D8). */
   exhaustion?: ExhaustionFact[]
+  /** Each open plan's attention facts, gathered once per snapshot (plan-supervision D13). */
+  plans?: PlanAttentionFact[]
 }
 
 /** One attention source: a pure function over the input (D5's registry). */
@@ -285,11 +267,14 @@ const exhaustionItems: AttentionSource = ({ exhaustion, taskTitle, nameOf }) =>
   exhaustionAttentionItems(exhaustion ?? [], taskTitle, nameOf)
 
 /**
- * The source registry (task 4.1). Wave C sources (plan holds, stalls, Lead
- * decision cards) add entries the same way — an item of an unrecognized kind
- * is data like any other and never dropped.
+ * The source registry (task 4.1; the plan sources join in plan-supervision
+ * D13) — an item of an unrecognized kind is data like any other and never
+ * dropped.
  */
-export const ATTENTION_SOURCES: readonly AttentionSource[] = [requestItems, uncertainItems, staffingItems, acceptanceItems, outboundItems, exhaustionItems]
+export const ATTENTION_SOURCES: readonly AttentionSource[] = [
+  requestItems, uncertainItems, staffingItems, acceptanceItems, outboundItems, exhaustionItems,
+  planStopItems, planStallItems, decisionQuestionItems, planFixItems, planConditionItems, planPromotionItems,
+]
 
 /** Every attention item the current state yields, in a stable order. */
 export function attentionItems(
@@ -297,113 +282,6 @@ export function attentionItems(
   sources: readonly AttentionSource[] = ATTENTION_SOURCES,
 ): AttentionItem[] {
   return sources.flatMap(source => source(input)).sort((a, b) => a.id.localeCompare(b.id))
-}
-
-/** What the morning summary reads (D8): durable rows plus the runtime ledger. */
-export interface SummaryInput {
-  /** Read time, ISO; the window is the 24 hours before it. */
-  now: string
-  sessions: Array<{ record: ChatSessionRecord; requests: ChatPendingRequest[] }>
-  messages: TeamMessage[]
-  /** One message's recorded events, oldest first (for the hold time). */
-  messageEvents: (messageId: string) => Array<{ kind: string; createdAt: string }>
-  waiting: Record<string, WaitingReason>
-  /** Persisted turn-end rows of the team's task-bound sessions (D8). */
-  turnEnds: Array<{ sessionId: string; taskId: string | null; at: string }>
-  nameOf: (sessionId: string) => string
-  /** Whether a result row exists for a session's task; such a turn is not "without a result". */
-  hasResult: (sessionId: string, taskId: string | null) => boolean
-  /** Outstanding results submitted in the window, each with its accepted state. */
-  results: Array<{ resultId: string; taskId: string; taskTitle: string | null; submitter: string; accepted: boolean }>
-  /** The audit records' row counts over the window (execution-safety-recovery D10). */
-  outboundCounts: { allowed: number; unknown: number; violations: number }
-}
-
-const bucket = (items: SummaryItem[], runtimeOnly = false): SummaryBucket =>
-  runtimeOnly ? { items, runtimeOnly: true } : { items }
-
-/**
- * The morning summary (task 4.3): a rolling 24-hour window ending at read
- * time (Q1/Q9). Capacity waits read the in-memory ledger only — after a
- * restart that bucket lists waits the running server has observed, which its
- * `runtimeOnly` label states; the other buckets read durable rows. A
- * finished turn with no submitted result never lands in a completion bucket
- * (E13): completed results come from result rows only.
- */
-export function morningSummary(input: SummaryInput): MorningSummary {
-  const { now, sessions, messages, messageEvents, waiting, turnEnds, nameOf, hasResult, results, outboundCounts } = input
-  const since = new Date(Date.parse(now) - 24 * 60 * 60 * 1000).toISOString()
-  const inWindow = (at: string) => Date.parse(at) >= Date.parse(since)
-
-  const approvals = sessions.flatMap(({ record, requests }) =>
-    requests.flatMap(request => {
-      if (request.kind !== 'approval' || !inWindow(request.at)) return []
-      return [{
-        id: `approval:${record.sessionId}:${request.requestId}`,
-        label: `${record.name}: ${request.tool}`,
-        link: { kind: 'chat' as const, id: record.sessionId },
-      }]
-    })
-  )
-
-  // An uncertain delivery stays listed while it is still uncertain; a retried
-  // or delivered row leaves (E13). The hold event names when it turned
-  // uncertain, and keeps the bucket to the window.
-  const uncertainDeliveries = messages
-    .filter(message => message.state === 'uncertain')
-    .filter(message => {
-      const held = messageEvents(message.id)
-        .filter(event => event.kind === 'held-uncertain')
-        .map(event => event.createdAt)
-        .filter(inWindow)
-      return held.length > 0
-    })
-    .map(message => ({
-      id: `uncertain-delivery:${message.id}`,
-      label: `Delivery uncertain${message.reason ? `: ${message.reason}` : ''}`,
-      link: { kind: 'message' as const, id: message.id },
-    }))
-
-  const capacityWaits = Object.entries(waiting)
-    .filter(([, reason]) => CAPACITY_CONSTRAINT_KINDS.has(reason.blocker.kind))
-    .map(([messageId, reason]) => ({
-      id: `staffing-wait:${messageId}`,
-      label: capacityConstraintLabel(reason.blocker),
-      link: { kind: 'message' as const, id: messageId },
-    }))
-
-  const withoutResult = new Map<string, { name: string; taskId: string | null; count: number }>()
-  for (const end of turnEnds) {
-    if (!inWindow(end.at) || hasResult(end.sessionId, end.taskId)) continue
-    const existing = withoutResult.get(end.sessionId)
-    if (existing) existing.count += 1
-    else withoutResult.set(end.sessionId, { name: nameOf(end.sessionId), taskId: end.taskId, count: 1 })
-  }
-  const finishedTurnsWithoutResult = [...withoutResult.entries()].map(([sessionId, fact]) => ({
-    id: `finished-turn:${sessionId}`,
-    label: `${fact.name}: ${fact.count} turn${fact.count === 1 ? '' : 's'} finished with no result`,
-    link: { kind: 'chat' as const, id: sessionId },
-  }))
-
-  // Submitted, not accepted: each result states which (D8, Q5).
-  const completedResults = results.map(result => ({
-    id: `result:${result.resultId}`,
-    label: `${result.taskTitle ?? result.taskId}: result by ${result.submitter} — ${result.accepted ? 'accepted' : 'awaiting acceptance'}`,
-    link: { kind: 'task' as const, id: result.taskId },
-  }))
-
-  // The audit records' row counts (execution-safety-recovery D10; workspaceOutbound.ts).
-  const outbound = outboundSummaryItems(outboundCounts)
-
-  return {
-    since,
-    completedResults: bucket(completedResults),
-    capacityWaits: bucket(capacityWaits, true),
-    approvals: bucket(approvals),
-    uncertainDeliveries: bucket(uncertainDeliveries),
-    finishedTurnsWithoutResult: bucket(finishedTurnsWithoutResult),
-    outbound: bucket(outbound),
-  }
 }
 
 /**
@@ -451,6 +329,8 @@ export class WorkspaceRead {
       sessions, messages, waiting, taskTitle, nameOf, pendingAcceptance,
       // The audit records' unacknowledged violations (execution-safety-recovery D10).
       outboundViolations: manager.outboundAudit.violationGroups(teamId),
+      // The plan sources' facts, gathered over the supervision reads (plan-supervision D13).
+      plans: manager.planAttentionFacts?.(teamId) ?? [],
       exhaustion: manager.exhaustionEpisodes(teamId).map(episode => {
         const record = records.find(row => row.sessionId === episode.sessionId)
         const task = episode.taskId ? store.get(episode.taskId) : null
@@ -498,6 +378,10 @@ export class WorkspaceRead {
           accepted: result.acceptedAt !== null,
         })),
         outboundCounts: manager.outboundAudit.windowCounts(teamId, since, now),
+        // The window's durable plan rows (plan-supervision D13).
+        plans: manager.planSummaryRows?.(teamId, since) ?? {
+          landings: [], stops: [], stallAlerts: [], decisions: [], overrides: [],
+        },
       }),
       directory,
     }
