@@ -129,15 +129,14 @@ export async function applyLanding(deps: LandingDeps, adapters: LandingAdapters,
     if (!prediction.ok) return
     if (prediction.conflicts.length > 0) {
       // A conflict releases the slot (leaving `landing`) and dispatches an
-      // update attempt naming the files.
-      // passedAt clears: the round's pass waits on the attempt's new result.
-      // Under a hold (revision-control 3.2) `passedAt` is kept and no
-      // attempt dispatches — the release re-fires the landing stage, which
-      // re-predicts the merge and dispatches then.
-      const held = deps.gate?.(changeRow.change) === true
+      // update attempt naming the files. `passedAt` clears: the round's
+      // pass waits on the attempt's new result. No hold branch here: the
+      // gate at the top of applyLanding returns before the stage logic, so
+      // a held change never predicts a merge — a held holder's settling
+      // update-branch effect keeps `passedAt` in failedUpdate below, which
+      // applyLandingOutcome reaches under a hold.
       const fresh = store.change(changeRow.executionId, changeRow.change)!
-      store.transition(changeRow.executionId, changeRow.change, fresh, { state: 'gating', step: null, stopReason: null, stopDetail: null, ...(held ? {} : { passedAt: null }) })
-      if (held) return
+      store.transition(changeRow.executionId, changeRow.change, fresh, { state: 'gating', step: null, stopReason: null, stopDetail: null, passedAt: null })
       return dispatchUpdateAttempt(deps, changeRow, round, { kind: 'conflict', files: prediction.conflicts, base: base.sha })
     }
     // Clean: the update-branch effect runs, pinned to the reviewed head.

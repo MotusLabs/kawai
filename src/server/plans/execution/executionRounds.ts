@@ -21,7 +21,7 @@ import { lsRemoteHead, pushToRemote } from '../landing/gitRemote'
 import { ghCheckRuns, ghPrCreate, ghPrList, ghRerunFailed, ghStatuses } from '../landing/github'
 import type { GhCommandOptions } from '../landing/ghCommand'
 import type { AssignmentService } from '../../team/AssignmentService'
-import { dispatchFix, dispatchFixAttempt, ensureFixAttempt } from './executionDispatch'
+import { dispatchFix, ensureFixAttempt } from './executionDispatch'
 import { refusable } from './stepRefusal'
 import type { EffectAdapter } from './effects'
 

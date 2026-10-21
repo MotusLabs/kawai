@@ -163,8 +163,17 @@ export async function ensureFixAttempt(deps: DispatchDeps, input: FixAttemptInpu
   const taskId = changeRow.taskId
 
   const existing = deps.executions.attempts(input.executionId, input.change)
-  if (existing.length > 0 && existing.at(-1)!.kind === 'fix') {
-    const newest = existing.at(-1)!
+  // An attempt answers one round — its manifest's answers.roundId. The
+  // newest fix attempt is reused only while it answers the round the change
+  // now stands on (the failed round, or the round a newer task revision
+  // superseded): a later round owes its own attempt, so the owed dispatch's
+  // marker — the outstanding assignment's request key — can never settle a
+  // later round's debt with an earlier round's key (revision-control 3.2,
+  // review B1). The same-round reuse stays: a revision stage re-planned for
+  // a newer task revision must not mint an attempt per tick.
+  const newest = existing.at(-1)
+  if (newest !== undefined && newest.kind === 'fix' && newest.manifest.answers !== undefined
+    && newest.manifest.answers.roundId === round?.id) {
     return { number: newest.number, manifestHash: newest.manifestHash }
   }
   const head = await runGitAsync(['rev-parse', 'HEAD'], { cwd: changeRow.worktree })
@@ -274,6 +283,11 @@ export async function dispatchOwedFixAttempt(deps: DispatchDeps, input: { execut
   let failingChecks: FixAttemptInput['failingChecks'] = []
   let findingsIds: string[] = []
   let findingsTexts: string[] = []
+  // The texts are rebuilt at send time from the round the attempt answers —
+  // the manifest keeps only ids. A superseded round's owed fix names the
+  // task's CURRENT revision (a second republish after the attempt was minted
+  // is still the round's answer), a failed round its failing checks and the
+  // verdict's findings.
   if (round?.outcome === 'superseded') {
     const task = changeRow.taskId === null ? null : deps.tasks.store.get(changeRow.taskId)
     const rationale = task === null || task === undefined ? null : deps.tasks.store.revisions(task.id).at(-1)?.rationale ?? null
