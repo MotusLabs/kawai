@@ -8,8 +8,7 @@
 // teamToolTable.
 import { describe, expect, test } from 'bun:test'
 import { z } from 'zod'
-import { teamToolTable, type TeamToolSpec } from '../team/mailboxTools'
-import { createMailboxServer } from '../team/mailboxTools'
+import { createMailboxServer, teamToolTable, type MailboxServerServices, type TeamToolSpec } from '../team/mailboxTools'
 import { dispatchTeamToolCall, teamNamespaceSpec } from '../chat/codex/codexTools'
 
 const THREAD = 'thread-0001'
@@ -87,7 +86,16 @@ test('null params are refused instead of crashing', async () => {
 describe('the drift test (6.1)', () => {
   test('the Codex namespace and the Claude MCP server render one teamToolTable identically', async () => {
     const mailbox = {} as Parameters<typeof teamToolTable>[0]
-    const realTable = teamToolTable(mailbox, 'chat-codex-test')
+    // Every optional service present, so every tool family is in the table
+    // and compared (N1): an absent one registers no tools in BOTH renderings,
+    // and the drift test would pass over a whole missing family. The stubs
+    // are never called — registration reads schemas and descriptions only,
+    // and every schema must survive z.toJSONSchema (Codex thread/start).
+    const services = {
+      tasks: {}, results: {}, strategies: {}, plans: {}, validation: {},
+      decisions: {}, impact: {}, releases: {}, management: {}, metrics: {}, reports: {},
+    } as MailboxServerServices
+    const realTable = teamToolTable(mailbox, 'chat-codex-test', services)
     expect(realTable.length).toBeGreaterThan(0)
     // One source of names for both runtimes.
     const names = realTable.map(tool => tool.name).sort()
@@ -96,7 +104,7 @@ describe('the drift test (6.1)', () => {
     expect(ns).not.toBeNull()
     expect(ns!.name).toBe('kawai-team')
     expect(ns!.tools.map(tool => tool.name).sort()).toEqual(names)
-    const server = await createMailboxServer(mailbox, 'chat-codex-test')
+    const server = await createMailboxServer(mailbox, 'chat-codex-test', services)
     // The SDK's tool() keeps the Zod raw shape it was handed verbatim.
     const registered = (server.instance as unknown as { _registeredTools: Record<string, { inputSchema: { shape: Record<string, unknown> } }> })._registeredTools
     expect(Object.keys(registered).sort()).toEqual(names)
