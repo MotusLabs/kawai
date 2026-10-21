@@ -209,6 +209,29 @@ test('an unreadable rollout shows the notice, then reads once without duplicatin
   expect(snapshot.events.filter(e => e.type === 'turn_started')).toHaveLength(1)
 })
 
+// Pins the post-await guard in loadHistory's Codex branch (ChatSessionManager
+// ~:1006, the `!snapshotHistory.has` check after replayCodexRolloutAsync): a
+// send's synchronous captureHistory that lands while the read is still
+// awaiting keeps its memo; the load discards its own older replay. The
+// Claude branch's copy is pinned by chatAsyncRestore's race test.
+test('a synchronous capture that wins the race keeps its memo — the async Codex replay discards its own result', async () => {
+  const wire: Wire = []
+  const id = await startedSession(wire, new Script().boot('thread/start', 'gpt-test', rollout))
+  fs.writeFileSync(rollout, `${turn(NOW, 't2', 'recent question', 'recent answer').join('\n')}\n`)
+  manager!.shutdown()
+
+  manager = createManager([], [])
+  await manager.whenRestored()
+  const loading = manager.loadHistory(id)
+  // The synchronous capture runs while the async read is still awaiting.
+  manager.getSnapshot(id)
+  const memo = (manager as unknown as { snapshotHistory: Map<string, ChatEvent[]> }).snapshotHistory.get(id)
+  expect(memo).toBeTruthy()
+  await loading
+  expect((manager as unknown as { snapshotHistory: Map<string, ChatEvent[]> }).snapshotHistory.get(id)).toBe(memo)
+  expect(userTexts(manager.getSnapshot(id)!.events)).toEqual(['recent question'])
+})
+
 test('a load while a live turn runs keeps the memo — the replay never duplicates live events', async () => {
   const gate = path.join(tempDir, 'gate')
   // Run 2 is the respawn after the restart: a resume whose rollout row (the
@@ -241,7 +264,11 @@ test('a load while a live turn runs keeps the memo — the replay never duplicat
   await until(() => fs.existsSync(rollout) && fs.readFileSync(rollout, 'utf8').includes('go again'))
 
   // A load mid-turn must not re-read: the rollout now holds the row the live
-  // turn is also streaming, and a re-read would replay it twice.
+  // turn is also streaming, and a re-read would replay it twice. (The memo
+  // here is NOT retryable — the send's capture consumed the notice memo at
+  // live=0 and replaced it with the successful pre-turn replay; the
+  // retryable-memo-plus-live-events window is pinned by the EISDIR test
+  // above.)
   await manager.loadHistory(id)
   const snapshot = manager.getSnapshot(id)!
   expect(snapshot.events.some(e => e.type === 'notice')).toBe(false)
