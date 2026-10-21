@@ -16,6 +16,7 @@ import { PlanStore } from '../plans/planStore'
 import { PlanService } from '../plans/PlanService'
 import { StrategyStore } from '../strategy/strategyStore'
 import { ExecutionStore } from '../plans/execution/executionStore'
+import { ExecutionRevisionStore } from '../plans/revisionControl/executionRevisionStore'
 import { schemaDb } from './schemaDb'
 import { ExecutionService } from '../plans/execution/ExecutionService'
 
@@ -124,6 +125,7 @@ esac
     landingModes: () => new Set(['direct']),
     promotions: { runningPromotion: () => null },
     identityOf: () => team,
+    executionRevisions: new ExecutionRevisionStore(db),
     wake: teamId => wakes.push(teamId),
     ghOptions: { env },
   })

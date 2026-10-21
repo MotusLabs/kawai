@@ -77,8 +77,9 @@ function createManager(events: ChatEvent[], wire: Wire): ChatSessionManager {
   })
 }
 
-const OLD = '2026-10-18T10:00:00.000Z'
-const NOW = '2026-10-20T10:00:00.000Z'
+// Clock-relative: live turns carry the real clock, so NOW must stay inside the 24 h window ending at them, and OLD outside it.
+const NOW = new Date(Date.now() - 60 * 60_000).toISOString()
+const OLD = new Date(Date.parse(NOW) - 48 * 60 * 60_000).toISOString()
 const line = (ts: string, type: string, payload: Record<string, unknown>) => JSON.stringify({ timestamp: ts, type, payload })
 const message = (ts: string, text: string) => line(ts, 'response_item', { type: 'message', role: 'user', content: [{ type: 'input_text', text }] })
 const turn = (ts: string, id: string, text: string, answer: string) => [

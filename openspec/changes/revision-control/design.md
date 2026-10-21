@@ -13,6 +13,15 @@ Several shipped or designed pieces are in place:
 
 What is missing is the owner's way to change course without throwing work away. Three levers are needed: hold the affected work, pause it with a checkpoint the owner can trust, and apply a newer approved revision to the run in place. The multi-agent design's "Publication, holds, and checkpoint protocol" and tests R01, R10, R11, R17, and R18 fix the guarantees.
 
+### Name reconciliation (task 1.1, against master 9c5af1e8, 2026-10-20)
+
+Read against the merged designs and code. No rename touches another change's spec or a shipped contract; the names above stand, with these anchors:
+
+- **plan-execution** (archived `2026-10-18-plan-execution`; `src/server/plans/execution/`): `planSteps(snapshot, now)` is `executionPlanner.ts` and returns `{ transitions, effects, dispatches, stages, fixes }`. The decide/dispatch split D5 needs lands there: a failed round's outcome is a guarded transition (the decision, recorded under a hold), while the fix attempt is the `fixes` entry / a later dispatch, still owed in stored state until the gate opens. `START_PRECONDITIONS` (`startPreconditions.ts`, append-only) gains `no-hold`; `plan_landing_slots` is migration 8's table; the effect kinds are the `EffectKind` union in `src/shared/planExecution.ts` and their inspectors live in `effectInspectors.ts` — `push-checkpoint` (D7) is a new change-level kind added to that union, with its own `ls-remote` inspector; `AttemptManifest` (same file, `version: 1`) already carries an optional field (`answers?`), so the optional `checkpoint: { id, commit }` follows that precedent with no version bump; `recordExecutionEvent` is `PlanService.recordExecutionEvent`, the model `recordRevisionControlEvent` follows (`runPlanCommand` + `store.insertEvent`, compared payloads in `CommandPayload.command`'s union, which gains the six command names); `TaskService.setStatus(caller, taskId, status, note?, alsoWithin?)` is as named; D11's removed-change cancel does not go through it — it follows Stop (`ExecutionService.ts` `stopAs`, `executor.ts`): `TaskService.prepareStatus` first, then `commit` inside Apply's synchronous transaction, never the async `setStatus(…, alsoWithin)` (D11).
+- **integration-candidates** (archived `2026-10-20-integration-candidates`): the candidate fast-forward is the non-forced `fast-forward` effect kind (`integrationMechanism.ts`); `PROMOTE_PRECONDITIONS` (`promotionPreconditions.ts`, append-only) gains `no-hold`; the promotion steps are D10's pure `planPromotionStep(input)` (`src/server/plans/landing/integration/promotionPlanner.ts`) — the `held` wait this design adds is a new step the runner reaches before its merge, and release re-runs its up-to-date step, which is step 4 there.
+- **plan-supervision** (`openspec/changes/plan-supervision/`): the running-stage named waits are `SupervisionWait` in `src/shared/planSupervision.ts` — today effect, uncertain-delivery, staffing, parked, request, decision-card, ci, member-release, condition, landing-slot; `paused`, `pausing`, `hold` join after `effect` in that order, before `uncertain-delivery` (D13), under S2's append-only rule, with `repeating-failure` still ahead of them. `fixStatus` is `src/shared/planDecisions.ts`. The system caller's origins are `execution | override | promotion` (`src/server/team/systemCaller.ts`); this change adds none — Kawai's writes here use the `execution` origin. The attention sources live in `ATTENTION_SOURCES` in `src/server/team/workspaceRead.ts`; the proposal's Impact names a `planAttention.ts` that does not exist — the three sources of D13 are added at the shipped location (a `planAttention.ts` module is created only if the 500-line bound demands the split). Items link with the `plan` link plan-supervision D13 shipped.
+- **Shipped:** `TaskService`'s publication path takes a `requestKey` and writes its notices through a `within` hook (`src/server/team/TaskService.ts`); the proposal's "`within` variant" — a whole publication inside a caller's transaction, for Adapt and Apply — does not exist yet and is added by this change's groups 4–5, modeled on `PlanService.reopenWithin`. `MemberRelease.readiness(sessionId)` and `releaseNow` are as named, with the durable `team_member_releases` pending row for Restart; its single readiness `reason` (`{ ready: true } | { ready: false; reason: string }`) reaches `PauseTargetFacts.readiness`'s `reasons: string[]` through a one-entry adapter.
+
 ## Goals / Non-Goals
 
 **Goals:**
@@ -133,7 +142,7 @@ CREATE TABLE plan_execution_publication_changes (
 - the execution revision primary key makes two concurrent Applies on the same base collide, and the loser maps to `execution-revision-unchanged`;
 - guarded `UPDATE … WHERE paused_at IS NULL` and `WHERE decision IS NULL` record Paused and decisions once.
 
-The backfill inserts `seq = 1` for every execution from its row.
+The backfill inserts `seq = 1` for every execution from its row. Start inserts seq 1 in its transaction; the migration's backfill covers executions started before migration 17.
 
 ### D3. Commands, replay, and plan events
 
@@ -371,7 +380,7 @@ Every resolution therefore works from the newest revision, and nothing is dispat
 - `landed-changed`: a landed change differs in a field other than `dependsOn` and `fixes`, or is `removed`;
 - `lead-changed`: `PlanContent.leadGroup` (plan-supervision D2) differs. It is informational, never a refusal: Apply takes it, and cards raised afterwards go to the new lead group.
 
-A change of roles or plan-wide rules with nothing landed marks every unlanded change `changed` through the effective fields.
+A change of roles or plan-wide rules with nothing landed marks every unlanded change `changed` through the effective fields. A role entry counts through its `profiles`, in preference order — the change's implementing group's and its effective review group's, looked up by group name — and only unlanded changes compare roles, so a role change never produces `landed-changed`.
 
 **Choices.** A `changed` change that has a task needs a choice. One still `waiting`, with no task, is recorded with choice `none` and picks up the new definition when provisioned.
 

@@ -34,6 +34,7 @@ import type { GhCommandOptions } from '../landing/ghCommand'
 import type { PlanExecutionSettings } from '../../team/teamCaps'
 import { evaluateStartPreconditions, type StartCheckContext, type StartRoleFact } from './startPreconditions'
 import { readIntegrationStartFacts } from '../landing/integration/integrationStart'
+import { ExecutionRevisionStore } from '../revisionControl/executionRevisionStore'
 
 export type ExecutionCaller = { kind: 'human'; team: TeamIdentity } | { kind: 'agent'; sessionId: string }
 
@@ -95,6 +96,8 @@ export class ExecutionService {
     tasks?: import('../../team/TaskService').TaskService
     /** The team's identity for Kawai's own stop (D19's plan-close hook). */
     identityOf: (teamId: string) => TeamIdentity
+    /** revision-control D2: the execution's revision history; Start writes seq 1 in its transaction. */
+    executionRevisions: ExecutionRevisionStore
     /** Woken after a Start commits (the executor, D5); never on a replay or refusal. */
     wake?: (teamId: string) => void
     homeDir?: string
@@ -132,6 +135,15 @@ export class ExecutionService {
         maxParallel: settings.maxParallelChanges, mergeMethod: settings.mergeMethod,
         changes: ctx.changes.map(change => ({ change, landed: gather.landed.has(change) })),
       })
+      // revision-control D2: seq 1 is the revision Start recorded, from the
+      // inserted execution's columns; the migration's backfill covers
+      // executions started before migration 17. Inside this transaction, so
+      // a replayed Start (R17) writes none.
+      this.deps.executionRevisions.recordAt(1, {
+        executionId: execution.id, revision: input.revision, contentHash: input.contentHash,
+        reportId: ctx.reportId!, inputHash: ctx.inputHash!, appliedAt: execution.startedAt,
+        rationale: null, commandId: null, payload: null,
+      }, [])
       // The mechanism's execution-level effects commit with the execution (integration-candidates D4).
       const mechanism = (this.deps.mechanisms ?? DIRECT_MECHANISMS).get(ctx.landingMode)
       for (const effect of mechanism?.startEffects?.({ execution, probe: gather.probe, main: caller.team.groupsRoot }) ?? []) {

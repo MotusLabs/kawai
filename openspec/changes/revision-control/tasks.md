@@ -4,13 +4,13 @@ Implement after these have landed on master: `plan-execution`, `integration-cand
 
 ## 1. Shared model and contracts
 
-- [ ] 1.1 Reconcile names with the merged designs, and record any renames in this design before coding. Verify by reading against D3–D5, D10–D11, and D13–D16 here:
+- [x] 1.1 Reconcile names with the merged designs, and record any renames in this design before coding. Verify by reading against D3–D5, D10–D11, and D13–D16 here:
   - plan-execution's D3, D4, D9, D12, D14, D18, and D20: `planSteps` and its decide/dispatch split, `START_PRECONDITIONS`, `plan_landing_slots`, the effect kinds and inspectors, `AttemptManifest`, `recordExecutionEvent`, and `TaskService.setStatus(…, alsoWithin)`;
   - integration-candidates' D5, D9, and I2: the fast-forward, `PROMOTE_PRECONDITIONS`, and the promotion steps;
   - plan-supervision's D10, D13, and S1–S4: the cause list and its order, `ATTENTION_SOURCES` kinds, the `plan` link, `fixStatus`, and the system caller's origins;
   - the shipped `TaskService` publication path, including the `within` variant the proposal's Impact names, `MemberRelease.readiness`, and member release's durable pending row for a Restart whose spawned holder is not yet ready.
-- [ ] 1.2 Create `src/shared/planRevisionControl.ts` with hold, pause, target, checkpoint, delta, and view types, and a header comment naming them. Verify with a typecheck.
-- [ ] 1.3 Implement the pure `holdGate` (D5), `pauseTargetState` (D8), and `revisionDelta` (D10). Verify with unit tests:
+- [x] 1.2 Create `src/shared/planRevisionControl.ts` with hold, pause, target, checkpoint, delta, and view types, and a header comment naming them. Verify with a typecheck.
+- [x] 1.3 Implement the pure `holdGate` (D5), `pauseTargetState` (D8), and `revisionDelta` (D10). Verify with unit tests:
   - a change is held by a plan hold, by a changes hold, and no longer once its row is released;
   - every D8 cause and its precedence;
   - `metadata` for a landed change differing only in `dependsOn` or `fixes`, `fixes` as a compared field, and `lead-changed` as informational;
@@ -21,12 +21,13 @@ Implement after these have landed on master: `plan-execution`, `integration-cand
 
 ## 2. Records and events
 
-- [ ] 2.1 Add the D2 migration in `src/server/plans/revisionControl/revisionControlSchema.ts`, with the seq-1 backfill of `plan_execution_revisions`. Verify with a migration test on a fresh database and on one with plan-execution tables and rows, run twice.
-- [ ] 2.2 Implement `holdStore.ts`, `pauseStore.ts`, `checkpointStore.ts`, and `executionRevisionStore.ts` as the only SQL writers of those tables, with header comments saying so. The records need no user docs beyond them. Verify with unit tests:
+- [x] 2.1 Add the D2 migration in `src/server/plans/revisionControl/revisionControlSchema.ts`, with the seq-1 backfill of `plan_execution_revisions`. Verify with a migration test on a fresh database and on one with plan-execution tables and rows, run twice.
+- [x] 2.2 Implement `holdStore.ts`, `pauseStore.ts`, `checkpointStore.ts`, and `executionRevisionStore.ts` as the only SQL writers of those tables, with header comments saying so. The records need no user docs beyond them. Verify with unit tests:
   - the guarded Paused and decision updates write once;
   - the execution revision primary key maps to `execution-revision-unchanged`;
   - superseding a checkpoint keeps the earlier one readable.
-- [ ] 2.3 Add `PlanService.recordRevisionControlEvent` and the six D3 kinds (C3, C6). Verify with unit tests: each kind replays by `(plan_id, command_id)` over its compared payload, and is refused naming the first differing field.
+- [x] 2.3 Add `PlanService.recordRevisionControlEvent` and the six D3 kinds (C3, C6). Verify with unit tests: each kind replays by `(plan_id, command_id)` over its compared payload, and is refused naming the first differing field.
+- [x] 2.4 Start writes the seq-1 execution revision (D2): the inserted execution's columns in Start's transaction through `ExecutionRevisionStore`; a replayed Start writes none. Verify with a test through the composed stack (`executionComposition.test.ts` › "Start writes the seq-1 revision row in its transaction; a replay writes none and record takes seq 2"): exactly one seq-1 row equal to the execution's columns, none on replay, and a later `record()` at seq 2.
 
 ## 3. Holds
 
