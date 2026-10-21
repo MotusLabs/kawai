@@ -2614,6 +2614,9 @@ export class ChatSessionManager {
               // The catalog at the chat's path names the credentials (D3).
               withheldCredentials: withheldCredentialNamesAt(this.catalogCtx(record.projectPath)),
               teamTools: teamToolTable(this.mailbox, record.sessionId, teamServices),
+              // Codex fills a home holding no report with one read (PR E
+              // 7.1); the store claims it once per home.
+              claimRateLimitsRead: () => this.usageLimits.claimPull(this.providerIdOf(record.sessionId)),
               ...(record.sdkSessionId ? { resumeThreadId: record.sdkSessionId } : {}),
             },
           })

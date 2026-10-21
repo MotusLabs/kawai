@@ -251,3 +251,35 @@ describe('usage bar minute clock', () => {
     expect(jest.getTimerCount()).toBe(0)
   })
 })
+
+describe('codex windows (codex-chat-sessions D9)', () => {
+  test('a codex report renders its 5-hour and weekly meters with its own labels', () => {
+    jest.useFakeTimers()
+    jest.setSystemTime(NOW)
+    const renderer = renderBar({
+      status: 'allowed',
+      windows: [
+        { key: 'codex:primary', label: '5-hour', percentUsed: 40, resetsAt: at(NOW + 2.5 * HOUR), periodMs: FIVE_HOURS },
+        { key: 'codex:secondary', label: 'weekly', percentUsed: 12, resetsAt: at(NOW + 5 * 24 * HOUR), periodMs: SEVEN_DAYS },
+      ],
+      receivedAt: at(NOW),
+    })
+    const primary = meterOf(renderer, 'codex:primary')
+    expect(primary.findByProps({ 'data-testid': 'chat-usage-meter' }).props['aria-label']).toBe(
+      '5-hour: 40% used · 50% of window elapsed · resets in 2h 30m'
+    )
+    const secondary = meterOf(renderer, 'codex:secondary')
+    expect(secondary.props.title).toBe('12% used · 29% of window elapsed · resets in 5d 0h')
+    renderer.unmount()
+  })
+
+  test('a reached codex limit renders the limited state', () => {
+    const renderer = renderBar({
+      status: 'limited',
+      windows: [{ key: 'codex:primary', label: '5-hour', percentUsed: 100, resetsAt: at(NOW + HOUR), periodMs: FIVE_HOURS }],
+      receivedAt: at(NOW),
+    })
+    expect(renderer.root.findByProps({ 'data-status': 'limited' })).toBeDefined()
+    renderer.unmount()
+  })
+})

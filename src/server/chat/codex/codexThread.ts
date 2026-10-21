@@ -51,6 +51,12 @@ export interface CodexSessionDriverOptions extends ChatDriverCallbacks {
   /** The server environment the child's env derives from; default process.env. */
   serverEnv?: Record<string, string | undefined>
   /**
+   * Whether this spawn may fill a home holding no report with one
+   * `account/rateLimits/read` (PR E 7.1); the usage store claims it once
+   * per home, so the harness default (unset) reads nothing.
+   */
+  claimRateLimitsRead?: () => boolean
+  /**
    * The catalog-named credential variables the child never inherits
    * (openrouter-provider D3, task 1.8); required, so no launch path can
    * forget it.

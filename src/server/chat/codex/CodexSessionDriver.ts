@@ -37,6 +37,7 @@ import type { DynamicToolSpec } from './protocol/v2/DynamicToolSpec'
 import { mapCodexNotification, turnCompletedDrafts, turnUsageBetween, type CodexEventDraft, type CodexOutput } from './codexEvents'
 import { CodexRequests } from './codexRequests'
 import { answerAsyncQuestion, CLIENT_INFO, codexContextUsage, codexEffort, reportCompaction, reportSpawn, threadParams, type CodexClient, type CodexSessionDriverOptions } from './codexThread'
+import { normalizeRateLimitSnapshot, snapshotOfRateLimitsRead } from './codexUsage'
 import type { ThreadItem } from './protocol/v2/ThreadItem'
 import type { TokenUsageBreakdown } from './protocol/v2/TokenUsageBreakdown'
 import type { Turn } from './protocol/v2/Turn'
@@ -261,6 +262,7 @@ export class CodexSessionDriver implements ChatAgentDriver {
       if (typeof thread.path === 'string' && thread.path) this.options.onTranscriptPath?.(thread.path)
       if (typeof result.model === 'string') this.reportModel(result.model)
       reportSpawn(this.options, { cwd: this.projectPath, instructions, effort, env, resumed })
+      this.fillRateLimits(client)
       return true
     } catch (error) {
       if (this.client !== client) return false
@@ -328,6 +330,9 @@ export class CodexSessionDriver implements ChatAgentDriver {
       case 'token_usage':
         this.onTokenUsage(output.usage.total, output.usage.last, output.usage.modelContextWindow)
         return
+      case 'rate_limits':
+        this.options.onRateLimit?.(normalizeRateLimitSnapshot(output.snapshot))
+        return
       case 'question': {
         if (this.askedItems.has(output.itemId)) return
         this.askedItems.add(output.itemId)
@@ -358,6 +363,23 @@ export class CodexSessionDriver implements ChatAgentDriver {
 
   private audit(phase: 'started' | 'completed', item: ThreadItem | undefined): void {
     auditItem(phase, item, { sink: this.options.outbound, spawnId: this.spawnId, cwd: this.projectPath })
+  }
+
+  /**
+   * Fill a home holding no report with one read (PR E 7.1): the manager
+   * claims it once per home, so a later spawn never re-reads.
+   */
+  private fillRateLimits(client: CodexClient): void {
+    if (!this.options.claimRateLimitsRead?.()) return
+    client.request('account/rateLimits/read', {}).then((result) => {
+      if (this.client !== client) return
+      const report = normalizeRateLimitSnapshot(snapshotOfRateLimitsRead(result), undefined, 'provider')
+      if (report.windows.length > 0) this.options.onRateLimit?.(report)
+      else this.options.onUsageNoData?.()
+    }).catch(() => {
+      // A dead process surfaces through onExit; there is nothing to fill.
+      if (this.client === client) this.options.onUsageNoData?.()
+    })
   }
 
   private completeTurn(turn: Turn): void {

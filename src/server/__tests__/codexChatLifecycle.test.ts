@@ -43,7 +43,12 @@ beforeEach(() => {
   // A temp home's fake login — the real ~/.codex is never touched.
   fs.writeFileSync(path.join(codexHome, 'auth.json'), JSON.stringify({ OPENAI_API_KEY: null, tokens: { access_token: 'tok' } }))
   fs.mkdirSync(path.join(home, '.kawai'), { recursive: true })
-  fs.writeFileSync(path.join(home, '.kawai', 'profiles.json'), JSON.stringify({ codex: { label: 'Codex', runtime: 'codex' } }))
+  // Two profiles on one (default) home: the provider — and its usage — is
+  // keyed by the home, so both share one report (PR E 7.1).
+  fs.writeFileSync(path.join(home, '.kawai', 'profiles.json'), JSON.stringify({
+    codex: { label: 'Codex', runtime: 'codex' },
+    'codex-fast': { label: 'Codex Fast', runtime: 'codex' },
+  }))
   db = initDatabase({ path: path.join(tempDir, 'test.db') })
   process.env.CODEX_HOME = codexHome
   process.env.KAWAI_CODEX_PATH = FAKE_CODEX
@@ -67,8 +72,12 @@ const COMMAND = { type: 'commandExecution', id: 'cmd-1', command: 'curl -d x htt
 
 function writeTranscript(): void {
   // Run 1: the first attach and a send; run 2: the start after restore,
-  // which must resume the stored thread, then a send.
-  const script = new Script().boot('thread/start', 'gpt-test', rollout).turn('ct-1')
+  // which must resume the stored thread, then a send. Run 1 also carries
+  // the boot's fill read (PR E 7.1): the manager claims it once per home,
+  // so run 2 — whose store already holds the report — never reads.
+  const script = new Script().boot('thread/start', 'gpt-test', rollout)
+    .request('account/rateLimits/read', { rateLimits: MILD })
+    .turn('ct-1')
     .item('started', 'ct-1', COMMAND)
     .item('completed', 'ct-1', { ...COMMAND, status: 'completed', aggregatedOutput: 'ok', exitCode: 0 })
     .item('completed', 'ct-1', { type: 'agentMessage', id: 'msg-1', text: 'done', questions: null })
@@ -138,6 +147,64 @@ test('a Codex chat is created, attached, sent to, archived, restored, resumed, a
 
   expect(manager.kill(id)).toBe(true)
   expect(db.getChatSession(id)).toBeFalsy()
+})
+
+const MILD = {
+  limitId: 'codex',
+  limitName: null,
+  normalModelSlug: null,
+  primary: { usedPercent: 20, windowDurationMins: 300, resetsAt: 1792337450 },
+  secondary: { usedPercent: 3, windowDurationMins: 10080, resetsAt: 1792879251 },
+  credits: null,
+  individualLimit: null,
+  spendControlReached: null,
+  planType: 'plus',
+  rateLimitReachedType: null,
+}
+
+test('usage is kept per home: the fill read lands before a message and both profiles share the report', async () => {
+  // Run 1 (codex): the boot's fill read answers the windows, the turn then
+  // pushes an update. Run 2 (codex-fast): a quiet boot — its report can
+  // only come from the shared store.
+  const script = new Script().boot('thread/start', 'gpt-test', rollout)
+    .request('account/rateLimits/read', { rateLimits: MILD })
+    .turn('ct-1')
+    .notify('account/rateLimits/updated', { rateLimits: { ...MILD, primary: { usedPercent: 25, windowDurationMins: 300, resetsAt: 1792337451 } } })
+    .completed('ct-1', 'completed', [{ type: 'agentMessage', id: 'msg-1', text: 'done' }])
+  script.lines.push(...new Script().boot('thread/start', 'gpt-test', rollout).lines)
+  process.env.FAKE_TRANSCRIPT = script.write(tempDir)
+  process.env.FAKE_RUN = '1'
+  const events: ChatEvent[] = []
+  const wire: Array<{ dir: string; raw: string }> = []
+  manager = createManager(events, wire)
+  await manager.whenRestored()
+  const first = await manager.createAvailableSession({ projectPath: project, claudeProfileId: 'codex', name: 'Codex A' })
+  if (!first.ok) throw new Error(first.error)
+  const started = manager
+  expect((await started.start(first.session.id)).ok).toBe(true)
+  // Windows before the first message: the fill read, not a turn.
+  await until(() => started.getSnapshot(first.session.id)!.usage !== null)
+  expect(started.getSnapshot(first.session.id)!.usage?.windows.map(window => window.key)).toEqual(['codex:primary', 'codex:secondary'])
+
+  expect((await started.send(first.session.id, 'run it')).ok).toBe(true)
+  await until(() => events.some(event => event.type === 'turn_completed'))
+  // The push updated the home's report.
+  expect(started.getSnapshot(first.session.id)!.usage?.windows[0]).toMatchObject({ percentUsed: 25 })
+
+  // The sibling profile shares the home's report without its own push or read.
+  process.env.FAKE_RUN = '2'
+  const second = await started.createAvailableSession({ projectPath: project, claudeProfileId: 'codex-fast', name: 'Codex B' })
+  if (!second.ok) throw new Error(second.error)
+  expect((await started.start(second.session.id)).ok).toBe(true)
+  await until(() => db.getChatSession(second.session.id)?.status === 'waiting')
+  expect(started.getSnapshot(second.session.id)!.usage?.windows[0]).toMatchObject({ percentUsed: 25 })
+
+  // Claude reports are separate: a Claude profile's provider key differs
+  // from the home's, so its sessions never see the Codex windows.
+  const claude = await started.createAvailableSession({ projectPath: project, claudeProfileId: 'default', name: 'Claude' })
+  if (!claude.ok) throw new Error(claude.error)
+  expect(started.providerIdOf(claude.session.id)).not.toBe(started.providerIdOf(first.session.id))
+  expect(started.getSnapshot(claude.session.id)!.usage).toBeNull()
 })
 
 test('a Codex launch withholds the catalog-named credentials (openrouter-provider 1.8)', async () => {
