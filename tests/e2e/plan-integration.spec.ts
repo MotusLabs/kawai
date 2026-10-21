@@ -135,7 +135,7 @@ function submitRound(root: string, mode: 'result' | 'findings', implementer: str
         if (claimant === null) {
           // Self-diagnosing: a CI timeout names its cause. A stopped change
           // dispatches no review; a dispatched one names its mail state.
-          const stopped = db.prepare('SELECT state, step, stop_reason, stop_detail_json FROM plan_execution_changes WHERE change = ? ORDER BY rowid DESC').get(change) ?? {};
+          const stopped = db.prepare('SELECT state, step, stop_reason, stop_detail_json FROM plan_execution_changes WHERE change = ? AND task_id = ? ORDER BY rowid DESC').get(change, taskId) ?? {};
           const handoff = db.prepare("SELECT m.state AS mail_state, m.reason AS mail_reason FROM team_task_assignments a LEFT JOIN team_messages m ON m.id = a.message_id WHERE a.task_id = ? AND a.handoff_kind = 'review' AND a.superseded_by IS NULL ORDER BY a.rowid DESC").get(taskId) ?? null;
           const stage = stopped.state === 'stopped'
             ? 'the change stopped (' + (stopped.stop_reason ?? 'unknown') + (stopped.stop_detail_json ? ' — ' + stopped.stop_detail_json : '') + ')'

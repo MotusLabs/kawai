@@ -110,7 +110,10 @@ test('supervision walkthrough: a Lead-answered card, the owner override, and a r
     leads: '---\nlabel: Leads\nmax: 1\n---\nDecide plan work',
     reviewers: '---\nlabel: Reviewers\nmax: 2\n---\nReview',
   })
-  initOrigin(root, origin)
+  // The supervision walkthrough's own repository: the fixture PR registry is
+  // repo-scoped, so sharing plan-execution's acme/walkthrough would let one
+  // spec's open walk-api PR refuse the other's.
+  initOrigin(root, origin, 'https://github.com/acme/supervision-walk.git')
   try {
     await page.goto('/')
     const implementer = await createChat(page, root, 'Supervision implementer', 'devs')
