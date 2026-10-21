@@ -329,3 +329,47 @@ describe('the hold gate at the executor (revision-control 3.2)', () => {
     expect(executions.change(executionId, 'hold-e')!.state).toBe('gating')
   })
 })
+
+// The R10 integration test (revision-control 3.4): submission is never
+// refused for a hold — the result is kept, its round recorded, CI runs —
+// while the review handoff, the slot, and the merge wait; the release
+// resumes the same round.
+describe('the R10 result under a hold (revision-control 3.4)', () => {
+  test('a result arriving under a hold is kept; its CI runs; no review or landing; the release resumes the same round', async () => {
+    const { executionId, planId } = await approvedExecution(['hold-r'])
+    // The change reaches implementing with no result yet: provision, task, dispatch.
+    executor.wake(world.team.teamId)
+    await executor.idle()
+    const row = executions.change(executionId, 'hold-r')!
+    expect(row.state).toBe('implementing')
+    const hold = placeHold(planId, 'changes', ['hold-r'], 'hold-r10')
+    await executor.idle()
+
+    // The result arrives under the hold and is kept: one round, recorded.
+    fs.mkdirSync(path.join(row.worktree!, 'src'), { recursive: true })
+    fs.writeFileSync(path.join(row.worktree!, 'src', 'hold-r.ts'), 'r\n')
+    commitAll(row.worktree!, 'implement hold-r')
+    const commit = git(['rev-parse', 'HEAD'], row.worktree!).trim()
+    await results.submit(bench.agent('dev'), row.taskId!, { summary: 'done', commit, tests: [{ description: 'unit', outcome: 'pass' }] })
+
+    // Its CI runs under the hold; the review handoff does not, and nothing lands.
+    ghStub.pulls = '[]'
+    passCi()
+    executor.wake(world.team.teamId)
+    await executor.idle()
+    const held = executions.change(executionId, 'hold-r')!
+    const rounds = executions.rounds(executionId, 'hold-r')
+    expect(rounds).toHaveLength(1)
+    expect(rounds[0]!.pushedAt).not.toBeNull()
+    expect(held.prNumber).toBe(7)
+    expect(rounds[0]!.reviewAssignmentId).toBeNull()
+    expect(held.state).not.toBe('landing')
+
+    // The release resumes the same round: its review handoff goes out.
+    releaseHold(planId, hold.id)
+    await executor.idle()
+    expect(executions.rounds(executionId, 'hold-r')).toHaveLength(1)
+    expect(executions.rounds(executionId, 'hold-r').at(-1)!.reviewAssignmentId).not.toBeNull()
+    expect(executions.change(executionId, 'hold-r')!.step).toBe('reviewing')
+  })
+})

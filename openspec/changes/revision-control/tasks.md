@@ -47,7 +47,7 @@ Implement after these have landed on master: `plan-execution`, `integration-cand
   - a running promotion waits at `held` without the slot, then re-runs its up-to-date step;
   - Start under a plan hold is refused, and under a changes hold it succeeds with the change unprovisioned;
   - Promote carrying a held change is refused.
-- [ ] 3.4 Write the R10 integration test: a result arrives under a hold and is kept, its CI runs, no review or landing happens, and release resumes the same round. Add the AGENTS.md holds bullet; that bullet is the docs for group 3. Verify by the test, and by reading the bullet against D4–D5.
+- [x] 3.4 Write the R10 integration test: a result arrives under a hold and is kept, its CI runs, no review or landing happens, and release resumes the same round. Add the AGENTS.md holds bullet; that bullet is the docs for group 3. Verify by the test, and by reading the bullet against D4–D5.
 
 ## 4. Pause and checkpoints
 
