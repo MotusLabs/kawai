@@ -5,8 +5,10 @@ import path from 'node:path'
 import { isProcDead } from './fixtures/runnerProbe/procState'
 import {
   buildBunTestArgs,
+  defaultWorkers,
   forwardSignalAndReap,
   isOwnerAlive,
+  parseCpuQuota,
   parseRunArgs,
   readOwnerMarker,
   readProcStartTime,
@@ -25,16 +27,44 @@ describe('parseRunArgs', () => {
 })
 
 describe('workersFromEnv', () => {
-  test('defaults to 1 until 2.3 measures', () => {
-    expect(workersFromEnv({})).toBe(1)
-    expect(workersFromEnv({ KAWAI_TEST_WORKERS: '' })).toBe(1)
+  test('unset takes the given fallback, the measured default by another name', () => {
+    expect(workersFromEnv({}, 4)).toBe(4)
+    expect(workersFromEnv({ KAWAI_TEST_WORKERS: '' }, 4)).toBe(4)
+    expect(workersFromEnv({}, 1)).toBe(1)
   })
 
   test('accepts a positive integer override and refuses the rest', () => {
-    expect(workersFromEnv({ KAWAI_TEST_WORKERS: '2' })).toBe(2)
+    expect(workersFromEnv({ KAWAI_TEST_WORKERS: '2' }, 4)).toBe(2)
     expect(() => workersFromEnv({ KAWAI_TEST_WORKERS: '0' })).toThrow()
     expect(() => workersFromEnv({ KAWAI_TEST_WORKERS: 'x' })).toThrow()
     expect(() => workersFromEnv({ KAWAI_TEST_WORKERS: '1.5' })).toThrow()
+  })
+})
+
+describe('parseCpuQuota', () => {
+  test('divides the cgroup v2 quota by its period', () => {
+    expect(parseCpuQuota('600000 100000')).toBe(6)
+    expect(parseCpuQuota('300000 100000')).toBe(3)
+    expect(parseCpuQuota('150000 100000')).toBe(1)
+    expect(parseCpuQuota('600000 100000\n')).toBe(6)
+  })
+
+  test('unbounded, malformed, or non-integer quotas read as absent', () => {
+    expect(parseCpuQuota('max 100000')).toBeNull()
+    expect(parseCpuQuota('max')).toBeNull()
+    expect(parseCpuQuota('')).toBeNull()
+    expect(parseCpuQuota('six 100000')).toBeNull()
+    expect(parseCpuQuota('600000.5 100000')).toBeNull()
+    expect(parseCpuQuota('600000 0')).toBeNull()
+  })
+})
+
+describe('defaultWorkers', () => {
+  test('never above the measured count, capped by the CPU cap, never below 1', () => {
+    expect(defaultWorkers(6)).toBe(4)
+    expect(defaultWorkers(16)).toBe(4)
+    expect(defaultWorkers(2)).toBe(2)
+    expect(defaultWorkers(0)).toBe(1)
   })
 })
 
