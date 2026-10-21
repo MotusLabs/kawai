@@ -1,3 +1,4 @@
+// Shared harness for the chatSessionManager.<area>.test.ts split.
 import { afterEach } from 'bun:test'
 import fs from 'node:fs'
 import path from 'node:path'

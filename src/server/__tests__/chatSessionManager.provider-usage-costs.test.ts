@@ -1,3 +1,4 @@
+// chatSessionManager split: provider-usage-costs tests.
 import { afterEach, beforeEach, describe, expect, jest, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
