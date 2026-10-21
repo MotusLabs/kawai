@@ -100,6 +100,20 @@ describe('revisionDelta', () => {
     expect(classes(delta).b.class).toBe('unchanged')
   })
 
+  test('after a landing, a plan reviewGroup change lands-changes a landed change without its own review group', () => {
+    // D10/D11: the effective review group is a compared field, so a landed
+    // change reading the plan-wide reviewGroup cannot silently re-route its
+    // reviews — the landed-changed refusal names reviewGroup. A landed change
+    // with its own reviewGroup is untouched.
+    const from = content([change('plan-grouped'), change('own-grouped', { reviewGroup: 'reviewers-mimo' })], { reviewGroup: 'reviewers-claude' })
+    const to = content([change('plan-grouped'), change('own-grouped', { reviewGroup: 'reviewers-mimo' })], { reviewGroup: 'reviewers-claude-2' })
+    const delta = revisionDelta(from, to, new Set(['plan-grouped', 'own-grouped']), new Set())
+    expect(classes(delta)['plan-grouped']).toMatchObject({ class: 'changed', fields: ['reviewGroup'] })
+    expect(finding(delta, 'landed-changed')?.changes).toEqual(['plan-grouped'])
+    expect(classes(delta)['own-grouped'].class).toBe('unchanged')
+    expect(finding(delta, 'landed-changed')?.changes).not.toContain('own-grouped')
+  })
+
   test('plan-wide rules with nothing landed mark every unlanded change changed (D10)', () => {
     const from = content([change('tasked'), change('waiting')])
     const to = content([change('tasked'), change('waiting')], {
