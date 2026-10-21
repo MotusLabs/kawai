@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import { PtyTerminalProxy as TerminalProxy } from '../../terminal'
-import { buildTmuxFormat } from '../../tmuxFormat'
+import { PtyTerminalProxy as TerminalProxy } from '../terminal'
+import { buildTmuxFormat } from '../tmuxFormat'
 
 const CLIENT_TTY_OUTPUT = `${buildTmuxFormat(['/dev/pts/9', '4242'])}\n`
 const CLIENT_TTY_FORMAT = buildTmuxFormat(['#{client_tty}', '#{client_pid}'])
