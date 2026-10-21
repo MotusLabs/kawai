@@ -69,6 +69,35 @@ function decisionTool(root: string, sessionId: string, tool: 'ask' | 'record', i
   return JSON.parse(line.slice('DECISION:'.length)) as Record<string, unknown>
 }
 
+/**
+ * The session the executor's task mail landed on: the spawned dev holding
+ * the walk-api task. Worktree-scoped routing skips a chat rooted above the
+ * worktree, and the reviewer's handoff mail pins the same task, so the group
+ * narrows the pick to the implementer. decisionScope resolves a card from
+ * `session.taskId`, so the ask must come from this session.
+ */
+function taskHolder(): string {
+  const dbPath = process.env.AGENTBOARD_DB_PATH!
+  if (!dbPath.startsWith(process.env.E2E_TMUX_TMPDIR!)) throw new Error('Refuse reading a non-isolated database')
+  const script = `
+    import { initDatabase } from './src/server/db';
+    const sessions = initDatabase({ path: ${JSON.stringify(dbPath)} });
+    sessions.db.exec('PRAGMA busy_timeout = 5000');
+    const taskId = sessions.db.prepare("SELECT task_id FROM plan_execution_changes WHERE change = 'walk-api' AND task_id IS NOT NULL ORDER BY rowid DESC LIMIT 1").get()?.task_id;
+    const row = taskId
+      ? sessions.db.prepare("SELECT session_id FROM chat_sessions WHERE task_id = ? AND group_id = 'devs' ORDER BY rowid DESC LIMIT 1").get(taskId)
+      : null;
+    console.log('HOLDER:' + JSON.stringify({ taskId: taskId ?? null, holder: row?.session_id ?? null }));
+    sessions.close();
+  `
+  const stdout = execFileSync('bun', ['-e', script], { cwd: process.cwd(), encoding: 'utf8' })
+  const line = stdout.split('\n').find(entry => entry.startsWith('HOLDER:'))
+  if (!line) throw new Error(`taskHolder printed no result: ${stdout}`)
+  const { taskId, holder } = JSON.parse(line.slice('HOLDER:'.length)) as { taskId: string | null; holder: string | null }
+  if (!holder) throw new Error(`no devs session holds the walk-api task ${taskId ?? '(none)'}: the executor's task mail has not been delivered`)
+  return holder
+}
+
 test('supervision walkthrough: a Lead-answered card, the owner override, and a repeating-failure stall', async ({ page }, info) => {
   test.setTimeout(300_000)
   const root = mkdtempSync(join(tmpdir(), 'kawai-supervision-run-'))
@@ -116,9 +145,10 @@ test('supervision walkthrough: a Lead-answered card, the owner override, and a r
     submitRound(root, 'result', implementer, reviewer)
     submitRound(root, 'findings', implementer, reviewer, { verdict: 'fail' })
 
-    // The implementer asks through decision_ask; the card goes to the Lead
-    // role group (the asker is outside it).
-    const asked = decisionTool(root, implementer, 'ask', {
+    // The implementer of record (the task holder, not the root chat) asks
+    // through decision_ask; the card goes to the Lead role group (the asker
+    // is outside it).
+    const asked = decisionTool(root, taskHolder(), 'ask', {
       question: 'Which schema should walk-api ship?', options: ['Narrow', 'Wide'],
     })
     expect(asked.addressed_to).toBe('lead')
