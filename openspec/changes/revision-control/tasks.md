@@ -41,7 +41,7 @@ Implement after these have landed on master: `plan-execution`, `integration-cand
   - the round outcome is still recorded;
   - release wakes the executor, and each deferred dispatch runs exactly once;
   - a running turn gets no mail.
-- [ ] 3.3 Wire the gate into direct and integration landing and promotion (D5), and append `no-hold` to `START_PRECONDITIONS` and `PROMOTE_PRECONDITIONS`. Verify with tests:
+- [x] 3.3 Wire the gate into direct and integration landing and promotion (D5), and append `no-hold` to `START_PRECONDITIONS` and `PROMOTE_PRECONDITIONS`. Verify with tests:
   - a slot holder before merge gives up the slot, and another change takes it;
   - a running merge and fast-forward settle;
   - a running promotion waits at `held` without the slot, then re-runs its up-to-date step;

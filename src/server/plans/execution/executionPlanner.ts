@@ -281,6 +281,24 @@ export function planSteps(snapshot: ExecutionSnapshot, _now: string): PlanSteps 
       if (round.outcome === 'pass' && change.passedAt !== null) {
         // D13: a passed change lands — conditions first, then the slot, then
         // up to date and the merge.
+        // revision-control 3.3: a held change that holds the slot with no
+        // live landing-kind effect gives the slot up in one guarded
+        // transition and returns to its pre-slot step (`gating`, passed
+        // round kept), so another change can land. A pending, running, or
+        // unknown effect settles first — a merging or updating change left
+        // above — and the hold applies from the next step.
+        if (held && change.state === 'landing') {
+          const landingLive = change.landingEffect !== null
+            && ['pending', 'running', 'unknown'].includes(change.landingEffect.state)
+          if (!landingLive) {
+            steps.transitions.push({
+              executionId: change.executionId, change: change.change,
+              guard: { state: change.state, generation: change.generation },
+              patch: { state: 'gating', step: null },
+            })
+          }
+          continue
+        }
         steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'landing', roundId: round.id, resultId: null })
         continue
       }

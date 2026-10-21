@@ -32,6 +32,7 @@ const ready = (): StartCheckContext => ({
   runningPromotion: null,
   offBaseLandings: [],
   baseBranch: 'master',
+  activeHolds: [],
 })
 
 const check = (name: string, overrides: Partial<StartCheckContext>): string | null => {
@@ -124,11 +125,12 @@ describe('START_PRECONDITIONS', () => {
       landingMode: 'integration-branch',
       runningPromotion: { id: 'promo-1', number: 1, branch: 'wave/int', step: 'ci' },
       offBaseLandings: [{ change: 'api', branch: 'wave/int' }],
+      activeHolds: [{ id: 'h1', scope: 'plan', changes: [] }],
     })
     expect(failures).toEqual([
       'plan-open', 'revision-current', 'validation-current', 'one-execution', 'changes-unclaimed',
       'changes-on-base', 'roles-routable', 'landing-ready', 'landing-mode-supported',
-      'promotion-idle', 'landings-on-base',
+      'promotion-idle', 'landings-on-base', 'no-hold',
     ])
   })
 
@@ -145,12 +147,22 @@ describe('START_PRECONDITIONS', () => {
     expect(check('landings-on-base', { offBaseLandings: [] })).toBeNull()
   })
 
+  test('no-hold: a whole-plan hold is named; a changes-scoped hold passes (revision-control 3.3)', () => {
+    const refusal = check('no-hold', { activeHolds: [{ id: 'h1', scope: 'plan', changes: [] }, { id: 'h2', scope: 'changes', changes: ['api'] }] })
+    expect(refusal).toContain('The plan is on hold: h1')
+    expect(refusal).toContain('Release the hold before starting an execution.')
+    expect(check('no-hold', { activeHolds: [{ id: 'h2', scope: 'changes', changes: ['api'] }] })).toBeNull()
+    expect(check('no-hold', { activeHolds: [] })).toBeNull()
+  })
+
   test('the shipped list is append-only in order (X5): the names D4 pins', () => {
     expect(START_PRECONDITIONS.map(entry => entry.name)).toEqual([
       'plan-open', 'revision-current', 'validation-current', 'start-conditions-resolved', 'strategy-impact',
       'one-execution', 'changes-unclaimed', 'changes-on-base', 'roles-routable', 'landing-ready', 'landing-mode-supported',
       // integration-candidates D8, appended.
       'promotion-idle', 'landings-on-base',
+      // revision-control 3.3, appended.
+      'no-hold',
     ])
   })
 })

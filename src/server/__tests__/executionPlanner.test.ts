@@ -236,4 +236,42 @@ describe('planSteps under holds (revision-control 3.2)', () => {
     const result = withHolds([change('api', 'waiting'), change('web', 'waiting')], [hold('api')])
     expect(result.transitions.map(step => step.change)).toEqual(['web'])
   })
+
+  test("a held slot holder with no live landing effect gives the slot up and keeps its passed round (revision-control 3.3)", () => {
+    const held = change('api', 'landing', {
+      step: 'up-to-date', passedAt: 't', branch: 'api',
+      round: { id: 'round-1', executionId: 'e1', change: 'api', number: 1, attemptId: 'at1', resultId: 'r1', commitSha: 'c1', fixRound: false, pushedAt: 't', outcome: 'pass' } as unknown as PlannedChange['round'],
+      task: { status: 'active', revision: 1, results: [{ id: 'r1', commit: 'c1', taskRevision: 1, submittedBySession: 'dev' }], assignment: null },
+    } as Partial<PlannedChange>)
+    const result = withHolds([held], [hold('api')])
+    expect(result.transitions).toEqual([
+      { executionId: 'e1', change: 'api', guard: { state: 'landing', generation: 0 }, patch: { state: 'gating', step: null } },
+    ])
+    expect(result.stages).toEqual([])
+  })
+
+  test("a held slot holder's pending landing effect settles first: no transition, no stage", () => {
+    const held = change('api', 'landing', {
+      step: 'up-to-date', passedAt: 't', branch: 'api',
+      round: { id: 'round-1', executionId: 'e1', change: 'api', number: 1, attemptId: 'at1', resultId: 'r1', commitSha: 'c1', fixRound: false, pushedAt: 't', outcome: 'pass' } as unknown as PlannedChange['round'],
+      task: { status: 'active', revision: 1, results: [{ id: 'r1', commit: 'c1', taskRevision: 1, submittedBySession: 'dev' }], assignment: null },
+      landingEffect: { id: 'f1', executionId: 'e1', change: 'api', roundId: 'round-1', kind: 'update-branch', effectKey: 'e1:api:landing', command: {}, state: 'pending', tries: 0, nextAt: null, outcome: null, error: null, createdAt: '', startedAt: null, finishedAt: null },
+    } as Partial<PlannedChange>)
+    const result = withHolds([held], [hold('api')])
+    expect(result.transitions).toEqual([])
+    expect(result.stages).toEqual([])
+  })
+
+  test("a held settling change still applies its merge verdict: the landing-outcome stage is emitted", () => {
+    const held = change('api', 'landing', {
+      step: 'merging', passedAt: 't', branch: 'api',
+      round: { id: 'round-1', executionId: 'e1', change: 'api', number: 1, attemptId: 'at1', resultId: 'r1', commitSha: 'c1', fixRound: false, pushedAt: 't', outcome: 'pass' } as unknown as PlannedChange['round'],
+      task: { status: 'active', revision: 1, results: [{ id: 'r1', commit: 'c1', taskRevision: 1, submittedBySession: 'dev' }], assignment: null },
+      landingEffect: { id: 'f1', executionId: 'e1', change: 'api', roundId: 'round-1', kind: 'merge', effectKey: 'e1:api:landing', command: {}, state: 'done', tries: 0, nextAt: null, outcome: { merged: true, mergeCommit: 'm' }, error: null, createdAt: '', startedAt: null, finishedAt: null },
+    } as Partial<PlannedChange>)
+    const result = withHolds([held], [hold('api')])
+    expect(result.stages.map(stage => stage.kind)).toEqual(['landing-outcome'])
+    expect(result.stages[0]).toMatchObject({ change: 'api', effectId: 'f1' })
+    expect(result.transitions).toEqual([])
+  })
 })

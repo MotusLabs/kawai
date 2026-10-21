@@ -124,3 +124,49 @@ describe('PromotionService (5.1, D9)', () => {
     expect([!preview.ok && preview.reason, !promote.ok && promote.reason]).toEqual(['forbidden', 'forbidden'])
   })
 })
+
+describe('PromotionService under holds (revision-control 3.3)', () => {
+  test('Promote carrying a held change is refused naming no-hold, and writes nothing', async () => {
+    const branch = `wave/svc-${n}`
+    const planId = await twoLandings(h, i, p, branch, String(n))
+    try {
+      p.script.activeHolds = [{ id: 'h1', scope: 'changes', changes: [`a${n}`] }]
+      const preview = await p.service.preview(p.human, { planId, branch })
+      expect(preview.ok && preview.preview.failures.map(failure => failure.name)).toContain('no-hold')
+      const outcome = await p.service.promote(p.human, { planId, branch, fromSha: originHead(matrix, branch)!, commandId: `held-${n}` })
+      expect(!outcome.ok && outcome.reason).toBe('precondition')
+      if (!outcome.ok) expect(outcome.message).toContain('Held changes this promotion would carry')
+      expect(i.store.promotionsOf(planId).length).toBe(0)
+    } finally {
+      p.script.activeHolds = []
+    }
+  })
+
+  test('a running promotion under a hold gives up the slot and waits at held; release re-runs up-to-date and merges', async () => {
+    const branch = `wave/svc-${n}`
+    const planId = await twoLandings(h, i, p, branch, String(n))
+    const fromSha = originHead(matrix, branch)!
+    const started = await p.service.promote(p.human, { planId, branch, fromSha, commandId: `go-${n}` })
+    if (!started.ok) throw new Error(started.message)
+    const promotionId = started.promotion.id
+    try {
+      // Hold CI pending on the promotion branch's head (created at fromSha), so the promotion sits at the ci step holding the slot.
+      h.gh.checks.set(fromSha, [{ name: 'ci', source: 'actions', conclusion: 'pending', link: null, runId: 12, startedAt: '2026-10-17T00:00:00.000Z', completedAt: null }])
+      for (let tick = 0; tick < 12 && i.store.promotion(promotionId)!.step !== 'ci'; tick++) await p.tick()
+      expect(i.store.promotion(promotionId)!.step).toBe('ci')
+
+      p.script.activeHolds = [{ id: 'h-plan', scope: 'plan', changes: [] }]
+      for (let tick = 0; tick < 8 && i.store.promotion(promotionId)!.step !== 'held'; tick++) await p.tick()
+      expect(i.store.promotion(promotionId)!.step).toBe('held')
+      expect(h.executions.slot(matrix.world.team.teamId)).toBeNull()
+
+      p.script.activeHolds = []
+      h.gh.checks.delete(fromSha) // release: the floor's green defaults decide CI again
+      for (let tick = 0; tick < 16 && i.store.promotion(promotionId)!.state !== 'finished'; tick++) await p.tick()
+      const finished = i.store.promotion(promotionId)!
+      expect(finished.outcome).toBe('merged')
+    } finally {
+      p.script.activeHolds = []
+    }
+  })
+})

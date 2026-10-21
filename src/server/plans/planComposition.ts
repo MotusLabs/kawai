@@ -304,6 +304,8 @@ export function composePlanServices(options: PlanServicesOptions): {
       },
     },
     identityOf: teamId => identityOrBare(team, teamId),
+    // revision-control 3.3: `no-hold` reads the same active holds as the gate.
+    holds: { active: holdsOf },
     ...(team !== undefined ? {
       tasks: team.tasks,
       wake: (teamId: string) => runtime?.command(teamId),
@@ -321,6 +323,8 @@ export function composePlanServices(options: PlanServicesOptions): {
     ...(options.executionProbe ? { probe: options.executionProbe } : fixture ? { probe: fixturePromotionProbe } : {}),
     ...(options.promotionReads ? { reads: options.promotionReads } : fixture ? { reads: fixturePromotionReads() } : {}),
     ...(fixture ? { adapters: fixturePromotionAdapters(), inspectorReads: fixtureInspectorReads() } : {}),
+    // revision-control 3.3: `no-hold` and the runner's held step read the same holds.
+    holds: { active: holdsOf },
   })
   if (team !== undefined) {
     const roundAdaptersUsed = fixture ? fixtureRoundAdapters() : roundAdapters
