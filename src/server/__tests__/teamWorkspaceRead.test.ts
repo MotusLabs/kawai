@@ -12,10 +12,10 @@ import {
   WorkspaceRead,
   attentionItems,
   memberRows,
-  morningSummary,
   taskRows,
   type AttentionInput,
 } from '../team/workspaceRead'
+import { morningSummary } from '../team/workspaceSummary'
 import type { PendingAcceptance } from '../team/attentionAcceptance'
 import { filterTeamTaskRows } from '../../shared/teamWorkspace'
 
