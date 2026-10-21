@@ -409,7 +409,14 @@ export class PlanService {
     if (!commandId) {
       return { ok: false, reason: 'invalid', result: undefined, message: 'A revision-control command needs a stable command id so a resend replays instead of repeating.' }
     }
-    const payload = revisionControlCommandPayload(event)
+    // The compared payload is canonical (D3); a malformed input — an
+    // unparsable deadline — is an invalid refusal, written nowhere.
+    let payload: CommandPayload
+    try {
+      payload = revisionControlCommandPayload(event)
+    } catch (error) {
+      return { ok: false, reason: 'invalid', result: undefined, message: error instanceof Error ? error.message : 'The command payload is malformed.' }
+    }
     let result: T | undefined
     let ran = false
     const outcome = runPlanCommand(this.store, planId, commandId, payload, () => {

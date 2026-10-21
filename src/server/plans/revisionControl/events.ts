@@ -16,16 +16,26 @@ export type RevisionControlEventInput =
 /**
  * The compared payload of one revision-control kind (revision-control D3):
  * the command name plus its own fields — trimmed prose, sorted change
- * lists, so a resend with a different input order replays.
+ * lists, canonical maps and instants — so a resend that differs only in
+ * spelling replays. A compared payload is canonical before comparison: map
+ * keys sort by key, and a deadline becomes `new Date(x).toISOString()`, an
+ * invalid one refused here rather than stored raw.
  */
 export function revisionControlCommandPayload(event: RevisionControlEventInput): CommandPayload {
   const sorted = (names: string[]): string[] => [...names].sort()
+  const instant = (raw: string): string => {
+    const date = new Date(raw)
+    if (Number.isNaN(date.getTime())) throw new Error(`Invalid deadline: ${JSON.stringify(raw)}`)
+    return date.toISOString()
+  }
+  const keyed = <T>(map: Record<string, T>): Record<string, T> =>
+    Object.fromEntries(Object.entries(map).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
   switch (event.kind) {
     case 'hold-placed':
       return {
         command: 'hold-place', scope: event.scope, changes: sorted(event.changes),
-        rationale: event.rationale.trim(), deadline: event.deadline,
-        ...(event.cites ? { cites: event.cites } : {}),
+        rationale: event.rationale.trim(), deadline: instant(event.deadline),
+        ...(event.cites ? { cites: keyed(event.cites) } : {}),
       }
     case 'hold-released':
       return {
@@ -33,9 +43,9 @@ export function revisionControlCommandPayload(event: RevisionControlEventInput):
         retain: sorted(event.retain), reason: event.reason.trim(),
       }
     case 'hold-extended':
-      return { command: 'hold-extend', holdId: event.holdId, deadline: event.deadline, reason: event.reason.trim() }
+      return { command: 'hold-extend', holdId: event.holdId, deadline: instant(event.deadline), reason: event.reason.trim() }
     case 'pause-requested':
-      return { command: 'pause', holdId: event.holdId, deadline: event.deadline, note: event.note.trim() }
+      return { command: 'pause', holdId: event.holdId, deadline: instant(event.deadline), note: event.note.trim() }
     case 'pause-resolved':
       return {
         command: 'pause-resolve', pauseId: event.pauseId, change: event.change, choice: event.choice,
@@ -44,8 +54,8 @@ export function revisionControlCommandPayload(event: RevisionControlEventInput):
     case 'revision-applied':
       return {
         command: 'revision-apply', executionId: event.executionId, expectedRevision: event.expectedRevision,
-        revision: event.revision, contentHash: event.contentHash, choices: event.choices,
-        adaptations: event.adaptations, rationale: event.rationale.trim(),
+        revision: event.revision, contentHash: event.contentHash, choices: keyed(event.choices),
+        adaptations: keyed(event.adaptations), rationale: event.rationale.trim(),
       }
   }
 }
