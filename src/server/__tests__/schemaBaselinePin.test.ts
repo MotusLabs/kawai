@@ -29,7 +29,9 @@
 // `profile_limit_events.at`; migration 15 (`codex-chat-runtime`) the
 // creation-fixed `runtime` and `codex_home` plus the `transcript_path` on
 // `chat_sessions`; migration 16 (`plan-supervision`) the decision cards,
-// decisions, fix tasks, and stall alerts.
+// decisions, fix tasks, and stall alerts; migration 17 (`worker-choice`)
+// the nullable `worker_choice` on `team_messages` and
+// `team_task_assignments`.
 import { expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { initDatabase } from '../db'
@@ -384,7 +386,10 @@ test('a fresh database opened by this build has the same shape plus each migrati
   const added = { ...migration2, ...migration3, ...migration4, ...migration5, ...migration6, ...migration7, ...migration8, ...migration9, ...migration10, ...migration11, ...migration13, ...migration16 }
   expect(Object.keys(added).filter(table => table in expected.tables)).toEqual([])
   const messages = expected.tables.team_messages!
-  const withProfiles = { ...messages, columns: [...messages.columns, optional('allowed_profiles')] }
+  // Migration 17's: the sender's worker choice (dispatch-worker-choice D1).
+  const withProfiles = { ...messages, columns: [...messages.columns, optional('allowed_profiles'), optional('worker_choice')] }
+  const assignments = expected.tables.team_task_assignments!
+  const withChoice = { ...assignments, columns: [...assignments.columns, optional('worker_choice')] }
   // Migration 10's delta: the chat_sessions exhaustion flags; migration 11's
   // the process-observations tables (in `added` above); migration 12's: limit
   // events record their provider and window (providers-and-workers D7), both
@@ -411,7 +416,7 @@ test('a fresh database opened by this build has the same shape plus each migrati
     indexes: [{ name: 'profile_limit_events_at', unique: 0, columns: ['at'] }, ...limitEvents.indexes],
   }
   expect(schemaShape(session.db)).toEqual({
-    tables: { ...expected.tables, ...added, team_messages: withProfiles, chat_sessions: withFlag, profile_limit_events: withLimitContext },
+    tables: { ...expected.tables, ...added, team_messages: withProfiles, team_task_assignments: withChoice, chat_sessions: withFlag, profile_limit_events: withLimitContext },
   })
   const extra = session.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'").get()
   expect(extra).toEqual({ name: 'schema_migrations' })

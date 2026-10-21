@@ -30,6 +30,7 @@ import { CREATE_TURN_USAGE_SQL } from '../chat/chatTurnUsageStore'
 import { CREATE_PROCESS_REPORT_TABLES_SQL } from '../metrics/reportSchema'
 import { migrateProviderLimitWindow } from '../team/routing/limitEvents'
 import { integrationMigration } from '../plans/landing/integration/integrationSchema'
+import { workerChoiceMigration } from '../team/workerChoiceMigration'
 import { planSupervisionMigration } from '../plans/decisions/decisionSchema'
 import type { BackupFile } from './backupFiles'
 import type { BackupOutcome } from './backups'
@@ -82,6 +83,9 @@ export const MIGRATIONS: readonly Migration[] = [
   // plan-supervision D3: decision cards, decisions, fix and correction tasks,
   // and stall alerts. Additive, no backfill.
   planSupervisionMigration,
+  // dispatch-worker-choice D1: the sender's worker choice on group mail and
+  // on dispatches. Additive, no backfill.
+  workerChoiceMigration,
 ]
 
 export const RESTORE_DOC = 'docs/operations/database-backups.md'

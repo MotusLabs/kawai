@@ -4,7 +4,7 @@
 
 ## 1. Selector and storage
 
-- [ ] 1.1 Add the next numbered migration (the next free number at landing), adding `team_messages.worker_choice` and `team_task_assignments.worker_choice` (nullable). Verify that `schemaBaselinePin.test.ts` gains its expected delta, and that migration tests pass on a copy of a database at the previous version.
+- [x] 1.1 Add the next numbered migration (the next free number at landing), adding `team_messages.worker_choice` and `team_task_assignments.worker_choice` (nullable). Verify that `schemaBaselinePin.test.ts` gains its expected delta, and that migration tests pass on a copy of a database at the previous version.
 - [ ] 1.2 Add a pure worker-selector module: parse and normalize against the catalog (provider; `provider/model`; bare model key → `provider/model`; refusing an ambiguous bare id; one-model provider not ambiguous) and resolve a selector to a group's model keys. Verify with unit tests covering every case in design D1 and the agent-mailbox spec's refusals.
 - [ ] 1.3 Thread `workerChoice` through `MailboxStore.enqueue`, `TeamMessage`, and the assignment store rows. Verify round-trip store tests, and that a `null` choice reads exactly as today.
 
