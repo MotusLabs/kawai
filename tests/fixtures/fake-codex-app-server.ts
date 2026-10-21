@@ -7,6 +7,8 @@
 //
 // FAKE_RUN=<n> picks the run (1-based; the transcript splits on each fresh
 // `initialize` request; default 1). FAKE_TRANSCRIPT overrides the path.
+// Records with a `fake` field (no `dir`) are test doubles: `append` writes a
+// line to a file (the rollout writer's stand-in), `gate` waits for a path.
 // FAKE_EXIT_AFTER_REPLAY=1 exits 0 once the run is replayed; the default
 // stays alive until stdin closes (the driver's end()). FAKE_ENV_NAMES=<file>
 // writes the NAMES of the variables the child received (never a value), so
@@ -17,7 +19,7 @@
 // client's reply with that id; notifications emit in order. A client request
 // whose method does not match the run's recorded sequence fails loudly
 // (exit 2), so a replay drift is a test failure, not a silent mismatch.
-import { writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 // The executable gate's probe (codexExecutable.ts): FAKE_VERSION overrides
@@ -44,6 +46,18 @@ interface Record {
   dir: 'out' | 'in'
   line: string
 }
+/**
+ * Test-double records (never in a recording), told apart by `fake` and
+ * carrying no `dir`: `append` writes a line to a file — standing in for
+ * Codex's rollout writer, never evidence of its timing; without `line` it
+ * writes the rollout user row of the client's latest turn/start input —
+ * and `gate` holds
+ * the run until a path exists. The run splitter and the id correlator skip
+ * them.
+ */
+type FakeRecord = { fake: 'append'; file: string; line?: string } | { fake: 'gate'; path: string }
+type AnyRecord = Record | FakeRecord
+const isFake = (record: AnyRecord): record is FakeRecord => 'fake' in record
 interface Message {
   jsonrpc?: unknown
   id?: unknown
@@ -53,16 +67,15 @@ interface Message {
   error?: unknown
 }
 
-const records: Record[] = (await Bun.file(transcriptPath).text())
+const records: AnyRecord[] = (await Bun.file(transcriptPath).text())
   .split('\n')
   .filter(line => line.trim())
-  .map(line => JSON.parse(line) as Record)
+  .map(line => JSON.parse(line) as AnyRecord)
 
 // Split into runs at each fresh `initialize` the recorded client sent.
-const runs: Array<Record[]> = []
+const runs: Array<AnyRecord[]> = []
 for (const record of records) {
-  const message = JSON.parse(record.line) as Message
-  if (record.dir === 'out' && message.method === 'initialize') runs.push([])
+  if (!isFake(record) && record.dir === 'out' && (JSON.parse(record.line) as Message).method === 'initialize') runs.push([])
   runs.at(-1)!.push(record)
 }
 const run = runs[runNumber - 1]
@@ -71,7 +84,10 @@ if (!run) {
   process.exit(2)
 }
 
-const steps = run.map(record => ({ dir: record.dir, message: JSON.parse(record.line) as Message }))
+type Step = { dir: 'out' | 'in'; message: Message; fake?: undefined } | { dir: 'fake'; message: Message; fake: FakeRecord }
+const steps: Step[] = run.map(record => isFake(record)
+  ? { dir: 'fake' as const, message: {}, fake: record }
+  : { dir: record.dir, message: JSON.parse(record.line) as Message })
 // Only the recorded client REQUESTS (method-bearing): the run's replies to
 // server requests cross stdin without a method and are matched by id.
 const expectedOut = steps
@@ -96,6 +112,14 @@ const waitFor = async (ready: () => boolean) => {
 
 const emit = (message: Message) => process.stdout.write(`${JSON.stringify(message)}\n`)
 
+/** The latest turn/start params, for an `append` record without a line. */
+let lastTurnInput: unknown = null
+const rolloutUserRow = () => {
+  const input = (lastTurnInput as { input?: Array<{ type?: string; text?: string }> } | null)?.input ?? []
+  const content = input.filter(item => item.type === 'text').map(item => ({ type: 'input_text', text: item.text }))
+  return JSON.stringify({ timestamp: new Date().toISOString(), type: 'response_item', payload: { type: 'message', role: 'user', content } })
+}
+
 const onClientLine = (line: string) => {
   if (!line.trim()) return
   const message = JSON.parse(line) as Message
@@ -108,6 +132,7 @@ const onClientLine = (line: string) => {
     if (message.id !== undefined) {
       sentIds.push(message.id)
     }
+    if (message.method === 'turn/start') lastTurnInput = message.params
   } else if (message.id !== undefined) {
     // A reply to a recorded server request; the waiting step consumes it.
     replies.set(message.id, message)
@@ -118,6 +143,11 @@ const onClientLine = (line: string) => {
 let responseOrdinal = 0
 ;(async () => {
   for (const step of steps) {
+    if (step.fake?.fake === 'append') appendFileSync(step.fake.file, `${step.fake.line ?? rolloutUserRow()}\n`)
+    else if (step.fake?.fake === 'gate') {
+      const gate = step.fake.path
+      while (!existsSync(gate)) await Bun.sleep(10)
+    }
     if (step.dir !== 'in') continue
     const message = step.message
     if (message.method !== undefined && message.id !== undefined) {

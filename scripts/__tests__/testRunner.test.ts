@@ -3,9 +3,10 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { isProcDead } from './fixtures/runnerProbe/procState'
+import { buildBunTestArgs } from '../planBatches'
 import {
-  buildBunTestArgs,
   defaultWorkers,
+  effectiveQuota,
   forwardSignalAndReap,
   isOwnerAlive,
   parseCpuQuota,
@@ -65,6 +66,17 @@ describe('defaultWorkers', () => {
     expect(defaultWorkers(16)).toBe(4)
     expect(defaultWorkers(2)).toBe(2)
     expect(defaultWorkers(0)).toBe(1)
+  })
+})
+
+describe('effectiveQuota', () => {
+  test('prefers the cgroup cpu.max over the platform parallelism (F7)', () => {
+    expect(effectiveQuota(() => 2)).toBe(2)
+    expect(effectiveQuota(() => 9)).toBe(9)
+  })
+
+  test('falls back to the platform parallelism when cpu.max is absent', () => {
+    expect(effectiveQuota(() => null)).toBe(os.availableParallelism())
   })
 })
 
@@ -220,6 +232,10 @@ describe('forwardSignalAndReap', () => {
     const gcPid = Number(fs.readFileSync(gcPidFile, 'utf8'))
     await forwardSignalAndReap(child, 'SIGTERM', root, 150)
     expect(await child.exited).toBe(137)
+    // Bounded poll, like runnerRoots: the SIGKILL may take a moment to
+    // retire the grandchild, and a zombie counts as dead (review F6).
+    const deadDeadline = Date.now() + 5_000
+    while (!isProcDead(gcPid) && Date.now() < deadDeadline) await Bun.sleep(50)
     expect(isProcDead(gcPid)).toBe(true)
     expect(fs.existsSync(root)).toBe(false)
   }, 15_000)

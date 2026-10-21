@@ -3,8 +3,10 @@
 // flaky marks, the verdict, each extra check labeled verified by CI or
 // attested by the reviewer, the landing fact flagged when its tree was not
 // verified (and marked promoted once a merged promotion carried it into the
-// target), and the change's effects, expandable.
-import { useState } from 'react'
+// target), and the change's effects, expandable. Its id is where a `plan`
+// attention link with that change scrolls to and focuses (plan-supervision
+// D15).
+import { useEffect, useRef, useState } from 'react'
 import type { ExecutionChangeView, PlanExecutionView } from '@shared/planExecution'
 import { CHANGE_STATE_LABELS, CHANGE_STEP_LABELS } from '@shared/planExecutionProgress'
 
@@ -25,17 +27,25 @@ const waitingLabel = (row: ExecutionChangeView): string | null => {
   }
 }
 
-export default function PlanExecutionChangeRow({ row, execution, promoted = false, onOpenTask }: {
+export default function PlanExecutionChangeRow({ row, execution, promoted = false, onOpenTask, revealed = false }: {
   row: ExecutionChangeView
   execution: PlanExecutionView
   /** A merged promotion carried this change's landing into the target (D11). */
   promoted?: boolean
   onOpenTask: (taskId: string) => void
+  /** The attention link named this change: scroll into view and take focus (plan-supervision D15). */
+  revealed?: boolean
 }) {
   const [effectsOpen, setEffectsOpen] = useState(false)
+  const rowRef = useRef<HTMLLIElement | null>(null)
+  useEffect(() => {
+    if (!revealed) return
+    rowRef.current?.scrollIntoView({ block: 'center' })
+    rowRef.current?.focus()
+  }, [revealed])
   const waiting = waitingLabel(row)
   const round = row.latestRound
-  return <li className="border border-border p-2" data-testid="plan-execution-change">
+  return <li ref={rowRef} id={`plan-change-${row.change}`} tabIndex={-1} className="border border-border p-2" data-testid="plan-execution-change">
     <p className="text-chat-body">
       <span className="font-medium">{row.change}</span>
       {' · '}{CHANGE_STATE_LABELS[row.state]}

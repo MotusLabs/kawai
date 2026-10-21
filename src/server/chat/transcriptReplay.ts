@@ -711,7 +711,8 @@ function replayContent(
   }
 }
 
-function historyUnavailable(
+/** The one "history unavailable" replay (D8: the Codex rollout replay shares it). */
+export function historyUnavailable(
   status: 'missing' | 'unparseable'
 ): TranscriptReplay {
   return {

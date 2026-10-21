@@ -7,6 +7,8 @@ import { afterAll, beforeAll, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import path from 'node:path'
 import { createPlanBench, createPlanWorld, type PlanBench, type PlanWorld } from './planHarness'
+import { HoldService } from '../plans/revisionControl/holdService'
+import { HoldStore } from '../plans/revisionControl/holdStore'
 import { ImpactService } from '../strategy/ImpactService'
 import { ImpactStore } from '../strategy/impactStore'
 import { MailboxStore } from '../team/mailboxStore'
@@ -70,4 +72,27 @@ test('capacity evidence reads the team own groups root, never the .git tail (M2)
   // The user-level leads group resolves through the home dir either way.
   const leads = capacityEvidenceFor({ teamId: `${world.repo}/.git`, groupsRoot: world.repo }, 'leads', reads, world.home)
   expect(leads).toMatchObject({ group: 'leads' })
+})
+
+test('the composition builds HoldService over the real stores (revision-control 3.1)', async () => {
+  bench = createPlanBench(world)
+  const impact = new ImpactService(new ImpactStore(bench.db.db), {
+    strategies: bench.strategies, plans: bench.plans, mail: new MailboxStore(bench.db.db), getSession: id => bench!.records.get(id), homeDir: world.home,
+  })
+  const composed = composePlanServices({
+    db: bench.db.db, plans: bench.plans, strategies: bench.strategies, impact, adapter: fakeAdapter(),
+    getSession: id => bench!.records.get(id), homeDir: world.home,
+  })
+  expect(composed.holds).toBeInstanceOf(HoldService)
+  // Without team services the holds still work: the human places a
+  // plan-scope hold on an open draft plan, and a fresh HoldStore over the
+  // same database reads it back.
+  const { plan } = await composed.plans.create({ kind: 'agent', sessionId: 'lead' }, { title: 'Hold', content: planInput() })
+  const placed = await composed.holds.place(bench.human, {
+    planId: plan.id, scope: 'plan', changes: [], rationale: 'waiting on the review',
+    deadline: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString(), cites: null, commandId: 'hold-compose-1',
+  })
+  if (!placed.ok || placed.result === undefined) throw new Error(placed.ok ? 'the command wrote nothing' : placed.message)
+  expect(placed.replayed).toBe(false)
+  expect(new HoldStore(bench.db.db).forPlan(world.team.teamId, plan.id).map(hold => hold.id)).toEqual([placed.result.hold.id])
 })

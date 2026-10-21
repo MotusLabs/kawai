@@ -18,6 +18,7 @@ import { PlanStore } from '../plans/planStore'
 import { PlanService } from '../plans/PlanService'
 import { StrategyStore } from '../strategy/strategyStore'
 import { ExecutionStore } from '../plans/execution/executionStore'
+import { ExecutionRevisionStore } from '../plans/revisionControl/executionRevisionStore'
 import { ExecutionService } from '../plans/execution/ExecutionService'
 import { directMechanism } from '../plans/landing/directMechanism'
 import { applyIntegrationSchema } from '../plans/landing/integration/integrationSchema'
@@ -134,6 +135,7 @@ esac
     mechanisms,
     promotions: { runningPromotion: planId => integration.runningPromotion(planId) },
     identityOf: () => team,
+    executionRevisions: new ExecutionRevisionStore(db),
     ghOptions: { env },
   }
   service = new ExecutionService(deps)

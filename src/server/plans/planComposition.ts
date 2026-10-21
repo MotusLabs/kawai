@@ -24,6 +24,7 @@ import { ValidationStore } from './validation/validationStore'
 import { ValidationDetailCache } from './validation/validationDetail'
 import { ExecutionStore } from './execution/executionStore'
 import { ExecutionService } from './execution/ExecutionService'
+import { ExecutionRevisionStore } from './revisionControl/executionRevisionStore'
 import { executionOwnership, type ExecutionOwnership } from './execution/executionOwnership'
 import { executionViewReads, executionViews } from './execution/executionView'
 import { ExecutionExecutor } from './execution/executor'
@@ -48,6 +49,8 @@ import type { MailboxStore } from '../team/mailboxStore'
 import type { TeamMailbox } from '../team/TeamMailbox'
 import { DecisionService } from './decisions/DecisionService'
 import { DecisionStore } from './decisions/decisionStore'
+import { HoldService } from './revisionControl/holdService'
+import { HoldStore } from './revisionControl/holdStore'
 import { readPlanSupervisionDetail, type SupervisionDetailReads } from './supervision/planSupervisionDetail'
 import type { SupervisionRuntime } from './supervision/supervisionRead'
 import { composeSupervisionMonitor, type MonitorCompositionOptions } from './supervision/monitorComposition'
@@ -189,6 +192,8 @@ export function composePlanServices(options: PlanServicesOptions): {
   integrationStore: IntegrationStore
   /** The decision service (plan-supervision D4–D7); null without team services. */
   decisions: DecisionService | null
+  /** The owner's hold commands (revision-control 3.1): place, release (whole, by changes, narrowed), extend. */
+  holds: HoldService
   /** The supervision monitor (plan-supervision D11); null without team services' supervision runtime. Started by its owner. */
   monitor: SupervisionMonitor | null
   /** The supervision reads (plan-supervision D13); null without team services' supervision runtime. */
@@ -268,6 +273,8 @@ export function composePlanServices(options: PlanServicesOptions): {
     store: executionStore,
     plansStore: options.plans,
     plans,
+    // revision-control D2: Start records the execution's seq-1 revision.
+    executionRevisions: new ExecutionRevisionStore(options.db),
     validation: options.executionValidation ?? {
       prepareStanding: (planId: string, revision: number) => validation.prepareStanding(planId, revision),
       standing: (prepared: unknown) => validation.standing(prepared as Parameters<ValidationService['standing']>[0]),
@@ -348,6 +355,14 @@ export function composePlanServices(options: PlanServicesOptions): {
     tasks: team.tasks, taskStore: team.taskStore, assignments: team.assignments, mailbox: team.teamMailbox, getSession: options.getSession,
     ...(options.homeDir ? { homeDir: options.homeDir } : {}), onChange: planId => options.plans.announce(planId),
   }) : null
+  // Holds (revision-control 3.1): the owner's place, release (whole, by
+  // changes, or narrowed with retain), and extend — one transaction with the
+  // D3 event, the executor wake after the commit.
+  const holds = new HoldService({
+    holds: new HoldStore(options.db), plans: options.plans, planService: plans,
+    strategies: options.strategies, impact: options.impact.store, decisions: decisionStore,
+    executions: executionStore, wake: teamId => runtime?.command(teamId),
+  })
   let monitor: SupervisionMonitor | null = null
   if (team?.supervision) {
     // The detail and the monitor's sweeps read one loader with the monitor's own `waitEndedAt` (D11).
@@ -370,7 +385,7 @@ export function composePlanServices(options: PlanServicesOptions): {
   }
   return {
     validation, validationStore, plans, validationDetail: new ValidationDetailCache(validation), adapter, executions, executionStore,
-    runtime, decisions, monitor, promotions: promotions.service, integrationStore,
+    runtime, decisions, holds, monitor, promotions: promotions.service, integrationStore,
     // The supervision reads the workspace's plan attention gathers over (plan-supervision D13); null without team services.
     supervisionReads,
   }

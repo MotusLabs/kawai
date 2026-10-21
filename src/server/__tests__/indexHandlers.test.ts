@@ -211,7 +211,12 @@ class SessionRegistryMock {
 
   replaceSessions(sessions: Session[]) {
     this.sessions = sessions
-    replaceSessionsCalls.push(sessions)
+    // Record only the live test's registry: a previous index's late async
+    // work (startup verification, enter refresh) writes its own instance and
+    // must not reach this test's recorded calls.
+    if (this === SessionRegistryMock.instance) {
+      replaceSessionsCalls.push(sessions)
+    }
     this.emit('sessions', sessions)
   }
 
@@ -521,12 +526,22 @@ class SessionRefreshWorkerTimeoutErrorMock extends Error {
 }
 
 class SessionRefreshWorkerClientMock {
+  // Workers of the live test's index only: a previous index's late refresh
+  // runs on its own client and must not append into this test's counts.
+  static instances = new Set<SessionRefreshWorkerClientMock>()
+
+  constructor() {
+    SessionRefreshWorkerClientMock.instances.add(this)
+  }
+
   refresh(
     _managedSession: string,
     _discoverPrefixes: string[],
     options?: { expectedWindowCount?: number }
   ): Promise<Session[]> {
-    refreshWorkerExpectedWindowCounts.push(options?.expectedWindowCount ?? 0)
+    if (SessionRefreshWorkerClientMock.instances.has(this)) {
+      refreshWorkerExpectedWindowCounts.push(options?.expectedWindowCount ?? 0)
+    }
     if (refreshWorkerDeferred) {
       return new Promise<Session[]>((resolve, reject) => {
         refreshWorkerResolve = resolve
@@ -677,6 +692,47 @@ async function loadIndex() {
   }
 }
 
+function startupVerificationCount(): number {
+  return logEntries.filter((entry) => entry.event === 'startup_verification_complete').length
+}
+
+/**
+ * completeStartupVerification() is fire-and-forget (bootstrap.ts) and its
+ * disk IO can still be in flight when a test starts driving the server, so a
+ * baseline captured before it settles can be invalidated by its late
+ * replaceSessions. Each index logs exactly one startup_verification_complete
+ * entry; wait for this import's entry before capturing any baseline.
+ */
+async function waitForStartupVerification(baseline: number): Promise<void> {
+  // 4 s: settled imports return at once, and the bound stays under the raw
+  // `bun test` 5 s per-test default as well as the runner's 20 s.
+  const startedAt = Date.now()
+  while (Date.now() - startedAt < 4000 && startupVerificationCount() <= baseline) {
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+  if (startupVerificationCount() <= baseline) {
+    throw new Error('Timed out waiting for: startup_verification_complete')
+  }
+}
+
+/**
+ * Bounded-poll for the refresh whose payload is the expected outcome — not
+ * merely any new call, which a concurrent path's call can satisfy first.
+ */
+async function waitForReplacedSessions(
+  baseline: number,
+  matches: (sessions: Session[]) => boolean,
+  description: string,
+  timeoutMs = 5000
+): Promise<void> {
+  const startedAt = Date.now()
+  while (Date.now() - startedAt < timeoutMs) {
+    if (replaceSessionsCalls.slice(baseline).some(matches)) return
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+  throw new Error(`Timed out waiting for: ${description}`)
+}
+
 beforeEach(() => {
   // The full schema (baseline plus every migration), as initDatabase leaves it.
   mailboxDb = schemaDb()
@@ -694,6 +750,7 @@ beforeEach(() => {
   lastUserMessageWorkerError = null
   lastUserMessageWorkerMessage = null
   SessionRegistryMock.instance = null
+  SessionRefreshWorkerClientMock.instances = new Set()
   resetDbState()
   Object.assign(configState, defaultConfig)
   sessionManagerState = {
@@ -1981,11 +2038,13 @@ describe('server message handlers', () => {
       return [freshSession]
     }
 
+    const settledVerifications = startupVerificationCount()
     const { serveOptions } = await loadIndex()
     const { ws } = createWs()
     const websocket = serveOptions.websocket
     if (!websocket) throw new Error('WebSocket handlers not configured')
 
+    await waitForStartupVerification(settledVerifications)
     const baselineReplaceCalls = replaceSessionsCalls.length
     refreshWorkerError = new SessionRefreshWorkerTimeoutErrorMock()
     websocket.message?.(ws as never, JSON.stringify({ type: 'session-refresh' }))
@@ -1997,11 +2056,12 @@ describe('server message handlers', () => {
 
     refreshWorkerSessions = [freshSession]
     websocket.message?.(ws as never, JSON.stringify({ type: 'session-refresh' }))
-    for (let i = 0; i < 50 && replaceSessionsCalls.length === baselineReplaceCalls; i++) {
-      await new Promise((resolve) => setTimeout(resolve, 10))
-    }
+    await waitForReplacedSessions(
+      baselineReplaceCalls,
+      (sessions) => sessions.length === 1 && sessions[0].id === freshSession.id,
+      'the recovered refresh applying [freshSession]'
+    )
 
-    expect(replaceSessionsCalls.length).toBeGreaterThan(baselineReplaceCalls)
     expect(replaceSessionsCalls.at(-1)).toEqual([freshSession])
     expect(refreshWorkerExpectedWindowCounts[1]).toBeGreaterThan(
       refreshWorkerExpectedWindowCounts[0] ?? 0
@@ -2015,7 +2075,9 @@ describe('server message handlers', () => {
       return { canPruneWsSessions: true }
     }
 
+    const settledVerifications = startupVerificationCount()
     const { serveOptions } = await loadIndex()
+    await waitForStartupVerification(settledVerifications)
     const startupEnsureCalls = ensureCalls
     const { ws } = createWs()
     const websocket = serveOptions.websocket
@@ -2023,10 +2085,14 @@ describe('server message handlers', () => {
 
     refreshWorkerSessions = [baseSession]
     websocket.message?.(ws as never, JSON.stringify({ type: 'session-refresh' }))
-    for (let i = 0; i < 50 && ensureCalls === startupEnsureCalls; i++) {
-      await new Promise((resolve) => setTimeout(resolve, 10))
+    // Wait for the live index's worker refresh (ensureSession runs before it),
+    // not for any ensureSession growth a previous index's late work could add.
+    const ensureStartedAt = Date.now()
+    while (Date.now() - ensureStartedAt < 5000 && refreshWorkerExpectedWindowCounts.length === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 5))
     }
 
+    expect(refreshWorkerExpectedWindowCounts.length).toBeGreaterThan(0)
     expect(ensureCalls).toBeGreaterThan(startupEnsureCalls)
     expect(refreshWorkerExpectedWindowCounts).toHaveLength(1)
   })
@@ -2038,6 +2104,7 @@ describe('server message handlers', () => {
       name: 'refreshed',
     }
 
+    const settledVerifications = startupVerificationCount()
     const { serveOptions, registryInstance } = await loadIndex()
     registryInstance.sessions = [baseSession]
 
@@ -2055,6 +2122,7 @@ describe('server message handlers', () => {
       'Session refresh worker timed out'
     )
 
+    await waitForStartupVerification(settledVerifications)
     const baselineReplaceCalls = replaceSessionsCalls.length
 
     websocket.message?.(
@@ -2066,11 +2134,12 @@ describe('server message handlers', () => {
       })
     )
 
-    for (let i = 0; i < 50 && replaceSessionsCalls.length === baselineReplaceCalls; i++) {
-      await new Promise((resolve) => setTimeout(resolve, 10))
-    }
+    await waitForReplacedSessions(
+      baselineReplaceCalls,
+      (sessions) => sessions.length === 1 && sessions[0].id === refreshedSession.id,
+      'the queued refresh applying [refreshedSession]'
+    )
 
-    expect(replaceSessionsCalls.length).toBeGreaterThan(baselineReplaceCalls)
     expect(replaceSessionsCalls.at(-1)).toEqual([refreshedSession])
   })
 
@@ -2824,6 +2893,7 @@ describe('server message handlers', () => {
   test('does not drop optimistically created remote session on refresh before poller updates', async () => {
     configState.remoteAllowControl = true
     configState.remoteHosts = ['remote-host']
+    const settledVerifications = startupVerificationCount()
     const { serveOptions, registryInstance } = await loadIndex()
     sessionManagerState.listWindows = () => []
 
@@ -2862,14 +2932,16 @@ describe('server message handlers', () => {
     const createdId = 'remote:remote-host:agentboard:@5'
     expect(registryInstance.sessions.some((s) => s.id === createdId)).toBe(true)
 
+    await waitForStartupVerification(settledVerifications)
     const baselineReplaceCalls = replaceSessionsCalls.length
     websocket.message?.(ws as never, JSON.stringify({ type: 'session-refresh' }))
 
-    for (let i = 0; i < 100 && replaceSessionsCalls.length === baselineReplaceCalls; i++) {
-      await new Promise((r) => setTimeout(r, 5))
-    }
+    await waitForReplacedSessions(
+      baselineReplaceCalls,
+      (sessions) => sessions.some((s) => s.id === createdId),
+      'the refresh preserving the created remote session'
+    )
 
-    expect(replaceSessionsCalls.length).toBeGreaterThan(baselineReplaceCalls)
     expect(registryInstance.sessions.some((s) => s.id === createdId)).toBe(true)
   })
 
@@ -2898,6 +2970,7 @@ describe('server message handlers', () => {
       } as ReturnType<typeof Bun.spawnSync>
     }) as typeof Bun.spawnSync
 
+    const settledVerifications = startupVerificationCount()
     const { serveOptions, registryInstance } = await loadIndex()
     sessionManagerState.listWindows = () => []
     await new Promise((r) => setTimeout(r, 0)) // allow initial remote poll to populate snapshot
@@ -2930,13 +3003,15 @@ describe('server message handlers', () => {
       false
     )
 
+    await waitForStartupVerification(settledVerifications)
     const baselineReplaceCalls = replaceSessionsCalls.length
     websocket.message?.(ws as never, JSON.stringify({ type: 'session-refresh' }))
-    for (let i = 0; i < 100 && replaceSessionsCalls.length === baselineReplaceCalls; i++) {
-      await new Promise((r) => setTimeout(r, 5))
-    }
+    await waitForReplacedSessions(
+      baselineReplaceCalls,
+      (sessions) => !sessions.some((s) => s.id === remoteSession.id),
+      'the refresh keeping the killed remote session gone'
+    )
 
-    expect(replaceSessionsCalls.length).toBeGreaterThan(baselineReplaceCalls)
     expect(registryInstance.sessions.some((s) => s.id === remoteSession.id)).toBe(
       false
     )
@@ -2967,6 +3042,7 @@ describe('server message handlers', () => {
       } as ReturnType<typeof Bun.spawnSync>
     }) as typeof Bun.spawnSync
 
+    const settledVerifications = startupVerificationCount()
     const { serveOptions, registryInstance } = await loadIndex()
     sessionManagerState.listWindows = () => []
     await new Promise((r) => setTimeout(r, 0))
@@ -3002,13 +3078,16 @@ describe('server message handlers', () => {
 
     expect(registryInstance.get(remoteSession.id)?.name).toBe('new-name')
 
+    await waitForStartupVerification(settledVerifications)
     const baselineReplaceCalls = replaceSessionsCalls.length
     websocket.message?.(ws as never, JSON.stringify({ type: 'session-refresh' }))
-    for (let i = 0; i < 100 && replaceSessionsCalls.length === baselineReplaceCalls; i++) {
-      await new Promise((r) => setTimeout(r, 5))
-    }
+    await waitForReplacedSessions(
+      baselineReplaceCalls,
+      (sessions) =>
+        sessions.some((s) => s.id === remoteSession.id && s.name === 'new-name'),
+      'the refresh keeping the renamed remote session'
+    )
 
-    expect(replaceSessionsCalls.length).toBeGreaterThan(baselineReplaceCalls)
     expect(registryInstance.get(remoteSession.id)?.name).toBe('new-name')
   })
 

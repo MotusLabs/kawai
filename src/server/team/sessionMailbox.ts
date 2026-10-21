@@ -18,7 +18,7 @@ import { SessionTeams } from './sessionTeams'
 import { TeamMailbox } from './TeamMailbox'
 import { MailboxStore } from './mailboxStore'
 import { MailDispatcher, type MailRecipient, type PassOutcome } from './dispatcher'
-import { reconcileMailbox, transcriptReceipt } from './receipt'
+import { reconcileMailbox, transcriptReceipt, type Receipt } from './receipt'
 import { TaskStore } from './taskStore'
 import { TaskService } from './TaskService'
 import { MemberRelease, type ArchiveResult } from './memberRelease'
@@ -100,6 +100,8 @@ export class SessionMailbox {
     /** User-level team caps; tests inject their own home. */
     caps?: TeamCaps
     transcriptFor: (id: string) => string | null
+    /** A session's receipt for a message (a Codex chat reads its rollouts); default: its transcriptFor file. */
+    receiptFor?: (id: string, messageId: string) => Receipt
     homeDir?: string
     onChange?: (team: string, message?: TeamMessage) => void
     /** A team's waiting reasons structurally changed: re-publish its snapshot (D3). */
@@ -474,7 +476,7 @@ export class SessionMailbox {
   /** Start only after persisted chat records are restored; dispatch is held until then. */
   start() {
     const store = this.mailbox.store
-    reconcileMailbox(store, this.options.transcriptFor)
+    reconcileMailbox(store, this.options.transcriptFor, (id, messageId) => this.receipt(id, messageId))
     this.staffing.reconcile()
     for (const team of store.teamsWithQueuedMail()) {
       for (const mail of store.listForTeam(team)) {
@@ -495,9 +497,13 @@ export class SessionMailbox {
     void this.rules.reload().then(() => this.dispatcher.notify(), this.options.onError)
   }
 
+  private receipt(id: string, messageId: string): Receipt {
+    return this.options.receiptFor?.(id, messageId) ?? transcriptReceipt(this.options.transcriptFor(id), messageId)
+  }
+
   private settle(mail: TeamMessage) {
     const store = this.mailbox.store
-    if (mail.claimedBy && transcriptReceipt(this.options.transcriptFor(mail.claimedBy), mail.id) === 'found') store.markDelivered(mail.id)
+    if (mail.claimedBy && this.receipt(mail.claimedBy, mail.id) === 'found') store.markDelivered(mail.id)
     else store.holdUncertain(mail.id, 'receipt-unconfirmed-after-delivery')
   }
 

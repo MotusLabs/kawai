@@ -101,7 +101,7 @@ import { MessageFeed } from '../team/messageFeed'
 import { MessageQuery } from '../team/messageQuery'
 import { ChatTurnEndStore } from './chatTurnEndStore'
 import { TeamMailbox } from '../team/TeamMailbox'
-import { createMailboxServer } from '../team/mailboxTools'
+import { createMailboxServer, teamToolTable, type MailboxServerServices } from '../team/mailboxTools'
 import { composeExecutionCore, composePlanServices } from '../plans/planComposition'
 import type { ValidationService } from '../plans/validation/ValidationService'
 import type { DecisionService } from '../plans/decisions/DecisionService'
@@ -115,7 +115,8 @@ import { ImpactService } from '../strategy/ImpactService'
 import { ImpactStore } from '../strategy/impactStore'
 import type { TeamMessage, TeamWorktreeOccupancy, WaitingReason } from '../../shared/team'
 import { MailDispatcher } from '../team/dispatcher'
-import { receiptMessageId } from '../team/receipt'
+import { codexReceiptMessageId, receiptMessageId, transcriptReceipt } from '../team/receipt'
+import { codexRolloutReceipt } from '../team/codexReceipt'
 import type { LimitEventStore } from '../team/routing/limitEvents'
 import { sessionCooldown } from '../team/cooldowns'
 import { supervisionRuntime } from '../plans/supervision/supervisionRuntime'
@@ -148,6 +149,7 @@ import {
   replayTranscriptFileAsync,
   type TranscriptReplay,
 } from './transcriptReplay'
+import { canRetryCodexMemo, replayCodexRollout, replayCodexRolloutAsync } from './codex/codexRollout'
 import { watchTranscriptTitle, type TranscriptTitleWatcher } from './transcriptTitleWatcher'
 
 export type { ChatQueryFactory }
@@ -539,6 +541,12 @@ export class ChatSessionManager {
   }
   private readonly snapshotHistory = new Map<string, ChatEvent[]>()
   private readonly liveEvents = new Map<string, ChatEvent[]>()
+  /**
+   * Sessions whose memo is a Codex "history unavailable" notice (D8, M3):
+   * the rollout may still appear, so the memo is retried on a later load —
+   * but only while no live turn could be duplicated by the re-read.
+   */
+  private readonly retryableHistory = new Set<string>()
   /** In-flight async history loads, deduped per session (design D3). */
   private readonly historyLoads = new Map<string, Promise<void>>()
   /** Boot restore chain; chat-attach awaits it via whenRestored (design D2). */
@@ -929,9 +937,27 @@ export class ChatSessionManager {
 
   private captureHistory(sessionId: string): void {
     if (!this.records.has(sessionId)) return
-    if (!this.snapshotHistory.has(sessionId)) {
-      this.snapshotHistory.set(sessionId, this.getHistory(sessionId)?.events ?? [])
+    if (this.snapshotHistory.has(sessionId)) {
+      if (!this.canRetryCodexHistory(sessionId)) return
+      this.snapshotHistory.delete(sessionId)
+      this.retryableHistory.delete(sessionId)
     }
+    const record = this.records.get(sessionId)!
+    const replay = this.getHistory(sessionId)
+    this.snapshotHistory.set(sessionId, replay?.events ?? [])
+    if (record.runtime === 'codex' && replay && replay.status !== 'ok') this.retryableHistory.add(sessionId)
+  }
+
+  /**
+   * Whether a retryable Codex history memo may be dropped for a retry now
+   * (D8, M3): only while `liveEvents` is empty. The memo is taken before a
+   * driver start, so everything the agent appends afterwards is also in
+   * `liveEvents`; a re-read after live turns began would replay those same
+   * turns and duplicate them. The retry therefore waits for a load with no
+   * live events (before the first turn, or after a restart).
+   */
+  private canRetryCodexHistory(sessionId: string): boolean {
+    return canRetryCodexMemo(this.retryableHistory.has(sessionId), (this.liveEvents.get(sessionId) ?? []).length)
   }
 
   /**
@@ -953,13 +979,37 @@ export class ChatSessionManager {
    * must capture before a driver starts without an await (D4).
    */
   async loadHistory(sessionId: string): Promise<void> {
-    if (!this.records.has(sessionId) || this.snapshotHistory.has(sessionId)) return
+    if (!this.records.has(sessionId)) return
+    if (this.snapshotHistory.has(sessionId) && !this.canRetryCodexHistory(sessionId)) return
     const inFlight = this.historyLoads.get(sessionId)
     if (inFlight) return inFlight
     const load = (async () => {
       const record = this.records.get(sessionId)
-      if (!record || this.snapshotHistory.has(sessionId)) return
-      if (record.sdkSessionId) {
+      if (!record) return
+      if (this.snapshotHistory.has(sessionId) && !this.canRetryCodexHistory(sessionId)) return
+      if (this.snapshotHistory.has(sessionId)) {
+        // A retryable Codex notice memo: drop it for this load's retry. The
+        // guard above held it while live events existed (D8, M3).
+        this.snapshotHistory.delete(sessionId)
+        this.retryableHistory.delete(sessionId)
+      }
+      if (record.runtime === 'codex') {
+        // A Codex chat's transcript is the rollout its start reported
+        // (codex-chat-sessions D8, M3) — the one replay source, never a
+        // Claude `<id>.jsonl`. A chat that never started has no rollout and
+        // replays as empty, like a Claude session without an SDK id.
+        if (!record.sdkSessionId && !record.transcriptPath) {
+          if (this.records.has(sessionId) && !this.snapshotHistory.has(sessionId)) {
+            this.snapshotHistory.set(sessionId, [])
+          }
+          return
+        }
+        const replay = await replayCodexRolloutAsync(record.transcriptPath)
+        if (this.records.has(sessionId) && !this.snapshotHistory.has(sessionId)) {
+          this.snapshotHistory.set(sessionId, replay.events)
+          if (replay.status !== 'ok') this.retryableHistory.add(sessionId)
+        }
+      } else if (record.sdkSessionId) {
         const replay = await replayTranscriptFileAsync(
           await findTranscriptPathAsync(record.sdkSessionId),
           { excludeToolCallIds: this.liveToolCallIds(sessionId) }
@@ -1096,7 +1146,15 @@ export class ChatSessionManager {
       },
       // Sync discovery is fine here: a per-event lookup, not the boot path
       // (async-transcript-parsing design D4).
-      transcriptFor: id => { const sdkId = this.records.get(id)?.sdkSessionId; return sdkId ? findTranscriptPath(sdkId) : null },
+      transcriptFor: id => this.receiptTranscript(id),
+      // A Codex chat's receipts are its rollouts' user messages (D8), read
+      // over every rollout file of its thread (PR D decision 2, M1–M2).
+      receiptFor: (id, messageId) => {
+        const record = this.records.get(id)
+        return record?.runtime === 'codex'
+          ? codexRolloutReceipt({ transcriptPath: record.transcriptPath, codexHome: record.codexHome, threadId: record.sdkSessionId }, messageId)
+          : transcriptReceipt(this.receiptTranscript(id), messageId)
+      },
       onChange: options.onMailboxChange,
       onReasonsChange: options.onWaitingReasonsChange,
       // The router reads the profile's provider plan report (D14: a profile
@@ -1436,6 +1494,15 @@ export class ChatSessionManager {
     if (!record) return { events: [], readable: true }
     const memo = this.snapshotHistory.get(sessionId)
     if (memo) return { events: [...memo, ...(this.liveEvents.get(sessionId) ?? [])], readable: true }
+    if (record.runtime === 'codex') {
+      // The rollout is the one replay source (D8, M3); a never-started chat
+      // has no rollout and searches its live events alone.
+      if (!record.sdkSessionId && !record.transcriptPath) return { events: [...(this.liveEvents.get(sessionId) ?? [])], readable: true }
+      const replay = await replayCodexRolloutAsync(record.transcriptPath)
+      const live = this.liveEvents.get(sessionId) ?? []
+      if (replay.status !== 'ok') return { events: [...live], readable: false }
+      return { events: [...replay.events, ...live], readable: true }
+    }
     if (!record.sdkSessionId) return { events: [...(this.liveEvents.get(sessionId) ?? [])], readable: true }
     const replay = await replayTranscriptFileAsync(
       await findTranscriptPathAsync(record.sdkSessionId),
@@ -1712,6 +1779,14 @@ export class ChatSessionManager {
   getHistory(sessionId: string): TranscriptReplay | null {
     const record = this.records.get(sessionId)
     if (!record) return null
+    if (record.runtime === 'codex') {
+      // A Codex chat's transcript is the rollout its start reported
+      // (codex-chat-sessions D8, M3) — the one replay source, never a Claude
+      // `<id>.jsonl`. A chat that never started has no rollout and replays
+      // as empty.
+      if (!record.sdkSessionId && !record.transcriptPath) return { status: 'ok', events: [], cwd: null }
+      return replayCodexRollout(record.transcriptPath)
+    }
     if (!record.sdkSessionId) {
       return { status: 'ok', events: [], cwd: null }
     }
@@ -1991,6 +2066,7 @@ export class ChatSessionManager {
     this.mailbox.store.deadLetterDirectTo(sessionId, 'killed-recipient')
     this.dispatcher.notify()
     this.snapshotHistory.delete(sessionId)
+    this.retryableHistory.delete(sessionId)
     this.liveEvents.delete(sessionId)
     this.activities.delete(sessionId)
     this.contextReadings.delete(sessionId)
@@ -2333,12 +2409,10 @@ export class ChatSessionManager {
     if (this.titleWatchers.has(sessionId)) return
     const record = this.records.get(sessionId)
     if (!record || record.archivedAt != null || !record.sdkSessionId) return
-    // A Codex thread has no Claude transcript; its rollout replay and
-    // receipts arrive with codex-chat-sessions §6.
-    if (record.runtime === 'codex') return
-    // Sync discovery acceptable: a per-attach watcher setup, not the boot
-    // path (async-transcript-parsing design D4).
-    const filePath = findTranscriptPath(record.sdkSessionId)
+    // A Codex chat's tail follows its rollout for receipts only: its name
+    // is Kawai's, so the title half is skipped (codex-chat-sessions D8).
+    const codex = record.runtime === 'codex'
+    const filePath = this.receiptTranscript(sessionId)
     if (!filePath) {
       const base = this.options.titleLocateIntervalMs ?? 2_000
       const timer = setTimeout(
@@ -2352,17 +2426,32 @@ export class ChatSessionManager {
       this.titleWatchers.set(sessionId, { close: () => clearTimeout(timer) })
       return
     }
+    const parse = codex ? codexReceiptMessageId : receiptMessageId
     const watcher: TranscriptTitleWatcher = watchTranscriptTitle(
       filePath,
-      (title, source) => this.applyTranscriptTitle(sessionId, title, source),
+      (title, source) => { if (!codex) this.applyTranscriptTitle(sessionId, title, source) },
       line => {
-        const id = receiptMessageId(line)
+        const id = parse(line)
         if (!id) return
         const message = this.mailbox.store.get(id)
         if (message?.claimedBy === sessionId) this.mailbox.store.markDelivered(id)
       }
     )
     this.titleWatchers.set(sessionId, watcher)
+  }
+
+  /**
+   * The file a session's mail receipts are read from: a Codex chat's stored
+   * rollout (`transcript_path`, D8), else the Claude transcript found by
+   * its SDK id. Sync discovery is fine: a per-event lookup, not the boot
+   * path (async-transcript-parsing design D4).
+   */
+  private receiptTranscript(sessionId: string): string | null {
+    const record = this.records.get(sessionId)
+    if (!record?.sdkSessionId) return null
+    // A missing file reads null either way: uncertain for a receipt, retried by the tail.
+    if (record.runtime === 'codex') return record.transcriptPath && existsSync(record.transcriptPath) ? record.transcriptPath : null
+    return findTranscriptPath(record.sdkSessionId)
   }
 
   /** Stop following a session's transcript (kill, archive, shutdown). */
@@ -2436,11 +2525,13 @@ export class ChatSessionManager {
       const queryFactory = codex ? null : await this.resolveQueryFactory()
       // The team must be known before the first spawn reads its prompt.
       await this.teams.track(record.sessionId, this.records.get(record.sessionId)?.projectPath ?? record.projectPath)
-      const teamMcpServer = codex ? null : await createMailboxServer(this.mailbox, record.sessionId, {
+      // Both runtimes build their team tools from one table (D6).
+      const teamServices: MailboxServerServices = {
         tasks: this.tasks, results: this.results, strategies: this.strategies, plans: this.plans, validation: this.validation, ...(this.decisions ? { decisions: this.decisions } : {}), releases: this.teamMail.releases, management: this.management,
         metrics: { teamOf: id => this.teams.teamOf(id)?.teamId ?? null, reader: this.metrics },
         reports: { caller: id => this.reportCaller(id), service: this.reports },
-      })
+      }
+      const teamMcpServer = codex ? null : await createMailboxServer(this.mailbox, record.sessionId, teamServices)
       // The options both runtimes share: identity, the audit observer, the
       // prompt/effort/policy readers, and every output callback.
       const shared: ChatDriverSharedOptions = {
@@ -2552,6 +2643,7 @@ export class ChatSessionManager {
               wire: wire ?? { record: () => {} },
               // The catalog at the chat's path names the credentials (D3).
               withheldCredentials: withheldCredentialNamesAt(this.catalogCtx(record.projectPath)),
+              teamTools: teamToolTable(this.mailbox, record.sessionId, teamServices),
               ...(record.sdkSessionId ? { resumeThreadId: record.sdkSessionId } : {}),
             },
           })
@@ -3359,6 +3451,12 @@ export class ChatSessionManager {
     // The first SDK session id makes a transcript followable: start the
     // title tail for the now-live conversation (design D4).
     if (patch.sdkSessionId !== undefined) {
+      this.watchSessionTitle(sessionId)
+    }
+    // A Codex rollout path that is new or moved (D8): the receipt tail
+    // follows the stored file from now on.
+    if (patch.transcriptPath !== undefined && patch.transcriptPath !== record.transcriptPath) {
+      this.releaseTitleWatch(sessionId)
       this.watchSessionTitle(sessionId)
     }
     // A moved cwd may leave the team (another repository); re-resolve.
