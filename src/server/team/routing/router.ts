@@ -129,7 +129,8 @@ export class ProfileRouter implements GroupRouter {
         ? [{ sessionId: entry.alternative.sessionId, kind: 'worker-choice' as const, detail: workerChoice!.selector }]
         : [])
       const breakdown = choiceExclusions.length > 0 ? { ...view, exclusions: [...(view.exclusions ?? []), ...choiceExclusions] } : view
-      const diagnosis = diagnoseNone(routeGroup, spawn, breakdown)
+      // A choice waits on its own workers' caps, never on a filtered-out one's (D5).
+      const diagnosis = diagnoseNone(routeGroup, spawn, breakdown, workerChoice ? new Set(workerChoice.profiles) : null)
       // The choice names itself beside the capacity it waits on (D5).
       if (workerChoice) diagnosis.push({ kind: 'worker-choice', detail: workerChoice.selector })
       return { kind: 'none', diagnosis }
@@ -321,11 +322,15 @@ function routingHold(until: number | null, reason?: string): WaitingConstraint {
  * reported, and the dispatcher's member breakdown. Caps lead — group, then
  * per-profile, then team spawn, then worktree occupancy — then member
  * facts, then spawn specifics; `orderConstraints` fixes the final order.
+ * Under a worker choice only the chosen profiles' caps are listed.
  */
-function diagnoseNone(group: RouteGroup, spawn: SpawnContext | null, view: RouteView): WaitingConstraint[] {
+function diagnoseNone(
+  group: RouteGroup, spawn: SpawnContext | null, view: RouteView, chosenProfiles: ReadonlySet<string> | null,
+): WaitingConstraint[] {
   const constraints: WaitingConstraint[] = []
   if (group.live >= group.max) constraints.push({ kind: 'group-cap', counts: { live: group.live, cap: group.max } })
   for (const profile of group.profiles) {
+    if (chosenProfiles && !chosenProfiles.has(profile.profileId)) continue
     if (profile.cap !== undefined && profile.live >= profile.cap) {
       constraints.push({ kind: 'profile-cap', counts: { live: profile.live, cap: profile.cap }, detail: profile.profileId })
     }
