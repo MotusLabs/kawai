@@ -23,6 +23,7 @@ import { TeamWorktrees } from '../team/worktreeRoots'
 import { WorktreeStaffing } from '../team/staffing'
 import { TeamCaps } from '../team/teamCaps'
 import { ExecutionStore } from '../plans/execution/executionStore'
+import { landingAdapters as realLandingAdapters } from '../plans/execution/executionLanding'
 import { executionOwnership } from '../plans/execution/executionOwnership'
 import { ExecutionExecutor } from '../plans/execution/executor'
 import { provisionAdapter } from '../plans/execution/executionProvision'
@@ -42,8 +43,11 @@ let executor: ExecutionExecutor
 let holds: HoldService
 let gitRoot: string
 let origin: string
-let baseSha: string
 let ghStub: { checkRuns: string; statuses: string; pulls: string; created: string; reruns: number[] }
+/** Landing reads fail while latched: a change stops after taking the slot. */
+let failLsRemote = false
+/** The head the stubbed merge merged, for prView's MERGED answer. */
+let mergedHead: string | null = null
 
 function git(args: string[], cwd?: string) {
   const result = spawnSync('git', args, { cwd, encoding: 'utf8', env: cleanGitEnv() })
@@ -55,13 +59,17 @@ const commitAll = (cwd: string, message: string) => {
   git(['-c', 'user.email=t@e', '-c', 'user.name=T', 'commit', '-q', '-m', message], cwd)
 }
 
-async function approvedExecution(changes: string[], maxParallel = 2): Promise<{ executionId: string; planId: string }> {
+async function approvedExecution(changes: string[], maxParallel = 2, baseCommit?: string): Promise<{ executionId: string; planId: string }> {
   for (const change of changes) {
     fs.mkdirSync(path.join(world.repo, 'openspec', 'changes', change), { recursive: true })
     fs.writeFileSync(path.join(world.repo, 'openspec', 'changes', change, 'proposal.md'), `# ${change}\n`)
   }
   commitAll(world.repo, 'change')
   git(['push', '-q', 'origin', 'master'], world.repo)
+  // The base defaults to origin's head after the push: the change branches
+  // (provisioned from it) contain the base, so landing merges instead of
+  // updating the branch through gh.
+  const base = baseCommit ?? git(['rev-parse', 'origin/master'], world.repo).trim()
   const { planId, revision, hash } = await bench.draftInReview({
     changes: changes.map(change => ({ change, dependsOn: [], group: 'middle-devs', acceptance: [], extraChecks: [], guidance: '' })),
     // The plan's review group; the fixture role narrows middle-devs to default.
@@ -70,7 +78,7 @@ async function approvedExecution(changes: string[], maxParallel = 2): Promise<{ 
   await bench.approve(planId, revision)
   const executionId = executions.insertExecution({
     teamId: world.team.teamId, planId, revision, contentHash: hash, reportId: 'r', inputHash: 'i',
-    landingMode: 'direct', baseBranch: 'master', baseCommit: baseSha,
+    landingMode: 'direct', baseBranch: 'master', baseCommit: base,
     floor: { version: 1, map: { lint: ['ci'], typecheck: ['ci'], 'unit-tests': ['ci'], 'ci-e2e': ['e2e'] } },
     maxParallel, mergeMethod: 'merge', changes: changes.map(change => ({ change, landed: false })),
   }).id
@@ -126,7 +134,6 @@ beforeAll(async () => {
   commitAll(world.repo, 'seed')
   git(['remote', 'add', 'origin', origin], world.repo)
   git(['push', '-q', 'origin', 'master'], world.repo)
-  baseSha = git(['rev-parse', 'master'], origin).trim()
 })
 afterAll(() => {
   fs.rmSync(world.root, { recursive: true, force: true })
@@ -135,6 +142,8 @@ afterAll(() => {
 
 beforeEach(() => {
   bench?.db.close()
+  failLsRemote = false
+  mergedHead = null
   bench = createPlanBench(world)
   // A reviewer session of the reviewers group.
   bench.records.set('rev1', { sessionId: 'rev1', groupId: 'reviewers', projectPath: world.feature, name: 'rev1', sdkSessionId: null, status: 'waiting', createdAt: '', lastActivityAt: '' })
@@ -166,6 +175,25 @@ beforeEach(() => {
     records: () => bench.records.values(),
     teamOf: id => (id === world.team.teamId ? world.team : undefined),
     adapters: { provision: provisionAdapter(executions) },
+    // The real landing reads, except the lsRemoteHead stub the slot test
+    // latches (a change stops after taking the slot), and a merge that
+    // merges on GitHub: prMerge succeeds and prView reads MERGED with a
+    // merge commit (its tree check then records treeVerified false).
+    landingAdapters: {
+      ...realLandingAdapters,
+      lsRemoteHead: async (cwd: string, ref: string, remote?: string) => {
+        if (failLsRemote) return { ok: false as const, error: { argv: ['git', 'ls-remote'], exitCode: 128, stderr: 'stubbed for the hold test' } }
+        return realLandingAdapters.lsRemoteHead(cwd, ref, remote)
+      },
+      prMerge: async (_repo: string, _pr: number, _method: 'merge' | 'squash' | 'rebase', head: string) => {
+        mergedHead = head
+        return { ok: true as const, data: null }
+      },
+      prView: async (_repo: string, pr: number) => ({
+        ok: true as const,
+        data: { number: pr, url: `https://example.internal/pr/${pr}`, state: 'MERGED' as const, headRefOid: mergedHead ?? '', mergeCommit: `merged-${pr}` },
+      }),
+    },
     holds: {
       active: (teamId, planId) => new HoldStore(bench.db.db).active(teamId, planId).map(hold => ({ id: hold.id, scope: hold.scope, changes: hold.changes })),
       openTargets: () => [],
@@ -327,6 +355,95 @@ describe('the hold gate at the executor (revision-control 3.2)', () => {
     // The open round's pipeline advanced under the hold (decisions run); the
     // release dispatched nothing for it.
     expect(executions.change(executionId, 'hold-e')!.state).toBe('gating')
+  })
+
+  test("a task revision published under a hold supersedes the round and owes the fix; the release dispatches it once", async () => {
+    const { executionId, planId } = await approvedExecution(['hold-rev'])
+    const { row } = await implementStage(executionId, 'hold-rev', 'v1')
+    ghStub.pulls = '[]'
+    passCi()
+    executor.wake(world.team.teamId)
+    await executor.idle()
+    const assignmentsBefore = tasks.store.assignmentsOf(row.taskId!).length
+
+    // D9's revision fix (revision-control 3.2): the revision is published
+    // under the hold — the round is superseded, the change returns to
+    // implementing, and the fix attempt exists — the decision runs — but
+    // the handoff never goes out.
+    const hold = placeHold(planId, 'changes', ['hold-rev'], 'hold-rev-1')
+    await executor.idle()
+    await tasks.amend(bench.human, row.taskId!, { direction: 'Do it differently now', rationale: 'scope changed' })
+    executor.wake(world.team.teamId)
+    await executor.idle()
+
+    expect(executions.rounds(executionId, 'hold-rev').at(-1)!.outcome).toBe('superseded')
+    expect(executions.attempts(executionId, 'hold-rev').at(-1)!.kind).toBe('fix')
+    expect(executions.change(executionId, 'hold-rev')!.state).toBe('implementing')
+    expect(tasks.store.assignmentsOf(row.taskId!).length).toBe(assignmentsBefore)
+
+    // The release dispatches the owed fix exactly once, naming the revision.
+    releaseHold(planId, hold.id)
+    await executor.idle()
+    const dispatched = tasks.store.assignmentsOf(row.taskId!)
+    expect(dispatched.length).toBe(assignmentsBefore + 1)
+    expect(dispatched.at(-1)!.instruction).toContain('revision 2')
+    executor.wake(world.team.teamId)
+    await executor.idle()
+    expect(tasks.store.assignmentsOf(row.taskId!).length).toBe(assignmentsBefore + 1)
+  })
+})
+
+// The hold gate at the landing slot (revision-control 3.3): a held slot
+// holder with no live landing effect gives the slot up, a sibling takes
+// it and lands, and the release lands the held change after it.
+describe('the hold gate at the landing slot (revision-control 3.3)', () => {
+  test('a held slot holder gives the slot up and a sibling takes it and lands; the release lands the held change after it', async () => {
+    // The execution starts from origin's head after its own push (the
+    // approvedExecution default), so the branches contain the base and
+    // landing merges instead of updating through gh.
+    const { executionId, planId } = await approvedExecution(['hold-slot', 'free-slot'])
+    await implementStage(executionId, 'hold-slot', 'a')
+    await implementStage(executionId, 'free-slot', 'b')
+    ghStub.pulls = '[]'
+    passCi()
+    executor.wake(world.team.teamId)
+    await executor.idle()
+    // Both reviews pass.
+    for (const name of ['hold-slot', 'free-slot']) {
+      const row = executions.change(executionId, name)!
+      const round = executions.rounds(executionId, name).at(-1)!
+      const review = tasks.store.assignmentsOf(row.taskId!).find(entry => entry.id === round.reviewAssignmentId)!
+      deliverToReviewer(review.messageId!, 'rev1')
+      await results.submitFindings(bench.agent('rev1'), row.taskId!, { resultId: round.resultId, kind: 'review', verdict: 'pass', findings: 'checked' })
+    }
+    // Both reviews pass; the landing-read latch is armed first, so the
+    // wake decides the rounds and leaves hold-slot standing at the slot
+    // with no live landing effect while free-slot waits for it.
+    failLsRemote = true
+    executor.wake(world.team.teamId)
+    await executor.idle()
+    expect(executions.change(executionId, 'hold-slot')!).toMatchObject({ state: 'landing', step: 'up-to-date' })
+    expect(executions.change(executionId, 'hold-slot')!.passedAt).not.toBeNull()
+    expect(executions.slot(world.team.teamId)).toMatchObject({ holderKind: 'change', holderId: `${executionId}:hold-slot` })
+    expect(executions.change(executionId, 'free-slot')!.step).toBe('awaiting-slot')
+
+    // The hold gives the slot up; the latch lifts first, so free-slot takes
+    // the freed slot and lands.
+    failLsRemote = false
+    const hold = placeHold(planId, 'changes', ['hold-slot'], 'hold-slot-1')
+    await executor.idle()
+    const released = executions.change(executionId, 'hold-slot')!
+    expect(released).toMatchObject({ state: 'gating', step: null })
+    expect(released.passedAt).not.toBeNull()
+    expect(executions.rounds(executionId, 'hold-slot').at(-1)!.outcome).toBe('pass')
+    expect(executions.change(executionId, 'free-slot')!.state).toBe('landed')
+    expect(executions.slot(world.team.teamId)).toBeNull()
+
+    // The release resumes hold-slot at its passed round: it takes the freed
+    // slot and lands too.
+    releaseHold(planId, hold.id)
+    await executor.idle()
+    expect(executions.change(executionId, 'hold-slot')!.state).toBe('landed')
   })
 })
 
