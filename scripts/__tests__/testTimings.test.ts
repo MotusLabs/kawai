@@ -4,11 +4,14 @@ import os from 'node:os'
 import path from 'node:path'
 import {
   TIMINGS_FILE_NAME,
+  formatMisplacedReport,
+  misplacedFiles,
   parseTimingsRecord,
   publishTimingsSnapshot,
   readTimingsSeed,
   seedTimingsSnapshot,
 } from '../testTimings'
+import { isSlowTierFile } from '../planBatches'
 
 function makeRecordsDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'timings-records-'))
@@ -186,4 +189,50 @@ describe('publishTimingsSnapshot', () => {
     fs.rmSync(dir, { recursive: true, force: true })
     fs.rmSync(runRoot, { recursive: true, force: true })
   }, 20_000)
+})
+
+describe('misplacedFiles', () => {
+  const files = {
+    './src/server/__tests__/bigMatrix.test.ts': 19_900,
+    './src/server/__tests__/listed.test.ts': 12_000,
+    './src/server/__tests__/quick.test.ts': 4_999,
+    './src/server/__tests__/teamTasks.integration.test.ts': 30_000,
+    './src/server/__tests__/integration.test.ts': 30_000,
+  }
+
+  test('a slow unlisted file outside the tier is reported; a slow listed one is not', () => {
+    const misplaced = misplacedFiles({
+      files,
+      isSlowTier: isSlowTierFile,
+      exceptions: [{ file: 'src/server/__tests__/listed.test.ts', reason: 'a matrix whose assertions need its size' }],
+    })
+    expect(misplaced).toEqual([{ file: 'src/server/__tests__/bigMatrix.test.ts', ms: 19_900 }])
+  })
+
+  test('a file at or under 5 s is not, and tier files never are', () => {
+    const misplaced = misplacedFiles({ files, isSlowTier: isSlowTierFile })
+    expect(misplaced.map((entry) => entry.file)).toEqual([
+      'src/server/__tests__/bigMatrix.test.ts',
+      'src/server/__tests__/listed.test.ts',
+    ])
+  })
+
+  test('the exception matches by basename whatever the key spelling', () => {
+    const misplaced = misplacedFiles({
+      files: { 'bigMatrix.test.ts': 19_900 },
+      isSlowTier: isSlowTierFile,
+      exceptions: [{ file: 'src/server/__tests__/bigMatrix.test.ts', reason: 'listed' }],
+    })
+    expect(misplaced).toEqual([])
+  })
+
+  test('the report formats dispositions, or a quiet confirmation', () => {
+    const lines = formatMisplacedReport([{ file: 'src/server/__tests__/bigMatrix.test.ts', ms: 19_900 }])
+    expect(lines[0]).toContain('1 file(s) over 5 s')
+    expect(lines[1]).toContain('19.9 s')
+    expect(lines[1]).toContain('bigMatrix.test.ts')
+    expect(formatMisplacedReport([])).toEqual([
+      '[test-runner] timings: no file over 5 s sits outside the slow tier',
+    ])
+  })
 })

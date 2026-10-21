@@ -4,7 +4,13 @@
 // test` child with --preload — gives each test file fresh directories for
 // the four runner-provided variables beneath that root. Every child also
 // gets a 20 s default per-test timeout: per-file isolation pays cold-start
-// costs the shared process used to amortize. Stale run roots from killed
+// costs the shared process used to amortize. `--skip-slow` (design D7)
+// excludes the slow tier — every `*.integration.test.ts` file plus the
+// real-tmux files — from the run; by default both tiers run. After a full
+// run the runner records per-file durations to
+// <git-common-dir>/kawai-checks/timings.json, feeds the record back with
+// --timings so the slowest files start first, and reports files the record
+// shows over 5 s outside the slow tier. Stale run roots from killed
 // runs are swept at startup, and SIGINT/SIGTERM are forwarded to the
 // child's whole process group before the root is removed after a bounded
 // kill; a finished batch's leftover processes are killed before the next
@@ -14,8 +20,10 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { recordsDir } from './lib/checkRecords'
-import { REAL_TMUX_FILES, isRealTmuxFile, planBatches } from './planBatches'
+import { REAL_TMUX_FILES, isRealTmuxFile, isSlowTierFile, planBatches } from './planBatches'
 import {
+  formatMisplacedReport,
+  misplacedFiles,
   publishTimingsSnapshot,
   readTimingsSeed,
   seedTimingsSnapshot,
@@ -34,6 +42,7 @@ interface RunnerChild {
 
 interface RunArgs {
   skipRealTmux: boolean
+  skipSlowTier: boolean
   fileArgs: string[]
   passthrough: string[]
 }
@@ -44,11 +53,13 @@ interface RunArgs {
 export function parseRunArgs(args: string[]): RunArgs {
   const parsed: RunArgs = {
     skipRealTmux: false,
+    skipSlowTier: false,
     fileArgs: [],
     passthrough: [],
   }
   for (const arg of args) {
     if (arg === '--skip-real-tmux') parsed.skipRealTmux = true
+    else if (arg === '--skip-slow') parsed.skipSlowTier = true
     else if (arg.endsWith('.test.ts') || arg.endsWith('.test.tsx')) parsed.fileArgs.push(arg)
     else parsed.passthrough.push(arg)
   }
@@ -421,17 +432,23 @@ async function main() {
       serialFiles,
       passthrough: args.passthrough,
       skipRealTmux: args.skipRealTmux,
+      skipSlowTier: args.skipSlowTier,
       mainLabel,
       timingsPath: timingsSnapshot ?? undefined,
       updateTimings: timingsSnapshot !== null,
     })) {
       await runCommand(batch.cmd, env, batch.label)
       // The main batch wrote the fresh snapshot (--update-timings). Publish
-      // it now — a later serial batch failing must not lose it.
+      // it now — a later serial batch failing must not lose it — and report
+      // files the record shows over 5 s outside the slow tier (D7).
       if (timingsSnapshot !== null && !published) {
         published = true
         try {
-          publishTimingsSnapshot(recordsDir(process.cwd()), timingsSnapshot)
+          const record = publishTimingsSnapshot(recordsDir(process.cwd()), timingsSnapshot)
+          if (record !== null) {
+            const misplaced = misplacedFiles({ files: record.files, isSlowTier: isSlowTierFile })
+            for (const line of formatMisplacedReport(misplaced)) console.log(line)
+          }
         } catch (error) {
           console.error(`[test-runner] timings record not published: ${String(error)}`)
         }

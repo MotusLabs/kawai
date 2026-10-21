@@ -17,7 +17,13 @@ bun run check      # lint + typecheck + tests, cached by content
 directories and runs files with per-file isolation; a bare `bun test` keeps
 the old shared-process mode. Non-tmux files run in one parallel `bun test`
 step, and the real-tmux files serially after it (`--skip-real-tmux` skips
-them). The default is 4 workers, overridable with `KAWAI_TEST_WORKERS` —
+them). `--skip-slow` runs neither tier — no `*.integration.test.ts` file and
+no real-tmux file; by default both tiers run. After a full run the runner
+records per-file durations to `<git-common-dir>/kawai-checks/timings.json`
+(atomic rename), and the next full run reads that record with `--timings`,
+so the slowest files start first; a missing or malformed record runs
+unordered, and a filtered run (`bun run test <file…>` or `-t`) never
+overwrites the record. The default is 4 workers, overridable with `KAWAI_TEST_WORKERS` —
 measured as the largest count whose peak process-tree memory stayed within
 one serial run's, and capped at the cgroup CPU quota (`cpu.max`, else the
 platform parallelism). `bun run test <file…>` runs just those test

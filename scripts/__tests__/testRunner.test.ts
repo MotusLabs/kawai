@@ -26,6 +26,11 @@ describe('parseRunArgs', () => {
     expect(parsed.fileArgs).toEqual(['a.test.ts', 'deep/b.test.tsx'])
     expect(parsed.passthrough).toEqual(['--coverage'])
   })
+
+  test('recognizes --skip-slow (4.3, D7)', () => {
+    expect(parseRunArgs(['--skip-slow']).skipSlowTier).toBe(true)
+    expect(parseRunArgs([]).skipSlowTier).toBe(false)
+  })
 })
 
 describe('hasTestNameFilter', () => {

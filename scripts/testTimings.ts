@@ -104,3 +104,53 @@ export function publishTimingsSnapshot(
   fs.renameSync(temporary, final)
   return { version: 1, files }
 }
+
+// --- the misplaced-file report (design D7) ---
+
+export const SLOW_TIER_THRESHOLD_MS = 5_000
+
+// Files over the threshold that stay outside the slow tier on purpose. Each
+// entry carries its reason; the report matches by basename, so a path's
+// spelling never hides an exception.
+export const SLOW_TIER_EXCEPTIONS: ReadonlyArray<{ file: string; reason: string }> = []
+
+export interface MisplacedFile {
+  file: string
+  ms: number
+}
+
+// Files over the threshold outside the slow tier that no exception lists.
+// Keys are normalized (a leading './' stripped) and matched by basename.
+export function misplacedFiles(options: {
+  files: Record<string, number>
+  isSlowTier: (file: string) => boolean
+  exceptions?: ReadonlyArray<{ file: string; reason: string }>
+  thresholdMs?: number
+}): MisplacedFile[] {
+  const thresholdMs = options.thresholdMs ?? SLOW_TIER_THRESHOLD_MS
+  const listed = new Set(
+    (options.exceptions ?? SLOW_TIER_EXCEPTIONS).map((exception) => path.basename(exception.file))
+  )
+  const misplaced: MisplacedFile[] = []
+  for (const [key, ms] of Object.entries(options.files)) {
+    const file = key.startsWith('./') ? key.slice(2) : key
+    if (ms <= thresholdMs) continue
+    if (options.isSlowTier(file)) continue
+    if (listed.has(path.basename(file))) continue
+    misplaced.push({ file, ms })
+  }
+  misplaced.sort((a, b) => b.ms - a.ms)
+  return misplaced
+}
+
+// The lines the runner prints after a published full run: the dispositions
+// when files need one, a quiet confirmation when the tier is honest.
+export function formatMisplacedReport(misplaced: MisplacedFile[]): string[] {
+  if (misplaced.length === 0) {
+    return ['[test-runner] timings: no file over 5 s sits outside the slow tier']
+  }
+  return [
+    `[test-runner] timings: ${misplaced.length} file(s) over 5 s outside the slow tier — rename to *.integration.test.ts or list in SLOW_TIER_EXCEPTIONS:`,
+    ...misplaced.map((entry) => `  ${(entry.ms / 1000).toFixed(1)} s  ${entry.file}`),
+  ]
+}
