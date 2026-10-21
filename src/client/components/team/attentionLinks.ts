@@ -14,9 +14,13 @@ const LINK_LABELS: Record<AttentionLink['kind'], string> = {
   message: 'Open message',
   chat: 'Open chat',
   audit: 'Open audit row',
+  plan: 'Open plan',
 }
 
-export const attentionLinkLabel = (link: AttentionLink): string => LINK_LABELS[link.kind] ?? 'Open'
+export const attentionLinkLabel = (link: AttentionLink): string =>
+  // A decision card carrying its plan opens the plan until the Plans view
+  // scrolls to the card (plan-supervision D13; PR E's 10.5).
+  link.kind === 'card' && link.planId ? 'Open plan' : LINK_LABELS[link.kind] ?? 'Open'
 
 export function openAttentionLink(
   teamKey: string,
@@ -36,12 +40,26 @@ export function openAttentionLink(
       return
     }
     case 'chat':
+      openParticipantChat(link.id)
+      return
     case 'card':
+      // A decision card opens its plan when it names one (plan-supervision
+      // D13); scrolling to the card arrives with the Plans view's own
+      // sources. A session-shaped card keeps its chat.
+      if (link.planId) {
+        navigate({ teamKey, tab: 'plans', id: link.planId })
+        return
+      }
       openParticipantChat(link.id)
       return
     case 'audit':
       // The Audit tab, on the linked call when one is named (execution-safety-recovery D10).
       navigate(link.id ? { teamKey, tab: 'audit', id: link.id } : { teamKey, tab: 'audit' })
+      return
+    case 'plan':
+      // The Plans tab's plan detail (plan-supervision D13); scrolling to the
+      // change or card arrives with the Plans view's own sources.
+      navigate({ teamKey, tab: 'plans', id: link.planId ?? link.id })
       return
   }
 }

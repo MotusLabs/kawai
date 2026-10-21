@@ -20,7 +20,8 @@ const bucket = { items: [] }
 const snapshot = (attention: AttentionItem[]): TeamWorkspaceSnapshot => ({
   tasks: [], attention, members: [], directory: [],
   summary: { since: '2026-10-14T00:00:00.000Z', completedResults: bucket, capacityWaits: bucket, approvals: bucket,
-    uncertainDeliveries: bucket, finishedTurnsWithoutResult: bucket, outbound: bucket },
+    uncertainDeliveries: bucket, finishedTurnsWithoutResult: bucket, outbound: bucket,
+    landings: bucket, stops: bucket, stallAlerts: bucket, decisions: bucket, overrides: bucket },
 })
 
 const snapshotMessage = (attention: AttentionItem[], type: 'team-workspace-snapshot' | 'team-workspace' = 'team-workspace-snapshot', teamPath = '/repo'): ServerMessage =>
