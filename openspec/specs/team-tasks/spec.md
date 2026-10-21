@@ -159,7 +159,7 @@ Every change of a task's status SHALL append one durable row naming the task, th
 - **THEN** no transition is recorded
 
 ### Requirement: Kawai creates the tasks of a plan execution
-A plan execution SHALL create its tasks with Kawai as the creator, shown as "Kawai", never as the human or an agent session. Kawai SHALL be a creator only through a plan execution, and SHALL close its tasks under the existing closing rights. A Kawai task SHALL link to the plan change of the execution's revision, even when a later approved revision no longer names that change.
+A plan execution SHALL create its tasks with Kawai as the creator, shown as "Kawai", never as the human or an agent session. Kawai SHALL be a creator only through a plan execution, an owner's decision override, or a failed promotion, and SHALL close its tasks under the existing closing rights. An execution's task SHALL link to the plan change of the execution's revision, even when a later approved revision no longer names that change. A fix or correction task SHALL link to no plan change.
 
 #### Scenario: Kawai's task in the task list
 - **WHEN** an execution provisions change `api`
@@ -172,6 +172,10 @@ A plan execution SHALL create its tasks with Kawai as the creator, shown as "Kaw
 #### Scenario: An agent cannot close Kawai's task
 - **WHEN** a dev sets the task Kawai created for its change to `done`
 - **THEN** the tool returns an error, as for any task it did not create, and the status is unchanged
+
+#### Scenario: Kawai's fix task for an override
+- **WHEN** the owner overrides a Lead decision on a plan whose Lead role is `lead`
+- **THEN** the task list shows a fix task created by Kawai, linked to no plan change, with its instruction dispatched to `lead`
 
 ### Requirement: Only Kawai links tasks to a running execution's changes
 While a running execution owns a change, creating another task linked to that change SHALL be refused for the human and for agents, naming the execution. Links to other changes SHALL follow the plan-change link rules unchanged.
