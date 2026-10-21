@@ -262,7 +262,9 @@ describe('compared payload table (D3)', () => {
         const first = plans.recordRevisionControlEvent(planId, base, within)
         expect(first.ok).toBe(true)
         const refused = plans.recordRevisionControlEvent(planId, different, within)
-        expect(!refused.ok && refused.reason === 'payload' && refused.message.includes(field)).toBe(true)
+        // planCommands.ts names the field as `different ${field};` — the bare
+        // field name is vacuous: every command id in this table contains it.
+        expect(!refused.ok && refused.reason === 'payload' && refused.message.includes(`different ${field};`)).toBe(true)
         if (equivalent) {
           const replay = plans.recordRevisionControlEvent(planId, equivalent, within)
           expect(replay.ok && replay.replayed).toBe(true)
