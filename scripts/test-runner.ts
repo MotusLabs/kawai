@@ -13,30 +13,12 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-
-// These spawn real servers, PTYs, and tmux clients. They still need process
-// isolation from global Bun.* mocks, but running them under coverage on
-// Linux CI can stall PTY attach readiness.
-const REAL_TMUX_FILES = new Set([
-  'copy-mode-async.integration.test.ts',
-  'output-coalescing.integration.test.ts',
-  'double-attach.integration.test.ts',
-  'hibernation.integration.test.ts',
-  'integration.test.ts',
-  'throttled-reconnect.integration.test.ts',
-  'chatRename.integration.test.ts',
-])
+import { REAL_TMUX_FILES, isRealTmuxFile, planBatches } from './planBatches'
 
 const RUN_ROOT_PREFIX = 'agentboard-tests-'
-const PRELOAD_ARG = 'scripts/test-preload.ts'
 const OWNER_MARKER = 'owner.json'
 const KILL_GRACE_MS = 10_000
 const UNMARKED_ROOT_MAX_AGE_MS = 24 * 60 * 60 * 1000
-// Per-file isolation pays cold module compilation and per-test database
-// backups inside hook/test time; the shared-process runner amortized those,
-// so tests that fit 5 s there need a larger default here (design D1).
-// Tests keep any explicit per-test timeout.
-const DEFAULT_TEST_TIMEOUT_MS = 20_000
 
 interface RunnerChild {
   pid: number
@@ -94,9 +76,9 @@ export function readCpuQuota(): number | null {
 }
 
 // The cap: the cgroup CPU quota where one is set, else the platform's
-// reported parallelism (2.3).
-export function effectiveQuota(): number {
-  return readCpuQuota() ?? os.availableParallelism()
+// reported parallelism (2.3). The reader is injectable for tests (review F7).
+export function effectiveQuota(readQuota: () => number | null = readCpuQuota): number {
+  return readQuota() ?? os.availableParallelism()
 }
 
 // The effective default: the measured count, never above the workspace's
@@ -206,31 +188,6 @@ export function sweepStaleRoots(tmpDir: string = os.tmpdir(), now: number = Date
 
 // --- child handling ---
 
-export function buildBunTestArgs(options: {
-  workers: number
-  files: string[]
-  passthrough: string[]
-}): string[] {
-  // --parallel is passed even for 1: it implies --isolate, the per-file
-  // isolation the suite now relies on (decision D-c). Leaving it out would
-  // restore the shared-global batch.
-  const args = [
-    `--parallel=${options.workers}`,
-    `--timeout=${DEFAULT_TEST_TIMEOUT_MS}`,
-    '--preload',
-    PRELOAD_ARG,
-  ]
-  args.push(...options.passthrough, ...options.files.map(toTestFilePath))
-  return args
-}
-
-// Bun treats a relative path outside the bunfig test root as a filter unless
-// it is './'-prefixed; absolute and dot-prefixed forms always read as paths.
-function toTestFilePath(file: string): string {
-  if (file.startsWith('/') || file.startsWith('./') || file.startsWith('../')) return file
-  return `./${file}`
-}
-
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
 // Sends a signal to the child's whole process group: every bun test worker
@@ -290,7 +247,7 @@ async function collectFiles(): Promise<{
   const serverTests: string[] = []
   const serverGlob = new Bun.Glob('src/server/__tests__/*.test.ts')
   for await (const file of serverGlob.scan({ onlyFiles: true })) {
-    if (!REAL_TMUX_FILES.has(path.basename(file))) {
+    if (!isRealTmuxFile(file)) {
       serverTests.push(file)
     }
   }
@@ -323,7 +280,7 @@ function resolveFileArgs(fileArgs: string[]): { parallel: string[]; realTmux: st
     if (!fs.existsSync(asPath)) {
       throw new Error(`Test file not found: ${arg}`)
     }
-    if (REAL_TMUX_FILES.has(path.basename(asPath))) realTmux.push(asPath)
+    if (isRealTmuxFile(asPath)) realTmux.push(asPath)
     else parallel.push(asPath)
   }
   return { parallel, realTmux }
@@ -332,6 +289,12 @@ function resolveFileArgs(fileArgs: string[]): { parallel: string[]; realTmux: st
 let currentChild: RunnerChild | null = null
 
 async function runCommand(cmd: string[], env: NodeJS.ProcessEnv, batch: string) {
+  // A handled signal owns the exit (decision D-g): its handler reaps the
+  // current child and process.exit()s. Spawning a further batch first would
+  // orphan it, so the loop stops here instead (review F5).
+  if (signalHandled) {
+    throw new Error(`Signal handled; not starting batch: ${batch}`)
+  }
   // detached: the child leads its own process group, so the group kills in
   // forwardSignalAndReap and below reach its workers and every process a
   // test spawned (decision D-g).
@@ -405,67 +368,29 @@ async function main() {
 
   try {
     writeOwnerMarker(runRoot)
+    let mainFiles: string[]
+    let serialFiles: string[]
+    let mainLabel: string
     if (args.fileArgs.length > 0) {
-      const { parallel, realTmux } = resolveFileArgs(args.fileArgs)
-      if (parallel.length > 0) {
-        await runCommand(
-          ['bun', 'test', ...buildBunTestArgs({ workers, files: parallel, passthrough: args.passthrough })],
-          env,
-          'explicit files'
-        )
-      }
-      if (!args.skipRealTmux) {
-        for (const file of realTmux) {
-          await runCommand(
-            [
-              'bun',
-              'test',
-              '--preload',
-              PRELOAD_ARG,
-              `--timeout=${DEFAULT_TEST_TIMEOUT_MS}`,
-              ...stripCoverageArgs(args.passthrough),
-              toTestFilePath(file),
-            ],
-            env,
-            `real-tmux: ${file}`
-          )
-        }
-      }
-      return
+      const resolved = resolveFileArgs(args.fileArgs)
+      mainFiles = resolved.parallel
+      serialFiles = resolved.realTmux
+      mainLabel = 'explicit files'
+    } else {
+      const { serverTests, clientTests, runnerTests } = await collectFiles()
+      mainFiles = [...serverTests, ...runnerTests, 'src/shared/__tests__', ...clientTests]
+      serialFiles = [...REAL_TMUX_FILES].map((file) => `src/server/__tests__/${file}`)
+      mainLabel = 'main batch'
     }
-
-    const { serverTests, clientTests, runnerTests } = await collectFiles()
-    await runCommand(
-      [
-        'bun',
-        'test',
-        ...buildBunTestArgs({
-          workers,
-          files: [...serverTests, ...runnerTests, 'src/shared/__tests__', ...clientTests],
-          passthrough: args.passthrough,
-        }),
-      ],
-      env,
-      'main batch'
-    )
-
-    if (!args.skipRealTmux) {
-      const argsWithoutCoverage = stripCoverageArgs(args.passthrough)
-      for (const file of REAL_TMUX_FILES) {
-        await runCommand(
-          [
-            'bun',
-            'test',
-            '--preload',
-            PRELOAD_ARG,
-            `--timeout=${DEFAULT_TEST_TIMEOUT_MS}`,
-            ...argsWithoutCoverage,
-            `src/server/__tests__/${file}`,
-          ],
-          env,
-          `real-tmux: ${file}`
-        )
-      }
+    for (const batch of planBatches({
+      workers,
+      mainFiles,
+      serialFiles,
+      passthrough: args.passthrough,
+      skipRealTmux: args.skipRealTmux,
+      mainLabel,
+    })) {
+      await runCommand(batch.cmd, env, batch.label)
     }
   } finally {
     fs.rmSync(runRoot, { recursive: true, force: true })
@@ -479,20 +404,4 @@ if (import.meta.main) {
     if (!signalHandled) console.error(error)
     process.exit(signalExitCode)
   })
-}
-
-function stripCoverageArgs(args: string[]) {
-  const stripped: string[] = []
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index]
-    if (arg === '--coverage') continue
-    if (arg.startsWith('--coverage=')) continue
-    if (arg.startsWith('--coverage-reporter=')) continue
-    if (arg === '--coverage-reporter') {
-      index += 1
-      continue
-    }
-    stripped.push(arg)
-  }
-  return stripped
 }

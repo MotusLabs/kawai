@@ -29,7 +29,9 @@
 // `profile_limit_events.at`; migration 15 (`codex-chat-runtime`) the
 // creation-fixed `runtime` and `codex_home` plus the `transcript_path` on
 // `chat_sessions`; migration 16 (`plan-supervision`) the decision cards,
-// decisions, fix tasks, and stall alerts.
+// decisions, fix tasks, and stall alerts; migration 17
+// (`revision-control`) the hold, pause, checkpoint, and execution-revision
+// tables.
 import { expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { initDatabase } from '../db'
@@ -379,9 +381,66 @@ const migration16: SchemaShape['tables'] = {
   },
 }
 
+/** Migration 17's delta: holds and their change rows, pauses and their targets, checkpoints, and the execution revision history (revision-control D2). */
+const migration17: SchemaShape['tables'] = {
+  plan_holds: {
+    columns: [
+      id, ...['team_id', 'plan_id', 'scope', 'rationale', 'deadline'].map(name => column(name)),
+      optional('cites_kind'), optional('cites_id'), column('created_at'), column('command_id'),
+      optional('released_at'), optional('release_reason'), optional('release_command_id'),
+    ],
+    indexes: [{ name: 'plan_holds_active', unique: 0, columns: ['plan_id'] }],
+  },
+  plan_hold_changes: {
+    columns: [keyPart('hold_id', 1), keyPart('change', 2), optional('released_at'), optional('release_command_id')],
+    indexes: [],
+  },
+  plan_pauses: {
+    columns: [
+      id, ...['team_id', 'plan_id', 'execution_id', 'hold_id', 'deadline'].map(name => column(name)),
+      optional('note'), column('created_at'), column('command_id'), optional('closed_at'),
+    ],
+    indexes: [],
+  },
+  plan_pause_targets: {
+    columns: [
+      keyPart('pause_id', 1), keyPart('change', 2), column('stage'), optional('attempt_id'),
+      column('assignment_id'), optional('holder_session'), optional('message_id'), counter('withdrawn', '0'),
+      optional('paused_at'), optional('checkpoint_id'), optional('decision'), optional('decision_detail_json'),
+      optional('decided_at'), optional('decision_command_id'),
+    ],
+    indexes: [],
+  },
+  plan_checkpoints: {
+    columns: [
+      id, ...['execution_id', 'change', 'pause_id'].map(name => column(name)), optional('attempt_id'),
+      column('session_id'), column('kind'), optional('commit_sha'), optional('baseline_commit'),
+      optional('manifest_hash'), optional('result_id'), column('summary'), optional('unfinished'),
+      optional('errors_tests'), column('next_steps'), optional('effect_id'), optional('superseded_by'),
+      column('created_at'),
+    ],
+    indexes: [],
+  },
+  plan_execution_revisions: {
+    columns: [
+      keyPart('execution_id', 1), { ...integer('seq'), pk: 2 }, integer('revision'), column('content_hash'),
+      column('report_id'), column('input_hash'), optional('rationale'), optional('command_id'),
+      optional('payload_json'), column('applied_at'),
+    ],
+    indexes: [],
+  },
+  plan_execution_publication_changes: {
+    columns: [
+      keyPart('execution_id', 1), { ...integer('seq'), pk: 2 }, keyPart('change', 3), column('class'),
+      optional('choice'), optional('fields_json'), optional('task_id'), optionalInteger('task_revision'),
+    ],
+    indexes: [],
+  },
+}
+
 test('a fresh database opened by this build has the same shape plus each migration\'s delta and schema_migrations', () => {
   const session = initDatabase({ path: ':memory:' })
-  const added = { ...migration2, ...migration3, ...migration4, ...migration5, ...migration6, ...migration7, ...migration8, ...migration9, ...migration10, ...migration11, ...migration13, ...migration16 }
+  const added = { ...migration2, ...migration3, ...migration4, ...migration5, ...migration6, ...migration7, ...migration8, ...migration9, ...migration10, ...migration11, ...migration13, ...migration16, ...migration17 }
   expect(Object.keys(added).filter(table => table in expected.tables)).toEqual([])
   const messages = expected.tables.team_messages!
   const withProfiles = { ...messages, columns: [...messages.columns, optional('allowed_profiles')] }

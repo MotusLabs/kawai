@@ -184,13 +184,11 @@ A `fileChange` item can change several files. Its `Edit`-like input carries ever
 
 `thread/start` and `thread/resume` return `Thread.path`. The driver stores it through a new `onTranscriptPath` callback into `transcript_path`, as soon as it is known.
 
-`team/receipt.ts` keeps `transcriptReceipt`/`reconcileMailbox` and takes the row parser per runtime: `receiptMessageId` (Claude) or `codexReceiptMessageId`. The Codex parser accepts only `type: "response_item"`, `payload.type: "message"`, `role: "user"` rows whose `input_text` parses as an envelope, so AGENTS.md user rows never match. `transcriptFor` returns `transcript_path` for Codex chats.
+`team/receipt.ts` keeps `transcriptReceipt`/`reconcileMailbox` and takes the row parser per runtime: `receiptMessageId` (Claude) or `codexReceiptMessageId`. The Codex parser accepts only `type: "response_item"`, `payload.type: "message"`, `role: "user"` rows whose `text` or `input_text` block parses as an envelope, so AGENTS.md user rows never match. The Codex reader reads the stored `transcript_path` plus every `rollout-*-<threadId>.jsonl` under `<codex_home>/sessions` — a walk at most four levels deep that never follows a symlink, and a directory it cannot list holds the receipt uncertain. A found envelope wins: a delivered row is a receipt even when another line of its own file fails to parse (a torn tail); only an absent envelope beside a torn tail stays uncertain. Absence requeues only under the proven-reader rule — some file of the thread holds a recognized envelope row and the stored path is named for the thread — every other absence holds as uncertain. `transcriptFor` returns `transcript_path` for Codex chats.
 
-Replay works as follows:
-- With a live driver, use `thread/read` with turns for the history.
-- For archived chats, or when no agent is running, `codexRollout.ts` parses the rollout file (`response_item` messages, function calls and outputs, `event_msg` items) into the same replay entries `transcriptReplay.ts` produces.
+Replay has one source (decision 2, M3): `codexRollout.ts` parses the rollout file (`response_item` messages, function calls and outputs, `event_msg` items) into the same replay entries `transcriptReplay.ts` produces, for a live driver and for archived or unloaded chats alike. `thread/read` is not used: its `includeTurns` flag is deprecated on the 0.163.0 baseline, and a second source would add a second row-id scheme. A paginated `thread/turns/list` + `thread/items/list` fallback for an unreadable rollout stays a recorded follow-up that needs 8.2 evidence.
 
-Both replay paths emit the turn boundaries a live turn emits, `turn_completed` included. History readers such as `team-workspace`'s finished-turn bucket, which reads persisted turn-end events, therefore count Codex turns.
+Replay emits the turn boundaries a live turn emits, `turn_completed` included. History readers such as `team-workspace`'s finished-turn bucket, which reads persisted turn-end events, therefore count Codex turns. Row ids are `codex-r<line index>-<first 8 hex characters of sha256(line)>`: stable while the file only grows, and a row rewritten under the same path gets a new id, so a client's older `beforeId` reads stale and it re-attaches plain. An unreadable rollout memoizes the "history unavailable" notice marked retryable: the manager retries it on a later load, and only while no live turn could be duplicated by the re-read — the memo is taken before a driver start, so live events must stay ahead of the replay.
 
 Live receipts keep working. Today the title watcher's tail also confirms mail: `watchReceipt` calls `watchSessionTitle`, whose line handler runs `receiptMessageId`. For a Codex chat that tail follows `transcript_path` and parses rows with `codexReceiptMessageId`. Only the title half is skipped, because Codex chat names come from Kawai. Pushed mail therefore settles as soon as its rollout row lands, not only at turn end or startup reconciliation.
 
@@ -301,7 +299,9 @@ former Open Questions:
   `127.0.0.1`) — but outside the sandbox, for the same reason as above.
   Inside a working sandbox: untested on this host; network-on profiles should
   not rely on it until verified on such a host.
-- **Replay shapes.** `thread/read` (`includeTurns: true`) returns
+- **Replay shapes.** Replay reads the rollout alone (M3); the `thread/read`
+  shapes below are recorded only for the possible paginated fallback.
+  `thread/read` (`includeTurns: true`) returns
   `thread.turns[]` whose items are typed: `userMessage`, `agentMessage` (with
   `phase`, `questions`, `delivery`), `commandExecution` (command, cwd,
   aggregatedOutput, exitCode, status), `dynamicToolCall` (namespace, tool,

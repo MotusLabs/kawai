@@ -14,9 +14,10 @@ import { CodexSessionDriver, type CodexSessionDriverOptions } from '../chat/code
 export const FAKE_CODEX = path.resolve(import.meta.dir, '../../../tests/fixtures/fake-codex-app-server.ts')
 
 export const THREAD_ID = 'thread-0001'
-export const ROLLOUT = '/codex-home/sessions/rollout-thread-0001.jsonl'
+// The observed nested layout (spike, 0.163.0): sessions/YYYY/MM/DD/rollout-<ts>-<thread>.jsonl.
+export const ROLLOUT = '/codex-home/sessions/2026/10/18/rollout-2026-10-18T17-46-05-thread-0001.jsonl'
 
-type Line = { dir: 'out' | 'in'; line: string }
+type Line = { dir: 'out' | 'in'; line: string } | { fake: 'append'; file: string; line?: string } | { fake: 'gate'; path: string }
 
 /** A transcript under construction; request ids follow the client's (1, 2, …). */
 export class Script {
@@ -60,6 +61,22 @@ export class Script {
 
   completed(codexTurn: string, status = 'completed', items: unknown[] = [], error: unknown = null): this {
     return this.notify('turn/completed', { threadId: THREAD_ID, turn: { id: codexTurn, status, items, error } })
+  }
+
+  /**
+   * The fake writes `line` to `file` here — the rollout writer's stand-in,
+   * never evidence of Codex's timing; without `line`, the rollout user row
+   * of the latest turn/start input.
+   */
+  append(file: string, line?: string): this {
+    this.lines.push({ fake: 'append', file, ...(line !== undefined ? { line } : {}) })
+    return this
+  }
+
+  /** The fake holds the run here until `gatePath` exists. */
+  gate(gatePath: string): this {
+    this.lines.push({ fake: 'gate', path: gatePath })
+    return this
   }
 
   write(dir: string): string {

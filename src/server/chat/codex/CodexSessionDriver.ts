@@ -31,6 +31,9 @@ import { codexSpawnEnv } from '../codexProfiles'
 import type { ChatAgentDriver, ChatDriverCallbacks, ChatEffort } from '../provider/driver'
 import { AppServerClient, type AppServerClientOptions, type AppServerExit } from './appServerClient'
 import { auditDeniedCard, auditItem, auditSpawnEnd } from './codexAudit'
+import { dispatchTeamToolCall, teamNamespaceSpec } from './codexTools'
+import type { DynamicToolCallParams } from './protocol/v2/DynamicToolCallParams'
+import type { DynamicToolSpec } from './protocol/v2/DynamicToolSpec'
 import { mapCodexNotification, turnCompletedDrafts, turnUsageBetween, type CodexEventDraft, type CodexOutput } from './codexEvents'
 import { CodexRequests } from './codexRequests'
 import { CLIENT_INFO, codexContextUsage, codexEffort, threadParams, type CodexClient, type CodexSessionDriverOptions } from './codexThread'
@@ -244,7 +247,9 @@ export class CodexSessionDriver implements ChatAgentDriver {
       const params = await threadParams({ cwd: this.projectPath, network: this.options.network, instructions, model: this.options.model })
       const result = await client.request(
         resumed ? 'thread/resume' : 'thread/start',
-        resumed ? { ...params, threadId: this.threadId } : { ...params, ephemeral: false },
+        // The team tools register at thread start; a resume serves the set
+        // the thread stored (spike: thread/resume takes no dynamicTools).
+        resumed ? { ...params, threadId: this.threadId } : { ...params, ephemeral: false, ...this.dynamicTools() },
       ) as { thread?: { id?: unknown; path?: unknown }; model?: unknown }
       if (this.client !== client) return false
       const thread = result?.thread
@@ -416,11 +421,13 @@ export class CodexSessionDriver implements ChatAgentDriver {
 
   private onServerRequest(method: string, params: Record<string, unknown>): Promise<unknown> {
     if (this.requests.handles(method)) return this.requests.serverRequest(method, params)
-    if (method === 'item/tool/call') {
-      // The kawai-team dynamic tools arrive with PR D; refuse rather than hang.
-      return Promise.resolve({ success: false, contentItems: [{ type: 'inputText', text: 'Kawai team tools are not available in this build.' }] })
-    }
+    if (method === 'item/tool/call') return dispatchTeamToolCall(this.options.teamTools ?? [], this.threadId, params as Partial<DynamicToolCallParams>)
     return Promise.reject(new Error(`Kawai does not handle ${method}`))
+  }
+
+  private dynamicTools(): { dynamicTools?: DynamicToolSpec[] } {
+    const table = this.options.teamTools
+    return table?.length ? { dynamicTools: [teamNamespaceSpec(table)] } : {}
   }
 
   private onExit(client: CodexClient, exit: AppServerExit): void {

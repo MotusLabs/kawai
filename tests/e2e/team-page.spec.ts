@@ -13,6 +13,7 @@ import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { killPrivateTmuxServer } from './fixtures/privateTmux'
 
 test.skip(process.env.AGENTBOARD_CHAT_FIXTURE !== '1', 'Requires development chat fixture')
 
@@ -77,20 +78,16 @@ function useIsolatedServer(root: string) {
     return url
   }
   const stop = async () => {
-    if (!server || server.exitCode !== null) return
-    const stopped = new Promise<void>(resolve => server!.once('exit', () => resolve()))
-    server.kill('SIGTERM')
-    await stopped
-    // The server leaves its private tmux server (TMUX_TMPDIR=root) running,
-    // and that daemon's cwd is this checkout — every run would leak one and
-    // pin the directory. Kill it through its own socket path, built from this
-    // spec's root and uid, so no other tmux server is ever addressed; a
-    // socket with no server just errors and is ignored.
-    try {
-      execFileSync('tmux', ['-S', join(root, `tmux-${process.getuid()}`, 'default'), 'kill-server'], { stdio: 'ignore' })
-    } catch {
-      // No server on that socket — nothing to clean up.
+    if (server && server.exitCode === null) {
+      const stopped = new Promise<void>(resolve => server!.once('exit', () => resolve()))
+      server.kill('SIGTERM')
+      await stopped
     }
+    // Every path that ends this server — a normal stop, a server that
+    // already exited, a failed start — kills the root's private tmux server
+    // before the root is removed: the daemon outlives the server and pins
+    // this checkout (see tests/e2e/fixtures/privateTmux.ts).
+    killPrivateTmuxServer(root)
     server = null
   }
   return { start, stop, url: () => url, dbPath: () => dbPath, diagnostics: () => diagnostics }

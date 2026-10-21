@@ -14,6 +14,7 @@ import { existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { killChat } from './support/chatHeader'
+import { killPrivateTmuxServer } from './fixtures/privateTmux'
 
 test.skip(process.env.AGENTBOARD_CHAT_FIXTURE !== '1', 'Requires development chat fixture')
 
@@ -259,10 +260,16 @@ test('E11 slice: uncertain retry keeps its recipient, history, and survives a re
     }, { timeout: 30_000 }).toBe(true)
   }
   const stop = async () => {
-    if (!server || server.exitCode !== null) return
-    const stopped = new Promise<void>(resolve => server!.once('exit', () => resolve()))
-    server.kill('SIGTERM')
-    await stopped
+    if (server && server.exitCode === null) {
+      const stopped = new Promise<void>(resolve => server!.once('exit', () => resolve()))
+      server.kill('SIGTERM')
+      await stopped
+    }
+    // Every path that ends this server — a normal stop, a server that
+    // already exited, a failed start — kills the root's private tmux server
+    // before the root is removed: the daemon outlives the server and pins
+    // this checkout (see tests/e2e/fixtures/privateTmux.ts).
+    killPrivateTmuxServer(root)
     server = null
   }
   try {

@@ -27,6 +27,8 @@ export const FIXTURE_FLOOR: FloorMap = { lint: ['ci'], typecheck: ['ci'], 'unit-
 interface FixturePr {
   number: number
   url: string
+  /** The origin the pull request belongs to; lookups are repo-scoped like GitHub's. */
+  repo: string
   head: string
   base: string
   headRefOid: string
@@ -35,7 +37,9 @@ interface FixturePr {
   closed: boolean
 }
 
-/** The fixture's pull-request registry (one server process, one walkthrough). */
+/** The fixture's pull-request registry: one server process, every walkthrough
+ * team in it (CI runs the walkthrough specs in one server, so rows are
+ * repo-scoped — two teams may each carry a PR for the same head branch). */
 const registry: FixturePr[] = []
 let nextNumber = 1
 /** The main checkout the last probe read: the fixture's ref writes find its bare origin through it. */
@@ -46,7 +50,7 @@ export function fixtureMainCheckout(): string | null {
   return fixtureMain
 }
 
-/** The registry row of a fixture pull request (mutable: the promotion merge records on it), null when unknown. */
+/** The registry row of a fixture pull request (mutable: the promotion merge records on it), null when unknown. Numbers are unique per process, so no repo is needed. */
 export function fixturePullRequest(prNumber: number): FixturePr | null {
   return registry.find(entry => entry.number === prNumber) ?? null
 }
@@ -54,8 +58,8 @@ export function fixturePullRequest(prNumber: number): FixturePr | null {
 const prState = (pr: FixturePr): 'OPEN' | 'MERGED' | 'CLOSED' => pr.mergeCommit !== null ? 'MERGED' : pr.closed ? 'CLOSED' : 'OPEN'
 
 /** `gh pr close` on the fixture: the registry row reads CLOSED. */
-export async function fixturePrClose(_repo: string, prNumber: number): Promise<GithubOutcome<null>> {
-  const pr = fixturePullRequest(prNumber)
+export async function fixturePrClose(repo: string, prNumber: number): Promise<GithubOutcome<null>> {
+  const pr = registry.find(entry => entry.repo === repo && entry.number === prNumber) ?? null
   if (pr === null) return { ok: false, error: { argv: ['gh', 'pr', 'close'], exitCode: 1, httpStatus: 404, message: `no fixture pull request #${prNumber}` } }
   pr.closed = true
   return { ok: true, data: null }
@@ -77,12 +81,14 @@ export function fixtureRoundAdapters(): RoundAdapters {
     checkRuns: async (): Promise<GithubOutcome<CiCheck[]>> =>
       ({ ok: true, data: [...new Set(Object.values(FIXTURE_FLOOR).flat())].map(successCheck) }),
     statuses: async (): Promise<GithubOutcome<CiCheck[]>> => ({ ok: true, data: [] }),
-    prList: async (_repo: string, input: { head: string }): Promise<GithubOutcome<PrSummary[]>> =>
-      ({ ok: true, data: registry.filter(pr => pr.head === input.head).map(pr => ({ number: pr.number, url: pr.url, state: prState(pr), headRefOid: pr.headRefOid })) }),
-    prCreate: async (_repo: string, input: { head: string; base: string }): Promise<GithubOutcome<{ number: number; url: string }>> => {
-      const existing = registry.find(pr => pr.head === input.head && !pr.closed)
+    prList: async (repo: string, input: { head: string }): Promise<GithubOutcome<PrSummary[]>> =>
+      ({ ok: true, data: registry.filter(pr => pr.repo === repo && pr.head === input.head).map(pr => ({ number: pr.number, url: pr.url, state: prState(pr), headRefOid: pr.headRefOid })) }),
+    prCreate: async (repo: string, input: { head: string; base: string }): Promise<GithubOutcome<{ number: number; url: string }>> => {
+      // GitHub refuses only an OPEN pull request for the head branch, in the
+      // same repository: a merged or closed one frees the branch.
+      const existing = registry.find(pr => pr.repo === repo && pr.head === input.head && prState(pr) === 'OPEN')
       if (existing !== undefined) return { ok: false, error: { argv: ['gh', 'pr', 'create'], exitCode: 1, httpStatus: 422, message: `a pull request for ${input.head} already exists as #${existing.number}` } }
-      const pr: FixturePr = { number: nextNumber++, url: `https://example.internal/pr/fixture`, head: input.head, base: input.base, headRefOid: '', mergeCommit: null, closed: false }
+      const pr: FixturePr = { number: nextNumber++, url: `https://example.internal/pr/fixture`, repo, head: input.head, base: input.base, headRefOid: '', mergeCommit: null, closed: false }
       registry.push(pr)
       return { ok: true, data: { number: pr.number, url: pr.url } }
     },

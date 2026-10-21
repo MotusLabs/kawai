@@ -14,7 +14,14 @@ import TeamPlansView from '../components/team/TeamPlansView'
 import { useTeamPlanStore } from '../stores/teamPlanStore'
 import { planDetail, planSummary } from './planViewFixtures'
 
-afterEach(() => { useTeamPlanStore.setState({ views: {} }) })
+const renderers: TestRenderer.ReactTestRenderer[] = []
+afterEach(() => {
+  // A left-mounted view consumes attention reveals outside act(), so every
+  // renderer goes away with its test.
+  for (const renderer of renderers) act(() => renderer.unmount())
+  renderers.length = 0
+  useTeamPlanStore.setState({ views: {}, reveal: null })
+})
 
 const textOf = (node: TestRenderer.ReactTestInstance | string): string =>
   typeof node === 'string' ? node : node.children.map(textOf).join('')
@@ -68,6 +75,7 @@ const mount = (setup: () => void = () => {}) => {
   act(() => {
     renderer = TestRenderer.create(element(), { createNodeMock: node => ({ focus: () => focused.push(String(node.props.id ?? node.props['data-testid'] ?? node.type)) }) })
   })
+  renderers.push(renderer)
   const rerender = (next: { connected?: boolean; epoch?: number } = {}) => {
     if (next.connected !== undefined) connected = next.connected
     act(() => { renderer.update(element(next.epoch ?? 0)) })

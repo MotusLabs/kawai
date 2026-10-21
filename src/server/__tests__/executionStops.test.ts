@@ -15,6 +15,7 @@ import { TeamWorktrees } from '../team/worktreeRoots'
 import { WorktreeStaffing } from '../team/staffing'
 import { TeamCaps } from '../team/teamCaps'
 import { ExecutionStore } from '../plans/execution/executionStore'
+import { ExecutionRevisionStore } from '../plans/revisionControl/executionRevisionStore'
 import { executionOwnership } from '../plans/execution/executionOwnership'
 import { ExecutionService } from '../plans/execution/ExecutionService'
 import { ExecutionExecutor } from '../plans/execution/executor'
@@ -72,6 +73,7 @@ beforeEach(async () => {
     landingModes: () => new Set(['direct']),
     promotions: { runningPromotion: () => null },
     identityOf: () => world.team,
+    executionRevisions: new ExecutionRevisionStore(bench.db.db),
     tasks,
   })
   executor = new ExecutionExecutor({
