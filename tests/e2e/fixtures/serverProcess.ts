@@ -29,9 +29,10 @@ const DIAGNOSTICS_BYTES = 6000
  * bounded wait, then a failure naming the pid. It never signals a server
  * that already exited (by code or by signal) or that was never spawned, and
  * it awaits the exit promise whatever path ended the server. When given a
- * tmuxRoot it kills the root's private tmux server after the exit, before
- * the caller removes the root: the daemon outlives the server and pins the
- * checkout (see privateTmux.ts).
+ * tmuxRoot it kills the root's private tmux server — after the exit, or
+ * after a failed sequence that throws — always before the caller removes
+ * the root: the daemon outlives the server and pins the checkout (see
+ * privateTmux.ts).
  */
 export class ServerProcess {
   private child: ChildProcess | null = null
@@ -67,20 +68,26 @@ export class ServerProcess {
     const child = this.child
     const termGraceMs = options.termGraceMs ?? DEFAULT_TERM_GRACE_MS
     const killGraceMs = options.killGraceMs ?? DEFAULT_KILL_GRACE_MS
-    if (child && child.exitCode === null && child.signalCode === null) {
-      child.kill('SIGTERM')
-      // Re-check liveness before escalating: the exit can land on the same
-      // tick the grace timer fires, and a dead pid must never be signalled.
-      if (!(await this.exitedWithin(termGraceMs)) && child.exitCode === null && child.signalCode === null) {
-        child.kill('SIGKILL')
-        if (!(await this.exitedWithin(killGraceMs))) {
-          throw new Error(`e2e server pid ${child.pid ?? '<unknown>'} ignored SIGKILL and is still running`)
+    try {
+      if (child && child.exitCode === null && child.signalCode === null) {
+        child.kill('SIGTERM')
+        // Re-check liveness before escalating: the exit can land on the same
+        // tick the grace timer fires, and a dead pid must never be signalled.
+        if (!(await this.exitedWithin(termGraceMs)) && child.exitCode === null && child.signalCode === null) {
+          child.kill('SIGKILL')
+          if (!(await this.exitedWithin(killGraceMs))) {
+            throw new Error(`e2e server pid ${child.pid ?? '<unknown>'} ignored SIGKILL and is still running`)
+          }
         }
       }
+      await this.exited
+    } finally {
+      // The tmux kill and the child cleanup run even when the sequence
+      // throws: the daemon outlives the server and pins the checkout (see
+      // privateTmux.ts), and a failed stop must not leave a stale child.
+      if (options.tmuxRoot) killPrivateTmuxServer(options.tmuxRoot)
+      this.child = null
     }
-    await this.exited
-    if (options.tmuxRoot) killPrivateTmuxServer(options.tmuxRoot)
-    this.child = null
   }
 
   /** Resolves true when the current child exited within the bound, false

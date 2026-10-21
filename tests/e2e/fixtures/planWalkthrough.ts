@@ -181,8 +181,8 @@ export function submitRound(root: string, mode: 'result' | 'findings', implement
       });
       // CI's one-server fixture run shares one database across walkthrough
       // teams, and two name their change walk-api: scope to this spec's own
-      // team (one execution per team owns the change, so the newest row with
-      // a task id inside the team is this spec's own execution's).
+      // team — each spec runs one execution in its own repo, so the newest
+      // row with a task id inside the team is this spec's own execution's.
       const teamId = (await resolveTeam(root)).teamId;
       const row = db.prepare("SELECT task_id FROM plan_execution_changes WHERE team_id = ? AND change = 'walk-api' AND task_id IS NOT NULL ORDER BY rowid DESC").get(teamId);
       if (!row) throw new Error('no owned task for walk-api yet');

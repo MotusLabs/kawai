@@ -86,8 +86,8 @@ function taskHolder(root: string): string {
     sessions.db.exec('PRAGMA busy_timeout = 5000');
     // CI's one-server fixture run shares one database across walkthrough
     // teams, and two name their change walk-api: scope to this spec's own
-    // team (one execution per team owns the change), so another team's
-    // row can never answer between provisioning and task creation.
+    // team — each spec runs one execution in its own repo — so another
+    // team's row can never answer between provisioning and task creation.
     const teamId = (await resolveTeam(${JSON.stringify(root)})).teamId;
     const taskId = sessions.db.prepare("SELECT task_id FROM plan_execution_changes WHERE team_id = ? AND change = 'walk-api' AND task_id IS NOT NULL ORDER BY rowid DESC LIMIT 1").get(teamId)?.task_id;
     const row = taskId

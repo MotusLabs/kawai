@@ -318,14 +318,19 @@ test('external CLI chat: streaming, approvals, question, interrupt, debug, resum
     console.error('ws events:', seenEvents.join(' '))
     throw error
   } finally {
-    await stop()
-    // The single unconditional kill: every path that ends this server — a
-    // normal stop, a server that already exited, a failed start — reaches it,
-    // including across the mid-test restarts, which reuse the same socket.
-    // The daemon's cwd is this checkout, so a leak would pin the directory.
-    killPrivateTmuxServer(root)
-    await mock.close()
-    if (!process.env.KAWAI_EXTERNAL_CLI_KEEP) rmSync(root, { recursive: true, force: true })
-    else console.error('KEEP_ROOT', root)
+    try {
+      await stop()
+    } finally {
+      // Runs even when stop() throws (a server that ignored SIGKILL). The
+      // single unconditional kill: every path that ends this server — a
+      // normal stop, a server that already exited, a failed start — reaches
+      // it, including across the mid-test restarts, which reuse the same
+      // socket. The daemon's cwd is this checkout, so a leak would pin the
+      // directory.
+      killPrivateTmuxServer(root)
+      await mock.close()
+      if (!process.env.KAWAI_EXTERNAL_CLI_KEEP) rmSync(root, { recursive: true, force: true })
+      else console.error('KEEP_ROOT', root)
+    }
   }
 })

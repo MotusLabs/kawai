@@ -117,8 +117,8 @@ function submitRound(root: string, mode: 'result' | 'findings', implementer: str
       });
       // CI's one-server fixture run shares one database across walkthrough
       // teams, and two name their change walk-api: scope to this spec's own
-      // team (one execution per team owns the change), so another team's
-      // row can never answer between provisioning and task creation.
+      // team — each spec runs one execution in its own repo — so another
+      // team's row can never answer between provisioning and task creation.
       const teamId = (await resolveTeam(root)).teamId;
       const row = db.prepare('SELECT task_id FROM plan_execution_changes WHERE team_id = ? AND change = ? AND task_id IS NOT NULL ORDER BY rowid DESC').get(teamId, change);
       if (!row) throw new Error('no owned task yet');

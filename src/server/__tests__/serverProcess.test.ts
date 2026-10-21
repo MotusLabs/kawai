@@ -61,10 +61,12 @@ test('stop never signals a server that already exited by code', async () => {
   const kill = spyOn(child, 'kill')
   try {
     await proc.stop({ termGraceMs: TERM_GRACE_MS, killGraceMs: KILL_GRACE_MS })
+    // Asserted before the finally restores the spy: mockRestore clears
+    // mock.calls, so an assertion placed after it could never fail.
+    expect(kill).not.toHaveBeenCalled()
   } finally {
     kill.mockRestore()
   }
-  expect(kill).not.toHaveBeenCalled()
   expect(proc.running).toBe(false)
 }, 15_000)
 
@@ -76,10 +78,12 @@ test('stop never signals a server that already died to a signal', async () => {
   const kill = spyOn(child, 'kill')
   try {
     await proc.stop({ termGraceMs: TERM_GRACE_MS, killGraceMs: KILL_GRACE_MS })
+    // Asserted before the finally restores the spy: mockRestore clears
+    // mock.calls, so an assertion placed after it could never fail.
+    expect(kill).not.toHaveBeenCalled()
   } finally {
     kill.mockRestore()
   }
-  expect(kill).not.toHaveBeenCalled()
   expect(proc.running).toBe(false)
 }, 15_000)
 
