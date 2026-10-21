@@ -2,6 +2,7 @@ import { defineConfig } from '@playwright/test'
 import { accessSync, constants as fsConstants, mkdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const port = Number(process.env.E2E_PORT) || 4173
 const tmuxSession =
@@ -48,6 +49,18 @@ process.env.AGENTBOARD_TMUX_PID_FILE = `${tmuxTmpDir}/tmux-server.pid`
 process.env.CLAUDE_CONFIG_DIR = claudeDir
 process.env.CODEX_HOME = codexDir
 process.env.PI_HOME = piDir
+
+// Codex e2e (codex-chat-sessions 8.1): a fake auth.json in the temporary
+// codexHome — never the user's ~/.codex — passes the login gate, and the
+// fake app-server stands in for the Codex executable so the carve-out
+// (ChatSessionManager's codexGatesApply) runs the real Codex path and gates
+// under AGENTBOARD_CHAT_FIXTURE. The spec writes FAKE_TRANSCRIPT before
+// creating its chat; every new app-server child replays run 1 of it. Specs
+// that never write the file make any Codex child they start exit at once —
+// harmless for their header-only assertions.
+writeFileSync(join(codexDir, 'auth.json'), JSON.stringify({ OPENAI_API_KEY: null, tokens: { access_token: 'fake' } }))
+process.env.KAWAI_CODEX_PATH = fileURLToPath(new URL('./tests/fixtures/fake-codex-app-server.ts', import.meta.url))
+process.env.FAKE_TRANSCRIPT = join(tmuxTmpDir, 'codex-transcript.jsonl')
 
 // A fake remote host so the Remote pane can render rows in e2e. The real
 // poller shells out to `ssh <host> tmux -u list-windows ...`; this stub on
