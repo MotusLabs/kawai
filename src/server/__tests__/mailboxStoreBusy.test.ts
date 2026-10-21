@@ -132,4 +132,69 @@ describe('MailboxStore under a RESERVED holder', () => {
       rmSync(dir, { recursive: true, force: true })
     }
   })
+
+  test('claimWhen waits out the holder and claims once it commits', () => {
+    const dir = freshDir()
+    const db = initDatabase({ path: join(dir, 'db.sqlite') }).db
+    db.exec('PRAGMA busy_timeout = 300')
+    const store = new MailboxStore(db)
+    const mail = store.enqueue({
+      teamId: 't', toKind: 'session', toId: 's1', fromSession: 's1',
+      fromGroup: null, originPath: '/tmp/proj', body: 'work',
+    })
+    const holder = reservedHolder(dir)
+    try {
+      // Eligibility reads on the store connection, like the dispatcher's
+      // availability check: a deferred transaction takes SHARED at that read
+      // and its claim write gets BUSY at once, while IMMEDIATE spends the
+      // budget at BEGIN (the :215 mutant dies on the elapsed assertion).
+      const eligible = () => {
+        void store.get(mail.id)
+        return true
+      }
+      const start = performance.now()
+      expect(() => store.claimWhen(mail.id, 's1', eligible)).toThrow(/database is locked/)
+      expect(performance.now() - start).toBeGreaterThanOrEqual(200)
+      expect(store.get(mail.id)?.state).toBe('queued')
+
+      holder.exec('COMMIT')
+      expect(store.claimWhen(mail.id, 's1', eligible)).toBe(true)
+      expect(store.get(mail.id)?.state).toBe('claimed')
+      expect(store.get(mail.id)?.claimedBy).toBe('s1')
+    } finally {
+      holder.close()
+      db.close()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('cancelling a queued message waits out the holder and succeeds once it commits', () => {
+    const dir = freshDir()
+    const db = initDatabase({ path: join(dir, 'db.sqlite') }).db
+    db.exec('PRAGMA busy_timeout = 300')
+    const store = new MailboxStore(db)
+    const mail = store.enqueue({
+      teamId: 't', toKind: 'session', toId: 's1', fromSession: 's1',
+      fromGroup: null, originPath: '/tmp/proj', body: 'work',
+    })
+    const holder = reservedHolder(dir)
+    try {
+      // ParkedCancel's transaction (:65) reads the row (get, parkedFor)
+      // before its transition write: a deferred transaction takes SHARED at
+      // that read and the write gets BUSY at once, while IMMEDIATE spends
+      // the budget at BEGIN (the :65 mutant dies on the elapsed assertion).
+      const start = performance.now()
+      expect(() => store.cancel(mail.id, { kind: 'human' })).toThrow(/database is locked/)
+      expect(performance.now() - start).toBeGreaterThanOrEqual(200)
+      expect(store.get(mail.id)?.state).toBe('queued')
+
+      holder.exec('COMMIT')
+      expect(store.cancel(mail.id, { kind: 'human' })).toBe(true)
+      expect(store.get(mail.id)?.state).toBe('cancelled')
+    } finally {
+      holder.close()
+      db.close()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
 })

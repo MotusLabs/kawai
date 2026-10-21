@@ -9,10 +9,13 @@
 //
 // A failed turn-end settle must not strand the claimed message: the settle
 // is retried a bounded number of times on an unref'd timer (one chain per
-// session — a retry re-runs settleRecipient, which covers every claim the
-// session still holds, so concurrent chains would be pure waste). After the
-// last failure the mail is left to mailbox recovery (the next turn end,
-// failure, archive, kill, or startup reconciliation).
+// session — a retry re-runs the caller's settle step, which covers exactly
+// the claims the caller captured at the failed attempt, so concurrent chains
+// would be pure waste). After the last failure the mail is left to mailbox
+// recovery (the next turn end, failure, archive, kill, or startup
+// reconciliation). close() marks the guard closed at shutdown: a settle
+// arriving afterwards runs nothing and arms no timer — recovery owns the
+// mail from there.
 import { logger } from '../logger'
 
 /** Retries after the synchronous attempt fails; the last failure gives up. */
@@ -34,6 +37,7 @@ const messageOf = (error: unknown): string => (error instanceof Error ? error.me
 export class DriverMailGuard {
   private readonly pending = new Set<string>()
   private readonly cancels = new Set<Cancel>()
+  private closed = false
   private readonly log: (event: string, fields: LogFields) => void
   private readonly logError: (event: string, fields: LogFields) => void
   private readonly schedule: (run: () => void, delayMs: number) => Cancel
@@ -73,6 +77,9 @@ export class DriverMailGuard {
    * retried on the timer until the bound, then left to mailbox recovery.
    */
   settleRecipient(sessionId: string, settle: () => void): void {
+    // Closed at shutdown: a late driver event must not write against the
+    // closing mailbox or arm retries past it — recovery owns the mail.
+    if (this.closed) return
     try {
       settle()
       return
@@ -82,8 +89,9 @@ export class DriverMailGuard {
     this.arm(sessionId, settle, SETTLE_RETRIES)
   }
 
-  /** Cancel pending retries (server shutdown). */
+  /** Cancel pending retries and refuse further settles (server shutdown). */
   close(): void {
+    this.closed = true
     for (const cancel of this.cancels) cancel()
     this.cancels.clear()
     this.pending.clear()
@@ -91,8 +99,9 @@ export class DriverMailGuard {
 
   private arm(sessionId: string, settle: () => void, remaining: number): void {
     // One chain per session: a pending retry already re-covers this
-    // session's claims, and the bound keeps total work bounded.
-    if (this.pending.has(sessionId)) return
+    // session's claims, and the bound keeps total work bounded. Closed
+    // guards arm nothing.
+    if (this.closed || this.pending.has(sessionId)) return
     this.pending.add(sessionId)
     const cancel = this.schedule(() => {
       this.cancels.delete(cancel)

@@ -138,6 +138,18 @@ describe('settleRecipient retries', () => {
     expect(h.cancelled).toHaveLength(1)
     expect(h.runs).toHaveLength(1) // captured, but the guard cancelled it
   })
+
+  test('a settle after close runs nothing and arms no timer', () => {
+    const h = harness()
+    h.guard.close()
+    let settles = 0
+    h.guard.settleRecipient('s1', () => { settles += 1 })
+    h.guard.settleRecipient('s1', boom)
+    expect(settles).toBe(0)
+    expect(h.runs).toHaveLength(0)
+    expect(h.logs).toHaveLength(0)
+    expect(h.errors).toHaveLength(0)
+  })
 })
 
 describe('the default timer path', () => {

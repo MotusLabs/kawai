@@ -3,17 +3,20 @@
 // escapes the driver's emit (which killed the server in the #269 CI crash —
 // the crashing settle ran from markDead's error event, inside
 // runQueryLoop's catch block) nor strands the claimed message: the guard
-// retries on its unref'd timer and the settle lands. The lock contention
-// that makes a settle fail is covered at the store and guard levels
-// (mailboxStoreBusy, driverMailGuard); here the teamMail facade's settle is
-// replaced by a checked double that fails once, so the composition is
-// deterministic — real manager, real driver, real store, real guard.
+// retries on its unref'd timer and the settle lands, scoped to the claims
+// that existed at the failed attempt (review B1). The lock contention that
+// makes a settle fail is covered at the store and guard levels
+// (mailboxStoreBusy, driverMailGuard); here the teamMail facade's scoped
+// settle is replaced by a checked double that fails once, so the
+// composition is deterministic — real manager, real driver, real store,
+// real guard.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { ChatEvent } from '../../shared/chat'
+import type { ClaimRef } from '../team/sessionMailbox'
 import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
 import { ChatSessionManager, type ChatQueryFactory } from '../chat/ChatSessionManager'
@@ -103,13 +106,10 @@ describe('ChatSessionManager turn-end settle wiring', () => {
     fs.rmSync(tempDir, { recursive: true, force: true })
   })
 
-  test('a failing settle neither escapes nor strands; the retry settles', async () => {
-    const registry = new SessionRegistry()
-    const handles: FakeHandle[] = []
-    const events: ChatEvent[] = []
+  async function startManager(handles: FakeHandle[], events: ChatEvent[]): Promise<ChatSessionManager> {
     const manager = new ChatSessionManager({
       isDirectory: () => true,
-      registry,
+      registry: new SessionRegistry(),
       db,
       onEvent: (_sessionId, event) => events.push(event),
       queryFactory: fakeQueryFactory(handles),
@@ -118,6 +118,24 @@ describe('ChatSessionManager turn-end settle wiring', () => {
       }) as unknown as typeof fetch,
     })
     await manager.whenRestored()
+    return manager
+  }
+
+  /** The claimed, pushed message a turn end settles (#269's crash row). */
+  function claimPushed(manager: ChatSessionManager, sessionId: string, body: string): string {
+    const mail = manager.mailbox.store.enqueue({
+      teamId: 't', toKind: 'session', toId: sessionId, fromSession: sessionId,
+      fromGroup: null, originPath: '/tmp/proj', body,
+    })
+    expect(manager.mailbox.store.claim(mail.id, sessionId)).toBe(true)
+    expect(manager.mailbox.store.markPushed(mail.id)).toBe(true)
+    return mail.id
+  }
+
+  test('a failing settle neither escapes nor strands; the retry settles', async () => {
+    const handles: FakeHandle[] = []
+    const events: ChatEvent[] = []
+    const manager = await startManager(handles, events)
     try {
       const created = manager.createSession({ projectPath: '/tmp/proj' })
       if (!created.ok) throw new Error('create failed')
@@ -125,33 +143,28 @@ describe('ChatSessionManager turn-end settle wiring', () => {
       await manager.send(id, 'turn')
       await flush()
 
-      // The claimed, pushed message a turn end settles (#269's crash row).
-      const mail = manager.mailbox.store.enqueue({
-        teamId: 't', toKind: 'session', toId: id, fromSession: id,
-        fromGroup: null, originPath: '/tmp/proj', body: 'work',
-      })
-      expect(manager.mailbox.store.claim(mail.id, id)).toBe(true)
-      expect(manager.mailbox.store.markPushed(mail.id)).toBe(true)
+      const mail = claimPushed(manager, id, 'work')
+      // `mail` is the row id (claimPushed returns it), as everywhere below.
 
       // The double the handleDriverEvent wiring must reach: it checks the
       // session it is called with, fails the first (inline) attempt, and
       // lets the real settle run on the retry.
       const facade = (manager as unknown as {
-        teamMail: { settleRecipient: (sessionId: string) => void }
+        teamMail: { settleClaims: (sessionId: string, refs: ClaimRef[]) => void }
       }).teamMail
-      const realSettle = facade.settleRecipient.bind(facade)
+      const realSettleClaims = facade.settleClaims.bind(facade)
       const attempts: string[] = []
-      facade.settleRecipient = (sessionId: string) => {
+      facade.settleClaims = (sessionId: string, refs: ClaimRef[]) => {
         attempts.push(sessionId)
         if (attempts.length === 1) throw new Error('database is locked')
-        realSettle(sessionId)
+        realSettleClaims(sessionId, refs)
       }
 
       handles[0]!.push(resultWithWindow())
       // The inline attempt failed inside handleDriverEvent, which continued;
       // the guard's timer retry runs about a second later.
       const deadline = Date.now() + 5000
-      while (Date.now() < deadline && manager.mailbox.store.get(mail.id)?.state === 'claimed') {
+      while (Date.now() < deadline && manager.mailbox.store.get(mail)?.state === 'claimed') {
         await flush()
       }
 
@@ -159,14 +172,85 @@ describe('ChatSessionManager turn-end settle wiring', () => {
       // the retry landed: the transcript carries no receipt id, so the
       // message is hold-uncertain — settled, not stranded, not claimed.
       expect(attempts).toEqual([id, id])
-      expect(manager.mailbox.store.get(mail.id)?.state).toBe('uncertain')
-      expect(manager.mailbox.store.eventsFor(mail.id).some(event => event.kind === 'held-uncertain')).toBe(true)
+      expect(manager.mailbox.store.get(mail)?.state).toBe('uncertain')
+      expect(manager.mailbox.store.eventsFor(mail).some(event => event.kind === 'held-uncertain')).toBe(true)
 
       // The turn end was still published while the settlement failed, and
       // the driver is alive: an unguarded settle escapes handleDriverEvent,
       // kills the driver (markDead emits an error event), and the mail only
       // settles through that death — this asserts the guard's path instead.
       expect(events.some(event => event.type === 'turn_completed')).toBe(true)
+      expect(events.some(event => event.type === 'error')).toBe(false)
+    } finally {
+      manager.shutdown()
+    }
+  })
+
+  test('a retry settles only the claims that existed at the failed attempt', async () => {
+    // Review B1's probe: inside the retry window the session is already
+    // 'waiting', so the dispatcher can claim and push M2; a session-wide
+    // retry (4e98dd64) settles it mid-turn — held uncertain while its own
+    // transcript row has not landed. The scoped settle touches only the
+    // snapshot taken at the failed attempt.
+    const handles: FakeHandle[] = []
+    const events: ChatEvent[] = []
+    const manager = await startManager(handles, events)
+    try {
+      const created = manager.createSession({ projectPath: '/tmp/proj' })
+      if (!created.ok) throw new Error('create failed')
+      const id = created.session.id
+      await manager.send(id, 'turn')
+      await flush()
+
+      const first = claimPushed(manager, id, 'first')
+
+      // Whichever settle the wiring reaches fails its first (inline) call,
+      // so the guard arms its retry under both the scoped and the old
+      // session-wide shape.
+      const facade = (manager as unknown as {
+        teamMail: {
+          settleRecipient: (sessionId: string) => void
+          settleClaims: (sessionId: string, refs: ClaimRef[]) => void
+        }
+      }).teamMail
+      const realSettleRecipient = facade.settleRecipient.bind(facade)
+      const realSettleClaims = facade.settleClaims.bind(facade)
+      let attempts = 0
+      let recipientCalls = 0
+      const failOnce = () => {
+        attempts += 1
+        if (attempts === 1) throw new Error('database is locked')
+      }
+      facade.settleRecipient = (sessionId: string) => {
+        recipientCalls += 1
+        failOnce()
+        realSettleRecipient(sessionId)
+      }
+      facade.settleClaims = (sessionId: string, refs: ClaimRef[]) => {
+        failOnce()
+        realSettleClaims(sessionId, refs)
+      }
+
+      handles[0]!.push(resultWithWindow())
+      // Wait out the inline attempt: only then does M2 land inside the
+      // retry window.
+      const inlined = Date.now() + 5000
+      while (Date.now() < inlined && attempts < 1) await flush()
+      expect(attempts).toBe(1)
+
+      const second = claimPushed(manager, id, 'second')
+
+      const deadline = Date.now() + 5000
+      while (Date.now() < deadline && attempts < 2) await flush()
+
+      // The retry ran through the scoped settle (never the session-wide
+      // one), settled the snapshot's claim, and left M2 untouched: still
+      // claimed, never held uncertain — its own turn end settles it.
+      expect(attempts).toBe(2)
+      expect(recipientCalls).toBe(0)
+      expect(manager.mailbox.store.get(first)?.state).toBe('uncertain')
+      expect(manager.mailbox.store.get(second)?.state).toBe('claimed')
+      expect(manager.mailbox.store.eventsFor(second).some(event => event.kind === 'held-uncertain')).toBe(false)
       expect(events.some(event => event.type === 'error')).toBe(false)
     } finally {
       manager.shutdown()

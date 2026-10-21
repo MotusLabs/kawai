@@ -123,7 +123,7 @@ import { sessionCooldown } from '../team/cooldowns'
 import { supervisionRuntime } from '../plans/supervision/supervisionRuntime'
 import type { HandoffTarget } from '../team/routing/limitOutcomes'
 import type { RuleLoadReport, TeamRoutingState } from '../../shared/routing'
-import { SessionMailbox } from '../team/sessionMailbox'
+import { SessionMailbox, type ClaimRef } from '../team/sessionMailbox'
 import type { TaskService } from '../team/TaskService'
 import type { AssignmentService } from '../team/AssignmentService'
 import type { TaskResultService } from '../team/TaskResultService'
@@ -3141,7 +3141,15 @@ export class ChatSessionManager {
     // escape the driver's emit and kill the process. The settle is retried on
     // the guard's timer; the rest log and continue.
     if (event.type === 'error' || event.type === 'turn_completed') {
-      this.mailGuard.settleRecipient(sessionId, () => this.teamMail.settleRecipient(sessionId))
+      // Every attempt (inline or retried) settles only the claims that exist
+      // now — same id, claimant, claimed_at. A session-wide retry would settle
+      // mail claimed after the turn end (the dispatcher can claim inside the
+      // retry window) and hold it uncertain mid-turn (review B1). A read is
+      // not blocked by a RESERVED holder, so the snapshot survives the same
+      // contention that failed the settle; if it cannot be read at all the
+      // empty list settles nothing and mailbox recovery covers the mail.
+      const claims = this.mailGuard.guardResult<ClaimRef[]>([], 'chat_mail_settle_snapshot_failed', () => this.teamMail.claimRefs(sessionId), { sessionId })
+      this.mailGuard.settleRecipient(sessionId, () => this.teamMail.settleClaims(sessionId, claims))
     }
     // The context-exhausted flag (chat-context-exhaustion D3), set or cleared
     // before the mail outcome below reads it. A failed write degrades to a
