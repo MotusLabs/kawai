@@ -54,6 +54,16 @@ Recorded 2026-10-21 in one exclusive window (`suite-run -x`; evidence under `/ho
 
 **1.1 per-file timings** — new runner at N=1, per-file isolation (`logs/ps-window/timings-n1.json`, written by `--timings --update-timings` on a full serial run; 573 files, 524.2 s summed). The 20 slowest, 49.2% of the total: chatSessionManager 51.0 s, throttled-reconnect.integration 30.3 s, promotionSteps 19.9 s, executionLandingMatrix 19.9 s, copy-mode-async.integration 12.7 s, executionRoundsMatrix 11.2 s, planExecution.integration 9.9 s, executionRounds 9.6 s, integrationLandingRules 9.5 s, executionScenarioMatrix 9.3 s, taskRevisionE09.integration 9.2 s, effectLifecycleTable 8.8 s, promotionService 8.5 s, integrationLanding 8.4 s, executionPlanWideChecks 8.1 s, promotion.integration 6.9 s, impactService 6.5 s, taskResultsE08.integration 6.5 s, integrationLanding.integration 6.2 s, effectResumeRounds 5.2 s.
 
+**4.1 setup profile** — recorded 2026-10-21, single-file runs in one exclusive window (per-test times from the JUnit report; setup costs from a 5-sample probe importing the worktree sources). A fresh file-backed `initDatabase` costs ~123 ms: applying the baseline schema and the 15 migrations (~80–95 ms — the same work `schemaDb()` pays, file or memory) plus 16 synchronous backups — the `startup` snapshot and one `pre-migration-<n>` per migration, each a `serialize()`, fsync, and `integrity_check` over a separate read-only connection (~40 ms together). D6's hypothesis that the backups dominate is false: they are the smaller third. Setup share = per-init cost × tests / median wall of 3 runs:
+
+| file | tests | total (median of 3) | setup share | cause |
+|---|---|---|---|---|
+| `teamAssignmentStore.test.ts` | 10 | 1.875 s | ~65% (10 × 123 ms ≈ 1.2 s) | a fresh file-backed `initDatabase` per test |
+| `teamTaskService.test.ts` | 20 | 3.764 s | ~65% (20 × 123 ms ≈ 2.5 s) | `initDatabase` in `beforeEach`; the git fixture is shared `beforeAll` |
+| `executionLandingMatrix.test.ts` | 23 | 20.349 s | ~13% (23 × 119 ms ≈ 2.7 s) | the bodies' real git (clone, merge, push through the executor); the per-test `createMatrixBench` database is minor |
+
+Setup dominates only in the first two, so 4.2 cuts them with the direction's copy shape: one migrated in-memory template per process, `Database.deserialize` of it per test — ~0.75 ms against 123 ms (`schemaCopy()` in `src/server/__tests__/schemaDb.ts`). Tests whose subject is the migration (the legacy-database test in `teamAssignmentStore`) or persistence across a real close/reopen keep their file-backed setup; the landing matrix keeps its bench untouched.
+
 ## Goals / Non-Goals
 
 **Goals:**
