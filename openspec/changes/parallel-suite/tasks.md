@@ -22,7 +22,7 @@
 ## 4. Setup costs and tiers
 
 - [x] 4.1 Profile `teamAssignmentStore`, `teamTaskService`, and `executionLandingMatrix` and record where per-test time goes.
-- [ ] 4.2 Where setup dominates, share it per file or use `schemaDb()`, keeping file-backed setup for migration and backup subjects. Verify that each touched file's test names and count are unchanged and that its time drops.
+- [x] 4.2 Where setup dominates, share it per file or use `schemaDb()`, keeping file-backed setup for migration and backup subjects. Verify that each touched file's test names and count are unchanged and that its time drops.
 - [ ] 4.3 Add the slow-tier selection option to the runner and the misplaced-file report (over 5 s outside the tier and not listed). Rename or list each file it reports. Verify that the option excludes every `*.integration.test.ts` and real-tmux file.
 
 ## 5. Integration check
