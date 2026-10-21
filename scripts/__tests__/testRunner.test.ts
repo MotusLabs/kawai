@@ -17,15 +17,8 @@ import {
 
 describe('parseRunArgs', () => {
   test('splits flags, file arguments, and passthrough', () => {
-    const parsed = parseRunArgs([
-      '--skip-real-tmux',
-      '--coverage',
-      'a.test.ts',
-      '--skip-isolated',
-      'deep/b.test.tsx',
-    ])
+    const parsed = parseRunArgs(['--skip-real-tmux', '--coverage', 'a.test.ts', 'deep/b.test.tsx'])
     expect(parsed.skipRealTmux).toBe(true)
-    expect(parsed.skipIsolated).toBe(true)
     expect(parsed.fileArgs).toEqual(['a.test.ts', 'deep/b.test.tsx'])
     expect(parsed.passthrough).toEqual(['--coverage'])
   })

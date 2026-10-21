@@ -1,14 +1,14 @@
 import { afterAll, afterEach, beforeEach, describe, expect, test, mock } from 'bun:test'
 import type { Database } from 'bun:sqlite'
-import { schemaDb } from '../schemaDb'
+import { schemaDb } from './schemaDb'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import type { Session, ServerMessage, TerminalSession } from '@shared/types'
-import type { AgentSessionRecord, ChatSessionRecord, ClaimCurrentWindowPatch } from '../../db'
-import { TmuxTimeoutError } from '../../tmuxTimeout'
-import { TMUX_FIELD_SEPARATOR } from '../../tmuxFormat'
-import { BUILD_VERSION } from '../../version'
+import type { AgentSessionRecord, ChatSessionRecord, ClaimCurrentWindowPatch } from '../db'
+import { TmuxTimeoutError } from '../tmuxTimeout'
+import { TMUX_FIELD_SEPARATOR } from '../tmuxFormat'
+import { BUILD_VERSION } from '../version'
 
 const bunAny = Bun as typeof Bun & {
   serve: typeof Bun.serve
@@ -352,14 +352,14 @@ class TerminalProxyMock {
   }
 }
 
-mock.module('../../config', () => ({
+mock.module('../config', () => ({
   config: configState,
   isValidHostname: (hostname: string) => {
     const re = /^([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9-]{0,61}[a-zA-Z0-9])(\.([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9-]{0,61}[a-zA-Z0-9]))*$/
     return hostname.length > 0 && hostname.length <= 253 && re.test(hostname)
   },
 }))
-mock.module('../../logger', () => ({
+mock.module('../logger', () => ({
   logLevel: 'info',
   logger: {
     debug: (event: string, data?: Record<string, unknown>) =>
@@ -372,7 +372,7 @@ mock.module('../../logger', () => ({
       logEntries.push({ level: 'error', event, data }),
   },
 }))
-mock.module('../../db', () => ({
+mock.module('../db', () => ({
   resolveDataDir: () => path.join(os.tmpdir(), `agentboard-index-handlers-${process.pid}`),
   initDatabase: () => ({
     db: mailboxDb,
@@ -553,14 +553,14 @@ class SessionRefreshWorkerClientMock {
   dispose(): void {}
 }
 
-mock.module('../../sessionRefreshWorkerClient', () => ({
+mock.module('../sessionRefreshWorkerClient', () => ({
   SessionRefreshWorkerClient: SessionRefreshWorkerClientMock,
   SessionRefreshWorkerTimeoutError: SessionRefreshWorkerTimeoutErrorMock,
 }))
-mock.module('../../SessionManager', () => ({
+mock.module('../SessionManager', () => ({
   SessionManager: SessionManagerMock,
 }))
-mock.module('../../SessionRegistry', () => ({
+mock.module('../SessionRegistry', () => ({
   SessionRegistry: SessionRegistryMock,
 }))
 class TerminalProxyErrorMock extends Error {
@@ -573,7 +573,7 @@ class TerminalProxyErrorMock extends Error {
   }
 }
 
-mock.module('../../terminal', () => ({
+mock.module('../terminal', () => ({
   createTerminalProxy: (options: ConstructorParameters<typeof TerminalProxyMock>[0]) =>
     new TerminalProxyMock(options),
   resolveTerminalMode: () => 'pty',
@@ -660,7 +660,7 @@ let importCounter = 0
 
 async function loadIndex() {
   importCounter += 1
-  await import(`../../index?test=${importCounter}`)
+  await import(`../index?test=${importCounter}`)
   if (!serveOptions) {
     throw new Error('Bun.serve was not called')
   }
@@ -778,10 +778,10 @@ afterAll(() => {
   mock.restore()
 })
 
-mock.module('../../chat/sdkAvailability', () => ({ probeSdkAvailability: async () => {} }))
+mock.module('../chat/sdkAvailability', () => ({ probeSdkAvailability: async () => {} }))
 // The executable check spawns a real child for --version; Bun.spawn is
 // mocked below, so stub the module like the handshake probe above.
-mock.module('../../chat/claudeExecutable', () => {
+mock.module('../chat/claudeExecutable', () => {
   class ClaudeExecutableError extends Error {
     kind: string
     constructor(kind: string, message: string) {

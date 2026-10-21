@@ -1,6 +1,5 @@
 // The unit-suite runner (design D1–D3): one `bun test --parallel=N` over the
-// main batch, the hand-kept isolated sets serially until task 2.4 removes
-// them, and the real-tmux files one process at a time. The runner owns one
+// main batch, and the real-tmux files one process at a time. The runner owns one
 // run root per invocation; scripts/test-preload.ts — passed to every `bun
 // test` child with --preload — gives each test file fresh directories for
 // the four runner-provided variables beneath that root. Every child also
@@ -14,7 +13,19 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { ISOLATED_CLIENT_FILES, ISOLATED_FILES, REAL_TMUX_FILES } from './test-isolation-lists'
+
+// These spawn real servers, PTYs, and tmux clients. They still need process
+// isolation from global Bun.* mocks, but running them under coverage on
+// Linux CI can stall PTY attach readiness.
+const REAL_TMUX_FILES = new Set([
+  'copy-mode-async.integration.test.ts',
+  'output-coalescing.integration.test.ts',
+  'double-attach.integration.test.ts',
+  'hibernation.integration.test.ts',
+  'integration.test.ts',
+  'throttled-reconnect.integration.test.ts',
+  'chatRename.integration.test.ts',
+])
 
 const RUN_ROOT_PREFIX = 'agentboard-tests-'
 const PRELOAD_ARG = 'scripts/test-preload.ts'
@@ -35,7 +46,6 @@ interface RunnerChild {
 
 interface RunArgs {
   skipRealTmux: boolean
-  skipIsolated: boolean
   fileArgs: string[]
   passthrough: string[]
 }
@@ -46,13 +56,11 @@ interface RunArgs {
 export function parseRunArgs(args: string[]): RunArgs {
   const parsed: RunArgs = {
     skipRealTmux: false,
-    skipIsolated: false,
     fileArgs: [],
     passthrough: [],
   }
   for (const arg of args) {
     if (arg === '--skip-real-tmux') parsed.skipRealTmux = true
-    else if (arg === '--skip-isolated') parsed.skipIsolated = true
     else if (arg.endsWith('.test.ts') || arg.endsWith('.test.tsx')) parsed.fileArgs.push(arg)
     else parsed.passthrough.push(arg)
   }
@@ -233,7 +241,7 @@ export async function forwardSignalAndReap(
   if (runRoot !== null) fs.rmSync(runRoot, { recursive: true, force: true })
 }
 
-// --- file collection (task 2.4 removes the isolated sets) ---
+// --- file collection ---
 
 async function collectFiles(): Promise<{
   serverTests: string[]
@@ -243,8 +251,7 @@ async function collectFiles(): Promise<{
   const serverTests: string[] = []
   const serverGlob = new Bun.Glob('src/server/__tests__/*.test.ts')
   for await (const file of serverGlob.scan({ onlyFiles: true })) {
-    const basename = path.basename(file)
-    if (!ISOLATED_FILES.has(basename) && !REAL_TMUX_FILES.has(basename)) {
+    if (!REAL_TMUX_FILES.has(path.basename(file))) {
       serverTests.push(file)
     }
   }
@@ -252,9 +259,7 @@ async function collectFiles(): Promise<{
   const clientTests: string[] = []
   const clientGlob = new Bun.Glob('src/client/__tests__/*.test.{ts,tsx}')
   for await (const file of clientGlob.scan({ onlyFiles: true })) {
-    if (!ISOLATED_CLIENT_FILES.has(path.basename(file))) {
-      clientTests.push(file)
-    }
+    clientTests.push(file)
   }
 
   const runnerTests: string[] = []
@@ -405,17 +410,6 @@ async function main() {
       'main batch'
     )
 
-    // Always run global-mutating tests in a separate process to prevent races.
-    // Each file gets its own invocation — and, through the preload, its own
-    // run root beneath this run's root (decision D-b).
-    for (const file of ISOLATED_FILES) {
-      await runCommand(
-        ['bun', 'test', '--preload', PRELOAD_ARG, `--timeout=${DEFAULT_TEST_TIMEOUT_MS}`, ...args.passthrough, `src/server/__tests__/${file}`],
-        env,
-        `isolated: ${file}`
-      )
-    }
-
     if (!args.skipRealTmux) {
       const argsWithoutCoverage = stripCoverageArgs(args.passthrough)
       for (const file of REAL_TMUX_FILES) {
@@ -432,32 +426,6 @@ async function main() {
           env,
           `real-tmux: ${file}`
         )
-      }
-    }
-
-    for (const file of ISOLATED_CLIENT_FILES) {
-      await runCommand(
-        ['bun', 'test', '--preload', PRELOAD_ARG, `--timeout=${DEFAULT_TEST_TIMEOUT_MS}`, ...args.passthrough, `src/client/__tests__/${file}`],
-        env,
-        `client-isolated: ${file}`
-      )
-    }
-
-    if (!args.skipIsolated) {
-      // Each file in isolated/ runs in its own process, same as ISOLATED_FILES
-      // above: these files install top-level mock.module(...) hooks (e.g.
-      // indexHandlers.test.ts stubs ../../terminal with a partial factory),
-      // and Bun module mocks persist for the life of the process — on readdir
-      // orderings where the mocking file loads first (Linux ext4), a shared
-      // process poisons every later import of the same module.
-      const isolatedTests: string[] = []
-      const isolatedGlob = new Bun.Glob('src/server/__tests__/isolated/*.test.ts')
-      for await (const file of isolatedGlob.scan({ onlyFiles: true })) {
-        isolatedTests.push(file)
-      }
-      isolatedTests.sort()
-      for (const file of isolatedTests) {
-        await runCommand(['bun', 'test', '--preload', PRELOAD_ARG, `--timeout=${DEFAULT_TEST_TIMEOUT_MS}`, ...args.passthrough, file], env, `isolated/: ${file}`)
       }
     }
   } finally {
