@@ -56,7 +56,13 @@ export class MailboxStore {
   } = {}) {
     this.events = new MessageEventLog(db)
     this.parkedCancel = new ParkedCancel({
-      transaction: run => db.transaction(run)(),
+      // Every writing transaction begins IMMEDIATE: in rollback-journal mode a
+      // deferred transaction that already read holds SHARED, and its first
+      // write gets SQLITE_BUSY at once — SQLite skips the busy handler on that
+      // upgrade path (db.ts keeps its pragma for plain writer-vs-writer waits).
+      // Nested transaction calls use savepoints, so only the outermost call's
+      // mode applies and the store's own transitions compose inside unchanged.
+      transaction: run => db.transaction(run).immediate(),
       get: id => this.get(id),
       parkedFor: id => this.parkedFor(id),
       transition: (id, from, set, kind, actor) => this.transition(id, from, set, kind, actor),
@@ -119,7 +125,7 @@ export class MailboxStore {
       this.db.transaction(() => {
         insert()
         this.cachedStatement('UPDATE team_messages SET worker_choice = $choice WHERE id = $id').run({ $choice: choice, $id: id })
-      })()
+      }).immediate()
     } else insert()
     this.changed(id, true)
     const message = this.get(id)!
@@ -203,8 +209,10 @@ export class MailboxStore {
 
   /** Re-check recipient availability inside the transaction that wins the claim. */
   claimWhen(id: string, sessionId: string, isEligible: () => boolean, reserved = false): boolean {
+    // IMMEDIATE: the eligibility read must not take SHARED before the claim's
+    // write lock, or the upgrade would bypass the busy handler (see above).
     return this.db.transaction(() => isEligible() &&
-      (reserved ? this.claimSpawned(id, sessionId) : this.claim(id, sessionId)))()
+      (reserved ? this.claimSpawned(id, sessionId) : this.claim(id, sessionId))).immediate()
   }
 
   /** Urgent direct mail held while the recipient's card awaits the human. */
@@ -362,7 +370,7 @@ export class MailboxStore {
         this.recordEvent(before, 'dead-lettered', SYSTEM, nowIso(), reason)
       }
       return count
-    })()
+    }).immediate()
   }
 
   /** Claimed rows not yet acknowledged (startup reconciliation, D10). */
@@ -448,12 +456,14 @@ export class MailboxStore {
    * transaction so the event keeps the facts the update overwrites.
    */
   private logged(id: string, run: () => boolean, kind: MessageEventKind, actor: StoreActor = SYSTEM, at = nowIso(), reason: string | null = null): boolean {
+    // The read-then-write at the heart of every transition: IMMEDIATE takes
+    // RESERVED at BEGIN, where the busy handler applies (see the constructor).
     return this.db.transaction(() => {
       const before = this.get(id)
       const changed = run()
       if (changed && before) this.recordEvent(before, kind, actor, at, reason)
       return changed
-    })()
+    }).immediate()
   }
 
   private recordEvent(before: TeamMessage, kind: MessageEventKind, actor: StoreActor, at: string, reason: string | null = null) {
