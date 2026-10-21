@@ -11,7 +11,7 @@
 // the live delivery path instead.)
 import { expect, test } from '@playwright/test'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { realpathSync } from 'node:fs'
+import { realpathSync, rmSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { Script, THREAD_ID } from '../../tests/fixtures/codexTranscript'
@@ -23,6 +23,9 @@ const COMMAND = { type: 'commandExecution', id: 'cmd-1', command: 'git push orig
 
 test('a Codex chat drives the app-server: approval card, question card, and a live peer turn', async ({ page }, info) => {
   const project = realpathSync(await mkdtemp(path.join(os.tmpdir(), 'agentboard-e2e-codex-')))
+  // The rollout the boot reports — the bare append after the peer turn
+  // writes the envelope row there, so the delivery receipt can confirm.
+  const rollout = path.join(process.env.E2E_TMUX_TMPDIR ?? os.tmpdir(), 'codex-e2e-rollout.jsonl')
   try {
     await mkdir(path.join(project, '.kawai'), { recursive: true })
     // Codex entries are legal at project level; only codexHome/network are
@@ -31,9 +34,6 @@ test('a Codex chat drives the app-server: approval card, question card, and a li
     await writeFile(path.join(project, '.kawai', 'profiles.json'), JSON.stringify({
       codex: { label: 'Codex E2E', runtime: 'codex' },
     }))
-    // The rollout the boot reports — the bare append after the peer turn
-    // writes the envelope row there, so the delivery receipt can confirm.
-    const rollout = path.join(process.env.E2E_TMUX_TMPDIR ?? os.tmpdir(), 'codex-e2e-rollout.jsonl')
     // Run 1: boot + the 7.1 rate-limits fill read, the approval turn, the
     // question turn, then the live peer delivery's turn (ct-3).
     const script = new Script()
@@ -95,7 +95,8 @@ test('a Codex chat drives the app-server: approval card, question card, and a li
     const messages = page.getByTestId('team-messages')
     await expect(messages).toBeVisible()
     const composer = messages.getByTestId('message-composer')
-    // The recipient select is disabled until the body has text.
+    // The composer stays usable while the body is empty — only Send waits
+    // for a body — so the recipient can be picked before or after typing.
     await composer.getByLabel('Message body').fill('Peer hello from the team mailbox.')
     await composer.getByLabel('Recipient').selectOption({ label: 'Codex e2e chat' })
     await page.screenshot({ path: info.outputPath('codex-compose.png') })
@@ -109,6 +110,12 @@ test('a Codex chat drives the app-server: approval card, question card, and a li
     await page.screenshot({ path: info.outputPath('codex-peer-live.png') })
     await killChat(page)
   } finally {
+    // Leave no fake state behind: CI runs every fixture spec in ONE server,
+    // and a leftover transcript would make any later Codex child replay
+    // this spec's script. With both files gone the fake cannot read a
+    // transcript, so a child a later spec starts exits at once.
+    rmSync(process.env.FAKE_TRANSCRIPT!, { force: true })
+    rmSync(rollout, { force: true })
     await rm(project, { recursive: true, force: true })
   }
 })

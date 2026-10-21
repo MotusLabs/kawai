@@ -54,10 +54,11 @@ process.env.PI_HOME = piDir
 // codexHome — never the user's ~/.codex — passes the login gate, and the
 // fake app-server stands in for the Codex executable so the carve-out
 // (ChatSessionManager's codexGatesApply) runs the real Codex path and gates
-// under AGENTBOARD_CHAT_FIXTURE. The spec writes FAKE_TRANSCRIPT before
-// creating its chat; every new app-server child replays run 1 of it. Specs
-// that never write the file make any Codex child they start exit at once —
-// harmless for their header-only assertions.
+// under AGENTBOARD_CHAT_FIXTURE. chat-codex.spec.ts writes FAKE_TRANSCRIPT
+// before creating its chat — every app-server child while it exists replays
+// run 1 of it — and removes the file (with its rollout) when done, so a
+// later spec's Codex child finds no transcript and exits at once, harmless
+// for header-only assertions.
 writeFileSync(join(codexDir, 'auth.json'), JSON.stringify({ OPENAI_API_KEY: null, tokens: { access_token: 'fake' } }))
 process.env.KAWAI_CODEX_PATH = fileURLToPath(new URL('./tests/fixtures/fake-codex-app-server.ts', import.meta.url))
 process.env.FAKE_TRANSCRIPT = join(tmuxTmpDir, 'codex-transcript.jsonl')
