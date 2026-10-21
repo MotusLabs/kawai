@@ -25,7 +25,7 @@
 - [x] 2.4 Add the `worker-choice` waiting constraint (detail selector, `retryAt` on cooldown) and its ordering. Verify `waitingReasons` tests for a cooling hold (retry at the cooldown end) and a cap hold (`profile-cap` plus `worker-choice`), and a dispatcher test where the message routes at the cooldown end without any other change.
 - [x] 2.5 Make `LimitOutcomes.forward` drop the choice. Verify a limit-outcome test where a forwarded message has no choice and still excludes the limited worker, while a released message keeps its choice.
 - [x] 2.6 Add the optional `worker` to `RouteContext.message` and `LimitOutcomeContext.message` in `src/shared/routing.ts`. Verify a rule-host test where a rule sees it, and that the published `kawai-routing.d.ts` copy matches.
-- [ ] 2.7 Document the choice in `docs/routing/README.md` (filter, holds, forwards). Verify the README examples match the rule types.
+- [x] 2.7 Document the choice in `docs/routing/README.md` (filter, holds, forwards). Verify the README examples match the rule types.
 
 ## 3. Agent tools
 

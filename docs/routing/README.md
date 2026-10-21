@@ -105,7 +105,7 @@ files are never loaded. It default-exports `{ route, onLimit?, env?, timeoutMs? 
 
 - Rules run in a Worker with an empty environment plus only the variables
   listed in `env`. They see message metadata (priority, sender group, tags,
-  worktree, task id), never the body.
+  worktree, task id, worker choice), never the body.
 - `route(ctx)` gets the eligible candidates (idle members and spawn slots per
   allowed profile, already filtered by delivery, staffing, caps, and parking —
   cooling profiles are included with their effective `cooldownUntil`, so a
@@ -188,6 +188,50 @@ its work where it is. Waiting reasons say the provider is out of credit and
 when it is retried at the latest, and urgent direct mail is refused with "…
 which is out of credit; its cooldown ends by … at the latest."
 
+
+## Worker choice
+
+Group mail can name the worker it should run on: a provider id (any of that
+provider's models the group lists) or `provider/model`. The row stores the
+canonical selector in `worker_choice`; it is resolved to the group's model
+keys on every pass, so a group edit applies the way any other group edit
+does. While it is set:
+
+- **Filter.** Members and spawn slots on other workers are never candidates;
+  the filter runs before any rule, so a rule's pick outside it is unknown and
+  falls back to the built-in strategy. With a plan role's `allowed_profiles`
+  the candidates are the intersection, in the role's order — a choice never
+  widens a role. A member inside the role but off the choice reports
+  `worker-choice`; one outside the role reports `outside-role`.
+- **Holds.** Caps and worktree occupancy still apply: a capped chosen worker
+  waits (the reason gives `profile-cap` for it, plus `worker-choice`) instead
+  of spawning elsewhere. When every allowed candidate is cooling, the mail
+  waits with `worker-choice` naming the selector and the cooldown end as its
+  retry time, and routes then with no other change.
+- **Forwards.** A limit forward drops the choice; its exclusion of the limited
+  profile governs, so the work is not left waiting out that provider's reset.
+  A release returns the original message to its group with the choice intact.
+
+Rules see the choice as `ctx.message.worker` (absent without one), in both
+`route` and `onLimit`. For example, pinned work prefers an idle member over a
+spawn, and a limit on pinned work releases it to wait for its worker:
+
+```ts
+import type { RoutingRule } from './kawai-routing'
+
+const rule: RoutingRule = {
+  route(ctx) {
+    if (!ctx.message.worker) return { type: 'default' }
+    // The candidates are already limited to the chosen worker.
+    const member = ctx.candidates.find(c => c.kind === 'member')
+    return member ? { type: 'pick', candidateId: member.id } : { type: 'default' }
+  },
+  onLimit(event) {
+    return event.message.worker ? { type: 'release' } : { type: 'default' }
+  },
+}
+export default rule
+```
 
 ## Plan roles and author tags
 
