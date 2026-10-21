@@ -9,6 +9,8 @@
 // already landed; a landed change differing in anything else, or removed,
 // is the `landed-changed` refusal. `lead-changed` is informational, never a
 // refusal (D10): Apply takes it, and later cards go to the new lead group.
+// With nothing landed, a plan-wide rules difference is every unlanded
+// change's difference through its effective fields (D10).
 import type { PlanChange, PlanContent } from '../../../shared/plans'
 import type { DeltaChange, DeltaFinding, RevisionDelta } from '../../../shared/planRevisionControl'
 
@@ -57,15 +59,22 @@ export function revisionDelta(from: PlanContent, to: PlanContent, landed: Readon
       changes: [],
     })
   }
-  if (JSON.stringify(from.acceptanceRules) !== JSON.stringify(to.acceptanceRules) || JSON.stringify(from.extraChecks) !== JSON.stringify(to.extraChecks)) {
-    if (landed.size > 0) {
-      findings.push({
-        kind: 'plan-rules-changed',
-        detail: 'The plan-wide acceptance rules or extra checks changed with landed work; add a change that corrects it (plan-supervision S4).',
-        changes: [],
-      })
-    }
+  // The plan-wide rules (D10): once something has landed their difference is
+  // the `plan-rules-changed` refusal; with nothing landed it marks every
+  // unlanded change `changed` through its effective fields instead, so Apply
+  // asks for each one rather than keeping the old definition silently.
+  const rulesChanged = JSON.stringify(from.acceptanceRules) !== JSON.stringify(to.acceptanceRules)
+  const checksChanged = JSON.stringify(from.extraChecks) !== JSON.stringify(to.extraChecks)
+  if ((rulesChanged || checksChanged) && landed.size > 0) {
+    findings.push({
+      kind: 'plan-rules-changed',
+      detail: 'The plan-wide acceptance rules or extra checks changed with landed work; add a change that corrects it (plan-supervision S4).',
+      changes: [],
+    })
   }
+  const planWideFields = landed.size > 0
+    ? []
+    : [...(rulesChanged ? ['acceptanceRules'] : []), ...(checksChanged ? ['extraChecks'] : [])]
 
   const fromByName = new Map(from.changes.map(change => [change.change, change]))
   const toByName = new Map(to.changes.map(change => [change.change, change]))
@@ -74,6 +83,10 @@ export function revisionDelta(from: PlanContent, to: PlanContent, landed: Readon
     const fromChange = fromByName.get(toChange.change)
     if (!fromChange) return { change: toChange.change, class: 'added', fields: [], choice: null }
     const fields = changedFields(from, to, fromChange, toChange)
+    // The plan-wide rules are effective fields of every unlanded change (D10).
+    for (const field of planWideFields) {
+      if (!fields.includes(field)) fields.push(field)
+    }
     if (fields.length === 0) return { change: toChange.change, class: 'unchanged', fields: [], choice: null }
     if (landed.has(toChange.change)) {
       if (fields.every(field => METADATA_FIELDS.has(field))) {

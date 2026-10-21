@@ -90,11 +90,29 @@ describe('revisionDelta', () => {
   })
 
   test('the effective review group: a plan reviewGroup change marks changes without their own', () => {
-    const from = content([change('a'), change('b', { reviewGroup: 'reviewers-mimo' })])
-    const to = content([change('a'), change('b', { reviewGroup: 'reviewers-mimo' })], { reviewGroup: 'reviewers-claude' })
-    const delta = revisionDelta(from, to, new Set(), new Set())
-    expect(classes(delta).a).toMatchObject({ class: 'changed', fields: ['reviewGroup'] })
+    // D10, roles with nothing landed: every unlanded change whose effective
+    // review group changed reads `changed`, provisioned ones needing a choice.
+    const from = content([change('a'), change('waiting'), change('b', { reviewGroup: 'reviewers-mimo' })])
+    const to = content([change('a'), change('waiting'), change('b', { reviewGroup: 'reviewers-mimo' })], { reviewGroup: 'reviewers-claude' })
+    const delta = revisionDelta(from, to, new Set(), new Set(['a']))
+    expect(classes(delta).a).toMatchObject({ class: 'changed', fields: ['reviewGroup'], choice: 'needed' })
+    expect(classes(delta).waiting).toMatchObject({ class: 'changed', fields: ['reviewGroup'], choice: 'none' })
     expect(classes(delta).b.class).toBe('unchanged')
+  })
+
+  test('plan-wide rules with nothing landed mark every unlanded change changed (D10)', () => {
+    const from = content([change('tasked'), change('waiting')])
+    const to = content([change('tasked'), change('waiting')], {
+      acceptanceRules: ['new rule'],
+      extraChecks: [{ name: 'ci', description: 'd', command: 'bun ci' }],
+    })
+    const delta = revisionDelta(from, to, new Set(), new Set(['tasked']))
+    expect(finding(delta, 'plan-rules-changed')).toBeNull()
+    expect(classes(delta).tasked).toMatchObject({ class: 'changed', fields: ['acceptanceRules', 'extraChecks'], choice: 'needed' })
+    expect(classes(delta).waiting).toMatchObject({ class: 'changed', fields: ['acceptanceRules', 'extraChecks'], choice: 'none' })
+    // An added change stays `added`: its provisioned definition is the new one.
+    expect(revisionDelta(from, content([change('tasked'), change('waiting'), change('new')], { acceptanceRules: ['new rule'] }), new Set(), new Set(['tasked'])).changes
+      .find(entry => entry.change === 'new')!.class).toBe('added')
   })
 
   test('landing-changed, plan-rules-changed only once something landed', () => {
@@ -109,11 +127,16 @@ describe('revisionDelta', () => {
     expect(finding(branch, 'landing-changed')).not.toBeNull()
     // Direct to direct, same plan rules: no findings at all.
     expect(revisionDelta(content([change('a')]), content([change('a')]), new Set(), new Set()).findings).toEqual([])
-    // Rules differ with nothing landed: no refusal; once landed: one finding.
+    // Rules differ with nothing landed: no refusal, but the class reads
+    // changed through the plan-wide effective fields (D10); once landed the
+    // class reads unchanged again and the refusal is the finding.
     const edited = rules([{ name: 'ci-extra', description: 'd', command: 'bun ci:extra' }])
-    expect(finding(revisionDelta(rules([]), edited, new Set(), new Set()), 'plan-rules-changed')).toBeNull()
-    const landed = finding(revisionDelta(rules([]), edited, new Set(['a']), new Set()), 'plan-rules-changed')
-    expect(landed).not.toBeNull()
+    const waiting = revisionDelta(rules([]), edited, new Set(), new Set())
+    expect(finding(waiting, 'plan-rules-changed')).toBeNull()
+    expect(classes(waiting).a).toMatchObject({ class: 'changed', fields: ['extraChecks'], choice: 'none' })
+    const landed = revisionDelta(rules([]), edited, new Set(['a']), new Set())
+    expect(finding(landed, 'plan-rules-changed')).not.toBeNull()
+    expect(classes(landed).a.class).toBe('unchanged')
   })
 
   test('landed-changed ignores dependsOn, names a landed content change, and a landed removal', () => {
