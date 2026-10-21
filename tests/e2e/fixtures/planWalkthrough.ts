@@ -194,7 +194,19 @@ export function submitRound(root: string, mode: 'result' | 'findings', implement
           claimant = row?.claimed_by ?? null;
           if (claimant === null) await new Promise(resolve => setTimeout(resolve, 1000));
         }
-        if (claimant === null) throw new Error('the review handoff was never claimed');
+        if (claimant === null) {
+          // Self-diagnosing: a CI timeout names its cause. A stopped change
+          // dispatches no review; a dispatched one names its mail state.
+          const change = db.prepare("SELECT state, step, stop_reason, stop_detail_json FROM plan_execution_changes WHERE change = 'walk-api' ORDER BY rowid DESC").get() ?? {};
+          const handoff = db.prepare("SELECT m.state AS mail_state, m.reason AS mail_reason FROM team_task_assignments a LEFT JOIN team_messages m ON m.id = a.message_id WHERE a.task_id = ? AND a.handoff_kind = 'review' AND a.superseded_by IS NULL ORDER BY a.rowid DESC").get(taskId) ?? null;
+          const stage = change.state === 'stopped'
+            ? 'the change stopped (' + (change.stop_reason ?? 'unknown') + (change.stop_detail_json ? ' — ' + change.stop_detail_json : '') + ')'
+            : 'the change is ' + (change.state ?? 'unknown') + (change.step ? ' at step ' + change.step : '');
+          const dispatch = handoff
+            ? 'the review was dispatched, its mail ' + (handoff.mail_state ?? 'unknown') + (handoff.mail_reason ? ' (' + handoff.mail_reason + ')' : '')
+            : 'the review was never dispatched';
+          throw new Error('the review handoff was never claimed in 30s: ' + stage + '; ' + dispatch);
+        }
         const result = db.prepare('SELECT id FROM team_task_results WHERE task_id = ? ORDER BY rowid DESC').get(taskId);
         if (!result) throw new Error('no result yet');
         const asReviewer = taskHandlers(tasks, claimant, results);
