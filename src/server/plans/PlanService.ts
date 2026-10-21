@@ -31,6 +31,7 @@ import {
   type PinDisposition,
 } from './planPreconditions'
 import { closePlan, reopenPlan, withdrawPlan, type PlanCloseInput, type PlanWithdrawInput } from './planLifecycle'
+import { revisionControlCommandPayload, type RevisionControlEventInput } from './revisionControl/events'
 
 export type PlanCaller = { kind: 'agent'; sessionId: string } | { kind: 'human'; team: TeamIdentity }
 
@@ -386,6 +387,42 @@ export class PlanService {
         kind: event.kind, actor: event.kind === 'promotion-finished' ? SYSTEM : HUMAN, commandId, payload,
         ...(event.kind === 'promotion-cancelled' ? { reason: event.reason.trim() || null } : {}),
       })
+    })
+    return { ...outcome, result: ran ? result : undefined }
+  }
+
+  /**
+   * revision-control D3 (C3, C6): append one of the six revision-control
+   * kinds together with the hold's, pause's, or Apply's own writes
+   * (`within`), as one transaction replaying by `(plan_id, command_id)` over
+   * the compared payload — the trimmed rationale, note, and reason, the
+   * sorted change lists, and the choice maps. A replay returns the prior
+   * outcome without writing and never runs `within`, so a command retried
+   * after a crash publishes nothing twice (R17). PlanService stays the only
+   * writer of `plan_events` (C3): the revision-control services compose this
+   * and never write that table themselves. Every kind here is the human's
+   * (D1) — the owner places, releases, and extends holds, pauses, resolves
+   * pauses, and applies a revision.
+   */
+  recordRevisionControlEvent<T>(planId: string, event: RevisionControlEventInput, within: () => T): ExecutionEventOutcome<T> {
+    const commandId = event.commandId.trim()
+    if (!commandId) {
+      return { ok: false, reason: 'invalid', result: undefined, message: 'A revision-control command needs a stable command id so a resend replays instead of repeating.' }
+    }
+    // The compared payload is canonical (D3); a malformed input — an
+    // unparsable deadline — is an invalid refusal, written nowhere.
+    let payload: CommandPayload
+    try {
+      payload = revisionControlCommandPayload(event)
+    } catch (error) {
+      return { ok: false, reason: 'invalid', result: undefined, message: error instanceof Error ? error.message : 'The command payload is malformed.' }
+    }
+    let result: T | undefined
+    let ran = false
+    const outcome = runPlanCommand(this.store, planId, commandId, payload, () => {
+      result = within()
+      ran = true
+      return this.store.insertEvent(planId, { kind: event.kind, actor: HUMAN, commandId, payload })
     })
     return { ...outcome, result: ran ? result : undefined }
   }
