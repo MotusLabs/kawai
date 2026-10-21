@@ -3,8 +3,9 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { isProcDead } from './fixtures/runnerProbe/procState'
-import { buildBunTestArgs } from '../planBatches'
+import { buildBunTestArgs, planBatches } from '../planBatches'
 import {
+  collectFiles,
   defaultWorkers,
   effectiveQuota,
   forwardSignalAndReap,
@@ -12,6 +13,7 @@ import {
   isOwnerAlive,
   parseCpuQuota,
   parseRunArgs,
+  planRun,
   readOwnerMarker,
   readProcStartTime,
   refuseBatchAfterSignal,
@@ -51,6 +53,114 @@ describe('hasTestNameFilter', () => {
     expect(hasTestNameFilter(['-t=refresh'])).toBe(true)
     expect(hasTestNameFilter(['--test-name-pattern'])).toBe(true)
     expect(hasTestNameFilter(['--test-name-pattern=refresh'])).toBe(true)
+  })
+})
+
+describe('planRun', () => {
+  const collected = {
+    serverTests: ['src/server/__tests__/a.test.ts'],
+    clientTests: ['src/client/__tests__/c.test.tsx'],
+    runnerTests: ['scripts/__tests__/r.test.ts'],
+    sharedTests: ['src/shared/__tests__/s.test.ts'],
+  }
+  const base = {
+    workers: 4,
+    collected,
+    serialFiles: ['src/server/__tests__/integration.test.ts'],
+    mainLabel: 'main batch',
+    seedText: '{"version":1,"files":{}}',
+  }
+
+  test('--skip-slow plans the batches without the slow tier (B1)', () => {
+    const plan = planRun({ ...base, args: parseRunArgs(['--skip-slow']), seedTimings: () => null })
+    expect(plan.batchOptions.skipSlowTier).toBe(true)
+    expect(plan.fullRun).toBe(true)
+    // The composed options are what planBatches sees: no tmux batch, and no
+    // slow-tier file among the scheduled arguments.
+    const batches = planBatches(plan.batchOptions)
+    expect(batches.some((batch) => batch.kind === 'real-tmux')).toBe(false)
+    const scheduled = batches.flatMap((batch) => batch.cmd)
+    expect(scheduled.join(' ')).not.toContain('integration.test.ts')
+  })
+
+  test('plain args keep both tiers and publish a full passing run (B1)', () => {
+    let seededWith: string | null | undefined
+    const plan = planRun({
+      ...base,
+      args: parseRunArgs([]),
+      seedTimings: (seed) => {
+        seededWith = seed
+        return '/run-root/timings.json'
+      },
+    })
+    expect(plan.batchOptions.skipSlowTier).toBe(false)
+    expect(planBatches(plan.batchOptions).some((batch) => batch.kind === 'real-tmux')).toBe(true)
+    expect(plan.fullRun).toBe(true)
+    expect(plan.publishTimings).toBe(true)
+    expect(plan.batchOptions.timingsPath).toBe('/run-root/timings.json')
+    expect(plan.batchOptions.updateTimings).toBe(true)
+    expect(seededWith).toBe(base.seedText)
+  })
+
+  test('a failed batch never publishes (B1)', () => {
+    const plan = planRun({ ...base, args: parseRunArgs([]), seedTimings: () => null, outcome: 'failed' })
+    expect(plan.fullRun).toBe(true)
+    expect(plan.publishTimings).toBe(false)
+  })
+
+  test('a -t filter or explicit files never publish and never seed (B1)', () => {
+    let seedCalls = 0
+    const seedTimings = () => {
+      seedCalls += 1
+      return '/run-root/timings.json'
+    }
+    for (const argv of [
+      ['-t', 'refresh'],
+      ['-t=refresh'],
+      ['--test-name-pattern=refresh'],
+      ['src/server/__tests__/a.test.ts'],
+    ]) {
+      const plan = planRun({ ...base, args: parseRunArgs(argv), seedTimings })
+      expect(plan.fullRun).toBe(false)
+      expect(plan.publishTimings).toBe(false)
+      expect(plan.batchOptions.timingsPath).toBeUndefined()
+      expect(plan.batchOptions.updateTimings).toBe(false)
+    }
+    expect(seedCalls).toBe(0)
+  })
+
+  test('the main batch is the collected files in order, spelled as files (follow-up)', () => {
+    const plan = planRun({ ...base, args: parseRunArgs([]), seedTimings: () => null })
+    expect(plan.batchOptions.mainFiles).toEqual([
+      'src/server/__tests__/a.test.ts',
+      'scripts/__tests__/r.test.ts',
+      'src/shared/__tests__/s.test.ts',
+      'src/client/__tests__/c.test.tsx',
+    ])
+    // A slow-tier file under src/shared/__tests__ is excluded like any other:
+    // the directory itself is never an entry the per-file filter would miss.
+    const withSharedTier = planRun({
+      ...base,
+      args: parseRunArgs(['--skip-slow']),
+      collected: {
+        ...collected,
+        sharedTests: ['src/shared/__tests__/chatTime.integration.test.ts', 'src/shared/__tests__/chatTime.test.ts'],
+      },
+      seedTimings: () => null,
+    })
+    const scheduled = planBatches(withSharedTier.batchOptions).flatMap((batch) => batch.cmd)
+    expect(scheduled).not.toContain('./src/shared/__tests__/chatTime.integration.test.ts')
+    expect(scheduled).toContain('./src/shared/__tests__/chatTime.test.ts')
+  })
+
+  test('collectFiles enumerates every source tree as files (follow-up)', async () => {
+    const files = await collectFiles()
+    const all = [...files.serverTests, ...files.clientTests, ...files.runnerTests, ...files.sharedTests]
+    expect(all.length).toBeGreaterThan(100)
+    for (const file of all) {
+      expect(file.endsWith('.test.ts') || file.endsWith('.test.tsx')).toBe(true)
+    }
+    expect(files.sharedTests).toContain('src/shared/__tests__/chatTime.test.ts')
   })
 })
 

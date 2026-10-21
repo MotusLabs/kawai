@@ -79,6 +79,65 @@ export function hasTestNameFilter(passthrough: string[]): boolean {
   )
 }
 
+// The test files collectFiles() gathers, per source tree.
+export interface CollectedFiles {
+  serverTests: string[]
+  clientTests: string[]
+  runnerTests: string[]
+  sharedTests: string[]
+}
+
+// The run-shape decisions (review B1), pure over the parsed arguments and
+// the run's resolved inputs: the batch options main() passes to planBatches
+// verbatim — so no per-field call site can drop a flag — whether the run is
+// full, and whether it may publish the timings record. Only a full run
+// seeds the snapshot: `seedTimings` is called with the previous record's
+// text (null when there is none usable) and returns the snapshot path, or
+// null when seeding failed. `outcome` answers the publish decision for a
+// run whose batches passed; main() reaches its publish point only after a
+// batch resolved successfully (a failed one throws first), so it omits it.
+export interface RunPlan {
+  batchOptions: Parameters<typeof planBatches>[0]
+  fullRun: boolean
+  publishTimings: boolean
+}
+
+export function planRun(input: {
+  args: RunArgs
+  workers: number
+  collected: CollectedFiles
+  serialFiles: string[]
+  mainLabel: string
+  seedText: string | null
+  seedTimings: (seedText: string | null) => string | null
+  outcome?: 'passed' | 'failed'
+}): RunPlan {
+  const fullRun = input.args.fileArgs.length === 0 && !hasTestNameFilter(input.args.passthrough)
+  const timingsPath = fullRun ? input.seedTimings(input.seedText) : null
+  return {
+    batchOptions: {
+      workers: input.workers,
+      // The main batch is the collected files, spelled as files: a directory
+      // entry would escape the slow tier's per-file filter (review follow-up).
+      mainFiles: [
+        ...input.collected.serverTests,
+        ...input.collected.runnerTests,
+        ...input.collected.sharedTests,
+        ...input.collected.clientTests,
+      ],
+      serialFiles: input.serialFiles,
+      passthrough: input.args.passthrough,
+      skipRealTmux: input.args.skipRealTmux,
+      skipSlowTier: input.args.skipSlowTier,
+      mainLabel: input.mainLabel,
+      timingsPath: timingsPath ?? undefined,
+      updateTimings: timingsPath !== null,
+    },
+    fullRun,
+    publishTimings: fullRun && (input.outcome ?? 'passed') === 'passed',
+  }
+}
+
 // The measured default (2.3, design D2): 4 is the largest N whose alone-run
 // peak process-tree memory stayed within one serial run's peak, and it
 // passed three loaded runs beside two serial suites. The cgroup grants this
@@ -269,17 +328,21 @@ export async function forwardSignalAndReap(
 
 // --- file collection ---
 
-async function collectFiles(): Promise<{
-  serverTests: string[]
-  clientTests: string[]
-  runnerTests: string[]
-}> {
+// Every directory is enumerated as files: a bare directory entry in the main
+// batch would escape excludeSlowTier's per-file filter (review follow-up).
+export async function collectFiles(): Promise<CollectedFiles> {
   const serverTests: string[] = []
   const serverGlob = new Bun.Glob('src/server/__tests__/*.test.ts')
   for await (const file of serverGlob.scan({ onlyFiles: true })) {
     if (!isRealTmuxFile(file)) {
       serverTests.push(file)
     }
+  }
+
+  const sharedTests: string[] = []
+  const sharedGlob = new Bun.Glob('src/shared/__tests__/*.test.{ts,tsx}')
+  for await (const file of sharedGlob.scan({ onlyFiles: true })) {
+    sharedTests.push(file)
   }
 
   const clientTests: string[] = []
@@ -295,9 +358,10 @@ async function collectFiles(): Promise<{
   }
 
   serverTests.sort()
+  sharedTests.sort()
   clientTests.sort()
   runnerTests.sort()
-  return { serverTests, clientTests, runnerTests }
+  return { serverTests, clientTests, runnerTests, sharedTests }
 }
 
 function resolveFileArgs(fileArgs: string[]): { parallel: string[]; realTmux: string[] } {
@@ -409,53 +473,51 @@ async function main() {
 
   try {
     writeOwnerMarker(runRoot)
-    let mainFiles: string[]
+    let collected: CollectedFiles
     let serialFiles: string[]
     let mainLabel: string
     if (args.fileArgs.length > 0) {
       const resolved = resolveFileArgs(args.fileArgs)
-      mainFiles = resolved.parallel
+      collected = { serverTests: resolved.parallel, clientTests: [], runnerTests: [], sharedTests: [] }
       serialFiles = resolved.realTmux
       mainLabel = 'explicit files'
     } else {
-      const { serverTests, clientTests, runnerTests } = await collectFiles()
-      mainFiles = [...serverTests, ...runnerTests, 'src/shared/__tests__', ...clientTests]
+      collected = await collectFiles()
       serialFiles = [...REAL_TMUX_FILES].map((file) => `src/server/__tests__/${file}`)
       mainLabel = 'main batch'
     }
-    // The timings record rides full runs only (D4): a filtered run — explicit
-    // files or a test-name filter — measures a subset and must not overwrite
-    // the record. A records directory that cannot be resolved (no git) only
-    // costs the scheduling order, never the run.
-    const fullRun = args.fileArgs.length === 0 && !hasTestNameFilter(args.passthrough)
-    let timingsSnapshot: string | null = null
-    if (fullRun) {
-      try {
-        timingsSnapshot = seedTimingsSnapshot(runRoot, readTimingsSeed(recordsDir(process.cwd())))
-      } catch (error) {
-        console.error(`[test-runner] timings record unavailable: ${String(error)}`)
-      }
-    }
-    let published = false
-    for (const batch of planBatches({
+    // The run-shape decisions (review B1): the batch options below are passed
+    // to planBatches verbatim. The timings record rides full runs only (D4):
+    // planRun seeds the snapshot through this callback — a records directory
+    // that cannot be resolved only costs the scheduling order, never the run.
+    const plan = planRun({
+      args,
       workers,
-      mainFiles,
+      collected,
       serialFiles,
-      passthrough: args.passthrough,
-      skipRealTmux: args.skipRealTmux,
-      skipSlowTier: args.skipSlowTier,
       mainLabel,
-      timingsPath: timingsSnapshot ?? undefined,
-      updateTimings: timingsSnapshot !== null,
-    })) {
+      seedText: readTimingsSeed(recordsDir(process.cwd())),
+      seedTimings: (seed) => {
+        try {
+          return seedTimingsSnapshot(runRoot, seed)
+        } catch (error) {
+          console.error(`[test-runner] timings record unavailable: ${String(error)}`)
+          return null
+        }
+      },
+    })
+    let published = false
+    for (const batch of planBatches(plan.batchOptions)) {
       await runCommand(batch.cmd, env, batch.label)
       // The main batch wrote the fresh snapshot (--update-timings). Publish
       // it now — a later serial batch failing must not lose it — and report
-      // files the record shows over 5 s outside the slow tier (D7).
-      if (timingsSnapshot !== null && !published) {
+      // files the kept runs show over 5 s outside the slow tier (D7). This
+      // point is only reached after runCommand resolved: a failed batch
+      // throws before it, so a failed run never publishes.
+      if (plan.publishTimings && plan.batchOptions.timingsPath !== undefined && !published) {
         published = true
         try {
-          const record = publishTimingsSnapshot(recordsDir(process.cwd()), timingsSnapshot)
+          const record = publishTimingsSnapshot(recordsDir(process.cwd()), plan.batchOptions.timingsPath)
           if (record !== null) {
             const misplaced = misplacedFiles({ files: record.files, isSlowTier: isSlowTierFile })
             for (const line of formatMisplacedReport(misplaced)) console.log(line)

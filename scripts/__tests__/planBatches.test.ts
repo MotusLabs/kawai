@@ -99,6 +99,7 @@ describe('skipSlowTier', () => {
     const files: string[] = []
     for (const pattern of [
       'src/server/__tests__/*.test.ts',
+      'src/shared/__tests__/*.test.{ts,tsx}',
       'src/client/__tests__/*.test.{ts,tsx}',
       'scripts/__tests__/*.test.{ts,tsx}',
     ]) {
