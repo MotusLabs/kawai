@@ -387,6 +387,10 @@ const terminalSession: Session = {
 }
 
 beforeEach(() => {
+  // No test may depend on another test's module state: the snapshot cache is
+  // module-level in useTerminal, and a shuffled order restores a previous
+  // test's cached snapshot into the next test's terminal writes.
+  clearSnapshotCache()
   TerminalMock.instances = []
   FitAddonMock.instances = []
   WebglAddonMock.instances = []
