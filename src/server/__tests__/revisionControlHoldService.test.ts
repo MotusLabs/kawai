@@ -336,6 +336,16 @@ describe('narrowing (D4)', () => {
     expect(holds.forPlan(teamId, target)).toHaveLength(before)
     expect(bench.plans.eventByCommand(target, 'nr-6')?.event.kind).toBe('hold-released')
   })
+
+  test('narrowing refuses a retain name the plan does not know, and writes nothing', async () => {
+    const target = (await newApprovedPlan()).planId
+    const placed = expectOk(place({ planId: target, scope: 'plan', changes: [], commandId: 'nr-7' }))
+    const outcome = refused(release({ planId: target, holdId: placed.hold.id, reason: 'keep none', retain: ['nope'], commandId: 'nr-8' }))
+    expect(outcome.message).toContain('unknown change: nope')
+    expect(holds.get(teamId, placed.hold.id)!.releasedAt).toBeNull()
+    expect(holds.get(teamId, 'hold-nr-8-narrowed')).toBeNull()
+    expect(bench.plans.eventByCommand(target, 'nr-8')).toBeNull()
+  })
 })
 
 describe('extend', () => {
@@ -427,6 +437,17 @@ describe('lifecycle and clocks', () => {
     const placed = expectOk(local.place(bench.human, { planId: target, scope: 'changes', changes: ['api'], rationale: 'r', deadline: inDays(1), cites: null, commandId: 'pd-1' }))
     clock = NOW + 3 * 24 * 60 * 60 * 1000
     expect(holds.active(teamId, target).map(hold => hold.id)).toEqual([placed.hold.id])
+  })
+
+  test('a deadline exactly now is refused for place and extend (M2)', () => {
+    const placed = refused(place({ planId, deadline: inDays(0), commandId: 'pn-1' }))
+    expect(placed.message).toContain('not in the future')
+    expect(bench.plans.eventByCommand(planId, 'pn-1')).toBeNull()
+    const held = expectOk(place({ planId, deadline: inDays(2), commandId: 'pn-2' }))
+    const extended = refused(extend({ planId, holdId: held.hold.id, deadline: inDays(0), commandId: 'pn-3' }))
+    expect(extended.message).toContain('not in the future')
+    expect(holds.get(teamId, held.hold.id)!.deadline).toBe(inDays(2))
+    expect(bench.plans.eventByCommand(planId, 'pn-3')).toBeNull()
   })
 
   test('the executor wake and the plan-detail push fire once per committed command, never on a replay or a refusal', () => {

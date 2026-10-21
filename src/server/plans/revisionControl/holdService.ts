@@ -177,6 +177,12 @@ export class HoldService {
       // UNIQUE (plan_id, command_id) refuses a second one outright.
       if (hold.scope !== 'plan') failures.push({ text: 'only a whole-plan hold narrows; free a changes-scoped hold by its changes' })
       this.namedOnce(retain, failures)
+      // The narrowed hold's names must be changes the plan knows, checked
+      // like place's — inside this transaction.
+      const known = this.knownChanges(planId)
+      for (const name of retain) {
+        if (!known.has(name)) failures.push({ text: `unknown change: ${name}` })
+      }
     } else if (changes.length > 0) {
       if (hold.scope !== 'changes') failures.push({ text: 'a whole-plan hold is released wholly, or narrowed with retain; it has no per-change rows' })
       for (const name of changes) {
