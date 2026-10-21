@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
+  SLOW_TIER_EXCEPTIONS,
   TIMINGS_FILE_NAME,
   formatMisplacedReport,
   misplacedFiles,
@@ -234,5 +235,21 @@ describe('misplacedFiles', () => {
     expect(formatMisplacedReport([])).toEqual([
       '[test-runner] timings: no file over 5 s sits outside the slow tier',
     ])
+  })
+})
+
+describe('SLOW_TIER_EXCEPTIONS', () => {
+  test('every entry names an existing non-tier file, once', () => {
+    const seen = new Set<string>()
+    for (const entry of SLOW_TIER_EXCEPTIONS) {
+      expect(entry.reason.trim()).not.toBe('')
+      expect(seen, `${entry.file} listed twice`).not.toContain(entry.file)
+      seen.add(entry.file)
+      // A stale entry (file renamed or deleted) must fail here, not hide in
+      // the report forever.
+      expect(fs.existsSync(entry.file), `${entry.file} no longer exists`).toBe(true)
+      expect(isSlowTierFile(entry.file), `${entry.file} belongs to the slow tier now`).toBe(false)
+    }
+    expect(SLOW_TIER_EXCEPTIONS.length).toBeGreaterThan(50)
   })
 })
