@@ -15,7 +15,7 @@ import type { GhCommandOptions } from '../landing/ghCommand'
 import type { ExecutorDeps } from './executor'
 
 /** The round pipeline's deps (D9-D11), over the executor's. */
-export function roundDeps(deps: ExecutorDeps, team: TeamIdentity, repo: string): RoundDeps {
+export function roundDeps(deps: ExecutorDeps, team: TeamIdentity, repo: string, gate?: (change: string) => boolean): RoundDeps {
   return {
     team,
     repo,
@@ -30,11 +30,12 @@ export function roundDeps(deps: ExecutorDeps, team: TeamIdentity, repo: string):
     releases: deps.releases,
     groupScoped: deps.groupScoped,
     now: () => (deps.now?.() ?? new Date()).toISOString(),
+    ...(gate ? { gate } : {}),
   }
 }
 
 /** The landing deps (D13), with the revision attempt dispatched through the round deps. */
-export function landingDeps(deps: ExecutorDeps, team: TeamIdentity, repo: string, rounds: () => RoundDeps): LandingDeps {
+export function landingDeps(deps: ExecutorDeps, team: TeamIdentity, repo: string, rounds: () => RoundDeps, gate?: (change: string) => boolean): LandingDeps {
   return {
     team, repo, executions: deps.store, plans: deps.plans,
     results: deps.results, plansService: deps.plansService, conditionsOf: deps.conditionsOf, records: deps.records,
@@ -42,6 +43,7 @@ export function landingDeps(deps: ExecutorDeps, team: TeamIdentity, repo: string
     now: () => (deps.now?.() ?? new Date()).toISOString(),
     revisionAttempt: (changeRow, round, update) => dispatchRevisionAttempt(rounds(), changeRow, round, update),
     taskStatusOf: taskId => deps.tasks.store.get(taskId)?.status ?? null,
+    ...(gate ? { gate } : {}),
   }
 }
 

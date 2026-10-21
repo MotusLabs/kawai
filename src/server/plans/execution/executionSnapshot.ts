@@ -5,6 +5,8 @@
 // planner is pure over the snapshot, so a tick after a restart resumes from
 // exactly these rows.
 import type { ChangeState, ChangeStep } from '../../../shared/planExecution'
+import type { ActiveHold } from '../../../shared/planRevisionControl'
+import type { OpenPauseTarget } from '../revisionControl/holdGate'
 import type { PlanContent } from '../../../shared/plans'
 import type { EffectRow, ExecutionRow, RoundRow } from './executionRows'
 import type { ExecutionStore } from './executionStore'
@@ -23,6 +25,8 @@ export interface AssignmentFact {
   id: string
   state: string
   reason: string | null
+  /** The dispatch key the instruction was sent under; the owed-dispatch marker reads it. */
+  requestKey: string | null
 }
 
 export interface PlannedChange {
@@ -47,6 +51,8 @@ export interface PlannedChange {
   task: { status: string; revision: number; results: ResultFact[]; assignment: AssignmentFact | null } | null
   /** The change's newest round, decided or open. */
   round: RoundRow | null
+  /** The change's newest attempt, any kind — a fix attempt whose handoff never dispatched is the owed dispatch's marker. */
+  newestAttempt: { number: number; kind: string } | null
   /** The change's landing fact, once it landed (D13). */
   landing: { mergeSha: string; postCi: unknown; mechanism: string } | null
   /** The change's newest merge, update-branch, or fast-forward effect, any state (D13's follow-ons). */
@@ -62,6 +68,10 @@ export interface PlannedExecution {
   finished: boolean
   /** The execution-level effects (X3: no change), any state, oldest first: integration's create-integration. */
   setupEffects?: EffectRow[]
+  /** The plan's active holds (revision-control 3.2), read once with the snapshot. */
+  holds: ActiveHold[]
+  /** The plan's open pause targets; none until §4 ships pauses, passed through whole. */
+  openTargets: OpenPauseTarget[]
 }
 
 export interface ExecutionSnapshot {
@@ -82,7 +92,8 @@ const LANDING_KINDS: ReadonlySet<string> = new Set(['merge', 'update-branch', 'f
 /** Load the team's running-execution snapshot: rows, plan facts, effects, attempt counts. */
 export function executionSnapshot(teamId: string, main: string, executions: ExecutionStore, plans: PlanStore,
   resultsOf: (taskId: string) => ResultFact[] = () => [], taskRevisionOf: (taskId: string) => number = () => 1,
-  taskStatusOf: (taskId: string) => string = () => 'active', assignmentOf: (taskId: string) => AssignmentFact | null = () => null): ExecutionSnapshot {
+  taskStatusOf: (taskId: string) => string = () => 'active', assignmentOf: (taskId: string) => AssignmentFact | null = () => null,
+  holdsOf: (planId: string) => ActiveHold[] = () => [], openTargetsOf: (planId: string) => OpenPauseTarget[] = () => []): ExecutionSnapshot {
   const running = [...executions.runningForTeam(teamId), ...executions.settlingForTeam(teamId)]
   const contentOf = new Map<string, PlanContent>()
   const planned: PlannedExecution[] = running.map(execution => {
@@ -97,6 +108,8 @@ export function executionSnapshot(teamId: string, main: string, executions: Exec
       row: execution,
       finished: execution.state !== 'running',
       setupEffects: effects.filter(effect => effect.change === null),
+      holds: holdsOf(execution.planId),
+      openTargets: openTargetsOf(execution.planId),
       changes: executions.changes(execution.id).map(row => ({
         executionId: row.executionId,
         change: row.change,
@@ -111,6 +124,10 @@ export function executionSnapshot(teamId: string, main: string, executions: Exec
         passedAt: row.passedAt,
         dependsOn: facts.get(row.change)?.dependsOn ?? [],
         group: facts.get(row.change)?.group ?? null,
+        newestAttempt: (() => {
+          const attempt = executions.attempts(row.executionId, row.change).at(-1)
+          return attempt === undefined ? null : { number: attempt.number, kind: attempt.kind }
+        })(),
         task: row.taskId === null ? null : { status: taskStatusOf(row.taskId), revision: taskRevisionOf(row.taskId), results: resultsOf(row.taskId), assignment: assignmentOf(row.taskId) },
         ...(() => {
           const round = executions.rounds(row.executionId, row.change).at(-1) ?? null

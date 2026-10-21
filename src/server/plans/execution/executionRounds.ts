@@ -21,7 +21,7 @@ import { lsRemoteHead, pushToRemote } from '../landing/gitRemote'
 import { ghCheckRuns, ghPrCreate, ghPrList, ghRerunFailed, ghStatuses } from '../landing/github'
 import type { GhCommandOptions } from '../landing/ghCommand'
 import type { AssignmentService } from '../../team/AssignmentService'
-import { dispatchFixAttempt } from './executionDispatch'
+import { dispatchFix, dispatchFixAttempt, ensureFixAttempt } from './executionDispatch'
 import { refusable } from './stepRefusal'
 import type { EffectAdapter } from './effects'
 
@@ -70,6 +70,8 @@ export interface RoundDeps {
   groupScoped: (teamId: string, groupId: string) => boolean
   records: () => Iterable<ChatSessionRecord>
   now: () => string
+  /** The hold gate (revision-control 3.2): true when the change is held. */
+  gate?: (change: string) => boolean
 }
 
 /** One stage performance; throws nothing — a failed git/gh read leaves the stage due again. */
@@ -167,13 +169,26 @@ export async function dispatchRevisionAttempt(deps: RoundDeps, changeRow: { exec
   if (update !== undefined) {
     texts.push(`GitHub's update of the branch with the base did not merge cleanly (base head ${update.base}${update.files.length > 0 ? `; conflicting files: ${update.files.join(', ')}` : ''}). Merge the base branch as part of this attempt.`)
   }
-  await dispatchFixAttempt(
+  // The attempt row — the owed dispatch's marker (revision-control 3.2) —
+  // is created however the gate reads; the handoff only when unheld, and
+  // the release dispatches it once through dispatchOwedFixAttempt.
+  const attempt = await ensureFixAttempt(
     { team: deps.team, executions: store, plans: deps.plans, tasks: deps.tasks, assignments: deps.assignments, results: deps.results },
     {
       executionId: changeRow.executionId, change: changeRow.change, group,
       failingChecks: [], findingsIds: [], findingsTexts: texts,
       continueFrom: round.commitSha, fixRounds: change.fixRounds,
     },
+  )
+  if (attempt === null || deps.gate?.(changeRow.change) === true) return true
+  await dispatchFix(
+    { team: deps.team, executions: store, plans: deps.plans, tasks: deps.tasks, assignments: deps.assignments, results: deps.results },
+    {
+      executionId: changeRow.executionId, change: changeRow.change, group,
+      failingChecks: [], findingsIds: [], findingsTexts: texts,
+      continueFrom: round.commitSha, fixRounds: change.fixRounds,
+    },
+    attempt,
   )
   return true
 }
@@ -225,6 +240,11 @@ async function pollCi(deps: RoundDeps, changeRow: { executionId: string; change:
 
 async function dispatchReview(deps: RoundDeps, changeRow: { executionId: string; change: string; branch: string | null; worktree: string | null }, round: RoundRow): Promise<void> {
   const store = deps.executions
+  // A held change hands off no review (revision-control 3.2): neither the
+  // implementer's release below nor the handoff runs. The release re-fires
+  // the stage from CI — the round's review assignment stays null, so the
+  // next pass re-plans the ci stage and lands here again.
+  if (deps.gate?.(changeRow.change) === true) return
   const execution = store.execution(changeRow.executionId)!
   const revision = deps.plans.revision(execution.planId, execution.revision)
   const entry = revision?.content.changes.find(candidate => candidate.change === changeRow.change) ?? null

@@ -36,7 +36,7 @@ Implement after these have landed on master: `plan-execution`, `integration-cand
   - narrowing is one transaction, and its replay writes nothing;
   - closing and reopening the plan leaves holds unchanged;
   - an agent caller is refused.
-- [ ] 3.2 Wire `holdGate` into `planSteps` (D5). Verify with executor tests:
+- [x] 3.2 Wire `holdGate` into `planSteps` (D5). Verify with executor tests:
   - provisioning, each attempt kind, the review and fix handoffs, D9's revision fix, and Retry's dispatch wait under a hold;
   - the round outcome is still recorded;
   - release wakes the executor, and each deferred dispatch runs exactly once;
