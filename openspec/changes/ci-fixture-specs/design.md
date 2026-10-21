@@ -27,8 +27,13 @@
 
 ### D1. The lister reads each spec's own gate
 
-- **The script.** `scripts/e2e-fixture-specs.ts` reads `tests/e2e/*.spec.ts` (the top level, Playwright's `testDir`). It prints the repository-relative path of each spec that carries the gate, sorted and one per line.
+- **The script.** `scripts/e2e-fixture-specs.ts` reads the files Playwright collects:
+  - every file under `tests/e2e/`, recursively, since `playwright.config.ts` sets `testDir: 'tests/e2e'`;
+  - only names that Playwright's default pattern matches, `*.spec.*` or `*.test.*` with a JS or TS extension, since the config sets no `testMatch` or `testIgnore`.
+
+  Today all 47 such files are `tests/e2e/*.spec.ts`. The script prints the repository-relative path of each one that carries the gate, sorted and one per line.
   - **The gate:** `test.skip(process.env.AGENTBOARD_CHAT_FIXTURE !== '1'`, matched with `!=` or `!==` and with any whitespace.
+  - **Comments are stripped before matching**, so a commented-out gate is not listed.
 - **An empty result** exits 1, with a message on stderr. A `playwright test` given no file arguments runs every spec, so an empty list must never reach it.
 - **The shape.** The logic is a pure function over `{ path, source }` entries, with a thin CLI around it, so the tests drive the function directly.
 - **Rejected:**
@@ -38,11 +43,13 @@
 ### D2. The guards
 
 The guard is a unit test, `scripts/__tests__/e2eFixtureSpecs.test.ts`. Its checks are pure functions, tested over fixture inputs and then run once over the real tree:
-- **The list.** The lister's output for the real tree equals the set of specs that carry the gate, and it is not empty.
-- **Other uses.** Every code occurrence of `AGENTBOARD_CHAT_FIXTURE` in a spec without the gate sets it to `'0'`, either as `AGENTBOARD_CHAT_FIXTURE: '0'` or as `process.env.AGENTBOARD_CHAT_FIXTURE = '0'`. Comments are stripped before matching. Any other occurrence fails the test, naming the spec, so a new gate form is caught rather than dropped.
-- **The step.** In `ci.yml`, parsed with `Bun.YAML.parse`, exactly one step's `run` sets `AGENTBOARD_CHAT_FIXTURE=1`. That `run`:
-  - captures the lister's output in an assignment line;
-  - names no `tests/e2e/` path.
+- **The test directory.** `playwright.config.ts` sets `testDir` to `tests/e2e`, and sets neither `testMatch` nor `testIgnore`. Otherwise the test fails, naming the config, because the lister would no longer read what Playwright collects.
+- **The list.** The lister's output for the real tree is not empty.
+- **Other uses.** In every collected file without the gate, at any depth, every code occurrence of `AGENTBOARD_CHAT_FIXTURE` sets it to `'0'`: either `AGENTBOARD_CHAT_FIXTURE: '0'` or `process.env.AGENTBOARD_CHAT_FIXTURE = '0'`. Comments are stripped before matching. Any other occurrence fails the test, naming the file, so a new gate form is caught rather than dropped.
+- **The step.** In `ci.yml`, parsed with `Bun.YAML.parse`, exactly one step's `run` sets `AGENTBOARD_CHAT_FIXTURE=1`. That `run` must:
+  - assign the lister's output to a variable, in an assignment line;
+  - pass that variable to `playwright test`;
+  - name no spec file itself: no `tests/e2e/` path, and no token matching the spec pattern above, such as a bare `chat.spec.ts`. Playwright treats such a token as a filter on the file path.
 
   A failure names the step.
 
@@ -60,6 +67,7 @@ The assignment makes a failing lister fail the step under `bash -e`. `$specs` is
 ## Risks / Trade-offs
 
 - [A spec gates in a form the lister does not recognize] → The guard fails on any use of the variable outside the gate or a `'0'` setting, naming the spec.
+- [The Playwright config starts collecting differently, such as another `testDir` or a `testMatch`] → The test-directory check fails, naming the config, before a spec can be dropped silently.
 - [The newly listed specs are slow or flaky in CI] → Locally, 9 tests took 42 s, and the job's 25-minute limit leaves room. A flaky spec is fixed like any other fixture spec.
 - [The lister breaks] → The step fails at the assignment, before Playwright runs. It cannot run every spec by accident.
 

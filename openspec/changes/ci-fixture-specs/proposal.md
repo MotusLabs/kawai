@@ -14,11 +14,11 @@ The change is small and independent. That also makes it the first change the tea
 
 ## What Changes
 
-- **A lister.** `scripts/e2e-fixture-specs.ts` lists every `tests/e2e/*.spec.ts` gated on the development chat fixture. It reads each spec's own gate, sorts the result, and exits non-zero when the list is empty.
+- **A lister.** `scripts/e2e-fixture-specs.ts` lists every spec that Playwright collects under `tests/e2e/`, at any depth, and that is gated on the development chat fixture. It reads each spec's own gate, sorts the result, and exits non-zero when the list is empty.
 - **The CI step.** CI's fixture step runs Playwright on the lister's output. The three specs start running, and a new fixture spec needs no workflow edit.
 - **A guard.** A unit-suite guard fails when:
-  - the workflow's fixture step names spec files itself;
-  - the lister's output differs from the gated specs;
+  - the workflow's fixture step names spec files itself, or doesn't pass the lister's output to Playwright;
+  - the Playwright configuration collects other files than the lister reads;
   - a spec without the gate uses the fixture variable for anything other than setting it to `0`.
 
 ## Capabilities
@@ -34,4 +34,4 @@ None.
 - `scripts/e2e-fixture-specs.ts` is new, with its unit tests.
 - `.github/workflows/ci.yml`: the fixture step's `run:` changes.
 - Nothing changes in the server, the client, or AGENTS.md. The specs and their gate stay as they are.
-- `independent-verification` drops its fixture-lister part in favor of this change.
+- The sibling proposal `independent-verification` (PR #271, not yet merged) leaves the fixture list to this change.
