@@ -84,7 +84,7 @@ export class MailboxStore {
     const hop = input.inReplyTo ? input.inReplyTo.hop + (input.handoff ? 0 : 1) : 1
     const limit = input.hopLimit ?? DEFAULT_HOP_LIMIT
     const overLimit = !input.handoff && hop > limit
-    this.statements.enqueue.run({
+    const insert = () => this.statements.enqueue.run({
       $id: id,
       $teamId: input.teamId,
       $toKind: input.toKind,
@@ -111,6 +111,16 @@ export class MailboxStore {
       $revisionNotice: input.revisionNotice ? JSON.stringify(input.revisionNotice) : null,
       $allowedProfiles: input.allowedProfiles ? JSON.stringify(input.allowedProfiles) : null,
     })
+    // The choice is written at call time, never in the eagerly prepared
+    // insert, so a store opened on a database before migration 17 still
+    // prepares (D1); with the insert in one transaction.
+    if (input.workerChoice) {
+      const choice = input.workerChoice
+      this.db.transaction(() => {
+        insert()
+        this.cachedStatement('UPDATE team_messages SET worker_choice = $choice WHERE id = $id').run({ $choice: choice, $id: id })
+      })()
+    } else insert()
     this.changed(id, true)
     const message = this.get(id)!
     // A new row: nothing was overwritten; the hop-limit reason is the one written.

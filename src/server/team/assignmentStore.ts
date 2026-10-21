@@ -58,6 +58,8 @@ export interface DispatchInsert {
   messageId?: string | null
   /** A handoff's kind, referenced result, and expected response (task-results-handoffs D1). */
   handoff?: DispatchHandoff
+  /** The canonical worker selector of a group dispatch (dispatch-worker-choice D1). */
+  workerChoice?: string | null
 }
 
 /** A handoff's fields on its assignment (task-results-handoffs D3). */
@@ -153,7 +155,11 @@ export class AssignmentStore {
       input.instruction, input.creator.kind, input.creator.sessionId, input.messageId ?? null,
       input.handoff?.kind ?? null, input.handoff?.resultId ?? null, input.handoff?.expectedResponse ?? null, now, now,
     ).changes
-    if (inserted === 1) return { replay: false, assignment: this.row(id)! }
+    if (inserted === 1) {
+      // Written beside the insert, inside the caller's dispatch transaction.
+      if (input.workerChoice) this.db.prepare('UPDATE team_task_assignments SET worker_choice = ? WHERE id = ?').run(input.workerChoice, id)
+      return { replay: false, assignment: this.row(id)! }
+    }
     const existing = this.byKey(input.teamId, input.requestKey)
     if (!existing) throw new Error('request key reuse could not be resolved; retry')
     const diff = this.payloadDiff(existing, input)
@@ -217,6 +223,8 @@ export class AssignmentStore {
       handoffKind: TASK_HANDOFF_KINDS.includes(raw.handoff_kind as TaskHandoffKind) ? raw.handoff_kind as TaskHandoffKind : null,
       resultId: raw.result_id === null || raw.result_id === undefined ? null : String(raw.result_id),
       expectedResponse: raw.expected_response === null || raw.expected_response === undefined ? null : String(raw.expected_response),
+      // Absent, not null, without a choice: the row reads as before (D1).
+      ...(typeof raw.worker_choice === 'string' && raw.worker_choice !== '' ? { workerChoice: raw.worker_choice } : {}),
     }
   }
 
