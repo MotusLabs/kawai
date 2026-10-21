@@ -98,6 +98,7 @@ function submitRound(root: string, mode: 'result' | 'findings', implementer: str
     import { TaskResultService } from './src/server/team/TaskResultService';
     import { taskHandlers } from './src/server/team/taskTools';
     import { composeExecutionCore } from './src/server/plans/planComposition';
+    import { retryOnSqliteBusy } from './src/server/__tests__/sqliteBusyRetry';
     try {
       const [file, root, mode, implementer, change] = JSON.parse(await Bun.stdin.text());
       const sessions = initDatabase({ path: file });
@@ -118,7 +119,11 @@ function submitRound(root: string, mode: 'result' | 'findings', implementer: str
       const taskId = row.task_id;
       if (mode === 'result') {
         const commit = Bun.spawnSync(['git', 'rev-parse', 'HEAD'], { cwd: join(root, '.worktrees', change) }).stdout.toString().trim();
-        await taskHandlers(tasks, implementer, results).task_submit_result({ task_id: taskId, summary: 'Implemented ' + change, commit, tests: [{ description: 'unit', outcome: 'pass' }] });
+        // The server is a second writer on this database: a BUSY on the
+        // result INSERT rolls its transaction back whole, so re-run the
+        // submission (planWalkthrough's submitRound, #236). The findings
+        // path stays unwrapped: it autocommits three statements.
+        await retryOnSqliteBusy(() => taskHandlers(tasks, implementer, results).task_submit_result({ task_id: taskId, summary: 'Implemented ' + change, commit, tests: [{ description: 'unit', outcome: 'pass' }] }));
         console.log('RESULT:' + commit);
       } else {
         let claimant = null;
