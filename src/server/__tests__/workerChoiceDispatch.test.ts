@@ -18,6 +18,7 @@ import { TaskStore } from '../team/taskStore'
 import { TeamCaps } from '../team/teamCaps'
 import { loadTeamGroups } from '../team/teamGroups'
 import { clearTeamCache, resolveTeam, type TeamIdentity } from '../team/teamIdentity'
+import { toReason } from '../team/waitingReasons'
 import { TeamWorktrees, worktreeRootOf } from '../team/worktreeRoots'
 import type { WaitingConstraint } from '../../shared/team'
 
@@ -169,5 +170,51 @@ describe('the dispatcher pass routes inside the worker choice (2.2)', () => {
     await run()
     expect(spawned).toEqual([expect.objectContaining({ groupId: 'devs', profileId: 'sonnet', taskId: plain.taskId })])
     expect(store.get(chosen.id)).toMatchObject({ state: 'queued' })
+  })
+})
+
+describe('the worker-choice waiting constraint (2.4)', () => {
+  test('a cooling choice holds with the cooldown end, and the pass routes it then with no other change', async () => {
+    writeGroup('profiles: [sonnet, glm]\nmax: 2')
+    // Real time: the dispatcher's own timer must fire at the cooldown end.
+    clock = Date.now()
+    const end = clock + 300
+    cooling = { glm: end }
+    records.set('zai', record('zai', 'glm'))
+    records.set('claude', record('claude', 'sonnet'))
+    recipients.push(recipient('zai', 'glm'), recipient('claude', 'sonnet'))
+    const chosen = mail('zai')
+    await run()
+    expect(delivered).toEqual([])
+    const reason = toReason(reasons.get(chosen.id) ?? [])
+    expect(reason?.blocker).toEqual({ kind: 'worker-choice', detail: 'zai', retryAt: new Date(end).toISOString() })
+    expect(reason?.others.map(entry => entry.kind)).toEqual(['all-profiles-cooling'])
+    // Time passes; nothing else is notified. The hold's timer wakes the pass.
+    clock = end
+    const deadline = Date.now() + 3000
+    while (delivered.length === 0 && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20))
+    await dispatcher.settled()
+    expect(delivered).toEqual([{ to: 'zai', id: chosen.id }])
+  })
+
+  test('a capped chosen worker reports profile-cap first, plus the choice', async () => {
+    writeGroup('profiles: { glm: 1, sonnet: 1 }\nmax: 3')
+    records.set('busy-glm', record('busy-glm', 'glm', { status: 'working' }))
+    recipients.push(recipient('busy-glm', 'glm', false))
+    const chosen = mail('zai/glm')
+    await run()
+    const reason = toReason(reasons.get(chosen.id) ?? [])
+    expect(reason?.blocker).toEqual({ kind: 'profile-cap', counts: { live: 1, cap: 1 }, detail: 'glm' })
+    expect(reason?.others.filter(entry => entry.kind === 'worker-choice')).toEqual([{ kind: 'worker-choice', detail: 'zai/glm' }])
+  })
+
+  test('mail with no choice never reports the constraint', async () => {
+    writeGroup('profiles: { glm: 1 }\nmax: 1')
+    records.set('busy-glm', record('busy-glm', 'glm', { status: 'working' }))
+    recipients.push(recipient('busy-glm', 'glm', false))
+    const plain = mail()
+    await run()
+    expect(reasons.get(plain.id)?.length).toBeGreaterThan(0)
+    expect(reasons.get(plain.id)?.some(entry => entry.kind === 'worker-choice')).toBe(false)
   })
 })

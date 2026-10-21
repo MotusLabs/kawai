@@ -256,6 +256,8 @@ export type WaitingConstraintKind =
   | 'recipient-pending-request'
   | 'recipient-unavailable'
   | 'outside-role'
+  /** Group mail held by its worker choice (dispatch-worker-choice D5): `detail` is the selector, `retryAt` a cooldown end. */
+  | 'worker-choice'
   | 'profile-cooling'
   | 'startup-failed'
   | 'no-eligible-member'

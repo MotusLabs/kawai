@@ -129,7 +129,10 @@ export class ProfileRouter implements GroupRouter {
         ? [{ sessionId: entry.alternative.sessionId, kind: 'worker-choice' as const, detail: workerChoice!.selector }]
         : [])
       const breakdown = choiceExclusions.length > 0 ? { ...view, exclusions: [...(view.exclusions ?? []), ...choiceExclusions] } : view
-      return { kind: 'none', diagnosis: diagnoseNone(routeGroup, spawn, breakdown) }
+      const diagnosis = diagnoseNone(routeGroup, spawn, breakdown)
+      // The choice names itself beside the capacity it waits on (D5).
+      if (workerChoice) diagnosis.push({ kind: 'worker-choice', detail: workerChoice.selector })
+      return { kind: 'none', diagnosis }
     }
     const signature = candidates.map(candidate => candidate.id).sort().join(',')
     const held = this.holds.get(message.id)
@@ -190,9 +193,12 @@ export class ProfileRouter implements GroupRouter {
         record('builtin', 'hold', providers.length > 0
           ? `every candidate profile is cooling (provider ${providers.join(', ')})`
           : 'every candidate profile is cooling')
-        return { kind: 'hold', retryAt, diagnosis: [{ kind: 'all-profiles-cooling',
-          ...(retryAt !== null ? { retryAt: new Date(retryAt).toISOString() } : {}),
-          ...(credit ? { credit: true as const } : {}) }] }
+        const until = retryAt !== null ? { retryAt: new Date(retryAt).toISOString() } : {}
+        return { kind: 'hold', retryAt, diagnosis: [
+          // A cooling choice holds with the cooldown end as its retry (D5).
+          ...(workerChoice ? [{ kind: 'worker-choice' as const, detail: workerChoice.selector, ...until }] : []),
+          { kind: 'all-profiles-cooling', ...until, ...(credit ? { credit: true as const } : {}) },
+        ] }
       }
       record('builtin', chosen.id, view.attempt === 2 ? 'stale pick retried' : undefined)
     }

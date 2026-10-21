@@ -22,7 +22,7 @@
   - a choice with a role list keeps only the intersection, with each member's cause.
 - [x] 2.2 Wire the intersection through the dispatcher's pass. Verify a dispatcher test where a chosen provider's member is picked over a longer-idle member elsewhere, and a staffing test where a capped chosen worker waits instead of spawning on another worker.
 - [x] 2.3 Treat a rule pick outside the filtered set as unknown. Verify a router test with a rule naming a filtered-out candidate falling back to the built-in pick.
-- [ ] 2.4 Add the `worker-choice` waiting constraint (detail selector, `retryAt` on cooldown) and its ordering. Verify `waitingReasons` tests for a cooling hold (retry at the cooldown end) and a cap hold (`profile-cap` plus `worker-choice`), and a dispatcher test where the message routes at the cooldown end without any other change.
+- [x] 2.4 Add the `worker-choice` waiting constraint (detail selector, `retryAt` on cooldown) and its ordering. Verify `waitingReasons` tests for a cooling hold (retry at the cooldown end) and a cap hold (`profile-cap` plus `worker-choice`), and a dispatcher test where the message routes at the cooldown end without any other change.
 - [ ] 2.5 Make `LimitOutcomes.forward` drop the choice. Verify a limit-outcome test where a forwarded message has no choice and still excludes the limited worker, while a released message keeps its choice.
 - [ ] 2.6 Add the optional `worker` to `RouteContext.message` and `LimitOutcomeContext.message` in `src/shared/routing.ts`. Verify a rule-host test where a rule sees it, and that the published `kawai-routing.d.ts` copy matches.
 - [ ] 2.7 Document the choice in `docs/routing/README.md` (filter, holds, forwards). Verify the README examples match the rule types.
