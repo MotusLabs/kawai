@@ -1,10 +1,20 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, jest, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { initDatabase, type SessionDatabase } from '../db'
 import { OutboundStore } from '../outbound/store'
 import { anyDirectory, closeDispatchers, createHarness, flush, waitForCondition, initMessage, writeTranscript } from './helpers/chatSessionManagerHarness'
+
+// Advance fake timers in small steps, draining microtasks between steps so a
+// fired timer's continuations settle before the next advance (flush uses a
+// real setTimeout, which never fires under fake timers).
+const settle = async (rounds: number, stepMs = 1): Promise<void> => {
+  for (let i = 0; i < rounds; i++) {
+    jest.advanceTimersByTime(stepMs)
+    for (let r = 0; r < 40; r++) await Promise.resolve()
+  }
+}
 
 describe('ChatSessionManager', () => {
 
@@ -68,26 +78,38 @@ describe('ChatSessionManager', () => {
     // re-arming. The locator must therefore outlive its early retries. The
     // wait has to pass the old three-retry budget (2s+4s+2s = 6s) to prove
     // the tail survives it; the locate interval is shrunk so the new code
-    // picks the file up promptly instead of backing off to 15s.
-    const harness = await createHarness(db, anyDirectory, undefined, 20)
-    const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
-    if (!created.ok) throw new Error(created.error)
-    const id = created.session.id
-    await harness.manager.send(id, 'hello')
-    // SDK id known, transcript not yet written: the placeholder stands.
-    harness.handles[0]!.push(initMessage('title-late'))
-    await flush(10)
-    expect(db.getChatSession(id)?.nameSource).toBe('placeholder')
-    await new Promise((resolve) => setTimeout(resolve, 6_500))
-    // The first message finally persists a transcript carrying a title.
-    writeTranscript(
-      'title-late',
-      JSON.stringify({ type: 'ai-title', aiTitle: 'late title', sessionId: 'title-late' }) + '\n'
-    )
-    await waitForCondition(() => db.getChatSession(id)?.name === 'late title')
-    expect(db.getChatSession(id)?.nameSource).toBe('auto')
-    harness.manager.shutdown()
-  }, 15_000)
+    // picks the file up promptly instead of backing off to 15s. Fake timers
+    // drive the locator's backoff chain, so the wait costs no real time and
+    // no real fs.watch event is needed: the locate pass that finds the file
+    // reads it synchronously and writes the row.
+    jest.useFakeTimers()
+    try {
+      const harness = await createHarness(db, anyDirectory, undefined, 20)
+      try {
+        const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
+        if (!created.ok) throw new Error(created.error)
+        const id = created.session.id
+        await harness.manager.send(id, 'hello')
+        // SDK id known, transcript not yet written: the placeholder stands.
+        harness.handles[0]!.push(initMessage('title-late'))
+        await settle(10)
+        expect(db.getChatSession(id)?.nameSource).toBe('placeholder')
+        jest.advanceTimersByTime(6_500)
+        // The first message finally persists a transcript carrying a title.
+        writeTranscript(
+          'title-late',
+          JSON.stringify({ type: 'ai-title', aiTitle: 'late title', sessionId: 'title-late' }) + '\n'
+        )
+        await settle(25, 200)
+        expect(db.getChatSession(id)?.name).toBe('late title')
+        expect(db.getChatSession(id)?.nameSource).toBe('auto')
+      } finally {
+        harness.manager.shutdown()
+      }
+    } finally {
+      jest.useRealTimers()
+    }
+  })
 
   test('a restored session adopts its transcript title as a catch-up, dormant ones only on attach', async () => {
     process.env.ANTHROPIC_API_KEY = 'test-key'
