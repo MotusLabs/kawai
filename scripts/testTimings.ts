@@ -184,7 +184,24 @@ export const SLOW_TIER_EXCEPTIONS: ReadonlyArray<{ file: string; reason: string 
   { file: 'src/server/__tests__/taskHandoffs.test.ts', reason: '3.6 s at N=1; 5.4 s only under N=4 worker contention' },
   { file: 'src/server/__tests__/codexSessionGates.test.ts', reason: '1.6 s at N=1; 5.3 s at N=4; touched by open branch feat/codex-chat-sessions-e — never renamed here' },
   { file: 'src/server/__tests__/taskNotices.test.ts', reason: '3.9 s at N=1; 5.3 s only under N=4 worker contention' },
-  { file: 'src/server/__tests__/chatContextDb.test.ts', reason: '1.0 s at N=1; 5.1 s only under N=4 worker contention' },
+  { file: 'src/server/__tests__/chatContextDb.test.ts', reason: '1.0 s at N=1; 5.1 s only under N=4 worker contention' },  // A second full run (commit 3's hook, N=4 with concurrent suite slots) flagged
+  // these over 5 s as well — all under 5 s at N=1 and under 5 s in the exclusive
+  // run, so they stay outside the tier: shared-slot contention, listed here.
+  { file: 'src/server/__tests__/teamMailboxParkedCancel.test.ts', reason: '2.3 s at N=1; 16.9 s under a shared-slot N=4 run (not over 5 s exclusive)' },
+  { file: 'src/server/__tests__/strategyStore.test.ts', reason: '2.4 s at N=1; 15.6 s under a shared-slot N=4 run (not over 5 s exclusive)' },
+  { file: 'src/server/__tests__/strategyService.test.ts', reason: '2.4 s at N=1; 14.1 s under a shared-slot N=4 run (not over 5 s exclusive)' },
+  { file: 'src/server/__tests__/supervisionMonitor.test.ts', reason: '2.2 s at N=1; 11.5 s under a shared-slot N=4 run (not over 5 s exclusive)' },
+  { file: 'src/server/__tests__/teamMailboxStore.test.ts', reason: '1.5 s at N=1; 10.5 s under a shared-slot N=4 run (not over 5 s exclusive)' },
+  { file: 'src/server/__tests__/chatSessionSearchSource.test.ts', reason: '1.1 s at N=1; 6.0 s under a shared-slot N=4 run (not over 5 s exclusive)' },
+  { file: 'src/server/__tests__/decisionReplyGuard.test.ts', reason: '1.2 s at N=1; 5.8 s under a shared-slot N=4 run (not over 5 s exclusive)' },
+  { file: 'src/server/__tests__/taskResultConnections.test.ts', reason: '1.0 s at N=1; 5.7 s under a shared-slot N=4 run (not over 5 s exclusive)' },
+  { file: 'src/server/__tests__/planSupervisionDetail.test.ts', reason: '1.0 s at N=1; 5.6 s under a shared-slot N=4 run (not over 5 s exclusive)' },
+  { file: 'src/server/__tests__/planValidationTools.test.ts', reason: '1.1 s at N=1; 5.5 s under a shared-slot N=4 run (not over 5 s exclusive)' },
+  { file: 'src/server/__tests__/chatModelDb.test.ts', reason: '0.7 s at N=1; 5.5 s under a shared-slot N=4 run (not over 5 s exclusive)' },
+  { file: 'src/server/__tests__/strategyConnections.test.ts', reason: '0.9 s at N=1; 5.3 s under a shared-slot N=4 run (not over 5 s exclusive)' },
+  { file: 'src/server/__tests__/integrationAgentSurface.test.ts', reason: '2.5 s at N=1; 5.3 s under a shared-slot N=4 run (not over 5 s exclusive)' },
+  { file: 'src/server/__tests__/chatApprovalPolicyDb.test.ts', reason: '1.2 s at N=1; 5.3 s under a shared-slot N=4 run (not over 5 s exclusive)' },
+  { file: 'src/server/__tests__/executionConnections.test.ts', reason: '2.2 s at N=1; 5.2 s under a shared-slot N=4 run (not over 5 s exclusive)' },
 ]
 
 export interface MisplacedFile {
