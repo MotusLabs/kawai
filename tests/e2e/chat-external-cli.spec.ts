@@ -222,7 +222,10 @@ test('external CLI chat: streaming, approvals, question, interrupt, debug, resum
     // card's label is "Approval · Bash", never exactly "Bash"), with the
     // call's description beside it — proof the Bash tool call ran and rendered.
     await expect(transcript.getByText('Bash', { exact: true }).first()).toBeVisible()
-    await expect(transcript).toContainText('Request allowed')
+    // A user-settled request renders "Allowed/Denied by user"
+    // (ChatMessages' request_resolved row); "Request <outcome>" is only the
+    // non-user fallback, e.g. "Request answered" below.
+    await expect(transcript).toContainText('Allowed by user')
 
     // Approval deny: the tool never runs.
     completed = await nextCompletion()
@@ -230,7 +233,7 @@ test('external CLI chat: streaming, approvals, question, interrupt, debug, resum
     await expect(page.getByRole('button', { name: 'Deny', exact: true })).toBeVisible()
     await page.getByRole('button', { name: 'Deny', exact: true }).click()
     await completed()
-    await expect(transcript).toContainText('Request denied')
+    await expect(transcript).toContainText('Denied by user')
     expect(existsSync(markerDeny)).toBe(false)
     await page.screenshot({ path: info.outputPath('denied.png') })
 
