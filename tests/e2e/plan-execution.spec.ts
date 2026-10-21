@@ -10,147 +10,15 @@
 // local bare origin behind a GitHub-shaped remote. Local execution requires
 // the fixture webServer (AGENTBOARD_CHAT_FIXTURE=1); CI runs it — never run
 // test:e2e against a live kawai server.
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test } from '@playwright/test'
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { initPlanRepository, validateUntilReady } from './fixtures/planWalkthrough'
+import { createChat, git, initOrigin, initPlanRepository, seedPlan, submitRound, validateUntilReady } from './fixtures/planWalkthrough'
 
 test.skip(process.env.AGENTBOARD_CHAT_FIXTURE !== '1', 'Requires development chat fixture')
 
-const GITHUB_URL = 'https://github.com/acme/walkthrough.git'
-
-function git(args: string[], cwd?: string): string {
-  return execFileSync('git', args, { cwd, encoding: 'utf8' })
-}
-
-async function createChat(page: Page, root: string, name: string, group: string) {
-  await page.getByRole('button', { name: 'New session', exact: true }).first().click()
-  const dialog = page.getByRole('dialog', { name: 'New Session' })
-  await dialog.getByLabel('Project Path').fill(root)
-  await dialog.getByLabel('Group').selectOption(group)
-  await dialog.getByLabel('Display Name').fill(name)
-  await dialog.getByRole('button', { name: 'Create', exact: true }).click()
-  await expect(page.getByTestId('chat-view')).toContainText(name)
-  return (await page.locator('[data-session-id^="chat-"]').filter({ hasText: name }).first().getAttribute('data-session-id'))!
-}
-
-/** A bare origin behind a GitHub-shaped remote, so the fixture probe reads a base. */
-function initOrigin(root: string, origin: string): void {
-  git(['init', '-q', '--bare', '-b', 'master', origin])
-  git(['add', '-A'], root)
-  git(['-c', 'user.email=t@e', '-c', 'user.name=T', 'commit', '-q', '-m', 'base'], root)
-  git(['remote', 'add', 'origin', origin], root)
-  git(['push', '-q', 'origin', 'master'], root)
-  git(['remote', 'set-url', 'origin', GITHUB_URL], root)
-  git(['config', `url.${origin}.insteadOf`, GITHUB_URL], root)
-}
-
-/** Seed the approved plan (and only the plan) through the stores, as the human. */
-function seedPlan(root: string): void {
-  const dbPath = process.env.AGENTBOARD_DB_PATH!
-  if (!dbPath.startsWith(process.env.E2E_TMUX_TMPDIR!)) throw new Error('Refuse seeding a non-isolated database')
-  execFileSync('bun', ['-e', `
-    import { initDatabase } from './src/server/db';
-    import { PlanStore } from './src/server/plans/planStore';
-    import { resolveTeam } from './src/server/team/teamIdentity';
-    import { normalizePlanContent } from './src/shared/plans';
-    import { retryOnSqliteBusy } from './src/server/__tests__/sqliteBusyRetry';
-    const sessions = initDatabase({ path: ${JSON.stringify(dbPath)} });
-    sessions.db.exec('PRAGMA busy_timeout = 5000');
-    const plans = new PlanStore(sessions.db);
-    const teamId = (await resolveTeam(${JSON.stringify(root)})).teamId;
-    // The server is a second writer on this database: a BUSY on the deferred
-    // read→write upgrade bypasses busy_timeout, so the whole seed runs as one
-    // transaction and re-runs on BUSY (a throw rolls everything back).
-    await retryOnSqliteBusy(() => plans.atomically(() => {
-      const planId = plans.insertPlan({ teamId, title: 'Execution walkthrough', creator: { kind: 'human', sessionId: null } });
-      const content = normalizePlanContent({
-        goal: 'Ship the walkthrough', successCriteria: ['The change lands through the execution'],
-        changes: [{ change: 'walk-api', dependsOn: [], group: 'devs', acceptance: [], extraChecks: [], guidance: '' }],
-        roles: [{ group: 'devs', profiles: [] }, { group: 'reviewers', profiles: [] }], reviewGroup: 'reviewers',
-      });
-      const revision = plans.insertRevision(planId, { content, contentHash: 'walk-hash-1', pin: null, author: { kind: 'human', sessionId: null } });
-      plans.setRevisionStatus(planId, revision, 'approved');
-      plans.setCurrentApproved(planId, revision);
-    }));
-    sessions.close();
-  `], { cwd: process.cwd(), encoding: 'utf8' })
-}
-
-/**
- * The implementer's result, then the reviewer's passing findings — the agent
- * tool path over the same database. Returns the pushed commit of the result.
- */
-function submitRound(root: string, mode: 'result' | 'findings', implementer: string, reviewer: string): string {
-  const dbPath = process.env.AGENTBOARD_DB_PATH!
-  if (!dbPath.startsWith(process.env.E2E_TMUX_TMPDIR!)) throw new Error('Refuse seeding a non-isolated database')
-  const script = `
-    import { join } from 'node:path';
-    import { initDatabase } from './src/server/db';
-    import { MailboxStore } from './src/server/team/mailboxStore';
-    import { AssignmentStore } from './src/server/team/assignmentStore';
-    import { TaskStore } from './src/server/team/taskStore';
-    import { TaskService } from './src/server/team/TaskService';
-    import { TaskResultService } from './src/server/team/TaskResultService';
-    import { taskHandlers } from './src/server/team/taskTools';
-    import { composeExecutionCore } from './src/server/plans/planComposition';
-    import { retryOnSqliteBusy } from './src/server/__tests__/sqliteBusyRetry';
-    try {
-      const [file, root, mode, implementer, reviewer] = JSON.parse(await Bun.stdin.text());
-      const sessions = initDatabase({ path: file });
-      sessions.db.exec('PRAGMA busy_timeout = 5000');
-      const db = sessions.db;
-      const core = composeExecutionCore(db);
-      const mail = new MailboxStore(db);
-      const taskStore = new TaskStore(db, mail, new AssignmentStore(db, mail));
-      const tasks = new TaskService(taskStore, {
-        getSession: id => sessions.getChatSession(id), homeDir: process.env.HOME,
-        restoreSession: () => undefined, ownership: core.ownership,
-      });
-      const results = new TaskResultService(tasks, {
-        getSession: id => sessions.getChatSession(id), ownership: core.ownership, records: () => [],
-      });
-      const row = db.prepare("SELECT task_id FROM plan_execution_changes WHERE change = 'walk-api' AND task_id IS NOT NULL ORDER BY rowid DESC").get();
-      if (!row) throw new Error('no owned task for walk-api yet');
-      const taskId = row.task_id;
-      if (mode === 'result') {
-        const commit = Bun.spawnSync(['git', 'rev-parse', 'HEAD'], { cwd: join(root, '.worktrees', 'walk-api') }).stdout.toString().trim();
-        const asImplementer = taskHandlers(tasks, implementer, results);
-        await retryOnSqliteBusy(() => asImplementer.task_submit_result({ task_id: taskId, summary: 'Implemented walk-api', commit, tests: [{ description: 'unit', outcome: 'pass' }] }));
-        console.log('RESULT:' + commit);
-      } else {
-        // The verdict counts only the review handoff's claimant's findings:
-        // wait for the dispatched review to be claimed, then answer as that
-        // reviewer (the tool path, exactly as the agent would).
-        let claimant = null;
-        for (let attempt = 0; attempt < 30 && claimant === null; attempt++) {
-          const row = db.prepare("SELECT claimed_by FROM team_task_assignments WHERE task_id = ? AND handoff_kind = 'review' AND superseded_by IS NULL AND claimed_by IS NOT NULL ORDER BY rowid DESC").get(taskId);
-          claimant = row?.claimed_by ?? null;
-          if (claimant === null) await new Promise(resolve => setTimeout(resolve, 1000));
-        }
-        if (claimant === null) throw new Error('the review handoff was never claimed');
-        const result = db.prepare('SELECT id FROM team_task_results WHERE task_id = ? ORDER BY rowid DESC').get(taskId);
-        if (!result) throw new Error('no result yet');
-        const asReviewer = taskHandlers(tasks, claimant, results);
-        // Not retried: submitFindings makes three autocommits (the findings
-        // INSERT, then the journal note's INSERT and UPDATE), so a BUSY after
-        // the first would duplicate them on a re-run; its statements start
-        // from TRANS_NONE and take the busy handler.
-        await asReviewer.task_submit_findings({ task_id: taskId, result_id: result.id, kind: 'review', verdict: 'pass', findings: 'Clean: the walkthrough change is sound.' });
-        console.log('FINDINGS:ok:' + claimant);
-      }
-      sessions.close();
-    } catch (error) {
-      console.error('ROUND-FAILED:', error instanceof Error ? error.stack : String(error));
-      process.exit(1);
-    }
-  `
-  return execFileSync('bun', ['-e', script], {
-    cwd: process.cwd(), input: JSON.stringify([dbPath, root, mode, implementer, reviewer]), encoding: 'utf8',
-  }).trim()
-}
 
 /** Poll the execution's progress until a row reads `until` (e.g. its outcome `completed`). */
 async function pollExecution(root: string, until: string): Promise<boolean> {
