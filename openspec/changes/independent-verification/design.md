@@ -250,8 +250,8 @@ The fixture-spec lister and its guards are now the sibling change `ci-fixture-sp
 ## Migration Plan
 
 1. **PR A:** move the record, key, and title modules (tasks 1.x). It depends on nothing open.
-2. **PR B:** server checks, storage, recheck, the result card, and the recovery-matrix row (2.x), after PR A. It reads today's records, which have no test lists, so citations read "ran: unknown" until PR D.
-3. **PR C:** coverage maps, the seal, and the comparison (3.x), after PR B.
+2. **PR B:** server checks, storage, recheck, the result card, and the recovery-matrix row (2.x), after PR A. It reads today's records, which have no test lists.
+3. **PR C:** coverage maps, the seal, and the comparison (3.x), after PR B. Until PR D, every citation it finds reads "found, run unknown", since no record has a test list yet.
 4. **PR D:** test lists beside records, and the local script (4.x), after PR C, and once `per-result-suite` PR A's JUnit reader and `parallel-suite`'s runner are on master. Task 4.3 extends the citation check that PR C adds (3.1), and the script's `--coverage` reads it.
 5. **PR E:** the coverage guard (5.x), after PR A, in parallel with B–D.
 6. **PR F:** procedure and docs (6.x), last.
