@@ -38,8 +38,10 @@ interface FixturePr {
 }
 
 /** The fixture's pull-request registry: one server process, every walkthrough
- * team in it (CI runs the walkthrough specs in one server, so rows are
- * repo-scoped — two teams may each carry a PR for the same head branch). */
+ * team in it (CI runs the walkthrough specs in one server). Rows are scoped
+ * by repository, so teams with different origins never collide; within one
+ * repository, only an OPEN pull request for the same head refuses a second,
+ * as on GitHub. */
 const registry: FixturePr[] = []
 let nextNumber = 1
 /** The main checkout the last probe read: the fixture's ref writes find its bare origin through it. */
