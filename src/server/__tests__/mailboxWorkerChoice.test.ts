@@ -72,6 +72,15 @@ describe('group mail names a worker', () => {
     expect(store.get(scheduled.id)).toMatchObject({ workerChoice: 'claude', deliverAt: scheduled.deliverAt })
   })
 
+  test('a group listing no workers takes the default profile\'s: claude/default', async () => {
+    const leads = { to_kind: 'group', to_id: 'leads', body: 'Plan it' }
+    expect((await lead.send_message({ ...leads, worker: 'claude' })).workerChoice).toBe('claude')
+    expect((await lead.send_message({ ...leads, worker: 'default' })).workerChoice).toBe('claude/default')
+    const before = queued()
+    expect(await refusal(() => lead.send_message({ ...leads, worker: 'zai' }))).toContain('not among group leads\'s workers: claude/default')
+    expect(queued()).toEqual(before)
+  })
+
   test('without a worker the row carries no choice', async () => {
     expect('workerChoice' in (await lead.send_message(group))).toBe(false)
   })
