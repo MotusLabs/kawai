@@ -8,7 +8,8 @@ import { Database } from 'bun:sqlite'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { initDatabase, type SessionDatabase } from '../db'
+import { initDatabase } from '../db'
+import { schemaCopy, schemaDb } from './schemaDb'
 import { assignmentState, outstandingOf, AssignmentStore, type AssignmentState } from '../team/assignmentStore'
 import { MailboxStore } from '../team/mailboxStore'
 import { TaskStore } from '../team/taskStore'
@@ -59,26 +60,32 @@ describe('Assignment migrations', () => {
 })
 
 describe('AssignmentStore', () => {
-  let dir: string
+  let dir: string | null
   let dbPath: string
-  let db: SessionDatabase
+  let db: Database
   let mail: MailboxStore
   let assignments: AssignmentStore
   let tasks: TaskStore
 
-  const open = () => {
-    db = initDatabase({ path: dbPath })
-    mail = new MailboxStore(db.db)
-    assignments = new AssignmentStore(db.db, mail)
-    tasks = new TaskStore(db.db, mail, assignments)
+  const openStores = () => {
+    mail = new MailboxStore(db)
+    assignments = new AssignmentStore(db, mail)
+    tasks = new TaskStore(db, mail, assignments)
   }
-  beforeEach(() => {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-assignments-'))
+  // In-memory schema copies keep the per-test setup near 1 ms; the reopen test
+  // switches to a file (its subject is persistence across a real close/reopen).
+  const openFile = () => {
+    dir ??= fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-assignments-'))
     dbPath = path.join(dir, 'assignments.db')
-    open()
+    db = schemaDb(dbPath)
+    openStores()
+  }
+  beforeEach(() => { dir = null; db = schemaCopy(); openStores() })
+  afterEach(() => {
+    db.close()
+    if (dir !== null) { fs.rmSync(dir, { recursive: true, force: true }); dir = null }
   })
-  afterEach(() => { db.close(); fs.rmSync(dir, { recursive: true, force: true }) })
-  const reopen = () => { db.close(); open() }
+  const reopen = () => { db.close(); openFile() }
 
   const createTask = (overrides: Partial<Parameters<TaskStore['create']>[0]> = {}) => tasks.create({
     teamId: TEAM, title: 'Add export', direction: 'CSV', creator: human, ...overrides,
@@ -171,6 +178,7 @@ describe('AssignmentStore', () => {
   })
 
   test('assignments persist across reopen with their claims and derived states', () => {
+    db.close(); openFile()
     const task = createTask()
     const { assignment, message } = dispatch(task)
     mail.claim(message.id, 'chat-dev')
@@ -223,18 +231,16 @@ describe('assignmentState', () => {
 })
 
 describe('task request keys', () => {
-  let dir: string
-  let db: SessionDatabase
+  let db: Database
   let mail: MailboxStore
   let tasks: TaskStore
 
   beforeEach(() => {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-task-keys-'))
-    db = initDatabase({ path: path.join(dir, 'tasks.db') })
-    mail = new MailboxStore(db.db)
-    tasks = new TaskStore(db.db, mail, new AssignmentStore(db.db, mail))
+    db = schemaCopy()
+    mail = new MailboxStore(db)
+    tasks = new TaskStore(db, mail, new AssignmentStore(db, mail))
   })
-  afterEach(() => { db.close(); fs.rmSync(dir, { recursive: true, force: true }) })
+  afterEach(() => { db.close() })
 
   test('a same-payload replay returns the prior task; a different payload is refused naming the field', () => {
     const first = tasks.create({ teamId: TEAM, title: 'Export', direction: 'CSV', creator: human, requestKey: 'k1', worktree: '/w', parentId: null, openspecChange: null })

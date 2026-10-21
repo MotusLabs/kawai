@@ -3,11 +3,13 @@
 // validation, the amend/status permission matrix, and identity binding.
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
+import { Database } from 'bun:sqlite'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { cleanGitEnv } from '../git/gitCommand'
-import { initDatabase, type ChatSessionRecord, type SessionDatabase } from '../db'
+import type { ChatSessionRecord } from '../db'
+import { schemaCopy } from './schemaDb'
 import { MailboxStore } from '../team/mailboxStore'
 import { TaskStore } from '../team/taskStore'
 import { TaskService, type TaskCaller } from '../team/TaskService'
@@ -24,7 +26,7 @@ let repo: string
 let feature: string
 let other: string
 let home: string
-let db: SessionDatabase
+let db: Database
 let records: Map<string, ChatSessionRecord>
 let service: TaskService
 let team: TeamIdentity
@@ -70,8 +72,8 @@ beforeEach(() => {
     ['stranger', row('stranger', 'leads', other)],
   ])
   db?.close()
-  db = initDatabase({ path: path.join(fs.mkdtempSync(path.join(root, 'db-')), 'tasks.db') })
-  service = new TaskService(new TaskStore(db.db, new MailboxStore(db.db)), { getSession: id => records.get(id), homeDir: home })
+  db = schemaCopy()
+  service = new TaskService(new TaskStore(db, new MailboxStore(db)), { getSession: id => records.get(id), homeDir: home })
 })
 
 describe('creation rights', () => {
@@ -230,9 +232,9 @@ describe('task_acknowledge (task-revision-publication 4.2, D6)', () => {
 describe('task_amend publishes with rationale and notify (task-revision-publication 4.4, D7)', () => {
   test('the creating lead publishes and notifies: the claimed developer gets one notice from the lead', async () => {
     const { AssignmentStore } = await import('../team/assignmentStore')
-    const mail = new MailboxStore(db.db)
-    const assignments = new AssignmentStore(db.db, mail)
-    const notifying = new TaskService(new TaskStore(db.db, mail, assignments), { getSession: id => records.get(id), homeDir: home })
+    const mail = new MailboxStore(db)
+    const assignments = new AssignmentStore(db, mail)
+    const notifying = new TaskService(new TaskStore(db, mail, assignments), { getSession: id => records.get(id), homeDir: home })
     const lead = taskHandlers(notifying, 'lead')
     const task = await lead.task_create({ title: 'Export', direction: 'CSV' })
     const { assignment } = assignments.insert({ teamId: team.teamId, taskId: task.id, requestKey: 'assign-1', targetKind: 'session',
@@ -260,7 +262,7 @@ describe('spawn-time registration', () => {
   test('the team MCP server carries mailbox and task tools, all allowed without cards', async () => {
     const { createMailboxServer, TEAM_ALLOWED_TOOLS } = await import('../team/mailboxTools')
     const { TeamMailbox } = await import('../team/TeamMailbox')
-    const mailbox = new TeamMailbox(new MailboxStore(db.db), { getSession: id => records.get(id), homeDir: home })
+    const mailbox = new TeamMailbox(new MailboxStore(db), { getSession: id => records.get(id), homeDir: home })
     const { MailboxManagement } = await import('../team/mailboxManagement')
     const management = new MailboxManagement(mailbox.store, { getSession: id => records.get(id), tasks: service, homeDir: home })
     const server = await createMailboxServer(mailbox, 'lead', { tasks: service, management })
@@ -290,7 +292,7 @@ describe('spawn-time registration', () => {
 describe('status boundary re-check (member-release, MM INFO 4)', () => {
   /** A service whose transition hook pauses until `resume()`, recording each snapshot and closure run. */
   const pausedService = (duringAwait: (store: TaskStore, taskId: string) => void) => {
-    const store = new TaskStore(db.db, new MailboxStore(db.db))
+    const store = new TaskStore(db, new MailboxStore(db))
     const prepared: string[] = []
     const ran: string[] = []
     const paused = new TaskService(store, {
