@@ -510,8 +510,9 @@ export class ChatSessionManager {
     // runs — it spends a Claude spawn that says nothing about Codex.
     if (launch.runtime === 'codex') {
       // An injected fake runtime (the development fixture) starts no Codex
-      // child — the same seam checkExecutable applies to the Claude install.
-      if (!this.options.queryFactory) {
+      // child — the same seam checkExecutable applies to the Claude install —
+      // unless the e2e carve-out configures a Codex executable.
+      if (this.codexGatesApply()) {
         try {
           await ensureCodexExecutable()
         } catch (error) {
@@ -1685,8 +1686,9 @@ export class ChatSessionManager {
     // environment. No runtimeFactsOf re-resolution, so stamp and gate can
     // never disagree.
     if (launch.runtime === 'codex') {
-      // The fixture seam again: a fake runtime never checks a real login.
-      if (!this.options.queryFactory && !hasCodexLogin(launch.codexHome)) {
+      // The fixture seam again: a fake runtime never checks a real login,
+      // except under the e2e carve-out (codexGatesApply).
+      if (this.codexGatesApply() && !hasCodexLogin(launch.codexHome)) {
         return { ok: false, error: this.codexLoginRefusal(launch.codexHome, input.claudeProfileId ?? null) }
       }
     } else {
@@ -2156,8 +2158,10 @@ export class ChatSessionManager {
     if (record.archivedAt != null) return ARCHIVED_SESSION_ERROR
     const spawning = !this.driverPromises.has(record.sessionId)
     // A Codex thread's transcript is the rollout its start reported
-    // (codex-chat-sessions D8), never a Claude `<id>.jsonl`.
-    const codexRollout = record.runtime === 'codex' && !this.options.queryFactory
+    // (codex-chat-sessions D8), never a Claude `<id>.jsonl`. Left bare, the
+    // fixture seam would compute a Claude .jsonl check for a real Codex chat
+    // under the e2e carve-out, so the same gate applies here.
+    const codexRollout = record.runtime === 'codex' && this.codexGatesApply()
     if (
       record.sdkSessionId &&
       // Sync discovery acceptable: a per-request existence check, not the
@@ -2209,9 +2213,10 @@ export class ChatSessionManager {
     // A Codex chat whose stored home lost its login cannot start (4.2); the
     // mismatch refusals above still win, and the ensureDriver gates refuse
     // with the same text when a send reaches the driver first. The fixture
-    // (a fake runtime) starts no Codex child and checks no login.
+    // (a fake runtime) starts no Codex child and checks no login — except
+    // under the e2e carve-out (codexGatesApply).
     if (
-      !this.options.queryFactory &&
+      this.codexGatesApply() &&
       (record.runtime ?? 'claude') === 'codex' &&
       record.codexHome &&
       !hasCodexLogin(record.codexHome)
@@ -2231,8 +2236,9 @@ export class ChatSessionManager {
    */
   private codexStartRefusal(record: ChatSessionRecord, launch: ChatLaunchConfiguration): string | null {
     // The fixture seam (see checkExecutable): an injected fake runtime
-    // starts no Codex child, so no real gate applies.
-    if (this.options.queryFactory) return null
+    // starts no Codex child, so no real gate applies — except under the e2e
+    // carve-out (codexGatesApply).
+    if (!this.codexGatesApply()) return null
     const stored = record.runtime ?? 'claude'
     if (launch.runtime !== 'codex') {
       return (
@@ -2262,6 +2268,17 @@ export class ChatSessionManager {
   private codexLoginRefusal(codexHome: string, profileId: string | null): string {
     logger.warn('codex_login_missing', { profileId: profileId ?? 'default', codexHome })
     return codexLoginErrorMessage(profileId ?? 'default')
+  }
+
+  /**
+   * Whether the real Codex gates apply to this manager. Production (no
+   * injected queryFactory) always gates; the development fixture starts no
+   * Codex child unless the e2e run configures a Codex executable
+   * (KAWAI_CODEX_PATH), in which case a Codex chat and all its gates —
+   * executable, login, rollout, start refusals — run for real (8.1).
+   */
+  private codexGatesApply(): boolean {
+    return !this.options.queryFactory || !!process.env.KAWAI_CODEX_PATH
   }
 
   /**
@@ -2515,8 +2532,9 @@ export class ChatSessionManager {
     const promise = (async () => {
       // A Codex chat runs the app-server driver (codex-chat-sessions 5.6);
       // the fixture seam (an injected fake runtime) keeps the fake SDK
-      // driver, which starts no Codex child.
-      const codex = record.runtime === 'codex' && !this.options.queryFactory
+      // driver, which starts no Codex child — unless the e2e carve-out
+      // configures a Codex executable, and the app-server driver runs.
+      const codex = record.runtime === 'codex' && this.codexGatesApply()
       // A profile executable replaces the standard binary (already verified
       // above); otherwise every Claude spawn runs the checked Claude Code
       // install, and a Codex spawn the gated Codex executable.
