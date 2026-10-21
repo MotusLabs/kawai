@@ -202,6 +202,7 @@ export const SLOW_TIER_EXCEPTIONS: ReadonlyArray<{ file: string; reason: string 
   { file: 'src/server/__tests__/integrationAgentSurface.test.ts', reason: '2.5 s at N=1; 5.3 s under a shared-slot N=4 run (not over 5 s exclusive)' },
   { file: 'src/server/__tests__/chatApprovalPolicyDb.test.ts', reason: '1.2 s at N=1; 5.3 s under a shared-slot N=4 run (not over 5 s exclusive)' },
   { file: 'src/server/__tests__/executionConnections.test.ts', reason: '2.2 s at N=1; 5.2 s under a shared-slot N=4 run (not over 5 s exclusive)' },
+  { file: 'src/client/__tests__/terminalFocusSteal.test.tsx', reason: '4.7 s at N=1; 5.0 s under a shared-slot N=4 run (not over 5 s exclusive)' },
 ]
 
 export interface MisplacedFile {
