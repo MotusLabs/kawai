@@ -380,7 +380,7 @@ Every resolution therefore works from the newest revision, and nothing is dispat
 - `landed-changed`: a landed change differs in a field other than `dependsOn` and `fixes`, or is `removed`;
 - `lead-changed`: `PlanContent.leadGroup` (plan-supervision D2) differs. It is informational, never a refusal: Apply takes it, and cards raised afterwards go to the new lead group.
 
-A change of roles or plan-wide rules with nothing landed marks every unlanded change `changed` through the effective fields. A role entry counts through its `profiles`, in preference order — the change's implementing group's and its effective review group's, looked up by group name — and only unlanded changes compare roles, so a role change never produces `landed-changed`.
+A change of plan-wide rules with nothing landed, or of roles at any time, marks every unlanded change `changed` through the effective fields. A role entry counts through its `profiles`, in preference order — the change's implementing group's and its effective review group's, looked up by group name — and only unlanded changes compare roles, so a role change never produces `landed-changed`.
 
 **Choices.** A `changed` change that has a task needs a choice. One still `waiting`, with no task, is recorded with choice `none` and picks up the new definition when provisioned.
 

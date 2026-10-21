@@ -31,7 +31,7 @@ Implement after these have landed on master: `plan-execution`, `integration-cand
 
 ## 3. Holds
 
-- [ ] 3.1 Implement `HoldService.place`, `release` (whole, changes, and narrowing), and `extend` (D4), refusing non-human callers first. Verify with unit tests:
+- [x] 3.1 Implement `HoldService.place`, `release` (whole, changes, and narrowing), and `extend` (D4), refusing non-human callers first. Verify with unit tests:
   - every refusal (closed plan, deadline in the past or beyond 30 days, empty rationale, unknown or repeated change, foreign cite) writes nothing;
   - narrowing is one transaction, and its replay writes nothing;
   - closing and reopening the plan leaves holds unchanged;

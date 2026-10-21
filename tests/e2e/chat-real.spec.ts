@@ -1,9 +1,10 @@
 import { expect, test } from '@playwright/test'
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdtempSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { killChat } from './support/chatHeader'
+import { killPrivateTmuxServer } from './fixtures/privateTmux'
 
 test.skip(process.env.KAWAI_REAL_CHAT_TEST !== '1', 'Opt-in test makes real Claude requests')
 
@@ -38,10 +39,16 @@ test('real chat approvals, questions, interrupt, reconnect, restart, recovery, a
     }, { timeout: 20_000 }).toBe(true)
   }
   const stop = async () => {
-    if (!server || server.exitCode !== null) return
-    const stopped = new Promise<void>(resolve => server!.once('exit', () => resolve()))
-    server.kill('SIGTERM')
-    await stopped
+    if (server && server.exitCode === null) {
+      const stopped = new Promise<void>(resolve => server!.once('exit', () => resolve()))
+      server.kill('SIGTERM')
+      await stopped
+    }
+    // Every path that ends this server — a normal stop, a server that
+    // already exited, a failed start — kills the root's private tmux server
+    // before the root is removed: the daemon outlives the server and pins
+    // this checkout (see tests/e2e/fixtures/privateTmux.ts).
+    killPrivateTmuxServer(root)
     server = null
   }
   const send = async (text: string) => {
@@ -150,7 +157,6 @@ test('real chat approvals, questions, interrupt, reconnect, restart, recovery, a
     await info.attach('walkthrough-results', { body: results.join('\n'), contentType: 'text/plain' })
     await info.attach('server-diagnostics', { body: diagnostics, contentType: 'text/plain' })
     await stop()
-    spawnSync('tmux', ['kill-server'], { env, stdio: 'ignore' })
     rmSync(root, { recursive: true, force: true })
   }
 })
