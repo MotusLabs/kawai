@@ -3,7 +3,8 @@
 // an execution's revision against the plan's newer approved one, with the
 // execution-wide findings Apply refuses on (D11). The compared C1 fields are
 // `dependsOn`, `fixes` (plan-supervision D2), the implementing and effective
-// review groups, `acceptance`, extra checks, and `guidance`. A landed change
+// review groups, the role profiles behind those groups (`roles`, unlanded
+// changes only), `acceptance`, extra checks, and `guidance`. A landed change
 // differing only in `dependsOn` or `fixes` is `metadata` — Apply updates it
 // and offers no choice, so a forward fix can name a task on a change that
 // already landed; a landed change differing in anything else, or removed,
@@ -22,8 +23,20 @@ function effectiveReviewGroup(content: PlanContent, change: PlanChange): string 
   return change.reviewGroup ?? content.reviewGroup
 }
 
+/** A group's role profiles in preference order, or null when no role names it. */
+function roleProfiles(content: PlanContent, group: string | null): string[] | null {
+  if (group === null) return null
+  return content.roles.find(role => role.group === group)?.profiles ?? null
+}
+
+/** Whether either role entry behind the change's effective groups differs, in preference order. */
+function rolesDiffer(from: PlanContent, to: PlanContent, a: PlanChange, b: PlanChange): boolean {
+  return JSON.stringify(roleProfiles(from, a.group)) !== JSON.stringify(roleProfiles(to, b.group)) ||
+    JSON.stringify(roleProfiles(from, effectiveReviewGroup(from, a))) !== JSON.stringify(roleProfiles(to, effectiveReviewGroup(to, b)))
+}
+
 /** The compared fields that differ between two revisions' copies of one change, in field order. */
-function changedFields(from: PlanContent, to: PlanContent, a: PlanChange, b: PlanChange): string[] {
+function changedFields(from: PlanContent, to: PlanContent, a: PlanChange, b: PlanChange, unlanded: boolean): string[] {
   const fields: string[] = []
   // Order is scheduling: a dependency reorder is a real change.
   if (JSON.stringify(a.dependsOn) !== JSON.stringify(b.dependsOn)) fields.push('dependsOn')
@@ -31,6 +44,11 @@ function changedFields(from: PlanContent, to: PlanContent, a: PlanChange, b: Pla
   if (JSON.stringify([...(a.fixes ?? [])].sort()) !== JSON.stringify([...(b.fixes ?? [])].sort())) fields.push('fixes')
   if ((a.group ?? null) !== (b.group ?? null)) fields.push('group')
   if (effectiveReviewGroup(from, a) !== effectiveReviewGroup(to, b)) fields.push('reviewGroup')
+  // A role entry's profiles are effective fields of an unlanded change (D10):
+  // its implementing group's and its effective review group's, in preference
+  // order, looked up by group name. A landed change never compares roles, so
+  // a role change never produces landed-changed (D11 judges unlanded work).
+  if (unlanded && rolesDiffer(from, to, a, b)) fields.push('roles')
   if (JSON.stringify(a.acceptance) !== JSON.stringify(b.acceptance)) fields.push('acceptance')
   if (JSON.stringify(a.extraChecks) !== JSON.stringify(b.extraChecks)) fields.push('extraChecks')
   if (a.guidance !== b.guidance) fields.push('guidance')
@@ -74,7 +92,7 @@ export function revisionDelta(from: PlanContent, to: PlanContent, landed: Readon
   }
   const planWideFields = landed.size > 0
     ? []
-    : [...(rulesChanged ? ['acceptanceRules'] : []), ...(checksChanged ? ['extraChecks'] : [])]
+    : [...(rulesChanged ? ['planAcceptanceRules'] : []), ...(checksChanged ? ['planExtraChecks'] : [])]
 
   const fromByName = new Map(from.changes.map(change => [change.change, change]))
   const toByName = new Map(to.changes.map(change => [change.change, change]))
@@ -82,7 +100,7 @@ export function revisionDelta(from: PlanContent, to: PlanContent, landed: Readon
   const changes: DeltaChange[] = to.changes.map(toChange => {
     const fromChange = fromByName.get(toChange.change)
     if (!fromChange) return { change: toChange.change, class: 'added', fields: [], choice: null }
-    const fields = changedFields(from, to, fromChange, toChange)
+    const fields = changedFields(from, to, fromChange, toChange, !landed.has(toChange.change))
     // The plan-wide rules are effective fields of every unlanded change (D10).
     for (const field of planWideFields) {
       if (!fields.includes(field)) fields.push(field)

@@ -114,6 +114,58 @@ describe('revisionDelta', () => {
     expect(finding(delta, 'landed-changed')?.changes).not.toContain('own-grouped')
   })
 
+  test('a role profiles change of the implementing group marks the change changed with roles', () => {
+    // D10, roles as effective fields: the implementing group's profiles are
+    // compared in preference order, looked up by group name.
+    const from = content([change('a')], { roles: [{ group: 'middle-devs', profiles: ['glm'] }] })
+    const to = content([change('a')], { roles: [{ group: 'middle-devs', profiles: ['sonnet'] }] })
+    expect(classes(revisionDelta(from, to, new Set(), new Set())).a).toMatchObject({ class: 'changed', fields: ['roles'] })
+  })
+
+  test('a role profiles change of the review group marks the change changed with roles', () => {
+    const from = content([change('a')], { roles: [{ group: 'reviewers', profiles: ['mimo'] }] })
+    const to = content([change('a')], { roles: [{ group: 'reviewers', profiles: ['claude'] }] })
+    expect(classes(revisionDelta(from, to, new Set(), new Set())).a).toMatchObject({ class: 'changed', fields: ['roles'] })
+  })
+
+  test('an unrelated group\'s role change leaves the change unchanged', () => {
+    const from = content([change('a')], { roles: [{ group: 'junior-devs', profiles: ['haiku'] }] })
+    const to = content([change('a')], { roles: [{ group: 'junior-devs', profiles: ['flash'] }] })
+    expect(classes(revisionDelta(from, to, new Set(), new Set())).a.class).toBe('unchanged')
+  })
+
+  test('reordering the roles array changes nothing', () => {
+    const roles = [{ group: 'middle-devs', profiles: ['glm'] }, { group: 'reviewers', profiles: ['mimo'] }]
+    const from = content([change('a')], { roles })
+    const to = content([change('a')], { roles: [roles[1], roles[0]] })
+    const delta = revisionDelta(from, to, new Set(), new Set())
+    expect(classes(delta).a.class).toBe('unchanged')
+    expect(delta.findings).toEqual([])
+  })
+
+  test('reordering a role\'s profiles marks the change changed (order is preference)', () => {
+    const from = content([change('a')], { roles: [{ group: 'middle-devs', profiles: ['glm', 'sonnet'] }] })
+    const to = content([change('a')], { roles: [{ group: 'middle-devs', profiles: ['sonnet', 'glm'] }] })
+    expect(classes(revisionDelta(from, to, new Set(), new Set())).a).toMatchObject({ class: 'changed', fields: ['roles'] })
+  })
+
+  test('after a landing, a role change never lands-changes: the landed change reads unchanged, the unlanded one is marked', () => {
+    const from = content([change('landed'), change('waiting')], { roles: [{ group: 'middle-devs', profiles: ['glm'] }] })
+    const to = content([change('landed'), change('waiting')], { roles: [{ group: 'middle-devs', profiles: ['sonnet'] }] })
+    const delta = revisionDelta(from, to, new Set(['landed']), new Set())
+    expect(classes(delta).landed).toMatchObject({ class: 'unchanged', fields: [] })
+    expect(classes(delta).waiting).toMatchObject({ class: 'changed', fields: ['roles'] })
+    expect(finding(delta, 'landed-changed')).toBeNull()
+  })
+
+  test('a roles change needs a choice when provisioned, none when waiting', () => {
+    const from = content([change('tasked'), change('waiting')], { roles: [{ group: 'middle-devs', profiles: ['glm'] }] })
+    const to = content([change('tasked'), change('waiting')], { roles: [{ group: 'middle-devs', profiles: ['sonnet'] }] })
+    const delta = revisionDelta(from, to, new Set(), new Set(['tasked']))
+    expect(classes(delta).tasked).toMatchObject({ class: 'changed', fields: ['roles'], choice: 'needed' })
+    expect(classes(delta).waiting).toMatchObject({ class: 'changed', fields: ['roles'], choice: 'none' })
+  })
+
   test('plan-wide rules with nothing landed mark every unlanded change changed (D10)', () => {
     const from = content([change('tasked'), change('waiting')])
     const to = content([change('tasked'), change('waiting')], {
@@ -122,8 +174,8 @@ describe('revisionDelta', () => {
     })
     const delta = revisionDelta(from, to, new Set(), new Set(['tasked']))
     expect(finding(delta, 'plan-rules-changed')).toBeNull()
-    expect(classes(delta).tasked).toMatchObject({ class: 'changed', fields: ['acceptanceRules', 'extraChecks'], choice: 'needed' })
-    expect(classes(delta).waiting).toMatchObject({ class: 'changed', fields: ['acceptanceRules', 'extraChecks'], choice: 'none' })
+    expect(classes(delta).tasked).toMatchObject({ class: 'changed', fields: ['planAcceptanceRules', 'planExtraChecks'], choice: 'needed' })
+    expect(classes(delta).waiting).toMatchObject({ class: 'changed', fields: ['planAcceptanceRules', 'planExtraChecks'], choice: 'none' })
     // An added change stays `added`: its provisioned definition is the new one.
     expect(revisionDelta(from, content([change('tasked'), change('waiting'), change('new')], { acceptanceRules: ['new rule'] }), new Set(), new Set(['tasked'])).changes
       .find(entry => entry.change === 'new')!.class).toBe('added')
@@ -147,7 +199,7 @@ describe('revisionDelta', () => {
     const edited = rules([{ name: 'ci-extra', description: 'd', command: 'bun ci:extra' }])
     const waiting = revisionDelta(rules([]), edited, new Set(), new Set())
     expect(finding(waiting, 'plan-rules-changed')).toBeNull()
-    expect(classes(waiting).a).toMatchObject({ class: 'changed', fields: ['extraChecks'], choice: 'none' })
+    expect(classes(waiting).a).toMatchObject({ class: 'changed', fields: ['planExtraChecks'], choice: 'none' })
     const landed = revisionDelta(rules([]), edited, new Set(['a']), new Set())
     expect(finding(landed, 'plan-rules-changed')).not.toBeNull()
     expect(classes(landed).a.class).toBe('unchanged')
