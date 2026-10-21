@@ -241,6 +241,7 @@ export class AssignmentStore {
     if (existing.targetKind !== input.targetKind) return 'target'
     if (existing.targetId !== input.targetId) return 'target'
     if (existing.instruction !== input.instruction) return 'instruction'
+    if ((existing.workerChoice ?? null) !== (input.workerChoice ?? null)) return 'worker'
     return handoffDiff(existing, input.handoff ?? null)
   }
 

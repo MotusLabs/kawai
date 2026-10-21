@@ -236,6 +236,8 @@ describe('Kawai\'s task and dispatch (§11.4)', () => {
     expect(assignment.requestKey).toBe(`exec:${execution.id}:task-a:attempt:1:${row.generation}`)
     const message = mail.get(assignment.messageId!)!
     expect(message).toMatchObject({ fromKind: 'system', allowedProfiles: ['default'] })
+    // Roles alone narrow Kawai's dispatches (dispatch-worker-choice): no worker choice on the row or the mail.
+    expect([assignment.workerChoice ?? null, message.workerChoice ?? null]).toEqual([null, null])
     expect(message.body).toContain('OpenSpec change "task-a"')
     // A replayed dispatch step yields one instruction (the key replays).
     executor.wake(world.team.teamId)

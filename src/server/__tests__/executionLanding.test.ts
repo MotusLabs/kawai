@@ -352,5 +352,7 @@ describe('direct landing (§14)', () => {
     expect(fix.handoffKind).toBe('fix')
     const fixMail = mail.get(fix.messageId!)!
     expect(fixMail.body).toContain('up to date')
+    // Kawai's handoffs carry the role's profiles only, never a worker choice (dispatch-worker-choice).
+    expect([fix.workerChoice ?? null, fixMail.workerChoice ?? null]).toEqual([null, null])
   })
 })
