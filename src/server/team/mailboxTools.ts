@@ -38,10 +38,13 @@ const content = { body: z.string().min(1), urgent: z.boolean().optional(), tags:
 // `human` is accepted so the service can refuse it with the reply path,
 // rather than an opaque enum error (team-message-threads D5).
 const recipient = { to_kind: z.enum(['group', 'session', 'human']), to_id: z.string().min(1).optional() }
+// The worker choice (dispatch-worker-choice D1) is on the two sends only, never
+// in `content`; reply names it only so the service can refuse it with a reason.
+const worker = { worker: z.string().min(1).optional() }
 export const mailboxSchemas = {
-  send_message: z.object({ ...recipient, ...content }),
-  reply: z.object({ message_id: z.string().min(1), ...content }),
-  schedule_message: z.object({ ...recipient, ...content, deliver_at: z.string().optional(), delay_seconds: z.number().nonnegative().optional() }),
+  send_message: z.object({ ...recipient, ...content, ...worker }),
+  reply: z.object({ message_id: z.string().min(1), ...content, ...worker }),
+  schedule_message: z.object({ ...recipient, ...content, ...worker, deliver_at: z.string().optional(), delay_seconds: z.number().nonnegative().optional() }),
   list_groups: z.object({}),
 }
 
@@ -169,9 +172,9 @@ export function teamToolTable(
     ...(validation ? validationSchemas : {}), ...(decisions ? decisionSchemas : {}), ...(metrics ? metricsSchemas : {}), ...(reports ? reportSchemas : {}),
   }
   const descriptions: Record<string, string> = {
-    send_message: 'Send to a team group or session. Returns immediately with the message id. Optional task_id puts the message under a team task. Mail to the human is refused: reply to a message they sent instead.',
-    reply: 'Reply to a received message in its thread. The reply keeps the original task unless task_id is given. A reply to a human-sent message reaches the human.',
-    schedule_message: 'Schedule mail at deliver_at (ISO date) or after delay_seconds. Use your session id for reminders. Optional task_id. Mail to the human is refused.',
+    send_message: 'Send to a team group or session. Returns immediately with the message id. Optional task_id puts the message under a team task. Optional worker (group mail only) limits who may take it to one provider (e.g. zai), one model (provider/model, or a bare model key), of the group\'s workers; it waits for that worker\'s cooldown and caps rather than going elsewhere. Mail to the human is refused: reply to a message they sent instead.',
+    reply: 'Reply to a received message in its thread. The reply keeps the original task unless task_id is given. A reply to a human-sent message reaches the human. A reply takes no worker.',
+    schedule_message: 'Schedule mail at deliver_at (ISO date) or after delay_seconds. Use your session id for reminders. Optional task_id. Optional worker (group mail only), as on send_message. Mail to the human is refused.',
     list_groups: 'List available team groups and their descriptions.',
     ...(management ? managementDescriptions : {}),
     ...(tasks ? taskDescriptions : {}),

@@ -29,7 +29,7 @@
 
 ## 3. Agent tools
 
-- [ ] 3.1 Add `worker` to the `send_message` and `schedule_message` schemas only (not the shared `content` spread, which `reply` also uses), with descriptions, validated in `TeamMailbox.send` with the spec's refusals, nothing queued on refusal. Verify mailbox tool tests: group accept, refusals for direct mail, the human, an unknown worker, a worker outside the group, an ambiguous id, and a `worker` given on `reply`.
+- [x] 3.1 Add `worker` to the `send_message` and `schedule_message` schemas only (not the shared `content` spread, which `reply` also uses), with descriptions, validated in `TeamMailbox.send` with the spec's refusals, nothing queued on refusal. Verify mailbox tool tests: group accept, refusals for direct mail, the human, an unknown worker, a worker outside the group, an ambiguous id, and a `worker` given on `reply`.
 - [ ] 3.2 Add `worker` to `task_handoff` and include it in `payloadDiff` and the standing-equivalent check. Verify task tool tests: a group handoff carries it; the same key with a different worker is refused naming `worker`; a session target refuses it. Verify that Kawai's plan-execution dispatches and handoffs (`executionDispatch.ts`, `executionLanding.ts`) never set `worker_choice`, with an execution test asserting a null choice beside the role's allowed profiles.
 - [ ] 3.3 Implement `team_capacity { group? }` from the routing objects (design D6), card-free and identity-bound. Verify tool tests: every group, one group, an unknown group refused, unknown usage as null, a cooling provider's end, and live counts including pending spawns equal to what `buildCandidates` counts.
 - [ ] 3.3a Add `sharesLoginWith` to `team_capacity`, following design D6's detection rule. Verify unit tests:
