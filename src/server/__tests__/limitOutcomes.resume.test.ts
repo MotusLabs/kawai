@@ -193,3 +193,21 @@ describe('resume replacement leaves no live resume (team-mailbox-management S1/S
     expect(store.get(fresh)?.state).toBe('queued')
   })
 })
+
+describe("a Codex home limit parks work at the exhausted windows' later reset (codex-chat-sessions 7.2)", () => {
+  test('the resume waits for the latest exhausted reset the event carries', async () => {
+    // The rule parks unconditionally (a group's onLimit may); the event is
+    // exactly what codexTurnLimitSignal emits with both windows exhausted —
+    // the five-hour window's sooner reset is gone, the weekly one decides.
+    ruleOnLimit = async () => ({ type: 'park' })
+    const m = deliver(); work()
+    limits.record({
+      profileId: 'codex', sessionId: 'dev', groupId: 'devs', kind: 'usageLimitExceeded', final: true, status: null,
+      message: 'limit reached', resetsAt: iso(now + 4 * 24 * 60 * MIN), providerId: 'codex-home-1a2b3c4d5e6f', window: null,
+    })
+    await outcomes.turnEnded('dev', true)
+    expect(store.get(m.id)).toMatchObject({ state: 'parked' })
+    const resume = store.get(store.get(m.id)!.resumeMessageId!)!
+    expect(resume).toMatchObject({ state: 'queued', toKind: 'session', toId: 'dev', deliverAt: iso(now + 4 * 24 * 60 * MIN), taskId: 'task-1' })
+  })
+})

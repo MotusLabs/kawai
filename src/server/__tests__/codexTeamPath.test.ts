@@ -98,6 +98,9 @@ const call = (threadId: string, body: string, to: string) => ({
  */
 function writeTranscript(sessionId: string): void {
   const script = new Script().boot('thread/start', 'gpt-test', rollout)
+    // The boot's fill read (PR E 7.1): a fresh manager's store holds no
+    // report, so the first spawn reads once — an empty reply records no data.
+    .request('account/rateLimits/read', {})
     .turn('ct-1')
     .serverRequest(900, 'item/tool/call', call(THREAD_ID, 'note to self', sessionId))
     .serverRequest(901, 'item/tool/call', call('thread-other', 'smuggled', sessionId))
@@ -169,6 +172,7 @@ test('a receipt written to an older rollout of the thread settles at turn end, n
   const older = path.join(codexHome, 'sessions', '2026', '10', '19', `rollout-2026-10-19T00-00-00-${THREAD_ID}.jsonl`)
   fs.mkdirSync(path.dirname(older), { recursive: true })
   const script = new Script().boot('thread/start', 'gpt-test', rollout)
+    .request('account/rateLimits/read', {})
     .turn('ct-1')
     .serverRequest(900, 'item/tool/call', call(THREAD_ID, 'note to self', id))
     .completed('ct-1')
@@ -211,8 +215,12 @@ test('a resume that moves transcript_path re-arms the receipt tail — mail sett
   // thread onto a NEW rollout (same thread id, newer file) and holds its
   // turn behind the gate.
   const moved = path.join(codexHome, 'sessions', '2026', '10', '20', `rollout-2026-10-20T01-00-00-${THREAD_ID}.jsonl`)
+  // Each boot's fill read (PR E 7.1): both runs' stores start empty, so
+  // both spawns claim one `account/rateLimits/read` right after the boot.
   const script = new Script().boot('thread/start', 'gpt-test', rollout)
+    .request('account/rateLimits/read', {})
   const second = new Script().boot('thread/resume', 'gpt-test', moved)
+    .request('account/rateLimits/read', {})
     .turn('ct-1')
     .gate(gate)
     .completed('ct-1')

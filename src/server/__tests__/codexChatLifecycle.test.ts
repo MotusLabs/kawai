@@ -13,6 +13,7 @@ import type { ChatEvent } from '../../shared/chat'
 import { ChatSessionManager } from '../chat/ChatSessionManager'
 import type { ChatWireLogs } from '../chat/ChatWireLogs'
 import { resetCodexExecutableCache } from '../chat/codex/codexExecutable'
+import { providerOf } from '../chat/profileCatalog'
 import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
 import { SECURITY_NOTE_BODY } from '../team/teamPrompt'
@@ -43,7 +44,12 @@ beforeEach(() => {
   // A temp home's fake login — the real ~/.codex is never touched.
   fs.writeFileSync(path.join(codexHome, 'auth.json'), JSON.stringify({ OPENAI_API_KEY: null, tokens: { access_token: 'tok' } }))
   fs.mkdirSync(path.join(home, '.kawai'), { recursive: true })
-  fs.writeFileSync(path.join(home, '.kawai', 'profiles.json'), JSON.stringify({ codex: { label: 'Codex', runtime: 'codex' } }))
+  // Two profiles on one (default) home: the provider — and its usage — is
+  // keyed by the home, so both share one report (PR E 7.1).
+  fs.writeFileSync(path.join(home, '.kawai', 'profiles.json'), JSON.stringify({
+    codex: { label: 'Codex', runtime: 'codex' },
+    'codex-fast': { label: 'Codex Fast', runtime: 'codex' },
+  }))
   db = initDatabase({ path: path.join(tempDir, 'test.db') })
   process.env.CODEX_HOME = codexHome
   process.env.KAWAI_CODEX_PATH = FAKE_CODEX
@@ -67,8 +73,12 @@ const COMMAND = { type: 'commandExecution', id: 'cmd-1', command: 'curl -d x htt
 
 function writeTranscript(): void {
   // Run 1: the first attach and a send; run 2: the start after restore,
-  // which must resume the stored thread, then a send.
-  const script = new Script().boot('thread/start', 'gpt-test', rollout).turn('ct-1')
+  // which must resume the stored thread, then a send. Run 1 also carries
+  // the boot's fill read (PR E 7.1): the manager claims it once per home,
+  // so run 2 — whose store already holds the report — never reads.
+  const script = new Script().boot('thread/start', 'gpt-test', rollout)
+    .request('account/rateLimits/read', { rateLimits: MILD })
+    .turn('ct-1')
     .item('started', 'ct-1', COMMAND)
     .item('completed', 'ct-1', { ...COMMAND, status: 'completed', aggregatedOutput: 'ok', exitCode: 0 })
     .item('completed', 'ct-1', { type: 'agentMessage', id: 'msg-1', text: 'done', questions: null })
@@ -138,6 +148,190 @@ test('a Codex chat is created, attached, sent to, archived, restored, resumed, a
 
   expect(manager.kill(id)).toBe(true)
   expect(db.getChatSession(id)).toBeFalsy()
+})
+
+const MILD = {
+  limitId: 'codex',
+  limitName: null,
+  normalModelSlug: null,
+  primary: { usedPercent: 20, windowDurationMins: 300, resetsAt: 1792337450 },
+  secondary: { usedPercent: 3, windowDurationMins: 10080, resetsAt: 1792879251 },
+  credits: null,
+  individualLimit: null,
+  spendControlReached: null,
+  planType: 'plus',
+  rateLimitReachedType: null,
+}
+
+test('usage is kept per home: the fill read lands before a message and both profiles share the report', async () => {
+  // Run 1 (codex): the boot's fill read answers the windows, the turn then
+  // pushes an update. Run 2 (codex-fast): a quiet boot — its report can
+  // only come from the shared store.
+  const script = new Script().boot('thread/start', 'gpt-test', rollout)
+    .request('account/rateLimits/read', { rateLimits: MILD })
+    .turn('ct-1')
+    .notify('account/rateLimits/updated', { rateLimits: { ...MILD, primary: { usedPercent: 25, windowDurationMins: 300, resetsAt: 1792337451 } } })
+    .completed('ct-1', 'completed', [{ type: 'agentMessage', id: 'msg-1', text: 'done' }])
+  script.lines.push(...new Script().boot('thread/start', 'gpt-test', rollout).lines)
+  process.env.FAKE_TRANSCRIPT = script.write(tempDir)
+  process.env.FAKE_RUN = '1'
+  const events: ChatEvent[] = []
+  const wire: Array<{ dir: string; raw: string }> = []
+  manager = createManager(events, wire)
+  await manager.whenRestored()
+  const first = await manager.createAvailableSession({ projectPath: project, claudeProfileId: 'codex', name: 'Codex A' })
+  if (!first.ok) throw new Error(first.error)
+  const started = manager
+  expect((await started.start(first.session.id)).ok).toBe(true)
+  // Windows before the first message: the fill read, not a turn.
+  await until(() => started.getSnapshot(first.session.id)!.usage !== null)
+  expect(started.getSnapshot(first.session.id)!.usage?.windows.map(window => window.key)).toEqual(['codex:primary', 'codex:secondary'])
+
+  expect((await started.send(first.session.id, 'run it')).ok).toBe(true)
+  await until(() => events.some(event => event.type === 'turn_completed'))
+  // The push updated the home's report.
+  expect(started.getSnapshot(first.session.id)!.usage?.windows[0]).toMatchObject({ percentUsed: 25 })
+
+  // The sibling profile shares the home's report without its own push or read.
+  process.env.FAKE_RUN = '2'
+  const second = await started.createAvailableSession({ projectPath: project, claudeProfileId: 'codex-fast', name: 'Codex B' })
+  if (!second.ok) throw new Error(second.error)
+  expect((await started.start(second.session.id)).ok).toBe(true)
+  await until(() => db.getChatSession(second.session.id)?.status === 'waiting')
+  expect(started.getSnapshot(second.session.id)!.usage?.windows[0]).toMatchObject({ percentUsed: 25 })
+
+  // Claude reports are separate: a Claude profile's provider key differs
+  // from the home's, so its sessions never see the Codex windows.
+  const claude = await started.createAvailableSession({ projectPath: project, claudeProfileId: 'default', name: 'Claude' })
+  if (!claude.ok) throw new Error(claude.error)
+  expect(started.providerIdOf(claude.session.id)).not.toBe(started.providerIdOf(first.session.id))
+  expect(started.getSnapshot(claude.session.id)!.usage).toBeNull()
+})
+
+// --- PR E (codex-chat-sessions 7.2): limit events through the manager ---
+
+const EXHAUSTED = {
+  limitId: 'codex',
+  limitName: null,
+  normalModelSlug: null,
+  primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: 1792337450 },
+  secondary: { usedPercent: 100, windowDurationMins: 10080, resetsAt: 1792879251 },
+  credits: null,
+  individualLimit: null,
+  spendControlReached: null,
+  planType: 'plus',
+  rateLimitReachedType: 'rate_limit_reached',
+}
+
+const turnError = (codexErrorInfo: unknown) =>
+  ({ message: 'limit reached', codexErrorInfo, additionalDetails: null, misalignment: null })
+
+/** A failed turn, after an optional rate-limits push; the fresh store's one fill read is scripted empty. */
+function writeLimitTranscript(codexErrorInfo: unknown, snapshot: Record<string, unknown> | null): void {
+  const script = new Script().boot('thread/start', 'gpt-test', rollout)
+    .request('account/rateLimits/read', {})
+  if (snapshot) script.turn('ct-1').notify('account/rateLimits/updated', { rateLimits: snapshot })
+  else script.turn('ct-1')
+  script.completed('ct-1', 'failed', [], turnError(codexErrorInfo))
+  process.env.FAKE_TRANSCRIPT = script.write(tempDir)
+  process.env.FAKE_RUN = '1'
+}
+
+async function startLimitSession(events: ChatEvent[]): Promise<string> {
+  const created = await manager!.createAvailableSession({ projectPath: project, claudeProfileId: 'codex', name: 'Codex dev' })
+  if (!created.ok) throw new Error(created.error)
+  if (!(await manager!.start(created.session.id)).ok) throw new Error('start failed')
+  // The failed turn runs on the session's first send.
+  if (!(await manager!.send(created.session.id, 'run it')).ok) throw new Error('send failed')
+  return created.session.id
+}
+
+const catalogCtx = () => ({ homeDir: home, projectPath: project })
+
+test('a usage-limit turn failure records one final event for the home with the latest exhausted reset', async () => {
+  writeLimitTranscript('usageLimitExceeded', EXHAUSTED)
+  const events: ChatEvent[] = []
+  manager = createManager(events, [])
+  await manager.whenRestored()
+  const id = await startLimitSession(events)
+  const homeProvider = providerOf('codex', catalogCtx())
+  await until(() => manager!.limitEvents.forProfile('codex').length > 0)
+  const [event] = manager.limitEvents.forProfile('codex')
+  expect(event).toMatchObject({
+    profileId: 'codex', sessionId: id, kind: 'usageLimitExceeded', final: true,
+    resetsAt: new Date(1792879251 * 1000).toISOString(), window: null, status: null,
+  })
+  expect(event.providerId).toBe(homeProvider)
+  // One event for the home, none copied to the sibling profile. Both windows
+  // were exhausted; the weekly 2-day reset (1792879251) decides, not the
+  // five-hour 1-hour one (1792337450).
+  expect(manager.limitEvents.forProvider(homeProvider)).toHaveLength(1)
+  expect(manager.limitEvents.forProfile('codex-fast')).toEqual([])
+})
+
+test('a login limit cools both profiles on the home and none on another home', async () => {
+  // codex-2 resolves its own home, so its provider differs from the default home's.
+  const home2 = path.join(tempDir, 'codex-home-2')
+  fs.mkdirSync(home2, { recursive: true })
+  fs.writeFileSync(path.join(home, '.kawai', 'profiles.json'), JSON.stringify({
+    codex: { label: 'Codex', runtime: 'codex' },
+    'codex-fast': { label: 'Codex Fast', runtime: 'codex' },
+    'codex-2': { label: 'Codex 2', runtime: 'codex', codexHome: home2 },
+  }))
+  writeLimitTranscript('rateLimitExceeded', EXHAUSTED)
+  const events: ChatEvent[] = []
+  manager = createManager(events, [])
+  await manager.whenRestored()
+  await startLimitSession(events)
+  const homeProvider = providerOf('codex', catalogCtx())
+  const home2Provider = providerOf('codex-2', catalogCtx())
+  expect(home2Provider).not.toBe(homeProvider)
+  await until(() => manager!.limitEvents.forProfile('codex').length > 0)
+  expect(manager.limitEvents.cooldownFor('codex', homeProvider).until).not.toBeNull()
+  expect(manager.limitEvents.cooldownFor('codex-fast', homeProvider).until).not.toBeNull()
+  // A separate home stays cold, as does an unrelated provider.
+  expect(manager.limitEvents.cooldownFor('codex-2', home2Provider).until).toBeNull()
+  expect(manager.limitEvents.cooldownFor('default', 'default').until).toBeNull()
+})
+
+test('a session budget failure records for its profile alone, with no provider', async () => {
+  writeLimitTranscript('sessionBudgetExceeded', EXHAUSTED)
+  const events: ChatEvent[] = []
+  manager = createManager(events, [])
+  await manager.whenRestored()
+  await startLimitSession(events)
+  const homeProvider = providerOf('codex', catalogCtx())
+  await until(() => manager!.limitEvents.forProfile('codex').length > 0)
+  const [event] = manager.limitEvents.forProfile('codex')
+  expect(event).toMatchObject({ kind: 'sessionBudgetExceeded', final: true, providerId: null })
+  // The profile cools through its own event; the home's other profile does not.
+  expect(manager.limitEvents.cooldownFor('codex', homeProvider).until).not.toBeNull()
+  expect(manager.limitEvents.cooldownFor('codex-fast', homeProvider).until).toBeNull()
+  expect(manager.limitEvents.forProvider(homeProvider)).toEqual([])
+})
+
+test('an unrelated failure records no limit event', async () => {
+  writeLimitTranscript('contextWindowExceeded', EXHAUSTED)
+  const events: ChatEvent[] = []
+  manager = createManager(events, [])
+  await manager.whenRestored()
+  await startLimitSession(events)
+  await until(() => events.some(event => event.type === 'turn_completed'))
+  expect(manager.limitEvents.forProfile('codex')).toEqual([])
+  expect(manager.limitEvents.forProvider(providerOf('codex', catalogCtx()))).toEqual([])
+})
+
+test("a Codex 402 records no credit limit event (openrouter-provider 3.1)", async () => {
+  // The Claude paths force window 'credit' on a 402 (limitSignals.ts); a
+  // Codex turn's 402-shaped failure records nothing through the manager.
+  writeLimitTranscript({ responseStreamConnectionFailed: { httpStatusCode: 402 } }, EXHAUSTED)
+  const events: ChatEvent[] = []
+  manager = createManager(events, [])
+  await manager.whenRestored()
+  await startLimitSession(events)
+  await until(() => events.some(event => event.type === 'turn_completed'))
+  expect(manager.limitEvents.forProfile('codex')).toEqual([])
+  expect(manager.limitEvents.forProvider(providerOf('codex', catalogCtx()))).toEqual([])
 })
 
 test('a Codex launch withholds the catalog-named credentials (openrouter-provider 1.8)', async () => {
