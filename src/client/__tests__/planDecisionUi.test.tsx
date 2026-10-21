@@ -8,8 +8,12 @@
 // it is reopened, which arms a new command. From the attention queue (§10.5),
 // a `plan` link with a change and a `card` link with a plan open the plan
 // scrolled to and focused on the change row or card, the one-shot reveal
-// consumed once, and an unknown target dropped silently. Renderers are
-// created inside act() so later store updates re-render (the bun act trap).
+// consumed once, and an unknown target dropped silently. On every settle
+// path — the detail mounting loaded, the detail arriving, a reveal after
+// load, a plan switch — the rendered target keeps the focus and scroll over
+// the plan title, and a reveal for another team never touches this detail.
+// Renderers are created inside act() so later store updates re-render (the
+// bun act trap).
 import { afterEach, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import type { ClientMessage, Session } from '@shared/types'
@@ -111,8 +115,8 @@ const decisionsFixture = (): PlanDecisionCardView[] => {
   ]
 }
 
-const detail = (decisionViews: PlanDecisionCardView[]): PlanDetail => ({
-  plan: planSummary('plan-1', { state: 'in-progress', currentApprovedRevision: 1 }),
+const detail = (decisionViews: PlanDecisionCardView[], planId = 'plan-1'): PlanDetail => ({
+  plan: planSummary(planId, { state: 'in-progress', currentApprovedRevision: 1 }),
   revisions: [{ revision: 1, status: 'approved', content: normalizePlanContent({ goal: 'Ship', changes: [{ change: 'api' }, { change: 'ui' }] }),
     contentHash: 'hash-1', pin: null, author: { kind: 'agent', sessionId: 'lead' }, createdAt: '2026-10-14T00:00:00.000Z' }],
   drafts: [], events: [], linkedTasks: [], progress: null,
@@ -120,20 +124,24 @@ const detail = (decisionViews: PlanDecisionCardView[]): PlanDetail => ({
   decisions: decisionViews,
 })
 
-const mount = (decisionViews: PlanDecisionCardView[], connected = true) => {
-  useTeamPlanStore.getState().open('/repo', 'plan-1')
+const mount = (decisionViews: PlanDecisionCardView[], options: { connected?: boolean; teamPath?: string; deferDetail?: boolean; planId?: string } = {}) => {
+  const teamPath = options.teamPath ?? '/repo'
+  const planId = options.planId ?? 'plan-1'
+  useTeamPlanStore.getState().open(teamPath, planId)
   const sent: ClientMessage[] = []
   const openedTasks: string[] = []
   /** Host elements that took focus, by their id or testid (the reveal's focus). */
   const focusedNodes: string[] = []
   /** Host elements scrolled into view, with the options they were given. */
   const scrolledNodes: Array<[string, unknown]> = []
-  let connectedNow = connected
+  let connectedNow = options.connected ?? true
   act(() => {
-    useTeamPlanStore.getState().applySnapshot({ type: 'team-plans-snapshot', teamPath: '/repo', teamId: 't', plans: [detail(decisionViews).plan] })
-    useTeamPlanStore.getState().applyDetail({ type: 'team-plan-detail', teamPath: '/repo', teamId: 't', detail: detail(decisionViews) })
+    useTeamPlanStore.getState().applySnapshot({ type: 'team-plans-snapshot', teamPath, teamId: 't', plans: [detail(decisionViews, planId).plan] })
+    if (!options.deferDetail) {
+      useTeamPlanStore.getState().applyDetail({ type: 'team-plan-detail', teamPath, teamId: 't', detail: detail(decisionViews, planId) })
+    }
   })
-  const element = () => <TeamPlansView teamPath="/repo" view={useTeamPlanStore.getState().views['/repo']!}
+  const element = () => <TeamPlansView teamPath={teamPath} view={useTeamPlanStore.getState().views[teamPath]!}
     sendMessage={message => sent.push(message)} connected={connectedNow} connectionEpoch={0} sessions={SESSIONS}
     onOpenTask={taskId => openedTasks.push(taskId)} />
   let renderer!: TestRenderer.ReactTestRenderer
@@ -285,7 +293,7 @@ test('Answer takes a chosen option or written text with an optional rationale', 
 })
 
 test('controls disable while disconnected', () => {
-  const ui = mount(decisionsFixture(), false)
+  const ui = mount(decisionsFixture(), { connected: false })
   for (const button of ui.allById('plan-decision-answer')) expect(button.props.disabled).toBe(true)
   for (const button of ui.allById('plan-decision-override')) expect(button.props.disabled).toBe(true)
   ui.rerender({ connected: true })
@@ -330,10 +338,12 @@ test('a plan attention link with a change opens the plan scrolled to and focused
   expect(navigated).toEqual([{ teamKey: '/repo', tab: 'plans', id: 'plan-1' }])
   expect(useTeamPlanStore.getState().reveal).toEqual({ teamKey: '/repo', planId: 'plan-1', anchor: 'plan-change-api' })
   // The host mounts the Plans view on that location; the loaded detail
-  // scrolls the row into view and moves focus to it, then the reveal is gone.
+  // scrolls the row into view and moves focus to it — the row is the ONLY
+  // element focused, so the title never takes the scroll back — and then the
+  // reveal is gone.
   const ui = mount(decisionsFixture())
   expect(ui.scrolledNodes).toEqual([['plan-change-api', { block: 'center' }]])
-  expect(ui.focusedNodes).toContain('plan-change-api')
+  expect(ui.focusedNodes).toEqual(['plan-change-api'])
   expect(useTeamPlanStore.getState().reveal).toBeNull()
   // The one-shot target does not scroll again on a re-render.
   ui.rerender()
@@ -347,7 +357,88 @@ test('a card attention link opens the plan scrolled to and focused on the decisi
   const ui = mount(decisionsFixture())
   // card-2 has no change, so it renders in the plan-level Decisions list.
   expect(ui.scrolledNodes).toEqual([['decision-card-card-2', { block: 'center' }]])
-  expect(ui.focusedNodes).toContain('decision-card-card-2')
+  expect(ui.focusedNodes).toEqual(['decision-card-card-2'])
+  expect(useTeamPlanStore.getState().reveal).toBeNull()
+})
+
+test('a reveal pending while the detail loads takes the scroll and focus once the detail arrives, and the title does not retake them', () => {
+  useTeamPlanStore.getState().requestReveal('/repo', 'plan-1', 'plan-change-api')
+  // The detail has not arrived: the loading view has no row and nothing focuses.
+  const ui = mount(decisionsFixture(), { deferDetail: true })
+  expect(ui.scrolledNodes).toEqual([])
+  expect(ui.focusedNodes).toEqual([])
+  // The detail arrives and `loaded` flips: the row scrolls and focuses, and
+  // the title-focus effect that runs in the same commit yields to it.
+  act(() => useTeamPlanStore.getState().applyDetail({ type: 'team-plan-detail', teamPath: '/repo', teamId: 't', detail: detail(decisionsFixture()) }))
+  ui.rerender()
+  expect(ui.scrolledNodes).toEqual([['plan-change-api', { block: 'center' }]])
+  expect(ui.focusedNodes).toEqual(['plan-change-api'])
+  expect(useTeamPlanStore.getState().reveal).toBeNull()
+})
+
+test('a reveal requested while the plan is already open and loaded scrolls and focuses the row, and the title stays put', () => {
+  const ui = mount(decisionsFixture())
+  expect(ui.focusedNodes).toEqual(['plan-title'])
+  act(() => useTeamPlanStore.getState().requestReveal('/repo', 'plan-1', 'plan-change-api'))
+  expect(ui.scrolledNodes).toEqual([['plan-change-api', { block: 'center' }]])
+  expect(ui.focusedNodes).toEqual(['plan-title', 'plan-change-api'])
+  expect(useTeamPlanStore.getState().reveal).toBeNull()
+  ui.rerender()
+  expect(ui.scrolledNodes).toHaveLength(1)
+})
+
+test('a reveal for another plan scrolls and focuses its row when the selection changes, not the title of the plan that was open', () => {
+  const ui = mount(decisionsFixture())
+  expect(ui.focusedNodes).toEqual(['plan-title'])
+  const view = useTeamPlanStore.getState().views['/repo']!
+  const planTwo = detail(decisionsFixture(), 'plan-2')
+  act(() => useTeamPlanStore.getState().applySnapshot({ type: 'team-plans-snapshot', teamPath: '/repo', teamId: 't', plans: [...(view.plans ?? []), planTwo.plan] }))
+  // The link names plan-2; the host requests the reveal, then selects it.
+  // A detail for an unselected plan is refused (applyDetail), so the switch
+  // renders the loading view first and plan-2's detail arrives after — the
+  // planId change and the loaded flip must not hand focus back to the title.
+  act(() => useTeamPlanStore.getState().requestReveal('/repo', 'plan-2', 'plan-change-api'))
+  act(() => useTeamPlanStore.getState().select('/repo', 'plan-2'))
+  ui.rerender()
+  expect(ui.focusedNodes).toEqual(['plan-title'])
+  act(() => useTeamPlanStore.getState().applyDetail({ type: 'team-plan-detail', teamPath: '/repo', teamId: 't', detail: planTwo }))
+  ui.rerender()
+  expect(ui.scrolledNodes).toEqual([['plan-change-api', { block: 'center' }]])
+  expect(ui.focusedNodes).toEqual(['plan-title', 'plan-change-api'])
+  expect(useTeamPlanStore.getState().reveal).toBeNull()
+})
+
+test('a reveal for one team does not scroll, focus, or consume in another team\'s detail of the same plan, and is consumed when that team mounts', () => {
+  // Team /other shows plan-1 loaded; its own move-in focuses its title.
+  const other = mount(decisionsFixture(), { teamPath: '/other' })
+  expect(other.focusedNodes).toEqual(['plan-title'])
+  // The attention link names team /repo's plan while /other is shown.
+  act(() => useTeamPlanStore.getState().requestReveal('/repo', 'plan-1', 'plan-change-api'))
+  expect(useTeamPlanStore.getState().reveal).toEqual({ teamKey: '/repo', planId: 'plan-1', anchor: 'plan-change-api' })
+  expect(other.scrolledNodes).toEqual([])
+  expect(other.focusedNodes).toEqual(['plan-title'])
+  // Then the host mounts team /repo's view: its row takes the scroll and
+  // focus, and the reveal is consumed once, by its own team.
+  const repo = mount(decisionsFixture(), { teamPath: '/repo' })
+  expect(repo.scrolledNodes).toEqual([['plan-change-api', { block: 'center' }]])
+  expect(repo.focusedNodes).toEqual(['plan-change-api'])
+  expect(useTeamPlanStore.getState().reveal).toBeNull()
+})
+
+test('a card the detail cannot render yet (no revision shown) leaves the focus on the title', () => {
+  const navigated = openFromQueue({ kind: 'card', id: 'card-1', planId: 'plan-1' }, 'decision-question:card-1')
+  expect(navigated).toEqual([{ teamKey: '/repo', tab: 'plans', id: 'plan-1' }])
+  expect(useTeamPlanStore.getState().reveal).toEqual({ teamKey: '/repo', planId: 'plan-1', anchor: 'decision-card-card-1' })
+  // The plan has no revision to show, so no Execution or Decisions section
+  // renders and the card is nowhere in the tree: nothing can take the
+  // scroll, and the title keeps the focus.
+  const ui = mount(decisionsFixture(), { deferDetail: true })
+  const bare = detail(decisionsFixture())
+  bare.revisions = []
+  act(() => useTeamPlanStore.getState().applyDetail({ type: 'team-plan-detail', teamPath: '/repo', teamId: 't', detail: bare }))
+  ui.rerender()
+  expect(ui.scrolledNodes).toEqual([])
+  expect(ui.focusedNodes).toEqual(['plan-title'])
   expect(useTeamPlanStore.getState().reveal).toBeNull()
 })
 
