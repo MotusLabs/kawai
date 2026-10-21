@@ -12,6 +12,7 @@
 // settles first (the runner finishes it).
 import { FLOOR_VERSION } from '../../../../shared/planExecution'
 import { candidateChain, promotedThrough, type PromotionPreview } from '../../../../shared/planIntegration'
+import type { ActiveHold } from '../../../../shared/planRevisionControl'
 import type { TeamIdentity } from '../../../team/teamIdentity'
 import type { PlanExecutionSettings } from '../../../team/teamCaps'
 import { PlanRefusal, type PlanRefusalReason } from '../../planCommands'
@@ -63,7 +64,7 @@ export function realPromotionReads(options: GhCommandOptions = {}): PromotionRea
 }
 
 interface PromoteGather {
-  ctx: Omit<PromoteCheckContext, 'runningExecution' | 'runningPromotion' | 'nextPromotionBranch'>
+  ctx: Omit<PromoteCheckContext, 'runningExecution' | 'runningPromotion' | 'nextPromotionBranch' | 'activeHolds' | 'heldCarried'>
   preview: PromotionPreview
   floor: PlanExecutionSettings['floorChecks']
 }
@@ -77,6 +78,8 @@ export class PromotionService {
     probe?: typeof probeLanding
     reads?: PromotionReads
     ghOptions?: GhCommandOptions
+    /** The plan's active holds (revision-control D5): `no-hold` refuses a held Promote. */
+    holds?: { active(teamId: string, planId: string): ActiveHold[] }
   }) {}
 
   async preview(caller: PromotionCaller, input: { planId: string; branch: string }): Promise<{ ok: true; preview: PromotionPreview } | Refusal> {
@@ -84,7 +87,7 @@ export class PromotionService {
     const plan = this.deps.plansStore.forTeam(caller.team.teamId, input.planId)
     if (!plan) return { ok: false, reason: 'not-found', message: `Plan not found in this team: ${input.planId}` }
     const gather = await this.gather(caller.team, plan.id, input.branch, null)
-    const failures = evaluatePromotePreconditions(this.context(gather, { planId: plan.id, branch: input.branch, fromSha: gather.preview.head ?? '', commandId: 'preview' }))
+    const failures = evaluatePromotePreconditions(this.context(caller.team.teamId, gather, { planId: plan.id, branch: input.branch, fromSha: gather.preview.head ?? '', commandId: 'preview' }))
     return { ok: true, preview: { ...gather.preview, failures } }
   }
 
@@ -98,7 +101,7 @@ export class PromotionService {
     const request = { ...input, planId: plan.id, commandId }
     const gather = await this.gather(caller.team, plan.id, input.branch, input.fromSha)
     const outcome = this.deps.plans.recordPromotionEvent<string>(plan.id, { kind: 'promotion-started', commandId, branch: input.branch, fromSha: input.fromSha }, () => {
-      const failures = evaluatePromotePreconditions(this.context(gather, request))
+      const failures = evaluatePromotePreconditions(this.context(caller.team.teamId, gather, request))
       if (failures.length > 0) {
         throw new PlanRefusal('precondition', `Promote refused: ${failures.map(failure => `${failure.name}: ${failure.message}`).join(' ')}`, failures)
       }
@@ -204,16 +207,21 @@ export class PromotionService {
     }
   }
 
-  /** The precondition context inside the transaction: the pre-reads plus fresh rows. */
-  private context(gather: PromoteGather, request: PromoteRequest): PromoteCheckContext {
+  /** The precondition context inside the transaction: the pre-reads, fresh rows, and the fresh holds. */
+  private context(teamId: string, gather: PromoteGather, request: PromoteRequest): PromoteCheckContext {
     const running = this.deps.integration.runningPromotion(request.planId)
     const execution = this.deps.executions.running(request.planId)
+    const activeHolds = this.deps.holds?.active(teamId, request.planId) ?? []
+    const heldCarried = [...new Set(gather.preview.carried.flatMap(candidate => candidate.change ?? []))]
+      .filter(change => activeHolds.some(hold => hold.scope === 'plan' || hold.changes.includes(change)))
     return {
       ...gather.ctx,
       request,
       runningExecution: execution === null ? null : { id: execution.id },
       runningPromotion: running === null ? null : { id: running.id, number: running.number, step: running.step },
       nextPromotionBranch: `${request.branch}--promote-${this.deps.integration.nextPromotionNumber(request.planId)}`,
+      activeHolds,
+      heldCarried,
     }
   }
 }

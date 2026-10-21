@@ -12,6 +12,7 @@ function ready(overrides: Partial<PromoteCheckContext> = {}): PromoteCheckContex
     branchRecord: { teamId: 't', branch: 'wave/x', planId: 'plan', targetBranch: 'master', createdBy: 'exec', createdSha: 'b'.repeat(40), createdAt: '' },
     runningExecution: null, runningPromotion: null, originHead: HEAD, targetContains: false, allowMergeCommit: true,
     probeFindings: [], promotionBranch: 'wave/x--promote-1', promotionBranchExists: false, nextPromotionBranch: 'wave/x--promote-1',
+    activeHolds: [], heldCarried: [],
     ...overrides,
   } as PromoteCheckContext
 }
@@ -19,10 +20,12 @@ function ready(overrides: Partial<PromoteCheckContext> = {}): PromoteCheckContex
 const names = (ctx: PromoteCheckContext) => evaluatePromotePreconditions(ctx).map(failure => failure.name)
 
 describe('PROMOTE_PRECONDITIONS (D9)', () => {
-  test('the eight entries, in order', () => {
+  test('the entries, in order', () => {
     expect(PROMOTE_PRECONDITIONS.map(entry => entry.name)).toEqual([
       'integration-branch-known', 'no-execution', 'no-promotion', 'from-current', 'something-to-promote',
       'merge-commits-allowed', 'landing-ready', 'promotion-name-free',
+      // revision-control 3.3, appended.
+      'no-hold',
     ])
   })
 
@@ -44,6 +47,8 @@ describe('PROMOTE_PRECONDITIONS (D9)', () => {
     ['promotion-name-free', { promotionBranchExists: true }],
     ['promotion-name-free', { promotionBranchExists: null }],
     ['promotion-name-free', { nextPromotionBranch: 'wave/x--promote-2' }],
+    ['no-hold', { activeHolds: [{ id: 'h1', scope: 'plan', changes: [] }] }],
+    ['no-hold', { heldCarried: ['api'] }],
   ]
   for (const [name, overrides] of cases) {
     test(`${name} refuses ${JSON.stringify(Object.values(overrides)[0])} by name`, () => {

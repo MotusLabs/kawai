@@ -8,6 +8,7 @@
 // completed plan is the usual one to promote, and a cancelled plan's landed
 // work may still be wanted.
 import type { IntegrationBranchRecord } from '../../../../shared/planIntegration'
+import type { ActiveHold } from '../../../../shared/planRevisionControl'
 import type { ProbeFinding } from '../landingProbe'
 
 export interface PromoteRequest {
@@ -39,6 +40,10 @@ export interface PromoteCheckContext {
   promotionBranchExists: boolean | null
   /** The name the insert would take now; differs from `promotionBranch` when another promotion was inserted since the reads. */
   nextPromotionBranch: string
+  /** The plan's active holds (revision-control D5), fresh in the transaction. */
+  activeHolds: ActiveHold[]
+  /** The carried changes an active hold covers, from the same reads as the preview's `carried`. */
+  heldCarried: string[]
 }
 
 export interface PromotePrecondition {
@@ -97,6 +102,17 @@ export const PROMOTE_PRECONDITIONS: readonly PromotePrecondition[] = [
       if (ctx.promotionBranch !== ctx.nextPromotionBranch) return `Another promotion took ${ctx.promotionBranch} while Promote read; try again.`
       if (ctx.promotionBranchExists === null) return `Whether ${ctx.promotionBranch} exists on origin could not be read; try again.`
       return ctx.promotionBranchExists ? `${ctx.promotionBranch} already exists on origin; Kawai never adopts a branch it did not create. Delete it on origin, then promote again.` : null
+    },
+  },
+  // revision-control D5, appended: a whole-plan hold refuses, and so does a
+  // hold covering any change the promotion would carry.
+  {
+    name: 'no-hold',
+    check: ctx => {
+      const plan = ctx.activeHolds.filter(hold => hold.scope === 'plan')
+      if (plan.length > 0) return `The plan is on hold: ${plan.map(hold => hold.id).join(', ')}. Release the hold before promoting.`
+      if (ctx.heldCarried.length > 0) return `Held changes this promotion would carry: ${ctx.heldCarried.join(', ')}. Release the hold before promoting.`
+      return null
     },
   },
 ]

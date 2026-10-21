@@ -17,6 +17,7 @@ import type { PlanRevision } from '../../../shared/plans'
 import type { ImpactGate } from '../../../shared/strategyImpact'
 import { FLOOR_VERSION } from '../../../shared/planExecution'
 import type { EffectKind } from '../../../shared/planExecution'
+import type { ActiveHold } from '../../../shared/planRevisionControl'
 import type { ChangeRow, ExecutionRow } from './executionRows'
 import { logger } from '../../logger'
 import { StaleTaskStatus, type PreparedTaskStatus } from '../../team/taskStatusPrepared'
@@ -100,6 +101,8 @@ export class ExecutionService {
     executionRevisions: ExecutionRevisionStore
     /** Woken after a Start commits (the executor, D5); never on a replay or refusal. */
     wake?: (teamId: string) => void
+    /** The plan's active holds (revision-control D5): `no-hold` refuses a whole-plan hold. */
+    holds?: { active(teamId: string, planId: string): ActiveHold[] }
     homeDir?: string
     /** Passed to every gh call (tests put a stub gh on a private PATH). */
     ghOptions?: GhCommandOptions
@@ -248,6 +251,7 @@ export class ExecutionService {
       runningPromotion: this.deps.promotions.runningPromotion(request.planId),
       offBaseLandings: gather.offBaseLandings,
       baseBranch: gather.probe.base?.branch ?? null,
+      activeHolds: this.deps.holds?.active(team.teamId, request.planId) ?? [],
       reportId: report?.id ?? null,
       inputHash: report?.inputHash ?? null,
       changes: names,

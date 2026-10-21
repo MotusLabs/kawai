@@ -8,6 +8,7 @@
 import { runGit } from '../../../git/gitCommand'
 import type { TeamIdentity } from '../../../team/teamIdentity'
 import type { PlanExecutionSettings } from '../../../team/teamCaps'
+import type { ActiveHold } from '../../../../shared/planRevisionControl'
 import type { ExecutionStore } from '../../execution/executionStore'
 import type { InspectorReads } from '../../execution/effectInspectors'
 import { startupReads } from '../../execution/startupReads'
@@ -40,6 +41,8 @@ export interface PromotionCompositionOptions {
   repoOf?: (teamId: string) => string
   /** Test seam: the runner's clock (effect backoffs, CI windows). */
   now?: () => Date
+  /** The plans' active holds (revision-control D5): Promote's `no-hold` and the runner's held step. */
+  holds?: { active(teamId: string, planId: string): ActiveHold[] }
 }
 
 export function composePromotions(options: PromotionCompositionOptions): { service: PromotionService; runner: PromotionRunner } {
@@ -63,15 +66,18 @@ export function composePromotions(options: PromotionCompositionOptions): { servi
   }
   const core: PromotionCore = { integration, executions, plans: options.plans, repoOf: options.repoOf ?? repoOf }
   const gh = options.ghOptions ? { ghOptions: options.ghOptions } : {}
+  const holds = options.holds ? { holds: options.holds } : {}
   const service = new PromotionService({
     ...core, plansStore: options.plansStore, settings: options.settings, wake: options.wake, ...gh,
     ...(options.probe ? { probe: options.probe } : {}),
     ...(options.reads ? { reads: options.reads } : {}),
+    ...holds,
   })
   const runner = new PromotionRunner({
     ...core, teamOf: teamId => options.identityOf(teamId), inspectorReads: options.inspectorReads ?? startupReads(options.ghOptions), ...gh,
     ...(options.adapters ? { adapters: options.adapters } : {}),
     ...(options.now ? { now: options.now } : {}),
+    ...holds,
   })
   return { service, runner }
 }

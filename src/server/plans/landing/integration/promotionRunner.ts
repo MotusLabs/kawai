@@ -16,6 +16,7 @@ import { logger } from '../../../logger'
 import type { TeamIdentity } from '../../../team/teamIdentity'
 import type { CiCheck } from '../../../../shared/planExecution'
 import type { PromotionFailure } from '../../../../shared/planIntegration'
+import type { ActiveHold } from '../../../../shared/planRevisionControl'
 import { EffectRunner } from '../../execution/effects'
 import type { InspectorReads } from '../../execution/effectInspectors'
 import { cleanMergeCheck } from '../cleanMerge'
@@ -38,6 +39,8 @@ export interface PromotionRunnerDeps extends PromotionCore {
   ghOptions?: GhCommandOptions
   backoffsMs?: readonly [number, number, number]
   now?: () => Date
+  /** The plan's active holds (revision-control D5): a held carried change stops the promotion before its merge. */
+  holds?: { active(teamId: string, planId: string): ActiveHold[] }
 }
 
 /** Effect rounds per pass: each settles at most one effect per promotion. */
@@ -124,6 +127,7 @@ export class PromotionRunner {
   private async advance(team: TeamIdentity, promotionId: string): Promise<void> {
     const store = this.deps.integration
     const repo = this.deps.repoOf(team.teamId)
+    const heldChanges = this.heldCarried(promotionId)
     let reads: PromotionReadsFor | undefined
     for (let steps = 0; steps < STEP_BUDGET; steps++) {
       const p = store.promotion(promotionId)
@@ -131,7 +135,7 @@ export class PromotionRunner {
       const effects = store.promotionEffects(p.id)
       const held = this.deps.executions.slot(p.teamId)
       const slot = held === null ? null : { holderKind: held.holderKind, holderId: held.holderId, label: this.deps.executions.slotHolderLabel(p.teamId) ?? held.holderId }
-      const decision = planPromotionStep({ promotion: p, effects, slot, now: this.iso(), repo, main: team.groupsRoot, ...(reads ? { reads } : {}) })
+      const decision = planPromotionStep({ promotion: p, effects, slot, heldChanges, now: this.iso(), repo, main: team.groupsRoot, ...(reads ? { reads } : {}) })
       const asked = reads
       reads = undefined
       switch (decision.kind) {
@@ -151,6 +155,13 @@ export class PromotionRunner {
         case 'take-slot':
           this.deps.executions.takeSlotFor(p.teamId, PROMOTION_HOLDER_KIND, p.id)
           continue
+        case 'held':
+          // The hold applies from the next step: give the slot up so another
+          // change can land, and wait at `held` (revision-control D5). Release
+          // re-enters at `held`, which retakes the slot and re-runs `up-to-date`.
+          this.deps.executions.releaseSlotFor(p.teamId, PROMOTION_HOLDER_KIND, p.id)
+          store.patchPromotion(p.id, { step: 'held' })
+          return
         case 'move': {
           const moves = store.atomically(() => {
             const count = store.countMove(p.id)
@@ -192,6 +203,28 @@ export class PromotionRunner {
 
   private finish(p: PromotionRow, failure: PromotionFailure, detail: Record<string, unknown>): void {
     finishPromotion(this.deps, p, `failed:${failure}`, detail)
+  }
+
+  /**
+   * The carried changes an active hold covers (revision-control D5): the
+   * landed, unpromoted increments this promotion carries — the preview's
+   * rule (D9) — filtered by the holds. Holds only: pauses are D6/D8 and
+   * cannot coexist with a running promotion (`no-execution`).
+   */
+  private heldCarried(promotionId: string): string[] {
+    const store = this.deps.integration
+    const p = store.promotion(promotionId)
+    if (p === null) return []
+    const holds = this.deps.holds?.active(p.teamId, p.planId) ?? []
+    if (holds.length === 0) return []
+    let through = 0
+    for (const other of store.promotionsOf(p.planId)) {
+      if (other.id !== p.id && other.branch === p.branch && other.outcome === 'merged') through = Math.max(through, other.throughSeq)
+    }
+    const carried = [...new Set(store.candidates(p.teamId, p.branch)
+      .filter(row => row.kind === 'increment' && row.change !== null && row.state === 'landed' && row.seq > through && row.seq <= p.throughSeq)
+      .map(row => row.change!))]
+    return carried.filter(change => holds.some(hold => hold.scope === 'plan' || hold.changes.includes(change)))
   }
 
   /** The reads a step named; every field null when it could not be read. */

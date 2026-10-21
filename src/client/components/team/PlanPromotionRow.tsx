@@ -13,6 +13,7 @@ const STEP_LABELS: Record<PromotionStep, string> = {
   branch: 'creating the promotion branch',
   'pull-request': 'opening the pull request',
   slot: 'waiting for the landing slot',
+  held: 'waiting for the hold to release',
   'up-to-date': 'bringing it up to date',
   ci: 'CI running',
   're-read': 're-reading the target',

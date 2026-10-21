@@ -51,6 +51,8 @@ import { DecisionService } from './decisions/DecisionService'
 import { DecisionStore } from './decisions/decisionStore'
 import { HoldService } from './revisionControl/holdService'
 import { HoldStore } from './revisionControl/holdStore'
+import { PauseStore } from './revisionControl/pauseStore'
+import type { ActiveHold } from '../../shared/planRevisionControl'
 import { readPlanSupervisionDetail, type SupervisionDetailReads } from './supervision/planSupervisionDetail'
 import type { SupervisionRuntime } from './supervision/supervisionRead'
 import { composeSupervisionMonitor, type MonitorCompositionOptions } from './supervision/monitorComposition'
@@ -220,6 +222,16 @@ export function composePlanServices(options: PlanServicesOptions): {
   // before this function returns, so no close can find it unbound.
   let executions: ExecutionService | null = null
   const integrationStore = new IntegrationStore(options.db)
+  // The hold gate's reads (revision-control 3.2), shared by the executor and
+  // Start/Promote: the plan's active holds and open pause targets, read at
+  // each call so a placed or released hold reaches the next tick.
+  const holdStore = new HoldStore(options.db)
+  const pauseStore = new PauseStore(options.db)
+  const holdsOf = (teamId: string, planId: string): ActiveHold[] =>
+    holdStore.active(teamId, planId).map(hold => ({ id: hold.id, scope: hold.scope, changes: hold.changes }))
+  const openTargetsOf = (teamId: string, planId: string) =>
+    pauseStore.forPlan(teamId, planId, true).flatMap(pause =>
+      pauseStore.targets(pause.id).map(target => ({ pauseId: pause.id, change: target.change, decision: target.decision })))
   // The execution's unresolved acceptance conditions (V2): landing and supervision read the same ones.
   const conditionsOf = (executionId: string): string[] => {
     const execution = executionStore.execution(executionId)
@@ -292,6 +304,8 @@ export function composePlanServices(options: PlanServicesOptions): {
       },
     },
     identityOf: teamId => identityOrBare(team, teamId),
+    // revision-control 3.3: `no-hold` reads the same active holds as the gate.
+    holds: { active: holdsOf },
     ...(team !== undefined ? {
       tasks: team.tasks,
       wake: (teamId: string) => runtime?.command(teamId),
@@ -309,6 +323,8 @@ export function composePlanServices(options: PlanServicesOptions): {
     ...(options.executionProbe ? { probe: options.executionProbe } : fixture ? { probe: fixturePromotionProbe } : {}),
     ...(options.promotionReads ? { reads: options.promotionReads } : fixture ? { reads: fixturePromotionReads() } : {}),
     ...(fixture ? { adapters: fixturePromotionAdapters(), inspectorReads: fixtureInspectorReads() } : {}),
+    // revision-control 3.3: `no-hold` and the runner's held step read the same holds.
+    holds: { active: holdsOf },
   })
   if (team !== undefined) {
     const roundAdaptersUsed = fixture ? fixtureRoundAdapters() : roundAdapters
@@ -334,6 +350,7 @@ export function composePlanServices(options: PlanServicesOptions): {
       conditionsOf,
       adapters: { provision: provisionAdapter(executionStore, undefined, mechanisms) },
       groupScoped: (teamId, groupId) => groupScopedOf(team, teamId, groupId),
+      holds: { active: holdsOf, openTargets: openTargetsOf },
       roundAdapters: roundAdaptersUsed,
       ...(fixture ? { landingAdapters: fixtureLandingAdapters(), tickMs: 1_000 } : {}),
       ...(options.executionGhOptions ? { ghOptions: options.executionGhOptions } : {}),
@@ -359,7 +376,7 @@ export function composePlanServices(options: PlanServicesOptions): {
   // changes, or narrowed with retain), and extend — one transaction with the
   // D3 event, the executor wake after the commit.
   const holds = new HoldService({
-    holds: new HoldStore(options.db), plans: options.plans, planService: plans,
+    holds: holdStore, plans: options.plans, planService: plans,
     strategies: options.strategies, impact: options.impact.store, decisions: decisionStore,
     executions: executionStore, wake: teamId => runtime?.command(teamId),
   })

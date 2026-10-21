@@ -25,6 +25,8 @@ export interface PromotionStepInput {
   promotion: PromotionRow
   effects: readonly PromotionEffectRow[]
   slot: { holderKind: string; holderId: string; label: string } | null
+  /** The plan's carried changes an active hold covers (revision-control D5); empty when none. */
+  heldChanges: readonly string[]
   now: string
   repo: string
   /** The team's main checkout: the cwd of every git read and ref effect. */
@@ -35,6 +37,7 @@ export interface PromotionStepInput {
 export type PromotionDecision =
   | { kind: 'read'; step: PromotionReadsFor['step'] }
   | { kind: 'wait'; reason: string; patch?: PromotionPatch }
+  | { kind: 'held' }
   | { kind: 'effect'; effect: { kind: PromotionEffectKind; effectKey: string; command: Record<string, unknown> } }
   | { kind: 'patch'; patch: PromotionPatch }
   | { kind: 'take-slot' }
@@ -85,6 +88,28 @@ export function planPromotionStep(input: PromotionStepInput): PromotionDecision 
     if (!merged) return { kind: 'finish', outcome: 'cancelled', detail: { message: `Cancelled by the owner: ${p.cancelReason}` } }
   }
 
+  // A hold on a carried change stops every step before the merge (revision-control
+  // D5): branch and pull-request wait (the slot is not involved yet), slot through
+  // re-read wait at `held` without the slot, and a merge not yet created waits at
+  // `held` too. A running merge settles — the hold applies from the next step — and
+  // steps past the merge (record, fast-forward, finish) are ungated.
+  if (input.heldChanges.length > 0) {
+    const reason = `the hold on ${input.heldChanges.join(', ')} covers this promotion's carried changes`
+    switch (p.step) {
+      case 'branch':
+      case 'pull-request':
+        return { kind: 'wait', reason }
+      case 'slot':
+      case 'up-to-date':
+      case 'ci':
+      case 're-read':
+        return { kind: 'held' }
+      case 'merge':
+        if (stateOf(merge) === 'none') return { kind: 'held' }
+        break
+    }
+  }
+
   switch (p.step) {
     case 'branch': {
       const created = effect('create-promotion-branch')
@@ -112,6 +137,16 @@ export function planPromotionStep(input: PromotionStepInput): PromotionDecision 
       return { kind: 'wait', reason: 'opening the pull request' }
     }
     case 'slot': {
+      if (input.slot === null) return { kind: 'take-slot' }
+      if (input.slot.holderKind === 'promotion' && input.slot.holderId === p.id) return { kind: 'patch', patch: { step: 'up-to-date' } }
+      return { kind: 'wait', reason: `waits for the landing slot, held by ${input.slot.label}` }
+    }
+    case 'held': {
+      // Waiting at the hold step; this runs when the hold still covers a carried
+      // change (the gate above kept steps before `held`), or after release while
+      // another holder has the slot. Release re-enters here and re-runs
+      // `up-to-date` once the promotion has its slot again (revision-control D5).
+      if (input.heldChanges.length > 0) return { kind: 'wait', reason: `the hold on ${input.heldChanges.join(', ')} covers this promotion's carried changes` }
       if (input.slot === null) return { kind: 'take-slot' }
       if (input.slot.holderKind === 'promotion' && input.slot.holderId === p.id) return { kind: 'patch', patch: { step: 'up-to-date' } }
       return { kind: 'wait', reason: `waits for the landing slot, held by ${input.slot.label}` }

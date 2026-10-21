@@ -64,11 +64,12 @@ export interface IntegrationCandidate {
   decidedAt: string | null
 }
 
-/** The promotion steps of D10, in order. */
+/** The promotion steps of D10, in order; `held` is the hold wait of revision-control D5. */
 export type PromotionStep =
   | 'branch'
   | 'pull-request'
   | 'slot'
+  | 'held'
   | 'up-to-date'
   | 'ci'
   | 're-read'
@@ -76,7 +77,7 @@ export type PromotionStep =
   | 'record'
   | 'fast-forward'
   | 'finish'
-export const PROMOTION_STEPS: readonly PromotionStep[] = ['branch', 'pull-request', 'slot', 'up-to-date', 'ci', 're-read', 'merge', 'record', 'fast-forward', 'finish']
+export const PROMOTION_STEPS: readonly PromotionStep[] = ['branch', 'pull-request', 'slot', 'held', 'up-to-date', 'ci', 're-read', 'merge', 'record', 'fast-forward', 'finish']
 
 export type PromotionState = 'running' | 'finished'
 
