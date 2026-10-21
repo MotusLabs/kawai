@@ -192,6 +192,8 @@ export function composePlanServices(options: PlanServicesOptions): {
   decisions: DecisionService | null
   /** The supervision monitor (plan-supervision D11); null without team services' supervision runtime. Started by its owner. */
   monitor: SupervisionMonitor | null
+  /** The supervision reads (plan-supervision D13); null without team services' supervision runtime. */
+  supervisionReads: SupervisionDetailReads | null
 } {
   const adapter = options.adapter ?? new OpenspecAdapter()
   const validationStore = new ValidationStore(options.db)
@@ -372,6 +374,8 @@ export function composePlanServices(options: PlanServicesOptions): {
   return {
     validation, validationStore, plans, validationDetail: new ValidationDetailCache(validation), adapter, executions, executionStore,
     runtime, decisions, monitor, promotions: promotions.service, integrationStore,
+    // The supervision reads the workspace's plan attention gathers over (plan-supervision D13); null without team services.
+    supervisionReads,
   }
 }
 

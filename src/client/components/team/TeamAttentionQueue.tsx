@@ -18,6 +18,12 @@ const KIND_LABELS: Record<string, string> = {
   'fixes-requested': 'Fixes requested',
   'outbound-violation': 'Outbound violation',
   'context-exhausted': 'Context exhausted',
+  'plan-stop': 'Plan stop',
+  'plan-stall': 'Plan stall',
+  'decision-question': 'Decision question',
+  'plan-fix': 'Plan fix',
+  'plan-condition': 'Plan condition',
+  'plan-promotion': 'Plan promotion',
 }
 
 /** A known kind's label; an unrecognized kind reads as itself. */

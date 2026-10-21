@@ -158,9 +158,15 @@ export class ChatConnections {
     this.strategyConnections.publish(teamId)
   }
 
-  /** A committed plan write, or a change to a task linked to the plan: re-send its views. */
+  /**
+   * A committed plan write, or a change to a task linked to the plan: re-send
+   * its views. The workspace's plan attention and summary buckets read the
+   * plan-side stores (plan-supervision D13), so a plan write re-projects it
+   * too; the workspace's own diff keeps a quiet team quiet.
+   */
   publishPlans(teamId: string, planId?: string): void {
     this.planConnections.publish(teamId, planId)
+    this.workspaceConnections.publish(teamId)
   }
 
   /** A committed process report or decision: re-send that team's metrics snapshots (never on mail changes). */

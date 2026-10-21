@@ -1,3 +1,4 @@
+import path from 'node:path'
 import { performance } from 'node:perf_hooks'
 import type { AgentType } from '../shared/types'
 import {
@@ -191,12 +192,21 @@ export function collectLogEntriesForPaths(
   return entries
 }
 
-/** Design D6: chat transcripts are excluded from log discovery by SDK id. */
+/** A Codex rollout file name's thread id: `rollout-<time>-<thread uuid>.jsonl`. */
+const ROLLOUT_THREAD_ID = /^rollout-.+-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i
+
+/**
+ * Design D6: chat transcripts are excluded from log discovery by SDK id. A
+ * Codex chat's rollout (codex-chat-sessions D8) is excluded by its
+ * session_meta id or by the thread id its file name carries — their
+ * equality is unverified, so either one suffices.
+ */
 function isExcludedChatLog(
   entry: LogEntrySnapshot,
   excludeSessionIds?: Set<string>
 ): boolean {
-  return Boolean(
-    entry.sessionId && excludeSessionIds?.has(entry.sessionId)
-  )
+  if (!excludeSessionIds?.size) return false
+  if (entry.sessionId && excludeSessionIds.has(entry.sessionId)) return true
+  const threadId = ROLLOUT_THREAD_ID.exec(path.basename(entry.logPath))?.[1]
+  return Boolean(threadId && excludeSessionIds.has(threadId))
 }
