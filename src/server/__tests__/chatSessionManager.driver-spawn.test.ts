@@ -6,7 +6,7 @@ import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
 import { ChatWireLogs } from '../chat/ChatWireLogs'
-import { anyDirectory, FakeHandle, managedManager, closeDispatchers, fakeQueryFactory, createHarness, flush } from './helpers/chatSessionManagerHarness'
+import { anyDirectory, FakeHandle, managedManager, closeDispatchers, fakeQueryFactory, createHarness, flush, waitForCondition } from './helpers/chatSessionManagerHarness'
 
 describe('ChatSessionManager', () => {
 
@@ -124,8 +124,8 @@ describe('ChatSessionManager', () => {
     expect(fs.existsSync(logFile)).toBe(true)
 
     manager.kill(sessionId)
-    await flush()
-    expect(fs.existsSync(logFile)).toBe(false)
+    // Deletion runs on the log's async chain; poll instead of trusting fixed timers.
+    await waitForCondition(() => !fs.existsSync(logFile))
   })
 
   test('startup prunes wire logs of sessions that no longer exist', async () => {
