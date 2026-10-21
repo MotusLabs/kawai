@@ -20,7 +20,7 @@ import type { TeamMessage } from '../mailboxStore'
 import type { SpawnContext, WorktreeStaffing } from '../staffing'
 import { builtinPick } from './builtin'
 import { DEFAULT_PROFILE_ID } from './candidates'
-import { evaluateEligibility } from './workerEligibility'
+import { evaluateEligibility, type EligibilityResult } from './workerEligibility'
 import { resolveWorkerSelector } from './workerSelector'
 import type { LimitEventStore } from './limitEvents'
 import type { RuleRegistry } from './ruleLoader'
@@ -120,15 +120,10 @@ export class ProfileRouter implements GroupRouter {
     })
     if (candidates.length === 0) {
       this.holds.delete(message.id)
-      // Members the dispatcher found eligible but the choice filtered out
-      // name it in the breakdown (D2); the others keep their own cause.
-      const listed = new Set((view.exclusions ?? []).map(entry => entry.sessionId))
-      const choiceExclusions: MemberExclusion[] = excluded.flatMap(entry => entry.alternative.kind === 'member' &&
-        eligible.has(entry.alternative.sessionId) && !listed.has(entry.alternative.sessionId) &&
-        entry.reasons.some(reason => reason.kind === 'worker-choice')
-        ? [{ sessionId: entry.alternative.sessionId, kind: 'worker-choice' as const, detail: workerChoice!.selector }]
-        : [])
-      const breakdown = choiceExclusions.length > 0 ? { ...view, exclusions: [...(view.exclusions ?? []), ...choiceExclusions] } : view
+      // Members the dispatcher found eligible were dropped by the message's
+      // filters; each names its first filter reason from the one eligibility
+      // check (D2/D10), beside the others' member-state causes.
+      const breakdown = { ...view, exclusions: [...(view.exclusions ?? []), ...filterExclusions(excluded, eligible)] }
       // A choice waits on its own workers' caps, never on a filtered-out one's (D5).
       const diagnosis = diagnoseNone(routeGroup, spawn, breakdown, workerChoice ? new Set(workerChoice.profiles) : null)
       // The choice names itself beside the capacity it waits on (D5).
@@ -279,6 +274,18 @@ function memberState(member: GroupMemberRecord, eligible: EligibleMember | undef
     ...(eligible ? { idleForMs: eligible.idleForMs } : {}),
   }
 }
+
+/** The message filter that dropped each dispatcher-eligible member, from the eligibility check. */
+function filterExclusions(excluded: EligibilityResult['excluded'], eligible: ReadonlyMap<string, EligibleMember>): MemberExclusion[] {
+  return excluded.flatMap(({ alternative, reasons }) => {
+    if (alternative.kind !== 'member' || !eligible.has(alternative.sessionId)) return []
+    const reason = reasons.find(entry => FILTER_KINDS.has(entry.kind))
+    if (!reason) return []
+    return [{ sessionId: alternative.sessionId, kind: reason.kind as MemberExclusion['kind'], ...(reason.detail !== undefined ? { detail: reason.detail } : {}) }]
+  })
+}
+
+const FILTER_KINDS: ReadonlySet<string> = new Set(['outside-role', 'worker-choice', 'excluded-profile'])
 
 /** A readable cause for the no-eligible-member breakdown line. */
 const CAUSE_LABELS: Record<MemberExclusion['kind'], string> = {
