@@ -42,6 +42,11 @@ function useIsolatedServer(root: string) {
   const url = `http://127.0.0.1:${port}`
   const dbPath = join(root, 'agentboard.db')
   let server: ChildProcess | null = null
+  // One exit promise per spawned server, its listener attached at spawn
+  // time: stop() awaits it whatever ended the server, including a signal
+  // kill before stop(), where exitCode is null but the exit already fired
+  // and a listener attached only at stop() would never resolve.
+  let exited: Promise<void> = Promise.resolve()
   let diagnostics = ''
   const start = async (page: Page) => {
     // Same guard as playwright.config.ts's webServer command: the server pins
@@ -70,6 +75,7 @@ function useIsolatedServer(root: string) {
         AGENTBOARD_REMOTE_HOSTS: '', CLAUDE_CODE_OAUTH_TOKEN: '', ANTHROPIC_API_KEY: '',
       },
     })
+    exited = new Promise<void>(resolve => { server!.once('exit', () => resolve()) })
     server.stdout?.on('data', chunk => { diagnostics = (diagnostics + String(chunk)).slice(-6000) })
     server.stderr?.on('data', chunk => { diagnostics = (diagnostics + String(chunk)).slice(-6000) })
     await expect.poll(async () => {
@@ -78,11 +84,8 @@ function useIsolatedServer(root: string) {
     return url
   }
   const stop = async () => {
-    if (server && server.exitCode === null) {
-      const stopped = new Promise<void>(resolve => server!.once('exit', () => resolve()))
-      server.kill('SIGTERM')
-      await stopped
-    }
+    if (server && server.exitCode === null && server.signalCode === null) server.kill('SIGTERM')
+    await exited
     // Every path that ends this server — a normal stop, a server that
     // already exited, a failed start — kills the root's private tmux server
     // before the root is removed: the daemon outlives the server and pins
