@@ -22,23 +22,32 @@ The CI fixture e2e step SHALL run every spec Playwright collects under `tests/e2
 - **THEN** it exits non-zero, and the fixture step fails without running Playwright
 
 ### Requirement: The unit suite guards the fixture list
-The unit suite SHALL fail, naming the step, configuration, or spec at fault, in each of these cases:
-- the workflow's fixture step names spec files itself, or does not pass the script's output to Playwright;
+The unit suite SHALL fail, naming the step, configuration, or file at fault, in each of these cases:
+- the fixture step passes Playwright anything besides the script's output and allowed options;
+- the fixture variable appears elsewhere in the workflow;
 - the Playwright configuration collects other files than the script reads;
-- a spec without the gate uses the fixture variable in code other than to set it to `0`.
+- a file under `tests/` without the gate uses the fixture variable in code other than to set it to `0`.
 
 #### Scenario: Literal list in the workflow
-- **WHEN** the workflow's fixture step names spec files itself, by path or by bare file name
+- **WHEN** the workflow's fixture step names spec files itself, by path, by bare file name, or by the `tests/e2e` directory
 - **THEN** the unit suite fails, naming the step
 
 #### Scenario: Output not passed to Playwright
 - **WHEN** the workflow's fixture step assigns the script's output but does not pass it to Playwright
 - **THEN** the unit suite fails, naming the step
 
+#### Scenario: Narrowing option
+- **WHEN** the workflow's fixture step passes Playwright an option outside the allowed ones, such as `--grep`
+- **THEN** the unit suite fails, naming the step
+
+#### Scenario: Fixture variable elsewhere in the workflow
+- **WHEN** another step, or a job's environment, sets the fixture variable
+- **THEN** the unit suite fails, naming where it appears
+
 #### Scenario: Playwright collects differently
-- **WHEN** the Playwright configuration changes its test directory, or sets a test match or ignore pattern
+- **WHEN** the Playwright configuration changes its test directory, sets a test match or ignore pattern, or defines projects
 - **THEN** the unit suite fails, naming the configuration
 
 #### Scenario: Unrecognized use of the variable
-- **WHEN** a spec without the gate reads the fixture variable in code
-- **THEN** the unit suite fails, naming the spec
+- **WHEN** a spec without the gate, or a helper under `tests/`, reads the fixture variable in code
+- **THEN** the unit suite fails, naming the file
