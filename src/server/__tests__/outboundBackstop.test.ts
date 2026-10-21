@@ -161,22 +161,32 @@ describe('linearity (task 3.6, D8)', () => {
   // quadrupled. "About twice" leaves room for timer noise, never for n².
   const RATIO = 2.8
 
+  // One re-measurement absorbs a scheduler hiccup: a stray slow small
+  // sample once pushed a linear pass to 2.93 under a loaded parallel suite.
+  // Two consecutive ratios over the bound still fail, and an n² pass (about
+  // 4) never passes either one.
+  function linearRatio(small: () => unknown, large: () => unknown): number {
+    const ratio = () => bestTime(large) / bestTime(small)
+    const first = ratio()
+    return first < RATIO ? first : Math.min(first, ratio())
+  }
+
   test('redaction: 40,000 headers take at most about twice 20,000', () => {
     const headers = (n: number) => `curl ${'-H "X-Trace-Id: v1" '.repeat(n)}https://example.internal/hook`
     const small = headers(20_000)
     const large = headers(40_000)
-    expect(bestTime(() => redact(large)) / bestTime(() => redact(small))).toBeLessThan(RATIO)
+    expect(linearRatio(() => redact(small), () => redact(large))).toBeLessThan(RATIO)
   })
 
   test('withholding: a full pass over 40,000 header words takes at most about twice 20,000', () => {
     // No early trigger: every word is read.
     const words = (n: number) => `echo ${'X-Trace-Id v1 '.repeat(n)}`
     expect(withholdReason(words(10))).toBeNull()
-    expect(bestTime(() => withholdReason(words(40_000))) / bestTime(() => withholdReason(words(20_000)))).toBeLessThan(RATIO)
+    expect(linearRatio(() => withholdReason(words(20_000)), () => withholdReason(words(40_000)))).toBeLessThan(RATIO)
   })
 
   test('the backstop: 40,000 words take at most about twice 20,000', () => {
     const text = (n: number) => 'word https://host.example.org '.repeat(n)
-    expect(bestTime(() => backstopEntries(text(40_000))) / bestTime(() => backstopEntries(text(20_000)))).toBeLessThan(RATIO)
+    expect(linearRatio(() => backstopEntries(text(20_000)), () => backstopEntries(text(40_000)))).toBeLessThan(RATIO)
   })
 })
