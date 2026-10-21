@@ -1,10 +1,10 @@
 // Hold store (revision-control design D2, D4): the only SQL writer of
 // `plan_holds` and `plan_hold_changes`. A release has a row (stored, not
-// derived): whole-hold releases stamp `released_at` on the hold guarded by
-// `WHERE released_at IS NULL`, and per-change releases stamp the change's
-// rows, releasing the hold itself once no change row remains. Reads are
-// scoped by team. The extend writes the later deadline in place; the history
-// lives in `plan_events`.
+// derived): whole-hold releases stamp `released_at` on the hold and on its
+// `plan_hold_changes` rows, guarded by `WHERE released_at IS NULL`, and
+// per-change releases stamp the change's rows, releasing the hold itself once
+// no change row remains. Reads are scoped by team. The extend writes the
+// later deadline in place; the history lives in `plan_events`.
 import type { Database } from 'bun:sqlite'
 import type { HoldCites, HoldScope, PlanHold } from '../../../shared/planRevisionControl'
 
@@ -59,7 +59,7 @@ export class HoldStore {
 
   /** Every hold of the plan, active first (oldest first within each group). */
   forPlan(teamId: string, planId: string): PlanHold[] {
-    const rows = this.db.prepare('SELECT * FROM plan_holds WHERE plan_id = ? AND team_id = ? ORDER BY created_at, rowid').all(planId, teamId) as Row[]
+    const rows = this.db.prepare('SELECT * FROM plan_holds WHERE plan_id = ? AND team_id = ? ORDER BY (released_at IS NULL) DESC, created_at, rowid').all(planId, teamId) as Row[]
     return rows.map(row => mapHold(row, this.changesOf(String(row.id))))
   }
 
@@ -80,6 +80,12 @@ export class HoldStore {
     if (hold.scope === 'plan' || input.changes.length === 0) {
       written = this.db.prepare('UPDATE plan_holds SET released_at = ?, release_reason = ?, release_command_id = ? WHERE id = ? AND released_at IS NULL')
         .run(at, input.reason, input.commandId, input.holdId).changes === 1
+      // A whole release releases the hold's change rows too, so a released
+      // hold never lists a change as held.
+      if (written) {
+        this.db.prepare('UPDATE plan_hold_changes SET released_at = ?, release_command_id = ? WHERE hold_id = ? AND released_at IS NULL')
+          .run(at, input.commandId, input.holdId)
+      }
     } else {
       const releaseChange = this.db.prepare('UPDATE plan_hold_changes SET released_at = ?, release_command_id = ? WHERE hold_id = ? AND change = ? AND released_at IS NULL')
       for (const change of input.changes) {

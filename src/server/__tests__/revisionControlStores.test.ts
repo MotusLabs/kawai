@@ -42,6 +42,34 @@ describe('HoldStore', () => {
     expect(store.get('t', hold.id)!.releaseReason).toBe('a')
   })
 
+  test('forPlan lists active holds before released ones, oldest first within each group', () => {
+    // Invariant: `forPlan` orders active first — a released hold never hides
+    // an active one behind its earlier creation.
+    const db = schemaDb()
+    let tick = 0
+    const store = new HoldStore(db, () => new Date(Date.UTC(2026, 9, 20, 12, 0, tick++)))
+    const first = store.insert({ teamId: 't', planId: 'p', scope: 'plan', rationale: 'r1', deadline: '2026-10-25T00:00:00Z', cites: null, commandId: 'cmd-1', changes: [] })
+    const second = store.insert({ teamId: 't', planId: 'p', scope: 'plan', rationale: 'r2', deadline: '2026-10-25T00:00:00Z', cites: null, commandId: 'cmd-2', changes: [] })
+    const third = store.insert({ teamId: 't', planId: 'p', scope: 'plan', rationale: 'r3', deadline: '2026-10-25T00:00:00Z', cites: null, commandId: 'cmd-3', changes: [] })
+    store.release({ teamId: 't', holdId: second.id, changes: [], reason: 'done', commandId: 'cmd-4' })
+    expect(store.forPlan('t', 'p').map(hold => hold.id)).toEqual([first.id, third.id, second.id])
+    expect(store.forPlan('t', 'p').map(hold => hold.releasedAt === null)).toEqual([true, true, false])
+  })
+
+  test('a whole release stamps the hold\'s change rows released too', () => {
+    // Invariant (D2): a released hold never lists a change as held — the
+    // whole-release branch releases its `plan_hold_changes` rows as well.
+    const db = schemaDb()
+    const store = new HoldStore(db, at)
+    const hold = store.insert({ teamId: 't', planId: 'p', scope: 'changes', rationale: 'r', deadline: '2026-10-25T00:00:00Z', cites: null, commandId: 'cmd-1', changes: ['alpha', 'beta'] })
+    const released = store.release({ teamId: 't', holdId: hold.id, changes: [], reason: 'done', commandId: 'cmd-2' })
+    expect(released.written).toBe(true)
+    expect(released.hold!.releasedAt).not.toBeNull()
+    expect(released.hold!.changes).toEqual([])
+    expect(store.get('t', hold.id)!.changes).toEqual([])
+    expect(store.active('t', 'p')).toHaveLength(0)
+  })
+
   test('extend sets a later deadline only while the hold is active', () => {
     const db = schemaDb()
     const store = new HoldStore(db, at)

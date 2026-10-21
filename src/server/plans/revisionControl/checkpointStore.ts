@@ -1,8 +1,8 @@
 // Checkpoint store (revision-control design D2, D7): the only SQL writer of
 // `plan_checkpoints`. A new checkpoint supersedes the target's earlier one in
 // the same write; the superseded rows stay readable — the history the
-// checkpoint dialog shows. Reads are scoped by team through the pause the
-// checkpoint belongs to.
+// checkpoint dialog shows. Its reads take no team: team scoping comes through
+// the pause at the service layer.
 import type { Database } from 'bun:sqlite'
 import type { CheckpointKind, PlanCheckpoint } from '../../../shared/planRevisionControl'
 
