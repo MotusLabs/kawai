@@ -108,3 +108,35 @@ test('sharesLoginWith marks two stored-login providers on the manager\'s one con
   expect(shares).toEqual({ first: ['default', 'second'], second: ['default', 'first'], keyed: [] })
   expect(reply.content[0]!.text).not.toContain(path.join(root, 'claude'))
 })
+
+test('a launch that cannot be resolved marks nothing: the capacity answer stands, with no sharing detected', async () => {
+  fs.mkdirSync(path.join(root, '.kawai'), { recursive: true })
+  fs.writeFileSync(path.join(root, '.kawai/providers.json'), JSON.stringify({
+    first: { label: 'First', models: { 'first-opus': { model: 'opus' } } },
+    second: { label: 'Second', models: { 'second-sonnet': { model: 'sonnet' } } },
+  }))
+  fs.writeFileSync(path.join(root, '.kawai/profiles.json'), '{}')
+  fs.writeFileSync(path.join(repo, '.kawai/groups/pair.md'), '---\nprofiles: [first-opus, second-sonnet]\n---\nPair up')
+  // The same stored login as above would mark first and second; once the
+  // chat runs, resolving a worker's launch throws instead.
+  let unreadable = false
+  const providerEnv = {
+    CLAUDE_CONFIG_DIR: path.join(root, 'claude'),
+    ANTHROPIC_API_KEY: undefined, ANTHROPIC_AUTH_TOKEN: undefined, CLAUDE_CODE_OAUTH_TOKEN: undefined, ANTHROPIC_BASE_URL: undefined,
+  } as unknown as Record<string, string>
+  const registered = await startedTools({
+    getProviderEnv: () => {
+      if (unreadable) throw new Error('provider environment unreadable')
+      return providerEnv
+    },
+  })
+  const before = JSON.parse((await registered.team_capacity!.handler({ group: 'pair' }, {})).content[0]!.text)
+  expect(before.providers.map((provider: { sharesLoginWith: string[] }) => provider.sharesLoginWith)).toEqual([['default', 'second'], ['default', 'first']])
+  unreadable = true
+  const reply = await registered.team_capacity!.handler({ group: 'pair' }, {})
+  expect(reply.isError).toBeUndefined()
+  const answer = JSON.parse(reply.content[0]!.text)
+  expect(answer.groups[0].workers.map((worker: { model: string }) => worker.model)).toEqual(['first-opus', 'second-sonnet'])
+  expect(answer.providers.map((provider: { id: string; sharesLoginWith: string[] }) => [provider.id, provider.sharesLoginWith]))
+    .toEqual([['first', []], ['second', []]])
+})
