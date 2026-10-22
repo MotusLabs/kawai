@@ -1,0 +1,12 @@
+#!/bin/sh
+# The push hook (per-result-suite D4): a pushed commit passes only with a
+# recorded full pass for its tree, or after `bun run check` passes here with
+# HEAD at that commit and a clean working tree; otherwise the push is
+# refused, naming the commit and the command. Deletions run nothing. Git
+# runs hooks from the working tree's root and passes the refs on stdin,
+# which scripts/pre-push.ts buffers whole before running anything.
+top=$(git rev-parse --show-toplevel) || {
+  echo "pre-push: cannot resolve the repository root; push refused" >&2
+  exit 1
+}
+exec bun "$top/scripts/pre-push.ts" "$@"
