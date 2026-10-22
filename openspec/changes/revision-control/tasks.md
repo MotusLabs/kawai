@@ -39,7 +39,7 @@ Implement after these have landed on master: `plan-execution`, `integration-cand
 - [x] 3.2 Wire `holdGate` into `planSteps` (D5). Verify with executor tests:
   - provisioning, each attempt kind, the review and fix handoffs, D9's revision fix, and Retry's dispatch wait under a hold;
   - the round outcome is still recorded;
-  - release wakes the executor, and each deferred dispatch runs exactly once;
+  - release wakes the executor, and each deferred dispatch runs while the change still stands on that attempt's round;
   - a running turn gets no mail.
 - [x] 3.3 Wire the gate into direct and integration landing and promotion (D5), and append `no-hold` to `START_PRECONDITIONS` and `PROMOTE_PRECONDITIONS`. Verify with tests:
   - a slot holder before merge gives up the slot, and another change takes it;
