@@ -17,6 +17,7 @@ import type { PauseStore } from './pauseStore'
 
 export type CheckpointRefusal =
   | 'no-execution'
+  | 'no-worktree'
   | 'no-pause-requested'
   | 'commit-required'
   | 'not-branch-head'
@@ -51,10 +52,10 @@ export interface CheckpointInput {
 
 const refuse = (reason: CheckpointRefusal, message: string): CheckpointOutcome => ({ ok: false, reason, message })
 
-/** The change's worktree and branch, or the refusal for their absence. */
+/** The change's worktree and branch, or the refusal for their absence (F6). */
 function worktreeOf(row: ChangeRow): { cwd: string; branch: string } | CheckpointOutcome {
   if (row.worktree === null || row.branch === null) {
-    return refuse('no-execution', `The change ${row.change} has no worktree or branch yet; keep working and submit with task_submit_result.`)
+    return refuse('no-worktree', `The change ${row.change} has no worktree or branch yet; record again once Kawai provisions it.`)
   }
   return { cwd: row.worktree, branch: row.branch }
 }
