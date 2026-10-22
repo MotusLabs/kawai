@@ -192,7 +192,9 @@ function mailboxNote({ sessionId, group, groups }: TeamPromptInput): string {
     `- \`${tool('reply')}\`: answer a message you received; the reply joins its thread and goes back to the sender.`,
     `- \`${tool('schedule_message')}\`: deliver a message later — to a group, a session, or yourself as a reminder.`,
     `- \`${tool('list_groups')}\`: list the team's groups.`,
+    `- \`${tool('team_capacity')}\`: read your team's capacity as routing sees it now — each group's workers (model, provider, cap, live members) and each provider's usage and cooldown. Usage null means kawai holds no report, not zero use.`,
     '',
+    ...workerChoiceLines(tool),
     ...managementLines(group, tool),
     'The human works alongside you. New mail to them is refused: only a reply to a message they sent reaches them.',
     '',
@@ -200,6 +202,18 @@ function mailboxNote({ sessionId, group, groups }: TeamPromptInput): string {
     '',
     'Sending returns a message id immediately; it never waits for an answer. Replies arrive as later turns. Do not spin waiting for them — finish your turn.',
   ].join('\n')
+}
+
+/**
+ * The worker choice and what team_capacity's marks mean (dispatch-worker-choice
+ * D9). Facts only: when to switch providers stays the lead's judgment and its
+ * group's role text, so no strategy is stated here.
+ */
+function workerChoiceLines(tool: (name: string) => string): string[] {
+  return [
+    `Choosing a worker: \`${tool('send_message')}\` and \`${tool('schedule_message')}\` (and \`${tool('task_handoff')}\` to a group) take an optional \`worker\` — a provider id, \`provider/model\`, or a bare model key among the receiving group's workers — that limits who may take the mail. It applies to group mail only. A chosen worker that is cooling waits for its cooldown end instead of going elsewhere, and the group's caps still apply. Providers that \`team_capacity\` lists in each other's \`sharesLoginWith\` draw on one quota window.`,
+    '',
+  ]
 }
 
 /** Inspect and withdraw for everyone; cancel-any and discard only for `canManageMailbox` groups (team-mailbox-management D8). */

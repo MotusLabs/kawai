@@ -283,14 +283,14 @@ test('a failing usage write is logged and leaves mail settlement intact', async 
     const record = spyOn(manager.turnUsage, 'record').mockImplementation(() => { throw new Error('disk full') })
     // The driver-event settle is the claim-scoped one (settleClaims), not the
     // session-wide settleRecipient.
-    const settle = spyOn((manager as unknown as { teamMail: { settleClaims: (id: string, refs: unknown[]) => void } }).teamMail, 'settleClaims')
+    const settle = spyOn((manager as unknown as { teamMail: { settleClaims: (refs: unknown[]) => void } }).teamMail, 'settleClaims')
     const warn = spyOn(logger, 'warn').mockImplementation(() => {})
     try {
       const feed = (manager as unknown as { handleDriverEvent: (sessionId: string, event: Record<string, unknown>) => void })
         .handleDriverEvent.bind(manager)
       feed(id, { type: 'turn_completed', subtype: 'success', id: 'evt-1', sequence: 1, turnId: 't-1', at: '2026-10-14T08:00:00Z', usage: { inputTokens: 1, outputTokens: 2, cacheReadTokens: 0, cacheCreationTokens: 0 } })
       expect(record).toHaveBeenCalledTimes(1)
-      expect(settle).toHaveBeenCalledWith(id, expect.any(Array))
+      expect(settle).toHaveBeenCalledWith(expect.any(Array))
       expect(warn.mock.calls.filter(([event]) => event === 'chat_turn_usage_record_failed')).toHaveLength(1)
     } finally { record.mockRestore(); settle.mockRestore(); warn.mockRestore() }
   } finally { manager.shutdown() }

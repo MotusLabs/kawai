@@ -129,6 +129,8 @@ test('a Codex chat serves kawai-team send_message on its thread, refuses a forei
   const namespace = threadStart.params.dynamicTools?.[0]
   expect(namespace).toMatchObject({ type: 'namespace', name: 'kawai-team' })
   expect(namespace.tools.map((tool: { name: string }) => tool.name)).toContain('send_message')
+  // The manager's team services reach Codex too (dispatch-worker-choice D6).
+  expect(namespace.tools.map((tool: { name: string }) => tool.name)).toContain('team_capacity')
 
   expect((await manager.send(id, 'go')).ok).toBe(true)
   await until(() => replyTo(wire, 901) !== undefined)

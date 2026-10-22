@@ -33,7 +33,7 @@ import { TeamCaps } from './teamCaps'
 import { worktreeRootOf } from './worktreeRoots'
 import { ambientProviderLabel, ambientProviderOf, LimitEventStore, recipientCooldown, sessionCooldown } from './cooldowns'
 import { RuleRegistry, type RuleLoadReport } from './routing/ruleLoader'
-import { ProfileRouter } from './routing/router'
+import { liveGroupMembers, ProfileRouter } from './routing/router'
 import { LimitOutcomes, type HandoffTarget } from './routing/limitOutcomes'
 import { ContextExhaustion, type ExhaustionOutcome } from './contextExhaustion'
 import { ExhaustionNotes } from './exhaustionNotes'
@@ -236,10 +236,7 @@ export class SessionMailbox {
         const { team, catalog } = await loadTeamGroups(message.originPath, options.homeDir)
         return team.teamId === message.teamId ? catalog.groups.get(message.toId)?.group : undefined
       },
-      members: (teamId, groupId) => [...options.records()].flatMap(record =>
-        record.archivedAt == null && record.groupId === groupId && options.teams.teamOf(record.sessionId)?.teamId === teamId
-          ? [{ sessionId: record.sessionId, profileId: record.claudeProfileId ?? 'default', cwd: record.projectPath }]
-          : []),
+      members: (teamId, groupId) => liveGroupMembers(options.records(), id => options.teams.teamOf(id)?.teamId, teamId, groupId),
       targetWorktree,
       staffing: this.staffing,
       rules: this.rules,
@@ -537,7 +534,7 @@ export class SessionMailbox {
    * settle; the transitions themselves stay conditional, so an already
    * settled row is skipped by the store.
    */
-  settleClaims(id: string, refs: ClaimRef[]) {
+  settleClaims(refs: ClaimRef[]) {
     for (const ref of refs) {
       const mail = this.mailbox.store.get(ref.id)
       if (!mail || mail.state !== 'claimed' || mail.claimedBy !== ref.claimant || mail.claimedAt !== ref.claimedAt) continue

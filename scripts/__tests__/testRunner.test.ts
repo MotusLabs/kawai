@@ -13,6 +13,7 @@ import {
   isOwnerAlive,
   parseCpuQuota,
   parseRunArgs,
+  readCpuQuota,
   readOwnerMarker,
   readProcStartTime,
   refuseBatchAfterSignal,
@@ -101,6 +102,16 @@ describe('planRun', () => {
     expect(seededWith).toBe(base.seedText)
   })
 
+  test('a full run whose seed failed plans no publish (F5)', () => {
+    const plan = planRun({ ...base, args: parseRunArgs([]), seedTimings: () => null })
+    expect(plan.fullRun).toBe(true)
+    expect(plan.publishTimings).toBe(false)
+    // The batch options carry the same decision: nothing seeded, nothing to
+    // update, and no publish path for main() to wire into the run.
+    expect(plan.batchOptions.timingsPath).toBeUndefined()
+    expect(plan.batchOptions.updateTimings).toBe(false)
+  })
+
   test('a -t filter or explicit files never publish and never seed (B1)', () => {
     let seedCalls = 0
     const seedTimings = () => {
@@ -167,15 +178,15 @@ describe('runBatchesAndPublish', () => {
 
   test('a failed batch never publishes and no later batch starts (B3)', async () => {
     const calls: Array<{ cmd: string[]; env: NodeJS.ProcessEnv; label: string }> = []
-    let published = 0
+    const publishedPaths: string[] = []
     let thrown: unknown
     try {
       await runBatchesAndPublish({
         batches: [batch('main batch'), batch('real-tmux: late.test.ts')],
         env,
-        publishTimings: true,
-        publish: () => {
-          published += 1
+        publishTimingsPath: '/run-root/timings.json',
+        publish: (timingsPath) => {
+          publishedPaths.push(timingsPath)
         },
         runCommand: async (cmd, receivedEnv, batchLabel) => {
           calls.push({ cmd, env: receivedEnv, label: batchLabel })
@@ -191,17 +202,19 @@ describe('runBatchesAndPublish', () => {
     expect(calls).toHaveLength(1)
     expect(calls[0].cmd).toEqual(batch('main batch').cmd)
     expect(calls[0].env).toBe(env)
-    expect(published).toBe(0)
+    expect(publishedPaths).toEqual([])
   })
 
   test('a passing run publishes exactly once, after the first batch, when the plan may publish (B3)', async () => {
     const order: string[] = []
+    let publishedPath: string | undefined
     await runBatchesAndPublish({
       batches: [batch('main batch'), batch('real-tmux: late.test.ts')],
       env,
-      publishTimings: true,
-      publish: () => {
+      publishTimingsPath: '/run-root/timings.json',
+      publish: (timingsPath) => {
         order.push('publish')
+        publishedPath = timingsPath
       },
       runCommand: async (_cmd, _env, batchLabel) => {
         order.push(`run:${batchLabel}`)
@@ -211,24 +224,26 @@ describe('runBatchesAndPublish', () => {
     // serial batch failing must not lose it — and the once-guard keeps the
     // passing serial batch from publishing again.
     expect(order).toEqual(['run:main batch', 'publish', 'run:real-tmux: late.test.ts'])
+    // The step publishes exactly the path the plan seeded.
+    expect(publishedPath).toBe('/run-root/timings.json')
   })
 
   test('a passing run whose plan may not publish never calls the publish step (B3)', async () => {
-    let published = 0
+    const publishedPaths: string[] = []
     let ran = 0
     await runBatchesAndPublish({
       batches: [batch('main batch')],
       env,
-      publishTimings: false,
-      publish: () => {
-        published += 1
+      publishTimingsPath: null,
+      publish: (timingsPath) => {
+        publishedPaths.push(timingsPath)
       },
       runCommand: async () => {
         ran += 1
       },
     })
     expect(ran).toBe(1)
-    expect(published).toBe(0)
+    expect(publishedPaths).toEqual([])
   })
 })
 
@@ -282,6 +297,11 @@ describe('effectiveQuota', () => {
 
   test('falls back to the platform parallelism when cpu.max is absent', () => {
     expect(effectiveQuota(() => null)).toBe(os.availableParallelism())
+  })
+
+  test('the default reader is the production cgroup read (F6)', () => {
+    // The default parameter binds the production reader, not a constant.
+    expect(effectiveQuota()).toBe(readCpuQuota() ?? os.availableParallelism())
   })
 })
 
