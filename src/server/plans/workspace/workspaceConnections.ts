@@ -1,11 +1,12 @@
-// Plan workspace subscriptions and the human bind command (plan-workspace
-// tasks 1.3, design D1, D6). Like the plan view, every request names the
-// team's directory (`teamPath`); the shared team-scope resolver turns it
-// into the team that scopes what may be seen or changed, so an unknown path
-// and another team's plan id are refused with no data. The snapshot is
-// authoritative and re-sent whole after every committed workspace write of
-// the team — never on a replay or a refusal (the runPlanCommand rule); a
-// bind is team-level, so it re-pushes every subscribed plan of the team.
+// Plan workspace subscriptions and the human bind and reference commands
+// (plan-workspace tasks 1.3, design D1, D4, D6). Like the plan view, every
+// request names the team's directory (`teamPath`); the shared team-scope
+// resolver turns it into the team that scopes what may be seen or changed,
+// so an unknown path and another team's plan id are refused with no data.
+// The snapshot is authoritative and re-sent whole after every committed
+// workspace write of the team — never on a replay or a refusal (the
+// runPlanCommand rule); a bind is team-level, so it re-pushes every
+// subscribed plan of the team.
 //
 // Invariant I6: open, close, and every read never start an agent or attach
 // a worker. The snapshot reads only the manager's record facts (`has`,
@@ -31,6 +32,8 @@ interface ResolvedPlanInputs {
 type WorkspaceClientMessage = Extract<ClientMessage, { type: `team-plan-workspace-${string}` }>
 type WorkspaceBindMessage = Extract<PlanWorkspaceClientMessage, { type: 'team-plan-workspace-bind' }>
 type WorkspaceOpenMessage = Extract<PlanWorkspaceClientMessage, { type: 'team-plan-workspace-open' }>
+type WorkspaceRefAddMessage = Extract<PlanWorkspaceClientMessage, { type: 'team-plan-workspace-ref-add' }>
+type WorkspaceRefRemoveMessage = Extract<PlanWorkspaceClientMessage, { type: 'team-plan-workspace-ref-remove' }>
 
 interface WorkspaceSubscription {
   teamId: string
@@ -65,6 +68,8 @@ export class PlanWorkspaceConnections {
 
   async handle(connection: ChatConnection, message: WorkspaceClientMessage) {
     if (message.type === 'team-plan-workspace-bind') return this.bind(connection, message as WorkspaceBindMessage)
+    if (message.type === 'team-plan-workspace-ref-add') return this.refAdd(connection, message as WorkspaceRefAddMessage)
+    if (message.type === 'team-plan-workspace-ref-remove') return this.refRemove(connection, message as WorkspaceRefRemoveMessage)
     const { teamPath, planId } = message
     const target = `${teamPath}\0${planId}`
     const token = {}
@@ -138,7 +143,7 @@ export class PlanWorkspaceConnections {
         plan: resolved.plan,
         displayedVersion,
         bindings: this.bindingViews(teamId),
-        references: [],
+        references: this.manager.planWorkspaceRefs.refsOf(teamId, resolved.plan.id),
       },
     })
   }
@@ -197,6 +202,67 @@ export class PlanWorkspaceConnections {
     }
     answer({ binding: { role: outcome.role, sessionId: outcome.sessionId, version: outcome.version }, replayed: outcome.replayed })
     // Only a commit re-pushes — never a replay or a refusal.
+    if (!outcome.replayed) this.publish(team.teamId)
+  }
+
+  /** The change names valid at insert: the union over the approved revision, every in-review revision and every draft (Q3). */
+  private changeNames(planId: string): ReadonlySet<string> {
+    const names = new Set<string>()
+    const collect = (content: { changes: ReadonlyArray<{ change: string }> }) => {
+      for (const change of content.changes) names.add(change.change)
+    }
+    const approved = this.manager.plans.store.approvedRevision(planId)
+    if (approved) collect(approved.content)
+    for (const revision of this.manager.plans.store.revisions(planId)) {
+      if (revision.status === 'in_review') collect(revision.content)
+    }
+    for (const draft of this.manager.plans.store.drafts(planId)) collect(draft.content)
+    return names
+  }
+
+  /** A human ref-add, as the human caller for the addressed team (design D4). */
+  private async refAdd(connection: ChatConnection, message: WorkspaceRefAddMessage) {
+    const { teamPath, requestId } = message
+    const answer = (payload: Record<string, unknown>) => connection.send({ type: 'team-plan-workspace-result', teamPath, requestId, ...payload })
+    const team = await this.manager.teamScopes.resolve(teamPath)
+    if (!team) {
+      answer({ error: unknownTeamError(teamPath) })
+      return
+    }
+    // Insert-time validation against the resolved facts; a refusal writes
+    // nothing, so a resend under the same command id is evaluated afresh.
+    const outcome = await this.manager.planWorkspaceRefs.add(team.teamId, message.commandId, {
+      planId: message.planId, label: message.label, kind: message.kind,
+      changeName: message.changeName, worktreeId: message.worktreeId,
+      relativePath: message.relativePath, url: message.url,
+    }, {
+      planInTeam: planId => this.manager.plans.store.forTeam(team.teamId, planId) !== null,
+      changeNames: planId => this.changeNames(planId),
+      worktreeTarget: async worktreeId => (await this.manager.tasks.worktrees.list(team.teamId)).includes(worktreeId),
+    })
+    if (!outcome.ok) {
+      answer({ error: outcome.message, ...(outcome.field ? { field: outcome.field } : {}) })
+      return
+    }
+    answer({ ref: outcome.ref, replayed: outcome.replayed })
+    if (!outcome.replayed) this.publish(team.teamId)
+  }
+
+  /** A human ref-remove: team-scoped, one not-found message for a gone or foreign reference (Q3). */
+  private async refRemove(connection: ChatConnection, message: WorkspaceRefRemoveMessage) {
+    const { teamPath, requestId } = message
+    const answer = (payload: Record<string, unknown>) => connection.send({ type: 'team-plan-workspace-result', teamPath, requestId, ...payload })
+    const team = await this.manager.teamScopes.resolve(teamPath)
+    if (!team) {
+      answer({ error: unknownTeamError(teamPath) })
+      return
+    }
+    const outcome = this.manager.planWorkspaceRefs.remove(team.teamId, message.commandId, { refId: message.refId })
+    if (!outcome.ok) {
+      answer({ error: outcome.message, ...(outcome.field ? { field: outcome.field } : {}) })
+      return
+    }
+    answer({ removedRefId: outcome.removedRefId, replayed: outcome.replayed })
     if (!outcome.replayed) this.publish(team.teamId)
   }
 }

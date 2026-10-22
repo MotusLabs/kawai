@@ -19,6 +19,7 @@ import { normalizePlanContent, type PlanDraft, type PlanRevision } from '../../s
 import { createPlanBench, createPlanWorld, sessionRow, writeGroup, type PlanWorld } from './planHarness'
 import { hashPlanDraft } from '../plans/planHash'
 import { PlanWorkspaceStore } from '../plans/workspace/workspaceStore'
+import { PlanWorkspaceRefs } from '../plans/workspace/workspaceRefs'
 import { defaultDisplayedVersion, selectedDisplayedVersion } from '../plans/workspace/displayedVersion'
 
 let world: PlanWorld
@@ -56,6 +57,7 @@ beforeEach(() => {
     teamScopes: new TeamScopes({ teams: { hasTeam: async () => false } as unknown as SessionTeams, repositories: () => [world.team.teamId] }),
     plans: bench.service,
     planWorkspace: new PlanWorkspaceStore(bench.db.db),
+    planWorkspaceRefs: new PlanWorkspaceRefs(bench.db.db),
     has: (id: string) => records.has(id),
     isArchived: (id: string) => records.get(id)?.archivedAt != null,
     teams: { teamOf: (id: string) => teamOfMap.get(id) },
@@ -301,7 +303,10 @@ describe('binds', () => {
 })
 
 test('every new workspace client type is listed for the WS router', () => {
-  for (const type of ['team-plan-workspace-open', 'team-plan-workspace-close', 'team-plan-workspace-bind']) {
+  for (const type of [
+    'team-plan-workspace-open', 'team-plan-workspace-close', 'team-plan-workspace-bind',
+    'team-plan-workspace-ref-add', 'team-plan-workspace-ref-remove',
+  ]) {
     expect(CHAT_CONNECTION_TYPES as readonly string[]).toContain(type)
   }
 })
