@@ -28,6 +28,8 @@ export interface ReleaseRequest {
   expectedResponse?: string | null
   /** The human's client request key: a resend replays the handoff, never a second release. */
   requestKey: string
+  /** The review's worker choice (dispatch-worker-choice D7), as on any handoff. */
+  worker?: string
 }
 
 export interface ReleaseOutcome {
@@ -86,6 +88,7 @@ export class TaskRelease {
     const handoff = {
       kind: 'review' as const, resultId: outstanding?.id ?? '', target: { kind: 'group' as const, id: request.target },
       instructions: request.instructions, expectedResponse: request.expectedResponse ?? null, requestKey: request.requestKey,
+      ...(request.worker !== undefined ? { worker: request.worker } : {}),
     }
     // A resend of a release that already dispatched replays its handoff — never a second release.
     const key = request.requestKey.trim()

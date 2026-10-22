@@ -771,6 +771,8 @@ export type ClientMessage =
       instructions: string
       expectedResponse?: string
       requestKey: string
+      /** Optional worker choice for a group target (dispatch-worker-choice D7): normalized and validated by the server. */
+      worker?: string
     }
   // Release worktree and hand off (D7): archive the task's ready spawned
   // members, then dispatch the review handoff to a reviewer group.
@@ -783,6 +785,8 @@ export type ClientMessage =
       instructions: string
       expectedResponse?: string
       requestKey: string
+      /** Optional worker choice for a group target (dispatch-worker-choice D7): normalized and validated by the server. */
+      worker?: string
     }
   | { type: 'team-task-note'; teamPath: string; requestId: string; taskId: string; text: string }
   | { type: 'team-task-status'; teamPath: string; requestId: string; taskId: string; status: TaskStatus }
@@ -798,6 +802,8 @@ export type ClientMessage =
       instruction: string
       requestKey: string
       handling?: 'notify' | 'stop'
+      /** Optional worker choice for a group target (dispatch-worker-choice D7): normalized and validated by the server. */
+      worker?: string
     }
   // Read-only preview of a dispatch: the task's stored worktree, or the
   // worktree the create form has (resolved by the same server rules).

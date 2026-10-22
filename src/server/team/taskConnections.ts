@@ -160,6 +160,7 @@ export class TaskConnections {
           const outcome = await this.manager.results.handoff(caller, message.taskId, {
             kind: message.kind, resultId: message.resultId, target: message.target, instructions: message.instructions,
             expectedResponse: message.expectedResponse ?? null, requestKey: message.requestKey,
+            ...(message.worker !== undefined ? { worker: message.worker } : {}),
           })
           result({ assignment: outcome.assignment, replay: outcome.duplicate, task: tasks.store.get(message.taskId) ?? undefined })
           return
@@ -168,7 +169,7 @@ export class TaskConnections {
           if (!this.manager.results.release) throw new Error('Release worktree and hand off is not available')
           const outcome = await this.manager.results.release.release(caller, message.taskId, {
             target: message.target, instructions: message.instructions, expectedResponse: message.expectedResponse ?? null,
-            requestKey: message.requestKey,
+            requestKey: message.requestKey, ...(message.worker !== undefined ? { worker: message.worker } : {}),
           })
           result({ assignment: outcome.handoff.assignment, replay: outcome.handoff.duplicate, task: tasks.store.get(message.taskId) ?? undefined })
           return
@@ -192,6 +193,7 @@ export class TaskConnections {
           const outcome = await this.manager.assignments.dispatch(caller, {
             taskId: message.taskId, target: message.target, instruction: message.instruction,
             requestKey: message.requestKey, ...(message.handling ? { handling: message.handling } : {}),
+            ...(message.worker !== undefined ? { worker: message.worker } : {}),
           })
           result({ assignment: outcome.assignment, ...(outcome.message?.taskId ? { task: tasks.store.get(outcome.message.taskId) ?? undefined } : {}) })
           return
