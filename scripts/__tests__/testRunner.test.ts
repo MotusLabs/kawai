@@ -13,6 +13,7 @@ import {
   isOwnerAlive,
   parseCpuQuota,
   parseRunArgs,
+  readCpuQuota,
   readOwnerMarker,
   readProcStartTime,
   refuseBatchAfterSignal,
@@ -282,6 +283,12 @@ describe('effectiveQuota', () => {
 
   test('falls back to the platform parallelism when cpu.max is absent', () => {
     expect(effectiveQuota(() => null)).toBe(os.availableParallelism())
+  })
+
+  test('the default reader is the production cgroup read (F6)', () => {
+    // The default parameter binds the production reader: a stubbed default
+    // would report a constant quota whatever host the runner starts on.
+    expect(effectiveQuota()).toBe(readCpuQuota() ?? os.availableParallelism())
   })
 })
 
