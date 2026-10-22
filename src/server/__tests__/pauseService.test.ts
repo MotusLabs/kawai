@@ -12,8 +12,11 @@ import fs from 'node:fs'
 import type { ChatHandoffPackage, TeamMessage } from '../../shared/team'
 import type { AttemptManifest, FloorMap } from '../../shared/planExecution'
 import type { PlanHold } from '../../shared/planRevisionControl'
-import { outstandingOf } from '../team/assignmentStore'
+import { outstandingOf, AssignmentStore } from '../team/assignmentStore'
 import { LimitEventStore } from '../team/routing/limitEvents'
+import { MailboxStore } from '../team/mailboxStore'
+import { initDatabase } from '../db'
+import { PlanStore } from '../plans/planStore'
 import { sessionRow, createPlanBench, createPlanWorld, type PlanBench, type PlanWorld } from './planHarness'
 import { ExecutionStore } from '../plans/execution/executionStore'
 import { PauseService, PLAN_PAUSE_TAG, pauseBody, type PauseInput } from '../plans/revisionControl/pauseService'
@@ -166,6 +169,56 @@ describe('targets and mail (D6)', () => {
     expect(service.sides(teamId, outcome.pause.id)).toEqual({ noActiveWork: ['ui'], landingInProgress: [] })
   })
 
+  test('two developers are asked to pause: one pause, two targets, one mail on each change task (spec scenario)', async () => {
+    const { planId, executionId } = await executionWith(['api', 'ui'])
+    const api = await inFlight(executionId, 'api')
+    const ui = await inFlight(executionId, 'ui', 'dev2')
+    // The second change moved on to its review handoff, claimed by dev2.
+    const uiRow = executions.change(executionId, 'ui')!
+    expect(executions.transition(executionId, 'ui', uiRow, { state: 'gating', step: 'reviewing' })).not.toBeNull()
+    const hold = placeHold(planId, ['api', 'ui'], 'pa-hB1')
+    const outcome = expectOk(pause({ planId, holdId: hold.id, commandId: 'pa-b1' }))
+    const targets = pauses.targets(outcome.pause.id)
+    expect(targets).toHaveLength(2)
+    expect(targets.map(target => [target.change, target.stage, target.holderSession, target.withdrawn])).toEqual([
+      ['api', 'attempt', 'dev', false],
+      ['ui', 'review', 'dev2', false],
+    ])
+    // One urgent plan-pause mail per developer, on its own change task.
+    const apiMails = pauseMails(api.taskId)
+    const uiMails = pauseMails(ui.taskId)
+    expect(apiMails).toHaveLength(1)
+    expect(uiMails).toHaveLength(1)
+    expect(targets.find(target => target.change === 'api')!.messageId).toBe(apiMails[0]!.id)
+    expect(targets.find(target => target.change === 'ui')!.messageId).toBe(uiMails[0]!.id)
+    expect(apiMails[0]!.toId).toBe('dev')
+    expect(uiMails[0]!.toId).toBe('dev2')
+    expect(apiMails[0]!.body).toContain(`task_checkpoint(task_id: ${api.taskId}`)
+    expect(uiMails[0]!.body).toContain('Submit nothing further for this review')
+    expect(uiMails[0]!.body).not.toContain('task_checkpoint')
+    expect(eventKinds(apiMails[0]!.id)).toContain('sent')
+    expect(eventKinds(uiMails[0]!.id)).toContain('sent')
+  })
+
+  test('a change in review is targeted at its reviewer: stage review, asked only to stop', async () => {
+    const { planId, executionId } = await executionWith(['api'])
+    const api = await inFlight(executionId, 'api', 'dev2')
+    const row = executions.change(executionId, 'api')!
+    expect(executions.transition(executionId, 'api', row, { state: 'gating', step: 'reviewing' })).not.toBeNull()
+    const hold = placeHold(planId, ['api'], 'pa-hB3')
+    const outcome = expectOk(pause({ planId, holdId: hold.id, commandId: 'pa-b3' }))
+    const targets = pauses.targets(outcome.pause.id)
+    expect(targets).toHaveLength(1)
+    expect(targets[0]).toMatchObject({ change: 'api', stage: 'review', holderSession: 'dev2', withdrawn: false })
+    const mails = pauseMails(api.taskId)
+    expect(mails).toHaveLength(1)
+    expect(targets[0].messageId).toBe(mails[0]!.id)
+    expect(mails[0]!.toId).toBe('dev2')
+    expect(mails[0]!.body).toContain('Submit nothing further for this review, and stop.')
+    expect(mails[0]!.body).not.toContain('task_checkpoint')
+    expect(service.sides(teamId, outcome.pause.id)).toEqual({ noActiveWork: [], landingInProgress: [] })
+  })
+
   test('the holder follows one forward to the successor claimant', async () => {
     const { planId, executionId } = await executionWith(['api'])
     const api = await inFlight(executionId, 'api')
@@ -229,6 +282,70 @@ describe('targets and mail (D6)', () => {
     expect(pauseMails(api.taskId)).toHaveLength(1)
   })
 
+  test('after a restart the owed mail is still sent exactly once: the marker is the stored row', async () => {
+    const { planId, executionId } = await executionWith(['api'])
+    const api = await inFlight(executionId, 'api', 'dev', 'spawning')
+    const hold = placeHold(planId, ['api'], 'pa-hB5')
+    const outcome = expectOk(pause({ planId, holdId: hold.id, commandId: 'pa-b5' }))
+    expect(bench.mail.claimSpawned(api.mailId, 'dev')).toBe(true)
+    expect(service.deliverOwed(teamId, world.repo, outcome.pause.id)).toEqual(['api'])
+    expect(pauseMails(api.taskId)).toHaveLength(1)
+    const mailed = pauseMails(api.taskId)[0]!
+    // Reopen the same database through a second connection and rebuild the
+    // service over it — the tick after a restart (condition e).
+    const reopened = initDatabase({ path: bench.db.db.filename })
+    try {
+      const mail = new MailboxStore(reopened.db)
+      const rebuilt = new PauseService({
+        pauses: new PauseStore(reopened.db, now),
+        holds: new HoldStore(reopened.db, now),
+        plans: new PlanStore(reopened.db),
+        // deliverOwed never reaches the plan service; the rebuilt stores carry the reads it does.
+        planService: bench.service,
+        executions: new ExecutionStore(reopened.db),
+        assignments: new AssignmentStore(reopened.db, mail),
+        mailbox: mail,
+        sessionExists: id => bench.records.has(id),
+        now,
+      })
+      expect(rebuilt.deliverOwed(teamId, world.repo, outcome.pause.id)).toEqual([])
+    } finally {
+      reopened.close()
+    }
+    expect(pauseMails(api.taskId)).toHaveLength(1)
+    expect(eventKinds(mailed.id).filter(kind => kind === 'sent')).toHaveLength(1)
+  })
+
+  test('an instruction held for a request is withdrawn like a queued one: cancelled mail, superseded assignment, Paused', async () => {
+    const { planId, executionId } = await executionWith(['api'])
+    const api = await inFlight(executionId, 'api', 'dev', 'queued')
+    expect(bench.mail.holdForRequest(api.mailId)).toBe(true)
+    expect(bench.mail.get(api.mailId)!.state).toBe('awaiting-request')
+    const hold = placeHold(planId, ['api'], 'pa-hB2')
+    const outcome = expectOk(pause({ planId, holdId: hold.id, commandId: 'pa-b2' }))
+    const target = pauses.targets(outcome.pause.id)[0]
+    expect(target.withdrawn).toBe(true)
+    expect(target.holderSession).toBeNull()
+    expect(target.pausedAt).not.toBeNull()
+    expect(bench.mail.get(api.mailId)!.state).toBe('cancelled')
+    expect(eventKinds(api.mailId)).toEqual(expect.arrayContaining(['held-for-request', 'cancelled']))
+    const [assignment] = bench.assignmentStore.listByTask(api.taskId)
+    expect(assignment.supersededBy).toBe(outcome.pause.id)
+    expect(assignment.state).toBe('superseded')
+    expect(outstandingOf(bench.assignmentStore.listByTask(api.taskId))).toBeNull()
+    expect(pauseMails(api.taskId)).toHaveLength(0)
+    // The recorded Paused fact reads as the derived state Paused (D8).
+    const facts: PauseTargetFacts = {
+      executionFinished: false, messageDelivered: false, spawnUnclaimed: false, pendingRequest: false, busy: false,
+      providerLimit: null, holder: 'live', readiness: { ready: true, reasons: [] }, deadlinePassed: false,
+    }
+    const record: PauseTargetRecord = {
+      stage: 'attempt', holderSession: null, withdrawn: target.withdrawn, pausedAt: target.pausedAt,
+      decision: target.decision, checkpointKind: null, pushEffectState: null,
+    }
+    expect(pauseTargetState(record, facts).state).toBe('paused')
+  })
+
   test('a queued instruction is withdrawn through the stop branch: cancelled mail, superseded assignment, Paused at once', async () => {
     const { planId, executionId } = await executionWith(['api'])
     const api = await inFlight(executionId, 'api', 'dev', 'queued')
@@ -270,6 +387,37 @@ describe('targets and mail (D6)', () => {
     const outcome = expectOk(pause({ planId, holdId: hold.id, commandId: 'pa-8' }))
     expect(service.sides(teamId, outcome.pause.id)).toEqual({ noActiveWork: [], landingInProgress: ['ui'] })
     expect(pauses.targets(outcome.pause.id).map(target => target.change)).toEqual(['api'])
+  })
+
+  test('a started update (the updating step) lists as landing in progress and writes nothing for the change', async () => {
+    const { planId, executionId } = await executionWith(['api', 'ui'])
+    const api = await inFlight(executionId, 'api')
+    const uiRow = executions.change(executionId, 'ui')!
+    expect(executions.transition(executionId, 'ui', uiRow, { state: 'landing', step: 'updating' })).not.toBeNull()
+    const hold = placeHold(planId, ['api', 'ui'], 'pa-hB4')
+    const outcome = expectOk(pause({ planId, holdId: hold.id, commandId: 'pa-b4' }))
+    expect(service.sides(teamId, outcome.pause.id)).toEqual({ noActiveWork: [], landingInProgress: ['ui'] })
+    expect(pauses.targets(outcome.pause.id).map(target => target.change)).toEqual(['api'])
+    // The updating change is left alone; the attempt beside it is targeted and mailed.
+    expect(pauseMails(api.taskId)).toHaveLength(1)
+  })
+
+  test('a plan-scoped hold covers every in-flight change, not just listed ones', async () => {
+    const { planId, executionId } = await executionWith(['api', 'ui'])
+    const api = await inFlight(executionId, 'api')
+    const ui = await inFlight(executionId, 'ui', 'dev2')
+    const hold = holds.insert({
+      teamId, planId, scope: 'plan', rationale: 'rethink the direction', deadline: inDays(10), cites: null,
+      commandId: 'pa-hN2', changes: [],
+    })
+    const outcome = expectOk(pause({ planId, holdId: hold.id, commandId: 'pa-n2' }))
+    expect(pauses.targets(outcome.pause.id).map(target => [target.change, target.holderSession, target.stage])).toEqual([
+      ['api', 'dev', 'attempt'],
+      ['ui', 'dev2', 'attempt'],
+    ])
+    expect(pauseMails(api.taskId)).toHaveLength(1)
+    expect(pauseMails(ui.taskId)).toHaveLength(1)
+    expect(service.sides(teamId, outcome.pause.id)).toEqual({ noActiveWork: [], landingInProgress: [] })
   })
 })
 
@@ -372,6 +520,18 @@ describe('refusals, replay, and payload identity (D3)', () => {
     expect(noRun.message).toContain('no running execution')
     expect(bench.plans.eventByCommand(planId, 'pa-15')?.event.kind).toBe('pause-requested')
     void open
+  })
+
+  test('a refusal names every failure: no running execution beside an open pause on the hold', async () => {
+    const { planId, executionId } = await executionWith(['api'])
+    await inFlight(executionId, 'api')
+    const hold = placeHold(planId, ['api'], 'pa-hN1')
+    expectOk(pause({ planId, holdId: hold.id, commandId: 'pa-n1a' }))
+    executions.finishExecution(executionId, 'completed')
+    const both = refused(pause({ planId, holdId: hold.id, commandId: 'pa-n1b' }))
+    expect(both.reason).toBe('state')
+    expect(both.message).toContain('no running execution')
+    expect(both.message).toContain('an open pause already covers')
   })
 
   test('an unparsable deadline is an invalid refusal written nowhere', async () => {

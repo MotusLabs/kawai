@@ -130,20 +130,16 @@ describe('PauseStore', () => {
     expect(store.get('t', pause.id)!.closedAt).not.toBeNull()
   })
 
-  test('the mail, holder, checkpoint, and withdrawal setters update the target', () => {
+  test('the mail, holder, and checkpoint setters update the target', () => {
     const store = new PauseStore(schemaDb(), at)
     const pause = insertPause(store)
     store.setMail(pause.id, 'alpha', 'msg-1')
     store.setHolder(pause.id, 'alpha', 'session-2')
     store.setCheckpoint(pause.id, 'alpha', 'checkpoint-9')
-    let target = store.target(pause.id, 'alpha')!
+    const target = store.target(pause.id, 'alpha')!
     expect(target.messageId).toBe('msg-1')
     expect(target.holderSession).toBe('session-2')
     expect(target.checkpointId).toBe('checkpoint-9')
-    store.markWithdrawn(pause.id, 'alpha')
-    target = store.target(pause.id, 'alpha')!
-    expect(target.withdrawn).toBe(true)
-    expect(target.holderSession).toBeNull()
   })
 })
 

@@ -101,11 +101,6 @@ export class PauseStore {
     this.db.prepare('UPDATE plan_pause_targets SET checkpoint_id = ? WHERE pause_id = ? AND change = ?').run(checkpointId, pauseId, change)
   }
 
-  /** Mark the target's instruction withdrawn: unclaimed, and Kawai superseded it (D6). */
-  markWithdrawn(pauseId: string, change: string): void {
-    this.db.prepare('UPDATE plan_pause_targets SET withdrawn = 1, holder_session = NULL WHERE pause_id = ? AND change = ?').run(pauseId, change)
-  }
-
   /**
    * Record Paused once: the guarded write is a no-op on a target that already
    * reads Paused or decided, and `written` says whether this call wrote it.

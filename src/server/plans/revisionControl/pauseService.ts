@@ -215,7 +215,9 @@ export class PauseService {
     if (deadline.getTime() <= this.now().getTime()) failures.push({ text: `the pause deadline ${deadline.toISOString()} is not in the future` })
     const execution = this.deps.executions.running(planId)
     if (!execution) failures.push({ state: true, text: 'the plan has no running execution to pause' })
-    else if (this.deps.pauses.forPlan(teamId, planId, true).some(pause => pause.holdId === hold.id)) {
+    // Independent of the execution check (D3 names every failure): a finished
+    // execution can still leave the hold's pause open.
+    if (this.deps.pauses.forPlan(teamId, planId, true).some(pause => pause.holdId === hold.id)) {
       failures.push({ state: true, text: `an open pause already covers the hold ${hold.id}` })
     }
     this.refuse(failures, 'The pause was refused')
