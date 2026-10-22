@@ -47,6 +47,22 @@ describe('recording contexts (I4)', () => {
     expect(context.contextOf('s1', 'm1')!.turnId).toBe('turn-1')
   })
 
+  test('a same-content resend in a different key order replays instead of conflicting (F4)', () => {
+    expect(record('s1', 'm1', 'turn-1')).toMatchObject({ ok: true, recorded: true })
+    // The stored JSON kept insertion order; the resend reverses it at the top
+    // level and inside the version object. Same content, so it is the same
+    // context: a replay, never a conflict.
+    const reordered = {
+      documentRefId: null, changeName: null, executionId: null,
+      version: { contentHash: 'hash-2', revision: 2, kind: 'revision' } as const,
+      planTitle: 'Wave C', planId: 'p1', teamId: 'team-1',
+    } as unknown as WorkspaceMessageContext
+    expect(record('s1', 'm1', 'turn-1', reordered)).toMatchObject({ ok: true, recorded: false })
+    expect(context.contextOf('s1', 'm1')!.context).toEqual(envelope())
+    // A real content difference under any key order still conflicts.
+    expect(record('s1', 'm1', 'turn-1', envelope({ planId: 'p2' }))).toMatchObject({ ok: false, reason: 'conflict' })
+  })
+
   test('another message uuid is a different key, even within one session', () => {
     expect(record('s1', 'm1', 'turn-1')).toMatchObject({ ok: true, recorded: true })
     expect(record('s1', 'm2', 'turn-1', envelope({ planId: 'p2' }))).toMatchObject({ ok: true, recorded: true })

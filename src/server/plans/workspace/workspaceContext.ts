@@ -7,6 +7,7 @@
 // UPDATE and no DELETE. Chat delivery (who records, when) is PR D §4.
 import type { Database } from 'bun:sqlite'
 import type { WorkspaceMessageContext } from '../../../shared/planWorkspace'
+import { canonicalJson } from '../../../shared/productStrategy'
 
 export interface StoredWorkspaceContext {
   sessionId: string
@@ -41,8 +42,12 @@ export class PlanWorkspaceContext {
       const stored = this.db.prepare('SELECT context_json FROM chat_workspace_turn_context WHERE session_id = ? AND message_uuid = ?')
         .get(sessionId, messageUuid) as Row | null
       if (stored) {
-        const previous = String(stored.context_json)
-        if (previous === JSON.stringify(input.context)) return { ok: true, recorded: false }
+        // Canonical compare (F4): a same-content resend in a different key
+        // order is the same context — a raw JSON string compare read it as a
+        // conflict. canonicalJson sorts keys recursively and keeps array
+        // order; any content difference still conflicts.
+        const previous = canonicalJson(JSON.parse(String(stored.context_json)))
+        if (previous === canonicalJson(input.context)) return { ok: true, recorded: false }
         return { ok: false, reason: 'conflict', message: `Message ${messageUuid} already carries a different context; the first record stands.` }
       }
       this.db.prepare('INSERT INTO chat_workspace_turn_context (session_id, message_uuid, turn_id, context_json, team_id, plan_id, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?)')

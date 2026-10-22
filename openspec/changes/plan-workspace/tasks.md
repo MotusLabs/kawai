@@ -10,10 +10,10 @@ Implement after `team-workspace-pages`, `durable-plans`, and `plan-supervision` 
 
 ## 2. OpenSpec work breakdown and document access
 
-- [ ] 2.1 Implement canonical change/artifact resolution using workspace identity and OpenSpec metadata, including nested specs and unique archive resolution; verify main-only, convention-worktree, missing-in-worktree, archived and ambiguous cases using isolated repository fixtures.
-- [ ] 2.2 Implement Markdown task AST projection with headings, nesting, checked state and source/hash links; verify mixed lists, fenced checkbox examples, duplicate numbering, no tasks artifact and changed source identities with parser tests.
-- [ ] 2.3 Implement bounded Markdown/image reads and a scoped asset route with regular-file/type checks and containment checks against traversal/symlink races; verify permitted relative links, external URL non-fetching, invalid UTF-8, unsupported types, oversized content and escaped paths through reader/route tests.
-- [ ] 2.4 Add hash/provenance metadata and selected-document/expanded-checklist invalidation via watcher plus reconciliation; verify external edits, source deletion, stale last-valid content and execution-pin match/mismatch/unknown without cross-worktree fallback. Document supported formats and source rules in the workspace module.
+- [x] 2.1 Implement canonical change/artifact resolution using workspace identity and OpenSpec metadata, including nested specs and unique archive resolution; verify main-only, convention-worktree, missing-in-worktree, archived and ambiguous cases using isolated repository fixtures.
+- [x] 2.2 Implement Markdown task AST projection with headings, nesting, checked state and source/hash links; verify mixed lists, fenced checkbox examples, duplicate numbering, no tasks artifact and changed source identities with parser tests.
+- [x] 2.3 Implement bounded Markdown/image reads and a scoped asset route with regular-file/type checks and containment checks against traversal/symlink races; verify permitted relative links, external URL non-fetching, invalid UTF-8, unsupported types, oversized content and escaped paths through reader/route tests.
+- [x] 2.4 Add hash/provenance metadata and selected-document/expanded-checklist invalidation via watcher plus reconciliation; verify external edits, source deletion, stale last-valid content and execution-pin match/mismatch/unknown without cross-worktree fallback. Document supported formats and source rules in the workspace module.
 
 ## 3. Runtime projection and passive health
 
