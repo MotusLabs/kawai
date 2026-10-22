@@ -368,6 +368,11 @@ export function composePlanServices(options: PlanServicesOptions): {
       // same way).
       assignments, mailbox: team.mailbox,
       sessionExists: id => options.getSession(id) !== undefined,
+      // The resolve's task revisions, checkpoint reads, and inline fix
+      // dispatch (revision-control 4.4). Adapt's git facts (adaptHead) stay
+      // unwired until the protocol step pre-reads them; without them the
+      // manifest falls back to the newest attempt's start commit.
+      tasks: team.tasks, checkpoints: checkpointStore, assignmentService: team.assignments,
       wake: teamId => runtime?.command(teamId),
     })
     composedPauses = pauses

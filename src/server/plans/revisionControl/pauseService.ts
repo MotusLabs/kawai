@@ -27,6 +27,7 @@ import type { ChangeRow } from '../execution/executionRows'
 import { agentHeldStage, attemptStatus } from '../execution/attemptStatus'
 import type { ExecutionStore } from '../execution/executionStore'
 import { outstandingOf, type AssignmentStore } from '../../team/assignmentStore'
+import type { AssignmentService } from '../../team/AssignmentService'
 import { forwardEnd } from '../../team/forwardChain'
 import type { MailboxStore } from '../../team/mailboxStore'
 import { PlanRefusal, type PlanCommandOutcome } from '../planCommands'
@@ -68,6 +69,18 @@ export interface PauseServiceDeps {
   tasks?: TaskService
   /** The shared checkpoint store (D7): an attempt target's resume names the newest checkpoint's commit. */
   checkpoints?: CheckpointStore
+  /** The dispatch path of the resolve's inline fix (A2r): the production
+   *  composition wires the team's AssignmentService; a bench may omit it,
+   *  leaving every adapt row owed. */
+  assignmentService?: Pick<AssignmentService, 'dispatchWithin'>
+  /**
+   * Adapt's git facts (rev4 §2: the resolution's git reads run BEFORE the
+   * transaction; only their results enter it): the branch head and file
+   * digests the new attempt's manifest records. The protocol step wires the
+   * pre-read; the resolve itself is synchronous. Null or absent falls back
+   * to the newest attempt's start commit, else the baseline.
+   */
+  adaptHead?: (executionId: string, change: string) => { startCommit: string; artifacts: Record<string, string> } | null
   /** The executor wake, called after a committed command only. */
   wake?: (teamId: string) => unknown
   now?: () => Date

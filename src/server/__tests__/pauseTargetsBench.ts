@@ -15,6 +15,10 @@ import { PauseStore } from '../plans/revisionControl/pauseStore'
 import { HoldStore } from '../plans/revisionControl/holdStore'
 import { CheckpointStore } from '../plans/revisionControl/checkpointStore'
 import { TaskService } from '../team/TaskService'
+import { AssignmentService } from '../team/AssignmentService'
+import { TeamCaps } from '../team/teamCaps'
+import { TeamWorktrees } from '../team/worktreeRoots'
+import { WorktreeStaffing } from '../team/staffing'
 
 const NOW = Date.UTC(2026, 10, 1, 12, 0, 0)
 
@@ -64,10 +68,27 @@ export async function pauseTargetsBench(prefix: string): Promise<PauseTargetsBen
   const executions = new ExecutionStore(bench.db.db)
   const checkpoints = new CheckpointStore(bench.db.db, now)
   const tasks = new TaskService(bench.tasks, { getSession: id => bench.records.get(id) ?? null })
+  // The resolve's inline fix dispatch (revision-control 4.4, A2r) goes
+  // through the real AssignmentService — the same request-key grammar, mail,
+  // and journal a production dispatch writes.
+  const caps = new TeamCaps({ homeDir: world.home })
+  const worktrees = new TeamWorktrees()
+  const teamOf = (id: string) => (bench.records.get(id)?.projectPath === world.other ? undefined : world.team)
+  const staffing = new WorktreeStaffing(bench.db.db, bench.mail, {
+    records: () => bench.records.values(), teamOf, caps, worktrees,
+    spawn: () => Promise.resolve({ ok: false, error: 'no spawn in tests' }),
+  })
+  const assignmentService = new AssignmentService(bench.db.db, bench.assignmentStore, bench.tasks, bench.mail, {
+    getSession: id => bench.records.get(id) ?? null, records: () => bench.records.values(), teamOf,
+    staffing, caps, worktrees, homeDir: world.home, plans: bench.plans,
+  })
   const service = new PauseService({
     pauses, holds, plans: bench.plans, planService: bench.service, executions,
     assignments: bench.assignmentStore, mailbox: bench.mail, sessionExists: id => bench.records.has(id), wake, now,
-    tasks, checkpoints,
+    tasks, checkpoints, assignmentService,
+    // Adapt's pre-transaction git facts (rev4 §2): a distinguishable head
+    // the manifest must record verbatim.
+    adaptHead: () => ({ startCommit: 'adapt-head-sha', artifacts: {} }),
   })
 
   function expectOk<T>(outcome: { ok: boolean; message?: string; result?: T }): T {
