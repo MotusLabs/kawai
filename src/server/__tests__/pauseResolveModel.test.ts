@@ -79,6 +79,10 @@ function expectRefusal(outcome: PauseResolveOutcome, reason: PlanRefusalReason |
   if (!outcome.ok) expect(outcome.reason).toBe(reason)
 }
 
+// L2 (lead ruling): every P-I1 test carries an explicit 60 s per-test
+// timeout — the runner's default 20 s cut one loaded run at 20.54 s. The
+// budget is for parallel-load jitter, not license to grow: a test passing
+// 15 s idle must split its cases rather than raise this.
 test('P-I1: 40 seeded cases — the replay replays, later commands refuse or replay, one decision and one resume hold', async () => {
   const rand = mulberry32(20261022)
   const FOLLOW_UPS = ['replay', 'fresh id', 'mutated rationale', 'adapt'] as const
@@ -113,4 +117,4 @@ test('P-I1: 40 seeded cases — the replay replays, later commands refuse or rep
     // One target, all decided: the pause closed.
     expect(counts(world.planId, world.executionId, world.taskId, world.pauseId).closed).not.toBeNull()
   }
-})
+}, 60000)
