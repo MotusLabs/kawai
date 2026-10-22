@@ -124,9 +124,10 @@ or record a wait when that member is unavailable. Never assume that a role has
 a live member or that another reviewer is available for a second opinion.
 
 Quotas are shared per provider account, not per group: `glm` and `glm-flash`
-share one Z.AI limit, and every Claude profile (`default`, `opus`, `sonnet`)
-shares the host Claude login with you. Kawai tracks cooldowns per profile, so
-when one Claude profile hits the account limit, expect the others to fail too.
+share one Z.AI limit, and every Claude profile (`default`, `opus`, `sonnet`,
+`haiku`) shares the host Claude login with you. Kawai tracks cooldowns per
+profile, so when one Claude profile hits the account limit, expect the others
+to fail too.
 
 An explicit human provider/model constraint is part of the assignment. Use
 supported routing that guarantees it, such as a
@@ -194,10 +195,10 @@ same worktree at once; reuse a worktree only for follow-up work on its branch.
   directly, with decisions and evidence in the task journal. Do not relay
   every exchange. Direction, assignment and acceptance remain under existing
   rights; advisory conversations never dispatch stages or grant new authority.
-- Push the task branch, open the PR, and merge after required review and
-  checks pass for its current head. Coordinate overlapping integration and
-  migration numbers. Diagnose failures instead of repeatedly rerunning
-  unchanged failures.
+- For manually managed work, push the task branch, open the PR, and merge
+  after required review and checks pass for its current head. Coordinate
+  overlapping integration and migration numbers. Diagnose failures instead of
+  repeatedly rerunning unchanged failures.
 - Mechanical OpenSpec archive-only PRs may merge on green without a separate
   review after implementation and review are complete.
 - After landing, journal the PR, merge commit, verification, and limitations.
