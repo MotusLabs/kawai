@@ -12,6 +12,15 @@ worktree. The main checkout is the first worktree in `git worktree list
 design note or commit examined, so another agent can continue without replaying
 the conversation.
 
+This pilot composes with the change-lead pilot (`docs/change-lead-pilot.md`):
+for one enrolled change a named Change Lead coordinates the work while this
+document's design challenge, production-path evidence, independent review, and
+direct technical clarification apply unchanged. The two documents never assign
+the same stage twice: under that pilot the Change Lead is the one formal
+review/fix dispatcher for the enrolled change's results, and a coordinator's
+sign-off or agreement is never presented as independent findings — the formal
+review stays on the cross-model reviewer path.
+
 ## Choose the appropriate path
 
 The Lead records whether a new assignment changes a state machine, concurrency,
@@ -96,7 +105,10 @@ the task id and note/result/finding references, use its `task_id` for the
 direct exchange, and keep each message focused on the next technical decision.
 Journal conclusions and unresolved disagreements. Send one consolidated
 outcome to the `lead` group, without `task_id` and with the task id in the body,
-so it reaches the current Lead under the existing reporting convention.
+so it reaches the current Lead under the existing reporting convention. Under
+the change-lead pilot that consolidated outcome goes to the named coordinator
+instead, with the `lead` group kept for the unavailable-coordinator escalation
+(`docs/change-lead-pilot.md` §4).
 
 When a response is needed, journal the named wait and end the turn at a safe
 boundary so normal mail can deliver. Do not busy-poll, send acknowledgement
@@ -154,7 +166,10 @@ cross-model routing in the role instructions. Recheck checkpoint evidence
 against the final head and review conflict resolutions. The eligible continuing
 reviewer may perform the formal review; any design input is disclosed, not
 presented as a second independent assessment. The Lead coordinates one formal
-handoff for manually managed work. For execution-owned work, Kawai owns review
+handoff for manually managed work; under the change-lead pilot the enrolled
+change's handoff belongs to its Change Lead, still exactly one per result and
+never the coordinator's own sign-off recorded as findings. For execution-owned
+work, Kawai owns review
 and fix dispatch; agents must not insert manual stages, reassign it or bypass
 retry/stop rights. Advisory notes never satisfy its review or acceptance gates.
 
