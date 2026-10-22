@@ -449,25 +449,56 @@ declarations were needed: the catalog fixture already declares
 `.kawai/groups/**`, and the task-service fixtures write their group files
 into a temporary repository instead of reading this one.
 
-## 12. Owner actions before the first pilot
+## 12. Pilot readiness note
 
-Installing this protocol is not activation. Before the first enrolled change:
+Installing this protocol is not activation: the artifacts add role and
+protocol files only — no server, API, schema, or CI behavior — so
+installation alone sends no mail and starts or enrolls no sessions.
+Activation happens only through the human actions below.
 
-- **Add the reporting exception to the user-level reviewer roles (I1).**
-  `~/.kawai/groups/reviewers-claude.md` and `~/.kawai/groups/reviewers-mimo.md`
-  are user-level files outside this repository; add the Section 4 exception
-  paragraph to each, verbatim, so per-task reviewers report pilot findings to
-  the named coordinator exactly like repository roles do.
-- **Adoption note (M4).** Role and doc changes reach agents only from the
-  main checkout's files, at each agent's next start. Once this change lands,
-  move any untracked owner copy of `openspec/changes/change-lead-pilot/` in
-  the main checkout aside before pulling, so the landed artifacts are
-  authoritative.
-- **Name the change and the coordinator session** (Section 1); the Team Lead
-  records enrollment, baseline, and window before the first dispatch.
+**References.** `.kawai/groups/change-leads.md` (coordinator role, D2); this
+protocol; `lead.md`'s "Change Lead pilot" section (Team Lead duties); the
+reporting exception in the three developer roles and `reviewers.md`, plus
+the user-level reviewer roles (I1); `docs/agent-collaboration.md`
+(composition, one dispatcher per result). Mechanical evidence: Section 11.
 
+**Candidate-selection checklist.** At least two coherent implementation
+groups and meaningful local coordination; stable scope and contracts; not
+owned by a running plan execution; not plan-linked, or the parent states the
+plan-Lead exception; a baseline per the method below, else a descriptive
+report.
 
+**Baseline-selection method** (Section 9): record matching task/change ids in
+the parent before outcomes are known; match scope and risk, dependency
+coupling, model mix, review policy, checks, and resource conditions, listing
+mismatches; prefer recent work under the implemented parallel-suite /
+per-result-suite baseline; without one, publish a descriptive pilot.
 
+**Human session and enrollment action.** Create the coordinator session by
+hand in the `change-leads` group, in a stable checkout outside developer
+worktrees (a session's group is fixed at creation); approve the candidate
+change; the Team Lead records enrollment, baseline, window, and quota pool
+in the parent before the first dispatch.
 
+**Owner actions before activation.** Add the Section 4 exception paragraph,
+verbatim, to the user-level `~/.kawai/groups/reviewers-claude.md` and
+`~/.kawai/groups/reviewers-mimo.md`, so per-task reviewers report pilot
+findings to the named coordinator like repository roles do (I1). Role and
+doc changes reach agents only from the main checkout's files, at each
+agent's next start; once this change lands, move any untracked owner copy of
+`openspec/changes/change-lead-pilot/` in the main checkout aside before
+pulling, so the landed artifacts are authoritative (M4).
 
+**Report cutoff.** The window ends 14 calendar days from the first
+assignment, or earlier on landing or withdrawal; post-landing defects count
+only through the cutoff recorded in the parent at enrollment (Section 9).
 
+**Rollback checklist** (Section 8): stop new pilot dispatch; reconcile
+creators and standing handoffs — the pending review stays singular; restore
+default reporting by amending the affected tasks' direction (the creator, or
+the human where the creator is gone) and require acknowledgments; let
+in-flight work settle, retaining the role until its dependent work resolves;
+preserve journals, results, findings, and mail for the evaluation report;
+archive human-created coordinator sessions by hand. Never kill a session,
+delete work, duplicate a pending handoff, or remove the role while
+unresolved pilot work depends on it.
