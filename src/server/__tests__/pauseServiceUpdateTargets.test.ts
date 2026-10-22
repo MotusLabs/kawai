@@ -75,4 +75,29 @@ describe('update-attempt targets (O3′)', () => {
     expect(pauses.targets(outcome.pause.id)).toEqual([])
     expect(wired.pauseMails(api.taskId)).toEqual([])
   })
+
+  test("an upgrade's in-flight attempt:update: handoff anchors no row and names no holder (Q5)", async () => {
+    const { planId, executionId } = await wired.executionWith(['api'])
+    const api = await wired.inFlight(executionId, 'api')
+    // A pre-upgrade runtime left a live update handoff under the retired
+    // attempt:update: key (no kind-'update' row existed yet to anchor). The
+    // rows alone decide: the old key anchors nothing, so dev4 is not the
+    // holder, the change reads Kawai-held, and the next failed update
+    // re-mints under the uniform key (Q5's upgrade limitation).
+    executions.transition(executionId, 'api', executions.change(executionId, 'api')!, { state: 'gating', step: null })
+    const oldMail = bench.mail.enqueue({
+      teamId, toKind: 'session', toId: 'dev4', fromKind: 'system', fromSession: null, fromGroup: null,
+      originPath: world.repo, body: 'Merge the base.', taskId: api.taskId, actor: 'system',
+    })
+    bench.mail.claim(oldMail.id, 'dev4')
+    bench.assignmentStore.insert({
+      teamId, taskId: api.taskId, requestKey: `exec:${executionId}:api:attempt:update:2:7`, targetKind: 'session', targetId: 'dev4',
+      role: null, instruction: 'Merge the base.', creator: { kind: 'human', sessionId: null }, messageId: oldMail.id,
+    })
+    const hold = wired.placeHold(planId, ['api'], 'pa-h13')
+    const outcome = wired.expectOk(wired.pause({ planId, holdId: hold.id, commandId: 'pa-13' }))
+    expect(pauses.targets(outcome.pause.id)).toEqual([])
+    expect(wired.service.sides(teamId, outcome.pause.id)).toEqual({ noActiveWork: ['api'], landingInProgress: [] })
+    expect(wired.pauseMails(api.taskId)).toEqual([])
+  })
 })
