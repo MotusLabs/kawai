@@ -323,6 +323,30 @@ describe('document subscriptions', () => {
     expect(agentStarts).toBe(0)
   })
 
+  test('a compose throw answers the open with an explicit unavailable state (O3)', async () => {
+    const { planId } = await bench.draftInReview()
+    const throwing = new PlanWorkspaceDocumentConnections(managerDouble, {
+      host: fixture.host,
+      resolver: new ChangeArtifactsResolver(runner),
+      read: async () => { throw new Error('reader exploded') },
+    })
+    const sendTo = (target: PlanWorkspaceDocumentConnections, message: ClientMessage) =>
+      target.handle(connection, message as Parameters<typeof target.handle>[1])
+    // A document open still answers: missing, with the failure named.
+    await sendTo(throwing, { type: 'team-plan-workspace-document-open', teamPath: world.repo, planId, worktreeId: world.feature, relativePath: 'notes/design.md' })
+    const document = last('team-plan-workspace-document')!
+    expect(document.view).toMatchObject({ availability: 'missing', stale: false, executionMatch: 'unknown', executionId: null })
+    expect(document.view.reason).toContain('reader exploded')
+    // A checklist open still answers: explicitly unreadable, not silence.
+    await sendTo(throwing, { type: 'team-plan-workspace-checklist-open', teamPath: world.repo, planId, changeName: 'alpha' })
+    const checklist = last('team-plan-workspace-checklist')!
+    expect(checklist.checklist).toBeNull()
+    expect(checklist.unavailable).toMatchObject({ state: 'unreadable' })
+    expect(checklist.unavailable!.message).toContain('reader exploded')
+    throwing.stop()
+    expect(agentStarts).toBe(0)
+  })
+
   test('stop() closes every watcher and clears the debounce and reconcile timers (O2)', async () => {
     const { planId } = await bench.draftInReview()
     writeDoc('alpha content\n')

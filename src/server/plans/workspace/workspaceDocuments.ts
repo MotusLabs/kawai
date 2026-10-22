@@ -123,6 +123,8 @@ export class PlanWorkspaceDocumentConnections {
   private readonly resolver: ChangeArtifactsResolver
   private readonly read: typeof readWorkspaceDocument
   private readonly watcher: SourceWatcher
+  /** Set by stop(): a refresh that raced the shutdown is dropped, not answered. */
+  private stopped = false
 
   constructor(
     private readonly manager: ChatSessionManager,
@@ -158,6 +160,7 @@ export class PlanWorkspaceDocumentConnections {
 
   /** Close every watch and timer; the subscriptions die with it (shutdown, tests). */
   stop(): void {
+    this.stopped = true
     this.subscriptions.clear()
     this.pending.clear()
     this.watcher.stop()
@@ -293,12 +296,8 @@ export class PlanWorkspaceDocumentConnections {
   }
 
   private async refreshChecklist(connection: ChatConnection, teamPath: string, sub: ChecklistSubscription): Promise<void> {
-    let payload: { checklist: WorkspaceChecklist | null; unavailable: WorkspaceChecklistUnavailable | null }
-    try {
-      payload = await this.composeChecklist(sub)
-    } catch {
-      return // A refresh that raced a shutdown or a vanished row is dropped.
-    }
+    if (this.stopped) return // A refresh that raced the shutdown is dropped, not answered.
+    const payload = await this.composeChecklist(sub)
     if (JSON.stringify(payload) === JSON.stringify(sub.push)) return
     sub.push = payload
     connection.send({ type: 'team-plan-workspace-checklist', teamPath, planId: sub.planId, changeName: sub.changeName, ...payload })
@@ -306,64 +305,79 @@ export class PlanWorkspaceDocumentConnections {
   }
 
   private async refreshDocument(connection: ChatConnection, teamPath: string, sub: DocumentSubscription): Promise<void> {
-    let view: WorkspaceDocumentView
-    try {
-      view = await this.composeDocument(sub)
-    } catch {
-      return // A refresh that raced a shutdown or a vanished row is dropped.
-    }
+    if (this.stopped) return // A refresh that raced the shutdown is dropped, not answered.
+    const view = await this.composeDocument(sub)
     if (JSON.stringify(view) === JSON.stringify(sub.view)) return
     sub.view = view
     connection.send({ type: 'team-plan-workspace-document', teamPath, planId: sub.planId, worktreeId: sub.worktreeId, relativePath: sub.relativePath, view })
   }
 
   private async composeChecklist(sub: ChecklistSubscription): Promise<{ checklist: WorkspaceChecklist | null; unavailable: WorkspaceChecklistUnavailable | null }> {
-    const resolution = await this.resolver.resolve(sub.changeName, {
-      mainRoot: sub.mainRoot,
-      worktreeRoots: await this.manager.tasks.worktrees.list(sub.teamId),
-    })
-    if (!resolution.ok) {
-      sub.changeRoot = null
-      return { checklist: null, unavailable: { state: resolution.state, message: resolution.message } }
+    try {
+      const resolution = await this.resolver.resolve(sub.changeName, {
+        mainRoot: sub.mainRoot,
+        worktreeRoots: await this.manager.tasks.worktrees.list(sub.teamId),
+      })
+      if (!resolution.ok) {
+        sub.changeRoot = null
+        return { checklist: null, unavailable: { state: resolution.state, message: resolution.message } }
+      }
+      sub.changeRoot = resolution.changeRoot
+      const tasks = resolution.artifacts.filter(artifact => artifact.kind === 'tasks')
+      if (tasks.length === 0) {
+        return { checklist: null, unavailable: { state: 'unreadable', message: `Change "${sub.changeName}" has no tasks artifact.` } }
+      }
+      const read = await this.read(resolution.changeRoot, tasks[0]!.relativePath)
+      if (!read.ok || read.kind !== 'markdown') {
+        const why = read.ok ? 'not markdown' : read.reason
+        return { checklist: null, unavailable: { state: 'unreadable', message: `The tasks artifact of "${sub.changeName}" is unreadable (${why}).` } }
+      }
+      return { checklist: projectChecklist(read.text, read.hash), unavailable: null }
+    } catch (error) {
+      // Compose is total (O3): an open always answers, so a throwing
+      // resolver, listing or read names the existing `unreadable` state.
+      return { checklist: null, unavailable: { state: 'unreadable', message: `The checklist of "${sub.changeName}" could not be composed (${errorText(error)}).` } }
     }
-    sub.changeRoot = resolution.changeRoot
-    const tasks = resolution.artifacts.filter(artifact => artifact.kind === 'tasks')
-    if (tasks.length === 0) {
-      return { checklist: null, unavailable: { state: 'unreadable', message: `Change "${sub.changeName}" has no tasks artifact.` } }
-    }
-    const read = await this.read(resolution.changeRoot, tasks[0]!.relativePath)
-    if (!read.ok || read.kind !== 'markdown') {
-      const why = read.ok ? 'not markdown' : read.reason
-      return { checklist: null, unavailable: { state: 'unreadable', message: `The tasks artifact of "${sub.changeName}" is unreadable (${why}).` } }
-    }
-    return { checklist: projectChecklist(read.text, read.hash), unavailable: null }
   }
 
   private async composeDocument(sub: DocumentSubscription): Promise<WorkspaceDocumentView> {
-    const result = await this.read(sub.worktreeId, sub.relativePath)
-    if (result.ok) {
-      const { match, executionId } = executionMatchFor(
-        this.pinFor(sub.teamId, sub.planId, sub.executionId, sub.worktreeId), sub.relativePath,
-        { kind: result.kind, hash: result.hash, size: result.size, bytes: result.bytes },
-      )
-      return {
-        worktreeId: sub.worktreeId, relativePath: sub.relativePath,
-        kind: result.kind, availability: 'current', stale: false, reason: null,
-        executionMatch: match, executionId,
-        contentHash: result.hash, size: result.size, mtimeMs: result.mtimeMs,
-        text: result.kind === 'markdown' ? result.text : null,
+    try {
+      const result = await this.read(sub.worktreeId, sub.relativePath)
+      if (result.ok) {
+        const { match, executionId } = executionMatchFor(
+          this.pinFor(sub.teamId, sub.planId, sub.executionId, sub.worktreeId), sub.relativePath,
+          { kind: result.kind, hash: result.hash, size: result.size, bytes: result.bytes },
+        )
+        return {
+          worktreeId: sub.worktreeId, relativePath: sub.relativePath,
+          kind: result.kind, availability: 'current', stale: false, reason: null,
+          executionMatch: match, executionId,
+          contentHash: result.hash, size: result.size, mtimeMs: result.mtimeMs,
+          text: result.kind === 'markdown' ? result.text : null,
+        }
       }
+      // Refused: hold last-valid content, labelled stale; with nothing held the
+      // view names the refusal and serves nothing. Either way the execution
+      // match stays unknown — last-valid content is never a pin comparison.
+      return this.unavailableDocument(sub, result.reason)
+    } catch (error) {
+      // Compose is total (O3): an open always answers, so a throwing reader
+      // names the failure on the view's `missing` state instead of dropping
+      // the snapshot. Like a refused read, last-valid content is held stale
+      // and the execution match stays unknown.
+      return this.unavailableDocument(sub, `The document could not be read (${errorText(error)}).`)
     }
-    // Refused: hold last-valid content, labelled stale; with nothing held the
-    // view names the refusal and serves nothing. Either way the execution
-    // match stays unknown — last-valid content is never a pin comparison.
+  }
+
+  /** A view without content: the reason named, last-valid held stale when there is one. */
+  private unavailableDocument(sub: DocumentSubscription, reason: string): WorkspaceDocumentView {
     const previous = sub.view
     if (previous && previous.contentHash !== null) {
-      return { ...previous, availability: 'missing', stale: true, reason: result.reason, executionMatch: 'unknown' }
+      return { ...previous, availability: 'missing', stale: true, reason, executionMatch: 'unknown' }
     }
     return {
       worktreeId: sub.worktreeId, relativePath: sub.relativePath,
-      kind: null, availability: 'missing', stale: false, reason: result.reason,
+      kind: null, availability: 'missing', stale: false, reason,
       executionMatch: 'unknown', executionId: null,
       contentHash: null, size: null, mtimeMs: null, text: null,
     }
@@ -447,6 +461,11 @@ export class PlanWorkspaceDocumentConnections {
 }
 
 const documentChainKey = (worktreeId: string, relativePath: string): string => `document\0${worktreeId}\0${relativePath}`
+
+/** The error's own text, for a reason or message that names the failure. */
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
 
 /** A watch event touches a document when it is the file, inside its directory, or an ancestor of it. */
 function touchesDocument(changed: string, absPath: string): boolean {
