@@ -6,7 +6,6 @@
 // (invariant I6) — the manager double's start seams throw and count.
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
-import path from 'node:path'
 import type { ChatSessionManager } from '../chat/ChatSessionManager'
 import { ChatConnections } from '../chat/ChatConnections'
 import { CHAT_CONNECTION_TYPES } from '../chat/chatConnectionTypes'
