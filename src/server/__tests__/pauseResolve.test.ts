@@ -234,6 +234,24 @@ describe('the C-rows (A3, verbatim)', () => {
   })
 })
 
+describe("C2's mail names the newest checkpoint's commit (B1)", () => {
+  test('an attempt-stage checkpoint with a commitSha puts `Continue from checkpoint <sha>` in the resume (C2)', async () => {
+    const world = await pausedAttempt()
+    const attempt = wired.executions.attempts(world.executionId, 'api').at(-1)!
+    // The pause flow's own checkpoint row: kind `commit`, the pushed commit
+    // in `commit_sha` (D7) — the newest() read the resume body names.
+    wired.checkpoints.insert({
+      executionId: world.executionId, change: 'api', pauseId: world.pauseId, attemptId: attempt.id, sessionId: 'dev',
+      kind: 'commit', commitSha: 'ckptabc123', baselineCommit: null, manifestHash: 'mh', resultId: null,
+      summary: 'paused here', unfinished: null, errorsTests: null, nextSteps: 'resume here', effectId: null,
+    })
+    ok(wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'continue' }))
+    const resumes = wired.resumeMails(world.taskId)
+    expect(resumes).toHaveLength(1)
+    expect(resumes[0].body).toContain('Continue from checkpoint ckptabc123')
+  })
+})
+
 describe('completeness (every axis combination maps to exactly one row or one U-claim)', () => {
   // The axes at this step: the continue states, every attempt kind (implement,
   // fix, update) over owed/out/answered, and `answered` split plain vs rev↗
