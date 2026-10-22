@@ -333,10 +333,15 @@ describe('completeness (every axis combination maps to exactly one row or one U-
     expect(hit['C14']).toBe(3)
   })
 
-  test('the update kind is unreachable owed and answered (U1, U7), and review rows are only answered (U2)', () => {
+  test("on the attempt stage the update kind is unreachable owed and answered (U1, U7); a review target's kind axis collapses to answered(*) (U2)", () => {
     expect(rowFor('paused', 'update', 'owed')).toBe('U1')
     expect(rowFor('paused', 'update', 'answered (plain)')).toBe('U7')
     expect(rowFor('paused', 'update', 'answered·rev↗')).toBe('U7')
+    // The review stage reads no kind: `agentHeldStage` returns `review` from
+    // `gating`+`reviewing` before the newest row is consulted, so the update
+    // kind's answered cells land on the review rows, never on U7 (B3).
+    expect(rowFor('review stands', 'update', 'answered (plain)')).toBe('C12')
+    expect(rowFor('review superseded', 'update', 'answered·rev↗')).toBe('C13')
     expect(rowFor('review stands', 'implement', 'owed')).toBe('U2')
     expect(rowFor('review stands', null, null)).toBe('U2')
     expect(rowFor('review superseded', 'fix', 'answered (plain)')).toBe('C13')
