@@ -41,6 +41,7 @@ import type { SessionOpsContext } from './sessions/context'
 import { createClaudeProfileRoutes } from './routes/claudeProfiles'
 import { createTeamGroupRoutes } from './routes/teamGroups'
 import { createChatSearchRoutes } from './routes/chatSearch'
+import { createPlanWorkspaceAssetRoutes } from './routes/planWorkspaceAsset'
 import { createPasteFileRoutes } from './routes/pasteFile'
 import { createChatProviderEnvStore } from './routes/chatProviderEnv'
 import { createSettingsRoutes, loadStoredSettings } from './routes/settings'
@@ -411,6 +412,14 @@ export function startServer(): void {
     groupProfileCounts: (teamId, groupId) => chatSessionManager.groupProfileCounts(teamId, groupId),
   }))
   app.route('/api/chat/search', createChatSearchRoutes({ source: chatSessionManager }))
+  // The plan workspace's scoped asset route (plan-workspace 2.3): membership
+  // and containment before any read; mounted before the static fallback.
+  app.route('/api', createPlanWorkspaceAssetRoutes({
+    membership: {
+      resolve: teamPath => chatSessionManager.teamScopes.resolve(teamPath),
+      exists: (teamId, root) => chatSessionManager.tasks.worktrees.exists(teamId, root),
+    },
+  }))
 
   app.route('/api/paste-file', createPasteFileRoutes())
 
