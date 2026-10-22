@@ -12,6 +12,7 @@ import type { Database } from 'bun:sqlite'
 import type { MessageState, TeamMessage } from '../../shared/team'
 import type { RevisionNoticeState, RevisionRecipient, TaskActor, TaskPublication, TaskRevision, TeamTask } from '../../shared/teamTasks'
 import { outstandingOf, type AssignmentStore } from './assignmentStore'
+import { forwardEnd } from './forwardChain'
 import type { MailboxStore } from './mailboxStore'
 import type { TaskAcknowledgements } from './taskAcknowledgements'
 
@@ -81,8 +82,7 @@ export class TaskNotices {
   holders(taskId: string): NoticeHolder[] {
     const outstanding = outstandingOf(this.assignments.listByTask(taskId))
     if (!outstanding?.messageId) return []
-    let message = this.mail.get(outstanding.messageId)
-    for (let hop = 0; message?.state === 'forwarded' && hop < 20; hop++) message = this.successor(message.id)
+    const message = forwardEnd(this.mail, this.db, outstanding.messageId)
     return message?.claimedBy ? [{ assignmentId: outstanding.id, sessionId: message.claimedBy }] : []
   }
 
@@ -181,12 +181,5 @@ export class TaskNotices {
       const state = noticeState(this.mail.get(row.message_id))
       return state === 'queued' || state === 'uncertain'
     })
-  }
-
-  /** The message that carried forwarded work on (profile routing): a handoff reply to it. */
-  private successor(messageId: string): TeamMessage | null {
-    const row = this.db.prepare('SELECT id FROM team_messages WHERE in_reply_to = ? AND handoff IS NOT NULL ORDER BY created_at DESC, rowid DESC LIMIT 1')
-      .get(messageId) as { id: string } | null
-    return row ? this.mail.get(row.id) : null
   }
 }
