@@ -44,6 +44,13 @@ import type { RouteDecisionLogEntry } from '../../shared/routing'
 import type { Database } from 'bun:sqlite'
 import { decisionReplyGuardOver } from '../plans/decisions/decisionReplyGuard'
 
+/** An identity of one claimed message, captured when a settle is attempted. */
+export interface ClaimRef {
+  id: string
+  claimant: string
+  claimedAt: string
+}
+
 export class SessionMailbox {
   readonly mailbox: TeamMailbox
   readonly tasks: TaskService
@@ -510,6 +517,30 @@ export class SessionMailbox {
   /** Live CLI input may still be draining: absence cannot authorize requeue. */
   settleRecipient(id: string) {
     for (const mail of this.mailbox.store.claimsFor(id)) {
+      if (mail.pushedAt) this.settle(mail)
+      else this.mailbox.store.requeue(mail.id)
+    }
+  }
+
+  /** The session's current claims, as identities a later settle can re-check. */
+  claimRefs(id: string): ClaimRef[] {
+    return this.mailbox.store.claimsFor(id).map(mail => ({
+      id: mail.id, claimant: mail.claimedBy ?? '', claimedAt: mail.claimedAt ?? '',
+    }))
+  }
+
+  /**
+   * Settle exactly the claims named by `refs` (the guarded driver-event
+   * settle, inline or retried): a row is touched only while it is still the
+   * same claim — same message, same claimant, same claimed_at. Mail claimed
+   * after the snapshot belongs to a newer turn and is left to that turn's
+   * settle; the transitions themselves stay conditional, so an already
+   * settled row is skipped by the store.
+   */
+  settleClaims(id: string, refs: ClaimRef[]) {
+    for (const ref of refs) {
+      const mail = this.mailbox.store.get(ref.id)
+      if (!mail || mail.state !== 'claimed' || mail.claimedBy !== ref.claimant || mail.claimedAt !== ref.claimedAt) continue
       if (mail.pushedAt) this.settle(mail)
       else this.mailbox.store.requeue(mail.id)
     }
