@@ -13,6 +13,7 @@ import { describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import path from 'node:path'
 import { isEscapeCandidate } from '../affected-tests'
+import { importClosure } from './helpers/importClosure'
 
 const ROOT = path.resolve(import.meta.dir, '..', '..')
 const ENTRIES = [
@@ -22,29 +23,6 @@ const ENTRIES = [
   'scripts/pre-commit.ts',
   'scripts/pre-push.ts',
 ].filter((entry) => fs.existsSync(path.join(ROOT, entry)))
-
-const IMPORT_PATTERN = /(?:from\s+|import\s*\(\s*|import\s+)['"](\.{1,2}\/[^'"]+)['"]/g
-
-function resolveModule(fromFile: string, specifier: string): string {
-  const base = path.resolve(path.dirname(fromFile), specifier)
-  for (const candidate of [base, `${base}.ts`, `${base}.tsx`, path.join(base, 'index.ts')]) {
-    if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) return candidate
-  }
-  throw new Error(`unresolved import ${specifier} in ${path.relative(ROOT, fromFile)}`)
-}
-
-function importClosure(entries: string[]): string[] {
-  const seen = new Set<string>()
-  const pending = entries.map((entry) => path.join(ROOT, entry))
-  while (pending.length > 0) {
-    const file = pending.pop() as string
-    if (seen.has(file)) continue
-    seen.add(file)
-    const source = fs.readFileSync(file, 'utf8')
-    for (const match of source.matchAll(IMPORT_PATTERN)) pending.push(resolveModule(file, match[1]))
-  }
-  return [...seen].map((file) => path.relative(ROOT, file).split(path.sep).join('/')).sort()
-}
 
 describe('the escape set covers the check machinery (D2)', () => {
   test('every module the entry scripts load escapes', () => {

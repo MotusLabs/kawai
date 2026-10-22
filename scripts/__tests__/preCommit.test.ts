@@ -9,6 +9,7 @@ import { describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import path from 'node:path'
 import type { AffectedSelection, ChangedPaths } from '../affected-tests'
+import { importClosure } from './helpers/importClosure'
 import {
   FULL_CHECK,
   LINT,
@@ -21,6 +22,7 @@ import {
 } from '../pre-commit'
 
 const ROOT = '/repo'
+const REPO_ROOT = path.resolve(import.meta.dir, '..', '..')
 
 function selection(overrides: Partial<AffectedSelection>): AffectedSelection {
   return {
@@ -221,5 +223,20 @@ describe('the commit hook never writes a record (I1)', () => {
     const source = fs.readFileSync(path.join(import.meta.dir, '..', 'pre-commit.ts'), 'utf8')
     expect(source).not.toMatch(/writeRecord|removeRecord|runCheck\b/)
     expect(source).toContain("from './lib/treeRecord'")
+    // The walk reaches every module pre-commit.ts loads (F-u3): a record
+    // writer imported through any of them would write a partial check's
+    // record, so only the defining modules may mention the names at all.
+    const closure = importClosure(['scripts/pre-commit.ts'])
+    expect(closure).toEqual(
+      expect.arrayContaining(['scripts/lib/treeRecord.ts', 'scripts/lib/checkRecords.ts', 'scripts/lib/checkRun.ts'])
+    )
+    const writer = /writeRecord|removeRecord|runCheck\b/
+    const offenders = closure.filter(
+      (file) =>
+        file !== 'scripts/lib/checkRecords.ts' &&
+        file !== 'scripts/lib/checkRun.ts' &&
+        writer.test(fs.readFileSync(path.join(REPO_ROOT, file), 'utf8'))
+    )
+    expect(offenders).toEqual([])
   })
 })

@@ -94,7 +94,6 @@ describe('planRun', () => {
     expect(plan.batchOptions.skipSlowTier).toBe(false)
     expect(planBatches(plan.batchOptions).some((batch) => batch.kind === 'real-tmux')).toBe(true)
     expect(plan.fullRun).toBe(true)
-    expect(plan.publishTimings).toBe(true)
     expect(plan.batchOptions.timingsPath).toBe('/run-root/timings.json')
     expect(plan.batchOptions.updateTimings).toBe(true)
     expect(seededWith).toBe(base.seedText)
@@ -103,9 +102,9 @@ describe('planRun', () => {
   test('a full run whose seed failed plans no publish (F5)', () => {
     const plan = planRun({ ...base, args: parseRunArgs([]), seedTimings: () => null })
     expect(plan.fullRun).toBe(true)
-    expect(plan.publishTimings).toBe(false)
-    // The batch options carry the same decision: nothing seeded, nothing to
-    // update, and no publish path for main() to wire into the run.
+    // The batch options carry the whole publish decision (N1): nothing
+    // seeded, nothing to update, and no publish path for main() to wire
+    // into the run.
     expect(plan.batchOptions.timingsPath).toBeUndefined()
     expect(plan.batchOptions.updateTimings).toBe(false)
   })
@@ -124,7 +123,6 @@ describe('planRun', () => {
     ]) {
       const plan = planRun({ ...base, args: parseRunArgs(argv), seedTimings })
       expect(plan.fullRun).toBe(false)
-      expect(plan.publishTimings).toBe(false)
       expect(plan.batchOptions.timingsPath).toBeUndefined()
       expect(plan.batchOptions.updateTimings).toBe(false)
     }
