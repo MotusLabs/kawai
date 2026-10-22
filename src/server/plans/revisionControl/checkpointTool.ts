@@ -158,8 +158,9 @@ export class CheckpointTool {
   /**
    * The shared write: one transaction inserting the checkpoint per served
    * target (each pause's own chain, so supersede stays per target), the
-   * target pointers, and — for a commit — one `push-checkpoint` effect under
-   * the first row's key, so one recording pushes once.
+   * target pointers, and — for a commit — one `push-checkpoint` effect
+   * linked to every served row under the first row's key, so one recording
+   * pushes once while every target's row settles with it.
    */
   private insert(
     found: { executionId: string; row: ChangeRow },
@@ -200,9 +201,12 @@ export class CheckpointTool {
             effectKey: `${found.executionId}:${found.row.change}:push-checkpoint:${checkpoint.id}:${fresh.generation}`,
             command: { cwd: place.cwd, commit, branch: place.branch },
           })
-          this.deps.checkpoints.setEffect(checkpoint.id, effect.id)
           effectId = effect.id
         }
+        // Every served row carries the one effect (L1): each target reads its
+        // own row's effectId, so done, failed, and the restart inspection
+        // settle every target exactly as a lone one — still one push.
+        if (effectId !== null) this.deps.checkpoints.setEffect(checkpoint.id, effectId)
         this.deps.pauses.setCheckpoint(pauseId, found.row.change, checkpoint.id)
         // The primary id is the effect's round slot: the first served target.
         if (checkpointId === null) checkpointId = checkpoint.id

@@ -12,9 +12,15 @@ import { cleanGitEnv } from '../git/gitCommand'
 import { initDatabase } from '../db'
 import { createPlanWorld, type PlanWorld } from './planHarness'
 import { ExecutionStore } from '../plans/execution/executionStore'
+import { EffectRunner } from '../plans/execution/effects'
+import { pushAdapter, roundAdapters } from '../plans/execution/executionRounds'
+import { recoverUnknownEffects } from '../plans/execution/executorStartup'
+import { startupReads } from '../plans/execution/startupReads'
 import { PauseStore } from '../plans/revisionControl/pauseStore'
 import { CheckpointStore } from '../plans/revisionControl/checkpointStore'
 import { CheckpointTool, type CheckpointOutcome } from '../plans/revisionControl/checkpointTool'
+import { derivePauseTarget, runPauseTick, type PauseTickDeps } from '../plans/revisionControl/pauseTick'
+import { MailboxStore } from '../team/mailboxStore'
 
 let world: PlanWorld
 let origin = ''
@@ -118,6 +124,16 @@ function okOutcome(outcome: CheckpointOutcome, label: string): Extract<Checkpoin
   return outcome
 }
 
+/** Run one effect through the round pipeline's own push adapter, as the executor's chain resolves it. */
+async function runEffect(bench: Bench, effectId: string): Promise<void> {
+  const effect = bench.executions.effect(effectId)!
+  await new EffectRunner({
+    store: bench.executions,
+    adapter: { call: effect2 => pushAdapter(roundAdapters).call(effect2) },
+    backoffsMs: [0, 0, 0],
+  }).runOne(effect)
+}
+
 describe('every open pause target of the change is visible (D7)', () => {
   test('two holds and two pauses on different changes: the second change\'s holder records, and its result counts', async () => {
     const b = benchWith(['api', 'ui'])
@@ -167,12 +183,13 @@ describe('every open pause target of the change is visible (D7)', () => {
     expect(firstCp).not.toBeNull()
     expect(secondCp).not.toBeNull()
     expect(firstCp).not.toBe(secondCp)
-    // Each target's own chain: the rows differ and name their pause.
+    // Each target's own chain: the rows differ and name their pause, and
+    // both carry the one effect (L1), so each settles with the push.
     expect(b.checkpoints.get(firstCp!)!.pauseId).toBe(first.id)
     expect(b.checkpoints.get(secondCp!)!.pauseId).toBe(second.id)
     // Exactly one push, under the first row's key.
     expect(recorded.checkpointId).toBe(firstCp!)
-    expect(b.checkpoints.get(secondCp!)!.effectId).toBeNull()
+    expect(b.checkpoints.get(secondCp!)!.effectId).toBe(recorded.effectId)
     expect(b.executions.effectsOf(b.executionId)).toHaveLength(1)
     const effect = b.executions.effect(recorded.effectId!)!
     expect(effect.roundId).toBe(firstCp!)
@@ -213,5 +230,86 @@ describe('every open pause target of the change is visible (D7)', () => {
     // The holder's record always wins: a checkpointed target is never recounted.
     b.tool.recordResultCheckpoint(b.executionId, 'api', round.id)
     expect(checkpointCount(b).n).toBe(2)
+  })
+})
+
+describe('the pause tick over overlapping pauses (L1: every row carries the effect, D8)', () => {
+  const tickDeps = (bench: Bench): PauseTickDeps => ({
+    pauses: bench.pauses, checkpoints: bench.checkpoints, executions: bench.executions,
+    mailbox: new MailboxStore(bench.db.db),
+    deliverOwed: () => [],
+    readiness: () => ({ ready: true, reason: null }),
+    factsOf: () => ({ state: 'live', pendingRequest: false, busy: false, providerLimit: null }),
+  })
+  const tick = (bench: Bench) => runPauseTick(tickDeps(bench), world.team.teamId, world.root)
+  const stateOf = (bench: Bench, pauseId: string, change: string) => {
+    const deps = tickDeps(bench)
+    const pause = bench.pauses.get(world.team.teamId, pauseId)!
+    const target = bench.pauses.target(pauseId, change)!
+    const finished = bench.executions.execution(pause.executionId)!.state !== 'running'
+    return derivePauseTarget(deps, pause, target, finished, new Date()).state
+  }
+
+  /** Two overlapping pauses on api, one recording through the real tool. */
+  async function overlapped() {
+    const b = benchWith(['api'])
+    const first = openPause(b, 'hold-1', 'cmd-1', [{ change: 'api', holder: 'dev' }])
+    const second = openPause(b, 'hold-2', 'cmd-2', [{ change: 'api', holder: 'dev' }])
+    const recorded = okOutcome(await b.tool.record(caller, {
+      task_id: 'task-api', summary: 'stands', next_steps: 'finish the parser', commit: b.work.api!.commit,
+    }), 'overlapped record')
+    return { b, first, second, recorded }
+  }
+
+  test('the push is done and both targets record Paused once', async () => {
+    const { b, first, second, recorded } = await overlapped()
+    await runEffect(b, recorded.effectId!)
+    expect(b.executions.effect(recorded.effectId!)!.state).toBe('done')
+    tick(b)
+    const firstAt = b.pauses.target(first.id, 'api')!.pausedAt
+    const secondAt = b.pauses.target(second.id, 'api')!.pausedAt
+    expect(firstAt).not.toBeNull()
+    expect(secondAt).not.toBeNull()
+    expect(stateOf(b, first.id, 'api')).toEqual({ state: 'paused' })
+    expect(stateOf(b, second.id, 'api')).toEqual({ state: 'paused' })
+    // The guarded write keeps each fact across further ticks.
+    tick(b)
+    expect(b.pauses.target(first.id, 'api')!.pausedAt).toBe(firstAt)
+    expect(b.pauses.target(second.id, 'api')!.pausedAt).toBe(secondAt)
+  })
+
+  test('the push fails and both read checkpoint-push-failed', async () => {
+    const { b, first, second, recorded } = await overlapped()
+    b.executions.setEffectOutcome(recorded.effectId!, { state: 'failed' })
+    tick(b)
+    expect(b.pauses.target(first.id, 'api')!.pausedAt).toBeNull()
+    expect(b.pauses.target(second.id, 'api')!.pausedAt).toBeNull()
+    for (const pauseId of [first.id, second.id]) {
+      const state = stateOf(b, pauseId, 'api')
+      if (state.state !== 'pausing') throw new Error(`expected pausing, got ${state.state}`)
+      expect(state.causes).toContainEqual({ kind: 'checkpoint-push-failed' })
+      expect(state.ownerRequired).toBe(true)
+    }
+  })
+
+  test('the effect is unknown at restart and the inspector settles it for both', async () => {
+    const { b, first, second, recorded } = await overlapped()
+    // The restart: the effect was running when the process died, so startup
+    // marks every running effect unknown and the targets stay Pausing.
+    b.executions.markEffectRunning(recorded.effectId!)
+    b.executions.markRunningEffectsUnknown()
+    tick(b)
+    expect(b.pauses.target(first.id, 'api')!.pausedAt).toBeNull()
+    expect(b.pauses.target(second.id, 'api')!.pausedAt).toBeNull()
+    // The push had landed before the restart: the inspection reads origin
+    // once and settles done, and both targets follow their own row to Paused.
+    git(['push', '-q', origin, `refs/heads/${b.work.api!.branch}:refs/heads/${b.work.api!.branch}`], b.work.api!.cwd)
+    await recoverUnknownEffects({ store: b.executions, reads: startupReads() })
+    expect(b.executions.effect(recorded.effectId!)!.state).toBe('done')
+    tick(b)
+    expect(b.pauses.target(first.id, 'api')!.pausedAt).not.toBeNull()
+    expect(b.pauses.target(second.id, 'api')!.pausedAt).not.toBeNull()
+    expect(stateOf(b, first.id, 'api')).toEqual({ state: 'paused' })
+    expect(stateOf(b, second.id, 'api')).toEqual({ state: 'paused' })
   })
 })
