@@ -92,6 +92,52 @@ describe('GET /api/plan-workspace/asset', () => {
     }
   })
 
+  test('the three safety headers ride every refusal, not only the success', async () => {
+    const oversized = path.join(root, 'huge.md')
+    fs.writeFileSync(oversized, '')
+    fs.truncateSync(oversized, 1024 * 1024 + 1)
+    const cases: Array<[Record<string, string>, number]> = [
+      [{ teamPath: '/somewhere/else', worktree: '/somewhere/else', path: 'tasks.md' }, 400],
+      [{ teamPath: root, worktree: path.join(base, 'not-listed'), path: 'tasks.md' }, 400],
+      [{ teamPath: root, worktree: root, path: '../outside/secret.md' }, 400],
+      [{ teamPath: root, worktree: root, path: 'no-such.md' }, 404],
+      [{ teamPath: root, worktree: root, path: 'huge.md' }, 413],
+      [{ teamPath: root, worktree: root, path: 'page.html' }, 400],
+    ]
+    try {
+      for (const [query, status] of cases) {
+        const response = await routes.request(assetUrl(query))
+        expect(response.status).toBe(status)
+        expect(response.headers.get('X-Content-Type-Options')).toBe('nosniff')
+        expect(response.headers.get('Cache-Control')).toBe('no-store')
+        expect(response.headers.get('Cross-Origin-Resource-Policy')).toBe('same-origin')
+      }
+    } finally {
+      fs.unlinkSync(oversized)
+    }
+  })
+
+  test('a listed root that is a symlink refuses root-not-canonical without exposing the target', async () => {
+    const linkRoot = path.join(base, 'listed-link')
+    fs.symlinkSync(outside, linkRoot)
+    try {
+      const symlinked = createPlanWorkspaceAssetRoutes({
+        membership: {
+          resolve: async () => ({ teamId: base }),
+          exists: async (_teamId, candidate) => candidate === path.resolve(linkRoot),
+        },
+      })
+      const response = await symlinked.request(assetUrl({ teamPath: base, worktree: linkRoot, path: 'secret.md' }))
+      expect(response.status).toBe(400)
+      expect(response.headers.get('Cross-Origin-Resource-Policy')).toBe('same-origin')
+      const body = await response.text()
+      expect(body).not.toContain(base)
+      expect(JSON.parse(body)).toEqual({ error: 'root-not-canonical' })
+    } finally {
+      fs.unlinkSync(linkRoot)
+    }
+  })
+
   test('reader and route enforce the same reasons on the same fixture set', async () => {
     for (const relative of ['tasks.md', 'mockup.png', 'page.html', 'no-such.md', 'leak/secret.md', '../outside/secret.md', 'sub/x.md']) {
       const direct = await readWorkspaceDocument(root, relative)

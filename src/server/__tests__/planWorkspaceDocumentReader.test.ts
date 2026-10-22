@@ -63,6 +63,40 @@ describe('readWorkspaceDocument', () => {
     }
   })
 
+  test('a listed root that is a symlink to an outside directory is refused as root-not-canonical', async () => {
+    const linkRoot = path.join(base, 'linked-root')
+    fs.symlinkSync(outside, linkRoot)
+    try {
+      const read = await readWorkspaceDocument(linkRoot, 'secret.md')
+      expect(read).toMatchObject({ ok: false, reason: 'root-not-canonical' })
+    } finally {
+      fs.unlinkSync(linkRoot)
+    }
+  })
+
+  test('a root swapped for an outside symlink after the canonical check is refused', async () => {
+    // B8.5's root-swap case (B8.2/B8.1): the base is canonical when checked;
+    // the seam then swaps it for an outside symlink before the open. The fd
+    // link names the outside path, which is not under the authorized base,
+    // so the read refuses instead of serving.
+    const swapped = path.join(base, 'swapped-root')
+    fs.mkdirSync(swapped)
+    const moved = path.join(base, 'swapped-root-moved')
+    try {
+      const read = await readWorkspaceDocument(swapped, 'secret.md', {
+        onRootVerified: () => {
+          fs.renameSync(swapped, moved)
+          fs.symlinkSync(outside, swapped)
+        },
+      })
+      expect(read).toMatchObject({ ok: false, reason: 'containment-failed' })
+    } finally {
+      fs.unlinkSync(swapped)
+      fs.renameSync(moved, swapped)
+      fs.rmdirSync(swapped)
+    }
+  })
+
   test('a fifo is refused as not-regular without hanging the open', async () => {
     const fifo = path.join(rootReal, 'pipe.md')
     execFileSync('mkfifo', [fifo])

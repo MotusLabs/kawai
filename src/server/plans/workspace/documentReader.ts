@@ -5,13 +5,17 @@
 // Everything else returns no content and names a reason; the server never
 // fetches a URL.
 //
-// Containment is decided from the kernel's path for the open descriptor, not
-// from the request path: the open runs with O_RDONLY|O_NONBLOCK|O_NOCTTY (a
-// FIFO cannot hang the open, a tty cannot take the controlling terminal),
-// then `/proc/self/fd/<fd>` is read and must equal the realpath'd root or
-// start with `root + sep`. That link names the open file description's
-// dentry — not a fresh lookup — so a directory swap between the open and the
-// check cannot re-race it (the three-phase open-outside/realpath-inside/
+// Containment is decided from the kernel's path for the open descriptor,
+// compared against the exact authorized root string (B8.1) — never a
+// resolution taken at request time, which a swapped root would widen. The
+// base must be canonical before any open: a root that is, or passes
+// through, a symlink refuses `root-not-canonical` (B8.2, fails closed).
+// The open runs with O_RDONLY|O_NONBLOCK|O_NOCTTY (a FIFO cannot hang the
+// open, a tty cannot take the controlling terminal), then
+// `/proc/self/fd/<fd>` is read and must equal the base or start with
+// `base + sep`, byte-exact. That link names the open file description's
+// dentry — not a fresh lookup — so a directory swap between the open and
+// the check cannot re-race it (the three-phase open-outside/realpath-inside/
 // stat-outside attack is refused; see planWorkspaceDocumentReader.test.ts).
 // Any readlink failure refuses `containment-unavailable`; there is no
 // realpath+stat fallback. A ` (deleted)` suffix refuses. Hard links are not
@@ -23,9 +27,11 @@
 // and SVG are never servable. Markdown bytes that are not valid UTF-8 are
 // refused, never lossily decoded.
 //
-// Test-only seams (stated per CP1 B4): `onOpened` runs between the open and
-// the containment check (the swap-race hook); `readProcLink` replaces the
-// `/proc/self/fd` read (the non-Linux seam). Neither is set in production.
+// Test-only seams (stated per CP1 B4, B8.5): `onRootVerified` runs between
+// the canonical-root check and the open (the root-swap hook); `onOpened`
+// runs between the open and the containment check (the swap-race hook);
+// `readProcLink` replaces the `/proc/self/fd` read (the non-Linux seam).
+// None is set in production.
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
@@ -42,6 +48,7 @@ export type DocumentRefusalReason =
   | 'invalid-utf8'            // markdown bytes are not valid UTF-8
   | 'containment-unavailable' // /proc/self/fd read failed (non-Linux); no fallback exists
   | 'containment-failed'      // the open descriptor resolves outside the root, or was deleted
+  | 'root-not-canonical'      // the permitted root is, or passes through, a symlink (B8.2)
 
 export type WorkspaceDocumentContent =
   | { ok: true; kind: 'markdown'; text: string; bytes: Uint8Array<ArrayBuffer>; hash: string; size: number; mtimeMs: number }
@@ -63,6 +70,8 @@ const MARKDOWN_LIMIT_BYTES = 1024 * 1024
 const IMAGE_LIMIT_BYTES = 10 * 1024 * 1024
 
 export interface ReadWorkspaceDocumentOptions {
+  /** Test seam (B8.5): runs after the canonical-root check, before the open. */
+  onRootVerified?: () => Promise<void> | void
   /** Test seam (B4): runs after the open, before the containment check. */
   onOpened?: (fd: number) => Promise<void> | void
   /** Test seam (B4): the `/proc/self/fd/<fd>` read; a throw reads as unavailable. */
@@ -129,17 +138,21 @@ export async function readWorkspaceDocument(
   if (extension === null || (!markdown && imageContentType === undefined)) return refuse('unsupported-type')
   const limit = markdown ? MARKDOWN_LIMIT_BYTES : IMAGE_LIMIT_BYTES
 
-  let rootReal: string
+  // B8.1/B8.2: the anchor is the exact authorized base string, never a
+  // request-time resolution. A root that is, or passes through, a symlink
+  // refuses root-not-canonical before any open.
+  const base = path.resolve(root)
   try {
-    rootReal = await fsp.realpath(root)
+    if (await fsp.realpath(base) !== base) return refuse('root-not-canonical')
   } catch {
     return refuse('missing')
   }
+  await options.onRootVerified?.()
 
   let handle: fs.promises.FileHandle | null = null
   try {
     try {
-      handle = await fsp.open(path.join(rootReal, lexical.normalized), OPEN_FLAGS)
+      handle = await fsp.open(path.join(base, lexical.normalized), OPEN_FLAGS)
     } catch {
       return refuse('missing')
     }
@@ -149,9 +162,11 @@ export async function readWorkspaceDocument(
     if (!stat.isFile()) return refuse('not-regular')
     if (stat.size > limit) return refuse('oversized')
 
-    // Containment (CP1 B2): the kernel's path for the open descriptor must
-    // name a file inside the realpath'd root. This link is the open file
-    // description's dentry, so directory swaps cannot re-race it.
+    // Containment (CP1 B2, B8.1): the kernel's path for the open descriptor
+    // must equal the authorized base or start with base + sep, byte-exact.
+    // This link is the open file description's dentry, so directory swaps
+    // cannot re-race it, and a root swapped after the canonical check lands
+    // outside the base and refuses here.
     let link: string
     try {
       link = await (options.readProcLink
@@ -161,7 +176,7 @@ export async function readWorkspaceDocument(
       return refuse('containment-unavailable')
     }
     if (link.endsWith(' (deleted)')) return refuse('containment-failed')
-    if (link !== rootReal && !link.startsWith(rootReal + path.sep)) return refuse('containment-failed')
+    if (link !== base && !link.startsWith(base + path.sep)) return refuse('containment-failed')
 
     // Bounded read: bound+1 bytes proves oversize even if the file grew
     // between the stat and this read.
