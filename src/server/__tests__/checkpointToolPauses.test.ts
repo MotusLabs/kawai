@@ -106,11 +106,11 @@ function benchWith(changes: string[]): Bench {
 }
 
 /** One open pause over the named targets, the way the pause service inserts them. */
-function openPause(bench: Bench, holdId: string, commandId: string, targets: Array<{ change: string; holder: string }>) {
+function openPause(bench: Bench, holdId: string, commandId: string, targets: Array<{ change: string; holder: string; stage?: 'attempt' | 'review' }>) {
   return bench.pauses.insert(
     { teamId: world.team.teamId, planId: 'plan-x', executionId: bench.executionId, holdId, deadline: new Date(Date.now() + 86_400_000).toISOString(), note: null, commandId },
-    targets.map(({ change, holder }) => ({
-      change, stage: 'attempt' as const, attemptId: bench.executions.attempts(bench.executionId, change)[0]!.id,
+    targets.map(({ change, holder, stage }) => ({
+      change, stage: stage ?? 'attempt', attemptId: bench.executions.attempts(bench.executionId, change)[0]!.id,
       assignmentId: `asg-${change}`, holderSession: holder,
     })),
   )
@@ -122,6 +122,12 @@ const checkpointCount = (bench: Bench) => bench.db.db.prepare('SELECT COUNT(*) A
 /** Narrow a tool outcome to its ok form, failing the test with the refusal's message. */
 function okOutcome(outcome: CheckpointOutcome, label: string): Extract<CheckpointOutcome, { ok: true }> {
   if (!outcome.ok) throw new Error(`${label}: ${outcome.message}`)
+  return outcome
+}
+
+/** Narrow a tool outcome to its refusal, failing the test when it unexpectedly succeeded. */
+function refusalOf(outcome: CheckpointOutcome, label: string): Extract<CheckpointOutcome, { ok: false }> {
+  if (outcome.ok) throw new Error(`${label}: unexpectedly succeeded`)
   return outcome
 }
 
@@ -208,6 +214,33 @@ describe('every open pause target of the change is visible (D7)', () => {
     expect(b.pauses.target(second.id, 'api')!.checkpointId).not.toBe(secondCp)
     expect(b.executions.effectsOf(b.executionId)).toHaveLength(2)
     expect(b.executions.effect(again.effectId!)!.roundId).toBe(again.checkpointId)
+  })
+
+  test('a mixed-stage pair decides commit-required for every served target (N1)', async () => {
+    const b = benchWith(['api'])
+    const review = openPause(b, 'hold-1', 'cmd-1', [{ change: 'api', holder: 'dev', stage: 'review' }])
+    const attempt = openPause(b, 'hold-2', 'cmd-2', [{ change: 'api', holder: 'dev' }])
+    // The attempt target is served too, so a commit-less call cannot leave
+    // notes for it — even though the first served target is the review one.
+    const missing = refusalOf(await b.tool.record(caller, { task_id: 'task-api', summary: 'stands', next_steps: 'finish the parser' }), 'mixed commit-less')
+    expect(missing.reason).toBe('commit-required')
+    expect(checkpointCount(b).n).toBe(0)
+    // The reverse order refuses through the same check (preserved).
+    const reversed = refusalOf(await b.tool.record(caller, { task_id: 'task-api', summary: 'stands', next_steps: 'finish the parser' }), 'mixed commit-less, attempt first')
+    expect(reversed.reason).toBe('commit-required')
+    // With a commit both targets record their own commit checkpoint.
+    const recorded = okOutcome(await b.tool.record(caller, {
+      task_id: 'task-api', summary: 'stands', next_steps: 'finish the parser', commit: b.work.api!.commit,
+    }), 'mixed with commit')
+    const reviewCp = b.pauses.target(review.id, 'api')!.checkpointId
+    const attemptCp = b.pauses.target(attempt.id, 'api')!.checkpointId
+    expect(reviewCp).not.toBeNull()
+    expect(attemptCp).not.toBeNull()
+    expect(reviewCp).not.toBe(attemptCp)
+    expect(b.checkpoints.get(reviewCp!)!.kind).toBe('commit')
+    expect(b.checkpoints.get(attemptCp!)!.kind).toBe('commit')
+    expect(b.checkpoints.get(attemptCp!)!.effectId).toBe(recorded.effectId)
+    expect(b.executions.effectsOf(b.executionId)).toHaveLength(1)
   })
 
   test('a result counts for each open uncheckpointed target across overlapping pauses', () => {

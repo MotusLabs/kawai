@@ -143,7 +143,9 @@ export class CheckpointTool {
     }
     const commit = input.commit ?? null
     if (commit === null) {
-      if (pausing[0].target.stage === 'attempt') {
+      // Every served target decides this (N1): one attempt target among
+      // review ones still requires the commit, whatever the serving order.
+      if (pausing.some(p => p.target.stage === 'attempt')) {
         return refuse('commit-required', 'An attempt target records a commit; pass the commit your work stands on.')
       }
       // A review target without a commit leaves notes (D7): no effect, the write alone.
