@@ -169,7 +169,7 @@ describe('the commit hook in a temporary repository', () => {
     const result = fixture.commit(['-m', 'lone'])
     expect(result.code).not.toBe(0)
     expect(result.output).toContain(
-      'working-tree source edits outside this commit also selected tests: src/shared/leaf.ts'
+      'working-tree source edits outside this commit may have selected tests: src/shared/leaf.ts'
     )
   })
 

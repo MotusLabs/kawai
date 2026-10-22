@@ -166,7 +166,7 @@ describe('runPreCommit', () => {
     for (const call of calls) {
       expect(Object.keys(call.env).some((name) => name.startsWith('GIT_'))).toBe(false)
     }
-    expect(logs.join('\n')).toContain('working-tree source edits outside this commit also selected tests: src/wip.ts')
+    expect(logs.join('\n')).toContain('working-tree source edits outside this commit may have selected tests: src/wip.ts')
   })
 
   test('a docs-only commit runs no --changed pass', async () => {
