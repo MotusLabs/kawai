@@ -42,6 +42,16 @@ export function excludeSlowTier(files: string[]): string[] {
 
 export const PRELOAD_ARG = 'scripts/test-preload.ts'
 
+// The unit-test corpus, in collectFiles' order: the one list the runner's
+// file collection and the @reads guard's scan both use, so the guard always
+// scans exactly what the suite runs (per-result-suite D3/B4).
+export const UNIT_TEST_GLOBS = [
+  'src/server/__tests__/*.test.ts',
+  'src/shared/__tests__/*.test.{ts,tsx}',
+  'src/client/__tests__/*.test.{ts,tsx}',
+  'scripts/__tests__/*.test.{ts,tsx}',
+] as const
+
 // Per-file isolation pays cold module compilation and per-test database
 // backups inside hook/test time; the shared-process runner amortized those,
 // so tests that fit 5 s there need a larger default here (design D1).

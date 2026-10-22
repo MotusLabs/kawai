@@ -3,6 +3,7 @@
 // creation right read from the current group file at each call, another
 // team's ids not found, a CAS mismatch returning the stored draft, and no
 // approve, withdraw, close, or reopen tool anywhere on the team server.
+// @reads: .kawai/plans, docs/plan.md
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import path from 'node:path'

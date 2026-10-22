@@ -8,6 +8,7 @@
 // journal aside, copies the `pre-migration-2` backup in, checks integrity, and
 // starts the older build, which opens at version 1 with the backup's rows and
 // none written after it.
+// @reads: docs/operations/database-backups.md
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'

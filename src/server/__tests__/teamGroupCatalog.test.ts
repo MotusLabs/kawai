@@ -1,3 +1,4 @@
+// @reads: .kawai/groups, .kawai/groups/**
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'

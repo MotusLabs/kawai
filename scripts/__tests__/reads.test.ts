@@ -94,6 +94,46 @@ describe('undeclaredReads', () => {
     expect(undeclaredReads(temp)).toEqual([])
   })
 
+  test('a literal joined onto import.meta.dir resolves against the file’s directory', () => {
+    const source = [
+      'import path from \'node:path\'',
+      'const a = path.join(import.meta.dir, \'../../../AGENTS.md\')',
+      'const b = path.resolve(__dirname, \'../../../.kawai/groups\')',
+      'const c = path.join(import.meta.dir, \'../shared.ts\')',
+    ].join('\n')
+    expect(undeclaredReads(source, 'src/server/__tests__/fixture.test.ts')).toEqual([
+      'AGENTS.md',
+      '.kawai/groups',
+    ])
+  })
+
+  test('a process.cwd() base is the repository root and segments fold', () => {
+    const source = [
+      'import path from \'node:path\'',
+      `const p = path.resolve(process.cwd(), '.kawai', 'groups')`,
+    ].join('\n')
+    expect(undeclaredReads(source)).toEqual(['.kawai/groups'])
+  })
+
+  test('consecutive literal segments fold into one path', () => {
+    const source = [
+      'import path from \'node:path\'',
+      `const p = path.join(repoRoot, 'docs', 'guide.md')`,
+    ].join('\n')
+    expect(undeclaredReads(source)).toEqual(['docs/guide.md'])
+  })
+
+  test('a concatenation from a base is a read', () => {
+    const source = [
+      `const a = repoRoot + '/AGENTS.md'`,
+      `const b = import.meta.dir + '/../../../docs/guide.md'`,
+    ].join('\n')
+    expect(undeclaredReads(source, 'src/server/__tests__/fixture.test.ts')).toEqual([
+      'AGENTS.md',
+      'docs/guide.md',
+    ])
+  })
+
   test('a comment mention is ignored', () => {
     const source = '// the suite reads docs/guide.md through the helper\nconst n = 1'
     expect(undeclaredReads(source)).toEqual([])

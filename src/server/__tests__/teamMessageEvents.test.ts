@@ -1,3 +1,4 @@
+// @reads: AGENTS.md
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { schemaDb } from './schemaDb'
