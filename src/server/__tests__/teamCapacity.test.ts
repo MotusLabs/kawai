@@ -3,10 +3,16 @@
 // end from cooldownFor, and live counts — pending spawns included — equal to
 // what buildCandidates and the router's rule context count for the same
 // state. Real LimitEventStore and WorktreeStaffing over one database.
+// sharesLoginWith (3.3a): computed over every group's workers whatever the
+// filter, a mixed provider never marked, and nothing secret in the answer.
 import type { Database } from 'bun:sqlite'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import type { ChatUsageReport } from '../../shared/chat'
 import type { RouteContext, RouteGroup } from '../../shared/routing'
+import { resolveClaudeProfile } from '../chat/ClaudeProfiles'
 import type { ChatSessionRecord } from '../db'
 import { capacityDescriptions, capacityHandlers, CAPACITY_TOOL_NAMES } from '../team/capacityTools'
 import { parseGroupFile, type GroupDefinition } from '../team/groupFile'
@@ -16,6 +22,7 @@ import { TEAM_ALLOWED_TOOLS, teamToolTable } from '../team/mailboxTools'
 import { buildCandidates } from '../team/routing/candidates'
 import { LimitEventStore } from '../team/routing/limitEvents'
 import { liveGroupMembers, ProfileRouter } from '../team/routing/router'
+import { storedLoginKey } from '../team/routing/sharedLogins'
 import { WorktreeStaffing } from '../team/staffing'
 import { TeamCapacity } from '../team/teamCapacity'
 import type { TeamIdentity } from '../team/teamIdentity'
@@ -37,6 +44,7 @@ let records: Map<string, ChatSessionRecord>
 let teamOf: Map<string, TeamIdentity>
 let catalogs: Map<string, GroupCatalog>
 let usage: Map<string, ChatUsageReport>
+let loginKeys: Map<string, string | null>
 
 function group(id: string, frontmatter: string): GroupDefinition {
   const parsed = parseGroupFile(id, `---\n${frontmatter}\n---\nWork.`)
@@ -67,6 +75,10 @@ function capacity() {
     providerOf,
     providerLabel: id => (id === 'zai' ? 'Z.AI' : null),
     providerUsageOf: id => usage.get(id) ?? null,
+    loginKeyOf: (profileId, groupsRoot) => {
+      expect(groupsRoot).toBe(TEAM.groupsRoot)
+      return loginKeys.get(profileId) ?? null
+    },
     now: () => T0,
   })
 }
@@ -78,6 +90,7 @@ beforeEach(() => {
   records = new Map()
   teamOf = new Map()
   usage = new Map()
+  loginKeys = new Map()
   staffing = new WorktreeStaffing(db, mail, {
     records: () => records.values(), teamOf: id => teamOf.get(id), caps: new TeamCaps({}),
     worktrees: { exists: async () => true } as never,
@@ -216,6 +229,18 @@ describe('team_capacity usage and cooldowns', () => {
     expect(answer.groups[0]!.workers.find(worker => worker.model === 'opus')!.cooldownUntil).toBeNull()
   })
 
+  test('an out-of-credit limit marks its workers credit, with the hour-capped end from cooldownFor; other workers carry no flag', () => {
+    limits.record({
+      profileId: 'glm', sessionId: 'dev-1', groupId: 'devs', kind: 'unknown', final: true, status: 402,
+      message: 'API Error: 402 This request requires more credits', resetsAt: null, providerId: 'zai', window: 'credit',
+    })
+    const workers = capacity().read('lead').groups[0]!.workers
+    const glm = workers.find(worker => worker.model === 'glm')!
+    expect(limits.cooldownFor('glm', 'zai').credit).toBe(true)
+    expect(glm).toEqual({ model: 'glm', provider: 'zai', cap: 2, live: 0, cooldownUntil: new Date(T0 + 3_600_000).toISOString(), credit: true })
+    expect(workers.find(worker => worker.model === 'opus')).not.toHaveProperty('credit')
+  })
+
   test('a model-scoped window cools only its worker, not the provider', () => {
     limits.record({
       profileId: 'opus', sessionId: 'dev-1', groupId: 'devs', kind: 'rate_limit', final: true, status: 429, message: 'quota',
@@ -262,5 +287,78 @@ describe('team_capacity reads only (I1) and its tool', () => {
     const spec = table.find(tool => tool.name === 'team_capacity')!
     expect(spec.description).toBe(capacityDescriptions.team_capacity)
     expect(spec.schema.safeParse({ group: '' }).success).toBe(false)
+  })
+})
+
+describe('team_capacity sharesLoginWith (3.3a)', () => {
+  beforeEach(() => {
+    PROVIDERS['first-opus'] = 'first'
+    catalogs.set(TEAM.teamId, catalogOf(
+      group('devs', 'profiles: { glm: 2, opus: 1 }'), group('leads', 'profiles: [sonnet]'), group('solo', 'profiles: [first-opus]'),
+    ))
+  })
+  afterEach(() => { delete PROVIDERS['first-opus'] })
+
+  test('providers whose workers all key on one login name each other', () => {
+    for (const id of ['opus', 'sonnet', 'first-opus']) loginKeys.set(id, '/home/example/.claude')
+    const providers = capacity().read('lead').providers
+    expect(providers.find(provider => provider.id === 'claude')!.sharesLoginWith).toEqual(['first'])
+    expect(providers.find(provider => provider.id === 'first')!.sharesLoginWith).toEqual(['claude'])
+    expect(providers.find(provider => provider.id === 'zai')!.sharesLoginWith).toEqual([])
+  })
+
+  test('a provider with one stored-login worker and one without is never marked', () => {
+    loginKeys.set('opus', '/home/example/.claude')
+    loginKeys.set('first-opus', '/home/example/.claude')
+    const providers = capacity().read('lead').providers
+    expect(providers.find(provider => provider.id === 'claude')!.sharesLoginWith).toEqual([])
+    expect(providers.find(provider => provider.id === 'first')!.sharesLoginWith).toEqual([])
+  })
+
+  test('a filtered answer gives a provider the same sharesLoginWith as the whole, naming providers it does not list', () => {
+    for (const id of ['opus', 'sonnet', 'first-opus']) loginKeys.set(id, '/home/example/.claude')
+    const whole = capacity().read('lead').providers.find(provider => provider.id === 'claude')!
+    const filtered = capacity().read('lead', { group: 'leads' })
+    expect(filtered.providers.map(provider => provider.id)).toEqual(['claude'])
+    expect(filtered.providers[0]!.sharesLoginWith).toEqual(whole.sharesLoginWith)
+    expect(filtered.providers[0]!.sharesLoginWith).toEqual(['first'])
+  })
+
+  test('the answer carries no login key, env value, credential, config dir, or base URL (I5)', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-capacity-i5-'))
+    try {
+      fs.mkdirSync(path.join(home, '.kawai'), { recursive: true })
+      fs.writeFileSync(path.join(home, '.kawai', 'providers.json'), JSON.stringify({
+        first: { label: 'First', models: { 'first-opus': { model: 'opus' } } },
+        keyed: { label: 'Keyed', authTokenEnv: 'EXAMPLE_KEYED_TOKEN', env: { ANTHROPIC_BASE_URL: 'https://keyed.example.internal/api' }, models: { 'keyed-opus': { model: 'opus' } } },
+        proxied: { label: 'Proxied', env: { ANTHROPIC_BASE_URL: 'https://proxy.example.internal/anthropic' }, models: { 'proxied-opus': { model: 'opus' } } },
+      }))
+      fs.writeFileSync(path.join(home, '.kawai', 'profiles.json'), '{}')
+      const token = ['example-', 'keyed-', 'secret'].join('')
+      const apiKey = ['sk-ant-', 'example-', 'secret'].join('')
+      const configDir = path.join(home, 'custom-claude-dir')
+      const values = [token, apiKey, configDir, 'keyed.example.internal', 'proxy.example.internal', home]
+      Object.assign(PROVIDERS, { 'keyed-opus': 'keyed', 'proxied-opus': 'proxied' })
+      catalogs.set(TEAM.teamId, catalogOf(group('mixed', 'profiles: [first-opus, keyed-opus, proxied-opus]')))
+      for (const withApiKey of [false, true]) {
+        const env = {
+          HOME: home, CLAUDE_CONFIG_DIR: configDir, EXAMPLE_KEYED_TOKEN: token,
+          ANTHROPIC_API_KEY: withApiKey ? apiKey : undefined, ANTHROPIC_AUTH_TOKEN: undefined, CLAUDE_CODE_OAUTH_TOKEN: undefined, ANTHROPIC_BASE_URL: undefined,
+        } as unknown as Record<string, string>
+        const reader = new TeamCapacity({
+          teams: { teamOf: id => teamOf.get(id), catalogOf: () => catalogs.get(TEAM.teamId) },
+          records: () => records.values(), pendingSpawns: teamId => staffing.pendingFor(teamId), limits, providerOf,
+          providerLabel: () => null, providerUsageOf: () => null, now: () => T0,
+          loginKeyOf: profileId => storedLoginKey(resolveClaudeProfile(profileId, env, { homeDir: home }), env),
+        })
+        const text = JSON.stringify(reader.read('lead'))
+        for (const value of values) expect(text.includes(value)).toBe(false)
+        // The stored-login worker was keyed (on the custom dir) only without the API key.
+        expect(storedLoginKey(resolveClaudeProfile('first-opus', env, { homeDir: home }), env)).toBe(withApiKey ? null : configDir)
+      }
+    } finally {
+      for (const id of ['keyed-opus', 'proxied-opus']) delete PROVIDERS[id]
+      fs.rmSync(home, { recursive: true, force: true })
+    }
   })
 })

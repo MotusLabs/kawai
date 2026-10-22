@@ -88,6 +88,7 @@ import { resolveCodexHome } from './codexProfiles'
 import { fetchZaiUsage } from './zaiUsage'
 import { fetchOpenRouterUsage, isOpenRouterBaseUrl, type OpenRouterUsagePull } from './openRouterUsage'
 import { ambientProviderLabel, ambientProviderOf, catalogCtx } from '../team/cooldowns'
+import { storedLoginKey } from '../team/routing/sharedLogins'
 import { TeamCapacity } from '../team/teamCapacity'
 import { readWorkerTranscript } from './chatWorkerTranscript'
 import { isTaskOutputFile, readTaskOutputTail } from './taskOutputFile'
@@ -1198,6 +1199,7 @@ export class ChatSessionManager {
       providerOf: ambientProviderOf(options.profileCatalogHome),
       providerLabel: ambientProviderLabel(options.profileCatalogHome),
       providerUsageOf: providerId => this.usageLimits.get(providerId),
+      loginKeyOf: (profileId, groupsRoot) => this.loginKeyOf(profileId, groupsRoot),
     })
     this.reports = new ProcessReportService(options.db.db, this.metrics, {
       onCommit: teamId => this.options.onProcessReportChange?.(teamId),
@@ -2851,6 +2853,21 @@ export class ChatSessionManager {
         : `Provider ${credential.providerLabel} needs ${credential.authTokenEnv} in the server environment.`
     }
     return hasClaudeAuth(this.launchEnvOf(profileId, projectPath)) ? undefined : chatAuthErrorMessage()
+  }
+
+  /**
+   * A worker's stored-login key for team_capacity's `sharesLoginWith`
+   * (dispatch-worker-choice D6): catalog resolution only, no spawn and no
+   * read under the config dir. An unresolvable profile has no key; only the
+   * error message is logged, never the environment.
+   */
+  private loginKeyOf(profileId: string, groupsRoot: string): string | null {
+    try {
+      return storedLoginKey(this.launchFor(profileId, groupsRoot), effectiveChatEnv(this.providerEnv()))
+    } catch (error) {
+      logger.warn('team_capacity_login_unresolved', { profileId, error: error instanceof Error ? error.message : String(error) })
+      return null
+    }
   }
 
   /** The services every session's team tools are built from, on both runtimes (codex-chat-sessions D6). */

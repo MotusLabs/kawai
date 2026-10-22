@@ -3,6 +3,8 @@
 // whose team_capacity answers for the chat's own team from the manager's
 // routing objects. (The Codex surface is covered by the namespace assertion
 // in codexTeamPath.integration.test.ts; both build from one teamServices().)
+// Its sharesLoginWith resolves each worker's launch through the manager's own
+// catalog and provider environment (3.3a).
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -43,12 +45,13 @@ afterEach(() => {
   fs.rmSync(root, { recursive: true, force: true })
 })
 
-test('a started Claude chat\'s kawai-team server carries team_capacity, answering for its team from the manager\'s routing objects', async () => {
+async function startedTools(options: Partial<ConstructorParameters<typeof ChatSessionManager>[0]> = {}): Promise<Registered> {
   let servers: Options['mcpServers'] | undefined
   manager = new ChatSessionManager({
     db, registry: new SessionRegistry(), authCheck: () => true, profileCatalogHome: root, onEvent: () => {},
     providerUsageFetch: (async () => { throw new Error('no provider pulls') }) as unknown as typeof fetch,
     queryFactory: params => { servers = params.options.mcpServers; return fixtureQueryFactory(params) },
+    ...options,
   })
   await manager.whenRestored()
   const lead = await manager.createAvailableSession({ projectPath: repo, groupId: 'leads' })
@@ -59,7 +62,11 @@ test('a started Claude chat\'s kawai-team server carries team_capacity, answerin
   while (!servers && Date.now() - start < 5000) await Bun.sleep(10)
   const server = servers?.['kawai-team'] as { instance: unknown } | undefined
   if (!server) throw new Error('The chat started without a kawai-team server')
-  const registered = (server.instance as { _registeredTools: Registered })._registeredTools
+  return (server.instance as { _registeredTools: Registered })._registeredTools
+}
+
+test('a started Claude chat\'s kawai-team server carries team_capacity, answering for its team from the manager\'s routing objects', async () => {
+  const registered = await startedTools()
   expect(Object.keys(registered)).toContain('team_capacity')
 
   const reply = await registered.team_capacity!.handler({ group: 'devs' }, {})
@@ -75,4 +82,29 @@ test('a started Claude chat\'s kawai-team server carries team_capacity, answerin
   const refused = await registered.team_capacity!.handler({ group: 'nobody' }, {})
   expect(refused.isError).toBe(true)
   expect(refused.content[0]!.text).toBe('Unknown group "nobody" in your team.')
+})
+
+test('sharesLoginWith marks two stored-login providers on the manager\'s one config dir, never a credentialed one', async () => {
+  fs.mkdirSync(path.join(root, '.kawai'), { recursive: true })
+  fs.writeFileSync(path.join(root, '.kawai/providers.json'), JSON.stringify({
+    first: { label: 'First', models: { 'first-opus': { model: 'opus' } } },
+    second: { label: 'Second', models: { 'second-sonnet': { model: 'sonnet' } } },
+    keyed: { label: 'Keyed', authTokenEnv: 'EXAMPLE_KEYED_TOKEN', env: { ANTHROPIC_BASE_URL: 'https://keyed.example.internal/api' }, models: { 'keyed-opus': { model: 'opus' } } },
+  }))
+  fs.writeFileSync(path.join(root, '.kawai/profiles.json'), '{}')
+  fs.writeFileSync(path.join(repo, '.kawai/groups/pair.md'), '---\nprofiles: [first-opus, second-sonnet, keyed-opus]\n---\nPair up')
+  // The manager's provider environment, with any host credential blanked out.
+  const providerEnv = {
+    CLAUDE_CONFIG_DIR: path.join(root, 'claude'), EXAMPLE_KEYED_TOKEN: ['example-', 'token'].join(''),
+    ANTHROPIC_API_KEY: undefined, ANTHROPIC_AUTH_TOKEN: undefined, CLAUDE_CODE_OAUTH_TOKEN: undefined, ANTHROPIC_BASE_URL: undefined,
+  } as unknown as Record<string, string>
+  const registered = await startedTools({ getProviderEnv: () => providerEnv })
+  const reply = await registered.team_capacity!.handler({ group: 'pair' }, {})
+  expect(reply.isError).toBeUndefined()
+  const shares = Object.fromEntries((JSON.parse(reply.content[0]!.text).providers as Array<{ id: string; sharesLoginWith: string[] }>)
+    .map(provider => [provider.id, provider.sharesLoginWith]))
+  // The leads group's default worker is on the same stored login: sharing is
+  // judged over every group, so the filtered answer names it too.
+  expect(shares).toEqual({ first: ['default', 'second'], second: ['default', 'first'], keyed: [] })
+  expect(reply.content[0]!.text).not.toContain(path.join(root, 'claude'))
 })

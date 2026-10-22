@@ -5,13 +5,15 @@
 // `buildCandidates`, `cooldownFor`, and the provider-keyed usage store — so
 // the answer cannot disagree with a dispatch pass. Reads memory and SQLite
 // only: nothing is fetched, written, or started. The answer carries ids,
-// counts, usage, and times; never an env value, credential, path, or URL.
+// counts, usage, and times; never an env value, credential, path, or URL —
+// the login keys `sharesLoginWith` is computed from stay inside `read`.
 import type { ChatUsageReport } from '../../shared/chat'
 import type { RouteUsage } from '../../shared/routing'
 import type { ChatSessionRecord } from '../db'
 import type { LimitEventStore } from './routing/limitEvents'
 import { buildCandidates } from './routing/candidates'
 import { liveGroupMembers, usageView } from './routing/router'
+import { sharedLogins } from './routing/sharedLogins'
 import type { SessionTeams } from './sessionTeams'
 import type { PendingSpawnRow } from './teamRoster'
 
@@ -69,6 +71,12 @@ export interface TeamCapacityOptions {
   providerLabel: (providerId: string) => string | null
   /** The provider-keyed usage store the router reads. */
   providerUsageOf: (providerId: string) => ChatUsageReport | null
+  /**
+   * A worker's stored-login key resolved at the team's groups root
+   * (`storedLoginKey` over its launch), or null when it is not provably the
+   * stored login or cannot be resolved. Never part of the answer.
+   */
+  loginKeyOf: (profileId: string, groupsRoot: string) => string | null
   now?: () => number
 }
 
@@ -84,10 +92,11 @@ export class TeamCapacity {
     if (input.group !== undefined && !catalog.groups.has(input.group)) {
       throw new Error(`Unknown group "${input.group}" in your team.`)
     }
-    const entries = [...catalog.groups.values()].filter(entry => input.group === undefined || entry.group.id === input.group)
     const records = [...this.options.records()]
     const pending = this.options.pendingSpawns(team.teamId)
-    const groups = entries.map(({ group }): CapacityGroup => {
+    // Every group is counted: login sharing is judged over all the team's
+    // workers whatever the filter, so a filtered answer agrees with the whole.
+    const all = [...catalog.groups.values()].map(({ group }): CapacityGroup => {
       // The same counting a dispatch pass runs: every live member plus the
       // group's pending reservations, tallied by the one eligibility check.
       const { group: counted } = buildCandidates({
@@ -110,6 +119,13 @@ export class TeamCapacity {
         }),
       }
     })
+    const keys = new Map<string, string | null>()
+    const keyOf = (profileId: string) => {
+      if (!keys.has(profileId)) keys.set(profileId, this.options.loginKeyOf(profileId, team.groupsRoot))
+      return keys.get(profileId) ?? null
+    }
+    const logins = sharedLogins(all.flatMap(group => group.workers.map(worker => ({ provider: worker.provider, key: keyOf(worker.model) }))))
+    const groups = all.filter(group => input.group === undefined || group.id === input.group)
     const providerIds = [...new Set(groups.flatMap(group => group.workers.map(worker => worker.provider)))]
     return {
       computedAt: new Date(this.options.now?.() ?? Date.now()).toISOString(),
@@ -119,8 +135,7 @@ export class TeamCapacity {
         label: this.options.providerLabel(id),
         usage: usageView(this.options.providerUsageOf(id)),
         cooldownUntil: limits.providerCooldownUntil(id),
-        // Shared-login detection arrives with 3.3a; until then nothing is detected.
-        sharesLoginWith: [],
+        sharesLoginWith: logins.get(id) ?? [],
       })),
     }
   }
