@@ -256,4 +256,60 @@ describe('ChatSessionManager turn-end settle wiring', () => {
       manager.shutdown()
     }
   })
+
+  test('a retry does not settle a message re-claimed after the failed attempt', async () => {
+    // N1: the retry re-checks each snapshot claim's identity (same message,
+    // same claimant, same claimed_at). A message the failed attempt had
+    // claimed can be requeued and claimed again inside the retry window —
+    // same id, same claimant, a newer claimed_at — and the newer claim
+    // belongs to a newer turn: the stale ref must skip it.
+    const handles: FakeHandle[] = []
+    const events: ChatEvent[] = []
+    const manager = await startManager(handles, events)
+    try {
+      const created = manager.createSession({ projectPath: '/tmp/proj' })
+      if (!created.ok) throw new Error('create failed')
+      const id = created.session.id
+      await manager.send(id, 'turn')
+      await flush()
+
+      const mail = claimPushed(manager, id, 'work')
+      const facade = (manager as unknown as {
+        teamMail: { settleClaims: (sessionId: string, refs: ClaimRef[]) => void }
+      }).teamMail
+      const realSettleClaims = facade.settleClaims.bind(facade)
+      let attempts = 0
+      facade.settleClaims = (sessionId: string, refs: ClaimRef[]) => {
+        attempts += 1
+        if (attempts === 1) throw new Error('database is locked')
+        realSettleClaims(sessionId, refs)
+      }
+
+      handles[0]!.push(resultWithWindow())
+      // Wait out the inline attempt, then requeue the claimed message and
+      // claim it again with an explicitly newer claimed_at, inside the
+      // retry window.
+      const inlined = Date.now() + 5000
+      while (Date.now() < inlined && attempts < 1) await flush()
+      expect(attempts).toBe(1)
+
+      expect(manager.mailbox.store.requeue(mail)).toBe(true)
+      const reclaimedAt = new Date(Date.now() + 60_000).toISOString()
+      expect(manager.mailbox.store.claim(mail, id, reclaimedAt)).toBe(true)
+
+      const deadline = Date.now() + 5000
+      while (Date.now() < deadline && attempts < 2) await flush()
+
+      // The retry ran against the stale ref and skipped the newer claim:
+      // it stands untouched, never settled behind the failed attempt.
+      expect(attempts).toBe(2)
+      expect(manager.mailbox.store.get(mail)?.state).toBe('claimed')
+      expect(manager.mailbox.store.get(mail)?.claimedBy).toBe(id)
+      expect(manager.mailbox.store.get(mail)?.claimedAt).toBe(reclaimedAt)
+      expect(manager.mailbox.store.eventsFor(mail).some(event => event.kind === 'held-uncertain')).toBe(false)
+      expect(events.some(event => event.type === 'error')).toBe(false)
+    } finally {
+      manager.shutdown()
+    }
+  })
 })
