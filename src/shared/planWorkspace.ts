@@ -74,6 +74,10 @@ export interface WorkspaceSnapshot {
   execution?: WorkspaceExecutionView
   bindings: WorkspaceBindingView[]
   references: WorkspaceRefView[]
+  /** The runtime projection (3.1): per-change states, holders, and outside work; absent until §3 wires it. */
+  runtime?: import('./planWorkspaceRuntime').WorkspaceRuntimeView
+  /** Passive readings of the relevant same-team sessions (3.2); absent until §3 wires it. */
+  health?: WorkspaceAgentReading[]
 }
 
 /** The bind command's recorded payload (the ledger compares it field by field). */
@@ -229,6 +233,27 @@ export interface WorkspaceAgentHealth {
   level: WorkspaceHealthLevel
   context: WorkspaceContextReading | null
   quota: WorkspaceQuotaReading | null
+}
+
+/**
+ * One exposed agent's passive readings (design D5, LC3): identity plus
+ * relevance — a current holder of linked work, or a bound conversation role.
+ * Read from already-held telemetry only; opening or inspecting never starts,
+ * restores, attaches, sends, or refreshes anything.
+ */
+export interface WorkspaceAgentReading {
+  sessionId: string
+  name: string | null
+  relevance: 'holder' | 'architect' | 'lead'
+  context: WorkspaceContextReading | null
+  quota: WorkspaceQuotaReading | null
+  /**
+   * False when the quota reading reports the host account's allowance while
+   * the session routes to a gateway provider, or routing is unconfirmed
+   * (design D5): the reading stays inspectable and is excluded from
+   * aggregation.
+   */
+  quotaApplicable: boolean
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
