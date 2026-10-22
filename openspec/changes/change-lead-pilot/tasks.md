@@ -23,7 +23,7 @@
 ## 4. Integration readiness and pilot handoff
 
 - [x] 4.1 Walk the complete documented flow from enrollment through two separately owned task groups, assembly, resulting-head review, contract checks, and Team Lead landing; verify coverage of every delta scenario, exclusion of execution-owned changes, shared-cap compliance, and separation of task closure from result acceptance.
-- [ ] 4.2 Run the authoritative baseline's required full check on the final implementation tree and `openspec validate change-lead-pilot --strict`; record outcomes and known limitations, verifying the patch changes no server/API/schema/CI behavior and preserves the implemented test policy.
+- [x] 4.2 Run the authoritative baseline's required full check on the final implementation tree and `openspec validate change-lead-pilot --strict`; record outcomes and known limitations, verifying the patch changes no server/API/schema/CI behavior and preserves the implemented test policy.
 - [x] 4.3 Deliver a pilot-readiness note with role/protocol references, a candidate-selection checklist, baseline-selection method, human session/enrollment action, report cutoff, and rollback checklist; verify installation alone sends no live mail and starts or enrolls no sessions.
 
 ## Workflow follow-up
