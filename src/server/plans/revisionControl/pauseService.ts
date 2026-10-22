@@ -24,6 +24,7 @@
 // durable once-marker for its mail. After the commit the executor wake fires.
 import type { PauseStage, PlanPause, PlanPauseTarget } from '../../../shared/planRevisionControl'
 import type { ChangeRow } from '../execution/executionRows'
+import { attemptStatus } from '../execution/attemptStatus'
 import type { ExecutionStore } from '../execution/executionStore'
 import { outstandingOf, type AssignmentStore } from '../../team/assignmentStore'
 import { forwardEnd } from '../../team/forwardChain'
@@ -254,14 +255,23 @@ export class PauseService {
   private deriveTarget(row: ChangeRow): { target: DerivedTarget } | { noActiveWork: true } | { landingInProgress: true } {
     const stage = stageOf(row)
     if (stage === null) return landingStarted(row) ? { landingInProgress: true } : { noActiveWork: true }
-    const attemptId = this.deps.executions.attempts(row.executionId, row.change).at(-1)?.id ?? null
+    if (row.taskId === null) return { noActiveWork: true }
+    // H7 (H″ O1): an owed newest attempt names no holder — the outstanding
+    // assignment is the previous stage's (the reviewer's), never the
+    // attempt's, so the change holds no live work to pause. A linked row
+    // (its dispatch went out) still derives its claimant.
+    const newest = this.deps.executions.attempts(row.executionId, row.change).at(-1)
+    if (stage === 'attempt' && newest !== undefined
+      && attemptStatus(newest, this.deps.assignments.listByTask(row.taskId), this.deps.executions.rounds(row.executionId, row.change)) === 'owed') {
+      return { noActiveWork: true }
+    }
+    const attemptId = newest?.id ?? null
     const base = {
       pauseId: '', change: row.change, stage, attemptId, assignmentId: '', holderSession: null as string | null,
       messageId: null as string | null, withdrawn: false, pausedAt: null as string | null, checkpointId: null as string | null,
       decision: null, decisionDetail: null, decidedAt: null as string | null, decisionCommandId: null as string | null,
       instructionTaskId: row.taskId, instructionMessageId: null as string | null, branch: row.branch,
     }
-    if (row.taskId === null) return { noActiveWork: true }
     const outstanding = outstandingOf(this.deps.assignments.listByTask(row.taskId))
     if (!outstanding?.messageId) return { noActiveWork: true }
     const message = this.deps.mailbox.get(outstanding.messageId)

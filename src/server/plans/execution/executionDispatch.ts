@@ -80,6 +80,7 @@ export async function dispatchImplementAttempt(deps: DispatchDeps, input: { exec
   const existing = deps.executions.attempts(input.executionId, input.change)
   let number = existing.length
   let manifestHash = existing.at(-1)?.manifestHash
+  let attemptId = existing.at(-1)?.id
   if (existing.length === 0) {
     const head = await runGitAsync(['rev-parse', 'HEAD'], { cwd: changeRow.worktree })
     const startCommit = head.ok ? head.stdout.trim() : changeRow.baselineCommit
@@ -102,6 +103,7 @@ export async function dispatchImplementAttempt(deps: DispatchDeps, input: { exec
       manifest, manifestHash,
     })
     number = attempt.number
+    attemptId = attempt.id
   }
 
   const change = deps.executions.change(input.executionId, input.change)!
@@ -109,7 +111,7 @@ export async function dispatchImplementAttempt(deps: DispatchDeps, input: { exec
   const head = existing.length === 0
     ? (await runGitAsync(['rev-parse', 'HEAD'], { cwd: changeRow.worktree! })).stdout.trim()
     : changeRow.baselineCommit!
-  await refusable('implement', () => deps.assignments.dispatch(kawaiCaller(deps.team, input.executionId), {
+  const outcome = await refusable('implement', () => deps.assignments.dispatch(kawaiCaller(deps.team, input.executionId), {
     taskId: taskId!,
     target: { kind: 'group', id: input.group },
     instruction: implementInstruction({
@@ -130,6 +132,7 @@ export async function dispatchImplementAttempt(deps: DispatchDeps, input: { exec
     requestKey,
     ...(roleProfiles.length > 0 ? { allowedProfiles: roleProfiles } : {}),
   }))
+  deps.executions.setAttemptAssignment(attemptId!, outcome.assignment.id)
 }
 
 /** What a fix attempt names: the failed round's checks and findings, and where to continue. */
@@ -150,7 +153,7 @@ export interface FixAttemptInput {
  * owed dispatch's marker (revision-control 3.2) — without sending the
  * handoff.
  */
-export async function ensureFixAttempt(deps: DispatchDeps, input: FixAttemptInput): Promise<{ number: number; manifestHash: string } | null> {
+export async function ensureFixAttempt(deps: DispatchDeps, input: FixAttemptInput): Promise<{ id: string; number: number; manifestHash: string } | null> {
   const execution = deps.executions.execution(input.executionId)
   if (execution === null) return null
   const changeRow = deps.executions.change(input.executionId, input.change)
@@ -174,7 +177,7 @@ export async function ensureFixAttempt(deps: DispatchDeps, input: FixAttemptInpu
   const newest = existing.at(-1)
   if (newest !== undefined && newest.kind === 'fix' && newest.manifest.answers !== undefined
     && newest.manifest.answers.roundId === round?.id) {
-    return { number: newest.number, manifestHash: newest.manifestHash }
+    return { id: newest.id, number: newest.number, manifestHash: newest.manifestHash }
   }
   const head = await runGitAsync(['rev-parse', 'HEAD'], { cwd: changeRow.worktree })
   const startCommit = head.ok ? head.stdout.trim() : changeRow.baselineCommit
@@ -206,7 +209,7 @@ export async function ensureFixAttempt(deps: DispatchDeps, input: FixAttemptInpu
     executionId: input.executionId, change: input.change, kind: 'fix', assignmentId: null,
     manifest, manifestHash,
   })
-  return { number: attempt.number, manifestHash }
+  return { id: attempt.id, number: attempt.number, manifestHash }
 }
 
 /**
@@ -222,7 +225,7 @@ export async function dispatchFixAttempt(deps: DispatchDeps, input: FixAttemptIn
 }
 
 /** The keyed handoff of an existing fix attempt (D12): the instruction names what it fixes. Exported for the gated fix step and the owed dispatch (revision-control 3.2). */
-export async function dispatchFix(deps: DispatchDeps, input: FixAttemptInput, attempt: { number: number; manifestHash: string }): Promise<void> {
+export async function dispatchFix(deps: DispatchDeps, input: FixAttemptInput, attempt: { id: string; number: number; manifestHash: string }): Promise<void> {
   const execution = deps.executions.execution(input.executionId)
   if (execution === null) return
   const changeRow = deps.executions.change(input.executionId, input.change)
@@ -256,11 +259,12 @@ export async function dispatchFix(deps: DispatchDeps, input: FixAttemptInput, at
   })
   // A fix is a handoff (D7): it supersedes the outstanding review through
   // the stop branch, so a delivered review never holds the change.
-  await refusable('fix', () => deps.results.handoff(kawaiCaller(deps.team, input.executionId), taskId, {
+  const outcome = await refusable('fix', () => deps.results.handoff(kawaiCaller(deps.team, input.executionId), taskId, {
     kind: 'fix', resultId: round?.resultId ?? '', target: { kind: 'group', id: input.group },
     instructions: instruction, requestKey,
     ...(roleProfiles.length > 0 ? { allowedProfiles: roleProfiles } : {}),
   }))
+  deps.executions.setAttemptAssignment(attempt.id, outcome.assignment.id)
 }
 
 /**
@@ -305,7 +309,7 @@ export async function dispatchOwedFixAttempt(deps: DispatchDeps, input: { execut
     failingChecks, findingsIds, findingsTexts,
     continueFrom: round?.commitSha ?? changeRow.baselineCommit ?? '',
     fixRounds: changeRow.fixRounds,
-  }, { number: newest.number, manifestHash: newest.manifestHash })
+  }, { id: newest.id, number: newest.number, manifestHash: newest.manifestHash })
 }
 
 /**

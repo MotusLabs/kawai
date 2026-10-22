@@ -290,7 +290,14 @@ describe('owed fix dispatches under holds (revision-control 3.2, review B1)', ()
     const dispatched = tasks.store.assignmentsOf(taskId)
     expect(dispatched.length).toBe(before + 1)
     expect(dispatched.at(-1)!.requestKey).toContain(`attempt:${expectedNumber}:`)
-    if (failure === 'd9') expect(dispatched.at(-1)!.instruction).toContain('revision 2')
+    // H2: a failed round's fix keeps its round — the d9 revision rides the
+    // task notice and the mail header, never a superseding dispatch. A d9
+    // over an open round supersedes it, and the owed fix names the revision.
+    if (failure === 'd9' && previous === 'implement') expect(dispatched.at(-1)!.instruction).toContain('revision 2')
+    if (failure === 'd9' && previous === 'fix') {
+      expect(executions.rounds(executionId, name).at(-1)).toMatchObject({ outcome: 'fail' })
+      expect(dispatched.at(-1)!.instruction).toContain('e2e')
+    }
     if (failure === 'ci') expect(dispatched.at(-1)!.instruction).toContain('e2e')
     if (failure === 'review') expect(dispatched.at(-1)!.instruction).toContain(previous === 'fix' ? 'fix round 2' : 'fix round 1')
     executor.wake(world.team.teamId)
@@ -341,5 +348,38 @@ describe('holds across an executor restart (revision-control 3.2, review N1)', (
     executor.wake(world.team.teamId)
     await executor.idle()
     expect(tasks.store.assignmentsOf(taskId).length).toBe(held + 1)
+  })
+
+  test('an unstamped row whose dispatch committed is neither owed nor re-sent (the crash window)', async () => {
+    const name = 'crash-window'
+    const { executionId } = await approvedExecution([name])
+    const first = await implementStage(executionId, name, 'v1\n')
+    const taskId = first.taskId!
+    // Round 1 fails unheld; the fix attempt mints, dispatches, and is stamped.
+    failCi()
+    executor.wake(world.team.teamId)
+    await executor.idle()
+    const fixRow = executions.attempts(executionId, name).at(-1)!
+    expect(fixRow.kind).toBe('fix')
+    expect(fixRow.assignmentId).not.toBeNull()
+    const dispatched = tasks.store.assignmentsOf(taskId).at(-1)!
+    expect(dispatched.requestKey).toContain(`attempt:${fixRow.number}:`)
+
+    // The dispatch's commit landed and the process died before the stamp:
+    // the row reads unstamped while its assignment carries the exact key.
+    bench.db.db.prepare('UPDATE plan_execution_attempts SET assignment_id = NULL WHERE id = ?').run(fixRow.id)
+
+    // A fresh executor over the same database derives the status from the
+    // rows: the exact key marks the row out, so nothing is owed, nothing
+    // re-sends, and the change is not stopped or duplicated.
+    const before = tasks.store.assignmentsOf(taskId).length
+    executor.close()
+    executor = buildExecutor()
+    executor.wake(world.team.teamId)
+    await executor.idle()
+    expect(tasks.store.assignmentsOf(taskId)).toHaveLength(before)
+    expect(tasks.store.assignmentsOf(taskId).at(-1)!.id).toBe(dispatched.id)
+    expect(executions.attempts(executionId, name).at(-1)!.assignmentId).toBeNull()
+    expect(executions.change(executionId, name)).toMatchObject({ state: 'implementing', stopReason: null })
   })
 })

@@ -14,7 +14,7 @@ import type { PlannedStage } from '../plans/execution/executionPlanner'
 const change = (name: string, state: ChangeState, over: Partial<PlannedChange> = {}): PlannedChange => ({
   executionId: 'e1', change: name, state, step: null, generation: 0, taskId: null,
   worktree: null, branch: null, baselineCommit: null, prNumber: null, passedAt: null, dependsOn: [], group: 'devs',
-  task: null, round: null, newestAttempt: null, landing: null, landingEffect: null, roundEffects: [], ...over,
+  task: null, round: null, newestAttempt: null, newestAttemptOwed: false, landing: null, landingEffect: null, roundEffects: [], ...over,
 })
 
 const withTask = (state: ChangeState, task: Partial<NonNullable<PlannedChange['task']>>, over: Partial<PlannedChange> = {}): PlannedChange =>
@@ -222,13 +222,14 @@ describe('planSteps under holds (revision-control 3.2)', () => {
       results: [{ id: 'r1', commit: 'c1', taskRevision: 1, submittedBySession: 'dev' }],
     }, { round: { id: 'round-1', executionId: 'e1', change: 'api', number: 1, attemptId: 'at1', resultId: 'r1', commitSha: 'c1', fixRound: false, pushedAt: 't', outcome: 'fail' } as unknown as PlannedChange['round'] })
     expect(withHolds([gating], [hold('api')]).fixes.map(fix => fix.change)).toEqual(['api'])
-    // The owed marker: the newest attempt is a fix whose handoff never
-    // dispatched (the assignment still carries the implement attempt's key).
-    const owed = withTask('implementing', { assignment: { id: 'a1', state: 'delivered', reason: null, requestKey: 'exec:e1:api:attempt:1:0' } }, { newestAttempt: { number: 2, kind: 'fix' } })
+    // The owed marker (H″ O1): the newest attempt is a fix still owed — the
+    // snapshot derived it (no assignment carries the row's exact key), and
+    // the planner reads the derived marker.
+    const owed = withTask('implementing', { assignment: { id: 'a1', state: 'delivered', reason: null, requestKey: 'exec:e1:api:attempt:1:0' } }, { newestAttempt: { number: 2, kind: 'fix' }, newestAttemptOwed: true })
     expect(withHolds([owed], [hold('api')]).dispatches).toEqual([])
     expect(withHolds([owed], []).dispatches).toEqual([{ executionId: 'e1', change: 'api', group: 'devs', kind: 'fix' }])
-    // Already dispatched: the assignment carries the fix attempt's key, nothing is owed.
-    const done = withTask('implementing', { assignment: { id: 'a2', state: 'delivered', reason: null, requestKey: 'exec:e1:api:attempt:2:1' } }, { newestAttempt: { number: 2, kind: 'fix' } })
+    // Already dispatched: the marker is false (the exact-key clause), nothing is owed.
+    const done = withTask('implementing', { assignment: { id: 'a2', state: 'delivered', reason: null, requestKey: 'exec:e1:api:attempt:2:1' } }, { newestAttempt: { number: 2, kind: 'fix' }, newestAttemptOwed: false })
     expect(withHolds([done], []).dispatches).toEqual([])
   })
 

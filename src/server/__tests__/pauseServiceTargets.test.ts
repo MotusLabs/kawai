@@ -370,6 +370,61 @@ describe('targets and mail (D6)', () => {
     expect(service.sides(teamId, outcome.pause.id)).toEqual({ noActiveWork: ['ui', 'ops', 'docs'], landingInProgress: [] })
   })
 
+  test('an owed fix attempt names no holder: the previous stage claimant is never the attempt holder (H7)', async () => {
+    const { planId, executionId } = await executionWith(['api'])
+    const api = await inFlight(executionId, 'api')
+    // A review handoff was claimed and its verdict failed the round; the fix
+    // attempt was minted but its dispatch never went out (a hold withheld
+    // it). The outstanding assignment is still the reviewer's, so the owed
+    // attempt has no holder to pause — the change has no active work.
+    const reviewMail = bench.mail.enqueue({
+      teamId, toKind: 'session', toId: 'dev2', fromKind: 'system', fromSession: null, fromGroup: null,
+      originPath: world.repo, body: 'Review api.', taskId: api.taskId, actor: 'system',
+    })
+    bench.mail.claim(reviewMail.id, 'dev2')
+    bench.assignmentStore.insert({
+      teamId, taskId: api.taskId, requestKey: `rk-review-${++dispatchCounter}`, targetKind: 'session', targetId: 'dev2',
+      role: null, instruction: 'Review api.', creator: { kind: 'human', sessionId: null }, messageId: reviewMail.id,
+    })
+    executions.insertAttempt({
+      executionId, change: 'api', kind: 'fix', assignmentId: null,
+      manifest: { ...manifest(), answers: { resultId: 'res-1', roundId: 'round-1', failingChecks: [], findingsIds: [] } },
+      manifestHash: 'mh-fix',
+    })
+    const hold = placeHold(planId, ['api'], 'pa-h9')
+    const outcome = expectOk(pause({ planId, holdId: hold.id, commandId: 'pa-9' }))
+    expect(pauses.targets(outcome.pause.id)).toEqual([])
+    expect(service.sides(teamId, outcome.pause.id)).toEqual({ noActiveWork: ['api'], landingInProgress: [] })
+    expect(pauseMails(api.taskId)).toEqual([])
+  })
+
+  test('a linked fix attempt keeps its holder: the pause targets its claimant (H7 bounds)', async () => {
+    const { planId, executionId } = await executionWith(['api'])
+    const api = await inFlight(executionId, 'api')
+    // The fix attempt dispatched: its assignment carries the attempt's key
+    // and dev3 claimed it, so the newest row is out, not owed — the change
+    // has live work and its claimant gets the pause mail.
+    const fixMail = bench.mail.enqueue({
+      teamId, toKind: 'session', toId: 'dev3', fromKind: 'system', fromSession: null, fromGroup: null,
+      originPath: world.repo, body: 'Fix api.', taskId: api.taskId, actor: 'system',
+    })
+    bench.mail.claim(fixMail.id, 'dev3')
+    const fixAssignment = bench.assignmentStore.insert({
+      teamId, taskId: api.taskId, requestKey: `exec:${executionId}:api:attempt:2:0`, targetKind: 'session', targetId: 'dev3',
+      role: null, instruction: 'Fix api.', creator: { kind: 'human', sessionId: null }, messageId: fixMail.id,
+    })
+    executions.insertAttempt({
+      executionId, change: 'api', kind: 'fix', assignmentId: fixAssignment.assignment.id,
+      manifest: { ...manifest(), answers: { resultId: 'res-1', roundId: 'round-1', failingChecks: [], findingsIds: [] } },
+      manifestHash: 'mh-fix',
+    })
+    const hold = placeHold(planId, ['api'], 'pa-h10')
+    const outcome = expectOk(pause({ planId, holdId: hold.id, commandId: 'pa-10' }))
+    expect(pauses.targets(outcome.pause.id)).toEqual([expect.objectContaining({ change: 'api', stage: 'attempt', holderSession: 'dev3' })])
+    expect(service.sides(teamId, outcome.pause.id)).toEqual({ noActiveWork: [], landingInProgress: [] })
+    expect(pauseMails(api.taskId)).toEqual([expect.objectContaining({ toId: 'dev3', priority: 'urgent' })])
+  })
+
   test('a started update or merge lists as landing in progress and is left alone', async () => {
     const { planId, executionId } = await executionWith(['api', 'ui'])
     await inFlight(executionId, 'api')

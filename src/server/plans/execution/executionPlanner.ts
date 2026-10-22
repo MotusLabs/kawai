@@ -159,13 +159,13 @@ export function planSteps(snapshot: ExecutionSnapshot, _now: string): PlanSteps 
         steps.dispatches.push({ executionId: change.executionId, change: change.change, group: change.group, kind: 'implement' })
       }
       // The owed fix dispatch (revision-control 3.2): the newest attempt is
-      // a fix whose handoff never dispatched — the attempt is the owed
-      // marker, the assignment still carrying the previous attempt's key.
-      // It runs exactly once on the first tick after release, under the
-      // attempt's own request key.
+      // still owed — never dispatched (no assignment carries its exact key,
+      // no stamp) and no round answers it (H″ O1). It runs exactly once on
+      // the first tick after release, under the attempt's own request key.
+      // (This step still covers fix rows only; PR E step 3 generalizes it.)
       if (!held && change.state === 'implementing' && change.group !== null && change.task !== null
         && change.newestAttempt?.kind === 'fix'
-        && (change.task.assignment === null || !(change.task.assignment.requestKey ?? '').startsWith(`exec:${change.executionId}:${change.change}:attempt:${change.newestAttempt.number}:`))) {
+        && change.newestAttemptOwed) {
         steps.dispatches.push({ executionId: change.executionId, change: change.change, group: change.group, kind: 'fix' })
       }
       // D13's follow-ons: a settled merge or update-branch effect of a
@@ -268,12 +268,15 @@ export function planSteps(snapshot: ExecutionSnapshot, _now: string): PlanSteps 
         continue
       }
       const round = change.round
-      // D9: a result pinned to an older task revision can never pass — the
-      // change returns for a fix attempt naming the revision (a landing
-      // change too, releasing the slot), unless its merge started or an
-      // update-branch effect is still settling. A round superseded once
-      // stays superseded: its fix attempt is already out.
-      if (round !== null && round.outcome !== 'superseded' && change.task.results.some(result => result.id === round.resultId && result.taskRevision < change.task!.revision)) {
+      // D9, narrowed by revision-control PR E (H2): a result pinned to an
+      // older task revision can never pass — the change returns for a fix
+      // attempt naming the revision (a landing change too, releasing the
+      // slot), unless its merge started or an update-branch effect is still
+      // settling. The stage fires for an open or passed round only: a failed
+      // round's fix is already out and answers that round, so it carries the
+      // newest revision through its notice instead, and a superseded round's
+      // fix attempt is already out.
+      if (round !== null && (round.outcome === null || round.outcome === 'pass') && change.task.results.some(result => result.id === round.resultId && result.taskRevision < change.task!.revision)) {
         steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'revision', roundId: round.id, resultId: null })
         continue
       }

@@ -198,6 +198,7 @@ export class ExecutionExecutor {
           const state = assignmentState(outstanding, outstanding.messageId !== null ? this.deps.mailbox.get(outstanding.messageId) : null)
           return { id: outstanding.id, state: state.state, reason: state.reason, requestKey: outstanding.requestKey ?? null }
         },
+        taskId => this.deps.tasks.store.assignmentsOf(taskId).map(row => ({ requestKey: row.requestKey })),
         planId => this.deps.holds?.active(teamId, planId) ?? [],
         planId => this.deps.holds?.openTargets(teamId, planId) ?? [])
       if (snapshot.executions.length === 0) return

@@ -479,6 +479,44 @@ describe('the round pipeline (§12)', () => {
     expect(executions.attempts(executionId, 'rev-a').at(-1)!.kind).toBe('fix')
   })
 
+  test('a failed round keeps its fix under a later revision: no stop, no new assignment, the round stays fail (H2)', async () => {
+    const executionId = await approvedExecution('rev-e')
+    await implementStage(executionId, 'rev-e', 'x')
+    // The round fails on a non-rerunnable status: the fix attempt is minted
+    // and dispatched, and the developer claims it.
+    ghStub.pulls = '[]'
+    ghStub.checkRuns = '[]'
+    ghStub.statuses = JSON.stringify([{ name: 'e2e', source: 'status', conclusion: 'failure', link: null, startedAt: null, completedAt: null }])
+    executor.wake(world.team.teamId)
+    await executor.idle()
+    const change = executions.change(executionId, 'rev-e')!
+    expect(executions.rounds(executionId, 'rev-e').at(-1)).toMatchObject({ outcome: 'fail' })
+    expect(executions.attempts(executionId, 'rev-e').at(-1)!.kind).toBe('fix')
+    const fixAssignment = tasks.store.assignmentsOf(change.taskId!).at(-1)!
+    mail.claim(fixAssignment.messageId!, 'dev')
+    const assignmentsBefore = tasks.store.assignmentsOf(change.taskId!).length
+
+    // The revision lands while the fix is claimed. The fix already answers
+    // the failed round and carries the newest direction through its notice,
+    // so D9 must not gate it again: no supersede, no second dispatch under
+    // the attempt's key, no stop.
+    await tasks.amend(bench.human, change.taskId!, { direction: 'Do it differently now', rationale: 'scope changed' })
+    executor.wake(world.team.teamId)
+    await executor.idle()
+
+    expect(executions.rounds(executionId, 'rev-e').at(-1)).toMatchObject({ outcome: 'fail' })
+    expect(executions.change(executionId, 'rev-e')).toMatchObject({ state: 'implementing', stopReason: null })
+    expect(tasks.store.assignmentsOf(change.taskId!)).toHaveLength(assignmentsBefore)
+
+    // The next result pins the newest revision: it re-enters the round
+    // pipeline at the round, never through a revision fix.
+    const worktree = executions.change(executionId, 'rev-e')!.worktree!
+    fs.writeFileSync(path.join(worktree, 'src', 'rev-e.ts'), 'v2\n')
+    commitAll(worktree, 'revise')
+    const revised = await results.submit(bench.agent('dev'), change.taskId!, { summary: 'revised', commit: git(['rev-parse', 'HEAD'], worktree).trim() })
+    expect(revised.taskRevision).toBe(tasks.store.get(change.taskId!)!.revision)
+  })
+
   test('an author claiming the review stops it as review-unavailable', async () => {
     const executionId = await approvedExecution('flow-d')
     await implementStage(executionId, 'flow-d', 'x')
