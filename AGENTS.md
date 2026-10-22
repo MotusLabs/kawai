@@ -43,17 +43,27 @@ version and platform. A run whose key already passed reports the recorded
 pass — its time and worktree — and runs nothing; a failure or an interrupted
 run records nothing; `--force` reruns everything. Records are shared by every
 linked worktree and pruned after 14 days or 500 records. The pre-commit hook
-classifies the staged change (`scripts/docs-only-changes.sh`): a docs-only
-commit runs lint and typecheck; every other commit — a source change, or an
-amend with an empty staged diff — runs `bun run check`, which reports a
-recorded pass without rerunning when this tree's content key already passed.
-A commit that touches source is therefore its own full check — don't run the
-trio just before it. `bun run test` stays the raw, uncached runner
-(typecheck keeps its build info under `node_modules/`, never committed).
-Run `bun run lint && bun run typecheck && bun run test` yourself for
-changes you won't commit, and run `bun run test` once before a docs-only
-commit touching `AGENTS.md`, `.kawai/groups/`, `docs/`, or any other file
-a test reads.
+(`scripts/pre-commit.ts`) is fast and never records a pass: a source commit
+runs lint, typecheck, and the affected fast-tier tests (`scripts/affected-tests.ts`:
+tests whose `@reads` header matches a changed path, plus Bun's `--changed`
+import following over the working tree — unstaged edits outside the commit
+can select tests too, and the hook names them); a docs-only commit runs lint,
+typecheck, and the `@reads` matches; a change to the check machinery, a
+manifest, the Bun pin, a hook, or a root config (the D2 escapes) runs
+`bun run check`; a message-only amend runs lint and typecheck when the
+index tree has a recorded pass, else `bun run check`. The pre-push hook
+(`scripts/pre-push.ts`) is the certificate: each pushed commit needs a
+recorded full pass for its tree, or HEAD at that commit and a clean working
+tree, where it runs `bun run check` itself; otherwise the push is refused,
+naming the commit and the command (deletions run nothing). `bun run check`
+and the push refuse an index with skip-worktree or assume-unchanged entries,
+which hide edits from the key. So commit freely,
+and run `bun run check` on the clean committed tree before every result and
+push. A test that reads a repository file at runtime (`AGENTS.md`, `docs/`,
+`.kawai/`, …) declares it with a `// @reads: <globs>` header in its first 20
+lines; `scripts/__tests__/readsGuard.test.ts` fails on an undeclared literal
+path. `bun run test` stays the raw, uncached runner (typecheck keeps its
+build info under `node_modules/`, never committed).
 
 ## How It Works
 

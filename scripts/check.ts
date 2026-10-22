@@ -20,8 +20,9 @@ if (!root.ok) {
 const cwd = root.stdout.trim()
 
 // A pre-commit hook exports GIT_INDEX_FILE for the commit's index; the key's
-// temporary-index copy reads it through the explicit option, while the steps
-// run with every GIT_* variable stripped.
+// temporary-index copy reads it through the explicit option (it seeds the
+// stat cache — the key is always the working tree's), while the steps run
+// with every GIT_* variable stripped.
 const hookIndex = process.env.GIT_INDEX_FILE || undefined
 const outcome = await runCheck({ cwd, force, indexFile: hookIndex })
 

@@ -7,7 +7,16 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { runGit } from '../git/gitCommand'
-import { computeContentKey, contentKeyFrom, resolveIndexPath } from '../../../scripts/lib/checkKey'
+import {
+  HiddenIndexEntriesError,
+  describeHidden,
+  computeContentKey,
+  contentKeyFrom,
+  hiddenEntries,
+  resolveIndexPath,
+} from '../../../scripts/lib/checkKey'
+import { recordsDir } from '../../../scripts/lib/checkRecords'
+import { runCheck } from '../../../scripts/lib/checkRun'
 
 let tempRoot: string
 let repo: string
@@ -128,6 +137,72 @@ describe('computeContentKey', () => {
     } finally {
       fs.rmSync(plain, { recursive: true, force: true })
     }
+  })
+})
+
+// per-result-suite CP1 F1: a skip-worktree or assume-unchanged entry hides
+// its on-disk edit from `add -A`, so the key would name HEAD's content while
+// the steps read the edit. The key refuses such an index outright.
+describe('hidden index entries', () => {
+  test('a skip-worktree edit refuses the key, naming the path', () => {
+    git('update-index', '--skip-worktree', 'src/a.ts')
+    write('src/a.ts', 'export const a = HIDDEN\n')
+    // git status cannot see it: the clean-tree test alone would pass.
+    expect(git('status', '--porcelain', '--untracked-files=all').trim()).toBe('')
+    expect(() => key()).toThrow(HiddenIndexEntriesError)
+    expect(() => key()).toThrow(/skip-worktree: src\/a\.ts — clear with `git update-index --no-skip-worktree -- src\/a\.ts`/)
+    expect(() => key()).toThrow(/Sparse checkouts are not supported: run `git sparse-checkout disable`/)
+  })
+
+  test('an assume-unchanged edit refuses the key, naming the path', () => {
+    git('update-index', '--assume-unchanged', 'src/a.ts')
+    write('src/a.ts', 'export const a = HIDDEN\n')
+    expect(() => key()).toThrow(/1 index entry hides working-tree content/)
+    expect(() => key()).toThrow(/assume-unchanged: src\/a\.ts — clear with `git update-index --no-assume-unchanged -- src\/a\.ts`/)
+  })
+
+  test('an index without the flags keys normally', () => {
+    expect(hiddenEntries(git('ls-files', '-v', '-z'))).toEqual([])
+    expect(key()).toMatch(/^[0-9a-f]{64}$/)
+  })
+
+  test('the tag rule: S and lowercase tags hide, other tags do not', () => {
+    const listing = ['H keep.ts', 'S skip.ts', 'h assume.ts', 's both.ts', 'M merge.ts', 'C changed.ts', '']
+    expect(hiddenEntries(listing.join('\0'))).toEqual([
+      { path: 'skip.ts', skipWorktree: true, assumeUnchanged: false },
+      { path: 'assume.ts', skipWorktree: false, assumeUnchanged: true },
+      { path: 'both.ts', skipWorktree: true, assumeUnchanged: true },
+    ])
+  })
+
+  test('the fix names one command per flag with that flag\'s paths, shell-quoted', () => {
+    const text = describeHidden([
+      { path: 'a b.ts', skipWorktree: true, assumeUnchanged: false },
+      { path: 'c.ts', skipWorktree: true, assumeUnchanged: true },
+    ])
+    expect(text).toContain("skip-worktree: a b.ts, c.ts — clear with `git update-index --no-skip-worktree -- 'a b.ts' c.ts`")
+    expect(text).toContain('assume-unchanged: c.ts — clear with `git update-index --no-assume-unchanged -- c.ts`')
+    expect(text).toContain('`git sparse-checkout disable`')
+  })
+
+  test('the check errors and records nothing over a hidden entry', async () => {
+    git('update-index', '--skip-worktree', 'src/a.ts')
+    write('src/a.ts', 'export const a = HIDDEN\n')
+    let spawned = 0
+    const outcome = await runCheck({
+      cwd: repo,
+      steps: [{ name: 'test', command: ['true'] }],
+      spawn: async () => {
+        spawned += 1
+        return 0
+      },
+    })
+    expect(outcome.kind).toBe('error')
+    if (outcome.kind === 'error') expect(outcome.message).toContain('src/a.ts')
+    expect(spawned).toBe(0)
+    const dir = recordsDir(repo)
+    const records = fs.existsSync(dir) ? fs.readdirSync(dir).filter((name) => name.endsWith('.json')) : []
+    expect(records).toEqual([])
   })
 })
 
