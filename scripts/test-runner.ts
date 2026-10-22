@@ -21,6 +21,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { recordsDir } from './lib/checkRecords'
 import { REAL_TMUX_FILES, isRealTmuxFile, isSlowTierFile, planBatches } from './planBatches'
+import { planRun, runBatchesAndPublish } from './runPlan'
 import {
   formatMisplacedReport,
   misplacedFromRecords,
@@ -66,76 +67,12 @@ export function parseRunArgs(args: string[]): RunArgs {
   return parsed
 }
 
-// A test-name filter selects a subset just like explicit file arguments do,
-// so a filtered run must not overwrite the timings record (D4): only the
-// selected files' durations would be measured.
-export function hasTestNameFilter(passthrough: string[]): boolean {
-  return passthrough.some(
-    (arg) =>
-      arg === '-t' ||
-      arg.startsWith('-t=') ||
-      arg === '--test-name-pattern' ||
-      arg.startsWith('--test-name-pattern=')
-  )
-}
-
 // The test files collectFiles() gathers, per source tree.
 export interface CollectedFiles {
   serverTests: string[]
   clientTests: string[]
   runnerTests: string[]
   sharedTests: string[]
-}
-
-// The run-shape decisions (review B1), pure over the parsed arguments and
-// the run's resolved inputs: the batch options main() passes to planBatches
-// verbatim — so no per-field call site can drop a flag — whether the run is
-// full, and whether it may publish the timings record. Only a full run
-// seeds the snapshot: `seedTimings` is called with the previous record's
-// text (null when there is none usable) and returns the snapshot path, or
-// null when seeding failed. `outcome` answers the publish decision for a
-// run whose batches passed; main() reaches its publish point only after a
-// batch resolved successfully (a failed one throws first), so it omits it.
-export interface RunPlan {
-  batchOptions: Parameters<typeof planBatches>[0]
-  fullRun: boolean
-  publishTimings: boolean
-}
-
-export function planRun(input: {
-  args: RunArgs
-  workers: number
-  collected: CollectedFiles
-  serialFiles: string[]
-  mainLabel: string
-  seedText: string | null
-  seedTimings: (seedText: string | null) => string | null
-  outcome?: 'passed' | 'failed'
-}): RunPlan {
-  const fullRun = input.args.fileArgs.length === 0 && !hasTestNameFilter(input.args.passthrough)
-  const timingsPath = fullRun ? input.seedTimings(input.seedText) : null
-  return {
-    batchOptions: {
-      workers: input.workers,
-      // The main batch is the collected files, spelled as files: a directory
-      // entry would escape the slow tier's per-file filter (review follow-up).
-      mainFiles: [
-        ...input.collected.serverTests,
-        ...input.collected.runnerTests,
-        ...input.collected.sharedTests,
-        ...input.collected.clientTests,
-      ],
-      serialFiles: input.serialFiles,
-      passthrough: input.args.passthrough,
-      skipRealTmux: input.args.skipRealTmux,
-      skipSlowTier: input.args.skipSlowTier,
-      mainLabel: input.mainLabel,
-      timingsPath: timingsPath ?? undefined,
-      updateTimings: timingsPath !== null,
-    },
-    fullRun,
-    publishTimings: fullRun && (input.outcome ?? 'passed') === 'passed',
-  }
 }
 
 // The measured default (2.3, design D2): 4 is the largest N whose alone-run
@@ -506,18 +443,23 @@ async function main() {
         }
       },
     })
-    let published = false
-    for (const batch of planBatches(plan.batchOptions)) {
-      await runCommand(batch.cmd, env, batch.label)
-      // The main batch wrote the fresh snapshot (--update-timings). Publish
-      // it now — a later serial batch failing must not lose it — and report
-      // files whose shortest kept duration sits over 5 s outside the slow
-      // tier (D7). This point is only reached after runCommand resolved: a
-      // failed batch throws before it, so a failed run never publishes.
-      if (plan.publishTimings && plan.batchOptions.timingsPath !== undefined && !published) {
-        published = true
+    // The batches run and the record is published through runBatchesAndPublish
+    // (review B3): the publish gate and the throw-before-publish ordering live
+    // there, tested with injected effects. Here the effects are the real ones.
+    await runBatchesAndPublish({
+      batches: planBatches(plan.batchOptions),
+      env,
+      publishTimings: plan.publishTimings,
+      publish: () => {
+        // The main batch wrote the fresh snapshot (--update-timings). Publish
+        // it — a later serial batch failing must not lose it — and report
+        // files whose shortest kept duration sits over 5 s outside the slow
+        // tier (D7). A full run whose seed failed has no snapshot to publish;
+        // the guard keeps that case quiet.
+        const timingsPath = plan.batchOptions.timingsPath
+        if (timingsPath === undefined) return
         try {
-          const record = publishTimingsSnapshot(recordsDir(process.cwd()), plan.batchOptions.timingsPath)
+          const record = publishTimingsSnapshot(recordsDir(process.cwd()), timingsPath)
           if (record !== null) {
             const misplaced = misplacedFromRecords(recordsDir(process.cwd()), isSlowTierFile)
             if (misplaced !== null) {
@@ -527,8 +469,9 @@ async function main() {
         } catch (error) {
           console.error(`[test-runner] timings record not published: ${String(error)}`)
         }
-      }
-    }
+      },
+      runCommand,
+    })
   } finally {
     fs.rmSync(runRoot, { recursive: true, force: true })
   }

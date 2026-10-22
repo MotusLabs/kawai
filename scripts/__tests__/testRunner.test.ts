@@ -3,17 +3,16 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { isProcDead } from './fixtures/runnerProbe/procState'
-import { buildBunTestArgs, planBatches } from '../planBatches'
+import { buildBunTestArgs, planBatches, type PlannedBatch } from '../planBatches'
+import { hasTestNameFilter, planRun, runBatchesAndPublish } from '../runPlan'
 import {
   collectFiles,
   defaultWorkers,
   effectiveQuota,
   forwardSignalAndReap,
-  hasTestNameFilter,
   isOwnerAlive,
   parseCpuQuota,
   parseRunArgs,
-  planRun,
   readOwnerMarker,
   readProcStartTime,
   refuseBatchAfterSignal,
@@ -102,12 +101,6 @@ describe('planRun', () => {
     expect(seededWith).toBe(base.seedText)
   })
 
-  test('a failed batch never publishes (B1)', () => {
-    const plan = planRun({ ...base, args: parseRunArgs([]), seedTimings: () => null, outcome: 'failed' })
-    expect(plan.fullRun).toBe(true)
-    expect(plan.publishTimings).toBe(false)
-  })
-
   test('a -t filter or explicit files never publish and never seed (B1)', () => {
     let seedCalls = 0
     const seedTimings = () => {
@@ -161,6 +154,81 @@ describe('planRun', () => {
       expect(file.endsWith('.test.ts') || file.endsWith('.test.tsx')).toBe(true)
     }
     expect(files.sharedTests).toContain('src/shared/__tests__/chatTime.test.ts')
+  })
+})
+
+describe('runBatchesAndPublish', () => {
+  const env = { KAWAI_TEST_RUN_ROOT: '/run-root' }
+  const batch = (label: string): PlannedBatch => ({
+    kind: 'parallel',
+    label,
+    cmd: ['bun', 'test', `./${label}.test.ts`],
+  })
+
+  test('a failed batch never publishes and no later batch starts (B3)', async () => {
+    const calls: Array<{ cmd: string[]; env: NodeJS.ProcessEnv; label: string }> = []
+    let published = 0
+    let thrown: unknown
+    try {
+      await runBatchesAndPublish({
+        batches: [batch('main batch'), batch('real-tmux: late.test.ts')],
+        env,
+        publishTimings: true,
+        publish: () => {
+          published += 1
+        },
+        runCommand: async (cmd, receivedEnv, batchLabel) => {
+          calls.push({ cmd, env: receivedEnv, label: batchLabel })
+          if (batchLabel === 'main batch') throw new Error('Command failed (1): bun test')
+        },
+      })
+    } catch (error) {
+      thrown = error
+    }
+    expect((thrown as Error).message).toBe('Command failed (1): bun test')
+    // The double receives exactly what main() passes the real runCommand,
+    // and the throw leaves the serial batch unstarted.
+    expect(calls).toHaveLength(1)
+    expect(calls[0].cmd).toEqual(batch('main batch').cmd)
+    expect(calls[0].env).toBe(env)
+    expect(published).toBe(0)
+  })
+
+  test('a passing run publishes exactly once, after the first batch, when the plan may publish (B3)', async () => {
+    const order: string[] = []
+    await runBatchesAndPublish({
+      batches: [batch('main batch'), batch('real-tmux: late.test.ts')],
+      env,
+      publishTimings: true,
+      publish: () => {
+        order.push('publish')
+      },
+      runCommand: async (_cmd, _env, batchLabel) => {
+        order.push(`run:${batchLabel}`)
+      },
+    })
+    // The record lands between the main batch and the serial one — a later
+    // serial batch failing must not lose it — and the once-guard keeps the
+    // passing serial batch from publishing again.
+    expect(order).toEqual(['run:main batch', 'publish', 'run:real-tmux: late.test.ts'])
+  })
+
+  test('a passing run whose plan may not publish never calls the publish step (B3)', async () => {
+    let published = 0
+    let ran = 0
+    await runBatchesAndPublish({
+      batches: [batch('main batch')],
+      env,
+      publishTimings: false,
+      publish: () => {
+        published += 1
+      },
+      runCommand: async () => {
+        ran += 1
+      },
+    })
+    expect(ran).toBe(1)
+    expect(published).toBe(0)
   })
 })
 
