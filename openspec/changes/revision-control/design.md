@@ -364,7 +364,7 @@ Every resolution therefore works from the newest revision, and nothing is dispat
 *Why Restart continues from the checkpoint commit:* Kawai never forces a branch, and a restart from the baseline would need a rewrite. The new holder gets the checkpoint as history and decides what to keep. That is the UX design's "new attempt linked to history".
 
 
-**Acceptance oracles (4.4–4.5).** The resolve/restart surface is accepted against the oracles below: A1 holds the inputs (this commit, every output `?`); A2 fills the outputs. A MiMo advisor fills A1's outputs blind from the spec alone and the two are diffed; each disagreement is resolved in the table before any of §10 (3)–(7) is coded. Derivation sources, in precedence order when they disagree: the binding INVARIANT H as amended (H″ O1–O4, O3′) and I1–I6; then CP1 rev 4 (§1–§9); then this D9 as written. Recorded where a source wins: **(a)** H3 wins over D9's Adapt/Restart effects — the resolution mints its own attempt row inside its transaction (never `ensureFixAttempt`'s reuse) and dispatches per H1, inline when the hold gate leaves the change unheld, else owed and dispatched once by the generalized owed step on release; **(b)** the H5 deviation wins over D9's Restart step 5 for a review target whose passable round pends a revision (steps 1–4 only, no new row, `revisionPending N` in the detail) and over D9's Continue for that same review cell (no drop, no resume); **(c)** O4 wins silently — every accepted resolution clears a pending `redispatch` step; **(d)** rev4 §1 extends D9's Restart allowed-from column to the withdrawn cells. Target states are `pauseState.ts:75–115`'s; the newest-attempt-row axis is `attemptStatus`'s (H″ O1).
+**Acceptance oracles (4.4–4.5).** The resolve/restart surface is accepted against the oracles below: A1 held the inputs (every output `?`); A2 (this commit) fills the outputs. A MiMo advisor fills A1's outputs blind from the spec alone and the two are diffed; each disagreement is resolved in the table before any of §10 (3)–(7) is coded. Derivation sources, in precedence order when they disagree: the binding INVARIANT H as amended (H″ O1–O4, O3′) and I1–I6; then CP1 rev 4 (§1–§9); then this D9 as written. Recorded where a source wins: **(a)** H3 wins over D9's Adapt/Restart effects — the resolution mints its own attempt row inside its transaction (never `ensureFixAttempt`'s reuse) and dispatches per H1, inline when the hold gate leaves the change unheld, else owed and dispatched once by the generalized owed step on release; **(b)** the H5 deviation wins over D9's Restart step 5 for a review target whose passable round pends a revision (steps 1–4 only, no new row, `revisionPending N` in the detail) and over D9's Continue for that same review cell (no drop, no resume); **(c)** O4 wins silently — every accepted resolution clears a pending `redispatch` step; **(d)** rev4 §1 extends D9's Restart allowed-from column to the withdrawn cells. Target states are `pauseState.ts:75–115`'s; the newest-attempt-row axis is `attemptStatus`'s (H″ O1).
 
 *Axes.* **State:** `decided` (a decision stands, or the execution finished → `cancelled`) · `paused` (not withdrawn, holder alive) · `paused·withdrawn` (withdrawn, Paused recorded) · `pausing·withdrawn` (withdrawn, not yet Paused, causes `[]`) · `pausing·no-checkpoint` · `pausing·checkpoint-pushing` · `pausing·checkpoint-push-failed` · `pausing·holder-killed` · `pausing·other` (awaiting-delivery | starting | request | busy | provider-limit | readiness — `*` among these) · `paused·gone` (Paused, the holder's session record is gone). **Resolution:** `continue` · `adapt` · `restart` · `stop` (plan-execution's Stop, the dialog's Cancel). **Hold:** `—` (none covers the change) · `active` · `active→released` (the resolution carries `releaseHold: true`; the release lands in the same transaction under `<commandId>:release-hold`). **Newest attempt row:** `—` (none exists) · `<kind> owed` · `<kind> out` · `<kind> answered` for kind ∈ implement|fix|update; `answered(*)` = any kind, on a review target; `answered·rev↗` = answered and the round's result pins an older task revision than the task's current one (the H5 pending-revision input).
 
@@ -372,71 +372,71 @@ Every resolution therefore works from the newest revision, and nothing is dispat
 
 | ID | Caller | Plan/pause/change | commandId history | Hold | Row | Outcome | Rows written | Mail sent | Dispatches |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| K1 | agent | * | * | * | * | ? | ? | ? | ? |
-| K2 | human | unknown plan, pause, or change | * | * | * | ? | ? | ? | ? |
-| K3 | human | known | same commandId, same payload | * | * | ? | ? | ? | ? |
-| K4 | human | known | same commandId, different payload | * | * | ? | ? | ? | ? |
-| K5 | human | known | same commandId, concurrent double submit | * | * | ? | ? | ? | ? |
-| K6 | human | known, pause closed (every target decided or the execution finished) | fresh | * | * | ? | ? | ? | ? |
+| K1 | agent | * | * | * | * | refused `forbidden` (rights first) | none | none | none |
+| K2 | human | unknown plan, pause, or change | * | * | * | refused `not-found` | none | none | none |
+| K3 | human | known | same commandId, same payload | * | * | replayed - the prior outcome returns; `within` never runs | none | none | none |
+| K4 | human | known | same commandId, different payload | * | * | refused naming the first differing field | none | none | none |
+| K5 | human | known | same commandId, concurrent double submit | * | * | one wins and commits; the loser rolls back and resolves as the winner's replay | one decision + one event total | the winner's mail only | the winner's dispatch only |
+| K6 | human | known, pause closed (every target decided or the execution finished) | fresh | * | * | refused (state: the pause is closed) | none | none | none |
 
 *Decision rows. `*` = the column does not change this row's outcome (the completeness test expands `*` over the axis's remaining values):*
 
 | ID | State | Resolution | Hold | Newest attempt row | Outcome | Rows written | Mail sent | Dispatches |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| C1 | decided | continue | * | * | ? | ? | ? | ? |
-| C2 | paused | continue | * | — | ? | ? | ? | ? |
-| C3 | paused | continue | * | implement owed | ? | ? | ? | ? |
-| C4 | paused | continue | * | implement out | ? | ? | ? | ? |
-| C5 | paused | continue | * | implement answered | ? | ? | ? | ? |
-| C6 | paused | continue | * | fix owed | ? | ? | ? | ? |
-| C7 | paused | continue | * | fix out | ? | ? | ? | ? |
-| C8 | paused | continue | * | fix answered | ? | ? | ? | ? |
-| C9 | paused·withdrawn | continue | * | * | ? | ? | ? | ? |
-| C10 | pausing·* (every pausing sub-state) | continue | * | * | ? | ? | ? | ? |
-| C11 | paused·gone | continue | * | * | ? | ? | ? | ? |
-| C12 | review target (gating, reviewing), handoff stands | continue | * | answered(*) | ? | ? | ? | ? |
-| C13 | review target, handoff superseded | continue | * | answered(*) | ? | ? | ? | ? |
-| C14 | review target, handoff stands, passable round `answered·rev↗` (H5) | continue | * | answered·rev↗ | ? | ? | ? | ? |
-| A1r | decided | adapt | * | * | ? | ? | ? | ? |
-| A2r | paused (attempt stage) | adapt | * | — | ? | ? | ? | ? |
-| A3r | paused (attempt stage) | adapt | * | implement owed | ? | ? | ? | ? |
-| A4r | paused (attempt stage) | adapt | * | implement out | ? | ? | ? | ? |
-| A5r | paused (attempt stage) | adapt | * | fix owed | ? | ? | ? | ? |
-| A6r | paused (attempt stage) | adapt | * | fix out (claimed failed-round fix) | ? | ? | ? | ? |
-| A7r | paused (attempt stage) | adapt | * | fix answered (passable round pending) | ? | ? | ? | ? |
-| A8r | paused·withdrawn (attempt stage) | adapt | * | * | ? | ? | ? | ? |
-| A9r | pausing·* | adapt | * | * | ? | ? | ? | ? |
-| A10r | review target | adapt | * | * | ? | ? | ? | ? |
-| A11r | paused·gone (attempt stage) | adapt | * | * | ? | ? | ? | ? |
-| R1 | decided | restart | * | * | ? | ? | ? | ? |
-| R2 | paused (attempt stage) | restart | * | — | ? | ? | ? | ? |
-| R3 | paused (attempt stage) | restart | * | implement owed | ? | ? | ? | ? |
-| R4 | paused (attempt stage) | restart | * | implement out | ? | ? | ? | ? |
-| R5 | paused (attempt stage) | restart | * | implement answered | ? | ? | ? | ? |
-| R6 | paused (attempt stage) | restart | * | fix owed | ? | ? | ? | ? |
-| R7 | paused (attempt stage) | restart | * | fix out | ? | ? | ? | ? |
-| R8 | paused (attempt stage) | restart | * | fix answered | ? | ? | ? | ? |
-| R9 | paused·withdrawn | restart | * | * | ? | ? | ? | ? |
-| R10 | pausing·no-checkpoint | restart | * | * | ? | ? | ? | ? |
-| R11 | pausing·checkpoint-pushing | restart | * | * | ? | ? | ? | ? |
-| R12 | pausing·checkpoint-push-failed | restart | * | * | ? | ? | ? | ? |
-| R13 | pausing·holder-killed | restart | * | * | ? | ? | ? | ? |
-| R14 | pausing·other | restart | * | * | ? | ? | ? | ? |
-| R15 | pausing·withdrawn | restart | * | * | ? | ? | ? | ? |
-| R16 | paused·gone | restart | * | * | ? | ? | ? | ? |
-| R17 | review target, `answered·rev↗` (H5 exception) | restart | * | answered·rev↗ | ? | ? | ? | ? |
-| R18r | review target | restart | * | answered(*) | ? | ? | ? | ? |
-| S1 | any state with ≥1 open target | stop | * | * | ? | ? | ? | ? |
-| S2 | all targets decided (pause closed) | stop | * | * | ? | ? | ? | ? |
+| C1 | decided | continue | * | * | refused, naming the standing decision (I1) | none | none | none |
+| C2 | paused | continue | * | — | accepted | decision `continue` {holder, release 'never', assignmentId} + `pause-resolved` event + closeIfDecided | one `plan-resume` (normal, direct, system) naming the newest revision and the newest checkpoint's commit | none |
+| C3 | paused | continue | * | implement owed | accepted; the owed row is untouched (Q-A3) | as C2 | as C2 | the owed row dispatches once via the owed step when the gate opens |
+| C4 | paused | continue | * | implement out | accepted | as C2 | as C2 | none |
+| C5 | paused | continue | * | implement answered | accepted | as C2 | as C2 | none |
+| C6 | paused | continue | * | fix owed | accepted; the owed row is untouched (Q-A3) | as C2 | as C2 | the owed row dispatches once via the owed step when the gate opens |
+| C7 | paused | continue | * | fix out | accepted | as C2 | as C2 | none |
+| C8 | paused | continue | * | fix answered | accepted | as C2 | as C2 | none |
+| C9 | paused·withdrawn | continue | * | * | refused `target-withdrawn` | none | none | none |
+| C10 | pausing·* (every pausing sub-state) | continue | * | * | refused `not-paused` | none | none | none |
+| C11 | paused·gone | continue | * | * | refused `holder-gone` | none | none | none |
+| C12 | review target (gating, reviewing), handoff stands | continue | * | answered(*) | accepted | decision + event; no drop | one `plan-resume` naming the recorded notes' id, never a commit | none |
+| C13 | review target, handoff superseded | continue | * | answered(*) | refused `review-superseded` | none | none | none |
+| C14 | review target, handoff stands, passable round `answered·rev↗` (H5) | continue | * | answered·rev↗ | accepted (H5) | decision `continue` + event only | none - no resume, no drop | none; after the decision D9 (H2) dispatches the round's fix per H1 |
+| A1r | decided | adapt | * | * | refused, naming the standing decision (I1) | none | none | none |
+| A2r | paused (attempt stage) | adapt | * | — | accepted | publish N+1 (requestKey `pause:<commandId>`) + its notices + decision `adapt` {release 'never'} + ONE new attempt row (kind fix, task revision N+1, startCommit the branch head read before the transaction) + the pending passable round superseded (supersedeRound + cancelLiveRoundEffects + the slot-releasing transition) + event | the publication's revision notices | inline when the gate is open, else owed - dispatched once by the owed step on release |
+| A3r | paused (attempt stage) | adapt | * | implement owed | accepted; the older owed row never dispatches (H6) | as A2r | the publication's notices | the new row, per the hold |
+| A4r | paused (attempt stage) | adapt | * | implement out | accepted | as A2r | the publication's notices | the new row, per the hold |
+| A5r | paused (attempt stage) | adapt | * | fix owed | accepted | as A2r | the publication's notices | the new row, per the hold |
+| A6r | paused (attempt stage) | adapt | * | fix out (claimed failed-round fix) | accepted; the failed round is NOT superseded (H2: passable rounds only) | as A2r | the publication's notices | the new row, per the hold |
+| A7r | paused (attempt stage) | adapt | * | fix answered (passable round pending) | accepted; the passable round superseded | as A2r | the publication's notices | the new row, per the hold |
+| A8r | paused·withdrawn (attempt stage) | adapt | * | * | accepted - the withdraw recorded Paused; publishes, no live holder notified (the assignment is already superseded) | as A2r | the publication's notices | the new row, per the hold |
+| A9r | pausing·* | adapt | * | * | refused `not-paused` | none | none | none |
+| A10r | review target | adapt | * | * | refused `review-target` | none | none | none |
+| A11r | paused·gone (attempt stage) | adapt | * | * | accepted - no holder-gone refusal; the notices to the gone session dead-letter at enqueue (Q-A7) | as A2r | the publication's notices (dead-lettered for the gone holder) | the new row, per the hold |
+| R1 | decided | restart | * | * | refused, naming the standing decision (I1) | none | none | none |
+| R2 | paused (attempt stage) | restart | * | — | accepted | decision `restart` {holder, release 'now'/'pending' when not ready/'never' for human-created or archived, assignmentId} + ONE new attempt row (kind = the newest row's kind, else the stage's kind; `manifest.checkpoint {id, commit}` when the F4 containment read finds the newest done checkpoint on origin, startCommit that commit; else startCommit origin's branch head + the may-predates note; newest revision) + the pending passable round superseded + the held assignment superseded through the stop branch (only queued/awaiting-request mail cancelled) + event; a spawned ready holder released first (releaseNow, journaled Kawai), a spawned busy one marked pending release, archived nothing, human-created never | none - the attempt's instruction rides its dispatch | per the hold: inline when the gate is open, else owed once on release; the dispatch waits for the worktree |
+| R3 | paused (attempt stage) | restart | * | implement owed | accepted; the older owed row never dispatches (H6) | as R2 | none | the new row, per the hold |
+| R4 | paused (attempt stage) | restart | * | implement out | accepted | as R2 | none | the new row, per the hold |
+| R5 | paused (attempt stage) | restart | * | implement answered | accepted | as R2 | none | the new row, per the hold |
+| R6 | paused (attempt stage) | restart | * | fix owed | accepted; the older owed row never dispatches (H6) | as R2 | none | the new row, per the hold |
+| R7 | paused (attempt stage) | restart | * | fix out | accepted | as R2 | none | the new row, per the hold |
+| R8 | paused (attempt stage) | restart | * | fix answered | accepted | as R2 | none | the new row, per the hold |
+| R9 | paused·withdrawn | restart | * | * | accepted | as R2 | none | the new row, per the hold |
+| R10 | pausing·no-checkpoint | restart | * | * | accepted; nothing on origin - the may-predates note in dialog and instruction | as R2 (startCommit origin's head) | none | the new row, per the hold |
+| R11 | pausing·checkpoint-pushing | restart | * | * | accepted; the containment read decides checkpoint vs may-predates | as R2 | none | the new row, per the hold |
+| R12 | pausing·checkpoint-push-failed | restart | * | * | accepted; a failed/unknown push is not on origin - may-predates | as R2 (startCommit origin's head) | none | the new row, per the hold |
+| R13 | pausing·holder-killed | restart | * | * | accepted; the checkpoint if it reached origin, else may-predates | as R2 | none | the new row, per the hold |
+| R14 | pausing·other | restart | * | * | accepted; a busy spawned holder is marked pending release | as R2 | none | the new row, per the hold; the dispatch waits for the worktree |
+| R15 | pausing·withdrawn | restart | * | * | accepted (rev4 extends D9's allowed-from) | as R2 | none | the new row, per the hold |
+| R16 | paused·gone | restart | * | * | accepted | as R2 | none | the new row, per the hold |
+| R17 | review target, `answered·rev↗` (H5 exception) | restart | * | answered·rev↗ | accepted; H5 exception - steps 1-4 only | decision `restart` with revisionPending N in the detail + the held assignment superseded through the stop branch + event; NO new attempt row | none | none; after the decision D9 (H2) dispatches the round's fix per H1 |
+| R18r | review target | restart | * | answered(*) | accepted; steps 1-5 (the handoff-standing condition does not restrict it, Q-A2) | as R2 | none | the new row, per the hold |
+| S1 | any state with ≥1 open target | stop | * | * | accepted | every open target decided `cancelled` + the pause closed + the event | none | none |
+| S2 | all targets decided (pause closed) | stop | * | * | refused (state: the pause is closed) | none | none | none |
 
 *releaseHold overlay (composes with every row above whose Hold is `active→released`):*
 
 | ID | Input | Outcome | Rows written | Mail sent | Dispatches |
 | --- | --- | --- | --- | --- | --- |
-| H1r | accepted resolution, releaseHold, changes-scoped active hold | ? | ? | ? | ? |
-| H2r | any resolution, releaseHold, whole-plan hold | ? | ? | ? | ? |
-| H3r | any resolution, releaseHold, hold already released | ? | ? | ? | ? |
-| H4r | other active holds also cover the change | ? | ? | ? | ? |
+| H1r | accepted resolution, releaseHold, changes-scoped active hold | additionally the `hold-released` release in the same transaction under `<commandId>:release-hold`; other covering holds stay and are named | composes with the row's own writes | none extra | the row's dispatch, now unblocked by this hold |
+| H2r | any resolution, releaseHold, whole-plan hold | refused with the narrowing guidance - nothing written, the resolution included (Q-A4) | none | none | none |
+| H3r | any resolution, releaseHold, hold already released | refused (the hold is already released) - nothing written | none | none | none |
+| H4r | other active holds also cover the change | accepted; the other holds stay and are named | the release for the named hold only | none | still gated by the remaining holds |
 
 *Unreachable combinations (with their reasons):*
 
