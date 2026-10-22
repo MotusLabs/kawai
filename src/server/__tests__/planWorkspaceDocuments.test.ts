@@ -255,15 +255,21 @@ describe('document subscriptions', () => {
     expect(agentStarts).toBe(0)
   })
 
-  test('the reconciliation pass recovers a missed watcher event', async () => {
+  test('a reconciliation with unchanged content pushes nothing; a missed watcher event is recovered exactly once (O6)', async () => {
     const { planId } = await bench.draftInReview()
     writeDoc('alpha content\n')
     await openDocument(planId)
+    expect(all('team-plan-workspace-document')).toHaveLength(1)
+    // The pass re-reads the source; identical content pushes nothing.
+    fixture.reconcile()
+    await new Promise(resolve => setTimeout(resolve, 50))
+    expect(all('team-plan-workspace-document')).toHaveLength(1)
     // No watch event fires for this edit: only the periodic pass sees it.
     writeDoc('reconciled content\n')
     fixture.reconcile()
     const push = await untilDocument(view => view.contentHash === sha('reconciled content\n'))
     expect(push.view).toMatchObject({ availability: 'current', stale: false })
+    expect(all('team-plan-workspace-document')).toHaveLength(2)
     expect(agentStarts).toBe(0)
   })
 
@@ -409,10 +415,13 @@ describe('checklist subscriptions', () => {
     expect(agentStarts).toBe(0)
   })
 
-  test('a checklist invalidation re-projects after an edit through the reconciliation pass', async () => {
+  test('a checklist reconciliation with unchanged content pushes nothing; an edit re-projects exactly once (O6)', async () => {
     const { planId } = await bench.draftInReview()
     writeChecklistFixture()
     await docSend({ type: 'team-plan-workspace-checklist-open', teamPath: world.repo, planId, changeName: 'alpha' })
+    expect(all('team-plan-workspace-checklist')).toHaveLength(1)
+    fixture.reconcile()
+    await new Promise(resolve => setTimeout(resolve, 50))
     expect(all('team-plan-workspace-checklist')).toHaveLength(1)
     const tasksPath = path.join(world.repo, 'openspec', 'changes', 'alpha', 'tasks.md')
     fs.writeFileSync(tasksPath, '# Tasks\n\n- [x] first\n- [x] second\n- [ ] third\n')
@@ -423,6 +432,7 @@ describe('checklist subscriptions', () => {
     }
     const refreshed = last('team-plan-workspace-checklist')!
     expect(refreshed.checklist!.sections[0]!.items).toHaveLength(3)
+    expect(all('team-plan-workspace-checklist')).toHaveLength(2)
     expect(agentStarts).toBe(0)
   })
 })
