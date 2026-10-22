@@ -22,6 +22,8 @@ import type { DecisionService } from '../plans/decisions/DecisionService'
 import { DECISION_TOOL_NAMES, decisionDescriptions, decisionHandlers, decisionSchemas } from '../plans/decisions/decisionTools'
 import type { ImpactService } from '../strategy/ImpactService'
 import { IMPACT_TOOL_NAMES, impactDescriptions, impactHandlers, impactSchemas } from '../strategy/impactTools'
+import type { CheckpointTool } from '../plans/revisionControl/checkpointTool'
+import { CHECKPOINT_TOOL_NAMES, checkpointDescriptions, checkpointHandlers, checkpointSchemas } from '../plans/revisionControl/checkpointTool'
 import type { MailboxManagement } from './mailboxManagement'
 import { METRICS_TOOL_NAMES, metricsDescriptions, metricsHandlers, metricsSchemas, type MetricsToolDeps } from '../metrics/metricsTools'
 import { REPORT_TOOL_NAMES, reportDescriptions, reportHandlers, reportSchemas, type ReportToolDeps } from '../metrics/reportTools'
@@ -32,7 +34,7 @@ export const RELEASE_TOOL_NAMES = ['release_member'] as const
 /** Mailbox management (team-mailbox-management): always registered, refused by right. */
 export const MANAGEMENT_TOOL_NAMES = ['list_mailbox', 'cancel_message', 'discard_message'] as const
 /** Every team tool, allowed without approval cards under either policy. */
-export const TEAM_ALLOWED_TOOLS = [...MAILBOX_TOOL_NAMES, ...MANAGEMENT_TOOL_NAMES, ...RELEASE_TOOL_NAMES, ...TASK_TOOL_NAMES, ...STRATEGY_TOOL_NAMES, ...IMPACT_TOOL_NAMES, ...PLAN_TOOL_NAMES, ...VALIDATION_TOOL_NAMES, ...DECISION_TOOL_NAMES, ...METRICS_TOOL_NAMES, ...REPORT_TOOL_NAMES].map(name => `mcp__${TEAM_MCP_SERVER}__${name}`)
+export const TEAM_ALLOWED_TOOLS = [...MAILBOX_TOOL_NAMES, ...MANAGEMENT_TOOL_NAMES, ...RELEASE_TOOL_NAMES, ...TASK_TOOL_NAMES, ...STRATEGY_TOOL_NAMES, ...IMPACT_TOOL_NAMES, ...PLAN_TOOL_NAMES, ...VALIDATION_TOOL_NAMES, ...DECISION_TOOL_NAMES, ...METRICS_TOOL_NAMES, ...REPORT_TOOL_NAMES, ...CHECKPOINT_TOOL_NAMES].map(name => `mcp__${TEAM_MCP_SERVER}__${name}`)
 
 const content = { body: z.string().min(1), urgent: z.boolean().optional(), tags: z.array(z.string()).optional(), task_id: z.string().min(1).optional() }
 // `human` is accepted so the service can refuse it with the reply path,
@@ -117,6 +119,8 @@ export interface MailboxServerServices {
   metrics?: MetricsToolDeps
   /** Process report submit/list/get/link (team-process-metrics D6); never decide or unlink. */
   reports?: ReportToolDeps
+  /** The `task_checkpoint` tool (revision-control D7); registered only when the team runs plan executions. */
+  checkpoints?: CheckpointTool
 }
 
 /** One runtime-neutral team tool: schema-validated, session-bound. */
@@ -140,7 +144,7 @@ export function teamToolTable(
   sessionId: string,
   services: MailboxServerServices = {}
 ): TeamToolSpec[] {
-  const { tasks, results, strategies, plans, validation, decisions, impact, releases, management, metrics, reports } = services
+  const { tasks, results, strategies, plans, validation, decisions, impact, releases, management, metrics, reports, checkpoints } = services
   const handlers: Record<string, (input: unknown) => Promise<unknown> | unknown> = {
     ...mailboxHandlers(mailbox, sessionId),
     ...(management ? managementHandlers(management, sessionId) : {}),
@@ -162,11 +166,14 @@ export function teamToolTable(
     ...(metrics ? metricsHandlers(metrics, sessionId) : {}),
     // Reports: submit, read, and link only — no decide, apply, or unlink tool (D6).
     ...(reports ? reportHandlers(reports, sessionId) : {}),
+    // Checkpoints: the Pausing holder records where work stands; Kawai pushes (revision-control D7).
+    ...(checkpoints ? checkpointHandlers(checkpoints, sessionId) : {}),
   }
   const schemas: Record<string, z.ZodObject> = {
     ...mailboxSchemas, ...(management ? managementSchemas : {}), ...(tasks ? taskSchemas : {}),
     ...(releases ? releaseSchemas : {}), ...(strategies ? strategySchemas : {}), ...(impact ? impactSchemas : {}), ...(plans ? planSchemas : {}),
     ...(validation ? validationSchemas : {}), ...(decisions ? decisionSchemas : {}), ...(metrics ? metricsSchemas : {}), ...(reports ? reportSchemas : {}),
+    ...(checkpoints ? checkpointSchemas : {}),
   }
   const descriptions: Record<string, string> = {
     send_message: 'Send to a team group or session. Returns immediately with the message id. Optional task_id puts the message under a team task. Mail to the human is refused: reply to a message they sent instead.',
@@ -183,6 +190,7 @@ export function teamToolTable(
     ...(decisions ? decisionDescriptions : {}),
     ...(metrics ? metricsDescriptions : {}),
     ...(reports ? reportDescriptions : {}),
+    ...(checkpoints ? checkpointDescriptions : {}),
   }
   return Object.keys(handlers).map((name) => ({
     name,

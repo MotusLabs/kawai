@@ -1289,6 +1289,7 @@ export class ChatSessionManager {
     this.executionRuntime = planServices.runtime
     this.supervisionMonitor = planServices.monitor
     this.promotions = planServices.promotions
+    this.checkpoints = planServices.checkpoints
     this.validationDetail = planServices.validationDetail
     this.validationAdapter = planServices.adapter
     // The plan attention's gatherer reads (plan-supervision D13): the same
@@ -1619,6 +1620,8 @@ export class ChatSessionManager {
   private readonly supervisionMonitor: import('../plans/supervision/SupervisionMonitor').SupervisionMonitor | null
   /** Promote, Cancel, and the promotion preview (integration-candidates D9). */
   readonly promotions: import('../plans/landing/integration/PromotionService').PromotionService
+  /** The `task_checkpoint` tool (revision-control D7); null when plan services are absent. */
+  readonly checkpoints: import('../plans/revisionControl/checkpointTool').CheckpointTool | null
   /** The one execution store, its ownership, and its wake hub (plan-execution D5/D7). */
   private readonly executionCore: ReturnType<typeof composeExecutionCore>
   /** The user-level team settings (plan-execution D16's floor map lives here). */
@@ -2547,6 +2550,7 @@ export class ChatSessionManager {
       // Both runtimes build their team tools from one table (D6).
       const teamServices: MailboxServerServices = {
         tasks: this.tasks, results: this.results, strategies: this.strategies, plans: this.plans, validation: this.validation, ...(this.decisions ? { decisions: this.decisions } : {}), releases: this.teamMail.releases, management: this.management,
+        ...(this.checkpoints ? { checkpoints: this.checkpoints } : {}),
         metrics: { teamOf: id => this.teams.teamOf(id)?.teamId ?? null, reader: this.metrics },
         reports: { caller: id => this.reportCaller(id), service: this.reports },
       }

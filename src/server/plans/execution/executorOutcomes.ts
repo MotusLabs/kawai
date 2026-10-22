@@ -15,6 +15,8 @@ export interface OutcomeDeps {
   taskStatusOf: (taskId: string) => string | null
   mechanismOf: (executionId: string) => LandingMechanism
   now: () => Date
+  /** revision-control D7: a round's result counts — once its push is done, Kawai records the target's `result` checkpoint. */
+  recordResultCheckpoint?: (executionId: string, change: string, roundId: string) => void
 }
 
 type SettledEffect = { id: string; kind: string; change: string | null; roundId?: string | null; executionId: string; state: string; outcome: unknown; error: string | null }
@@ -26,6 +28,11 @@ type SettledEffect = { id: string; kind: string; change: string | null; roundId?
  * landing-outcome stage instead (D12: cancelled with its task).
  */
 export function applyEffectFailure(deps: OutcomeDeps, effect: SettledEffect): void {
+  // A failed push-checkpoint never stops its change (revision-control D7):
+  // the settled row reads Pausing checkpoint-push-failed and the holder may
+  // record again. Keyed on the kind only, so a failed round `push` beside it
+  // still stops as usual.
+  if (effect.kind === 'push-checkpoint') return
   if (deps.store.execution(effect.executionId)?.state !== 'running') return
   if (effect.change === null) {
     stopWaitingChanges(deps.store, effect.executionId, effect.kind, effect.id, effect.error ?? 'the effect failed')
@@ -79,6 +86,9 @@ export function applyEffectOutcome(deps: OutcomeDeps, effect: SettledEffect): vo
   }
   if (effect.kind === 'push' && typeof effect.roundId === 'string') {
     deps.store.markRoundPushed(effect.roundId, deps.now().toISOString())
+    // The holder never calls the tool for a submitted result (D7): the done
+    // push itself records the checkpoint when the change is Pausing.
+    deps.recordResultCheckpoint?.(effect.executionId, effect.change, effect.roundId)
     return
   }
   if (effect.kind === 'open-pr') {

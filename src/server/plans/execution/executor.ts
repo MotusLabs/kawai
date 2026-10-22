@@ -88,6 +88,8 @@ export interface ExecutorDeps {
   promotions?: { startup(): void; pass(teamId: string): Promise<void>; active(teamId: string): boolean }
   /** The hold gate's reads (revision-control 3.2): the plan's active holds and open pause targets. */
   holds?: { active(teamId: string, planId: string): ActiveHold[]; openTargets(teamId: string, planId: string): OpenPauseTarget[] }
+  /** revision-control D7: the checkpoints the tool records and the round results that count as them. */
+  checkpoints?: import('../revisionControl/checkpointTool').CheckpointTool
 }
 
 export class ExecutionExecutor {

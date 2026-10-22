@@ -58,7 +58,7 @@ Implement after these have landed on master: `plan-execution`, `integration-cand
   - a spawning instruction gets its mail after the claim;
   - a replay sends nothing;
   - an agent caller is refused.
-- [ ] 4.2 Implement `task_checkpoint` and the `push-checkpoint` effect with its inspector (D7). Verify with tests against a bare remote:
+- [x] 4.2 Implement `task_checkpoint` and the `push-checkpoint` effect with its inspector (D7). Verify with tests against a bare remote:
   - each refusal (no pause, wrong caller, not the branch head, dirty or untracked worktree listing paths, missing origin head, Kawai writing the branch) writes nothing;
   - a valid call pushes without force;
   - an unknown effect is inspected after restart;

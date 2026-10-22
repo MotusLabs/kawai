@@ -96,6 +96,8 @@ export type RoundOutcome = 'pass' | 'fail' | 'superseded'
 export type EffectKind = 'provision' | 'push' | 'open-pr' | 'rerun' | 'update-branch' | 'merge' | 'remove-worktree'
   // integration-candidates (D4, D5): the execution-level branch creation, and the non-forced landing.
   | 'create-integration' | 'fast-forward'
+  // revision-control (D7): the checkpoint push — never a stop, never round evidence.
+  | 'push-checkpoint'
 export type EffectState = 'pending' | 'running' | 'done' | 'failed' | 'unknown' | 'cancelled'
 
 /**

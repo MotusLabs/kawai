@@ -52,6 +52,8 @@ import { DecisionStore } from './decisions/decisionStore'
 import { HoldService } from './revisionControl/holdService'
 import { HoldStore } from './revisionControl/holdStore'
 import { PauseStore } from './revisionControl/pauseStore'
+import { CheckpointStore } from './revisionControl/checkpointStore'
+import { CheckpointTool } from './revisionControl/checkpointTool'
 import type { ActiveHold } from '../../shared/planRevisionControl'
 import { readPlanSupervisionDetail, type SupervisionDetailReads } from './supervision/planSupervisionDetail'
 import type { SupervisionRuntime } from './supervision/supervisionRead'
@@ -200,6 +202,8 @@ export function composePlanServices(options: PlanServicesOptions): {
   monitor: SupervisionMonitor | null
   /** The supervision reads (plan-supervision D13); null without team services' supervision runtime. */
   supervisionReads: SupervisionDetailReads | null
+  /** The `task_checkpoint` tool (revision-control D7); also the executor's round-push → result-checkpoint recorder. */
+  checkpoints: CheckpointTool
 } {
   const adapter = options.adapter ?? new OpenspecAdapter()
   const validationStore = new ValidationStore(options.db)
@@ -326,6 +330,19 @@ export function composePlanServices(options: PlanServicesOptions): {
     // revision-control 3.3: `no-hold` and the runner's held step read the same holds.
     holds: { active: holdsOf },
   })
+  // Checkpoints (revision-control D7): the tool the Pausing holder calls,
+  // and the recorder that counts a round's done push as the `result`
+  // checkpoint. The git reads are the tool's own; the results name the
+  // submitter a `result` checkpoint carries.
+  const checkpoints = new CheckpointTool({
+    executions: executionStore, pauses: pauseStore, checkpoints: new CheckpointStore(options.db),
+    ...(team !== undefined ? {
+      resultOf: resultId => {
+        const result = team.results.tasks.store.results.get(resultId)
+        return result === null ? null : { sessionId: result.submittedBy.kind === 'agent' ? result.submittedBy.sessionId : null }
+      },
+    } : {}),
+  })
   if (team !== undefined) {
     const roundAdaptersUsed = fixture ? fixtureRoundAdapters() : roundAdapters
     const executor = new ExecutionExecutor({
@@ -351,6 +368,7 @@ export function composePlanServices(options: PlanServicesOptions): {
       adapters: { provision: provisionAdapter(executionStore, undefined, mechanisms) },
       groupScoped: (teamId, groupId) => groupScopedOf(team, teamId, groupId),
       holds: { active: holdsOf, openTargets: openTargetsOf },
+      checkpoints,
       roundAdapters: roundAdaptersUsed,
       ...(fixture ? { landingAdapters: fixtureLandingAdapters(), tickMs: 1_000 } : {}),
       ...(options.executionGhOptions ? { ghOptions: options.executionGhOptions } : {}),
@@ -405,6 +423,7 @@ export function composePlanServices(options: PlanServicesOptions): {
     runtime, decisions, holds, monitor, promotions: promotions.service, integrationStore,
     // The supervision reads the workspace's plan attention gathers over (plan-supervision D13); null without team services.
     supervisionReads,
+    checkpoints,
   }
 }
 
