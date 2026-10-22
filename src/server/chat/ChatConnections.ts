@@ -43,6 +43,7 @@ import { MessageConnections } from '../team/messageConnections'
 import { StrategyConnections } from '../strategy/strategyConnections'
 import { WorkspaceConnections } from '../team/workspaceConnections'
 import { PlanConnections } from '../plans/planConnections'
+import { PlanWorkspaceConnections } from '../plans/workspace/workspaceConnections'
 import { ExecutionConnections } from '../plans/execution/executionConnections'
 import { PROMOTION_MESSAGE_TYPES, PromotionConnections, type PromotionClientMessage } from '../plans/landing/integration/promotionConnections'
 import { OutboundConnections } from '../outbound/outboundConnections'
@@ -89,6 +90,7 @@ export class ChatConnections {
   private readonly strategyConnections: StrategyConnections
   private readonly workspaceConnections: WorkspaceConnections
   private readonly planConnections: PlanConnections
+  private readonly planWorkspaceConnections: PlanWorkspaceConnections
   private readonly executionConnections: ExecutionConnections
   private readonly promotionConnections: PromotionConnections
   private readonly outboundConnections: OutboundConnections
@@ -105,6 +107,7 @@ export class ChatConnections {
     this.strategyConnections = new StrategyConnections(manager)
     this.workspaceConnections = new WorkspaceConnections(manager)
     this.planConnections = new PlanConnections(manager)
+    this.planWorkspaceConnections = new PlanWorkspaceConnections(manager)
     this.executionConnections = new ExecutionConnections(manager)
     this.promotionConnections = new PromotionConnections(manager)
     this.outboundConnections = new OutboundConnections(manager)
@@ -193,6 +196,7 @@ export class ChatConnections {
     this.strategyConnections.disconnect(connection)
     this.workspaceConnections.disconnect(connection)
     this.planConnections.disconnect(connection)
+    this.planWorkspaceConnections.disconnect(connection)
     this.outboundConnections.disconnect(connection)
     this.metricsConnections.disconnect(connection)
     this.subscriptions.delete(connection)
@@ -581,6 +585,7 @@ export class ChatConnections {
     if (message.type.startsWith('team-workspace-')) return this.workspaceConnections.handle(connection, message as Extract<ClientMessage, { type: `team-workspace-${string}` }>)
     if (PROMOTION_MESSAGE_TYPES.has(message.type)) return this.promotionConnections.handle(connection, message as PromotionClientMessage)
     if (message.type.startsWith('team-plan-execution-')) return this.executionConnections.handle(connection, message as Extract<ClientMessage, { type: `team-plan-execution-${string}` }>)
+    if (message.type.startsWith('team-plan-workspace-')) return this.planWorkspaceConnections.handle(connection, message as Extract<ClientMessage, { type: `team-plan-workspace-${string}` }>)
     if (message.type.startsWith('team-plan')) return this.planConnections.handle(connection, message as Extract<ClientMessage, { type: `team-plan${string}` }>)
     if (message.type.startsWith('team-audit-')) return this.outboundConnections.handle(connection, message as Extract<ClientMessage, { type: `team-audit-${string}` }>)
     if (message.type.startsWith('process-metrics-')) return this.metricsConnections.handle(connection, message as Extract<ClientMessage, { type: `process-metrics-${string}` }>)
@@ -749,6 +754,7 @@ function opensSubscription(type: ClientMessage['type']): boolean {
     type === 'team-mailbox-open' || type === 'team-tasks-open' || type === 'team-task-open' ||
     type === 'team-messages-open' || type === 'team-thread-open' ||
     type === 'strategy-open' || type === 'team-workspace-open' || type === 'team-plans-open' || type === 'team-plan-open' ||
+    type === 'team-plan-workspace-open' ||
     type === 'team-audit-open' ||
     type === 'process-metrics-open' || type === 'process-report-open'
 }

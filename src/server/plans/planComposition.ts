@@ -18,6 +18,9 @@ import type { ImpactService } from '../strategy/ImpactService'
 import { carriedConditionsOf, type ValidationCapacityEvidence } from '../../shared/planValidation'
 import type { PlanStore } from './planStore'
 import { PlanService } from './PlanService'
+import { PlanWorkspaceStore } from './workspace/workspaceStore'
+import { PlanWorkspaceRefs } from './workspace/workspaceRefs'
+import { PlanWorkspaceContext } from './workspace/workspaceContext'
 import { OpenspecAdapter } from './validation/openspecAdapter'
 import { ValidationService } from './validation/ValidationService'
 import { ValidationStore } from './validation/validationStore'
@@ -199,6 +202,12 @@ export function composePlanServices(options: PlanServicesOptions): {
   promotions: PromotionService
   /** The integration branches, candidates, promotions, and promotion effects; its writes re-push plan details (D13). */
   integrationStore: IntegrationStore
+  /** The workspace's bindings and command ledger (plan-workspace 1.2). */
+  workspaceStore: PlanWorkspaceStore
+  /** The workspace's document references and their keyed add/remove (plan-workspace 1.2). */
+  workspaceRefs: PlanWorkspaceRefs
+  /** The workspace's per-message context snapshots (plan-workspace 1.2); chat delivery is PR D. */
+  workspaceContext: PlanWorkspaceContext
   /** The decision service (plan-supervision D4–D7); null without team services. */
   decisions: DecisionService | null
   /** The owner's hold commands (revision-control 3.1): place, release (whole, by changes, narrowed), extend. */
@@ -458,6 +467,11 @@ export function composePlanServices(options: PlanServicesOptions): {
   return {
     validation, validationStore, plans, validationDetail: new ValidationDetailCache(validation), adapter, executions, executionStore,
     runtime, decisions, holds, monitor, promotions: promotions.service, integrationStore,
+    // The workspace's bindings and command ledger over the same database (plan-workspace 1.2).
+    workspaceStore: new PlanWorkspaceStore(options.db),
+    // The workspace's document references and context snapshots (plan-workspace 1.2).
+    workspaceRefs: new PlanWorkspaceRefs(options.db),
+    workspaceContext: new PlanWorkspaceContext(options.db),
     // The supervision reads the workspace's plan attention gathers over (plan-supervision D13); null without team services.
     supervisionReads,
     checkpoints,
