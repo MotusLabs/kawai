@@ -419,11 +419,20 @@ Mechanically tested (cited `file › title`):
   human reopens, closes, and amends a task whose creator was killed`
   (authorized closure when the original creator is gone).
 
-Affected-test selection (3.4): with `.kawai/groups/change-leads.md` and
-`docs/change-lead-pilot.md` changed, `scripts/affected-tests.ts` selects the
-fixtures above through their `// @reads:` declarations
-(`teamGroupCatalog.test.ts` declares `.kawai/groups/**`); the run log in the
-submitted result names the selected set.
+Affected-test selection (3.4), as `scripts/affected-tests.ts` selects it with
+`.kawai/groups/change-leads.md` and `docs/change-lead-pilot.md` staged: kind
+`docs-only`, declaration pass (@reads matches) = `scripts/__tests__/
+affectedTests.test.ts`, `scripts/__tests__/preCommit.test.ts`,
+`scripts/__tests__/reads.test.ts`, `src/server/__tests__/docsOnlyChanges.test.ts`,
+`src/server/__tests__/shippedCatalog.test.ts`,
+`src/server/__tests__/teamGroupCatalog.test.ts`; changed-pass candidates 0;
+one slow-tier file excluded. With the two fixture files staged as well the
+kind is `source`: the same declaration pass, and `teamTaskService.test.ts` in
+the changed pass (Bun's `--changed` import following also carries
+`teamGroupCatalog.test.ts`, which is itself changed). No new `@reads`
+declarations were needed: the catalog fixture already declares
+`.kawai/groups/**`, and the task-service fixtures write their group files
+into a temporary repository instead of reading this one.
 
 ## 12. Owner actions before the first pilot
 
