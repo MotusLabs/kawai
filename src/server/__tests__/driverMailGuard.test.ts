@@ -1,9 +1,9 @@
 // The driver-event mail guard's contract: a failure never escapes, every
 // failure is logged under its own event, the settle is retried a bounded
 // number of times on the injected schedule, a failing attempt joins the
-// session's live chain and every settle in it is retried, and after the
-// last failure the mail is left to mailbox recovery (one error log, no
-// further scheduling). The default timer path is covered by the
+// session's live chain and every settle in it is retried until it passes,
+// and after the last failure the mail is left to mailbox recovery (one
+// error log, no further scheduling). The default timer path is covered by the
 // real-timeout tests at the end.
 import { describe, expect, test } from 'bun:test'
 import { DriverMailGuard, SETTLE_RETRIES, SETTLE_RETRY_DELAY_MS } from '../chat/driverMailGuard'
@@ -164,6 +164,46 @@ describe('settleRecipient retries', () => {
     // one error naming both unsettled settles.
     expect(h.errors).toEqual([
       ['chat_mail_settle_exhausted', { sessionId: 's1', retries: SETTLE_RETRIES, unsettled: 2 }],
+    ])
+  })
+
+  test('only the failed subset re-arms: a chain member that passes stops running', () => {
+    // The retry keeps each settle's outcome to itself: one that succeeds in
+    // round 1 must not be re-armed beside the one that keeps failing — a
+    // re-arm-all would run it once per remaining round.
+    const h = harness()
+    let first = 0
+    let second = 0
+    h.guard.settleRecipient('s1', () => {
+      first += 1
+      // Fails inline (arming the chain), succeeds on the chain's first retry.
+      if (first === 1) throw new Error('database is locked')
+    })
+    h.guard.settleRecipient('s1', () => {
+      second += 1
+      throw new Error('database is locked')
+    })
+    expect(h.runs).toHaveLength(1)
+    h.runs.shift()!() // round 1: first succeeds, second fails again
+    // The settled member ran its inline attempt and round 1 — nothing more.
+    expect(first).toBe(2)
+    expect(second).toBe(2)
+    expect(h.runs).toHaveLength(1) // only the failed subset re-arms
+    h.runs.shift()!() // round 2
+    h.runs.shift()!() // round 3: exhausts
+    expect(h.runs).toHaveLength(0)
+    expect(first).toBe(2)
+    expect(second).toBe(1 + SETTLE_RETRIES)
+    // One unsettled settle: the exhaustion counts the failures, not the chain.
+    expect(h.errors).toEqual([
+      ['chat_mail_settle_exhausted', { sessionId: 's1', retries: SETTLE_RETRIES, unsettled: 1 }],
+    ])
+    expect(h.logs.map(([event]) => event)).toEqual([
+      'chat_mail_settle_failed',
+      'chat_mail_settle_failed',
+      'chat_mail_settle_retry_failed',
+      'chat_mail_settle_retry_failed',
+      'chat_mail_settle_retry_failed',
     ])
   })
 

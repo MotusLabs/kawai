@@ -20,8 +20,9 @@ export type WriterRequest =
 export type WriterRead = { type: 'read'; held: boolean }
 export type WriterDone = { type: 'done'; ok: boolean; error: string | null }
 
-/** Long enough that only a genuinely stuck lock (a protocol bug) reaches it. */
-const BUDGET_MS = 10_000
+/** Long enough that only a genuinely stuck lock (a protocol bug) reaches it;
+ * still below bun's 5 s per-test default so a stuck round fails, not times out. */
+const BUDGET_MS = 4_000
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error))
 

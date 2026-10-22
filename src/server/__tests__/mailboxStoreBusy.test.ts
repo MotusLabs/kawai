@@ -17,7 +17,9 @@
 // by waiting it out; a worker stall longer than the timer would only turn
 // the round into a trivial success, never a false failure. The old elapsed
 // assertions (`>= 200` of a 300 ms budget) flaked once under host load and
-// are gone — no assertion here depends on how long anything takes.
+// are gone — no lower-bound timing assertion remains; the one surviving
+// bound (the BUSY-upgrade check's `ms < 2000`) is an upper bound that only
+// fails when the upgrade waits out a budget it must never engage.
 import { describe, expect, test } from 'bun:test'
 import { Database, type Database as Db } from 'bun:sqlite'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -106,9 +108,9 @@ function writerRound(holder: Db, request: WriterRequest): Promise<WriterDone> {
       stop()
       resolve(data as WriterDone)
     }
-    worker.onerror = () => {
+    worker.onerror = (event: ErrorEvent) => {
       stop()
-      reject(new Error('the writer worker failed to start'))
+      reject(new Error(`the writer worker failed to start: ${event.message}`))
     }
     worker.postMessage(request)
   })
