@@ -38,7 +38,7 @@ function round(number: number, extra: Partial<SupervisionRound> = {}): Supervisi
 function input(extra: Partial<SupervisionInput> = {}): SupervisionInput {
   return {
     change: 'api', dependsOn: [], state: 'implementing', step: null, stopReason: null, stopDetail: null,
-    landing: null, dependencies: [], parallelLimit: 3, attempt: { kind: 'implement' }, rounds: [], effects: [],
+    landing: null, dependencies: [], parallelLimit: 3, attempt: { kind: 'implement', status: 'out' }, rounds: [], effects: [],
     instruction: { messageId: 'msg-1', state: 'delivered', deliveredAt: ago(30), blocker: null, holder: holder() },
     openCards: [], conditions: [], memberRelease: null, slotHolder: null, candidates: [], results: [], waitEndedAt: null,
     ...extra,
@@ -108,7 +108,7 @@ describe('failingChecks', () => {
 })
 
 describe('repeating-failure', () => {
-  const view = (rounds: SupervisionRound[]) => changeSupervision(input({ state: 'implementing', attempt: { kind: 'fix' }, rounds }), NOW)
+  const view = (rounds: SupervisionRound[]) => changeSupervision(input({ state: 'implementing', attempt: { kind: 'fix', status: 'out' }, rounds }), NOW)
 
   test('different failures raise none', () => {
     expect(view([failed(2, [check('lint', 'failure')]), failed(3, [check('unit', 'failure')])]).stall).toBeNull()

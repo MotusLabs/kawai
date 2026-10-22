@@ -29,12 +29,12 @@ export interface PlannedEffect {
   command: Record<string, unknown>
 }
 
-/** The dispatch step (D7/D8; the owed fix of a released hold, revision-control 3.2): performed, never an effect row. */
+/** The dispatch step (D7/D8; the owed attempt of a released hold or refused send, revision-control 3.2, PR E A1): performed, never an effect row. */
 export interface PlannedDispatch {
   executionId: string
   change: string
   group: string
-  kind: 'implement' | 'fix'
+  kind: 'implement' | 'owed'
 }
 
 /** One round-pipeline stage (D9-D11), performed by the executor in order. */
@@ -161,15 +161,19 @@ export function planSteps(snapshot: ExecutionSnapshot, _now: string): PlanSteps 
         && (change.taskId === null || (change.task !== null && change.task.assignment === null && change.task.results.length === 0))) {
         steps.dispatches.push({ executionId: change.executionId, change: change.change, group: change.group, kind: 'implement' })
       }
-      // The owed fix dispatch (revision-control 3.2): the newest attempt is
-      // still owed — never dispatched (no assignment carries its exact key,
-      // no stamp) and no round answers it (H″ O1). It runs exactly once on
-      // the first tick after release, under the attempt's own request key.
-      // (This step still covers fix rows only; PR E step 3 generalizes it.)
-      if (!held && change.state === 'implementing' && change.group !== null && change.task !== null
-        && change.newestAttempt?.kind === 'fix'
-        && change.newestAttemptOwed) {
-        steps.dispatches.push({ executionId: change.executionId, change: change.change, group: change.group, kind: 'fix' })
+      // The owed dispatch (revision-control 3.2, PR E A1/H1): the newest
+      // attempt is still owed — never dispatched (no assignment carries its
+      // exact key, no stamp) and no round answers it (H″ O1). Implement and
+      // fix rows are owed in `implementing`; an update row is owed in
+      // `gating` with no step and no passed round — the failed update
+      // returned the change before its dispatch committed. It runs exactly
+      // once on the first tick it is reachable, under the attempt's own
+      // request key; the row's one writer beside the fixes step (H″ O2).
+      if (!held && change.group !== null && change.task !== null && change.newestAttemptOwed
+        && (change.newestAttempt?.kind === 'update'
+          ? change.state === 'gating' && change.step === null && change.passedAt === null
+          : change.state === 'implementing')) {
+        steps.dispatches.push({ executionId: change.executionId, change: change.change, group: change.group, kind: 'owed' })
       }
       // D13's follow-ons: a settled merge or update-branch effect of a
       // landing change is applied by the tick (merge → landed, or back to
@@ -278,8 +282,12 @@ export function planSteps(snapshot: ExecutionSnapshot, _now: string): PlanSteps 
       // settling. The stage fires for an open or passed round only: a failed
       // round's fix is already out and answers that round, so it carries the
       // newest revision through its notice instead, and a superseded round's
-      // fix attempt is already out.
-      if (round !== null && (round.outcome === null || round.outcome === 'pass') && change.task.results.some(result => result.id === round.resultId && result.taskRevision < change.task!.revision)) {
+      // fix attempt is already out. An owed newest attempt is the change's
+      // next instruction and the owed step is its one writer (H″ O2): the
+      // gate holds the revision fix until the row is out — superseding its
+      // round before the dispatch committed would orphan the attempt; the
+      // next failed update, or this stage once the row is out, re-mints.
+      if (round !== null && !change.newestAttemptOwed && (round.outcome === null || round.outcome === 'pass') && change.task.results.some(result => result.id === round.resultId && result.taskRevision < change.task!.revision)) {
         steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'revision', roundId: round.id, resultId: null })
         continue
       }

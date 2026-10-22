@@ -4,9 +4,10 @@
 // their own. 'answered' — a round records the row (a result is attributed to
 // the newest row), so its work is in the round pipeline; 'owed' — never
 // dispatched, the change's next instruction; 'out' — dispatched.
+import type { AttemptStatus } from '../../../shared/planExecution'
 import type { AttemptRow, RoundRow } from './executionRows'
 
-export type AttemptStatus = 'answered' | 'owed' | 'out'
+export { type AttemptStatus, agentHeldStage } from '../../../shared/planExecution'
 
 /** The assignment facts the status reads: every assignment of the task, any state. */
 export interface AttemptKeyFacts {

@@ -104,6 +104,40 @@ describe('bringing the branch up to date (14.2)', () => {
     expect(h.gh.merges).toHaveLength(0)
   })
 
+  test('a refused update dispatch leaves the row owed; the next tick re-sends its own key once (A1, H″ O2)', async () => {
+    const executionId = await startedExecution(h, [{ change: 'up-g' }])
+    await passedChange(h, executionId, 'up-g')
+    pushCommit(matrix, 'master', 'other-g.txt', 'g\n')
+    h.gh.update = branch => { mergeBaseInto(branch, clone => fs.writeFileSync(path.join(clone, 'extra.txt'), 'edited in the merge\n')) }
+    const real = h.results.handoff.bind(h.results)
+    h.results.handoff = (async () => { throw new Error('the send was refused') }) as typeof h.results.handoff
+    await h.tick()
+    await h.tick()
+    expect(row(executionId, 'up-g').stopDetail).toMatchObject({ stage: 'update' })
+    // The row was minted before the send: unstamped, unanswered — owed. The
+    // hand merge's tree differs, so the update fact is the failed check (the
+    // base head, no files) — the instruction says to merge the base by hand.
+    const updateRow = h.executions.attempts(executionId, 'up-g').at(-1)!
+    expect(updateRow).toMatchObject({ kind: 'update', assignmentId: null })
+    expect(updateRow.manifest.update).toEqual({ base: expect.any(String), files: [] })
+    expect(updateRow.manifest.answers?.roundId).toBe(h.executions.rounds(executionId, 'up-g').at(-1)!.id)
+    // Retry resumes the change; the owed step dispatches the row under its
+    // uniform key, and the stamp lands.
+    h.results.handoff = real
+    h.executions.transition(executionId, 'up-g', row(executionId, 'up-g'), { state: 'gating', step: null, stopReason: null, stopDetail: null, fixRounds: 0 })
+    await h.tick()
+    const sent = handoffs(executionId, 'up-g', 'fix')
+    expect(sent).toHaveLength(1)
+    const resumed = h.executions.change(executionId, 'up-g')!
+    expect(sent[0]!.requestKey).toBe(`exec:${executionId}:up-g:attempt:${updateRow.number}:${resumed.generation}`)
+    expect(h.executions.attempts(executionId, 'up-g').at(-1)!.assignmentId).not.toBeNull()
+    expect(bodyOf(sent[0]!)).toContain('did not produce a clean merge')
+    // The next pass replays by key: no second handoff, no second mint.
+    await h.tick()
+    expect(handoffs(executionId, 'up-g', 'fix')).toHaveLength(1)
+    expect(h.executions.attempts(executionId, 'up-g')).toHaveLength(2)
+  })
+
   test('a head moved by a push during the update returns an update attempt and releases the slot', async () => {
     const executionId = await startedExecution(h, [{ change: 'up-d' }])
     await passedChange(h, executionId, 'up-d')

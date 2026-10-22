@@ -38,7 +38,7 @@ import { EffectPinConflict } from './executionEffectStore'
 import { ExecutionConflict } from './executionStore'
 import type { ExecutionStore } from './executionStore'
 import type { PlanStore } from '../planStore'
-import { dispatchFix, dispatchImplementAttempt, dispatchOwedFixAttempt, ensureFixAttempt, redispatchStage, type DispatchDeps } from './executionDispatch'
+import { dispatchFix, dispatchImplementAttempt, dispatchOwedAttempt, ensureFixAttempt, redispatchStage, type DispatchDeps } from './executionDispatch'
 import { StepRefusal } from './stepRefusal'
 import { fixRoundOutcome } from '../../../shared/planExecutionProgress'
 import { applyRoundStage, type ReleaseSeam, roundAdapters } from './executionRounds'
@@ -231,8 +231,8 @@ export class ExecutionExecutor {
       // Each step runs in its own guard: a refused service call stops only
       // its change; any other throw ends the tick (the wake loop logs it).
       for (const step of steps.dispatches) {
-        await this.guarded(step, () => step.kind === 'fix'
-          ? dispatchOwedFixAttempt(this.dispatchDeps(team), step)
+        await this.guarded(step, () => step.kind === 'owed'
+          ? dispatchOwedAttempt(this.dispatchDeps(team), step)
           : dispatchImplementAttempt(this.dispatchDeps(team), step))
       }
       for (const stage of steps.stages) {

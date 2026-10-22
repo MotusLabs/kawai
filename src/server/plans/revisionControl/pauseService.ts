@@ -24,7 +24,7 @@
 // durable once-marker for its mail. After the commit the executor wake fires.
 import type { PauseStage, PlanPause, PlanPauseTarget } from '../../../shared/planRevisionControl'
 import type { ChangeRow } from '../execution/executionRows'
-import { attemptStatus } from '../execution/attemptStatus'
+import { agentHeldStage, attemptStatus } from '../execution/attemptStatus'
 import type { ExecutionStore } from '../execution/executionStore'
 import { outstandingOf, type AssignmentStore } from '../../team/assignmentStore'
 import { forwardEnd } from '../../team/forwardChain'
@@ -81,13 +81,6 @@ type Failure = { state?: boolean; text: string }
  */
 export function landingStarted(row: Pick<ChangeRow, 'state' | 'step'>): boolean {
   return row.state === 'landing' && (row.step === 'updating' || row.step === 'merging')
-}
-
-/** The agent-held stages a pause targets (D6): the attempt, and the review handoff. */
-function stageOf(row: Pick<ChangeRow, 'state' | 'step'>): PauseStage | null {
-  if (row.state === 'implementing') return 'attempt'
-  if (row.state === 'gating' && row.step === 'reviewing') return 'review'
-  return null
 }
 
 /** The held changes of the pause that are not targets, split per D6. */
@@ -253,18 +246,20 @@ export class PauseService {
    * successor is unclaimed; `deliverOwed` mails those when a claim appears.
    */
   private deriveTarget(row: ChangeRow): { target: DerivedTarget } | { noActiveWork: true } | { landingInProgress: true } {
-    const stage = stageOf(row)
+    // O3′ (revision-control PR E): the shared agent-held predicate decides
+    // the stage. An owed newest attempt names no holder (H7, H″ O1) — the
+    // outstanding assignment is the previous stage's (the reviewer's), never
+    // the attempt's, so the change holds no live work to pause, whatever
+    // its state. A linked row (its dispatch went out) still derives its
+    // claimant.
+    const newest = this.deps.executions.attempts(row.executionId, row.change).at(-1) ?? null
+    const held = agentHeldStage(row, newest === null || row.taskId === null ? null : {
+      kind: newest.kind,
+      status: attemptStatus(newest, this.deps.assignments.listByTask(row.taskId), this.deps.executions.rounds(row.executionId, row.change)),
+    })
+    const stage: PauseStage | null = held === null ? null : held === 'review' ? 'review' : 'attempt'
     if (stage === null) return landingStarted(row) ? { landingInProgress: true } : { noActiveWork: true }
     if (row.taskId === null) return { noActiveWork: true }
-    // H7 (H″ O1): an owed newest attempt names no holder — the outstanding
-    // assignment is the previous stage's (the reviewer's), never the
-    // attempt's, so the change holds no live work to pause. A linked row
-    // (its dispatch went out) still derives its claimant.
-    const newest = this.deps.executions.attempts(row.executionId, row.change).at(-1)
-    if (stage === 'attempt' && newest !== undefined
-      && attemptStatus(newest, this.deps.assignments.listByTask(row.taskId), this.deps.executions.rounds(row.executionId, row.change)) === 'owed') {
-      return { noActiveWork: true }
-    }
     const attemptId = newest?.id ?? null
     const base = {
       pauseId: '', change: row.change, stage, attemptId, assignmentId: '', holderSession: null as string | null,

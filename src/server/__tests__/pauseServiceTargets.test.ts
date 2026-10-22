@@ -425,6 +425,52 @@ describe('targets and mail (D6)', () => {
     expect(pauseMails(api.taskId)).toEqual([expect.objectContaining({ toId: 'dev3', priority: 'urgent' })])
   })
 
+  test('an out update attempt keeps its holder in gating: the pause targets its claimant (O3′)', async () => {
+    const { planId, executionId } = await executionWith(['api'])
+    const api = await inFlight(executionId, 'api')
+    // The failed branch update returned the change to gating; its attempt
+    // dispatched to dev4 (stamped, key anchored). The update attempt is live
+    // agent-held work in gating, so its claimant is paused.
+    executions.transition(executionId, 'api', executions.change(executionId, 'api')!, { state: 'gating', step: null })
+    const updateMail = bench.mail.enqueue({
+      teamId, toKind: 'session', toId: 'dev4', fromKind: 'system', fromSession: null, fromGroup: null,
+      originPath: world.repo, body: 'Merge the base.', taskId: api.taskId, actor: 'system',
+    })
+    bench.mail.claim(updateMail.id, 'dev4')
+    const updateAssignment = bench.assignmentStore.insert({
+      teamId, taskId: api.taskId, requestKey: `exec:${executionId}:api:attempt:2:0`, targetKind: 'session', targetId: 'dev4',
+      role: null, instruction: 'Merge the base.', creator: { kind: 'human', sessionId: null }, messageId: updateMail.id,
+    })
+    executions.insertAttempt({
+      executionId, change: 'api', kind: 'update', assignmentId: updateAssignment.assignment.id,
+      manifest: { ...manifest(), answers: { resultId: 'res-1', roundId: 'round-1', failingChecks: [], findingsIds: [] }, update: { base: 'base', files: ['a.txt'] } },
+      manifestHash: 'mh-update',
+    })
+    const hold = placeHold(planId, ['api'], 'pa-h11')
+    const outcome = expectOk(pause({ planId, holdId: hold.id, commandId: 'pa-11' }))
+    expect(pauses.targets(outcome.pause.id)).toEqual([expect.objectContaining({ change: 'api', stage: 'attempt', holderSession: 'dev4' })])
+    expect(pauseMails(api.taskId)).toEqual([expect.objectContaining({ toId: 'dev4' })])
+  })
+
+  test('an owed update attempt names no holder: gating with an undispatched row has no active work', async () => {
+    const { planId, executionId } = await executionWith(['api'])
+    const api = await inFlight(executionId, 'api')
+    // The update row was minted but its send never committed: the outstanding
+    // assignment is the implement stage's, never the attempt's, so the
+    // change has no live work to pause.
+    executions.transition(executionId, 'api', executions.change(executionId, 'api')!, { state: 'gating', step: null })
+    executions.insertAttempt({
+      executionId, change: 'api', kind: 'update', assignmentId: null,
+      manifest: { ...manifest(), answers: { resultId: 'res-1', roundId: 'round-1', failingChecks: [], findingsIds: [] }, update: { base: '', files: [] } },
+      manifestHash: 'mh-update',
+    })
+    const hold = placeHold(planId, ['api'], 'pa-h12')
+    const outcome = expectOk(pause({ planId, holdId: hold.id, commandId: 'pa-12' }))
+    expect(pauses.targets(outcome.pause.id)).toEqual([])
+    expect(service.sides(teamId, outcome.pause.id)).toEqual({ noActiveWork: ['api'], landingInProgress: [] })
+    expect(pauseMails(api.taskId)).toEqual([])
+  })
+
   test('a started update or merge lists as landing in progress and is left alone', async () => {
     const { planId, executionId } = await executionWith(['api', 'ui'])
     await inFlight(executionId, 'api')

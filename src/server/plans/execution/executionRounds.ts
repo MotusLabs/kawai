@@ -171,7 +171,7 @@ export async function dispatchRevisionAttempt(deps: RoundDeps, changeRow: { exec
   }
   // The attempt row — the owed dispatch's marker (revision-control 3.2) —
   // is created however the gate reads; the handoff only when unheld, and
-  // the release dispatches it once through dispatchOwedFixAttempt.
+  // the release dispatches it once through dispatchOwedAttempt.
   const attempt = await ensureFixAttempt(
     { team: deps.team, executions: store, plans: deps.plans, tasks: deps.tasks, assignments: deps.assignments, results: deps.results },
     {
