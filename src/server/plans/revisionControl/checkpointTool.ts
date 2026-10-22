@@ -11,6 +11,7 @@ import { runGit } from '../../git/gitCommand'
 import { z } from 'zod'
 import type { ExecutionStore } from '../execution/executionStore'
 import type { ChangeRow } from '../execution/executionRows'
+import type { PlanPauseTarget } from '../../../shared/planRevisionControl'
 import type { CheckpointStore, NewPlanCheckpoint } from './checkpointStore'
 import type { PauseStore } from './pauseStore'
 
@@ -76,14 +77,21 @@ export class CheckpointTool {
     return { executionId: execution.id, planId: execution.planId, teamId: row.teamId, row }
   }
 
-  /** The open pause target of one change, with the caller as its claimant, or the D7 `no-pause-requested` refusal. */
-  private pausingTarget(teamId: string, planId: string, change: string, sessionId: string) {
-    const pause = this.deps.pauses.forPlan(teamId, planId, true)[0] ?? null
-    const target = pause === null ? null : this.deps.pauses.target(pause.id, change)
-    if (pause === null || target === null || target.withdrawn || target.decision !== null || target.holderSession !== sessionId) {
-      return null
+  /**
+   * Every open pause target of the change that names the caller: unwithdrawn,
+   * undecided, across every open pause of the plan — never only the plan's
+   * first pause, whose targets may not hold this change (D6 allows pauses on
+   * different holds to stand side by side, and two holds can cover one change).
+   */
+  private pausingTargets(teamId: string, planId: string, change: string, sessionId: string): Array<{ pauseId: string; target: PlanPauseTarget }> {
+    const found: Array<{ pauseId: string; target: PlanPauseTarget }> = []
+    for (const pause of this.deps.pauses.forPlan(teamId, planId, true)) {
+      const target = this.deps.pauses.target(pause.id, change)
+      if (target !== null && !target.withdrawn && target.decision === null && target.holderSession === sessionId) {
+        found.push({ pauseId: pause.id, target })
+      }
     }
-    return { pauseId: pause.id, target }
+    return found
   }
 
   /** The commit checks (D7): the branch's head, a clean worktree, and origin's head contained. */
@@ -94,7 +102,10 @@ export class CheckpointTool {
       return refuse('not-branch-head', `The commit is not the head of refs/heads/${branch} (originally ${actual}); commit on ${branch} and record again.`)
     }
     const status = runGit(['status', '--porcelain'], { cwd })
-    if (status.ok && status.stdout.trim() !== '') {
+    if (!status.ok) {
+      return refuse('dirty-worktree', `Reading the worktree state failed: ${status.stderr.trim()}. Record again once git reads it.`)
+    }
+    if (status.stdout.trim() !== '') {
       const paths = status.stdout.trim().split('\n').map(line => line.slice(3).trim()).join(', ')
       return refuse('dirty-worktree', `The worktree is not clean: ${paths}. Commit (or stash) these first; ignored files are excluded.`)
     }
@@ -122,8 +133,8 @@ export class CheckpointTool {
     const found = this.targetOf(input.task_id)
     if (!('row' in found)) return found
     const { row } = found
-    const pausing = this.pausingTarget(found.teamId, found.planId, row.change, caller.sessionId)
-    if (pausing === null) {
+    const pausing = this.pausingTargets(found.teamId, found.planId, row.change, caller.sessionId)
+    if (pausing.length === 0) {
       return refuse('no-pause-requested', `No pause of ${row.change} names this session as its claimant; keep working and submit with task_submit_result, or wait for the pause mail.`)
     }
     if (row.state === 'landing' && (row.step === 'updating' || row.step === 'merging')) {
@@ -131,23 +142,28 @@ export class CheckpointTool {
     }
     const commit = input.commit ?? null
     if (commit === null) {
-      if (pausing.target.stage === 'attempt') {
+      if (pausing[0].target.stage === 'attempt') {
         return refuse('commit-required', 'An attempt target records a commit; pass the commit your work stands on.')
       }
       // A review target without a commit leaves notes (D7): no effect, the write alone.
-      return this.insert(found, pausing.pauseId, caller.sessionId, input, null)
+      return this.insert(found, pausing, caller.sessionId, input, null)
     }
     const place = worktreeOf(row)
     if (!('cwd' in place)) return place
     const checked = await this.checkCommit(place.cwd, place.branch, commit)
     if (checked !== null) return checked
-    return this.insert(found, pausing.pauseId, caller.sessionId, input, commit, place)
+    return this.insert(found, pausing, caller.sessionId, input, commit, place)
   }
 
-  /** The shared write: one transaction inserting the checkpoint, the effect, and the target's pointer. */
+  /**
+   * The shared write: one transaction inserting the checkpoint per served
+   * target (each pause's own chain, so supersede stays per target), the
+   * target pointers, and — for a commit — one `push-checkpoint` effect under
+   * the first row's key, so one recording pushes once.
+   */
   private insert(
     found: { executionId: string; row: ChangeRow },
-    pauseId: string,
+    pausing: Array<{ pauseId: string; target: PlanPauseTarget }>,
     sessionId: string,
     input: CheckpointInput,
     commit: string | null,
@@ -155,68 +171,75 @@ export class CheckpointTool {
   ): CheckpointOutcome {
     const attempt = this.deps.executions.attempts(found.executionId, found.row.change).at(-1) ?? null
     const fresh = this.deps.executions.change(found.executionId, found.row.change) ?? found.row
-    const record: NewPlanCheckpoint = {
-      executionId: found.executionId,
-      change: found.row.change,
-      pauseId,
-      attemptId: attempt?.id ?? null,
-      sessionId,
-      kind: commit === null ? 'notes' : 'commit',
-      commitSha: commit,
-      baselineCommit: attempt?.manifest.baseline ?? fresh.baselineCommit,
-      manifestHash: attempt?.manifestHash ?? null,
-      resultId: null,
-      summary: input.summary,
-      unfinished: input.unfinished ?? null,
-      errorsTests: input.errors_tests ?? null,
-      nextSteps: input.next_steps,
-      effectId: null,
-    }
+    let checkpointId: string | null = null
     let effectId: string | null = null
-    const written = this.deps.pauses.db.transaction(() => {
-      const checkpoint = this.deps.checkpoints.insert(record)
-      if (commit !== null && place !== undefined) {
-        const effect = this.deps.executions.insertEffect({
-          executionId: found.executionId, change: found.row.change, roundId: checkpoint.id,
-          kind: 'push-checkpoint',
-          effectKey: `${found.executionId}:${found.row.change}:push-checkpoint:${checkpoint.id}:${fresh.generation}`,
-          command: { cwd: place.cwd, commit, branch: place.branch },
-        })
-        this.deps.checkpoints.setEffect(checkpoint.id, effect.id)
-        effectId = effect.id
+    this.deps.pauses.db.transaction(() => {
+      for (const { pauseId } of pausing) {
+        const record: NewPlanCheckpoint = {
+          executionId: found.executionId,
+          change: found.row.change,
+          pauseId,
+          attemptId: attempt?.id ?? null,
+          sessionId,
+          kind: commit === null ? 'notes' : 'commit',
+          commitSha: commit,
+          baselineCommit: attempt?.manifest.baseline ?? fresh.baselineCommit,
+          manifestHash: attempt?.manifestHash ?? null,
+          resultId: null,
+          summary: input.summary,
+          unfinished: input.unfinished ?? null,
+          errorsTests: input.errors_tests ?? null,
+          nextSteps: input.next_steps,
+          effectId: null,
+        }
+        const checkpoint = this.deps.checkpoints.insert(record)
+        if (commit !== null && place !== undefined && effectId === null) {
+          const effect = this.deps.executions.insertEffect({
+            executionId: found.executionId, change: found.row.change, roundId: checkpoint.id,
+            kind: 'push-checkpoint',
+            effectKey: `${found.executionId}:${found.row.change}:push-checkpoint:${checkpoint.id}:${fresh.generation}`,
+            command: { cwd: place.cwd, commit, branch: place.branch },
+          })
+          this.deps.checkpoints.setEffect(checkpoint.id, effect.id)
+          effectId = effect.id
+        }
+        this.deps.pauses.setCheckpoint(pauseId, found.row.change, checkpoint.id)
+        // The primary id is the effect's round slot: the first served target.
+        if (checkpointId === null) checkpointId = checkpoint.id
       }
-      this.deps.pauses.setCheckpoint(pauseId, found.row.change, checkpoint.id)
-      return checkpoint.id
     })()
-    return { ok: true, checkpointId: written, effectId }
+    return { ok: true, checkpointId: checkpointId!, effectId }
   }
 
   /**
    * A result counts (D7): once the round's push is done and its change is
    * Pausing with no checkpoint recorded, Kawai records the `result`
-   * checkpoint itself — the holder never calls the tool for it. The
-   * holder's own record always wins: a target with a checkpoint is skipped.
+   * checkpoint itself — the holder never calls the tool for it. It counts
+   * for every open, uncheckpointed target of the change across every open
+   * pause of the plan; the holder's own record always wins: a target with a
+   * checkpoint is skipped.
    */
   recordResultCheckpoint(executionId: string, change: string, roundId: string): void {
     const round = this.deps.executions.round(roundId)
     if (round === null || round.change !== change) return
     const execution = this.deps.executions.execution(executionId)
     if (execution === null || execution.state !== 'running') return
-    const pause = this.deps.pauses.forPlan(execution.teamId, execution.planId, true)[0] ?? null
-    const target = pause === null ? null : this.deps.pauses.target(pause.id, change)
-    if (pause === null || target === null || target.withdrawn || target.decision !== null || target.checkpointId !== null) return
     const attempt = this.deps.executions.attempts(executionId, change).find(entry => entry.id === round.attemptId) ?? null
     const result = this.deps.resultOf?.(round.resultId) ?? null
-    const checkpoint = this.deps.checkpoints.insert({
-      executionId, change, pauseId: pause.id, attemptId: round.attemptId,
-      sessionId: result?.sessionId ?? target.holderSession ?? 'kawai',
-      kind: 'result', commitSha: round.commitSha,
-      baselineCommit: attempt?.manifest.baseline ?? null, manifestHash: attempt?.manifestHash ?? null,
-      resultId: round.resultId,
-      summary: `Kawai recorded this checkpoint from the round's submitted result (${round.resultId}).`,
-      unfinished: null, errorsTests: null, nextSteps: '', effectId: null,
-    })
-    this.deps.pauses.setCheckpoint(pause.id, change, checkpoint.id)
+    for (const pause of this.deps.pauses.forPlan(execution.teamId, execution.planId, true)) {
+      const target = this.deps.pauses.target(pause.id, change)
+      if (target === null || target.withdrawn || target.decision !== null || target.checkpointId !== null) continue
+      const checkpoint = this.deps.checkpoints.insert({
+        executionId, change, pauseId: pause.id, attemptId: round.attemptId,
+        sessionId: result?.sessionId ?? target.holderSession ?? 'kawai',
+        kind: 'result', commitSha: round.commitSha,
+        baselineCommit: attempt?.manifest.baseline ?? null, manifestHash: attempt?.manifestHash ?? null,
+        resultId: round.resultId,
+        summary: `Kawai recorded this checkpoint from the round's submitted result (${round.resultId}).`,
+        unfinished: null, errorsTests: null, nextSteps: '', effectId: null,
+      })
+      this.deps.pauses.setCheckpoint(pause.id, change, checkpoint.id)
+    }
   }
 }
 

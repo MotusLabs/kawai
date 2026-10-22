@@ -59,7 +59,7 @@ Implement after these have landed on master: `plan-execution`, `integration-cand
   - a replay sends nothing;
   - an agent caller is refused.
 - [x] 4.2 Implement `task_checkpoint` and the `push-checkpoint` effect with its inspector (D7). Verify with tests against a bare remote:
-  - each refusal (no pause, wrong caller, not the branch head, dirty or untracked worktree listing paths, missing origin head, Kawai writing the branch) writes nothing;
+  - each refusal (no pause, wrong caller, not the branch head, dirty or untracked worktree listing paths, a commit that does not contain origin's head, Kawai writing the branch) writes nothing;
   - a valid call pushes without force;
   - an unknown effect is inspected after restart;
   - a failed push leaves the target Pausing with `checkpoint-push-failed`;

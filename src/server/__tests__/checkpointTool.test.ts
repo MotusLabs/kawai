@@ -212,6 +212,40 @@ describe('task_checkpoint refusals (D7)', () => {
     }
   })
 
+  test('a failed status read is refused and writes nothing', async () => {
+    const unreadable = bench()
+    const gitDir = git(['rev-parse', '--absolute-git-dir'], unreadable.work.cwd).trim()
+    fs.chmodSync(path.join(gitDir, 'index'), 0o000)
+    try {
+      const failed = refusalOf(await unreadable.tool.record(caller, { ...baseInput, commit: unreadable.work.commit }), 'unreadable index')
+      expect(failed.reason).toBe('dirty-worktree')
+      expect(failed.message).toContain('Reading the worktree state failed')
+      expect(failed.message).toContain('Permission denied')
+    } finally {
+      fs.chmodSync(path.join(gitDir, 'index'), 0o644)
+    }
+    expect(checkpointCount(unreadable).n).toBe(0)
+    expect(effectCount(unreadable)).toBe(0)
+  })
+
+  test('an origin read failure is refused and writes nothing', async () => {
+    const unreachable = bench()
+    // The remote is repo-wide config; re-pointed at an unreachable path here
+    // and restored in the finally (a `remote remove` would drop the tracking
+    // refs later benches read as `origin/master`).
+    git(['remote', 'set-url', 'origin', path.join(world.root, 'unreachable-origin.git')], world.repo)
+    try {
+      const failed = refusalOf(await unreachable.tool.record(caller, { ...baseInput, commit: unreachable.work.commit }), 'no origin')
+      expect(failed.reason).toBe('not-contains-origin')
+      expect(failed.message).toContain("Reading origin's")
+      expect(failed.message).toContain('does not appear')
+    } finally {
+      git(['remote', 'set-url', 'origin', origin], world.repo)
+    }
+    expect(checkpointCount(unreachable).n).toBe(0)
+    expect(effectCount(unreachable)).toBe(0)
+  })
+
   test('a commit that does not contain origin head, or Kawai writing the branch, is refused', async () => {
     const diverged = bench()
     git(['-c', 'user.email=t@e', '-c', 'user.name=T', 'commit', '-q', '--allow-empty', '-m', 'origin moves on'], world.repo)
@@ -275,6 +309,17 @@ describe('push-checkpoint effect (D7)', () => {
     expect(git(['ls-remote', origin, `refs/heads/${bench1.work.branch}`], world.repo).trim().split(/\s+/)[0]).toBe(foreign)
     expect(freshRow(bench1).state).toBe('implementing')
     expect(freshRow(bench1).stopReason).toBeNull()
+  })
+
+  test('a never-pushed branch records and pushes without force', async () => {
+    const fresh = bench()
+    // Origin has never seen the change's branch: no head to contain, so the record is allowed.
+    expect(git(['ls-remote', origin, `refs/heads/${fresh.work.branch}`], world.repo).trim()).toBe('')
+    const pushed = okOutcome(await fresh.tool.record(caller, { ...baseInput, commit: fresh.work.commit }), 'never pushed')
+    await runEffect(fresh, pushed.effectId!)
+    expect(git(['ls-remote', origin, `refs/heads/${fresh.work.branch}`], world.repo).trim().split(/\s+/)[0]).toBe(fresh.work.commit)
+    expect(fresh.executions.effect(pushed.effectId!)!.state).toBe('done')
+    expect(fresh.pauses.target(fresh.pauseId, 'api')!.checkpointId).toBe(pushed.checkpointId)
   })
 
   test('a restart inspects the unknown effect first: pushed means done, unreadable never stops the change', async () => {
