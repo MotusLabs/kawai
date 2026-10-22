@@ -52,6 +52,11 @@ import { DecisionStore } from './decisions/decisionStore'
 import { HoldService } from './revisionControl/holdService'
 import { HoldStore } from './revisionControl/holdStore'
 import { PauseStore } from './revisionControl/pauseStore'
+import { PauseService } from './revisionControl/pauseService'
+import { AssignmentStore } from '../team/assignmentStore'
+import { CheckpointStore } from './revisionControl/checkpointStore'
+import type { PauseTickDeps } from './revisionControl/pauseTick'
+import { CheckpointTool } from './revisionControl/checkpointTool'
 import type { ActiveHold } from '../../shared/planRevisionControl'
 import { readPlanSupervisionDetail, type SupervisionDetailReads } from './supervision/planSupervisionDetail'
 import type { SupervisionRuntime } from './supervision/supervisionRead'
@@ -80,6 +85,8 @@ export interface ExecutionTeamServices {
   supervision?: SupervisionRuntime
   /** Member release's readiness and release (the D11 release-before-review seam). */
   releases: MemberRelease
+  /** The pause tick's live holder facts (revision-control D8): state, request, busy, provider limit. */
+  pauseFacts: (sessionId: string) => import('./revisionControl/pauseTick').PauseHolderRuntimeFacts
   /** Staffing's in-flight spawn reservations: a member still starting holds the D11 release step. */
   pendingSpawns: (teamId: string) => Array<{ groupId: string; worktree: string }>
   records: () => Iterable<ChatSessionRecord>
@@ -200,6 +207,10 @@ export function composePlanServices(options: PlanServicesOptions): {
   monitor: SupervisionMonitor | null
   /** The supervision reads (plan-supervision D13); null without team services' supervision runtime. */
   supervisionReads: SupervisionDetailReads | null
+  /** The `task_checkpoint` tool (revision-control D7); also the executor's round-push → result-checkpoint recorder. */
+  checkpoints: CheckpointTool
+  /** The owner's pause commands (revision-control D6); the executor's owed-mail pass reads through it. Null without team services. */
+  pauses: PauseService | null
 } {
   const adapter = options.adapter ?? new OpenspecAdapter()
   const validationStore = new ValidationStore(options.db)
@@ -244,6 +255,8 @@ export function composePlanServices(options: PlanServicesOptions): {
   }
   // Set once the team services exist; the detail reads it at each push (plan-supervision D15/D16).
   let supervisionReads: SupervisionDetailReads | null = null
+  // The pause service (revision-control D6), built with the team services; null without them.
+  let composedPauses: PauseService | null = null
   const plans = new PlanService(options.plans, {
     getSession: options.getSession,
     strategies: options.strategies,
@@ -326,8 +339,37 @@ export function composePlanServices(options: PlanServicesOptions): {
     // revision-control 3.3: `no-hold` and the runner's held step read the same holds.
     holds: { active: holdsOf },
   })
+  // Checkpoints (revision-control D7): the tool the Pausing holder calls,
+  // and the recorder that counts a round's done push as the `result`
+  // checkpoint. The git reads are the tool's own; the results name the
+  // submitter a `result` checkpoint carries. The store is shared with the
+  // tick's pause pass, which reads each target's newest checkpoint.
+  const checkpointStore = new CheckpointStore(options.db)
+  const checkpoints = new CheckpointTool({
+    executions: executionStore, pauses: pauseStore, checkpoints: checkpointStore,
+    ...(team !== undefined ? {
+      resultOf: resultId => {
+        const result = team.results.tasks.store.results.get(resultId)
+        return result === null ? null : { sessionId: result.submittedBy.kind === 'agent' ? result.submittedBy.sessionId : null }
+      },
+    } : {}),
+  })
   if (team !== undefined) {
     const roundAdaptersUsed = fixture ? fixtureRoundAdapters() : roundAdapters
+    // The pause service (revision-control D6): the owner's command — and,
+    // for the tick (D8), the owed-mail pass over a spawn's or forward's
+    // claim, whose once-marker is the target's stored message_id.
+    const pauses = new PauseService({
+      pauses: pauseStore, holds: holdStore, plans: options.plans, planService: plans, executions: executionStore,
+      // The assignment reads (the outstanding instruction, the withdrawal's
+      // supersede) over the shared table; the service-owned instance keeps
+      // its claim copies current (supervisionRead builds its reader the
+      // same way).
+      assignments: new AssignmentStore(options.db, team.mailbox), mailbox: team.mailbox,
+      sessionExists: id => options.getSession(id) !== undefined,
+      wake: teamId => runtime?.command(teamId),
+    })
+    composedPauses = pauses
     const executor = new ExecutionExecutor({
       mechanisms,
       store: executionStore,
@@ -351,6 +393,19 @@ export function composePlanServices(options: PlanServicesOptions): {
       adapters: { provision: provisionAdapter(executionStore, undefined, mechanisms) },
       groupScoped: (teamId, groupId) => groupScopedOf(team, teamId, groupId),
       holds: { active: holdsOf, openTargets: openTargetsOf },
+      checkpoints,
+      // revision-control D8 (4.3): the tick's pause pass — the owed mail,
+      // then Paused recorded from stored rows and the live holder facts,
+      // and a settled pause closed.
+      pauses: {
+        pauses: pauseStore, checkpoints: checkpointStore, executions: executionStore, mailbox: team.mailbox,
+        deliverOwed: (teamId, groupsRoot, pauseId) => pauses.deliverOwed(teamId, groupsRoot, pauseId),
+        readiness: sessionId => {
+          const answer = team.releases.readiness(sessionId)
+          return answer.ready ? { ready: true, reason: null } : { ready: false, reason: answer.reason }
+        },
+        factsOf: team.pauseFacts,
+      } satisfies PauseTickDeps,
       roundAdapters: roundAdaptersUsed,
       ...(fixture ? { landingAdapters: fixtureLandingAdapters(), tickMs: 1_000 } : {}),
       ...(options.executionGhOptions ? { ghOptions: options.executionGhOptions } : {}),
@@ -405,6 +460,8 @@ export function composePlanServices(options: PlanServicesOptions): {
     runtime, decisions, holds, monitor, promotions: promotions.service, integrationStore,
     // The supervision reads the workspace's plan attention gathers over (plan-supervision D13); null without team services.
     supervisionReads,
+    checkpoints,
+    pauses: composedPauses,
   }
 }
 

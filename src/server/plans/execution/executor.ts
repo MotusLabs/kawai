@@ -43,6 +43,7 @@ import { StepRefusal } from './stepRefusal'
 import { fixRoundOutcome } from '../../../shared/planExecutionProgress'
 import { applyRoundStage, type ReleaseSeam, roundAdapters } from './executionRounds'
 import { dispatchDeps as dispatchDepsOf, effectRunner, landingDeps as landingDepsOf, outcomeDeps as outcomeDepsOf, roundDeps as roundDepsOf } from './executorDeps'
+import { runPauseTick } from '../revisionControl/pauseTick'
 
 /** D5's polling interval while a team has a running execution. */
 export const EXECUTOR_TICK_MS = 60_000
@@ -88,6 +89,10 @@ export interface ExecutorDeps {
   promotions?: { startup(): void; pass(teamId: string): Promise<void>; active(teamId: string): boolean }
   /** The hold gate's reads (revision-control 3.2): the plan's active holds and open pause targets. */
   holds?: { active(teamId: string, planId: string): ActiveHold[]; openTargets(teamId: string, planId: string): OpenPauseTarget[] }
+  /** revision-control D7: the checkpoints the tool records and the round results that count as them. */
+  checkpoints?: import('../revisionControl/checkpointTool').CheckpointTool
+  /** revision-control D8 (4.3): the tick's pause pass — owed mail, Paused recording, closing. */
+  pauses?: import('../revisionControl/pauseTick').PauseTickDeps
 }
 
 export class ExecutionExecutor {
@@ -171,6 +176,10 @@ export class ExecutionExecutor {
   private async tickExecutions(teamId: string): Promise<void> {
     const team = this.deps.teamOf(teamId)
     if (team === undefined) return
+    // The pause pass runs before anything plans: a finished execution's open
+    // pause still settles here, and the owed mail goes out on the wake the
+    // pause command fired (revision-control D8).
+    if (this.deps.pauses !== undefined) runPauseTick(this.deps.pauses, teamId, team.groupsRoot)
     // A settled step makes the next due: the tick loops until a pass owes
     // nothing, bounded so a pathological loop cannot spin forever.
     for (let pass = 0; pass < 10; pass++) {

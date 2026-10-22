@@ -79,6 +79,13 @@ export class PauseStore {
     return rows.map(mapPause)
   }
 
+  /** Every pause of the team, oldest first; `open` keeps only the unclosed ones (the tick's pass, D8). */
+  forTeam(teamId: string, open = false): PlanPause[] {
+    const rows = this.db.prepare(`SELECT * FROM plan_pauses WHERE team_id = ?${open ? ' AND closed_at IS NULL' : ''} ORDER BY created_at, rowid`)
+      .all(teamId) as Row[]
+    return rows.map(mapPause)
+  }
+
   targets(pauseId: string): PlanPauseTarget[] {
     return (this.db.prepare('SELECT * FROM plan_pause_targets WHERE pause_id = ? ORDER BY change').all(pauseId) as Row[]).map(mapTarget)
   }
@@ -99,11 +106,6 @@ export class PauseStore {
 
   setCheckpoint(pauseId: string, change: string, checkpointId: string): void {
     this.db.prepare('UPDATE plan_pause_targets SET checkpoint_id = ? WHERE pause_id = ? AND change = ?').run(checkpointId, pauseId, change)
-  }
-
-  /** Mark the target's instruction withdrawn: unclaimed, and Kawai superseded it (D6). */
-  markWithdrawn(pauseId: string, change: string): void {
-    this.db.prepare('UPDATE plan_pause_targets SET withdrawn = 1, holder_session = NULL WHERE pause_id = ? AND change = ?').run(pauseId, change)
   }
 
   /**
@@ -134,6 +136,20 @@ export class PauseStore {
   closeIfDecided(pauseId: string): boolean {
     const open = this.db.prepare('SELECT 1 FROM plan_pause_targets WHERE pause_id = ? AND decision IS NULL LIMIT 1').get(pauseId)
     if (open) return false
+    return this.closeNow(pauseId)
+  }
+
+  /**
+   * Close a settled pause (D8): every target decided, or the execution
+   * finished — which reads every undecided target `cancelled`. `closed`
+   * says whether this call closed it; a repeat writes nothing.
+   */
+  closeIfSettled(pauseId: string, executionFinished: boolean): boolean {
+    if (!executionFinished) return this.closeIfDecided(pauseId)
+    return this.closeNow(pauseId)
+  }
+
+  private closeNow(pauseId: string): boolean {
     return this.db.prepare('UPDATE plan_pauses SET closed_at = ? WHERE id = ? AND closed_at IS NULL').run(this.now().toISOString(), pauseId).changes === 1
   }
 }

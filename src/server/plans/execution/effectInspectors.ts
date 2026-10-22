@@ -66,8 +66,10 @@ export async function inspectEffect(effect: EffectRow, reads: InspectorReads): P
         const branch = await reads.localBranch(text('repo'), text('branch'))
         return branch !== null ? { found: 'done', outcome: { head: branch } } : { found: 'not-done' }
       }
-      case 'push': {
-        // origin's head contains the commit: done; else run again.
+      case 'push':
+      case 'push-checkpoint': {
+        // origin's head contains the commit: done; else run again. The
+        // checkpoint push (revision-control D7) inspects the same way.
         const head = await reads.remoteHead(text('cwd'), `refs/heads/${text('branch')}`)
         if (head === null) return { found: 'not-done' }
         return head === text('commit') || head.startsWith(text('commit')) ? { found: 'done', outcome: { head } }

@@ -59,6 +59,7 @@ export function outcomeDeps(deps: ExecutorDeps, mechanismOf: (executionId: strin
     taskStatusOf: taskId => deps.tasks.store.get(taskId)?.status ?? null,
     mechanismOf: executionId => mechanismOf(executionId),
     now: () => deps.now?.() ?? new Date(),
+    ...(deps.checkpoints ? { recordResultCheckpoint: (executionId: string, change: string, roundId: string) => deps.checkpoints!.recordResultCheckpoint(executionId, change, roundId) } : {}),
   }
 }
 
@@ -73,7 +74,7 @@ export function effectRunner(deps: ExecutorDeps, mechanismOf: (executionId: stri
         const landing = deps.landingAdapters ?? landingAdapters
         const gh: GhCommandOptions | undefined = deps.ghOptions
         const adapter = adapters[effect.kind]
-          ?? (effect.kind === 'push' ? pushAdapter(rounds)
+          ?? (effect.kind === 'push' || effect.kind === 'push-checkpoint' ? pushAdapter(rounds)
             : effect.kind === 'open-pr' ? openPrAdapter(rounds, gh)
               : effect.kind === 'rerun' ? rerunAdapter(rounds, gh)
                 : effect.kind === 'remove-worktree' ? removeWorktreeAdapter()

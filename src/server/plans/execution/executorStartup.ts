@@ -34,6 +34,10 @@ export async function inspectDueUnknownEffects(deps: { store: ExecutionStore; re
       if (verdict.found === 'stop') stopWaitingChanges(deps.store, effect.executionId, effect.kind, effect.id, verdict.detail.message ?? `stopped as ${verdict.reason}`)
     },
     onUnknownSettled: effect => {
+      // revision-control D7: a push-checkpoint never stops its change — the
+      // settled row reads Pausing checkpoint-push-failed and the holder may
+      // record again. Keyed on the kind only.
+      if (effect.kind === 'push-checkpoint') return
       if (effect.change === null) return stopWaitingChanges(deps.store, effect.executionId, effect.kind, effect.id, effect.error ?? 'the outcome could not be determined')
       const row = deps.store.change(effect.executionId, effect.change)
       // A stopped execution's merge is settled by its landing-outcome stage.
