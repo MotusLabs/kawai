@@ -235,10 +235,18 @@ describe('runAffectedTests', () => {
     reportPath: string
   }
 
-  function recorder(calls: PassCall[], exitCodes: number[]) {
+  // A passing pass must leave a JUnit report at the path it was given, so a
+  // scripted success takes the report content to write there (2.2).
+  const junitReport = (file: string): string =>
+    `<?xml version="1.0" encoding="UTF-8"?>\n<testsuites name="bun test"><testsuite name="t" file="${file}" tests="1" failures="0"></testsuite></testsuites>\n`
+
+  function recorder(calls: PassCall[], exitCodes: number[], reports?: (string | undefined)[]) {
     return async (cmd: string[], reportPath: string): Promise<number> => {
       calls.push({ cmd, reportPath })
-      return exitCodes[Math.min(calls.length - 1, exitCodes.length - 1)]
+      const index = Math.min(calls.length - 1, exitCodes.length - 1)
+      const report = reports?.[index]
+      if (exitCodes[index] === 0 && report !== undefined) fs.writeFileSync(reportPath, report)
+      return exitCodes[index]
     }
   }
 
@@ -251,7 +259,9 @@ describe('runAffectedTests', () => {
         kind: 'docs-only',
         declarationFiles: ['src/server/__tests__/guide.test.ts'],
       }),
-      runPass: recorder(calls, [0]),
+      runPass: recorder(calls, [0], [
+        junitReport('./src/server/__tests__/guide.test.ts'),
+      ]),
     })
     expect(outcome.code).toBe(0)
     expect(outcome.failures).toEqual([])
@@ -265,6 +275,10 @@ describe('runAffectedTests', () => {
       expect.stringMatching(/^--reporter-outfile=/),
     ])
     expect(calls[0].cmd.slice(-1)).toEqual(['./src/server/__tests__/guide.test.ts'])
+    expect(outcome.executed).toEqual({
+      declaration: ['src/server/__tests__/guide.test.ts'],
+      changed: [],
+    })
   })
 
   test('a source commit runs the declaration pass first, then --changed', async () => {
@@ -276,7 +290,14 @@ describe('runAffectedTests', () => {
         declarationFiles: ['src/server/__tests__/guide.test.ts'],
         changedPassFiles: ['src/server/__tests__/plain.test.ts'],
       }),
-      runPass: recorder(calls, [0, 0]),
+      runPass: recorder(
+        calls,
+        [0, 0],
+        [
+          junitReport('./src/server/__tests__/guide.test.ts'),
+          junitReport('src/server/__tests__/plain.test.ts'),
+        ]
+      ),
     })
     expect(outcome.code).toBe(0)
     expect(calls.length).toBe(2)
@@ -284,6 +305,10 @@ describe('runAffectedTests', () => {
     expect(calls[1].cmd).toContain('--changed')
     expect(calls[1].cmd.slice(-1)).toEqual(['./src/server/__tests__/plain.test.ts'])
     expect(calls[0].reportPath).not.toBe(calls[1].reportPath)
+    expect(outcome.executed).toEqual({
+      declaration: ['src/server/__tests__/guide.test.ts'],
+      changed: ['src/server/__tests__/plain.test.ts'],
+    })
   })
 
   test('two invocations never share a report path', async () => {
@@ -313,6 +338,9 @@ describe('runAffectedTests', () => {
     })
     expect(outcome.code).toBe(0)
     expect(calls).toEqual([])
+    expect(outcome.lines).toEqual([
+      'affected-tests: ran 0 test file(s) (declaration: 0, changed: 0); slow-tier candidates excluded: 0',
+    ])
   })
 
   test('a failed declaration pass fails the run and stops the changed pass', async () => {
@@ -366,6 +394,9 @@ describe('runAffectedTests', () => {
     expect(outcome.fullCheckExit).toBe(7)
     expect(fullChecks).toBe(1)
     expect(calls).toEqual([])
+    expect(outcome.lines).toEqual([
+      'affected-tests: escape matched bun.lock; running the full check',
+    ])
   })
 })
 

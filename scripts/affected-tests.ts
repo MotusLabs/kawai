@@ -200,6 +200,44 @@ export function selectAffectedTests(input: {
   }
 }
 
+// --- JUnit report (task 2.2) ---
+
+// Bun's JUnit reporter writes one aggregated `<testsuites>` document per
+// invocation, with one `<testsuite>` per executed file carrying the file in
+// its `file` attribute. Anything else — no root, or a suite without a file —
+// is a report this script cannot trust, and reads as malformed (null).
+export function parseJUnitExecutedFiles(xml: string): string[] | null {
+  if (!xml.includes('<testsuites')) return null
+  const files: string[] = []
+  const suiteTag = /<testsuite\b[^>]*>/g
+  let tag: RegExpExecArray | null
+  while ((tag = suiteTag.exec(xml)) !== null) {
+    const file = /\bfile="([^"]*)"/.exec(tag[0])
+    if (file === null) return null
+    files.push(file[1].replace(/^\.\//, ''))
+  }
+  return files
+}
+
+// The hook's selection summary. Counts come from the reports, never the
+// candidate lists.
+export function formatSelectionReport(input: {
+  executed: { declaration: readonly string[]; changed: readonly string[] }
+  slowTierExcluded: number
+}): string {
+  const declaration = input.executed.declaration.length
+  const changed = input.executed.changed.length
+  return `affected-tests: ran ${declaration + changed} test file(s) (declaration: ${declaration}, changed: ${changed}); slow-tier candidates excluded: ${input.slowTierExcluded}`
+}
+
+function pushWorkingTreeLine(lines: string[], contributors: readonly string[]): void {
+  if (contributors.length > 0) {
+    lines.push(
+      `affected-tests: unstaged/untracked paths affected selection: ${contributors.join(', ')}`
+    )
+  }
+}
+
 // --- execution ---
 
 export interface AffectedPass {
@@ -215,6 +253,9 @@ export interface AffectedRunResult {
   failures: string[]
   passes: AffectedPass[]
   fullCheckExit: number | null
+  // The files the JUnit reports say actually ran, per pass — never the
+  // candidate lists, since `--changed` may execute fewer than its candidates.
+  executed: { declaration: string[]; changed: string[] }
 }
 
 export interface AffectedRunInput {
@@ -224,18 +265,25 @@ export interface AffectedRunInput {
   runFullCheck?: () => Promise<number>
 }
 
-// Runs the selection. The escape delegates to the full check. Source and
-// docs-only commits run their non-empty passes in order through the suite
-// runner (`--skip-slow`, JUnit reports for task 2.2's counts), each pass
-// getting a fresh report path under its own per-invocation directory so a
-// stale report can never supply a count. The first failing pass stops the
-// run and fails it; task 2.2 reads the reports and prints the selection.
+// Runs the selection. The escape delegates to the full check, reporting
+// which paths triggered it. Source and docs-only commits run their non-empty
+// passes in order through the suite runner (`--skip-slow`, JUnit reports for
+// the executed counts), each pass getting a fresh report path under its own
+// per-invocation directory so a stale report can never supply a count. The
+// first failing pass — a failed child, a missing declaration report, or an
+// unreadable report — stops the run and fails it; a successful zero-affected
+// `--changed` pass exits 0 with no report and counts as zero executed.
 export async function runAffectedTests(input: AffectedRunInput): Promise<AffectedRunResult> {
   const lines: string[] = []
   const failures: string[] = []
   const passes: AffectedPass[] = []
+  const executed: { declaration: string[]; changed: string[] } = { declaration: [], changed: [] }
 
   if (input.selection.kind === 'escape') {
+    lines.push(
+      `affected-tests: escape matched ${input.selection.escapePaths.join(', ')}; running the full check`
+    )
+    pushWorkingTreeLine(lines, input.selection.workingTreeContributors)
     const runFullCheck =
       input.runFullCheck ??
       (async () => {
@@ -249,9 +297,10 @@ export async function runAffectedTests(input: AffectedRunInput): Promise<Affecte
         return await proc.exited
       })
     const fullCheckExit = await runFullCheck()
-    return { code: fullCheckExit, lines, failures, passes, fullCheckExit }
+    return { code: fullCheckExit, lines, failures, passes, fullCheckExit, executed }
   }
 
+  pushWorkingTreeLine(lines, input.selection.workingTreeContributors)
   const runPass =
     input.runPass ??
     (async (cmd: string[]) => {
@@ -288,14 +337,36 @@ export async function runAffectedTests(input: AffectedRunInput): Promise<Affecte
       const exitCode = await runPass(cmd, reportPath)
       passes.push({ pass: step.pass, cmd, reportPath, exitCode })
       if (exitCode !== 0) {
+        // A failed child always fails the run, report or not.
         failures.push(`affected-tests: ${step.pass} pass failed (exit ${exitCode})`)
         break
       }
+      if (!fs.existsSync(reportPath)) {
+        // Bun's verified behaviour: a successful zero-affected `--changed`
+        // run exits 0 and writes no report. The declaration pass has exact
+        // files, so its missing report means something went wrong.
+        if (step.pass === 'declaration') {
+          failures.push(`affected-tests: declaration pass produced no JUnit report at ${reportPath}`)
+          break
+        }
+        continue
+      }
+      const files = parseJUnitExecutedFiles(fs.readFileSync(reportPath, 'utf8'))
+      if (files === null) {
+        failures.push(`affected-tests: malformed JUnit report at ${reportPath}`)
+        break
+      }
+      executed[step.pass] = files
     }
   } finally {
     fs.rmSync(reportDir, { recursive: true, force: true })
   }
-  return { code: failures.length > 0 ? 1 : 0, lines, failures, passes, fullCheckExit: null }
+  if (failures.length === 0) {
+    lines.push(
+      formatSelectionReport({ executed, slowTierExcluded: input.selection.slowTierExcluded })
+    )
+  }
+  return { code: failures.length > 0 ? 1 : 0, lines, failures, passes, fullCheckExit: null, executed }
 }
 
 // --- entry ---
