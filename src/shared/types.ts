@@ -814,6 +814,8 @@ export type ClientMessage =
       taskId?: string
       worktree?: string
       target: { kind: 'group' | 'session'; id: string }
+      /** A group target's worker choice (dispatch-worker-choice 4.2). */
+      worker?: string
     }
   // The pickers' data (worktrees with branches, changes with locations).
   // `worktree` narrows the change list to the roots validateChange accepts

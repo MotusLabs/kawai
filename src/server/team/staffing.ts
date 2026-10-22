@@ -96,6 +96,8 @@ export interface SpawnRequest {
 export interface StaffingPreview {
   /** Live members of the group per profile, pending reservations included. */
   liveOnProfile: Record<string, number>
+  /** Profiles of the group's pending reservations, as `spawnContext` states them. */
+  pendingProfiles: string[]
   /** Live members plus pending reservations of the group. */
   groupMembers: number
   /** The team's live spawned sessions, pending reservations included. */
@@ -177,8 +179,7 @@ export class WorktreeStaffing {
     return {
       worktree,
       allowed: !backingOff && counts.teamSpawned < teamCap && counts.worktreeWriters < 1,
-      pendingProfiles: counts.roster.flatMap(entry => entry.pendingSpawns)
-        .filter(pending => pending.group === message.toId).map(pending => pending.profile),
+      pendingProfiles: pendingProfilesOf(counts.roster, message.toId),
       facts: {
         teamSpawned: counts.teamSpawned,
         teamCap,
@@ -295,12 +296,11 @@ export class WorktreeStaffing {
     for (const session of counts.groupLive) {
       liveOnProfile[session.profile] = (liveOnProfile[session.profile] ?? 0) + 1
     }
-    for (const pending of counts.roster.flatMap(entry => entry.pendingSpawns)) {
-      if (pending.group !== groupId) continue
-      liveOnProfile[pending.profile] = (liveOnProfile[pending.profile] ?? 0) + 1
-    }
+    const pendingProfiles = pendingProfilesOf(counts.roster, groupId)
+    for (const profile of pendingProfiles) liveOnProfile[profile] = (liveOnProfile[profile] ?? 0) + 1
     return {
       liveOnProfile,
+      pendingProfiles,
       groupMembers: counts.groupMembers,
       teamSpawned: counts.teamSpawned,
       worktreeWriters: worktree === null ? 0 : counts.worktreeWriters,
@@ -370,4 +370,9 @@ export class WorktreeStaffing {
       message_id AS messageId, created_at AS createdAt FROM team_spawns WHERE team_id = ?`)
       .all(teamId) as PendingSpawnRow[]
   }
+}
+
+/** Profiles of a group's pending spawn reservations: the one roster read routing and the preview share. */
+function pendingProfilesOf(roster: Array<{ pendingSpawns: Array<{ group: string; profile: string }> }>, groupId: string): string[] {
+  return roster.flatMap(entry => entry.pendingSpawns).filter(pending => pending.group === groupId).map(pending => pending.profile)
 }

@@ -8,6 +8,7 @@
 // `provider/model`, so the stored value never depends on bare-id ambiguity
 // later; one that is a provider and a model of a *different* provider is
 // refused as ambiguous. A provider whose model shares its id is not ambiguous.
+import { DEFAULT_PROFILE_ID } from './workerEligibility'
 
 /** Every catalog model key with its provider id. */
 export type WorkerCatalog = ReadonlyMap<string, string>
@@ -80,4 +81,17 @@ export function validateWorkerChoice(raw: string, catalog: WorkerCatalog, group:
     return { ok: false, reason: 'outside-group', error: `Worker "${normalized.selector}" is not among group ${group.id}'s workers: ${workers}.` }
   }
   return { ...normalized, profiles }
+}
+
+/**
+ * A worker choice as the eligibility check states it (dispatch-worker-choice
+ * D1/D2): the canonical selector and the group's model keys it resolves to
+ * now, so a group or catalog edit applies the way every other group edit
+ * does. Null without a choice. The router and the dispatch preview both build it here.
+ */
+export function workerChoiceState(selector: string | null | undefined, group: { profiles: ReadonlyArray<{ profileId: string }> },
+  providerOf: (profileId: string) => string): { selector: string; profiles: string[] } | null {
+  if (!selector) return null
+  const profiles = group.profiles.length > 0 ? group.profiles.map(entry => entry.profileId) : [DEFAULT_PROFILE_ID]
+  return { selector, profiles: resolveWorkerSelector(selector, profiles, providerOf) }
 }

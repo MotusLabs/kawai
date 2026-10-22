@@ -203,6 +203,7 @@ export class TaskConnections {
             ...(message.taskId ? { taskId: message.taskId } : {}),
             ...(message.worktree ? { worktree: message.worktree } : {}),
             target: message.target,
+            ...(message.worker !== undefined ? { worker: message.worker } : {}),
           })
           connection.send({ type: 'team-task-preview-result', teamPath, requestId, preview })
           return

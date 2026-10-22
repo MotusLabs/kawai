@@ -96,6 +96,16 @@ export function memberStateCauses(
   return causes
 }
 
+/**
+ * Whether `member` passes the group path's member-state predicates: every
+ * cause rejects except the direct-only ones (`excluded-profile` is the
+ * candidate filter's; cooling members stay candidates). The dispatcher's
+ * eligible members and the dispatch preview's idle members both read it.
+ */
+export function groupPathEligible(member: MemberFacts, mail: MailFacts, options: { targetWorktree: string | null; now: number; startupFailed: boolean }): boolean {
+  return !memberStateCauses(member, mail, options).some(cause => cause.kind !== 'excluded-profile' && cause.kind !== 'profile-cooling')
+}
+
 /** Profile spawned members get when the group lists none. */
 export const DEFAULT_PROFILE_ID = 'default'
 

@@ -39,7 +39,11 @@ import { refuseSystem, type SystemCaller } from './systemCaller'
 import type { GroupDefinition } from './groupFile'
 import { checkWorkerChoice, WORKER_GROUP_TARGET_ONLY } from './workerChoiceCheck'
 import type { TeamCaps } from './teamCaps'
-import type { StaffingPreview, WorktreeStaffing } from './staffing'
+import type { WorktreeStaffing } from './staffing'
+import type { MailRecipient } from './dispatcher'
+import { ambientProviderOf } from './cooldowns'
+import { previewGroupDispatch } from './groupDispatchPreview'
+import { liveGroupMembers } from './routing/router'
 import { worktreeRootOf, type TeamWorktrees } from './worktreeRoots'
 import type { PlanStore } from '../plans/planStore'
 import { NULL_OWNERSHIP, type ExecutionOwnership } from '../plans/execution/executionOwnership'
@@ -114,6 +118,8 @@ export class AssignmentService {
       plans?: PlanStore
       /** Built-in cooldown end (ISO) of a profile, or null (preview skips cooling profiles). */
       cooldownUntil?: (profileId: string) => string | null
+      /** A member's recipient facts as the dispatcher states them (the preview's member predicates). */
+      recipient?: (sessionId: string) => MailRecipient | undefined
       /** What a running execution owns (plan-execution D7); the default owns nothing. */
       ownership?: ExecutionOwnership
     }) {}
@@ -268,7 +274,7 @@ export class AssignmentService {
    * availability. Warns — never blocks — when a session target works outside
    * the task's worktree. Writes nothing and reserves nothing.
    */
-  async preview(caller: TaskCaller, input: { taskId?: string; worktree?: string; target: AssignmentTarget }): Promise<TaskDispatchPreview> {
+  async preview(caller: TaskCaller, input: { taskId?: string; worktree?: string; target: AssignmentTarget; worker?: string }): Promise<TaskDispatchPreview> {
     refuseSystem(caller, 'read')
     const team = await this.teamOf(caller)
     let taskWorktree: string | null = null
@@ -281,36 +287,39 @@ export class AssignmentService {
       if (!target.ok) throw new Error(target.error)
       taskWorktree = target.root
     }
+    // The worker choice is checked as dispatch checks it: a session target or a bad worker is refused.
+    const workerChoice = this.workerChoice(caller, team, input.target, input.worker)
     if (input.target.kind === 'group') {
       const group = this.groupOf(team, input.target.id)
-      return await this.previewGroup(team, taskWorktree, input.target, group)
+      return await this.previewGroup(team, taskWorktree, input.target, group, workerChoice)
     }
     const recipient = await this.sessionTarget(team, input.target)
     if (!recipient) throw new Error(`Unknown session: ${input.target.id}`)
     return this.previewSession(taskWorktree, input.target, recipient)
   }
 
-  private async previewGroup(team: TeamIdentity, worktree: string | null, target: AssignmentTarget, group: GroupDefinition): Promise<TaskDispatchPreview> {
-    const members = [...this.options.records()].filter(record =>
-      record.archivedAt == null && record.groupId === target.id && this.options.teamOf(record.sessionId)?.teamId === team.teamId)
-    const inWorktree = worktree === null ? members : members.filter(record => worktreeRootOf(record.projectPath) === worktree)
-    const idleMembers = inWorktree.filter(record => record.status === 'waiting').map(record => record.sessionId)
-    const facts = this.options.staffing.preview(team.teamId, target.id, worktree)
-    const spawnProfile = this.spawnProfile(group, facts)
-    let blockedBy: string | null = null
-    if (worktree === null) blockedBy = 'the task has no target worktree'
-    else {
-      const teamCap = await this.options.caps.maxSpawnedSessions(team.teamId)
-      if (facts.groupMembers >= group.max) blockedBy = `group ${target.id} is at its max of ${group.max} live members`
-      else if (facts.teamSpawned >= teamCap) blockedBy = `the team is at its cap of ${teamCap} spawned sessions`
-      else if (facts.worktreeWriters >= 1) blockedBy = `a spawned member already works in ${worktree}`
-      else if (spawnProfile === null) blockedBy = 'every allowed profile is at its cap or cooling down'
-    }
+  private async previewGroup(team: TeamIdentity, worktree: string | null, target: AssignmentTarget, group: GroupDefinition, workerChoice: string | null): Promise<TaskDispatchPreview> {
+    return previewGroupDispatch({
+      worktree, target, group, workerChoice,
+      members: liveGroupMembers(this.options.records(), id => this.options.teamOf(id)?.teamId, team.teamId, target.id),
+      recipient: id => this.options.recipient ? this.options.recipient(id) : this.recordRecipient(id),
+      facts: this.options.staffing.preview(team.teamId, target.id, worktree),
+      teamCap: await this.options.caps.maxSpawnedSessions(team.teamId),
+      providerOf: ambientProviderOf(this.options.homeDir),
+      cooldownUntil: profileId => this.options.cooldownUntil?.(profileId) ?? null,
+      now: Date.now(),
+    })
+  }
+
+  /** A member's recipient facts from its record alone, where no dispatcher view is wired (tests). */
+  private recordRecipient(id: string): MailRecipient | undefined {
+    const record = this.options.getSession(id)
+    const team = this.options.teamOf(id)
+    if (!record || !team) return undefined
     return {
-      worktree, target, role: group.label, profile: spawnProfile, approval: group.approval,
-      sessionWorktree: null, idleMembers,
-      spawn: { allowed: blockedBy === null, profile: spawnProfile, blockedBy },
-      warning: null,
+      sessionId: id, teamId: team.teamId, groupId: record.groupId ?? null, idle: record.status === 'waiting', pendingRequest: false,
+      available: true, worktree: worktreeRootOf(record.projectPath), parked: this.mail.parkedBy(id).length > 0,
+      contextExhausted: Boolean(record.contextExhausted), profileId: record.claudeProfileId ?? 'default',
     }
   }
 
@@ -325,21 +334,6 @@ export class AssignmentService {
         ? `Session works in ${sessionWorktree}; the task targets ${worktree}`
         : null,
     }
-  }
-
-  /** The first profile a spawn could use: group preference order, caps and cooldowns applied. */
-  private spawnProfile(group: GroupDefinition, facts: StaffingPreview): string | null {
-    const allowed = group.profiles.length > 0 ? group.profiles : [{ profileId: 'default' }]
-    const cooling = (profileId: string) => {
-      const until = this.options.cooldownUntil?.(profileId) ?? null
-      return until !== null && Date.parse(until) > Date.now()
-    }
-    for (const entry of allowed) {
-      if (entry.cap !== undefined && (facts.liveOnProfile[entry.profileId] ?? 0) >= entry.cap) continue
-      if (cooling(entry.profileId)) continue
-      return entry.profileId
-    }
-    return null
   }
 
   /**
