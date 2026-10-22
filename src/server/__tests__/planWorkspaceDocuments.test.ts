@@ -79,7 +79,7 @@ let fixture: ReturnType<typeof fixtureHost>
 const runner: OpenspecRunner = async (args, { cwd }) => {
   const call = (stdout: string) => ({ ok: true, exitCode: 0, stdout, stderr: '', timedOut: false })
   if (args[0] === 'list' && cwd === world.repo) {
-    const names = args.includes('--archived') ? [] : ['alpha']
+    const names = args.includes('--archived') ? [] : ['alpha', 'notasks']
     return call(JSON.stringify({ changes: names.map(name => ({ name })), root: { path: world.repo } }))
   }
   if (args[0] === 'status' && cwd === world.repo && args[2] === 'alpha') {
@@ -88,6 +88,9 @@ const runner: OpenspecRunner = async (args, { cwd }) => {
       changeRoot,
       artifactPaths: { tasks: { existingOutputPaths: [path.join(changeRoot, 'tasks.md')] } },
     }))
+  }
+  if (args[0] === 'status' && cwd === world.repo && args[2] === 'notasks') {
+    return call(JSON.stringify({ changeRoot: path.join(world.repo, 'openspec', 'changes', 'notasks'), artifactPaths: {} }))
   }
   return { ok: false, exitCode: 1, stdout: '', stderr: 'not found', timedOut: false }
 }
@@ -311,6 +314,16 @@ describe('checklist subscriptions', () => {
     const missing = last('team-plan-workspace-checklist')!
     expect(missing.checklist).toBeNull()
     expect(missing.unavailable).toMatchObject({ state: 'missing' })
+    expect(agentStarts).toBe(0)
+  })
+
+  test('a change with no tasks artifact reads explicitly unavailable, not zero completion', async () => {
+    const { planId } = await bench.draftInReview()
+    await docSend({ type: 'team-plan-workspace-checklist-open', teamPath: world.repo, planId, changeName: 'notasks' })
+    const push = last('team-plan-workspace-checklist')!
+    expect(push.checklist).toBeNull()
+    expect(push.unavailable).toMatchObject({ state: 'unreadable' })
+    expect(push.unavailable!.message).toContain('no tasks artifact')
     expect(agentStarts).toBe(0)
   })
 
