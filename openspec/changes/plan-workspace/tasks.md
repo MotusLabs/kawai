@@ -4,9 +4,9 @@ Implement after `team-workspace-pages`, `durable-plans`, and `plan-supervision` 
 
 ## 1. Workspace contracts and metadata
 
-- [ ] 1.1 Add `src/shared/planWorkspace.ts` types and defensive parsers for displayed version/execution, document references, checklist projections, passive health, conversation bindings and message context; verify malformed selectors, draft/revision discrimination and optional-field compatibility with unit tests.
-- [ ] 1.2 Add migrations/stores for repository role bindings, document references and per-user-message context snapshots (UUID key, turn id only for grouping); verify fresh/old databases, restart retention, distinct role sessions and multiple messages within one turn with store tests.
-- [ ] 1.3 Add team-scoped connections and message routing registration for workspace open/close, binding CAS and keyed reference add/remove; verify wrong-team ids, stale CAS, request-key replay/conflict and no writes on refusal in connection tests. Document these additive contracts beside the module.
+- [x] 1.1 Add `src/shared/planWorkspace.ts` types and defensive parsers for displayed version/execution, document references, checklist projections, passive health, conversation bindings and message context; verify malformed selectors, draft/revision discrimination and optional-field compatibility with unit tests.
+- [x] 1.2 Add migrations/stores for repository role bindings, document references and per-user-message context snapshots (UUID key, turn id only for grouping); verify fresh/old databases, restart retention, distinct role sessions and multiple messages within one turn with store tests.
+- [x] 1.3 Add team-scoped connections and message routing registration for workspace open/close, binding CAS and keyed reference add/remove; verify wrong-team ids, stale CAS, request-key replay/conflict and no writes on refusal in connection tests. Document these additive contracts beside the module.
 
 ## 2. OpenSpec work breakdown and document access
 
