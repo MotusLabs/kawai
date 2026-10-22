@@ -3,8 +3,10 @@
 // event and the target's decision row in one transaction. This step
 // implements 'continue' (C1-C17). The checks run in order: decided (I1,
 // naming the standing decision even on a closed pause), closed pause (K6),
-// withdrawn before the state (C9), not-paused (C10), holder-gone (C11),
-// then the stage branch. An attempt target takes C2's
+// the choice dispatch — I1 precedes it, so a decided target names its
+// standing decision whatever choice arrives (A1r, N2; lead ruling L1) —
+// then for 'continue': withdrawn before the state (C9), not-paused (C10),
+// holder-gone (C11), and the stage branch. An attempt target takes C2's
 // shape: the decision {holder, release 'never', assignmentId}, the ROUND
 // RULE's conditional supersede of the newest passable round (supersedeRound
 // + cancelLiveRoundEffects + the slot-releasing transition), O4's clear of a
@@ -122,13 +124,10 @@ function resolveWithin(deps: PauseServiceDeps, caller: PlanCaller & { kind: 'hum
   if (pause === null || pause.planId !== planId) throw new PlanRefusal('not-found', `Pause not found on this plan: ${input.pauseId}`)
   const target = deps.pauses.target(pause.id, input.change)
   if (target === null) throw new PlanRefusal('not-found', `The pause ${pause.id} has no target for change ${input.change}`)
-  if (input.choice !== 'continue') {
-    // Only 'continue' resolves in this step; adapt, restart and Stop land
-    // with their own ones (rev4 §10).
-    throw new PlanRefusal('state', `'${input.choice}' does not resolve yet; only 'continue' is implemented. Nothing was written.`)
-  }
   // I1 first (C1): a decided target refuses naming its standing decision,
-  // even on a pause that decision has already closed.
+  // even on a pause that decision has already closed — before the choice
+  // dispatch, so a decided target names its decision whatever choice
+  // arrives (A1r, N2; lead ruling L1).
   if (target.decision !== null) {
     throw new PlanRefusal('state', `Change ${target.change} is already decided (${target.decision}). Nothing was written.`)
   }
@@ -138,6 +137,12 @@ function resolveWithin(deps: PauseServiceDeps, caller: PlanCaller & { kind: 'hum
   const finished = execution !== null && execution.state !== 'running'
   if (pause.closedAt !== null || finished) {
     throw new PlanRefusal('state', `The pause ${pause.id} is closed; there is nothing left to resolve. Nothing was written.`)
+  }
+  // Only 'continue' resolves in this step; adapt, restart and Stop land
+  // with their own ones (rev4 §10). The check sits below I1 (N2): a decided
+  // target names its standing decision whatever choice arrives (A1r).
+  if (input.choice !== 'continue') {
+    throw new PlanRefusal('state', `'${input.choice}' does not resolve yet; only 'continue' is implemented. Nothing was written.`)
   }
   // Withdrawn is checked before the state, so the answer is the same across
   // the tick (C9): it reads `target-withdrawn` from Paused and Pausing alike.
@@ -228,6 +233,7 @@ function continueAttempt(deps: PauseServiceDeps, caller: PlanCaller & { kind: 'h
   return { target: { change: target.change, decision: 'continue' } }
 }
 
+/** The guarded decision write (one per target, the database arbitrates) plus closeIfDecided. */
 /** The guarded decision write (one per target, the database arbitrates) plus closeIfDecided. */
 function recordContinue(deps: PauseServiceDeps, input: ResolveInput, pause: PlanPause, target: PlanPauseTarget, detail: Record<string, unknown>): void {
   const decision = deps.pauses.recordDecision({ pauseId: pause.id, change: target.change, decision: 'continue', detail, commandId: input.commandId.trim() })
