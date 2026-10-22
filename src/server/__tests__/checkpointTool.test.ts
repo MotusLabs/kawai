@@ -226,7 +226,8 @@ describe('task_checkpoint refusals (D7)', () => {
     }
   })
 
-  test('a failed status read is refused and writes nothing', async () => {
+  // Root reads a 0o000 file anyway, so the refusal is unreachable there (N3).
+  test.skipIf(process.getuid?.() === 0)('a failed status read is refused and writes nothing', async () => {
     const unreadable = bench()
     const gitDir = git(['rev-parse', '--absolute-git-dir'], unreadable.work.cwd).trim()
     fs.chmodSync(path.join(gitDir, 'index'), 0o000)
