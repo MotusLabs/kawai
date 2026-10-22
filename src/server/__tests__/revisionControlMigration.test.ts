@@ -11,6 +11,7 @@ import { Database } from 'bun:sqlite'
 import { initDatabase } from '../db'
 import { MIGRATIONS, type Migration } from '../dbSafety/migrations'
 import { REVISION_CONTROL_TABLES, revisionControlMigration } from '../plans/revisionControl/revisionControlSchema'
+import { PLAN_WORKSPACE_TABLES } from '../plans/workspace/workspaceSchema'
 
 const UP_TO_16: readonly Migration[] = MIGRATIONS.filter(migration => migration.version <= 16)
 
@@ -69,7 +70,9 @@ test('a database at version 16 with execution rows backfills seq 1, twice, keepi
   for (let run = 0; run < 2; run++) initDatabase({ path: dbPath, migrations: MIGRATIONS }).close()
   const after = tables(dbPath)
   for (const [table, rows] of Object.entries(before)) expect(after[table]).toEqual(rows)
-  expect(Object.keys(after).filter(table => !(table in before)).sort()).toEqual([...REVISION_CONTROL_TABLES].sort())
+  // Later migrations (19 plan-workspace) also land in this upgrade.
+  expect(Object.keys(after).filter(table => !(table in before)).sort())
+    .toEqual([...REVISION_CONTROL_TABLES, ...PLAN_WORKSPACE_TABLES].sort())
   expect(versions(dbPath).filter(row => row.version === 17)).toHaveLength(1)
   // The backfill: each execution's row, once, as seq 1.
   expect(after.plan_execution_revisions).toEqual([
