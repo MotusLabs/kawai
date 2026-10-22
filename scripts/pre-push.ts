@@ -30,14 +30,27 @@ function git(root: string, args: string[]): string | null {
   return result.ok ? result.stdout.trim() : null
 }
 
-/** Porcelain paths of the working tree, untracked included; null on failure. */
+/** Porcelain paths of the working tree, untracked included; null on failure.
+ * In -z format a rename or copy carries its old path as the token after the
+ * entry, with no XY prefix; both paths are listed unmangled. */
 export function dirtyPaths(root: string): string[] | null {
   const result = runGit(['status', '--porcelain', '-z', '--untracked-files=all'], { cwd: root })
   if (!result.ok) return null
-  return result.stdout
-    .split('\0')
-    .filter((entry) => entry.length > 3)
-    .map((entry) => entry.slice(3))
+  const tokens = result.stdout.split('\0')
+  const paths: string[] = []
+  for (let index = 0; index < tokens.length; index++) {
+    const entry = tokens[index]!
+    // Each entry is XY, a space, and the path; the trailing token is empty.
+    if (entry.length < 3 || entry[2] !== ' ') continue
+    paths.push(entry.slice(3))
+    const xy = entry.slice(0, 2)
+    if (xy.includes('R') || xy.includes('C')) {
+      const oldPath = tokens[index + 1]
+      if (oldPath !== undefined && oldPath !== '') paths.push(oldPath)
+      index += 1
+    }
+  }
+  return paths
 }
 
 export function gatherFacts(root: string, lines: PushLine[], now = Date.now()): RefFacts[] {

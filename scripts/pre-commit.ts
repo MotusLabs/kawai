@@ -123,7 +123,7 @@ export async function runPreCommit(plan: PreCommitPlan, deps: PreCommitDeps): Pr
   deps.log(`pre-commit: ${plan.selection.kind} commit; affected fast-tier tests only (the full check runs at result and push)`)
   if (plan.outsideSourcePaths.length > 0) {
     deps.log(
-      `pre-commit: working-tree source edits outside this commit also selected tests: ${plan.outsideSourcePaths.join(', ')}`
+      `pre-commit: working-tree source edits outside this commit may have selected tests: ${plan.outsideSourcePaths.join(', ')}`
     )
   }
   const outcome = await runAffectedTests({

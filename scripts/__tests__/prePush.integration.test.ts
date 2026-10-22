@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import path from 'node:path'
 import { createHookRepo, type HookRepo } from './helpers/hookRepo'
+import { dirtyPaths } from '../pre-push'
 
 let fixture: HookRepo
 
@@ -98,6 +99,31 @@ describe('the push hook in a temporary repository', () => {
     expect(result.code).not.toBe(0)
     expect(result.output).toContain('checked out but the working tree is dirty: scratch.txt')
     expect(fixture.takeLog()).toEqual([])
+  })
+
+  test('a staged rename lists both paths unmangled (F-u1)', () => {
+    setUpCommit('src/shared/lone.ts', 'export const lone = 16\n')
+    fixture.git(['mv', 'src/shared/lone.ts', 'src/shared/moved-lone.ts'])
+    // In -z format the old path is a separate token without an XY prefix;
+    // a slice over every token cut its first three characters off.
+    expect(dirtyPaths(fixture.repo)).toEqual(['src/shared/moved-lone.ts', 'src/shared/lone.ts'])
+  })
+
+  test('a staged rename whose old path has a space lists both paths unmangled (F-u1)', () => {
+    setUpCommit('ab c.ts', 'export const spaced = 1\n')
+    fixture.git(['mv', 'ab c.ts', 'moved.ts'])
+    // The old path's third character is a space: if the rename's old-path
+    // token were not consumed, the loop would read it as the next entry and
+    // push its own slice — the mangled 'c.ts'.
+    expect(dirtyPaths(fixture.repo)).toEqual(['moved.ts', 'ab c.ts'])
+  })
+
+  test('dirtyPaths returns null outside a repository (F1)', () => {
+    const outside = path.join(fixture.root, 'outside')
+    fs.mkdirSync(outside)
+    // A failed status reads as dirty (fail closed) only after dirtyPaths
+    // reports it; null is what separates "cannot tell" from "clean".
+    expect(dirtyPaths(outside)).toBeNull()
   })
 
   test('two unchecked refs: both are buffered, the second is refused by id, and the clean HEAD is not checked (Q1)', () => {

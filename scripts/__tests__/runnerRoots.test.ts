@@ -9,7 +9,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { cleanGitEnv } from '../../src/server/git/gitCommand'
 import { recordsDir } from '../lib/checkRecords'
-import { TIMINGS_FILE_NAME, isRunSnapshotName } from '../testTimings'
+import { isRunSnapshotName } from '../testTimings'
 import { isProcDead } from './fixtures/runnerProbe/procState'
 
 const REPO_ROOT = path.resolve(import.meta.dir, '..', '..')
@@ -374,12 +374,12 @@ describe('the real runner publishes the timings record (B3)', () => {
     // A filtered run must not publish (D4): on the production path, planRun
     // seeds and publishes for a full run only, so the real runner given
     // explicit files leaves the scratch repository's records directory
-    // without a timings record — and without a seed call side effect.
+    // absent — no record, and no run snapshot beside one (N4).
     const repo = makeProbeRepo("import { test, expect } from 'bun:test'\ntest('passes', () => {\n  expect(1).toBe(1)\n})\n")
     const proc = spawnRunner(repo, 'src/server/__tests__/publishProbe.test.ts')
     const { code, stderr } = await drainAndExit(proc)
     expect(code, stderr.slice(-2000)).toBe(0)
-    expect(fs.existsSync(path.join(recordsDir(repo), TIMINGS_FILE_NAME))).toBe(false)
+    expect(fs.existsSync(recordsDir(repo))).toBe(false)
   }, 45_000)
 })
 

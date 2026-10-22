@@ -1,11 +1,10 @@
 // The runner's run-shape decisions and their execution (design D1–D4,
 // review B1/B3): planRun() is pure over the parsed arguments and the run's
-// resolved inputs — the batch options main() passes to planBatches verbatim,
-// whether the run is full, and whether it may publish the timings record —
-// and runBatchesAndPublish() runs the planned batches in order and publishes
-// once the first batch has passed. test-runner.ts owns the processes, the
-// run root, and the signals; main() wires the real runCommand and publish
-// into runBatchesAndPublish.
+// resolved inputs — the batch options main() passes to planBatches verbatim
+// and whether the run is full — and runBatchesAndPublish() runs the planned
+// batches in order and publishes once the first batch has passed.
+// test-runner.ts owns the processes, the run root, and the signals; main()
+// wires the real runCommand and publish into runBatchesAndPublish.
 
 import type { PlannedBatch, planBatches } from './planBatches'
 import type { CollectedFiles, RunArgs } from './test-runner'
@@ -25,22 +24,17 @@ export function hasTestNameFilter(passthrough: string[]): boolean {
 
 // The run-shape decisions (review B1), pure over the parsed arguments and
 // the run's resolved inputs: the batch options main() passes to planBatches
-// verbatim — so no per-field call site can drop a flag — whether the run is
-// full, and whether it may publish the timings record. Only a full run
-// publishes (D4): a filtered run measures a subset, and a failed one throws
-// in runBatchesAndPublish before its publish point. Only a full run seeds
-// the snapshot: `seedTimings` is called with the previous record's text
-// (null when there is none usable) and returns the snapshot path, or null
-// when seeding failed.
+// verbatim — so no per-field call site can drop a flag — and whether the run
+// is full. The publish gate (F5) is batchOptions.timingsPath itself: a run
+// may publish the timings record only when it is full AND seeding produced
+// the snapshot, which is the same fact as the path being set, and main()
+// wires that path into runBatchesAndPublish — there is no second gate
+// beside it. Only a full run seeds the snapshot: `seedTimings` is called
+// with the previous record's text (null when there is none usable) and
+// returns the snapshot path, or null when seeding failed.
 export interface RunPlan {
   batchOptions: Parameters<typeof planBatches>[0]
   fullRun: boolean
-  // planRun's publish decision (F5): a run may publish the timings record
-  // only when it is full AND seeding produced the snapshot — the same fact
-  // as batchOptions.timingsPath being set, spelled for readers. What main()
-  // wires into runBatchesAndPublish is the path itself (publishTimingsPath),
-  // so there is no second gate beside this one.
-  publishTimings: boolean
 }
 
 export function planRun(input: {
@@ -74,7 +68,6 @@ export function planRun(input: {
       updateTimings: timingsPath !== null,
     },
     fullRun,
-    publishTimings: timingsPath !== null,
   }
 }
 

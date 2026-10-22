@@ -123,6 +123,27 @@ describe('undeclaredReads', () => {
     expect(undeclaredReads(source)).toEqual(['docs/guide.md'])
   })
 
+  test('a conditional literal nested in a join call is a read (F5)', () => {
+    const source = [
+      'import path from \'node:path\'',
+      `const p = path.join(repoRoot, flag ? 'AGENTS.md' : 'x')`,
+    ].join('\n')
+    expect(undeclaredReads(source)).toEqual(['AGENTS.md'])
+  })
+
+  test('a literal nested in a join call argument is a read (F5)', () => {
+    const source = [
+      'import path from \'node:path\'',
+      `const p = path.join(repoRoot, pick('AGENTS.md'))`,
+    ].join('\n')
+    expect(undeclaredReads(source)).toEqual(['AGENTS.md'])
+  })
+
+  test('literals inside a joined array are reads (F5)', () => {
+    const source = `const p = ['AGENTS.md', x].join('\\n')`
+    expect(undeclaredReads(source)).toEqual(['AGENTS.md'])
+  })
+
   test('a concatenation from a base is a read', () => {
     const source = [
       `const a = repoRoot + '/AGENTS.md'`,
