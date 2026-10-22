@@ -12,12 +12,21 @@
 // `isArchived`, `teams.teamOf`), the session directory, and the plan store.
 import type { ClientMessage } from '../../../shared/types'
 import { unknownTeamError } from '../../../shared/team'
-import type { PlanWorkspaceRole, WorkspaceBindingView, WorkspaceVersionSelector } from '../../../shared/planWorkspace'
+import type { PlanWorkspaceRole, WorkspaceBindingView, WorkspaceDisplayedVersion, WorkspaceSnapshot, WorkspaceVersionSelector } from '../../../shared/planWorkspace'
 import { parseVersionSelector } from '../../../shared/planWorkspace'
 import type { PlanWorkspaceClientMessage } from '../../../shared/planWorkspaceMessages'
 import type { ChatSessionManager } from '../../chat/ChatSessionManager'
 import type { ChatConnection } from '../../chat/ChatConnections'
-import { defaultDisplayedVersion, selectedDisplayedVersion } from './displayedVersion'
+import { defaultDisplayedVersion, selectedDisplayedVersion, type PlanVersionInputs } from './displayedVersion'
+
+const namedSelector = (selector: WorkspaceVersionSelector): string =>
+  selector.kind === 'revision' ? `Revision ${selector.revision}` : `Draft "${selector.draftId}"`
+
+/** The plan identity and the version inputs one snapshot is built from. */
+interface ResolvedPlanInputs {
+  plan: WorkspaceSnapshot['plan']
+  inputs: PlanVersionInputs
+}
 
 type WorkspaceClientMessage = Extract<ClientMessage, { type: `team-plan-workspace-${string}` }>
 type WorkspaceBindMessage = Extract<PlanWorkspaceClientMessage, { type: 'team-plan-workspace-bind' }>
@@ -84,8 +93,17 @@ export class PlanWorkspaceConnections {
       connection.send({ type: 'error', message: unknownTeamError(teamPath) })
       return
     }
-    if (!this.manager.plans.store.forTeam(team.teamId, planId)) {
+    // Resolve the selector against the plan before anything is stored: a
+    // refused open must not subscribe, or every later committed bind of the
+    // team would re-push its refusal to this connection.
+    const resolved = this.planInputs(team.teamId, planId)
+    if (!resolved) {
       connection.send({ type: 'error', message: `Plan not found in this team: ${planId}` })
+      return
+    }
+    const displayedVersion = selector ? selectedDisplayedVersion(resolved.inputs, selector) : defaultDisplayedVersion(resolved.inputs)
+    if (selector && displayedVersion === null) {
+      connection.send({ type: 'error', message: `${namedSelector(selector)} not found in this plan: ${planId}` })
       return
     }
     // Read the connection's map only now: concurrent opens each awaited the team.
@@ -96,33 +114,44 @@ export class PlanWorkspaceConnections {
     views.set(teamPath, subscription)
     subscription.plans.set(planId, selector)
     // The open's first snapshot is authoritative: awaited, not pushed.
-    await this.sendSnapshot(connection, teamPath, team.teamId, planId, selector)
+    this.emitSnapshot(connection, teamPath, team.teamId, resolved, displayedVersion)
+  }
+
+  /** The plan identity and version inputs a snapshot is built from; null when the plan row is gone. */
+  private planInputs(teamId: string, planId: string): ResolvedPlanInputs | null {
+    const plan = this.manager.plans.store.forTeam(teamId, planId)
+    if (!plan) return null
+    return {
+      plan: { id: plan.id, title: plan.title, lifecycle: plan.lifecycle },
+      inputs: {
+        approved: this.manager.plans.store.approvedRevision(planId),
+        revisions: this.manager.plans.store.revisions(planId),
+        drafts: this.manager.plans.store.drafts(planId),
+      },
+    }
+  }
+
+  private emitSnapshot(connection: ChatConnection, teamPath: string, teamId: string, resolved: ResolvedPlanInputs, displayedVersion: WorkspaceDisplayedVersion | null) {
+    connection.send({
+      type: 'team-plan-workspace-snapshot', teamPath, teamId, planId: resolved.plan.id,
+      workspace: {
+        plan: resolved.plan,
+        displayedVersion,
+        bindings: this.bindingViews(teamId),
+        references: [],
+      },
+    })
   }
 
   private async sendSnapshot(connection: ChatConnection, teamPath: string, teamId: string, planId: string, selector: WorkspaceVersionSelector | null) {
     try {
-      const plan = this.manager.plans.store.forTeam(teamId, planId)
-      if (!plan) return
-      const inputs = {
-        approved: this.manager.plans.store.approvedRevision(planId),
-        revisions: this.manager.plans.store.revisions(planId),
-        drafts: this.manager.plans.store.drafts(planId),
-      }
-      const displayedVersion = selector ? selectedDisplayedVersion(inputs, selector) : defaultDisplayedVersion(inputs)
-      if (selector && displayedVersion === null) {
-        const named = selector.kind === 'revision' ? `Revision ${selector.revision}` : `Draft "${selector.draftId}"`
-        connection.send({ type: 'error', message: `${named} not found in this plan: ${planId}` })
-        return
-      }
-      connection.send({
-        type: 'team-plan-workspace-snapshot', teamPath, teamId, planId,
-        workspace: {
-          plan: { id: plan.id, title: plan.title, lifecycle: plan.lifecycle },
-          displayedVersion,
-          bindings: this.bindingViews(teamId),
-          references: [],
-        },
-      })
+      const resolved = this.planInputs(teamId, planId)
+      if (!resolved) return
+      const displayedVersion = selector ? selectedDisplayedVersion(resolved.inputs, selector) : defaultDisplayedVersion(resolved.inputs)
+      // A stored subscription's selector resolved at open; if it no longer
+      // does, the refresh is dropped — never an error on a push.
+      if (selector && displayedVersion === null) return
+      this.emitSnapshot(connection, teamPath, teamId, resolved, displayedVersion)
     } catch {
       // A view refresh that raced a shutdown or a vanished row is dropped.
     }

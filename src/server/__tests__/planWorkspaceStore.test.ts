@@ -103,6 +103,20 @@ describe('the command ledger', () => {
     bind('b1', 'lead', 's1', null)
     expect(store.bind('team-2', 'b1', { role: 'lead', sessionId: 's1', expectedVersion: null })).toMatchObject({ ok: true, replayed: false, version: 1 })
   })
+
+  test('a ledger row of another kind under the same command id refuses naming the kind, never replaying', () => {
+    // Seed a ref-add row whose payload is exactly the bind's payload: only
+    // the kind-first compare can refuse it (the mutant that drops the kind
+    // compare would replay the row's outcome here instead).
+    db.prepare("INSERT INTO plan_workspace_commands (team_id, command_id, kind, payload, outcome, at) VALUES ('team-1', 'x1', 'ref-add', ?, ?, 't')")
+      .run(JSON.stringify({ role: 'lead', sessionId: 's1', expectedVersion: null }), JSON.stringify({ role: 'lead', sessionId: 's1', version: 7 }))
+    const refused = bind('x1', 'lead', 's1', null)
+    expect(refused).toMatchObject({ ok: false, reason: 'payload', field: 'kind' })
+    expect(refused.ok === false && refused.message).toContain('different kind')
+    // The refusal wrote nothing: the other kind's outcome never surfaced
+    // and no binding row exists.
+    expect(store.bindings('team-1')).toEqual([])
+  })
 })
 
 describe('constraint mapping', () => {

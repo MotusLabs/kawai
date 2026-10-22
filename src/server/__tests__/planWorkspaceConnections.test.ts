@@ -132,6 +132,27 @@ describe('subscriptions', () => {
     expect(messages).toEqual([{ type: 'error', message: expect.stringContaining('Draft "gone" not found') }])
   })
 
+  test('a refused open stores no subscription: a later committed bind of the team pushes it nothing', async () => {
+    const { planId } = await bench.draftInReview()
+    await send({ type: 'team-plan-workspace-open', teamPath: world.repo, planId, version: { kind: 'revision', revision: 99 } })
+    expect(messages).toEqual([{ type: 'error', message: expect.stringContaining('Revision 99 not found') }])
+    // The selector resolves before the subscription is stored, so the
+    // refusal subscribed to nothing (read through the module's registry).
+    const registry = (connections as unknown as {
+      planWorkspaceConnections: { subscriptions: Map<unknown, Map<string, { plans: Map<string, unknown> }>> }
+    }).planWorkspaceConnections
+    expect(registry.subscriptions.get(connection)).toBeUndefined()
+    // The bind of the same team answers this connection (it asked) and
+    // pushes it nothing: no snapshot, no replayed refusal — the refused
+    // open subscribed to nothing.
+    await send({ type: 'team-plan-workspace-bind', teamPath: world.repo, requestId: 'b9', commandId: 'bind-9', role: 'lead', sessionId: 'lead-chat', expectedVersion: null })
+    expect(last('team-plan-workspace-result')).toMatchObject({ requestId: 'b9', replayed: false, binding: { version: 1 } })
+    await untilSnapshot(() => all('team-plan-workspace-snapshot').length > 0 || false, 10).catch(() => null)
+    expect(all('team-plan-workspace-snapshot')).toHaveLength(0)
+    expect(messages).toHaveLength(2)
+    expect(agentStarts).toBe(0)
+  })
+
   test('an unknown path is refused as unknown-team; another team\'s plan is refused with no data', async () => {
     const { planId } = await bench.draftInReview()
     const foreign = bench.plans.insertPlan({ teamId: world.otherTeam.teamId, title: 'Secret', creator: { kind: 'human', sessionId: null } })
@@ -235,6 +256,23 @@ describe('binds', () => {
     expect(last('team-plan-workspace-result')).toMatchObject({ requestId: 'r5', error: expect.stringContaining('Session not found in this team'), field: 'sessionId' })
     await send(bindMessage({ requestId: 'r6', commandId: 'bind-4', role: 'architect', sessionId: 'other-team-chat', expectedVersion: null }))
     expect(last('team-plan-workspace-result')).toMatchObject({ requestId: 'r6', error: expect.stringContaining('Session not found in this team'), field: 'sessionId' })
+  })
+
+  test('an archived session binds: the write accepts it and the snapshot reads archived', async () => {
+    records.set('lead-chat', { ...sessionRow('lead-chat', 'leads', world.repo), archivedAt: 'now' })
+    const { planId } = await bench.draftInReview()
+    await send({ type: 'team-plan-workspace-open', teamPath: world.repo, planId })
+    // D6: only `has` and the same-team identity gate a bind — an archived
+    // session still has a record, so it binds (read-only until Restore).
+    await send(bindMessage({ requestId: 'r8' }))
+    expect(last('team-plan-workspace-result')).toMatchObject({
+      requestId: 'r8', replayed: false, binding: { role: 'lead', sessionId: 'lead-chat', version: 1 },
+    })
+    const pushed = await untilSnapshot(message => message.workspace.bindings.length > 0)
+    expect(pushed.workspace.bindings).toEqual([
+      { role: 'lead', sessionId: 'lead-chat', version: 1, availability: 'archived', name: 'name-lead-chat' },
+    ])
+    expect(agentStarts).toBe(0)
   })
 
   test('a bound session reads live, archived, or unavailable as its record changes', async () => {
