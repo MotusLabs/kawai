@@ -37,6 +37,7 @@ import type { TaskStore } from './taskStore'
 import type { TaskCaller } from './TaskService'
 import { refuseSystem, type SystemCaller } from './systemCaller'
 import type { GroupDefinition } from './groupFile'
+import { checkWorkerChoice, WORKER_GROUP_TARGET_ONLY } from './workerChoiceCheck'
 import type { TeamCaps } from './teamCaps'
 import type { StaffingPreview, WorktreeStaffing } from './staffing'
 import { worktreeRootOf, type TeamWorktrees } from './worktreeRoots'
@@ -69,6 +70,13 @@ export interface DispatchInput {
   allowedProfiles?: string[]
   /** Tags on the instruction mail (plan-execution D7); the system caller only. */
   tags?: string[]
+  /**
+   * The worker choice (dispatch-worker-choice D1/D7), as on group mail: a
+   * group target only, normalized before anything is written, carried on the
+   * row and the instruction mail, and part of the key's payload identity.
+   * Kawai's dispatches never carry one (roles alone narrow them).
+   */
+  worker?: string
 }
 
 
@@ -136,7 +144,7 @@ export class AssignmentService {
   }
 
   /** The dispatch's synchronous refusals, before anything is written. */
-  private checkDispatch(caller: TaskCaller, team: TeamIdentity, input: DispatchInput): { task: TeamTask; instruction: string; requestKey: string } {
+  private checkDispatch(caller: TaskCaller, team: TeamIdentity, input: DispatchInput): { task: TeamTask; instruction: string; requestKey: string; workerChoice: string | null } {
     const task = this.tasks.get(input.taskId)
     if (!task || task.teamId !== team.teamId) throw new Error(`Task not found in this team: ${input.taskId}`)
     // A decision origin dispatches only the fix and correction tasks Kawai created (D7).
@@ -159,11 +167,23 @@ export class AssignmentService {
     // Target validation before anything is written: a catalog group, or a
     // live non-archived session of this team (sessionTarget).
     if (input.target.kind === 'group') this.groupOf(team, input.target.id)
-    return { task, instruction, requestKey }
+    return { task, instruction, requestKey, workerChoice: this.workerChoice(caller, team, input.target, input.worker) }
+  }
+
+  /**
+   * The canonical worker choice of a dispatch or handoff (dispatch-worker-choice
+   * D1/D7), or null without one. Refused naming the reason for Kawai, for a
+   * session target, and for an unknown, ambiguous, or out-of-group worker.
+   */
+  workerChoice(caller: TaskCaller, team: TeamIdentity, target: AssignmentTarget, raw: string | undefined): string | null {
+    if (raw === undefined) return null
+    if (caller.kind === 'system') throw new Error("Kawai's dispatches carry no worker choice; roles alone narrow them.")
+    if (target.kind !== 'group') throw new Error(WORKER_GROUP_TARGET_ONLY)
+    return checkWorkerChoice(raw, this.groupOf(team, target.id), this.options.homeDir, team.groupsRoot)
   }
 
   private commitDispatch(caller: TaskCaller, team: TeamIdentity, input: DispatchInput,
-    { task, instruction, requestKey }: { task: TeamTask; instruction: string; requestKey: string }, recipient: ChatSessionRecord | null): DispatchOutcome {
+    { task, instruction, requestKey, workerChoice }: { task: TeamTask; instruction: string; requestKey: string; workerChoice: string | null }, recipient: ChatSessionRecord | null): DispatchOutcome {
     const role = input.target.kind === 'group' ? input.target.id : recipient?.groupId ?? null
 
     // The replay path resolves against committed rows before anything is
@@ -171,7 +191,7 @@ export class AssignmentService {
     // never add a second instruction (D4).
     const existing = this.store.byKey(team.teamId, requestKey)
     if (existing) {
-      const diff = this.payloadDiff(existing, task.id, { target: input.target, instruction, handoff: input.handoff ?? null })
+      const diff = this.payloadDiff(existing, task.id, { target: input.target, instruction, workerChoice, handoff: input.handoff ?? null })
       if (diff) throw new Error(`Request key already used with a different ${diff}`)
       return { replay: true, assignment: existing, message: existing.messageId ? this.mail.get(existing.messageId) : null }
     }
@@ -186,13 +206,13 @@ export class AssignmentService {
       const inserted = this.store.insert({
         teamId: team.teamId, taskId: task.id, requestKey,
         targetKind: input.target.kind, targetId: input.target.id, role, instruction, creator,
-        ...(input.handoff ? { handoff: input.handoff } : {}),
+        ...(input.handoff ? { handoff: input.handoff } : {}), ...(workerChoice ? { workerChoice } : {}),
       })
       const enqueued = this.mail.enqueue({
         teamId: team.teamId, toKind: input.target.kind, toId: input.target.id,
         ...sender, priority: 'normal', body: instruction, taskId: task.id,
         ...(input.allowedProfiles ? { allowedProfiles: input.allowedProfiles } : {}),
-        ...(input.tags ? { tags: [...new Set(input.tags)] } : {}),
+        ...(input.tags ? { tags: [...new Set(input.tags)] } : {}), ...(workerChoice ? { workerChoice } : {}),
       })
       this.store.setMessage(inserted.assignment.id, enqueued.id)
       const by = creator.kind === 'human' ? 'human' : partyName(creator)
@@ -447,10 +467,12 @@ export class AssignmentService {
 
   /** Which normalized request field differs between a stored dispatch and a replayed intent (D4). */
   private payloadDiff(existing: TeamTaskAssignment, taskId: string,
-    input: { target: AssignmentTarget; instruction: string; handoff: DispatchHandoff | null }): string | null {
+    input: { target: AssignmentTarget; instruction: string; workerChoice: string | null; handoff: DispatchHandoff | null }): string | null {
     if (existing.taskId !== taskId) return 'task'
     if (existing.targetKind !== input.target.kind || existing.targetId !== input.target.id) return 'target'
     if (existing.instruction !== input.instruction.trim()) return 'instruction'
+    // Compared normalized (D7): a bare model key and its provider/model form are one payload.
+    if ((existing.workerChoice ?? null) !== input.workerChoice) return 'worker'
     // Handoff identity (task-results-handoffs D3): a replay carrying another result is refused.
     return handoffDiff(existing, input.handoff)
   }

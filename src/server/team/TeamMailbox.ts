@@ -14,6 +14,7 @@ import { resolveTeam, type TeamIdentity } from './teamIdentity'
 import { MailboxStore, type TeamMessage } from './mailboxStore'
 import { KAWAI_REPLY_GUIDANCE } from '../../shared/team'
 import type { TaskStore } from './taskStore'
+import { checkWorkerChoice, WORKER_GROUP_ONLY, WORKER_NOT_ON_REPLY } from './workerChoiceCheck'
 
 /** Who is sending: an agent session (identity bound) or the human for a team. */
 export type MailCaller = { kind: 'agent'; sessionId: string } | { kind: 'human'; team: TeamIdentity }
@@ -33,6 +34,8 @@ export interface MailInput {
   urgent?: boolean
   tags?: string[]
   task_id?: string
+  /** The sender's worker choice (dispatch-worker-choice D1); group mail only. */
+  worker?: string
 }
 
 export interface MailReplyInput {
@@ -41,6 +44,8 @@ export interface MailReplyInput {
   urgent?: boolean
   tags?: string[]
   task_id?: string
+  /** Never accepted: a reply goes back to its sender (refused naming the reason). */
+  worker?: string
 }
 
 import type { EffectiveCooldown } from './routing/limitEvents'
@@ -146,7 +151,12 @@ export class TeamMailbox {
   async prepareSend(caller: MailCaller, input: MailInput, deliverAt?: string): Promise<PreparedMail> {
     const sender = await this.context(caller)
     const taskId = this.taskOf(sender.team, input.task_id)
+    // A worker choice applies only to group mail (D1): refused on direct
+    // mail and on mail to the human before the recipient is even resolved.
+    if (input.worker !== undefined && input.to_kind !== 'group') throw new Error(WORKER_GROUP_ONLY)
     const target = this.targetOf(sender, input)
+    const workerChoice = input.worker !== undefined && target.kind === 'group'
+      ? checkWorkerChoice(input.worker, sender.catalog.groups.get(target.id)!.group, this.options.homeDir, sender.team.groupsRoot) : null
     if (target.kind === 'session') {
       const recipient = target.recipient
       if ((await resolveTeam(recipient.projectPath)).teamId !== sender.team.teamId) {
@@ -164,7 +174,7 @@ export class TeamMailbox {
         fromKind: sender.fromKind, fromSession: sender.fromSession, fromGroup: sender.fromGroup,
         originPath: sender.originPath, body: input.body,
         priority: input.urgent ? 'urgent' : 'normal', tags: input.tags,
-        hopLimit: sender.hopLimit, deliverAt, taskId,
+        hopLimit: sender.hopLimit, deliverAt, taskId, ...(workerChoice ? { workerChoice } : {}),
       }),
       after: async message => this.publish(this.store.get(message.id) ?? message),
     }
@@ -198,6 +208,7 @@ export class TeamMailbox {
    */
   async prepareReply(caller: MailCaller, input: MailReplyInput, options: { answer?: boolean } = {}): Promise<PreparedMail> {
     const answer = options.answer === true
+    if (input.worker !== undefined) throw new Error(WORKER_NOT_ON_REPLY)
     const sender = await this.context(caller)
     const explicitTask = this.taskOf(sender.team, input.task_id)
     const original = this.store.get(input.message_id)

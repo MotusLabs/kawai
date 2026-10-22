@@ -17,3 +17,8 @@ systemd/agentboard.service
 .claude/
 .worktrees/
 .kawai/profiles.json
+# Scratch repositories for the runner's production-path publish probes
+# (runnerRoots.test.ts): bun resolves the child's bare --preload path at the
+# bun project root (package.json/node_modules), which only the repository
+# provides, so they cannot live in the shared tmpdir.
+.kawai-fixture-probes/

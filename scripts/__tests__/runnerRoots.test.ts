@@ -7,6 +7,9 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { cleanGitEnv } from '../../src/server/git/gitCommand'
+import { recordsDir } from '../lib/checkRecords'
+import { TIMINGS_FILE_NAME, isRunSnapshotName } from '../testTimings'
 import { isProcDead } from './fixtures/runnerProbe/procState'
 
 const REPO_ROOT = path.resolve(import.meta.dir, '..', '..')
@@ -232,10 +235,14 @@ describe('the real runner gives each file its own root', () => {
 
   // F5 (review): a signal handled while the main batch runs must stop the
   // batch loop — spawning the next batch would orphan it when the handler's
-  // process.exit lands. The main-batch file ignores SIGTERM and exits 0, so
-  // only the signalHandled guard keeps the serial batch from starting. The
-  // serial fixture's basename classifies it as a real-tmux batch, but it
-  // runs no tmux: it only marks that it started.
+  // process.exit lands. This is not a race the guard barely wins: the
+  // handler sets the flag synchronously when the signal arrives, and the
+  // main batch ends only in response to the forwarded signal, so the loop's
+  // continuation always finds the flag already set — the ordering stops the
+  // serial batch on its own, and the refusal in runCommand (exported as
+  // refuseBatchAfterSignal, unit-tested in testRunner.test.ts) is defense in
+  // depth on that ordering. The serial fixture's basename classifies it as a
+  // real-tmux batch, but it runs no tmux: it only marks that it started.
   test('a handled signal stops the batch loop: the serial batch never starts', async () => {
     const out = makeProbeOut()
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'runner-signal-race-'))
@@ -275,5 +282,104 @@ describe('the real runner gives each file its own root', () => {
     expect(stderr).toContain('KAWAI_TEST_WORKERS')
     expect(fs.readdirSync(privateTmp)).toEqual([])
   }, 30_000)
+})
+
+// Production-path probes for the timings record (review B3): these drive the
+// real scripts/test-runner.ts through a FULL run — no file arguments, no -t —
+// so main() exercises runBatchesAndPublish with the real runCommand and the
+// real publish closure. The run happens in a temporary repository of its own,
+// so the publish lands in that repository's own records directory, never the
+// driving repository's. The repositories are created beneath the driving
+// repository (ignored, see .gitignore): bun resolves the child's bare
+// --preload path at the bun project root (the nearest enclosing
+// package.json/node_modules), and only the driving repository provides one,
+// so the shared tmpdir cannot host them.
+describe('the real runner publishes the timings record (B3)', () => {
+  const fixturesParent = path.join(REPO_ROOT, '.kawai-fixture-probes')
+  const probeRepos: string[] = []
+  afterAll(() => {
+    for (const dir of probeRepos) fs.rmSync(dir, { recursive: true, force: true })
+    try {
+      fs.rmdirSync(fixturesParent)
+    } catch {
+      // a concurrent probe run still holds the parent
+    }
+  })
+
+  // A minimal repository for one full run: every source tree collectFiles()
+  // scans (empty but existing), one test file in src/server/__tests__, and
+  // the production preload copied in (buildBunTestArgs passes it to every
+  // child). --skip-real-tmux drops the serial batches the tree has no files
+  // for, and the run stays a full one.
+  function makeProbeRepo(testBody: string): string {
+    fs.mkdirSync(fixturesParent, { recursive: true })
+    const repo = fs.mkdtempSync(path.join(fixturesParent, 'runner-publish-probe-'))
+    probeRepos.push(repo)
+    const inited = Bun.spawnSync(['git', 'init', '-q', repo], { env: cleanGitEnv() })
+    if (inited.exitCode !== 0) throw new Error(`git init failed: ${inited.stderr.toString()}`)
+    for (const tree of ['src/server/__tests__', 'src/client/__tests__', 'src/shared/__tests__', 'scripts/__tests__']) {
+      fs.mkdirSync(path.join(repo, tree), { recursive: true })
+    }
+    fs.writeFileSync(path.join(repo, 'src', 'server', '__tests__', 'publishProbe.test.ts'), testBody)
+    fs.copyFileSync(
+      path.join(REPO_ROOT, 'scripts', 'test-preload.ts'),
+      path.join(repo, 'scripts', 'test-preload.ts')
+    )
+    return repo
+  }
+
+  function spawnRunner(repo: string, ...args: string[]): Bun.Subprocess {
+    return Bun.spawn({
+      cmd: [process.execPath, RUNNER, '--skip-real-tmux', ...args],
+      cwd: repo,
+      env: { ...process.env, KAWAI_TEST_WORKERS: '1' },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    })
+  }
+
+  test('a full passing run publishes the record into its own repository', async () => {
+    const repo = makeProbeRepo("import { test, expect } from 'bun:test'\ntest('passes', () => {\n  expect(1).toBe(1)\n})\n")
+    const proc = spawnRunner(repo)
+    const { code, stderr } = await drainAndExit(proc)
+    expect(code, stderr.slice(-2000)).toBe(0)
+    const record = JSON.parse(fs.readFileSync(path.join(recordsDir(repo), 'timings.json'), 'utf8')) as {
+      version: number
+      files: Record<string, number>
+    }
+    expect(record.version).toBe(1)
+    // Bun's key spelling for a measured file has varied around the './'
+    // prefix; the path beneath it is what identifies the file.
+    expect(
+      Object.keys(record.files).map((key) => key.replace(/^\.\//, ''))
+    ).toContain('src/server/__tests__/publishProbe.test.ts')
+    // This run's own snapshot (D7) sits beside the record.
+    expect(fs.readdirSync(recordsDir(repo)).some(isRunSnapshotName)).toBe(true)
+  }, 45_000)
+
+  test('a full failing run leaves the records directory without a record', async () => {
+    const repo = makeProbeRepo("import { test, expect } from 'bun:test'\ntest('fails', () => {\n  expect(1).toBe(2)\n})\n")
+    const proc = spawnRunner(repo)
+    const { code, stderr } = await drainAndExit(proc)
+    expect(code).not.toBe(0)
+    // The failed batch surfaces as the runCommand error main() reprints, and
+    // nothing is published: bun writes the run-root snapshot even on a
+    // failed batch (probed), so the throw-before-publish ordering is the
+    // only guard over the shared records directory.
+    expect(stderr).toContain('Command failed (1)')
+    expect(fs.existsSync(recordsDir(repo))).toBe(false)
+  }, 45_000)
+
+  test('an explicit-files run leaves the records directory without a record (F5)', async () => {
+    // A filtered run must not publish (D4): on the production path, planRun
+    // seeds and publishes for a full run only, so the real runner given
+    // explicit files leaves the scratch repository's records directory
+    // without a timings record — and without a seed call side effect.
+    const repo = makeProbeRepo("import { test, expect } from 'bun:test'\ntest('passes', () => {\n  expect(1).toBe(1)\n})\n")
+    const proc = spawnRunner(repo, 'src/server/__tests__/publishProbe.test.ts')
+    const { code, stderr } = await drainAndExit(proc)
+    expect(code, stderr.slice(-2000)).toBe(0)
+    expect(fs.existsSync(path.join(recordsDir(repo), TIMINGS_FILE_NAME))).toBe(false)
+  }, 45_000)
 })
 

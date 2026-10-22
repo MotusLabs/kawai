@@ -10,6 +10,7 @@
 // diagnosis built from the same eligibility breakdown, live counts, spawn
 // facts, and cooldowns the decision used — never scraped from the log.
 import type { ChatUsageReport } from '../../../shared/chat'
+import type { ChatSessionRecord } from '../../db'
 import type {
   RouteCandidate, RouteContext, RouteDecisionLogEntry, RouteGroup, RouteMessage, RouteProfileState, RouteProviderState, RouteUsage,
 } from '../../../shared/routing'
@@ -20,7 +21,7 @@ import type { TeamMessage } from '../mailboxStore'
 import type { SpawnContext, WorktreeStaffing } from '../staffing'
 import { builtinPick } from './builtin'
 import { DEFAULT_PROFILE_ID } from './candidates'
-import { evaluateEligibility } from './workerEligibility'
+import { evaluateEligibility, type EligibilityResult } from './workerEligibility'
 import { resolveWorkerSelector } from './workerSelector'
 import type { LimitEventStore } from './limitEvents'
 import type { RuleRegistry } from './ruleLoader'
@@ -33,6 +34,20 @@ export interface GroupMemberRecord {
   sessionId: string
   profileId: string
   cwd: string
+}
+
+/**
+ * Every live (non-archived) member of a team's group: the members routing
+ * counts toward caps, busy or idle, spawned or not. The one counter both the
+ * router and `team_capacity` read (dispatch-worker-choice D6).
+ */
+export function liveGroupMembers(
+  records: Iterable<ChatSessionRecord>, teamOf: (sessionId: string) => string | undefined, teamId: string, groupId: string,
+): GroupMemberRecord[] {
+  return [...records].flatMap(record =>
+    record.archivedAt == null && record.groupId === groupId && teamOf(record.sessionId) === teamId
+      ? [{ sessionId: record.sessionId, profileId: record.claudeProfileId ?? 'default', cwd: record.projectPath }]
+      : [])
 }
 
 export interface ProfileRouterOptions {
@@ -120,16 +135,12 @@ export class ProfileRouter implements GroupRouter {
     })
     if (candidates.length === 0) {
       this.holds.delete(message.id)
-      // Members the dispatcher found eligible but the choice filtered out
-      // name it in the breakdown (D2); the others keep their own cause.
-      const listed = new Set((view.exclusions ?? []).map(entry => entry.sessionId))
-      const choiceExclusions: MemberExclusion[] = excluded.flatMap(entry => entry.alternative.kind === 'member' &&
-        eligible.has(entry.alternative.sessionId) && !listed.has(entry.alternative.sessionId) &&
-        entry.reasons.some(reason => reason.kind === 'worker-choice')
-        ? [{ sessionId: entry.alternative.sessionId, kind: 'worker-choice' as const, detail: workerChoice!.selector }]
-        : [])
-      const breakdown = choiceExclusions.length > 0 ? { ...view, exclusions: [...(view.exclusions ?? []), ...choiceExclusions] } : view
-      const diagnosis = diagnoseNone(routeGroup, spawn, breakdown)
+      // Members the dispatcher found eligible were dropped by the message's
+      // filters; each names its first filter reason from the one eligibility
+      // check (D2/D10), beside the others' member-state causes.
+      const breakdown = { ...view, exclusions: [...(view.exclusions ?? []), ...filterExclusions(excluded, eligible)] }
+      // A choice waits on its own workers' caps, never on a filtered-out one's (D5).
+      const diagnosis = diagnoseNone(routeGroup, spawn, breakdown, workerChoice ? new Set(workerChoice.profiles) : null)
       // The choice names itself beside the capacity it waits on (D5).
       if (workerChoice) diagnosis.push({ kind: 'worker-choice', detail: workerChoice.selector })
       return { kind: 'none', diagnosis }
@@ -265,7 +276,7 @@ export class ProfileRouter implements GroupRouter {
 }
 
 /** The rule view of a report: the window facts a rule reads, nothing else. */
-function usageView(usage: ChatUsageReport | null): RouteUsage | null {
+export function usageView(usage: ChatUsageReport | null): RouteUsage | null {
   return usage ? {
     status: usage.status, receivedAt: usage.receivedAt, source: usage.source ?? 'unknown',
     windows: usage.windows.map(window => ({ key: window.key, percentUsed: window.percentUsed, resetsAt: window.resetsAt })),
@@ -278,6 +289,18 @@ function memberState(member: GroupMemberRecord, eligible: EligibleMember | undef
     ...(eligible ? { idleForMs: eligible.idleForMs } : {}),
   }
 }
+
+/** The message filter that dropped each dispatcher-eligible member, from the eligibility check. */
+function filterExclusions(excluded: EligibilityResult['excluded'], eligible: ReadonlyMap<string, EligibleMember>): MemberExclusion[] {
+  return excluded.flatMap(({ alternative, reasons }) => {
+    if (alternative.kind !== 'member' || !eligible.has(alternative.sessionId)) return []
+    const reason = reasons.find(entry => FILTER_KINDS.has(entry.kind))
+    if (!reason) return []
+    return [{ sessionId: alternative.sessionId, kind: reason.kind as MemberExclusion['kind'], ...(reason.detail !== undefined ? { detail: reason.detail } : {}) }]
+  })
+}
+
+const FILTER_KINDS: ReadonlySet<string> = new Set(['outside-role', 'worker-choice', 'excluded-profile'])
 
 /** A readable cause for the no-eligible-member breakdown line. */
 const CAUSE_LABELS: Record<MemberExclusion['kind'], string> = {
@@ -321,11 +344,15 @@ function routingHold(until: number | null, reason?: string): WaitingConstraint {
  * reported, and the dispatcher's member breakdown. Caps lead — group, then
  * per-profile, then team spawn, then worktree occupancy — then member
  * facts, then spawn specifics; `orderConstraints` fixes the final order.
+ * Under a worker choice only the chosen profiles' caps are listed.
  */
-function diagnoseNone(group: RouteGroup, spawn: SpawnContext | null, view: RouteView): WaitingConstraint[] {
+function diagnoseNone(
+  group: RouteGroup, spawn: SpawnContext | null, view: RouteView, chosenProfiles: ReadonlySet<string> | null,
+): WaitingConstraint[] {
   const constraints: WaitingConstraint[] = []
   if (group.live >= group.max) constraints.push({ kind: 'group-cap', counts: { live: group.live, cap: group.max } })
   for (const profile of group.profiles) {
+    if (chosenProfiles && !chosenProfiles.has(profile.profileId)) continue
     if (profile.cap !== undefined && profile.live >= profile.cap) {
       constraints.push({ kind: 'profile-cap', counts: { live: profile.live, cap: profile.cap }, detail: profile.profileId })
     }

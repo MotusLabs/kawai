@@ -87,7 +87,9 @@ import { codexLimitProviderId } from './codex/codexLimits'
 import { resolveCodexHome } from './codexProfiles'
 import { fetchZaiUsage } from './zaiUsage'
 import { fetchOpenRouterUsage, isOpenRouterBaseUrl, type OpenRouterUsagePull } from './openRouterUsage'
-import { ambientProviderOf, catalogCtx } from '../team/cooldowns'
+import { ambientProviderLabel, ambientProviderOf, catalogCtx } from '../team/cooldowns'
+import { storedLoginKey } from '../team/routing/sharedLogins'
+import { TeamCapacity } from '../team/teamCapacity'
 import { readWorkerTranscript } from './chatWorkerTranscript'
 import { isTaskOutputFile, readTaskOutputTail } from './taskOutputFile'
 import type { BackgroundTaskRecord } from './chatBackgroundTasks'
@@ -101,6 +103,7 @@ import { SessionDirectory } from '../team/sessionDirectory'
 import { MessageFeed } from '../team/messageFeed'
 import { MessageQuery } from '../team/messageQuery'
 import { ChatTurnEndStore } from './chatTurnEndStore'
+import { DriverMailGuard } from './driverMailGuard'
 import { TeamMailbox } from '../team/TeamMailbox'
 import { createMailboxServer, teamToolTable, type MailboxServerServices } from '../team/mailboxTools'
 import { composeExecutionCore, composePlanServices } from '../plans/planComposition'
@@ -124,7 +127,7 @@ import { supervisionRuntime } from '../plans/supervision/supervisionRuntime'
 import { pauseHolderFacts } from '../plans/revisionControl/pauseTick'
 import type { HandoffTarget } from '../team/routing/limitOutcomes'
 import type { RuleLoadReport, TeamRoutingState } from '../../shared/routing'
-import { SessionMailbox } from '../team/sessionMailbox'
+import { SessionMailbox, type ClaimRef } from '../team/sessionMailbox'
 import type { TaskService } from '../team/TaskService'
 import type { AssignmentService } from '../team/AssignmentService'
 import type { TaskResultService } from '../team/TaskResultService'
@@ -1187,6 +1190,18 @@ export class ChatSessionManager {
       // The provider cooldown (providers-and-workers D8) resolves in the
       // team's own catalog, so a provider event shows in every profile's tax.
       (profileId, teamId) => providerOf(profileId, this.catalogCtx(teamId)))
+    // team_capacity (dispatch-worker-choice D6) reads the router's own objects:
+    // the members counter, staffing's reservations, the limit store, the
+    // ambient provider resolution, and the provider-keyed usage store.
+    this.capacity = new TeamCapacity({
+      teams: this.teams, records: () => this.records.values(),
+      pendingSpawns: teamId => this.teamMail.staffing.pendingFor(teamId),
+      limits: this.teamMail.limits,
+      providerOf: ambientProviderOf(options.profileCatalogHome),
+      providerLabel: ambientProviderLabel(options.profileCatalogHome),
+      providerUsageOf: providerId => this.usageLimits.get(providerId),
+      loginKeyOf: (profileId, groupsRoot) => this.loginKeyOf(profileId, groupsRoot),
+    })
     this.reports = new ProcessReportService(options.db.db, this.metrics, {
       onCommit: teamId => this.options.onProcessReportChange?.(teamId),
     })
@@ -1619,7 +1634,10 @@ export class ChatSessionManager {
   readonly metrics: MetricsReader
   /** Process reports and proposals (team-process-metrics D6): the report tools and the human's decide/link commands. */
   readonly reports: ProcessReportService
+  readonly capacity: TeamCapacity
   private readonly turnUsageTracker: TurnUsageTracker
+  /** Guards the teamMail calls on the driver-event path (never throws; a failed settle is retried). */
+  private readonly mailGuard = new DriverMailGuard()
   /** Durable plans (durable-plans); the plan tools and UI actions go through it. */
   readonly plans: PlanService
   /** Plan executions (plan-execution): the human Start/Stop/Retry commands. */
@@ -2109,6 +2127,7 @@ export class ChatSessionManager {
     // A restore still in flight stops at its next row (design D2).
     this.isShutDown = true
     this.observations.stop()
+    this.mailGuard.close()
     this.teamMail.close()
     // The executor stops with the server: wakes drop, the timer clears, new ticks refuse (D5).
     this.executionRuntime?.stop()
@@ -2557,12 +2576,7 @@ export class ChatSessionManager {
       // The team must be known before the first spawn reads its prompt.
       await this.teams.track(record.sessionId, this.records.get(record.sessionId)?.projectPath ?? record.projectPath)
       // Both runtimes build their team tools from one table (D6).
-      const teamServices: MailboxServerServices = {
-        tasks: this.tasks, results: this.results, strategies: this.strategies, plans: this.plans, validation: this.validation, ...(this.decisions ? { decisions: this.decisions } : {}), releases: this.teamMail.releases, management: this.management,
-        ...(this.checkpoints ? { checkpoints: this.checkpoints } : {}),
-        metrics: { teamOf: id => this.teams.teamOf(id)?.teamId ?? null, reader: this.metrics },
-        reports: { caller: id => this.reportCaller(id), service: this.reports },
-      }
+      const teamServices = this.teamServices()
       const teamMcpServer = codex ? null : await createMailboxServer(this.mailbox, record.sessionId, teamServices)
       // The options both runtimes share: identity, the audit observer, the
       // prompt/effort/policy readers, and every output callback.
@@ -2851,6 +2865,32 @@ export class ChatSessionManager {
         : `Provider ${credential.providerLabel} needs ${credential.authTokenEnv} in the server environment.`
     }
     return hasClaudeAuth(this.launchEnvOf(profileId, projectPath)) ? undefined : chatAuthErrorMessage()
+  }
+
+  /**
+   * A worker's stored-login key for team_capacity's `sharesLoginWith`
+   * (dispatch-worker-choice D6): catalog resolution only, no spawn and no
+   * read under the config dir. An unresolvable profile has no key; only the
+   * error message is logged, never the environment.
+   */
+  private loginKeyOf(profileId: string, groupsRoot: string): string | null {
+    try {
+      return storedLoginKey(this.launchFor(profileId, groupsRoot), effectiveChatEnv(this.providerEnv()))
+    } catch (error) {
+      logger.warn('team_capacity_login_unresolved', { profileId, error: error instanceof Error ? error.message : String(error) })
+      return null
+    }
+  }
+
+  /** The services every session's team tools are built from, on both runtimes (codex-chat-sessions D6). */
+  private teamServices(): MailboxServerServices {
+    return {
+      tasks: this.tasks, results: this.results, strategies: this.strategies, plans: this.plans, validation: this.validation, ...(this.decisions ? { decisions: this.decisions } : {}), releases: this.teamMail.releases, management: this.management,
+      ...(this.checkpoints ? { checkpoints: this.checkpoints } : {}),
+      metrics: { teamOf: id => this.teams.teamOf(id)?.teamId ?? null, reader: this.metrics },
+      reports: { caller: id => this.reportCaller(id), service: this.reports },
+      capacity: this.capacity,
+    }
   }
 
   /**
@@ -3169,14 +3209,33 @@ export class ChatSessionManager {
         logger.warn('chat_turn_usage_record_failed', { sessionId, error: error instanceof Error ? error.message : String(error) })
       }
     }
-    if (event.type === 'error' || event.type === 'turn_completed') this.teamMail.settleRecipient(sessionId)
+    // Every teamMail call below is guarded (driverMailGuard): their writes run
+    // on the shared rollback-journal connection, and a throw here used to
+    // escape the driver's emit and kill the process. The settle is retried on
+    // the guard's timer; the rest log and continue.
+    if (event.type === 'error' || event.type === 'turn_completed') {
+      // Every attempt (inline or retried) settles only the claims that exist
+      // now — same id, claimant, claimed_at. A session-wide retry would settle
+      // mail claimed after the turn end (the dispatcher can claim inside the
+      // retry window) and hold it uncertain mid-turn (review B1). A read is
+      // not blocked by a RESERVED holder, so the snapshot survives the same
+      // contention that failed the settle; if it cannot be read at all the
+      // empty list settles nothing and mailbox recovery covers the mail.
+      const claims = this.mailGuard.guardResult<ClaimRef[]>([], 'chat_mail_settle_snapshot_failed', () => this.teamMail.claimRefs(sessionId), { sessionId })
+      this.mailGuard.settleRecipient(sessionId, () => this.teamMail.settleClaims(claims))
+    }
     // The context-exhausted flag (chat-context-exhaustion D3), set or cleared
-    // before the mail outcome below reads it.
-    const exhausted = this.trackContextExhaustion(sessionId, event)
+    // before the mail outcome below reads it. A failed write degrades to a
+    // normal turn end (fallback false).
+    const exhausted = this.mailGuard.guardResult(false, 'chat_context_exhaustion_track_failed', () => this.trackContextExhaustion(sessionId, event), { sessionId })
     // Profile routing: progress and limit outcomes for the mail a turn handles.
-    if (event.type === 'tool_call') this.teamMail.toolCall(sessionId, event.tool, event.input)
+    if (event.type === 'tool_call') {
+      this.mailGuard.guard('chat_mail_tool_call_failed', () => this.teamMail.toolCall(sessionId, event.tool, event.input), { sessionId })
+    }
     // A trigger marks a turn the agent started itself (limit-outcomes-agent-turns D1).
-    if (event.type === 'turn_started') this.teamMail.turnStarted(sessionId, event.trigger !== undefined)
+    if (event.type === 'turn_started') {
+      this.mailGuard.guard('chat_mail_turn_started_failed', () => this.teamMail.turnStarted(sessionId, event.trigger !== undefined), { sessionId })
+    }
     if (event.type === 'turn_completed') {
       try {
         // An exhausted turn never processed its mail: the exhaustion outcome

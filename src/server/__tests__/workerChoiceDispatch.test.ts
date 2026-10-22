@@ -208,6 +208,23 @@ describe('the worker-choice waiting constraint (2.4)', () => {
     expect(reason?.others.filter(entry => entry.kind === 'worker-choice')).toEqual([{ kind: 'worker-choice', detail: 'zai/glm' }])
   })
 
+  test('a choice reports only its own worker\'s cap, even when another worker\'s cap sorts first', async () => {
+    writeGroup('profiles: { sonnet: 1, glm: 1 }\nmax: 3')
+    records.set('busy-sonnet', record('busy-sonnet', 'sonnet', { status: 'working' }))
+    records.set('busy-glm', record('busy-glm', 'glm', { status: 'working' }))
+    recipients.push(recipient('busy-sonnet', 'sonnet', false), recipient('busy-glm', 'glm', false))
+    const chosen = mail('zai/glm')
+    await run()
+    const reason = toReason(reasons.get(chosen.id) ?? [])
+    expect(reason?.blocker).toEqual({ kind: 'profile-cap', counts: { live: 1, cap: 1 }, detail: 'glm' })
+    expect([reason!.blocker, ...reason!.others].filter(entry => entry.kind === 'profile-cap').map(entry => entry.detail)).toEqual(['glm'])
+    // Without a choice every capped worker is listed, in the group's order.
+    const plain = mail()
+    await run()
+    const open = toReason(reasons.get(plain.id) ?? [])
+    expect([open!.blocker, ...open!.others].filter(entry => entry.kind === 'profile-cap').map(entry => entry.detail)).toEqual(['sonnet', 'glm'])
+  })
+
   test('mail with no choice never reports the constraint', async () => {
     writeGroup('profiles: { glm: 1 }\nmax: 1')
     records.set('busy-glm', record('busy-glm', 'glm', { status: 'working' }))

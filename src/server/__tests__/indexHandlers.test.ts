@@ -197,6 +197,11 @@ class SessionManagerMock {
 
 class SessionRegistryMock {
   static instance: SessionRegistryMock | null = null
+  // The instance whose setAgentSessions ran last (N2): the startup marker is
+  // emitted in the same synchronous block that call sits in, so the pair is
+  // atomic and the logger gate can tell this test's registry from a previous
+  // import's late one.
+  static lastActor: SessionRegistryMock | null = null
   sessions: Session[] = []
   agentSessions: { active: unknown[]; hibernating: unknown[]; history: unknown[] } = {
     active: [],
@@ -264,6 +269,7 @@ class SessionRegistryMock {
   }
 
   setAgentSessions(active: unknown[], hibernating: unknown[], history: unknown[]) {
+    SessionRegistryMock.lastActor = this
     this.agentSessions = { active, hibernating, history }
     this.emit('agent-sessions', { active, hibernating, history })
   }
@@ -364,17 +370,34 @@ mock.module('../config', () => ({
     return hostname.length > 0 && hostname.length <= 253 && re.test(hostname)
   },
 }))
+// N2: a previous index's startup verification can settle late and log its
+// startup_verification_complete marker into the live test's logEntries, so a
+// wait gated on that count passes early. The marker is emitted in the same
+// synchronous block that calls registry.setAgentSessions (SessionRefreshLoop),
+// so recording the last registry actor and gating only this marker on "it is
+// the live test's registry" drops the stale marker while passing this test's —
+// the same gate replaceSessions applies to its recorded calls. Every other
+// event passes unconditionally.
+function pushLogEntry(
+  level: 'debug' | 'info' | 'warn' | 'error',
+  event: string,
+  data?: Record<string, unknown>
+) {
+  if (
+    event === 'startup_verification_complete' &&
+    SessionRegistryMock.lastActor !== SessionRegistryMock.instance
+  ) {
+    return
+  }
+  logEntries.push({ level, event, data })
+}
 mock.module('../logger', () => ({
   logLevel: 'info',
   logger: {
-    debug: (event: string, data?: Record<string, unknown>) =>
-      logEntries.push({ level: 'debug', event, data }),
-    info: (event: string, data?: Record<string, unknown>) =>
-      logEntries.push({ level: 'info', event, data }),
-    warn: (event: string, data?: Record<string, unknown>) =>
-      logEntries.push({ level: 'warn', event, data }),
-    error: (event: string, data?: Record<string, unknown>) =>
-      logEntries.push({ level: 'error', event, data }),
+    debug: (event: string, data?: Record<string, unknown>) => pushLogEntry('debug', event, data),
+    info: (event: string, data?: Record<string, unknown>) => pushLogEntry('info', event, data),
+    warn: (event: string, data?: Record<string, unknown>) => pushLogEntry('warn', event, data),
+    error: (event: string, data?: Record<string, unknown>) => pushLogEntry('error', event, data),
   },
 }))
 mock.module('../db', () => ({
@@ -701,7 +724,10 @@ function startupVerificationCount(): number {
  * disk IO can still be in flight when a test starts driving the server, so a
  * baseline captured before it settles can be invalidated by its late
  * replaceSessions. Each index logs exactly one startup_verification_complete
- * entry; wait for this import's entry before capturing any baseline.
+ * entry; wait for this import's entry before capturing any baseline. The
+ * logger mock only records that marker when the last registry actor is this
+ * test's registry instance (the same gate replaceSessions applies), so a
+ * previous import's late marker never satisfies the wait.
  */
 async function waitForStartupVerification(baseline: number): Promise<void> {
   // 4 s: settled imports return at once, and the bound stays under the raw
@@ -750,6 +776,7 @@ beforeEach(() => {
   lastUserMessageWorkerError = null
   lastUserMessageWorkerMessage = null
   SessionRegistryMock.instance = null
+  SessionRegistryMock.lastActor = null
   SessionRefreshWorkerClientMock.instances = new Set()
   resetDbState()
   Object.assign(configState, defaultConfig)
@@ -2062,11 +2089,16 @@ describe('server message handlers', () => {
       'the recovered refresh applying [freshSession]'
     )
 
-    expect(replaceSessionsCalls.at(-1)).toEqual([freshSession])
+    // N2: assert on the call the wait matched, not on whatever call happens
+    // to be last — a concurrent path's late call must not move this.
+    const applied = replaceSessionsCalls
+      .slice(baselineReplaceCalls)
+      .find((sessions) => sessions.length === 1 && sessions[0].id === freshSession.id)
+    expect(applied).toEqual([freshSession])
     expect(refreshWorkerExpectedWindowCounts[1]).toBeGreaterThan(
       refreshWorkerExpectedWindowCounts[0] ?? 0
     )
-  })
+  }, 15_000)
 
   test('session refresh ensures base session before worker snapshot', async () => {
     let ensureCalls = 0
@@ -2095,7 +2127,7 @@ describe('server message handlers', () => {
     expect(refreshWorkerExpectedWindowCounts.length).toBeGreaterThan(0)
     expect(ensureCalls).toBeGreaterThan(startupEnsureCalls)
     expect(refreshWorkerExpectedWindowCounts).toHaveLength(1)
-  })
+  }, 15_000)
 
   test('last-user-message timeout does not poison the queued refresh', async () => {
     const refreshedSession: Session = {
@@ -2140,8 +2172,13 @@ describe('server message handlers', () => {
       'the queued refresh applying [refreshedSession]'
     )
 
-    expect(replaceSessionsCalls.at(-1)).toEqual([refreshedSession])
-  })
+    // N2: assert on the call the wait matched, not on whatever call happens
+    // to be last — a concurrent path's late call must not move this.
+    const applied = replaceSessionsCalls
+      .slice(baselineReplaceCalls)
+      .find((sessions) => sessions.length === 1 && sessions[0].id === refreshedSession.id)
+    expect(applied).toEqual([refreshedSession])
+  }, 15_000)
 
   test('startup sync timeout skips replacing sessions and leaves DB state intact', async () => {
     const activeRecord = makeRecord({
@@ -2943,7 +2980,7 @@ describe('server message handlers', () => {
     )
 
     expect(registryInstance.sessions.some((s) => s.id === createdId)).toBe(true)
-  })
+  }, 15_000)
 
   test('remote kill is not resurrected by stale poller snapshot on next refresh', async () => {
     configState.remoteAllowControl = true
@@ -3015,7 +3052,7 @@ describe('server message handlers', () => {
     expect(registryInstance.sessions.some((s) => s.id === remoteSession.id)).toBe(
       false
     )
-  })
+  }, 15_000)
 
   test('remote rename is not reverted by stale poller snapshot on next refresh', async () => {
     configState.remoteAllowControl = true
@@ -3089,7 +3126,7 @@ describe('server message handlers', () => {
     )
 
     expect(registryInstance.get(remoteSession.id)?.name).toBe('new-name')
-  })
+  }, 15_000)
 
   test('sends error when remote new-window fails', async () => {
     configState.remoteAllowControl = true

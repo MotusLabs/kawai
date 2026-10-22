@@ -3,20 +3,33 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { isProcDead } from './fixtures/runnerProbe/procState'
-import { buildBunTestArgs } from '../planBatches'
+import { buildBunTestArgs, planBatches, type PlannedBatch } from '../planBatches'
+import { hasTestNameFilter, planRun, runBatchesAndPublish } from '../runPlan'
 import {
+  collectFiles,
   defaultWorkers,
   effectiveQuota,
   forwardSignalAndReap,
   isOwnerAlive,
   parseCpuQuota,
   parseRunArgs,
+  readCpuQuota,
   readOwnerMarker,
   readProcStartTime,
+  refuseBatchAfterSignal,
   sweepStaleRoots,
   workersFromEnv,
   writeOwnerMarker,
 } from '../test-runner'
+
+describe('refuseBatchAfterSignal', () => {
+  test('a handled signal refuses the batch with its name; otherwise it passes (N1)', () => {
+    expect(() => refuseBatchAfterSignal(false, 'main batch')).not.toThrow()
+    expect(() => refuseBatchAfterSignal(true, 'real-tmux: integration.test.ts')).toThrow(
+      'Signal handled; not starting batch: real-tmux: integration.test.ts'
+    )
+  })
+})
 
 describe('parseRunArgs', () => {
   test('splits flags, file arguments, and passthrough', () => {
@@ -24,6 +37,213 @@ describe('parseRunArgs', () => {
     expect(parsed.skipRealTmux).toBe(true)
     expect(parsed.fileArgs).toEqual(['a.test.ts', 'deep/b.test.tsx'])
     expect(parsed.passthrough).toEqual(['--coverage'])
+  })
+
+  test('recognizes --skip-slow (4.3, D7)', () => {
+    expect(parseRunArgs(['--skip-slow']).skipSlowTier).toBe(true)
+    expect(parseRunArgs([]).skipSlowTier).toBe(false)
+  })
+})
+
+describe('hasTestNameFilter', () => {
+  test('detects every -t and --test-name-pattern spelling the parser accepts', () => {
+    expect(hasTestNameFilter([])).toBe(false)
+    expect(hasTestNameFilter(['--coverage', '--rerun-each=2'])).toBe(false)
+    expect(hasTestNameFilter(['-t'])).toBe(true)
+    expect(hasTestNameFilter(['-t=refresh'])).toBe(true)
+    expect(hasTestNameFilter(['--test-name-pattern'])).toBe(true)
+    expect(hasTestNameFilter(['--test-name-pattern=refresh'])).toBe(true)
+  })
+})
+
+describe('planRun', () => {
+  const collected = {
+    serverTests: ['src/server/__tests__/a.test.ts'],
+    clientTests: ['src/client/__tests__/c.test.tsx'],
+    runnerTests: ['scripts/__tests__/r.test.ts'],
+    sharedTests: ['src/shared/__tests__/s.test.ts'],
+  }
+  const base = {
+    workers: 4,
+    collected,
+    serialFiles: ['src/server/__tests__/integration.test.ts'],
+    mainLabel: 'main batch',
+    seedText: '{"version":1,"files":{}}',
+  }
+
+  test('--skip-slow plans the batches without the slow tier (B1)', () => {
+    const plan = planRun({ ...base, args: parseRunArgs(['--skip-slow']), seedTimings: () => null })
+    expect(plan.batchOptions.skipSlowTier).toBe(true)
+    expect(plan.fullRun).toBe(true)
+    // The composed options are what planBatches sees: no tmux batch, and no
+    // slow-tier file among the scheduled arguments.
+    const batches = planBatches(plan.batchOptions)
+    expect(batches.some((batch) => batch.kind === 'real-tmux')).toBe(false)
+    const scheduled = batches.flatMap((batch) => batch.cmd)
+    expect(scheduled.join(' ')).not.toContain('integration.test.ts')
+  })
+
+  test('plain args keep both tiers and publish a full passing run (B1)', () => {
+    let seededWith: string | null | undefined
+    const plan = planRun({
+      ...base,
+      args: parseRunArgs([]),
+      seedTimings: (seed) => {
+        seededWith = seed
+        return '/run-root/timings.json'
+      },
+    })
+    expect(plan.batchOptions.skipSlowTier).toBe(false)
+    expect(planBatches(plan.batchOptions).some((batch) => batch.kind === 'real-tmux')).toBe(true)
+    expect(plan.fullRun).toBe(true)
+    expect(plan.publishTimings).toBe(true)
+    expect(plan.batchOptions.timingsPath).toBe('/run-root/timings.json')
+    expect(plan.batchOptions.updateTimings).toBe(true)
+    expect(seededWith).toBe(base.seedText)
+  })
+
+  test('a full run whose seed failed plans no publish (F5)', () => {
+    const plan = planRun({ ...base, args: parseRunArgs([]), seedTimings: () => null })
+    expect(plan.fullRun).toBe(true)
+    expect(plan.publishTimings).toBe(false)
+    // The batch options carry the same decision: nothing seeded, nothing to
+    // update, and no publish path for main() to wire into the run.
+    expect(plan.batchOptions.timingsPath).toBeUndefined()
+    expect(plan.batchOptions.updateTimings).toBe(false)
+  })
+
+  test('a -t filter or explicit files never publish and never seed (B1)', () => {
+    let seedCalls = 0
+    const seedTimings = () => {
+      seedCalls += 1
+      return '/run-root/timings.json'
+    }
+    for (const argv of [
+      ['-t', 'refresh'],
+      ['-t=refresh'],
+      ['--test-name-pattern=refresh'],
+      ['src/server/__tests__/a.test.ts'],
+    ]) {
+      const plan = planRun({ ...base, args: parseRunArgs(argv), seedTimings })
+      expect(plan.fullRun).toBe(false)
+      expect(plan.publishTimings).toBe(false)
+      expect(plan.batchOptions.timingsPath).toBeUndefined()
+      expect(plan.batchOptions.updateTimings).toBe(false)
+    }
+    expect(seedCalls).toBe(0)
+  })
+
+  test('the main batch is the collected files in order, spelled as files (follow-up)', () => {
+    const plan = planRun({ ...base, args: parseRunArgs([]), seedTimings: () => null })
+    expect(plan.batchOptions.mainFiles).toEqual([
+      'src/server/__tests__/a.test.ts',
+      'scripts/__tests__/r.test.ts',
+      'src/shared/__tests__/s.test.ts',
+      'src/client/__tests__/c.test.tsx',
+    ])
+    // A slow-tier file under src/shared/__tests__ is excluded like any other:
+    // the directory itself is never an entry the per-file filter would miss.
+    const withSharedTier = planRun({
+      ...base,
+      args: parseRunArgs(['--skip-slow']),
+      collected: {
+        ...collected,
+        sharedTests: ['src/shared/__tests__/chatTime.integration.test.ts', 'src/shared/__tests__/chatTime.test.ts'],
+      },
+      seedTimings: () => null,
+    })
+    const scheduled = planBatches(withSharedTier.batchOptions).flatMap((batch) => batch.cmd)
+    expect(scheduled).not.toContain('./src/shared/__tests__/chatTime.integration.test.ts')
+    expect(scheduled).toContain('./src/shared/__tests__/chatTime.test.ts')
+  })
+
+  test('collectFiles enumerates every source tree as files (follow-up)', async () => {
+    const files = await collectFiles()
+    const all = [...files.serverTests, ...files.clientTests, ...files.runnerTests, ...files.sharedTests]
+    expect(all.length).toBeGreaterThan(100)
+    for (const file of all) {
+      expect(file.endsWith('.test.ts') || file.endsWith('.test.tsx')).toBe(true)
+    }
+    expect(files.sharedTests).toContain('src/shared/__tests__/chatTime.test.ts')
+  })
+})
+
+describe('runBatchesAndPublish', () => {
+  const env = { KAWAI_TEST_RUN_ROOT: '/run-root' }
+  const batch = (label: string): PlannedBatch => ({
+    kind: 'parallel',
+    label,
+    cmd: ['bun', 'test', `./${label}.test.ts`],
+  })
+
+  test('a failed batch never publishes and no later batch starts (B3)', async () => {
+    const calls: Array<{ cmd: string[]; env: NodeJS.ProcessEnv; label: string }> = []
+    const publishedPaths: string[] = []
+    let thrown: unknown
+    try {
+      await runBatchesAndPublish({
+        batches: [batch('main batch'), batch('real-tmux: late.test.ts')],
+        env,
+        publishTimingsPath: '/run-root/timings.json',
+        publish: (timingsPath) => {
+          publishedPaths.push(timingsPath)
+        },
+        runCommand: async (cmd, receivedEnv, batchLabel) => {
+          calls.push({ cmd, env: receivedEnv, label: batchLabel })
+          if (batchLabel === 'main batch') throw new Error('Command failed (1): bun test')
+        },
+      })
+    } catch (error) {
+      thrown = error
+    }
+    expect((thrown as Error).message).toBe('Command failed (1): bun test')
+    // The double receives exactly what main() passes the real runCommand,
+    // and the throw leaves the serial batch unstarted.
+    expect(calls).toHaveLength(1)
+    expect(calls[0].cmd).toEqual(batch('main batch').cmd)
+    expect(calls[0].env).toBe(env)
+    expect(publishedPaths).toEqual([])
+  })
+
+  test('a passing run publishes exactly once, after the first batch, when the plan may publish (B3)', async () => {
+    const order: string[] = []
+    let publishedPath: string | undefined
+    await runBatchesAndPublish({
+      batches: [batch('main batch'), batch('real-tmux: late.test.ts')],
+      env,
+      publishTimingsPath: '/run-root/timings.json',
+      publish: (timingsPath) => {
+        order.push('publish')
+        publishedPath = timingsPath
+      },
+      runCommand: async (_cmd, _env, batchLabel) => {
+        order.push(`run:${batchLabel}`)
+      },
+    })
+    // The record lands between the main batch and the serial one — a later
+    // serial batch failing must not lose it — and the once-guard keeps the
+    // passing serial batch from publishing again.
+    expect(order).toEqual(['run:main batch', 'publish', 'run:real-tmux: late.test.ts'])
+    // The step publishes exactly the path the plan seeded.
+    expect(publishedPath).toBe('/run-root/timings.json')
+  })
+
+  test('a passing run whose plan may not publish never calls the publish step (B3)', async () => {
+    const publishedPaths: string[] = []
+    let ran = 0
+    await runBatchesAndPublish({
+      batches: [batch('main batch')],
+      env,
+      publishTimingsPath: null,
+      publish: (timingsPath) => {
+        publishedPaths.push(timingsPath)
+      },
+      runCommand: async () => {
+        ran += 1
+      },
+    })
+    expect(ran).toBe(1)
+    expect(publishedPaths).toEqual([])
   })
 })
 
@@ -78,6 +298,11 @@ describe('effectiveQuota', () => {
   test('falls back to the platform parallelism when cpu.max is absent', () => {
     expect(effectiveQuota(() => null)).toBe(os.availableParallelism())
   })
+
+  test('the default reader is the production cgroup read (F6)', () => {
+    // The default parameter binds the production reader, not a constant.
+    expect(effectiveQuota()).toBe(readCpuQuota() ?? os.availableParallelism())
+  })
 })
 
 describe('buildBunTestArgs', () => {
@@ -102,6 +327,20 @@ describe('buildBunTestArgs', () => {
     // Relative files are './'-prefixed: Bun reads a bare relative path
     // outside the bunfig test root as a filter, not a path.
     expect(args.slice(-2)).toEqual(['./b.test.ts', './a.test.ts'])
+  })
+
+  test('carries the timings record before the passthrough and file arguments (3.1)', () => {
+    const args = buildBunTestArgs({
+      workers: 4,
+      files: ['a.test.ts'],
+      passthrough: ['--coverage'],
+      timingsPath: '/run/root/timings.json',
+      updateTimings: true,
+    })
+    const timings = args.indexOf('--timings=/run/root/timings.json')
+    expect(timings).toBeGreaterThan(-1)
+    expect(args[timings + 1]).toBe('--update-timings')
+    expect(args.indexOf('--coverage')).toBeGreaterThan(timings + 1)
   })
 })
 

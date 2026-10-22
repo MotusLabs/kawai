@@ -4,7 +4,13 @@
 // test` child with --preload — gives each test file fresh directories for
 // the four runner-provided variables beneath that root. Every child also
 // gets a 20 s default per-test timeout: per-file isolation pays cold-start
-// costs the shared process used to amortize. Stale run roots from killed
+// costs the shared process used to amortize. `--skip-slow` (design D7)
+// excludes the slow tier — every `*.integration.test.ts` file plus the
+// real-tmux files — from the run; by default both tiers run. After a full
+// run the runner records per-file durations to
+// <git-common-dir>/kawai-checks/timings.json, feeds the record back with
+// --timings so the slowest files start first, and reports files the record
+// shows over 5 s outside the slow tier. Stale run roots from killed
 // runs are swept at startup, and SIGINT/SIGTERM are forwarded to the
 // child's whole process group before the root is removed after a bounded
 // kill; a finished batch's leftover processes are killed before the next
@@ -13,7 +19,22 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { REAL_TMUX_FILES, isRealTmuxFile, planBatches } from './planBatches'
+import { recordsDir } from './lib/checkRecords'
+import {
+  REAL_TMUX_FILES,
+  UNIT_TEST_GLOBS,
+  isRealTmuxFile,
+  isSlowTierFile,
+  planBatches,
+} from './planBatches'
+import { planRun, runBatchesAndPublish } from './runPlan'
+import {
+  formatMisplacedReport,
+  misplacedFromRecords,
+  publishTimingsSnapshot,
+  readTimingsSeed,
+  seedTimingsSnapshot,
+} from './testTimings'
 
 const RUN_ROOT_PREFIX = 'agentboard-tests-'
 const OWNER_MARKER = 'owner.json'
@@ -28,6 +49,7 @@ interface RunnerChild {
 
 interface RunArgs {
   skipRealTmux: boolean
+  skipSlowTier: boolean
   fileArgs: string[]
   passthrough: string[]
 }
@@ -38,15 +60,25 @@ interface RunArgs {
 export function parseRunArgs(args: string[]): RunArgs {
   const parsed: RunArgs = {
     skipRealTmux: false,
+    skipSlowTier: false,
     fileArgs: [],
     passthrough: [],
   }
   for (const arg of args) {
     if (arg === '--skip-real-tmux') parsed.skipRealTmux = true
+    else if (arg === '--skip-slow') parsed.skipSlowTier = true
     else if (arg.endsWith('.test.ts') || arg.endsWith('.test.tsx')) parsed.fileArgs.push(arg)
     else parsed.passthrough.push(arg)
   }
   return parsed
+}
+
+// The test files collectFiles() gathers, per source tree.
+export interface CollectedFiles {
+  serverTests: string[]
+  clientTests: string[]
+  runnerTests: string[]
+  sharedTests: string[]
 }
 
 // The measured default (2.3, design D2): 4 is the largest N whose alone-run
@@ -239,35 +271,37 @@ export async function forwardSignalAndReap(
 
 // --- file collection ---
 
-async function collectFiles(): Promise<{
-  serverTests: string[]
-  clientTests: string[]
-  runnerTests: string[]
-}> {
+// Every directory is enumerated as files: a bare directory entry in the main
+// batch would escape excludeSlowTier's per-file filter (review follow-up).
+export async function collectFiles(): Promise<CollectedFiles> {
+  const [serverGlob, sharedGlob, clientGlob, runnerGlob] = UNIT_TEST_GLOBS
   const serverTests: string[] = []
-  const serverGlob = new Bun.Glob('src/server/__tests__/*.test.ts')
-  for await (const file of serverGlob.scan({ onlyFiles: true })) {
+  for await (const file of new Bun.Glob(serverGlob).scan({ onlyFiles: true })) {
     if (!isRealTmuxFile(file)) {
       serverTests.push(file)
     }
   }
 
+  const sharedTests: string[] = []
+  for await (const file of new Bun.Glob(sharedGlob).scan({ onlyFiles: true })) {
+    sharedTests.push(file)
+  }
+
   const clientTests: string[] = []
-  const clientGlob = new Bun.Glob('src/client/__tests__/*.test.{ts,tsx}')
-  for await (const file of clientGlob.scan({ onlyFiles: true })) {
+  for await (const file of new Bun.Glob(clientGlob).scan({ onlyFiles: true })) {
     clientTests.push(file)
   }
 
   const runnerTests: string[] = []
-  const runnerGlob = new Bun.Glob('scripts/__tests__/*.test.{ts,tsx}')
-  for await (const file of runnerGlob.scan({ onlyFiles: true })) {
+  for await (const file of new Bun.Glob(runnerGlob).scan({ onlyFiles: true })) {
     runnerTests.push(file)
   }
 
   serverTests.sort()
+  sharedTests.sort()
   clientTests.sort()
   runnerTests.sort()
-  return { serverTests, clientTests, runnerTests }
+  return { serverTests, clientTests, runnerTests, sharedTests }
 }
 
 function resolveFileArgs(fileArgs: string[]): { parallel: string[]; realTmux: string[] } {
@@ -288,13 +322,24 @@ function resolveFileArgs(fileArgs: string[]): { parallel: string[]; realTmux: st
 
 let currentChild: RunnerChild | null = null
 
+// The last gate before a batch spawns (review F5, N1): a handled signal owns
+// the exit (decision D-g) — its handler sets the flag synchronously when the
+// signal arrives and process.exit()s after reaping — so no further batch may
+// start. The handler's synchronous section always precedes any code that
+// could spawn a next batch (the current one ends only in response to the
+// forwarded signal), so the loop's continuation evaluates this after the flag
+// is set. Kept a pure helper so testRunner.test.ts asserts the gate directly.
+export function refuseBatchAfterSignal(signalHandled: boolean, batch: string): void {
+  if (signalHandled) {
+    throw new Error(`Signal handled; not starting batch: ${batch}`)
+  }
+}
+
 async function runCommand(cmd: string[], env: NodeJS.ProcessEnv, batch: string) {
   // A handled signal owns the exit (decision D-g): its handler reaps the
   // current child and process.exit()s. Spawning a further batch first would
   // orphan it, so the loop stops here instead (review F5).
-  if (signalHandled) {
-    throw new Error(`Signal handled; not starting batch: ${batch}`)
-  }
+  refuseBatchAfterSignal(signalHandled, batch)
   // detached: the child leads its own process group, so the group kills in
   // forwardSignalAndReap and below reach its workers and every process a
   // test spawned (decision D-g).
@@ -368,30 +413,68 @@ async function main() {
 
   try {
     writeOwnerMarker(runRoot)
-    let mainFiles: string[]
+    let collected: CollectedFiles
     let serialFiles: string[]
     let mainLabel: string
     if (args.fileArgs.length > 0) {
       const resolved = resolveFileArgs(args.fileArgs)
-      mainFiles = resolved.parallel
+      collected = { serverTests: resolved.parallel, clientTests: [], runnerTests: [], sharedTests: [] }
       serialFiles = resolved.realTmux
       mainLabel = 'explicit files'
     } else {
-      const { serverTests, clientTests, runnerTests } = await collectFiles()
-      mainFiles = [...serverTests, ...runnerTests, 'src/shared/__tests__', ...clientTests]
+      collected = await collectFiles()
       serialFiles = [...REAL_TMUX_FILES].map((file) => `src/server/__tests__/${file}`)
       mainLabel = 'main batch'
     }
-    for (const batch of planBatches({
+    // The run-shape decisions (review B1): the batch options below are passed
+    // to planBatches verbatim. The timings record rides full runs only (D4):
+    // planRun seeds the snapshot through this callback — a records directory
+    // that cannot be resolved only costs the scheduling order, never the run.
+    const plan = planRun({
+      args,
       workers,
-      mainFiles,
+      collected,
       serialFiles,
-      passthrough: args.passthrough,
-      skipRealTmux: args.skipRealTmux,
       mainLabel,
-    })) {
-      await runCommand(batch.cmd, env, batch.label)
-    }
+      seedText: readTimingsSeed(recordsDir(process.cwd())),
+      seedTimings: (seed) => {
+        try {
+          return seedTimingsSnapshot(runRoot, seed)
+        } catch (error) {
+          console.error(`[test-runner] timings record unavailable: ${String(error)}`)
+          return null
+        }
+      },
+    })
+    // The batches run and the record is published through runBatchesAndPublish
+    // (review B3): the throw-before-publish ordering lives there, tested with
+    // injected effects. Here the effects are the real ones. planRun's seeded
+    // path is the only publish gate (F5) — null for a filtered run or a
+    // failed seed — so the closure runs only with a snapshot to publish and
+    // has no gate of its own.
+    await runBatchesAndPublish({
+      batches: planBatches(plan.batchOptions),
+      env,
+      publishTimingsPath: plan.batchOptions.timingsPath ?? null,
+      publish: (timingsPath) => {
+        // The main batch wrote the fresh snapshot (--update-timings). Publish
+        // it — a later serial batch failing must not lose it — and report
+        // files whose shortest kept duration sits over 5 s outside the slow
+        // tier (D7).
+        try {
+          const record = publishTimingsSnapshot(recordsDir(process.cwd()), timingsPath)
+          if (record !== null) {
+            const misplaced = misplacedFromRecords(recordsDir(process.cwd()), isSlowTierFile)
+            if (misplaced !== null) {
+              for (const line of formatMisplacedReport(misplaced)) console.log(line)
+            }
+          }
+        } catch (error) {
+          console.error(`[test-runner] timings record not published: ${String(error)}`)
+        }
+      },
+      runCommand,
+    })
   } finally {
     fs.rmSync(runRoot, { recursive: true, force: true })
   }

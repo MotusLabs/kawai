@@ -5,6 +5,7 @@
 // repositories, injection-like change names, and proof that the main
 // worktree's checkout and index are never touched. No force flags,
 // argument-array invocation only.
+// @reads: openspec/changes/add-auth/proposal.md, openspec/changes/add-auth/tasks.md
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'

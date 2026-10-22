@@ -4,6 +4,7 @@
 import { describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import path from 'node:path'
+import ts from 'typescript'
 import { parseGroupFile, type GroupDefinition } from '../team/groupFile'
 import { buildCandidates } from '../team/routing/candidates'
 import {
@@ -135,13 +136,78 @@ describe('evaluateEligibility is the candidate builder', () => {
   })
 })
 
+/**
+ * Every module a source file reaches, in every form the compiler accepts:
+ * static and side-effect imports (single- or multi-line, type-only or not),
+ * `export … from`, `import x = require()`, dynamic `import()`, `require()`,
+ * and `import('…')` types. A non-literal dynamic specifier reads as
+ * `<dynamic>`. `value` marks a module whose values (not only types) load.
+ */
+function moduleReferences(source: string): Array<{ spec: string; value: boolean }> {
+  const file = ts.createSourceFile('probe.ts', source, ts.ScriptTarget.Latest, true)
+  const out: Array<{ spec: string; value: boolean }> = []
+  const literal = (node: ts.Node | undefined) => (node && ts.isStringLiteralLike(node) ? node.text : '<dynamic>')
+  const visit = (node: ts.Node) => {
+    if (ts.isImportDeclaration(node)) {
+      const clause = node.importClause
+      const bindings = clause?.namedBindings
+      const typeOnly = !!clause && (clause.isTypeOnly || (!clause.name && !!bindings && ts.isNamedImports(bindings) &&
+        bindings.elements.length > 0 && bindings.elements.every(element => element.isTypeOnly)))
+      out.push({ spec: literal(node.moduleSpecifier), value: !typeOnly })
+    } else if (ts.isExportDeclaration(node) && node.moduleSpecifier) {
+      out.push({ spec: literal(node.moduleSpecifier), value: !node.isTypeOnly })
+    } else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)) {
+      out.push({ spec: literal(node.moduleReference.expression), value: !node.isTypeOnly })
+    } else if (ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+      (ts.isIdentifier(node.expression) && node.expression.text === 'require'))) {
+      out.push({ spec: literal(node.arguments[0]), value: true })
+    } else if (ts.isImportTypeNode(node)) {
+      const argument = node.argument
+      out.push({ spec: ts.isLiteralTypeNode(argument) ? literal(argument.literal) : '<dynamic>', value: false })
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(file)
+  return out
+}
+
+/** The modules a pure module may not reach: anything outside shared, and any value load. */
+const impure = (source: string) => moduleReferences(source)
+  .filter(entry => !entry.spec.startsWith('../../../shared/') || entry.value)
+  .map(entry => entry.spec)
+
 describe('workerEligibility purity', () => {
   test('the module imports no store, filesystem, or clock', () => {
     const source = fs.readFileSync(path.join(import.meta.dir, '../team/routing/workerEligibility.ts'), 'utf8')
-    const imports = [...source.matchAll(/^import\s.*from\s+'([^']+)'/gm)].map(match => match[1])
     // Only shared types: no store, database, filesystem, process, or catalog module.
-    expect(imports.every(spec => spec.startsWith('../../../shared/'))).toBe(true)
-    expect(source).not.toMatch(/^import(?!\s+type\b)/m)
-    expect(source).not.toMatch(/Date\.now|performance\.now|new Date\(\)|process\.|require\(|Bun\./)
+    expect(moduleReferences(source).length).toBeGreaterThan(0)
+    expect(impure(source)).toEqual([])
+    expect(source).not.toMatch(/Date\.now|performance\.now|new Date\(\)|process\.|Bun\./)
+  })
+
+  test('the module check catches every import form (negative fixtures)', () => {
+    const fixtures: Array<[string, string]> = [
+      ["import { a } from '../mailboxStore'", '../mailboxStore'],
+      ["import type {\n  A,\n  B,\n} from '../mailboxStore'", '../mailboxStore'],
+      ["import type { A } from\n  'node:fs'", 'node:fs'],
+      ["import '../sideEffect'", '../sideEffect'],
+      ["import * as fs from 'node:fs'", 'node:fs'],
+      ["export { a } from '../mailboxStore'", '../mailboxStore'],
+      ["export {\n  type A,\n} from '../mailboxStore'", '../mailboxStore'],
+      ["export * from 'node:fs'", 'node:fs'],
+      ["export type * as T from '../db'", '../db'],
+      ["const m = await import('node:fs')", 'node:fs'],
+      ["const m = import(\n  '../db'\n)", '../db'],
+      ['const m = import(name)', '<dynamic>'],
+      ["const m = require('node:fs')", 'node:fs'],
+      ["import fs = require('node:fs')", 'node:fs'],
+      ["type T = import('../db').Db", '../db'],
+      // Shared, but a value load rather than types only.
+      ["import { a } from '../../../shared/routing'", '../../../shared/routing'],
+      ["export { a } from '../../../shared/routing'", '../../../shared/routing'],
+    ]
+    for (const [source, spec] of fixtures) expect({ source, found: impure(source) }).toEqual({ source, found: [spec] })
+    // The allowed forms stay allowed.
+    expect(impure("import type { A } from '../../../shared/routing'\nimport { type B } from '../../../shared/team'")).toEqual([])
   })
 })

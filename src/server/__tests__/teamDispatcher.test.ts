@@ -373,7 +373,7 @@ test('the routing view reports each member exclusion cause', async () => {
   expect(byId.has('eligible')).toBe(false)
 })
 
-test('a member on the excluded profile reports excluded-profile though eligibleFor keeps it', async () => {
+test('a member on the excluded profile stays eligible with no member-state entry: the router names the filter', async () => {
   recipients = [
     { sessionId: 'glm-member', teamId: 'team', groupId: 'devs', idle: true, pendingRequest: false, available: true, profileId: 'glm' },
   ]
@@ -385,10 +385,10 @@ test('a member on the excluded profile reports excluded-profile though eligibleF
     router: { route: async (_message, routed) => { view = routed; return { kind: 'none' } } },
   })
   send({ excludedProfile: 'glm' }); await dispatch()
-  // eligibleFor itself does not reject the profile (the candidate builder
-  // does); the breakdown still names it.
+  // eligibleFor itself does not reject the profile; the eligibility check
+  // drops it and the router reports that (routerFilterBreakdown.test.ts).
   expect(view!.eligible.map(row => row.sessionId)).toEqual(['glm-member'])
-  expect(view!.exclusions).toEqual([{ sessionId: 'glm-member', kind: 'excluded-profile' }])
+  expect(view!.exclusions).toEqual([])
 })
 
 test('a start failure is reported with its error text', async () => {

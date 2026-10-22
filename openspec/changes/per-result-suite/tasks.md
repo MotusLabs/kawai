@@ -2,13 +2,13 @@
 
 ## 1. Runtime-read declarations
 
-- [ ] 1.1 Add the `@reads` header parser and the guard test (literal repository paths under `AGENTS.md`, `CLAUDE.md`, `docs/`, `.kawai/`, `.github/`, `openspec/` must be declared). Verify it with fixtures: an undeclared literal fails naming the file and path, a declared glob passes, and a temporary-directory path is ignored.
-- [ ] 1.2 Add `@reads` headers to every existing test file the guard flags, and verify that the guard passes over the whole suite.
+- [x] 1.1 Add the `@reads` header parser and the guard test (literal repository paths under `AGENTS.md`, `CLAUDE.md`, `docs/`, `.kawai/`, `.github/`, `openspec/` must be declared). Verify it with fixtures: an undeclared literal fails naming the file and path, a declared glob passes, and a temporary-directory path is ignored.
+- [x] 1.2 Add `@reads` headers to every existing test file the guard flags, and verify that the guard passes over the whole suite.
 
 ## 2. Affected-test selection
 
-- [ ] 2.1 Add `scripts/affected-tests.ts`: staged-path classification; staged, unstaged, and untracked paths for runtime-read matches and escapes; the D1 disjoint declaration and `--changed` execution passes over exact fast-tier paths; and the D2 escape list (including `.bun-version`) switching to `bun run check` before classification. Unit-test it in a temporary repository with a leaf-module change, a docs change matched by `@reads`, a change nothing reaches (no tests), a lockfile or Bun pin change (escape), a rename/deletion, an unstaged runtime-read edit, and an empty candidate list. Verify runtime-only declaration matches execute without `--changed`, a test selected by both routes executes once, and either pass's failure fails the hook.
-- [ ] 2.2 Report the selection in the hook output: executed file count from JUnit reports, slow-tier candidates excluded, and when the escape fired. Verify the wording in the script's tests, including Bun's successful zero-affected run producing no JUnit file, a malformed report, stale-report prevention, and a failed child without a report.
+- [x] 2.1 Add `scripts/affected-tests.ts`: staged-path classification; staged, unstaged, and untracked paths for runtime-read matches and escapes; the D1 disjoint declaration and `--changed` execution passes over exact fast-tier paths; and the D2 escape list (including `.bun-version`) switching to `bun run check` before classification. Unit-test it in a temporary repository with a leaf-module change, a docs change matched by `@reads`, a change nothing reaches (no tests), a lockfile or Bun pin change (escape), a rename/deletion, an unstaged runtime-read edit, and an empty candidate list. Verify runtime-only declaration matches execute without `--changed`, a test selected by both routes executes once, and either pass's failure fails the hook.
+- [x] 2.2 Report the selection in the hook output: executed file count from JUnit reports, slow-tier candidates excluded, and when the escape fired. Verify the wording in the script's tests, including Bun's successful zero-affected run producing no JUnit file, a malformed report, stale-report prevention, and a failed child without a report.
 
 ## 3. Hooks
 

@@ -1,6 +1,7 @@
 // ciCoverageOnPush.test.ts - The CI workflow (check-dedup 4.1) runs the unit
 // suite once on pull requests and adds the coverage pass and its artifact
 // upload on push only. Reads .github/workflows/ci.yml as YAML; spawns nothing.
+// @reads: .github/workflows/ci.yml
 import { describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import path from 'node:path'

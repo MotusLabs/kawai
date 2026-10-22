@@ -2,6 +2,7 @@
 // matches the rule types: it type-checks against the published contract
 // (`src/shared/routing.ts`, copied verbatim as `kawai-routing.d.ts`), loads
 // through the real rule registry, and behaves as the prose says.
+// @reads: docs/routing/README.md
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'

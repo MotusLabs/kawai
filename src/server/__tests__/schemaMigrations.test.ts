@@ -4,6 +4,7 @@
 // on an unversioned database; a migration applies whole after its checked
 // backup; and a database newer than the build is refused before any write.
 // Every database lives in a temporary directory.
+// @reads: docs/operations/database-backups.md
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'

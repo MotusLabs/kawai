@@ -26,7 +26,31 @@ export function isRealTmuxFile(file: string): boolean {
   return REAL_TMUX_FILES.includes(path.basename(file))
 }
 
+// The slow tier (design D7): every `*.integration.test.ts` file plus the
+// real-tmux set. Both tiers run by default; `--skip-slow` excludes the tier.
+export function isIntegrationFile(file: string): boolean {
+  return path.basename(file).endsWith('.integration.test.ts')
+}
+
+export function isSlowTierFile(file: string): boolean {
+  return isRealTmuxFile(file) || isIntegrationFile(file)
+}
+
+export function excludeSlowTier(files: string[]): string[] {
+  return files.filter((file) => !isSlowTierFile(file))
+}
+
 export const PRELOAD_ARG = 'scripts/test-preload.ts'
+
+// The unit-test corpus, in collectFiles' order: the one list the runner's
+// file collection and the @reads guard's scan both use, so the guard always
+// scans exactly what the suite runs (per-result-suite D3/B4).
+export const UNIT_TEST_GLOBS = [
+  'src/server/__tests__/*.test.ts',
+  'src/shared/__tests__/*.test.{ts,tsx}',
+  'src/client/__tests__/*.test.{ts,tsx}',
+  'scripts/__tests__/*.test.{ts,tsx}',
+] as const
 
 // Per-file isolation pays cold module compilation and per-test database
 // backups inside hook/test time; the shared-process runner amortized those,
@@ -51,6 +75,8 @@ export function buildBunTestArgs(options: {
   workers: number
   files: string[]
   passthrough: string[]
+  timingsPath?: string
+  updateTimings?: boolean
 }): string[] {
   // --parallel is passed even for 1: it implies --isolate, the per-file
   // isolation the suite now relies on (decision D-c). Leaving it out would
@@ -61,6 +87,12 @@ export function buildBunTestArgs(options: {
     '--preload',
     PRELOAD_ARG,
   ]
+  // The timings record (D4): read the previous run's durations and, on a
+  // full run, rewrite the snapshot with the measured ones.
+  if (options.timingsPath !== undefined) {
+    args.push(`--timings=${options.timingsPath}`)
+    if (options.updateTimings) args.push('--update-timings')
+  }
   args.push(...options.passthrough, ...options.files.map(toTestFilePath))
   return args
 }
@@ -84,17 +116,24 @@ export function stripCoverageArgs(args: string[]) {
 // The main batch first (with --parallel, skipped when it has no files), then
 // each real-tmux file as its own later batch: serial, without --parallel, and
 // without any --coverage* argument — coverage on Linux CI can stall PTY
-// attach readiness. `--skip-real-tmux` yields no tmux batch.
+// attach readiness. `--skip-real-tmux` yields no tmux batch. `--skip-slow`
+// excludes the slow tier (D7): no `*.integration.test.ts` file in the main
+// batch and no tmux batch. The timings flags ride the main batch only: the
+// serial files are one-file processes whose scheduling never reorders.
 export function planBatches(options: {
   workers: number
   mainFiles: string[]
   serialFiles: string[]
   passthrough: string[]
   skipRealTmux: boolean
+  skipSlowTier?: boolean
   mainLabel?: string
+  timingsPath?: string
+  updateTimings?: boolean
 }): PlannedBatch[] {
   const batches: PlannedBatch[] = []
-  if (options.mainFiles.length > 0) {
+  const mainFiles = options.skipSlowTier ? excludeSlowTier(options.mainFiles) : options.mainFiles
+  if (mainFiles.length > 0) {
     batches.push({
       kind: 'parallel',
       label: options.mainLabel ?? 'main batch',
@@ -103,13 +142,15 @@ export function planBatches(options: {
         'test',
         ...buildBunTestArgs({
           workers: options.workers,
-          files: options.mainFiles,
+          files: mainFiles,
           passthrough: options.passthrough,
+          timingsPath: options.timingsPath,
+          updateTimings: options.updateTimings,
         }),
       ],
     })
   }
-  if (!options.skipRealTmux) {
+  if (!options.skipRealTmux && !options.skipSlowTier) {
     const passthrough = stripCoverageArgs(options.passthrough)
     for (const file of options.serialFiles) {
       batches.push({
