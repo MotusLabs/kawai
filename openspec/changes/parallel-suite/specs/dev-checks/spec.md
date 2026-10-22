@@ -65,7 +65,7 @@ Files named `*.integration.test.ts` and the real-tmux files SHALL form the slow 
 - **THEN** no `*.integration.test.ts` or real-tmux file runs
 
 #### Scenario: A slow file outside the tier
-- **WHEN** every kept run snapshot shows a file outside the slow tier over 5 s and the file is not listed with a reason
+- **WHEN** a file outside the slow tier is over 5 s by its shortest duration across the kept run snapshots and is not listed with a reason
 - **THEN** the runner's timing report names it as misplaced
 
 #### Scenario: A load spike

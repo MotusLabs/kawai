@@ -9,7 +9,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { cleanGitEnv } from '../../src/server/git/gitCommand'
 import { recordsDir } from '../lib/checkRecords'
-import { isRunSnapshotName } from '../testTimings'
+import { TIMINGS_FILE_NAME, isRunSnapshotName } from '../testTimings'
 import { isProcDead } from './fixtures/runnerProbe/procState'
 
 const REPO_ROOT = path.resolve(import.meta.dir, '..', '..')
@@ -290,9 +290,10 @@ describe('the real runner gives each file its own root', () => {
 // real publish closure. The run happens in a temporary repository of its own,
 // so the publish lands in that repository's own records directory, never the
 // driving repository's. The repositories are created beneath the driving
-// repository (ignored, see .gitignore): bun only resolves the child's bare
-// --preload path beneath this repository tree, so the shared tmpdir cannot
-// host them.
+// repository (ignored, see .gitignore): bun resolves the child's bare
+// --preload path at the bun project root (the nearest enclosing
+// package.json/node_modules), and only the driving repository provides one,
+// so the shared tmpdir cannot host them.
 describe('the real runner publishes the timings record (B3)', () => {
   const fixturesParent = path.join(REPO_ROOT, '.kawai-fixture-probes')
   const probeRepos: string[] = []
@@ -327,9 +328,9 @@ describe('the real runner publishes the timings record (B3)', () => {
     return repo
   }
 
-  function spawnFullRun(repo: string): Bun.Subprocess {
+  function spawnRunner(repo: string, ...args: string[]): Bun.Subprocess {
     return Bun.spawn({
-      cmd: [process.execPath, RUNNER, '--skip-real-tmux'],
+      cmd: [process.execPath, RUNNER, '--skip-real-tmux', ...args],
       cwd: repo,
       env: { ...process.env, KAWAI_TEST_WORKERS: '1' },
       stdout: 'pipe',
@@ -339,7 +340,7 @@ describe('the real runner publishes the timings record (B3)', () => {
 
   test('a full passing run publishes the record into its own repository', async () => {
     const repo = makeProbeRepo("import { test, expect } from 'bun:test'\ntest('passes', () => {\n  expect(1).toBe(1)\n})\n")
-    const proc = spawnFullRun(repo)
+    const proc = spawnRunner(repo)
     const { code, stderr } = await drainAndExit(proc)
     expect(code, stderr.slice(-2000)).toBe(0)
     const record = JSON.parse(fs.readFileSync(path.join(recordsDir(repo), 'timings.json'), 'utf8')) as {
@@ -358,7 +359,7 @@ describe('the real runner publishes the timings record (B3)', () => {
 
   test('a full failing run leaves the records directory without a record', async () => {
     const repo = makeProbeRepo("import { test, expect } from 'bun:test'\ntest('fails', () => {\n  expect(1).toBe(2)\n})\n")
-    const proc = spawnFullRun(repo)
+    const proc = spawnRunner(repo)
     const { code, stderr } = await drainAndExit(proc)
     expect(code).not.toBe(0)
     // The failed batch surfaces as the runCommand error main() reprints, and
@@ -367,6 +368,18 @@ describe('the real runner publishes the timings record (B3)', () => {
     // only guard over the shared records directory.
     expect(stderr).toContain('Command failed (1)')
     expect(fs.existsSync(recordsDir(repo))).toBe(false)
+  }, 45_000)
+
+  test('an explicit-files run leaves the records directory without a record (F5)', async () => {
+    // A filtered run must not publish (D4): on the production path, planRun
+    // seeds and publishes for a full run only, so the real runner given
+    // explicit files leaves the scratch repository's records directory
+    // without a timings record — and without a seed call side effect.
+    const repo = makeProbeRepo("import { test, expect } from 'bun:test'\ntest('passes', () => {\n  expect(1).toBe(1)\n})\n")
+    const proc = spawnRunner(repo, 'src/server/__tests__/publishProbe.test.ts')
+    const { code, stderr } = await drainAndExit(proc)
+    expect(code, stderr.slice(-2000)).toBe(0)
+    expect(fs.existsSync(path.join(recordsDir(repo), TIMINGS_FILE_NAME))).toBe(false)
   }, 45_000)
 })
 

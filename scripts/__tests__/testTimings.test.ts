@@ -362,21 +362,40 @@ describe('misplacedFiles', () => {
   })
 })
 
+// The per-entry integrity check (F4), extracted so it can be exercised on
+// a synthetic list: the real SLOW_TIER_EXCEPTIONS is empty today, so the
+// tripwire over the real list would iterate nothing and prove nothing.
+// `seen` carries the files the earlier entries of one list already named.
+function checkExceptionEntry(entry: { file: string; reason: string }, seen: Set<string>): void {
+  expect(entry.reason.trim()).not.toBe('')
+  expect(seen, `${entry.file} listed twice`).not.toContain(entry.file)
+  seen.add(entry.file)
+  // A stale entry (file renamed or deleted) must fail here, not hide in
+  // the report forever.
+  expect(fs.existsSync(entry.file), `${entry.file} no longer exists`).toBe(true)
+  expect(isSlowTierFile(entry.file), `${entry.file} belongs to the slow tier now`).toBe(false)
+  // Only a file over 5 s alone at N=1 may be listed (D7): the reason
+  // states that measurement.
+  expect(entry.reason, `${entry.file} states no N=1 time`).toMatch(/\d+(?:\.\d+)? s at N=1/)
+}
+
 describe('SLOW_TIER_EXCEPTIONS', () => {
+  test('the per-entry check accepts a valid entry and rejects an invalid one (F4)', () => {
+    // The shape a listed entry must have: a real non-tier file and its
+    // N=1 measurement.
+    const valid = { file: 'src/shared/__tests__/chatTime.test.ts', reason: '9.4 s at N=1' }
+    expect(() => checkExceptionEntry(valid, new Set())).not.toThrow()
+
+    // A stale entry — the file no longer exists — fails and names it.
+    const invalid = { file: 'src/server/__tests__/noLongerThere.test.ts', reason: '9.4 s at N=1' }
+    expect(() => checkExceptionEntry(invalid, new Set())).toThrow(
+      'src/server/__tests__/noLongerThere.test.ts no longer exists'
+    )
+  })
+
   test('every entry names an existing non-tier file, once, with its N=1 time', () => {
     const seen = new Set<string>()
-    for (const entry of SLOW_TIER_EXCEPTIONS) {
-      expect(entry.reason.trim()).not.toBe('')
-      expect(seen, `${entry.file} listed twice`).not.toContain(entry.file)
-      seen.add(entry.file)
-      // A stale entry (file renamed or deleted) must fail here, not hide in
-      // the report forever.
-      expect(fs.existsSync(entry.file), `${entry.file} no longer exists`).toBe(true)
-      expect(isSlowTierFile(entry.file), `${entry.file} belongs to the slow tier now`).toBe(false)
-      // Only a file over 5 s alone at N=1 may be listed (D7): the reason
-      // states that measurement.
-      expect(entry.reason, `${entry.file} states no N=1 time`).toMatch(/\d+(?:\.\d+)? s at N=1/)
-    }
+    for (const entry of SLOW_TIER_EXCEPTIONS) checkExceptionEntry(entry, seen)
   })
 
   test('the renamed codex files belong to the slow tier now', () => {
