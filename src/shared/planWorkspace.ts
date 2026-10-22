@@ -17,6 +17,22 @@ export type PlanWorkspaceRole = (typeof PLAN_WORKSPACE_ROLES)[number]
 export type WorkspaceVersionSelector = { kind: 'revision'; revision: number } | { kind: 'draft'; draftId: string }
 
 /**
+ * Names a selected execution (design D2), additive and separate from the
+ * version selector: the display may pin one execution while the displayed
+ * plan version is the default or its own selection. Never part of
+ * WorkspaceVersionSelector — the two are chosen independently.
+ */
+export interface WorkspaceExecutionSelector {
+  executionId: string
+}
+
+/** The execution identity a snapshot names, with the revision it runs. */
+export interface WorkspaceExecutionView {
+  executionId: string
+  revision: number
+}
+
+/**
  * The displayed version's identity, carrying its status so the UI can label a
  * proposed revision or a draft as such (design D2).
  */
@@ -54,6 +70,8 @@ export interface WorkspaceRefView {
 export interface WorkspaceSnapshot {
   plan: { id: string; title: string; lifecycle: PlanLifecycle }
   displayedVersion: WorkspaceDisplayedVersion | null
+  /** The selected execution and the revision it runs; absent while none is selected (design D2). */
+  execution?: WorkspaceExecutionView
   bindings: WorkspaceBindingView[]
   references: WorkspaceRefView[]
 }
@@ -64,6 +82,109 @@ export interface WorkspaceBindPayload {
   sessionId: string
   /** The CAS token the binder saw; null = the role is unbound. */
   expectedVersion: number | null
+}
+
+/** A ref-add command's payload (design D4): supporting metadata, never document content. */
+export interface WorkspaceRefPayload {
+  planId: string
+  label: string
+  kind: 'local' | 'external'
+  changeName?: string
+  /** `kind: 'local'`: the listed worktree root the path resolves in. */
+  worktreeId?: string
+  relativePath?: string
+  /** `kind: 'external'`: an https link; the server never fetches it. */
+  url?: string
+}
+
+/** A ref-remove command's payload. */
+export interface WorkspaceRefRemovePayload {
+  refId: string
+}
+
+/**
+ * Whether `value` is a relative, normalized repository path (design D4):
+ * no absolute path, no `..` or `.` segment, no NUL, no backslash or network
+ * path. The document reader refuses everything else.
+ */
+export function isRelativeWorkspacePath(value: string): boolean {
+  if (value === '' || value.includes('\0') || value.includes('\\')) return false
+  if (value.startsWith('/') || /^[A-Za-z]:/.test(value)) return false
+  return value.split('/').every(segment => segment !== '' && segment !== '.' && segment !== '..')
+}
+
+/**
+ * The version identity a workspace message attaches to (design D7): an
+ * immutable revision, or a draft by id — both carrying the content hash the
+ * sender saw, so a changed draft is refused rather than silently re-scoped.
+ */
+export type WorkspaceContextVersion =
+  | { kind: 'revision'; revision: number; contentHash: string }
+  | { kind: 'draft'; draftId: string; contentHash: string }
+
+/**
+ * The immutable per-message context (design D7): what the server validated
+ * and stored whole for one user message. Stored snapshots survive killed
+ * plans and changed files, so `planTitle` is snapshotted, never re-read.
+ */
+export interface WorkspaceMessageContext {
+  teamId: string
+  planId: string
+  planTitle: string
+  version: WorkspaceContextVersion
+  executionId: string | null
+  changeName: string | null
+  documentRefId: string | null
+}
+
+/** One parsed checklist item (design D3); keys are local to the document hash and position. */
+export interface WorkspaceChecklistItem {
+  key: string
+  text: string
+  checked: boolean
+  /** The item's 1-based source line in the artifact. */
+  line: number
+}
+
+export interface WorkspaceChecklistSection {
+  heading: string
+  /** Heading depth in the source document (1 = a top-level `#`). */
+  depth: number
+  items: WorkspaceChecklistItem[]
+}
+
+/** A change artifact's checklist projection (design D3): a read-only view, never Kawai tasks. */
+export interface WorkspaceChecklist {
+  /** The source content hash the row keys are local to. */
+  sourceHash: string
+  sections: WorkspaceChecklistSection[]
+}
+
+export type WorkspaceHealthLevel = 'green' | 'yellow' | 'red' | 'unknown'
+export type WorkspaceQuotaStatus = 'ok' | 'warning' | 'limited'
+
+/** One passive context reading (design D5): an already-held fact, never a worker attach. */
+export interface WorkspaceContextReading {
+  /** The used share of the session's context window, 0..1; null when unknown. */
+  used: number | null
+  measuredAt: string | null
+}
+
+export interface WorkspaceQuotaReading {
+  status: WorkspaceQuotaStatus | null
+  /** The reported window share already used, 0..1, when the source reports one. */
+  used: number | null
+  resetsAt: string | null
+  measuredAt: string | null
+  /** Whose allowance the reading reports; a host account is not a gateway provider's. */
+  source: 'profile' | 'provider' | 'account'
+}
+
+/** One agent's compact health (design D5); the dot never predicts failure or controls dispatch. */
+export interface WorkspaceAgentHealth {
+  level: WorkspaceHealthLevel
+  context: WorkspaceContextReading | null
+  quota: WorkspaceQuotaReading | null
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -86,5 +207,12 @@ export function parseVersionSelector(value: unknown): WorkspaceVersionSelector |
 export function parseWorkspaceRole(value: unknown): PlanWorkspaceRole | null {
   return typeof value === 'string' && (PLAN_WORKSPACE_ROLES as readonly string[]).includes(value)
     ? value as PlanWorkspaceRole
+    : null
+}
+
+/** Parse an execution selector; null when malformed. */
+export function parseExecutionSelector(value: unknown): WorkspaceExecutionSelector | null {
+  return isRecord(value) && typeof value.executionId === 'string' && value.executionId.trim() !== ''
+    ? { executionId: value.executionId }
     : null
 }

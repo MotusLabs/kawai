@@ -14,7 +14,7 @@
 // changes is evaluated afresh. There is no unbind and this file has no
 // DELETE for `plan_workspace_chats`: the version only grows.
 import type { Database } from 'bun:sqlite'
-import { firstDifferingField } from '../../metrics/reportStore'
+import { ledgerLookup, ledgerRecord } from './commandLedger'
 import type { PlanWorkspaceRole, WorkspaceBindPayload } from '../../../shared/planWorkspace'
 import { parseWorkspaceRole } from '../../../shared/planWorkspace'
 
@@ -67,19 +67,16 @@ export class PlanWorkspaceStore {
     const clean: WorkspaceBindPayload = { role, sessionId, expectedVersion: expected }
     try {
       return this.db.transaction((): WorkspaceBindOutcome => {
-        const stored = this.db.prepare('SELECT kind, payload, outcome FROM plan_workspace_commands WHERE team_id = ? AND command_id = ?')
-          .get(teamId, id) as Row | null
-        if (stored) {
-          const recorded = JSON.parse(String(stored.payload)) as Record<string, unknown>
-          const field = String(stored.kind) !== 'bind' ? 'kind' : firstDifferingField(recorded, clean as unknown as Record<string, unknown>)
-          if (field) return { ok: false, reason: 'payload', field, message: `Command key ${id} was already used with a different ${field}.` }
-          return { ok: true, replayed: true, ...JSON.parse(String(stored.outcome)) as { role: PlanWorkspaceRole; sessionId: string; version: number } }
+        const outcome = { role, sessionId }
+        const ledger = ledgerLookup<{ role: PlanWorkspaceRole; sessionId: string; version: number }>(
+          this.db, teamId, id, 'bind', clean as unknown as Record<string, unknown>)
+        if (ledger) {
+          return ledger.ok ? { ok: true, replayed: true, ...ledger.value } : { ...ledger }
         }
         const version = this.writeBinding(teamId, clean, now)
-        const outcome = { role, sessionId, version }
-        this.db.prepare('INSERT INTO plan_workspace_commands (team_id, command_id, kind, payload, outcome, at) VALUES (?, ?, ?, ?, ?, ?)')
-          .run(teamId, id, 'bind', JSON.stringify(clean), JSON.stringify(outcome), now)
-        return { ok: true, replayed: false, ...outcome }
+        const recorded = { ...outcome, version }
+        ledgerRecord(this.db, teamId, id, 'bind', clean as unknown as Record<string, unknown>, recorded, now)
+        return { ok: true, replayed: false, ...recorded }
       })()
     } catch (error) {
       if (error instanceof BindConflict) {

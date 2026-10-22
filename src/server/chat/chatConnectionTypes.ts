@@ -98,6 +98,8 @@ export const CHAT_CONNECTION_TYPES = [
   'team-plan-workspace-open',
   'team-plan-workspace-close',
   'team-plan-workspace-bind',
+  'team-plan-workspace-ref-add',
+  'team-plan-workspace-ref-remove',
   'team-plan-execution-preview',
   'team-plan-execution-start',
   'team-plan-execution-stop',
