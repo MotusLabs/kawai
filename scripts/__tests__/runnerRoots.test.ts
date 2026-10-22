@@ -290,9 +290,10 @@ describe('the real runner gives each file its own root', () => {
 // real publish closure. The run happens in a temporary repository of its own,
 // so the publish lands in that repository's own records directory, never the
 // driving repository's. The repositories are created beneath the driving
-// repository (ignored, see .gitignore): bun only resolves the child's bare
-// --preload path beneath this repository tree, so the shared tmpdir cannot
-// host them.
+// repository (ignored, see .gitignore): bun resolves the child's bare
+// --preload path at the bun project root (the nearest enclosing
+// package.json/node_modules), and only the driving repository provides one,
+// so the shared tmpdir cannot host them.
 describe('the real runner publishes the timings record (B3)', () => {
   const fixturesParent = path.join(REPO_ROOT, '.kawai-fixture-probes')
   const probeRepos: string[] = []
