@@ -87,7 +87,8 @@ import { codexLimitProviderId } from './codex/codexLimits'
 import { resolveCodexHome } from './codexProfiles'
 import { fetchZaiUsage } from './zaiUsage'
 import { fetchOpenRouterUsage, isOpenRouterBaseUrl, type OpenRouterUsagePull } from './openRouterUsage'
-import { ambientProviderOf, catalogCtx } from '../team/cooldowns'
+import { ambientProviderLabel, ambientProviderOf, catalogCtx } from '../team/cooldowns'
+import { TeamCapacity } from '../team/teamCapacity'
 import { readWorkerTranscript } from './chatWorkerTranscript'
 import { isTaskOutputFile, readTaskOutputTail } from './taskOutputFile'
 import type { BackgroundTaskRecord } from './chatBackgroundTasks'
@@ -1187,6 +1188,17 @@ export class ChatSessionManager {
       // The provider cooldown (providers-and-workers D8) resolves in the
       // team's own catalog, so a provider event shows in every profile's tax.
       (profileId, teamId) => providerOf(profileId, this.catalogCtx(teamId)))
+    // team_capacity (dispatch-worker-choice D6) reads the router's own objects:
+    // the members counter, staffing's reservations, the limit store, the
+    // ambient provider resolution, and the provider-keyed usage store.
+    this.capacity = new TeamCapacity({
+      teams: this.teams, records: () => this.records.values(),
+      pendingSpawns: teamId => this.teamMail.staffing.pendingFor(teamId),
+      limits: this.teamMail.limits,
+      providerOf: ambientProviderOf(options.profileCatalogHome),
+      providerLabel: ambientProviderLabel(options.profileCatalogHome),
+      providerUsageOf: providerId => this.usageLimits.get(providerId),
+    })
     this.reports = new ProcessReportService(options.db.db, this.metrics, {
       onCommit: teamId => this.options.onProcessReportChange?.(teamId),
     })
@@ -1610,6 +1622,7 @@ export class ChatSessionManager {
   readonly metrics: MetricsReader
   /** Process reports and proposals (team-process-metrics D6): the report tools and the human's decide/link commands. */
   readonly reports: ProcessReportService
+  readonly capacity: TeamCapacity
   private readonly turnUsageTracker: TurnUsageTracker
   /** Guards the teamMail calls on the driver-event path (never throws; a failed settle is retried). */
   private readonly mailGuard = new DriverMailGuard()
@@ -2549,11 +2562,7 @@ export class ChatSessionManager {
       // The team must be known before the first spawn reads its prompt.
       await this.teams.track(record.sessionId, this.records.get(record.sessionId)?.projectPath ?? record.projectPath)
       // Both runtimes build their team tools from one table (D6).
-      const teamServices: MailboxServerServices = {
-        tasks: this.tasks, results: this.results, strategies: this.strategies, plans: this.plans, validation: this.validation, ...(this.decisions ? { decisions: this.decisions } : {}), releases: this.teamMail.releases, management: this.management,
-        metrics: { teamOf: id => this.teams.teamOf(id)?.teamId ?? null, reader: this.metrics },
-        reports: { caller: id => this.reportCaller(id), service: this.reports },
-      }
+      const teamServices = this.teamServices()
       const teamMcpServer = codex ? null : await createMailboxServer(this.mailbox, record.sessionId, teamServices)
       // The options both runtimes share: identity, the audit observer, the
       // prompt/effort/policy readers, and every output callback.
@@ -2842,6 +2851,16 @@ export class ChatSessionManager {
         : `Provider ${credential.providerLabel} needs ${credential.authTokenEnv} in the server environment.`
     }
     return hasClaudeAuth(this.launchEnvOf(profileId, projectPath)) ? undefined : chatAuthErrorMessage()
+  }
+
+  /** The services every session's team tools are built from, on both runtimes (codex-chat-sessions D6). */
+  private teamServices(): MailboxServerServices {
+    return {
+      tasks: this.tasks, results: this.results, strategies: this.strategies, plans: this.plans, validation: this.validation, ...(this.decisions ? { decisions: this.decisions } : {}), releases: this.teamMail.releases, management: this.management,
+      metrics: { teamOf: id => this.teams.teamOf(id)?.teamId ?? null, reader: this.metrics },
+      reports: { caller: id => this.reportCaller(id), service: this.reports },
+      capacity: this.capacity,
+    }
   }
 
   /**
