@@ -298,9 +298,15 @@ export class ExecutionStore extends ExecutionEffectStore {
       .map(mapAttempt)
   }
 
-  /** The execution's newest attempt across its changes (the document pin's manifest). */
+  /** The execution's newest attempt across its changes. */
   latestAttempt(executionId: string): AttemptRow | null {
     const row = this.db.prepare('SELECT * FROM plan_execution_attempts WHERE execution_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1').get(executionId) as Record<string, unknown> | null
+    return row ? mapAttempt(row) : null
+  }
+
+  /** One change's newest attempt — the document pin's manifest, worktree-scoped (plan-workspace 2.4, O1). */
+  latestAttemptForChange(executionId: string, change: string): AttemptRow | null {
+    const row = this.db.prepare('SELECT * FROM plan_execution_attempts WHERE execution_id = ? AND change = ? ORDER BY created_at DESC, rowid DESC LIMIT 1').get(executionId, change) as Record<string, unknown> | null
     return row ? mapAttempt(row) : null
   }
 

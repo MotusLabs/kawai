@@ -19,11 +19,15 @@
 //   its reason, carried on the view as `reason`.
 // - Provenance: worktree id, relative path, sha256 content hash, size,
 //   mtime, availability and staleness, and the execution pin's match. The
-//   pin is the selected execution's newest attempt manifest — its artifacts
-//   map that branch head's full tree, worktree-relative, so any path
-//   compares (B7: both sides normalized, forward slashes, no `./`). No
-//   execution, no attempt, or a path absent from the map reads `unknown`;
-//   so does any view without current content (D4: never inferred).
+//   pin is worktree-scoped (O1): the newest attempt of the execution change
+//   provisioned in the document's own worktree — never another change's
+//   attempt, and nothing for a worktree no change of the execution occupies
+//   (the main checkout included). The comparison is convention-comparable
+//   (B1): only markdown within the git output bound, fatally valid UTF-8 and
+//   BOM-free compares; everything else — no execution, no attempt, no
+//   occupied worktree, a path absent from the map, an image, a BOM, invalid
+//   UTF-8, or a view without current content — reads `unknown` (D4: never
+//   inferred, never a false mismatch). executionPin.ts owns the rule.
 // - Invalidation: dedicated non-recursive watches on each selected
 //   document's parent directory and each expanded change's artifact
 //   directory, debounced (WORKSPACE_WATCH_DEBOUNCE_MS), plus a
@@ -41,7 +45,7 @@ import {
 } from '../../workspace/workspaceWatcher'
 import { SourceWatcher } from './documentWatcher'
 import type {
-  WorkspaceChecklist, WorkspaceChecklistUnavailable, WorkspaceDocumentView, WorkspaceExecutionMatch,
+  WorkspaceChecklist, WorkspaceChecklistUnavailable, WorkspaceDocumentView,
 } from '../../../shared/planWorkspace'
 import { unknownTeamError } from '../../../shared/team'
 import type { PlanWorkspaceClientMessage } from '../../../shared/planWorkspaceMessages'
@@ -50,31 +54,7 @@ import type { ChatConnection } from '../../chat/ChatConnections'
 import { ChangeArtifactsResolver } from './changeArtifacts'
 import { projectChecklist } from './checklistProjection'
 import { normalizeRelativeDocumentPath, readWorkspaceDocument } from './documentReader'
-
-/** B7: both pin sides compare normalized repo-relative paths. */
-const normalizePinPath = (value: string): string => value.replace(/^\.\//, '').replace(/\\/g, '/')
-
-export interface ExecutionPin {
-  executionId: string
-  artifacts: Record<string, string>
-}
-
-/**
- * The pin's three-way rule (D4, CP1 §5): in the map and equal → `match`, in
- * the map and different → `mismatch`, no pin or the path absent → `unknown`.
- * A view without current content (hash null) is never compared at all.
- */
-export function executionMatchFor(
-  pin: ExecutionPin | null,
-  relativePath: string,
-  hash: string | null,
-): { match: WorkspaceExecutionMatch; executionId: string | null } {
-  if (hash === null) return { match: 'unknown', executionId: pin?.executionId ?? null }
-  if (!pin) return { match: 'unknown', executionId: null }
-  const pinned = pin.artifacts[normalizePinPath(relativePath)]
-  if (pinned === undefined) return { match: 'unknown', executionId: pin.executionId }
-  return { match: pinned === hash ? 'match' : 'mismatch', executionId: pin.executionId }
-}
+import { executionMatchFor, type ExecutionPin, type ExecutionPinStore } from './executionPin'
 
 /** One subscribed document: the request's identity plus the composed view. */
 interface DocumentSubscription {
@@ -278,7 +258,7 @@ export class PlanWorkspaceDocumentConnections {
       connection.send({ type: 'error', message: 'Worktree not listed in this team.' })
       return
     }
-    if (message.executionId !== undefined && !this.pinFor(team.teamId, planId, message.executionId)) {
+    if (message.executionId !== undefined && !this.executionFor(team.teamId, planId, message.executionId)) {
       connection.send({ type: 'error', message: `Execution not found in this plan: ${message.executionId}` })
       return
     }
@@ -363,7 +343,8 @@ export class PlanWorkspaceDocumentConnections {
     const result = await this.read(sub.worktreeId, sub.relativePath)
     if (result.ok) {
       const { match, executionId } = executionMatchFor(
-        this.pinFor(sub.teamId, sub.planId, sub.executionId), sub.relativePath, result.hash,
+        this.pinFor(sub.teamId, sub.planId, sub.executionId, sub.worktreeId), sub.relativePath,
+        { kind: result.kind, hash: result.hash, size: result.size, bytes: result.bytes },
       )
       return {
         worktreeId: sub.worktreeId, relativePath: sub.relativePath,
@@ -423,17 +404,32 @@ export class PlanWorkspaceDocumentConnections {
   }
 
   /**
-   * The execution pin: the selected execution's newest attempt manifest. An
-   * absent selector means the plan's latest execution (D2); a named one must
-   * belong to this team and plan — a foreign id names no pin.
+   * The selected execution: the named id, or the plan's latest (D2). It must
+   * belong to this team and plan — a foreign id names no execution.
    */
-  private pinFor(teamId: string, planId: string, requested: string | null): ExecutionPin | null {
+  private executionFor(teamId: string, planId: string, requested: string | null) {
     const store = this.manager.planExecutionStore
     const execution = requested !== null ? store.execution(requested) : store.latestForPlan(planId)
     if (!execution || execution.teamId !== teamId || execution.planId !== planId) return null
-    const attempt = store.latestAttempt(execution.id)
-    if (!attempt) return null
-    return { executionId: execution.id, artifacts: attempt.manifest.artifacts }
+    return execution
+  }
+
+  /**
+   * The execution pin, worktree-scoped (O1): the newest attempt of the one
+   * execution change provisioned in the document's worktree. No change of
+   * the execution occupies that worktree (the main checkout, another plan's
+   * worktree), or the change has no attempt yet — no pin. Another change's
+   * attempt never speaks for this worktree.
+   */
+  private pinFor(teamId: string, planId: string, requested: string | null, worktreeId: string): ExecutionPin | null {
+    const store: ExecutionPinStore = this.manager.planExecutionStore
+    const execution = this.executionFor(teamId, planId, requested)
+    if (!execution) return null
+    const change = store.changes(execution.id).find(candidate =>
+      candidate.worktree !== null && path.resolve(candidate.worktree) === worktreeId)
+    if (!change) return null
+    const attempt = store.latestAttemptForChange(execution.id, change.change)
+    return attempt ? { executionId: execution.id, artifacts: attempt.manifest.artifacts } : null
   }
 
   /** The team's main checkout — the subscription carries it, resolved at open. */
