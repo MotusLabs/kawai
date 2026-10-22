@@ -7,6 +7,7 @@ import { describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import path from 'node:path'
 import { mapCodexNotification, turnCompletedDrafts, turnUsageBetween, type CodexOutput } from '../chat/codex/codexEvents'
+import type { RateLimitSnapshot } from '../chat/codex/protocol/v2/RateLimitSnapshot'
 import type { Turn } from '../chat/codex/protocol/v2/Turn'
 import { formatHandoffHeader, ProgressDigest } from '../team/routing/handoff'
 
@@ -86,7 +87,12 @@ describe('recorded frames', () => {
   })
 
   test('unknown notifications map to nothing', () => {
-    expect(map('account/rateLimits/updated', recorded('account/rateLimits/updated'))).toEqual([])
+    expect(map('thread/archived', { threadId: 'thread-1' })).toEqual([])
+  })
+
+  test('a rate-limits push maps to its snapshot for the driver to normalize (PR E 7.1)', () => {
+    const out = map('account/rateLimits/updated', recorded('account/rateLimits/updated'))
+    expect(out).toEqual([{ kind: 'rate_limits', snapshot: recorded('account/rateLimits/updated').rateLimits as RateLimitSnapshot }])
   })
 })
 

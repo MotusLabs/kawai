@@ -3,11 +3,15 @@
 ## MODIFIED Requirements
 
 ### Requirement: Users select a predefined chat profile
-The system SHALL offer the profiles resolved from the catalog files for the session's project path when creating a chat session, Claude and Codex profiles alike, each identified by its runtime. The selection SHALL apply to the created session and remain visible in its chat view. Omitted selections SHALL use Default. Terminal session creation SHALL retain its existing behavior.
+The system SHALL offer the profiles resolved from the catalog files for the session's project path, grouped under their providers, when creating a chat session, Claude and Codex profiles alike, each identified by its runtime. The selection SHALL apply to the created session, and its chat view SHALL identify the session's provider and profile. Omitted selections SHALL use Default. Terminal session creation SHALL retain its existing behavior.
 
 #### Scenario: Select a provider profile
 - **WHEN** a user creates a chat session with MiMo selected from the resolved catalog
 - **THEN** the session is created with MiMo as its profile and the chat view identifies it as MiMo
+
+#### Scenario: Models are grouped by provider
+- **WHEN** the resolved catalog's provider Z.AI holds models GLM and GLM Flash
+- **THEN** the picker lists both under Z.AI, and a session created on GLM Flash is identified by Z.AI and GLM Flash
 
 #### Scenario: Select a Codex profile
 - **WHEN** a user creates a chat session with a Codex profile selected

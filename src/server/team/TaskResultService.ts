@@ -47,6 +47,8 @@ export interface HandoffRequest {
   allowedProfiles?: string[]
   /** Tags on the instruction mail (plan-execution D15: author-profile); the system caller only. */
   tags?: string[]
+  /** The worker choice (dispatch-worker-choice D7): a group target only; never Kawai's. */
+  worker?: string
 }
 
 export interface HandoffOutcome {
@@ -236,9 +238,11 @@ export class TaskResultService {
     if (!instructions) throw new Error('A handoff needs instructions')
     if (!this.options.assignments) throw new Error('Handoffs are not available')
     const expectedResponse = request.expectedResponse?.trim() || null
+    // Normalized before the equivalent check (D7): a retry naming another worker is another handoff.
+    const workerChoice = this.options.assignments.workerChoice(caller, team, request.target, request.worker)
     if (caller.kind === 'agent') {
       const standing = this.tasks.store.assignmentsOf(taskId).find(row => row.handoffKind === request.kind &&
-        row.resultId === result.id && row.supersededBy === null && row.state !== 'failed')
+        row.resultId === result.id && (row.workerChoice ?? null) === workerChoice && row.supersededBy === null && row.state !== 'failed')
       if (standing) {
         // The standing recipient is exposed (session-targeted-task-handoffs
         // D3): kind, id, and — when the request names another recipient — both
@@ -259,6 +263,7 @@ export class TaskResultService {
       handoff: { kind: request.kind, resultId: result.id, expectedResponse },
       ...(request.allowedProfiles ? { allowedProfiles: request.allowedProfiles } : {}),
       ...(request.tags ? { tags: request.tags } : {}),
+      ...(request.worker !== undefined ? { worker: request.worker } : {}),
     })
     return { assignment: outcome.assignment, duplicate: outcome.replay,
       notice: outcome.replay ? 'This request was already dispatched; the earlier handoff is returned.' : null }

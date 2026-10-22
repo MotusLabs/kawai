@@ -9,6 +9,7 @@
 // `implementing` change without a task gets its task and first dispatch
 // (D7/D8), performed by the executor, not an effect row.
 import type { ChangeState, EffectKind } from '../../../shared/planExecution'
+import { holdGate } from '../revisionControl/holdGate'
 import type { ChangePatch } from './executionStore'
 import type { ExecutionSnapshot } from './executionSnapshot'
 
@@ -28,11 +29,12 @@ export interface PlannedEffect {
   command: Record<string, unknown>
 }
 
-/** The task-creation and dispatch step (D7/D8): performed, never an effect row. */
+/** The dispatch step (D7/D8; the owed fix of a released hold, revision-control 3.2): performed, never an effect row. */
 export interface PlannedDispatch {
   executionId: string
   change: string
   group: string
+  kind: 'implement' | 'fix'
 }
 
 /** One round-pipeline stage (D9-D11), performed by the executor in order. */
@@ -105,11 +107,18 @@ export function planSteps(snapshot: ExecutionSnapshot, _now: string): PlanSteps 
         continue
       }
       if (change.state === 'stopped' || change.state === 'cancelled') continue
+      // The hold gate (revision-control 3.2): what a hold closes, the
+      // planner withholds — the step onto the worktree, every attempt
+      // dispatch, the review handoff, and the owed fix of an interrupted
+      // one. What it leaves open still plans: decisions (a round's result,
+      // a verdict, the failed round's fix transition), the push, the PR,
+      // and CI run for a held change; only its dispatches wait.
+      const held = holdGate(execution.holds, execution.openTargets, change.change) !== null
       if (change.state === 'waiting') {
         // A dependency that has not landed holds the change — stopped ones
         // included; independent changes elsewhere in the plan continue.
-        const held = setupHolds || change.dependsOn.some(dependency => states.get(dependency) !== 'landed')
-        if (held || inProgress >= execution.row.maxParallel) continue
+        const blocked = setupHolds || change.dependsOn.some(dependency => states.get(dependency) !== 'landed')
+        if (held || blocked || inProgress >= execution.row.maxParallel) continue
         steps.transitions.push({
           executionId: change.executionId, change: change.change,
           guard: { state: change.state, generation: change.generation },
@@ -122,7 +131,7 @@ export function planSteps(snapshot: ExecutionSnapshot, _now: string): PlanSteps 
       if (change.state === 'provisioning') {
         const attempt = (snapshot.attempts.get(`${change.executionId}:${change.change}`) ?? 0) + 1
         const effectKey = `${change.executionId}:${change.change}:provision:${attempt}:${change.generation}`
-        if (standing.has(effectKey)) continue
+        if (standing.has(effectKey) || held) continue
         steps.effects.push({
           executionId: change.executionId, change: change.change, kind: 'provision', effectKey,
           command: {
@@ -137,16 +146,27 @@ export function planSteps(snapshot: ExecutionSnapshot, _now: string): PlanSteps 
         continue
       }
       // Retry of a failed or closed stage (D12): its instruction is sent
-      // again before anything reads the old, failed assignment.
+      // again before anything reads the old, failed assignment. A hold
+      // withholds the dispatch; the step stays due for the release.
       if (change.step === 'redispatch') {
-        steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'redispatch', roundId: null, resultId: null })
+        if (!held) steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'redispatch', roundId: null, resultId: null })
         continue
       }
       // The implement dispatch: a change without its task, or whose task
       // exists but whose dispatch never committed (a refused one, retried).
-      if (change.state === 'implementing' && change.group !== null
+      if (!held && change.state === 'implementing' && change.group !== null
         && (change.taskId === null || (change.task !== null && change.task.assignment === null && change.task.results.length === 0))) {
-        steps.dispatches.push({ executionId: change.executionId, change: change.change, group: change.group })
+        steps.dispatches.push({ executionId: change.executionId, change: change.change, group: change.group, kind: 'implement' })
+      }
+      // The owed fix dispatch (revision-control 3.2): the newest attempt is
+      // a fix whose handoff never dispatched — the attempt is the owed
+      // marker, the assignment still carrying the previous attempt's key.
+      // It runs exactly once on the first tick after release, under the
+      // attempt's own request key.
+      if (!held && change.state === 'implementing' && change.group !== null && change.task !== null
+        && change.newestAttempt?.kind === 'fix'
+        && (change.task.assignment === null || !(change.task.assignment.requestKey ?? '').startsWith(`exec:${change.executionId}:${change.change}:attempt:${change.newestAttempt.number}:`))) {
+        steps.dispatches.push({ executionId: change.executionId, change: change.change, group: change.group, kind: 'fix' })
       }
       // D13's follow-ons: a settled merge or update-branch effect of a
       // landing change is applied by the tick (merge → landed, or back to
@@ -261,6 +281,24 @@ export function planSteps(snapshot: ExecutionSnapshot, _now: string): PlanSteps 
       if (round.outcome === 'pass' && change.passedAt !== null) {
         // D13: a passed change lands — conditions first, then the slot, then
         // up to date and the merge.
+        // revision-control 3.3: a held change that holds the slot with no
+        // live landing-kind effect gives the slot up in one guarded
+        // transition and returns to its pre-slot step (`gating`, passed
+        // round kept), so another change can land. A pending, running, or
+        // unknown effect settles first — a merging or updating change left
+        // above — and the hold applies from the next step.
+        if (held && change.state === 'landing') {
+          const landingLive = change.landingEffect !== null
+            && ['pending', 'running', 'unknown'].includes(change.landingEffect.state)
+          if (!landingLive) {
+            steps.transitions.push({
+              executionId: change.executionId, change: change.change,
+              guard: { state: change.state, generation: change.generation },
+              patch: { state: 'gating', step: null },
+            })
+          }
+          continue
+        }
         steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'landing', roundId: round.id, resultId: null })
         continue
       }

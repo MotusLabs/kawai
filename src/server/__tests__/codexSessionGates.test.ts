@@ -56,6 +56,12 @@ const createManager = () => new ChatSessionManager({
   profileCatalogHome: home, availabilityProbe: async () => {},
 })
 
+const fixtureManager = () => new ChatSessionManager({
+  db, registry: new SessionRegistry(), onEvent: () => {},
+  profileCatalogHome: home, availabilityProbe: async () => {},
+  queryFactory: (() => { throw new Error('not reached') }) as unknown as ChatQueryFactory,
+})
+
 const writeProfiles = (json: unknown) => {
   const file = path.join(home, '.kawai', 'profiles.json')
   fs.mkdirSync(path.dirname(file), { recursive: true })
@@ -178,16 +184,42 @@ test('restoring the login clears the start blocker', async () => {
 
 test('the fixture seam creates a Codex chat without an executable or login', async () => {
   writeProfiles(CODEX_PROFILES)
-  process.env.KAWAI_CODEX_PATH = path.join(tempDir, 'absent-codex')
+  delete process.env.KAWAI_CODEX_PATH
   fs.rmSync(path.join(codexHome, 'auth.json'))
   // The factory is never called here — creation only. The seam treats an
   // injected factory as the development fixture: no Codex child starts, so
   // no real gate applies (the same rule checkExecutable applies to Claude).
-  const manager = new ChatSessionManager({
-    db, registry: new SessionRegistry(), onEvent: () => {},
-    profileCatalogHome: home, availabilityProbe: async () => {},
-    queryFactory: (() => { throw new Error('not reached') }) as unknown as ChatQueryFactory,
-  })
+  // The 8.1 carve-out narrows this only when KAWAI_CODEX_PATH is set — the
+  // e2e run's configuration — so the test deletes it outright.
+  const manager = fixtureManager()
+  try {
+    const result = await manager.createAvailableSession({ projectPath: project, claudeProfileId: 'codex' })
+    if (!result.ok) throw new Error(result.error)
+    expect(db.getChatSession(result.session.id)).toMatchObject({ runtime: 'codex', codexHome })
+  } finally { manager.shutdown() }
+})
+
+test('under the carve-out the fixture manager refuses a Codex chat without a login', async () => {
+  writeProfiles(CODEX_PROFILES)
+  fs.rmSync(path.join(codexHome, 'auth.json'))
+  // KAWAI_CODEX_PATH stays set from beforeEach: the carve-out runs the real
+  // gates (executable, login) even in a fixture manager, and the working
+  // codexExe stub passes the version check while the missing login refuses.
+  const manager = fixtureManager()
+  try {
+    const result = await manager.createAvailableSession({ projectPath: project, claudeProfileId: 'codex' })
+    expect(result.ok).toBeFalse()
+    if (result.ok) throw new Error('expected the refusal')
+    expect(result.error).toContain('"codex"')
+    expect(result.error).not.toContain(codexHome)
+    expect(result.error).toContain('codex login')
+    expect(db.getChatSessions()).toHaveLength(0)
+  } finally { manager.shutdown() }
+})
+
+test('under the carve-out the fixture manager creates a logged-in Codex chat with its runtime facts', async () => {
+  writeProfiles(CODEX_PROFILES)
+  const manager = fixtureManager()
   try {
     const result = await manager.createAvailableSession({ projectPath: project, claudeProfileId: 'codex' })
     if (!result.ok) throw new Error(result.error)

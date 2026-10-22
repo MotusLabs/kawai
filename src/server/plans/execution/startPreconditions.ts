@@ -7,6 +7,7 @@
 // entries and never edit a shipped one.
 import type { Plan, PlanRevision } from '../../../shared/plans'
 import type { ImpactGate } from '../../../shared/strategyImpact'
+import type { ActiveHold } from '../../../shared/planRevisionControl'
 import type { ValidationStanding } from '../validation/validationStanding'
 import { validationCurrentMessage } from '../validation/validationStanding'
 import type { ProbeFinding } from '../landing/landingProbe'
@@ -64,6 +65,8 @@ export interface StartCheckContext {
   offBaseLandings: Array<{ change: string; branch: string }>
   /** The base branch the execution would provision from and land on: the probe's. */
   baseBranch: string | null
+  /** The plan's active holds (revision-control D5), fresh in the transaction. */
+  activeHolds: ActiveHold[]
 }
 
 export interface StartPrecondition {
@@ -168,6 +171,17 @@ export const START_PRECONDITIONS: readonly StartPrecondition[] = [
     check: ({ offBaseLandings, baseBranch }) => (offBaseLandings.length === 0
       ? null
       : `The base ${baseBranch ?? 'branch'}'s head on origin lacks landed work: ${offBaseLandings.map(entry => `${entry.change} (landed on ${entry.branch})`).join(', ')}. Promote that branch first, or start a revision that lands on it.`),
+  },
+  // revision-control D5, appended: a whole-plan hold refuses Start; a
+  // changes-scoped hold passes — its changes stay unprovisioned under the gate.
+  {
+    name: 'no-hold',
+    check: ({ activeHolds }) => {
+      const plan = activeHolds.filter(hold => hold.scope === 'plan')
+      return plan.length === 0
+        ? null
+        : `The plan is on hold: ${plan.map(hold => hold.id).join(', ')}. Release the hold before starting an execution.`
+    },
   },
 ]
 

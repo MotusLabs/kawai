@@ -21,25 +21,28 @@ import type { MailboxStore } from '../../team/mailboxStore'
 import { githubRepoOf } from '../landing/landingProbe'
 import { inspectDueUnknownEffects, recoverUnknownEffects } from './executorStartup'
 import type { InspectorReads } from './effectInspectors'
-import { applyEffectFailure, applyEffectOutcome, type OutcomeDeps } from './executorOutcomes'
-import { landingAdapters, removeWorktreeAdapter } from './executionLanding'
+import { applyEffectFailure, type OutcomeDeps } from './executorOutcomes'
+import { landingAdapters } from './executionLanding'
 import { mechanismFor, type LandingMechanism, type LandingMechanisms } from '../landing/landingMechanisms'
 import { startupReads } from './startupReads'
 import { DIRECT_MECHANISMS } from '../landing/directMechanism'
 import type { CiCheck } from '../../../shared/planExecution'
 import { ciClass } from '../../../shared/planExecutionGates'
+import type { ActiveHold } from '../../../shared/planRevisionControl'
+import type { OpenPauseTarget } from '../revisionControl/holdGate'
 import type { GhCommandOptions } from '../landing/ghCommand'
 import { executionSnapshot } from './executionSnapshot'
 import { planSteps } from './executionPlanner'
-import { EffectRunner, type EffectAdapter } from './effects'
+import { holdGate } from '../revisionControl/holdGate'
 import { EffectPinConflict } from './executionEffectStore'
 import { ExecutionConflict } from './executionStore'
 import type { ExecutionStore } from './executionStore'
 import type { PlanStore } from '../planStore'
-import { dispatchFixAttempt, dispatchImplementAttempt, redispatchStage, type DispatchDeps } from './executionDispatch'
+import { dispatchFix, dispatchImplementAttempt, dispatchOwedFixAttempt, ensureFixAttempt, redispatchStage, type DispatchDeps } from './executionDispatch'
 import { StepRefusal } from './stepRefusal'
 import { fixRoundOutcome } from '../../../shared/planExecutionProgress'
-import { applyRoundStage, dispatchRevisionAttempt, type ReleaseSeam, openPrAdapter, pushAdapter, rerunAdapter, roundAdapters } from './executionRounds'
+import { applyRoundStage, type ReleaseSeam, roundAdapters } from './executionRounds'
+import { dispatchDeps as dispatchDepsOf, effectRunner, landingDeps as landingDepsOf, outcomeDeps as outcomeDepsOf, roundDeps as roundDepsOf } from './executorDeps'
 
 /** D5's polling interval while a team has a running execution. */
 export const EXECUTOR_TICK_MS = 60_000
@@ -70,7 +73,7 @@ export interface ExecutorDeps {
   /** Test seam: the landing adapters (defaults to the real git/gh). */
   landingAdapters?: import('./executionLanding').LandingAdapters
   /** Test seam: effect adapters by kind (the composition passes provision's). */
-  adapters?: Partial<Record<string, EffectAdapter>>
+  adapters?: Partial<Record<string, import('./effects').EffectAdapter>>
   /** Test seam: round-pipeline adapters (push, PRs, CI, rerun); defaults to the real gh/git. */
   roundAdapters?: typeof roundAdapters
   /** The tick interval while a team runs an execution; the development fixture shortens it. */
@@ -83,6 +86,8 @@ export interface ExecutorDeps {
   now?: () => Date
   /** The promotion runner (integration-candidates D10): its startup, a pass per tick, and whether its timer stays armed. */
   promotions?: { startup(): void; pass(teamId: string): Promise<void>; active(teamId: string): boolean }
+  /** The hold gate's reads (revision-control 3.2): the plan's active holds and open pause targets. */
+  holds?: { active(teamId: string, planId: string): ActiveHold[]; openTargets(teamId: string, planId: string): OpenPauseTarget[] }
 }
 
 export class ExecutionExecutor {
@@ -182,8 +187,10 @@ export class ExecutionExecutor {
           const outstanding = this.deps.tasks.store.assignmentsOf(taskId).filter(row => row.supersededBy === null).at(-1)
           if (outstanding === undefined) return null
           const state = assignmentState(outstanding, outstanding.messageId !== null ? this.deps.mailbox.get(outstanding.messageId) : null)
-          return { id: outstanding.id, state: state.state, reason: state.reason }
-        })
+          return { id: outstanding.id, state: state.state, reason: state.reason, requestKey: outstanding.requestKey ?? null }
+        },
+        planId => this.deps.holds?.active(teamId, planId) ?? [],
+        planId => this.deps.holds?.openTargets(teamId, planId) ?? [])
       if (snapshot.executions.length === 0) return
       const steps = planSteps(snapshot, this.deps.now?.().toISOString() ?? new Date().toISOString())
       if (steps.transitions.length === 0 && steps.effects.length === 0 && steps.dispatches.length === 0 && steps.stages.length === 0 && steps.fixes.length === 0) {
@@ -214,20 +221,23 @@ export class ExecutionExecutor {
       // Each step runs in its own guard: a refused service call stops only
       // its change; any other throw ends the tick (the wake loop logs it).
       for (const step of steps.dispatches) {
-        await this.guarded(step, () => dispatchImplementAttempt(this.dispatchDeps(team), step))
+        await this.guarded(step, () => step.kind === 'fix'
+          ? dispatchOwedFixAttempt(this.dispatchDeps(team), step)
+          : dispatchImplementAttempt(this.dispatchDeps(team), step))
       }
       for (const stage of steps.stages) {
         const row = this.deps.store.change(stage.executionId, stage.change)
         if (row === null) continue
+        const gate = this.gateOf(snapshot, stage.executionId)
         await this.guarded(stage, async () => {
-          if (stage.kind === 'landing' || stage.kind === 'post-ci') return this.applyLandingStage(team, row, stage)
+          if (stage.kind === 'landing' || stage.kind === 'post-ci') return this.applyLandingStage(team, row, stage, gate)
           if (stage.kind === 'redispatch') return redispatchStage(this.dispatchDeps(team), row)
-          if (stage.kind === 'landing-outcome') return this.applyLandingFollowOn(team, row, stage.effectId ?? '')
-          return applyRoundStage(this.roundDeps(team), row, stage)
+          if (stage.kind === 'landing-outcome') return this.applyLandingFollowOn(team, row, stage.effectId ?? '', gate)
+          return applyRoundStage(this.roundDeps(team, gate), row, stage)
         })
       }
       for (const fix of steps.fixes) {
-        await this.guarded(fix, () => this.applyFix(team, fix))
+        await this.guarded(fix, () => this.applyFix(team, fix, this.gateOf(snapshot, fix.executionId)))
       }
       // A done effect's follow-on transition lands with its outcome (D14),
       // so the next pass sees the state it implies — and an effect the
@@ -236,22 +246,19 @@ export class ExecutionExecutor {
     }
   }
 
-  private roundDeps(team: TeamIdentity): import('./executionRounds').RoundDeps {
-    return {
-      team,
-      repo: this.repoOf(team),
-      executions: this.deps.store,
-      plans: this.deps.plans,
-      tasks: this.deps.tasks,
-      results: this.deps.results,
-      assignments: this.deps.assignments,
-      adapters: this.deps.roundAdapters ?? roundAdapters,
-      records: this.deps.records,
-      ...(this.deps.ghOptions ? { ghOptions: this.deps.ghOptions } : {}),
-      releases: this.deps.releases,
-      groupScoped: this.deps.groupScoped,
-      now: () => (this.deps.now?.() ?? new Date()).toISOString(),
-    }
+  private roundDeps(team: TeamIdentity, gate?: (change: string) => boolean): import('./executionRounds').RoundDeps {
+    return roundDepsOf(this.deps, team, this.repoOf(team), gate)
+  }
+
+  /**
+   * The hold gate over one execution (revision-control 3.2), built from the
+   * tick's snapshot — planning-time, so a hold placed mid-tick is seen on
+   * the next one. Unknown executions gate nothing.
+   */
+  private gateOf(snapshot: import('./executionSnapshot').ExecutionSnapshot, executionId: string): (change: string) => boolean {
+    const execution = snapshot.executions.find(row => row.row.id === executionId)
+    if (execution === undefined) return () => false
+    return change => holdGate(execution.holds, execution.openTargets, change) !== null
   }
 
   /** origin as owner/repo, read once from the main checkout's remote (the probe's fact). */
@@ -287,33 +294,8 @@ export class ExecutionExecutor {
     }
   }
 
-  private runner(): EffectRunner {
-    return new EffectRunner({
-      store: this.deps.store,
-      adapter: {
-        call: async effect => {
-          const adapters = this.deps.adapters ?? {}
-          const rounds = this.deps.roundAdapters ?? roundAdapters
-          const landing = this.deps.landingAdapters ?? landingAdapters
-          const adapter = adapters[effect.kind]
-            ?? (effect.kind === 'push' ? pushAdapter(rounds)
-              : effect.kind === 'open-pr' ? openPrAdapter(rounds, this.deps.ghOptions)
-                : effect.kind === 'rerun' ? rerunAdapter(rounds, this.deps.ghOptions)
-                  : effect.kind === 'remove-worktree' ? removeWorktreeAdapter()
-                    : this.mechanismOf(effect.executionId).effectAdapter(effect.kind, landing, this.deps.ghOptions))
-          if (adapter === undefined) {
-            return { ok: false, error: { argv: ['executor', effect.kind], exitCode: 1, stderr: `no adapter for kind ${effect.kind}` } }
-          }
-          return adapter.call(effect)
-        },
-      },
-      // A done effect's follow-on transition commits with its outcome (D14);
-      // merge and update-branch outcomes are applied by the next pass's
-      // landing-outcome stage, inside the single-flight tick.
-      onDone: effect => applyEffectOutcome(this.outcomeDeps(), effect),
-      onFailed: effect => applyEffectFailure(this.outcomeDeps(), effect),
-      ...(this.deps.now ? { now: this.deps.now } : {}),
-    })
+  private runner(): import('./effects').EffectRunner {
+    return effectRunner(this.deps, executionId => this.mechanismOf(executionId))
   }
 
   /**
@@ -324,7 +306,7 @@ export class ExecutionExecutor {
    * execution's merge that did not complete leaves the change cancelled,
    * with Kawai's task, in one transaction (D12).
    */
-  private async applyLandingFollowOn(team: TeamIdentity, row: import('./executionRows').ChangeRow, effectId: string): Promise<void> {
+  private async applyLandingFollowOn(team: TeamIdentity, row: import('./executionRows').ChangeRow, effectId: string, gate?: (change: string) => boolean): Promise<void> {
     const effect = this.deps.store.effectsOf(row.executionId).find(entry => entry.id === effectId)
     if (effect === undefined) return
     const waiting = this.deps.store.change(row.executionId, row.change)
@@ -339,7 +321,7 @@ export class ExecutionExecutor {
         return
       }
     }
-    if (effect.state === 'done') await this.mechanismOf(row.executionId).landOutcome(this.landingDeps(team), effect, this.deps.landingAdapters ?? landingAdapters)
+    if (effect.state === 'done') await this.mechanismOf(row.executionId).landOutcome(this.landingDeps(team, gate), effect, this.deps.landingAdapters ?? landingAdapters)
     else if (effect.state === 'failed' && (effect.outcome as { stop?: unknown } | null)?.stop !== undefined) {
       // An inspection's stop verdict for a resumed change (pr-closed, a
       // foreign branch): the same stop a run's failure would have written.
@@ -365,23 +347,16 @@ export class ExecutionExecutor {
     return mechanismFor(this.deps.mechanisms ?? DIRECT_MECHANISMS, this.deps.store.execution(executionId)?.landingMode ?? 'direct')
   }
 
-  private landingDeps(team: TeamIdentity): import('./executionLanding').LandingDeps {
-    return {
-      team, repo: this.repoOf(team), executions: this.deps.store, plans: this.deps.plans,
-      results: this.deps.results, plansService: this.deps.plansService, conditionsOf: this.deps.conditionsOf, records: this.deps.records,
-      ...(this.deps.ghOptions ? { ghOptions: this.deps.ghOptions } : {}),
-      now: () => (this.deps.now?.() ?? new Date()).toISOString(),
-      revisionAttempt: (changeRow, round, update) => dispatchRevisionAttempt(this.roundDeps(team), changeRow, round, update),
-      taskStatusOf: taskId => this.deps.tasks.store.get(taskId)?.status ?? null,
-    }
+  private landingDeps(team: TeamIdentity, gate?: (change: string) => boolean): import('./executionLanding').LandingDeps {
+    return landingDepsOf(this.deps, team, this.repoOf(team), () => this.roundDeps(team, gate), gate)
   }
 
   /** The landing stages (D13): a passed change lands; a landed change's base CI lands as evidence. */
-  private async applyLandingStage(team: import('../../team/teamIdentity').TeamIdentity, row: import('./executionRows').ChangeRow, stage: { kind: string; roundId: string | null }): Promise<void> {
+  private async applyLandingStage(team: import('../../team/teamIdentity').TeamIdentity, row: import('./executionRows').ChangeRow, stage: { kind: string; roundId: string | null }, gate?: (change: string) => boolean): Promise<void> {
     if (stage.kind === 'landing' && stage.roundId !== null) {
       const round = this.deps.store.round(stage.roundId)
       if (row.branch === null || round === null) return
-      await this.mechanismOf(row.executionId).land(this.landingDeps(team), this.deps.landingAdapters ?? landingAdapters, row, round)
+      await this.mechanismOf(row.executionId).land(this.landingDeps(team, gate), this.deps.landingAdapters ?? landingAdapters, row, round)
       return
     }
     if (stage.kind === 'post-ci') {
@@ -407,7 +382,7 @@ export class ExecutionExecutor {
    * dispatches the fix attempt naming the failing checks, findings, count,
    * and the commit to continue from.
    */
-  private async applyFix(team: import('../../team/teamIdentity').TeamIdentity, fix: { executionId: string; change: string; roundId: string }): Promise<void> {
+  private async applyFix(team: import('../../team/teamIdentity').TeamIdentity, fix: { executionId: string; change: string; roundId: string }, gate?: (change: string) => boolean): Promise<void> {
     const store = this.deps.store
     const round = store.round(fix.roundId)
     const row = store.change(fix.executionId, fix.change)
@@ -432,22 +407,24 @@ export class ExecutionExecutor {
     // The dispatch comes first: a refused fix stops the change while it is
     // still gating on the failed round, so Retry finds the round again. The
     // dispatch replays under its key if the transition below never landed.
-    await dispatchFixAttempt(
-      this.dispatchDeps(team),
-      {
-        executionId: fix.executionId, change: fix.change, group,
-        failingChecks: failing,
-        findingsIds: findings.map(row => row.id),
-        findingsTexts: findings.map(row => row.findings),
-        continueFrom: round.commitSha,
-        fixRounds: outcome.count,
-      },
-    )
+    // Under a hold (revision-control 3.2) the attempt row — the owed
+    // dispatch's marker — is still created and the fix transition stands;
+    // only the handoff waits, and the release dispatches it once.
+    const input = {
+      executionId: fix.executionId, change: fix.change, group,
+      failingChecks: failing,
+      findingsIds: findings.map(entry => entry.id),
+      findingsTexts: findings.map(entry => entry.findings),
+      continueFrom: round.commitSha,
+      fixRounds: outcome.count,
+    }
+    const attempt = await ensureFixAttempt(this.dispatchDeps(team), input)
+    if (attempt !== null && gate?.(fix.change) !== true) await dispatchFix(this.dispatchDeps(team), input, attempt)
     store.transition(fix.executionId, fix.change, row, { state: 'implementing', step: null, fixRounds: outcome.count })
   }
 
   private dispatchDeps(team: TeamIdentity): DispatchDeps {
-    return { team, executions: this.deps.store, plans: this.deps.plans, tasks: this.deps.tasks, assignments: this.deps.assignments, results: this.deps.results }
+    return dispatchDepsOf(this.deps, team)
   }
 
   /** Run one step; a StepRefusal stops its change as instruction-failed, anything else propagates. */
@@ -476,12 +453,7 @@ export class ExecutionExecutor {
   }
 
   private outcomeDeps(): OutcomeDeps {
-    return {
-      store: this.deps.store,
-      taskStatusOf: taskId => this.deps.tasks.store.get(taskId)?.status ?? null,
-      mechanismOf: executionId => this.mechanismOf(executionId),
-      now: () => this.deps.now?.() ?? new Date(),
-    }
+    return outcomeDepsOf(this.deps, executionId => this.mechanismOf(executionId))
   }
 
   /** While the team runs an execution or a promotion, the 60-second timer keeps the loop alive (D5). */

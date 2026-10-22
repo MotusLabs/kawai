@@ -30,7 +30,7 @@ function effect(p: PromotionRow, kind: PromotionEffectRow['kind'], state: Promot
 }
 
 function plan(p: PromotionRow, rest: Partial<PromotionStepInput> = {}) {
-  return planPromotionStep({ promotion: p, effects: [], slot: null, now: NOW, repo: 'o/r', main: '/main', ...rest })
+  return planPromotionStep({ promotion: p, effects: [], slot: null, now: NOW, repo: 'o/r', main: '/main', ...rest, heldChanges: rest.heldChanges ?? [] })
 }
 
 const pass = (name: string): CiCheck => ({ name, source: 'check-run', conclusion: 'success', link: null, startedAt: NOW, completedAt: NOW })
@@ -158,5 +158,43 @@ describe('promotion planner (D10)', () => {
     const m = promotion({ step: 'merge', headSha: 'h', prNumber: 9 })
     const closed = plan(m, { effects: [effect(m, 'merge', 'failed', { stop: 'pr-closed' }, 0)] })
     expect(closed.kind === 'fail' && closed.failure).toBe('pr-closed')
+  })
+})
+
+describe('planPromotionStep under holds (revision-control 3.3)', () => {
+  const held = ['api', 'ui']
+
+  test('a hold before the merge: slot through re-read wait at held; branch and pull-request wait in place', () => {
+    for (const step of ['slot', 'up-to-date', 'ci', 're-read'] as const) {
+      expect(plan(promotion({ step }), { heldChanges: held })).toEqual({ kind: 'held' })
+    }
+    expect(plan(promotion({ step: 'branch' }), { heldChanges: held })).toEqual({ kind: 'wait', reason: `the hold on ${held.join(', ')} covers this promotion's carried changes` })
+    expect(plan(promotion({ step: 'pull-request' }), { heldChanges: held }).kind).toBe('wait')
+  })
+
+  test('a hold at merge: a merge not yet created waits at held; a merge in flight settles', () => {
+    const p = promotion({ step: 'merge', headSha: 'h', prNumber: 9 })
+    expect(plan(p, { heldChanges: held })).toEqual({ kind: 'held' })
+    expect(plan(p, { heldChanges: held, effects: [effect(p, 'merge', 'pending', {}, 0)] })).toEqual({ kind: 'wait', reason: 'merging pull request 9' })
+  })
+
+  test('steps past the merge are ungated: finish finishes merged under a hold', () => {
+    expect(plan(promotion({ step: 'finish', mergeSha: 'm' }), { heldChanges: held })).toEqual({ kind: 'finish', outcome: 'merged', detail: null })
+    const p = promotion({ step: 'record', headSha: 'h' })
+    const merged = [effect(p, 'merge', 'done', { merged: true, mergeCommit: 'm' }, 0)]
+    expect(plan(p, { heldChanges: held, effects: merged, reads: { step: 'record', mergeTree: 'T', headTree: 'T' } })).toEqual({ kind: 'record', mergeSha: 'm', treeVerified: true, headTree: 'T' })
+  })
+
+  test('step held: a standing hold waits; release retakes the slot or re-runs up-to-date from its own slot', () => {
+    const p = promotion({ step: 'held' })
+    expect(plan(p, { heldChanges: held })).toEqual({ kind: 'wait', reason: `the hold on ${held.join(', ')} covers this promotion's carried changes` })
+    expect(plan(p)).toEqual({ kind: 'take-slot' })
+    expect(plan(p, { slot: { holderKind: 'promotion', holderId: p.id, label: p.promotionBranch } })).toEqual({ kind: 'patch', patch: { step: 'up-to-date' } })
+    expect(plan(p, { slot: { holderKind: 'change', holderId: 'x', label: 'exec-1/a' } })).toEqual({ kind: 'wait', reason: 'waits for the landing slot, held by exec-1/a' })
+  })
+
+  test('a Cancel wins over the hold: a held slot step finishes cancelled', () => {
+    const p = promotion({ step: 'slot', cancelReason: 'stop it' })
+    expect(plan(p, { heldChanges: held })).toEqual({ kind: 'finish', outcome: 'cancelled', detail: { message: 'Cancelled by the owner: stop it' } })
   })
 })

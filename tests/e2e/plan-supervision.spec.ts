@@ -76,14 +76,20 @@ function decisionTool(root: string, sessionId: string, tool: 'ask' | 'record', i
  * narrows the pick to the implementer. decisionScope resolves a card from
  * `session.taskId`, so the ask must come from this session.
  */
-function taskHolder(): string {
+function taskHolder(root: string): string {
   const dbPath = process.env.AGENTBOARD_DB_PATH!
   if (!dbPath.startsWith(process.env.E2E_TMUX_TMPDIR!)) throw new Error('Refuse reading a non-isolated database')
   const script = `
     import { initDatabase } from './src/server/db';
+    import { resolveTeam } from './src/server/team/teamIdentity';
     const sessions = initDatabase({ path: ${JSON.stringify(dbPath)} });
     sessions.db.exec('PRAGMA busy_timeout = 5000');
-    const taskId = sessions.db.prepare("SELECT task_id FROM plan_execution_changes WHERE change = 'walk-api' AND task_id IS NOT NULL ORDER BY rowid DESC LIMIT 1").get()?.task_id;
+    // CI's one-server fixture run shares one database across walkthrough
+    // teams, and two name their change walk-api: scope to this spec's own
+    // team — each spec runs one execution in its own repo — so another
+    // team's row can never answer between provisioning and task creation.
+    const teamId = (await resolveTeam(${JSON.stringify(root)})).teamId;
+    const taskId = sessions.db.prepare("SELECT task_id FROM plan_execution_changes WHERE team_id = ? AND change = 'walk-api' AND task_id IS NOT NULL ORDER BY rowid DESC LIMIT 1").get(teamId)?.task_id;
     const row = taskId
       ? sessions.db.prepare("SELECT session_id FROM chat_sessions WHERE task_id = ? AND group_id = 'devs' ORDER BY rowid DESC LIMIT 1").get(taskId)
       : null;
@@ -151,7 +157,7 @@ test('supervision walkthrough: a Lead-answered card, the owner override, and a r
     // The implementer of record (the task holder, not the root chat) asks
     // through decision_ask; the card goes to the Lead role group (the asker
     // is outside it).
-    const asked = decisionTool(root, taskHolder(), 'ask', {
+    const asked = decisionTool(root, taskHolder(root), 'ask', {
       question: 'Which schema should walk-api ship?', options: ['Narrow', 'Wide'],
     })
     expect(asked.addressed_to).toBe('lead')

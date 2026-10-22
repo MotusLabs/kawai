@@ -36,18 +36,18 @@ Implement after these have landed on master: `plan-execution`, `integration-cand
   - narrowing is one transaction, and its replay writes nothing;
   - closing and reopening the plan leaves holds unchanged;
   - an agent caller is refused.
-- [ ] 3.2 Wire `holdGate` into `planSteps` (D5). Verify with executor tests:
+- [x] 3.2 Wire `holdGate` into `planSteps` (D5). Verify with executor tests:
   - provisioning, each attempt kind, the review and fix handoffs, D9's revision fix, and Retry's dispatch wait under a hold;
   - the round outcome is still recorded;
   - release wakes the executor, and each deferred dispatch runs exactly once;
   - a running turn gets no mail.
-- [ ] 3.3 Wire the gate into direct and integration landing and promotion (D5), and append `no-hold` to `START_PRECONDITIONS` and `PROMOTE_PRECONDITIONS`. Verify with tests:
+- [x] 3.3 Wire the gate into direct and integration landing and promotion (D5), and append `no-hold` to `START_PRECONDITIONS` and `PROMOTE_PRECONDITIONS`. Verify with tests:
   - a slot holder before merge gives up the slot, and another change takes it;
   - a running merge and fast-forward settle;
   - a running promotion waits at `held` without the slot, then re-runs its up-to-date step;
   - Start under a plan hold is refused, and under a changes hold it succeeds with the change unprovisioned;
   - Promote carrying a held change is refused.
-- [ ] 3.4 Write the R10 integration test: a result arrives under a hold and is kept, its CI runs, no review or landing happens, and release resumes the same round. Add the AGENTS.md holds bullet; that bullet is the docs for group 3. Verify by the test, and by reading the bullet against D4–D5.
+- [x] 3.4 Write the R10 integration test: a result arrives under a hold and is kept, its CI runs, no review or landing happens, and release resumes the same round. Add the AGENTS.md holds bullet; that bullet is the docs for group 3. Verify by the test, and by reading the bullet against D4–D5.
 
 ## 4. Pause and checkpoints
 
