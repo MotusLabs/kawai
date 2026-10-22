@@ -14,6 +14,12 @@ implement it there, end to end.
 
 ## Starting
 
+- Read `docs/agent-collaboration.md` from the team's main checkout at agent
+  start. For risky work, journal the design note and obtain the Lead's
+  checkpoint decision before substantial coding; demonstrate one production
+  path before expanding it. Use notes and ordinary mail for these advisory
+  checks, not incomplete result submissions or new handoffs. If a small task
+  exposes architectural decisions, tell the Lead before dependent work.
 - Read the delivered task (or `task_get`). If it links an OpenSpec change, its
   proposal, design, delta specs, and tasks under
   `openspec/changes/<change>/` are authoritative; follow the
@@ -43,6 +49,11 @@ implement it there, end to end.
   constraint excludes your session, stop and tell the Lead before working.
 - Read the code around what you change; match its style and comment density.
 
+When the Lead explicitly asks you to advise on another task's architecture,
+read and discuss it without editing that task's worktree or taking its writer
+assignment. Record the design recommendation in its journal; the Lead decides
+whether a takeover is needed.
+
 ## Working
 
 - Stay inside your worktree and its branch. Never touch master, the main
@@ -70,11 +81,24 @@ implement it there, end to end.
   teardown kills the live kawai server). Tests that spawn git need
   `cleanGitEnv`.
 - Keep files under 500 lines; fix root causes; add tests for new behavior.
+- Check tests while implementing each rule: remove the protection or run the
+  new test on the base and confirm it fails; preserved-behavior tests must
+  catch regressions instead. Doubles must check the arguments they receive.
+  At the first production-path checkpoint, trace construction and calls
+  outside tests and exercise real composition to an observable outcome.
+  Include a relevant failure path; do not substitute constructor greps or a
+  test-only composition for the behavior.
 - Turn each review reproduction into a regression test, then test the defect
-  class across relevant variants and boundaries. After two unsuccessful fix
-  rounds on the same class, pause affected work and ask the Lead for an
-  architecture review or reassignment; report the invariant, failed approaches,
-  and recommended next step. Continue independent authorized work.
+  class across relevant variants and boundaries. For an architectural
+  finding, journal the violated invariant, reproduction, affected paths,
+  correction mechanism and regression evidence before coding the fix. If the
+  first correction still breaks that invariant, reopen the design with the
+  Lead before another patch. For other classes, keep the two-unsuccessful-fix
+  escalation. Pause dependent work only and respect execution ownership.
+- Clarify reproductions and mechanisms directly with the appointed reviewer;
+  journal conclusions and send the consolidated outcome to the `lead` group.
+  The Lead owns scope, acceptance and assignments. Technical discussion is
+  not permission to change direction, dispatch stages or claim a final pass.
 - Before final review, identify affected existing workflows, shared fixtures
   and test stubs as well as new tests. Run the relevant checks in isolation.
   For e2e verification, use a disposable checkout and database, a spare port,
@@ -94,13 +118,10 @@ implement it there, end to end.
   Paste `git rev-parse HEAD` verbatim, never reconstruct a SHA from memory.
   State any remaining uncommitted work separately.
 - Self-review before submitting; these are the classes reviews keep failing:
-  - Effective tests: for each new rule, break the line it guards (or run the
-    test on the base commit) and confirm a test fails. Doubles must check the
-    arguments they receive; a test that only pins preserved behavior does not
-    cover a change.
-  - Production wiring: grep every new class, store, and option for its
-    construction or call outside tests; no `void dep`, no optional seam left
-    unpassed. Exercise one path through the real composition.
+  - Recheck the working-time test and production-path evidence against the
+    final committed head, including changed wiring and conflict resolutions.
+    No `void dep`, no optional seam left unpassed, and no checkpoint approval
+    inherited by later code.
   - Failure paths fail closed: unreadable or missing refs, unknown kinds,
     malformed input, every argument order and spelling the parser accepts,
     and frame or event orderings that can race.
