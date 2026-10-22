@@ -13,6 +13,8 @@ import { ExecutionStore } from '../plans/execution/executionStore'
 import { PauseService, PLAN_PAUSE_TAG, type PauseInput, type PauseOutcome } from '../plans/revisionControl/pauseService'
 import { PauseStore } from '../plans/revisionControl/pauseStore'
 import { HoldStore } from '../plans/revisionControl/holdStore'
+import { CheckpointStore } from '../plans/revisionControl/checkpointStore'
+import { TaskService } from '../team/TaskService'
 
 const NOW = Date.UTC(2026, 10, 1, 12, 0, 0)
 
@@ -27,6 +29,9 @@ export interface PauseTargetsBench {
   holds: HoldStore
   pauses: PauseStore
   executions: ExecutionStore
+  /** The task service and the checkpoint store, wired as the production composition does (the resolve reads both). */
+  tasks: TaskService
+  checkpoints: CheckpointStore
   service: PauseService
   now: () => Date
   inDays: (days: number) => string
@@ -35,7 +40,7 @@ export interface PauseTargetsBench {
   expectOk: <T>(outcome: { ok: boolean; message?: string; result?: T }) => T
   executionWith: (changes: string[]) => Promise<{ planId: string; executionId: string }>
   manifest: () => AttemptManifest
-  inFlight: (executionId: string, change: string, holder?: string, claim?: 'claim' | 'spawning' | 'queued') => Promise<{ taskId: string; mailId: string; assignmentId: string }>
+  inFlight: (executionId: string, change: string, holder?: string, claim?: 'claim' | 'spawning' | 'queued', mintAttempt?: boolean) => Promise<{ taskId: string; mailId: string; assignmentId: string }>
   forward: (originalId: string, to: string) => TeamMessage
   placeHold: (planId: string, changes: string[], commandId: string) => PlanHold
   pause: (input: Partial<PauseInput> & { planId: string; holdId: string; commandId: string }) => PauseOutcome
@@ -57,9 +62,12 @@ export async function pauseTargetsBench(prefix: string): Promise<PauseTargetsBen
   const holds = new HoldStore(bench.db.db, now)
   const pauses = new PauseStore(bench.db.db, now)
   const executions = new ExecutionStore(bench.db.db)
+  const checkpoints = new CheckpointStore(bench.db.db, now)
+  const tasks = new TaskService(bench.tasks, { getSession: id => bench.records.get(id) ?? null })
   const service = new PauseService({
     pauses, holds, plans: bench.plans, planService: bench.service, executions,
     assignments: bench.assignmentStore, mailbox: bench.mail, sessionExists: id => bench.records.has(id), wake, now,
+    tasks, checkpoints,
   })
 
   function expectOk<T>(outcome: { ok: boolean; message?: string; result?: T }): T {
@@ -87,9 +95,9 @@ export async function pauseTargetsBench(prefix: string): Promise<PauseTargetsBen
     validation: { reportId: 'r', inputHash: 'i' }, baseline: 'b', startCommit: 's', artifacts: {}, roleProfiles: [],
   })
 
-  /** A change with a task, an instruction mail, an assignment, an attempt, and `implementing` state. */
+  /** A change with a task, an instruction mail, an assignment, an attempt (unless `mintAttempt` is false — C2's `—` axis), and `implementing` state. */
   async function inFlight(executionId: string, change: string, holder = 'dev',
-    claim: 'claim' | 'spawning' | 'queued' = 'claim'): Promise<{ taskId: string; mailId: string; assignmentId: string }> {
+    claim: 'claim' | 'spawning' | 'queued' = 'claim', mintAttempt = true): Promise<{ taskId: string; mailId: string; assignmentId: string }> {
     const task = bench.tasks.create({ teamId, title: `${change} work`, direction: 'Build it', creator: { kind: 'human', sessionId: null } })
     const message = bench.mail.enqueue({
       teamId, toKind: 'session', toId: holder, fromKind: 'human', fromSession: null, fromGroup: null,
@@ -101,7 +109,7 @@ export async function pauseTargetsBench(prefix: string): Promise<PauseTargetsBen
     })
     if (claim === 'claim') bench.mail.claim(message.id, holder)
     else if (claim === 'spawning') bench.mail.reserveForSpawn(message.id)
-    executions.insertAttempt({ executionId, change, kind: 'implement', assignmentId: inserted.assignment.id, manifest: manifest(), manifestHash: 'mh' })
+    if (mintAttempt) executions.insertAttempt({ executionId, change, kind: 'implement', assignmentId: inserted.assignment.id, manifest: manifest(), manifestHash: 'mh' })
     const row = executions.change(executionId, change)!
     const updated = executions.transition(executionId, change, row, { state: 'implementing', worktree: world.repo, branch: `${change}-branch`, taskId: task.id })
     if (!updated) throw new Error('the transition to implementing failed')
@@ -136,7 +144,7 @@ export async function pauseTargetsBench(prefix: string): Promise<PauseTargetsBen
     (bench.db.db.prepare('SELECT kind FROM team_message_events WHERE message_id = ? ORDER BY seq').all(messageId) as Array<{ kind: string }>).map(row => row.kind)
 
   return {
-    world, bench, teamId, holds, pauses, executions, service, now, inDays,
+    world, bench, teamId, holds, pauses, executions, tasks, checkpoints, service, now, inDays,
     wakes: () => wakeCount,
     expectOk,
     executionWith,
