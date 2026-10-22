@@ -30,7 +30,7 @@ const resolvers = (): WorkspaceRefResolvers => ({
 const localAdd = (commandId: string, overrides: Record<string, unknown> = {}) =>
   refs.add('team-1', commandId, {
     planId: 'p1', label: 'Architecture', kind: 'local',
-    worktreeId: '/repo', relativePath: 'docs/design.md', ...overrides,
+    worktreeId: '/repo', relativePath: 'notes/design.md', ...overrides,
   } as Parameters<PlanWorkspaceRefs['add']>[2], resolvers())
 
 beforeEach(() => {
@@ -47,7 +47,7 @@ describe('adding references', () => {
     const local = await localAdd('r1')
     expect(local).toMatchObject({
       ok: true, replayed: false,
-      ref: { planId: 'p1', changeName: null, label: 'Architecture', kind: 'local', worktreeId: '/repo', relativePath: 'docs/design.md', url: null },
+      ref: { planId: 'p1', changeName: null, label: 'Architecture', kind: 'local', worktreeId: '/repo', relativePath: 'notes/design.md', url: null },
     })
     expect(local.ok === true && local.ref.id).toMatch(/^ref-/)
     const external = await refs.add('team-1', 'r2', {
@@ -106,10 +106,10 @@ describe('replays and refusals (I3)', () => {
   test('a different payload or another kind under the same command id is refused naming the field', async () => {
     await localAdd('r1')
     expect(await localAdd('r1', { label: 'Other' })).toMatchObject({ ok: false, reason: 'payload', field: 'label' })
-    expect(await localAdd('r1', { relativePath: 'docs/other.md' })).toMatchObject({ ok: false, reason: 'payload', field: 'relativePath' })
+    expect(await localAdd('r1', { relativePath: 'notes/other.md' })).toMatchObject({ ok: false, reason: 'payload', field: 'relativePath' })
     // A bind row under the same command id refuses on the kind-first compare.
     db.prepare("INSERT INTO plan_workspace_commands (team_id, command_id, kind, payload, outcome, at) VALUES ('team-1', 'r2', 'bind', ?, ?, 't')")
-      .run(JSON.stringify({ planId: 'p1', label: 'Architecture', kind: 'local', worktreeId: '/repo', relativePath: 'docs/design.md' }), JSON.stringify({ role: 'lead', sessionId: 's', version: 1 }))
+      .run(JSON.stringify({ planId: 'p1', label: 'Architecture', kind: 'local', worktreeId: '/repo', relativePath: 'notes/design.md' }), JSON.stringify({ role: 'lead', sessionId: 's', version: 1 }))
     expect(await localAdd('r2')).toMatchObject({ ok: false, reason: 'payload', field: 'kind' })
     expect(refs.refsOf('team-1', 'p1')).toHaveLength(1)
   })
@@ -171,7 +171,7 @@ describe('restart retention', () => {
       const first = initDatabase({ path: file, migrations: MIGRATIONS })
       const writer = new PlanWorkspaceRefs(first.db)
       const added = await writer.add('team-1', 'r1', {
-        planId: 'p1', label: 'Architecture', kind: 'local', worktreeId: '/repo', relativePath: 'docs/design.md',
+        planId: 'p1', label: 'Architecture', kind: 'local', worktreeId: '/repo', relativePath: 'notes/design.md',
       }, { planInTeam: () => true, changeNames: () => new Set(), worktreeTarget: async () => true })
       expect(added).toMatchObject({ ok: true })
       if (!added.ok) throw new Error('the add must succeed to test retention')

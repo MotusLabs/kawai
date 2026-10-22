@@ -49,8 +49,8 @@ describe('version selectors', () => {
 describe('relative workspace paths', () => {
   test('repository-relative normalized paths pass', () => {
     expect(isRelativeWorkspacePath('a.md')).toBe(true)
-    expect(isRelativeWorkspacePath('docs/design.md')).toBe(true)
-    expect(isRelativeWorkspacePath('openspec/changes/x/specs/y/spec.md')).toBe(true)
+    expect(isRelativeWorkspacePath('notes/design.md')).toBe(true)
+    expect(isRelativeWorkspacePath('changes/x/specs/y/spec.md')).toBe(true)
   })
 
   test('escapes, absolutes, and network paths fail', () => {

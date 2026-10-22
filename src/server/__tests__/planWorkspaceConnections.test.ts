@@ -307,7 +307,7 @@ describe('references', () => {
   const refAdd = (over: Partial<Extract<ClientMessage, { type: 'team-plan-workspace-ref-add' }>> = {}) =>
     ({
       type: 'team-plan-workspace-ref-add', teamPath: world.repo, requestId: 'f1', commandId: 'ref-1',
-      planId: 'pending', label: 'Architecture', kind: 'local', worktreeId: world.repo, relativePath: 'docs/design.md', ...over,
+      planId: 'pending', label: 'Architecture', kind: 'local', worktreeId: world.repo, relativePath: 'notes/design.md', ...over,
     }) as Extract<ClientMessage, { type: 'team-plan-workspace-ref-add' }>
   const refRemove = (over: Partial<Extract<ClientMessage, { type: 'team-plan-workspace-ref-remove' }>> = {}) =>
     ({ type: 'team-plan-workspace-ref-remove', teamPath: world.repo, requestId: 'g1', commandId: 'rm-1', refId: 'ref-x', ...over }) as Extract<ClientMessage, { type: 'team-plan-workspace-ref-remove' }>
