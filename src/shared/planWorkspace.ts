@@ -144,6 +144,8 @@ export interface WorkspaceChecklistItem {
   checked: boolean
   /** The item's 1-based source line in the artifact. */
   line: number
+  /** Nesting depth in the source list, 1 = a top-level item (additive, 2.2). */
+  depth?: number
 }
 
 export interface WorkspaceChecklistSection {
