@@ -52,6 +52,12 @@ export class PlanWorkspaceConnections {
     this.pending.delete(connection)
   }
 
+  /** Retire an open/close reservation, but only while it is still the latest one for its target. */
+  private dropPending(connection: ChatConnection, target: string, token: object) {
+    const pending = this.pending.get(connection)
+    if (pending?.get(target) === token) pending.delete(target)
+  }
+
   /** A committed workspace write of the team: re-push every subscribed plan of it. */
   publish(teamId: string) {
     for (const [connection, views] of this.subscriptions) {
@@ -81,6 +87,7 @@ export class PlanWorkspaceConnections {
       const subscription = views?.get(teamPath)
       subscription?.plans.delete(planId)
       if (subscription && subscription.plans.size === 0) views!.delete(teamPath)
+      this.dropPending(connection, target, token)
       return
     }
     // The selector is parsed before anything else, so a malformed one is
@@ -88,6 +95,9 @@ export class PlanWorkspaceConnections {
     const open = message as WorkspaceOpenMessage
     const selector = parseVersionSelector(open.version)
     if (open.version !== undefined && selector === null) {
+      // A refused open leaves nothing behind (F3): drop the token it
+      // reserved — no await has run, so it is still the latest one.
+      this.dropPending(connection, target, token)
       connection.send({ type: 'error', message: 'Malformed version selector: use { kind: "revision", revision } or { kind: "draft", draftId }.' })
       return
     }

@@ -135,6 +135,23 @@ describe('subscriptions', () => {
     expect(messages).toEqual([{ type: 'error', message: expect.stringContaining('Draft "gone" not found') }])
   })
 
+  test('a refused open and a finished close leave no pending entry behind (F3)', async () => {
+    const { planId } = await bench.draftInReview()
+    const registry = (connections as unknown as {
+      planWorkspaceConnections: { pending: Map<unknown, Map<string, unknown>> }
+    }).planWorkspaceConnections
+    // The malformed-selector refusal reserved a pending token before it
+    // parsed; the refusal must retire it, not leak it until disconnect.
+    await send({ type: 'team-plan-workspace-open', teamPath: world.repo, planId, version: { kind: 'wat' } as never })
+    expect(messages).toEqual([{ type: 'error', message: expect.stringContaining('Malformed version selector') }])
+    expect(registry.pending.get(connection)?.size ?? 0).toBe(0)
+    // A close supersedes an in-flight open for its target, then retires its
+    // own token the same way.
+    await send({ type: 'team-plan-workspace-open', teamPath: world.repo, planId })
+    await send({ type: 'team-plan-workspace-close', teamPath: world.repo, planId })
+    expect(registry.pending.get(connection)?.size ?? 0).toBe(0)
+  })
+
   test('a refused open stores no subscription: a later committed bind of the team pushes it nothing', async () => {
     const { planId } = await bench.draftInReview()
     await send({ type: 'team-plan-workspace-open', teamPath: world.repo, planId, version: { kind: 'revision', revision: 99 } })
