@@ -122,31 +122,35 @@ function collectCandidates(source: ts.SourceFile, fileName: string): string[] {
     const candidate = normalizeRepoPath(raw)
     if (isWatchedRepoPath(candidate) && !found.includes(candidate)) found.push(candidate)
   }
-  // The consecutive literal arguments after the base fold into one path;
-  // a non-literal argument ends the fold (its value is not decidable).
-  const foldedSegments = (args: ts.NodeArray<ts.Expression>, from: number): string | null => {
-    let folded: string | null = null
-    for (let index = from; index < args.length; index++) {
-      const arg = args[index]!
-      if (!ts.isStringLiteral(arg) && !ts.isNoSubstitutionTemplateLiteral(arg)) break
-      folded = folded === null ? arg.text : `${folded}/${arg.text}`
-    }
-    return folded
-  }
-  const collectJoinCall = (call: ts.CallExpression): void => {
+  // The consecutive literal arguments from `from` on fold into one path; a
+  // non-literal argument ends the fold (its value is not decidable).
+  // Returns the argument range the fold consumed, so the walk continues
+  // through the callee and every argument around it (F5); null when the
+  // base is unrecognised — those literals are fixture paths and the whole
+  // call stays ignored.
+  const collectJoinCall = (call: ts.CallExpression): { from: number; to: number } | null => {
     const args = call.arguments
-    if (args.length === 0) return
+    if (args.length === 0) return { from: 0, to: 0 }
     let base: PathBase = 'repo-root'
     let from = 0
     const first = args[0]!
     if (!ts.isStringLiteral(first) && !ts.isNoSubstitutionTemplateLiteral(first)) {
       const kind = baseOf(first)
-      if (kind === null) return
+      if (kind === null) return null
       base = kind
       from = 1
     }
-    const segments = foldedSegments(args, from)
-    if (segments !== null) addCandidate(resolveCandidate(base, segments, fileName))
+    let folded: string | null = null
+    let end = from
+    while (end < args.length) {
+      const arg = args[end]!
+      if (!ts.isStringLiteral(arg) && !ts.isNoSubstitutionTemplateLiteral(arg)) break
+      folded = folded === null ? arg.text : `${folded}/${arg.text}`
+      end += 1
+    }
+    if (folded === null) return { from: 0, to: 0 }
+    addCandidate(resolveCandidate(base, folded, fileName))
+    return { from, to: end }
   }
   const collectConcat = (left: ts.Expression, right: ts.Expression): boolean => {
     const kind = baseOf(left)
@@ -157,7 +161,16 @@ function collectCandidates(source: ts.SourceFile, fileName: string): string[] {
   }
   const visit = (node: ts.Node): void => {
     if (ts.isCallExpression(node) && isJoinLikeCall(node)) {
-      collectJoinCall(node)
+      const consumed = collectJoinCall(node)
+      if (consumed === null) return
+      // The fold consumed the consecutive literal arguments it joined; the
+      // callee and every other argument may still hold literals (F5), so
+      // the walk continues through them.
+      ts.forEachChild(node.expression, visit)
+      for (let index = 0; index < node.arguments.length; index++) {
+        if (index >= consumed.from && index < consumed.to) continue
+        visit(node.arguments[index]!)
+      }
       return
     }
     if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
