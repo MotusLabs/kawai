@@ -162,8 +162,9 @@ identically in the three developer roles and `reviewers.md`:
 > duplicate work or request a second review; if an assignment names a
 > different coordinator than the task's current direction, ask for
 > reconciliation instead of reading the message as reassignment. Every task
-> without that delegation keeps the ordinary rule — report to `lead` — and
-> pilot escalations, boundary questions, and milestones go there too.
+> without that delegation keeps the ordinary rule: report to `lead`. Under
+> the pilot, only the unavailable-coordinator escalation goes to `lead`.
+> Scope and contract questions go to the Change Lead, which escalates them.
 
 The Team Lead receives milestones, unresolved boundary questions, named
 blockers requiring its action, and the final assembled evidence. It does not
