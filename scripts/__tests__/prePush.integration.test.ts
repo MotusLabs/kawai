@@ -109,6 +109,23 @@ describe('the push hook in a temporary repository', () => {
     expect(dirtyPaths(fixture.repo)).toEqual(['src/shared/moved-lone.ts', 'src/shared/lone.ts'])
   })
 
+  test('a staged rename whose old path has a space lists both paths unmangled (F-u1)', () => {
+    setUpCommit('ab c.ts', 'export const spaced = 1\n')
+    fixture.git(['mv', 'ab c.ts', 'moved.ts'])
+    // The old path's third character is a space: if the rename's old-path
+    // token were not consumed, the loop would read it as the next entry and
+    // push its own slice — the mangled 'c.ts'.
+    expect(dirtyPaths(fixture.repo)).toEqual(['moved.ts', 'ab c.ts'])
+  })
+
+  test('dirtyPaths returns null outside a repository (F1)', () => {
+    const outside = path.join(fixture.root, 'outside')
+    fs.mkdirSync(outside)
+    // A failed status reads as dirty (fail closed) only after dirtyPaths
+    // reports it; null is what separates "cannot tell" from "clean".
+    expect(dirtyPaths(outside)).toBeNull()
+  })
+
   test('two unchecked refs: both are buffered, the second is refused by id, and the clean HEAD is not checked (Q1)', () => {
     const side = setUpCommit('src/shared/lone.ts', 'export const lone = 7\n')
     fixture.git(['branch', 'side'])

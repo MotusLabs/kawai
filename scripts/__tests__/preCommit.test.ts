@@ -226,9 +226,16 @@ describe('the commit hook never writes a record (I1)', () => {
     // The walk reaches every module pre-commit.ts loads (F-u3): a record
     // writer imported through any of them would write a partial check's
     // record, so only the defining modules may mention the names at all.
+    // planBatches.ts sits two imports deep (pre-commit.ts only reaches it
+    // through lib/reads.ts), so the walk must recurse, not stop at depth 1.
     const closure = importClosure(['scripts/pre-commit.ts'])
     expect(closure).toEqual(
-      expect.arrayContaining(['scripts/lib/treeRecord.ts', 'scripts/lib/checkRecords.ts', 'scripts/lib/checkRun.ts'])
+      expect.arrayContaining([
+        'scripts/lib/treeRecord.ts',
+        'scripts/lib/checkRecords.ts',
+        'scripts/lib/checkRun.ts',
+        'scripts/planBatches.ts',
+      ])
     )
     const writer = /writeRecord|removeRecord|runCheck\b/
     const offenders = closure.filter(
