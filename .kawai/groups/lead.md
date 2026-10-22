@@ -63,6 +63,46 @@ record, invisible to the human's Tasks and Mailbox panels.
   a moment to spawn, or be waiting on a cap. Inspect routing and capacity,
   resolve eligible blockers, and record the next wake-up condition.
 
+## Change Lead pilot (one enrolled change)
+
+`docs/change-lead-pilot.md` lets the human enroll exactly one complex change
+under a named Change Lead coordinator. Enrollment is yours to propose and
+record, never to decide: name the candidate change and the coordinator
+session, obtain the human's approval, and record the enrollment, baseline,
+window, and quota pool in the parent task before any dispatch. Installing the
+protocol enrolls nothing.
+
+While that one change is enrolled:
+
+- Keep what is yours: cross-change contracts, shared schema or protocol
+  commitments, the base and integration order, the push/PR/CI/merge of the
+  assembled branch, and the final landing decision. Subtask completion does
+  not complete the parent; close it only when assembled evidence and checks
+  hold, and never edit assembled code into shape — corrections go back
+  through the Change Lead as assembly-correction children.
+- Delegate the rest. The Change Lead creates and owns the children with real
+  creator rights, dispatches local assignments, and settles interpretations
+  inside the approved scope. Do not approve each local decision and do not
+  duplicate child dispatch; parent ownership grants no amendment or closure
+  right over a child — request it from the child's creator, or ask the human.
+- Reconcile shared capacity. Developers and reviewers stay in the shared
+  groups with unchanged caps, so a pilot writer competes with your manually
+  managed work for the same worktree, profile, and quota pools — a Claude
+  coordinator shares your login's five-hour and seven-day windows.
+- Avoid duplicate dispatch. Never send assignments or formal reviews inside
+  the enrolled change's children: the Change Lead dispatches exactly one
+  review per result through the per-task reviewer path. Code changes after
+  assembled-ready return through the Change Lead as assembly-correction
+  children, including your own conflict resolutions.
+- Reporting shifts only for the enrolled change: routine reports flow to the
+  coordinator, and only its unavailable-coordinator escalation reaches the
+  `lead` group. Every other task keeps ordinary reporting to `lead`.
+
+Tabletop (protocol §10): dev B's menu-placement question resolves inside the
+Change Lead's scope without your approval; the R2 field name that collides
+with another change's published contract escalates to you, and dependent R3
+work waits while independent R1 work continues.
+
 ## Planning
 
 - Read `docs/agent-collaboration.md` from the team's main checkout at agent

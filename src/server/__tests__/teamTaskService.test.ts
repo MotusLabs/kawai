@@ -63,10 +63,13 @@ beforeEach(() => {
   clearTeamCache()
   fs.rmSync(path.join(repo, '.kawai'), { recursive: true, force: true })
   writeGroup('leads', '---\ncanCreateTasks: true\n---\nLead.')
+  writeGroup('change-leads', '---\ncanCreateTasks: true\n---\nCoordinate.')
   writeGroup('devs', 'Build.')
   records = new Map([
     ['lead', row('lead', 'leads')],
     ['lead2', row('lead2', 'leads')],
+    ['cl', row('cl', 'change-leads')],
+    ['cl2', row('cl2', 'change-leads')],
     ['dev', row('dev', 'devs', path.join(feature))],
     ['solo', row('solo', null)],
     ['stranger', row('stranger', 'leads', other)],
@@ -177,6 +180,50 @@ describe('permission matrix', () => {
     expect((await service.setStatus(human(), task.id, 'cancelled')).status).toBe('cancelled')
     expect((await service.note(human(), task.id, 'closing')).author).toEqual({ kind: 'human', sessionId: null })
     await expect(service.note(agent('lead'), task.id, 'ghost')).rejects.toThrow('Unknown calling session')
+  })
+})
+
+describe('change-lead pilot composition (change-lead-pilot D3/D6)', () => {
+  test('parent/child creator asymmetry under the pilot: the parent creator cannot amend or close the Change Lead\'s child; the human can; the child records parent, change, and creator', async () => {
+    const parent = await service.create(agent('lead'), { title: 'pilot parent', direction: 'enrolled', openspec_change: 'add-export' })
+    const child = await service.create(agent('cl'), {
+      title: 'serializer', direction: 'Pilot parent: <parent>\nChange: add-export\nCoordinator: cl',
+      parent_id: parent.id, openspec_change: 'add-export', worktree: feature,
+    })
+    // The child is the Change Lead's: its own creator rights, the parent link, the change, the worktree.
+    expect(child).toMatchObject({ parentId: parent.id, openspecChange: 'add-export', worktree: feature, creator: { kind: 'agent', sessionId: 'cl' } })
+    // Parent ownership grants no child authority: amend and closure are refused, writing nothing.
+    await expect(service.amend(agent('lead'), child.id, { direction: 'hijack' })).rejects.toThrow('creator')
+    await expect(service.setStatus(agent('lead'), child.id, 'done')).rejects.toThrow('Only the task\'s creator')
+    await expect(service.setStatus(agent('lead'), child.id, 'cancelled')).rejects.toThrow('Only the task\'s creator')
+    expect(service.store.revisions(child.id)).toHaveLength(1)
+    // The child's creator amends and closes, recording that closure is not acceptance.
+    expect((await service.amend(agent('cl'), child.id, { direction: 'v2' })).revision).toBe(2)
+    await service.note(agent('cl'), child.id, 'closing: acceptance holds; closure is not result acceptance')
+    expect((await service.setStatus(agent('cl'), child.id, 'done')).status).toBe('done')
+    // The human amends and closes regardless of who created the task.
+    expect((await service.setStatus(human(), child.id, 'open')).status).toBe('open')
+    expect((await service.amend(human(), child.id, { acceptance: 'assembled checks hold' })).acceptance).toBe('assembled checks hold')
+    expect((await service.setStatus(human(), child.id, 'done')).status).toBe('done')
+  })
+
+  test('a replacement Change Lead cannot amend or close the original coordinator\'s children, but can coordinate within existing rights', async () => {
+    const parent = await service.create(agent('lead'), { title: 'pilot parent', direction: 'enrolled', openspec_change: 'add-export' })
+    const child = await service.create(agent('cl'), { title: 'serializer', direction: 'v1', parent_id: parent.id, openspec_change: 'add-export', worktree: feature })
+    // Same group, different session: hierarchy conveys nothing.
+    await expect(service.amend(agent('cl2'), child.id, { direction: 'takeover' })).rejects.toThrow('creator')
+    await expect(service.setStatus(agent('cl2'), child.id, 'done')).rejects.toThrow('Only the task\'s creator')
+    await expect(service.setStatus(agent('cl2'), child.id, 'cancelled')).rejects.toThrow('Only the task\'s creator')
+    // Within its own rights it coordinates: a new child under the same parent.
+    const next = await service.create(agent('cl2'), { title: 'assembly', direction: 'assemble', parent_id: parent.id, openspec_change: 'add-export', worktree: feature })
+    expect(next).toMatchObject({ parentId: parent.id, creator: { kind: 'agent', sessionId: 'cl2' } })
+    expect((await service.amend(agent('cl2'), next.id, { direction: 'v2' })).revision).toBe(2)
+    // The original creator is gone: the replacement still cannot take the child; only the human recovers it.
+    records.delete('cl')
+    await expect(service.amend(agent('cl2'), child.id, { direction: 'still no' })).rejects.toThrow(/creator/)
+    expect(service.store.get(child.id)?.revision).toBe(1)
+    expect((await service.amend(human(), child.id, { direction: 'handover direction' })).direction).toBe('handover direction')
+    expect((await service.setStatus(human(), child.id, 'cancelled')).status).toBe('cancelled')
   })
 })
 

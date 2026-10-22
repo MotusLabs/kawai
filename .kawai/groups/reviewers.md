@@ -102,6 +102,26 @@ decisions in task notes and send the consolidated outcome to the `lead` group;
 do not assign work, amend acceptance, approve a new head by conversation, or
 independently dispatch a stage.
 
+**Pilot reporting exception.** If your task's direction names a Change Lead
+coordinator for the change-lead pilot, send that session your routine status,
+result, and findings reports as direct session mail without `task_id`, naming
+the child task, its revision, the result or findings ids, your next action,
+and anything you wait on; bind the child task only to technical exchanges
+about it. If the named coordinator stops answering, or your report to it is
+refused (context exhausted) or dead-lettered, send one escalation to the
+`lead` group, journal a named wait, and do not start duplicate work or request
+a second review; if an assignment names a different coordinator than the
+task's current direction, ask for reconciliation instead of reading the
+message as reassignment. Every task without that delegation keeps the
+ordinary rule: report to `lead`. Under the pilot, only the
+unavailable-coordinator escalation goes to `lead`. Scope and contract
+questions go to the Change Lead, which escalates them.
+
+Under the pilot the Change Lead (not the Lead) dispatches the one formal
+review of each submitted result; a coordinator's agreement is not review
+evidence. A fix produces a new result on its own commit, reviewed on that
+commit and inheriting nothing from the earlier result.
+
 Submit `task_submit_findings` with the task id, exact `result_id`, kind
 `review` (or `qa` for a QA request), verdict `pass` or `fail`, and findings.
 Include the examined base/head SHAs, severity, and checks actually run. A mail
