@@ -5,7 +5,7 @@
 // connection. An explicit selector resolves against the plan's standing
 // versions and names nothing when the revision or draft is gone; the caller
 // refuses that rather than silently selecting another record (design D8).
-import type { PlanDraft, PlanRevision } from '../../../shared/plans'
+import type { PlanContent, PlanDraft, PlanRevision } from '../../../shared/plans'
 import type { WorkspaceDisplayedVersion, WorkspaceVersionSelector } from '../../../shared/planWorkspace'
 
 export interface PlanVersionInputs {
@@ -35,4 +35,12 @@ export function selectedDisplayedVersion(inputs: PlanVersionInputs, selector: Wo
   }
   const revision = inputs.revisions.find(candidate => candidate.revision === selector.revision)
   return revision ? asRevision(revision) : null
+}
+
+/** The displayed version's content, resolved against the same inputs that named it. */
+export function displayedContent(inputs: PlanVersionInputs, version: WorkspaceDisplayedVersion): PlanContent {
+  if (version.kind === 'draft') {
+    return inputs.drafts.find(candidate => candidate.draftId === version.draftId)!.content
+  }
+  return inputs.revisions.find(candidate => candidate.revision === version.revision)!.content
 }

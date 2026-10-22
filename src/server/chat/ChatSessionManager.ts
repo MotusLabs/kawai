@@ -80,7 +80,8 @@ import { probeSdkAvailability } from './sdkAvailability'
 import { AccountNoticeStore, credentialsPathFor } from './accountNotices'
 import { UsageLimitStore } from './usageLimits'
 import { withTextReset } from './limitSignals'
-import { providerOf, resolveProfileCatalog } from './profileCatalog'
+import { profileCatalogStamp, providerOf, resolveProfileCatalog } from './profileCatalog'
+import type { MergedProvider } from './catalogMerge'
 import { ensureCodexExecutable } from './codex/codexExecutable'
 import { codexLoginErrorMessage, hasCodexLogin } from './codex/codexAuth'
 import { codexLimitProviderId } from './codex/codexLimits'
@@ -389,6 +390,8 @@ export class ChatSessionManager {
    * over the stored column. Survives respawns; a restart begins with none.
    */
   private readonly contextReadings = new Map<string, ChatContextUsage>()
+  /** Merged provider definitions per catalog stamp (host-login routing facts); re-resolved when the stamp moves. */
+  private readonly providerDefinitions = new Map<string, Map<string, MergedProvider>>()
   /**
    * Latest worker roster per session (workers design D2): the last publish
    * of a live driver, or the recovered sidecar rows of a restarted one. A
@@ -1311,6 +1314,7 @@ export class ChatSessionManager {
     this.plans = planServices.plans
     this.planWorkspace = planServices.workspaceStore
     this.planWorkspaceRefs = planServices.workspaceRefs
+    this.planWorkspaceRuntimeReads = planServices.supervisionReads
     this.planExecutionStore = planServices.executionStore
     this.executions = planServices.executions
     this.executionRuntime = planServices.runtime
@@ -1649,6 +1653,8 @@ export class ChatSessionManager {
   readonly planWorkspaceRefs: import('../plans/workspace/workspaceRefs').PlanWorkspaceRefs
   /** The execution pin's read-only surface (plan-workspace 2.4, O4): the accessors executionPin.ts reads, no writer. */
   readonly planExecutionStore: import('../plans/workspace/executionPin').ExecutionPinStore
+  /** The workspace runtime's supervision reads (plan-workspace 3.1); null without team services. */
+  readonly planWorkspaceRuntimeReads: import('../plans/supervision/supervisionRead').SupervisionReads | null
   /** Plan executions (plan-execution): the human Start/Stop/Retry commands. */
   readonly executions: import('../plans/execution/ExecutionService').ExecutionService
   /** The execution runtime (plan-execution D5): boot recovery, wakes, and stop. */
@@ -1810,6 +1816,44 @@ export class ChatSessionManager {
       record?.claudeProfileId ?? 'default',
       catalogCtx(this.options.profileCatalogHome, record?.projectPath)
     )
+  }
+
+  /**
+   * The session's live context reading, or the record's last persisted one,
+   * else null (the snapshot's precedence, read-only for the workspace's
+   * passive health — design D5). Never attaches to the driver or refreshes
+   * anything.
+   */
+  contextReadingOf(sessionId: string): ChatContextUsage | null {
+    return this.contextReadings.get(sessionId) ?? this.records.get(sessionId)?.contextUsage ?? null
+  }
+
+  /**
+   * The provider's latest plan-usage report, or null (providers-and-workers
+   * 5.1): a read-only public accessor over the same in-memory store the
+   * snapshot and TeamCapacity read. Never claims a pull or refreshes.
+   */
+  providerUsageOf(providerId: string): ChatUsageReport | null {
+    return this.usageLimits.get(providerId)
+  }
+
+  /**
+   * The catalog's merged definition of the provider the session's profile
+   * belongs to (read-only, for routing facts like host-login applicability,
+   * plan-workspace LC5.4): cached per catalog stamp like `providerOf`. A
+   * provider the catalog no longer defines has no definition.
+   */
+  providerDefinitionOf(sessionId: string): MergedProvider | null {
+    const record = this.records.get(sessionId)
+    const ctx = catalogCtx(this.options.profileCatalogHome, record?.projectPath)
+    const key = `${ctx.homeDir ?? process.env.HOME ?? os.homedir()}\n${ctx.projectPath ?? ''}\n${profileCatalogStamp(ctx)}`
+    let known = this.providerDefinitions.get(key)
+    if (!known) {
+      if (this.providerDefinitions.size >= 32) this.providerDefinitions.clear()
+      known = resolveProfileCatalog(ctx).merged
+      this.providerDefinitions.set(key, known)
+    }
+    return known.get(this.providerIdOf(sessionId)) ?? null
   }
 
   /**

@@ -18,7 +18,8 @@ import { parseVersionSelector } from '../../../shared/planWorkspace'
 import type { PlanWorkspaceClientMessage } from '../../../shared/planWorkspaceMessages'
 import type { ChatSessionManager } from '../../chat/ChatSessionManager'
 import type { ChatConnection } from '../../chat/ChatConnections'
-import { defaultDisplayedVersion, selectedDisplayedVersion, type PlanVersionInputs } from './displayedVersion'
+import { defaultDisplayedVersion, displayedContent, selectedDisplayedVersion, type PlanVersionInputs } from './displayedVersion'
+import { composeWorkspaceSections } from './workspaceRuntime'
 
 const namedSelector = (selector: WorkspaceVersionSelector): string =>
   selector.kind === 'revision' ? `Revision ${selector.revision}` : `Draft "${selector.draftId}"`
@@ -147,6 +148,14 @@ export class PlanWorkspaceConnections {
   }
 
   private emitSnapshot(connection: ChatConnection, teamPath: string, teamId: string, resolved: ResolvedPlanInputs, displayedVersion: WorkspaceDisplayedVersion | null) {
+    // The §3 sections (runtime overlay, passive readings) ride the same
+    // authoritative snapshot; both read only held facts (INVARIANT P).
+    const displayed = displayedVersion === null ? null : displayedContent(resolved.inputs, displayedVersion)
+    // A manager without the reads (a stub from before this change, or no
+    // team services) composes neither section.
+    const sections = this.manager.planWorkspaceRuntimeReads ? composeWorkspaceSections(
+      { reads: this.manager.planWorkspaceRuntimeReads }, this.manager, teamId, resolved.plan.id, { displayed, now: new Date() },
+    ) : { runtime: null, health: [] }
     connection.send({
       type: 'team-plan-workspace-snapshot', teamPath, teamId, planId: resolved.plan.id,
       workspace: {
@@ -154,6 +163,8 @@ export class PlanWorkspaceConnections {
         displayedVersion,
         bindings: this.bindingViews(teamId),
         references: this.manager.planWorkspaceRefs.refsOf(teamId, resolved.plan.id),
+        ...(sections.runtime === null ? {} : { runtime: sections.runtime }),
+        ...(sections.health.length > 0 ? { health: sections.health } : {}),
       },
     })
   }
