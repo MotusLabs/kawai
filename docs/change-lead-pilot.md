@@ -451,8 +451,7 @@ into a temporary repository instead of reading this one.
 
 Installing this protocol is not activation: the artifacts add role and
 protocol files only — no server, API, schema, or CI behavior — so
-installation alone sends no mail and starts or enrolls no sessions; activation
-happens only through the human actions below.
+installation alone sends no mail and starts or enrolls no sessions.
 
 **References.** `.kawai/groups/change-leads.md` (coordinator role, D2); this
 protocol; `lead.md`'s "Change Lead pilot" section (Team Lead duties); the
@@ -462,9 +461,8 @@ one dispatcher per result). Mechanical evidence: Section 11.
 
 **Candidate-selection checklist.** At least two coherent implementation
 groups and meaningful local coordination; stable scope and contracts; not
-owned by a running plan execution; not plan-linked, or the parent states the
-plan-Lead exception; a baseline per the method below, else a descriptive
-report.
+execution-owned; not plan-linked, or the parent states the plan-Lead
+exception; a baseline per the method below, else a descriptive report.
 
 **Baseline-selection method** (Section 9): record matching task/change ids in
 the parent before outcomes are known; match scope and risk, dependency
