@@ -2,7 +2,7 @@
 
 ## 1. Establish the integrated baseline and pilot protocol
 
-- [ ] 1.1 Resolve the authoritative branch containing the implemented parallel-suite and per-result-suite changes before implementation; record the base SHA and actual affected-test/full-check commands in the implementation journal, verifying the hooks/scripts agree with that baseline without modifying unrelated planning artifacts.
+- [x] 1.1 Resolve the authoritative branch containing the implemented parallel-suite and per-result-suite changes before implementation; record the base SHA and actual affected-test/full-check commands in the implementation journal, verifying the hooks/scripts agree with that baseline without modifying unrelated planning artifacts.
 - [ ] 1.2 Create `docs/change-lead-pilot.md` with enrollment criteria, one-change scope, authority matrix, parent/child direction templates, escalation and integration boundaries, and the 14-day default evaluation window from design D1-D5; verify a worked two-subtask example maps every implementation requirement to a coordinator, writer, dependency, and acceptance check.
 - [ ] 1.3 Add the baseline/evaluation template to the protocol: task ids, scope/risk/model/resource conditions, timestamps, waits without overlap double-counting, defects, corrections, all participant token/cost coverage, failed/abandoned work, and limitations; verify sample complete and partial evidence yield explicit conclusions or unknowns without attributing quota percentages as costs.
 
