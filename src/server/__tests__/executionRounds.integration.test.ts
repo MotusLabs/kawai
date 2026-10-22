@@ -209,7 +209,7 @@ describe('the round pipeline (§12)', () => {
     // The review mail carried the author's profile tag and no role narrowing (reviewers has no role entry).
     const reviewMail = mail.get(assignment.messageId!)!
     expect(reviewMail.tags).toContain('author-profile:glm')
-    expect(reviewMail.allowedProfiles).toBeNull()
+    expect([reviewMail.allowedProfiles, reviewMail.workerChoice ?? null, assignment.workerChoice ?? null]).toEqual([null, null, null])
   })
 
   test('a newer result supersedes the open round; a merge started holds it', async () => {

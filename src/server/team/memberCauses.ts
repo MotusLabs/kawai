@@ -13,9 +13,10 @@ export { outsideRoleExclusion }
 
 /**
  * The per-message breakdown the router's diagnosis reads (team-waiting-reasons
- * S1): one entry per group member — eligible ones carry only the causes the
- * candidate builder already dropped (excluded profile, outside the role);
- * the others their first non-cooling cause, with a start failure's error.
+ * S1): one entry per group member the member-state predicates reject — its
+ * first non-cooling cause, with a start failure's error. Members that pass
+ * them get no entry here; the router names the message filter that dropped
+ * them from the one eligibility check.
  */
 export function messageExclusions(input: {
   message: TeamMessage
@@ -30,16 +31,10 @@ export function messageExclusions(input: {
   const out: MemberExclusion[] = []
   for (const row of input.recipients) {
     if (row.teamId !== message.teamId || row.groupId !== message.toId) continue
-    // A member on the excluded profile passes `eligibleFor` (the candidate
-    // builder drops it instead), so its breakdown entry is added here.
-    if (input.eligibleIds.has(row.sessionId)) {
-      if (message.excludedProfile && (row.profileId ?? 'default') === message.excludedProfile) {
-        out.push({ sessionId: row.sessionId, kind: 'excluded-profile' })
-      }
-      const outsideRole = outsideRoleExclusion(row.sessionId, row.profileId, message.allowedProfiles)
-      if (outsideRole !== null) out.push(outsideRole)
-      continue
-    }
+    // An eligible member's filters (excluded profile or provider, the plan
+    // role, the worker choice) are the eligibility check's to report: the
+    // router adds those entries from `evaluateEligibility` (D10).
+    if (input.eligibleIds.has(row.sessionId)) continue
     const causes = memberExclusions(row, message, { targetWorktree: input.targetWorktree, now: input.now, startupFailed: input.startupFailed(row.sessionId) })
     // Cooling is never a breakdown cause (it is the separate all-profiles-
     // cooling constraint); every other cause — excluded profile included —

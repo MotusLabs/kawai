@@ -298,6 +298,9 @@ test('a load while a live turn runs keeps the memo — the replay never duplicat
   // append) lands while Kawai's turn is still live.
   const script = new Script().boot('thread/start', 'gpt-test', rollout)
   const second = new Script().boot('thread/resume', 'gpt-test', rollout)
+    // The restart's fresh store holds no report, so the respawn's boot fills
+    // it with one read (PR E 7.1); an empty reply records no data.
+    .request('account/rateLimits/read', {})
     .turn('ct-2')
     .append(rollout)
     .gate(gate)

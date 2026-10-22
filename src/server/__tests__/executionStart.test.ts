@@ -12,6 +12,7 @@ import path from 'node:path'
 import type { Database } from 'bun:sqlite'
 import { cleanGitEnv } from '../git/gitCommand'
 import { normalizePlanContent } from '../../shared/plans'
+import type { ActiveHold } from '../../shared/planRevisionControl'
 import { PlanStore } from '../plans/planStore'
 import { PlanService } from '../plans/PlanService'
 import { StrategyStore } from '../strategy/strategyStore'
@@ -40,6 +41,8 @@ let plansStore: PlanStore
 let executions: ExecutionStore
 let service: ExecutionService
 let wakes: string[]
+// revision-control 3.3: the holds `no-hold` reads; each test resets it.
+let activeHolds: ActiveHold[] = []
 let team: { teamId: string; groupsRoot: string }
 let human: { kind: 'human'; team: typeof team }
 let planSerial = 0
@@ -127,6 +130,7 @@ esac
     identityOf: () => team,
     executionRevisions: new ExecutionRevisionStore(db),
     wake: teamId => wakes.push(teamId),
+    holds: { active: () => activeHolds },
     ghOptions: { env },
   })
 })
@@ -230,6 +234,33 @@ describe('ExecutionService.start: landings-on-base (integration-candidates D8)',
       expect(refused.message).toContain("The base master's head on origin lacks landed work: ui (landed on an unknown branch)")
     }
     expect(executions.executionsOf(target.planId)).toHaveLength(before)
+  })
+})
+
+describe('ExecutionService.start: no-hold (revision-control 3.3)', () => {
+  test('a whole-plan hold refuses Start naming the hold; a changes hold starts with the changes unprovisioned', async () => {
+    const target = approvedPlan(['ha', 'hb'])
+    try {
+      activeHolds = [{ id: 'h-plan', scope: 'plan', changes: [] }]
+      const refused = await start(target.planId, target.hash, 'cmd-held')
+      expect(refused).toMatchObject({ ok: false, reason: 'precondition' })
+      if (!refused.ok) {
+        expect(refused.failures?.map(failure => failure.name)).toEqual(['no-hold'])
+        expect(refused.message).toContain('The plan is on hold: h-plan')
+      }
+      expect(executions.running(target.planId)).toBeNull()
+      expect(executions.executionsOf(target.planId)).toHaveLength(0)
+
+      activeHolds = [{ id: 'h-ha', scope: 'changes', changes: ['ha'] }]
+      const started = await start(target.planId, target.hash, 'cmd-changes-held')
+      expect(started.ok).toBe(true)
+      if (started.ok) {
+        const rows = executions.changes(started.execution.id)
+        expect(rows.map(row => [row.change, row.state, row.worktree])).toEqual([['ha', 'waiting', null], ['hb', 'waiting', null]])
+      }
+    } finally {
+      activeHolds = []
+    }
   })
 })
 

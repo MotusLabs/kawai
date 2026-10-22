@@ -76,6 +76,19 @@ test('a new message addresses a group or session with a task and an optional urg
   act(() => renderer.unmount())
 })
 
+test('connected and empty, the composer stays typeable and only the send waits for text', () => {
+  const { sent, renderer } = render({ kind: 'new' })
+  // Regression: the send gate's empty-body term used to disable the body
+  // textarea itself, so a connected composer could not be typed into (the
+  // chat-codex e2e fills it in a real browser).
+  expect(field(renderer, 'Message body').props.disabled).toBe(false)
+  expect(field(renderer, 'Recipient').props.disabled).toBe(false)
+  expect(button(renderer, 'Send message').props.disabled).toBe(true)
+  act(() => renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} }))
+  expect(sent).toEqual([])
+  act(() => renderer.unmount())
+})
+
 test('a reply is addressed to its parent and inherits its task rather than asking again', () => {
   const { sent, renderer } = render(replyMode)
   expect(textOf(renderer.root.findByProps({ 'data-testid': 'composer-reply-to' }))).toContain('Dev one')

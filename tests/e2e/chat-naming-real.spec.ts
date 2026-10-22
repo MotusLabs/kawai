@@ -1,9 +1,8 @@
 import { expect, test } from '@playwright/test'
-import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { killPrivateTmuxServer } from './fixtures/privateTmux'
+import { ServerProcess } from './fixtures/serverProcess'
 
 test.skip(process.env.KAWAI_REAL_CHAT_TEST !== '1', 'Opt-in test makes real Claude requests')
 
@@ -54,31 +53,19 @@ test('placeholder names adopt generated titles and keep manual renames', async (
     CLAUDE_CONFIG_DIR: claude, CODEX_HOME: join(root, 'codex'), PI_HOME: join(root, 'pi'),
     AGENTBOARD_REMOTE_HOSTS: '', ANTHROPIC_API_KEY: '',
   }
-  let server: ChildProcess | null = null
-  // One exit promise per spawned server, its listener attached at spawn
-  // time: stop() awaits it whatever ended the server, including a signal
-  // kill before stop(), where exitCode is null but the exit already fired
-  // and a listener attached only at stop() would never resolve.
-  let exited: Promise<void> = Promise.resolve()
-  let diagnostics = ''
+  const proc = new ServerProcess()
   const start = async () => {
-    server = spawn('bun', ['src/server/index.ts'], { cwd: process.cwd(), env, stdio: ['ignore', 'pipe', 'pipe'] })
-    exited = new Promise<void>(resolve => { server!.once('exit', () => resolve()) })
-    server.stdout?.on('data', chunk => { diagnostics = (diagnostics + String(chunk)).slice(-6000) })
-    server.stderr?.on('data', chunk => { diagnostics = (diagnostics + String(chunk)).slice(-6000) })
+    proc.spawn('bun', ['src/server/index.ts'], { cwd: process.cwd(), env, stdio: ['ignore', 'pipe', 'pipe'] })
     await expect.poll(async () => {
       try { return (await page.request.get(url, { timeout: 1000 })).ok() } catch { return false }
     }, { timeout: 20_000 }).toBe(true)
   }
   const stop = async () => {
-    if (server && server.exitCode === null && server.signalCode === null) server.kill('SIGTERM')
-    await exited
     // Every path that ends this server — a normal stop, a server that
-    // already exited, a failed start — kills the root's private tmux server
-    // before the root is removed: the daemon outlives the server and pins
-    // this checkout (see tests/e2e/fixtures/privateTmux.ts).
-    killPrivateTmuxServer(root)
-    server = null
+    // already exited, a failed start — goes through the shared bounded
+    // sequence, which kills the root's private tmux server before the root
+    // is removed: the daemon outlives the server and pins this checkout.
+    await proc.stop({ tmuxRoot: root })
   }
   const send = async (text: string) => {
     await page.getByLabel('Message Claude').fill(text)
@@ -158,10 +145,10 @@ test('placeholder names adopt generated titles and keep manual renames', async (
     results.push('After a restart the navigator still shows the manual name without opening the chat.')
   } finally {
     mkdirSync(info.outputDir, { recursive: true })
-    writeFileSync(info.outputPath('server-diagnostics.log'), diagnostics)
+    writeFileSync(info.outputPath('server-diagnostics.log'), proc.diagnostics())
     writeFileSync(info.outputPath('walkthrough-results.txt'), results.join('\n'))
     await info.attach('walkthrough-results', { body: results.join('\n'), contentType: 'text/plain' })
-    await info.attach('server-diagnostics', { body: diagnostics, contentType: 'text/plain' })
+    await info.attach('server-diagnostics', { body: proc.diagnostics(), contentType: 'text/plain' })
     await stop()
     // Transcript tail: the ground truth for whether a title row ever landed.
     let transcriptDump = '(no transcript found)'

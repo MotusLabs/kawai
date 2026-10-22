@@ -58,12 +58,16 @@ After a full run, the runner SHALL record each file's duration, and the next run
 - **THEN** the suite runs normally and writes one at the end
 
 ### Requirement: The slow tier is selectable
-Files named `*.integration.test.ts` and the real-tmux files SHALL form the slow tier. The runner SHALL run both tiers by default and SHALL accept an option that excludes the slow tier. No file over 5 s in the recorded timings MAY sit outside the slow tier, unless it is listed with a reason.
+Files named `*.integration.test.ts` and the real-tmux files SHALL form the slow tier. The runner SHALL run both tiers by default and SHALL accept an option that excludes the slow tier. After a published full run the runner SHALL keep that run's snapshot beside the record and SHALL keep the newest five. No file whose shortest duration across the kept snapshots is over 5 s MAY sit outside the slow tier, unless it is listed with a reason.
 
 #### Scenario: Excluding the slow tier
 - **WHEN** the runner is asked to exclude the slow tier
 - **THEN** no `*.integration.test.ts` or real-tmux file runs
 
 #### Scenario: A slow file outside the tier
-- **WHEN** recorded timings show a file outside the slow tier taking over 5 s and the file is not listed with a reason
+- **WHEN** every kept run snapshot shows a file outside the slow tier over 5 s and the file is not listed with a reason
 - **THEN** the runner's timing report names it as misplaced
+
+#### Scenario: A load spike
+- **WHEN** a file outside the slow tier is over 5 s in one kept run snapshot and under 5 s in another
+- **THEN** the timing report does not name it

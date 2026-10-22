@@ -132,13 +132,8 @@ export async function dispatchImplementAttempt(deps: DispatchDeps, input: { exec
   }))
 }
 
-/**
- * The fix attempt after a failed round (D12): one more attempt of the change
- * with `answers` naming what it fixes — the failing checks, the findings,
- * the count, and the commit to continue from. The key is
- * `exec:<execution>:<change>:attempt:<n>:<generation>`; a retry replays it.
- */
-export async function dispatchFixAttempt(deps: DispatchDeps, input: {
+/** What a fix attempt names: the failed round's checks and findings, and where to continue. */
+export interface FixAttemptInput {
   executionId: string
   change: string
   group: string
@@ -147,7 +142,87 @@ export async function dispatchFixAttempt(deps: DispatchDeps, input: {
   findingsTexts: string[]
   continueFrom: string
   fixRounds: number
-}): Promise<void> {
+}
+
+/**
+ * The fix attempt row (D12), created or reused; null when the change cannot
+ * take one. Split from the dispatch so a hold can create the attempt — the
+ * owed dispatch's marker (revision-control 3.2) — without sending the
+ * handoff.
+ */
+export async function ensureFixAttempt(deps: DispatchDeps, input: FixAttemptInput): Promise<{ number: number; manifestHash: string } | null> {
+  const execution = deps.executions.execution(input.executionId)
+  if (execution === null) return null
+  const changeRow = deps.executions.change(input.executionId, input.change)
+  if (changeRow === null || changeRow.worktree === null || changeRow.branch === null || changeRow.baselineCommit === null || changeRow.taskId === null) return null
+  const revision = deps.plans.revision(execution.planId, execution.revision)
+  const entry = revision?.content.changes.find(candidate => candidate.change === input.change)
+  if (revision === null || entry === undefined) return null
+  const roleProfiles = revision.content.roles.find(role => role.group === input.group)?.profiles ?? []
+  const round = deps.executions.rounds(input.executionId, input.change).at(-1) ?? null
+  const taskId = changeRow.taskId
+
+  const existing = deps.executions.attempts(input.executionId, input.change)
+  // An attempt answers one round — its manifest's answers.roundId. The
+  // newest fix attempt is reused only while it answers the round the change
+  // now stands on (the failed round, or the round a newer task revision
+  // superseded): a later round owes its own attempt, so the owed dispatch's
+  // marker — the outstanding assignment's request key — can never settle a
+  // later round's debt with an earlier round's key (revision-control 3.2,
+  // review B1). The same-round reuse stays: a revision stage re-planned for
+  // a newer task revision must not mint an attempt per tick.
+  const newest = existing.at(-1)
+  if (newest !== undefined && newest.kind === 'fix' && newest.manifest.answers !== undefined
+    && newest.manifest.answers.roundId === round?.id) {
+    return { number: newest.number, manifestHash: newest.manifestHash }
+  }
+  const head = await runGitAsync(['rev-parse', 'HEAD'], { cwd: changeRow.worktree })
+  const startCommit = head.ok ? head.stdout.trim() : changeRow.baselineCommit
+  const files = await runGitAsync(['ls-tree', '-r', '--name-only', startCommit], { cwd: changeRow.worktree })
+  const artifacts = await artifactsAt(changeRow.worktree, startCommit, files.ok ? files.stdout.trim().split('\n').filter(Boolean) : [])
+  const manifest: AttemptManifest = {
+    version: 1,
+    plan: { id: execution.planId, revision: execution.revision, contentHash: execution.contentHash },
+    execution: input.executionId,
+    task: { id: taskId, revision: deps.tasks.store.get(taskId)?.revision ?? 1 },
+    validation: { reportId: execution.reportId, inputHash: execution.inputHash },
+    baseline: changeRow.baselineCommit,
+    startCommit,
+    artifacts,
+    roleProfiles,
+    answers: {
+      resultId: round?.resultId ?? '',
+      roundId: round?.id ?? '',
+      failingChecks: input.failingChecks.map(check => ({
+        name: check.name, source: 'actions' as const, conclusion: check.conclusion, link: check.link,
+        startedAt: null, completedAt: null,
+        ...(check.link?.match(/\/runs\/(\d+)/) ? { runId: Number(check.link.match(/\/runs\/(\d+)/)![1]) } : {}),
+      })),
+      findingsIds: input.findingsIds,
+    },
+  }
+  const manifestHash = createHash('sha256').update(manifestHashInput(manifest)).digest('hex')
+  const attempt = deps.executions.insertAttempt({
+    executionId: input.executionId, change: input.change, kind: 'fix', assignmentId: null,
+    manifest, manifestHash,
+  })
+  return { number: attempt.number, manifestHash }
+}
+
+/**
+ * The fix attempt after a failed round (D12): one more attempt of the change
+ * with `answers` naming what it fixes — the failing checks, the findings,
+ * the count, and the commit to continue from. The key is
+ * `exec:<execution>:<change>:attempt:<n>:<generation>`; a retry replays it.
+ */
+export async function dispatchFixAttempt(deps: DispatchDeps, input: FixAttemptInput): Promise<void> {
+  const attempt = await ensureFixAttempt(deps, input)
+  if (attempt === null) return
+  await dispatchFix(deps, input, attempt)
+}
+
+/** The keyed handoff of an existing fix attempt (D12): the instruction names what it fixes. Exported for the gated fix step and the owed dispatch (revision-control 3.2). */
+export async function dispatchFix(deps: DispatchDeps, input: FixAttemptInput, attempt: { number: number; manifestHash: string }): Promise<void> {
   const execution = deps.executions.execution(input.executionId)
   if (execution === null) return
   const changeRow = deps.executions.change(input.executionId, input.change)
@@ -159,45 +234,7 @@ export async function dispatchFixAttempt(deps: DispatchDeps, input: {
   const round = deps.executions.rounds(input.executionId, input.change).at(-1) ?? null
   const taskId = changeRow.taskId
 
-  const existing = deps.executions.attempts(input.executionId, input.change)
-  let number = existing.length
-  let manifestHash = existing.at(-1)?.manifestHash
-  if (existing.length === 0 || existing.at(-1)!.kind !== 'fix') {
-    const head = await runGitAsync(['rev-parse', 'HEAD'], { cwd: changeRow.worktree })
-    const startCommit = head.ok ? head.stdout.trim() : changeRow.baselineCommit
-    const files = await runGitAsync(['ls-tree', '-r', '--name-only', startCommit], { cwd: changeRow.worktree })
-    const artifacts = await artifactsAt(changeRow.worktree, startCommit, files.ok ? files.stdout.trim().split('\n').filter(Boolean) : [])
-    const manifest: AttemptManifest = {
-      version: 1,
-      plan: { id: execution.planId, revision: execution.revision, contentHash: execution.contentHash },
-      execution: input.executionId,
-      task: { id: taskId, revision: deps.tasks.store.get(taskId)?.revision ?? 1 },
-      validation: { reportId: execution.reportId, inputHash: execution.inputHash },
-      baseline: changeRow.baselineCommit,
-      startCommit,
-      artifacts,
-      roleProfiles,
-      answers: {
-        resultId: round?.resultId ?? '',
-        roundId: round?.id ?? '',
-        failingChecks: input.failingChecks.map(check => ({
-          name: check.name, source: 'actions' as const, conclusion: check.conclusion, link: check.link,
-          startedAt: null, completedAt: null,
-          ...(check.link?.match(/\/runs\/(\d+)/) ? { runId: Number(check.link.match(/\/runs\/(\d+)/)![1]) } : {}),
-        })),
-        findingsIds: input.findingsIds,
-      },
-    }
-    manifestHash = createHash('sha256').update(manifestHashInput(manifest)).digest('hex')
-    const attempt = deps.executions.insertAttempt({
-      executionId: input.executionId, change: input.change, kind: 'fix', assignmentId: null,
-      manifest, manifestHash,
-    })
-    number = attempt.number
-  }
-
-  const change = deps.executions.change(input.executionId, input.change)!
-  const requestKey = `exec:${input.executionId}:${input.change}:attempt:${number}:${change.generation}`
+  const requestKey = `exec:${input.executionId}:${input.change}:attempt:${attempt.number}:${changeRow.generation}`
   const instruction = fixInstruction({
     planTitle: deps.plans.get(execution.planId)?.title ?? execution.planId,
     revision: execution.revision,
@@ -210,7 +247,7 @@ export async function dispatchFixAttempt(deps: DispatchDeps, input: {
     extraChecks: effectiveExtraChecks(revision.content, entry).map(check => check.name),
     guidance: entry.guidance,
     taskId,
-    manifestHash: manifestHash!,
+    manifestHash: attempt.manifestHash,
     integrationBranch: integrationBranchOf(execution),
     failingChecks: input.failingChecks,
     findings: input.findingsTexts,
@@ -224,6 +261,51 @@ export async function dispatchFixAttempt(deps: DispatchDeps, input: {
     instructions: instruction, requestKey,
     ...(roleProfiles.length > 0 ? { allowedProfiles: roleProfiles } : {}),
   }))
+}
+
+/**
+ * The owed fix dispatch of a released hold (revision-control 3.2): the fix
+ * attempt row exists — the hold's marker — but its handoff never sent. The
+ * attempt is reused, the instruction's texts are rebuilt from the round it
+ * answers (a superseded round names the republished direction, a failed
+ * round its failing checks and the verdict's findings), and the handoff
+ * dispatches once under the attempt's own request key: a re-run replays it,
+ * and once sent the assignment carries the key, so nothing is owed again.
+ */
+export async function dispatchOwedFixAttempt(deps: DispatchDeps, input: { executionId: string; change: string; group: string }): Promise<void> {
+  const newest = deps.executions.attempts(input.executionId, input.change).at(-1)
+  if (newest === undefined || newest.kind !== 'fix') return
+  const changeRow = deps.executions.change(input.executionId, input.change)
+  if (changeRow === null) return
+  const round = newest.manifest.answers !== undefined
+    ? deps.executions.round(newest.manifest.answers.roundId) ?? null
+    : null
+  let failingChecks: FixAttemptInput['failingChecks'] = []
+  let findingsIds: string[] = []
+  let findingsTexts: string[] = []
+  // The texts are rebuilt at send time from the round the attempt answers —
+  // the manifest keeps only ids. A superseded round's owed fix names the
+  // task's CURRENT revision (a second republish after the attempt was minted
+  // is still the round's answer), a failed round its failing checks and the
+  // verdict's findings.
+  if (round?.outcome === 'superseded') {
+    const task = changeRow.taskId === null ? null : deps.tasks.store.get(changeRow.taskId)
+    const rationale = task === null || task === undefined ? null : deps.tasks.store.revisions(task.id).at(-1)?.rationale ?? null
+    findingsTexts = [`The task's direction was republished as revision ${task?.revision ?? 1}${rationale ? ` (${rationale})` : ''}. Re-apply your work on top of the new direction.`]
+  } else if (round !== null && round.outcome === 'fail') {
+    failingChecks = (round.ci ?? []).filter(check => check.conclusion.toLowerCase() === 'failure')
+      .map(check => ({ name: check.name, conclusion: check.conclusion, link: check.link }))
+    const all = changeRow.taskId === null ? [] : deps.tasks.store.results.findingsFor(round.resultId)
+    const findings = round.verdictFindingsId !== null ? all.filter(entry => entry.id === round.verdictFindingsId) : all
+    findingsIds = findings.map(row => row.id)
+    findingsTexts = findings.map(row => row.findings)
+  }
+  await dispatchFix(deps, {
+    executionId: input.executionId, change: input.change, group: input.group,
+    failingChecks, findingsIds, findingsTexts,
+    continueFrom: round?.commitSha ?? changeRow.baselineCommit ?? '',
+    fixRounds: changeRow.fixRounds,
+  }, { number: newest.number, manifestHash: newest.manifestHash })
 }
 
 /**

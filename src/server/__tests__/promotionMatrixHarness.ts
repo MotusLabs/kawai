@@ -7,6 +7,7 @@
 // allow_merge_commit, and D14's inspection reads over the same scripted
 // GitHub.
 import { gitFetch, isAncestor, lsRemoteHead } from '../plans/landing/gitRemote'
+import type { ActiveHold } from '../../shared/planRevisionControl'
 import type { InspectorReads } from '../plans/execution/effectInspectors'
 import type { ExecutionExecutor } from '../plans/execution/executor'
 import { composePromotions } from '../plans/landing/integration/promotionComposition'
@@ -23,6 +24,8 @@ export interface PromotionScript {
   allowMergeCommit: boolean | null
   /** Inspection reads that reject (D14's undecidable), by read name. */
   failingReads: Set<keyof InspectorReads>
+  /** The plan's active holds (revision-control 3.3): `no-hold` and the runner's held step. */
+  activeHolds: ActiveHold[]
 }
 
 export interface PromotionBench {
@@ -55,7 +58,7 @@ function serialized(reads: PromotionReads): PromotionReads {
 
 export function createPromotionBench(h: MatrixBench, i: IntegrationBench): PromotionBench {
   const { world } = h.matrix
-  const script: PromotionScript = { closes: [], closeTransient: 0, allowMergeCommit: true, failingReads: new Set() }
+  const script: PromotionScript = { closes: [], closeTransient: 0, allowMergeCommit: true, failingReads: new Set(), activeHolds: [] }
   const pullOf = (pr: number) => h.gh.pulls.find(pull => pull.number === pr)
   const guard = <T>(name: keyof InspectorReads, read: () => Promise<T>): Promise<T> =>
     script.failingReads.has(name) ? Promise.reject(new Error(`${name} could not be read`)) : read()
@@ -93,6 +96,7 @@ export function createPromotionBench(h: MatrixBench, i: IntegrationBench): Promo
     inspectorReads,
     now: () => new Date(h.clock.now),
     repoOf: () => 'o/r',
+    holds: { active: () => script.activeHolds },
     adapters: {
       landing: h.landingAdapters, rounds: h.roundAdapters, refs: i.adapters,
       prClose: async (_repo, pr, comment) => {

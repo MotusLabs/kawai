@@ -54,6 +54,20 @@ describe('buildCandidates', () => {
     expect(set.group.profiles.map(profile => profile.providerId)).toEqual(['zai', 'zai', 'claude'])
   })
 
+  test('a cooled Codex home keeps a forward off every profile on it (profile-limit-handling)', () => {
+    // Both Codex profiles share the home's provider id, so a forward from a
+    // limited codex member lands on default alone.
+    const def = group('profiles: [codex, codex-fast, default]\nmax: 5')
+    const set = buildCandidates({
+      group: def,
+      members: [member('f', 'codex-fast'), member('d', 'default')],
+      pendingSpawnProfiles: [], spawnAllowed: true, spawnCwd: '/repo/wt',
+      excludeProfile: 'codex', excludeProvider: 'codex-home-1a2b3c4d5e6f',
+      providerOf: id => (id === 'codex' || id === 'codex-fast' ? 'codex-home-1a2b3c4d5e6f' : id),
+    })
+    expect(ids(set.candidates)).toEqual(['member:d', 'spawn:default'])
+  })
+
   test('without a cooling provider the exclusion narrows to the profile alone', () => {
     const def = group('profiles: [opus, sonnet]\nmax: 5')
     // No excludeProvider: opus's model-scoped window left its provider cool,

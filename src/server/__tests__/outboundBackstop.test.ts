@@ -144,39 +144,68 @@ describe('round 7 regressions and controls (task 3.6)', () => {
   })
 })
 
-/** The best of several timings of `run` (warm, least noisy). */
-function bestTime(run: () => unknown): number {
-  run()
-  let best = Infinity
-  for (let i = 0; i < 5; i++) {
-    const started = performance.now()
-    run()
-    best = Math.min(best, performance.now() - started)
+/** The best timing of each fn over interleaved rounds: alternating the two
+ * sizes keeps a load spike in one phase from inflating only one side of the
+ * ratio, and the minimum of each side is the least noisy reading (warm, full
+ * gc before every timed run so a collection never lands inside one). */
+function bestTimes(large: () => unknown, small: () => unknown, rounds = 7): { large: number; small: number } {
+  large()
+  small()
+  let bestLarge = Infinity
+  let bestSmall = Infinity
+  for (let i = 0; i < rounds; i++) {
+    Bun.gc(true)
+    let started = performance.now()
+    large()
+    bestLarge = Math.min(bestLarge, performance.now() - started)
+    Bun.gc(true)
+    started = performance.now()
+    small()
+    bestSmall = Math.min(bestSmall, performance.now() - started)
   }
-  return best
+  return { large: bestLarge, small: bestSmall }
+}
+
+// A linear pass doubles; the quadratic header redaction this guard replaced
+// quadrupled. "About twice" leaves room for timer noise, never for n².
+const RATIO = 2.8
+
+/** The one linearity assertion, shared by all three sizes: pass on the first
+ * attempt whose interleaved best-of-7 ratio reads below RATIO, re-measure an
+ * attempt at or above it (at most 3 attempts — a whole-attempt window of
+ * load is far rarer than a phase spike, and `withholdReason`'s true ratio
+ * sits near 2.2), and a failure reports every attempt's ratio. */
+function expectAtMostTwice(large: () => unknown, small: () => unknown, attempts = 3): void {
+  const seen: string[] = []
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const times = bestTimes(large, small)
+    if (times.large / times.small < RATIO) return
+    seen.push((times.large / times.small).toFixed(3))
+  }
+  throw new Error(`ratio read at or above ${RATIO} on all ${attempts} attempts: ${seen.join(' ')}`)
 }
 
 describe('linearity (task 3.6, D8)', () => {
-  // A linear pass doubles; the quadratic header redaction it replaced
-  // quadrupled. "About twice" leaves room for timer noise, never for n².
-  const RATIO = 2.8
-
   test('redaction: 40,000 headers take at most about twice 20,000', () => {
-    const headers = (n: number) => `curl ${'-H "X-Trace-Id: v1" '.repeat(n)}https://example.internal/hook`
+    // Cookie, not any header name outside redact's HEADERS list: the value
+    // must take the header-value path (the span-pointer match loop), or the
+    // test times a scan that never redacts and a span-reset mutant reads
+    // linear.
+    const headers = (n: number) => `curl ${'-H "Cookie: v1" '.repeat(n)}https://example.internal/hook`
     const small = headers(20_000)
     const large = headers(40_000)
-    expect(bestTime(() => redact(large)) / bestTime(() => redact(small))).toBeLessThan(RATIO)
+    expectAtMostTwice(() => redact(large), () => redact(small))
   })
 
   test('withholding: a full pass over 40,000 header words takes at most about twice 20,000', () => {
     // No early trigger: every word is read.
     const words = (n: number) => `echo ${'X-Trace-Id v1 '.repeat(n)}`
     expect(withholdReason(words(10))).toBeNull()
-    expect(bestTime(() => withholdReason(words(40_000))) / bestTime(() => withholdReason(words(20_000)))).toBeLessThan(RATIO)
+    expectAtMostTwice(() => withholdReason(words(40_000)), () => withholdReason(words(20_000)))
   })
 
   test('the backstop: 40,000 words take at most about twice 20,000', () => {
     const text = (n: number) => 'word https://host.example.org '.repeat(n)
-    expect(bestTime(() => backstopEntries(text(40_000))) / bestTime(() => backstopEntries(text(20_000)))).toBeLessThan(RATIO)
+    expectAtMostTwice(() => backstopEntries(text(40_000)), () => backstopEntries(text(20_000)))
   })
 })

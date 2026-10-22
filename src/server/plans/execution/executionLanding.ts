@@ -50,6 +50,8 @@ export interface LandingDeps {
   revisionAttempt: (changeRow: { executionId: string; change: string; taskId: string | null }, round: RoundRow, update: { base: string; files: string[] }) => Promise<boolean>
   /** The task's live status: a task the human closed is never touched again (D19). */
   taskStatusOf: (taskId: string) => string | null
+  /** The hold gate (revision-control 3.2): true when the change is held. */
+  gate?: (change: string) => boolean
 }
 
 /** The landing stage's git/gh reads, injectable for tests. */
@@ -77,6 +79,9 @@ export async function applyLanding(deps: LandingDeps, adapters: LandingAdapters,
   const store = deps.executions
   const execution = store.execution(changeRow.executionId)
   if (execution === null || changeRow.branch === null) return
+  // A held change enters no landing stage and takes no slot (revision-control
+  // 3.2): the release re-fires the stage from the gating state.
+  if (deps.gate?.(changeRow.change) === true) return
 
   if (changeRow.state === 'gating') {
     // Step 1 — Conditions: an unresolved acceptance condition holds the
@@ -124,8 +129,12 @@ export async function applyLanding(deps: LandingDeps, adapters: LandingAdapters,
     if (!prediction.ok) return
     if (prediction.conflicts.length > 0) {
       // A conflict releases the slot (leaving `landing`) and dispatches an
-      // update attempt naming the files.
-      // passedAt clears: the round's pass waits on the attempt's new result.
+      // update attempt naming the files. `passedAt` clears: the round's
+      // pass waits on the attempt's new result. No hold branch here: the
+      // gate at the top of applyLanding returns before the stage logic, so
+      // a held change never predicts a merge — a held holder's settling
+      // update-branch effect keeps `passedAt` in failedUpdate below, which
+      // applyLandingOutcome reaches under a hold.
       const fresh = store.change(changeRow.executionId, changeRow.change)!
       store.transition(changeRow.executionId, changeRow.change, fresh, { state: 'gating', step: null, stopReason: null, stopDetail: null, passedAt: null })
       return dispatchUpdateAttempt(deps, changeRow, round, { kind: 'conflict', files: prediction.conflicts, base: base.sha })
@@ -198,7 +207,12 @@ async function fetchHeads(adapters: Pick<LandingAdapters, 'fetch'>, cwd: string,
  */
 async function failedUpdate(deps: LandingDeps, row: ChangeRow, updateRound: RoundRow | null, update: { base: string; files: string[] }): Promise<void> {
   const store = deps.executions
-  store.transition(row.executionId, row.change, row, { state: 'gating', step: null, passedAt: null })
+  // Under a hold (revision-control 3.2) `passedAt` is kept and no attempt
+  // dispatches — no owed marker for the update path: the release re-fires
+  // the landing stage, which re-runs the update and re-derives the attempt.
+  const held = deps.gate?.(row.change) === true
+  store.transition(row.executionId, row.change, row, { state: 'gating', step: null, ...(held ? {} : { passedAt: null }) })
+  if (held) return
   const round = updateRound ?? store.rounds(row.executionId, row.change).at(-1) ?? null
   if (round === null) return
   if (await deps.revisionAttempt(row, round, update)) return

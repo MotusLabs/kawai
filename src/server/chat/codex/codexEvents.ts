@@ -10,6 +10,7 @@
 // typed outputs the driver acts on.
 import type { ChatEvent, ChatQuestion, ChatTurnUsage } from '../../../shared/chat'
 import type { ChatActivityInput } from '../chatActivity'
+import type { RateLimitSnapshot } from './protocol/v2/RateLimitSnapshot'
 import type { ThreadItem } from './protocol/v2/ThreadItem'
 import type { Turn } from './protocol/v2/Turn'
 import type { ThreadTokenUsage } from './protocol/v2/ThreadTokenUsage'
@@ -29,6 +30,7 @@ export type CodexOutput =
   | { kind: 'question'; itemId: string; questions: ChatQuestion[] }
   | { kind: 'compaction'; itemId: string }
   | { kind: 'token_usage'; usage: ThreadTokenUsage }
+  | { kind: 'rate_limits'; snapshot: RateLimitSnapshot }
 
 /** The Kawai tool name of a dynamic or MCP tool call. */
 export const mcpToolName = (server: string, tool: string): string => `mcp__${server}__${tool}`
@@ -69,6 +71,10 @@ export function mapCodexNotification(
     case 'thread/tokenUsage/updated': {
       const usage = params.tokenUsage as ThreadTokenUsage | undefined
       return usage && typeof usage === 'object' && usage.last ? [{ kind: 'token_usage', usage }] : []
+    }
+    case 'account/rateLimits/updated': {
+      const snapshot = params.rateLimits
+      return snapshot && typeof snapshot === 'object' ? [{ kind: 'rate_limits', snapshot: snapshot as RateLimitSnapshot }] : []
     }
     case 'item/started':
       return itemStarted(params.item as Item | undefined, turnId)

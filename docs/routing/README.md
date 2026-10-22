@@ -139,7 +139,10 @@ alone. A profile is cooling while its provider or the profile itself is: the
 latest final event of each window sets that window's end, and the latest end
 still ahead decides, so a later short-window event never releases a weekly one
 still running. Events recorded before providers (no provider id) cool only
-their own profile. When the turn handling a message fails that way, the
+their own profile. Codex profiles are ordinary profile ids whose provider
+is the resolved Codex home (`codex-home-<first 12 hex of sha256>`), so a
+home limit cools every profile on it; `sessionBudgetExceeded` cools its
+profile alone. When the turn handling a message fails that way, the
 message is:
 
 - **parked** on the same agent, with a resume message scheduled at the reset;
