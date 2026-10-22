@@ -444,20 +444,20 @@ async function main() {
       },
     })
     // The batches run and the record is published through runBatchesAndPublish
-    // (review B3): the publish gate and the throw-before-publish ordering live
-    // there, tested with injected effects. Here the effects are the real ones.
+    // (review B3): the throw-before-publish ordering lives there, tested with
+    // injected effects. Here the effects are the real ones. planRun's seeded
+    // path is the only publish gate (F5) — null for a filtered run or a
+    // failed seed — so the closure runs only with a snapshot to publish and
+    // has no gate of its own.
     await runBatchesAndPublish({
       batches: planBatches(plan.batchOptions),
       env,
-      publishTimings: plan.publishTimings,
-      publish: () => {
+      publishTimingsPath: plan.batchOptions.timingsPath ?? null,
+      publish: (timingsPath) => {
         // The main batch wrote the fresh snapshot (--update-timings). Publish
         // it — a later serial batch failing must not lose it — and report
         // files whose shortest kept duration sits over 5 s outside the slow
-        // tier (D7). A full run whose seed failed has no snapshot to publish;
-        // the guard keeps that case quiet.
-        const timingsPath = plan.batchOptions.timingsPath
-        if (timingsPath === undefined) return
+        // tier (D7).
         try {
           const record = publishTimingsSnapshot(recordsDir(process.cwd()), timingsPath)
           if (record !== null) {

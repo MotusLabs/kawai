@@ -172,6 +172,31 @@ describe('buildTeamPrompt mailbox management note (team-mailbox-management D8)',
   })
 })
 
+describe('buildTeamPrompt worker choice and capacity (dispatch-worker-choice D9)', () => {
+  const choice = 'Choosing a worker: `mcp__kawai-team__send_message` and `mcp__kawai-team__schedule_message` (and `mcp__kawai-team__task_handoff` to a group) take an optional `worker` — a provider id, `provider/model`, or a bare model key among the receiving group\'s workers — that limits who may take the mail. It applies to group mail only. A chosen worker that is cooling waits for its cooldown end instead of going elsewhere, and the group\'s caps still apply. Providers that `team_capacity` lists in each other\'s `sharesLoginWith` draw on one quota window.'
+
+  test('every agent, grouped or not, learns team_capacity and the worker choice facts verbatim', () => {
+    for (const prompt of [
+      buildTeamPrompt({ outbound, sessionId: 'chat-w1', group: devs, groups: [devs] }),
+      buildTeamPrompt({ outbound, sessionId: 'chat-w2', groups: [devs] }),
+    ]) {
+      expect(prompt).toContain('- `mcp__kawai-team__team_capacity`: read your team\'s capacity as routing sees it now — each group\'s workers (model, provider, cap, live members) and each provider\'s usage and cooldown. Usage null means kawai holds no report, not zero use.')
+      expect(prompt).toContain(`\n${choice}\n`)
+      // The facts sit in the mailbox note, before mail management.
+      expect(prompt.indexOf(choice)).toBeGreaterThan(prompt.indexOf('# Team mailbox'))
+      expect(prompt.indexOf(choice)).toBeLessThan(prompt.indexOf('Managing mail:'))
+    }
+  })
+
+  test('the note states no strategy for when to switch providers', () => {
+    const prompt = buildTeamPrompt({ outbound, sessionId: 'chat-w3', group: devs, groups: [devs] })
+    const note = prompt.slice(prompt.indexOf('# Team mailbox'), prompt.indexOf('Managing mail:'))
+    for (const strategy of [/\bswitch\b/i, /\bprefer\b/i, /\bshould\b/i, /\bwhen (a|the) (provider|worker|limit)/i, /\bbefore\b.*\blimit\b/i]) {
+      expect(note).not.toMatch(strategy)
+    }
+  })
+})
+
 describe('buildTeamPrompt plan note (durable-plans 6.2)', () => {
   const creator = buildTeamPrompt({ outbound, sessionId: 'chat-p1', group: { ...devs, canCreatePlans: true }, groups: [devs] })
   const member = buildTeamPrompt({ outbound, sessionId: 'chat-p2', group: devs, groups: [devs] })

@@ -10,6 +10,7 @@
 // diagnosis built from the same eligibility breakdown, live counts, spawn
 // facts, and cooldowns the decision used — never scraped from the log.
 import type { ChatUsageReport } from '../../../shared/chat'
+import type { ChatSessionRecord } from '../../db'
 import type {
   RouteCandidate, RouteContext, RouteDecisionLogEntry, RouteGroup, RouteMessage, RouteProfileState, RouteProviderState, RouteUsage,
 } from '../../../shared/routing'
@@ -33,6 +34,20 @@ export interface GroupMemberRecord {
   sessionId: string
   profileId: string
   cwd: string
+}
+
+/**
+ * Every live (non-archived) member of a team's group: the members routing
+ * counts toward caps, busy or idle, spawned or not. The one counter both the
+ * router and `team_capacity` read (dispatch-worker-choice D6).
+ */
+export function liveGroupMembers(
+  records: Iterable<ChatSessionRecord>, teamOf: (sessionId: string) => string | undefined, teamId: string, groupId: string,
+): GroupMemberRecord[] {
+  return [...records].flatMap(record =>
+    record.archivedAt == null && record.groupId === groupId && teamOf(record.sessionId) === teamId
+      ? [{ sessionId: record.sessionId, profileId: record.claudeProfileId ?? 'default', cwd: record.projectPath }]
+      : [])
 }
 
 export interface ProfileRouterOptions {
@@ -261,7 +276,7 @@ export class ProfileRouter implements GroupRouter {
 }
 
 /** The rule view of a report: the window facts a rule reads, nothing else. */
-function usageView(usage: ChatUsageReport | null): RouteUsage | null {
+export function usageView(usage: ChatUsageReport | null): RouteUsage | null {
   return usage ? {
     status: usage.status, receivedAt: usage.receivedAt, source: usage.source ?? 'unknown',
     windows: usage.windows.map(window => ({ key: window.key, percentUsed: window.percentUsed, resetsAt: window.resetsAt })),

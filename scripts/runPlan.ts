@@ -35,6 +35,11 @@ export function hasTestNameFilter(passthrough: string[]): boolean {
 export interface RunPlan {
   batchOptions: Parameters<typeof planBatches>[0]
   fullRun: boolean
+  // planRun's publish decision (F5): a run may publish the timings record
+  // only when it is full AND seeding produced the snapshot — the same fact
+  // as batchOptions.timingsPath being set, spelled for readers. What main()
+  // wires into runBatchesAndPublish is the path itself (publishTimingsPath),
+  // so there is no second gate beside this one.
   publishTimings: boolean
 }
 
@@ -69,19 +74,21 @@ export function planRun(input: {
       updateTimings: timingsPath !== null,
     },
     fullRun,
-    publishTimings: fullRun,
+    publishTimings: timingsPath !== null,
   }
 }
 
 // One input the runner wires for real in main(): the planned batches, the
-// child environment, whether the run may publish, and the two effects — the
-// batch runner and the publish step. Tests inject doubles for the effects;
-// production passes the real runCommand and the real publish closure.
+// child environment, the snapshot path planRun seeded — null when the plan
+// publishes nothing — and the two effects, the batch runner and the publish
+// step. Tests inject doubles for the effects; production passes the real
+// runCommand and the real publish closure. There is no separate permission
+// flag to bypass (F5): planRun's seeded path is the only publish gate.
 export interface BatchRunInput {
   batches: PlannedBatch[]
   env: NodeJS.ProcessEnv
-  publishTimings: boolean
-  publish: () => void
+  publishTimingsPath: string | null
+  publish: (timingsPath: string) => void
   runCommand: (cmd: string[], env: NodeJS.ProcessEnv, batch: string) => Promise<void>
 }
 
@@ -90,13 +97,14 @@ export interface BatchRunInput {
 // (--update-timings), and a later serial batch failing must not lose it.
 // A failed batch throws out of runCommand before the publish point, so a
 // failed run never publishes and no later batch starts (D4, review B3).
+// A null publishTimingsPath never publishes — the gate is planRun's (F5).
 export async function runBatchesAndPublish(input: BatchRunInput): Promise<void> {
   let published = false
   for (const batch of input.batches) {
     await input.runCommand(batch.cmd, input.env, batch.label)
-    if (input.publishTimings && !published) {
+    if (input.publishTimingsPath !== null && !published) {
       published = true
-      input.publish()
+      input.publish(input.publishTimingsPath)
     }
   }
 }
