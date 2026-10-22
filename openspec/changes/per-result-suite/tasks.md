@@ -12,13 +12,13 @@
 
 ## 3. Hooks
 
-- [ ] 3.1 Change `.githooks/pre-commit`: lint, typecheck, and the affected tests for source commits; lint, typecheck, and the `@reads` matches for docs-only commits; the full check on escape. Verify it with commits on a scratch branch: a one-module change runs only its tests in seconds, and an AGENTS.md edit runs the tests declaring AGENTS.md.
-- [ ] 3.2 Add `.githooks/pre-push` per D4 (record lookup by the pushed tree, a run when HEAD is that commit and the tree is clean, refusal otherwise, deletions skipped). Verify it in a temporary repository with a local bare remote, covering all push scenarios, including multiple refs on stdin, annotated tags, exact-key verification after a fallback, malformed/missing records, and deletion-only pushes. Verify partial checks never create a full-pass record.
+- [x] 3.1 Change `.githooks/pre-commit`: lint, typecheck, and the affected tests for source commits; lint, typecheck, and the `@reads` matches for docs-only commits; the full check on escape. Verify it with commits on a scratch branch: a one-module change runs only its tests in seconds, and an AGENTS.md edit runs the tests declaring AGENTS.md.
+- [x] 3.2 Add `.githooks/pre-push` per D4 (record lookup by the pushed tree, a run when HEAD is that commit and the tree is clean, refusal otherwise, deletions skipped). Verify it in a temporary repository with a local bare remote, covering all push scenarios, including multiple refs on stdin, annotated tags, exact-key verification after a fallback, malformed/missing records, and deletion-only pushes. Verify partial checks never create a full-pass record.
 
 ## 4. Procedure and docs
 
-- [ ] 4.1 Rewrite AGENTS.md's Commands paragraph (fast commit hook, full check per result and push, `@reads`), and run `bun run test` once because tests read AGENTS.md.
-- [ ] 4.2 Rewrite the Checks bullet in `.kawai/groups/{junior,middle,senior}-devs.md` (commit freely without `suite-run`; `suite-run bun run check` on the clean committed tree before every `task_submit_result`, stating the outcome), and the check steps in `lead.md` and `reviewers.md` (`bun run check`, normally a recorded hit). Three-way merge against the live group files if the human edited them meanwhile. Verify with the group-catalog tests.
+- [x] 4.1 Rewrite AGENTS.md's Commands paragraph (fast commit hook, full check per result and push, `@reads`), and run `bun run test` once because tests read AGENTS.md.
+- [x] 4.2 Rewrite the Checks bullet in `.kawai/groups/{junior,middle,senior}-devs.md` (commit freely without `suite-run`; `suite-run bun run check` on the clean committed tree before every `task_submit_result`, stating the outcome), and the check steps in `lead.md` and `reviewers.md` (`bun run check`, normally a recorded hit). Three-way merge against the live group files if the human edited them meanwhile. Verify with the group-catalog tests.
 
 ## 5. Integration check
 

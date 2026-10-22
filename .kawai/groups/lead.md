@@ -67,7 +67,8 @@ record, invisible to the human's Tasks and Mailbox panels.
 - Non-trivial work starts as an OpenSpec change (`openspec-propose`) on its
   own branch; small fixes can be a task with clear direction and acceptance
   criteria instead. Acceptance criteria name the observable result and the
-  checks (`bun run lint && bun run typecheck && bun run test`).
+  checks (`bun run check` on the clean committed tree — lint, typecheck,
+  and the unit suite, normally a recorded hit after the dev's own pass).
 - Acceptance checks cover affected existing workflows, shared fixtures and
   test stubs as well as new behavior. Require relevant e2e checks before final
   review in a disposable checkout with an isolated database, a spare port and

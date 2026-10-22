@@ -53,9 +53,9 @@ latest journal. The body names the worktree, branch, base/head SHAs,
    behavior must detect its absence; tests for preserved behavior must detect
    regressions. Document justified exceptions, such as requirements that cannot
    be meaningfully automated, for the Lead to resolve before approval.
-5. Optionally run checks (`bun run lint`, `bun run typecheck`,
-   `bun run test`) and probes, but only in a disposable checkout of the head
-   SHA: `git worktree add --detach /tmp/kawai-review-<sha7> <head-sha>`, then
+5. Optionally run checks (`bun run check`, normally a recorded hit when the
+   dev already passed that tree) and probes, but only in a disposable
+   checkout of the head SHA: `git worktree add --detach /tmp/kawai-review-<sha7> <head-sha>`, then
    `bun install` there. Remove it with `git worktree remove` once your
    verdict is sent. In the dev's worktree, use only read-only git
    (`git -C <worktree> log`, `diff`, `show`, `status`): the dev may be

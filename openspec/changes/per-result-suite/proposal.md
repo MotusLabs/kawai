@@ -24,7 +24,7 @@ Every source commit runs the full unit suite in the pre-commit hook. The 2026-10
 
 ## Impact
 
-- `.githooks/pre-commit`, new `.githooks/pre-push`, a selection script (`scripts/affected-tests.ts` or similar), and the runner's `--exclude-slow` path from `parallel-suite`.
+- `.githooks/pre-commit`, new `.githooks/pre-push`, a selection script (`scripts/affected-tests.ts` or similar), and the runner's `--skip-slow` path from `parallel-suite`.
 - Test files gain `@reads` headers where they read repository files. A new guard test.
 - `AGENTS.md`; `.kawai/groups/{junior,middle,senior}-devs.md`, `lead.md`, `reviewers.md`.
 - Outside the repository (follow-up for the owner): user-level `~/.kawai/groups/reviewers-claude.md` and `reviewers-mimo.md`; the lead's `suite-run` usage notes and memory note `dev-checks-commit-hook-is-the-check`.
