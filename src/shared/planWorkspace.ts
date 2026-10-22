@@ -162,6 +162,48 @@ export interface WorkspaceChecklist {
   sections: WorkspaceChecklistSection[]
 }
 
+/**
+ * One document's provenance and last-valid content (design D4, 2.4). The
+ * view is the server's memory of one subscribed source: `availability` is the
+ * source's state at the last check, and `stale` labels held content that is
+ * last-valid rather than current — a deleted source reads `missing` with its
+ * last-valid content still held, labelled stale. `executionMatch` compares
+ * only a current read against the selected execution's pin; a missing or
+ * last-valid file is never presented as a historical execution input, so it
+ * reads `unknown` (never inferred).
+ */
+export type WorkspaceDocumentAvailability = 'current' | 'missing'
+export type WorkspaceExecutionMatch = 'match' | 'mismatch' | 'unknown'
+
+export interface WorkspaceDocumentView {
+  worktreeId: string
+  relativePath: string
+  /** What the held content is; null while nothing is held. */
+  kind: 'markdown' | 'image' | null
+  availability: WorkspaceDocumentAvailability
+  /** True when the held content is last-valid, not the source's current bytes. */
+  stale: boolean
+  /** The last check's refusal code when nothing current was served; null otherwise. */
+  reason: string | null
+  executionMatch: WorkspaceExecutionMatch
+  /** The execution the match names; null when none was selected or found. */
+  executionId: string | null
+  contentHash: string | null
+  size: number | null
+  mtimeMs: number | null
+  /** Markdown text only; images never ride WS — the asset route serves bytes. */
+  text: string | null
+}
+
+/**
+ * Why a checklist subscription serves no projection (2.4): the change
+ * resolution's named states (2.1) plus the artifact's own unreadability.
+ */
+export interface WorkspaceChecklistUnavailable {
+  state: 'missing' | 'missing-in-worktree' | 'ambiguous' | 'cli-unavailable' | 'unreadable'
+  message: string
+}
+
 export type WorkspaceHealthLevel = 'green' | 'yellow' | 'red' | 'unknown'
 export type WorkspaceQuotaStatus = 'ok' | 'warning' | 'limited'
 

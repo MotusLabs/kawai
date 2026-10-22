@@ -8,7 +8,8 @@
 // reply) and a `commandId` (the ledger key), so a resend replays instead of
 // repeating. `team-plan-workspace-close` only ends the subscription.
 import type {
-  PlanWorkspaceRole, WorkspaceRefView, WorkspaceSnapshot, WorkspaceVersionSelector,
+  PlanWorkspaceRole, WorkspaceChecklist, WorkspaceChecklistUnavailable, WorkspaceDocumentView,
+  WorkspaceRefView, WorkspaceSnapshot, WorkspaceVersionSelector,
 } from './planWorkspace'
 
 export type PlanWorkspaceServerMessage =
@@ -18,6 +19,28 @@ export type PlanWorkspaceServerMessage =
       teamId: string
       planId: string
       workspace: WorkspaceSnapshot
+    }
+  // One change's checklist projection (2.4): the snapshot, or the explicit
+  // unavailable state — never a silent empty projection. Re-pushed on
+  // invalidation (a watcher event or the reconciliation pass).
+  | {
+      type: 'team-plan-workspace-checklist'
+      teamPath: string
+      planId: string
+      changeName: string
+      checklist: WorkspaceChecklist | null
+      unavailable: WorkspaceChecklistUnavailable | null
+    }
+  // One document's provenance view (2.4): hash, availability, staleness and
+  // the execution pin's match, with last-valid markdown text held when the
+  // source went missing. Images never ride WS — the asset route serves bytes.
+  | {
+      type: 'team-plan-workspace-document'
+      teamPath: string
+      planId: string
+      worktreeId: string
+      relativePath: string
+      view: WorkspaceDocumentView
     }
   // Result of a keyed workspace command: what a commit recorded — the bind's
   // `binding`, the reference a ref-add created, the id a ref-remove took —
@@ -69,3 +92,26 @@ export type PlanWorkspaceClientMessage =
       url?: string
     }
   | { type: 'team-plan-workspace-ref-remove'; teamPath: string; requestId: string; commandId: string; refId: string }
+  // Document subscriptions (2.4): one change's checklist, or one document of
+  // a listed worktree. Every open answers an authoritative first snapshot
+  // (checklist/view, or the explicit unavailable state); a close only ends
+  // the subscription. The worktree is matched lexically against the team's
+  // listed roots — no request-time filesystem resolution (B8.3).
+  | { type: 'team-plan-workspace-checklist-open'; teamPath: string; planId: string; changeName: string }
+  | { type: 'team-plan-workspace-checklist-close'; teamPath: string; planId: string; changeName: string }
+  | {
+      type: 'team-plan-workspace-document-open'
+      teamPath: string
+      planId: string
+      worktreeId: string
+      relativePath: string
+      /** Absent: the plan's latest execution (design D2). */
+      executionId?: string
+    }
+  | {
+      type: 'team-plan-workspace-document-close'
+      teamPath: string
+      planId: string
+      worktreeId: string
+      relativePath: string
+    }
