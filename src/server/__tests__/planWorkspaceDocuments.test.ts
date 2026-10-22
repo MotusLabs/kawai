@@ -129,6 +129,7 @@ beforeAll(async () => {
 afterAll(() => fs.rmSync(world.root, { recursive: true, force: true }))
 beforeEach(() => {
   fs.rmSync(path.join(world.feature, 'notes'), { recursive: true, force: true })
+  fs.rmSync(path.join(world.repo, 'notes'), { recursive: true, force: true })
   fs.rmSync(path.join(world.repo, 'openspec'), { recursive: true, force: true })
   bench = createPlanBench(world)
   fixture = fixtureHost()
@@ -321,7 +322,12 @@ describe('document subscriptions', () => {
     insertAttemptPinning(executionId, 'alpha-b', { 'notes/design.md': sha('other content\n') })
     await openDocument(planId, { executionId })
     expect(last('team-plan-workspace-document')!.view).toMatchObject({ executionMatch: 'match', executionId })
-    // The main checkout hosts no change of the execution: no pin at all.
+    // The main checkout hosts no change of the execution: no pin at all. It
+    // does host the file — byte-identical to A's pin — so the read succeeds
+    // and the worktree-scoped pin lookup actually runs; without a change
+    // provisioned here the match must still read unknown.
+    fs.mkdirSync(path.join(world.repo, 'notes'), { recursive: true })
+    fs.writeFileSync(path.join(world.repo, 'notes', 'design.md'), 'alpha content\n')
     await docSend({ type: 'team-plan-workspace-document-close', teamPath: world.repo, planId, worktreeId: world.feature, relativePath: 'notes/design.md' })
     await docSend({ type: 'team-plan-workspace-document-open', teamPath: world.repo, planId, worktreeId: world.repo, relativePath: 'notes/design.md' })
     expect(last('team-plan-workspace-document')!.view).toMatchObject({ executionMatch: 'unknown', executionId: null })
