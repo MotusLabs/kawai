@@ -18,6 +18,7 @@ import { WorktreeStaffing } from '../team/staffing'
 import { TeamCaps } from '../team/teamCaps'
 import { TeamWorktrees } from '../team/worktreeRoots'
 import { WORKER_GROUP_TARGET_ONLY } from '../team/workerChoiceCheck'
+import { recordRecipient } from './helpers/recordRecipient'
 
 let dir: string
 let worktree: string
@@ -60,6 +61,7 @@ beforeEach(() => {
     getSession: id => records.get(id), records: () => records.values(), teamOf,
     staffing, caps: new TeamCaps({}), worktrees, homeDir: home,
     cooldownUntil: profileId => cooldowns.get(profileId) ?? null,
+    recipient: id => recordRecipient(records.get(id), 'team', mail),
   })
 })
 afterEach(() => { db.close(); fs.rmSync(dir, { recursive: true, force: true }) })

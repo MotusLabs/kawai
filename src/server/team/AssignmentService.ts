@@ -118,7 +118,7 @@ export class AssignmentService {
       plans?: PlanStore
       /** Built-in cooldown end (ISO) of a profile, or null (preview skips cooling profiles). */
       cooldownUntil?: (profileId: string) => string | null
-      /** A member's recipient facts as the dispatcher states them (the preview's member predicates). */
+      /** A member's recipient facts as the dispatcher states them (the preview's member predicates); without it no member previews as idle. */
       recipient?: (sessionId: string) => MailRecipient | undefined
       /** What a running execution owns (plan-execution D7); the default owns nothing. */
       ownership?: ExecutionOwnership
@@ -302,25 +302,13 @@ export class AssignmentService {
     return previewGroupDispatch({
       worktree, target, group, workerChoice,
       members: liveGroupMembers(this.options.records(), id => this.options.teamOf(id)?.teamId, team.teamId, target.id),
-      recipient: id => this.options.recipient ? this.options.recipient(id) : this.recordRecipient(id),
+      recipient: id => this.options.recipient?.(id),
       facts: this.options.staffing.preview(team.teamId, target.id, worktree),
       teamCap: await this.options.caps.maxSpawnedSessions(team.teamId),
       providerOf: ambientProviderOf(this.options.homeDir),
       cooldownUntil: profileId => this.options.cooldownUntil?.(profileId) ?? null,
       now: Date.now(),
     })
-  }
-
-  /** A member's recipient facts from its record alone, where no dispatcher view is wired (tests). */
-  private recordRecipient(id: string): MailRecipient | undefined {
-    const record = this.options.getSession(id)
-    const team = this.options.teamOf(id)
-    if (!record || !team) return undefined
-    return {
-      sessionId: id, teamId: team.teamId, groupId: record.groupId ?? null, idle: record.status === 'waiting', pendingRequest: false,
-      available: true, worktree: worktreeRootOf(record.projectPath), parked: this.mail.parkedBy(id).length > 0,
-      contextExhausted: Boolean(record.contextExhausted), profileId: record.claudeProfileId ?? 'default',
-    }
   }
 
   private previewSession(worktree: string | null, target: AssignmentTarget, recipient: ChatSessionRecord): TaskDispatchPreview {

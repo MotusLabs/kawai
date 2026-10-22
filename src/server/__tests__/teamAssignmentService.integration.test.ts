@@ -21,6 +21,7 @@ import { WorktreeStaffing } from '../team/staffing'
 import { TeamCaps } from '../team/teamCaps'
 import { TeamWorktrees } from '../team/worktreeRoots'
 import { clearTeamCache, resolveTeam, type TeamIdentity } from '../team/teamIdentity'
+import { recordRecipient } from './helpers/recordRecipient'
 
 function git(args: string[], cwd?: string) {
   const result = spawnSync('git', args, { cwd, encoding: 'utf8', env: cleanGitEnv() })
@@ -107,6 +108,7 @@ beforeEach(() => {
     teamOf,
     staffing, caps, worktrees, homeDir: home, plans: new PlanStore(db.db),
     cooldownUntil: profileId => cooldowns.get(profileId) ?? null,
+    recipient: id => recordRecipient(records.get(id), team.teamId, mail),
   })
 })
 
