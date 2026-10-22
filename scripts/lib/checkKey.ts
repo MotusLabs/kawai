@@ -5,7 +5,14 @@
 // GIT_INDEX_FILE pointing at the copy), hashed together with the Bun version
 // and platform. The real index is never opened for writing — its stat cache
 // survives, so an unchanged tree re-adds in milliseconds, and a test asserts
-// it stays byte-identical.
+// it stays byte-identical. `add -A` restages every path, so the key is
+// always the WORKING TREE's (untracked non-ignored files included), whatever
+// index was copied: the copy only seeds the stat cache.
+//
+// An index entry flagged skip-worktree or assume-unchanged hides its on-disk
+// content from `add -A`, so the tree id would name content the steps never
+// read (per-result-suite CP1 F1). computeContentKey refuses such an index:
+// no record is written or accepted for a tree it could not see.
 //
 // Every git call here runs through runGit's cleanGitEnv, so the GIT_DIR /
 // GIT_INDEX_FILE variables a pre-commit hook exports cannot redirect these
@@ -40,12 +47,17 @@ export function contentKeyFrom(parts: Omit<ContentKey, 'key'>): string {
     .digest('hex')
 }
 
-function gitOrThrow(args: string[], cwd: string, env?: Record<string, string>): string {
+function gitOrThrow(
+  args: string[],
+  cwd: string,
+  env?: Record<string, string>,
+  trim = true
+): string {
   const result = runGit(args, { cwd, timeoutMs: KEY_GIT_TIMEOUT_MS, env })
   if (!result.ok) {
     throw new Error(`check: git ${args[0]} failed: ${result.stderr.trim() || `exit ${result.exitCode}`}`)
   }
-  return result.stdout.trim()
+  return trim ? result.stdout.trim() : result.stdout
 }
 
 /**
@@ -58,16 +70,88 @@ export function resolveIndexPath(cwd: string): string {
   return path.isAbsolute(answer) ? answer : path.join(cwd, answer)
 }
 
+/** An index entry whose working-tree content git does not look at. */
+export interface HiddenEntry {
+  path: string
+  skipWorktree: boolean
+  assumeUnchanged: boolean
+}
+
+const MAX_NAMED = 20
+
+function shellWord(word: string): string {
+  return /^[\w./@%+=:,-]+$/.test(word) ? word : `'${word.replace(/'/g, `'\\''`)}'`
+}
+
+/** The per-path fix for `entries`: one `git update-index` command per flag,
+ * naming that flag's paths (the first 20), plus the sparse-checkout note —
+ * a sparse checkout marks every excluded path skip-worktree. */
+export function describeHidden(entries: HiddenEntry[]): string {
+  const parts: string[] = []
+  for (const [flag, paths] of [
+    ['skip-worktree', entries.filter((entry) => entry.skipWorktree).map((entry) => entry.path)],
+    ['assume-unchanged', entries.filter((entry) => entry.assumeUnchanged).map((entry) => entry.path)],
+  ] as const) {
+    if (paths.length === 0) continue
+    const more = paths.length > MAX_NAMED ? ` (+${paths.length - MAX_NAMED} more)` : ''
+    const named = paths.slice(0, MAX_NAMED)
+    parts.push(
+      `${flag}: ${named.join(', ')}${more} — clear with ` +
+        `\`git update-index --no-${flag} -- ${named.map(shellWord).join(' ')}\``
+    )
+  }
+  return (
+    `${parts.join('; ')}. Sparse checkouts are not supported: run \`git sparse-checkout disable\` ` +
+    'in a sparse checkout.'
+  )
+}
+
+/** Thrown when the index hides working-tree content from the key. */
+export class HiddenIndexEntriesError extends Error {
+  constructor(readonly entries: HiddenEntry[]) {
+    super(
+      `check: ${entries.length} index entr${entries.length === 1 ? 'y hides' : 'ies hide'} working-tree ` +
+        `content from the key. ${describeHidden(entries)} Then rerun.`
+    )
+    this.name = 'HiddenIndexEntriesError'
+  }
+}
+
+/**
+ * The entries flagged skip-worktree (`S`, or `s` with assume-unchanged too)
+ * or assume-unchanged (a lowercase tag) in `git ls-files -v` output, NUL
+ * delimited. Pure, so the tag rule is tested without git.
+ */
+export function hiddenEntries(lsFilesV: string): HiddenEntry[] {
+  const hidden: HiddenEntry[] = []
+  for (const entry of lsFilesV.split('\0')) {
+    if (entry.length < 3 || entry[1] !== ' ') continue
+    const tag = entry[0]
+    const assumeUnchanged = tag >= 'a' && tag <= 'z'
+    const skipWorktree = tag === 'S' || tag === 's'
+    if (skipWorktree || assumeUnchanged) hidden.push({ path: entry.slice(2), skipWorktree, assumeUnchanged })
+  }
+  return hidden
+}
+
+/** The hidden entries of the index behind `cwd` (or `indexFile`). */
+export function listHiddenEntries(cwd: string, indexFile?: string): HiddenEntry[] {
+  const env = indexFile !== undefined ? { GIT_INDEX_FILE: indexFile } : undefined
+  return hiddenEntries(gitOrThrow(['ls-files', '-v', '-z'], cwd, env, false))
+}
+
 /**
  * Compute the working tree's content key. Throws outside a repository, on a
- * git failure (a conflicted index, for example), or when the index path
- * cannot be resolved — a check must never cache under a key it could not
- * derive.
+ * git failure (a conflicted index, for example), when the index path cannot
+ * be resolved, or when an index entry hides its on-disk content
+ * (HiddenIndexEntriesError) — a check must never cache under a key it could
+ * not derive from what its steps read.
  *
  * @param indexFile the index to copy. Defaults to the repository's index;
  *   a pre-commit hook passes its own GIT_INDEX_FILE here explicitly (read
  *   from the environment before the check strips GIT_* from step
- *   environments), so the key still reflects the commit's staged content.
+ *   environments). It only seeds the copy's stat cache: the key is the
+ *   working tree's either way.
  */
 export function computeContentKey(options: { cwd: string; indexFile?: string }): ContentKey {
   const { cwd, indexFile } = options
@@ -82,6 +166,8 @@ export function computeContentKey(options: { cwd: string; indexFile?: string }):
       fs.copyFileSync(sourceIndex, tempIndex)
     }
     const indexEnv = { GIT_INDEX_FILE: tempIndex }
+    const hidden = hiddenEntries(gitOrThrow(['ls-files', '-v', '-z'], cwd, indexEnv, false))
+    if (hidden.length > 0) throw new HiddenIndexEntriesError(hidden)
     gitOrThrow(['add', '-A'], cwd, indexEnv)
     const treeId = gitOrThrow(['write-tree'], cwd, indexEnv)
     return {

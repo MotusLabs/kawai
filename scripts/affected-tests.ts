@@ -74,10 +74,16 @@ export function isDocsOnlyCommit(staged: readonly string[]): boolean {
 // --- escapes (D2) ---
 
 // Files the selection itself depends on, or that Bun's import following
-// cannot attribute: the runner, the check pipeline, this script, the test
-// preload, the package manifest, the lockfile, the Bun pin, the bunfig, the
-// hooks, and the root TypeScript configs. Evaluated before docs-only
-// classification and before tier exclusion.
+// cannot attribute: every script under scripts/ outside scripts/__tests__/
+// (the runner, the check pipeline, this script, the hooks' scripts, and the
+// modules they import), the entry scripts' import closure outside scripts/
+// (ESCAPE_CLOSURE_FILES; escapeClosure.test.ts walks the closure and fails
+// on a module that does not escape), the test preload, the package
+// manifest, the lockfile, the Bun pin, the bunfig, the hooks, and the root
+// TypeScript configs. The rule errs toward the full check. Evaluated before
+// docs-only classification and before tier exclusion.
+export const ESCAPE_CLOSURE_FILES: ReadonlySet<string> = new Set(['src/server/git/gitCommand.ts'])
+
 const ESCAPE_FILES = new Set([
   'scripts/test-runner.ts',
   'scripts/check.ts',
@@ -90,7 +96,8 @@ const ESCAPE_FILES = new Set([
 ])
 
 export function isEscapeCandidate(candidate: string): boolean {
-  if (ESCAPE_FILES.has(candidate)) return true
+  if (ESCAPE_FILES.has(candidate) || ESCAPE_CLOSURE_FILES.has(candidate)) return true
+  if (candidate.startsWith('scripts/') && !candidate.startsWith('scripts/__tests__/')) return true
   if (candidate.startsWith('.githooks/')) return true
   if (!candidate.includes('/') && /^tsconfig(?:\.[^/]+)?\.json$/.test(candidate)) return true
   return candidate.includes('__tests__/helpers/')

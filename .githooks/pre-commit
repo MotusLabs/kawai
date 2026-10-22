@@ -1,27 +1,13 @@
 #!/bin/sh
-set -e
-
-echo "Running pre-commit checks..."
-
-# Docs-only commits have nothing for the unit suite to cover. Lint and
-# typecheck still run — they are cheap and give a misclassified source file
-# some scrutiny. See scripts/docs-only-changes.sh for the classification rules.
-# An EMPTY staged diff is not a docs-only change: it is an amend without
-# content changes, whose committed content is the working tree — exactly what
-# the recorded-pass cache covers — so it takes the check path below.
-if scripts/docs-only-changes.sh && [ -n "$(git diff --cached --no-renames --name-only)" ]; then
-	echo "Docs-only change; lint and typecheck still run."
-	echo "Linting..."
-	bun run lint
-	echo "Type checking..."
-	bun run typecheck
-else
-	# A source change gets the full pipeline through the content-keyed cache:
-	# a working tree whose key already passed reports the recorded pass in
-	# seconds, and the record is shared by every linked worktree. Failures are
-	# never recorded; `bun run check --force` reruns everything.
-	echo "Checking (lint, typecheck, unit suite; cached by content)..."
-	bun run check
-fi
-
-echo "All checks passed!"
+# The commit hook (per-result-suite D1/D2): lint, typecheck, and the affected
+# fast-tier tests for a source commit; lint, typecheck, and the tests whose
+# @reads header matches a changed path for a docs-only commit; the full check
+# (`bun run check`, cached by content) on an escape path or a message-only
+# amend without a recorded pass. The full check runs at result and push
+# (.githooks/pre-push). Git runs hooks from the working tree's root; the
+# decision table lives in scripts/pre-commit.ts.
+top=$(git rev-parse --show-toplevel) || {
+  echo "pre-commit: cannot resolve the repository root; commit refused" >&2
+  exit 1
+}
+exec bun "$top/scripts/pre-commit.ts"

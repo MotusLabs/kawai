@@ -437,7 +437,7 @@ describe('isDocsOnlyPath mirrors the shell rule', () => {
 })
 
 describe('the D2 escape list', () => {
-  test('machinery, manifests, hooks, and root configs escape', () => {
+  test('machinery, every script outside scripts/__tests__, the closure, manifests, hooks, and root configs escape', () => {
     for (const escaped of [
       'scripts/test-runner.ts',
       'scripts/check.ts',
@@ -450,6 +450,12 @@ describe('the D2 escape list', () => {
       '.githooks/pre-commit',
       'tsconfig.json',
       'tsconfig.node.json',
+      'scripts/lib/reads.ts',
+      'scripts/lib/checkKey.ts',
+      'scripts/planBatches.ts',
+      'scripts/pre-commit.ts',
+      'scripts/release.ts',
+      'src/server/git/gitCommand.ts',
     ]) {
       expect(isEscapeCandidate(escaped)).toBe(true)
     }
@@ -457,7 +463,9 @@ describe('the D2 escape list', () => {
       'src/leaf.ts',
       'nested/tsconfig.json',
       'src/server/tsconfig.json',
-      'scripts/lib/reads.ts',
+      'scripts/__tests__/reads.test.ts',
+      'scripts/__tests__/fixtures/report.xml',
+      'src/server/git/other.ts',
     ]) {
       expect(isEscapeCandidate(kept)).toBe(false)
     }
