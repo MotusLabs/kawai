@@ -146,18 +146,17 @@ describe('ChatSessionManager turn-end settle wiring', () => {
       const mail = claimPushed(manager, id, 'work')
       // `mail` is the row id (claimPushed returns it), as everywhere below.
 
-      // The double the handleDriverEvent wiring must reach: it checks the
-      // session it is called with, fails the first (inline) attempt, and
-      // lets the real settle run on the retry.
+      // The double the handleDriverEvent wiring must reach: it fails the
+      // first (inline) attempt and lets the real settle run on the retry.
       const facade = (manager as unknown as {
-        teamMail: { settleClaims: (sessionId: string, refs: ClaimRef[]) => void }
+        teamMail: { settleClaims: (refs: ClaimRef[]) => void }
       }).teamMail
       const realSettleClaims = facade.settleClaims.bind(facade)
-      const attempts: string[] = []
-      facade.settleClaims = (sessionId: string, refs: ClaimRef[]) => {
-        attempts.push(sessionId)
-        if (attempts.length === 1) throw new Error('database is locked')
-        realSettleClaims(sessionId, refs)
+      let attempts = 0
+      facade.settleClaims = (refs: ClaimRef[]) => {
+        attempts += 1
+        if (attempts === 1) throw new Error('database is locked')
+        realSettleClaims(refs)
       }
 
       handles[0]!.push(resultWithWindow())
@@ -168,10 +167,10 @@ describe('ChatSessionManager turn-end settle wiring', () => {
         await flush()
       }
 
-      // The settle ran twice (inline + retry) for exactly this session, and
-      // the retry landed: the transcript carries no receipt id, so the
-      // message is hold-uncertain — settled, not stranded, not claimed.
-      expect(attempts).toEqual([id, id])
+      // The settle ran twice (inline + retry), and the retry landed: the
+      // transcript carries no receipt id, so the message is hold-uncertain
+      // — settled, not stranded, not claimed.
+      expect(attempts).toBe(2)
       expect(manager.mailbox.store.get(mail)?.state).toBe('uncertain')
       expect(manager.mailbox.store.eventsFor(mail).some(event => event.kind === 'held-uncertain')).toBe(true)
 
@@ -210,7 +209,7 @@ describe('ChatSessionManager turn-end settle wiring', () => {
       const facade = (manager as unknown as {
         teamMail: {
           settleRecipient: (sessionId: string) => void
-          settleClaims: (sessionId: string, refs: ClaimRef[]) => void
+          settleClaims: (refs: ClaimRef[]) => void
         }
       }).teamMail
       const realSettleRecipient = facade.settleRecipient.bind(facade)
@@ -226,9 +225,9 @@ describe('ChatSessionManager turn-end settle wiring', () => {
         failOnce()
         realSettleRecipient(sessionId)
       }
-      facade.settleClaims = (sessionId: string, refs: ClaimRef[]) => {
+      facade.settleClaims = (refs: ClaimRef[]) => {
         failOnce()
-        realSettleClaims(sessionId, refs)
+        realSettleClaims(refs)
       }
 
       handles[0]!.push(resultWithWindow())
@@ -275,14 +274,14 @@ describe('ChatSessionManager turn-end settle wiring', () => {
 
       const mail = claimPushed(manager, id, 'work')
       const facade = (manager as unknown as {
-        teamMail: { settleClaims: (sessionId: string, refs: ClaimRef[]) => void }
+        teamMail: { settleClaims: (refs: ClaimRef[]) => void }
       }).teamMail
       const realSettleClaims = facade.settleClaims.bind(facade)
       let attempts = 0
-      facade.settleClaims = (sessionId: string, refs: ClaimRef[]) => {
+      facade.settleClaims = (refs: ClaimRef[]) => {
         attempts += 1
         if (attempts === 1) throw new Error('database is locked')
-        realSettleClaims(sessionId, refs)
+        realSettleClaims(refs)
       }
 
       handles[0]!.push(resultWithWindow())
@@ -329,14 +328,14 @@ describe('ChatSessionManager turn-end settle wiring', () => {
 
       const first = claimPushed(manager, id, 'first')
       const facade = (manager as unknown as {
-        teamMail: { settleClaims: (sessionId: string, refs: ClaimRef[]) => void }
+        teamMail: { settleClaims: (refs: ClaimRef[]) => void }
       }).teamMail
       const realSettleClaims = facade.settleClaims.bind(facade)
-      const attempts: string[] = []
-      facade.settleClaims = (sessionId: string, refs: ClaimRef[]) => {
-        attempts.push(sessionId)
-        if (attempts.length <= 2) throw new Error('database is locked')
-        realSettleClaims(sessionId, refs)
+      let attempts = 0
+      facade.settleClaims = (refs: ClaimRef[]) => {
+        attempts += 1
+        if (attempts <= 2) throw new Error('database is locked')
+        realSettleClaims(refs)
       }
 
       handles[0]!.push(resultWithWindow()) // turn 1 ends: inline fail, chain armed
@@ -344,8 +343,8 @@ describe('ChatSessionManager turn-end settle wiring', () => {
       // messages on a later macrotask, so turn two may only open once turn
       // one's result was actually processed.
       const inlined = Date.now() + 4500
-      while (Date.now() < inlined && attempts.length < 1) await flush()
-      expect(attempts.length).toBe(1)
+      while (Date.now() < inlined && attempts < 1) await flush()
+      expect(attempts).toBe(1)
       // Still inside the retry window: a second turn ends and its settle
       // fails too — it must join the pending chain, not be dropped.
       await manager.send(id, 'turn two')
@@ -353,14 +352,14 @@ describe('ChatSessionManager turn-end settle wiring', () => {
       const second = claimPushed(manager, id, 'second')
       handles[0]!.push(resultWithWindow())
       const deadline = Date.now() + 4500
-      while (Date.now() < deadline && attempts.length < 4) await flush()
+      while (Date.now() < deadline && attempts < 4) await flush()
 
       // Two inline failures plus one retry round running both joined
       // settles. The second attempt's snapshot also holds the first message
       // (still claimed when it was taken); the first settle claims it
       // first, so the identity check skips it for the second — no double
       // settle.
-      expect(attempts).toEqual([id, id, id, id])
+      expect(attempts).toBe(4)
       expect(manager.mailbox.store.get(first)?.state).toBe('uncertain')
       expect(manager.mailbox.store.get(second)?.state).toBe('uncertain')
       expect(events.some(event => event.type === 'error')).toBe(false)

@@ -537,7 +537,7 @@ export class SessionMailbox {
    * settle; the transitions themselves stay conditional, so an already
    * settled row is skipped by the store.
    */
-  settleClaims(id: string, refs: ClaimRef[]) {
+  settleClaims(refs: ClaimRef[]) {
     for (const ref of refs) {
       const mail = this.mailbox.store.get(ref.id)
       if (!mail || mail.state !== 'claimed' || mail.claimedBy !== ref.claimant || mail.claimedAt !== ref.claimedAt) continue
