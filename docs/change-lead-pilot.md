@@ -357,9 +357,10 @@ dependency, and acceptance check:
 
 Walkthrough of one full pass:
 
-1. **Enrollment.** The Team Lead proposes `add-export-csv`; the human names
-   the change and the coordinator session; the parent records baseline, 14-day
-   window, and the quota pool.
+1. **Enrollment.** The Team Lead proposes `add-export-csv` — two coherent
+   implementation groups, stable contracts, and not owned by a running plan
+   execution; the human names the change and the coordinator session; the
+   parent records baseline, 14-day window, and the quota pool.
 2. **Children.** The Change Lead creates R1/R2 (one child, dev A) and R3
    (another child, dev B) with the coordination block, separate worktrees,
    R3 depending on R2's message shape only.
@@ -395,6 +396,19 @@ A documented tabletop walkthrough (this document's Section 10, and the
 scenarios of the `change-coordination` delta) covers interpretation,
 reporting, escalation, assembled-head review, and withdrawal; it demonstrates
 the protocol, and does not claim that agents will obey prompts.
+
+Delta-scenario coverage (4.1): the Section 10 walkthrough plus the sections it
+references cover every scenario of the `change-coordination` delta —
+enrollment (§1), the ordinary-task fallback and reporting routes (§4),
+execution-owned exclusion (§1; the example change qualifies by construction),
+child creation and parent/child asymmetry (§2, §3; mechanically tested),
+local clarification versus contract escalation (§10 step 3), shared caps and
+one writer per worktree (§4, §10 step 2), local result reporting and the
+conflicting-coordinator case (§4, §10 step 4), one review per result, fix
+results, and reviewer absence (§5), assembled evidence and closure-versus-
+acceptance (§2, §6, §10 steps 5–6), coordinator loss and replacement (§7, §10
+final paragraph), evaluation with incomplete evidence (§9), and withdrawal
+with a pending review and older running prompts (§8).
 
 Mechanically tested (cited `file › title`):
 
