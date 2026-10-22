@@ -177,14 +177,26 @@ describe('team-task-handoff', () => {
 })
 
 describe('team-task-release', () => {
-  test('the review handoff after the release carries the worker; a resend with another worker is refused naming worker', async () => {
+  /** A task whose worktree holds one live spawned member, with a submitted result. */
+  const releasable = async () => {
     const task = await tasks.create(human(), { title: 'Export', direction: 'v1' })
     const worktree = path.join(dir, 'wt')
     fs.mkdirSync(path.join(worktree, '.git'), { recursive: true })
     db.db.prepare('UPDATE team_tasks SET worktree = ? WHERE id = ?').run(worktree, task.id)
     records.set('dev', { sessionId: 'dev', name: 'dev', projectPath: worktree, sdkSessionId: null, status: 'waiting', createdAt: '',
       lastActivityAt: '', groupId: 'devs', spawned: true, taskId: task.id })
-    resultFor(task.id)
+    return { task, result: resultFor(task.id) }
+  }
+  /** Request review queued before the release, as when the worktree is occupied. */
+  const requestReview = async (taskId: string, resultId: string, worker: string) => {
+    await send({ type: 'team-task-handoff', teamPath: '/repo', requestId: 'standing', taskId, kind: 'review', resultId,
+      target: { kind: 'group', id: 'reviewers' }, instructions: 'Review the export', requestKey: 'handoff-standing', worker })
+    return resultOf('standing').assignment!
+  }
+  const state = (messageId: string | null) => mail.get(messageId!)!.state
+
+  test('the review handoff after the release carries the worker; a resend with another worker is refused naming worker', async () => {
+    const { task } = await releasable()
     const release = (requestId: string, worker: string) => send({ type: 'team-task-release', teamPath: '/repo', requestId, taskId: task.id,
       target: 'reviewers', instructions: 'Review the export', requestKey: 'release-1', worker })
     await release('r1', 'glm-flash')
@@ -196,5 +208,54 @@ describe('team-task-release', () => {
     await release('r3', 'claude')
     expect(resultOf('r3').error).toBe('Request key already used with a different worker')
     expect(mail.forTask(task.id)).toHaveLength(1)
+  })
+
+  test('an invalid worker is refused before any member is archived, with nothing dispatched', async () => {
+    const { task } = await releasable()
+    await send({ type: 'team-task-release', teamPath: '/repo', requestId: 'r1', taskId: task.id,
+      target: 'reviewers', instructions: 'Review the export', requestKey: 'release-1', worker: 'opus' })
+    expect(resultOf('r1').error).toContain('opus')
+    expect(records.get('dev')!.archivedAt).toBeUndefined()
+    expect(assignmentRows()).toEqual([])
+    expect(mail.forTask(task.id)).toEqual([])
+  })
+
+  test('a standing review with the same normalized worker proceeds in the freed worktree; nothing new is dispatched', async () => {
+    const { task, result } = await releasable()
+    const standing = await requestReview(task.id, result.id, 'zai/glm-flash')
+    await send({ type: 'team-task-release', teamPath: '/repo', requestId: 'r1', taskId: task.id,
+      target: 'reviewers', instructions: 'Review the export', requestKey: 'release-1', worker: 'glm-flash' })
+    expect(resultOf('r1')).toMatchObject({ replay: true, assignment: { id: standing.id } })
+    expect(records.get('dev')!.archivedAt).toBe('now')
+    expect(mail.forTask(task.id)).toHaveLength(1)
+    expect(state(standing.messageId)).toBe('queued')
+  })
+
+  test('a different worker over a queued standing review dispatches a new review and cancels the queued one', async () => {
+    const { task, result } = await releasable()
+    const standing = await requestReview(task.id, result.id, 'claude')
+    await send({ type: 'team-task-release', teamPath: '/repo', requestId: 'r1', taskId: task.id,
+      target: 'reviewers', instructions: 'Review the export', requestKey: 'release-1', worker: 'glm-flash' })
+    const answer = resultOf('r1')
+    expect(answer).toMatchObject({ replay: false, assignment: { handoffKind: 'review', workerChoice: 'zai/glm-flash' } })
+    expect(answer.assignment!.id).not.toBe(standing.id)
+    expect(records.get('dev')!.archivedAt).toBe('now')
+    expect(state(standing.messageId)).toBe('cancelled')
+    expect(tasks.store.assignmentsOf(task.id).find(row => row.id === standing.id)!.supersededBy).toBe(answer.assignment!.id)
+  })
+
+  test('a different worker over a claimed standing review dispatches a new review and leaves the claimed one untouched', async () => {
+    const { task, result } = await releasable()
+    const standing = await requestReview(task.id, result.id, 'claude')
+    records.set('rev', { sessionId: 'rev', name: 'rev', projectPath: dir, sdkSessionId: null, status: 'working', createdAt: '', lastActivityAt: '', groupId: 'reviewers' })
+    expect(mail.claim(standing.messageId!, 'rev')).toBe(true)
+    await send({ type: 'team-task-release', teamPath: '/repo', requestId: 'r1', taskId: task.id,
+      target: 'reviewers', instructions: 'Review the export', requestKey: 'release-1', worker: 'glm-flash' })
+    const answer = resultOf('r1')
+    expect(answer.error).toBeUndefined()
+    expect(answer).toMatchObject({ replay: false, assignment: { workerChoice: 'zai/glm-flash' } })
+    expect(state(standing.messageId)).toBe('claimed')
+    expect(mail.get(standing.messageId!)!.claimedBy).toBe('rev')
+    expect(mail.forTask(task.id).filter(message => message.state !== 'cancelled')).toHaveLength(2)
   })
 })

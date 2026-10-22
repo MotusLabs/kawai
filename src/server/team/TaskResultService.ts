@@ -16,6 +16,7 @@ import type { MemberRelease } from './memberRelease'
 import { TaskRelease } from './taskRelease'
 import { statusRefusal, type TaskCaller, type TaskService } from './TaskService'
 import { refuseSystem } from './systemCaller'
+import type { TeamIdentity } from './teamIdentity'
 import { worktreeRootOf } from './worktreeRoots'
 
 export interface ResultSubmission {
@@ -222,6 +223,12 @@ export class TaskResultService {
    * stands (not superseded, not failed), a retried call returns it with a
    * notice instead of dispatching again; a failed one loses standing.
    */
+  /** A handoff's canonical worker choice (dispatch-worker-choice D7), refused like the dispatch refuses it. */
+  workerChoice(caller: TaskCaller, team: TeamIdentity, target: AssignmentTarget, raw: string | undefined): string | null {
+    if (!this.options.assignments) throw new Error('Handoffs are not available')
+    return this.options.assignments.workerChoice(caller, team, target, raw)
+  }
+
   async handoff(caller: TaskCaller, taskId: string, request: HandoffRequest): Promise<HandoffOutcome> {
     refuseSystem(caller, 'handoff')
     const { team } = await this.tasks.context(caller)

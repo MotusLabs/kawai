@@ -42,7 +42,7 @@
 
 ## 4. Human dispatch
 
-- [ ] 4.1 Carry an optional `worker` on `team-task-assign`, `team-task-create` (with assignment), and the human handoff, through `AssignmentService`. Verify service tests for storage, instruction mail carrying the choice, and the replay refusal naming `worker`.
+- [x] 4.1 Carry an optional `worker` on `team-task-assign` (which also carries Create and assign's assign leg; `team-task-create` takes no assignment and no field), `team-task-handoff`, and `team-task-release`'s review handoff, through `TaskConnections` to `AssignmentService`. Release validates and normalizes the worker before archiving anyone, and a standing review counts only with the same choice; one with another choice is superseded through the stop branch (a claimed or delivered one stays live). Verify service tests for storage, instruction mail carrying the choice, the replay refusal naming `worker`, a normalized-equal replay, the session-target refusal, and release's invalid-worker and standing-review cases.
 - [ ] 4.2 Apply the choice in `team-task-preview` (effective profile, staffing, cooling warning). Verify preview tests including a cooling warning that does not block.
 - [ ] 4.3 Add the worker picker to the task form and the Assign dialog: group targets only, workers grouped by provider with usage and cooldown, and the choice inside the armed request key's payload. Verify client tests, and a `dev-browser` walkthrough assigning on a chosen provider.
 - [ ] 4.4 Add the worker choice bullet to AGENTS.md (mail, routing, capacity tool, human dispatch). Verify that the doc names only shipped tool and field names.
