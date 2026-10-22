@@ -252,6 +252,25 @@ describe("C2's mail names the newest checkpoint's commit (B1)", () => {
   })
 })
 
+describe("O4's redispatch clear (B2)", () => {
+  test('a paused attempt target with a pending `redispatch` step clears it; one resume goes out and nothing re-sends under :retry: (C2)', async () => {
+    const world = await pausedAttempt()
+    // Retry under the hold left the redispatch step due (H′ A3's path): the
+    // change row carries `step: 'redispatch'` at resolve time.
+    const row = wired.executions.change(world.executionId, 'api')!
+    expect(wired.executions.transition(world.executionId, 'api', row, { step: 'redispatch' })).not.toBeNull()
+    ok(wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'continue' }))
+    expect(wired.executions.change(world.executionId, 'api')!.step).toBeNull()
+    expect(wired.resumeMails(world.taskId)).toHaveLength(1)
+    // The redispatch stage is the only :retry: sender (its trigger is the
+    // step at executionPlanner.ts:151); with the step cleared, no assignment
+    // of the task carries a retry key.
+    for (const assignment of wired.bench.assignmentStore.listByTask(world.taskId)) {
+      expect(assignment.requestKey).not.toContain(':retry:')
+    }
+  })
+})
+
 describe('completeness (every axis combination maps to exactly one row or one U-claim)', () => {
   // The axes at this step: the continue states, every attempt kind (implement,
   // fix, update) over owed/out/answered, and `answered` split plain vs rev↗
