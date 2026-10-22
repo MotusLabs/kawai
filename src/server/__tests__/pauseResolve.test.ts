@@ -219,6 +219,12 @@ describe('the C-rows (A3, verbatim)', () => {
       wired.republish(world.taskId)
       ok(wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'continue' }))
       expect(wired.executions.rounds(world.executionId, 'api').at(-1)!.outcome).toBe('superseded')
+      // N4: the slot-releasing transition is unreachable for every Continue
+      // cell — the change stays where insertRound left it; the supersede
+      // alone is the drop.
+      const row = wired.executions.change(world.executionId, 'api')!
+      expect(row.state).toBe('gating')
+      expect(row.step).toBeNull()
       expect(wired.resumeMails(world.taskId)).toHaveLength(1)
     } else if (id === 'C17') {
       const world = await pausedUpdate()
