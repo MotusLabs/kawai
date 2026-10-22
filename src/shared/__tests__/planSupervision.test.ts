@@ -254,6 +254,31 @@ describe('no-progress', () => {
   })
 })
 
+describe("the update stage's no-progress (O3′)", () => {
+  const updateOut = () => input({
+    state: 'gating',
+    step: null,
+    attempt: { kind: 'update', status: 'out' },
+    instruction: { messageId: 'msg-1', state: 'delivered', deliveredAt: ago(180), blocker: null, holder: holder() },
+  })
+
+  test('a gating update row out, delivered past the attempt deadline, stalls no-progress', () => {
+    const view = changeSupervision(updateOut(), NOW)
+    expect(view.stage).toBe('update')
+    expect(view.outcome).toBe('stalled')
+    expect(view.stall).toEqual({ kind: 'no-progress', episodeKey: ago(180), anchorAt: ago(180), deadlineAt: ago(60), idle: false })
+    expect(causeLabel(view.cause)).toBe('Stalled: no progress')
+  })
+
+  test('the same gating change with no attempt row stays Kawai-held and never stalls', () => {
+    const view = changeSupervision({ ...updateOut(), attempt: null }, NOW)
+    expect(view.stage).toBe('kawai')
+    expect(view.outcome).toBe('running')
+    expect(view.stall).toBeNull()
+    expect(view.cause).toEqual({ kind: 'stage', stage: 'kawai', step: null })
+  })
+})
+
 describe('labels', () => {
   test('an unknown cause or stop reason renders verbatim', () => {
     expect(causeLabel({ kind: 'hold' })).toBe('hold')
