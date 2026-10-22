@@ -4,6 +4,7 @@
 // destination, so `git mv src/runtime.ts docs/runtime.txt` would otherwise be
 // classified as a docs-only commit and skip the unit suite while removing
 // runtime code.
+// @reads: docs/**, openspec/changes/demo/**
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'

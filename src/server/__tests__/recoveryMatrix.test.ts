@@ -5,6 +5,7 @@
 // row has neither a citation nor `gap — <reason>`. The checker's own failure
 // modes are pinned against synthetic tables, so a broken checker cannot pass
 // the real one vacuously.
+// @reads: docs/recovery-matrix.md
 import { describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import path from 'node:path'

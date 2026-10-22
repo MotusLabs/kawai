@@ -4,6 +4,8 @@
 // digests cover exactly what the checks read, and catalog digests cover the
 // named groups and the known profile ids. The adapter is injected, and no
 // test spawns a CLI process: any validate/showDeltas call would throw.
+// @reads: openspec/changes/old-change, openspec/changes/validation
+// @reads: openspec/changes/archive/2026-01-01-old-change, openspec/changes/archive/2026-01-01-plan-validation
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'

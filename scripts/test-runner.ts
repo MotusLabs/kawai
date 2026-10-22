@@ -20,7 +20,13 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { recordsDir } from './lib/checkRecords'
-import { REAL_TMUX_FILES, isRealTmuxFile, isSlowTierFile, planBatches } from './planBatches'
+import {
+  REAL_TMUX_FILES,
+  UNIT_TEST_GLOBS,
+  isRealTmuxFile,
+  isSlowTierFile,
+  planBatches,
+} from './planBatches'
 import { planRun, runBatchesAndPublish } from './runPlan'
 import {
   formatMisplacedReport,
@@ -268,29 +274,26 @@ export async function forwardSignalAndReap(
 // Every directory is enumerated as files: a bare directory entry in the main
 // batch would escape excludeSlowTier's per-file filter (review follow-up).
 export async function collectFiles(): Promise<CollectedFiles> {
+  const [serverGlob, sharedGlob, clientGlob, runnerGlob] = UNIT_TEST_GLOBS
   const serverTests: string[] = []
-  const serverGlob = new Bun.Glob('src/server/__tests__/*.test.ts')
-  for await (const file of serverGlob.scan({ onlyFiles: true })) {
+  for await (const file of new Bun.Glob(serverGlob).scan({ onlyFiles: true })) {
     if (!isRealTmuxFile(file)) {
       serverTests.push(file)
     }
   }
 
   const sharedTests: string[] = []
-  const sharedGlob = new Bun.Glob('src/shared/__tests__/*.test.{ts,tsx}')
-  for await (const file of sharedGlob.scan({ onlyFiles: true })) {
+  for await (const file of new Bun.Glob(sharedGlob).scan({ onlyFiles: true })) {
     sharedTests.push(file)
   }
 
   const clientTests: string[] = []
-  const clientGlob = new Bun.Glob('src/client/__tests__/*.test.{ts,tsx}')
-  for await (const file of clientGlob.scan({ onlyFiles: true })) {
+  for await (const file of new Bun.Glob(clientGlob).scan({ onlyFiles: true })) {
     clientTests.push(file)
   }
 
   const runnerTests: string[] = []
-  const runnerGlob = new Bun.Glob('scripts/__tests__/*.test.{ts,tsx}')
-  for await (const file of runnerGlob.scan({ onlyFiles: true })) {
+  for await (const file of new Bun.Glob(runnerGlob).scan({ onlyFiles: true })) {
     runnerTests.push(file)
   }
 
