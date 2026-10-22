@@ -110,17 +110,57 @@ describe('ChangeArtifactsResolver', () => {
     expect(calls.every(call => call.cwd === convention)).toBe(true)
   })
 
-  test("a convention worktree lacking the change reports missing, never main's copy", async () => {
+  test("a convention worktree lacking the change in both listings reports missing, never main's copy", async () => {
     const main = makeMain('convention-missing')
     writeChange(main, 'alpha', [{ relative: 'tasks.md', body: '# main tasks\n' }])
     const convention = path.join(main, '.worktrees', 'alpha')
     fs.mkdirSync(convention, { recursive: true })
     const { run, calls } = stubRunner({
       [`${convention}|list --json`]: cwd => listing(cwd, []),
+      [`${convention}|list --archived --json`]: cwd => listing(cwd, []),
     })
     const resolution = await new ChangeArtifactsResolver(run).resolve('alpha', { mainRoot: main, worktreeRoots: [convention] })
     expect(resolution).toMatchObject({ ok: false, state: 'missing-in-worktree' })
     expect(calls.every(call => call.cwd === convention)).toBe(true)
+  })
+
+  test("a change archived in a listed convention worktree resolves through that worktree's archive", async () => {
+    const main = makeMain('convention-archived')
+    writeChange(main, 'beta', [{ relative: 'tasks.md', body: '# main tasks\n' }])
+    const convention = path.join(main, '.worktrees', 'beta')
+    fs.mkdirSync(convention, { recursive: true })
+    const archiveRoot = path.join(convention, 'openspec', 'changes', 'archive', '2026-02-03-beta')
+    for (const relative of ['proposal.md', 'tasks.md']) writeFile(archiveRoot, relative, '# archived\n')
+    const { run, calls } = stubRunner({
+      [`${convention}|list --json`]: cwd => listing(cwd, []),
+      [`${convention}|list --archived --json`]: cwd => listing(cwd, ['2026-02-03-beta']),
+    })
+    const resolution = await new ChangeArtifactsResolver(run).resolve('beta', { mainRoot: main, worktreeRoots: [convention] })
+    expect(resolution).toMatchObject({
+      ok: true, changeName: 'beta', changeRoot: archiveRoot,
+      source: { kind: 'archive', root: archiveRoot, entry: '2026-02-03-beta' },
+    })
+    if (resolution.ok) {
+      expect(resolution.artifacts.map(artifact => artifact.relativePath)).toEqual(['proposal.md', 'tasks.md'])
+    }
+    // The convention worktree stays canonical: main is never consulted even
+    // though its active listing still holds the change (O5 regression).
+    expect(calls.every(call => call.cwd === convention)).toBe(true)
+  })
+
+  test('two archive entries in a convention worktree are an explicit ambiguity, not a pick', async () => {
+    const main = makeMain('convention-archived-ambiguous')
+    const convention = path.join(main, '.worktrees', 'beta')
+    fs.mkdirSync(convention, { recursive: true })
+    for (const entry of ['2026-01-02-beta', '2026-03-04-beta']) {
+      writeFile(path.join(convention, 'openspec', 'changes', 'archive', entry), 'tasks.md', '# x\n')
+    }
+    const { run } = stubRunner({
+      [`${convention}|list --json`]: cwd => listing(cwd, []),
+      [`${convention}|list --archived --json`]: cwd => listing(cwd, ['2026-01-02-beta', '2026-03-04-beta']),
+    })
+    const resolution = await new ChangeArtifactsResolver(run).resolve('beta', { mainRoot: main, worktreeRoots: [convention] })
+    expect(resolution).toMatchObject({ ok: false, state: 'ambiguous' })
   })
 
   test('an archived change resolves its unique archive location', async () => {
