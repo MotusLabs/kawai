@@ -58,6 +58,7 @@ beforeEach(() => {
     plans: bench.service,
     planWorkspace: new PlanWorkspaceStore(bench.db.db),
     planWorkspaceRefs: new PlanWorkspaceRefs(bench.db.db),
+    tasks: { worktrees: { list: async () => [world.repo, world.feature] } },
     has: (id: string) => records.has(id),
     isArchived: (id: string) => records.get(id)?.archivedAt != null,
     teams: { teamOf: (id: string) => teamOfMap.get(id) },
@@ -298,6 +299,88 @@ describe('binds', () => {
     records.delete('lead-chat')
     await send({ type: 'team-plan-workspace-open', teamPath: world.repo, planId })
     expect(views().find(binding => binding.role === 'lead')).toMatchObject({ availability: 'unavailable' })
+    expect(agentStarts).toBe(0)
+  })
+})
+
+describe('references', () => {
+  const refAdd = (over: Partial<Extract<ClientMessage, { type: 'team-plan-workspace-ref-add' }>> = {}) =>
+    ({
+      type: 'team-plan-workspace-ref-add', teamPath: world.repo, requestId: 'f1', commandId: 'ref-1',
+      planId: 'pending', label: 'Architecture', kind: 'local', worktreeId: world.repo, relativePath: 'docs/design.md', ...over,
+    }) as Extract<ClientMessage, { type: 'team-plan-workspace-ref-add' }>
+  const refRemove = (over: Partial<Extract<ClientMessage, { type: 'team-plan-workspace-ref-remove' }>> = {}) =>
+    ({ type: 'team-plan-workspace-ref-remove', teamPath: world.repo, requestId: 'g1', commandId: 'rm-1', refId: 'ref-x', ...over }) as Extract<ClientMessage, { type: 'team-plan-workspace-ref-remove' }>
+  const openPlan = async () => {
+    const { planId } = await bench.draftInReview()
+    await send({ type: 'team-plan-workspace-open', teamPath: world.repo, planId })
+    return planId
+  }
+
+  test('a committed ref-add answers, rides the snapshot, and re-pushes; a replay answers without a push', async () => {
+    const planId = await openPlan()
+    await send(refAdd({ planId }))
+    expect(last('team-plan-workspace-result')).toMatchObject({ requestId: 'f1', replayed: false, ref: { label: 'Architecture', kind: 'local', planId } })
+    const pushed = await untilSnapshot(message => message.workspace.references.length > 0)
+    expect(pushed.workspace.references).toHaveLength(1)
+    const pushes = all('team-plan-workspace-snapshot').length
+    await send(refAdd({ planId, requestId: 'f2' }))
+    expect(last('team-plan-workspace-result')).toMatchObject({ requestId: 'f2', replayed: true })
+    await untilSnapshot(() => all('team-plan-workspace-snapshot').length > pushes || false, 10).catch(() => null)
+    expect(all('team-plan-workspace-snapshot')).toHaveLength(pushes)
+    expect(agentStarts).toBe(0)
+  })
+
+  test('insert-time validation is refused naming the field and writes nothing: an unlisted worktree, an unknown change, an http url', async () => {
+    const planId = await openPlan()
+    await send(refAdd({ planId, commandId: 'ref-w', worktreeId: '/not-a-worktree' }))
+    expect(last('team-plan-workspace-result')).toMatchObject({ requestId: 'f1', error: expect.stringContaining('/not-a-worktree'), field: 'worktreeId' })
+    await send(refAdd({ planId, commandId: 'ref-c', changeName: 'not-a-change' }))
+    expect(last('team-plan-workspace-result')).toMatchObject({ requestId: 'f1', error: expect.stringContaining('not-a-change'), field: 'changeName' })
+    await send({ type: 'team-plan-workspace-ref-add', teamPath: world.repo, requestId: 'f3', commandId: 'ref-u', planId, label: 'x', kind: 'external', url: 'http://example.internal/a' })
+    expect(last('team-plan-workspace-result')).toMatchObject({ requestId: 'f3', error: expect.stringContaining('https'), field: 'url' })
+    await send({ type: 'team-plan-workspace-ref-add', teamPath: world.repo, requestId: 'f4', commandId: 'ref-e', planId, label: '', kind: 'external', url: 'https://example.internal/a' })
+    expect(last('team-plan-workspace-result')).toMatchObject({ requestId: 'f4', field: 'label' })
+    // No refusal reached the snapshot, and none left a reference or a ledger row.
+    expect(all('team-plan-workspace-snapshot').every(message => message.workspace.references.length === 0)).toBe(true)
+    // A resend under the same command id after the state changes succeeds: the
+    // refusals wrote nothing, so the command id was never recorded.
+    await send({ type: 'team-plan-workspace-ref-add', teamPath: world.repo, requestId: 'f5', commandId: 'ref-u', planId, label: 'Spec', kind: 'external', url: 'https://example.internal/a' })
+    expect(last('team-plan-workspace-result')).toMatchObject({ requestId: 'f5', replayed: false, ref: { kind: 'external', url: 'https://example.internal/a' } })
+    expect(agentStarts).toBe(0)
+  })
+
+  test('another team\'s plan or an unknown path is refused with no data and no write', async () => {
+    const planId = await openPlan()
+    const foreign = bench.plans.insertPlan({ teamId: world.otherTeam.teamId, title: 'Secret', creator: { kind: 'human', sessionId: null } })
+    await send(refAdd({ planId: foreign }))
+    expect(last('team-plan-workspace-result')).toMatchObject({ requestId: 'f1', error: expect.stringContaining('Plan not found in this team'), field: 'planId' })
+    await send(refAdd({ teamPath: world.other, planId }))
+    expect(last('team-plan-workspace-result')).toMatchObject({ requestId: 'f1', error: expect.stringContaining('unknown-team') })
+    await send(refRemove({ teamPath: world.other }))
+    expect(last('team-plan-workspace-result')).toMatchObject({ requestId: 'g1', error: expect.stringContaining('unknown-team') })
+    // The team's own plan still reads no references: nothing was written.
+    await send({ type: 'team-plan-workspace-open', teamPath: world.repo, planId })
+    expect(last('team-plan-workspace-snapshot')!.workspace.references).toEqual([])
+    expect(agentStarts).toBe(0)
+  })
+
+  test('a committed ref-remove answers, empties the snapshot, and its replay answers without a push', async () => {
+    const planId = await openPlan()
+    await send(refAdd({ planId }))
+    await untilSnapshot(message => message.workspace.references.length > 0)
+    const refId = last('team-plan-workspace-snapshot')!.workspace.references[0]!.id
+    await send(refRemove({ refId }))
+    expect(last('team-plan-workspace-result')).toMatchObject({ requestId: 'g1', replayed: false, removedRefId: refId })
+    await untilSnapshot(message => message.workspace.references.length === 0)
+    const pushes = all('team-plan-workspace-snapshot').length
+    await send(refRemove({ refId, requestId: 'g2' }))
+    expect(last('team-plan-workspace-result')).toMatchObject({ requestId: 'g2', replayed: true, removedRefId: refId })
+    await untilSnapshot(() => all('team-plan-workspace-snapshot').length > pushes || false, 10).catch(() => null)
+    expect(all('team-plan-workspace-snapshot')).toHaveLength(pushes)
+    // A gone or foreign reference is refused with the one not-found message.
+    await send(refRemove({ refId, requestId: 'g3', commandId: 'rm-2' }))
+    expect(last('team-plan-workspace-result')).toMatchObject({ requestId: 'g3', error: expect.stringContaining('Reference not found in this team') })
     expect(agentStarts).toBe(0)
   })
 })
