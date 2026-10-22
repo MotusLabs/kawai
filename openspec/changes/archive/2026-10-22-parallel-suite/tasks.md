@@ -27,7 +27,7 @@
 
 ## 5. Integration check
 
-- [ ] 5.1 Compare a full run with the step 1.1 baseline: wall time, peak memory, and test count (identical). Record the result in the PR.
+- [x] 5.1 Compare a full run with the step 1.1 baseline: wall time, peak memory, and test count (identical). Record the result in the PR.
 
 ## Workflow follow-up
 
