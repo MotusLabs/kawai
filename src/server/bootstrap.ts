@@ -522,6 +522,7 @@ export function startServer(): void {
     }
     await Promise.allSettled(disposePromises)
     workspaceWatcherInstance.stop()
+    chatConnections.stop()
     logPoller.stop()
     remote.stop()
     clearInterval(accountNoticeTimer)

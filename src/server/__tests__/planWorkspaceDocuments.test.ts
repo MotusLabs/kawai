@@ -61,6 +61,9 @@ function fixtureHost() {
   }
   return {
     host,
+    watchers,
+    debounce,
+    intervals,
     fireWatch: (directory: string, name: string) => watchers.get(directory)?.(path.join(directory, name)),
     flushDebounce: () => {
       const armed = debounce.splice(0)
@@ -317,6 +320,22 @@ describe('document subscriptions', () => {
     await docSend({ type: 'team-plan-workspace-document-close', teamPath: world.repo, planId, worktreeId: world.feature, relativePath: 'notes/design.md' })
     await docSend({ type: 'team-plan-workspace-document-open', teamPath: world.repo, planId, worktreeId: world.repo, relativePath: 'notes/design.md' })
     expect(last('team-plan-workspace-document')!.view).toMatchObject({ executionMatch: 'unknown', executionId: null })
+    expect(agentStarts).toBe(0)
+  })
+
+  test('stop() closes every watcher and clears the debounce and reconcile timers (O2)', async () => {
+    const { planId } = await bench.draftInReview()
+    writeDoc('alpha content\n')
+    await openDocument(planId)
+    expect(fixture.watchers.size).toBeGreaterThan(0)
+    expect(fixture.intervals.length).toBeGreaterThan(0)
+    // A pending change has armed a debounce timer; stop() must clear it too.
+    fixture.fireWatch(docDir(), 'design.md')
+    expect(fixture.debounce.length).toBeGreaterThan(0)
+    documents.stop()
+    expect(fixture.watchers.size).toBe(0)
+    expect(fixture.debounce.length).toBe(0)
+    expect(fixture.intervals.length).toBe(0)
     expect(agentStarts).toBe(0)
   })
 

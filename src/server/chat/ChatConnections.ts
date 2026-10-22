@@ -217,6 +217,11 @@ export class ChatConnections {
     this.debugBatches.delete(connection)
   }
 
+  /** Stop every connection group's watches and timers (server shutdown, O2). */
+  stop(): void {
+    this.planWorkspaceDocuments.stop()
+  }
+
   /**
    * Push a replaced command list to every connection subscribed to the
    * session. Immediate (not batched): the state is replaceable, not ordered
