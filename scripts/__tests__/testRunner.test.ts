@@ -107,8 +107,7 @@ describe('planRun', () => {
     expect(plan.fullRun).toBe(true)
     expect(plan.publishTimings).toBe(false)
     // The batch options carry the same decision: nothing seeded, nothing to
-    // update, so the main batch runs without --update-timings and main()
-    // wires no publish path into runBatchesAndPublish.
+    // update, and no publish path for main() to wire into the run.
     expect(plan.batchOptions.timingsPath).toBeUndefined()
     expect(plan.batchOptions.updateTimings).toBe(false)
   })
@@ -301,8 +300,7 @@ describe('effectiveQuota', () => {
   })
 
   test('the default reader is the production cgroup read (F6)', () => {
-    // The default parameter binds the production reader: a stubbed default
-    // would report a constant quota whatever host the runner starts on.
+    // The default parameter binds the production reader, not a constant.
     expect(effectiveQuota()).toBe(readCpuQuota() ?? os.availableParallelism())
   })
 })
