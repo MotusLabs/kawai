@@ -3173,7 +3173,7 @@ export class ChatSessionManager {
       // contention that failed the settle; if it cannot be read at all the
       // empty list settles nothing and mailbox recovery covers the mail.
       const claims = this.mailGuard.guardResult<ClaimRef[]>([], 'chat_mail_settle_snapshot_failed', () => this.teamMail.claimRefs(sessionId), { sessionId })
-      this.mailGuard.settleRecipient(sessionId, () => this.teamMail.settleClaims(sessionId, claims))
+      this.mailGuard.settleRecipient(sessionId, () => this.teamMail.settleClaims(claims))
     }
     // The context-exhausted flag (chat-context-exhaustion D3), set or cleared
     // before the mail outcome below reads it. A failed write degrades to a
