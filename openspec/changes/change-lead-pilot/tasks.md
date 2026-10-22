@@ -3,8 +3,8 @@
 ## 1. Establish the integrated baseline and pilot protocol
 
 - [x] 1.1 Resolve the authoritative branch containing the implemented parallel-suite and per-result-suite changes before implementation; record the base SHA and actual affected-test/full-check commands in the implementation journal, verifying the hooks/scripts agree with that baseline without modifying unrelated planning artifacts.
-- [ ] 1.2 Create `docs/change-lead-pilot.md` with enrollment criteria, one-change scope, authority matrix, parent/child direction templates, escalation and integration boundaries, and the 14-day default evaluation window from design D1-D5; verify a worked two-subtask example maps every implementation requirement to a coordinator, writer, dependency, and acceptance check.
-- [ ] 1.3 Add the baseline/evaluation template to the protocol: task ids, scope/risk/model/resource conditions, timestamps, waits without overlap double-counting, defects, corrections, all participant token/cost coverage, failed/abandoned work, and limitations; verify sample complete and partial evidence yield explicit conclusions or unknowns without attributing quota percentages as costs.
+- [x] 1.2 Create `docs/change-lead-pilot.md` with enrollment criteria, one-change scope, authority matrix, parent/child direction templates, escalation and integration boundaries, and the 14-day default evaluation window from design D1-D5; verify a worked two-subtask example maps every implementation requirement to a coordinator, writer, dependency, and acceptance check.
+- [x] 1.3 Add the baseline/evaluation template to the protocol: task ids, scope/risk/model/resource conditions, timestamps, waits without overlap double-counting, defects, corrections, all participant token/cost coverage, failed/abandoned work, and limitations; verify sample complete and partial evidence yield explicit conclusions or unknowns without attributing quota percentages as costs.
 
 ## 2. Introduce the role and coherent reporting
 
@@ -17,7 +17,7 @@
 
 - [ ] 3.1 Reuse existing task/handoff test coverage and extend disposable fixtures only for uncovered pilot composition: Team Lead parent, Change Lead child creation, parent/child creator asymmetry, child result, explicit-session independent review, and duplicate handoff retry; verify no new rights, duplicate instructions, or inherited result approval appear.
 - [ ] 3.2 Document coordinator-loss and replacement procedures in the protocol and exercise the existing authorization path in a disposable fixture: a replacement cannot amend/close old children, the original creator or human publishes the handover, and the authorized actor can finish closure; verify branch/result/mail references survive and work is not recreated to obtain rights.
-- [ ] 3.3 Document and tabletop withdrawal with an in-flight implementation and outstanding review: stop new pilot dispatch, reconcile creators and standing handoffs, amend reporting through authorized actors, retain the role until dependencies settle, and preserve evidence; verify no automatic session restart, kill, deletion, duplicate review, or premature parent completion is required.
+- [x] 3.3 Document and tabletop withdrawal with an in-flight implementation and outstanding review: stop new pilot dispatch, reconcile creators and standing handoffs, amend reporting through authorized actors, retain the role until dependencies settle, and preserve evidence; verify no automatic session restart, kill, deletion, duplicate review, or premature parent completion is required.
 - [ ] 3.4 Declare role/docs runtime reads where the integrated affected-test selector requires them, and run the focused role/task/handoff tests through its supported runner; verify actual changed-path selection covers these fixtures, with logs identifying which behaviors are mechanically tested versus only walked through.
 
 ## 4. Integration readiness and pilot handoff
