@@ -101,11 +101,14 @@ export function isEscapeCandidate(candidate: string): boolean {
 // invisible to that following and escapes to the full check. The check is
 // textual on purpose — the same heuristic class as the @reads guard — and
 // errs toward the full check: only a `helpers/<stem>` mention in a test's
-// source suppresses the escape.
+// source suppresses the escape. The stem must end at a quote or a dot, so
+// `helpers/db` does not match a mention of `helpers/dbSchema`.
 function helperIsImported(repoPath: string, testSources: readonly string[]): boolean {
   const stem = path.basename(repoPath).replace(/\.tsx?$/, '')
-  const marker = `helpers/${stem}`
-  return testSources.some((source) => source.includes(marker))
+  const marker = new RegExp(
+    `helpers/${stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=["'.])`
+  )
+  return testSources.some((source) => marker.test(source))
 }
 
 export function findEscapePaths(
@@ -203,18 +206,25 @@ export function selectAffectedTests(input: {
 // --- JUnit report (task 2.2) ---
 
 // Bun's JUnit reporter writes one aggregated `<testsuites>` document per
-// invocation, with one `<testsuite>` per executed file carrying the file in
-// its `file` attribute. Anything else — no root, or a suite without a file —
-// is a report this script cannot trust, and reads as malformed (null).
+// invocation. Real 1.4.3 output nests one `<testsuite>` per describe block
+// inside the file's suite, and every level repeats the executed file in its
+// `file` attribute — so the executed set is the DISTINCT files. Anything
+// else — no root, or a suite without a file — is a report this script
+// cannot trust, and reads as malformed (null).
 export function parseJUnitExecutedFiles(xml: string): string[] | null {
   if (!xml.includes('<testsuites')) return null
   const files: string[] = []
+  const seen = new Set<string>()
   const suiteTag = /<testsuite\b[^>]*>/g
   let tag: RegExpExecArray | null
   while ((tag = suiteTag.exec(xml)) !== null) {
     const file = /\bfile="([^"]*)"/.exec(tag[0])
     if (file === null) return null
-    files.push(file[1].replace(/^\.\//, ''))
+    const executed = file[1].replace(/^\.\//, '')
+    if (!seen.has(executed)) {
+      seen.add(executed)
+      files.push(executed)
+    }
   }
   return files
 }

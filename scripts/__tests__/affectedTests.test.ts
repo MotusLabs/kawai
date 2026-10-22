@@ -163,6 +163,16 @@ describe('selectAffectedTests over a temporary repository', () => {
     expect(picked.escapePaths).toEqual(['.bun-version'])
   })
 
+  test('an unstaged escape path overrides a docs-only staging', () => {
+    initRepo()
+    stage('docs/guide.md', '# guide v2\n')
+    writeRepoFile('.bun-version', '1.4.5\n')
+    const picked = selection()
+    expect(picked.kind).toBe('escape')
+    expect(picked.escapePaths).toEqual(['.bun-version'])
+    expect(picked.workingTreeContributors).toEqual(['.bun-version'])
+  })
+
   test('a staged rename contributes both sides to the union', () => {
     initRepo()
     git(['mv', 'src/leaf.ts', 'src/leaf2.ts'])
@@ -460,5 +470,12 @@ describe('the D2 escape list', () => {
       findEscapePaths([helper], ['import { x } from "../helpers/other"'])
     ).toEqual([helper])
     expect(findEscapePaths(['src/leaf.ts'], [])).toEqual([])
+  })
+
+  test('a helper mention ends at a quote or a dot, so a stem is not a prefix', () => {
+    const db = 'src/server/__tests__/helpers/db.ts'
+    expect(findEscapePaths([db], ['import { pool } from "../helpers/dbSchema"'])).toEqual([db])
+    expect(findEscapePaths([db], ['import { pool } from "../helpers/db"'])).toEqual([])
+    expect(findEscapePaths([db], ['the helpers/db.test.ts fixtures load first'])).toEqual([])
   })
 })
