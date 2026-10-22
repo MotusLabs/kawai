@@ -359,13 +359,14 @@ export function composePlanServices(options: PlanServicesOptions): {
     // The pause service (revision-control D6): the owner's command — and,
     // for the tick (D8), the owed-mail pass over a spawn's or forward's
     // claim, whose once-marker is the target's stored message_id.
+    const assignments = new AssignmentStore(options.db, team.mailbox)
     const pauses = new PauseService({
       pauses: pauseStore, holds: holdStore, plans: options.plans, planService: plans, executions: executionStore,
       // The assignment reads (the outstanding instruction, the withdrawal's
       // supersede) over the shared table; the service-owned instance keeps
       // its claim copies current (supervisionRead builds its reader the
       // same way).
-      assignments: new AssignmentStore(options.db, team.mailbox), mailbox: team.mailbox,
+      assignments, mailbox: team.mailbox,
       sessionExists: id => options.getSession(id) !== undefined,
       wake: teamId => runtime?.command(teamId),
     })
@@ -400,6 +401,12 @@ export function composePlanServices(options: PlanServicesOptions): {
       pauses: {
         pauses: pauseStore, checkpoints: checkpointStore, executions: executionStore, mailbox: team.mailbox,
         deliverOwed: (teamId, groupsRoot, pauseId) => pauses.deliverOwed(teamId, groupsRoot, pauseId),
+        // F5: `starting` names an unclaimed spawn only — a forward successor
+        // that has not claimed reads as its owed mail.
+        assignmentMessageState: assignmentId => {
+          const row = assignments.byId(assignmentId)
+          return row?.messageId != null ? team.mailbox.get(row.messageId)?.state ?? null : null
+        },
         readiness: sessionId => {
           const answer = team.releases.readiness(sessionId)
           return answer.ready ? { ready: true, reason: null } : { ready: false, reason: answer.reason }

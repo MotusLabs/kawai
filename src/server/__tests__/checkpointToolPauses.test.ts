@@ -239,6 +239,7 @@ describe('the pause tick over overlapping pauses (L1: every row carries the effe
     pauses: bench.pauses, checkpoints: bench.checkpoints, executions: bench.executions,
     mailbox: new MailboxStore(bench.db.db),
     deliverOwed: () => [],
+    assignmentMessageState: () => null,
     readiness: () => ({ ready: true, reason: null }),
     factsOf: () => ({ state: 'live', pendingRequest: false, busy: false, providerLimit: null }),
   })
@@ -343,6 +344,7 @@ describe('a round push the restart inspection settles done (F4)', () => {
     pauses: bench.pauses, checkpoints: bench.checkpoints, executions: bench.executions,
     mailbox: new MailboxStore(bench.db.db),
     deliverOwed: () => [],
+    assignmentMessageState: () => null,
     readiness: () => ({ ready: true, reason: null }),
     factsOf: () => ({ state: 'live', pendingRequest: false, busy: false, providerLimit: null }),
   })

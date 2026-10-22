@@ -54,6 +54,9 @@ const tickDeps = (db = bench.db.db, owed = service): PauseTickDeps => ({
   executions: new ExecutionStore(db),
   mailbox: bench.mail,
   deliverOwed: (id, root, pauseId) => owed.deliverOwed(id, root, pauseId),
+  assignmentMessageState: assignmentId => bench.assignmentStore.byId(assignmentId)?.messageId != null
+    ? bench.mail.get(bench.assignmentStore.byId(assignmentId)!.messageId!)?.state ?? null
+    : null,
   readiness,
   factsOf,
   now,
@@ -341,6 +344,54 @@ describe("the executor tick's pause pass (D8)", () => {
     expect(pauseMails(api.taskId)).toBe(1)
     expect(pauses.target(pauseRow.id, 'api')!.holderSession).toBe('dev')
   })
+
+  test('an unclaimed forward successor is not a spawn: spawnUnclaimed stays false (F5)', async () => {
+    const { planId, executionId } = await executionWith(['api'])
+    const api = await inFlight(executionId, 'api')
+    // A provider limit forwarded the work: the original mail reads
+    // forwarded, and the handoff reply to a fresh holder is still queued —
+    // no claim, so the pause target names no holder.
+    const original = bench.mail.get(api.mailId)!
+    const successor = bench.mail.enqueue({
+      teamId, toKind: 'session', toId: 'dev2', fromKind: 'human', fromSession: null, fromGroup: null,
+      originPath: world.repo, body: 'Build api.', taskId: api.taskId, actor: 'system',
+      inReplyTo: original, attachThread: true,
+      handoff: { fromSession: 'dev', fromProfile: 'glm', claimCommit: null, lastError: 'the profile hit its limit', progress: { toolCalls: 3, tools: ['Read'], filesTouched: [] } },
+    })
+    bench.mail.markForwarded(api.mailId, `forwarded: ${successor.id}`)
+    bench.records.set('dev2', sessionRow('dev2', 'middle-devs', world.feature))
+    const hold = placeHold(planId, ['api'], 'pt-h10')
+    const pauseRow = pause(planId, hold.id, 'pt-10')
+    expect(pauses.target(pauseRow.id, 'api')).toMatchObject({ holderSession: null, messageId: null })
+    const factsOfTarget = (): ReturnType<typeof derivePauseTarget>['facts'] => {
+      const p = pauses.get(teamId, pauseRow.id)!
+      const t = pauses.target(pauseRow.id, 'api')!
+      const finished = executions.execution(p.executionId)!.state !== 'running'
+      return derivePauseTarget(tickDeps(), p, t, finished, now()).facts
+    }
+    // The spawn-specific fact never names a forward successor.
+    expect(factsOfTarget().spawnUnclaimed).toBe(false)
+    // The successor's claim mails the owed pause, as for a spawn.
+    bench.mail.claim(successor.id, 'dev2')
+    bench.mail.markPushed(successor.id)
+    bench.mail.markDelivered(successor.id)
+    clock += 5_000
+    tick()
+    expect(pauses.target(pauseRow.id, 'api')!.holderSession).toBe('dev2')
+  })
+
+  test('an unclaimed spawn still reads spawnUnclaimed (F5)', async () => {
+    const { planId, executionId } = await executionWith(['api'])
+    const api = await inFlight(executionId, 'api', 'dev', 'spawning')
+    const hold = placeHold(planId, ['api'], 'pt-h11')
+    const pauseRow = pause(planId, hold.id, 'pt-11')
+    const p = pauses.get(teamId, pauseRow.id)!
+    const t = pauses.target(pauseRow.id, 'api')!
+    const facts = derivePauseTarget(tickDeps(), p, t, false, now()).facts
+    expect(t.holderSession).toBeNull()
+    expect(facts.spawnUnclaimed).toBe(true)
+    expect(api.mailId).toBeTruthy()
+  })
 })
 
 describe('a restart between the claim and the tick (R18, the B5 pattern)', () => {
@@ -376,6 +427,10 @@ describe('a restart between the claim and the tick (R18, the B5 pattern)', () =>
         pauses: new PauseStore(reopened.db, now), checkpoints: new CheckpointStore(reopened.db, now),
         executions: new ExecutionStore(reopened.db), mailbox: mail,
         deliverOwed: (id, root, pauseId) => rebuiltService.deliverOwed(id, root, pauseId),
+        assignmentMessageState: assignmentId => {
+          const row = new AssignmentStore(reopened.db, mail).byId(assignmentId)
+          return row?.messageId != null ? mail.get(row.messageId)?.state ?? null : null
+        },
         readiness, factsOf, now,
       }
       runPauseTick(deps, teamId, world.repo)
