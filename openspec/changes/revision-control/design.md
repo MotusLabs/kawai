@@ -379,7 +379,7 @@ Every resolution therefore works from the newest revision, and nothing is dispat
 | K3 | human | known | same commandId, same payload | * | * | replayed - the prior outcome returns; `within` never runs | none | none | none |
 | K4 | human | known | same commandId, different payload | * | * | refused naming the first differing field | none | none | none |
 | K5 | human | known | same commandId, concurrent double submit | * | * | one wins and commits; the loser rolls back and resolves as the winner's replay | one decision + one event total | the winner's mail only | the winner's dispatch only |
-| K6 | human | known, pause closed (every target decided or the execution finished) | fresh | * | * | refused `state` (the pause is closed) - covers continue, adapt and restart; Stop is not refused here (S2) | none | none | none |
+| K6 | human | known, pause closed, this target undecided (every target decided or the execution finished) | fresh | * | * | refused `state` (the pause is closed) - covers continue, adapt and restart, and only a target with no standing decision: a decided target reads I1 first (C1), naming the standing decision even when that decision closed the pause (lead ruling L1). K6's "before any state is read" means before any execution or round state is read; the target's own decision record, which I1 checks, is read first. Stop is not refused here (S2) | none | none | none |
 
 *Decision rows. `*` = the column does not change this row's outcome (the completeness test expands `*` over the axis's remaining values):*
 
