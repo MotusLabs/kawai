@@ -1300,6 +1300,7 @@ export class ChatSessionManager {
     this.validation = planServices.validation
     this.decisions = planServices.decisions
     this.plans = planServices.plans
+    this.planWorkspace = planServices.workspaceStore
     this.executions = planServices.executions
     this.executionRuntime = planServices.runtime
     this.supervisionMonitor = planServices.monitor
@@ -1630,6 +1631,8 @@ export class ChatSessionManager {
   private readonly mailGuard = new DriverMailGuard()
   /** Durable plans (durable-plans); the plan tools and UI actions go through it. */
   readonly plans: PlanService
+  /** The plan workspace's bindings and command ledger (plan-workspace 1.2); the workspace connection reads it. */
+  readonly planWorkspace: import('../plans/workspace/workspaceStore').PlanWorkspaceStore
   /** Plan executions (plan-execution): the human Start/Stop/Retry commands. */
   readonly executions: import('../plans/execution/ExecutionService').ExecutionService
   /** The execution runtime (plan-execution D5): boot recovery, wakes, and stop. */
