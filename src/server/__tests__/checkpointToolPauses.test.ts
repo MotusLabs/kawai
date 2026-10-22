@@ -16,6 +16,7 @@ import { EffectRunner } from '../plans/execution/effects'
 import { pushAdapter, roundAdapters } from '../plans/execution/executionRounds'
 import { recoverUnknownEffects } from '../plans/execution/executorStartup'
 import { startupReads } from '../plans/execution/startupReads'
+import type { OutcomeDeps } from '../plans/execution/executorOutcomes'
 import { PauseStore } from '../plans/revisionControl/pauseStore'
 import { CheckpointStore } from '../plans/revisionControl/checkpointStore'
 import { CheckpointTool, type CheckpointOutcome } from '../plans/revisionControl/checkpointTool'
@@ -311,5 +312,90 @@ describe('the pause tick over overlapping pauses (L1: every row carries the effe
     expect(b.pauses.target(second.id, 'api')!.pausedAt).not.toBeNull()
     expect(stateOf(b, first.id, 'api')).toEqual({ state: 'paused' })
     expect(stateOf(b, second.id, 'api')).toEqual({ state: 'paused' })
+  })
+})
+
+/** The outcome deps the executor wires (executorDeps), over the bench's own tool. */
+function outcomeDepsOf(b: Bench): OutcomeDeps {
+  return {
+    store: b.executions, taskStatusOf: () => null,
+    // A push outcome never consults the landing mechanism.
+    mechanismOf: () => { throw new Error('a push outcome never consults the mechanism') },
+    now: () => new Date(),
+    recordResultCheckpoint: (executionId, change, roundId) => b.tool.recordResultCheckpoint(executionId, change, roundId),
+  }
+}
+
+/** One round's `push` effect, marked running so a restart reads it unknown. */
+function roundPushLeftUnknown(b: Bench, round: { id: string; number: number }, commit: string, branch: string, cwd: string): string {
+  const effect = b.executions.insertEffect({
+    executionId: b.executionId, change: 'api', roundId: round.id, kind: 'push',
+    effectKey: `${b.executionId}:api:push:${round.number}:1`,
+    command: { cwd, commit, branch },
+  })
+  b.executions.markEffectRunning(effect.id)
+  b.executions.markRunningEffectsUnknown()
+  return effect.id
+}
+
+describe('a round push the restart inspection settles done (F4)', () => {
+  const tickDeps = (bench: Bench): PauseTickDeps => ({
+    pauses: bench.pauses, checkpoints: bench.checkpoints, executions: bench.executions,
+    mailbox: new MailboxStore(bench.db.db),
+    deliverOwed: () => [],
+    readiness: () => ({ ready: true, reason: null }),
+    factsOf: () => ({ state: 'live', pendingRequest: false, busy: false, providerLimit: null }),
+  })
+  const tick = (b: Bench): void => runPauseTick(tickDeps(b), world.team.teamId, world.root)
+
+  test('a round push unknown at restart and on origin counts the result, and no second push runs', async () => {
+    const b = benchWith(['api'])
+    const pauseRow = openPause(b, 'hold-1', 'cmd-1', [{ change: 'api', holder: 'dev' }])
+    b.resultsById.set('result-1', { sessionId: 'dev' })
+    const { round } = b.executions.insertRound({
+      executionId: b.executionId, change: 'api', attemptId: b.executions.attempts(b.executionId, 'api')[0]!.id,
+      resultId: 'result-1', commitSha: b.work.api!.commit, fixRound: false,
+    })
+    const effect = roundPushLeftUnknown(b, round, b.work.api!.commit, b.work.api!.branch, b.work.api!.cwd)
+    // The push had landed before the restart. The done inspection must reach
+    // the outcome path — markRoundPushed plus the D7 result checkpoint — or
+    // the planner's pushedAt heal re-issues the push as a second one.
+    git(['push', '-q', origin, `refs/heads/${b.work.api!.branch}:refs/heads/${b.work.api!.branch}`], b.work.api!.cwd)
+    await recoverUnknownEffects({ store: b.executions, reads: startupReads(), outcomes: outcomeDepsOf(b) })
+    expect(b.executions.effect(effect)!.state).toBe('done')
+    expect(b.executions.round(round.id)!.pushedAt).not.toBeNull()
+    const counted = b.pauses.target(pauseRow.id, 'api')!.checkpointId
+    expect(counted).not.toBeNull()
+    expect(b.checkpoints.get(counted!)!.kind).toBe('result')
+    // Exactly the one push effect: the planner never re-issues it.
+    expect(b.executions.effectsOf(b.executionId)).toHaveLength(1)
+    // The counted result is the work on origin, so the next tick records Paused.
+    tick(b)
+    expect(b.pauses.target(pauseRow.id, 'api')!.pausedAt).not.toBeNull()
+  })
+
+  test('a round push unknown at restart with origin past it still settles done', async () => {
+    const b = benchWith(['api'])
+    const pauseRow = openPause(b, 'hold-1', 'cmd-1', [{ change: 'api', holder: 'dev' }])
+    b.resultsById.set('result-1', { sessionId: 'dev' })
+    const { round } = b.executions.insertRound({
+      executionId: b.executionId, change: 'api', attemptId: b.executions.attempts(b.executionId, 'api')[0]!.id,
+      resultId: 'result-1', commitSha: b.work.api!.commit, fixRound: false,
+    })
+    const effect = roundPushLeftUnknown(b, round, b.work.api!.commit, b.work.api!.branch, b.work.api!.cwd)
+    // A checkpoint moved origin past the round commit before the restart:
+    // the round commit is contained, so the inspection settles done — the
+    // equality read would re-run the push and fail it non-fast-forward.
+    fs.writeFileSync(path.join(b.work.api!.cwd, 'checkpoint.ts'), 'export const c = 1\n')
+    git(['add', '-A'], b.work.api!.cwd)
+    git(['-c', 'user.email=t@e', '-c', 'user.name=T', 'commit', '-q', '-m', 'checkpoint work'], b.work.api!.cwd)
+    git(['push', '-q', origin, `refs/heads/${b.work.api!.branch}:refs/heads/${b.work.api!.branch}`], b.work.api!.cwd)
+    await recoverUnknownEffects({ store: b.executions, reads: startupReads(), outcomes: outcomeDepsOf(b) })
+    expect(b.executions.effect(effect)!.state).toBe('done')
+    expect(b.executions.round(round.id)!.pushedAt).not.toBeNull()
+    expect(b.pauses.target(pauseRow.id, 'api')!.checkpointId).not.toBeNull()
+    // No failed push stopped the change: the submitted round had moved it to
+    // gating (D9), and it stays there.
+    expect(b.executions.change(b.executionId, 'api')!.state).toBe('gating')
   })
 })
