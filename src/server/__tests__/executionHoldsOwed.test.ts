@@ -306,6 +306,119 @@ describe('owed fix dispatches under holds (revision-control 3.2, review B1)', ()
   })
 })
 
+// Redispatch's order and the refused fix (revision-control PR E, A3, H″ O2):
+// an owed newest row is inert under the Retry stage — the owed step is its
+// one writer; a linked row whose chain the pause stop-branch superseded
+// re-sends its own assignment under :retry:; and applyFix's own row needs no
+// owed step — a refused send wrote nothing, so the fixes step re-sends the
+// same key after Retry.
+describe('redispatch order and the refused fix (revision-control PR E, A3, H″ O2)', () => {
+  test('a redispatch step over an owed fix row is inert; the owed step dispatches it once on release (A3 case 1)', async () => {
+    const name = 'redispatch-owed'
+    const { executionId, planId } = await approvedExecution([name])
+    const first = await implementStage(executionId, name, 'v1\n')
+    const taskId = first.taskId!
+    // Round 1 fails unheld; its fix dispatches and round 2 is submitted.
+    failCi()
+    executor.wake(world.team.teamId)
+    await executor.idle()
+    await submitResult(executionId, name, 'v2\n')
+    // Round 2 fails under the hold: fix attempt 3 is minted and owed.
+    const hold = placeHold(planId, [name], 'redispatch-owed-1')
+    await executor.idle()
+    failCi()
+    executor.wake(world.team.teamId)
+    await executor.idle()
+    expect(executions.attempts(executionId, name).at(-1)!.number).toBe(3)
+    expect(executions.attempts(executionId, name).at(-1)!.assignmentId).toBeNull()
+    // A Retry left the change's redispatch step due beside the owed row.
+    executions.transition(executionId, name, executions.change(executionId, name)!, { step: 'redispatch' })
+    // The release: pass one clears the step inert; pass two dispatches the
+    // owed fix — exactly one instruction, under the attempt's own key.
+    const before = tasks.store.assignmentsOf(taskId).length
+    releaseHold(planId, hold.id)
+    await executor.idle()
+    const dispatched = tasks.store.assignmentsOf(taskId)
+    expect(dispatched).toHaveLength(before + 1)
+    expect(dispatched.at(-1)!.requestKey).toContain('attempt:3:')
+    expect(dispatched.at(-1)!.requestKey).not.toContain(':retry:')
+    expect(executions.attempts(executionId, name).at(-1)!.assignmentId).toBe(dispatched.at(-1)!.id)
+    // A further tick re-sends nothing: the row is stamped, the step is gone.
+    executor.wake(world.team.teamId)
+    await executor.idle()
+    expect(tasks.store.assignmentsOf(taskId)).toHaveLength(before + 1)
+  })
+
+  test('a redispatch over a linked, withdrawn row re-sends its own assignment under :retry: (A3 case 3)', async () => {
+    const name = 'redispatch-withdrawn'
+    const { executionId } = await approvedExecution([name])
+    const first = await implementStage(executionId, name, 'v1\n')
+    const taskId = first.taskId!
+    const linked = tasks.store.assignmentsOf(taskId).at(-1)!
+    // The pause's stop branch: the instruction superseded with no new one,
+    // so no assignment stands while the newest row stays linked.
+    expect(new AssignmentStore(bench.db.db, mail).supersede(linked.id, 'pause-1')).toBe(true)
+    expect(tasks.store.assignmentsOf(taskId).filter(entry => entry.supersededBy === null)).toEqual([])
+    executions.transition(executionId, name, executions.change(executionId, name)!, { step: 'redispatch' })
+    const generation = executions.change(executionId, name)!.generation
+    executor.wake(world.team.teamId)
+    await executor.idle()
+    const resent = tasks.store.assignmentsOf(taskId).at(-1)!
+    expect(resent.id).not.toBe(linked.id)
+    expect(resent.requestKey).toBe(`${linked.requestKey}:retry:${generation}`)
+    expect(resent.instruction).toBe(linked.instruction)
+    expect(resent.supersededBy).toBeNull()
+    // The step cleared; the submitted round's pipeline continued past the
+    // re-send (the change is gating on its round).
+    expect(executions.change(executionId, name)).toMatchObject({ state: 'gating', step: null })
+    // Exactly one re-send: a further tick sends nothing.
+    executor.wake(world.team.teamId)
+    await executor.idle()
+    expect(tasks.store.assignmentsOf(taskId)).toHaveLength(2)
+  })
+
+  test('a refused fix dispatch, then Retry: the fixes step re-sends the same key once (H″ O2)', async () => {
+    const name = 'refused-fix'
+    const { executionId } = await approvedExecution([name])
+    const first = await implementStage(executionId, name, 'v1\n')
+    const taskId = first.taskId!
+    // The fix handoff is refused: applyFix mints the row, the send throws,
+    // and the change stops instruction-failed with the fix stage named.
+    const original = results.handoff
+    results.handoff = (async () => {
+      throw new Error('the fix handoff is refused by the test')
+    }) as typeof results.handoff
+    try {
+      failCi()
+      executor.wake(world.team.teamId)
+      await executor.idle()
+    } finally {
+      results.handoff = original
+    }
+    expect(executions.change(executionId, name)).toMatchObject({ state: 'stopped', stopReason: 'instruction-failed' })
+    const fixRow = executions.attempts(executionId, name).at(-1)!
+    expect(fixRow.kind).toBe('fix')
+    expect(fixRow.assignmentId).toBeNull()
+    expect(tasks.store.assignmentsOf(taskId)).toHaveLength(1)
+    // Retry (D12): a refused step's stop names its stage, so Retry resumes
+    // gating without a redispatch step — the fixes step re-runs itself.
+    executions.transition(executionId, name, executions.change(executionId, name)!,
+      { state: 'gating', step: null, stopReason: null, stopDetail: null, fixRounds: 0 })
+    executor.wake(world.team.teamId)
+    await executor.idle()
+    const dispatched = tasks.store.assignmentsOf(taskId)
+    expect(dispatched).toHaveLength(2)
+    expect(dispatched.at(-1)!.requestKey).toContain(`attempt:${fixRow.number}:`)
+    expect(dispatched.at(-1)!.requestKey).not.toContain(':retry:')
+    expect(executions.attempts(executionId, name).at(-1)!.assignmentId).toBe(dispatched.at(-1)!.id)
+    // The owed step never fires in 'gating', and the stamped row reads out:
+    // a further tick sends nothing.
+    executor.wake(world.team.teamId)
+    await executor.idle()
+    expect(tasks.store.assignmentsOf(taskId)).toHaveLength(2)
+  })
+})
+
 // Recovery-matrix R1: hold placed or released at a crash. The hold rows and
 // the owed attempt are durable; a fresh executor and the same hold service
 // read them from the database, gate the same way, and the release dispatches

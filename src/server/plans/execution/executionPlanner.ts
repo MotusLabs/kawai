@@ -152,9 +152,12 @@ export function planSteps(snapshot: ExecutionSnapshot, _now: string): PlanSteps 
         if (!held) steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'redispatch', roundId: null, resultId: null })
         continue
       }
-      // The implement dispatch: a change without its task, or whose task
-      // exists but whose dispatch never committed (a refused one, retried).
-      if (!held && change.state === 'implementing' && change.group !== null
+      // The implement dispatch (H4): only a change without any attempt row —
+      // no task, or a task whose dispatch never committed (a refused one,
+      // retried). An existing undispatched row belongs to the owed step, and
+      // the dispatch's own H4 guard (revision-control PR E, A3) backs this up
+      // for every caller.
+      if (!held && change.state === 'implementing' && change.group !== null && change.newestAttempt === null
         && (change.taskId === null || (change.task !== null && change.task.assignment === null && change.task.results.length === 0))) {
         steps.dispatches.push({ executionId: change.executionId, change: change.change, group: change.group, kind: 'implement' })
       }
@@ -308,7 +311,13 @@ export function planSteps(snapshot: ExecutionSnapshot, _now: string): PlanSteps 
       if (round.outcome === 'fail') {
         // A failed round returns the change for fixes under the count rule
         // (D12) — a carried round that failed base-merge CI too, leaving the
-        // slot; the executor decides stop versus dispatch.
+        // slot; the executor decides stop versus dispatch. The fixes step is
+        // applyFix's own row's one writer (H″ O2): the dispatch runs before
+        // the transition, so a refused or interrupted send leaves the change
+        // gating on the failed round and this step re-runs it — after Retry,
+        // or on the next pass — re-sending the same key: a refused send
+        // wrote nothing, and a committed one replays by key and payload. The
+        // owed step never fires there: 'gating' is not a fix row's owed state.
         steps.fixes.push({ executionId: change.executionId, change: change.change, roundId: round.id })
         continue
       }

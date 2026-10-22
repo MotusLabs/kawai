@@ -419,7 +419,10 @@ export class ExecutionExecutor {
     // dispatch replays under its key if the transition below never landed.
     // Under a hold (revision-control 3.2) the attempt row — the owed
     // dispatch's marker — is still created and the fix transition stands;
-    // only the handoff waits, and the release dispatches it once.
+    // only the handoff waits, and the release dispatches it once. This is
+    // the change's one writer for its own row (H″ O2): a refused send wrote
+    // nothing, and the fixes step re-sends the same key after Retry; the
+    // owed step never fires here — 'gating' is not a fix row's owed state.
     const input = {
       executionId: fix.executionId, change: fix.change, group,
       failingChecks: failing,

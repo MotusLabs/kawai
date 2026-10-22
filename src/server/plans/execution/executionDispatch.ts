@@ -13,6 +13,7 @@ import type { AssignmentService } from '../../team/AssignmentService'
 import type { TaskResultService } from '../../team/TaskResultService'
 import { runGitAsync } from '../../git/gitCommand'
 import { manifestHashInput, type AttemptManifest } from '../../../shared/planExecution'
+import { attemptStatus } from './attemptStatus'
 import type { ExecutionStore } from './executionStore'
 import type { PlanStore } from '../planStore'
 import { fixInstruction, implementInstruction } from './instructions'
@@ -77,42 +78,38 @@ export async function dispatchImplementAttempt(deps: DispatchDeps, input: { exec
   }
 
   // The attempt and its immutable manifest (D8), then the keyed dispatch.
-  const existing = deps.executions.attempts(input.executionId, input.change)
-  let number = existing.length
-  let manifestHash = existing.at(-1)?.manifestHash
-  let attemptId = existing.at(-1)?.id
-  if (existing.length === 0) {
-    const head = await runGitAsync(['rev-parse', 'HEAD'], { cwd: changeRow.worktree })
-    const startCommit = head.ok ? head.stdout.trim() : changeRow.baselineCommit
-    const files = await runGitAsync(['ls-tree', '-r', '--name-only', startCommit], { cwd: changeRow.worktree })
-    const artifacts = await artifactsAt(changeRow.worktree, startCommit, files.ok ? files.stdout.trim().split('\n').filter(Boolean) : [])
-    const manifest: AttemptManifest = {
-      version: 1,
-      plan: { id: execution.planId, revision: execution.revision, contentHash: execution.contentHash },
-      execution: input.executionId,
-      task: { id: taskId, revision: deps.tasks.store.get(taskId)?.revision ?? 1 },
-      validation: { reportId: execution.reportId, inputHash: execution.inputHash },
-      baseline: changeRow.baselineCommit,
-      startCommit,
-      artifacts,
-      roleProfiles,
-    }
-    manifestHash = createHash('sha256').update(manifestHashInput(manifest)).digest('hex')
-    const attempt = deps.executions.insertAttempt({
-      executionId: input.executionId, change: input.change, kind: 'implement', assignmentId: null,
-      manifest, manifestHash,
-    })
-    number = attempt.number
-    attemptId = attempt.id
+  // H4 in the dispatch itself (revision-control PR E, A3): the implement step
+  // mints and dispatches only when no attempt row exists. With rows present
+  // it writes and sends nothing — an undispatched row belongs to the owed
+  // step, and a human Retry re-sends through redispatchStage under :retry:,
+  // never a second implement dispatch beside the rows.
+  if (deps.executions.attempts(input.executionId, input.change).length > 0) return
+  const head = await runGitAsync(['rev-parse', 'HEAD'], { cwd: changeRow.worktree })
+  const headSha = head.stdout.trim()
+  const startCommit = head.ok ? headSha : changeRow.baselineCommit
+  const files = await runGitAsync(['ls-tree', '-r', '--name-only', startCommit], { cwd: changeRow.worktree })
+  const artifacts = await artifactsAt(changeRow.worktree, startCommit, files.ok ? files.stdout.trim().split('\n').filter(Boolean) : [])
+  const manifest: AttemptManifest = {
+    version: 1,
+    plan: { id: execution.planId, revision: execution.revision, contentHash: execution.contentHash },
+    execution: input.executionId,
+    task: { id: taskId, revision: deps.tasks.store.get(taskId)?.revision ?? 1 },
+    validation: { reportId: execution.reportId, inputHash: execution.inputHash },
+    baseline: changeRow.baselineCommit,
+    startCommit,
+    artifacts,
+    roleProfiles,
   }
+  const manifestHash = createHash('sha256').update(manifestHashInput(manifest)).digest('hex')
+  const attempt = deps.executions.insertAttempt({
+    executionId: input.executionId, change: input.change, kind: 'implement', assignmentId: null,
+    manifest, manifestHash,
+  })
 
   const change = deps.executions.change(input.executionId, input.change)!
-  const requestKey = `exec:${input.executionId}:${input.change}:attempt:${number}:${change.generation}`
-  const head = existing.length === 0
-    ? (await runGitAsync(['rev-parse', 'HEAD'], { cwd: changeRow.worktree! })).stdout.trim()
-    : changeRow.baselineCommit!
+  const requestKey = `exec:${input.executionId}:${input.change}:attempt:${attempt.number}:${change.generation}`
   const outcome = await refusable('implement', () => deps.assignments.dispatch(kawaiCaller(deps.team, input.executionId), {
-    taskId: taskId!,
+    taskId,
     target: { kind: 'group', id: input.group },
     instruction: implementInstruction({
       planTitle: deps.plans.get(execution.planId)?.title ?? execution.planId,
@@ -121,18 +118,18 @@ export async function dispatchImplementAttempt(deps: DispatchDeps, input: { exec
       worktree: changeRow.worktree!,
       branch: changeRow.branch!,
       baseline: changeRow.baselineCommit!,
-      head,
+      head: headSha,
       acceptance: [...entry.acceptance, ...revision.content.acceptanceRules],
       extraChecks: effectiveExtraChecks(revision.content, entry).map(check => check.name),
       guidance: entry.guidance,
-      taskId: taskId!,
-      manifestHash: manifestHash!,
+      taskId,
+      manifestHash,
       integrationBranch: integrationBranchOf(execution),
     }),
     requestKey,
     ...(roleProfiles.length > 0 ? { allowedProfiles: roleProfiles } : {}),
   }))
-  deps.executions.setAttemptAssignment(attemptId!, outcome.assignment.id)
+  deps.executions.setAttemptAssignment(attempt.id, outcome.assignment.id)
 }
 
 /** What a fix attempt names: the failed round's checks and findings, and where to continue. */
@@ -314,47 +311,67 @@ export async function dispatchOwedFixAttempt(deps: DispatchDeps, input: { execut
 
 /**
  * Retry of a failed or closed stage (D12): the stage's instruction is sent
- * again. The task's newest standing assignment is re-sent verbatim to the
- * same target under a key carrying the change's new generation — a handoff
- * through the result service (a review re-pins the round's review), else a
- * plain dispatch. A change without one dispatches its implement attempt.
- * The step clears once the instruction is sent.
+ * again, in A3's order (revision-control PR E). An owed newest row is the
+ * change's next instruction and the owed step — never this stage — sends it
+ * (H″ O2; the step still clears, and the planner's `continue` keeps the two
+ * stages out of one pass). Else the task's standing assignment re-sends
+ * verbatim to the same target under a key carrying the change's new
+ * generation — a handoff through the result service (a review re-pins the
+ * round's review), else a plain dispatch. Else, when no assignment stands
+ * but the newest row is linked (the pause stop-branch superseded the chain),
+ * that row's own assignment re-sends under the same :retry: shape. A change
+ * with no linked row dispatches its implement attempt (a no-op behind H4's
+ * guard when rows exist). The step clears once the decision is applied.
  */
 export async function redispatchStage(deps: DispatchDeps, row: { executionId: string; change: string; taskId: string | null; generation: number }): Promise<void> {
   const execution = deps.executions.execution(row.executionId)
   if (execution === null) return
   const revision = deps.plans.revision(execution.planId, execution.revision)
   const caller = kawaiCaller(deps.team, row.executionId)
-  const previous = row.taskId === null ? undefined
-    : deps.tasks.store.assignmentsOf(row.taskId).filter(entry => entry.supersededBy === null).at(-1)
-  if (row.taskId !== null && previous !== undefined) {
-    const taskId = row.taskId
-    const target = { kind: previous.targetKind, id: previous.targetId }
-    const roleProfiles = previous.targetKind === 'group' ? revision?.content.roles.find(role => role.group === previous.targetId)?.profiles ?? [] : []
-    const requestKey = `${previous.requestKey}:retry:${row.generation}`
-    const handoffKind = previous.handoffKind ?? null
-    const resultId = previous.resultId ?? null
-    if (handoffKind !== null && resultId !== null) {
-      const outcome = await refusable(handoffKind, () => deps.results.handoff(caller, taskId, {
-        kind: handoffKind, resultId, target, instructions: previous.instruction, requestKey,
-        ...(previous.expectedResponse ? { expectedResponse: previous.expectedResponse } : {}),
-        ...(roleProfiles.length > 0 ? { allowedProfiles: roleProfiles } : {}),
-      }))
-      const round = deps.executions.rounds(row.executionId, row.change).at(-1) ?? null
-      if (handoffKind === 'review' && round !== null) deps.executions.setRoundReview(round.id, outcome.assignment.id)
+  const newest = deps.executions.attempts(row.executionId, row.change).at(-1) ?? null
+  const assignments = row.taskId === null ? [] : deps.tasks.store.assignmentsOf(row.taskId)
+  // A3 case 1: an owed newest row reads noActiveWork for a pause and no
+  // redispatch here; the owed step dispatches it exactly once, next pass.
+  const owed = newest !== null && row.taskId !== null
+    && attemptStatus(newest, assignments, deps.executions.rounds(row.executionId, row.change)) === 'owed'
+  if (!owed) {
+    // A3 case 2: the standing chain's tip re-sends.
+    const previous = assignments.filter(entry => entry.supersededBy === null).at(-1)
+    // A3 case 3: the chain is gone, but the newest row is linked — its own
+    // assignment is what went out for this attempt, so it re-sends.
+    const linked = previous === undefined && newest !== null && newest.assignmentId !== null
+      ? assignments.find(entry => entry.id === newest.assignmentId)
+      : undefined
+    const source = previous ?? linked
+    if (row.taskId !== null && source !== undefined) {
+      const taskId = row.taskId
+      const target = { kind: source.targetKind, id: source.targetId }
+      const roleProfiles = source.targetKind === 'group' ? revision?.content.roles.find(role => role.group === source.targetId)?.profiles ?? [] : []
+      const requestKey = `${source.requestKey}:retry:${row.generation}`
+      const handoffKind = source.handoffKind ?? null
+      const resultId = source.resultId ?? null
+      if (handoffKind !== null && resultId !== null) {
+        const outcome = await refusable(handoffKind, () => deps.results.handoff(caller, taskId, {
+          kind: handoffKind, resultId, target, instructions: source.instruction, requestKey,
+          ...(source.expectedResponse ? { expectedResponse: source.expectedResponse } : {}),
+          ...(roleProfiles.length > 0 ? { allowedProfiles: roleProfiles } : {}),
+        }))
+        const round = deps.executions.rounds(row.executionId, row.change).at(-1) ?? null
+        if (handoffKind === 'review' && round !== null) deps.executions.setRoundReview(round.id, outcome.assignment.id)
+      } else {
+        // The earlier instruction may still be outstanding (claimed or
+        // delivered before a hand close, or unscoped group mail the close
+        // left queued): the resend supersedes it through the stop branch,
+        // which cancels it only while it is still queued.
+        await refusable('implement', () => deps.assignments.dispatch(caller, {
+          taskId, target, instruction: source.instruction, requestKey, handling: 'stop',
+          ...(roleProfiles.length > 0 ? { allowedProfiles: roleProfiles } : {}),
+        }))
+      }
     } else {
-      // The earlier instruction may still be outstanding (claimed or
-      // delivered before a hand close, or unscoped group mail the close
-      // left queued): the resend supersedes it through the stop branch,
-      // which cancels it only while it is still queued.
-      await refusable('implement', () => deps.assignments.dispatch(caller, {
-        taskId, target, instruction: previous.instruction, requestKey, handling: 'stop',
-        ...(roleProfiles.length > 0 ? { allowedProfiles: roleProfiles } : {}),
-      }))
+      const group = revision?.content.changes.find(entry => entry.change === row.change)?.group ?? null
+      if (group !== null) await dispatchImplementAttempt(deps, { executionId: row.executionId, change: row.change, group })
     }
-  } else {
-    const group = revision?.content.changes.find(entry => entry.change === row.change)?.group ?? null
-    if (group !== null) await dispatchImplementAttempt(deps, { executionId: row.executionId, change: row.change, group })
   }
   const fresh = deps.executions.change(row.executionId, row.change)
   if (fresh !== null && fresh.step === 'redispatch') deps.executions.transition(row.executionId, row.change, fresh, { step: null })
