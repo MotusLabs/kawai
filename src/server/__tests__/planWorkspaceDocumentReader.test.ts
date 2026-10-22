@@ -23,9 +23,9 @@ afterAll(() => fs.rmSync(base, { recursive: true, force: true }))
 
 describe('readWorkspaceDocument', () => {
   test('reads a contained markdown path whose .. stays inside the root', async () => {
-    fs.mkdirSync(path.join(rootReal, 'docs'), { recursive: true })
-    fs.writeFileSync(path.join(rootReal, 'docs', 'note.md'), '# Note\n')
-    const read = await readWorkspaceDocument(root, 'docs/../docs/note.md')
+    fs.mkdirSync(path.join(rootReal, 'notes'), { recursive: true })
+    fs.writeFileSync(path.join(rootReal, 'notes', 'note.md'), '# Note\n')
+    const read = await readWorkspaceDocument(root, 'notes/../notes/note.md')
     expect(read).toMatchObject({ ok: true, kind: 'markdown', text: '# Note\n' })
     if (read.ok) {
       expect(read.hash).toBe(createHash('sha256').update('# Note\n').digest('hex'))
@@ -50,7 +50,7 @@ describe('readWorkspaceDocument', () => {
 
   test('refuses .. that escapes the root as escape', async () => {
     expect(await readWorkspaceDocument(root, '../outside/secret.md')).toMatchObject({ ok: false, reason: 'escape' })
-    expect(await readWorkspaceDocument(root, 'docs/../../outside/secret.md')).toMatchObject({ ok: false, reason: 'escape' })
+    expect(await readWorkspaceDocument(root, 'notes/../../outside/secret.md')).toMatchObject({ ok: false, reason: 'escape' })
     expect(await readWorkspaceDocument(root, 'a//..//../x.md')).toMatchObject({ ok: false, reason: 'escape' })
   })
 
