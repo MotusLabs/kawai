@@ -2,8 +2,8 @@
 
 ## 1. Runtime-read declarations
 
-- [ ] 1.1 Add the `@reads` header parser and the guard test (literal repository paths under `AGENTS.md`, `CLAUDE.md`, `docs/`, `.kawai/`, `.github/`, `openspec/` must be declared). Verify it with fixtures: an undeclared literal fails naming the file and path, a declared glob passes, and a temporary-directory path is ignored.
-- [ ] 1.2 Add `@reads` headers to every existing test file the guard flags, and verify that the guard passes over the whole suite.
+- [x] 1.1 Add the `@reads` header parser and the guard test (literal repository paths under `AGENTS.md`, `CLAUDE.md`, `docs/`, `.kawai/`, `.github/`, `openspec/` must be declared). Verify it with fixtures: an undeclared literal fails naming the file and path, a declared glob passes, and a temporary-directory path is ignored.
+- [x] 1.2 Add `@reads` headers to every existing test file the guard flags, and verify that the guard passes over the whole suite.
 
 ## 2. Affected-test selection
 
