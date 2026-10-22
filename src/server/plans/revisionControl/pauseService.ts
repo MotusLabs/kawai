@@ -34,6 +34,9 @@ import type { PlanStore } from '../planStore'
 import type { ExecutionEventOutcome, PlanCaller, PlanService } from '../PlanService'
 import { HoldStore } from './holdStore'
 import { PauseStore } from './pauseStore'
+import { resolvePause, type PauseResolveOutcome, type ResolveInput } from './pauseResolve'
+import type { CheckpointStore } from './checkpointStore'
+import type { TaskService } from '../../team/TaskService'
 
 /** The tag every pause mail carries (D6). */
 export const PLAN_PAUSE_TAG = 'plan-pause'
@@ -58,6 +61,13 @@ export interface PauseServiceDeps {
   mailbox: MailboxStore
   /** Whether a session record still exists; a killed holder's mail dead-letters at enqueue. */
   sessionExists: (sessionId: string) => boolean
+  /** The task service (D9): the resolve's H5 drop reads the task's current
+   *  revision and the round result's pinned one, and the resume names the
+   *  newest revision. Optional so a unit bench can omit it; the production
+   *  composition wires it. */
+  tasks?: TaskService
+  /** The shared checkpoint store (D7): an attempt target's resume names the newest checkpoint's commit. */
+  checkpoints?: CheckpointStore
   /** The executor wake, called after a committed command only. */
   wake?: (teamId: string) => unknown
   now?: () => Date
@@ -147,6 +157,11 @@ export class PauseService {
     }, () => this.pauseWithin(caller.team.teamId, caller.team.groupsRoot, plan.id, input))
     if (outcome.ok && !outcome.replayed) this.deps.wake?.(plan.teamId)
     return outcome
+  }
+
+  /** D9: the owner's decision on one pause target (pauseResolve.ts). */
+  resolve(caller: PlanCaller, input: ResolveInput): PauseResolveOutcome {
+    return resolvePause(this.deps, caller, input)
   }
 
   /** The pause's held changes that are not targets, split per D6 (read model for 4.1's tests and the view). */
