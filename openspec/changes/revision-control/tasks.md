@@ -51,7 +51,7 @@ Implement after these have landed on master: `plan-execution`, `integration-cand
 
 ## 4. Pause and checkpoints
 
-- [ ] 4.1 Implement `PauseService.pause` (D6): the targets, withdrawal of unclaimed instructions through the stop branch, and urgent `plan-pause` system mail in the same transaction. Verify with tests:
+- [x] 4.1 Implement `PauseService.pause` (D6): the targets, withdrawal of unclaimed instructions through the stop branch, and urgent `plan-pause` system mail in the same transaction. Verify with tests:
   - one mail per holder, following forwards;
   - Kawai-held steps are listed as having no active work;
   - a queued instruction is superseded without `instruction-failed`;
@@ -64,7 +64,7 @@ Implement after these have landed on master: `plan-execution`, `integration-cand
   - an unknown effect is inspected after restart;
   - a failed push leaves the target Pausing with `checkpoint-push-failed`;
   - a result round counts as a checkpoint.
-- [ ] 4.3 Record Paused in the executor tick (D8). Verify with tests:
+- [x] 4.3 Record Paused in the executor tick (D8). Verify with tests:
   - checkpoint pushed but the holder busy stays Pausing;
   - a pending approval stays pending and reads Pausing as `request` (R11);
   - an archived holder counts as ready, and a killed holder with nothing pushed reads Pausing as `holder-killed`;

@@ -121,6 +121,7 @@ import { codexRolloutReceipt } from '../team/codexReceipt'
 import type { LimitEventStore } from '../team/routing/limitEvents'
 import { sessionCooldown } from '../team/cooldowns'
 import { supervisionRuntime } from '../plans/supervision/supervisionRuntime'
+import { pauseHolderFacts } from '../plans/revisionControl/pauseTick'
 import type { HandoffTarget } from '../team/routing/limitOutcomes'
 import type { RuleLoadReport, TeamRoutingState } from '../../shared/routing'
 import { SessionMailbox } from '../team/sessionMailbox'
@@ -1277,6 +1278,14 @@ export class ChatSessionManager {
           pendingRequests: id => this.drivers.get(id)?.getPendingRequests() ?? [],
           hasLiveWorkers: id => this.hasLiveWorkers(id), hasRunningBackgroundTasks: id => this.hasRunningBackgroundTasks(id),
           waitingFor: teamId => this.teamMail.waitingFor(teamId),
+          cooldownUntil: record => sessionCooldown(this.teamMail.limits, options.profileCatalogHome, record.claudeProfileId ?? 'default', record.projectPath).until,
+        }),
+        // The pause tick's holder facts (revision-control D8), from the same reads.
+        pauseFacts: pauseHolderFacts({
+          getRecord: id => this.records.get(id),
+          pendingRequest: id => (this.drivers.get(id)?.getPendingRequests().length ?? 0) > 0,
+          hasLiveWorkers: id => this.hasLiveWorkers(id), hasRunningBackgroundTasks: id => this.hasRunningBackgroundTasks(id),
+          parkedResumes: id => this.teamMail.mailbox.store.parkedBy(id).map(row => row.parkedUntil),
           cooldownUntil: record => sessionCooldown(this.teamMail.limits, options.profileCatalogHome, record.claudeProfileId ?? 'default', record.projectPath).until,
         }),
       },
