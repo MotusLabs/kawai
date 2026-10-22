@@ -398,17 +398,15 @@ reporting, escalation, assembled-head review, and withdrawal; it demonstrates
 the protocol, and does not claim that agents will obey prompts.
 
 Delta-scenario coverage (4.1): the Section 10 walkthrough plus the sections it
-references cover every scenario of the `change-coordination` delta —
-enrollment (§1), the ordinary-task fallback and reporting routes (§4),
-execution-owned exclusion (§1; the example change qualifies by construction),
-child creation and parent/child asymmetry (§2, §3; mechanically tested),
+references cover every `change-coordination` delta scenario — enrollment (§1),
+the ordinary-task fallback and reporting routes (§4), execution-owned
+exclusion (§1), child creation and parent/child asymmetry (§2, §3; tested),
 local clarification versus contract escalation (§10 step 3), shared caps and
-one writer per worktree (§4, §10 step 2), local result reporting and the
+one writer per worktree (§4, §10 step 2), result reporting and the
 conflicting-coordinator case (§4, §10 step 4), one review per result, fix
-results, and reviewer absence (§5), assembled evidence and closure-versus-
+results, and reviewer absence (§5), assembled evidence and closure versus
 acceptance (§2, §6, §10 steps 5–6), coordinator loss and replacement (§7, §10
-final paragraph), evaluation with incomplete evidence (§9), and withdrawal
-with a pending review and older running prompts (§8).
+final paragraph), evaluation (§9), and withdrawal with a pending review (§8).
 
 Mechanically tested (cited `file › title`):
 
@@ -453,14 +451,14 @@ into a temporary repository instead of reading this one.
 
 Installing this protocol is not activation: the artifacts add role and
 protocol files only — no server, API, schema, or CI behavior — so
-installation alone sends no mail and starts or enrolls no sessions.
-Activation happens only through the human actions below.
+installation alone sends no mail and starts or enrolls no sessions; activation
+happens only through the human actions below.
 
 **References.** `.kawai/groups/change-leads.md` (coordinator role, D2); this
 protocol; `lead.md`'s "Change Lead pilot" section (Team Lead duties); the
-reporting exception in the three developer roles and `reviewers.md`, plus
-the user-level reviewer roles (I1); `docs/agent-collaboration.md`
-(composition, one dispatcher per result). Mechanical evidence: Section 11.
+reporting exception in the three developer roles, `reviewers.md`, and the
+user-level reviewer roles (I1); `docs/agent-collaboration.md` (composition,
+one dispatcher per result). Mechanical evidence: Section 11.
 
 **Candidate-selection checklist.** At least two coherent implementation
 groups and meaningful local coordination; stable scope and contracts; not
@@ -484,8 +482,8 @@ in the parent before the first dispatch.
 verbatim, to the user-level `~/.kawai/groups/reviewers-claude.md` and
 `~/.kawai/groups/reviewers-mimo.md`, so per-task reviewers report pilot
 findings to the named coordinator like repository roles do (I1). Role and
-doc changes reach agents only from the main checkout's files, at each
-agent's next start; once this change lands, move any untracked owner copy of
+doc changes reach agents only from the main checkout at each agent's next
+start; once this change lands, move any untracked owner copy of
 `openspec/changes/change-lead-pilot/` in the main checkout aside before
 pulling, so the landed artifacts are authoritative (M4).
 
@@ -495,10 +493,9 @@ only through the cutoff recorded in the parent at enrollment (Section 9).
 
 **Rollback checklist** (Section 8): stop new pilot dispatch; reconcile
 creators and standing handoffs — the pending review stays singular; restore
-default reporting by amending the affected tasks' direction (the creator, or
-the human where the creator is gone) and require acknowledgments; let
-in-flight work settle, retaining the role until its dependent work resolves;
-preserve journals, results, findings, and mail for the evaluation report;
-archive human-created coordinator sessions by hand. Never kill a session,
-delete work, duplicate a pending handoff, or remove the role while
-unresolved pilot work depends on it.
+default reporting by amending the affected tasks' direction (creator, or the
+human where gone) and require acknowledgments; let in-flight work settle,
+retaining the role until its dependent work resolves; preserve journals,
+results, findings, and mail; archive human-created coordinator sessions by
+hand. Never kill a session, delete work, duplicate a pending handoff, or
+remove the role while unresolved pilot work depends on it.
