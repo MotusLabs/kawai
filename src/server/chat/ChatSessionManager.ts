@@ -1647,8 +1647,8 @@ export class ChatSessionManager {
   readonly planWorkspace: import('../plans/workspace/workspaceStore').PlanWorkspaceStore
   /** The plan workspace's document references (plan-workspace 1.2); the workspace connection reads it. */
   readonly planWorkspaceRefs: import('../plans/workspace/workspaceRefs').PlanWorkspaceRefs
-  /** The one execution store (plan-execution); the workspace document pin reads its attempt manifests (2.4). */
-  readonly planExecutionStore: import('../plans/execution/executionStore').ExecutionStore
+  /** The execution pin's read-only surface (plan-workspace 2.4, O4): the accessors executionPin.ts reads, no writer. */
+  readonly planExecutionStore: import('../plans/workspace/executionPin').ExecutionPinStore
   /** Plan executions (plan-execution): the human Start/Stop/Retry commands. */
   readonly executions: import('../plans/execution/ExecutionService').ExecutionService
   /** The execution runtime (plan-execution D5): boot recovery, wakes, and stop. */
