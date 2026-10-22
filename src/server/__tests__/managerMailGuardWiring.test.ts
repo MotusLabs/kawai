@@ -312,4 +312,60 @@ describe('ChatSessionManager turn-end settle wiring', () => {
       manager.shutdown()
     }
   })
+
+  test('a second failing turn end joins the pending chain and its claims settle too', async () => {
+    // N2: the second attempt's settle joins the live chain instead of being
+    // dropped — on the dropping code its claims (M2) strand as 'claimed'
+    // with no armed retry of their own.
+    const handles: FakeHandle[] = []
+    const events: ChatEvent[] = []
+    const manager = await startManager(handles, events)
+    try {
+      const created = manager.createSession({ projectPath: '/tmp/proj' })
+      if (!created.ok) throw new Error('create failed')
+      const id = created.session.id
+      await manager.send(id, 'turn')
+      await flush()
+
+      const first = claimPushed(manager, id, 'first')
+      const facade = (manager as unknown as {
+        teamMail: { settleClaims: (sessionId: string, refs: ClaimRef[]) => void }
+      }).teamMail
+      const realSettleClaims = facade.settleClaims.bind(facade)
+      const attempts: string[] = []
+      facade.settleClaims = (sessionId: string, refs: ClaimRef[]) => {
+        attempts.push(sessionId)
+        if (attempts.length <= 2) throw new Error('database is locked')
+        realSettleClaims(sessionId, refs)
+      }
+
+      handles[0]!.push(resultWithWindow()) // turn 1 ends: inline fail, chain armed
+      // Wait out the inline attempt — the fake query delivers pushed
+      // messages on a later macrotask, so turn two may only open once turn
+      // one's result was actually processed.
+      const inlined = Date.now() + 4500
+      while (Date.now() < inlined && attempts.length < 1) await flush()
+      expect(attempts.length).toBe(1)
+      // Still inside the retry window: a second turn ends and its settle
+      // fails too — it must join the pending chain, not be dropped.
+      await manager.send(id, 'turn two')
+      await flush()
+      const second = claimPushed(manager, id, 'second')
+      handles[0]!.push(resultWithWindow())
+      const deadline = Date.now() + 4500
+      while (Date.now() < deadline && attempts.length < 4) await flush()
+
+      // Two inline failures plus one retry round running both joined
+      // settles. The second attempt's snapshot also holds the first message
+      // (still claimed when it was taken); the first settle claims it
+      // first, so the identity check skips it for the second — no double
+      // settle.
+      expect(attempts).toEqual([id, id, id, id])
+      expect(manager.mailbox.store.get(first)?.state).toBe('uncertain')
+      expect(manager.mailbox.store.get(second)?.state).toBe('uncertain')
+      expect(events.some(event => event.type === 'error')).toBe(false)
+    } finally {
+      manager.shutdown()
+    }
+  })
 })

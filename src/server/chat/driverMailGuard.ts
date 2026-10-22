@@ -8,11 +8,15 @@
 // it without a full manager; the manager calls it from handleDriverEvent.
 //
 // A failed turn-end settle must not strand the claimed message: the settle
-// is retried a bounded number of times on an unref'd timer (one chain per
-// session — a retry re-runs the caller's settle step, which covers exactly
-// the claims the caller captured at the failed attempt, so concurrent chains
-// would be pure waste). After the last failure the mail is left to mailbox
-// recovery (the next turn end, failure, archive, kill, or startup
+// is retried a bounded number of times on an unref'd timer. One chain per
+// session: the first failing attempt arms it, and a later failing attempt
+// joins the live chain instead of being dropped — after the claims-scoped
+// settle (B1) each attempt's settle covers exactly the claims its own
+// snapshot captured, so dropping the second attempt would strand them. Each
+// settle runs in its own try/catch and only the failed subset re-arms; the
+// bound is per chain, so an arrival inherits the rounds the chain has left
+// and cannot extend them. After the last failure the mail is left to
+// mailbox recovery (the next turn end, failure, archive, kill, or startup
 // reconciliation). close() marks the guard closed at shutdown: a settle
 // arriving afterwards runs nothing and arms no timer — recovery owns the
 // mail from there.
@@ -35,7 +39,7 @@ export interface DriverMailGuardOptions {
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error))
 
 export class DriverMailGuard {
-  private readonly pending = new Set<string>()
+  private readonly pending = new Map<string, Array<() => void>>()
   private readonly cancels = new Set<Cancel>()
   private closed = false
   private readonly log: (event: string, fields: LogFields) => void
@@ -98,27 +102,44 @@ export class DriverMailGuard {
   }
 
   private arm(sessionId: string, settle: () => void, remaining: number): void {
-    // One chain per session: a pending retry already re-covers this
-    // session's claims, and the bound keeps total work bounded. Closed
-    // guards arm nothing.
-    if (this.closed || this.pending.has(sessionId)) return
-    this.pending.add(sessionId)
+    // One chain per session: a pending retry re-runs every settle that
+    // joined it, and the bound keeps total work bounded — a later failing
+    // attempt's claims were captured after the earlier attempt's snapshot,
+    // so its settle joins instead of being dropped. Closed guards arm
+    // nothing.
+    if (this.closed) return
+    const chain = this.pending.get(sessionId)
+    if (chain) {
+      chain.push(settle)
+      return
+    }
+    this.startChain(sessionId, [settle], remaining)
+  }
+
+  private startChain(sessionId: string, settles: Array<() => void>, remaining: number): void {
+    this.pending.set(sessionId, settles)
     const cancel = this.schedule(() => {
       this.cancels.delete(cancel)
       this.pending.delete(sessionId)
-      this.retry(sessionId, settle, remaining)
+      this.retry(sessionId, settles, remaining)
     }, SETTLE_RETRY_DELAY_MS)
     this.cancels.add(cancel)
   }
 
-  private retry(sessionId: string, settle: () => void, remaining: number): void {
-    try {
-      settle()
-      return
-    } catch (error) {
-      this.log('chat_mail_settle_retry_failed', { sessionId, retriesLeft: remaining - 1, error: messageOf(error) })
+  private retry(sessionId: string, settles: Array<() => void>, remaining: number): void {
+    // Each settle covers its own snapshot: one failure never takes down
+    // another attempt's settle, and only the failed subset re-arms.
+    const failed: Array<() => void> = []
+    for (const settle of settles) {
+      try {
+        settle()
+      } catch (error) {
+        failed.push(settle)
+        this.log('chat_mail_settle_retry_failed', { sessionId, retriesLeft: remaining - 1, error: messageOf(error) })
+      }
     }
-    if (remaining > 1) this.arm(sessionId, settle, remaining - 1)
-    else this.logError('chat_mail_settle_exhausted', { sessionId, retries: SETTLE_RETRIES })
+    if (failed.length === 0) return
+    if (remaining > 1) this.startChain(sessionId, failed, remaining - 1)
+    else this.logError('chat_mail_settle_exhausted', { sessionId, retries: SETTLE_RETRIES, unsettled: failed.length })
   }
 }
