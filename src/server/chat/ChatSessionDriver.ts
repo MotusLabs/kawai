@@ -433,6 +433,29 @@ export class ChatSessionDriver implements ChatAgentDriver {
     return this.submit(text, context) ?? { ok: true }
   }
 
+  /**
+   * S4: the one DB write a contextual submit makes, before anything
+   * observable. A refused record — or a throwing store — refuses the send
+   * and leaves no turn, no event, and no prompt.
+   */
+  private recordContext(messageUuid: string, turnId: string, context: WorkspaceMessageContext): ChatSendOutcome | null {
+    try {
+      const recorded = this.options.recordWorkspaceContext?.({
+        sessionId: this.options.sessionId,
+        messageUuid,
+        turnId,
+        context,
+      })
+      if (!recorded || !recorded.ok) {
+        const why = recorded?.message ?? 'The plan context could not be recorded.'
+        return { ok: false, error: `${why} The message was not sent.` }
+      }
+      return null
+    } catch (error) {
+      return { ok: false, error: `The plan context could not be recorded (${error instanceof Error ? error.message : String(error)}); the message was not sent.` }
+    }
+  }
+
   /** The one submit path: mint, record, open, emit, enqueue (PR D S3–S7). */
   private submit(text: string, context?: WorkspaceMessageContext): ChatSendOutcome | void {
     if (this.killed) {
@@ -446,16 +469,8 @@ export class ChatSessionDriver implements ChatAgentDriver {
     // the turn opens only after storage succeeded (S5).
     const turnId = this.activeTurnId ?? this.nextTurnId()
     if (context) {
-      const recorded = this.options.recordWorkspaceContext?.({
-        sessionId: this.options.sessionId,
-        messageUuid,
-        turnId,
-        context,
-      })
-      if (!recorded || !recorded.ok) {
-        const why = recorded?.message ?? 'The plan context could not be recorded.'
-        return { ok: false, error: `${why} The message was not sent.` }
-      }
+      const refusal = this.recordContext(messageUuid, turnId, context)
+      if (refusal) return refusal
     }
     if (!this.activeTurnId) this.startTurn(undefined, turnId)
     if (context) {
