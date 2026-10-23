@@ -172,6 +172,32 @@ describe('chatWorkspaceSend', () => {
     expect(recorded.map(row => row.messageUuid)).toEqual(uuids)
   })
 
+  test('I2 two messages in one active turn keep their own distinct contexts', async () => {
+    const recorded: Array<{ sessionId: string; messageUuid: string; turnId: string; context: WorkspaceMessageContext }> = []
+    const harness = createHarness({
+      recordWorkspaceContext: input => {
+        recorded.push(input)
+        return { ok: true, recorded: true }
+      },
+    })
+    const other: WorkspaceMessageContext = { ...context, planId: 'plan-2', planTitle: 'Dispatch roadmap' }
+    harness.driver.sendWorkspaceContext('first message', context)
+    harness.driver.sendWorkspaceContext('second message', other)
+    await flush()
+    const userEvents = harness.events.filter(e => e.type === 'user_message')
+    expect(userEvents).toHaveLength(2)
+    const first = userEvents[0] as { messageUuid?: string; workspaceContext?: WorkspaceMessageContext }
+    const second = userEvents[1] as { messageUuid?: string; workspaceContext?: WorkspaceMessageContext }
+    expect(first.messageUuid).not.toBe(second.messageUuid)
+    expect(first.workspaceContext).toEqual(context)
+    expect(second.workspaceContext).toEqual(other)
+    // Each uuid's row holds its own context — no ambient current-plan state.
+    expect(recorded).toHaveLength(2)
+    const rowFor = (uuid: string | undefined) => recorded.find(row => row.messageUuid === uuid)
+    expect(rowFor(first.messageUuid)!.context).toEqual(context)
+    expect(rowFor(second.messageUuid)!.context).toEqual(other)
+  })
+
   test('I3 a slash command keeps its literal text and still dispatches with the context pasted', async () => {
     const harness = createHarness({ recordWorkspaceContext: () => ({ ok: true, recorded: true }) })
     harness.driver.sendWorkspaceContext('/context verbose', context)
