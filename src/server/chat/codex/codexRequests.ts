@@ -180,6 +180,12 @@ export class CodexRequests {
             ...(typeof option.description === 'string' && option.description ? { description: option.description } : {}),
           }))
         : [],
+      // F3 (codex-chat-sessions): carry the answer-shape flags into the card —
+      // free text only where Codex allows another answer, masked where secret.
+      // Absent fields read as today, so a sender omitting them cannot make a
+      // card unanswerable.
+      ...(typeof question.isOther === 'boolean' ? { isOther: question.isOther } : {}),
+      ...(question.isSecret === true ? { isSecret: true } : {}),
     }))
     return new Promise((resolve) => {
       const requestId = newRequestId()
