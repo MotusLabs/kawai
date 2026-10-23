@@ -235,9 +235,13 @@ export class PlanWorkspaceArtifactsConnections {
       return this.mapResolution(sub, resolution, worktreeRoots)
     } catch (error) {
       sub.changeRoot = null
+      // The client-visible reason is fixed shape-only text (D4): a throw's
+      // own message can carry an absolute path, so its detail stays in the
+      // server log only.
+      console.error(`[workspace] the artifacts of "${sub.changeName}" could not be enumerated:`, error)
       return {
         ok: false, state: 'cli-unavailable',
-        message: `The artifacts of "${sub.changeName}" could not be enumerated (${errorText(error)}).`,
+        message: `The artifacts of "${sub.changeName}" could not be enumerated.`,
       }
     }
   }
@@ -330,11 +334,6 @@ export class PlanWorkspaceArtifactsConnections {
     }
     this.watcher.setTargets(dirs)
   }
-}
-
-/** The error's own text, for a reason or message that names the failure. */
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
 }
 
 /** A watch event touches a change tree when either path contains the other. */

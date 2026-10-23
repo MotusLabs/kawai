@@ -285,6 +285,27 @@ describe('refusals and cleanup', () => {
     expect(fixture.watchers.size).toBe(0)
     expect(agentStarts).toBe(0)
   })
+
+  test('a throwing enumeration answers a fixed path-free reason, never the raw error', async () => {
+    const { planId } = await bench.draftInReview()
+    writeArchiveFixture()
+    // The resolver's runner throws with a representative absolute path in
+    // its message; the push's reason must stay shape-only text (D4).
+    const throwing: OpenspecRunner = async () => {
+      throw new Error(`ENOENT: no such file or directory, open '${archiveRoot()}/proposal.md'`)
+    }
+    const throwingModule = new PlanWorkspaceArtifactsConnections(managerDouble, { host: fixture.host, resolver: new ChangeArtifactsResolver(throwing) })
+    messages = []
+    await throwingModule.handle(connection, { type: 'team-plan-workspace-artifacts-open', teamPath: world.repo, planId, changeName: 'archived' })
+    const push = await untilArtifacts(view => !view.ok)
+    expect(push.view).toMatchObject({ ok: false, state: 'cli-unavailable' })
+    if (push.view.ok) return
+    expect(push.view.message).toBe('The artifacts of "archived" could not be enumerated.')
+    expect(push.view.message).not.toContain(world.repo)
+    expect(push.view.message).not.toContain(archiveRoot())
+    expect(agentStarts).toBe(0)
+    throwingModule.stop()
+  })
 })
 
 describe('the change name shape gate (B5)', () => {
