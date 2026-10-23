@@ -53,7 +53,7 @@ import { manifestHashInput } from '../../../shared/planExecution'
 import { holdGate, type OpenPauseTarget } from './holdGate'
 import type { ActiveHold } from '../../../shared/planRevisionControl'
 import { dispatchAdaptedFixWithin } from '../execution/executionAdaptDispatch'
-import { restartTarget } from './pauseRestart'
+import { releaseRestartedHolder, restartTarget } from './pauseRestart'
 import type { PlanPause, PlanPauseTarget } from '../../../shared/planRevisionControl'
 import type { PauseServiceDeps } from './pauseService'
 
@@ -477,27 +477,6 @@ function revisionOf(tasks: NonNullable<PauseServiceDeps['tasks']>, task: { id: s
   return { number: task.revision, rationale: tasks.store.revisions(task.id).at(-1)?.rationale ?? null }
 }
 
-/**
- * R2's after-commit release (rev4 §4): the decision detail recorded the
- * release bookkeeping; a spawned holder it found ready is released here,
- * outside the resolve's transaction (releaseNow archives a session — an
- * external effect a rollback could not undo). A release refused between the
- * decision and this step keeps the work durable with a pending-release row
- * instead; unwired seams never release.
- */
-async function releaseRestartedHolder(deps: PauseServiceDeps, pauseId: string, change: string): Promise<void> {
-  if (deps.releases === undefined) return
-  const target = deps.pauses.target(pauseId, change)
-  const detail = target?.decisionDetail as { holder?: unknown; release?: unknown } | undefined
-  if (target === null || target === undefined || target.decision !== 'restart') return
-  if (detail?.release !== 'now' || typeof detail.holder !== 'string') return
-  try {
-    await deps.releases.releaseNow(detail.holder, ` paused change ${change} restarted`)
-  } catch {
-    deps.releases.markPending(detail.holder, `paused change ${change} restarted; the release was refused`)
-  }
-}
-
 /** The resume mail (C2/C12): one normal direct system message, enqueued inside the caller's transaction. */
 function enqueueResume(deps: PauseServiceDeps, caller: PlanCaller & { kind: 'human' }, plan: { id: string; title: string },
   target: Pick<PlanPauseTarget, 'change' | 'stage' | 'holderSession'>, taskId: string, body: string): void {
@@ -509,7 +488,3 @@ function enqueueResume(deps: PauseServiceDeps, caller: PlanCaller & { kind: 'hum
   })
   if (!deps.sessionExists(holder)) deps.mailbox.deadLetter(message.id, 'killed-recipient')
 }
-
-
-
-
