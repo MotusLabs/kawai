@@ -310,6 +310,15 @@ export class ExecutionStore extends ExecutionEffectStore {
     return row ? mapAttempt(row) : null
   }
 
+  /**
+   * Stamp the assignment the row's dispatch returned (H″ O1): the first
+   * stamp wins, so a `:retry:` re-send keeps the original link and a racing
+   * second dispatch cannot overwrite it.
+   */
+  setAttemptAssignment(id: string, assignmentId: string): void {
+    this.db.prepare('UPDATE plan_execution_attempts SET assignment_id = ? WHERE id = ? AND assignment_id IS NULL').run(assignmentId, id)
+  }
+
   /** Record a landing fact (X7): one per plan and change. */
   insertLanding(input: Omit<LandingRow, 'landedAt' | 'postCi'> & { postCi?: CiCheck[] | null }): LandingRow {
     this.db.prepare(`INSERT INTO plan_change_landings (plan_id, change, execution_id, team_id, mechanism, pr_number, pr_url, head_sha, base_sha,

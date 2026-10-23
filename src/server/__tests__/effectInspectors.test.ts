@@ -103,7 +103,13 @@ describe('the per-kind inspections (D14 table)', () => {
   test('push: origin containing the commit is done; a head without it runs again', async () => {
     reads.remoteHead = { 'refs/heads/api': 'abc123' }
     await expect(inspect('push', { cwd: '/repo/.worktrees/api', commit: 'abc123', branch: 'api' })).resolves.toEqual({ found: 'done', outcome: { head: 'abc123' } })
+    // A head moved past the commit contains it (a checkpoint pushed on top of
+    // the round commit): done, not a re-run into a non-fast-forward refusal.
+    reads.remoteHead = { 'refs/heads/api': 'moved999' }
+    reads.contains = { 'abc123..moved999': true }
+    await expect(inspect('push', { cwd: '/repo/.worktrees/api', commit: 'abc123', branch: 'api' })).resolves.toEqual({ found: 'done', outcome: { head: 'moved999' } })
     reads.remoteHead = { 'refs/heads/api': 'other999' }
+    reads.contains = { 'abc123..other999': false }
     await expect(inspect('push', { cwd: '/repo/.worktrees/api', commit: 'abc123', branch: 'api' })).resolves.toMatchObject({ found: 'not-done' })
     reads.remoteHead = { 'refs/heads/api': null }
     await expect(inspect('push', { cwd: '/repo/.worktrees/api', commit: 'abc123', branch: 'api' })).resolves.toEqual({ found: 'not-done' })

@@ -38,7 +38,7 @@ import { EffectPinConflict } from './executionEffectStore'
 import { ExecutionConflict } from './executionStore'
 import type { ExecutionStore } from './executionStore'
 import type { PlanStore } from '../planStore'
-import { dispatchFix, dispatchImplementAttempt, dispatchOwedFixAttempt, ensureFixAttempt, redispatchStage, type DispatchDeps } from './executionDispatch'
+import { dispatchFix, dispatchImplementAttempt, dispatchOwedAttempt, ensureFixAttempt, redispatchStage, type DispatchDeps } from './executionDispatch'
 import { StepRefusal } from './stepRefusal'
 import { fixRoundOutcome } from '../../../shared/planExecutionProgress'
 import { applyRoundStage, type ReleaseSeam, roundAdapters } from './executionRounds'
@@ -93,6 +93,8 @@ export interface ExecutorDeps {
   checkpoints?: import('../revisionControl/checkpointTool').CheckpointTool
   /** revision-control D8 (4.3): the tick's pause pass — owed mail, Paused recording, closing. */
   pauses?: import('../revisionControl/pauseTick').PauseTickDeps
+  /** The owed review-restart stage's dispatch (revision-control 4.5 LC1), wired by the composition from the pause side's stores. */
+  reviewRestart?: import('./executionRounds').ReviewRestartSeam
 }
 
 export class ExecutionExecutor {
@@ -198,6 +200,7 @@ export class ExecutionExecutor {
           const state = assignmentState(outstanding, outstanding.messageId !== null ? this.deps.mailbox.get(outstanding.messageId) : null)
           return { id: outstanding.id, state: state.state, reason: state.reason, requestKey: outstanding.requestKey ?? null }
         },
+        taskId => this.deps.tasks.store.assignmentsOf(taskId).map(row => ({ requestKey: row.requestKey })),
         planId => this.deps.holds?.active(teamId, planId) ?? [],
         planId => this.deps.holds?.openTargets(teamId, planId) ?? [])
       if (snapshot.executions.length === 0) return
@@ -230,8 +233,8 @@ export class ExecutionExecutor {
       // Each step runs in its own guard: a refused service call stops only
       // its change; any other throw ends the tick (the wake loop logs it).
       for (const step of steps.dispatches) {
-        await this.guarded(step, () => step.kind === 'fix'
-          ? dispatchOwedFixAttempt(this.dispatchDeps(team), step)
+        await this.guarded(step, () => step.kind === 'owed'
+          ? dispatchOwedAttempt(this.dispatchDeps(team), step)
           : dispatchImplementAttempt(this.dispatchDeps(team), step))
       }
       for (const stage of steps.stages) {
@@ -418,7 +421,10 @@ export class ExecutionExecutor {
     // dispatch replays under its key if the transition below never landed.
     // Under a hold (revision-control 3.2) the attempt row — the owed
     // dispatch's marker — is still created and the fix transition stands;
-    // only the handoff waits, and the release dispatches it once.
+    // only the handoff waits, and the release dispatches it once. This is
+    // the change's one writer for its own row (H″ O2): a refused send wrote
+    // nothing, and the fixes step re-sends the same key after Retry; the
+    // owed step never fires here — 'gating' is not a fix row's owed state.
     const input = {
       executionId: fix.executionId, change: fix.change, group,
       failingChecks: failing,

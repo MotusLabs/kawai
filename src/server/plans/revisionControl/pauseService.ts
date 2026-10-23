@@ -24,8 +24,10 @@
 // durable once-marker for its mail. After the commit the executor wake fires.
 import type { PauseStage, PlanPause, PlanPauseTarget } from '../../../shared/planRevisionControl'
 import type { ChangeRow } from '../execution/executionRows'
+import { agentHeldStage, attemptStatus } from '../execution/attemptStatus'
 import type { ExecutionStore } from '../execution/executionStore'
 import { outstandingOf, type AssignmentStore } from '../../team/assignmentStore'
+import type { AssignmentService } from '../../team/AssignmentService'
 import { forwardEnd } from '../../team/forwardChain'
 import type { MailboxStore } from '../../team/mailboxStore'
 import { PlanRefusal, type PlanCommandOutcome } from '../planCommands'
@@ -33,6 +35,9 @@ import type { PlanStore } from '../planStore'
 import type { ExecutionEventOutcome, PlanCaller, PlanService } from '../PlanService'
 import { HoldStore } from './holdStore'
 import { PauseStore } from './pauseStore'
+import { resolvePause, type AdaptHeadFacts, type PauseResolveOutcome, type ResolveInput } from './pauseResolve'
+import type { CheckpointStore } from './checkpointStore'
+import type { TaskService } from '../../team/TaskService'
 
 /** The tag every pause mail carries (D6). */
 export const PLAN_PAUSE_TAG = 'plan-pause'
@@ -57,6 +62,43 @@ export interface PauseServiceDeps {
   mailbox: MailboxStore
   /** Whether a session record still exists; a killed holder's mail dead-letters at enqueue. */
   sessionExists: (sessionId: string) => boolean
+  /** A session record's profile (LC3): the inline restarted review's author-profile tags. Optional so a bench can omit it; the production composition wires the session directory. */
+  sessionProfile?: (sessionId: string) => string | null
+  /** The task service (D9): the resolve's H5 drop reads the task's current
+   *  revision and the round result's pinned one, and the resume names the
+   *  newest revision. Optional so a unit bench can omit it; the production
+   *  composition wires it. */
+  tasks?: TaskService
+  /** The shared checkpoint store (D7): an attempt target's resume names the newest checkpoint's commit. */
+  checkpoints?: CheckpointStore
+  /** The dispatch path of the resolve's inline fix (A2r): the production
+   *  composition wires the team's AssignmentService; a bench may omit it,
+   *  leaving every adapt row owed. */
+  assignmentService?: Pick<AssignmentService, 'dispatchWithin'>
+  /**
+   * Adapt's git facts (rev4 §2: the resolution's git reads run BEFORE the
+   * transaction; only their results enter it — L3 (A3.2): the entry reads
+   * it before `recordRevisionControlEvent`, after the replay short-circuit,
+   * and the manifest consumes the gathered facts inside. `{ ok: false }` is
+   * a failed read, refused `head-unreadable` (K7); null or absent falls
+   * back to the newest attempt's start commit, else the baseline.
+   */
+  adaptHead?: (executionId: string, change: string) => Promise<AdaptHeadFacts | null>
+  /**
+   * R2's release bookkeeping (rev4 §4): `readiness` decides the decision
+   * detail's release for a spawned holder, `releaseNow` archives a ready one
+   * after the resolve's commit, and `markPending` records a busy one durably
+   * inside the resolve's transaction. Optional; unwired (or the holder
+   * record missing below), the detail reads release 'never' — fail-closed.
+   * The production composition wires the team's MemberRelease.
+   */
+  releases?: {
+    readiness: (sessionId: string) => { ready: boolean; reason?: string | null }
+    releaseNow: (sessionId: string, detail: string) => unknown
+    markPending: (sessionId: string, reason: string) => boolean
+  }
+  /** The holder's session-record facts (R2: spawned, archivedAt); null when the session is gone (R16). */
+  holderRecord?: (sessionId: string) => { spawned: boolean; archivedAt: string | null } | null
   /** The executor wake, called after a committed command only. */
   wake?: (teamId: string) => unknown
   now?: () => Date
@@ -80,13 +122,6 @@ type Failure = { state?: boolean; text: string }
  */
 export function landingStarted(row: Pick<ChangeRow, 'state' | 'step'>): boolean {
   return row.state === 'landing' && (row.step === 'updating' || row.step === 'merging')
-}
-
-/** The agent-held stages a pause targets (D6): the attempt, and the review handoff. */
-function stageOf(row: Pick<ChangeRow, 'state' | 'step'>): PauseStage | null {
-  if (row.state === 'implementing') return 'attempt'
-  if (row.state === 'gating' && row.step === 'reviewing') return 'review'
-  return null
 }
 
 /** The held changes of the pause that are not targets, split per D6. */
@@ -153,6 +188,11 @@ export class PauseService {
     }, () => this.pauseWithin(caller.team.teamId, caller.team.groupsRoot, plan.id, input))
     if (outcome.ok && !outcome.replayed) this.deps.wake?.(plan.teamId)
     return outcome
+  }
+
+  /** D9: the owner's decision on one pause target (pauseResolve.ts); async for L3's pre-transaction head read. */
+  resolve(caller: PlanCaller, input: ResolveInput): Promise<PauseResolveOutcome> {
+    return resolvePause(this.deps, caller, input)
   }
 
   /** The pause's held changes that are not targets, split per D6 (read model for 4.1's tests and the view). */
@@ -252,16 +292,27 @@ export class PauseService {
    * successor is unclaimed; `deliverOwed` mails those when a claim appears.
    */
   private deriveTarget(row: ChangeRow): { target: DerivedTarget } | { noActiveWork: true } | { landingInProgress: true } {
-    const stage = stageOf(row)
+    // O3′ (revision-control PR E): the shared agent-held predicate decides
+    // the stage. An owed newest attempt names no holder (H7, H″ O1) — the
+    // outstanding assignment is the previous stage's (the reviewer's), never
+    // the attempt's, so the change holds no live work to pause, whatever
+    // its state. A linked row (its dispatch went out) still derives its
+    // claimant.
+    const newest = this.deps.executions.attempts(row.executionId, row.change).at(-1) ?? null
+    const held = agentHeldStage(row, newest === null || row.taskId === null ? null : {
+      kind: newest.kind,
+      status: attemptStatus(newest, this.deps.assignments.listByTask(row.taskId), this.deps.executions.rounds(row.executionId, row.change)),
+    })
+    const stage: PauseStage | null = held === null ? null : held === 'review' ? 'review' : 'attempt'
     if (stage === null) return landingStarted(row) ? { landingInProgress: true } : { noActiveWork: true }
-    const attemptId = this.deps.executions.attempts(row.executionId, row.change).at(-1)?.id ?? null
+    if (row.taskId === null) return { noActiveWork: true }
+    const attemptId = newest?.id ?? null
     const base = {
       pauseId: '', change: row.change, stage, attemptId, assignmentId: '', holderSession: null as string | null,
       messageId: null as string | null, withdrawn: false, pausedAt: null as string | null, checkpointId: null as string | null,
       decision: null, decisionDetail: null, decidedAt: null as string | null, decisionCommandId: null as string | null,
       instructionTaskId: row.taskId, instructionMessageId: null as string | null, branch: row.branch,
     }
-    if (row.taskId === null) return { noActiveWork: true }
     const outstanding = outstandingOf(this.deps.assignments.listByTask(row.taskId))
     if (!outstanding?.messageId) return { noActiveWork: true }
     const message = this.deps.mailbox.get(outstanding.messageId)

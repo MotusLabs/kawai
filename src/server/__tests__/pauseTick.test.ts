@@ -54,6 +54,9 @@ const tickDeps = (db = bench.db.db, owed = service): PauseTickDeps => ({
   executions: new ExecutionStore(db),
   mailbox: bench.mail,
   deliverOwed: (id, root, pauseId) => owed.deliverOwed(id, root, pauseId),
+  assignmentMessageState: assignmentId => bench.assignmentStore.byId(assignmentId)?.messageId != null
+    ? bench.mail.get(bench.assignmentStore.byId(assignmentId)!.messageId!)?.state ?? null
+    : null,
   readiness,
   factsOf,
   now,
@@ -341,6 +344,54 @@ describe("the executor tick's pause pass (D8)", () => {
     expect(pauseMails(api.taskId)).toBe(1)
     expect(pauses.target(pauseRow.id, 'api')!.holderSession).toBe('dev')
   })
+
+  test('an unclaimed forward successor is not a spawn: spawnUnclaimed stays false (F5)', async () => {
+    const { planId, executionId } = await executionWith(['api'])
+    const api = await inFlight(executionId, 'api')
+    // A provider limit forwarded the work: the original mail reads
+    // forwarded, and the handoff reply to a fresh holder is still queued —
+    // no claim, so the pause target names no holder.
+    const original = bench.mail.get(api.mailId)!
+    const successor = bench.mail.enqueue({
+      teamId, toKind: 'session', toId: 'dev2', fromKind: 'human', fromSession: null, fromGroup: null,
+      originPath: world.repo, body: 'Build api.', taskId: api.taskId, actor: 'system',
+      inReplyTo: original, attachThread: true,
+      handoff: { fromSession: 'dev', fromProfile: 'glm', claimCommit: null, lastError: 'the profile hit its limit', progress: { toolCalls: 3, tools: ['Read'], filesTouched: [] } },
+    })
+    bench.mail.markForwarded(api.mailId, `forwarded: ${successor.id}`)
+    bench.records.set('dev2', sessionRow('dev2', 'middle-devs', world.feature))
+    const hold = placeHold(planId, ['api'], 'pt-h10')
+    const pauseRow = pause(planId, hold.id, 'pt-10')
+    expect(pauses.target(pauseRow.id, 'api')).toMatchObject({ holderSession: null, messageId: null })
+    const factsOfTarget = (): ReturnType<typeof derivePauseTarget>['facts'] => {
+      const p = pauses.get(teamId, pauseRow.id)!
+      const t = pauses.target(pauseRow.id, 'api')!
+      const finished = executions.execution(p.executionId)!.state !== 'running'
+      return derivePauseTarget(tickDeps(), p, t, finished, now()).facts
+    }
+    // The spawn-specific fact never names a forward successor.
+    expect(factsOfTarget().spawnUnclaimed).toBe(false)
+    // The successor's claim mails the owed pause, as for a spawn.
+    bench.mail.claim(successor.id, 'dev2')
+    bench.mail.markPushed(successor.id)
+    bench.mail.markDelivered(successor.id)
+    clock += 5_000
+    tick()
+    expect(pauses.target(pauseRow.id, 'api')!.holderSession).toBe('dev2')
+  })
+
+  test('an unclaimed spawn still reads spawnUnclaimed (F5)', async () => {
+    const { planId, executionId } = await executionWith(['api'])
+    const api = await inFlight(executionId, 'api', 'dev', 'spawning')
+    const hold = placeHold(planId, ['api'], 'pt-h11')
+    const pauseRow = pause(planId, hold.id, 'pt-11')
+    const p = pauses.get(teamId, pauseRow.id)!
+    const t = pauses.target(pauseRow.id, 'api')!
+    const facts = derivePauseTarget(tickDeps(), p, t, false, now()).facts
+    expect(t.holderSession).toBeNull()
+    expect(facts.spawnUnclaimed).toBe(true)
+    expect(api.mailId).toBeTruthy()
+  })
 })
 
 describe('a restart between the claim and the tick (R18, the B5 pattern)', () => {
@@ -376,6 +427,10 @@ describe('a restart between the claim and the tick (R18, the B5 pattern)', () =>
         pauses: new PauseStore(reopened.db, now), checkpoints: new CheckpointStore(reopened.db, now),
         executions: new ExecutionStore(reopened.db), mailbox: mail,
         deliverOwed: (id, root, pauseId) => rebuiltService.deliverOwed(id, root, pauseId),
+        assignmentMessageState: assignmentId => {
+          const row = new AssignmentStore(reopened.db, mail).byId(assignmentId)
+          return row?.messageId != null ? mail.get(row.messageId)?.state ?? null : null
+        },
         readiness, factsOf, now,
       }
       runPauseTick(deps, teamId, world.repo)
@@ -384,6 +439,59 @@ describe('a restart between the claim and the tick (R18, the B5 pattern)', () =>
       expect(target.pausedAt).toBe(firstPausedAt)
       expect(mail.forTask(row.taskId!).filter(message => message.tags.includes(PLAN_PAUSE_TAG))).toHaveLength(1)
       expect(stateOf(deps, pauseRow.id, 'api')).toEqual({ state: 'paused' })
+    } finally {
+      reopened.close()
+    }
+    expect(sentEvents()).toBe(1)
+  })
+
+  // R18's busy-holder variant (4.5): the crash lands after the pause mail
+  // and before any checkpoint, with the holder busy — the first pass
+  // recorded no Paused, and the rebuilt pass re-derives `pausing` from the
+  // rows alone: no second mail, no Paused, whatever the passes.
+  test('a restart re-derivation sends no resume twice and records no second Paused', async () => {
+    const { planId, executionId } = await executionWith(['api'])
+    await inFlight(executionId, 'api')
+    const row = executions.change(executionId, 'api')!
+    expect(executions.transition(executionId, 'api', row, { state: 'gating', step: 'reviewing' })).not.toBeNull()
+    const hold = placeHold(planId, ['api'], 'pt-h10')
+    const pauseRow = pause(planId, hold.id, 'pt-10')
+    holderStates.set('dev', { state: 'live', pendingRequest: false, busy: true, providerLimit: null })
+    // A busy holder is not release-ready (D8's holder-ready rule): the
+    // guarded Paused write waits for the readiness answer.
+    readinessAnswers.set('dev', { ready: false, reason: 'the holder is running a turn' })
+    tick()
+    const mailed = bench.mail.forTask(row.taskId!).filter(message => message.tags.includes(PLAN_PAUSE_TAG))
+    expect(mailed).toHaveLength(1)
+    expect(pauses.target(pauseRow.id, 'api')!.pausedAt).toBeNull()
+    expect(stateOf(tickDeps(), pauseRow.id, 'api').state).toBe('pausing')
+    const sentEvents = (): number =>
+      (bench.db.db.prepare('SELECT COUNT(*) AS n FROM team_message_events WHERE message_id = ? AND kind = ?').get(mailed[0]!.id, 'sent') as { n: number }).n
+    expect(sentEvents()).toBe(1)
+    clock += 5_000
+    const reopened = initDatabase({ path: bench.db.db.filename })
+    try {
+      const mail = new MailboxStore(reopened.db)
+      const rebuiltService = new PauseService({
+        pauses: new PauseStore(reopened.db, now), holds: new HoldStore(reopened.db, now), plans: bench.plans,
+        planService: bench.service, executions: new ExecutionStore(reopened.db), assignments: new AssignmentStore(reopened.db, mail),
+        mailbox: mail, sessionExists: id => bench.records.has(id), now,
+      })
+      const deps: PauseTickDeps = {
+        pauses: new PauseStore(reopened.db, now), checkpoints: new CheckpointStore(reopened.db, now),
+        executions: new ExecutionStore(reopened.db), mailbox: mail,
+        deliverOwed: (id, root, pauseId) => rebuiltService.deliverOwed(id, root, pauseId),
+        assignmentMessageState: assignmentId => {
+          const standing = new AssignmentStore(reopened.db, mail).byId(assignmentId)
+          return standing?.messageId != null ? mail.get(standing.messageId)?.state ?? null : null
+        },
+        readiness, factsOf, now,
+      }
+      runPauseTick(deps, teamId, world.repo)
+      runPauseTick(deps, teamId, world.repo)
+      expect(deps.pauses.target(pauseRow.id, 'api')!.pausedAt).toBeNull()
+      expect(mail.forTask(row.taskId!).filter(message => message.tags.includes(PLAN_PAUSE_TAG))).toHaveLength(1)
+      expect(stateOf(deps, pauseRow.id, 'api').state).toBe('pausing')
     } finally {
       reopened.close()
     }

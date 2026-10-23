@@ -38,7 +38,7 @@ function round(number: number, extra: Partial<SupervisionRound> = {}): Supervisi
 function input(extra: Partial<SupervisionInput> = {}): SupervisionInput {
   return {
     change: 'api', dependsOn: [], state: 'implementing', step: null, stopReason: null, stopDetail: null,
-    landing: null, dependencies: [], parallelLimit: 3, attempt: { kind: 'implement' }, rounds: [], effects: [],
+    landing: null, dependencies: [], parallelLimit: 3, attempt: { kind: 'implement', status: 'out' }, rounds: [], effects: [],
     instruction: { messageId: 'msg-1', state: 'delivered', deliveredAt: ago(30), blocker: null, holder: holder() },
     openCards: [], conditions: [], memberRelease: null, slotHolder: null, candidates: [], results: [], waitEndedAt: null,
     ...extra,
@@ -108,7 +108,7 @@ describe('failingChecks', () => {
 })
 
 describe('repeating-failure', () => {
-  const view = (rounds: SupervisionRound[]) => changeSupervision(input({ state: 'implementing', attempt: { kind: 'fix' }, rounds }), NOW)
+  const view = (rounds: SupervisionRound[]) => changeSupervision(input({ state: 'implementing', attempt: { kind: 'fix', status: 'out' }, rounds }), NOW)
 
   test('different failures raise none', () => {
     expect(view([failed(2, [check('lint', 'failure')]), failed(3, [check('unit', 'failure')])]).stall).toBeNull()
@@ -251,6 +251,31 @@ describe('no-progress', () => {
   test('an undelivered instruction or a Kawai-held step never stalls', () => {
     expect(changeSupervision(input({ instruction: { messageId: 'm', state: 'claimed', deliveredAt: null, blocker: null, holder: holder() } }), NOW).outcome).toBe('running')
     expect(changeSupervision(busy(600, { state: 'gating', step: 'pushing' }), NOW).cause).toEqual({ kind: 'stage', stage: 'kawai', step: 'pushing' })
+  })
+})
+
+describe("the update stage's no-progress (O3′)", () => {
+  const updateOut = () => input({
+    state: 'gating',
+    step: null,
+    attempt: { kind: 'update', status: 'out' },
+    instruction: { messageId: 'msg-1', state: 'delivered', deliveredAt: ago(180), blocker: null, holder: holder() },
+  })
+
+  test('a gating update row out, delivered past the attempt deadline, stalls no-progress', () => {
+    const view = changeSupervision(updateOut(), NOW)
+    expect(view.stage).toBe('update')
+    expect(view.outcome).toBe('stalled')
+    expect(view.stall).toEqual({ kind: 'no-progress', episodeKey: ago(180), anchorAt: ago(180), deadlineAt: ago(60), idle: false })
+    expect(causeLabel(view.cause)).toBe('Stalled: no progress')
+  })
+
+  test('the same gating change with no attempt row stays Kawai-held and never stalls', () => {
+    const view = changeSupervision({ ...updateOut(), attempt: null }, NOW)
+    expect(view.stage).toBe('kawai')
+    expect(view.outcome).toBe('running')
+    expect(view.stall).toBeNull()
+    expect(view.cause).toEqual({ kind: 'stage', stage: 'kawai', step: null })
   })
 })
 

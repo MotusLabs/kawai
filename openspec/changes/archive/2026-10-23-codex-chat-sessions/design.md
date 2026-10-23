@@ -251,6 +251,7 @@ The first task is a scripted spike against the baseline, recorded in this design
 - **[Risk] Rollout rows may be written later than the turn push (buffering), briefly making receipts look absent.** → Mitigation: reconciliation already runs only at turn end, failure, archive, kill, and startup, and Codex flushes by turn end. The spike confirms this; otherwise reconciliation waits for `turn/completed`.
 - **[Risk] The driver extraction touches the most central server file.** → Mitigation: it is a separate first commit with no behavior change, and the existing driver and manager tests must pass unmodified.
 - **[Trade-off] Codex profiles that share a home cool down together, but Claude profiles that share a login still do not.** → Mitigation: this is accepted as a known gap (proposal non-goals). Codex shares one cooldown per home through the home's provider id (D9); no fan-out code exists.
+- **[Risk] A secret Codex answer is masked on the question card only.** → History replay renders the `request_user_input` output as a tool row (`codexRollout.ts`), and the raw protocol capture (`appServerClient.ts`; the chat Debug panel and the chat-wire log) records the response frame — both show what crossed the wire unmasked. Accepted as a known limitation; follow-up: redact secret answers in replayed tool rows and the wire capture. The spec claims masking of the question card only.
 
 ## Migration Plan
 

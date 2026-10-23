@@ -26,9 +26,13 @@ export interface OpenPauseTarget {
  * when a whole-plan hold covers the change, else `changes`; `holdIds` is
  * sorted so callers render and log deterministically. `pauseId` names the
  * undecided pause target when the pause closes the gate beside the holds
- * (or alone). Several pauses' targets for one change are open in principle:
- * the first in input order wins, and a second pause on the same change is
- * refused upstream (D6: no open pause covers the same hold).
+ * (or alone). Several pauses' targets for one change can be open at once —
+ * D6 refuses only a second pause over the same hold, and different holds
+ * stand side by side — so the gate names the first open target in input
+ * order: resolving one target decides its own (pauseId, change), and any
+ * other open target keeps the gate closed on the next read. The callers
+ * today read only the gate's open/closed answer (`holdGate(...) !== null`),
+ * so no `pauseIds[]` is carried: `pauseId` names the first open target only.
  */
 export function holdGate(activeHolds: readonly ActiveHold[], openTargets: readonly OpenPauseTarget[], change: string): HoldClosure | null {
   const covering = activeHolds.filter(hold => hold.scope === 'plan' || hold.changes.includes(change))

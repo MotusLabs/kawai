@@ -195,6 +195,20 @@ describe('task_checkpoint refusals (D7)', () => {
     expect(freshRow(review).state).toBe('implementing')
   })
 
+  test('a change with no worktree yet is refused no-worktree and writes nothing (F6)', async () => {
+    const bare = bench()
+    // Provisioning has not run: the row owns the task but names no worktree
+    // or branch, so a commit-carrying call has nowhere to check against.
+    bare.executions.transition(bare.executionId, 'api', freshRow(bare), {
+      state: 'implementing', step: null, taskId: 'task-x', worktree: null, branch: null, baselineCommit: bare.work.base,
+    })
+    const outcome = refusalOf(await bare.tool.record(caller, { ...baseInput, commit: bare.work.commit }), 'no worktree')
+    expect(outcome.reason).toBe('no-worktree')
+    expect(outcome.message).toContain('no worktree or branch yet')
+    expect(checkpointCount(bare).n).toBe(0)
+    expect(effectCount(bare)).toBe(0)
+  })
+
   test('a commit that is not the branch head, or a dirty worktree, is refused and writes nothing', async () => {
     const bench1 = bench()
     const notHead = refusalOf(await bench1.tool.record(caller, { ...baseInput, commit: revParse('origin/master', world.repo) }), 'not the head')
@@ -212,7 +226,8 @@ describe('task_checkpoint refusals (D7)', () => {
     }
   })
 
-  test('a failed status read is refused and writes nothing', async () => {
+  // Root reads a 0o000 file anyway, so the refusal is unreachable there (N3).
+  test.skipIf(process.getuid?.() === 0)('a failed status read is refused and writes nothing', async () => {
     const unreadable = bench()
     const gitDir = git(['rev-parse', '--absolute-git-dir'], unreadable.work.cwd).trim()
     fs.chmodSync(path.join(gitDir, 'index'), 0o000)

@@ -8,8 +8,13 @@
 // exists it requests one page with `throughId = anchor` and re-attempts when
 // the page lands; if the entry still is not found it falls back silently —
 // the chat is simply open at its usual place. One request per reveal, no loop.
-import { useEffect, useRef, type RefObject } from 'react'
+// With `mayConsume` (plan-workspace §6.1) the hook reads its host's reveal
+// designation through the claimant subscription, so a designation change —
+// the designated owner unmounting while a reveal is still pending — wakes
+// this already-mounted survivor and it consumes the waiting reveal.
+import { useCallback, useEffect, useRef, useSyncExternalStore, type RefObject } from 'react'
 import type { ClientMessage } from '@shared/types'
+import { subscribeRevealDesignation } from '../../stores/chatAttachment'
 import { useChatStore } from '../../stores/chatStore'
 
 export const REVEAL_MS = 2000
@@ -35,15 +40,31 @@ export function useRevealRow(options: {
   sendMessage?: (message: ClientMessage) => void
   /** Grows when events land (a page included); the reveal re-attempts then. */
   eventCount?: number
+  /**
+   * Consulted live at each attempt (plan-workspace §6.1): when it returns
+   * false this surface only renders statically and another host of the
+   * session consumes the reveal. Omit to always consume.
+   */
+  mayConsume?: () => boolean
 }): void {
-  const { sessionId, loaded, container, sendMessage, eventCount } = options
+  const { sessionId, loaded, container, sendMessage, eventCount, mayConsume } = options
   const reveal = useChatStore(state => (state.pendingReveal?.sessionId === sessionId ? state.pendingReveal : null))
   const marked = useRef<{ target: RevealTarget; timer: ReturnType<typeof setTimeout> } | null>(null)
   /** The anchor the one page request already went out for. */
   const pagedFor = useRef<string | null>(null)
+  // This host's designation, live (advisory 396ee67b R1): a flip re-renders,
+  // and `designated` below re-runs the attempt so a reveal left pending by a
+  // newly designated owner is consumed instead of stranding. Without
+  // `mayConsume` the host is always the consumer.
+  const subscribeDesignation = useCallback(
+    (listener: () => void) => subscribeRevealDesignation(sessionId, listener),
+    [sessionId],
+  )
+  const designated = useSyncExternalStore(subscribeDesignation, () => (mayConsume ? mayConsume() : true))
 
   useEffect(() => {
     if (!reveal || !loaded) return
+    if (mayConsume && !mayConsume()) return
     const anchor = reveal.anchorId.replace(/["\\]/g, '\\$&')
     const target = container.current?.querySelector(`[data-anchor-id="${anchor}"]`) ?? null
     if (!target) {
@@ -80,7 +101,9 @@ export function useRevealRow(options: {
       marked.current = null
     }, REVEAL_MS)
     marked.current = { target, timer }
-  }, [reveal, loaded, container, sessionId, sendMessage, eventCount])
+    // `mayConsume` is read live (it is a fresh closure on most renders);
+    // `designated` is its stored value and the dep that wakes a survivor.
+  }, [reveal, loaded, container, sessionId, sendMessage, eventCount, designated])
 
   useEffect(() => () => {
     if (!marked.current) return

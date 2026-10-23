@@ -95,8 +95,12 @@ Interrupting a Codex chat SHALL stop its in-flight turn through the protocol, ca
 Every Codex turn SHALL run with workspace-write file access limited to the session's project directory, the repository's git common directory, and temporary space, so commits from a linked worktree succeed. Codex SHALL ask for approval only when an action needs more than the sandbox grants. Network access SHALL be on unless the profile turns it off. The sandbox SHALL NOT depend on the approval policy.
 
 #### Scenario: Commit from a linked worktree
-- **WHEN** a Codex member in a linked worktree commits
-- **THEN** the commit succeeds without an approval request
+- **WHEN** a Codex member in a linked worktree commits and the sandbox starts with the writable root
+- **THEN** the commit runs without an approval request
+
+#### Scenario: Commit where the sandbox cannot help
+- **WHEN** the sandbox cannot start, or `.git` stays read-only under `workspace-write`, and a Codex member in a linked worktree commits
+- **THEN** the command escalates: an approval card under manual, accepted without one under auto
 
 #### Scenario: Write outside the sandbox
 - **WHEN** Codex needs to write outside the project directory and git common directory
@@ -130,11 +134,27 @@ On thread start and resume under either policy, the system SHALL set `approvalsR
 - **THEN** later requests in that turn are accepted without cards and the thread is not restarted
 
 ### Requirement: Codex questions use question cards
-A Codex request for user input SHALL appear as a question card with each question's header, text, and options, offering free text where Codex allows another answer and hiding input where Codex marks it secret. Questions SHALL NOT be answered automatically under either policy. The user's answers SHALL return to Codex keyed by question.
+A Codex request for user input SHALL appear as a question card with each question's header, text, and options, offering free text where Codex allows another answer, and always where the question offers no options, since text is then its only answer, and masking the input where Codex marks it secret. Questions SHALL NOT be answered automatically under either policy. The user's answers SHALL return to Codex keyed by question.
 
 #### Scenario: Question under auto
 - **WHEN** an auto Codex chat asks the user a question with options
 - **THEN** a question card shows the options and the turn waits for the user's answer
+
+#### Scenario: Secret question's input is masked
+- **WHEN** Codex marks a question secret and the card renders
+- **THEN** the input is masked, on the pending and the answered card
+
+#### Scenario: A question with options offers free text only with another-answer permission
+- **WHEN** a question offers options and Codex marks it without another-answer permission
+- **THEN** the card offers only Codex's options and no free-text input
+
+#### Scenario: A question without options always offers free text
+- **WHEN** a question offers no options, whatever its another-answer permission says
+- **THEN** the card offers free text, masked when Codex marks the question secret
+
+#### Scenario: Claude questions are unchanged
+- **WHEN** a Claude chat's agent asks a structured question
+- **THEN** the card renders as before, with a plain input and free text offered
 
 ### Requirement: Codex sessions carry the team tools
 A Codex chat SHALL have the same `kawai-team` tools as a Claude chat, with identity bound to the calling session, allowed without approval cards under either policy. A call SHALL be served only for the session's own thread. If Codex refuses to register the team tools, the agent SHALL NOT start and the chat SHALL show the reason.
@@ -186,7 +206,7 @@ A Codex chat that belongs to a group SHALL receive the same role body, mailbox n
 - **THEN** the new Codex chat starts with that group's role and team notes and the task mail as its first turn
 
 ### Requirement: Mail receipt for Codex recipients comes from the Codex transcript
-Delivery to a Codex recipient SHALL be acknowledged only by a complete user-message row in its Codex transcript file that carries the envelope's message id. A missing, unreadable, or torn file SHALL hold the message as uncertain, as for Claude recipients. Receipt SHALL be checkable without a running agent.
+Delivery to a Codex recipient SHALL be acknowledged only by a complete user-message row in its Codex transcript file that carries the envelope's message id; such a row counts as delivered whatever follows it, a torn or unreadable tail included. Only an absent receipt beside torn or unreadable evidence SHALL hold the message as uncertain, as for Claude recipients. Receipt SHALL be checkable without a running agent.
 
 #### Scenario: Receipt while the turn runs
 - **WHEN** a Codex member's transcript records the envelope row while its turn is still running
@@ -196,8 +216,12 @@ Delivery to a Codex recipient SHALL be acknowledged only by a complete user-mess
 - **WHEN** the backend restarts after pushing mail to a Codex member whose transcript holds the envelope row
 - **THEN** startup reconciliation marks the message delivered without starting the agent
 
-#### Scenario: Torn transcript
-- **WHEN** a Codex recipient's transcript ends in a malformed row
+#### Scenario: Torn tail after the envelope row
+- **WHEN** a Codex recipient's transcript holds the envelope row and ends in a malformed row
+- **THEN** the message shows delivered despite the torn tail
+
+#### Scenario: Torn transcript without the envelope row
+- **WHEN** a Codex recipient's transcript ends in a malformed row and carries no envelope row for the message
 - **THEN** the pushed message is held as uncertain for human resolution
 
 ### Requirement: Codex chat history replays
