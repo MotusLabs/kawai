@@ -283,8 +283,12 @@ export class ChatSessionDriver implements ChatAgentDriver {
   private readonly seenToolCallIds = new Set<string>()
   /** Echo suppression: texts we submitted that the SDK may echo back. */
   private readonly sentEchoTexts = new Map<string, number>()
-  /** Echo suppression: client message uuids a contextual submit sent (LC-D3). */
-  private readonly sentEchoUuids = new Map<string, number>()
+  /**
+   * Echo suppression: client message uuids a contextual submit sent (LC-D3),
+   * each paired with the typed text it was submitted under, so suppression
+   * consumes both tokens whatever text the CLI's merged echo carries.
+   */
+  private readonly sentEchoUuids = new Map<string, string>()
   private capturedSdkSessionId: string | undefined
   /** Last model reported to onModel; undefined before the first report. */
   private lastReportedModel: string | undefined
@@ -474,8 +478,9 @@ export class ChatSessionDriver implements ChatAgentDriver {
     }
     if (!this.activeTurnId) this.startTurn(undefined, turnId)
     if (context) {
-      // Echo suppression by uuid, beside today's text fallback (LC-D3).
-      this.sentEchoUuids.set(messageUuid, (this.sentEchoUuids.get(messageUuid) ?? 0) + 1)
+      // Echo suppression by uuid beside today's text fallback (LC-D3): the
+      // token pairs the uuid with the typed text so suppression consumes both.
+      this.sentEchoUuids.set(messageUuid, text)
     }
     this.trackEcho(text)
     // I4's answer: every user message carries the uuid the enqueue already
@@ -1090,10 +1095,15 @@ export class ChatSessionDriver implements ChatAgentDriver {
     if (!turnId) return
     const content = message.message.content
     if (typeof content === 'string') {
-      this.maybeEchoUser(message, content, turnId)
+      if (this.takeSentEchoUuid(message)) return
+      this.maybeEchoUser(content, turnId)
       return
     }
     const subagent = isSubagentContentFrame(message)
+    // Suppression is decided once per message: one uuid match suppresses
+    // every text block of that message and consumes exactly one typed-text
+    // token, however many text blocks the CLI merged into the echo.
+    const echoed = !subagent && this.takeSentEchoUuid(message)
     for (const block of content) {
       if (block.type === 'tool_result') {
         // D4 carve-out: only the tool_result of a kept Agent/Task call (a
@@ -1123,31 +1133,45 @@ export class ChatSessionDriver implements ChatAgentDriver {
         }
       } else if (block.type === 'text') {
         if (subagent) continue
-        this.maybeEchoUser(message, block.text, turnId)
+        if (echoed) continue
+        this.maybeEchoUser(block.text, turnId)
       }
     }
   }
 
   /**
    * The SDK echoes streamed user turns; suppress the copy we already sent.
-   * A uuid we minted suppresses first (LC-D3), whatever text the echo
-   * carries; an echo without one of ours takes today's text path.
+   * A uuid we minted suppresses first (LC-D3) at message level; an echo
+   * without one of ours takes today's text path per block.
    */
-  private maybeEchoUser(message: SDKUserMessage, text: string, turnId: string): void {
-    const uuid = typeof message.uuid === 'string' ? message.uuid : ''
-    if (uuid !== '') {
-      const outstandingUuid = this.sentEchoUuids.get(uuid) ?? 0
-      if (outstandingUuid > 0) {
-        this.sentEchoUuids.set(uuid, outstandingUuid - 1)
-        return
-      }
-    }
-    const outstanding = this.sentEchoTexts.get(text) ?? 0
-    if (outstanding > 0) {
-      this.sentEchoTexts.set(text, outstanding - 1)
-      return
-    }
+  private maybeEchoUser(text: string, turnId: string): void {
+    if (this.consumeEchoText(text)) return
     this.emit({ type: 'user_message', turnId, text })
+  }
+
+  /**
+   * Consume this message's sent uuid token once; true when the frame is our
+   * own echo. The token pairs the uuid with the typed text, so suppression
+   * consumes both — the echoed text of a contextual send can differ from
+   * what was submitted (the CLI appends each pasted_content entry).
+   */
+  private takeSentEchoUuid(message: SDKUserMessage): boolean {
+    const uuid = typeof message.uuid === 'string' ? message.uuid : ''
+    if (uuid === '') return false
+    const submitted = this.sentEchoUuids.get(uuid)
+    if (submitted === undefined) return false
+    this.sentEchoUuids.delete(uuid)
+    this.consumeEchoText(submitted)
+    return true
+  }
+
+  /** Consume one outstanding echo token for `text`; true when one was held. */
+  private consumeEchoText(text: string): boolean {
+    const outstanding = this.sentEchoTexts.get(text) ?? 0
+    if (outstanding <= 0) return false
+    if (outstanding === 1) this.sentEchoTexts.delete(text)
+    else this.sentEchoTexts.set(text, outstanding - 1)
+    return true
   }
 
   private trackEcho(text: string): void {

@@ -3,7 +3,9 @@
 // harness, and the I1 failure rule — a refused record opens no turn, emits
 // no event, and enqueues nothing.
 import { describe, expect, test } from 'bun:test'
+import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import { workspaceContextBlock, type WorkspaceMessageContext } from '../../shared/planWorkspace'
+import type { ChatEvent } from '../../shared/chat'
 import type { WorkspaceContextOutcome } from '../plans/workspace/workspaceContext'
 import { createHarness, flush, typesOf } from './fixtures/chatDriverHarness'
 
@@ -74,4 +76,79 @@ describe('chatWorkspaceSend', () => {
     expect(harness.events).toEqual([])
     expect(await harness.fakes[0]!.pullPrompt()).toBeNull()
   })
+
+  test('B1 a uuid-preserving echo whose text differs from the submitted text renders one bubble and leaves no text token', async () => {
+    const harness = createHarness({ recordWorkspaceContext: () => ({ ok: true, recorded: true }) })
+    harness.driver.sendWorkspaceContext('mine', context)
+    const fake = harness.fakes[0]!
+    const prompt = await fake.pullPrompt()
+    const sentUuid = String(prompt!.uuid)
+    // The CLI appends each pasted_content entry to the echoed text
+    // (sdk.d.ts:6294), so a contextual echo's text differs from what was
+    // submitted. The uuid must suppress it regardless.
+    fake.push(echoFrame(sentUuid, `mine\n${workspaceContextBlock(context)}`))
+    await flush()
+    expect(userTexts(harness.events)).toEqual(['mine'])
+    // Suppression consumed the typed text's token beside the uuid's: a later
+    // foreign frame with the SUBMITTED text is kept, not swallowed.
+    fake.push(echoFrame(undefined, 'mine'))
+    await flush()
+    expect(userTexts(harness.events)).toEqual(['mine', 'mine'])
+  })
+
+  test('B1 a foreign same-text user frame after a uuid-suppressed echo is kept', async () => {
+    const harness = createHarness({ recordWorkspaceContext: () => ({ ok: true, recorded: true }) })
+    harness.driver.sendWorkspaceContext('mine', context)
+    const fake = harness.fakes[0]!
+    const prompt = await fake.pullPrompt()
+    fake.push(echoFrame(String(prompt!.uuid), 'mine'))
+    await flush()
+    expect(userTexts(harness.events)).toEqual(['mine'])
+    fake.push(echoFrame(undefined, 'mine'))
+    await flush()
+    expect(userTexts(harness.events)).toEqual(['mine', 'mine'])
+  })
+
+  test('B1 one uuid match suppresses every text block of the echoed message', async () => {
+    const harness = createHarness({ recordWorkspaceContext: () => ({ ok: true, recorded: true }) })
+    harness.driver.sendWorkspaceContext('mine', context)
+    const fake = harness.fakes[0]!
+    const prompt = await fake.pullPrompt()
+    // A block-form echo carries the typed text and the appended context as
+    // two text blocks of one message sharing the uuid: neither may fall
+    // through to the text path (a spurious context-block bubble).
+    fake.push({
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'mine' },
+          { type: 'text', text: workspaceContextBlock(context) },
+        ],
+      },
+      parent_tool_use_id: null,
+      uuid: String(prompt!.uuid),
+    } as unknown as SDKMessage)
+    await flush()
+    expect(userTexts(harness.events)).toEqual(['mine'])
+    // Exactly one typed-text token was consumed: a foreign frame is kept.
+    fake.push(echoFrame(undefined, 'mine'))
+    await flush()
+    expect(userTexts(harness.events)).toEqual(['mine', 'mine'])
+  })
 })
+
+/** The live user_message texts, in order. */
+function userTexts(events: ChatEvent[]): string[] {
+  return events.filter((e) => e.type === 'user_message').map((e) => e.text ?? '')
+}
+
+/** An SDK user frame as the CLI streams it back, with an optional uuid. */
+function echoFrame(uuid: string | undefined, text: string): SDKMessage {
+  return {
+    type: 'user',
+    message: { role: 'user', content: text },
+    parent_tool_use_id: null,
+    ...(uuid !== undefined ? { uuid } : {}),
+  } as unknown as SDKMessage
+}
