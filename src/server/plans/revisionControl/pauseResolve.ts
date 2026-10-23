@@ -1,7 +1,12 @@
 // The owner's resolve command (revision-control 4.4-4.5, design D9 + A3's
 // C-rows and A-rows): one decision per pause target, recorded as the
 // `pause-resolved` event and the target's decision row in one transaction.
-// This step implements 'continue' (C1-C17) and 'adapt' (A1r-A13r). The
+// This step implements 'continue' (C1-C19) and 'adapt' (A1r-A14r). The
+// entry is async for L3's pre-transaction head read (A3.2): after the
+// replay short-circuit it gathers origin's branch head for an adapted fix
+// row's manifest through the `adaptHead` seam, outside the transaction; a
+// failed read refuses `head-unreadable` (K7) inside `within`, after every
+// earlier refusal. The
 // checks run in order: decided (I1, naming the standing decision even on a
 // closed pause — before the choice dispatch, so every choice names it), the
 // closed pause (K6, undecided targets only), then the choice dispatch:
@@ -53,7 +58,17 @@ export const PLAN_RESUME_TAG = 'plan-resume'
  * inside the transaction so nothing is written, returned as the outcome's
  * reason. `review-target` belongs to adapt (A10r) and lands with its step.
  */
-export type ResolveRefusalCode = 'target-withdrawn' | 'not-paused' | 'holder-gone' | 'review-superseded' | 'review-target'
+export type ResolveRefusalCode = 'target-withdrawn' | 'not-paused' | 'holder-gone' | 'review-superseded' | 'review-target' | 'head-unreadable'
+
+/**
+ * L3 (A3.2): the facts the resolve's pre-transaction git read gathers for an
+ * adapted fix row's manifest — origin's branch head for the new startCommit.
+ * `{ ok: false }` is a failed read (K7, refused `head-unreadable` inside
+ * `within`, where it cannot mask I1/K6 or the review refusals); `null` (or
+ * the seam unwired) leaves the manifest's old fallback to the newest
+ * attempt's start commit.
+ */
+export type AdaptHeadFacts = { ok: true; startCommit: string; artifacts: Record<string, string> } | { ok: false }
 
 /** A resolve-specific refusal: not a PlanRefusalReason, so it carries its own class and is caught at the resolve entry (§2). */
 export class ResolveRefusal extends Error {
@@ -112,18 +127,30 @@ function forbidden(): PauseResolveOutcome {
  * supersedes nothing twice. A ResolveRefusal from `within` rolls the
  * transaction back and returns as the outcome's own reason code.
  */
-export function resolvePause(deps: PauseServiceDeps, caller: PlanCaller, input: ResolveInput): PauseResolveOutcome {
+export async function resolvePause(deps: PauseServiceDeps, caller: PlanCaller, input: ResolveInput): Promise<PauseResolveOutcome> {
   if (caller.kind !== 'human') return forbidden()
   const plan = deps.plans.forTeam(caller.team.teamId, input.planId)
   if (!plan) return { ok: false, reason: 'not-found', result: undefined, message: `Plan not found in this team: ${input.planId}` }
   if (deps.tasks === undefined || deps.checkpoints === undefined) {
     return { ok: false, reason: 'state', result: undefined, message: 'The resolve needs the task and checkpoint services wired.' }
   }
+  // L3 (A3.2): the resolution's pre-transaction git read — origin's branch
+  // head for the new startCommit — runs here, outside the transaction, after
+  // the replay short-circuit (a replayed resolve returns its recorded
+  // outcome and reads nothing). The read is a gather only: K7's refusal is
+  // thrown inside `within` at the facts' consumption, where it cannot mask
+  // I1/K6 or the stage refusals, and a failed read leaves nothing written.
+  // Only 'adapt' reads today; 'restart' joins with its own step (rev4 §10).
+  let head: AdaptHeadFacts | null | undefined
+  if (input.choice === 'adapt' && deps.adaptHead && deps.plans.eventByCommand(plan.id, input.commandId) === null) {
+    const pause = deps.pauses.get(caller.team.teamId, input.pauseId)
+    head = pause !== null && pause.planId === plan.id ? await deps.adaptHead(pause.executionId, input.change) : undefined
+  }
   try {
     const outcome = deps.planService.recordRevisionControlEvent(plan.id, {
       kind: 'pause-resolved', commandId: input.commandId, pauseId: input.pauseId, change: input.change,
       choice: input.choice, adapt: input.adapt ?? null, rationale: input.rationale, releaseHold: input.releaseHold === true,
-    }, () => resolveWithin(deps, caller, input, plan.id))
+    }, () => resolveWithin(deps, caller, input, plan.id, head))
     if (outcome.ok && !outcome.replayed) deps.wake?.(plan.teamId)
     return outcome
   } catch (error) {
@@ -134,8 +161,8 @@ export function resolvePause(deps: PauseServiceDeps, caller: PlanCaller, input: 
   }
 }
 
-/** Everything `within` writes for one resolve, after the replay. */
-function resolveWithin(deps: PauseServiceDeps, caller: PlanCaller & { kind: 'human' }, input: ResolveInput, planId: string): { target: { change: string; decision: string } } {
+/** Everything `within` writes for one resolve, after the replay; `head` is the pre-transaction git read's gather (undefined when the seam is unwired or the pause is not found). */
+function resolveWithin(deps: PauseServiceDeps, caller: PlanCaller & { kind: 'human' }, input: ResolveInput, planId: string, head: AdaptHeadFacts | null | undefined): { target: { change: string; decision: string } } {
   const pause = deps.pauses.get(caller.team.teamId, input.pauseId)
   if (pause === null || pause.planId !== planId) throw new PlanRefusal('not-found', `Pause not found on this plan: ${input.pauseId}`)
   const target = deps.pauses.target(pause.id, input.change)
@@ -190,7 +217,7 @@ function resolveWithin(deps: PauseServiceDeps, caller: PlanCaller & { kind: 'hum
   if (target.stage === 'review') {
     throw new ResolveRefusal('review-target', `Change ${target.change} is paused in review; adapt the direction after the review resolves, or restart the work instead.`)
   }
-  return adaptAttempt(deps, caller, input, pause, target, changeRow, task)
+  return adaptAttempt(deps, caller, input, pause, target, changeRow, task, head)
 }
 
 /** C12-C14: the review target's Continue. The handoff the pause recorded
@@ -305,7 +332,8 @@ function supersedeHeldAssignment(deps: PauseServiceDeps, pause: PlanPause, targe
  * target no longer closes it — is open, else the row stays owed (H1, H6).
  */
 function adaptAttempt(deps: PauseServiceDeps, caller: PlanCaller & { kind: 'human' }, input: ResolveInput, pause: PlanPause,
-  target: PlanPauseTarget, changeRow: ChangeRow, task: { id: string; revision: number }): { target: { change: string; decision: string } } {
+  target: PlanPauseTarget, changeRow: ChangeRow, task: { id: string; revision: number },
+  head: AdaptHeadFacts | null | undefined): { target: { change: string; decision: string } } {
   const tasks = deps.tasks!
   const execution = deps.executions.execution(pause.executionId)
   if (execution === null) throw new PlanRefusal('not-found', `The execution of pause ${pause.id} is missing.`)
@@ -372,10 +400,15 @@ function adaptAttempt(deps: PauseServiceDeps, caller: PlanCaller & { kind: 'huma
     fresh = deps.executions.change(pause.executionId, target.change)
   }
   // 6. ONE new attempt row: kind `fix` (A13r copies the update row's
-  //    `answers` and `update` at revision N+1), its own facts added.
+  //    `answers` and `update` at revision N+1), its own facts added. The
+  //    git read itself ran pre-transaction (L3); a failed read refuses
+  //    here — after every earlier refusal — as K7 (A3.2), retryable.
   const newest = deps.executions.attempts(pause.executionId, target.change).at(-1) ?? null
-  const facts = deps.adaptHead?.(pause.executionId, target.change) ?? null
-  const startCommit = facts?.startCommit ?? newest?.manifest.startCommit ?? changeRow.baselineCommit
+  const facts = head ?? null
+  if (facts !== null && !facts.ok) {
+    throw new ResolveRefusal('head-unreadable', `Change ${target.change}'s pre-transaction read of origin's branch head failed; nothing was written. Resolve again once the git read succeeds.`)
+  }
+  const startCommit = (facts !== null && facts.ok ? facts.startCommit : newest?.manifest.startCommit ?? changeRow.baselineCommit)
   if (startCommit === null) throw new PlanRefusal('state', `Change ${target.change} has no start commit; nothing was written.`)
   const manifest: AttemptManifest = {
     version: 1,
@@ -385,7 +418,7 @@ function adaptAttempt(deps: PauseServiceDeps, caller: PlanCaller & { kind: 'huma
     validation: { reportId: execution.reportId, inputHash: execution.inputHash },
     baseline: changeRow.baselineCommit ?? '',
     startCommit,
-    artifacts: facts?.artifacts ?? {},
+    artifacts: facts !== null && facts.ok ? facts.artifacts : {},
     roleProfiles: revision.content.roles.find(role => role.group === entry.group)?.profiles ?? [],
     ...(newest?.manifest.answers !== undefined ? { answers: newest.manifest.answers } : {}),
     ...(newest?.manifest.update !== undefined ? { update: newest.manifest.update } : {}),

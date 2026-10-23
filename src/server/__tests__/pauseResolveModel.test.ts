@@ -100,19 +100,19 @@ test('P-I1: 40 seeded cases — the replay replays, later commands refuse or rep
     }
     const baseline = counts(world.planId, world.executionId, world.taskId, world.pauseId)
     expect(baseline.attempts).toBeGreaterThan(0)
-    expectFreshAccept(wired.resolve(payload))
+    expectFreshAccept(await wired.resolve(payload))
     // The same command and payload replays without running again (K5's surrogate).
-    expectReplay(wired.resolve({ ...payload }))
+    expectReplay(await wired.resolve({ ...payload }))
     expect(counts(world.planId, world.executionId, world.taskId, world.pauseId)).toMatchObject({
       events: 1, resumes: 1, attempts: baseline.attempts, decided: 'continue',
     })
     const followUps = 1 + Math.floor(rand() * 3)
     for (let step = 0; step < followUps; step += 1) {
       const kind = FOLLOW_UPS[Math.floor(rand() * FOLLOW_UPS.length)]
-      if (kind === 'replay') expectReplay(wired.resolve({ ...payload }))
-      else if (kind === 'fresh id') expectRefusal(wired.resolve({ ...payload, commandId: `${commandId}-x${step}` }), 'state')
-      else if (kind === 'mutated rationale') expectRefusal(wired.resolve({ ...payload, rationale: 'changed while replaying' }), 'payload')
-      else expectRefusal(wired.resolve({ ...payload, choice: 'adapt', commandId: `${commandId}-a${step}` }), 'state')
+      if (kind === 'replay') expectReplay(await wired.resolve({ ...payload }))
+      else if (kind === 'fresh id') expectRefusal(await wired.resolve({ ...payload, commandId: `${commandId}-x${step}` }), 'state')
+      else if (kind === 'mutated rationale') expectRefusal(await wired.resolve({ ...payload, rationale: 'changed while replaying' }), 'payload')
+      else expectRefusal(await wired.resolve({ ...payload, choice: 'adapt', commandId: `${commandId}-a${step}` }), 'state')
       // The invariants after every command: exactly one event, one resume,
       // no minted attempt row, the one standing decision.
       expect(counts(world.planId, world.executionId, world.taskId, world.pauseId)).toMatchObject({
@@ -141,7 +141,7 @@ test('P-I1 adapt: 40 seeded cases — the publication lands once, the round supe
     }
     const baseline = counts(world.planId, world.executionId, world.taskId, world.pauseId)
     expect(baseline.attempts).toBeGreaterThan(0)
-    expectFreshAccept(wired.resolve(payload))
+    expectFreshAccept(await wired.resolve(payload))
     const after = counts(world.planId, world.executionId, world.taskId, world.pauseId)
     // ONE new fix attempt, no resume, one notice, one event, the decision.
     expect(after).toMatchObject({
@@ -151,17 +151,17 @@ test('P-I1 adapt: 40 seeded cases — the publication lands once, the round supe
     // (the owed-after-mint variant has no round to supersede).
     if (baseline.roundOutcomes.length > 0) expect(after.roundOutcomes).toEqual(['superseded'])
     // The same command and payload replays without a second publication.
-    expectReplay(wired.resolve({ ...payload }))
+    expectReplay(await wired.resolve({ ...payload }))
     expect(counts(world.planId, world.executionId, world.taskId, world.pauseId)).toMatchObject({
       events: 1, resumes: 0, notices: 1, attempts: baseline.attempts + 1, decided: 'adapt',
     })
     const followUps = 1 + Math.floor(rand() * 3)
     for (let step = 0; step < followUps; step += 1) {
       const kind = FOLLOW_UPS[Math.floor(rand() * FOLLOW_UPS.length)]
-      if (kind === 'replay') expectReplay(wired.resolve({ ...payload }))
-      else if (kind === 'fresh id') expectRefusal(wired.resolve({ ...payload, commandId: `${commandId}-x${step}` }), 'state')
-      else if (kind === 'mutated rationale') expectRefusal(wired.resolve({ ...payload, rationale: 'changed while replaying' }), 'payload')
-      else expectRefusal(wired.resolve({ ...payload, choice: 'continue', commandId: `${commandId}-c${step}` }), 'state')
+      if (kind === 'replay') expectReplay(await wired.resolve({ ...payload }))
+      else if (kind === 'fresh id') expectRefusal(await wired.resolve({ ...payload, commandId: `${commandId}-x${step}` }), 'state')
+      else if (kind === 'mutated rationale') expectRefusal(await wired.resolve({ ...payload, rationale: 'changed while replaying' }), 'payload')
+      else expectRefusal(await wired.resolve({ ...payload, choice: 'continue', commandId: `${commandId}-c${step}` }), 'state')
       expect(counts(world.planId, world.executionId, world.taskId, world.pauseId)).toMatchObject({
         events: 1, resumes: 0, notices: 1, attempts: baseline.attempts + 1, decided: 'adapt',
       })

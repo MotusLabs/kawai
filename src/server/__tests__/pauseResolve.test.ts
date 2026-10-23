@@ -55,14 +55,14 @@ describe('the C-rows (A3, verbatim)', () => {
   test.each(C_ROWS)('%s: %s · %s · hold %s · row %s → %s', async (id: string) => {
     if (id === 'C1') {
       const world = await wired.pausedAttempt()
-      ok(wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'continue' }))
-      const again = refusal(wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'continue' }))
+      ok(await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'continue' }))
+      const again = refusal(await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'continue' }))
       expect(again.reason).toBe('state')
       expect(again.message).toContain('already decided (continue)')
       expect(wired.resolvedEvents(world.planId)).toHaveLength(1)
     } else if (id === 'C2') {
       const world = await wired.pausedAttempt({ mintAttempt: false })
-      ok(wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'continue' }))
+      ok(await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'continue' }))
       const target = targetOf(wired, world.pauseId, 'api')
       expect(target.decision).toBe('continue')
       expect(target.decisionDetail).toMatchObject({ holder: 'dev', release: 'never', assignmentId: world.assignmentId })
@@ -77,7 +77,7 @@ describe('the C-rows (A3, verbatim)', () => {
       const kind = id === 'C3' ? 'implement' : 'fix'
       const world = await wired.pausedAttempt({ mintAttempt: false })
       wired.mintOwed(world.executionId, 'api', kind)
-      ok(wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'continue' }))
+      ok(await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'continue' }))
       const newest = wired.executions.attempts(world.executionId, 'api').at(-1)!
       expect(newest.kind).toBe(kind)
       expect(newest.assignmentId).toBeNull()
@@ -85,7 +85,7 @@ describe('the C-rows (A3, verbatim)', () => {
       expect(wired.resumeMails(world.taskId)).toHaveLength(1)
     } else if (id === 'C4') {
       const world = await wired.pausedAttempt()
-      ok(wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'continue' }))
+      ok(await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'continue' }))
       const standing = wired.bench.assignmentStore.listByTask(world.taskId).find(row => row.id === world.assignmentId)!
       expect(standing.supersededBy).toBeNull()
       expect(wired.bench.mail.get(standing.messageId!)!.state).toBe('claimed')
@@ -96,7 +96,7 @@ describe('the C-rows (A3, verbatim)', () => {
       // Answered after the pause (the row-answered worlds are unreachable at
       // pause placement — the round insert moves the change to `gating`).
       wired.answerNewestRow(world.executionId, 'api', 1)
-      ok(wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'continue' }))
+      ok(await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'continue' }))
       const round = wired.executions.rounds(world.executionId, 'api').at(-1)!
       expect(round.outcome).toBeNull()
       expect(wired.resumeMails(world.taskId)).toHaveLength(1)
@@ -109,7 +109,7 @@ describe('the C-rows (A3, verbatim)', () => {
       const hold = wired.placeHold(planId, ['api'], `hold-${++sequence}`)
       const pause = ok(wired.pause({ planId, holdId: hold.id, commandId: `pause-${++sequence}` })).pause
       wired.toPaused(pause.id, 'api')
-      ok(wired.resolve({ planId, pauseId: pause.id, change: 'api', choice: 'continue' }))
+      ok(await wired.resolve({ planId, pauseId: pause.id, change: 'api', choice: 'continue' }))
       const fixRow = wired.executions.attempts(executionId, 'api').at(-1)!
       expect(fixRow.kind).toBe('fix')
       expect(wired.bench.assignmentStore.listByTask(flight.taskId).find(row => row.id === fix.assignmentId)!.supersededBy).toBeNull()
@@ -125,22 +125,22 @@ describe('the C-rows (A3, verbatim)', () => {
       await wired.inFlight(executionId, 'api', 'dev', 'queued')
       const hold = wired.placeHold(planId, ['api'], `hold-${++sequence}`)
       const pause = ok(wired.pause({ planId, holdId: hold.id, commandId: `pause-${++sequence}` })).pause
-      expect(refusal(wired.resolve({ planId, pauseId: pause.id, change: 'api', choice: 'continue' })).reason).toBe('target-withdrawn')
+      expect(refusal(await wired.resolve({ planId, pauseId: pause.id, change: 'api', choice: 'continue' })).reason).toBe('target-withdrawn')
       expect(wired.resolvedEvents(planId)).toHaveLength(0)
     } else if (id === 'C10') {
       const { planId, executionId } = await wired.executionWith(['api'])
       await wired.inFlight(executionId, 'api')
       const hold = wired.placeHold(planId, ['api'], `hold-${++sequence}`)
       const pause = ok(wired.pause({ planId, holdId: hold.id, commandId: `pause-${++sequence}` })).pause
-      expect(refusal(wired.resolve({ planId, pauseId: pause.id, change: 'api', choice: 'continue' })).reason).toBe('not-paused')
+      expect(refusal(await wired.resolve({ planId, pauseId: pause.id, change: 'api', choice: 'continue' })).reason).toBe('not-paused')
       expect(wired.resolvedEvents(planId)).toHaveLength(0)
     } else if (id === 'C11') {
       const world = await wired.pausedAttempt({ holder: 'ghost' })
-      expect(refusal(wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'continue' })).reason).toBe('holder-gone')
+      expect(refusal(await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'continue' })).reason).toBe('holder-gone')
       expect(wired.resolvedEvents(world.planId)).toHaveLength(0)
     } else if (id === 'C12') {
       const world = await wired.pausedReview({ notes: true })
-      ok(wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'continue' }))
+      ok(await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'continue' }))
       const resumes = wired.resumeMails(world.taskId)
       expect(resumes).toHaveLength(1)
       expect(resumes[0].body).toContain('revision 1')
@@ -149,11 +149,11 @@ describe('the C-rows (A3, verbatim)', () => {
       expect(wired.executions.rounds(world.executionId, 'api')[0].outcome).toBeNull()
     } else if (id === 'C13') {
       const world = await wired.pausedReview({ superseded: true })
-      expect(refusal(wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'continue' })).reason).toBe('review-superseded')
+      expect(refusal(await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'continue' })).reason).toBe('review-superseded')
       expect(wired.resolvedEvents(world.planId)).toHaveLength(0)
     } else if (id === 'C14') {
       const world = await wired.pausedReview({ pending: true })
-      ok(wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'continue' }))
+      ok(await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'continue' }))
       expect(targetOf(wired, world.pauseId, 'api').decisionDetail).toMatchObject({ revisionPending: 2 })
       expect(wired.resumeMails(world.taskId)).toHaveLength(0)
       expect(wired.executions.rounds(world.executionId, 'api')[0].outcome).toBeNull()
@@ -166,7 +166,7 @@ describe('the C-rows (A3, verbatim)', () => {
       // it (the slot-releasing transition only fires from `landing`).
       wired.answerNewestRow(world.executionId, 'api', 1)
       wired.republish(world.taskId)
-      ok(wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'continue' }))
+      ok(await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'continue' }))
       expect(wired.executions.rounds(world.executionId, 'api').at(-1)!.outcome).toBe('superseded')
       // N4: the slot-releasing transition is unreachable for every Continue
       // cell — the change stays where insertRound left it; the supersede
@@ -177,7 +177,7 @@ describe('the C-rows (A3, verbatim)', () => {
       expect(wired.resumeMails(world.taskId)).toHaveLength(1)
     } else if (id === 'C17') {
       const world = await wired.pausedUpdate()
-      ok(wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'continue' }))
+      ok(await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'continue' }))
       const row = wired.executions.change(world.executionId, 'api')!
       expect(row.state).toBe('gating')
       expect(row.step).toBeNull()
@@ -190,7 +190,7 @@ describe('the C-rows (A3, verbatim)', () => {
       const world = await wired.pausedUpdate()
       await wired.answerNewestRowViaStage(world.executionId, 'api', 1)
       if (id === 'C19') wired.republish(world.taskId)
-      ok(wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'continue' }))
+      ok(await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'continue' }))
       // Plain: the round pins the task's newest revision, so the ROUND
       // RULE's condition fails and the update's round is untouched (the
       // implement round's supersession is insertRound's own bookkeeping).
@@ -219,7 +219,7 @@ describe("C2's mail names the newest checkpoint's commit (B1)", () => {
       kind: 'commit', commitSha: 'ckptabc123', baselineCommit: null, manifestHash: 'mh', resultId: null,
       summary: 'paused here', unfinished: null, errorsTests: null, nextSteps: 'resume here', effectId: null,
     })
-    ok(wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'continue' }))
+    ok(await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'continue' }))
     const resumes = wired.resumeMails(world.taskId)
     expect(resumes).toHaveLength(1)
     expect(resumes[0].body).toContain('Continue from checkpoint ckptabc123')
@@ -233,7 +233,7 @@ describe("O4's redispatch clear (B2)", () => {
     // change row carries `step: 'redispatch'` at resolve time.
     const row = wired.executions.change(world.executionId, 'api')!
     expect(wired.executions.transition(world.executionId, 'api', row, { step: 'redispatch' })).not.toBeNull()
-    ok(wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'continue' }))
+    ok(await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'continue' }))
     expect(wired.executions.change(world.executionId, 'api')!.step).toBeNull()
     expect(wired.resumeMails(world.taskId)).toHaveLength(1)
     // The redispatch stage is the only :retry: sender (its trigger is the
@@ -310,6 +310,66 @@ describe('completeness (the shared cell table, lead ruling L5)', () => {
       if (cell.state === 'paused (update target, answered after the pause)' && cell.status === 'owed') {
         expect(cell.verdict).toMatchObject({ unreachable: true, uId: 'U1' })
       }
+    }
+  })
+})
+
+// K7 (A3.2, lead ruling L3): the resolution's pre-transaction git read. A
+// failed read refuses `head-unreadable` inside `within` — after every
+// earlier refusal, so it masks nothing — with nothing written, the same
+// command id retries once the read recovers, and a replayed resolve
+// short-circuits before reading (the prepareApproval pattern).
+describe('the pre-transaction head read (K7, L3)', () => {
+  const GOOD_HEAD = (): Promise<{ ok: true; startCommit: string; artifacts: Record<string, string> }> =>
+    Promise.resolve({ ok: true, startCommit: 'adapt-head-sha', artifacts: {} })
+
+  test('a failed read refuses head-unreadable with nothing written; the same command id retries and records the head verbatim', async () => {
+    const world = await wired.pausedAttempt()
+    const payload = { planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'adapt' as const, adapt: 'Build it wider', rationale: 'scope grew', commandId: 'k7-retry-1' }
+    wired.useAdaptHead(() => Promise.resolve({ ok: false }))
+    try {
+      const { reason, message } = refusal(await wired.resolve(payload))
+      expect(reason).toBe('head-unreadable')
+      expect(message).toMatch(/origin's branch head/)
+      // Nothing entered the transaction: no publication, no new row, no decision.
+      expect(wired.tasks.store.revisions(world.taskId)).toHaveLength(1)
+      expect(wired.executions.attempts(world.executionId, 'api')).toHaveLength(1)
+      expect(wired.resolvedEvents(world.planId)).toHaveLength(0)
+    } finally {
+      wired.useAdaptHead(GOOD_HEAD)
+    }
+    // Retryable: the same command id resolves once the read succeeds.
+    expect((await wired.resolve(payload)).ok).toBe(true)
+    const attempts = wired.executions.attempts(world.executionId, 'api')
+    expect(attempts).toHaveLength(2)
+    expect(attempts[1].kind).toBe('fix')
+    expect(attempts[1].manifest.startCommit).toBe('adapt-head-sha')
+  })
+
+  test('a failed read does not mask I1: a decided target still names its standing decision', async () => {
+    const world = await wired.pausedAttempt()
+    expect((await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'continue' })).ok).toBe(true)
+    wired.useAdaptHead(() => Promise.resolve({ ok: false }))
+    try {
+      const { reason, message } = refusal(await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'adapt', adapt: 'Rework it', rationale: 'the direction moved' }))
+      expect(reason).toBe('state')
+      expect(message).toMatch(/already decided \(continue\)/)
+    } finally {
+      wired.useAdaptHead(GOOD_HEAD)
+    }
+  })
+
+  test('a replayed resolve short-circuits before the head read', async () => {
+    const world = await wired.pausedAttempt()
+    const payload = { planId: world.planId, pauseId: world.pauseId, change: 'api' as const, choice: 'adapt' as const, adapt: 'Build it wider', rationale: 'scope grew', commandId: 'k7-replay-1' }
+    expect((await wired.resolve(payload)).ok).toBe(true)
+    wired.useAdaptHead(() => Promise.resolve({ ok: false }))
+    try {
+      const replay = await wired.resolve(payload)
+      expect(replay.ok).toBe(true)
+      if (replay.ok) expect(replay.replayed).toBe(true)
+    } finally {
+      wired.useAdaptHead(GOOD_HEAD)
     }
   })
 })

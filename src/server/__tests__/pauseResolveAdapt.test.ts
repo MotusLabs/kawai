@@ -34,9 +34,9 @@ function noticeMails(taskId: string) {
 // A1r | decided | adapt | * | * | refused, naming the standing decision (I1)
 test('A1r: a decided target refuses adapt naming the standing decision (I1 before the choice dispatch, N2)', async () => {
   const world = await wired.pausedAttempt()
-  const decided = wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'continue' })
+  const decided = await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'continue' })
   expect(decided.ok).toBe(true)
-  const outcome = wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'adapt', adapt: 'Rework it', rationale: 'the direction moved' })
+  const outcome = await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'adapt', adapt: 'Rework it', rationale: 'the direction moved' })
   const { reason, message } = refusal(outcome)
   expect(reason).toBe('state')
   // The refusal names the standing decision — the pre-move stub refused the
@@ -51,14 +51,14 @@ test('A9r: a still-pausing target refuses adapt with not-paused', async () => {
   await wired.inFlight(executionId, 'api')
   const hold = wired.placeHold(planId, ['api'], `hold-${++sequence}`)
   const pause = ok(wired.pause({ planId, holdId: hold.id, commandId: `pause-${++sequence}` })).pause
-  expect(refusal(wired.resolve({ planId, pauseId: pause.id, change: 'api', choice: 'adapt', adapt: 'Rework', rationale: 'move' })).reason).toBe('not-paused')
+  expect(refusal(await wired.resolve({ planId, pauseId: pause.id, change: 'api', choice: 'adapt', adapt: 'Rework', rationale: 'move' })).reason).toBe('not-paused')
   expect(wired.resolvedEvents(planId)).toHaveLength(0)
 })
 
 // A10r | review target | adapt | * | * | refused `review-target`
 test('A10r: a review target refuses adapt with review-target', async () => {
   const world = await wired.pausedReview()
-  const { reason } = refusal(wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'adapt', adapt: 'Rework', rationale: 'move' }))
+  const { reason } = refusal(await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'adapt', adapt: 'Rework', rationale: 'move' }))
   expect(reason).toBe('review-target')
   expect(wired.resolvedEvents(world.planId)).toHaveLength(0)
   expect(wired.executions.rounds(world.executionId, 'api')[0].outcome).toBeNull()
@@ -72,7 +72,7 @@ test('A8r: adapt over a withdrawn target publishes and notifies no one', async (
   const flight = await wired.inFlight(executionId, 'api', 'dev', 'queued')
   const hold = wired.placeHold(planId, ['api'], `hold-${++sequence}`)
   const pause = ok(wired.pause({ planId, holdId: hold.id, commandId: `pause-${++sequence}` })).pause
-  ok(wired.resolve({ planId, pauseId: pause.id, change: 'api', choice: 'adapt', adapt: 'Reworked direction', rationale: 'the lead rethought it' }))
+  ok(await wired.resolve({ planId, pauseId: pause.id, change: 'api', choice: 'adapt', adapt: 'Reworked direction', rationale: 'the lead rethought it' }))
   const target = targetOf(wired, pause.id, 'api')
   expect(target.decision).toBe('adapt')
   expect(target.decisionDetail?.release).toBe('never')
@@ -98,7 +98,7 @@ test('A8r: adapt over a withdrawn target publishes and notifies no one', async (
 // enqueue (Q-A7)
 test('A11r: adapt over a paused target whose holder is gone publishes, dead-letters the notice', async () => {
   const world = await wired.pausedAttempt({ holder: 'ghost' })
-  ok(wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'adapt', adapt: 'Rework it', rationale: 'the direction moved' }))
+  ok(await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'adapt', adapt: 'Rework it', rationale: 'the direction moved' }))
   const target = targetOf(wired, world.pauseId, 'api')
   expect(target.decision).toBe('adapt')
   const notices = noticeMails(world.taskId)
@@ -116,7 +116,7 @@ test('A11r: adapt over a paused target whose holder is gone publishes, dead-lett
 test('A2r: adapt over a target with no attempt row publishes revision N+1 and mints one owed fix row', async () => {
   const world = await wired.pausedAttempt({ mintAttempt: false })
   const before = wired.resolvedEvents(world.planId).length
-  ok(wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'adapt', adapt: 'Build it wider', rationale: 'scope grew', commandId: 'adapt-owed-1' }))
+  ok(await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'adapt', adapt: 'Build it wider', rationale: 'scope grew', commandId: 'adapt-owed-1' }))
   // The publication: revision 2 under `pause:<commandId>`, notify carried.
   const revisions = wired.tasks.store.revisions(world.taskId)
   expect(revisions).toHaveLength(2)
@@ -161,7 +161,7 @@ test('A2r: with the gate open the new fix row dispatches inline under its attemp
   expect(wired.executions.transition(world.executionId, 'api', row, { baselineCommit: 'base' })).not.toBeNull()
   const released = wired.holds.release({ teamId: wired.teamId, holdId: wired.holds.forPlan(wired.teamId, world.planId)[0].id, changes: ['api'], reason: 'the dispatch may go', commandId: `release-${++sequence}` })
   expect(released.written).toBe(true)
-  ok(wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'adapt', adapt: 'Build it wider', rationale: 'scope grew' }))
+  ok(await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'adapt', adapt: 'Build it wider', rationale: 'scope grew' }))
   const attempts = wired.executions.attempts(world.executionId, 'api')
   expect(attempts).toHaveLength(2)
   expect(attempts[1].kind).toBe('fix')

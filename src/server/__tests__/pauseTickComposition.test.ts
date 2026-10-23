@@ -5,6 +5,7 @@
 // holder reads gone), readiness from the real `MemberRelease`.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
+import path from 'node:path'
 import { AssignmentService } from '../team/AssignmentService'
 import { AssignmentStore } from '../team/assignmentStore'
 import { MailboxStore } from '../team/mailboxStore'
@@ -18,6 +19,8 @@ import { TeamCaps } from '../team/teamCaps'
 import { ImpactService } from '../strategy/ImpactService'
 import { ImpactStore } from '../strategy/impactStore'
 import { composeExecutionCore, composePlanServices } from '../plans/planComposition'
+import { lsRemoteHead } from '../plans/landing/gitRemote'
+import { runGitChecked } from '../git/gitCommand'
 import { pauseHolderFacts } from '../plans/revisionControl/pauseTick'
 import type { ExecutionRuntime } from '../plans/execution/executionRuntime'
 import type { ExecutionStore } from '../plans/execution/executionStore'
@@ -208,5 +211,76 @@ describe('the composed pause tick (revision-control 4.3)', () => {
     // The facts the composition wires read the bench records: a missing
     // record is killed, its unpushed review work never records Paused.
     expect(pauseRows.target(paused.result!.pause.id, 'api')!.pausedAt).toBeNull()
+  })
+})
+
+// The composed resolve's head read (revision-control A3.2, lead ruling L3):
+// the composition wires `adaptHead` to origin through the executor's own
+// adapter (lsRemoteHead) — the adapted fix row starts from origin's true
+// head and dispatches inline, and a read that fails is refused
+// `head-unreadable` with nothing written (K7). This runs the real wiring —
+// the same construction the server runs, not a hand-built seam.
+describe('the composed resolve reads origin (L3, A3.2)', () => {
+  /** The pause-and-Paused world over one change, holds returned for the release. */
+  async function pausedTarget(planIndex: number): Promise<{ planId: string; executionId: string; taskId: string; holdId: string; pauseId: string }> {
+    const holder = `comp-adapt-${planIndex}`
+    const built = await inFlightTarget(holder, 'attempt')
+    const placed = holds.place(bench.human, {
+      planId: built.planId, scope: 'changes', rationale: 'rethink the direction', deadline: inTwoDays(), cites: null,
+      commandId: `pause-comp-hold-adapt-${planIndex}`, changes: ['api'],
+    })
+    if (!placed.ok) throw new Error(placed.message)
+    const paused = await pauses.pause(bench.human, { planId: built.planId, holdId: placed.result!.hold.id, deadline: inTwoDays(), commandId: `pause-comp-adapt-${planIndex}` })
+    if (!paused.ok) throw new Error(paused.message)
+    if (!pauseRows.recordPaused(paused.result!.pause.id, 'api', null).written) throw new Error('recording Paused wrote nothing')
+    return { ...built, holdId: placed.result!.hold.id, pauseId: paused.result!.pause.id }
+  }
+
+  test("the adapted fix row starts from origin's head and dispatches inline through the composition", async () => {
+    // A real origin: world.repo (the harness's own repo) gains a bare
+    // origin, and the change's branch is pushed so ls-remote reads a head.
+    const bare = path.join(world.root, 'origin.git')
+    runGitChecked(['init', '--bare', bare])
+    fs.writeFileSync(path.join(world.repo, 'seed.txt'), 'seed\n')
+    runGitChecked(['add', 'seed.txt'], { cwd: world.repo })
+    runGitChecked(['-c', 'user.email=seed@example.test', '-c', 'user.name=Seed', 'commit', '-m', 'seed'], { cwd: world.repo })
+    runGitChecked(['remote', 'add', 'origin', bare], { cwd: world.repo })
+    runGitChecked(['push', 'origin', 'HEAD:refs/heads/api-branch'], { cwd: world.repo })
+    const read = await lsRemoteHead(world.repo, 'refs/heads/api-branch')
+    if (!read.ok || read.sha === null) throw new Error('the fixture origin has no head to read')
+    const world_ = await pausedTarget(1)
+    const row = store.change(world_.executionId, 'api')!
+    expect(store.transition(world_.executionId, 'api', row, { baselineCommit: read.sha })).not.toBeNull()
+    // The inline arm: the hold releases before the resolve, so the gate —
+    // read after the decision — is open.
+    const released = holds.release(bench.human, { planId: world_.planId, holdId: world_.holdId, reason: 'the dispatch may go', commandId: 'pause-comp-release-adapt-1' })
+    if (!released.ok) throw new Error(released.message)
+    const resolved = await pauses.resolve(bench.human, { planId: world_.planId, pauseId: world_.pauseId, change: 'api', choice: 'adapt', adapt: 'Build it wider', rationale: 'scope grew', releaseHold: false, commandId: 'pause-comp-resolve-adapt-1' })
+    if (!resolved.ok) throw new Error(resolved.message)
+    const attempts = store.attempts(world_.executionId, 'api')
+    expect(attempts).toHaveLength(2)
+    expect(attempts[1].kind).toBe('fix')
+    // L3/B5: the manifest's start commit is origin's head — the wired seam,
+    // never the newest attempt's stale one ('s').
+    expect(attempts[1].manifest.startCommit).toBe(read.sha)
+    // M1: the inline dispatch through the composed AssignmentService.
+    expect(attempts[1].assignmentId).not.toBeNull()
+    const assignment = bench.assignmentStore.byId(attempts[1].assignmentId!)
+    expect(assignment?.requestKey).toBe(`exec:${world_.executionId}:api:attempt:2:${store.change(world_.executionId, 'api')!.generation}`)
+  })
+
+  test('an origin the git read cannot reach refuses head-unreadable with nothing written (K7)', async () => {
+    // The remote now dangles: the pre-transaction read fails and nothing
+    // enters the transaction.
+    runGitChecked(['remote', 'set-url', 'origin', path.join(world.root, 'gone.git')], { cwd: world.repo })
+    const world_ = await pausedTarget(2)
+    const refused = await pauses.resolve(bench.human, { planId: world_.planId, pauseId: world_.pauseId, change: 'api', choice: 'adapt', adapt: 'Build it wider', rationale: 'scope grew', releaseHold: false, commandId: 'pause-comp-resolve-k7-1' })
+    expect(refused.ok).toBe(false)
+    if (!refused.ok) {
+      expect(refused.reason).toBe('head-unreadable')
+      expect(refused.message).toMatch(/origin's branch head/)
+    }
+    expect(store.attempts(world_.executionId, 'api')).toHaveLength(1)
+    expect(bench.tasks.revisions(world_.taskId)).toHaveLength(1)
   })
 })

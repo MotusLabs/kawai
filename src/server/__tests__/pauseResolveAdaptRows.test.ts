@@ -80,14 +80,14 @@ describe('the A-rows (A3, verbatim)', () => {
   test.each(A_ROWS)('%s: %s · %s · hold %s · row %s → %s', async (id: string) => {
     if (id === 'A1r') {
       const world = await wired.pausedAttempt()
-      ok(wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'continue' }))
-      const again = refusal(wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'adapt', adapt: 'Rework it', rationale: 'the direction moved' }))
+      ok(await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'continue' }))
+      const again = refusal(await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'adapt', adapt: 'Rework it', rationale: 'the direction moved' }))
       expect(again.reason).toBe('state')
       expect(again.message).toContain('already decided (continue)')
       expect(wired.resolvedEvents(world.planId)).toHaveLength(1)
     } else if (id === 'A2r') {
       const world = await wired.pausedAttempt({ mintAttempt: false })
-      ok(wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'adapt', adapt: 'Build it wider', rationale: 'scope grew', commandId: `adapt-${++sequence}` }))
+      ok(await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'adapt', adapt: 'Build it wider', rationale: 'scope grew', commandId: `adapt-${++sequence}` }))
       // ONE new fix row, owed (the hold still covers the change), at revision N+1.
       const attempts = wired.executions.attempts(world.executionId, 'api')
       expect(attempts).toHaveLength(1)
@@ -102,7 +102,7 @@ describe('the A-rows (A3, verbatim)', () => {
       const world = await wired.pausedAttempt()
       wired.mintOwed(world.executionId, 'api', kind)
       openGate(world.planId, world.executionId)
-      ok(wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'adapt', adapt: 'Build it wider', rationale: 'scope grew' }))
+      ok(await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'adapt', adapt: 'Build it wider', rationale: 'scope grew' }))
       const attempts = wired.executions.attempts(world.executionId, 'api')
       expect(attempts).toHaveLength(3)
       expect(attempts[1].kind).toBe(kind)
@@ -113,7 +113,7 @@ describe('the A-rows (A3, verbatim)', () => {
       expect(wired.bench.assignmentStore.byId(attempts[2].assignmentId!)?.requestKey).toBe(attemptKey(world.executionId, 'api'))
     } else if (id === 'A4r') {
       const world = await wired.pausedAttempt()
-      ok(wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'adapt', adapt: 'Build it wider', rationale: 'scope grew' }))
+      ok(await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'adapt', adapt: 'Build it wider', rationale: 'scope grew' }))
       // The held assignment superseded through the stop branch; its claimed
       // instruction untouched (P-I2); the new fix row owed under the hold.
       expect(wired.bench.assignmentStore.byId(world.assignmentId)?.supersededBy).toBe(world.pauseId)
@@ -128,7 +128,7 @@ describe('the A-rows (A3, verbatim)', () => {
       wired.mintAttempt(world.executionId, 'api', 'fix', 'dev2')
       const roundId = wired.answerNewestRow(world.executionId, 'api', 1)
       wired.executions.decideRound(roundId, 'fail')
-      ok(wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'adapt', adapt: 'Build it wider', rationale: 'scope grew' }))
+      ok(await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'adapt', adapt: 'Build it wider', rationale: 'scope grew' }))
       // H2: the failed round is never superseded — it stays `fail`.
       expect(wired.executions.rounds(world.executionId, 'api')[0].outcome).toBe('fail')
       // The held (implement) assignment still supersedes; one new fix row owed.
@@ -144,7 +144,7 @@ describe('the A-rows (A3, verbatim)', () => {
         if (kind === 'fix') wired.mintAttempt(world.executionId, 'api', 'fix', 'dev2')
         if (variant.republished) wired.republish(world.taskId)
         wired.answerNewestRow(world.executionId, 'api', variant.rev)
-        ok(wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'adapt', adapt: 'Build it wider', rationale: 'scope grew' }))
+        ok(await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'adapt', adapt: 'Build it wider', rationale: 'scope grew' }))
         // The ROUND RULE: every passable round superseded, plain and rev↗ alike.
         expect(wired.executions.rounds(world.executionId, 'api')[0].outcome).toBe('superseded')
         // The answered round left the change in `gating`; the resolution's
@@ -165,7 +165,7 @@ describe('the A-rows (A3, verbatim)', () => {
       const flight = await wired.inFlight(executionId, 'api', 'dev', 'queued')
       const hold = wired.placeHold(planId, ['api'], `hold-${++sequence}`)
       const pause = ok(wired.pause({ planId, holdId: hold.id, commandId: `pause-${++sequence}` })).pause
-      ok(wired.resolve({ planId, pauseId: pause.id, change: 'api', choice: 'adapt', adapt: 'Reworked direction', rationale: 'the lead rethought it' }))
+      ok(await wired.resolve({ planId, pauseId: pause.id, change: 'api', choice: 'adapt', adapt: 'Reworked direction', rationale: 'the lead rethought it' }))
       // The publication stands; nobody is notified — the withdrawn target
       // names no claimant, and the stop branch's writes were no-ops.
       const revisions = wired.tasks.store.revisions(flight.taskId)
@@ -182,16 +182,16 @@ describe('the A-rows (A3, verbatim)', () => {
       await wired.inFlight(executionId, 'api')
       const hold = wired.placeHold(planId, ['api'], `hold-${++sequence}`)
       const pause = ok(wired.pause({ planId, holdId: hold.id, commandId: `pause-${++sequence}` })).pause
-      expect(refusal(wired.resolve({ planId, pauseId: pause.id, change: 'api', choice: 'adapt', adapt: 'Rework', rationale: 'move' })).reason).toBe('not-paused')
+      expect(refusal(await wired.resolve({ planId, pauseId: pause.id, change: 'api', choice: 'adapt', adapt: 'Rework', rationale: 'move' })).reason).toBe('not-paused')
       expect(wired.resolvedEvents(planId)).toHaveLength(0)
     } else if (id === 'A10r') {
       const world = await wired.pausedReview()
-      expect(refusal(wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'adapt', adapt: 'Rework', rationale: 'move' })).reason).toBe('review-target')
+      expect(refusal(await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'adapt', adapt: 'Rework', rationale: 'move' })).reason).toBe('review-target')
       expect(wired.resolvedEvents(world.planId)).toHaveLength(0)
       expect(wired.executions.rounds(world.executionId, 'api')[0].outcome).toBeNull()
     } else if (id === 'A11r') {
       const world = await wired.pausedAttempt({ holder: 'ghost' })
-      ok(wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'adapt', adapt: 'Rework it', rationale: 'the direction moved' }))
+      ok(await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'adapt', adapt: 'Rework it', rationale: 'the direction moved' }))
       // No holder-gone refusal: the notice dead-letters at enqueue (Q-A7).
       const notices = noticeMails(world.taskId)
       expect(notices).toHaveLength(1)
@@ -200,7 +200,7 @@ describe('the A-rows (A3, verbatim)', () => {
     } else if (id === 'A13r') {
       const manifest: AttemptManifest = { ...wired.manifest(), update: { base: 'prev-base', files: ['a.ts'] } }
       const world = await wired.pausedUpdate({ manifest })
-      ok(wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'adapt', adapt: 'Build it wider', rationale: 'scope grew' }))
+      ok(await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'adapt', adapt: 'Build it wider', rationale: 'scope grew' }))
       // The ROUND RULE supersedes the round the update flow left behind.
       expect(wired.executions.rounds(world.executionId, 'api')[0].outcome).toBe('superseded')
       // The change moved to `implementing` — the fix row's owed state.
@@ -223,7 +223,7 @@ describe('the A-rows (A3, verbatim)', () => {
         const world = await wired.pausedUpdate({ manifest })
         await wired.answerNewestRowViaStage(world.executionId, 'api', variant.rev)
         if (variant.republished) wired.republish(world.taskId)
-        ok(wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'adapt', adapt: 'Build it wider', rationale: 'scope grew' }))
+        ok(await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'adapt', adapt: 'Build it wider', rationale: 'scope grew' }))
         // The ROUND RULE: every passable round superseded, plain and rev↗
         // alike (Adapt always supersedes — it works from its own N+1).
         expect(wired.executions.rounds(world.executionId, 'api').at(-1)!.outcome).toBe('superseded')

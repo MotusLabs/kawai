@@ -10,7 +10,7 @@ import type { AttemptManifest, FloorMap } from '../../shared/planExecution'
 import type { PlanHold } from '../../shared/planRevisionControl'
 import { sessionRow, createPlanBench, createPlanWorld, type PlanBench, type PlanWorld } from './planHarness'
 import { ExecutionStore } from '../plans/execution/executionStore'
-import { PauseService, PLAN_PAUSE_TAG, type PauseInput, type PauseOutcome } from '../plans/revisionControl/pauseService'
+import { PauseService, PLAN_PAUSE_TAG, type PauseInput, type PauseOutcome, type PauseServiceDeps } from '../plans/revisionControl/pauseService'
 import { PauseStore } from '../plans/revisionControl/pauseStore'
 import { HoldStore } from '../plans/revisionControl/holdStore'
 import { CheckpointStore } from '../plans/revisionControl/checkpointStore'
@@ -38,6 +38,8 @@ export interface PauseTargetsBench {
   checkpoints: CheckpointStore
   /** The resolve's dispatch seam, wired as the production composition does — the round stage's RoundDeps reads it too. */
   assignments: AssignmentService
+  /** Swap the head-read seam (K7 tests); the caller restores it (try/finally). */
+  useAdaptHead: (impl: NonNullable<PauseServiceDeps['adaptHead']>) => void
   service: PauseService
   now: () => Date
   inDays: (days: number) => string
@@ -84,13 +86,18 @@ export async function pauseTargetsBench(prefix: string): Promise<PauseTargetsBen
     getSession: id => bench.records.get(id) ?? null, records: () => bench.records.values(), teamOf,
     staffing, caps, worktrees, homeDir: world.home, plans: bench.plans,
   })
+  // The seam behind the K7 tests: `useAdaptHead` swaps the fixed head for a
+  // failing read and back. Tests that swap must restore (try/finally).
+  let adaptHeadImpl: NonNullable<PauseServiceDeps['adaptHead']> = () =>
+    Promise.resolve({ ok: true as const, startCommit: 'adapt-head-sha', artifacts: {} })
   const service = new PauseService({
     pauses, holds, plans: bench.plans, planService: bench.service, executions,
     assignments: bench.assignmentStore, mailbox: bench.mail, sessionExists: id => bench.records.has(id), wake, now,
     tasks, checkpoints, assignmentService,
-    // Adapt's pre-transaction git facts (rev4 §2): a distinguishable head
-    // the manifest must record verbatim.
-    adaptHead: () => ({ startCommit: 'adapt-head-sha', artifacts: {} }),
+    // L3: the resolve's pre-transaction head read. The bench returns a fixed
+    // head without git — a distinguishable one the manifest must record
+    // verbatim; the composition test proves the real lsRemoteHead wiring.
+    adaptHead: (...args) => adaptHeadImpl(...args),
   })
 
   function expectOk<T>(outcome: { ok: boolean; message?: string; result?: T }): T {
@@ -167,7 +174,9 @@ export async function pauseTargetsBench(prefix: string): Promise<PauseTargetsBen
     (bench.db.db.prepare('SELECT kind FROM team_message_events WHERE message_id = ? ORDER BY seq').all(messageId) as Array<{ kind: string }>).map(row => row.kind)
 
   return {
-    world, bench, teamId, holds, pauses, executions, tasks, checkpoints, assignments: assignmentService, service, now, inDays,
+    world, bench, teamId, holds, pauses, executions, tasks, checkpoints, assignments: assignmentService,
+    useAdaptHead: impl => { adaptHeadImpl = impl },
+    service, now, inDays,
     wakes: () => wakeCount,
     expectOk,
     executionWith,

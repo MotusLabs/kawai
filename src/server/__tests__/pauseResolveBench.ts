@@ -17,8 +17,8 @@ function ok<T>(outcome: { ok: boolean; result?: T; message?: string }): T {
 }
 
 export type PauseResolveBench = PauseTargetsBench & {
-  /** One human resolve with a fresh command id unless one is given. */
-  resolve: (input: Partial<ResolveInput> & { planId: string; pauseId: string; change: string }) => PauseResolveOutcome
+  /** One human resolve with a fresh command id unless one is given; async for L3's pre-transaction head read. */
+  resolve: (input: Partial<ResolveInput> & { planId: string; pauseId: string; change: string }) => Promise<PauseResolveOutcome>
   /** The plan-resume mails on the change task. */
   resumeMails: (taskId: string) => TeamMessage[]
   /** The plan's `pause-resolved` events. */
@@ -46,7 +46,7 @@ export type PauseResolveBench = PauseTargetsBench & {
 export async function pauseResolveBench(prefix: string): Promise<PauseResolveBench> {
   const wired = await pauseTargetsBench(prefix)
   let commandCounter = 0
-  const resolve = (input: Partial<ResolveInput> & { planId: string; pauseId: string; change: string }): PauseResolveOutcome =>
+  const resolve = async (input: Partial<ResolveInput> & { planId: string; pauseId: string; change: string }): Promise<PauseResolveOutcome> =>
     wired.service.resolve(wired.bench.human, { rationale: 'rethink', commandId: `resolve-${++commandCounter}`, ...input } as ResolveInput)
   const resumeMails = (taskId: string): TeamMessage[] =>
     wired.bench.mail.forTask(taskId).filter(message => message.tags.includes(PLAN_RESUME_TAG))

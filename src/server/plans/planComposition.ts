@@ -369,10 +369,20 @@ export function composePlanServices(options: PlanServicesOptions): {
       assignments, mailbox: team.mailbox,
       sessionExists: id => options.getSession(id) !== undefined,
       // The resolve's task revisions, checkpoint reads, and inline fix
-      // dispatch (revision-control 4.4). Adapt's git facts (adaptHead) stay
-      // unwired until the protocol step pre-reads them; without them the
-      // manifest falls back to the newest attempt's start commit.
+      // dispatch (revision-control 4.4). L3 (A3.2): the resolve's
+      // pre-transaction head read is wired — origin's branch head through
+      // the same adapter the executor's landing reads; a failed read is
+      // refused `head-unreadable` inside the resolve (K7).
       tasks: team.tasks, checkpoints: checkpointStore, assignmentService: team.assignments,
+      adaptHead: async (executionId, change) => {
+        const row = executionStore.change(executionId, change)
+        const teamId = executionStore.execution(executionId)?.teamId
+        const identity = teamId !== undefined ? team.identityOf(teamId) : undefined
+        if (row === null || row.branch === null || identity === undefined) return null
+        const head = await import('./landing/gitRemote').then(module => module.lsRemoteHead(row.worktree ?? identity.groupsRoot, `refs/heads/${row.branch}`))
+        if (!head.ok || head.sha === null) return { ok: false }
+        return { ok: true, startCommit: head.sha, artifacts: {} }
+      },
       wake: teamId => runtime?.command(teamId),
     })
     composedPauses = pauses

@@ -35,7 +35,7 @@ import type { PlanStore } from '../planStore'
 import type { ExecutionEventOutcome, PlanCaller, PlanService } from '../PlanService'
 import { HoldStore } from './holdStore'
 import { PauseStore } from './pauseStore'
-import { resolvePause, type PauseResolveOutcome, type ResolveInput } from './pauseResolve'
+import { resolvePause, type AdaptHeadFacts, type PauseResolveOutcome, type ResolveInput } from './pauseResolve'
 import type { CheckpointStore } from './checkpointStore'
 import type { TaskService } from '../../team/TaskService'
 
@@ -75,12 +75,13 @@ export interface PauseServiceDeps {
   assignmentService?: Pick<AssignmentService, 'dispatchWithin'>
   /**
    * Adapt's git facts (rev4 §2: the resolution's git reads run BEFORE the
-   * transaction; only their results enter it): the branch head and file
-   * digests the new attempt's manifest records. The protocol step wires the
-   * pre-read; the resolve itself is synchronous. Null or absent falls back
-   * to the newest attempt's start commit, else the baseline.
+   * transaction; only their results enter it — L3 (A3.2): the entry reads
+   * it before `recordRevisionControlEvent`, after the replay short-circuit,
+   * and the manifest consumes the gathered facts inside. `{ ok: false }` is
+   * a failed read, refused `head-unreadable` (K7); null or absent falls
+   * back to the newest attempt's start commit, else the baseline.
    */
-  adaptHead?: (executionId: string, change: string) => { startCommit: string; artifacts: Record<string, string> } | null
+  adaptHead?: (executionId: string, change: string) => Promise<AdaptHeadFacts | null>
   /** The executor wake, called after a committed command only. */
   wake?: (teamId: string) => unknown
   now?: () => Date
@@ -172,8 +173,8 @@ export class PauseService {
     return outcome
   }
 
-  /** D9: the owner's decision on one pause target (pauseResolve.ts). */
-  resolve(caller: PlanCaller, input: ResolveInput): PauseResolveOutcome {
+  /** D9: the owner's decision on one pause target (pauseResolve.ts); async for L3's pre-transaction head read. */
+  resolve(caller: PlanCaller, input: ResolveInput): Promise<PauseResolveOutcome> {
     return resolvePause(this.deps, caller, input)
   }
 
