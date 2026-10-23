@@ -182,6 +182,74 @@ is advisory; it does not dispatch a second stage or replace the formal review.
 If no suitable fresh assessor is available, record that limitation and the
 Lead's next step; do not claim that two independent reviews occurred.
 
+## Write acceptance as oracles
+
+Risky work is accepted against oracles written before any of it is coded: a
+decision table of observable results, plus one property per invariant. The
+linked change's design carries them, so the developer, the cross-model
+reviewer, a replacement and a restarted execution all judge the same rows
+instead of re-deriving intent from prose. A small, well-specified change
+needs none; decision logic, state machines, parsing or security checks, and
+concurrency do (`openspec/config.yaml` `rules:` carries the same rule for
+artifact authors).
+
+The design's "Acceptance oracles" subsection holds:
+
+- **Decision tables** of observable results only — inputs × outputs, `*`
+  for a don't-care, and unreachable combinations listed with their reasons.
+  Every row has an oracle id.
+- **One property per invariant**, giving the property, the generator, the
+  seams, a fixed seed and a case count, with no new dependency.
+- For a state machine with recovery, a **completeness claim** — every
+  combination of the axes matches exactly one row or one unreachable claim —
+  and model-based tests that run the table as the reference model under
+  seeded command sequences with replays, supersessions, and a crash at each
+  transaction boundary.
+
+Before code starts, the tables get a blind second reading:
+
+1. Commit A1 holds the inputs only, with every output `?`.
+2. An advisor from another model family fills in the outputs from the spec
+   alone, without seeing the author's expectations.
+3. Commit A2 holds the author's outputs; the two readings are diffed, and
+   each disagreement is resolved in the table, not in mail.
+4. The Lead records the resolved oracles as binding before code starts.
+
+The executable forms follow the table into the test tree: each row is
+committed verbatim as a table-driven test next to the code it covers, and
+each property runs as a seeded generator over the named seams. The
+completeness test expands the axes over the table and the unreachable list,
+so it has no gap and no overlap; a failing seed found on the way becomes a
+named table row.
+
+Keep a coverage map from every requirement and behavioral scenario in the
+assigned scope to its oracle row and test, and keep it current across task
+revisions: tests for changed behavior must detect its absence, and tests for
+preserved behavior must detect regressions. An oracle exercised only through
+a hand-built harness is not coverage — at least one oracle test per guarded
+seam runs through the production composition, and its mutant removes the
+wiring.
+
+The reviewer's verdict rule lives in `.kawai/groups/reviewers.md`: for work
+whose acceptance has oracles, a finding blocks only when it shows a missing,
+unfaithful or vacuous oracle test, a counterexample to a stated property, or
+a security or data-loss bug with a reproducer; from round 2, only
+regressions, unfixed findings, and new counterexamples with reproducers
+block.
+
+Amendments go through the table, not around it: a finding outside the rows
+is a new defect class, proposed as an oracle amendment the Lead decides and
+recorded as an entry in `docs/oracle-hazards.md` — the hazard catalog
+organized by change class. Add an entry for every new blocking finding,
+naming the class, the hazard, the oracle row or property that would have
+caught it, and the source finding.
+
+Read the rule's effect through `team_metrics`: first-pass review yield and
+fix iterations, with reopen rate as the guard metric. Pilot evidence: RC E
+ran 1 failed review over 5 results; its baseline RC D (task-707555cd) ran 2
+failed reviews over 10 results. Both samples are n=1, so the comparison is
+undetermined.
+
 ## Roll out and evaluate
 
 New agent starts load the revised group instructions. Running agents retain
