@@ -147,6 +147,133 @@ describe('chatWorkspaceSend', () => {
     await flush()
     expect(typesOf(harness.events)).toEqual(['turn_started', 'user_message', 'turn_completed'])
   })
+
+  test('I2 two messages in one active turn keep distinct contexts', async () => {
+    const recorded: Array<{ sessionId: string; messageUuid: string; turnId: string }> = []
+    const harness = createHarness({
+      recordWorkspaceContext: input => {
+        recorded.push(input)
+        return { ok: true, recorded: true }
+      },
+    })
+    harness.driver.sendWorkspaceContext('first message', context)
+    harness.driver.sendWorkspaceContext('second message', context)
+    await flush()
+    // One active turn reused: exactly one turn_started for both messages.
+    expect(typesOf(harness.events).filter(type => type === 'turn_started')).toHaveLength(1)
+    const turnId = (harness.events[0] as { turnId: string }).turnId
+    const userEvents = harness.events.filter(e => e.type === 'user_message')
+    expect(userEvents).toHaveLength(2)
+    const uuids = userEvents.map(e => (e as { messageUuid?: string }).messageUuid ?? '')
+    expect(uuids[0]).not.toBe(uuids[1])
+    // Both context rows share the active turn's id and keep their own uuid.
+    expect(recorded).toHaveLength(2)
+    expect(recorded.map(row => row.turnId)).toEqual([turnId, turnId])
+    expect(recorded.map(row => row.messageUuid)).toEqual(uuids)
+  })
+
+  test('I3 a slash command keeps its literal text and still dispatches with the context pasted', async () => {
+    const harness = createHarness({ recordWorkspaceContext: () => ({ ok: true, recorded: true }) })
+    harness.driver.sendWorkspaceContext('/context verbose', context)
+    const fake = harness.fakes[0]!
+    const prompt = await fake.pullPrompt()
+    // I3: the typed text is exactly the command; the context rides only
+    // pasted_content, and client_composed is never set — the CLI dispatches.
+    expect(prompt!.message.content).toBe('/context verbose')
+    expect(prompt!.pasted_content).toEqual([workspaceContextBlock(context)])
+    expect((prompt as { client_composed?: unknown }).client_composed).toBeUndefined()
+    // The command-output turn: the CLI answers on the same turn.
+    fake.push({ type: 'system', subtype: 'local_command_output', content: 'Context usage: 12%' } as unknown as SDKMessage)
+    await flush()
+    const output = harness.events.find(e => e.type === 'command_output')
+    expect(output).toMatchObject({ text: 'Context usage: 12%', turnId: (harness.events[0] as { turnId: string }).turnId })
+  })
+
+  test('I4 an unscoped send is unchanged', async () => {
+    const recorded: unknown[] = []
+    const harness = createHarness({
+      recordWorkspaceContext: input => {
+        recorded.push(input)
+        return { ok: true, recorded: true }
+      },
+    })
+    harness.driver.send('Hello there')
+    await flush()
+    const fake = harness.fakes[0]!
+    const prompt = await fake.pullPrompt()
+    expect(prompt!.message.content).toBe('Hello there')
+    expect((prompt as { pasted_content?: unknown }).pasted_content).toBeUndefined()
+    // N1's assertion shape: types, texts, and the fields that must not be
+    // there — not a whole-event deep-equal (messageUuid rides every
+    // user_message by I4's answer).
+    expect(typesOf(harness.events)).toEqual(['turn_started', 'user_message'])
+    const event = harness.events[1] as { type: string; text: string; messageUuid?: string; workspaceContext?: unknown }
+    expect(event.text).toBe('Hello there')
+    expect(typeof event.messageUuid).toBe('string')
+    expect('workspaceContext' in event).toBe(false)
+    expect(recorded).toEqual([])
+  })
+
+  test('LC-D3 a UUID-preserving echo renders one bubble', async () => {
+    const harness = createHarness({ recordWorkspaceContext: () => ({ ok: true, recorded: true }) })
+    harness.driver.sendWorkspaceContext('ship it', context)
+    const fake = harness.fakes[0]!
+    const prompt = await fake.pullPrompt()
+    fake.push(echoFrame(String(prompt!.uuid), `ship it\n${workspaceContextBlock(context)}`))
+    await flush()
+    expect(typesOf(harness.events).filter(type => type === 'user_message')).toHaveLength(1)
+  })
+
+  test("LC-D3 an echo without the UUID takes today's text path", async () => {
+    const harness = createHarness({ recordWorkspaceContext: () => ({ ok: true, recorded: true }) })
+    harness.driver.sendWorkspaceContext('ship it', context)
+    const fake = harness.fakes[0]!
+    await fake.pullPrompt()
+    // Equal text without the uuid: suppressed, exactly today.
+    fake.push(echoFrame(undefined, 'ship it'))
+    await flush()
+    expect(typesOf(harness.events).filter(type => type === 'user_message')).toHaveLength(1)
+    // Different text without the uuid: a second bubble, exactly today.
+    fake.push(echoFrame(undefined, 'a different message'))
+    await flush()
+    expect(userTexts(harness.events)).toEqual(['ship it', 'a different message'])
+  })
+
+  test('B6 a refused record stores nothing and its retry mints a fresh uuid', async () => {
+    const refused: string[] = []
+    let accepted: string | null = null
+    let calls = 0
+    const harness = createHarness({
+      recordWorkspaceContext: input => {
+        calls += 1
+        if (calls === 1) {
+          refused.push(input.messageUuid)
+          return { ok: false, reason: 'conflict', message: 'Message x already carries a different context; the first record stands.' }
+        }
+        accepted = input.messageUuid
+        return { ok: true, recorded: true }
+      },
+    })
+    const first = harness.driver.sendWorkspaceContext('retry me', context)
+    expect(first.ok).toBe(false)
+    await flush()
+    expect(harness.events).toEqual([])
+    // The retry revalidates and enqueues under a fresh uuid. (One pull only:
+    // a timed-out pull orphans the pending iterator and would swallow the
+    // next pushed prompt.)
+    const second = harness.driver.sendWorkspaceContext('retry me', context)
+    expect(second.ok).toBe(true)
+    await flush()
+    expect(accepted).not.toBeNull()
+    expect(accepted).not.toBe(refused[0])
+    const prompt = await harness.fakes[0]!.pullPrompt()
+    expect(prompt).not.toBeNull()
+    expect(String(prompt!.uuid)).toBe(accepted!)
+    // The refused mint left no suppression token: a frame carrying it renders.
+    harness.fakes[0]!.push(echoFrame(refused[0], 'never submitted'))
+    await flush()
+    expect(userTexts(harness.events)).toEqual(['retry me', 'never submitted'])
+  })
 })
 
 /** The live user_message texts, in order. */

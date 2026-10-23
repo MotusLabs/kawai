@@ -194,6 +194,25 @@ describe('validateWorkspaceSend', () => {
     })
   })
 
+  test('B6 a stale-hash refusal revalidates against the current state on retry', async () => {
+    const state = baseState()
+    // S1: the stale hash refuses before any mint — no uuid exists yet (N2).
+    const refused = await validateWorkspaceSend(
+      '/repo/example/session',
+      envelopeOf({ version: { kind: 'revision', revision: 2, contentHash: 'b'.repeat(64) } }),
+      depsFor(state),
+    )
+    expect(refused.ok).toBe(false)
+    // The plan advances; the retry carries the current hash and passes.
+    state.revisions = [revisionOf(2, 'c'.repeat(64), ['plan-workspace'])]
+    const retry = await validateWorkspaceSend(
+      '/repo/example/session',
+      envelopeOf({ version: { kind: 'revision', revision: 2, contentHash: 'c'.repeat(64) } }),
+      depsFor(state),
+    )
+    expect(retry.ok).toBe(true)
+  })
+
   // V8 reads the real document: a local ref needs the hash the sender read,
   // fail-closed, by a fresh read at validation time.
   describe('V8 the document ref', () => {
