@@ -45,7 +45,6 @@
 import { createHash } from 'node:crypto'
 import { PlanRefusal } from '../planCommands'
 import type { ExecutionEventOutcome, PlanCaller } from '../PlanService'
-import type { PauseStage } from '../../../shared/planRevisionControl'
 import { revisionPending } from '../execution/executionRounds'
 import type { ChangeRow } from '../execution/executionRows'
 import type { AttemptManifest } from '../../../shared/planExecution'
@@ -56,9 +55,7 @@ import { dispatchAdaptedFixWithin } from '../execution/executionAdaptDispatch'
 import { releaseRestartedHolder, restartTarget } from './pauseRestart'
 import type { PlanPause, PlanPauseTarget } from '../../../shared/planRevisionControl'
 import type { PauseServiceDeps } from './pauseService'
-
-/** The tag the resume mail carries (D9). */
-export const PLAN_RESUME_TAG = 'plan-resume'
+import { enqueueResume, resumeBody, revisionOf } from './pauseResolveResume'
 
 /**
  * The resolve's own refusal codes (the checkpointTool precedent): thrown
@@ -101,27 +98,6 @@ export interface ResolveInput {
 /** One committed resolve; `result` is undefined on a replay (D3). The
  *  resolve-specific refusal codes ride `reason` beside PlanRefusalReason. */
 export type PauseResolveOutcome = ExecutionEventOutcome<{ target: { change: string; decision: string } }> | { ok: false; reason: ResolveRefusalCode; message: string; result: undefined }
-
-/**
- * The resume mail's body (D9, D3): the decision and the task revision in
- * force; an attempt target also names the newest checkpoint commit to
- * continue from, a review target the recorded notes' id — never a commit.
- */
-export function resumeBody(plan: { id: string; title: string }, target: { change: string; stage: PauseStage },
-  revision: { number: number; rationale: string | null }, checkpointCommit: string | null, notesId: string | null): string {
-  const lines = [
-    `Kawai: the owner resumed change ${target.change} of plan "${plan.title}" (${plan.id}).`,
-    `Your work continues on the same task and branch. The task's direction is revision ${revision.number}${revision.rationale ? ` (${revision.rationale})` : ''}.`,
-  ]
-  if (target.stage === 'attempt' && checkpointCommit !== null) {
-    lines.push(`Continue from checkpoint ${checkpointCommit}.`)
-  }
-  if (target.stage === 'review' && notesId !== null) {
-    lines.push(`Your recorded review notes are checkpoint ${notesId}.`)
-  }
-  lines.push('Replies to this message are refused.')
-  return lines.join('\n')
-}
 
 function forbidden(): PauseResolveOutcome {
   return { ok: false, reason: 'forbidden', result: undefined, message: 'Only the plan\'s owner may resolve a pause, from the Plans view; no agent tool can.' }
@@ -470,21 +446,4 @@ function adaptAttempt(deps: PauseServiceDeps, caller: PlanCaller & { kind: 'huma
     }
   }
   return { target: { change: target.change, decision: 'adapt' } }
-}
-
-/** The task revision in force, with its newest rationale, for the resume text. */
-function revisionOf(tasks: NonNullable<PauseServiceDeps['tasks']>, task: { id: string; revision: number }): { number: number; rationale: string | null } {
-  return { number: task.revision, rationale: tasks.store.revisions(task.id).at(-1)?.rationale ?? null }
-}
-
-/** The resume mail (C2/C12): one normal direct system message, enqueued inside the caller's transaction. */
-function enqueueResume(deps: PauseServiceDeps, caller: PlanCaller & { kind: 'human' }, plan: { id: string; title: string },
-  target: Pick<PlanPauseTarget, 'change' | 'stage' | 'holderSession'>, taskId: string, body: string): void {
-  const holder = target.holderSession
-  if (holder === null) return // U4: a Paused target always names a holder.
-  const message = deps.mailbox.enqueue({
-    teamId: caller.team.teamId, toKind: 'session', toId: holder, fromKind: 'system', fromSession: null, fromGroup: null,
-    originPath: caller.team.groupsRoot, priority: 'normal', tags: [PLAN_RESUME_TAG], body, taskId, actor: 'system',
-  })
-  if (!deps.sessionExists(holder)) deps.mailbox.deadLetter(message.id, 'killed-recipient')
 }
