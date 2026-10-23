@@ -35,8 +35,14 @@ export function useRevealRow(options: {
   sendMessage?: (message: ClientMessage) => void
   /** Grows when events land (a page included); the reveal re-attempts then. */
   eventCount?: number
+  /**
+   * Consulted live at each attempt (plan-workspace §6.1): when it returns
+   * false this surface only renders statically and another host of the
+   * session consumes the reveal. Omit to always consume.
+   */
+  mayConsume?: () => boolean
 }): void {
-  const { sessionId, loaded, container, sendMessage, eventCount } = options
+  const { sessionId, loaded, container, sendMessage, eventCount, mayConsume } = options
   const reveal = useChatStore(state => (state.pendingReveal?.sessionId === sessionId ? state.pendingReveal : null))
   const marked = useRef<{ target: RevealTarget; timer: ReturnType<typeof setTimeout> } | null>(null)
   /** The anchor the one page request already went out for. */
@@ -44,6 +50,7 @@ export function useRevealRow(options: {
 
   useEffect(() => {
     if (!reveal || !loaded) return
+    if (mayConsume && !mayConsume()) return
     const anchor = reveal.anchorId.replace(/["\\]/g, '\\$&')
     const target = container.current?.querySelector(`[data-anchor-id="${anchor}"]`) ?? null
     if (!target) {
