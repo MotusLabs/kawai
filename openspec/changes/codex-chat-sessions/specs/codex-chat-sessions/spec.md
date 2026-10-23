@@ -134,19 +134,23 @@ On thread start and resume under either policy, the system SHALL set `approvalsR
 - **THEN** later requests in that turn are accepted without cards and the thread is not restarted
 
 ### Requirement: Codex questions use question cards
-A Codex request for user input SHALL appear as a question card with each question's header, text, and options, offering free text where Codex allows another answer and masking the input where Codex marks it secret. A secret answer SHALL show masked wherever Kawai renders it. Questions SHALL NOT be answered automatically under either policy. The user's answers SHALL return to Codex keyed by question.
+A Codex request for user input SHALL appear as a question card with each question's header, text, and options, offering free text where Codex allows another answer, and always where the question offers no options, since text is then its only answer, and masking the input where Codex marks it secret. Questions SHALL NOT be answered automatically under either policy. The user's answers SHALL return to Codex keyed by question.
 
 #### Scenario: Question under auto
 - **WHEN** an auto Codex chat asks the user a question with options
 - **THEN** a question card shows the options and the turn waits for the user's answer
 
-#### Scenario: Secret question is masked
-- **WHEN** Codex marks a question secret and Kawai renders the question or its answer
-- **THEN** the input and the rendered answer are masked
+#### Scenario: Secret question's input is masked
+- **WHEN** Codex marks a question secret and the card renders
+- **THEN** the input is masked, on the pending and the answered card
 
-#### Scenario: Free text follows another-answer permission
-- **WHEN** Codex marks a question without another-answer permission
+#### Scenario: A question with options offers free text only with another-answer permission
+- **WHEN** a question offers options and Codex marks it without another-answer permission
 - **THEN** the card offers only Codex's options and no free-text input
+
+#### Scenario: A question without options always offers free text
+- **WHEN** a question offers no options, whatever its another-answer permission says
+- **THEN** the card offers free text, masked when Codex marks the question secret
 
 #### Scenario: Claude questions are unchanged
 - **WHEN** a Claude chat's agent asks a structured question
