@@ -22,7 +22,7 @@ The system SHALL offer the profiles resolved from the catalog files for the sess
 - **THEN** the session is created as a Codex chat and the picker and chat view identify its profile as Codex
 
 #### Scenario: Project-level catalog extends the picker
-- **WHEN** a `.kawai/profiles.json` in the session's project path (or a directory above it) defines an additional profile
+- **WHEN** a `.kawai/profiles.json` or `.kawai/providers.json` in the session's project path (or a directory above it) defines an additional model
 - **THEN** the picker for that project path offers it alongside the inherited catalog, and project paths without that file do not
 
 #### Scenario: Older client omits the profile
