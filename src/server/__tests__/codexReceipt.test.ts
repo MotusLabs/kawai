@@ -2,6 +2,7 @@
 // `response_item` user message carrying the envelope — never a row that
 // merely quotes it (assistant, developer, tool output, event_msg), never an
 // AGENTS.md user row — and a torn or missing rollout reads uncertain.
+// @reads: src/server/__tests__/fixtures/codex/receipt-user-row.jsonl
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import fs from 'node:fs'
@@ -86,4 +87,21 @@ test('reconciliation with the Codex parser delivers found mail and requeues a co
   reconcileMailbox(store, () => file, codexFile)
   expect(store.get(found.id)?.state).toBe('delivered')
   expect(store.get(absent.id)?.state).toBe('queued')
+})
+
+// The 8.2 pin: a real rollout user row (identifying values scrubbed into
+// fixture placeholders) committed as data, so the parser is pinned to the
+// shape Codex actually writes — ordinal, passthrough metadata and all.
+const FIXTURE_ID = '00000000-0000-4000-8000-000000000001'
+const fixtureRow = () =>
+  fs.readFileSync(path.join(import.meta.dir, 'fixtures/codex/receipt-user-row.jsonl'), 'utf8').trim()
+
+test('the pinned real receipt row (fixture) yields its envelope message id', () => {
+  expect(codexReceiptMessageId(fixtureRow())).toBe(FIXTURE_ID)
+})
+
+test('the fixture row with another envelope id does not match the delivered id', () => {
+  const other = fixtureRow().split(FIXTURE_ID).join('00000000-0000-4000-8000-000000000009')
+  expect(codexReceiptMessageId(other)).not.toBe(FIXTURE_ID)
+  expect(codexReceiptMessageId(other)).toBe('00000000-0000-4000-8000-000000000009')
 })

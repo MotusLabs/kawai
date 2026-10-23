@@ -77,7 +77,7 @@
 ## 8. Integration checks
 
 - [x] 8.1 Add `tests/e2e/chat-codex.spec.ts` using the fake app-server through `KAWAI_CODEX_PATH`. Cover creating a Codex chat, a manual approval card round-trip, a question card, and a peer-message turn. Name it in `ci.yml`'s fixture run. Verify it passes locally and in CI.
-- [ ] 8.2 Run `scripts/codex-smoke.ts` and a manual team run against real Codex: a group with a Codex `profile` spawns a member in a worktree, the member commits and replies through `kawai-team`, and the receipt settles. Record the result in the change's journal or PR. Verify the reply reaches the lead and the message shows delivered. Capture one real rollout user row that carries a delivered envelope, and pin `codexReceipt.test.ts` to it: today the parser follows the documented RolloutLine shape and accepts both `input_text` and `text` blocks, and an unproven reader holds mail instead of requeueing it (PR D decision 2, M1).
+- [x] 8.2 Run `scripts/codex-smoke.ts` and a manual team run against real Codex: a group with a Codex `profile` spawns a member in a worktree, the member commits and replies through `kawai-team`, and the receipt settles. Record the result in the change's journal or PR. Verify the reply reaches the lead and the message shows delivered. Capture one real rollout user row that carries a delivered envelope, and pin `codexReceipt.test.ts` to it: today the parser follows the documented RolloutLine shape and accepts both `input_text` and `text` blocks, and an unproven reader holds mail instead of requeueing it (PR D decision 2, M1).
 - [x] 8.3 Run `bun run lint && bun run typecheck && bun run test` and `openspec validate codex-chat-sessions --strict`. Verify all pass.
 
 ## Workflow follow-up
