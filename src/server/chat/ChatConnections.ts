@@ -45,6 +45,7 @@ import { WorkspaceConnections } from '../team/workspaceConnections'
 import { PlanConnections } from '../plans/planConnections'
 import { PlanWorkspaceConnections } from '../plans/workspace/workspaceConnections'
 import { PlanWorkspaceDocumentConnections } from '../plans/workspace/workspaceDocuments'
+import { PlanChecklistTotals } from '../plans/workspace/checklistTotals'
 import type { PlanWorkspaceClientMessage } from '../../shared/planWorkspaceMessages'
 import { ExecutionConnections } from '../plans/execution/executionConnections'
 import { PROMOTION_MESSAGE_TYPES, PromotionConnections, type PromotionClientMessage } from '../plans/landing/integration/promotionConnections'
@@ -94,6 +95,8 @@ export class ChatConnections {
   private readonly planConnections: PlanConnections
   private readonly planWorkspaceConnections: PlanWorkspaceConnections
   private readonly planWorkspaceDocuments: PlanWorkspaceDocumentConnections
+  /** The composed checklists' totals, shared documents → snapshot (N3); public for compositions that build the documents side separately. */
+  readonly planWorkspaceTotals = new PlanChecklistTotals()
   private readonly executionConnections: ExecutionConnections
   private readonly promotionConnections: PromotionConnections
   private readonly outboundConnections: OutboundConnections
@@ -110,8 +113,10 @@ export class ChatConnections {
     this.strategyConnections = new StrategyConnections(manager)
     this.workspaceConnections = new WorkspaceConnections(manager)
     this.planConnections = new PlanConnections(manager)
-    this.planWorkspaceConnections = new PlanWorkspaceConnections(manager)
-    this.planWorkspaceDocuments = new PlanWorkspaceDocumentConnections(manager)
+    // One totals cache shared by the two connections (N3): the documents
+    // side records every composed checklist, the snapshot side reads it.
+    this.planWorkspaceDocuments = new PlanWorkspaceDocumentConnections(manager, { totals: this.planWorkspaceTotals })
+    this.planWorkspaceConnections = new PlanWorkspaceConnections(manager, this.planWorkspaceTotals)
     this.executionConnections = new ExecutionConnections(manager)
     this.promotionConnections = new PromotionConnections(manager)
     this.outboundConnections = new OutboundConnections(manager)
@@ -126,6 +131,7 @@ export class ChatConnections {
   publishTasks(teamId: string): void {
     this.taskConnections.publish(teamId)
     this.workspaceConnections.publish(teamId)
+    this.planWorkspaceConnections.publish(teamId)
   }
 
   /** A live workspace fact changed outside the task and mailbox paths. */
@@ -152,12 +158,23 @@ export class ChatConnections {
       event.type === 'approval_request' || event.type === 'question_request' ||
       event.type === 'request_resolved' || event.type === 'turn_completed' ||
       event.type === 'turn_started'
-    ) this.publishWorkspaceOf(sessionId)
+    ) {
+      this.publishWorkspaceOf(sessionId)
+      // The plan workspace's supervision facts and binding availability read
+      // session state (3.4); the pass's diff keeps an unchanged view quiet.
+      const teamId = this.manager.teams.teamOf(sessionId)?.teamId
+      if (teamId) this.planWorkspaceConnections.publish(teamId)
+    }
   }
 
   /** Resolves once every scheduled workspace publish has run (test seam). */
   flushWorkspace(): Promise<void> {
     return this.workspaceConnections.settled()
+  }
+
+  /** Resolves once the plan workspace's coalesced push pass has run (test seam, 3.4). */
+  flushPlanWorkspace(): Promise<void> {
+    return this.planWorkspaceConnections.settled()
   }
 
   /** A committed strategy change: re-send that team's strategy snapshots. */
@@ -174,6 +191,7 @@ export class ChatConnections {
   publishPlans(teamId: string, planId?: string): void {
     this.planConnections.publish(teamId, planId)
     this.workspaceConnections.publish(teamId)
+    this.planWorkspaceConnections.publish(teamId)
   }
 
   /** A committed process report or decision: re-send that team's metrics snapshots (never on mail changes). */
@@ -238,6 +256,9 @@ export class ChatConnections {
     if (message?.taskId) this.taskConnections.publish(teamId)
     // The workspace reads mail state and waiting reasons; see publishTasks.
     this.workspaceConnections.publish(teamId)
+    // The plan workspace reads claims and waiting reasons through the same
+    // facts (3.4); its pass's diff keeps an unchanged view quiet.
+    this.planWorkspaceConnections.publish(teamId)
     if (message?.state === 'dead' && message.reason === 'hop-limit') {
       this.notice(teamId, { type: 'team-mailbox-dead-letter', teamId, messageId: message.id, senderSession: message.fromSession })
     }
@@ -314,6 +335,10 @@ export class ChatConnections {
       this.contextBatches.set(connection, latest)
     }
     this.scheduleFlush()
+    // A held context reading is a plan-workspace health fact (3.4); a
+    // value-identical tick composes unchanged and pushes nothing (O6).
+    const teamId = this.manager.teams.teamOf(sessionId)?.teamId
+    if (teamId) this.planWorkspaceConnections.publish(teamId)
   }
 
   /**
@@ -380,6 +405,9 @@ export class ChatConnections {
       }
     }
     this.scheduleFlush()
+    // The report is provider-scoped: mark every subscribed team dirty and
+    // let the plan-workspace pass's diff keep an unaffected team quiet (3.4).
+    this.planWorkspaceConnections.publishSubscribed()
   }
 
   /**

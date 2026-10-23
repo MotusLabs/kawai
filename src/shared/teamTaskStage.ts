@@ -24,7 +24,7 @@ import type { TaskStatus, TeamTaskAssignment } from './teamTasks'
  */
 export function teamTaskStage(
   task: { status: TaskStatus },
-  assignment: TeamTaskAssignment | null,
+  assignment: Pick<TeamTaskAssignment, 'handoffKind' | 'state'> | null,
   result: { accepted: boolean; reviewVerdict?: 'pass' | 'fail' | null } | null = null,
 ): TeamTaskStage | null {
   if (task.status === 'done' || task.status === 'cancelled') return null

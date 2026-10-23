@@ -2,12 +2,12 @@
 // design D4). One change's artifacts resolve from its canonical source only:
 // the convention worktree `<main>/.worktrees/<change>` once it is listed,
 // else the main checkout — never another worktree, and never a substitution
-// of one copy for another. A listed convention worktree whose own active
-// listing lacks the change reports `missing-in-worktree`; main's copy is
-// never used. A change absent from the canonical worktree's active listing
-// resolves through the CLI's archive listing in the same worktree: exactly
-// one `YYYY-MM-DD-<name>` entry is its location, none reads `missing`, two
-// or more are an explicit `ambiguous`.
+// of one copy for another. A change absent from the canonical worktree's
+// active listing resolves through the CLI's archive listing of that same
+// worktree: exactly one `YYYY-MM-DD-<name>` entry is its location, two or
+// more are an explicit `ambiguous`, and none reads `missing` — or, in the
+// listed convention worktree, `missing-in-worktree`; main's copy is never
+// used.
 //
 // Artifact paths come from `openspec status --change <name> --json`
 // (per-kind `existingOutputPaths`, nested specs enumerated by the CLI); an
@@ -132,15 +132,16 @@ export class ChangeArtifactsResolver {
     const convention = path.join(mainRoot, CHANGE_WORKTREES_DIR, changeName)
     const listed = (input.worktreeRoots ?? []).some(root => path.resolve(root) === convention)
 
-    // The convention worktree is canonical once listed; its own listing
-    // decides, and main's copy is never consulted (design D4).
+    // The convention worktree is canonical once listed; its own listings
+    // decide, and main's copy is never consulted (design D4).
     if (listed) {
       const active = await this.list(convention, [])
       if (!active.ok) return unavailable(`openspec list failed in the convention worktree for "${changeName}"`, active.detail)
       if (listedNames(active.listing).has(changeName)) {
         return this.fromStatus(changeName, { kind: 'worktree', root: convention })
       }
-      return { ok: false, state: 'missing-in-worktree', message: `Change "${changeName}" is missing in its convention worktree; main checkout's copy is not substituted.` }
+      return this.resolveArchive(changeName, convention, 'missing-in-worktree',
+        `Change "${changeName}" is missing in its convention worktree (active and archive listings); main checkout's copy is not substituted.`)
     }
 
     const active = await this.list(mainRoot, [])
@@ -150,17 +151,26 @@ export class ChangeArtifactsResolver {
     }
 
     // Not active: resolve through the archive listing of the same worktree.
-    const archived = await this.list(mainRoot, ['--archived'])
+    return this.resolveArchive(changeName, mainRoot, 'missing',
+      `Change "${changeName}" is absent from the active and archive listings; it reads missing, not an error.`)
+  }
+
+  /** Not active in `root`: the archive listing of the same worktree decides (D4). */
+  private async resolveArchive(
+    changeName: string,
+    root: string,
+    missingState: 'missing' | 'missing-in-worktree',
+    missingMessage: string,
+  ): Promise<ChangeArtifactsResolution> {
+    const archived = await this.list(root, ['--archived'])
     if (!archived.ok) return unavailable(`openspec list --archived failed for "${changeName}"`, archived.detail)
     const entries = [...listedNames(archived.listing)].filter(name => archiveEntryPattern(changeName).test(name))
-    if (entries.length === 0) {
-      return { ok: false, state: 'missing', message: `Change "${changeName}" is absent from the active and archive listings; it reads missing, not an error.` }
-    }
+    if (entries.length === 0) return { ok: false, state: missingState, message: missingMessage }
     if (entries.length > 1) {
       return { ok: false, state: 'ambiguous', message: `Change "${changeName}" matches ${entries.length} archive entries: ${entries.sort().join(', ')}.` }
     }
     // The CLI-recognized archive location: <projectRoot>/openspec/changes/archive/<entry>.
-    const archiveRoot = path.join(archived.listing.projectRoot ?? mainRoot, 'openspec', 'changes', 'archive', entries[0]!)
+    const archiveRoot = path.join(archived.listing.projectRoot ?? root, 'openspec', 'changes', 'archive', entries[0]!)
     return {
       ok: true,
       changeName,

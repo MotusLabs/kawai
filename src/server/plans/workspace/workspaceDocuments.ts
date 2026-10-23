@@ -52,6 +52,7 @@ import type { PlanWorkspaceClientMessage } from '../../../shared/planWorkspaceMe
 import type { ChatSessionManager } from '../../chat/ChatSessionManager'
 import type { ChatConnection } from '../../chat/ChatConnections'
 import { ChangeArtifactsResolver } from './changeArtifacts'
+import { PlanChecklistTotals } from './checklistTotals'
 import { projectChecklist } from './checklistProjection'
 import { normalizeRelativeDocumentPath, readWorkspaceDocument } from './documentReader'
 import { executionMatchFor, type ExecutionPin, type ExecutionPinStore } from './executionPin'
@@ -123,6 +124,8 @@ export class PlanWorkspaceDocumentConnections {
   private readonly resolver: ChangeArtifactsResolver
   private readonly read: typeof readWorkspaceDocument
   private readonly watcher: SourceWatcher
+  /** The composed checklists' totals, read by the workspace snapshot (N3). */
+  private readonly totals: PlanChecklistTotals
   /** Set by stop(): a refresh that raced the shutdown is dropped, not answered. */
   private stopped = false
 
@@ -134,8 +137,11 @@ export class PlanWorkspaceDocumentConnections {
       host?: WorkspaceWatcherHost
       debounceMs?: number
       reconcileIntervalMs?: number
+      /** Receives every composed checklist's totals for the workspace rows (N3). */
+      totals?: PlanChecklistTotals
     } = {},
   ) {
+    this.totals = options.totals ?? new PlanChecklistTotals()
     this.resolver = options.resolver ?? new ChangeArtifactsResolver()
     this.read = options.read ?? readWorkspaceDocument
     // Production host: the navigator watcher's node adapter, with the
@@ -298,6 +304,10 @@ export class PlanWorkspaceDocumentConnections {
   private async refreshChecklist(connection: ChatConnection, teamPath: string, sub: ChecklistSubscription): Promise<void> {
     if (this.stopped) return // A refresh that raced the shutdown is dropped, not answered.
     const payload = await this.composeChecklist(sub)
+    // The totals ride every compose, push or not: the workspace's runtime
+    // rows read the last composed value (N3). A checklist or document
+    // refresh itself never pushes the workspace projection (CP1).
+    this.totals.record(sub.teamId, sub.planId, sub.changeName, payload.checklist)
     if (JSON.stringify(payload) === JSON.stringify(sub.push)) return
     sub.push = payload
     connection.send({ type: 'team-plan-workspace-checklist', teamPath, planId: sub.planId, changeName: sub.changeName, ...payload })

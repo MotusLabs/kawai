@@ -17,10 +17,10 @@ Implement after `team-workspace-pages`, `durable-plans`, and `plan-supervision` 
 
 ## 3. Runtime projection and passive health
 
-- [ ] 3.1 Compose plan-supervision outcomes with linked tasks and outstanding assignment claims for the selected execution; verify parallel holders, unclaimed groups, handoffs, outside-version work and all-checkboxes-checked/in-review remain distinguishable with read-model tests.
-- [ ] 3.2 Add passive read/subscription access to available session context and profile quota without attaching or refreshing workers; verify open/close and health inspection call no start/restore/send/poll methods and expose only same-team relevant sessions.
-- [ ] 3.3 Implement D5 health derivation and explanations with thresholds, approximation, applicability and freshness; verify red/yellow/green/gray boundaries, missing readings, shared quota, passed reset, gateway/host-account mismatch and disconnected state using a controlled clock. Document the display thresholds and 15-minute freshness policy.
-- [ ] 3.4 Wire coalesced workspace snapshots and incremental source invalidation to plan/task/assignment/session/usage changes; verify unsubscribe cleanup, reason-only changes and reconnect restoring fresh facts without loading all document bodies or starting chats.
+- [x] 3.1 Compose plan-supervision outcomes with linked tasks and outstanding assignment claims for the selected execution; verify parallel holders, unclaimed groups, handoffs, outside-version work and all-checkboxes-checked/in-review remain distinguishable with read-model tests.
+- [x] 3.2 Add passive read/subscription access to available session context and profile quota without attaching or refreshing workers; verify open/close and health inspection call no start/restore/send/poll methods and expose only same-team relevant sessions.
+- [x] 3.3 Implement D5 health derivation and explanations with thresholds, approximation, applicability and freshness; verify red/yellow/green/gray boundaries, missing readings, shared quota, passed reset, gateway/host-account mismatch and disconnected state using a controlled clock. Document the display thresholds and 15-minute freshness policy.
+- [x] 3.4 Wire coalesced workspace snapshots and incremental source invalidation to plan/task/assignment/session/usage changes; verify unsubscribe cleanup, reason-only changes and reconnect restoring fresh facts without loading all document bodies or starting chats.
 
 ## 4. Durable contextual chat delivery
 

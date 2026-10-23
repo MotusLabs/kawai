@@ -395,3 +395,20 @@ export function planDiffSummary(
     pinChanged: base !== null && !samePin(base.pin, next.pin),
   }
 }
+
+/**
+ * Whether one change entry's canonical form differs between the two contents
+ * (plan-workspace LC1): the per-change "modified" test `planDiffSummary`
+ * does not keep. A change absent from either content is not modified — the
+ * added/removed lists classify it.
+ */
+export function planChangeModified(
+  base: PlanContent,
+  next: PlanContent,
+  change: string,
+): boolean {
+  const before = base.changes.find(entry => entry.change === change)
+  const after = next.changes.find(entry => entry.change === change)
+  if (before === undefined || after === undefined) return false
+  return canonicalJson(before) !== canonicalJson(after)
+}

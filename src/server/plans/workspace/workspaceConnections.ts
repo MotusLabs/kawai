@@ -3,10 +3,14 @@
 // request names the team's directory (`teamPath`); the shared team-scope
 // resolver turns it into the team that scopes what may be seen or changed,
 // so an unknown path and another team's plan id are refused with no data.
-// The snapshot is authoritative and re-sent whole after every committed
-// workspace write of the team — never on a replay or a refusal (the
-// runPlanCommand rule); a bind is team-level, so it re-pushes every
-// subscribed plan of the team.
+// The open's snapshot is authoritative and always answered — never on a
+// replay or a refusal (the runPlanCommand rule). A push is coalesced (3.4):
+// source events (plan, task, mail, session, context-usage, provider-usage
+// facts) mark the team's subscribed plans dirty, and one microtask pass
+// composes each once and pushes only a workspace whose composed facts
+// changed (the O6 no-op rule, keyed on the whole payload including every
+// reading's value). A bind is team-level, so it dirties every subscribed
+// plan of the team.
 //
 // Invariant I6: open, close, and every read never start an agent or attach
 // a worker. The snapshot reads only the manager's record facts (`has`,
@@ -18,7 +22,9 @@ import { parseVersionSelector } from '../../../shared/planWorkspace'
 import type { PlanWorkspaceClientMessage } from '../../../shared/planWorkspaceMessages'
 import type { ChatSessionManager } from '../../chat/ChatSessionManager'
 import type { ChatConnection } from '../../chat/ChatConnections'
-import { defaultDisplayedVersion, selectedDisplayedVersion, type PlanVersionInputs } from './displayedVersion'
+import { defaultDisplayedVersion, displayedContent, selectedDisplayedVersion, type PlanVersionInputs } from './displayedVersion'
+import { PlanChecklistTotals } from './checklistTotals'
+import { composeWorkspaceSections } from './workspaceRuntime'
 
 const namedSelector = (selector: WorkspaceVersionSelector): string =>
   selector.kind === 'revision' ? `Revision ${selector.revision}` : `Draft "${selector.draftId}"`
@@ -40,16 +46,35 @@ interface WorkspaceSubscription {
   plans: Map<string, WorkspaceVersionSelector | null>
 }
 
+/** One dirty push target: the subscription's state at the moment a source marked it. */
+interface DirtyTarget {
+  teamPath: string
+  teamId: string
+  planId: string
+  selector: WorkspaceVersionSelector | null
+}
+
 export class PlanWorkspaceConnections {
   private readonly subscriptions = new Map<ChatConnection, Map<string, WorkspaceSubscription>>()
   /** Latest open/close per connection and target; only a later one supersedes a pending open. */
   private readonly pending = new Map<ChatConnection, Map<string, object>>()
+  /** Dirty push targets (3.4): source events mark them; the coalesced pass composes once. */
+  private dirty = new Map<ChatConnection, Map<string, DirtyTarget>>()
+  private flushScheduled = false
+  /** The workspace payload last pushed per connection and target — the O6 no-op key. */
+  private readonly lastPushed = new Map<ChatConnection, Map<string, string>>()
 
-  constructor(private readonly manager: ChatSessionManager) {}
+  constructor(
+    private readonly manager: ChatSessionManager,
+    /** The composed checklists' totals (N3); null composes no checklist column. */
+    private readonly totals: PlanChecklistTotals | null = null,
+  ) {}
 
   disconnect(connection: ChatConnection) {
     this.subscriptions.delete(connection)
     this.pending.delete(connection)
+    this.dirty.delete(connection)
+    this.lastPushed.delete(connection)
   }
 
   /** Retire an open/close reservation, but only while it is still the latest one for its target. */
@@ -58,16 +83,76 @@ export class PlanWorkspaceConnections {
     if (pending?.get(target) === token) pending.delete(target)
   }
 
-  /** A committed workspace write of the team: re-push every subscribed plan of it. */
+  /**
+   * A source event that can change this projection (a plan, task, mail,
+   * session, context-usage, or provider-usage fact): the team's subscribed
+   * plans turn dirty, and one coalesced pass composes and diffs them (3.4).
+   */
   publish(teamId: string) {
     for (const [connection, views] of this.subscriptions) {
       for (const [teamPath, subscription] of views) {
         if (subscription.teamId !== teamId) continue
+        const targets = this.dirty.get(connection) ?? new Map<string, DirtyTarget>()
         for (const [planId, selector] of subscription.plans) {
-          // Fire and forget: a push is a view refresh, and one racing a
-          // shutdown must not surface anywhere (planConnections' rule).
-          void this.sendSnapshot(connection, teamPath, teamId, planId, selector).catch(() => {})
+          targets.set(`${teamPath}\0${planId}`, { teamPath, teamId, planId, selector })
         }
+        this.dirty.set(connection, targets)
+      }
+    }
+    this.scheduleFlush()
+  }
+
+  /** Every team with a subscribed plan: for a source that cannot name its team (a provider report). The pass's diff keeps an unaffected team quiet. */
+  publishSubscribed() {
+    for (const views of this.subscriptions.values()) {
+      for (const subscription of views.values()) this.publish(subscription.teamId)
+    }
+  }
+
+  /** Resolves after any scheduled coalesced pass has run (test seam). */
+  settled(): Promise<void> {
+    // Two microtask hops: the first runs the scheduled flush, the second
+    // proves no further pass was scheduled behind it.
+    return new Promise(resolve => queueMicrotask(() => queueMicrotask(resolve)))
+  }
+
+  private scheduleFlush() {
+    if (this.flushScheduled) return
+    this.flushScheduled = true
+    queueMicrotask(() => {
+      this.flushScheduled = false
+      this.flush()
+    })
+  }
+
+  /** One coalesced pass: compose each dirty target once, push only what changed (O6). */
+  private flush() {
+    const pending = this.dirty
+    this.dirty = new Map()
+    for (const [connection, targets] of pending) {
+      for (const [key, target] of targets) {
+        const views = this.subscriptions.get(connection)
+        const subscription = views?.get(target.teamPath)
+        // Unsubscribe cleanup: a target closed before the pass composes nothing.
+        if (!subscription || subscription.teamId !== target.teamId || !subscription.plans.has(target.planId)) continue
+        const resolved = this.planInputs(target.teamId, target.planId)
+        if (!resolved) continue
+        const displayedVersion = target.selector
+          ? selectedDisplayedVersion(resolved.inputs, target.selector)
+          : defaultDisplayedVersion(resolved.inputs)
+        // A stored subscription's selector resolved at open; if it no longer
+        // does, the refresh is dropped — never an error on a push.
+        if (target.selector && displayedVersion === null) continue
+        const workspace = this.workspacePayload(target.teamId, resolved, displayedVersion)
+        const json = JSON.stringify(workspace)
+        const pushed = this.lastPushed.get(connection) ?? new Map<string, string>()
+        if (pushed.get(key) === json) continue
+        pushed.set(key, json)
+        this.lastPushed.set(connection, pushed)
+        connection.send({
+          type: 'team-plan-workspace-snapshot', teamPath: target.teamPath, teamId: target.teamId,
+          planId: target.planId, workspace,
+        })
       }
     }
   }
@@ -87,6 +172,9 @@ export class PlanWorkspaceConnections {
       const subscription = views?.get(teamPath)
       subscription?.plans.delete(planId)
       if (subscription && subscription.plans.size === 0) views!.delete(teamPath)
+      // Unsubscribe cleanup: the target's diff key goes with it, so a later
+      // re-open answers from scratch.
+      this.lastPushed.get(connection)?.delete(target)
       this.dropPending(connection, target, token)
       return
     }
@@ -147,28 +235,42 @@ export class PlanWorkspaceConnections {
   }
 
   private emitSnapshot(connection: ChatConnection, teamPath: string, teamId: string, resolved: ResolvedPlanInputs, displayedVersion: WorkspaceDisplayedVersion | null) {
+    // The open's first snapshot is authoritative: always sent, never diffed,
+    // and recorded so the next coalesced pass diffs against it.
+    const workspace = this.workspacePayload(teamId, resolved, displayedVersion)
+    const pushed = this.lastPushed.get(connection) ?? new Map<string, string>()
+    pushed.set(`${teamPath}\0${resolved.plan.id}`, JSON.stringify(workspace))
+    this.lastPushed.set(connection, pushed)
     connection.send({
-      type: 'team-plan-workspace-snapshot', teamPath, teamId, planId: resolved.plan.id,
-      workspace: {
-        plan: resolved.plan,
-        displayedVersion,
-        bindings: this.bindingViews(teamId),
-        references: this.manager.planWorkspaceRefs.refsOf(teamId, resolved.plan.id),
-      },
+      type: 'team-plan-workspace-snapshot', teamPath, teamId, planId: resolved.plan.id, workspace,
     })
   }
 
-  private async sendSnapshot(connection: ChatConnection, teamPath: string, teamId: string, planId: string, selector: WorkspaceVersionSelector | null) {
-    try {
-      const resolved = this.planInputs(teamId, planId)
-      if (!resolved) return
-      const displayedVersion = selector ? selectedDisplayedVersion(resolved.inputs, selector) : defaultDisplayedVersion(resolved.inputs)
-      // A stored subscription's selector resolved at open; if it no longer
-      // does, the refresh is dropped — never an error on a push.
-      if (selector && displayedVersion === null) return
-      this.emitSnapshot(connection, teamPath, teamId, resolved, displayedVersion)
-    } catch {
-      // A view refresh that raced a shutdown or a vanished row is dropped.
+  /**
+   * The workspace payload one snapshot carries: the plan identity, displayed
+   * version, bindings, references, and the §3 sections (runtime overlay,
+   * passive readings) — all composed from already-held facts (INVARIANT P).
+   */
+  private workspacePayload(teamId: string, resolved: ResolvedPlanInputs, displayedVersion: WorkspaceDisplayedVersion | null): WorkspaceSnapshot {
+    const displayed = displayedVersion === null ? null : displayedContent(resolved.inputs, displayedVersion)
+    // A manager without the reads (a stub from before this change, or no
+    // team services) composes neither section.
+    const sections = this.manager.planWorkspaceRuntimeReads ? composeWorkspaceSections(
+      { reads: this.manager.planWorkspaceRuntimeReads }, this.manager, teamId, resolved.plan.id, {
+        displayed,
+        now: new Date(),
+        // The last composed checklist totals (N3): a read of remembered
+        // facts, never a document load (INVARIANT P).
+        checklistTotals: change => this.totals?.of(teamId, resolved.plan.id, change) ?? null,
+      },
+    ) : { runtime: null, health: [] }
+    return {
+      plan: resolved.plan,
+      displayedVersion,
+      bindings: this.bindingViews(teamId),
+      references: this.manager.planWorkspaceRefs.refsOf(teamId, resolved.plan.id),
+      ...(sections.runtime === null ? {} : { runtime: sections.runtime }),
+      ...(sections.health.length > 0 ? { health: sections.health } : {}),
     }
   }
 

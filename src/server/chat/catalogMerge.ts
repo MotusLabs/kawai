@@ -90,6 +90,19 @@ export function providerCredentialed(provider: MergedProvider): boolean {
   return false
 }
 
+/**
+ * Whether the provider is the host CLI login (plan-workspace LC5.4): the
+ * catalog neither re-homes its base URL nor names a credential variable for
+ * it, so the usage readings that follow the host login (`report`, `pull`)
+ * describe this provider's own allowance. Derived from the catalog only,
+ * never from the model name.
+ */
+export function hostLoginProvider(provider: MergedProvider | null | undefined): boolean {
+  if (provider == null) return false
+  if (providerCredentialed(provider)) return false
+  return !('ANTHROPIC_BASE_URL' in provider.env)
+}
+
 /** The settings a re-homed model carries away from the provider it left. */
 function inheritedFrom(flat: ReturnType<typeof flattenModel>): InheritedSettings {
   return {
