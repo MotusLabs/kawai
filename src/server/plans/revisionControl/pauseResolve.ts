@@ -56,13 +56,15 @@ import { releaseRestartedHolder, restartTarget } from './pauseRestart'
 import type { PlanPause, PlanPauseTarget } from '../../../shared/planRevisionControl'
 import type { PauseServiceDeps } from './pauseService'
 import { enqueueResume, resumeBody, revisionOf } from './pauseResolveResume'
+import { releaseNamedHoldWithin } from './pauseReleaseHold'
 
 /**
  * The resolve's own refusal codes (the checkpointTool precedent): thrown
  * inside the transaction so nothing is written, returned as the outcome's
- * reason. `review-target` belongs to adapt (A10r) and lands with its step.
+ * reason. `review-target` belongs to adapt (A10r) and lands with its step;
+ * the hold codes belong to the releaseHold overlay (H2r/H3r).
  */
-export type ResolveRefusalCode = 'target-withdrawn' | 'not-paused' | 'holder-gone' | 'review-superseded' | 'review-target' | 'head-unreadable'
+export type ResolveRefusalCode = 'target-withdrawn' | 'not-paused' | 'holder-gone' | 'review-superseded' | 'review-target' | 'head-unreadable' | 'whole-plan-hold' | 'hold-already-released'
 
 /**
  * L3 (A3.2): the facts the resolve's pre-transaction git read gathers for an
@@ -81,9 +83,11 @@ export class ResolveRefusal extends Error {
   }
 }
 
-/** One resolve command (D9): the target's change, the choice, and whether
- *  releasing the hold follows the decision — the flag is recorded now so the
- *  replay compares it; the hold's release writes land in the release step. */
+/** One resolve command (D9): the target's change, the choice, and whether the
+ *  hold the pause rides releases with the decision — the flag is recorded so
+ *  the replay compares it, and the release writes land in the same
+ *  transaction under `<commandId>:release-hold` (H1r; H2r/H3r refuse with
+ *  nothing written). */
 export interface ResolveInput {
   planId: string
   pauseId: string
@@ -95,9 +99,17 @@ export interface ResolveInput {
   commandId: string
 }
 
+/** One committed resolve's observable result: the decided target, plus the
+ *  releaseHold overlay's facts when the flag released the pause's hold (H1r)
+ *  — the other active holds still covering the change, which stay (H4r). */
+export interface PauseResolveResult {
+  target: { change: string; decision: string }
+  releaseHold?: { holdId: string; stillCovering: string[] }
+}
+
 /** One committed resolve; `result` is undefined on a replay (D3). The
  *  resolve-specific refusal codes ride `reason` beside PlanRefusalReason. */
-export type PauseResolveOutcome = ExecutionEventOutcome<{ target: { change: string; decision: string } }> | { ok: false; reason: ResolveRefusalCode; message: string; result: undefined }
+export type PauseResolveOutcome = ExecutionEventOutcome<PauseResolveResult> | { ok: false; reason: ResolveRefusalCode; message: string; result: undefined }
 
 function forbidden(): PauseResolveOutcome {
   return { ok: false, reason: 'forbidden', result: undefined, message: 'Only the plan\'s owner may resolve a pause, from the Plans view; no agent tool can.' }
@@ -153,7 +165,7 @@ export async function resolvePause(deps: PauseServiceDeps, caller: PlanCaller, i
 }
 
 /** Everything `within` writes for one resolve, after the replay; `head` is the pre-transaction git read's gather (undefined when the seam is unwired or the pause is not found). */
-function resolveWithin(deps: PauseServiceDeps, caller: PlanCaller & { kind: 'human' }, input: ResolveInput, planId: string, head: AdaptHeadFacts | null | undefined): { target: { change: string; decision: string } } {
+function resolveWithin(deps: PauseServiceDeps, caller: PlanCaller & { kind: 'human' }, input: ResolveInput, planId: string, head: AdaptHeadFacts | null | undefined): PauseResolveResult {
   const pause = deps.pauses.get(caller.team.teamId, input.pauseId)
   if (pause === null || pause.planId !== planId) throw new PlanRefusal('not-found', `Pause not found on this plan: ${input.pauseId}`)
   const target = deps.pauses.target(pause.id, input.change)
@@ -195,6 +207,21 @@ function resolveWithin(deps: PauseServiceDeps, caller: PlanCaller & { kind: 'hum
   if (changeRow.taskId === null) throw new PlanRefusal('state', `Change ${target.change} has no task; a target always names one.`)
   const task = deps.tasks!.store.get(changeRow.taskId)
   if (task === undefined || task === null) throw new PlanRefusal('state', `The task of change ${target.change} is missing.`)
+  // The releaseHold overlay (design "Under a standing hold", H1r-H4r): the
+  // checks refuse before any write — the resolution included (Q-A4) — and
+  // the release lands before the choice dispatch, so the choice's gate read
+  // (adapt and restart dispatch per the hold, H1) sees it released and the
+  // row's dispatch runs inline when nothing else covers (H1r). A refusal in
+  // the choice rolls the release back with the resolution: one transaction.
+  const released = input.releaseHold === true ? releaseNamedHoldWithin(deps, caller, input, pause, target) : null
+  const dispatched = dispatchChoice(deps, caller, input, pause, target, changeRow, task, head)
+  return released === null ? dispatched : { ...dispatched, releaseHold: released }
+}
+
+/** The choice dispatch, after every shared refusal (N2's order). */
+function dispatchChoice(deps: PauseServiceDeps, caller: PlanCaller & { kind: 'human' }, input: ResolveInput, pause: PlanPause,
+  target: PlanPauseTarget, changeRow: ChangeRow, task: { id: string; revision: number },
+  head: AdaptHeadFacts | null | undefined): PauseResolveResult {
   if (input.choice === 'continue') {
     // C11 (Q-A5): judged from the target's holder and the session records at
     // call time, for review targets exactly as for attempt targets. Adapt
