@@ -72,4 +72,38 @@ describe('I6 a contextual send carries no authority', () => {
     // The plan store took no writes: the same summaries, the draft unchanged.
     expect(manager.plans.list({ kind: 'human', team })).toEqual(plansBefore)
   })
+
+  test('LC-D4 a runtime without the contextual seam refuses the send explicitly', async () => {
+    const manager = createManager()
+    const team = await resolveTeam(project)
+    const planCreated = await manager.plans.create({ kind: 'human', team }, { title: 'Roadmap' })
+    const created = await manager.createAvailableSession({ projectPath: project, groupId: 'devs' })
+    if (!created.ok) throw new Error(created.error)
+    const sessionId = created.session.id
+    // A first unscoped send spawns the driver and completes its turn.
+    expect(await manager.send(sessionId, 'plain first')).toEqual({ ok: true })
+    await waitFor(() => manager.turnUsage.forSession(sessionId).length > 0, 'the first turn')
+    // Stand in for a Codex driver: the contextual seam absent on the
+    // instance, exactly as CodexSessionDriver implements the interface.
+    const drivers = (manager as unknown as { drivers: Map<string, { sendWorkspaceContext?: unknown }> }).drivers
+    const driver = drivers.get(sessionId)
+    expect(driver).toBeDefined()
+    driver!.sendWorkspaceContext = undefined
+    const envelope: WorkspaceMessageEnvelope = {
+      teamId: team.teamId,
+      planId: planCreated.plan.id,
+      version: { kind: 'draft', draftId: planCreated.draft.draftId, contentHash: planCreated.draft.contentHash },
+    }
+    const refused = await manager.send(sessionId, 'with context', envelope)
+    expect(refused).toEqual({
+      ok: false,
+      error: "This chat's runtime does not carry plan-workspace contexts.",
+    })
+    // Never a silent drop or an unscoped send: no second turn ran, and the
+    // store took no row.
+    await new Promise(resolve => setTimeout(resolve, 50))
+    expect(manager.turnUsage.forSession(sessionId)).toHaveLength(1)
+    const rows = db.db.prepare('SELECT COUNT(*) AS n FROM chat_workspace_turn_context WHERE session_id = ?').get(sessionId) as { n: number }
+    expect(rows.n).toBe(0)
+  })
 })
