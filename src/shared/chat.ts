@@ -54,6 +54,17 @@ export interface ChatQuestion {
     description?: string
     preview?: string
   }>
+  /**
+   * Codex questions only (codex-chat-sessions F3): Codex marks the answer
+   * secret, so the card masks the input and its rendered answer. Absent
+   * (every Claude question) renders plain.
+   */
+  isSecret?: boolean
+  /**
+   * Codex questions only: whether Codex allows an answer of the user's own.
+   * Absent (every Claude question) keeps the free-text input; `false` hides it.
+   */
+  isOther?: boolean
 }
 
 /**
