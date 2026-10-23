@@ -71,7 +71,7 @@ describe('grouped shipped default on a fresh HOME', () => {
     expect(profiles.get('kimi')?.model).toBe('kimi-k3[1m]')
   })
 
-  test('the three OpenRouter models resolve to provider openrouter with its key names and mappings', () => {
+  test('the three tier OpenRouter models resolve to provider openrouter with its key names and mappings', () => {
     const { profiles, providers, errors } = resolveProfileCatalog(freshHomeCtx())
     expect(errors).toEqual([])
     const env = {
@@ -90,8 +90,29 @@ describe('grouped shipped default on a fresh HOME', () => {
       expect(profiles.get(id!)).toEqual({ label, model, env, providerId: 'openrouter', ...credentials })
     }
     expect(providers.get('openrouter')).toEqual({
-      label: 'OpenRouter', models: ['openrouter-opus', 'openrouter-sonnet', 'openrouter-haiku'], ...credentials,
+      label: 'OpenRouter',
+      models: ['openrouter-opus', 'openrouter-sonnet', 'openrouter-haiku', 'openrouter-deepseek-flash', 'openrouter-minimax-flash'],
+      ...credentials,
     })
+  })
+
+  test('the flash OpenRouter models start on their slugs; every alias maps to it', () => {
+    const { profiles, errors } = resolveProfileCatalog(freshHomeCtx())
+    expect(errors).toEqual([])
+    const credentials = { authTokenEnv: 'OPENROUTER_API_KEY', balanceKeyEnv: 'OPENROUTER_MANAGEMENT_KEY' }
+    const env = (slug: string) => ({
+      ANTHROPIC_BASE_URL: 'https://openrouter.ai/api',
+      ANTHROPIC_DEFAULT_OPUS_MODEL: slug,
+      ANTHROPIC_DEFAULT_SONNET_MODEL: slug,
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: slug,
+      ANTHROPIC_DEFAULT_FABLE_MODEL: slug,
+    })
+    for (const [id, label, slug] of [
+      ['openrouter-deepseek-flash', 'OpenRouter DeepSeek V4.1 Flash', 'deepseek/deepseek-v4.1-flash-1017'],
+      ['openrouter-minimax-flash', 'OpenRouter MiniMax M3.1 Flash', 'minimax/minimax-m3.1-flash'],
+    ]) {
+      expect(profiles.get(id!)).toEqual({ label, model: slug, env: env(slug!), providerId: 'openrouter', ...credentials })
+    }
   })
 
   test('the providers view orders the default-holder first, then file order (D13)', () => {
