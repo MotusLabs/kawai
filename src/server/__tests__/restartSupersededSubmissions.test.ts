@@ -10,6 +10,7 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test'
 import { CheckpointTool } from '../plans/revisionControl/checkpointTool'
 import { executionOwnership, ownershipRowReads, restartSupersededRefusal } from '../plans/execution/executionOwnership'
+import { composeExecutionCore } from '../plans/planComposition'
 import { TaskResultService } from '../team/TaskResultService'
 import { pauseResolveBench, type PauseResolveBench } from './pauseResolveBench'
 import { sessionRow } from './planHarness'
@@ -164,6 +165,25 @@ test('the old holder re-dispatched as the new claimant submits again (ruling L6\
   await submitAsOldHolder(world, results, tool, 'result', true)
   await submitAsOldHolder(world, results, tool, 'findings', true)
   await submitAsOldHolder(world, results, tool, 'checkpoint', false)
+})
+
+// OG1 (the round-2 amendment): the same refusal and acceptance judged
+// through the production composition — `composeExecutionCore` builds the
+// ownership with its row reads wired — so dropping `ownershipRowReads(db)`
+// from planComposition (mutant M1 of findings-6a6a844d) fails this test.
+// Findings only: a 'result' call through the real core can reach real git.
+test('OG1: through the production composition the old holder\'s findings are refused restart-superseded and the new claimant\'s pass (kills M1)', async () => {
+  const world = await heldWorld('claimed', 'human')
+  wired.expectOk(await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'restart' }))
+  expect(restartTarget(world)).toMatchObject({ decision: 'restart', holderSession: 'dev' })
+  wired.answerNewestRow(world.executionId, 'api', 1)
+  await wired.mintAttempt(world.executionId, 'api', 'implement', 'dev2')
+  const core = composeExecutionCore(wired.bench.db.db)
+  const oldHolder = await core.ownership.checkResult(world.taskId, { commit: null, submitter: 'dev', kind: 'findings' })
+  expect(oldHolder).toContain('restart-superseded')
+  const claimant = await core.ownership.checkResult(world.taskId, { commit: null, submitter: 'dev2', kind: 'findings' })
+  expect(claimant).toBeNull()
+  core.wakes.bind(null)
 })
 
 // The non-Restart rule (the shipped suites stay green): with the row reads
