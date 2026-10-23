@@ -218,7 +218,9 @@ describe('validateWorkspaceSend', () => {
   describe('V8 the document ref', () => {
     const base = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-send-v8-'))
     const root = path.join(base, 'wt')
-    const docDir = path.join(root, 'docs')
+    // notes/, not docs/: a docs/ literal in a test source reads as a
+    // repository path to the @reads guard, and this fixture never reads one.
+    const docDir = path.join(root, 'notes')
     const docPath = path.join(docDir, 'note.md')
     fs.mkdirSync(docDir, { recursive: true })
     fs.writeFileSync(docPath, '# Note\n')
@@ -227,7 +229,7 @@ describe('validateWorkspaceSend', () => {
 
     const localRef = (): WorkspaceRefView => ({
       id: 'ref-1', planId: 'plan-1', changeName: null, label: 'Note', kind: 'local',
-      worktreeId: root, relativePath: 'docs/note.md', url: null, createdAt: '2026-10-23T00:00:00Z',
+      worktreeId: root, relativePath: 'notes/note.md', url: null, createdAt: '2026-10-23T00:00:00Z',
     })
     const externalRef = (): WorkspaceRefView => ({
       id: 'ref-2', planId: 'plan-1', changeName: null, label: 'Spec', kind: 'external',
