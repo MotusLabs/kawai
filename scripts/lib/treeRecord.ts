@@ -5,8 +5,8 @@
 // key. Used by the pre-push hook and by the commit hook's message-only amend
 // gate — both only read; writing stays checkRun's alone.
 
-import { contentKeyFrom } from './checkKey'
-import { readRecord, type CheckRecord } from './checkRecords'
+import { contentKeyFrom } from '../../src/server/checks/checkKey'
+import { readRecord, type CheckRecord } from '../../src/server/checks/checkRecords'
 
 /** The content key a full check of `treeId` records under, for this Bun. */
 export function treeRecordKey(treeId: string): string {

@@ -15,7 +15,7 @@ import {
   readRecord,
   recordsDir,
   writeRecord,
-} from '../../../scripts/lib/checkRecords'
+} from '../checks/checkRecords'
 
 let tempRoot: string
 let repo: string

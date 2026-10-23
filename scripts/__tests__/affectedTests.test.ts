@@ -451,7 +451,7 @@ describe('the D2 escape list', () => {
       'tsconfig.json',
       'tsconfig.node.json',
       'scripts/lib/reads.ts',
-      'scripts/lib/checkKey.ts',
+      'src/server/checks/checkKey.ts',
       'scripts/planBatches.ts',
       'scripts/pre-commit.ts',
       'scripts/release.ts',

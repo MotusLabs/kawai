@@ -27,7 +27,7 @@ import {
   type AffectedSelection,
   type ChangedPaths,
 } from './affected-tests'
-import { recordsDir } from './lib/checkRecords'
+import { recordsDir } from '../src/server/checks/checkRecords'
 import { stepEnv } from './lib/checkRun'
 import { listUnitTestFiles } from './lib/reads'
 import { readTreeRecord } from './lib/treeRecord'

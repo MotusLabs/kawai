@@ -19,7 +19,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { recordsDir } from './lib/checkRecords'
+import { recordsDir } from '../src/server/checks/checkRecords'
 import {
   REAL_TMUX_FILES,
   UNIT_TEST_GLOBS,

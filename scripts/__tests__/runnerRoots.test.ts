@@ -8,7 +8,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { cleanGitEnv } from '../../src/server/git/gitCommand'
-import { recordsDir } from '../lib/checkRecords'
+import { recordsDir } from '../../src/server/checks/checkRecords'
 import { isRunSnapshotName } from '../testTimings'
 import { isProcDead } from './fixtures/runnerProbe/procState'
 

@@ -9,7 +9,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { runGit } from '../../src/server/git/gitCommand'
+import { runGit } from '../git/gitCommand'
 
 export interface CheckStep {
   name: string

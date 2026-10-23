@@ -22,7 +22,7 @@ import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { runGit } from '../../src/server/git/gitCommand'
+import { runGit } from '../git/gitCommand'
 
 // `git add -A` over a whole tree can take longer than the default 10 s on a
 // cold cache; the copy itself is a file copy.
