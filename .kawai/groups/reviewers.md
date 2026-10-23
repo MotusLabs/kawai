@@ -86,6 +86,26 @@ latest journal. The body names the worktree, branch, base/head SHAs,
      killed by `file › exact title`, survived, or equivalent (with the reason).
    - A survivor blocks only when production wiring or a specified behavior has
      no test. Every other survivor is a follow-up.
+7. For work whose acceptance carries acceptance oracles — a design's
+   "Acceptance oracles" subsection (docs/agent-collaboration.md, "Write
+   acceptance as oracles") — judge the result against its tables and
+   properties, and let them decide what blocks:
+   - A finding blocks only when it shows one of:
+     - a missing, unfaithful, or vacuous oracle test (the row or property is
+       not exercised by the committed tests, or the test asserts something
+       else);
+     - a counterexample to a stated property;
+     - a security or data-loss bug, with a reproducer.
+   - From round 2, only regressions, still-unfixed findings, and new
+     counterexamples with reproducers block.
+   - Everything else is an optional follow-up. A defect the tables have no
+     row for is a new class: report it as a proposed oracle amendment (the
+     Lead decides, not you) plus an entry for docs/oracle-hazards.md, not as
+     a blocking finding.
+   - This never relaxes the mutation rule in step 6: a survivor still blocks
+     when production wiring or a specified behavior has no test — an oracle
+     exercised only through a hand-built harness is the M1 class in
+     docs/oracle-hazards.md.
 
 Report with `send_message` to the `lead` group, without `task_id`; put the
 task id in the body. Group addressing keeps reports reaching whoever leads now
