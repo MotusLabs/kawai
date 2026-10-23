@@ -31,7 +31,12 @@
 // Reveal designation is module-global (chatStore.pendingReveal is a
 // client-global slot): the latest claimant per session is the one surface
 // that consumes the reveal; when it unmounts, the previous still-mounted
-// claimant takes over for subsequently set reveals. Draft text is not
+// claimant takes over for subsequently set reveals. Because the takeover
+// must also wake a survivor while a reveal is already pending (advisory
+// 396ee67b R1), every claim and release notifies that session's
+// designation subscribers (subscribeRevealDesignation) — the consumer hook
+// reads its designation through one, so a designation flip re-runs its
+// reveal attempt against the still-pending reveal. Draft text is not
 // managed here: chatStore drafts stay per session, and two hosts editing
 // one session share that draft last-write-wins.
 import type { SendClientMessage } from '@shared/types'
@@ -149,11 +154,39 @@ export const createHostToken = (): number => nextHostToken++
 // session; the last one is the designated consumer.
 const revealClaimants = new Map<string, number[]>()
 
+const revealListeners = new Map<string, Set<() => void>>()
+
+const notifyReveal = (sessionId: string): void => {
+  const listeners = revealListeners.get(sessionId)
+  if (!listeners) return
+  for (const listener of [...listeners]) listener()
+}
+
+/**
+ * Subscribes to this session's reveal-designation changes: every claim,
+ * release, and takeover (release of the designated claimant promoting a
+ * survivor) calls `listener`. Returns the unsubscribe.
+ */
+export function subscribeRevealDesignation(sessionId: string, listener: () => void): () => void {
+  let listeners = revealListeners.get(sessionId)
+  if (!listeners) {
+    listeners = new Set()
+    revealListeners.set(sessionId, listeners)
+  }
+  listeners.add(listener)
+  return () => {
+    const current = revealListeners.get(sessionId)
+    if (!current?.delete(listener)) return
+    if (current.size === 0) revealListeners.delete(sessionId)
+  }
+}
+
 /** Makes `token` the designated reveal consumer of `sessionId`. */
 export function claimReveal(sessionId: string, token: number): void {
   const claimants = (revealClaimants.get(sessionId) ?? []).filter(claimed => claimed !== token)
   claimants.push(token)
   revealClaimants.set(sessionId, claimants)
+  notifyReveal(sessionId)
 }
 
 /** Drops a claim (idempotent); the previous claimant becomes designated. */
@@ -163,6 +196,7 @@ export function releaseReveal(sessionId: string, token: number): void {
   const remaining = claimants.filter(claimed => claimed !== token)
   if (remaining.length === 0) revealClaimants.delete(sessionId)
   else revealClaimants.set(sessionId, remaining)
+  notifyReveal(sessionId)
 }
 
 /** True when `token` is the session's designated reveal consumer. */

@@ -10,6 +10,7 @@ import { describe, expect, test } from 'bun:test'
 import type { ClientMessage } from '@shared/types'
 import {
   claimReveal, createHostToken, isRevealDesignated, registryFor, releaseReveal,
+  subscribeRevealDesignation,
 } from '../stores/chatAttachment'
 
 /** One microtask tick: a scheduled detach fires ahead of the await resume. */
@@ -222,5 +223,44 @@ describe('reveal designation', () => {
     releaseReveal('reveal-idem', token)
     releaseReveal('reveal-idem', token)
     expect(isRevealDesignated('reveal-idem', token)).toBe(false)
+  })
+
+  test('a designation change notifies the session subscribers, takeover included', () => {
+    const seen: number[] = []
+    const unsubscribe = subscribeRevealDesignation('reveal-sub', () => { seen.push(seen.length + 1) })
+    expect(seen).toEqual([]) // subscribing alone notifies nobody
+    const owner = createHostToken()
+    const survivor = createHostToken()
+    claimReveal('reveal-sub', owner)
+    expect(seen).toEqual([1])
+    // A survivor subscribing after the owner is not told retroactively…
+    unsubscribe()
+    claimReveal('reveal-sub', survivor)
+    expect(seen).toEqual([1])
+    // …but a live subscriber hears the takeover when the designated
+    // claimant releases: the previous claimant is promoted.
+    const takeover: string[] = []
+    const stop = subscribeRevealDesignation('reveal-sub', () => {
+      takeover.push(isRevealDesignated('reveal-sub', owner) ? 'owner' : 'other')
+    })
+    releaseReveal('reveal-sub', survivor) // the designated release promotes the owner
+    expect(takeover).toEqual(['owner'])
+    releaseReveal('reveal-sub', owner) // the last claim leaves: nobody is designated
+    expect(takeover).toEqual(['owner', 'other'])
+    stop()
+    releaseReveal('reveal-sub', owner)
+    expect(takeover).toEqual(['owner', 'other']) // unsubscribed: no more calls
+  })
+
+  test('subscribers of other sessions are never notified; unsubscribe is idempotent', () => {
+    const hits: string[] = []
+    const stopA = subscribeRevealDesignation('reveal-a', () => { hits.push('a') })
+    subscribeRevealDesignation('reveal-b', () => { hits.push('b') })
+    claimReveal('reveal-a', createHostToken())
+    expect(hits).toEqual(['a'])
+    stopA()
+    stopA() // a second unsubscribe is a no-op, not a crash
+    releaseReveal('reveal-a', createHostToken())
+    expect(hits).toEqual(['a'])
   })
 })

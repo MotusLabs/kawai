@@ -8,8 +8,12 @@
 // same-commit full-screen↔embedded transfer sends no wire traffic and never
 // resets the held events; a mount while offline attaches once on connect; a
 // held online→offline→online transition re-attaches once with historyFrom;
-// archived and approval behavior carries over whole-column. The full-screen
-// regression guards stay in chatComponents/chatViewHistory/chatViewReveal.
+// archived and approval behavior carries over whole-column; and a search
+// reveal transfers to the already-mounted survivor when the designated
+// owner unmounts with the reveal pending (advisory 396ee67b R1). The
+// full-screen regression guards stay in chatComponents/chatViewHistory/
+// chatViewReveal/chatHeaderIntegration; reset-lifecycle and strip-parity
+// host tests live in chatSurfaceHostLifecycle.test.tsx.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import type { ComponentProps, CSSProperties, ReactElement } from 'react'
@@ -42,11 +46,11 @@ const assistantEvent = (id: string, text: string) =>
 /**
  * A test-only embedded host (plan-workspace §6.1): the host owns the root
  * element with the palette classes and the chat font size; the surface
- * renders the content column inside it.
+ * renders the strips and the content column inside it.
  */
-function EmbeddedHost({ label, children, ...surface }: { label: string } & ComponentProps<typeof ChatSurface>) {
+function EmbeddedHost({ label, ...surface }: { label: string } & ComponentProps<typeof ChatSurface>) {
   return <div className="chat-palette chat-root" style={{ '--chat-font-size': '15px' } as CSSProperties} data-testid={`host-${label}`}>
-    <ChatSurface {...surface}>{children}</ChatSurface>
+    <ChatSurface {...surface} />
   </div>
 }
 
@@ -338,5 +342,114 @@ describe('ChatSurface embedded hosts', () => {
     const allow = renderer!.root.findAll(node => node.type === 'button' && node.props.children === 'Allow')[0]!
     act(() => { allow.props.onClick() })
     expect(sent).toContainEqual({ type: 'chat-approval', sessionId: 'chat-a', requestId: 'r1', decision: 'allow' })
+  })
+
+  // Reveal transfer between hosts (advisory 396ee67b R1): the designated
+  // owner unmounting with a reveal already pending must wake the
+  // already-mounted survivor through the claimant subscription — the
+  // survivor re-attempts at takeover, not only at the next unrelated store
+  // change. The reveal row is hidden at first so the attempts page history.
+  describe('reveal transfer between hosts', () => {
+    interface RevealRow {
+      tagName: string
+      open?: boolean
+      scrolls: Array<ScrollIntoViewOptions | undefined>
+      classes: Set<string>
+      scrollIntoView(options?: ScrollIntoViewOptions): void
+      classList: { add(token: string): void; remove(token: string): void }
+    }
+
+    /** Mounts two hosts with a scroller whose reveal row the test reveals. */
+    function mountPair() {
+      const target: RevealRow = {
+        tagName: 'ARTICLE', scrolls: [], classes: new Set<string>(),
+        scrollIntoView(options?: ScrollIntoViewOptions) { target.scrolls.push(options) },
+        classList: {
+          add: token => { target.classes.add(token) },
+          remove: token => { target.classes.delete(token) },
+        },
+      }
+      let rowVisible = false
+      act(() => {
+        useChatStore.getState().snapshot(snapshotMessage({
+          sessionId: 'chat-a', events: [userEvent('u1', 'held')], historyHasOlder: true, historyStartId: 'u1',
+        }))
+      })
+      act(() => {
+        renderer = TestRenderer.create(
+          <>
+            <EmbeddedHost label="a" {...props(makeSession('chat-a'))} />
+            <EmbeddedHost label="b" {...props(makeSession('chat-a'))} />
+          </>,
+          {
+            createNodeMock: element => {
+              if (String(element.props.className ?? '').includes('overflow-y-auto')) {
+                return {
+                  scrollTop: 0,
+                  getBoundingClientRect: () => ({ top: 0 } as DOMRect),
+                  querySelector: () => (rowVisible ? target : null),
+                  querySelectorAll: () => [],
+                  scrollIntoView: () => {},
+                }
+              }
+              return { scrollIntoView: () => {} }
+            },
+          }
+        )
+      })
+      const pages = () =>
+        sent.filter((message): message is Extract<ClientMessage, { type: 'chat-history-page' }> => message.type === 'chat-history-page')
+      return {
+        revealRow: () => { rowVisible = true },
+        target,
+        pages,
+        keepOnlyA: () => act(() => {
+          renderer!.update(<EmbeddedHost label="a" {...props(makeSession('chat-a'))} />)
+        }),
+      }
+    }
+
+    test('a reveal left pending by the unmounting designated owner wakes the survivor', () => {
+      const pair = mountPair()
+      // Host b is the designated consumer (latest claimant). The row is
+      // hidden, so its attempt pages once and waits for the page.
+      act(() => { useChatStore.getState().requestReveal('chat-a', 'u1') })
+      expect(pair.pages()).toEqual([
+        { type: 'chat-history-page', sessionId: 'chat-a', beforeId: 'u1', throughId: 'u1' },
+      ])
+      // The page reply is lost and a reconnect snapshot resets the in-flight
+      // claim without changing the events: no dep of the survivor's attempt
+      // changes, so only the takeover below can wake it.
+      act(() => {
+        useChatStore.getState().snapshot(snapshotMessage({
+          sessionId: 'chat-a', events: [userEvent('u1', 'held')], historyHasOlder: true, historyStartId: 'u1',
+        }))
+      })
+      pair.keepOnlyA()
+      // Woken by the designation flip, the survivor pages afresh for the
+      // still-pending reveal instead of stranding it.
+      expect(pair.pages()).toHaveLength(2)
+      pair.revealRow()
+      act(() => {
+        useChatStore.getState().applyHistoryPage({
+          type: 'chat-history-page', sessionId: 'chat-a', beforeId: 'u1',
+          events: [userEvent('u0', 'older')], hasOlder: false,
+        })
+      })
+      expect(useChatStore.getState().pendingReveal).toBeNull()
+      expect(pair.target.scrolls).toEqual([{ block: 'center' }])
+      expect(pair.target.classes.has('chat-reveal')).toBe(true)
+    })
+
+    test('a new reveal after the owner unmounts is consumed by the surviving host', () => {
+      const pair = mountPair()
+      pair.keepOnlyA() // no reveal pending yet: host a becomes the designated consumer
+      pair.revealRow()
+      act(() => { useChatStore.getState().requestReveal('chat-a', 'u1') })
+      expect(useChatStore.getState().pendingReveal).toBeNull()
+      expect(pair.target.scrolls).toEqual([{ block: 'center' }])
+      expect(pair.target.classes.has('chat-reveal')).toBe(true)
+      expect(pair.pages()).toHaveLength(0)
+    })
   })
 })
