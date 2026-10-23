@@ -478,9 +478,11 @@ export class ChatSessionDriver implements ChatAgentDriver {
       this.sentEchoUuids.set(messageUuid, (this.sentEchoUuids.get(messageUuid) ?? 0) + 1)
     }
     this.trackEcho(text)
+    // I4's answer: every user message carries the uuid the enqueue already
+    // minted — the replay join key exists on every live user message.
     this.emit(context
       ? { type: 'user_message', turnId, text, messageUuid, workspaceContext: context }
-      : { type: 'user_message', turnId, text })
+      : { type: 'user_message', turnId, text, messageUuid })
     this.enqueue(turnId, {
       type: 'user',
       message: { role: 'user', content: text },
