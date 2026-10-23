@@ -1,12 +1,14 @@
 // The resolve command's model-based suite (revision-control 4.4, P-I1):
 // seeded random command sequences over fresh paused attempt targets — the
 // idempotent replay, the refusals after the decision, and the invariants
-// that hold after every command (one event, one decision, one resume, no
-// minted attempt rows, the pause closed). Seed 20261022, 40 cases; the
-// follow-up vocabulary grows with each resolve step (adapt, restart add
-// their choices here).
+// that hold after every command (one event, one decision, one resume or
+// notice, the attempt delta, no second publication, the pause closed).
+// Seed 20261022 drives the `continue` cases, seed 20261023 the `adapt`
+// ones; the follow-up vocabulary grows with each resolve step (restart
+// adds its choices here).
 import { afterAll, beforeAll, expect, test } from 'bun:test'
 import type { PlanRefusalReason } from '../plans/planCommands'
+import { REVISION_NOTICE_TAG } from '../team/taskNotices'
 import { pauseResolveBench, targetOf, type PauseResolveBench } from './pauseResolveBench'
 import type { PauseResolveOutcome, ResolveRefusalCode } from '../plans/revisionControl/pauseResolve'
 
@@ -53,12 +55,15 @@ async function pausedTarget(rand: () => number): Promise<{ planId: string; execu
 
 /** The observable state the invariants are read from, after any command. */
 function counts(planId: string, executionId: string, taskId: string, pauseId: string): {
-  events: number; resumes: number; attempts: number; decided: string | null; closed: string | null
+  events: number; resumes: number; notices: number; attempts: number
+  roundOutcomes: Array<string | null>; decided: string | null; closed: string | null
 } {
   return {
     events: wired.resolvedEvents(planId).length,
     resumes: wired.resumeMails(taskId).length,
+    notices: wired.bench.mail.forTask(taskId).filter(message => message.tags.includes(REVISION_NOTICE_TAG)).length,
     attempts: wired.executions.attempts(executionId, 'api').length,
+    roundOutcomes: wired.executions.rounds(executionId, 'api').map(round => round.outcome),
     decided: targetOf(wired, pauseId, 'api').decision,
     closed: wired.pauses.get(wired.teamId, pauseId)!.closedAt,
   }
@@ -115,6 +120,52 @@ test('P-I1: 40 seeded cases — the replay replays, later commands refuse or rep
       })
     }
     // One target, all decided: the pause closed.
+    expect(counts(world.planId, world.executionId, world.taskId, world.pauseId).closed).not.toBeNull()
+  }
+}, 60000)
+
+// The adapt twin (N3): same shape, choice `adapt`, seed 20261023. The
+// invariants after a fresh accept are adapt's own — one new fix attempt,
+// no plan-resume, exactly one revision notice, the passable round
+// superseded (the ROUND RULE always fires for adapt) — and the replay and
+// post-decision refusals hold as for continue.
+test('P-I1 adapt: 40 seeded cases — the publication lands once, the round supersedes, the replay replays', async () => {
+  const rand = mulberry32(20261023)
+  const FOLLOW_UPS = ['replay', 'fresh id', 'mutated rationale', 'adapt'] as const
+  for (let index = 0; index < 40; index += 1) {
+    const world = await pausedTarget(rand)
+    const commandId = `model-adapt-${index}`
+    const payload = {
+      planId: world.planId, pauseId: world.pauseId, change: 'api' as const, choice: 'adapt' as const,
+      adapt: `Rebuilt direction ${index}`, rationale: 'the lead rethought it', releaseHold: false, commandId,
+    }
+    const baseline = counts(world.planId, world.executionId, world.taskId, world.pauseId)
+    expect(baseline.attempts).toBeGreaterThan(0)
+    expectFreshAccept(wired.resolve(payload))
+    const after = counts(world.planId, world.executionId, world.taskId, world.pauseId)
+    // ONE new fix attempt, no resume, one notice, one event, the decision.
+    expect(after).toMatchObject({
+      events: 1, resumes: 0, notices: 1, attempts: baseline.attempts + 1, decided: 'adapt',
+    })
+    // N3: the round outcomes are observed — every passable round superseded
+    // (the owed-after-mint variant has no round to supersede).
+    if (baseline.roundOutcomes.length > 0) expect(after.roundOutcomes).toEqual(['superseded'])
+    // The same command and payload replays without a second publication.
+    expectReplay(wired.resolve({ ...payload }))
+    expect(counts(world.planId, world.executionId, world.taskId, world.pauseId)).toMatchObject({
+      events: 1, resumes: 0, notices: 1, attempts: baseline.attempts + 1, decided: 'adapt',
+    })
+    const followUps = 1 + Math.floor(rand() * 3)
+    for (let step = 0; step < followUps; step += 1) {
+      const kind = FOLLOW_UPS[Math.floor(rand() * FOLLOW_UPS.length)]
+      if (kind === 'replay') expectReplay(wired.resolve({ ...payload }))
+      else if (kind === 'fresh id') expectRefusal(wired.resolve({ ...payload, commandId: `${commandId}-x${step}` }), 'state')
+      else if (kind === 'mutated rationale') expectRefusal(wired.resolve({ ...payload, rationale: 'changed while replaying' }), 'payload')
+      else expectRefusal(wired.resolve({ ...payload, choice: 'continue', commandId: `${commandId}-c${step}` }), 'state')
+      expect(counts(world.planId, world.executionId, world.taskId, world.pauseId)).toMatchObject({
+        events: 1, resumes: 0, notices: 1, attempts: baseline.attempts + 1, decided: 'adapt',
+      })
+    }
     expect(counts(world.planId, world.executionId, world.taskId, world.pauseId).closed).not.toBeNull()
   }
 }, 60000)
