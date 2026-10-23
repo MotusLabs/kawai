@@ -2,7 +2,8 @@
 label: Reviewers
 description: Review a dev branch's diff for correctness and fit; read-only; report findings to the lead
 # Reviewers on different model families, so a change is never reviewed by the
-# family that wrote it: Claude Code and MiMo profiles. Configured caps are not
+# family that wrote it: Claude Code, MiMo, and the OpenRouter DeepSeek and
+# MiniMax profiles. Configured caps are not
 # running-agent counts; discover eligible sessions at dispatch. Review requests
 # are direct task mail to a chosen session (only group mail is
 # worktree-scoped); unscoped group mail does not spawn reviewers.
