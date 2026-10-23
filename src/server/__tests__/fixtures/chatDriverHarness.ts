@@ -225,6 +225,13 @@ export function createHarness(
     onNotification?: (notification: ChatNotification, timeoutMs?: number) => void
     /** Replaces the harness's process-end capture. */
     onProcessEnd?: () => void
+    /** The plan-workspace context record (PR D §4); a refused or throwing store refuses the send. */
+    recordWorkspaceContext?: (input: {
+      sessionId: string
+      messageUuid: string
+      turnId: string
+      context: import('../../../shared/planWorkspace').WorkspaceMessageContext
+    }) => import('../../plans/workspace/workspaceContext').WorkspaceContextOutcome
   } = {}
 ): Harness {
   const events: ChatEvent[] = []
