@@ -11,7 +11,7 @@
 // both stalls; `failureSignature` the repeating-failure key. The report
 // (`blockedDependents`, `planReport`) lives in `planReport.ts`.
 import type { CandidateState } from './planIntegration'
-import type { AttemptKind, ChangeState, ChangeStep, CiCheck, RoundOutcome, StopDetail } from './planExecution'
+import { agentHeldStage, type AttemptKind, type AttemptStatus, type ChangeState, type ChangeStep, type CiCheck, type RoundOutcome, type StopDetail } from './planExecution'
 import { ciClass, flakyChecks, runsByName } from './planExecutionGates'
 
 export type SupervisionOutcome = 'landed' | 'running' | 'waiting' | 'stalled' | 'stopped' | 'cancelled' | 'not-started'
@@ -97,7 +97,7 @@ export interface SupervisionInput {
   dependencies: Array<{ change: string; outcome: SupervisionOutcome }>
   /** The execution's parallel limit. */
   parallelLimit: number | null
-  attempt: { kind: AttemptKind } | null
+  attempt: { kind: AttemptKind; status: AttemptStatus } | null
   rounds: SupervisionRound[]
   /** The change's effects (and the execution-level ones that hold it). */
   effects: Array<{ kind: string; state: string; tries: number; nextAt: string | null }>
@@ -239,9 +239,11 @@ function noProgress(input: SupervisionInput, stage: SupervisionStage, progressAt
 }
 
 function stageOf(input: SupervisionInput): SupervisionStage {
-  if (input.state === 'implementing') return input.attempt?.kind ?? 'implement'
-  if (input.state === 'gating' && input.step === 'reviewing') return 'review'
-  return 'kawai'
+  // O3′ (revision-control PR E): the one agent-held predicate. An owed
+  // newest attempt names no holder — the change reads Kawai-held until the
+  // owed step dispatches it.
+  if (input.state === null) return 'kawai'
+  return agentHeldStage({ state: input.state, step: input.step }, input.attempt) ?? 'kawai'
 }
 
 /**

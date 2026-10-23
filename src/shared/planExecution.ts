@@ -45,6 +45,8 @@ export type ChangeStep =
   | 'awaiting-ci'
   | 'releasing'
   | 'reviewing'
+  /** The owed review handoff of a held restart (revision-control 4.5 LC1): the restart dropped the round's stale pointer; the release dispatches the one fresh `…:restart` handoff through this step. */
+  | 'review-restart'
   | 'conditions'
   | 'awaiting-slot'
   | 'up-to-date'
@@ -131,6 +133,37 @@ export interface AttemptManifest {
   artifacts: Record<string, string>
   roleProfiles: string[]
   answers?: { resultId: string; roundId: string; failingChecks: CiCheck[]; findingsIds: string[] }
+  /** An update attempt's failed branch update (revision-control PR E, A1): the base head and the conflicting files; a failed check carries both empty. */
+  update?: { base: string; files: string[] }
+  /** A restart's start point (rev4 §4, D5): THIS pause target's own newest checkpoint on origin — id and commit. Omitted when none reached origin (the restart then starts from origin's branch head with the may-predates note); never null. */
+  checkpoint?: { id: string; commit: string }
+}
+
+/** One attempt row's dispatch state (revision-control PR E, H″ O1). */
+export type AttemptStatus = 'answered' | 'owed' | 'out'
+
+/**
+ * The agent-held stage a change's newest fact names (revision-control PR E,
+ * O3′): the one predicate every holder derivation shares — the pause targets,
+ * the supervision loader, and the monitor's stage all read it. `null` is
+ * Kawai-held (or nothing live): an owed newest attempt names no holder (H7),
+ * whatever the change's state. A `gating` change whose newest attempt is an
+ * update row that went out is agent-held work again — the update attempt is
+ * a real handoff between the failed update and the fix round.
+ */
+export function agentHeldStage(row: { state: ChangeState; step: ChangeStep | null },
+  newest: { kind: AttemptKind; status: AttemptStatus } | null): AttemptKind | 'review' | null {
+  if (row.state === 'implementing') {
+    if (newest?.status === 'owed') return null
+    return newest?.kind ?? 'implement'
+  }
+  if (row.state === 'gating') {
+    if (row.step === 'reviewing') return 'review'
+    // Between the failed update and the fix round's pipeline the change sits
+    // with no step; once a step runs again (CI, the review) Kawai holds it.
+    if (row.step === null && newest?.kind === 'update' && newest.status === 'out') return 'update'
+  }
+  return null
 }
 
 /** The manifest's canonical serialization: the input of its sha256 (stable under key order). */

@@ -72,7 +72,22 @@ export interface RoundDeps {
   now: () => string
   /** The hold gate (revision-control 3.2): true when the change is held. */
   gate?: (change: string) => boolean
+  /** The owed review-restart stage's dispatch (revision-control 4.5 LC1), wired by the composition from the pause side's stores. */
+  reviewRestart?: ReviewRestartSeam
 }
+
+/**
+ * The owed review-restart stage's seam (LC1): dispatches the change's one
+ * owed review handoff — the fresh `…:restart` key, the recorded notes — and
+ * returns the assignment id; `null` (no standing restart decision, or the
+ * change's facts missing) leaves the stage due.
+ */
+export type ReviewRestartSeam = (input: {
+  team: TeamIdentity
+  changeRow: { executionId: string; change: string; taskId: string }
+  round: RoundRow
+  tags?: string[]
+}) => Promise<string | null>
 
 /** One stage performance; throws nothing — a failed git/gh read leaves the stage due again. */
 export async function applyRoundStage(deps: RoundDeps, changeRow: { executionId: string; change: string; branch: string | null; worktree: string | null; taskId: string | null }, stage: { kind: string; roundId: string | null; resultId: string | null }): Promise<void> {
@@ -129,6 +144,7 @@ export async function applyRoundStage(deps: RoundDeps, changeRow: { executionId:
 
   if (stage.kind === 'ci') return pollCi(deps, changeRow, round, effectiveExtraChecks(revision?.content, entry))
   if (stage.kind === 'review') return dispatchReview(deps, changeRow, round)
+  if (stage.kind === 'review-restart') return dispatchRestartedReview(deps, changeRow, round)
   if (stage.kind === 'verdict') return decideVerdict(deps, changeRow, round, effectiveExtraChecks(revision?.content, entry))
   if (stage.kind === 'revision') {
     await dispatchRevisionAttempt(deps, changeRow, round)
@@ -171,7 +187,7 @@ export async function dispatchRevisionAttempt(deps: RoundDeps, changeRow: { exec
   }
   // The attempt row — the owed dispatch's marker (revision-control 3.2) —
   // is created however the gate reads; the handoff only when unheld, and
-  // the release dispatches it once through dispatchOwedFixAttempt.
+  // the release dispatches it once through dispatchOwedAttempt.
   const attempt = await ensureFixAttempt(
     { team: deps.team, executions: store, plans: deps.plans, tasks: deps.tasks, assignments: deps.assignments, results: deps.results },
     {
@@ -300,14 +316,51 @@ async function dispatchReview(deps: RoundDeps, changeRow: { executionId: string;
     instructions: reviewInstruction(deps, changeRow.change, round, effectiveExtraChecks(revision?.content, entry), [...entry?.acceptance ?? [], ...revision?.content.acceptanceRules ?? []]),
     requestKey: `exec:${changeRow.executionId}:${changeRow.change}:round:${round.number}:review:${change.generation}`,
     ...(role.length > 0 ? { allowedProfiles: role } : {}),
-    tags: [...new Set(authors.flatMap(session => sessionProfileOf(deps, session)).map(profile => `author-profile:${profile}`))],
+    tags: authorProfileTags(profilesOfRecords(deps), authors),
   }))
   store.setRoundReview(round.id, outcome.assignment.id)
 }
 
-function sessionProfileOf(deps: RoundDeps, sessionId: string): string[] {
-  const record = [...deps.records()].find(row => row.sessionId === sessionId)
-  return record?.claudeProfileId ? [record.claudeProfileId] : []
+/** The result authors' profile tags, deduped — a review handoff routes away from the author's model (D5's tag grammar). */
+export function authorProfileTags(profilesOf: (sessionId: string) => string | null, sessionIds: string[]): string[] {
+  return [...new Set(sessionIds.map(session => profilesOf(session)).filter((profile): profile is string => profile !== null)
+    .map(profile => `author-profile:${profile}`))]
+}
+
+function profilesOfRecords(deps: RoundDeps): (sessionId: string) => string | null {
+  return sessionId => {
+    const record = [...deps.records()].find(row => row.sessionId === sessionId)
+    return record?.claudeProfileId ?? null
+  }
+}
+
+/**
+ * The owed review-restart stage (LC1): the held restart dropped the round's
+ * stale pointer and marked this step, so nothing waits on the superseded
+ * handoff. The seam dispatches the one owed handoff — the fresh `…:restart`
+ * key and the recorded notes — and the change returns to `reviewing`. A
+ * seam-less composition, a missing change task, or a null return leaves the
+ * stage due; the keyed dispatch replays a crash between the send and the
+ * pointer write.
+ */
+async function dispatchRestartedReview(deps: RoundDeps, changeRow: { executionId: string; change: string; taskId: string | null }, round: RoundRow): Promise<void> {
+  if (deps.reviewRestart === undefined || changeRow.taskId === null) return
+  // The restarted handoff routes like a fresh review (LC3): the result
+  // authors' profile tags ride it.
+  const authors = deps.tasks.store.results.listByTask(changeRow.taskId)
+    .map(result => result.submittedBy.sessionId).filter((id): id is string => id !== null)
+  const assignmentId = await deps.reviewRestart({
+    team: deps.team,
+    changeRow: { executionId: changeRow.executionId, change: changeRow.change, taskId: changeRow.taskId },
+    round,
+    tags: authorProfileTags(profilesOfRecords(deps), authors),
+  })
+  if (assignmentId === null) return
+  deps.executions.setRoundReview(round.id, assignmentId)
+  const change = deps.executions.change(changeRow.executionId, changeRow.change)
+  if (change !== null && change.step === 'review-restart') {
+    deps.executions.transition(changeRow.executionId, changeRow.change, change, { step: 'reviewing' })
+  }
 }
 
 async function decideVerdict(deps: RoundDeps, changeRow: { executionId: string; change: string; branch: string | null; worktree: string | null }, round: RoundRow, extra: PlanCheck[]): Promise<void> {

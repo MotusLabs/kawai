@@ -59,6 +59,7 @@ export const CHANGE_STEP_LABELS: Record<ChangeStep, string> = {
   'awaiting-ci': 'waiting for CI',
   releasing: 'releasing the worktree for review',
   reviewing: 'in review',
+  'review-restart': 're-sending the restarted review',
   conditions: 'waiting for acceptance conditions',
   'awaiting-slot': 'waiting for the landing slot',
   'up-to-date': 'bringing the branch up to date',

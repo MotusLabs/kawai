@@ -262,6 +262,26 @@ export class MemberRelease {
   }
 
   /**
+   * A spawned holder a pause restart leaves busy (rev4 §4, R2/R14): mark it
+   * for release by kawai with the resolve's reason, released through the
+   * same readiness and archive path. Human-created and archived holders,
+   * and members without a task, are never marked. Synchronous, inside the
+   * resolve's transaction; returns whether a row was written.
+   */
+  markPending(sessionId: string, reason: string): boolean {
+    const record = this.options.getRecord(sessionId)
+    if (!record || !record.spawned || !record.taskId || record.archivedAt != null) return false
+    const task = this.options.tasks.get(record.taskId)
+    if (!task) return false
+    this.db.prepare(`INSERT OR REPLACE INTO team_member_releases
+      (session_id, task_id, team_id, reason, requested_by_kind, requested_by_session, requested_at)
+      VALUES (?, ?, ?, ?, 'system', NULL, ?)`)
+      .run(sessionId, task.id, task.teamId, reason, new Date().toISOString())
+    this.options.notify()
+    return true
+  }
+
+  /**
    * The spawn path's entry for {@link markSpawnedForClosedTask}. A failure
    * is logged with both ids and retried a bounded number of times (1 s, 5 s,
    * 30 s), each attempt through the same re-checks — so a member reopened,

@@ -227,6 +227,16 @@ describe('buildTeamPrompt plan note (durable-plans 6.2)', () => {
     }
   })
 
+  test('the note teaches the plan-pause checkpoint rule and claims no pause or resolve right (revision-control D15)', () => {
+    for (const prompt of [creator, member, groupless]) {
+      expect(prompt).toContain('A `plan-pause` mail asks you to stop at a safe point')
+      expect(prompt).toContain('then call `task_checkpoint`')
+      expect(prompt).toContain('Kawai pushes the checkpoint; wait for the owner’s decision')
+      expect(prompt).toContain('nothing lands until the owner releases it')
+      expect(prompt).not.toMatch(/plan_(pause|resolve|hold|release)/)
+    }
+  })
+
   test('the creation right follows canCreatePlans', () => {
     expect(creator).toContain('Your group may create plans: `mcp__kawai-team__plan_create`')
     for (const prompt of [member, groupless]) {

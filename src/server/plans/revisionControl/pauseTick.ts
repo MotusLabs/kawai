@@ -79,6 +79,13 @@ export interface PauseTickDeps {
   mailbox: Pick<MailboxStore, 'get'>
   /** The owed pause mail (D6), through the pause service's once-markered pass. */
   deliverOwed: (teamId: string, groupsRoot: string, pauseId: string) => string[]
+  /**
+   * The target assignment's instruction message state (F5): `starting` names
+   * an unclaimed spawn only (D8), so a forward successor that has not
+   * claimed — the same null holder, its mail still owed — never reads as one.
+   * Null when the assignment or its mail is gone.
+   */
+  assignmentMessageState: (assignmentId: string) => string | null
   /** Member release's one readiness answer, for a live holder (D8's holder-ready rule). */
   readiness: (sessionId: string) => { ready: boolean; reason: string | null }
   /** The live holder facts (`pauseHolderFacts`). */
@@ -165,10 +172,16 @@ function targetFacts(deps: PauseTickDeps, pause: PlanPause, target: PlanPauseTar
         const answer = deps.readiness(holderSession)
         return answer.ready ? { ready: true, reasons: [] as string[] } : { ready: false, reasons: [answer.reason ?? 'not ready'] }
       })()
+  // An unclaimed holder with no mail yet is a spawn only while its
+  // assignment's instruction still reads `spawning` (F5): a forward
+  // successor that has not claimed reads as its owed mail instead.
+  const instruction = holderSession === null && target.messageId === null
+    ? deps.assignmentMessageState(target.assignmentId)
+    : null
   return {
     executionFinished,
     messageDelivered: message !== null && message.state === 'delivered',
-    spawnUnclaimed: holderSession === null && target.messageId === null,
+    spawnUnclaimed: holderSession === null && target.messageId === null && instruction === 'spawning',
     pendingRequest: live?.pendingRequest ?? false,
     busy: live?.busy ?? false,
     providerLimit: live?.providerLimit ?? null,

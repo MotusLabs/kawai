@@ -5,6 +5,7 @@
 // come from a recording double that checks what it is asked for.
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
+import type { AttemptManifest } from '../../shared/planExecution'
 import type { HolderFacts } from '../../shared/planSupervision'
 import { ExecutionStore } from '../plans/execution/executionStore'
 import { IntegrationStore } from '../plans/landing/integration/integrationStore'
@@ -263,5 +264,38 @@ describe('the rest of the input', () => {
     const api = await supervise(planId, 'api')
     expect(api.outcome).toBe('stalled')
     expect(api.stall).toMatchObject({ kind: 'no-progress', idle: true, episodeKey: '2026-10-20T08:00:00.000Z' })
+  })
+})
+
+describe('the agent-held stage (O3′)', () => {
+  const manifest = (executionId: string, taskId: string): AttemptManifest => ({
+    version: 1, plan: { id: 'p', revision: 1, contentHash: 'h' }, execution: executionId, task: { id: taskId, revision: 1 },
+    validation: { reportId: 'r', inputHash: 'i' }, baseline: 'b', startCommit: 's', artifacts: {}, roleProfiles: [],
+  })
+
+  test('an owed newest attempt names no holder: the stage reads Kawai-held', async () => {
+    const { planId, executionId } = await started()
+    const { taskId } = await implementing(executionId, planId)
+    executions.insertAttempt({ executionId, change: 'api', kind: 'fix', assignmentId: null, manifest: manifest(executionId, taskId), manifestHash: 'mh' })
+    const input = readSupervisionInputs(reads(), teamId(), planId)!.inputs.find(entry => entry.change === 'api')!
+    expect(input.attempt).toEqual({ kind: 'fix', status: 'owed' })
+    expect(input.instruction).toBeNull()
+    expect((await supervise(planId, 'api')).stage).toBe('kawai')
+  })
+
+  test('a gating change whose update attempt went out is agent-held at the attempt', async () => {
+    const { planId, executionId } = await started()
+    const { taskId } = await implementing(executionId, planId)
+    setChange(executionId, 'api', { state: 'gating', step: null, taskId })
+    const row = executions.insertAttempt({
+      executionId, change: 'api', kind: 'update', assignmentId: null,
+      manifest: { ...manifest(executionId, taskId), update: { base: 'base', files: ['a.txt'] } }, manifestHash: 'mh',
+    })
+    const outcome = await bench.assignments.dispatch(bench.human, { taskId, target: { kind: 'session', id: 'dev' }, instruction: 'Merge the base branch', requestKey: `exec:${executionId}:api:attempt:${row.number}:0`, handling: 'stop' })
+    executions.setAttemptAssignment(row.id, outcome.assignment.id)
+    const input = readSupervisionInputs(reads(), teamId(), planId)!.inputs.find(entry => entry.change === 'api')!
+    expect(input.attempt).toEqual({ kind: 'update', status: 'out' })
+    expect(input.instruction).not.toBeNull()
+    expect((await supervise(planId, 'api')).stage).toBe('update')
   })
 })

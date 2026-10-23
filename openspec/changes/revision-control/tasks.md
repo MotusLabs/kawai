@@ -71,7 +71,7 @@ Implement after these have landed on master: `plan-execution`, `integration-cand
   - a parked or cooling holder reads `provider-limit` with its reset, and the pause mail is never refused for cooling;
   - a change whose merge started lists as landing in progress;
   - Paused is recorded once.
-- [ ] 4.4 Implement `PauseService.resolve` (D9): Continue, Adapt through the `within` task publication, and Restart with the manifest's optional `checkpoint`. Stop closes the pause. Verify with tests:
+- [x] 4.4 Implement `PauseService.resolve` (D9): Continue, Adapt through the `within` task publication, and Restart with the manifest's optional `checkpoint`. Stop closes the pause. Verify with tests:
   - Continue sends one `plan-resume` mail and creates no attempt, and is refused for a killed holder (`holder-gone`) and a withdrawn target;
   - Adapt publishes one revision with its notice, and D9's fix attempt follows;
   - Restart supersedes without cancelling claimed work, and the manifest names the checkpoint;
@@ -85,7 +85,7 @@ Implement after these have landed on master: `plan-execution`, `integration-cand
   - Continue resumes under a hold;
   - a task revision published while the target is undecided dispatches nothing, and the following resolution names the newest revision with no second dispatch;
   - an old manifest's hash is unchanged by the optional field.
-- [ ] 4.5 Write the R01 and R18 integration tests:
+- [x] 4.5 Write the R01 and R18 integration tests:
   - R01: restart with a Paused target keeps the execution, attempt, and checkpoint, and Continue creates no attempt;
   - R18: restart after the pause mail and before any checkpoint re-derives Pausing, records no Paused, and sends no resume.
 
