@@ -5,7 +5,7 @@ description: Small, well-specified tasks in their own worktree and branch; repor
 # cooling, including limit forwards. `haiku` runs on the host Claude login that
 # the lead, the senior dev, middle devs' Sonnet, and a reviewer already share,
 # and kawai tracks cooldowns per profile, not per account.
-profiles: { glm-flash: 3, haiku: 2 }
+profiles: { glm-flash: 3, openrouter-deepseek-flash: 2, openrouter-minimax-flash: 2, haiku: 2 }
 strategy: profile-order
 approval: auto
 onLimit: { parkIfResetWithin: 3h, otherwise: forward, forwardTo: junior-devs }

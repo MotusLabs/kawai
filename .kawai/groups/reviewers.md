@@ -9,7 +9,7 @@ description: Review a dev branch's diff for correctness and fit; read-only; repo
 # Each reviewer chat is created on its profile by hand, in the main checkout
 # or an empty directory under .worktrees/, never in a dev worktree: removing
 # that worktree after its branch lands leaves the chat unable to start.
-profiles: { default: 1, mimo: 2 }
+profiles: { default: 1, mimo: 2, openrouter-deepseek-flash: 2, openrouter-minimax-flash: 2 }
 # Applies to every reviewer in the group, MiMo included.
 effort: medium
 # Receive review context across task worktrees.
