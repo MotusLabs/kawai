@@ -29,11 +29,12 @@ function QuestionForm({ request, sessionId, sendMessage, disabled }: {
                 : { options: [option.label] })} />
             <span>{option.label}{option.description && <span className="block text-chat-meta text-secondary">{option.description}</span>}</span>
           </label>)}
-          {/* Codex F3: free text only where Codex allows another answer
-              (absent, as on every Claude question, keeps it); a secret
-              answer is masked in the input, which stays masked on the
-              answered card until the resolved event removes it. */}
-          {question.isOther !== false && <input className="input chat-composer text-chat-body" aria-label={`Free-text answer: ${question.question}`}
+          {/* Codex F3: free text where Codex allows another answer (absent,
+              as on every Claude question, keeps it) and always when the
+              question offers no options — text is then its only answer; a
+              secret answer is masked in the input, which stays masked on
+              the answered card until the resolved event removes it. */}
+          {(question.options.length === 0 || question.isOther !== false) && <input className="input chat-composer text-chat-body" aria-label={`Free-text answer: ${question.question}`}
             type={question.isSecret ? 'password' : undefined}
             placeholder={question.multiSelect ? 'Add your own answer' : 'Or type your own answer'}
             value={answer.text ?? ''} onChange={event => update(question.question, question.multiSelect || !event.target.value.trim()

@@ -45,6 +45,23 @@ test('free text is offered only where Codex allows another answer', () => {
   expect(inputs(undefined)).toHaveLength(1) // A Claude question: unchanged
 })
 
+test('a question with no options always offers free text, masked when secret', () => {
+  // A secret question usually has no options: text is then its only
+  // answer, whatever isOther says — the card must stay answerable.
+  const renderer = TestRenderer.create(<ChatRequests sessionId="chat-1" disabled={false} sendMessage={() => {}}
+    requests={[{ kind: 'question', requestId: 'q', at: 'now', questions: [{ question: 'Paste the token?', header: 'Token', multiSelect: false,
+      options: [], isOther: false, isSecret: true }] }]} />)
+  const input = renderer.root.findByProps({ 'aria-label': 'Free-text answer: Paste the token?' })
+  expect(input.props.type).toBe('password')
+  renderer.unmount()
+
+  const plain = TestRenderer.create(<ChatRequests sessionId="chat-1" disabled={false} sendMessage={() => {}}
+    requests={[{ kind: 'question', requestId: 'q', at: 'now', questions: [{ question: 'Say it', header: 'Say', multiSelect: false,
+      options: [], isOther: false }] }]} />)
+  expect(plain.root.findByProps({ 'aria-label': 'Free-text answer: Say it' }).props.type).toBeUndefined()
+  plain.unmount()
+})
+
 test('a Claude question renders exactly as before: plain input with free text', () => {
   const renderer = TestRenderer.create(<ChatRequests sessionId="chat-1" disabled={false} sendMessage={() => {}}
     requests={[{ kind: 'question', requestId: 'q', at: 'now', questions: [{ question: 'Pick?', header: 'Pick', multiSelect: false,
