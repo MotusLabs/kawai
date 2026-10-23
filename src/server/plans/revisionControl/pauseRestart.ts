@@ -19,7 +19,7 @@ import type { ChangeRow, ExecutionRow } from '../execution/executionRows'
 import type { ExecutionStore } from '../execution/executionStore'
 import type { AttemptKind, AttemptManifest } from '../../../shared/planExecution'
 import { manifestHashInput } from '../../../shared/planExecution'
-import { revisionPending, type ReviewRestartSeam } from '../execution/executionRounds'
+import { authorProfileTags, revisionPending, type ReviewRestartSeam } from '../execution/executionRounds'
 import { dispatchRestartedAttemptWithin, dispatchRestartedReviewWithin } from '../execution/executionRestartDispatch'
 import { handoffInstruction } from '../../team/TaskResultService'
 import type { AssignmentService } from '../../team/AssignmentService'
@@ -257,10 +257,16 @@ function restartReview(deps: PauseServiceDeps, caller: PlanCaller & { kind: 'hum
   }), null)
   // The execution-origin caller is minted in the execution module (D2's
   // boundary); the pause side composes only the instruction and the key.
+  // The restarted handoff routes like a fresh review (LC3): the result
+  // authors' profile tags ride it.
+  const authors = deps.tasks!.store.results.listByTask(task.id)
+    .map(row => row.submittedBy.sessionId).filter((id): id is string => id !== null)
+  const tags = deps.sessionProfile === undefined ? undefined : authorProfileTags(deps.sessionProfile, authors)
   const assignmentId = dispatchRestartedReviewWithin({
     team: caller.team, execution, reviewGroup, taskId: task.id, instruction,
     requestKey: `exec:${execution.id}:${target.change}:round:${newestRound.number}:review:${changeRow?.generation ?? 0}:restart`,
     resultId: newestRound.resultId, allowedProfiles: roleProfiles,
+    ...(tags?.length ? { tags } : {}),
     assignments: deps.assignmentService!,
   })
   deps.executions.setRoundReview(newestRound.id, assignmentId)
@@ -306,7 +312,7 @@ export function reviewRestartSeam(input: {
   tasks: TaskService
   assignments: Pick<AssignmentService, 'dispatchWithin'>
 }): ReviewRestartSeam {
-  return async ({ team, changeRow, round }) => {
+  return async ({ team, changeRow, round, tags }) => {
     const execution = input.executions.execution(changeRow.executionId)
     if (execution === null) return null
     const restart = input.pauses.forPlan(team.teamId, execution.planId, false)
@@ -332,7 +338,29 @@ export function reviewRestartSeam(input: {
       requestKey: `exec:${execution.id}:${changeRow.change}:round:${round.number}:review:${row?.generation ?? 0}:restart`,
       resultId: round.resultId,
       allowedProfiles: revision.content.roles.find(role => role.group === reviewGroup)?.profiles ?? [],
+      ...(tags?.length ? { tags } : {}),
       assignments: input.assignments,
     })
+  }
+}
+
+/**
+ * R2's after-commit release (rev4 §4): the decision detail recorded the
+ * release bookkeeping; a spawned holder it found ready is released here,
+ * outside the resolve's transaction (releaseNow archives a session — an
+ * external effect a rollback could not undo). A release refused between the
+ * decision and this step keeps the work durable with a pending-release row
+ * instead; unwired seams never release.
+ */
+export async function releaseRestartedHolder(deps: PauseServiceDeps, pauseId: string, change: string): Promise<void> {
+  if (deps.releases === undefined) return
+  const target = deps.pauses.target(pauseId, change)
+  const detail = target?.decisionDetail as { holder?: unknown; release?: unknown } | undefined
+  if (target === null || target === undefined || target.decision !== 'restart') return
+  if (detail?.release !== 'now' || typeof detail.holder !== 'string') return
+  try {
+    await deps.releases.releaseNow(detail.holder, ` paused change ${change} restarted`)
+  } catch {
+    deps.releases.markPending(detail.holder, `paused change ${change} restarted; the release was refused`)
   }
 }

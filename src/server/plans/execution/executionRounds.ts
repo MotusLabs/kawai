@@ -86,6 +86,7 @@ export type ReviewRestartSeam = (input: {
   team: TeamIdentity
   changeRow: { executionId: string; change: string; taskId: string }
   round: RoundRow
+  tags?: string[]
 }) => Promise<string | null>
 
 /** One stage performance; throws nothing — a failed git/gh read leaves the stage due again. */
@@ -315,14 +316,22 @@ async function dispatchReview(deps: RoundDeps, changeRow: { executionId: string;
     instructions: reviewInstruction(deps, changeRow.change, round, effectiveExtraChecks(revision?.content, entry), [...entry?.acceptance ?? [], ...revision?.content.acceptanceRules ?? []]),
     requestKey: `exec:${changeRow.executionId}:${changeRow.change}:round:${round.number}:review:${change.generation}`,
     ...(role.length > 0 ? { allowedProfiles: role } : {}),
-    tags: [...new Set(authors.flatMap(session => sessionProfileOf(deps, session)).map(profile => `author-profile:${profile}`))],
+    tags: authorProfileTags(profilesOfRecords(deps), authors),
   }))
   store.setRoundReview(round.id, outcome.assignment.id)
 }
 
-function sessionProfileOf(deps: RoundDeps, sessionId: string): string[] {
-  const record = [...deps.records()].find(row => row.sessionId === sessionId)
-  return record?.claudeProfileId ? [record.claudeProfileId] : []
+/** The result authors' profile tags, deduped — a review handoff routes away from the author's model (D5's tag grammar). */
+export function authorProfileTags(profilesOf: (sessionId: string) => string | null, sessionIds: string[]): string[] {
+  return [...new Set(sessionIds.map(session => profilesOf(session)).filter((profile): profile is string => profile !== null)
+    .map(profile => `author-profile:${profile}`))]
+}
+
+function profilesOfRecords(deps: RoundDeps): (sessionId: string) => string | null {
+  return sessionId => {
+    const record = [...deps.records()].find(row => row.sessionId === sessionId)
+    return record?.claudeProfileId ?? null
+  }
 }
 
 /**
@@ -336,10 +345,15 @@ function sessionProfileOf(deps: RoundDeps, sessionId: string): string[] {
  */
 async function dispatchRestartedReview(deps: RoundDeps, changeRow: { executionId: string; change: string; taskId: string | null }, round: RoundRow): Promise<void> {
   if (deps.reviewRestart === undefined || changeRow.taskId === null) return
+  // The restarted handoff routes like a fresh review (LC3): the result
+  // authors' profile tags ride it.
+  const authors = deps.tasks.store.results.listByTask(changeRow.taskId)
+    .map(result => result.submittedBy.sessionId).filter((id): id is string => id !== null)
   const assignmentId = await deps.reviewRestart({
     team: deps.team,
     changeRow: { executionId: changeRow.executionId, change: changeRow.change, taskId: changeRow.taskId },
     round,
+    tags: authorProfileTags(profilesOfRecords(deps), authors),
   })
   if (assignmentId === null) return
   deps.executions.setRoundReview(round.id, assignmentId)

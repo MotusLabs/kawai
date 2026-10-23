@@ -11,6 +11,7 @@ import { REVISION_NOTICE_TAG } from '../team/taskNotices'
 import { applyRoundStage } from '../plans/execution/executionRounds'
 import { reviewRestartSeam } from '../plans/revisionControl/pauseRestart'
 import { pauseResolveBench, targetOf, type PauseResolveBench } from './pauseResolveBench'
+import { sessionRow } from './planHarness'
 
 let wired: PauseResolveBench
 let sequence = 0
@@ -198,6 +199,10 @@ test('R17: a restart over a stale review records revisionPending and dispatches 
 // points at the new handoff.
 test('R18r: the restart re-dispatches the same round under a fresh review key with the notes id', async () => {
   const world = await wired.pausedReview({ notes: true })
+  // LC3 holds on the inline arm too: the result authors' profile tags ride
+  // the fresh handoff.
+  const author = wired.tasks.store.results.get(wired.executions.rounds(world.executionId, 'api')[0]!.resultId)!.submittedBy.sessionId!
+  wired.bench.records.set(author, { ...sessionRow(author, 'leads', wired.world.feature), claudeProfileId: 'glm' })
   openGate(world.planId, world.executionId)
   ok(await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'restart' }))
   expect(wired.executions.attempts(world.executionId, 'api')).toHaveLength(1)
@@ -208,6 +213,7 @@ test('R18r: the restart re-dispatches the same round under a fresh review key wi
   expect(handoff?.requestKey).toBe(`exec:${world.executionId}:api:round:1:review:${wired.executions.change(world.executionId, 'api')!.generation}:restart`)
   const instruction = wired.bench.mail.get(handoff?.messageId ?? '')
   expect(instruction?.toKind).toBe('group')
+  expect(instruction?.tags).toContain('author-profile:glm')
   expect(instruction?.body).toContain('restarted by the owner')
   expect(instruction?.body).toContain(wired.checkpoints.newest(world.pauseId, 'api')!.id)
   // The round moved off the superseded held assignment onto the new handoff.
@@ -248,10 +254,18 @@ test('R18r: the release dispatches the owed review handoff once — fresh key, n
     plans: wired.bench.plans, tasks: wired.tasks, assignments: wired.assignments,
   })
   const changeRow = { executionId: world.executionId, change: 'api', taskId: world.taskId }
-  const first = await seam({ team: wired.world.team, changeRow, round })
+  // LC3: the restarted handoff routes like a fresh review — the result
+  // authors' profile tags ride it. The author is the round result's
+  // submitter; the record's profile becomes the tag.
+  const author = wired.tasks.store.results.get(round.resultId)!.submittedBy.sessionId!
+  wired.bench.records.set(author, { ...sessionRow(author, 'leads', wired.world.feature), claudeProfileId: 'glm' })
+  // The seam call carries the tags the production stage computes from the
+  // records (LC3); the composed tick test covers that computation whole.
+  const tags = ['author-profile:glm']
+  const first = await seam({ team: wired.world.team, changeRow, round, tags })
   // The crash window: a second seam run before any transition moved the
   // generation replays the same key — the same assignment, no second mail.
-  const replayed = await seam({ team: wired.world.team, changeRow, round })
+  const replayed = await seam({ team: wired.world.team, changeRow, round, tags })
   expect(replayed).toBe(first)
   const restarted = () => wired.bench.mail.forTask(world.taskId).filter(message => message.body.includes('restarted by the owner'))
   expect(restarted()).toHaveLength(1)
@@ -266,6 +280,7 @@ test('R18r: the release dispatches the owed review handoff once — fresh key, n
   expect(handoff?.requestKey).toBe(`exec:${world.executionId}:api:round:1:review:${generationAtDispatch}:restart`)
   const instruction = wired.bench.mail.get(handoff?.messageId ?? '')
   expect(instruction?.toKind).toBe('group')
+  expect(instruction?.tags).toContain('author-profile:glm')
   expect(instruction?.body).toContain(wired.checkpoints.newest(world.pauseId, 'api')!.id)
   expect(wired.executions.change(world.executionId, 'api')!.step).toBe('reviewing')
   expect(wired.executions.attempts(world.executionId, 'api')).toHaveLength(1)

@@ -62,6 +62,8 @@ export interface PauseServiceDeps {
   mailbox: MailboxStore
   /** Whether a session record still exists; a killed holder's mail dead-letters at enqueue. */
   sessionExists: (sessionId: string) => boolean
+  /** A session record's profile (LC3): the inline restarted review's author-profile tags. Optional so a bench can omit it; the production composition wires the session directory. */
+  sessionProfile?: (sessionId: string) => string | null
   /** The task service (D9): the resolve's H5 drop reads the task's current
    *  revision and the round result's pinned one, and the resume names the
    *  newest revision. Optional so a unit bench can omit it; the production

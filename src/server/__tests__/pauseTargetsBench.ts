@@ -110,6 +110,7 @@ export async function pauseTargetsBench(prefix: string): Promise<PauseTargetsBen
   const service = new PauseService({
     pauses, holds, plans: bench.plans, planService: bench.service, executions,
     assignments: bench.assignmentStore, mailbox: bench.mail, sessionExists: id => bench.records.has(id), wake, now,
+    sessionProfile: id => bench.records.get(id)?.claudeProfileId ?? null,
     tasks, checkpoints, assignmentService,
     // L3: the resolve's pre-transaction head read. The bench returns a fixed
     // head without git — a distinguishable one the manifest must record

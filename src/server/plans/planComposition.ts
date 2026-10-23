@@ -369,6 +369,7 @@ export function composePlanServices(options: PlanServicesOptions): {
       // same way).
       assignments, mailbox: team.mailbox,
       sessionExists: id => options.getSession(id) !== undefined,
+      sessionProfile: id => options.getSession(id)?.claudeProfileId ?? null,
       // The resolve's task revisions, checkpoint reads, and inline fix
       // dispatch (revision-control 4.4). L3 (A3.2): the resolve's
       // pre-transaction head read is wired — origin's branch head through

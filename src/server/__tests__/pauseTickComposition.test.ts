@@ -341,6 +341,9 @@ describe('the released restart dispatches the owed review handoff (LC1, H1r)', (
   async function pausedReviewCell(planIndex: number): Promise<{ planId: string; executionId: string; taskId: string; pauseId: string; holdId: string; roundId: string; handoffId: string }> {
     const holder = `comp-rev-${planIndex}`
     const built = await inFlightTarget(holder, 'review')
+    // LC3: the round result's author carries a profile, so the restarted
+    // handoff's tags name it.
+    bench.records.set(holder, { ...sessionRow(holder, 'leads', world.feature), claudeProfileId: 'glm' })
     const result = bench.tasks.results.insert({
       teamId: world.team.teamId, taskId: built.taskId, summary: 'done', commit: 'round-commit', diff: null, worktree: null,
       tests: [], limitations: null, taskRevision: 1, submittedBy: { kind: 'agent', sessionId: holder },
@@ -412,6 +415,7 @@ describe('the released restart dispatches the owed review handoff (LC1, H1r)', (
     const instruction = bench.mail.get(handoff?.messageId ?? '')
     expect(instruction?.toKind).toBe('group')
     expect(instruction?.toId).toBe('reviewers')
+    expect(instruction?.tags).toContain('author-profile:glm')
     expect(instruction?.body).toContain('restarted by the owner')
     expect(instruction?.body).toContain(checkpointRows.newest(built.pauseId, 'api')!.id)
   })

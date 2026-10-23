@@ -122,6 +122,8 @@ export interface RestartedReviewDispatchInput {
   requestKey: string
   resultId: string
   allowedProfiles: string[]
+  /** The result authors' profile tags (LC3) — the restarted handoff routes like a fresh review. */
+  tags?: string[]
   assignments: Pick<AssignmentService, 'dispatchWithin'>
 }
 
@@ -139,6 +141,7 @@ export function dispatchRestartedReviewWithin(input: RestartedReviewDispatchInpu
     requestKey: input.requestKey,
     handoff: { kind: 'review', resultId: input.resultId, expectedResponse: null },
     ...(input.allowedProfiles.length > 0 ? { allowedProfiles: input.allowedProfiles } : {}),
+    ...(input.tags?.length ? { tags: input.tags } : {}),
   })
   return outcome.assignment.id
 }
