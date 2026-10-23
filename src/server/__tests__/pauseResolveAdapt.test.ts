@@ -182,3 +182,47 @@ test('A2r: with the gate open the new fix row dispatches inline under its attemp
   expect(wired.executions.rounds(world.executionId, 'api')).toHaveLength(0)
   expect(wired.resolvedEvents(world.planId)).toHaveLength(1)
 })
+
+// B4 (Adapt advisory): the inline world with the hold still active — the
+// gate, read after the decision, keeps the new row owed. The dispatch facts
+// being complete (baseline, worktree, branch) is not enough to dispatch (M2).
+test('B4: with the hold still active the new fix row stays owed even with the dispatch facts present', async () => {
+  const world = await wired.pausedAttempt()
+  const row = wired.executions.change(world.executionId, 'api')!
+  expect(wired.executions.transition(world.executionId, 'api', row, { baselineCommit: 'base' })).not.toBeNull()
+  ok(await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'adapt', adapt: 'Build it wider', rationale: 'scope grew' }))
+  const attempts = wired.executions.attempts(world.executionId, 'api')
+  expect(attempts).toHaveLength(2)
+  expect(attempts[1].kind).toBe('fix')
+  // The row is owed: the hold covers the change, so nothing dispatches.
+  expect(attempts[1].assignmentId).toBeNull()
+  // No instruction mail went out for the new row — the dispatch's own body
+  // never appears on the task.
+  const instructions = wired.bench.mail.forTask(world.taskId).filter(message => message.body.includes('Re-apply your work on top of the new direction'))
+  expect(instructions).toHaveLength(0)
+})
+
+// B6 (Adapt advisory): the adapt-side clear of a pending `redispatch` step
+// (O4) — the same step the C2 test clears, cleared by the adapt resolution
+// too, in the A13r move's transaction.
+test("B6: adapt over a target with a pending `redispatch` step clears it with the A13r move", async () => {
+  const world = await wired.pausedAttempt()
+  // Retry under the hold left the redispatch step due (H′ A3's path).
+  const row = wired.executions.change(world.executionId, 'api')!
+  expect(wired.executions.transition(world.executionId, 'api', row, { step: 'redispatch' })).not.toBeNull()
+  ok(await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'adapt', adapt: 'Build it wider', rationale: 'scope grew' }))
+  const cleared = wired.executions.change(world.executionId, 'api')!
+  expect(cleared.step).toBeNull()
+  // The A13r move ran with it: the change is `implementing`, the new fix
+  // row minted (owed — the hold still covers the change).
+  expect(cleared.state).toBe('implementing')
+  const attempts = wired.executions.attempts(world.executionId, 'api')
+  expect(attempts).toHaveLength(2)
+  expect(attempts[1].kind).toBe('fix')
+  expect(attempts[1].assignmentId).toBeNull()
+  // The redispatch stage is the only :retry: sender; with the step cleared,
+  // no assignment of the task carries a retry key.
+  for (const assignment of wired.bench.assignmentStore.listByTask(world.taskId)) {
+    expect(assignment.requestKey).not.toContain(':retry:')
+  }
+})
