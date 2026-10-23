@@ -357,9 +357,21 @@ describe('checklist totals ride the composed checklist (N3)', () => {
       resolver: new ChangeArtifactsResolver(runner),
       totals: connections.planWorkspaceTotals,
     })
-    // The checklist composes on open (awaited) and records its totals.
-    await send({ type: 'team-plan-workspace-checklist-open', teamPath: world.repo, planId, changeName: 'api' })
-    expect(messages.at(-1)).toMatchObject({ type: 'team-plan-workspace-checklist' })
+    // The checklist composes on open (awaited) and records its totals. The
+    // open goes to this documents connection, not `send`: connections.handle
+    // routes checklist messages to ChatConnections' own documents
+    // connection, whose production resolver spawns the real `openspec` CLI —
+    // absent in CI — and composes `checklist: null`. The production path
+    // under test is the wiring: the documents compose, the shared totals
+    // cache, and the snapshot's read of it.
+    const docOpen = (message: ClientMessage) => documents.handle(connection, message as Parameters<typeof documents.handle>[1])
+    await docOpen({ type: 'team-plan-workspace-checklist-open', teamPath: world.repo, planId, changeName: 'api' })
+    // The push carries the composed checklist itself, not just the type —
+    // an unavailable compose pushes `checklist: null` and must fail here.
+    const pushed = messages.at(-1) as Extract<ServerMessage, { type: 'team-plan-workspace-checklist' }>
+    const items = pushed.checklist!.sections.flatMap(section => section.items)
+    expect(items).toHaveLength(2)
+    expect(items.filter(item => item.checked)).toHaveLength(1)
     // The production path: the next workspace snapshot's `api` row carries
     // the composed totals — 2 items, 1 checked.
     await send({ type: 'team-plan-workspace-open', teamPath: world.repo, planId })
@@ -371,7 +383,7 @@ describe('checklist totals ride the composed checklist (N3)', () => {
     // source event's diff picks the new totals up.
     writeTasks('# Tasks\n\n- [ ] first\n- [x] second\n- [x] third\n')
     messages = []
-    await send({ type: 'team-plan-workspace-checklist-open', teamPath: world.repo, planId, changeName: 'api' })
+    await docOpen({ type: 'team-plan-workspace-checklist-open', teamPath: world.repo, planId, changeName: 'api' })
     expect(messages.map(m => m.type)).toEqual(['team-plan-workspace-checklist'])
     connections.publishTasks(world.team.teamId)
     await settle()
