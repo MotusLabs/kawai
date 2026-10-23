@@ -47,6 +47,7 @@ import { WorkspaceConnections } from '../team/workspaceConnections'
 import { PlanConnections } from '../plans/planConnections'
 import { PlanWorkspaceConnections } from '../plans/workspace/workspaceConnections'
 import { PlanWorkspaceDocumentConnections } from '../plans/workspace/workspaceDocuments'
+import { PlanWorkspaceArtifactsConnections } from '../plans/workspace/workspaceArtifacts'
 import { PlanChecklistTotals } from '../plans/workspace/checklistTotals'
 import type { PlanWorkspaceClientMessage } from '../../shared/planWorkspaceMessages'
 import { ExecutionConnections } from '../plans/execution/executionConnections'
@@ -97,6 +98,7 @@ export class ChatConnections {
   private readonly planConnections: PlanConnections
   private readonly planWorkspaceConnections: PlanWorkspaceConnections
   private readonly planWorkspaceDocuments: PlanWorkspaceDocumentConnections
+  private readonly planWorkspaceArtifacts: PlanWorkspaceArtifactsConnections
   /** The composed checklists' totals, shared documents → snapshot (N3); public for compositions that build the documents side separately. */
   readonly planWorkspaceTotals = new PlanChecklistTotals()
   private readonly executionConnections: ExecutionConnections
@@ -118,6 +120,7 @@ export class ChatConnections {
     // One totals cache shared by the two connections (N3): the documents
     // side records every composed checklist, the snapshot side reads it.
     this.planWorkspaceDocuments = new PlanWorkspaceDocumentConnections(manager, { totals: this.planWorkspaceTotals })
+    this.planWorkspaceArtifacts = new PlanWorkspaceArtifactsConnections(manager)
     this.planWorkspaceConnections = new PlanWorkspaceConnections(manager, this.planWorkspaceTotals)
     this.executionConnections = new ExecutionConnections(manager)
     this.promotionConnections = new PromotionConnections(manager)
@@ -222,6 +225,7 @@ export class ChatConnections {
     this.planConnections.disconnect(connection)
     this.planWorkspaceConnections.disconnect(connection)
     this.planWorkspaceDocuments.disconnect(connection)
+    this.planWorkspaceArtifacts.disconnect(connection)
     this.outboundConnections.disconnect(connection)
     this.metricsConnections.disconnect(connection)
     this.subscriptions.delete(connection)
@@ -240,6 +244,7 @@ export class ChatConnections {
   /** Stop every connection group's watches and timers (server shutdown, O2). */
   stop(): void {
     this.planWorkspaceDocuments.stop()
+    this.planWorkspaceArtifacts.stop()
   }
 
   /**
@@ -625,6 +630,9 @@ export class ChatConnections {
     if (message.type.startsWith('team-workspace-')) return this.workspaceConnections.handle(connection, message as Extract<ClientMessage, { type: `team-workspace-${string}` }>)
     if (PROMOTION_MESSAGE_TYPES.has(message.type)) return this.promotionConnections.handle(connection, message as PromotionClientMessage)
     if (message.type.startsWith('team-plan-execution-')) return this.executionConnections.handle(connection, message as Extract<ClientMessage, { type: `team-plan-execution-${string}` }>)
+    if (message.type.startsWith('team-plan-workspace-artifacts-')) {
+      return this.planWorkspaceArtifacts.handle(connection, message as Extract<PlanWorkspaceClientMessage, { type: `team-plan-workspace-artifacts-${string}` }>)
+    }
     if (message.type.startsWith('team-plan-workspace-checklist-') || message.type.startsWith('team-plan-workspace-document-')) {
       return this.planWorkspaceDocuments.handle(connection, message as Extract<PlanWorkspaceClientMessage, { type: `team-plan-workspace-checklist-${string}` | `team-plan-workspace-document-${string}` }>)
     }

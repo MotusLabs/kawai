@@ -12,7 +12,7 @@
 import { create } from 'zustand'
 import type { ServerMessage } from '@shared/types'
 import type {
-  WorkspaceChecklist, WorkspaceChecklistUnavailable, WorkspaceDocumentView,
+  WorkspaceArtifactsView, WorkspaceChecklist, WorkspaceChecklistUnavailable, WorkspaceDocumentView,
   WorkspaceSnapshot, WorkspaceVersionSelector,
 } from '@shared/planWorkspace'
 import { routedTeamPath } from '../utils/teamKeyAliases'
@@ -43,6 +43,8 @@ export interface PlanWorkspaceView {
   checklists: Record<string, { checklist: WorkspaceChecklist | null; unavailable: WorkspaceChecklistUnavailable | null }>
   /** Composed documents by subscription key. */
   documents: Record<string, WorkspaceDocumentView>
+  /** Canonical artifact enumerations by change name (5.3, lazy descriptors). */
+  artifacts: Record<string, WorkspaceArtifactsView>
   /** Keyed commands awaiting their `team-plan-workspace-result`, by request id. */
   pending: Record<string, WorkspaceCommand>
   /** The last command refusal, until the next command or a success. */
@@ -58,7 +60,7 @@ export interface PlanWorkspaceView {
 }
 
 const emptyView = (planId: string): PlanWorkspaceView => ({
-  planId, version: null, executionId: null, snapshot: null, checklists: {}, documents: {},
+  planId, version: null, executionId: null, snapshot: null, checklists: {}, documents: {}, artifacts: {},
   pending: {}, error: null, expanded: [], selectedChange: null, selectedDocument: null, filter: 'all',
 })
 
@@ -81,6 +83,7 @@ interface PlanWorkspaceState {
   applySnapshot: (message: Extract<ServerMessage, { type: 'team-plan-workspace-snapshot' }>) => void
   applyChecklist: (message: Extract<ServerMessage, { type: 'team-plan-workspace-checklist' }>) => void
   applyDocument: (message: Extract<ServerMessage, { type: 'team-plan-workspace-document' }>) => void
+  applyArtifacts: (message: Extract<ServerMessage, { type: 'team-plan-workspace-artifacts' }>) => void
   applyResult: (message: Extract<ServerMessage, { type: 'team-plan-workspace-result' }>) => void
 }
 
@@ -153,6 +156,14 @@ export const useTeamPlanWorkspaceStore = create<PlanWorkspaceState>(set => ({
     if (!view || view.planId !== message.planId) return state
     const keyId = documentKey({ worktreeId: message.worktreeId, relativePath: message.relativePath })
     return update(state, key, { documents: { ...view.documents, [keyId]: message.view } })
+  }),
+  applyArtifacts: message => set(state => {
+    const key = routedTeamPath(message.teamPath, state.views)
+    const view = state.views[key]
+    if (!view || view.planId !== message.planId) return state
+    return update(state, key, {
+      artifacts: { ...view.artifacts, [message.changeName]: message.view },
+    })
   }),
   applyResult: message => set(state => {
     const key = routedTeamPath(message.teamPath, state.views)

@@ -227,6 +227,47 @@ export interface WorkspaceChecklistUnavailable {
   message: string
 }
 
+/**
+ * One canonical artifact's wire address (plan-workspace 5.3, S2/S3): a lazy
+ * descriptor only — kind plus the normalized path relative to the source
+ * worktree's listed root. Hash, size, mtime and availability never ride the
+ * enumeration; they are observed per selected document through
+ * `team-plan-workspace-document`, so unobserved metadata stays unknown
+ * instead of fabricated.
+ */
+export interface WorkspaceArtifactDescriptor {
+  kind: string
+  relativePath: string
+}
+
+/**
+ * Where the canonical copy lives (Lead b57a7360): named by an exact listed
+ * worktree root — the wire `worktreeId`, never the resolver's absolute
+ * change or archive root. An archive names its entry (`YYYY-MM-DD-<name>`).
+ */
+export type WorkspaceArtifactsSource =
+  | { kind: 'main' | 'worktree'; worktreeId: string }
+  | { kind: 'archive'; worktreeId: string; entry: string }
+
+/**
+ * One change's canonical artifact enumeration (5.3): the descriptor list, or
+ * the named refusal. `uncontained` is the fail-closed state for an artifact
+ * that does not lexically stay inside the source worktree's listed root —
+ * never mapped, never exposed. Messages name no absolute path.
+ */
+export type WorkspaceArtifactsView =
+  | {
+      ok: true
+      changeName: string
+      source: WorkspaceArtifactsSource
+      artifacts: WorkspaceArtifactDescriptor[]
+    }
+  | {
+      ok: false
+      state: 'missing' | 'missing-in-worktree' | 'ambiguous' | 'cli-unavailable' | 'uncontained'
+      message: string
+    }
+
 export type WorkspaceHealthLevel = 'green' | 'yellow' | 'red' | 'unknown'
 export type WorkspaceQuotaStatus = 'ok' | 'warning' | 'limited'
 
