@@ -25,6 +25,7 @@ import PlanReportSection from './PlanReportSection'
 import PlanUsageSection from './PlanUsageSection'
 import { PlanDecisionsList } from './PlanDecisionCard'
 import PlanRevisionsSection from './PlanRevisionsSection'
+import PlanWorkspaceSection from './PlanWorkspaceSection'
 import PlanLifecycleControls from './PlanLifecycleControls'
 import { pinLabel, planActorLabel } from './planLabels'
 import PlanImpactBadge, { ImpactGateText, OpenImpactReview } from './PlanImpactBadge'
@@ -87,7 +88,7 @@ export default function TeamPlansView({ teamPath, view, sendMessage, connected, 
     <div className="min-h-0 flex-1 overflow-y-auto p-3">
       {selected
         ? <PlanDetailPane teamPath={teamPath} planId={selected} detail={view.detail} validation={view.detailValidation} onCaptureStrategy={onCaptureStrategy} sessions={sessions} sendMessage={sendMessage}
-          connected={connected} busy={busy} onBack={() => select(null)} onOpenTask={onOpenTask}
+          connected={connected} connectionEpoch={connectionEpoch} busy={busy} onBack={() => select(null)} onOpenTask={onOpenTask}
           impact={view.detailImpact ?? view.impact[selected] ?? null} onOpenImpactReview={onOpenImpactReview} />
         : <PlanList plans={view.plans} loading={view.loading} onSelect={select} impact={view.impact} onOpenImpactReview={onOpenImpactReview} />}
     </div>
@@ -124,13 +125,15 @@ function PlanList({ plans, loading, onSelect, impact, onOpenImpactReview }: {
   </ul>
 }
 
-function PlanDetailPane({ teamPath, planId, detail, sessions, sendMessage, connected, busy, onBack, onOpenTask, impact, onOpenImpactReview, validation, onCaptureStrategy }: {
+function PlanDetailPane({ teamPath, planId, detail, sessions, sendMessage, connected, connectionEpoch, busy, onBack, onOpenTask, impact, onOpenImpactReview, validation, onCaptureStrategy }: {
   teamPath: string
   planId: string
   detail: PlanDetail | null
   sessions: Session[]
   sendMessage: SendClientMessage
   connected: boolean
+  /** Bumps on every reconnect; the workspace section re-sends its subscription. */
+  connectionEpoch: number
   busy: boolean
   onBack: () => void
   onOpenTask?: (taskId: string) => void
@@ -202,6 +205,10 @@ function PlanDetailPane({ teamPath, planId, detail, sessions, sendMessage, conne
         revealAnchor={revealAnchor} />
       {detail.usage && <PlanUsageSection view={detail.usage} />}
     </>}
+    {/* The dependency workspace (plan-workspace 5.1): map, documents, and health
+        beside the sections above — which it never replaces or gates. */}
+    <PlanWorkspaceSection teamPath={teamPath} detail={detail} connected={connected}
+      connectionEpoch={connectionEpoch} sendMessage={sendMessage} />
     <PlanRevisionsSection teamPath={teamPath} detail={detail} sessions={sessions} sendMessage={sendMessage} connected={connected} busy={busy}
       validation={validation} onCaptureStrategy={onCaptureStrategy} />
     <PlanLifecycleControls teamPath={teamPath} detail={detail} sendMessage={sendMessage} connected={connected} busy={busy} />
