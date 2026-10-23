@@ -10,6 +10,7 @@ import { useTeamMessageStore } from '../stores/teamMessageStore'
 import { useTeamTaskStore } from '../stores/teamTaskStore'
 import { useTeamPlanStore } from '../stores/teamPlanStore'
 import { useTeamAuditStore } from '../stores/teamAuditStore'
+import { handlePlanWorkspaceMessage } from './planWorkspaceMessages'
 import { notifyDeliveredToHuman, notifyMailboxDeadLetter } from '../utils/teamMailboxNotification'
 import { handleTeamWorkspaceMessage } from './teamWorkspaceMessages'
 import { routedTeamPath } from '../utils/teamKeyAliases'
@@ -50,6 +51,11 @@ export function handleTeamMessage(message: TeamMessage, _deps: MessageRouterDeps
     case 'team-plans-snapshot': plans.applySnapshot(routed(message, plans.views)); return
     case 'team-plan-detail': plans.applyDetail(routed(message, plans.views)); return
     case 'team-plan-result': plans.applyResult(routed(message, plans.views)); return
+    // The plan workspace (plan-workspace §5).
+    case 'team-plan-workspace-snapshot':
+    case 'team-plan-workspace-checklist':
+    case 'team-plan-workspace-document':
+    case 'team-plan-workspace-result': handlePlanWorkspaceMessage(message); return
     // The Audit tab (execution-safety-recovery D9).
     case 'team-audit-page': audits.applyPage(routed(message, audits.views)); return
     case 'team-audit-changed': audits.applyChanged(routed(message, audits.views)); return
