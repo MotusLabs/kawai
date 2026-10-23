@@ -419,4 +419,30 @@ describe('the released restart dispatches the owed review handoff (LC1, H1r)', (
     expect(instruction?.body).toContain('restarted by the owner')
     expect(instruction?.body).toContain(checkpointRows.newest(built.pauseId, 'api')!.id)
   })
+
+  // The re-check's N4 rebuild twin (§9's "Restart between decision and
+  // dispatch"): the debt marked under the hold is stored state — the whole
+  // composition is rebuilt over the same database between the restart and
+  // the release, and the fresh runtime still dispatches the owed handoff
+  // exactly once under the fresh key.
+  test('a restart between the hold and the release survives a composition rebuild (the debt is stored state)', async () => {
+    const built = await pausedReviewCell(5)
+    const resolved = await pauses.resolve(bench.human, { planId: built.planId, pauseId: built.pauseId, change: 'api', choice: 'restart', rationale: 'rethink', releaseHold: false, commandId: 'pause-comp-resolve-rev-restart-2' })
+    if (!resolved.ok) throw new Error(resolved.message)
+    expect(store.change(built.executionId, 'api')!.step).toBe('review-restart')
+    expect(store.round(built.roundId)!.reviewAssignmentId).toBeNull()
+    // Fresh services and runtime over the same connection: nothing in memory
+    // carries the debt across but the rows.
+    runtime.stop()
+    await compose()
+    const released = holds.release(bench.human, { planId: built.planId, holdId: built.holdId, reason: 'the dispatch may go', commandId: 'pause-comp-release-rev-2' })
+    if (!released.ok) throw new Error(released.message)
+    runtime.command(world.team.teamId)
+    await runtime.idle()
+    const round = store.round(built.roundId)!
+    expect(round.reviewAssignmentId).not.toBeNull()
+    expect(round.reviewAssignmentId).not.toBe(built.handoffId)
+    expect(bench.assignmentStore.byId(round.reviewAssignmentId!)?.requestKey).toMatch(/:review:\d+:restart$/)
+    expect(store.change(built.executionId, 'api')!.step).toBe('reviewing')
+  })
 })
