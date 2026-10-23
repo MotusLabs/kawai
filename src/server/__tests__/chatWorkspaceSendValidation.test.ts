@@ -281,6 +281,23 @@ describe('validateWorkspaceSend', () => {
       expect(outcome).toEqual({ ok: false, error: 'An external document ref carries no hash.' })
     })
 
+    test('V8 an external ref without a hash is accepted and stores the ref id', async () => {
+      // CP1's V-table: an external ref has no hash in the model — its id is
+      // validated only. A production change refusing every external ref
+      // must fail here, not just in the carrying-a-hash row above.
+      const state = baseState()
+      state.refs = [externalRef()]
+      const outcome = await send(state, envelopeOf({ documentRefId: 'ref-2' }))
+      expect(outcome).toEqual({
+        ok: true,
+        context: {
+          teamId: TEAM, planId: 'plan-1', planTitle: 'Workspace roadmap',
+          version: { kind: 'revision', revision: 2, contentHash: HASH2 },
+          executionId: null, changeName: null, documentRefId: 'ref-2',
+        },
+      })
+    })
+
     test('V8 an unknown ref is refused', async () => {
       const outcome = await send(baseState(), envelopeOf({ documentRefId: 'ref-x', documentHash: docHash() }))
       expect(outcome).toEqual({ ok: false, error: 'Document ref not found in this plan: ref-x' })
