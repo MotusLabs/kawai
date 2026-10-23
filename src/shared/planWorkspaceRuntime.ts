@@ -268,7 +268,14 @@ export function workspaceRuntime(inputs: WorkspaceRuntimeInputs): WorkspaceRunti
         .filter(entry => !displayedNames.has(entry.change))
         .map(entry => ({ change: entry.change, executionRevision: execution.revision, state: workspaceChangeState(factsOf(entry.change)) })),
       tasks: inputs.tasks.filter(task => !displayedNames.has(task.planChange))
-        .map(task => ({ taskId: task.id, title: task.title, planChange: task.planChange, holders: holdersOf(task.planChange) })),
+        .map(task => ({
+          taskId: task.id,
+          title: task.title,
+          planChange: task.planChange,
+          // Per task, never the change-wide list: two orphan tasks of one
+          // plan_change keep their own holders apart (N5).
+          holders: [byTask.get(task.id)!.holder].filter((holder): holder is WorkspaceHolderView => holder !== null),
+        })),
     },
   }
 }

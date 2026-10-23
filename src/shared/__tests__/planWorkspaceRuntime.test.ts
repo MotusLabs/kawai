@@ -238,4 +238,20 @@ describe('outside linked work', () => {
     ])
     expect(view.changes).toHaveLength(1)
   })
+
+  test('two orphan tasks of one plan_change keep their own holders apart (N5)', () => {
+    const view = workspaceRuntime({
+      displayed: content([{ change: 'api' }]),
+      execution: { executionId: 'ex', revision: 1, content: content([{ change: 'api' }]) },
+      supervision: new Map([['api', supervision({})]]),
+      tasks: [
+        { ...baseInput, id: 'task-9', title: 'old task', planChange: 'removed' },
+        { ...baseInput, id: 'task-10', title: 'claimed orphan', planChange: 'removed', assignment: { targetKind: 'session', targetId: 'dev', claimedBy: 'dev', handoffKind: null, state: 'delivered' } },
+      ],
+    })
+    expect(view.outside.tasks.map(task => [task.taskId, task.holders])).toEqual([
+      ['task-9', []],
+      ['task-10', [{ taskId: 'task-10', holder: { kind: 'session', sessionId: 'dev', name: null }, stage: 'implementing', waitingReason: null }]],
+    ])
+  })
 })
