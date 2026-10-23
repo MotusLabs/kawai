@@ -74,8 +74,8 @@ const R_ROWS = [
   ['R19r', 'paused (attempt stage)', 'restart', '*', 'implement answered·rev↗', 'accepted; the passable round superseded (the ROUND RULE)'],
   ['R20r', 'paused (attempt stage)', 'restart', '*', 'fix answered·rev↗', 'accepted; the passable round superseded (the ROUND RULE)'],
   ['R21r', 'paused (update target: gating, update row out)', 'restart', '*', 'update out', 'accepted (G1, per O4)'],
-  ['R22r', 'paused (update target, answered after the pause — L4)', 'restart', '*', 'update answered (plain)', 'accepted; no drop (the round pins the task\'s newest revision, so the ROUND RULE\'s condition fails - as C18)'],
-  ['R23r', 'paused (update target, answered after the pause — L4)', 'restart', '*', 'update answered·rev↗', 'accepted; the passable round superseded (the ROUND RULE - as C19)'],
+  ['R22r', 'paused (update target, answered after the pause — L4)', 'restart', '*', 'update answered (plain)', 'accepted; no drop (the round pins the task\'s newest revision, so the ROUND RULE\'s condition fails — as C18)'],
+  ['R23r', 'paused (update target, answered after the pause — L4)', 'restart', '*', 'update answered·rev↗', 'accepted; the passable round superseded (the ROUND RULE — as C19)'],
 ] as const
 
 describe('the R-rows (D9, verbatim)', () => {
