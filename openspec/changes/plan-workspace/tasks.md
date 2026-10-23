@@ -24,9 +24,9 @@ Implement after `team-workspace-pages`, `durable-plans`, and `plan-supervision` 
 
 ## 4. Durable contextual chat delivery
 
-- [ ] 4.1 Extend `chat-send` with optional workspace context, validating bound session/team, exact plan version/hash, change, execution and document identities before starting/sending; verify ordinary unscoped chat compatibility, wrong-team refusal and stale-draft/document refusal with manager/connection tests.
-- [ ] 4.2 Extend the driver user-message path with stable message UUIDs, immutable context persistence and a separate SDK `pasted_content` context entry; verify metadata storage precedes enqueue, storage failure sends nothing, literal slash commands remain recognized, and two messages in an active turn retain different contexts.
-- [ ] 4.3 Carry attachment metadata through live events, persistence, snapshots and SDK transcript reconstruction keyed by message UUID; verify restart/replay, changing plan titles/files, command-output turns, and legacy events without context with history/driver tests. Document that attachments do not set task association or authorize execution.
+- [x] 4.1 Extend `chat-send` with optional workspace context, validating bound session/team, exact plan version/hash, change, execution and document identities before starting/sending; verify ordinary unscoped chat compatibility, wrong-team refusal and stale-draft/document refusal with manager/connection tests.
+- [x] 4.2 Extend the driver user-message path with stable message UUIDs, immutable context persistence and a separate SDK `pasted_content` context entry; verify metadata storage precedes enqueue, storage failure sends nothing, literal slash commands remain recognized, and two messages in an active turn retain different contexts.
+- [x] 4.3 Carry attachment metadata through live events, persistence, snapshots and SDK transcript reconstruction keyed by message UUID; verify restart/replay, changing plan titles/files, command-output turns, and legacy events without context with history/driver tests. Document that attachments do not set task association or authorize execution.
 
 ## 5. Dependency workspace and document reader UI
 

@@ -108,6 +108,9 @@ import { outboundAuditHooks } from '../outbound/auditHooks'
 import type { OutboundAuditSink } from '../outbound/observer'
 import { TEAM_MCP_SERVER } from '../team/teamPrompt'
 import { formatEnvelope } from '../team/envelope'
+import { workspaceContextBlock, type WorkspaceMessageContext } from '../../shared/planWorkspace'
+import type { WorkspaceContextOutcome } from '../plans/workspace/workspaceContext'
+import type { ChatSendOutcome } from './provider/driver'
 import { createWireTappedSpawn, type ChatWireRecorder } from './wireTap'
 import {
   assistantLimitSignal,
@@ -144,6 +147,17 @@ export type ChatQueryFactory = (params: {
 export interface ChatSessionDriverOptions extends ChatDriverCallbacks {
   /** Opaque unique turn identity; injectable for deterministic protocol tests. */
   createTurnId?: () => string
+  /**
+   * The plan-workspace context store's record (PR D §4): the one DB write a
+   * contextual submit makes, before the turn opens and before the SDK
+   * message is enqueued (invariant I1). Omitted = contextual sends refuse.
+   */
+  recordWorkspaceContext?: (input: {
+    sessionId: string
+    messageUuid: string
+    turnId: string
+    context: WorkspaceMessageContext
+  }) => WorkspaceContextOutcome
   /** Agentboard session id (chat-<uuid>); used for logging context only. */
   sessionId: string
   projectPath: string
@@ -269,6 +283,12 @@ export class ChatSessionDriver implements ChatAgentDriver {
   private readonly seenToolCallIds = new Set<string>()
   /** Echo suppression: texts we submitted that the SDK may echo back. */
   private readonly sentEchoTexts = new Map<string, number>()
+  /**
+   * Echo suppression: client message uuids a contextual submit sent (LC-D3),
+   * each paired with the typed text it was submitted under, so suppression
+   * consumes both tokens whatever text the CLI's merged echo carries.
+   */
+  private readonly sentEchoUuids = new Map<string, string>()
   private capturedSdkSessionId: string | undefined
   /** Last model reported to onModel; undefined before the first report. */
   private lastReportedModel: string | undefined
@@ -371,8 +391,13 @@ export class ChatSessionDriver implements ChatAgentDriver {
    * paths — user send, peer delivery, agent self-start — funnel through
    * here so the buffer can never outlive the turn it should name.
    */
-  private startTurn(trigger?: ChatTurnTrigger): string {
-    const turnId = this.options.createTurnId?.() ?? `turn-${crypto.randomUUID()}`
+  /** The turn identity mint, shared by startTurn and the pre-record mint (PR D S4). */
+  private nextTurnId(): string {
+    return this.options.createTurnId?.() ?? `turn-${crypto.randomUUID()}`
+  }
+
+  private startTurn(trigger?: ChatTurnTrigger, presetTurnId?: string): string {
+    const turnId = presetTurnId ?? this.nextTurnId()
     this.activeTurnId = turnId
     this.pendingTaskNotifications = []
     this.turnProviderCost = null
@@ -390,25 +415,86 @@ export class ChatSessionDriver implements ChatAgentDriver {
     return this.binder.framesBelongToActive() ? this.activeTurnId : null
   }
 
-  /** Hand a prompt to the CLI under a fresh client uuid bound to `turnId`. */
-  private enqueue(turnId: string, message: Omit<SDKUserMessage, 'uuid'>): void {
-    const uuid = crypto.randomUUID()
+  /** Hand a prompt to the CLI under the submit's pre-minted client uuid. */
+  private enqueue(turnId: string, message: Omit<SDKUserMessage, 'uuid'>, uuid: ReturnType<typeof crypto.randomUUID>): void {
     this.binder.promptSent(uuid, turnId)
     this.queue.push({ ...message, uuid })
   }
 
   /** Submit a user turn. Spawns the SDK lazily on the first turn. */
   send(text: string): void {
-    if (this.killed) return
+    this.submit(text)
+  }
+
+  /**
+   * Submit a user turn carrying a plan-workspace context (PR D §4, the
+   * S-path): mint the message uuid (S3), record the context row — the one
+   * DB write (S4) — then open the turn only if none was open (S5), emit the
+   * visible event (S6), and enqueue (S7). A failure at any earlier step
+   * opens no turn, emits no event, and enqueues nothing.
+   */
+  sendWorkspaceContext(text: string, context: WorkspaceMessageContext): ChatSendOutcome {
+    return this.submit(text, context) ?? { ok: true }
+  }
+
+  /**
+   * S4: the one DB write a contextual submit makes, before anything
+   * observable. A refused record — or a throwing store — refuses the send
+   * and leaves no turn, no event, and no prompt.
+   */
+  private recordContext(messageUuid: string, turnId: string, context: WorkspaceMessageContext): ChatSendOutcome | null {
+    try {
+      const recorded = this.options.recordWorkspaceContext?.({
+        sessionId: this.options.sessionId,
+        messageUuid,
+        turnId,
+        context,
+      })
+      if (!recorded || !recorded.ok) {
+        const why = recorded?.message ?? 'The plan context could not be recorded.'
+        return { ok: false, error: `${why} The message was not sent.` }
+      }
+      return null
+    } catch (error) {
+      return { ok: false, error: `The plan context could not be recorded (${error instanceof Error ? error.message : String(error)}); the message was not sent.` }
+    }
+  }
+
+  /** The one submit path: mint, record, open, emit, enqueue (PR D S3–S7). */
+  private submit(text: string, context?: WorkspaceMessageContext): ChatSendOutcome | void {
+    if (this.killed) {
+      return context ? { ok: false, error: 'This session was killed; the message was not sent.' } : undefined
+    }
     this.ensureQuery()
-    const turnId = this.activeTurnId ?? this.startTurn()
+    // S3: the user-message uuid is minted independently of the turn id, so
+    // two messages in one active turn keep distinct contexts (invariant I2).
+    const messageUuid = crypto.randomUUID()
+    // S4: reuse an open turn, else mint a turn id the record may still name —
+    // the turn opens only after storage succeeded (S5).
+    const turnId = this.activeTurnId ?? this.nextTurnId()
+    if (context) {
+      const refusal = this.recordContext(messageUuid, turnId, context)
+      if (refusal) return refusal
+    }
+    if (!this.activeTurnId) this.startTurn(undefined, turnId)
+    if (context) {
+      // Echo suppression by uuid beside today's text fallback (LC-D3): the
+      // token pairs the uuid with the typed text so suppression consumes both.
+      this.sentEchoUuids.set(messageUuid, text)
+    }
     this.trackEcho(text)
-    this.emit({ type: 'user_message', turnId, text })
+    // I4's answer: every user message carries the uuid the enqueue already
+    // minted — the replay join key exists on every live user message.
+    this.emit(context
+      ? { type: 'user_message', turnId, text, messageUuid, workspaceContext: context }
+      : { type: 'user_message', turnId, text, messageUuid })
     this.enqueue(turnId, {
       type: 'user',
       message: { role: 'user', content: text },
       parent_tool_use_id: null,
-    })
+      // I3: the typed text stays literal; the context rides pasted_content.
+      ...(context ? { pasted_content: [workspaceContextBlock(context)] } : {}),
+    }, messageUuid)
     this.refreshStatus()
   }
 
@@ -428,7 +514,7 @@ export class ChatSessionDriver implements ChatAgentDriver {
       parent_tool_use_id: null,
       // A human sender has no session id; the envelope's senderKind says so.
       origin: { kind: 'peer', from: envelope.senderSession ?? 'human' },
-    })
+    }, crypto.randomUUID())
     this.refreshStatus()
   }
 
@@ -1009,10 +1095,15 @@ export class ChatSessionDriver implements ChatAgentDriver {
     if (!turnId) return
     const content = message.message.content
     if (typeof content === 'string') {
-      this.maybeEchoUserText(content, turnId)
+      if (this.takeSentEchoUuid(message)) return
+      this.maybeEchoUser(content, turnId)
       return
     }
     const subagent = isSubagentContentFrame(message)
+    // Suppression is decided once per message: one uuid match suppresses
+    // every text block of that message and consumes exactly one typed-text
+    // token, however many text blocks the CLI merged into the echo.
+    const echoed = !subagent && this.takeSentEchoUuid(message)
     for (const block of content) {
       if (block.type === 'tool_result') {
         // D4 carve-out: only the tool_result of a kept Agent/Task call (a
@@ -1042,19 +1133,45 @@ export class ChatSessionDriver implements ChatAgentDriver {
         }
       } else if (block.type === 'text') {
         if (subagent) continue
-        this.maybeEchoUserText(block.text, turnId)
+        if (echoed) continue
+        this.maybeEchoUser(block.text, turnId)
       }
     }
   }
 
-  /** The SDK echoes streamed user turns; suppress the copy we already sent. */
-  private maybeEchoUserText(text: string, turnId: string): void {
-    const outstanding = this.sentEchoTexts.get(text) ?? 0
-    if (outstanding > 0) {
-      this.sentEchoTexts.set(text, outstanding - 1)
-      return
-    }
+  /**
+   * The SDK echoes streamed user turns; suppress the copy we already sent.
+   * A uuid we minted suppresses first (LC-D3) at message level; an echo
+   * without one of ours takes today's text path per block.
+   */
+  private maybeEchoUser(text: string, turnId: string): void {
+    if (this.consumeEchoText(text)) return
     this.emit({ type: 'user_message', turnId, text })
+  }
+
+  /**
+   * Consume this message's sent uuid token once; true when the frame is our
+   * own echo. The token pairs the uuid with the typed text, so suppression
+   * consumes both — the echoed text of a contextual send can differ from
+   * what was submitted (the CLI appends each pasted_content entry).
+   */
+  private takeSentEchoUuid(message: SDKUserMessage): boolean {
+    const uuid = typeof message.uuid === 'string' ? message.uuid : ''
+    if (uuid === '') return false
+    const submitted = this.sentEchoUuids.get(uuid)
+    if (submitted === undefined) return false
+    this.sentEchoUuids.delete(uuid)
+    this.consumeEchoText(submitted)
+    return true
+  }
+
+  /** Consume one outstanding echo token for `text`; true when one was held. */
+  private consumeEchoText(text: string): boolean {
+    const outstanding = this.sentEchoTexts.get(text) ?? 0
+    if (outstanding <= 0) return false
+    if (outstanding === 1) this.sentEchoTexts.delete(text)
+    else this.sentEchoTexts.set(text, outstanding - 1)
+    return true
   }
 
   private trackEcho(text: string): void {
