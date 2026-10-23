@@ -5,6 +5,7 @@
 // the model-based P-I1 runs in pauseResolveModel.test.ts.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { pauseResolveBench, targetOf, type PauseResolveBench } from './pauseResolveBench'
+import { PAUSE_U_CLAIMS, pauseCells, type PauseCell } from './pauseCells'
 
 let wired: PauseResolveBench
 let sequence = 0
@@ -223,80 +224,70 @@ describe("O4's redispatch clear (B2)", () => {
   })
 })
 
-describe('completeness (every axis combination maps to exactly one row or one U-claim)', () => {
-  // The axes at this step: the continue states, every attempt kind (implement,
-  // fix, update) over owed/out/answered, and `answered` split plain vs rev↗
-  // (G2/G3/Q-A6). The hold axis is `*` for every C-row — the mapping ignores
-  // it; releaseHold composes through the H-overlay (H1r-H4r, the release
-  // step). The pausing sub-states collapse into `pausing` (C10's `*`), and
-  // U3-U6/U8 are state-level unreachables the state axis never produces.
-  const KINDS = ['implement', 'fix', 'update'] as const
-  const CELLS = ['owed', 'out', 'answered (plain)', 'answered·rev↗'] as const
-  const STATES = ['decided', 'withdrawn', 'pausing', 'paused·gone', 'paused', 'review stands', 'review superseded'] as const
-
-  // The table's check order, as the resolve implements it: decided (I1),
-  // withdrawn before the state (C9), not-paused (C10), holder-gone (C11),
-  // then the stage branch. First match wins; the unreachable list takes what
-  // no row claims.
-  function rowFor(state: string, kind: string | null, cell: string | null): string {
-    if (state === 'decided') return 'C1'
-    if (state === 'withdrawn') return 'C9'
-    if (state === 'pausing') return 'C10'
-    if (state === 'paused·gone') return 'C11'
-    if (state === 'review stands') {
-      if (cell === null) return 'U2'
-      if (cell === 'answered (plain)') return 'C12'
-      if (cell === 'answered·rev↗') return 'C14'
-      return 'U2'
+describe('completeness (the shared cell table, lead ruling L5)', () => {
+  // The cells and their reachability come from pauseCells (one shared
+  // reading); this mapping sends each reachable cell to its C-row, in the
+  // resolve's own check order. The hold axis is `*` for every C-row —
+  // releaseHold composes through the H-overlay (H1r-H4r, the release step).
+  function continueRowFor(cell: PauseCell): string {
+    if (cell.state === 'decided') return 'C1'
+    if (cell.state === 'withdrawn') return 'C9'
+    if (cell.state === 'pausing') return 'C10'
+    if (cell.state === 'paused·gone') return 'C11'
+    if (cell.state === 'paused (review target)') return cell.status === 'answered (plain)' ? 'C12' : 'C14'
+    if (cell.state === 'paused (review target, handoff superseded)') return 'C13'
+    if (cell.state === 'paused (attempt stage)') {
+      if (cell.status === '—') return 'C2'
+      const implementRow = cell.kind === 'implement'
+      if (cell.status === 'owed') return implementRow ? 'C3' : 'C6'
+      if (cell.status === 'out') return implementRow ? 'C4' : 'C7'
+      if (cell.status === 'answered (plain)') return implementRow ? 'C5' : 'C8'
+      return implementRow ? 'C15' : 'C16'
     }
-    if (state === 'review superseded') return cell !== null && cell.startsWith('answered') ? 'C13' : 'U2'
-    if (cell === null) return 'C2'
-    if (kind === 'update') {
-      if (cell === 'owed') return 'U1'
-      if (cell === 'out') return 'C17'
-      return 'U7'
-    }
-    const implementRow = kind === 'implement'
-    if (cell === 'owed') return implementRow ? 'C3' : 'C6'
-    if (cell === 'out') return implementRow ? 'C4' : 'C7'
-    if (cell === 'answered (plain)') return implementRow ? 'C5' : 'C8'
-    return implementRow ? 'C15' : 'C16'
+    // The update-target states: out at placement (C17), answered after the
+    // pause (C18 plain, C19 rev↗ — L4's route).
+    if (cell.status === 'out') return 'C17'
+    return cell.status === 'answered (plain)' ? 'C18' : 'C19'
   }
 
-  test('every state × kind × cell combination resolves to exactly one id, with no gap and no overlap', () => {
+  test('every shared cell maps to exactly one C-row or U-claim, and every C-row and this step\'s U-claims are hit', () => {
     const hit: Record<string, number> = {}
-    for (const state of STATES) {
-      const rowAxes: Array<[string | null, string | null]> = [[null, null], ...KINDS.flatMap(kind => CELLS.map(cell => [kind, cell] as [string, string]))]
-      for (const [kind, cell] of rowAxes) {
-        const mapped = rowFor(state, kind, cell)
-        expect(mapped).toMatch(/^(C\d+|U\d+)$/)
-        hit[mapped] = (hit[mapped] ?? 0) + 1
+    for (const cell of pauseCells()) {
+      const verdict = cell.verdict
+      let mapped: string
+      if (!verdict.unreachable) {
+        mapped = continueRowFor(cell)
+        expect(mapped).toMatch(/^C\d+$/)
+      } else {
+        expect(PAUSE_U_CLAIMS[verdict.uId]).toBeDefined()
+        mapped = verdict.uId
       }
+      hit[mapped] = (hit[mapped] ?? 0) + 1
     }
-    // Every C-row and every U-claim this step's axes produce is hit, and the
-    // update kind's out cell hits the update target alone.
     for (const id of ['C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9', 'C10', 'C11', 'C12', 'C13', 'C14', 'C15', 'C16', 'C17', 'U1', 'U2', 'U7']) {
       expect(hit[id]).toBeGreaterThan(0)
     }
+    // One cell each: the update target's out and the two answered-after rows.
     expect(hit['C17']).toBe(1)
-    expect(hit['C15']).toBe(1)
-    expect(hit['C16']).toBe(1)
-    expect(hit['C12']).toBe(3)
-    expect(hit['C14']).toBe(3)
   })
 
-  test("on the attempt stage the update kind is unreachable owed and answered (U1, U7); a review target's kind axis collapses to answered(*) (U2)", () => {
-    expect(rowFor('paused', 'update', 'owed')).toBe('U1')
-    expect(rowFor('paused', 'update', 'answered (plain)')).toBe('U7')
-    expect(rowFor('paused', 'update', 'answered·rev↗')).toBe('U7')
-    // The review stage reads no kind: `agentHeldStage` returns `review` from
-    // `gating`+`reviewing` before the newest row is consulted, so the update
-    // kind's answered cells land on the review rows, never on U7 (B3).
-    expect(rowFor('review stands', 'update', 'answered (plain)')).toBe('C12')
-    expect(rowFor('review superseded', 'update', 'answered·rev↗')).toBe('C13')
-    expect(rowFor('review stands', 'implement', 'owed')).toBe('U2')
-    expect(rowFor('review stands', null, null)).toBe('U2')
-    expect(rowFor('review superseded', 'fix', 'answered (plain)')).toBe('C13')
+  test('the shared table holds the key unreachables: U1 with the attempt-stage/update-target split, U2, U7, and B3\'s review collapse', () => {
+    for (const cell of pauseCells()) {
+      if (cell.state === 'paused (attempt stage)' && cell.kind === 'update') {
+        // B2: the cell is present in the expansion — owed and out by U1 (the
+        // split: out is the update target's gating cell only), answered by U7.
+        expect(cell.verdict).toMatchObject({ unreachable: true, uId: cell.status === 'owed' || cell.status === 'out' ? 'U1' : 'U7' })
+      }
+      // B3: a review target's kind axis collapses to answered(*) — the
+      // answered cells land on the review rows, never on U7; the rest are U2.
+      if (cell.state === 'paused (review target)' || cell.state === 'paused (review target, handoff superseded)') {
+        if (cell.status === 'answered (plain)' || cell.status === 'answered·rev↗') expect(cell.verdict).toMatchObject({ unreachable: false })
+        else expect(cell.verdict).toMatchObject({ unreachable: true, uId: 'U2' })
+      }
+      if (cell.state === 'paused (update target, answered after the pause)' && cell.status === 'owed') {
+        expect(cell.verdict).toMatchObject({ unreachable: true, uId: 'U1' })
+      }
+    }
   })
 })
 

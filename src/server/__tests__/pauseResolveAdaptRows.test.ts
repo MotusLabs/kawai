@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import type { AttemptManifest } from '../../shared/planExecution'
 import { REVISION_NOTICE_TAG } from '../team/taskNotices'
 import { pauseResolveBench, targetOf, type PauseResolveBench } from './pauseResolveBench'
+import { PAUSE_U_CLAIMS, pauseCells, type PauseCell } from './pauseCells'
 
 let wired: PauseResolveBench
 let sequence = 0
@@ -216,50 +217,54 @@ describe('the A-rows (A3, verbatim)', () => {
   })
 })
 
-// The completeness grid (adapt): every state × kind × row cell maps to
-// exactly one A-row or one U-claim. The U-claim is reachability-only: the
-// pipeline mints exactly one row kind owed — the fix row (G4's caveat) —
-// while an update row mints dispatched or not at all, so an owed update row
-// is not producible (mintOwed('update') is a fixture-only state). An update
-// row ANSWERED after the pause is producible (the holder's result records
-// the round); it resolves exactly as A7r — the ROUND RULE supersedes the
-// round — with the H3 copy pulling `update` from the newest row (the A13r
-// copy semantics), asserted by the test below the grid.
-const ADAPT_GRID = [
-  ['decided', '*', '*', 'A1r'],
-  ['pausing', '*', '*', 'A9r'],
-  ['paused·withdrawn', '*', '*', 'A8r'],
-  ['paused·gone', '*', '*', 'A11r'],
-  ['paused (review stage)', '*', '*', 'A10r'],
-  ['paused (attempt stage)', '—', '—', 'A2r'],
-  ['paused (attempt stage)', 'implement', 'owed', 'A3r'],
-  ['paused (attempt stage)', 'implement', 'out', 'A4r'],
-  ['paused (attempt stage)', 'implement', 'answered (plain)', 'A12r'],
-  ['paused (attempt stage)', 'implement', 'answered (rev↗)', 'A12r'],
-  ['paused (attempt stage)', 'fix', 'owed', 'A5r'],
-  ['paused (attempt stage)', 'fix', 'out', 'A6r'],
-  ['paused (attempt stage)', 'fix', 'answered (plain)', 'A7r'],
-  ['paused (attempt stage)', 'fix', 'answered (rev↗)', 'A7r'],
-  ['paused (attempt stage)', 'update', 'owed', 'U1 (not producible — see the comment above)'],
-  ['paused (attempt stage)', 'update', 'answered (plain)', 'A7r'],
-  ['paused (attempt stage)', 'update', 'answered (rev↗)', 'A7r'],
-  ['paused (update target)', 'update', 'out', 'A13r'],
-] as const
+// The completeness grid (adapt, lead ruling L5): the cells and their
+// reachability come from the shared pauseCells table — one reading for
+// every resolution — and this mapping sends each reachable cell to its
+// A-row. The unreachable cells carry their U-claims from PAUSE_U_CLAIMS.
+describe('the adapt grid (completeness, derived from the shared cell table)', () => {
+  function adaptRowFor(cell: PauseCell): string {
+    if (cell.state === 'decided') return 'A1r'
+    if (cell.state === 'withdrawn') return 'A8r'
+    if (cell.state === 'pausing') return 'A9r'
+    if (cell.state === 'paused·gone') return 'A11r'
+    if (cell.state === 'paused (review target)' || cell.state === 'paused (review target, handoff superseded)') return 'A10r'
+    if (cell.state === 'paused (attempt stage)') {
+      if (cell.status === '—') return 'A2r'
+      if (cell.kind === 'implement') {
+        if (cell.status === 'owed') return 'A3r'
+        if (cell.status === 'out') return 'A4r'
+        return 'A12r'
+      }
+      if (cell.status === 'owed') return 'A5r'
+      if (cell.status === 'out') return 'A6r'
+      return 'A7r'
+    }
+    // The update-target states: out at placement (A13r), answered after the
+    // pause (A14r — L4's route; the rows land with their forcing tests).
+    if (cell.status === 'out') return 'A13r'
+    return 'A14r'
+  }
 
-describe('the adapt grid (completeness)', () => {
-  test('every state × kind × row cell maps to exactly one A-row or U-claim, and every A-row is used', () => {
-    const seen = new Set<string>()
-    for (const [state, kind, row, mapped] of ADAPT_GRID) {
-      const cell = `${state} × ${kind} × ${row}`
-      expect(seen.has(cell)).toBe(false) // no overlap
-      seen.add(cell)
-      const id = mapped === 'U1 (not producible — see the comment above)' ? 'U1' : mapped
-      expect(id === 'U1' || A_ROWS.some(candidate => candidate[0] === id)).toBe(true)
+  test('every shared cell maps to exactly one A-row or U-claim, and every A-row is used', () => {
+    const hit: Record<string, number> = {}
+    for (const cell of pauseCells()) {
+      const verdict = cell.verdict
+      let mapped: string
+      if (!verdict.unreachable) {
+        mapped = adaptRowFor(cell)
+        expect(mapped).toMatch(/^A\d+r$/)
+      } else {
+        expect(PAUSE_U_CLAIMS[verdict.uId]).toBeDefined()
+        mapped = verdict.uId
+      }
+      hit[mapped] = (hit[mapped] ?? 0) + 1
     }
     // Every A-row of the table is reached by at least one cell (no gap).
-    for (const candidate of A_ROWS) expect(ADAPT_GRID.some(cell => cell[3] === candidate[0])).toBe(true)
-    const used = new Set(ADAPT_GRID.map(cell => (cell[3].startsWith('U1') ? 'U1' : cell[3])))
-    expect(used.size).toBe(A_ROWS.length + 1) // 13 rows + the one U-claim
+    for (const candidate of A_ROWS) expect(hit[candidate[0]]).toBeGreaterThan(0)
+    // The unreachable cells are exactly the U-claim cells.
+    expect(hit['U1']).toBe(4) // attempt-stage owed + out; both update-target states' owed
+    expect(hit['U7']).toBe(4) // attempt-stage plain + rev↗; the update target's answered at placement
+    expect(hit['U3']).toBe(1) // the answered-after state's out cross
   })
 
   test('the update-answered cells resolve as A7r, copying `update` from the update row (H3)', async () => {
