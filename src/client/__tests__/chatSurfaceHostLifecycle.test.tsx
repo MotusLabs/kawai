@@ -326,6 +326,38 @@ describe('ChatSurface host parity', () => {
     expect(byId('chat-usage')).toHaveLength(1)
   })
 
+  test('two hosts of one session share the per-session draft last-write-wins', () => {
+    const session = seed()
+    act(() => {
+      renderer = TestRenderer.create(<>
+        <div data-testid="host-one">
+          <ChatSurface session={session} sendMessage={sendMessage}
+            connectionStatus="connected" connectionEpoch={1} />
+        </div>
+        <div data-testid="host-two">
+          <ChatSurface session={session} sendMessage={sendMessage}
+            connectionStatus="connected" connectionEpoch={1} />
+        </div>
+      </>)
+    })
+    const inputs = renderer!.root.findAllByType('textarea')
+    expect(inputs).toHaveLength(2)
+    // Typing in one host is visible in the other: the draft is per session.
+    act(() => { inputs[0]!.props.onChange({ target: { value: 'shared draft text' } }) })
+    expect(inputs[1]!.props.value).toBe('shared draft text')
+    // A submit in the other host clears it for both.
+    act(() => {
+      inputs[1]!.props.onChange({ target: { value: 'shared draft text', selectionStart: 17, selectionEnd: 17 } })
+    })
+    const forms = renderer!.root.findAllByType('form')
+    expect(forms).toHaveLength(2)
+    act(() => { forms[1]!.props.onSubmit({ preventDefault: () => {} }) })
+    expect(useChatStore.getState().drafts['chat-a']).toBeUndefined()
+    expect(renderer!.root.findAllByType('textarea').map(node => node.props.value)).toEqual(['', ''])
+    expect(sent.filter(message => message.type === 'chat-send'))
+      .toEqual([{ type: 'chat-send', sessionId: 'chat-a', text: 'shared draft text' }])
+  })
+
   test('the full-screen wrapper keeps its DOM order across the moved surface', () => {
     const session = seed({}, [notice('agent', 'agent-1')])
     act(() => {
