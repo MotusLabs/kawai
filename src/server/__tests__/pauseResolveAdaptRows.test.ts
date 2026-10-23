@@ -73,6 +73,7 @@ const A_ROWS = [
   ['A11r', 'paused·gone (attempt stage)', 'adapt', '*', '*', 'accepted - no holder-gone refusal; the notices to the gone session dead-letter at enqueue (Q-A7)'],
   ['A12r', 'paused (attempt stage)', 'adapt', '*', 'implement answered (plain or rev↗)', 'accepted; every passable round superseded (the ROUND RULE — as A7r)'],
   ['A13r', 'paused (update target: gating, update row out)', 'adapt', '*', 'update out', 'accepted (G1, per O4); the ROUND RULE supersedes the update\'s round (Adapt always supersedes)'],
+  ['A14r', 'paused (update target, answered after the pause — L4)', 'adapt', '*', 'update answered (plain or rev↗)', 'accepted; every passable round superseded (as A7r)'],
 ] as const
 
 describe('the A-rows (A3, verbatim)', () => {
@@ -213,6 +214,33 @@ describe('the A-rows (A3, verbatim)', () => {
       expect(attempts[2].manifest.update).toEqual({ base: 'prev-base', files: ['a.ts'] })
       expect(attempts[2].manifest.task.revision).toBe(2)
       expect(attempts[2].assignmentId).toBeNull()
+    } else if (id === 'A14r') {
+      const manifest: AttemptManifest = { ...wired.manifest(), update: { base: 'prev-base', files: ['a.ts'] } }
+      for (const variant of [{ label: 'plain', rev: 1, republished: false }, { label: 'rev↗', rev: 2, republished: true }]) {
+        // L4's answered-after-pause route: the update target paused with its
+        // row out, then the holder's result recorded through the production
+        // round stage while the hold is still active.
+        const world = await wired.pausedUpdate({ manifest })
+        await wired.answerNewestRowViaStage(world.executionId, 'api', variant.rev)
+        if (variant.republished) wired.republish(world.taskId)
+        ok(wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'adapt', adapt: 'Build it wider', rationale: 'scope grew' }))
+        // The ROUND RULE: every passable round superseded, plain and rev↗
+        // alike (Adapt always supersedes — it works from its own N+1).
+        expect(wired.executions.rounds(world.executionId, 'api').at(-1)!.outcome).toBe('superseded')
+        // A13r's writes: the change to `implementing`, ONE new fix row
+        // copying the update row's `update` at revision N+1, owed (the hold).
+        const row = wired.executions.change(world.executionId, 'api')!
+        expect(row.state).toBe('implementing')
+        expect(row.step).toBeNull()
+        const attempts = wired.executions.attempts(world.executionId, 'api')
+        expect(attempts).toHaveLength(3)
+        expect(attempts[2].kind).toBe('fix')
+        expect(attempts[2].manifest.update).toEqual({ base: 'prev-base', files: ['a.ts'] })
+        // N+1 counts from the revision in force at the resolve — rev↗ has
+        // already published once, so the new row sits one higher.
+        expect(attempts[2].manifest.task.revision).toBe(variant.rev + 1)
+        expect(attempts[2].assignmentId).toBeNull()
+      }
     }
   })
 })
@@ -240,7 +268,7 @@ describe('the adapt grid (completeness, derived from the shared cell table)', ()
       return 'A7r'
     }
     // The update-target states: out at placement (A13r), answered after the
-    // pause (A14r — L4's route; the rows land with their forcing tests).
+    // pause (A14r — L4's route, forced through the production round stage).
     if (cell.status === 'out') return 'A13r'
     return 'A14r'
   }
@@ -265,17 +293,5 @@ describe('the adapt grid (completeness, derived from the shared cell table)', ()
     expect(hit['U1']).toBe(4) // attempt-stage owed + out; both update-target states' owed
     expect(hit['U7']).toBe(4) // attempt-stage plain + rev↗; the update target's answered at placement
     expect(hit['U3']).toBe(1) // the answered-after state's out cross
-  })
-
-  test('the update-answered cells resolve as A7r, copying `update` from the update row (H3)', async () => {
-    const world = await wired.pausedAttempt()
-    await wired.mintAttempt(world.executionId, 'api', 'update', 'dev3', { ...wired.manifest(), update: { base: 'prev-base', files: ['a.ts'] } })
-    wired.answerNewestRow(world.executionId, 'api', 1)
-    ok(wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'adapt', adapt: 'Build it wider', rationale: 'scope grew' }))
-    expect(wired.executions.rounds(world.executionId, 'api')[0].outcome).toBe('superseded')
-    const attempts = wired.executions.attempts(world.executionId, 'api')
-    expect(attempts.at(-1)!.kind).toBe('fix')
-    expect(attempts.at(-1)!.manifest.update).toEqual({ base: 'prev-base', files: ['a.ts'] })
-    expect(attempts.at(-1)!.manifest.task.revision).toBe(2)
   })
 })

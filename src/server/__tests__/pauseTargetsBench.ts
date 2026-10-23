@@ -36,6 +36,8 @@ export interface PauseTargetsBench {
   /** The task service and the checkpoint store, wired as the production composition does (the resolve reads both). */
   tasks: TaskService
   checkpoints: CheckpointStore
+  /** The resolve's dispatch seam, wired as the production composition does — the round stage's RoundDeps reads it too. */
+  assignments: AssignmentService
   service: PauseService
   now: () => Date
   inDays: (days: number) => string
@@ -165,7 +167,7 @@ export async function pauseTargetsBench(prefix: string): Promise<PauseTargetsBen
     (bench.db.db.prepare('SELECT kind FROM team_message_events WHERE message_id = ? ORDER BY seq').all(messageId) as Array<{ kind: string }>).map(row => row.kind)
 
   return {
-    world, bench, teamId, holds, pauses, executions, tasks, checkpoints, service, now, inDays,
+    world, bench, teamId, holds, pauses, executions, tasks, checkpoints, assignments: assignmentService, service, now, inDays,
     wakes: () => wakeCount,
     expectOk,
     executionWith,

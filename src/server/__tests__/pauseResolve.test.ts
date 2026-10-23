@@ -47,6 +47,8 @@ const C_ROWS = [
   ['C15', 'paused (attempt stage)', 'continue', '*', 'implement answered·rev↗', 'accepted; the passable round superseded (the ROUND RULE)'],
   ['C16', 'paused (attempt stage)', 'continue', '*', 'fix answered·rev↗', 'accepted; the passable round superseded (the ROUND RULE)'],
   ['C17', 'paused (update target: gating, update row out)', 'continue', '*', 'update out', 'accepted (G1: as C2)'],
+  ['C18', 'paused (update target, answered after the pause: the holder\'s result recorded the round under the hold — L4)', 'continue', '*', 'update answered (plain)', 'accepted; no drop (the round pins the task\'s newest revision, so the ROUND RULE\'s condition fails)'],
+  ['C19', 'paused (update target, answered after the pause — L4)', 'continue', '*', 'update answered·rev↗', 'accepted; the passable round superseded (the ROUND RULE)'],
 ] as const
 
 describe('the C-rows (A3, verbatim)', () => {
@@ -181,6 +183,25 @@ describe('the C-rows (A3, verbatim)', () => {
       expect(row.step).toBeNull()
       expect(wired.bench.assignmentStore.listByTask(world.taskId).find(entry => entry.id === world.updateAssignmentId)!.supersededBy).toBeNull()
       expect(wired.resumeMails(world.taskId)).toHaveLength(1)
+    } else if (id === 'C18' || id === 'C19') {
+      // L4's answered-after-pause route: the holder's result is recorded
+      // through the production round stage while the hold is still active —
+      // the cell the state names is built, never hand-minted.
+      const world = await wired.pausedUpdate()
+      await wired.answerNewestRowViaStage(world.executionId, 'api', 1)
+      if (id === 'C19') wired.republish(world.taskId)
+      ok(wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'continue' }))
+      // Plain: the round pins the task's newest revision, so the ROUND
+      // RULE's condition fails and the update's round is untouched (the
+      // implement round's supersession is insertRound's own bookkeeping).
+      // rev↗: the passable round is superseded (the ROUND RULE).
+      expect(wired.executions.rounds(world.executionId, 'api').at(-1)!.outcome).toBe(id === 'C19' ? 'superseded' : null)
+      // The change stays where the round left it (N4 as C15's).
+      const row = wired.executions.change(world.executionId, 'api')!
+      expect(row.state).toBe('gating')
+      expect(row.step).toBeNull()
+      expect(wired.bench.assignmentStore.listByTask(world.taskId).find(entry => entry.id === world.updateAssignmentId)!.supersededBy).toBeNull()
+      expect(wired.resumeMails(world.taskId)).toHaveLength(1)
     } else {
       throw new Error(`no fixture for row ${id}`)
     }
@@ -264,11 +285,13 @@ describe('completeness (the shared cell table, lead ruling L5)', () => {
       }
       hit[mapped] = (hit[mapped] ?? 0) + 1
     }
-    for (const id of ['C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9', 'C10', 'C11', 'C12', 'C13', 'C14', 'C15', 'C16', 'C17', 'U1', 'U2', 'U7']) {
+    for (const id of ['C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9', 'C10', 'C11', 'C12', 'C13', 'C14', 'C15', 'C16', 'C17', 'C18', 'C19', 'U1', 'U2', 'U7']) {
       expect(hit[id]).toBeGreaterThan(0)
     }
     // One cell each: the update target's out and the two answered-after rows.
     expect(hit['C17']).toBe(1)
+    expect(hit['C18']).toBe(1)
+    expect(hit['C19']).toBe(1)
   })
 
   test('the shared table holds the key unreachables: U1 with the attempt-stage/update-target split, U2, U7, and B3\'s review collapse', () => {

@@ -7,6 +7,8 @@ import { expect } from 'bun:test'
 import type { TeamMessage } from '../../shared/team'
 import { PLAN_RESUME_TAG, type ResolveInput, type PauseResolveOutcome } from '../plans/revisionControl/pauseResolve'
 import type { PlanPauseTarget } from '../../shared/planRevisionControl'
+import { applyRoundStage, roundAdapters, type ReleaseSeam } from '../plans/execution/executionRounds'
+import { TaskResultService } from '../team/TaskResultService'
 import { pauseTargetsBench, type PauseTargetsBench } from './pauseTargetsBench'
 
 function ok<T>(outcome: { ok: boolean; result?: T; message?: string }): T {
@@ -29,6 +31,8 @@ export type PauseResolveBench = PauseTargetsBench & {
   mintAttempt: (executionId: string, change: string, kind: AttemptKind, holder?: string, manifest?: AttemptManifest) => Promise<{ taskId: string; assignmentId: string }>
   /** Record the newest attempt's round with a result pinning `taskRevision`. Returns the round id. */
   answerNewestRow: (executionId: string, change: string, taskRevision: number) => string
+  /** The same recording through the production round stage (`applyRoundStage`'s `result` branch) — L4's forcing path for the answered-after-pause cells. */
+  answerNewestRowViaStage: (executionId: string, change: string, taskRevision: number) => Promise<string>
   /** Publish the next task revision (notify: false — no notices in the bench). */
   republish: (taskId: string, direction?: string) => void
   /** An in-flight change, held, paused, and recorded Paused — C2's base world. */
@@ -76,6 +80,27 @@ export async function pauseResolveBench(prefix: string): Promise<PauseResolveBen
       tests: [], limitations: null, taskRevision, submittedBy: { kind: 'agent', sessionId: 'dev' },
     })
     return wired.executions.insertRound({ executionId, change, attemptId: attempt.id, resultId: result.id, commitSha: 'round-commit', fixRound: false }).round.id
+  }
+  /** Record the newest attempt's round the way the executor settles a holder's result (L4): the result row is the production store insert, and the round is written by `applyRoundStage`'s `result` branch — the production result-recording function — not by hand-minting the row. The answered-after-pause cells (C18/C19/A14r) build exactly here. */
+  const answerNewestRowViaStage = async (executionId: string, change: string, taskRevision: number): Promise<string> => {
+    const row = wired.executions.change(executionId, change)!
+    const result = wired.tasks.store.results.insert({
+      teamId: wired.teamId, taskId: row.taskId!, summary: 'done', commit: 'round-commit', diff: null, worktree: null,
+      tests: [], limitations: null, taskRevision, submittedBy: { kind: 'agent', sessionId: 'dev' },
+    })
+    const releases: ReleaseSeam = {
+      readiness: () => ({ ready: true, reason: null }),
+      release: () => ({ ok: true }),
+      pendingSpawns: () => [],
+    }
+    await applyRoundStage({
+      team: wired.world.team, repo: wired.world.repo, executions: wired.executions, plans: wired.bench.plans,
+      tasks: wired.tasks,
+      results: new TaskResultService(wired.tasks, { getSession: id => wired.bench.records.get(id) ?? null }),
+      assignments: wired.assignments, adapters: roundAdapters, releases,
+      groupScoped: () => false, records: () => wired.bench.records.values(), now: () => wired.now().toISOString(),
+    }, row, { kind: 'result', roundId: null, resultId: result.id })
+    return wired.executions.rounds(executionId, change).at(-1)!.id
   }
   const republish = (taskId: string, direction = 'Revised: rework the shape'): void => {
     const outcome = wired.tasks.store.publish(taskId, { direction, rationale: 'the lead rethought it', notify: false }, { kind: 'human', sessionId: null })
@@ -129,7 +154,7 @@ export async function pauseResolveBench(prefix: string): Promise<PauseResolveBen
     toPaused(pause.id, 'api')
     return { planId, executionId, taskId: update.taskId, updateAssignmentId: update.assignmentId, pauseId: pause.id }
   }
-  return { ...wired, resolve, resumeMails, resolvedEvents, toPaused, mintOwed, mintAttempt, answerNewestRow, republish, pausedAttempt, pausedReview, pausedUpdate }
+  return { ...wired, resolve, resumeMails, resolvedEvents, toPaused, mintOwed, mintAttempt, answerNewestRow, answerNewestRowViaStage, republish, pausedAttempt, pausedReview, pausedUpdate }
 }
 
 /** The pause target of `change` on the pause, asserted present. */
