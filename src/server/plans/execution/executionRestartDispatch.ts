@@ -109,3 +109,36 @@ function updateLine(update: { base: string; files: string[] }): string {
   const files = update.files.length > 0 ? `files ${update.files.join(', ')}` : 'no named files'
   return `The failed update this restart re-runs: base ${update.base}, ${files}.`
 }
+
+export interface RestartedReviewDispatchInput {
+  team: TeamIdentity
+  execution: { id: string }
+  /** The plan's review group (the entry's, else the content's). */
+  reviewGroup: string
+  taskId: string
+  /** The composed review-restart instruction (the pause side's text). */
+  instruction: string
+  /** The fresh key `…round:<n>:review:<gen>:restart` — the superseded handoff's key would replay it. */
+  requestKey: string
+  resultId: string
+  allowedProfiles: string[]
+  assignments: Pick<AssignmentService, 'dispatchWithin'>
+}
+
+/**
+ * Dispatch R18r's ONE new review handoff inline (same round, same result,
+ * its own fresh request key), inside the caller's transaction. The
+ * execution-origin system caller is minted HERE, as for the attempt
+ * dispatch (D2's boundary — the structural test holds it).
+ */
+export function dispatchRestartedReviewWithin(input: RestartedReviewDispatchInput): string {
+  const outcome = input.assignments.dispatchWithin(resolveCaller(input.team, input.execution.id), {
+    taskId: input.taskId,
+    target: { kind: 'group', id: input.reviewGroup },
+    instruction: input.instruction,
+    requestKey: input.requestKey,
+    handoff: { kind: 'review', resultId: input.resultId, expectedResponse: null },
+    ...(input.allowedProfiles.length > 0 ? { allowedProfiles: input.allowedProfiles } : {}),
+  })
+  return outcome.assignment.id
+}

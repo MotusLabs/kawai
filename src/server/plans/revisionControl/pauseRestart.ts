@@ -18,7 +18,7 @@ import type { ChangeRow, ExecutionRow } from '../execution/executionRows'
 import type { AttemptKind, AttemptManifest } from '../../../shared/planExecution'
 import { manifestHashInput } from '../../../shared/planExecution'
 import { revisionPending } from '../execution/executionRounds'
-import { dispatchRestartedAttemptWithin } from '../execution/executionRestartDispatch'
+import { dispatchRestartedAttemptWithin, dispatchRestartedReviewWithin } from '../execution/executionRestartDispatch'
 import { handoffInstruction } from '../../team/TaskResultService'
 import type { MemberRelease } from '../../team/memberRelease'
 import { holdGate, type OpenPauseTarget } from './holdGate'
@@ -234,18 +234,15 @@ function restartReview(deps: PauseServiceDeps, caller: PlanCaller & { kind: 'hum
     prUrl: changeRow?.prUrl ?? null, notesId: notes?.kind === 'notes' ? notes.id : null,
     acceptance: [...entry?.acceptance ?? [], ...revision.content.acceptanceRules],
   }), null)
-  const outcome = deps.assignmentService!.dispatchWithin(
-    { kind: 'system', team: caller.team, origin: { kind: 'execution', executionId: execution.id } },
-    {
-      taskId: task.id,
-      target: { kind: 'group', id: reviewGroup },
-      instruction,
-      requestKey: `exec:${execution.id}:${target.change}:round:${newestRound.number}:review:${changeRow?.generation ?? 0}:restart`,
-      handoff: { kind: 'review', resultId: newestRound.resultId, expectedResponse: null },
-      ...(roleProfiles.length > 0 ? { allowedProfiles: roleProfiles } : {}),
-    },
-  )
-  deps.executions.setRoundReview(newestRound.id, outcome.assignment.id)
+  // The execution-origin caller is minted in the execution module (D2's
+  // boundary); the pause side composes only the instruction and the key.
+  const assignmentId = dispatchRestartedReviewWithin({
+    team: caller.team, execution, reviewGroup, taskId: task.id, instruction,
+    requestKey: `exec:${execution.id}:${target.change}:round:${newestRound.number}:review:${changeRow?.generation ?? 0}:restart`,
+    resultId: newestRound.resultId, allowedProfiles: roleProfiles,
+    assignments: deps.assignmentService!,
+  })
+  deps.executions.setRoundReview(newestRound.id, assignmentId)
   return { target: { change: target.change, decision: 'restart' } }
 }
 
