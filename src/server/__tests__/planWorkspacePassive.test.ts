@@ -146,7 +146,10 @@ function wire(bench: SupervisionBench): void {
     restore: forbid('restore'),
     loadHistory: forbid('loadHistory'),
     send: forbid('send'),
-    claimPull: forbid('claimPull'),
+    // N2: the real usage-refresh seams under their production names — the
+    // manager's own provider pull and the usageLimits claim beneath it.
+    claimProviderUsagePull: forbid('claimProviderUsagePull'),
+    usageLimits: { claimPull: forbid('usageLimits.claimPull') },
     // LC6: the dispatcher and staffing wakes are as forbidden as the
     // process seams — the real field and method names on the manager.
     dispatcher: { notify: forbid('dispatcher.notify') },
