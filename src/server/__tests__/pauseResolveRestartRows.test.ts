@@ -10,6 +10,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import type { AttemptManifest } from '../../shared/planExecution'
 import { pauseResolveBench, targetOf, type PauseResolveBench } from './pauseResolveBench'
+import { PAUSE_U_CLAIMS, pauseCells, type PauseCell } from './pauseCells'
 import { writeGroup } from './planHarness'
 
 let wired: PauseResolveBench
@@ -235,5 +236,68 @@ describe('the R-rows (D9, verbatim)', () => {
       expect(attempts[2].manifest.task.revision).toBe(id === 'R23r' ? 2 : 1)
       expect(attempts[2].assignmentId).toBeNull()
     }
+  })
+})
+
+// The completeness grid (restart, lead ruling L5): the cells and their
+// reachability come from the shared pauseCells table — one reading for every
+// resolution — and this mapping sends each reachable cell to its R-row.
+// Restart's state rows fan out where the design table does: the shared
+// `pausing` cell rows as R10-R14 by its cause, and the shared `withdrawn`
+// cell rows as R9 (paused) and R15 (pausing) — the two presentations the
+// withdrawn stamp composes with. The unreachable cells carry their U-claims
+// from PAUSE_U_CLAIMS.
+describe('the restart grid (completeness, derived from the shared cell table)', () => {
+  function restartRowFor(cell: PauseCell): string[] {
+    if (cell.state === 'decided') return ['R1']
+    if (cell.state === 'withdrawn') return ['R9', 'R15']
+    if (cell.state === 'pausing') return ['R10', 'R11', 'R12', 'R13', 'R14']
+    if (cell.state === 'paused·gone') return ['R16']
+    if (cell.state === 'paused (review target)' || cell.state === 'paused (review target, handoff superseded)') {
+      // The kind axis collapses to answered(*): plain rows as R18r, and the
+      // rev↗ cell takes the H5 exception (R17).
+      return cell.status === 'answered·rev↗' ? ['R17'] : ['R18r']
+    }
+    if (cell.state === 'paused (attempt stage)') {
+      if (cell.status === '—') return ['R2']
+      if (cell.kind === 'implement') {
+        if (cell.status === 'owed') return ['R3']
+        if (cell.status === 'out') return ['R4']
+        if (cell.status === 'answered (plain)') return ['R5']
+        return ['R19r']
+      }
+      if (cell.status === 'owed') return ['R6']
+      if (cell.status === 'out') return ['R7']
+      if (cell.status === 'answered (plain)') return ['R8']
+      return ['R20r']
+    }
+    // The update-target states: out at placement (R21r), answered after the
+    // pause (R22r/R23r — L4's route, forced through the production round
+    // stage).
+    if (cell.status === 'out') return ['R21r']
+    return cell.status === 'answered·rev↗' ? ['R23r'] : ['R22r']
+  }
+
+  test('every shared cell maps to R-rows or U-claims, and every R-row is used', () => {
+    const hit: Record<string, number> = {}
+    for (const cell of pauseCells()) {
+      const verdict = cell.verdict
+      let mapped: string[]
+      if (!verdict.unreachable) {
+        mapped = restartRowFor(cell)
+        for (const row of mapped) expect(row).toMatch(/^R\d+r?$/)
+      } else {
+        expect(PAUSE_U_CLAIMS[verdict.uId]).toBeDefined()
+        mapped = [verdict.uId]
+      }
+      for (const row of mapped) hit[row] = (hit[row] ?? 0) + 1
+    }
+    // Every R-row of the table is reached by at least one cell (no gap).
+    for (const candidate of R_ROWS) expect(hit[candidate[0]]).toBeGreaterThan(0)
+    // The unreachable cells are exactly the U-claim cells.
+    expect(hit['U1']).toBe(4) // attempt-stage update owed + out; both update-target states' owed
+    expect(hit['U2']).toBe(6) // both review states' absent, owed, and out
+    expect(hit['U7']).toBe(4) // attempt-stage update answered plain + rev↗; the update-out target's answered at placement
+    expect(hit['U3']).toBe(1) // the answered-after state's out cross
   })
 })

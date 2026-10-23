@@ -83,7 +83,7 @@ export function pauseCell(state: PauseCellState, kind: AttemptKind | null, statu
       : { unreachable: true, uId: 'U3' } // an answered row is not also out (attemptStatus's exclusive branches)
   }
   return state === 'paused (update target, answered after the pause)'
-    ? { unreachable: false, via: 'the holder\'s result recorded the round under the hold (L4): C18/C19/A14r' }
+    ? { unreachable: false, via: 'the holder\'s result recorded the round under the hold (L4): C18/C19/A14r/R22r/R23r' }
     : { unreachable: true, uId: 'U7' } // the pause is never CREATED naming an answered update row
 }
 
