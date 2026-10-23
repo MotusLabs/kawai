@@ -100,6 +100,37 @@ function isStep(step: unknown): step is CheckStep {
   )
 }
 
+/** Every unexpired, well-formed record for `treeId`, newest first — by the
+ * record's own `at`, which travels with the file across worktrees, unlike
+ * mtime (ties break by key, so the order is total). A tree can hold records
+ * under several keys: the key hashes the Bun version, platform, and
+ * architecture, and the server cannot rebuild one — a compiled binary embeds
+ * its own Bun, which need not be the worktree's (independent-verification
+ * D3) — so the directory is scanned instead of computing a key. Fail-closed
+ * like readRecord, whose age limit and parsing it applies: a missing or
+ * unreadable directory holds no records, and a file that is not a
+ * well-formed record is skipped, never thrown. */
+export function recordsForTree(dir: string, treeId: string, now = Date.now()): CheckRecord[] {
+  let names: string[]
+  try {
+    names = fs.readdirSync(dir)
+  } catch {
+    return []
+  }
+  const records: CheckRecord[] = []
+  for (const name of names) {
+    if (!/^[0-9a-f]{64}\.json$/.test(name)) continue
+    const record = readRecord(dir, name.slice(0, -'.json'.length), now)
+    if (record === null || record.treeId !== treeId) continue
+    records.push(record)
+  }
+  return records.sort((a, b) => {
+    const byAt = Date.parse(b.at) - Date.parse(a.at)
+    if (byAt !== 0) return byAt
+    return a.key < b.key ? -1 : a.key > b.key ? 1 : 0
+  })
+}
+
 /** Remove the record for `key`, whatever wrote it. Best-effort: a file that
  * is already absent, or a store that cannot be written, is fine — removal
  * must never turn a failing check into a crash. */
