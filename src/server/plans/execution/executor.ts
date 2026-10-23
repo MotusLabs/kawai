@@ -93,6 +93,8 @@ export interface ExecutorDeps {
   checkpoints?: import('../revisionControl/checkpointTool').CheckpointTool
   /** revision-control D8 (4.3): the tick's pause pass — owed mail, Paused recording, closing. */
   pauses?: import('../revisionControl/pauseTick').PauseTickDeps
+  /** The owed review-restart stage's dispatch (revision-control 4.5 LC1), wired by the composition from the pause side's stores. */
+  reviewRestart?: import('./executionRounds').ReviewRestartSeam
 }
 
 export class ExecutionExecutor {

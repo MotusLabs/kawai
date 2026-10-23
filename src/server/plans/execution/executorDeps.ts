@@ -31,6 +31,7 @@ export function roundDeps(deps: ExecutorDeps, team: TeamIdentity, repo: string, 
     groupScoped: deps.groupScoped,
     now: () => (deps.now?.() ?? new Date()).toISOString(),
     ...(gate ? { gate } : {}),
+    ...(deps.reviewRestart ? { reviewRestart: deps.reviewRestart } : {}),
   }
 }
 

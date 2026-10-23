@@ -11,16 +11,12 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import type { AttemptManifest } from '../../shared/planExecution'
 import { pauseResolveBench, targetOf, type PauseResolveBench } from './pauseResolveBench'
 import { PAUSE_U_CLAIMS, pauseCells, type PauseCell } from './pauseCells'
-import { writeGroup } from './planHarness'
 
 let wired: PauseResolveBench
 let sequence = 0
 
 beforeAll(async () => {
   wired = await pauseResolveBench('pause-resolve-restart-rows')
-  // The fixture plan's review group, for R18r's handoff dispatch — the
-  // harness defines only the implement groups.
-  writeGroup(wired.world, 'reviewers', 'Review work.')
 })
 
 afterAll(() => {

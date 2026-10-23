@@ -53,7 +53,7 @@ import { HoldService } from './revisionControl/holdService'
 import { HoldStore } from './revisionControl/holdStore'
 import { PauseStore } from './revisionControl/pauseStore'
 import { PauseService } from './revisionControl/pauseService'
-import { restartReleaseSeams } from './revisionControl/pauseRestart'
+import { restartReleaseSeams, reviewRestartSeam } from './revisionControl/pauseRestart'
 import { AssignmentStore } from '../team/assignmentStore'
 import { CheckpointStore } from './revisionControl/checkpointStore'
 import type { PauseTickDeps } from './revisionControl/pauseTick'
@@ -415,6 +415,13 @@ export function composePlanServices(options: PlanServicesOptions): {
       adapters: { provision: provisionAdapter(executionStore, undefined, mechanisms) },
       groupScoped: (teamId, groupId) => groupScopedOf(team, teamId, groupId),
       holds: { active: holdsOf, openTargets: openTargetsOf },
+      // LC1: the planner's owed review-restart stage dispatches through the
+      // pause side's stores — the newest restart decision names the pause
+      // whose recorded notes ride the instruction.
+      reviewRestart: reviewRestartSeam({
+        pauses: pauseStore, checkpoints: checkpointStore, executions: executionStore,
+        plans: options.plans, tasks: team.tasks, assignments: team.assignments,
+      }),
       checkpoints,
       // revision-control D8 (4.3): the tick's pause pass — the owed mail,
       // then Paused recorded from stored rows and the live holder facts,

@@ -27,6 +27,7 @@ import type { ExecutionStore } from '../plans/execution/executionStore'
 import type { HoldService } from '../plans/revisionControl/holdService'
 import type { PauseService } from '../plans/revisionControl/pauseService'
 import { PauseStore } from '../plans/revisionControl/pauseStore'
+import { CheckpointStore } from '../plans/revisionControl/checkpointStore'
 import type { FloorMap } from '../../shared/planExecution'
 import { LEAD_ROLES } from './decisionHarness'
 import { sessionRow, writeGroup, createPlanBench, createPlanWorld, type PlanBench, type PlanWorld } from './planHarness'
@@ -39,6 +40,8 @@ let pauses: PauseService
 let store: ExecutionStore
 /** A reader over the same connection: the composition's own pause rows. */
 let pauseRows: PauseStore
+/** A reader over the same connection: the checkpoints the resolve's restart reads. */
+let checkpointRows: CheckpointStore
 let planCounter = 0
 
 const inTwoDays = (): string => new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString()
@@ -121,8 +124,11 @@ async function compose(): Promise<void> {
 beforeAll(async () => {
   world = await createPlanWorld('kawai-pause-comp-')
   writeGroup(world, 'leads', '---\ncanCreatePlans: true\nmax: 1\n---\nLead.')
+  // The fixture plans' review group: the review-restart dispatch addresses it.
+  writeGroup(world, 'reviewers', 'Review work.')
   bench = createPlanBench(world)
   await compose()
+  checkpointRows = new CheckpointStore(bench.db.db)
 })
 
 afterAll(() => {
@@ -322,5 +328,91 @@ describe('the composed resolve reads origin (L3, A3.2)', () => {
     const target = pauseRows.target(world_.pauseId, 'api')!
     expect(target.decision).toBe('restart')
     expect(target.decisionDetail).toMatchObject({ holder: 'comp-adapt-3', release: 'never' })
+  })
+})
+
+// The released restart's owed review handoff (revision-control 4.5 LC1,
+// H1r): the full composition — the resolve marks the debt (`review-restart`
+// and the cleared pointer), the hold's release unblocks the planner, and the
+// tick dispatches the one fresh handoff through the composed seam. The unit
+// suites force the arms piecewise; this runs the production path whole.
+describe('the released restart dispatches the owed review handoff (LC1, H1r)', () => {
+  /** A paused review cell whose round settled (push, PR done), whose review handoff is out and claimed, and whose reviewer's notes are recorded. */
+  async function pausedReviewCell(planIndex: number): Promise<{ planId: string; executionId: string; taskId: string; pauseId: string; holdId: string; roundId: string; handoffId: string }> {
+    const holder = `comp-rev-${planIndex}`
+    const built = await inFlightTarget(holder, 'review')
+    const result = bench.tasks.results.insert({
+      teamId: world.team.teamId, taskId: built.taskId, summary: 'done', commit: 'round-commit', diff: null, worktree: null,
+      tests: [], limitations: null, taskRevision: 1, submittedBy: { kind: 'agent', sessionId: holder },
+    })
+    const { round } = store.insertRound({ executionId: built.executionId, change: 'api', attemptId: store.attempts(built.executionId, 'api')[0]!.id, resultId: result.id, commitSha: 'round-commit', fixRound: false })
+    // insertRound returns the change to `gating` with no step (D9); the
+    // review dispatch re-applies `reviewing`, as the production round stage
+    // does.
+    const gating = store.change(built.executionId, 'api')!
+    if (!store.transition(built.executionId, 'api', gating, { state: 'gating', step: 'reviewing' })) throw new Error('the transition to reviewing failed')
+    // The round's push and PR settled — their done effects' handlers write
+    // these in production; the fixture inserts the settled rows.
+    bench.db.db.prepare('UPDATE plan_execution_rounds SET pushed_at = ? WHERE id = ?').run(new Date().toISOString(), round.id)
+    const pr = store.insertEffect({ executionId: built.executionId, change: 'api', roundId: round.id, kind: 'open-pr', effectKey: `${built.executionId}:api:open-pr:1:comp-${planIndex}`, command: {} })
+    store.setEffectOutcome(pr.id, { state: 'done', outcome: { number: 1, url: 'https://example.test/pr/1', openedByKawai: true }, error: null })
+    // The production review cell: the round's handoff is out and claimed by
+    // a reviewer session — the assignment the held restart drops.
+    bench.records.set('comp-reviewer', sessionRow('comp-reviewer', 'reviewers', world.feature))
+    const reviewMail = bench.mail.enqueue({
+      teamId: world.team.teamId, toKind: 'group', toId: 'reviewers', fromKind: 'system', fromSession: null, fromGroup: null,
+      originPath: world.repo, body: `Review the result ${result.id} of change "api".`, taskId: built.taskId, actor: 'system',
+    })
+    const reviewAssignment = bench.assignmentStore.insert({
+      teamId: world.team.teamId, taskId: built.taskId, requestKey: `exec:${built.executionId}:api:round:1:review:1-comp-${planIndex}`, targetKind: 'group', targetId: 'reviewers',
+      role: null, instruction: 'Review.', creator: { kind: 'human', sessionId: null }, messageId: reviewMail.id,
+    })
+    settleReceipt(reviewMail.id, 'comp-reviewer')
+    store.setRoundReview(round.id, reviewAssignment.assignment.id)
+    const placed = holds.place(bench.human, {
+      planId: built.planId, scope: 'changes', rationale: 'rethink the direction', deadline: inTwoDays(), cites: null,
+      commandId: `pause-comp-hold-rev-${planIndex}`, changes: ['api'],
+    })
+    if (!placed.ok) throw new Error(placed.message)
+    const paused = await pauses.pause(bench.human, { planId: built.planId, holdId: placed.result!.hold.id, deadline: inTwoDays(), commandId: `pause-comp-rev-${planIndex}` })
+    if (!paused.ok) throw new Error(paused.message)
+    checkpointRows.insert({
+      executionId: built.executionId, change: 'api', pauseId: paused.result!.pause.id, attemptId: null, sessionId: 'comp-reviewer',
+      kind: 'notes', commitSha: null, baselineCommit: null, manifestHash: null, resultId: null,
+      summary: 'the review notes', unfinished: null, errorsTests: null, nextSteps: 'none', effectId: null,
+    })
+    const target = pauseRows.target(paused.result!.pause.id, 'api')!
+    settleReceipt(target.messageId!, 'comp-reviewer')
+    runtime.command(world.team.teamId)
+    await runtime.idle()
+    if (pauseRows.target(paused.result!.pause.id, 'api')!.pausedAt === null) throw new Error('the fixture pause never recorded Paused')
+    return { ...built, pauseId: paused.result!.pause.id, holdId: placed.result!.hold.id, roundId: round.id, handoffId: reviewAssignment.assignment.id }
+  }
+
+  test('the resolve marks the debt; the release dispatches it once through the tick', async () => {
+    const built = await pausedReviewCell(4)
+    const resolved = await pauses.resolve(bench.human, { planId: built.planId, pauseId: built.pauseId, change: 'api', choice: 'restart', rationale: 'rethink', releaseHold: false, commandId: 'pause-comp-resolve-rev-restart-1' })
+    if (!resolved.ok) throw new Error(resolved.message)
+    // Held: the round's pointer drops off the superseded handoff and the
+    // step marks the owed handoff — the debt is stored state.
+    expect(store.round(built.roundId)!.reviewAssignmentId).toBeNull()
+    expect(store.change(built.executionId, 'api')!.step).toBe('review-restart')
+    expect(bench.assignmentStore.byId(built.handoffId)?.supersededBy).not.toBeNull()
+    // The release unblocks the planner; the tick dispatches the debt.
+    const released = holds.release(bench.human, { planId: built.planId, holdId: built.holdId, reason: 'the dispatch may go', commandId: 'pause-comp-release-rev-1' })
+    if (!released.ok) throw new Error(released.message)
+    runtime.command(world.team.teamId)
+    await runtime.idle()
+    const round = store.round(built.roundId)!
+    expect(round.reviewAssignmentId).not.toBeNull()
+    expect(round.reviewAssignmentId).not.toBe(built.handoffId)
+    const handoff = bench.assignmentStore.byId(round.reviewAssignmentId!)
+    expect(handoff?.requestKey).toMatch(/:review:\d+:restart$/)
+    expect(store.change(built.executionId, 'api')!.step).toBe('reviewing')
+    const instruction = bench.mail.get(handoff?.messageId ?? '')
+    expect(instruction?.toKind).toBe('group')
+    expect(instruction?.toId).toBe('reviewers')
+    expect(instruction?.body).toContain('restarted by the owner')
+    expect(instruction?.body).toContain(checkpointRows.newest(built.pauseId, 'api')!.id)
   })
 })

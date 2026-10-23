@@ -13,17 +13,23 @@
 import { createHash } from 'node:crypto'
 import { PlanRefusal } from '../planCommands'
 import type { PlanCaller } from '../PlanService'
+import type { PlanStore } from '../planStore'
 import type { PlanChange, PlanContent } from '../../../shared/plans'
 import type { ChangeRow, ExecutionRow } from '../execution/executionRows'
+import type { ExecutionStore } from '../execution/executionStore'
 import type { AttemptKind, AttemptManifest } from '../../../shared/planExecution'
 import { manifestHashInput } from '../../../shared/planExecution'
-import { revisionPending } from '../execution/executionRounds'
+import { revisionPending, type ReviewRestartSeam } from '../execution/executionRounds'
 import { dispatchRestartedAttemptWithin, dispatchRestartedReviewWithin } from '../execution/executionRestartDispatch'
 import { handoffInstruction } from '../../team/TaskResultService'
+import type { AssignmentService } from '../../team/AssignmentService'
+import type { TaskService } from '../../team/TaskService'
 import type { MemberRelease } from '../../team/memberRelease'
 import { holdGate, type OpenPauseTarget } from './holdGate'
 import type { ActiveHold, PlanPause, PlanPauseTarget } from '../../../shared/planRevisionControl'
 import type { PauseServiceDeps } from './pauseService'
+import type { PauseStore } from './pauseStore'
+import type { CheckpointStore } from './checkpointStore'
 import { recordResolution, supersedeHeldAssignment, type AdaptHeadFacts, type ResolveInput, ResolveRefusal } from './pauseResolve'
 
 /**
@@ -205,7 +211,9 @@ function restartAttempt(deps: PauseServiceDeps, caller: PlanCaller & { kind: 'hu
  * request key (the superseded handoff's key would replay it), the
  * instruction naming the paused reviewer's recorded notes' id when one
  * exists; no attempt row and no manifest (D9's steps 6-7 apply to attempts
- * only, D4).
+ * only, D4). Under a still-closed gate the handoff is owed, not dropped:
+ * the round's pointer is cleared and the change's `review-restart` step
+ * marks the debt for the planner's release dispatch (LC1).
  */
 function restartReview(deps: PauseServiceDeps, caller: PlanCaller & { kind: 'human' }, input: ResolveInput,
   pause: PlanPause, target: PlanPauseTarget, task: { id: string; revision: number }, release: ReleaseBookkeeping): { target: { change: string; decision: string } } {
@@ -216,6 +224,19 @@ function restartReview(deps: PauseServiceDeps, caller: PlanCaller & { kind: 'hum
   recordResolution(deps, input, pause, target, 'restart', detail)
   supersedeHeldAssignment(deps, pause, target)
   if (pending || newestRound === null || !dispatchGateOpen(deps, caller, pause, target.change)) {
+    // LC1's held arm: the closed gate kept the dispatch from running, so the
+    // round's stale pointer is dropped — nothing may wait on the superseded
+    // handoff — and the change's step marks the one owed handoff, which the
+    // planner dispatches once on release (the `review-restart` stage). A
+    // pending round keeps its pointer: the revision flow owns it (R17), and
+    // the planner's revision stage preempts this step.
+    if (!pending && newestRound !== null) {
+      deps.executions.clearRoundReview(newestRound.id)
+      const heldRow = deps.executions.change(pause.executionId, target.change)
+      if (heldRow !== null && heldRow.step === 'reviewing') {
+        deps.executions.transition(pause.executionId, target.change, heldRow, { step: 'review-restart' })
+      }
+    }
     return { target: { change: target.change, decision: 'restart' } }
   }
   const execution = deps.executions.execution(pause.executionId)
@@ -267,4 +288,51 @@ function reviewRestartInstruction(input: {
     `Submit your verdict with task_submit_findings on task ${input.taskId} for result ${input.round.resultId}: pass or fail, with what you checked.`,
     'You are the independent reviewer: if you authored one of this change\'s results, do not review it — say so in a message to the Lead group instead.',
   ].filter(line => line !== null).join('\n\n') + `\n\nExecution ${input.execution.id} of plan ${input.execution.planId} at revision ${input.execution.revision}.`
+}
+
+/**
+ * The production wiring of the owed review-restart stage (LC1): the newest
+ * restart decision standing for the change names the pause whose recorded
+ * notes ride the instruction, and the dispatch goes through the execution
+ * module's `dispatchRestartedReviewWithin` — the execution-origin caller is
+ * minted there, D2's boundary. `null` (no standing restart decision, or a
+ * missing fact) leaves the stage due with the step still marking the debt.
+ */
+export function reviewRestartSeam(input: {
+  pauses: Pick<PauseStore, 'forPlan' | 'targets'>
+  checkpoints: CheckpointStore
+  executions: Pick<ExecutionStore, 'execution' | 'change'>
+  plans: PlanStore
+  tasks: TaskService
+  assignments: Pick<AssignmentService, 'dispatchWithin'>
+}): ReviewRestartSeam {
+  return async ({ team, changeRow, round }) => {
+    const execution = input.executions.execution(changeRow.executionId)
+    if (execution === null) return null
+    const restart = input.pauses.forPlan(team.teamId, execution.planId, false)
+      .flatMap(pause => input.pauses.targets(pause.id).map(target => ({ pauseId: pause.id, target })))
+      .filter(entry => entry.target.change === changeRow.change && entry.target.decision === 'restart')
+      .at(-1) ?? null
+    if (restart === null) return null
+    const notes = input.checkpoints.newest(restart.pauseId, changeRow.change)
+    const result = input.tasks.store.results.get(round.resultId)
+    if (result === null) return null
+    const revision = input.plans.revision(execution.planId, execution.revision)
+    const entry = revision?.content.changes.find(candidate => candidate.change === changeRow.change)
+    const reviewGroup = entry?.reviewGroup ?? revision?.content.reviewGroup ?? null
+    if (revision === null || revision === undefined || reviewGroup === null) return null
+    const row = input.executions.change(changeRow.executionId, changeRow.change)
+    const instruction = handoffInstruction('review', result, reviewRestartInstruction({
+      change: changeRow.change, round, taskId: changeRow.taskId, execution,
+      prUrl: row?.prUrl ?? null, notesId: notes?.kind === 'notes' ? notes.id : null,
+      acceptance: [...entry?.acceptance ?? [], ...revision.content.acceptanceRules],
+    }), null)
+    return dispatchRestartedReviewWithin({
+      team, execution, reviewGroup, taskId: changeRow.taskId, instruction,
+      requestKey: `exec:${execution.id}:${changeRow.change}:round:${round.number}:review:${row?.generation ?? 0}:restart`,
+      resultId: round.resultId,
+      allowedProfiles: revision.content.roles.find(role => role.group === reviewGroup)?.profiles ?? [],
+      assignments: input.assignments,
+    })
+  }
 }

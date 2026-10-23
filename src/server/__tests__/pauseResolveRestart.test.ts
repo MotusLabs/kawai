@@ -8,17 +8,15 @@ import { afterAll, beforeAll, expect, test } from 'bun:test'
 import type { AttemptManifest } from '../../shared/planExecution'
 import { manifestHashInput } from '../../shared/planExecution'
 import { REVISION_NOTICE_TAG } from '../team/taskNotices'
+import { applyRoundStage } from '../plans/execution/executionRounds'
+import { reviewRestartSeam } from '../plans/revisionControl/pauseRestart'
 import { pauseResolveBench, targetOf, type PauseResolveBench } from './pauseResolveBench'
-import { writeGroup } from './planHarness'
 
 let wired: PauseResolveBench
 let sequence = 0
 
 beforeAll(async () => {
   wired = await pauseResolveBench('pause-resolve-restart')
-  // The fixture plan's review group, for R18r's handoff dispatch — the
-  // harness defines only the implement groups.
-  writeGroup(wired.world, 'reviewers', 'Review work.')
 })
 
 afterAll(() => {
@@ -213,16 +211,62 @@ test('R18r: the restart re-dispatches the same round under a fresh review key wi
   expect(handoff?.id).not.toBe(targetOf(wired, world.pauseId, 'api').assignmentId)
 })
 
-// R18r, the held arm: the gate still closed means the decision and the stop
-// branch stand but nothing dispatches — the round pointer is unchanged.
-// (A held restart's later re-dispatch path is the planner's, not the
-// resolve's; see the CHECKPOINT note on this arm.)
-test('R18r: a restart under a still-held change decides and dispatches nothing', async () => {
+// R18r, the held arm (LC1): the gate still closed means the decision and the
+// stop branch stand and nothing dispatches — and the debt is stored state,
+// not a memory: the round's pointer drops off the superseded handoff and the
+// change's step marks the one owed review handoff for the release dispatch.
+test('R18r: a restart under a still-held change drops the stale pointer and marks the owed handoff', async () => {
+  const world = await wired.pausedReview({ notes: true })
+  ok(await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'restart' }))
+  const round = wired.executions.rounds(world.executionId, 'api')[0]
+  // Nothing waits on the superseded handoff: the pointer is clear.
+  expect(round.reviewAssignmentId).toBeNull()
+  // The dispatch stays owed in stored state: the step marks it, no mail went out.
+  const row = wired.executions.change(world.executionId, 'api')!
+  expect(row.state).toBe('gating')
+  expect(row.step).toBe('review-restart')
+  expect(wired.bench.mail.forTask(world.taskId).filter(message => message.body.includes('restarted by the owner'))).toHaveLength(0)
+  // The held handoff itself was superseded through the stop branch.
+  expect(wired.bench.assignmentStore.byId(targetOf(wired, world.pauseId, 'api').assignmentId)?.supersededBy).not.toBeNull()
+})
+
+// LC1's release: the held restart's owed handoff dispatches exactly once —
+// same round, fresh `…:restart` key, the recorded notes' id — through the
+// same seam the composition wires, and the keyed replay across the crash
+// window (dispatch committed, the stage's writes not) returns the same
+// assignment without a second mail.
+test('R18r: the release dispatches the owed review handoff once — fresh key, notes id, keyed replay', async () => {
   const world = await wired.pausedReview({ notes: true })
   ok(await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'restart' }))
   const round = wired.executions.rounds(world.executionId, 'api')[0]
   expect(round.reviewAssignmentId).toBeNull()
-  expect(wired.bench.mail.forTask(world.taskId).filter(message => message.body.includes('restarted by the owner'))).toHaveLength(0)
+  const seam = reviewRestartSeam({
+    pauses: wired.pauses, checkpoints: wired.checkpoints, executions: wired.executions,
+    plans: wired.bench.plans, tasks: wired.tasks, assignments: wired.assignments,
+  })
+  const changeRow = { executionId: world.executionId, change: 'api', taskId: world.taskId }
+  const first = await seam({ team: wired.world.team, changeRow, round })
+  // The crash window: a second seam run before any transition moved the
+  // generation replays the same key — the same assignment, no second mail.
+  const replayed = await seam({ team: wired.world.team, changeRow, round })
+  expect(replayed).toBe(first)
+  const restarted = () => wired.bench.mail.forTask(world.taskId).filter(message => message.body.includes('restarted by the owner'))
+  expect(restarted()).toHaveLength(1)
+  // The stage lands the dispatch: the pointer moves onto the fresh handoff
+  // and the change reviews again; no attempt row was minted. The key reads
+  // the generation as it stood at dispatch — the step transition lands after.
+  const generationAtDispatch = wired.executions.change(world.executionId, 'api')!.generation
+  await applyRoundStage(wired.roundDeps(seam), wired.executions.change(world.executionId, 'api')!, { kind: 'review-restart', roundId: round.id, resultId: null })
+  const reloaded = wired.executions.round(round.id)!
+  expect(reloaded.reviewAssignmentId).toBe(first)
+  const handoff = wired.bench.assignmentStore.byId(reloaded.reviewAssignmentId!)
+  expect(handoff?.requestKey).toBe(`exec:${world.executionId}:api:round:1:review:${generationAtDispatch}:restart`)
+  const instruction = wired.bench.mail.get(handoff?.messageId ?? '')
+  expect(instruction?.toKind).toBe('group')
+  expect(instruction?.body).toContain(wired.checkpoints.newest(world.pauseId, 'api')!.id)
+  expect(wired.executions.change(world.executionId, 'api')!.step).toBe('reviewing')
+  expect(wired.executions.attempts(world.executionId, 'api')).toHaveLength(1)
+  expect(restarted()).toHaveLength(1)
 })
 
 // R18r with a superseded handoff: the handoff-standing refusal has no

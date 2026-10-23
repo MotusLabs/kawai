@@ -7,9 +7,10 @@ import { expect } from 'bun:test'
 import type { TeamMessage } from '../../shared/team'
 import { PLAN_RESUME_TAG, type ResolveInput, type PauseResolveOutcome } from '../plans/revisionControl/pauseResolve'
 import type { PlanPauseTarget } from '../../shared/planRevisionControl'
-import { applyRoundStage, roundAdapters, type ReleaseSeam } from '../plans/execution/executionRounds'
+import { applyRoundStage, roundAdapters, type RoundDeps } from '../plans/execution/executionRounds'
 import { TaskResultService } from '../team/TaskResultService'
 import { pauseTargetsBench, type PauseTargetsBench } from './pauseTargetsBench'
+import { sessionRow, writeGroup } from './planHarness'
 
 function ok<T>(outcome: { ok: boolean; result?: T; message?: string }): T {
   if (!outcome.ok || outcome.result === undefined) throw new Error(outcome.ok ? 'the command wrote nothing' : (outcome.message ?? 'refused'))
@@ -37,16 +38,23 @@ export type PauseResolveBench = PauseTargetsBench & {
   republish: (taskId: string, direction?: string) => void
   /** An in-flight change, held, paused, and recorded Paused — C2's base world. */
   pausedAttempt: (opts?: { holder?: string; mintAttempt?: boolean }) => Promise<{ planId: string; executionId: string; taskId: string; assignmentId: string; pauseId: string }>
-  /** A review target (gating, reviewing) recorded Paused, with the C12-C14 variants. */
+  /** A review target (gating, reviewing) recorded Paused, with the C12-C14 variants. The round's handoff is dispatched through the production review stage (`applyRoundStage`'s review branch — `round.reviewAssignmentId` is a store fact) and claimed by reviewer session `rev1`, so the target derives a live holder. */
   pausedReview: (opts?: { superseded?: boolean; notes?: boolean; pending?: boolean }) => Promise<{ planId: string; executionId: string; taskId: string; pauseId: string }>
   /** The update target (gating, newest update row out) recorded Paused. */
   pausedUpdate: (opts?: { manifest?: AttemptManifest }) => Promise<{ planId: string; executionId: string; taskId: string; updateAssignmentId: string; pauseId: string }>
+  /** The fixture's RoundDeps, with an optional review-restart seam — the release test runs the planner's stage through it. */
+  roundDeps: (reviewRestart?: RoundDeps['reviewRestart']) => RoundDeps
   /** A still-pausing target — the pause placed, Paused not recorded (R10-R15's base world). `checkpoint` plants THIS pause's own newest checkpoint, kind `commit` with its push effect in `effectState` (undefined = no effect row) or kind `result` (work on origin). */
   pausing: (opts?: { holder?: string; queued?: boolean; withdrawn?: boolean; checkpoint?: { kind: 'commit'; effectState?: 'done' | 'failed' | 'running' } | { kind: 'result' } }) => Promise<{ planId: string; executionId: string; taskId: string; assignmentId: string; pauseId: string }>
 }
 
 export async function pauseResolveBench(prefix: string): Promise<PauseResolveBench> {
   const wired = await pauseTargetsBench(prefix)
+  // The plan fixtures name `reviewers` as the review group; the production
+  // dispatch addresses it as a group target, so the bench defines it once
+  // (the restart suites each wrote it before the fixture built the real
+  // review cell).
+  writeGroup(wired.world, 'reviewers', 'Review work.')
   let commandCounter = 0
   const resolve = async (input: Partial<ResolveInput> & { planId: string; pauseId: string; change: string }): Promise<PauseResolveOutcome> =>
     wired.service.resolve(wired.bench.human, { rationale: 'rethink', commandId: `resolve-${++commandCounter}`, ...input } as ResolveInput)
@@ -83,6 +91,20 @@ export async function pauseResolveBench(prefix: string): Promise<PauseResolveBen
     })
     return wired.executions.insertRound({ executionId, change, attemptId: attempt.id, resultId: result.id, commitSha: 'round-commit', fixRound: false }).round.id
   }
+  /** The RoundDeps the fixture's stage paths share (L4, and LC1's review cell): the bench stores behind the production round pipeline's shape, a ready release seam, no hold gate. The review branch's handoff dispatches through the same AssignmentService the resolve reads. */
+  const roundDeps = (reviewRestart?: RoundDeps['reviewRestart']): RoundDeps => ({
+    team: wired.world.team, repo: wired.world.repo, executions: wired.executions, plans: wired.bench.plans,
+    tasks: wired.tasks,
+    results: new TaskResultService(wired.tasks, { getSession: id => wired.bench.records.get(id) ?? null, assignments: wired.assignments }),
+    assignments: wired.assignments, adapters: roundAdapters,
+    releases: {
+      readiness: () => ({ ready: true, reason: null }),
+      release: () => ({ ok: true }),
+      pendingSpawns: () => [],
+    },
+    groupScoped: () => false, records: () => wired.bench.records.values(), now: () => wired.now().toISOString(),
+    ...(reviewRestart ? { reviewRestart } : {}),
+  })
   /** Record the newest attempt's round the way the executor settles a holder's result (L4): the result row is the production store insert, and the round is written by `applyRoundStage`'s `result` branch — the production result-recording function — not by hand-minting the row. The answered-after-pause cells (C18/C19/A14r) build exactly here. */
   const answerNewestRowViaStage = async (executionId: string, change: string, taskRevision: number): Promise<string> => {
     const row = wired.executions.change(executionId, change)!
@@ -90,18 +112,7 @@ export async function pauseResolveBench(prefix: string): Promise<PauseResolveBen
       teamId: wired.teamId, taskId: row.taskId!, summary: 'done', commit: 'round-commit', diff: null, worktree: null,
       tests: [], limitations: null, taskRevision, submittedBy: { kind: 'agent', sessionId: 'dev' },
     })
-    const releases: ReleaseSeam = {
-      readiness: () => ({ ready: true, reason: null }),
-      release: () => ({ ok: true }),
-      pendingSpawns: () => [],
-    }
-    await applyRoundStage({
-      team: wired.world.team, repo: wired.world.repo, executions: wired.executions, plans: wired.bench.plans,
-      tasks: wired.tasks,
-      results: new TaskResultService(wired.tasks, { getSession: id => wired.bench.records.get(id) ?? null }),
-      assignments: wired.assignments, adapters: roundAdapters, releases,
-      groupScoped: () => false, records: () => wired.bench.records.values(), now: () => wired.now().toISOString(),
-    }, row, { kind: 'result', roundId: null, resultId: result.id })
+    await applyRoundStage(roundDeps(), row, { kind: 'result', roundId: null, resultId: result.id })
     return wired.executions.rounds(executionId, change).at(-1)!.id
   }
   const republish = (taskId: string, direction = 'Revised: rework the shape'): void => {
@@ -124,14 +135,28 @@ export async function pauseResolveBench(prefix: string): Promise<PauseResolveBen
   const pausedReview = async (opts: { superseded?: boolean; notes?: boolean; pending?: boolean } = {}): Promise<{ planId: string; executionId: string; taskId: string; pauseId: string }> => {
     const { planId, executionId } = await wired.executionWith(['api'])
     const flight = await wired.inFlight(executionId, 'api', 'dev2')
-    answerNewestRow(executionId, 'api', 1)
+    const roundId = answerNewestRow(executionId, 'api', 1)
     const row = wired.executions.change(executionId, 'api')!
     expect(wired.executions.transition(executionId, 'api', row, { state: 'gating', step: 'reviewing' })).not.toBeNull()
+    // LC1's fixture: the review cell is built the production way — the
+    // round's handoff is dispatched by `applyRoundStage`'s review branch, so
+    // `round.reviewAssignmentId` and the supersede-able assignment row are
+    // real store facts, never hand-minted ones.
+    const reviewing = wired.executions.change(executionId, 'api')!
+    await applyRoundStage(roundDeps(), reviewing, { kind: 'review', roundId, resultId: null })
+    const round = wired.executions.round(roundId)!
+    const handoff = round.reviewAssignmentId === null ? null : wired.bench.assignmentStore.byId(round.reviewAssignmentId)
+    if (handoff === null || handoff.messageId === null) throw new Error('the fixture review dispatch wrote no handoff')
+    // A live holder: reviewer session `rev1` claims the group handoff, so
+    // the paused target derives one (a queued handoff reads withdrawn, and
+    // C12's continue would refuse).
+    wired.bench.records.set('rev1', sessionRow('rev1', 'reviewers', wired.world.feature))
+    wired.bench.mail.claim(handoff.messageId, 'rev1')
     const hold = wired.placeHold(planId, ['api'], `hold-${++fixtureSequence}`)
     const pause = ok(wired.pause({ planId, holdId: hold.id, commandId: `pause-${++fixtureSequence}` })).pause
     if (opts.notes) {
       wired.checkpoints.insert({
-        executionId, change: 'api', pauseId: pause.id, attemptId: null, sessionId: 'dev2', kind: 'notes', commitSha: null,
+        executionId, change: 'api', pauseId: pause.id, attemptId: null, sessionId: 'rev1', kind: 'notes', commitSha: null,
         baselineCommit: null, manifestHash: null, resultId: null, summary: 'the review notes', unfinished: null,
         errorsTests: null, nextSteps: 'none', effectId: null,
       })
@@ -196,7 +221,7 @@ export async function pauseResolveBench(prefix: string): Promise<PauseResolveBen
     }
     return { planId, executionId, taskId: flight.taskId, assignmentId: flight.assignmentId, pauseId: pause.id }
   }
-  return { ...wired, resolve, resumeMails, resolvedEvents, toPaused, mintOwed, mintAttempt, answerNewestRow, answerNewestRowViaStage, republish, pausedAttempt, pausedReview, pausedUpdate, pausing }
+  return { ...wired, resolve, resumeMails, resolvedEvents, toPaused, mintOwed, mintAttempt, answerNewestRow, answerNewestRowViaStage, republish, pausedAttempt, pausedReview, pausedUpdate, pausing, roundDeps }
 }
 
 /** The pause target of `change` on the pause, asserted present. */

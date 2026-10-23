@@ -41,7 +41,7 @@ export interface PlannedDispatch {
 export interface PlannedStage {
   executionId: string
   change: string
-  kind: 'result' | 'push' | 'open-pr' | 'ci' | 'review' | 'verdict' | 'revision' | 'landing' | 'post-ci' | 'redispatch' | 'landing-outcome'
+  kind: 'result' | 'push' | 'open-pr' | 'ci' | 'review' | 'review-restart' | 'verdict' | 'revision' | 'landing' | 'post-ci' | 'redispatch' | 'landing-outcome'
   roundId: string | null
   resultId: string | null
   /** A `landing-outcome` stage's settled merge or update-branch effect. */
@@ -358,7 +358,16 @@ export function planSteps(snapshot: ExecutionSnapshot, _now: string): PlanSteps 
         }
         if (live(pull)) continue
       }
-      if (round.reviewAssignmentId !== null) {
+      // A held restart's owed review handoff (revision-control 4.5 LC1): the
+      // change's step marks the debt, the round's pointer is already clear —
+      // so this routes to the restart stage, never to a verdict that would
+      // wait on the superseded handoff. The stage dispatches the one fresh
+      // handoff and returns the step to `reviewing`; until then it re-plans.
+      // A standing hold keeps the debt owed: like every dispatch stage, it
+      // waits for the gate (the release routes it here).
+      if (change.step === 'review-restart') {
+        if (!held) steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'review-restart', roundId: round.id, resultId: null })
+      } else if (round.reviewAssignmentId !== null) {
         steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'verdict', roundId: round.id, resultId: null })
       } else {
         ciStage()

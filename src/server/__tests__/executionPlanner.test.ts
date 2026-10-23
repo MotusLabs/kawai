@@ -307,3 +307,55 @@ describe('planSteps under holds (revision-control 3.2)', () => {
     expect(result.transitions).toEqual([])
   })
 })
+
+// The owed review-restart stage (revision-control 4.5 LC1): a held restart
+// drops the round's stale pointer and marks the change's step, so the
+// planner routes the restart dispatch — never a verdict that would wait on
+// the superseded handoff, and not the CI stage that would re-fire the
+// un-restarted key.
+describe('the owed review-restart stage (revision-control 4.5 LC1)', () => {
+  const round = (reviewAssignmentId: string | null): RoundRow => ({
+    id: 'r1', executionId: 'e1', change: 'api', attemptId: 'a1', number: 1, resultId: 'res-1', commitSha: 'c1',
+    fixRound: false, carriedFrom: null, pushedAt: 't', ciWindowFrom: null, ci: null, rerunAt: null,
+    reviewAssignmentId, verdictFindingsId: null, extra: null, outcome: null, decidedAt: null,
+  })
+  const reviewing = (step: 'reviewing' | 'review-restart', reviewAssignmentId: string | null): PlannedChange =>
+    change('api', 'gating', {
+      step, taskId: 't1', round: round(reviewAssignmentId),
+      task: { status: 'active', revision: 1, results: [], assignment: null },
+    })
+
+  test('the owed step routes the restart stage — never a verdict, never CI', () => {
+    expect(steps([reviewing('review-restart', null)]).stages).toEqual([
+      { executionId: 'e1', change: 'api', kind: 'review-restart', roundId: 'r1', resultId: null },
+    ])
+  })
+
+  test('a reviewing change keeps the old routing: pointer set is a verdict, pointer clear re-fires from CI', () => {
+    expect(steps([reviewing('reviewing', 'a9')]).stages.map(stage => stage.kind)).toEqual(['verdict'])
+    expect(steps([reviewing('reviewing', null)]).stages.map(stage => stage.kind)).toEqual(['ci'])
+  })
+
+  test('a standing hold keeps the debt owed: the restart stage waits for the gate (LC1)', () => {
+    const debt = reviewing('review-restart', null)
+    const held = steps([debt], {
+      executions: [{
+        ...snapshot([debt]).executions[0]!,
+        changes: [debt],
+        holds: [{ id: 'h-api', scope: 'changes' as const, changes: ['api'] }],
+        openTargets: [],
+      }],
+    })
+    expect(held.stages).toEqual([])
+    // The pause-side closure (an undecided target) closes the gate too.
+    const pausing = steps([debt], {
+      executions: [{
+        ...snapshot([debt]).executions[0]!,
+        changes: [debt],
+        holds: [],
+        openTargets: [{ pauseId: 'p1', change: 'api', decision: null }],
+      }],
+    })
+    expect(pausing.stages).toEqual([])
+  })
+})

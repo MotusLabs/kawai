@@ -45,6 +45,8 @@ export type ChangeStep =
   | 'awaiting-ci'
   | 'releasing'
   | 'reviewing'
+  /** The owed review handoff of a held restart (revision-control 4.5 LC1): the restart dropped the round's stale pointer; the release dispatches the one fresh `…:restart` handoff through this step. */
+  | 'review-restart'
   | 'conditions'
   | 'awaiting-slot'
   | 'up-to-date'
