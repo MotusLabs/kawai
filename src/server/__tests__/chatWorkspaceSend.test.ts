@@ -25,11 +25,23 @@ describe('chatWorkspaceSend', () => {
     const harness = createHarness({
       recordWorkspaceContext: input => {
         recorded.push(input)
+        order.push('record')
         return { ok: true, recorded: true }
       },
     })
+    // Direct order evidence: the real startTurn, wrapped on the instance,
+    // logs beside the record seam (S4 before S5 — I1's ordering, stated).
+    const order: string[] = []
+    const driver = harness.driver as unknown as { startTurn: (...args: unknown[]) => unknown }
+    const realStartTurn = driver.startTurn.bind(harness.driver)
+    driver.startTurn = (...args: unknown[]) => {
+      order.push('startTurn')
+      return realStartTurn(...args)
+    }
     expect(harness.driver.sendWorkspaceContext('Ship the checklist', context)).toEqual({ ok: true })
     await flush()
+    // The context row committed before the turn opened.
+    expect(order).toEqual(['record', 'startTurn'])
     // One row, keyed by the minted uuid, naming the turn that then opened.
     expect(recorded).toHaveLength(1)
     expect(typesOf(harness.events)).toEqual(['turn_started', 'user_message'])
