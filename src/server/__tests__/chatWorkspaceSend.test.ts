@@ -7,7 +7,7 @@ import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import { workspaceContextBlock, type WorkspaceMessageContext } from '../../shared/planWorkspace'
 import type { ChatEvent } from '../../shared/chat'
 import type { WorkspaceContextOutcome } from '../plans/workspace/workspaceContext'
-import { createHarness, flush, typesOf } from './fixtures/chatDriverHarness'
+import { createHarness, flush, result, typesOf } from './fixtures/chatDriverHarness'
 
 const context: WorkspaceMessageContext = {
   teamId: '/repo/example/main',
@@ -135,6 +135,17 @@ describe('chatWorkspaceSend', () => {
     fake.push(echoFrame(undefined, 'mine'))
     await flush()
     expect(userTexts(harness.events)).toEqual(['mine', 'mine'])
+  })
+
+  test('B2 a contextual send whose result names its uuid ends the turn', async () => {
+    const harness = createHarness({ recordWorkspaceContext: () => ({ ok: true, recorded: true }) })
+    harness.driver.sendWorkspaceContext('Ship the checklist', context)
+    const fake = harness.fakes[0]!
+    const prompt = await fake.pullPrompt()
+    expect(prompt).not.toBeNull()
+    fake.push(result('success', { user_message_uuids: [String(prompt!.uuid)] }))
+    await flush()
+    expect(typesOf(harness.events)).toEqual(['turn_started', 'user_message', 'turn_completed'])
   })
 })
 
