@@ -1514,14 +1514,8 @@ describe('ChatView usage bar', () => {
     })
     let renderer = renderView(chatSession)
     const bar = renderer.root.findByProps({ 'data-testid': 'chat-usage' })
-    // Under the header, above the transcript column (the document order the
-    // integration test pins) and inside the wrapper's palette tree: the
-    // surface renders the bar, the wrapper owns the palette root (§6.1).
-    let ancestor: TestRenderer.ReactTestInstance | null = bar.parent
-    while (ancestor && !(String(ancestor.props.className ?? '').includes('chat-palette'))) {
-      ancestor = ancestor.parent
-    }
-    expect(ancestor).toBeDefined()
+    // Directly under the header, above the transcript column.
+    expect(bar.parent?.parent?.props.className).toContain('chat-palette')
     renderer.unmount()
 
     // A session of a profile with no data (GLM) shows no bar.

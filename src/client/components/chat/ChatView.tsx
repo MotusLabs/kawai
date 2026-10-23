@@ -5,11 +5,16 @@
 // chat-header-layout D1: identity, status, controls), the debug side slot,
 // and the Team navigation — the Team button and the task chip open the Team
 // page for the chat's team key (team-workspace-pages D2), so every chat of
-// one team shares those views. Everything the conversation needs — usage,
-// notifications, workers/background tasks, the error banner, the transcript
-// column, and the wire attach/detach ownership — lives in ChatSurface, so
-// an embedded host renders the same component (the wrapper passes its
-// subscribe through: the full-screen host is lifecycle-capable).
+// one team shares those views. The full-width strips — usage, notifications
+// and the error banner — are wrapper-owned too, rendered above the
+// debug/content row exactly as before the shared surface (they must span
+// the palette root with the debug panel open, never sit beside it as row
+// items); ChatSurface gets showStrips={false} so they are not duplicated.
+// Everything else the conversation needs — workers/background tasks, the
+// transcript column, and the wire attach/detach ownership — lives in
+// ChatSurface, so an embedded host renders the same component with its own
+// strips (the wrapper passes its subscribe through: the full-screen host is
+// lifecycle-capable).
 // Attach on selection and reconnect; detaching never stops the agent. The
 // approval policy renders from the broadcast Session, never local state.
 // During an in-flight turn an activity row (design D6) follows ChatMessages:
@@ -37,6 +42,8 @@ import { closedDebugView, useChatDebugStore } from '../../stores/chatDebugStore'
 import ChatHeader from './ChatHeader'
 import ChatDebugPanel from './ChatDebugPanel'
 import ChatSurface from './ChatSurface'
+import NotificationStrip from './NotificationStrip'
+import UsageBar from './UsageBar'
 import { requestChatArchive } from '../../utils/chatArchive'
 import { openParticipantChat } from './openParticipant'
 import { teamKeyOf } from '../../utils/teamKey'
@@ -63,6 +70,10 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
   const chatFontSize = useSettingsStore(state => state.chatFontSize)
   const transcript = useChatStore(state => state.sessions[session.id]) ?? EMPTY
   const connected = connectionStatus === 'connected'
+  const archived = session.archivedAt != null
+  // Plan usage is per profile (usage bar design D4): every session of the
+  // profile renders the same shared report.
+  const usage = useChatStore(state => state.usage[profileId]) ?? null
   const debug = useChatDebugStore(state => state.views[session.id]) ?? CLOSED_DEBUG
   const debugOpen = debug.open
   useEffect(() => {
@@ -100,14 +111,32 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
       onRename={name => sendMessage({ type: 'session-rename', sessionId: session.id, newName: name })}
       onToggleApproval={toggleApprovalPolicy} onArchive={handleArchive} onKill={onKill} onClose={onClose}
       fontSizePx={chatFontSize} />
+    {/* Full-width strips above the debug/content row (the pre-surface
+        placement, §6.1): the usage bar, the notification strip (archived
+        chats render account notices only, design D4) and the error banner
+        span the palette root with the debug panel open — desktop and narrow
+        alike — so they must not become row items beside the panel. The
+        surface renders none of its own (showStrips={false}). */}
+    <UsageBar report={usage} />
+    <NotificationStrip
+      notifications={
+        archived
+          ? transcript.notifications.filter((notice) => notice.source === 'account')
+          : transcript.notifications
+      }
+      onClose={(notice) =>
+        useChatStore.getState().closeNotification(session.id, notice, sendMessage)
+      }
+    />
+    {error && <p role="alert" className="border-b border-border p-3 text-chat-body text-chat-danger">{error}</p>}
     <div className="flex min-h-0 flex-1">
-      {/* The shared surface owns everything below the header (§6.1): usage,
-          notifications, workers, the error banner and the content column.
-          Passing sendMessage through unchanged: its identity is the
-          attachment registry key (ChatSurface). */}
+      {/* The shared surface owns the content column (§6.1): workers, the
+          transcript and the composer. Passing sendMessage through
+          unchanged: its identity is the attachment registry key
+          (ChatSurface). */}
       <ChatSurface session={session} sendMessage={sendMessage} subscribe={subscribe}
         connectionStatus={connectionStatus} connectionEpoch={connectionEpoch}
-        error={error}
+        showStrips={false}
         className={debugOpen ? 'hidden md:flex' : 'flex'}
         participantDirectory={participantDirectory}
         onOpenParticipant={openParticipantChat} />

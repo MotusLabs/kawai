@@ -11,6 +11,15 @@
 // inside it. Header/identity, the debug panel and global navigation stay in
 // the wrapper.
 //
+// Strip placement (`showStrips`, default true): embedded hosts render the
+// usage/notification/error strips inside the surface, stacked above the
+// column. The full-screen wrapper hoists those three strips ABOVE its
+// debug/content row instead — they must span the whole palette root there,
+// desktop and narrow debug views alike — and passes `showStrips={false}`,
+// which drops the surface's own copies and leaves the column alone as the
+// row's flex-1 child (the strips are never row items and never render
+// twice).
+//
 // Host contract (advisory 396ee67b R2/R5): a host that wants local reset
 // support (/clear, /reset, /new composing a new chat and archiving the old
 // one) MUST pass `subscribe` — the lifecycle subscription the flow needs to
@@ -65,7 +74,7 @@ const CLEAR_COMMAND = /^\/(clear|reset|new)(?:\s+(.*))?$/
 export default function ChatSurface({
   session, sendMessage, subscribe, connectionStatus, connectionEpoch,
   revealEnabled = true, onOpenParticipant, onResetCreated, participantDirectory,
-  error = null, className = 'flex',
+  error = null, className = 'flex', showStrips = true,
 }: {
   session: Session
   /** The connection's stable sendMessage — the attachment registry keys on it. */
@@ -85,6 +94,12 @@ export default function ChatSurface({
   error?: string | null
   /** Extra layout classes on the column root (the wrapper's debug-aware visibility). */
   className?: string
+  /** Render the usage/notification/error strips inside this surface
+      (embedded hosts, the default). A host that hoists the full-width
+      strips above its debug/content row — the full-screen wrapper — passes
+      false and renders them itself, so the strips span the palette root,
+      never become row items beside the debug panel, and never duplicate. */
+  showStrips?: boolean
 }) {
   const transcript = useChatStore(state => state.sessions[session.id]) ?? EMPTY
   const connected = connectionStatus === 'connected'
@@ -238,27 +253,12 @@ export default function ChatSurface({
   // ones keep their name through the wrapper's team directory when loaded.
   const liveSessions = useSessionStore(state => state.sessions)
   const directory = participantDirectory ?? NO_DIRECTORY
-  // One column root so the strips stack above the transcript inside any
-  // host layout — the wrapper places this root beside its debug slot in a
-  // row; the strips must never become row items.
-  return <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-    {/* Plan usage (usage bar design D4) and the notification strip (design
-        D7) under wherever the host renders its header: every session of the
-        profile shares the report; archived chats are read-only surfaces no
-        agent feeds, so they render account notices only (design D4). */}
-    <UsageBar report={usage} />
-    <NotificationStrip
-      notifications={
-        archived
-          ? transcript.notifications.filter((notice) => notice.source === 'account')
-          : transcript.notifications
-      }
-      onClose={(notice) =>
-        useChatStore.getState().closeNotification(session.id, notice, sendMessage)
-      }
-    />
-    {error && <p role="alert" className="border-b border-border p-3 text-chat-body text-chat-danger">{error}</p>}
-    <div className={`min-h-0 min-w-0 flex-1 flex-col ${className}`}>
+  // The conversation column: workers strip, transcript scroller, then the
+  // archived Restore bar or the composer. `showStrips={false}` hosts get
+  // exactly this element as the row's flex-1 child — the pre-surface
+  // content-column shape, with the full-width strips hoisted above the row
+  // by the host instead.
+  const column = <div className={`min-h-0 min-w-0 flex-1 flex-col ${className}`}>
       {/* The live-workers strip (workers design D8, background tasks D2):
           live rows only, hidden in archived chats and when nothing runs
           (the strip hides itself). */}
@@ -305,6 +305,28 @@ export default function ChatSurface({
           connected={connected} commandState={transcript.commands} onSubmit={submitText}
           onInterrupt={() => sendMessage({ type: 'chat-interrupt', sessionId: session.id })} />
       )}
-    </div>
+  </div>
+  if (!showStrips) return column
+  // One column root so the strips stack above the transcript inside any
+  // host layout — the wrapper places this root beside its debug slot in a
+  // row; the strips must never become row items.
+  return <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+    {/* Plan usage (usage bar design D4) and the notification strip (design
+        D7) under wherever the host renders its header: every session of the
+        profile shares the report; archived chats are read-only surfaces no
+        agent feeds, so they render account notices only (design D4). */}
+    <UsageBar report={usage} />
+    <NotificationStrip
+      notifications={
+        archived
+          ? transcript.notifications.filter((notice) => notice.source === 'account')
+          : transcript.notifications
+      }
+      onClose={(notice) =>
+        useChatStore.getState().closeNotification(session.id, notice, sendMessage)
+      }
+    />
+    {error && <p role="alert" className="border-b border-border p-3 text-chat-body text-chat-danger">{error}</p>}
+    {column}
   </div>
 }

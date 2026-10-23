@@ -11,14 +11,20 @@
 // notifications with the archived account-only filter, workers/background
 // tasks, and the error banner — with the full-screen DOM order preserved.
 // Wire-level and transfer guards stay in chatSurfaceHost.test.tsx and
-// chatAttachment.test.ts; the full-screen strips in chatHeaderIntegration.
+// chatAttachment.test.ts. The full-screen host hoists the usage,
+// notification and error strips ABOVE its debug/content row (showStrips
+// hoist, review finding F1): the placement tests here pin them as direct
+// palette-root children outside that row, and chatHeaderIntegration pins
+// the document order.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import type { ComponentProps, ReactElement } from 'react'
 import type { ChatNotification, ChatUsageReport, ClientMessage, ServerMessage, Session } from '@shared/types'
 import ChatView from '../components/chat/ChatView'
 import ChatSurface from '../components/chat/ChatSurface'
+import ChatDebugPanel from '../components/chat/ChatDebugPanel'
 import { emptyTranscript, useChatStore } from '../stores/chatStore'
+import { closedDebugView, useChatDebugStore } from '../stores/chatDebugStore'
 
 const makeSession = (id: string, overrides: Partial<Session> = {}) =>
   ({
@@ -253,12 +259,14 @@ describe('ChatSurface host parity', () => {
     sent = []
     sendMessage = (message) => { sent.push(message) }
     useChatStore.setState({ sessions: {}, usage: {}, closedAccountNotices: {}, pendingReveal: null })
+    useChatDebugStore.setState({ views: {} })
   })
 
   afterEach(() => {
     act(() => renderer?.unmount())
     renderer = null
     useChatStore.setState({ sessions: {}, usage: {}, closedAccountNotices: {}, pendingReveal: null })
+    useChatDebugStore.setState({ views: {} })
   })
 
   const notice = (source: 'agent' | 'account', key: string): ChatNotification => ({
@@ -301,6 +309,9 @@ describe('ChatSurface host parity', () => {
       ['chat-usage', 'chat-notifications', 'chat-workers-strip', 'chat-transcript']
         .includes(node.props['data-testid'])).map(node => node.props['data-testid'])
     expect(order).toEqual(['chat-usage', 'chat-notifications', 'chat-workers-strip', 'chat-transcript'])
+    // Exactly once each — the surface's own strips are the embedded default.
+    expect(byId('chat-usage')).toHaveLength(1)
+    expect(byId('chat-notifications')).toHaveLength(1)
     const alert = renderer!.root.findByProps({ role: 'alert' })
     expect(textOf(alert)).toContain('connection lost')
     // Agent notices dismiss server-side through the surface's sendMessage.
@@ -358,6 +369,38 @@ describe('ChatSurface host parity', () => {
       .toEqual([{ type: 'chat-send', sessionId: 'chat-a', text: 'shared draft text' }])
   })
 
+  test('showStrips={false} drops the surface strips; the default renders them once', () => {
+    const session = seed({}, [notice('agent', 'agent-1')])
+    act(() => {
+      renderer = TestRenderer.create(
+        <div data-testid="host">
+          <ChatSurface session={session} sendMessage={sendMessage}
+            connectionStatus="connected" connectionEpoch={1} error="connection lost" />
+        </div>
+      )
+    })
+    expect(byId('chat-usage')).toHaveLength(1)
+    expect(byId('chat-notifications')).toHaveLength(1)
+    act(() => renderer!.unmount())
+    // A hoisting host (the full-screen wrapper) passes false: the surface
+    // renders no strips and no error banner — the host owns all three —
+    // while the conversation column stays whole.
+    act(() => {
+      renderer = TestRenderer.create(
+        <div data-testid="host">
+          <ChatSurface session={session} sendMessage={sendMessage}
+            connectionStatus="connected" connectionEpoch={1} error="connection lost"
+            showStrips={false} />
+        </div>
+      )
+    })
+    expect(byId('chat-usage')).toHaveLength(0)
+    expect(byId('chat-notifications')).toHaveLength(0)
+    expect(renderer!.root.findAllByProps({ role: 'alert' })).toHaveLength(0)
+    expect(byId('chat-transcript')).toHaveLength(1)
+    expect(byId('chat-workers-strip')).toHaveLength(1)
+  })
+
   test('the full-screen wrapper keeps its DOM order across the moved surface', () => {
     const session = seed({}, [notice('agent', 'agent-1')])
     act(() => {
@@ -374,6 +417,41 @@ describe('ChatSurface host parity', () => {
       ['chat-context-meter', 'chat-usage', 'chat-notifications', 'chat-transcript']
         .includes(node.props['data-testid'])).map(node => node.props['data-testid'])
     expect(order).toEqual(['chat-context-meter', 'chat-usage', 'chat-notifications', 'chat-transcript'])
+  })
+
+  test('full-screen strips stay palette-root children above the debug/content row', () => {
+    // Debug open: the row beside the panel is exactly where the strips must
+    // never move (review finding F1 — they would narrow to the row's
+    // remaining width beside the debug panel).
+    useChatDebugStore.setState({ views: { 'chat-a': { ...closedDebugView(), open: true } } })
+    const session = seed({}, [notice('agent', 'agent-1')])
+    act(() => {
+      renderer = TestRenderer.create(<ChatView session={session} sendMessage={sendMessage}
+        connectionStatus="connected" connectionEpoch={0} error="connection lost"
+        onClose={() => {}} onKill={() => {}} />)
+    })
+    expect(renderer!.root.findAllByType(ChatDebugPanel).length).toBeGreaterThan(0)
+    // Each full-width strip tops out at the palette root: its parent is the
+    // strip component's own root element, whose parent is the palette main
+    // (the same grandparent pin chatComponents makes) — never a row item
+    // beside the debug panel.
+    const palette = renderer!.root.findByProps({ 'data-testid': 'chat-view' })
+    for (const testid of ['chat-usage', 'chat-notifications']) {
+      const node = renderer!.root.findByProps({ 'data-testid': testid })
+      expect(node.parent?.parent).toBe(palette)
+    }
+    const banner = renderer!.root.findAllByProps({ role: 'alert' })
+      .find(node => textOf(node).includes('connection lost'))
+    expect(banner?.parent?.props['data-testid']).toBe('chat-view')
+    // No duplicate strip sets anywhere in the tree…
+    expect(renderer!.root.findAllByProps({ 'data-testid': 'chat-usage' })).toHaveLength(1)
+    expect(renderer!.root.findAllByProps({ 'data-testid': 'chat-notifications' })).toHaveLength(1)
+    // …and nothing strip-like inside the debug/content row itself.
+    const row = renderer!.root.find(node => node.type === 'div' &&
+      String(node.props.className ?? '').includes('flex min-h-0 flex-1'))
+    for (const testid of ['chat-usage', 'chat-notifications']) {
+      expect(row.findAllByProps({ 'data-testid': testid })).toHaveLength(0)
+    }
   })
 })
 
