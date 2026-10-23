@@ -23,6 +23,7 @@ import type { PlanWorkspaceClientMessage } from '../../../shared/planWorkspaceMe
 import type { ChatSessionManager } from '../../chat/ChatSessionManager'
 import type { ChatConnection } from '../../chat/ChatConnections'
 import { defaultDisplayedVersion, displayedContent, selectedDisplayedVersion, type PlanVersionInputs } from './displayedVersion'
+import { PlanChecklistTotals } from './checklistTotals'
 import { composeWorkspaceSections } from './workspaceRuntime'
 
 const namedSelector = (selector: WorkspaceVersionSelector): string =>
@@ -63,7 +64,11 @@ export class PlanWorkspaceConnections {
   /** The workspace payload last pushed per connection and target — the O6 no-op key. */
   private readonly lastPushed = new Map<ChatConnection, Map<string, string>>()
 
-  constructor(private readonly manager: ChatSessionManager) {}
+  constructor(
+    private readonly manager: ChatSessionManager,
+    /** The composed checklists' totals (N3); null composes no checklist column. */
+    private readonly totals: PlanChecklistTotals | null = null,
+  ) {}
 
   disconnect(connection: ChatConnection) {
     this.subscriptions.delete(connection)
@@ -251,7 +256,13 @@ export class PlanWorkspaceConnections {
     // A manager without the reads (a stub from before this change, or no
     // team services) composes neither section.
     const sections = this.manager.planWorkspaceRuntimeReads ? composeWorkspaceSections(
-      { reads: this.manager.planWorkspaceRuntimeReads }, this.manager, teamId, resolved.plan.id, { displayed, now: new Date() },
+      { reads: this.manager.planWorkspaceRuntimeReads }, this.manager, teamId, resolved.plan.id, {
+        displayed,
+        now: new Date(),
+        // The last composed checklist totals (N3): a read of remembered
+        // facts, never a document load (INVARIANT P).
+        checklistTotals: change => this.totals?.of(teamId, resolved.plan.id, change) ?? null,
+      },
     ) : { runtime: null, health: [] }
     return {
       plan: resolved.plan,

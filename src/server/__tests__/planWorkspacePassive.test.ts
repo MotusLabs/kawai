@@ -19,6 +19,7 @@ import type { SessionTeams } from '../team/sessionTeams'
 import type { ChatUsageReport } from '../../shared/chat'
 import { hostLoginProvider, type MergedProvider } from '../chat/catalogMerge'
 import { quotaReadingOf } from '../plans/workspace/workspaceRuntime'
+import { workspaceHealthOf } from '../../shared/planWorkspaceHealth'
 import type { WorkspaceQuotaReading } from '../../shared/planWorkspace'
 import type { SupervisionReads } from '../plans/supervision/supervisionRead'
 import type { ClientMessage, ServerMessage } from '../../shared/types'
@@ -275,7 +276,9 @@ describe('passive workspace composition', () => {
     const outcome = await sup.assignments.dispatch(sup.human, { taskId: task.id, target: { kind: 'group', id: 'middle-devs' }, instruction: 'Build', requestKey: `k-${task.id}` })
     const messageId = outcome.assignment.messageId!
     expect(messageId).toBeTruthy()
-    blockers.set(messageId, 'group at cap')
+    // The production blocker shape (N4): the kind code `team.ts`'s waiting
+    // reasons and §5's waitingLabels render (`group-cap`), never prose.
+    blockers.set(messageId, 'group-cap')
     const changesAtRest = totalChanges()
     messages = []
     await send({ type: 'team-plan-workspace-open', teamPath: world.repo, planId })
@@ -284,7 +287,7 @@ describe('passive workspace composition', () => {
     const api = runtime.changes.find(change => change.change === 'api')!
     expect(api.state).toEqual({ kind: 'no-execution' })
     expect(api.holders).toEqual([
-      { taskId: task.id, holder: { kind: 'group-unclaimed', groupId: 'middle-devs' }, stage: 'unstarted', waitingReason: 'group at cap' },
+      { taskId: task.id, holder: { kind: 'group-unclaimed', groupId: 'middle-devs' }, stage: 'unstarted', waitingReason: 'group-cap' },
     ])
     expect(totalChanges()).toBe(changesAtRest)
     expect(forbiddenCalls).toEqual([])
@@ -332,5 +335,36 @@ describe('passive workspace composition', () => {
     expect(totalChanges()).toBe(changesAtRest)
     expect(forbiddenCalls).toEqual([])
     expect(messages.length).toBe(pushesAfterOpen)
+  })
+
+  test('two sessions of one provider read the same limited report; both dots derive red (B6)', async () => {
+    const planId = await approvedPlan()
+    const executionId = sup.start(planId)
+    const { taskId } = await sup.implementing(executionId, planId, new Date().toISOString())
+    sup.db.db.prepare("UPDATE team_task_assignments SET claimed_by = 'dev' WHERE task_id = ?").run(taskId)
+    new PlanWorkspaceStore(sup.db.db).bind(world.team.teamId, `bind-${Date.now()}`, { role: 'architect', sessionId: 'arch', expectedVersion: null })
+    // One provider report shared by both sessions (providerIdOf is 'prov'
+    // for either), fresh so the client-side derivation sees it: limited.
+    const at = new Date().toISOString()
+    usageReports.set('prov', { ...REPORT, status: 'limited', windows: [{ key: 'five_hour', label: 'Five hours', percentUsed: 100, resetsAt: null }], receivedAt: at })
+    contextReadings.set('dev', { percentage: 50, at })
+    contextReadings.set('arch', { percentage: 40, at })
+    const changesAtRest = totalChanges()
+    messages = []
+    await send({ type: 'team-plan-workspace-open', teamPath: world.repo, planId })
+    const health = lastSnapshot()!.workspace.health!
+    expect(health.map(agent => agent.sessionId).sort()).toEqual(['arch', 'dev'])
+    // The snapshot carries the raw shared readings; the shared derivation
+    // (the same code §5 runs on a client clock) turns each into a red dot.
+    for (const agent of health) {
+      expect(agent.quota).toMatchObject({ status: 'limited', used: 1, source: 'profile' })
+      expect(agent.quotaApplicable).toBe(true)
+      expect(workspaceHealthOf(
+        { context: agent.context, quota: agent.quota, quotaApplicable: agent.quotaApplicable, connected: true },
+        new Date(),
+      ).level).toBe('red')
+    }
+    expect(totalChanges()).toBe(changesAtRest)
+    expect(forbiddenCalls).toEqual([])
   })
 })

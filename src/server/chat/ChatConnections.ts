@@ -45,6 +45,7 @@ import { WorkspaceConnections } from '../team/workspaceConnections'
 import { PlanConnections } from '../plans/planConnections'
 import { PlanWorkspaceConnections } from '../plans/workspace/workspaceConnections'
 import { PlanWorkspaceDocumentConnections } from '../plans/workspace/workspaceDocuments'
+import { PlanChecklistTotals } from '../plans/workspace/checklistTotals'
 import type { PlanWorkspaceClientMessage } from '../../shared/planWorkspaceMessages'
 import { ExecutionConnections } from '../plans/execution/executionConnections'
 import { PROMOTION_MESSAGE_TYPES, PromotionConnections, type PromotionClientMessage } from '../plans/landing/integration/promotionConnections'
@@ -94,6 +95,8 @@ export class ChatConnections {
   private readonly planConnections: PlanConnections
   private readonly planWorkspaceConnections: PlanWorkspaceConnections
   private readonly planWorkspaceDocuments: PlanWorkspaceDocumentConnections
+  /** The composed checklists' totals, shared documents → snapshot (N3); public for compositions that build the documents side separately. */
+  readonly planWorkspaceTotals = new PlanChecklistTotals()
   private readonly executionConnections: ExecutionConnections
   private readonly promotionConnections: PromotionConnections
   private readonly outboundConnections: OutboundConnections
@@ -110,8 +113,10 @@ export class ChatConnections {
     this.strategyConnections = new StrategyConnections(manager)
     this.workspaceConnections = new WorkspaceConnections(manager)
     this.planConnections = new PlanConnections(manager)
-    this.planWorkspaceConnections = new PlanWorkspaceConnections(manager)
-    this.planWorkspaceDocuments = new PlanWorkspaceDocumentConnections(manager)
+    // One totals cache shared by the two connections (N3): the documents
+    // side records every composed checklist, the snapshot side reads it.
+    this.planWorkspaceDocuments = new PlanWorkspaceDocumentConnections(manager, { totals: this.planWorkspaceTotals })
+    this.planWorkspaceConnections = new PlanWorkspaceConnections(manager, this.planWorkspaceTotals)
     this.executionConnections = new ExecutionConnections(manager)
     this.promotionConnections = new PromotionConnections(manager)
     this.outboundConnections = new OutboundConnections(manager)

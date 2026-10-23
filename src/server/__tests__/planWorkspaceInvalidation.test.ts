@@ -8,6 +8,7 @@
 // asserted empty after every exercised path.
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
+import path from 'node:path'
 import type { ChatSessionManager } from '../chat/ChatSessionManager'
 import { ChatConnections } from '../chat/ChatConnections'
 import { TeamScopes } from '../team/teamScope'
@@ -21,10 +22,15 @@ import { createPlanWorld, writeGroup, type PlanWorld } from './planHarness'
 import { createSupervisionBench, type SupervisionBench } from './supervisionHarness'
 import { PlanWorkspaceStore } from '../plans/workspace/workspaceStore'
 import { PlanWorkspaceRefs } from '../plans/workspace/workspaceRefs'
+import { PlanWorkspaceDocumentConnections } from '../plans/workspace/workspaceDocuments'
+import { ChangeArtifactsResolver } from '../plans/workspace/changeArtifacts'
+import type { OpenspecRunner } from '../plans/validation/openspecAdapter'
+import type { WorkspaceWatcherHost } from '../workspace/workspaceWatcher'
 
 let world: PlanWorld
 let sup: SupervisionBench
 let connections: ChatConnections
+let managerDouble: ChatSessionManager
 let messages: ServerMessage[]
 let forbiddenCalls: string[]
 let contextReadings: Map<string, { percentage: number; at: string }>
@@ -83,6 +89,7 @@ function wire(bench: SupervisionBench): void {
     teamScopes: new TeamScopes({ teams: { hasTeam: async () => false } as unknown as SessionTeams, repositories: () => [world.team.teamId] }),
     plans: bench.service,
     validationDetail: { invalidate: () => {} },
+    tasks: { worktrees: { list: async () => [world.repo, world.feature] } },
     planWorkspace: new PlanWorkspaceStore(bench.db.db),
     planWorkspaceRefs: new PlanWorkspaceRefs(bench.db.db),
     planWorkspaceRuntimeReads: reads,
@@ -104,6 +111,7 @@ function wire(bench: SupervisionBench): void {
     dispatcher: { notify: forbid('dispatcher.notify') },
     teamMail: { staffing: { spawnFor: forbid('staffing.spawnFor') } },
   } as unknown as ChatSessionManager
+  managerDouble = manager
   connections = new ChatConnections(manager)
 }
 
@@ -305,6 +313,73 @@ describe('unsubscribe cleanup and reconnect', () => {
     expect(snapshots()[0]!.workspace.health!.map(a => a.sessionId).sort()).toEqual(['dev'])
     expect(messages.map(m => m.type)).toEqual(['team-plan-workspace-snapshot'])
     expect(forbiddenCalls).toEqual([])
+  })
+})
+
+describe('checklist totals ride the composed checklist (N3)', () => {
+  /** A never-firing watcher host: the composition path runs, no watch fires. */
+  const quietHost = (): WorkspaceWatcherHost => ({
+    watchDirectory: () => ({ close: () => {} }),
+    isWatchable: candidate => fs.existsSync(candidate),
+    setDebounceTimer: () => ({ clear: () => {} }),
+    clearDebounceTimer: () => {},
+    setReconciliationInterval: () => ({ clear: () => {} }),
+    clearReconciliationInterval: () => {},
+  })
+
+  /** The openspec listing double: change `api` is active with its tasks artifact. */
+  const runner: OpenspecRunner = async (args, { cwd }) => {
+    const call = (stdout: string) => ({ ok: true, exitCode: 0, stdout, stderr: '', timedOut: false })
+    if (args[0] === 'list' && cwd === world.repo) {
+      return call(JSON.stringify({ changes: [{ name: 'api' }], root: { path: world.repo } }))
+    }
+    if (args[0] === 'status' && cwd === world.repo && args[2] === 'api') {
+      const changeRoot = path.join(world.repo, 'openspec', 'changes', 'api')
+      return call(JSON.stringify({
+        changeRoot,
+        artifactPaths: { tasks: { existingOutputPaths: [path.join(changeRoot, 'tasks.md')] } },
+      }))
+    }
+    return { ok: false, exitCode: 1, stdout: '', stderr: 'not found', timedOut: false }
+  }
+
+  const writeTasks = (text: string): void => {
+    const changeRoot = path.join(world.repo, 'openspec', 'changes', 'api')
+    fs.mkdirSync(changeRoot, { recursive: true })
+    fs.writeFileSync(path.join(changeRoot, 'tasks.md'), text)
+  }
+
+  test('a checklist compose feeds the runtime rows; the checklist refresh itself never pushes the workspace snapshot', async () => {
+    writeTasks('# Tasks\n\n- [ ] first\n- [x] second\n')
+    const planId = await planInReview()
+    const documents = new PlanWorkspaceDocumentConnections(managerDouble, {
+      host: quietHost(),
+      resolver: new ChangeArtifactsResolver(runner),
+      totals: connections.planWorkspaceTotals,
+    })
+    // The checklist composes on open (awaited) and records its totals.
+    await send({ type: 'team-plan-workspace-checklist-open', teamPath: world.repo, planId, changeName: 'api' })
+    expect(messages.at(-1)).toMatchObject({ type: 'team-plan-workspace-checklist' })
+    // The production path: the next workspace snapshot's `api` row carries
+    // the composed totals — 2 items, 1 checked.
+    await send({ type: 'team-plan-workspace-open', teamPath: world.repo, planId })
+    expect(snapshots().at(-1)!.workspace.runtime!.changes.find(c => c.change === 'api')!.checklist)
+      .toEqual({ total: 2, checked: 1 })
+    expect(snapshots().at(-1)!.workspace.runtime!.changes.find(c => c.change === 'ui')!.checklist).toBeNull()
+    // A checklist refresh (file rewritten, checklist re-opened) pushes the
+    // checklist message but never the workspace projection (CP1): the next
+    // source event's diff picks the new totals up.
+    writeTasks('# Tasks\n\n- [ ] first\n- [x] second\n- [x] third\n')
+    messages = []
+    await send({ type: 'team-plan-workspace-checklist-open', teamPath: world.repo, planId, changeName: 'api' })
+    expect(messages.map(m => m.type)).toEqual(['team-plan-workspace-checklist'])
+    connections.publishTasks(world.team.teamId)
+    await settle()
+    expect(snapshots()).toHaveLength(1)
+    expect(snapshots()[0]!.workspace.runtime!.changes.find(c => c.change === 'api')!.checklist)
+      .toEqual({ total: 3, checked: 2 })
+    expect(forbiddenCalls).toEqual([])
+    documents.disconnect(connection)
   })
 })
 

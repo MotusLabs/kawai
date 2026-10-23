@@ -198,7 +198,12 @@ export function composeWorkspaceSections(
   manager: ChatSessionManager,
   teamId: string,
   planId: string,
-  opts: { displayed: PlanContent | null; now: Date },
+  opts: {
+    displayed: PlanContent | null
+    now: Date
+    /** The checklist projection's remembered totals (N3); a change without one reads null. */
+    checklistTotals?: (change: string) => { total: number; checked: number } | null
+  },
 ): WorkspaceRuntimeSections {
   if (opts.displayed === null) return { runtime: null, health: [] }
   const reads = deps.reads
@@ -223,6 +228,7 @@ export function composeWorkspaceSections(
       execution: execution === null || revision === null ? null : { executionId: execution.id, revision: execution.revision, content: revision.content },
       supervision,
       tasks,
+      checklistTotals: opts.checklistTotals,
     })
     const fixClaimants = reads.decisions.fixTasksOfPlan(teamId, planId)
       .map(fix => outstandingOf(assignments.listByTask(fix.taskId))?.claimedBy ?? null)
