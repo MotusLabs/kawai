@@ -163,6 +163,8 @@ export interface WorkspaceStateFacts {
   supervision: ChangeSupervision | null
   /** The linked work's outstanding handoff kind, when one stands (rows 10–12). */
   handoff: 'review' | 'qa' | 'fix' | null
+  /** The outstanding review handoff's claimant; row 10 names them when it keys on the handoff. */
+  reviewClaimant: string | null
   /** The outstanding result's newest findings fail (row 12). */
   failingFindings: boolean
 }
@@ -189,7 +191,10 @@ export function workspaceChangeState(facts: WorkspaceStateFacts): WorkspaceRunti
     return { kind: 'stalled', stall: s.stall?.kind ?? 'no-progress' }
   }
   // Rows 10–12 key on the stage or the outstanding handoff, never a holder.
-  if (facts.handoff === 'review' || s.stage === 'review') return { kind: 'in-review', reviewer: s.holder?.session ?? null }
+  // A handoff-keyed In review names the review claimant (B1), not the
+  // instruction holder the supervision still carries.
+  if (facts.handoff === 'review') return { kind: 'in-review', reviewer: facts.reviewClaimant }
+  if (s.stage === 'review') return { kind: 'in-review', reviewer: s.holder?.session ?? null }
   if (facts.handoff === 'qa') return { kind: 'ready-for-qa' }
   if (facts.handoff === 'fix' || facts.failingFindings) return { kind: 'fixes-requested' }
   if (outcome === 'waiting') return { kind: 'waiting', cause: causeLabel(s.cause) }
@@ -235,9 +240,14 @@ export function workspaceRuntime(inputs: WorkspaceRuntimeInputs): WorkspaceRunti
     inputs.tasks.filter(task => task.planChange === change).flatMap(task => byTask.get(task.id)!.history)
   const factsOf = (change: string): WorkspaceStateFacts => {
     const tasks = inputs.tasks.filter(task => task.planChange === change)
-    const handoff = tasks.map(task => task.assignment?.handoffKind ?? null).find(kind => kind !== null) ?? null
+    const withHandoff = tasks.find(task => task.assignment?.handoffKind != null) ?? null
     const failingFindings = tasks.some(task => task.result !== null && !task.result.accepted && task.result.reviewVerdict === 'fail')
-    return { supervision: inputs.supervision.get(change) ?? null, handoff, failingFindings }
+    return {
+      supervision: inputs.supervision.get(change) ?? null,
+      handoff: withHandoff?.assignment?.handoffKind ?? null,
+      reviewClaimant: withHandoff?.assignment?.claimedBy ?? null,
+      failingFindings,
+    }
   }
   const rowOf = (change: string, relation: WorkspaceExecutionRelation): WorkspaceRuntimeChange => ({
     change,

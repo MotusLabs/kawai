@@ -107,19 +107,22 @@ describe('the state ladder', () => {
     ['row 13: waiting, staffing cause with its blocker', supervision({ outcome: 'waiting', cause: { kind: 'staffing', blocker: 'group at cap' }, stage: null }), { kind: 'waiting', cause: 'Waiting for staffing: group at cap' }],
     ['row 14: implementing names its stage', supervision({}), { kind: 'implementing', stage: 'implement' }],
   ])('%s', (_name, s, expected) => {
-    expect(workspaceChangeState({ supervision: s, handoff: null, failingFindings: false })).toEqual(expected)
+    expect(workspaceChangeState({ supervision: s, handoff: null, reviewClaimant: null, failingFindings: false })).toEqual(expected)
   })
 
-  test.each<[string, { stage: SupervisionStage; handoff: 'review' | null }]>([
-    ['row 10: the review stage reads In review', { stage: 'review', handoff: null }],
-    ['row 10: an outstanding review handoff reads In review', { stage: 'implement', handoff: 'review' }],
-  ])('%s', (_name, facts) => {
-    const state = workspaceChangeState({ supervision: supervision({ stage: facts.stage }), handoff: facts.handoff, failingFindings: false })
-    expect(state).toEqual({ kind: 'in-review', reviewer: 'dev' })
+  test.each<[string, { stage: SupervisionStage; handoff: 'review' | null; reviewClaimant: string | null }, string | null]>([
+    ['row 10: the review stage names the instruction holder', { stage: 'review', handoff: null, reviewClaimant: null }, 'implementer'],
+    ['row 10: an outstanding review handoff names its claimant', { stage: 'implement', handoff: 'review', reviewClaimant: 'dev' }, 'dev'],
+    // Divergent fixture (B1): the implementer still holds the instruction;
+    // the reviewer is the review handoff's claimant, never the holder.
+    ['row 10: keyed on the handoff, it names the review claimant, not the instruction holder', { stage: 'implement', handoff: 'review', reviewClaimant: 'reviewer' }, 'reviewer'],
+  ])('%s', (_name, facts, reviewer) => {
+    const state = workspaceChangeState({ supervision: supervision({ stage: facts.stage, holder: { session: 'implementer', group: 'middle-devs', profile: 'default' } }), handoff: facts.handoff, reviewClaimant: facts.reviewClaimant, failingFindings: false })
+    expect(state).toEqual({ kind: 'in-review', reviewer })
   })
 
   test('row 11: a qa handoff reads Ready for QA', () => {
-    expect(workspaceChangeState({ supervision: supervision({}), handoff: 'qa', failingFindings: false }))
+    expect(workspaceChangeState({ supervision: supervision({}), handoff: 'qa', reviewClaimant: null, failingFindings: false }))
       .toEqual({ kind: 'ready-for-qa' })
   })
 
@@ -127,7 +130,7 @@ describe('the state ladder', () => {
     ['row 12: a fix handoff reads Fixes requested', { handoff: 'fix' as const, failing: false }],
     ['row 12: failing findings read Fixes requested', { handoff: null, failing: true }],
   ])('%s', (_name, facts) => {
-    expect(workspaceChangeState({ supervision: supervision({}), handoff: facts.handoff, failingFindings: facts.failing }))
+    expect(workspaceChangeState({ supervision: supervision({}), handoff: facts.handoff, reviewClaimant: null, failingFindings: facts.failing }))
       .toEqual({ kind: 'fixes-requested' })
   })
 
@@ -166,7 +169,7 @@ describe('holders and history', () => {
     })
     // Only the handoff moves the row, never the holders themselves.
     expect(reviewing.changes[0]!.state.kind).toBe('implementing')
-    expect(workspaceChangeState({ supervision: supervision({}), handoff: 'review', failingFindings: false }).kind).toBe('in-review')
+    expect(workspaceChangeState({ supervision: supervision({}), handoff: 'review', reviewClaimant: 'reviewer', failingFindings: false }).kind).toBe('in-review')
   })
 
   test('parallel holders stay distinguishable: every holder of every linked task is listed', () => {
