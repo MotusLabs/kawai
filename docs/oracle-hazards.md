@@ -31,7 +31,9 @@ or property that would have caught it, and the source finding.
   is not what ships.
 - **Oracle that catches it.** At least one oracle test per guarded seam runs
   through the production composition, and its mutant removes the wiring
-  (revision-control design.md, the OG1 row).
+  (`src/server/__tests__/restartSupersededSubmissions.test.ts` › "OG1:
+  through the production composition the old holder's findings are refused
+  restart-superseded and the new claimant's pass (kills M1)").
 - **Source finding.** findings-6a6a844d.
 
 ## Command surfaces
@@ -69,4 +71,3 @@ or property that would have caught it, and the source finding.
   gets its own table row over that shared derivation.
 - **Source finding.** RC E seed (no finding record — cataloged at rule
   adoption).
-
