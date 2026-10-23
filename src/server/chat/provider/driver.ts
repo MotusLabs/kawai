@@ -24,6 +24,13 @@ import type { SessionStatus } from '../../../shared/types'
 import type { BackgroundTaskRecord } from '../chatBackgroundTasks'
 import type { ChatLimitSignal } from '../limitSignals'
 import type { Measurement } from '../../../shared/processObservations'
+import type { WorkspaceMessageContext } from '../../../shared/planWorkspace'
+
+/**
+ * A contextual submit's outcome (plan-workspace §4): a refusal names why
+ * nothing was stored, opened, or enqueued.
+ */
+export type ChatSendOutcome = { ok: true } | { ok: false; error: string }
 
 // The agent runtime a chat runs on (the shared union, re-exported so every
 // driver-side import keeps its path).
@@ -148,6 +155,13 @@ export interface ChatAgentDriver {
   setProjectPath(path: string): void
   /** Submit a user turn. */
   send(text: string): void
+  /**
+   * Submit a user turn carrying a plan-workspace context (PR D §4): the
+   * driver mints the message uuid, records the context row, and only then
+   * opens the turn, emits the visible event, and enqueues. A refused send
+   * opens nothing. A driver without this seam refuses contextual sends.
+   */
+  sendWorkspaceContext?(text: string, context: WorkspaceMessageContext): ChatSendOutcome
   /** Deliver a peer envelope as a turn (team mail), carrying its message id. */
   deliver(envelope: ChatPeerMessage): void
   /** Stop the in-flight turn and cancel its pending cards. */
