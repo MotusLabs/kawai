@@ -20,6 +20,7 @@ import {
 } from '../../stores/teamPlanWorkspaceStore'
 import PlanWorkspaceMap from './PlanWorkspaceMap'
 import PlanWorkspaceReader, { type ReaderRefAdd, type ReaderWorktree } from './PlanWorkspaceReader'
+import PlanWorkspaceArtifacts from './PlanWorkspaceArtifacts'
 import PlanWorkspaceHealth from './PlanWorkspaceHealth'
 
 export default function PlanWorkspaceSection({ teamPath, detail, connected, connectionEpoch, sendMessage }: {
@@ -229,6 +230,9 @@ function WorkspaceBody({ teamPath, detail, snapshot, view, connected, connection
       </div>
     )}
     <PlanWorkspaceHealth readings={snapshot.health ?? []} connected={connected} />
+    {view.selectedChange !== null && <PlanWorkspaceArtifacts teamPath={teamPath} planId={planId}
+      change={view.selectedChange} view={view} connected={connected} connectionEpoch={connectionEpoch}
+      sendMessage={sendMessage} />}
     <PlanWorkspaceReader teamPath={teamPath} refs={snapshot.references} selectedChange={view.selectedChange}
       executionId={view.executionId} view={view} worktrees={worktrees} connected={connected}
       onOpenDocument={(selection: WorkspaceDocumentSelection | null) => store.openDocument(teamPath, selection)}

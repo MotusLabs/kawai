@@ -6,6 +6,7 @@
 // listing the checklist resolver sees is a runner double; no CLI runs, no
 // agent starts (I6).
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import type { ChatSessionManager } from '../chat/ChatSessionManager'
@@ -16,19 +17,39 @@ import type { ServerMessage } from '../../shared/types'
 import type { OpenspecRunner } from '../plans/validation/openspecAdapter'
 import { ExecutionStore } from '../plans/execution/executionStore'
 import { ChangeArtifactsResolver } from '../plans/workspace/changeArtifacts'
+import { readWorkspaceDocument } from '../plans/workspace/documentReader'
 import { PlanWorkspaceDocumentConnections } from '../plans/workspace/workspaceDocuments'
 import type { WorkspaceWatcherHost } from '../workspace/workspaceWatcher'
 import { createPlanBench, createPlanWorld, sessionRow, type PlanWorld } from './planHarness'
 
-/** The watcher host double: nothing is watched or fired in these tests. */
-function fixtureHost(): WorkspaceWatcherHost {
-  return {
-    watchDirectory: () => ({ close: () => undefined }),
+/** The watcher host double: watch callbacks and timers are recorded. */
+function fixtureHost() {
+  const watchers = new Map<string, (changedPath: string) => void>()
+  const debounce: Array<{ callback: () => void; ms: number }> = []
+  const host: WorkspaceWatcherHost = {
+    watchDirectory: (directory, onEvent) => {
+      watchers.set(directory, onEvent)
+      return { close: () => watchers.delete(directory) }
+    },
     isWatchable: candidate => fs.existsSync(candidate),
-    setDebounceTimer: () => undefined,
-    clearDebounceTimer: () => undefined,
+    setDebounceTimer: (callback, ms) => {
+      const entry = { callback, ms }
+      debounce.push(entry)
+      return entry
+    },
+    clearDebounceTimer: handle => {
+      const at = debounce.indexOf(handle as { callback: () => void; ms: number })
+      if (at >= 0) debounce.splice(at, 1)
+    },
     setReconciliationInterval: () => undefined,
     clearReconciliationInterval: () => undefined,
+  }
+  return {
+    host,
+    fireWatch: (directory: string, name: string) => watchers.get(directory)?.(path.join(directory, name)),
+    flushDebounce: () => {
+      for (const { callback } of debounce.splice(0)) callback()
+    },
   }
 }
 
@@ -58,6 +79,8 @@ const writeChecklistFixture = (): void => {
   fs.writeFileSync(path.join(changeRoot, 'tasks.md'), '# Tasks\n')
 }
 
+const sha = (text: string): string => crypto.createHash('sha256').update(text).digest('hex')
+
 let world: PlanWorld
 let bench: ReturnType<typeof createPlanBench>
 let messages: ServerMessage[]
@@ -75,6 +98,7 @@ beforeAll(async () => {
 afterAll(() => fs.rmSync(world.root, { recursive: true, force: true }))
 beforeEach(() => {
   fs.rmSync(path.join(world.repo, 'openspec'), { recursive: true, force: true })
+  fs.rmSync(path.join(world.feature, 'notes'), { recursive: true, force: true })
   bench = createPlanBench(world)
   messages = []
   agentStarts = 0
@@ -98,17 +122,20 @@ beforeEach(() => {
     restore: forbidden('restore'),
     loadHistory: forbidden('loadHistory'),
   } as unknown as ChatSessionManager
+  fixture = fixtureHost()
 })
+
+let fixture: ReturnType<typeof fixtureHost>
 
 describe('thrown reads name no path (D4)', () => {
   // A dependency throw whose own message carries a representative absolute
   // path: the client-visible reason must stay fixed shape-only text, the
   // raw error never crossing the wire (first-path advisory F1).
   const pathError = () => new Error(`EACCES: permission denied, open '${world.repo}/openspec/changes/alpha/tasks.md'`)
-  const throwingModule = () =>
+  const throwingModule = (read?: typeof readWorkspaceDocument): PlanWorkspaceDocumentConnections =>
     new PlanWorkspaceDocumentConnections(managerDouble, {
-      host: fixtureHost(), resolver: new ChangeArtifactsResolver(runner),
-      read: async () => { throw pathError() },
+      host: fixture.host, resolver: new ChangeArtifactsResolver(runner),
+      read: read ?? (async () => { throw pathError() }),
     })
 
   test('a thrown document read answers the fixed missing reason, never the raw error', async () => {
@@ -137,6 +164,45 @@ describe('thrown reads name no path (D4)', () => {
     expect(push.unavailable).toMatchObject({ state: 'unreadable' })
     expect(push.unavailable!.message).toBe('The checklist of "alpha" could not be composed.')
     expect(push.unavailable!.message).not.toContain(world.repo)
+    expect(agentStarts).toBe(0)
+    throwing.stop()
+  })
+
+  test('a throw after a successful read holds last-valid content stale (fixed reason)', async () => {
+    const { planId } = await bench.draftInReview()
+    const docDir = path.join(world.feature, 'notes')
+    fs.mkdirSync(docDir, { recursive: true })
+    fs.writeFileSync(path.join(docDir, 'design.md'), 'first\n')
+    // The read succeeds once, then throws: the same subscription refreshes
+    // on a watch event and must hold the last-valid content stale, naming
+    // the fixed reason — never the raw error (D4, correction semantics).
+    let calls = 0
+    const read: typeof readWorkspaceDocument = (...args) => {
+      calls += 1
+      if (calls > 1) throw pathError()
+      return readWorkspaceDocument(...args)
+    }
+    const throwing = throwingModule(read)
+    messages = []
+    await throwing.handle(connection, { type: 'team-plan-workspace-document-open', teamPath: world.repo, planId,
+      worktreeId: world.feature, relativePath: 'notes/design.md' })
+    const currentMessage = last('team-plan-workspace-document')!
+    expect(currentMessage.view.availability).toBe('current')
+    expect(currentMessage.view.contentHash).toBe(sha('first\n'))
+    fixture.fireWatch(docDir, 'design.md')
+    fixture.flushDebounce()
+    for (let attempt = 0; attempt < 400 && last('team-plan-workspace-document') === currentMessage; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 5))
+    }
+    const stale = last('team-plan-workspace-document')!.view
+    expect(stale.availability).toBe('missing')
+    expect(stale.stale).toBe(true)
+    expect(stale.reason).toBe('The document could not be read.')
+    expect(stale.reason).not.toContain(world.repo)
+    // Last-valid content is held: the hash and text survive the failure.
+    expect(stale.contentHash).toBe(sha('first\n'))
+    expect(stale.text).toBe('first\n')
+    expect(stale.executionMatch).toBe('unknown')
     expect(agentStarts).toBe(0)
     throwing.stop()
   })

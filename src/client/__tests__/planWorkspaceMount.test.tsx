@@ -141,6 +141,84 @@ test('checklists are lazy: expanding a row opens its subscription, collapsing cl
   expect(close!.changeName).toBe('api')
 })
 
+test('the selected change subscribes to its canonical artifacts; switching sends close then open (B3)', () => {
+  const { sent, byId, has, rerender } = mount()
+  act(() => useTeamPlanWorkspaceStore.getState().applySnapshot({
+    type: 'team-plan-workspace-snapshot', teamPath: '/repo', teamId: 't', planId: 'p1', workspace: snapshot(),
+  }))
+  expect(has('plan-workspace-artifacts')).toBe(false)
+  expect(sent.filter(message => message.type === 'team-plan-workspace-artifacts-open')).toEqual([])
+  // Selecting a change opens its enumeration.
+  act(() => { byId('wbs-select-api').props.onClick() })
+  expect(sent.filter(message => message.type === 'team-plan-workspace-artifacts-open')
+    .map(message => message.changeName)).toEqual(['api'])
+  expect(has('plan-workspace-artifacts-loading')).toBe(true)
+  // The push renders the rows; an unobserved artifact reads `unread`.
+  act(() => useTeamPlanWorkspaceStore.getState().applyArtifacts({
+    type: 'team-plan-workspace-artifacts', teamPath: '/repo', planId: 'p1', changeName: 'api',
+    view: {
+      ok: true, changeName: 'api', source: { kind: 'main', worktreeId: '/repo' },
+      artifacts: [{ kind: 'proposal', relativePath: 'openspec/changes/api/proposal.md' }],
+    },
+  }))
+  expect(has('plan-workspace-artifacts-loading')).toBe(false)
+  expect(textOf(byId('plan-workspace-artifacts-source'))).toContain('main checkout')
+  const row = byId('plan-workspace-artifact-proposal')
+  expect(textOf(byId('plan-workspace-artifact-proposal-state'))).toBe('unread')
+  // Opening it routes through the existing document selection (B2)…
+  act(() => { row.props.onClick() })
+  expect(useTeamPlanWorkspaceStore.getState().views['/repo']?.selectedDocument).toEqual({
+    worktreeId: '/repo', relativePath: 'openspec/changes/api/proposal.md',
+  })
+  // …and the selected document-open alone supplies the real availability.
+  act(() => useTeamPlanWorkspaceStore.getState().applyDocument({
+    type: 'team-plan-workspace-document', teamPath: '/repo', planId: 'p1',
+    worktreeId: '/repo', relativePath: 'openspec/changes/api/proposal.md',
+    view: {
+      worktreeId: '/repo', relativePath: 'openspec/changes/api/proposal.md', kind: 'markdown',
+      availability: 'current', stale: false, reason: null, executionMatch: 'unknown', executionId: null,
+      contentHash: 'abc', size: 10, mtimeMs: 1, text: '# p',
+    },
+  }))
+  expect(textOf(byId('plan-workspace-artifact-proposal-state'))).toContain('current')
+  // A reconnect epoch re-sends the enumeration onto the new connection.
+  const beforeReconnect = sent.filter(message => message.type === 'team-plan-workspace-artifacts-open').length
+  rerender(1)
+  expect(sent.filter(message => message.type === 'team-plan-workspace-artifacts-open').length).toBe(beforeReconnect + 1)
+  // Switching the selection closes the old enumeration, opens the new —
+  // after the reconnect's own close/open pair. The stale `api` enumeration
+  // never leaks into the new change's panel.
+  act(() => { byId('wbs-select-web').props.onClick() })
+  expect(has('plan-workspace-artifacts-loading')).toBe(true)
+  expect(has('plan-workspace-artifacts-list')).toBe(false)
+  const artifactCloses = sent.filter(message => message.type === 'team-plan-workspace-artifacts-close')
+  expect(artifactCloses.map(message => message.changeName)).toEqual(['api', 'api'])
+  expect(sent.filter(message => message.type === 'team-plan-workspace-artifacts-open')
+    .map(message => message.changeName)).toEqual(['api', 'api', 'web'])
+})
+
+test('an unavailable enumeration renders its fixed reason; unmount closes the subscription', () => {
+  const { sent, byId, has, renderer } = mount()
+  act(() => useTeamPlanWorkspaceStore.getState().applySnapshot({
+    type: 'team-plan-workspace-snapshot', teamPath: '/repo', teamId: 't', planId: 'p1', workspace: snapshot(),
+  }))
+  act(() => { byId('wbs-select-api').props.onClick() })
+  act(() => useTeamPlanWorkspaceStore.getState().applyArtifacts({
+    type: 'team-plan-workspace-artifacts', teamPath: '/repo', planId: 'p1', changeName: 'api',
+    view: {
+      ok: false, state: 'missing-in-worktree',
+      message: 'Change "api" is missing in its convention worktree (active and archive listings); main checkout’s copy is not substituted.',
+    },
+  }))
+  expect(has('plan-workspace-artifacts-list')).toBe(false)
+  expect(textOf(byId('plan-workspace-artifacts-unavailable'))).toContain('missing in its convention worktree')
+  // Unmount — as on leaving the plan or the team — closes the subscription.
+  act(() => renderer.unmount())
+  renderers.length = 0
+  expect(sent.filter(message => message.type === 'team-plan-workspace-artifacts-close')
+    .map(message => message.changeName)).toEqual(['api'])
+})
+
 test('no displayable version states itself and fabricates no map; loading holds before the snapshot', () => {
   const { has, byId } = mount()
   expect(has('plan-workspace-loading')).toBe(true)
@@ -194,6 +272,7 @@ test('the workspace starts no worker and displaces no existing section or gate',
     'team-plan-workspace-open', 'team-plan-workspace-close',
     'team-plan-workspace-checklist-open', 'team-plan-workspace-checklist-close',
     'team-plan-workspace-document-open', 'team-plan-workspace-document-close',
+    'team-plan-workspace-artifacts-open', 'team-plan-workspace-artifacts-close',
   ])
   for (const message of sent) expect(allowed.has(message.type)).toBe(true)
   // The existing sections and their gates render beside the workspace.

@@ -95,6 +95,40 @@ describe('pushes', () => {
     })
     expect(useTeamPlanWorkspaceStore.getState().views['/repo']?.documents[documentKey({ worktreeId: '/repo', relativePath: 'docs/architecture.md' })]?.text).toBe('# hi')
   })
+
+  test('an artifact enumeration lands by change name; other plans and teams are dropped', () => {
+    const store = useTeamPlanWorkspaceStore.getState()
+    store.open('/repo', 'p1')
+    store.applyArtifacts({
+      type: 'team-plan-workspace-artifacts', teamPath: '/repo', planId: 'p1', changeName: 'api',
+      view: {
+        ok: true, changeName: 'api', source: { kind: 'main', worktreeId: '/repo' },
+        artifacts: [{ kind: 'proposal', relativePath: 'openspec/changes/api/proposal.md' }],
+      },
+    })
+    expect(useTeamPlanWorkspaceStore.getState().views['/repo']?.artifacts.api).toMatchObject({ ok: true })
+    // A late push for another change lands under its own key and never
+    // overwrites the selected change's enumeration.
+    store.applyArtifacts({
+      type: 'team-plan-workspace-artifacts', teamPath: '/repo', planId: 'p1', changeName: 'web',
+      view: { ok: false, state: 'missing', message: 'stale' },
+    })
+    expect(useTeamPlanWorkspaceStore.getState().views['/repo']?.artifacts.api).toMatchObject({ ok: true })
+    expect(useTeamPlanWorkspaceStore.getState().views['/repo']?.artifacts.web).toMatchObject({ ok: false })
+    // Another plan's enumeration is dropped; so is another team's.
+    store.applyArtifacts({
+      type: 'team-plan-workspace-artifacts', teamPath: '/repo', planId: 'other', changeName: 'api',
+      view: { ok: false, state: 'missing', message: 'x' },
+    })
+    store.applyArtifacts({
+      type: 'team-plan-workspace-artifacts', teamPath: '/elsewhere', planId: 'p1', changeName: 'api',
+      view: { ok: false, state: 'missing', message: 'x' },
+    })
+    expect(useTeamPlanWorkspaceStore.getState().views['/repo']?.artifacts.api).toMatchObject({ ok: true })
+    // Selecting another plan resets the view, enumerations included.
+    store.open('/repo', 'p2')
+    expect(useTeamPlanWorkspaceStore.getState().views['/repo']?.artifacts).toEqual({})
+  })
 })
 
 describe('commands', () => {

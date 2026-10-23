@@ -308,10 +308,13 @@ export class PlanWorkspaceDocumentConnections {
     // rows read the last composed value (N3). A checklist or document
     // refresh itself never pushes the workspace projection (CP1).
     this.totals.record(sub.teamId, sub.planId, sub.changeName, payload.checklist)
+    // The watch target moves before any early return: an equal view from a
+    // moved change root (same projection, new location) must still re-target
+    // the watcher, or the stale watch never fires again (F4).
+    this.updateWatchTargets()
     if (JSON.stringify(payload) === JSON.stringify(sub.push)) return
     sub.push = payload
     connection.send({ type: 'team-plan-workspace-checklist', teamPath, planId: sub.planId, changeName: sub.changeName, ...payload })
-    this.updateWatchTargets()
   }
 
   private async refreshDocument(connection: ChatConnection, teamPath: string, sub: DocumentSubscription): Promise<void> {

@@ -212,10 +212,13 @@ export class PlanWorkspaceArtifactsConnections {
     // tears the subscription down — the stale composition is dropped, never
     // pushed, and the chain's next run finds nothing subscribed.
     if (this.subscriptions.get(connection)?.get(teamPath)?.artifacts.get(artifactsKey(sub.planId, sub.changeName)) !== sub) return
+    // The watch target moves before any early return: an equal view from a
+    // moved source root (same projection, new location) must still re-target
+    // the watcher, or the stale watch never fires again (F4).
+    this.updateWatchTargets()
     if (JSON.stringify(view) === JSON.stringify(sub.push)) return
     sub.push = view
     connection.send({ type: 'team-plan-workspace-artifacts', teamPath, planId: sub.planId, changeName: sub.changeName, view })
-    this.updateWatchTargets()
   }
 
   /** Compose is total (O3): an open always answers, so a throw names its state. */
