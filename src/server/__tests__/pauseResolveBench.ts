@@ -36,7 +36,7 @@ export type PauseResolveBench = PauseTargetsBench & {
   /** A review target (gating, reviewing) recorded Paused, with the C12-C14 variants. */
   pausedReview: (opts?: { superseded?: boolean; notes?: boolean; pending?: boolean }) => Promise<{ planId: string; executionId: string; taskId: string; pauseId: string }>
   /** The update target (gating, newest update row out) recorded Paused. */
-  pausedUpdate: () => Promise<{ planId: string; executionId: string; taskId: string; updateAssignmentId: string; pauseId: string }>
+  pausedUpdate: (opts?: { manifest?: AttemptManifest }) => Promise<{ planId: string; executionId: string; taskId: string; updateAssignmentId: string; pauseId: string }>
 }
 
 export async function pauseResolveBench(prefix: string): Promise<PauseResolveBench> {
@@ -117,11 +117,11 @@ export async function pauseResolveBench(prefix: string): Promise<PauseResolveBen
     if (opts.pending) republish(flight.taskId)
     return { planId, executionId, taskId: flight.taskId, pauseId: pause.id }
   }
-  const pausedUpdate = async (): Promise<{ planId: string; executionId: string; taskId: string; updateAssignmentId: string; pauseId: string }> => {
+  const pausedUpdate = async (opts: { manifest?: AttemptManifest } = {}): Promise<{ planId: string; executionId: string; taskId: string; updateAssignmentId: string; pauseId: string }> => {
     const { planId, executionId } = await wired.executionWith(['api'])
     await wired.inFlight(executionId, 'api', 'dev')
     answerNewestRow(executionId, 'api', 1)
-    const update = await mintAttempt(executionId, 'api', 'update', 'dev3')
+    const update = await mintAttempt(executionId, 'api', 'update', 'dev3', opts.manifest)
     const row = wired.executions.change(executionId, 'api')!
     expect(wired.executions.transition(executionId, 'api', row, { state: 'gating', step: null })).not.toBeNull()
     const hold = wired.placeHold(planId, ['api'], `hold-${++fixtureSequence}`)
