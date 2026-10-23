@@ -17,6 +17,8 @@ import type { ProductStrategy, StrategyDetail, StrategyDraft, StrategyRevision }
 import type { ImpactDecision, ImpactDisposition, StrategyImpactDetail } from './strategyImpact'
 import type { TeamWorkspaceSnapshot } from './teamWorkspace'
 import type { PlanClientMessage, PlanServerMessage } from './planMessages'
+import type { WorkspaceMessageEnvelope } from './planWorkspace'
+import type { PlanWorkspaceClientMessage, PlanWorkspaceServerMessage } from './planWorkspaceMessages'
 import type { OutboundAuditClientMessage, OutboundAuditServerMessage } from './outbound'
 import type { MetricsClientMessage, MetricsServerMessage } from './metricsMessages'
 import type {
@@ -248,6 +250,8 @@ export interface UpdateState {
 export type ServerMessage =
   // Durable plans (durable-plans D12): see planMessages.ts.
   | PlanServerMessage
+  // The plan workspace (plan-workspace D1): see planWorkspaceMessages.ts.
+  | PlanWorkspaceServerMessage
   // The owner's audit view (execution-safety-recovery D9): see outbound.ts.
   | OutboundAuditServerMessage
   // Process metrics (team-process-metrics D5): see metricsMessages.ts.
@@ -606,6 +610,8 @@ export interface WakeError {
 export type ClientMessage =
   // Durable plans (durable-plans D12): see planMessages.ts.
   | PlanClientMessage
+  // The plan workspace (plan-workspace D1): see planWorkspaceMessages.ts.
+  | PlanWorkspaceClientMessage
   // The owner's audit view (execution-safety-recovery D9/D10): see outbound.ts.
   | OutboundAuditClientMessage
   // Process metrics (team-process-metrics D5): see metricsMessages.ts.
@@ -668,7 +674,7 @@ export type ClientMessage =
   // oldest held event, widened back to throughId when a search reveal needs
   // an older entry (an event id or a tool:<callId> anchor).
   | { type: 'chat-history-page'; sessionId: string; beforeId: string; throughId?: string }
-  | { type: 'chat-send'; sessionId: string; text: string }
+  | { type: 'chat-send'; sessionId: string; text: string; /** Plan-workspace context (§4): validated server-side before anything is stored. */ workspaceContext?: WorkspaceMessageEnvelope }
   | { type: 'chat-interrupt'; sessionId: string }
   // Archive stops the agent process but keeps the record, conversation, and
   // protocol log; restore clears the archived state (chat-archive design D2).

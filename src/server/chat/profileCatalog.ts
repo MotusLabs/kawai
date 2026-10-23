@@ -22,7 +22,7 @@ import os from 'node:os'
 import path from 'node:path'
 import shippedDefaultCatalog from '../../../config/profiles.default.json'
 import shippedDefaultProviders from '../../../config/providers.default.json'
-import { CatalogMerger, flattenModel } from './catalogMerge'
+import { CatalogMerger, flattenModel, type MergedProvider } from './catalogMerge'
 import {
   parseCatalogValue,
   parseProviderCatalogValue,
@@ -119,6 +119,8 @@ export interface ProfileCatalog {
   profiles: Map<string, CatalogProfile>
   /** Providers with their labels and model keys, default-holder first (D13). */
   providers: Map<string, CatalogProvider>
+  /** The raw merged provider definitions (env and credential names included), for routing facts like host-login applicability. */
+  merged: Map<string, MergedProvider>
   /** Per-file validation failures; the rest of the catalog still resolves. */
   errors: string[]
 }
@@ -367,7 +369,7 @@ export function resolveProfileCatalog(
   if (!profiles.has('default')) {
     profiles.set('default', { label: 'Default', env: {}, providerId: 'default' })
   }
-  return { profiles, providers, errors }
+  return { profiles, providers, merged: merger.providers, errors }
 }
 
 /**

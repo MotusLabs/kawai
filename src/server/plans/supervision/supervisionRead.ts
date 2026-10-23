@@ -37,7 +37,7 @@ export interface SupervisionReads {
   db: Database
   mail: MailboxStore
   executions: ExecutionStore
-  plans: Pick<PlanStore, 'forTeam' | 'revision' | 'approvedRevision'>
+  plans: Pick<PlanStore, 'forTeam' | 'revision' | 'approvedRevision' | 'linkedTasks'>
   decisions: DecisionStore
   integration?: IntegrationStore
   /** The execution's unresolved acceptance conditions (V2), as landing reads them. */

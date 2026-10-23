@@ -64,6 +64,26 @@
       "openrouter-haiku": {
         "label": "OpenRouter Haiku",
         "model": "haiku"
+      },
+      "openrouter-deepseek-flash": {
+        "label": "OpenRouter DeepSeek V4.1 Flash",
+        "model": "deepseek/deepseek-v4.1-flash-1017",
+        "env": {
+          "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek/deepseek-v4.1-flash-1017",
+          "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek/deepseek-v4.1-flash-1017",
+          "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek/deepseek-v4.1-flash-1017",
+          "ANTHROPIC_DEFAULT_FABLE_MODEL": "deepseek/deepseek-v4.1-flash-1017"
+        }
+      },
+      "openrouter-minimax-flash": {
+        "label": "OpenRouter MiniMax M3.1 Flash",
+        "model": "minimax/minimax-m3.1-flash",
+        "env": {
+          "ANTHROPIC_DEFAULT_OPUS_MODEL": "minimax/minimax-m3.1-flash",
+          "ANTHROPIC_DEFAULT_SONNET_MODEL": "minimax/minimax-m3.1-flash",
+          "ANTHROPIC_DEFAULT_HAIKU_MODEL": "minimax/minimax-m3.1-flash",
+          "ANTHROPIC_DEFAULT_FABLE_MODEL": "minimax/minimax-m3.1-flash"
+        }
       }
     }
   }

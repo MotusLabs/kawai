@@ -80,7 +80,8 @@ import { probeSdkAvailability } from './sdkAvailability'
 import { AccountNoticeStore, credentialsPathFor } from './accountNotices'
 import { UsageLimitStore } from './usageLimits'
 import { withTextReset } from './limitSignals'
-import { providerOf, resolveProfileCatalog } from './profileCatalog'
+import { profileCatalogStamp, providerOf, resolveProfileCatalog } from './profileCatalog'
+import type { MergedProvider } from './catalogMerge'
 import { ensureCodexExecutable } from './codex/codexExecutable'
 import { codexLoginErrorMessage, hasCodexLogin } from './codex/codexAuth'
 import { codexLimitProviderId } from './codex/codexLimits'
@@ -156,6 +157,9 @@ import {
 } from './transcriptReplay'
 import { canRetryCodexMemo, replayCodexRollout, replayCodexRolloutAsync } from './codex/codexRollout'
 import { watchTranscriptTitle, type TranscriptTitleWatcher } from './transcriptTitleWatcher'
+import { resolveTeam } from '../team/teamIdentity'
+import { validateWorkspaceSend } from './workspaceSendValidation'
+import type { WorkspaceMessageContext, WorkspaceMessageEnvelope } from '../../shared/planWorkspace'
 
 export type { ChatQueryFactory }
 export { chatAuthErrorMessage, hasClaudeAuth }
@@ -389,6 +393,8 @@ export class ChatSessionManager {
    * over the stored column. Survives respawns; a restart begins with none.
    */
   private readonly contextReadings = new Map<string, ChatContextUsage>()
+  /** Merged provider definitions per catalog stamp (host-login routing facts); re-resolved when the stamp moves. */
+  private readonly providerDefinitions = new Map<string, Map<string, MergedProvider>>()
   /**
    * Latest worker roster per session (workers design D2): the last publish
    * of a live driver, or the recovered sidecar rows of a restarted one. A
@@ -591,7 +597,7 @@ export class ChatSessionManager {
     return {
       type: 'chat-snapshot', sessionId,
       profileId: this.records.get(sessionId)?.claudeProfileId ?? 'default',
-      events: window.events,
+      events: this.attachWorkspaceContext(sessionId, window.events),
       pendingRequests: this.getPendingRequests(sessionId),
       status: this.options.registry.get(sessionId)?.status ?? 'waiting',
       // The live tail, not the window: older live events outside the window
@@ -641,7 +647,7 @@ export class ChatSessionManager {
       [...(this.snapshotHistory.get(sessionId) ?? []), ...(this.liveEvents.get(sessionId) ?? [])],
       { beforeId, ...(throughId !== undefined ? { throughId } : {}) }
     )
-    return { events: window.events, hasOlder: window.hasOlder, stale: window.stale === true }
+    return { events: this.attachWorkspaceContext(sessionId, window.events), hasOlder: window.hasOlder, stale: window.stale === true }
   }
 
   /**
@@ -1309,6 +1315,11 @@ export class ChatSessionManager {
     this.validation = planServices.validation
     this.decisions = planServices.decisions
     this.plans = planServices.plans
+    this.planWorkspace = planServices.workspaceStore
+    this.planWorkspaceRefs = planServices.workspaceRefs
+    this.planWorkspaceContext = planServices.workspaceContext
+    this.planWorkspaceRuntimeReads = planServices.supervisionReads
+    this.planExecutionStore = planServices.executionStore
     this.executions = planServices.executions
     this.executionRuntime = planServices.runtime
     this.supervisionMonitor = planServices.monitor
@@ -1640,6 +1651,16 @@ export class ChatSessionManager {
   private readonly mailGuard = new DriverMailGuard()
   /** Durable plans (durable-plans); the plan tools and UI actions go through it. */
   readonly plans: PlanService
+  /** The plan workspace's bindings and command ledger (plan-workspace 1.2); the workspace connection reads it. */
+  readonly planWorkspace: import('../plans/workspace/workspaceStore').PlanWorkspaceStore
+  /** The plan workspace's document references (plan-workspace 1.2); the workspace connection reads it. */
+  readonly planWorkspaceRefs: import('../plans/workspace/workspaceRefs').PlanWorkspaceRefs
+  /** The per-message context store (plan-workspace §4); the send path records through it. */
+  readonly planWorkspaceContext: import('../plans/workspace/workspaceContext').PlanWorkspaceContext
+  /** The execution pin's read-only surface (plan-workspace 2.4, O4): the accessors executionPin.ts reads, no writer. */
+  readonly planExecutionStore: import('../plans/workspace/executionPin').ExecutionPinStore
+  /** The workspace runtime's supervision reads (plan-workspace 3.1); null without team services. */
+  readonly planWorkspaceRuntimeReads: import('../plans/supervision/supervisionRead').SupervisionReads | null
   /** Plan executions (plan-execution): the human Start/Stop/Retry commands. */
   readonly executions: import('../plans/execution/ExecutionService').ExecutionService
   /** The execution runtime (plan-execution D5): boot recovery, wakes, and stop. */
@@ -1804,6 +1825,44 @@ export class ChatSessionManager {
   }
 
   /**
+   * The session's live context reading, or the record's last persisted one,
+   * else null (the snapshot's precedence, read-only for the workspace's
+   * passive health — design D5). Never attaches to the driver or refreshes
+   * anything.
+   */
+  contextReadingOf(sessionId: string): ChatContextUsage | null {
+    return this.contextReadings.get(sessionId) ?? this.records.get(sessionId)?.contextUsage ?? null
+  }
+
+  /**
+   * The provider's latest plan-usage report, or null (providers-and-workers
+   * 5.1): a read-only public accessor over the same in-memory store the
+   * snapshot and TeamCapacity read. Never claims a pull or refreshes.
+   */
+  providerUsageOf(providerId: string): ChatUsageReport | null {
+    return this.usageLimits.get(providerId)
+  }
+
+  /**
+   * The catalog's merged definition of the provider the session's profile
+   * belongs to (read-only, for routing facts like host-login applicability,
+   * plan-workspace LC5.4): cached per catalog stamp like `providerOf`. A
+   * provider the catalog no longer defines has no definition.
+   */
+  providerDefinitionOf(sessionId: string): MergedProvider | null {
+    const record = this.records.get(sessionId)
+    const ctx = catalogCtx(this.options.profileCatalogHome, record?.projectPath)
+    const key = `${ctx.homeDir ?? process.env.HOME ?? os.homedir()}\n${ctx.projectPath ?? ''}\n${profileCatalogStamp(ctx)}`
+    let known = this.providerDefinitions.get(key)
+    if (!known) {
+      if (this.providerDefinitions.size >= 32) this.providerDefinitions.clear()
+      known = resolveProfileCatalog(ctx).merged
+      this.providerDefinitions.set(key, known)
+    }
+    return known.get(this.providerIdOf(sessionId)) ?? null
+  }
+
+  /**
    * Read-only history for a chat session: the stored SDK transcript replayed
    * into ChatEvents (with dead requests marked cancelled), or a
    * "history unavailable" notice. Sessions that never started have no SDK id
@@ -1842,7 +1901,7 @@ export class ChatSessionManager {
    * refuses the turn rather than silently starting a fresh conversation
    * (design D5): the id is kept so a restored transcript can still resume.
    */
-  async send(sessionId: string, text: string): Promise<ChatActionResult> {
+  async send(sessionId: string, text: string, workspaceContext?: WorkspaceMessageEnvelope): Promise<ChatActionResult> {
     // Recovery can replace the record's path: finish it before checking the
     // directory or resolving the launch configuration.
     this.captureHistory(sessionId)
@@ -1854,6 +1913,15 @@ export class ChatSessionManager {
     if (blocked) {
       return { ok: false, error: blocked }
     }
+    // A contextual send validates whole before the driver mints anything
+    // (plan-workspace §4 S1): a refusal stores no row, opens no turn, and
+    // leaves the client draft intact.
+    let stored: WorkspaceMessageContext | null = null
+    if (workspaceContext !== undefined) {
+      const validated = await validateWorkspaceSend(record.projectPath, workspaceContext, this.workspaceSendDeps())
+      if (!validated.ok) return { ok: false, error: validated.error }
+      stored = validated.context
+    }
     let driver: ChatAgentDriver | null
     try {
       driver = await this.ensureDriver(sessionId)
@@ -1863,9 +1931,54 @@ export class ChatSessionManager {
     if (!driver) {
       return { ok: false, error: `Unknown chat session ${sessionId}` }
     }
-    driver.send(text)
+    if (stored) {
+      if (!driver.sendWorkspaceContext) {
+        return { ok: false, error: "This chat's runtime does not carry plan-workspace contexts." }
+      }
+      const sent = driver.sendWorkspaceContext(text, stored)
+      if (!sent.ok) return { ok: false, error: sent.error }
+    } else {
+      driver.send(text)
+    }
     this.touch(sessionId)
     return { ok: true }
+  }
+
+  /** The validation reads, wired to the plan services (plan-workspace §4.1). */
+  private workspaceSendDeps() {
+    return {
+      resolveTeam: (projectPath: string) => resolveTeam(projectPath),
+      planForTeam: (teamId: string, planId: string) => {
+        const plan = this.plans.store.forTeam(teamId, planId)
+        return plan ? { id: plan.id, title: plan.title } : null
+      },
+      versionInputs: (planId: string) => ({
+        approved: this.plans.store.approvedRevision(planId),
+        revisions: this.plans.store.revisions(planId),
+        drafts: this.plans.store.drafts(planId),
+      }),
+      execution: (executionId: string) => this.planExecutionStore.execution(executionId),
+      refsOf: (teamId: string, planId: string) => this.planWorkspaceRefs.refsOf(teamId, planId),
+    }
+  }
+
+  /**
+   * Re-attach the stored context to user events by message uuid
+   * (plan-workspace §4.3): snapshot and history assembly join through here,
+   * so a replayed transcript renders the attachment the live event showed.
+   * A row whose message never reached the transcript renders nothing, and
+   * an event without a uuid (legacy) reads as absent.
+   */
+  private attachWorkspaceContext(sessionId: string, events: ChatEvent[]): ChatEvent[] {
+    let attached = false
+    const joined = events.map(event => {
+      if (event.type !== 'user_message' || typeof event.messageUuid !== 'string' || event.messageUuid === '') return event
+      const stored = this.planWorkspaceContext.contextOf(sessionId, event.messageUuid)
+      if (!stored) return event
+      attached = true
+      return { ...event, workspaceContext: stored.context }
+    })
+    return attached ? joined : events
   }
 
   /**
@@ -2723,6 +2836,10 @@ export class ChatSessionManager {
               ...(this.backgroundTaskRecords.has(record.sessionId)
                 ? { recoveredBackgroundTasks: this.backgroundTaskRecords.get(record.sessionId) ?? [] }
                 : {}),
+              // The context store's record (plan-workspace §4 S4): the one
+              // DB write a contextual submit makes, inside the driver's
+              // mint→record→open→emit→enqueue order.
+              recordWorkspaceContext: input => this.planWorkspaceContext.record(input),
               // The SDK's usage pull is Claude's alone (providers-and-workers).
               claimUsagePull: () =>
                 this.claimProviderUsagePull(record),

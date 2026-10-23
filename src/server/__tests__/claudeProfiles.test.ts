@@ -88,6 +88,8 @@ describe('Claude profile resolution', () => {
       { id: 'openrouter-opus', label: 'OpenRouter Opus', providerId: 'openrouter', providerLabel: 'OpenRouter', runtime: 'claude' },
       { id: 'openrouter-sonnet', label: 'OpenRouter Sonnet', providerId: 'openrouter', providerLabel: 'OpenRouter', runtime: 'claude' },
       { id: 'openrouter-haiku', label: 'OpenRouter Haiku', providerId: 'openrouter', providerLabel: 'OpenRouter', runtime: 'claude' },
+      { id: 'openrouter-deepseek-flash', label: 'OpenRouter DeepSeek V4.1 Flash', providerId: 'openrouter', providerLabel: 'OpenRouter', runtime: 'claude' },
+      { id: 'openrouter-minimax-flash', label: 'OpenRouter MiniMax M3.1 Flash', providerId: 'openrouter', providerLabel: 'OpenRouter', runtime: 'claude' },
       { id: 'minimax', label: 'MiniMax', providerId: 'minimax', providerLabel: 'MiniMax', runtime: 'claude' },
       { id: 'mimo', label: 'MiMo', providerId: 'mimo', providerLabel: 'MiMo', runtime: 'claude' },
       { id: 'kimi', label: 'Kimi', providerId: 'kimi', providerLabel: 'Kimi', runtime: 'claude' },

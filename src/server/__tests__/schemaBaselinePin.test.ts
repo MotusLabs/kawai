@@ -32,7 +32,9 @@
 // decisions, fix tasks, and stall alerts; migration 17
 // (`revision-control`) the hold, pause, checkpoint, and execution-revision
 // tables; migration 18 (`worker-choice`) the nullable `worker_choice` on
-// `team_messages` and `team_task_assignments`.
+// `team_messages` and `team_task_assignments`; migration 19
+// (`plan-workspace`) the bindings, document references, turn-context
+// snapshots, and command-ledger tables.
 import { expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { initDatabase } from '../db'
@@ -439,9 +441,37 @@ const migration17: SchemaShape['tables'] = {
   },
 }
 
+// Migration 19's delta: the plan-workspace tables (plan-workspace 1.2). The
+// roles' and refs' CHECK constraints and every UNIQUE key are autoindexes,
+// which the shape skips.
+const migration19: SchemaShape['tables'] = {
+  plan_workspace_chats: {
+    columns: [keyPart('team_id', 1), keyPart('role', 2), column('session_id'), integer('version'), column('bound_at')],
+    indexes: [],
+  },
+  plan_document_refs: {
+    columns: [
+      id, ...['team_id', 'plan_id'].map(name => column(name)), optional('change_name'), column('label'), column('kind'),
+      optional('worktree_id'), optional('relative_path'), optional('url'), column('created_at'),
+    ],
+    indexes: [],
+  },
+  chat_workspace_turn_context: {
+    columns: [
+      keyPart('session_id', 1), keyPart('message_uuid', 2), optional('turn_id'), column('context_json'),
+      optional('team_id'), optional('plan_id'), column('recorded_at'),
+    ],
+    indexes: [],
+  },
+  plan_workspace_commands: {
+    columns: [keyPart('team_id', 1), keyPart('command_id', 2), column('kind'), column('payload'), column('outcome'), column('at')],
+    indexes: [],
+  },
+}
+
 test('a fresh database opened by this build has the same shape plus each migration\'s delta and schema_migrations', () => {
   const session = initDatabase({ path: ':memory:' })
-  const added = { ...migration2, ...migration3, ...migration4, ...migration5, ...migration6, ...migration7, ...migration8, ...migration9, ...migration10, ...migration11, ...migration13, ...migration16, ...migration17 }
+  const added = { ...migration2, ...migration3, ...migration4, ...migration5, ...migration6, ...migration7, ...migration8, ...migration9, ...migration10, ...migration11, ...migration13, ...migration16, ...migration17, ...migration19 }
   expect(Object.keys(added).filter(table => table in expected.tables)).toEqual([])
   const messages = expected.tables.team_messages!
   // Migration 18's: the sender's worker choice (dispatch-worker-choice D1).

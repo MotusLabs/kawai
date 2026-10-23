@@ -77,8 +77,10 @@ export function currentLink(history: readonly ProposalLinkEvent[]): ProposalLink
   return { changeStartId: last.changeStartId, changeHash: last.changeHash, changeAt: last.changeAt, actor: last.actor, at: last.at }
 }
 
-/** The first field whose value differs between a stored payload and a new one, else null. */
-export function firstDifferingField(stored: CommandPayload, next: CommandPayload): string | null {
+/** The first field whose value differs between a stored payload and a new one, else null.
+ * Primitive payloads only (values compare with `!==`); shared with the plan
+ * workspace's command ledger (plan-workspace 1.3), which compares the same way. */
+export function firstDifferingField(stored: Record<string, unknown>, next: Record<string, unknown>): string | null {
   for (const key of new Set([...Object.keys(next), ...Object.keys(stored)])) {
     if ((stored[key] ?? null) !== (next[key] ?? null)) return key
   }

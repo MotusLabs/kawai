@@ -60,7 +60,9 @@ const SHIPPED: Record<string, Omit<CatalogProfile, 'providerId'>> = {
   default: DEFAULT, glm: GLM, 'glm-flash': GLM_FLASH, minimax: MINIMAX, mimo: MIMO, kimi: KIMI, opus: OPUS, sonnet: SONNET, haiku: HAIKU,
 }
 
-const ADDED_SINCE_MASTER = new Set(['openrouter-opus', 'openrouter-sonnet', 'openrouter-haiku'])
+const ADDED_SINCE_MASTER = new Set([
+  'openrouter-opus', 'openrouter-sonnet', 'openrouter-haiku', 'openrouter-deepseek-flash', 'openrouter-minimax-flash',
+])
 
 let root: string
 let home: string

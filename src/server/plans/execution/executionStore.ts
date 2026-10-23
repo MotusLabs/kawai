@@ -100,6 +100,12 @@ export class ExecutionStore extends ExecutionEffectStore {
     return row ? mapExecution(row) : null
   }
 
+  /** The plan's newest execution by start order (D2's default selection). */
+  latestForPlan(planId: string): ExecutionRow | null {
+    const row = this.db.prepare('SELECT * FROM plan_executions WHERE plan_id = ? ORDER BY started_at DESC, rowid DESC LIMIT 1').get(planId) as Record<string, unknown> | null
+    return row ? mapExecution(row) : null
+  }
+
   runningForTeam(teamId: string): ExecutionRow[] {
     return (this.db.prepare("SELECT * FROM plan_executions WHERE team_id = ? AND state = 'running' ORDER BY started_at, rowid").all(teamId) as Array<Record<string, unknown>>)
       .map(mapExecution)
@@ -290,6 +296,18 @@ export class ExecutionStore extends ExecutionEffectStore {
   attempts(executionId: string, change: string): AttemptRow[] {
     return (this.db.prepare('SELECT * FROM plan_execution_attempts WHERE execution_id = ? AND change = ? ORDER BY number').all(executionId, change) as Array<Record<string, unknown>>)
       .map(mapAttempt)
+  }
+
+  /** The execution's newest attempt across its changes. */
+  latestAttempt(executionId: string): AttemptRow | null {
+    const row = this.db.prepare('SELECT * FROM plan_execution_attempts WHERE execution_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1').get(executionId) as Record<string, unknown> | null
+    return row ? mapAttempt(row) : null
+  }
+
+  /** One change's newest attempt — the document pin's manifest, worktree-scoped (plan-workspace 2.4, O1). */
+  latestAttemptForChange(executionId: string, change: string): AttemptRow | null {
+    const row = this.db.prepare('SELECT * FROM plan_execution_attempts WHERE execution_id = ? AND change = ? ORDER BY created_at DESC, rowid DESC LIMIT 1').get(executionId, change) as Record<string, unknown> | null
+    return row ? mapAttempt(row) : null
   }
 
   /**
