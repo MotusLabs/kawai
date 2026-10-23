@@ -1,19 +1,24 @@
 // The owner's resolve command (revision-control 4.4-4.5, design D9 + A3's
 // C-rows and A-rows): one decision per pause target, recorded as the
 // `pause-resolved` event and the target's decision row in one transaction.
-// This step implements 'continue' (C1-C19) and 'adapt' (A1r-A14r). The
+// This step implements 'continue' (C1-C19) and 'adapt' (A1r-A14r); the
+// 'restart' choice (R1-R23r) lives beside it in pauseRestart.ts. The
 // entry is async for L3's pre-transaction head read (A3.2): after the
 // replay short-circuit it gathers origin's branch head for an adapted fix
-// row's manifest through the `adaptHead` seam, outside the transaction; a
-// failed read refuses `head-unreadable` (K7) inside `within`, after every
-// earlier refusal. The
+// row's manifest — and for a restart's — through the `adaptHead` seam,
+// outside the transaction; a failed read refuses `head-unreadable` (K7)
+// inside `within`, after every earlier refusal. The
 // checks run in order: decided (I1, naming the standing decision even on a
 // closed pause — before the choice dispatch, so every choice names it), the
 // closed pause (K6, undecided targets only), then the choice dispatch:
 // 'continue' reads withdrawn before the state (C9), not-paused (C10),
 // holder-gone (C11), then the stage branch; 'adapt' proceeds past a
 // withdrawn target (A8r), refuses only still-pausing (A9r) and review
-// targets (A10r), and never refuses a gone holder (A11r). An attempt target
+// targets (A10r), and never refuses a gone holder (A11r); 'restart' is
+// D9's allowed-from exception (rev4 §10): it proceeds past withdrawn
+// (R9/R15), still-pausing (R10-R15), gone holders (R16), and review
+// targets (R17/R18r), so only I1, K6, and the not-implemented choices
+// refuse before its stage branch. An attempt target
 // under 'continue' takes C2's shape: the decision {holder, release 'never',
 // assignmentId}, the ROUND RULE's conditional supersede of the newest
 // passable round (supersedeRound + cancelLiveRoundEffects + the
@@ -31,8 +36,9 @@
 // assignment superseded through the stop branch after the notices (P-I2),
 // the A13r move to `implementing`, O4's clear, ONE new kind-`fix` attempt
 // row at revision N+1 (H3), and the dispatch inline when the gate — read
-// after the decision — is open, else owed (H1). 'restart' and Stop land in
-// their own steps and refuse writing nothing until then. Refusals inside
+// after the decision — is open, else owed (H1). 'restart' takes R2's shape
+// (pauseRestart.ts). Stop lands in its own step and refuses writing nothing
+// until then. Refusals inside
 // the transaction throw (§2) — PlanRefusal for the K-level reasons, the
 // ResolveRefusal codes below — so a refused command writes nothing, not
 // even the event.
@@ -47,6 +53,7 @@ import { manifestHashInput } from '../../../shared/planExecution'
 import { holdGate, type OpenPauseTarget } from './holdGate'
 import type { ActiveHold } from '../../../shared/planRevisionControl'
 import { dispatchAdaptedFixWithin } from '../execution/executionAdaptDispatch'
+import { restartTarget } from './pauseRestart'
 import type { PlanPause, PlanPauseTarget } from '../../../shared/planRevisionControl'
 import type { PauseServiceDeps } from './pauseService'
 
@@ -140,9 +147,10 @@ export async function resolvePause(deps: PauseServiceDeps, caller: PlanCaller, i
   // outcome and reads nothing). The read is a gather only: K7's refusal is
   // thrown inside `within` at the facts' consumption, where it cannot mask
   // I1/K6 or the stage refusals, and a failed read leaves nothing written.
-  // Only 'adapt' reads today; 'restart' joins with its own step (rev4 §10).
+  // 'adapt' and 'restart' both read (rev4 §10); a review-target restart
+  // consumes no head facts, so its gather is spent harmlessly.
   let head: AdaptHeadFacts | null | undefined
-  if (input.choice === 'adapt' && deps.adaptHead && deps.plans.eventByCommand(plan.id, input.commandId) === null) {
+  if ((input.choice === 'adapt' || input.choice === 'restart') && deps.adaptHead && deps.plans.eventByCommand(plan.id, input.commandId) === null) {
     const pause = deps.pauses.get(caller.team.teamId, input.pauseId)
     head = pause !== null && pause.planId === plan.id ? await deps.adaptHead(pause.executionId, input.change) : undefined
   }
@@ -151,7 +159,14 @@ export async function resolvePause(deps: PauseServiceDeps, caller: PlanCaller, i
       kind: 'pause-resolved', commandId: input.commandId, pauseId: input.pauseId, change: input.change,
       choice: input.choice, adapt: input.adapt ?? null, rationale: input.rationale, releaseHold: input.releaseHold === true,
     }, () => resolveWithin(deps, caller, input, plan.id, head))
-    if (outcome.ok && !outcome.replayed) deps.wake?.(plan.teamId)
+    if (outcome.ok && !outcome.replayed) {
+      deps.wake?.(plan.teamId)
+      // R2's release step (rev4 §4) runs after the commit: releaseNow
+      // archives a session — an external effect that must not run inside
+      // the resolve's SQLite transaction. The pending-release row for a
+      // busy holder was already written inside it.
+      if (input.choice === 'restart') await releaseRestartedHolder(deps, input.pauseId, input.change)
+    }
     return outcome
   } catch (error) {
     if (error instanceof ResolveRefusal) {
@@ -180,20 +195,23 @@ function resolveWithin(deps: PauseServiceDeps, caller: PlanCaller & { kind: 'hum
   if (pause.closedAt !== null || finished) {
     throw new PlanRefusal('state', `The pause ${pause.id} is closed; there is nothing left to resolve. Nothing was written.`)
   }
-  // The choice dispatch (N2): 'restart' and Stop land with their own steps
-  // (rev4 §10).
-  if (input.choice !== 'continue' && input.choice !== 'adapt') {
-    throw new PlanRefusal('state', `'${input.choice}' does not resolve yet; only 'continue' and 'adapt' are implemented. Nothing was written.`)
+  // The choice dispatch (N2): Stop lands with its own step (rev4 §10);
+  // 'restart' is implemented beside this module (pauseRestart.ts).
+  if (input.choice !== 'continue' && input.choice !== 'adapt' && input.choice !== 'restart') {
+    throw new PlanRefusal('state', `'${input.choice}' does not resolve yet; only 'continue', 'adapt' and 'restart' are implemented. Nothing was written.`)
   }
   // Withdrawn before the state (C9): 'continue' reads `target-withdrawn`
   // from Paused and Pausing alike, so the answer is the same across the
   // tick. 'adapt' proceeds (A8r — the withdraw recorded Paused; its
-  // stop-branch writes below are no-ops on the already-superseded row).
+  // stop-branch writes below are no-ops on the already-superseded row),
+  // and 'restart' proceeds too (R9/R15 — D9's allowed-from extension).
   if (target.withdrawn && input.choice === 'continue') {
     throw new ResolveRefusal('target-withdrawn', `Change ${target.change}'s instruction was withdrawn when the pause was placed; nothing resumes.`)
   }
   // C10 / A9r: still pausing — the executor has not recorded Paused yet.
-  if (target.pausedAt === null) {
+  // 'restart' skips the state check (rev4 extends the allowed-from): R10-R15
+  // resolve a Pausing target from its own causes.
+  if (target.pausedAt === null && input.choice !== 'restart') {
     throw new ResolveRefusal('not-paused', `Change ${target.change} is still pausing, not Paused; resolve it once the pause records Paused.`)
   }
   const changeRow = deps.executions.change(pause.executionId, target.change)
@@ -211,6 +229,9 @@ function resolveWithin(deps: PauseServiceDeps, caller: PlanCaller & { kind: 'hum
     }
     if (target.stage === 'review') return continueReview(deps, caller, input, pause, target, task)
     return continueAttempt(deps, caller, input, pause, target, changeRow, task)
+  }
+  if (input.choice === 'restart') {
+    return restartTarget(deps, caller, input, pause, target, changeRow, task, head)
   }
   // A10r: a review target never adapts — the review's verdict, not a new
   // direction, decides a review.
@@ -291,8 +312,9 @@ function recordContinue(deps: PauseServiceDeps, input: ResolveInput, pause: Plan
   recordResolution(deps, input, pause, target, 'continue', detail)
 }
 
-function recordResolution(deps: PauseServiceDeps, input: ResolveInput, pause: PlanPause, target: PlanPauseTarget,
-  decision: 'continue' | 'adapt', detail: Record<string, unknown>): void {
+/** The guarded decision write, shared with the restart's branches (pauseRestart.ts). */
+export function recordResolution(deps: PauseServiceDeps, input: ResolveInput, pause: PlanPause, target: PlanPauseTarget,
+  decision: 'continue' | 'adapt' | 'restart', detail: Record<string, unknown>): void {
   const written = deps.pauses.recordDecision({ pauseId: pause.id, change: target.change, decision, detail, commandId: input.commandId.trim() })
   if (!written.written) {
     throw new PlanRefusal('state', `Change ${target.change} was decided while this command ran (${written.target?.decision ?? 'unknown'}). Nothing was written.`)
@@ -306,8 +328,9 @@ function recordResolution(deps: PauseServiceDeps, input: ResolveInput, pause: Pl
  * never touched — and the assignment supersedes, so it derives `superseded`
  * and §5 cannot accept against it. Both writes are guarded no-ops for the
  * withdrawn target (A8r: already cancelled and superseded at the pause).
+ * Shared with the restart's branches (pauseRestart.ts).
  */
-function supersedeHeldAssignment(deps: PauseServiceDeps, pause: PlanPause, target: PlanPauseTarget): void {
+export function supersedeHeldAssignment(deps: PauseServiceDeps, pause: PlanPause, target: PlanPauseTarget): void {
   const assignment = deps.assignments.byId(target.assignmentId)
   if (assignment !== null && assignment.messageId !== null) {
     const message = deps.mailbox.get(assignment.messageId)
@@ -452,6 +475,27 @@ function adaptAttempt(deps: PauseServiceDeps, caller: PlanCaller & { kind: 'huma
 /** The task revision in force, with its newest rationale, for the resume text. */
 function revisionOf(tasks: NonNullable<PauseServiceDeps['tasks']>, task: { id: string; revision: number }): { number: number; rationale: string | null } {
   return { number: task.revision, rationale: tasks.store.revisions(task.id).at(-1)?.rationale ?? null }
+}
+
+/**
+ * R2's after-commit release (rev4 §4): the decision detail recorded the
+ * release bookkeeping; a spawned holder it found ready is released here,
+ * outside the resolve's transaction (releaseNow archives a session — an
+ * external effect a rollback could not undo). A release refused between the
+ * decision and this step keeps the work durable with a pending-release row
+ * instead; unwired seams never release.
+ */
+async function releaseRestartedHolder(deps: PauseServiceDeps, pauseId: string, change: string): Promise<void> {
+  if (deps.releases === undefined) return
+  const target = deps.pauses.target(pauseId, change)
+  const detail = target?.decisionDetail as { holder?: unknown; release?: unknown } | undefined
+  if (target === null || target === undefined || target.decision !== 'restart') return
+  if (detail?.release !== 'now' || typeof detail.holder !== 'string') return
+  try {
+    await deps.releases.releaseNow(detail.holder, ` paused change ${change} restarted`)
+  } catch {
+    deps.releases.markPending(detail.holder, `paused change ${change} restarted; the release was refused`)
+  }
 }
 
 /** The resume mail (C2/C12): one normal direct system message, enqueued inside the caller's transaction. */

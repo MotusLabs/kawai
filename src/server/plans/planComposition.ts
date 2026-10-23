@@ -53,6 +53,7 @@ import { HoldService } from './revisionControl/holdService'
 import { HoldStore } from './revisionControl/holdStore'
 import { PauseStore } from './revisionControl/pauseStore'
 import { PauseService } from './revisionControl/pauseService'
+import { restartReleaseSeams } from './revisionControl/pauseRestart'
 import { AssignmentStore } from '../team/assignmentStore'
 import { CheckpointStore } from './revisionControl/checkpointStore'
 import type { PauseTickDeps } from './revisionControl/pauseTick'
@@ -384,6 +385,11 @@ export function composePlanServices(options: PlanServicesOptions): {
         return { ok: true, startCommit: head.sha, artifacts: {} }
       },
       wake: teamId => runtime?.command(teamId),
+      // R2's release bookkeeping (rev4 §4): the team's MemberRelease behind
+      // the resolve's structural seams — a ready spawned holder is released
+      // after the resolve's commit, a busy one marked pending inside the
+      // transaction; unwired, the detail reads release 'never'.
+      ...restartReleaseSeams(team.releases, id => options.getSession(id)),
     })
     composedPauses = pauses
     const executor = new ExecutionExecutor({

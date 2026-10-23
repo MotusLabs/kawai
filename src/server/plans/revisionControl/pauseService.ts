@@ -82,6 +82,21 @@ export interface PauseServiceDeps {
    * back to the newest attempt's start commit, else the baseline.
    */
   adaptHead?: (executionId: string, change: string) => Promise<AdaptHeadFacts | null>
+  /**
+   * R2's release bookkeeping (rev4 §4): `readiness` decides the decision
+   * detail's release for a spawned holder, `releaseNow` archives a ready one
+   * after the resolve's commit, and `markPending` records a busy one durably
+   * inside the resolve's transaction. Optional; unwired (or the holder
+   * record missing below), the detail reads release 'never' — fail-closed.
+   * The production composition wires the team's MemberRelease.
+   */
+  releases?: {
+    readiness: (sessionId: string) => { ready: boolean; reason?: string | null }
+    releaseNow: (sessionId: string, detail: string) => unknown
+    markPending: (sessionId: string, reason: string) => boolean
+  }
+  /** The holder's session-record facts (R2: spawned, archivedAt); null when the session is gone (R16). */
+  holderRecord?: (sessionId: string) => { spawned: boolean; archivedAt: string | null } | null
   /** The executor wake, called after a committed command only. */
   wake?: (teamId: string) => unknown
   now?: () => Date

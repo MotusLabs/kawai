@@ -40,6 +40,14 @@ export interface PauseTargetsBench {
   assignments: AssignmentService
   /** Swap the head-read seam (K7 tests); the caller restores it (try/finally). */
   useAdaptHead: (impl: NonNullable<PauseServiceDeps['adaptHead']>) => void
+  /** Swap R2's release seams in (or out with null); the caller restores (try/finally). The readiness double receives the holder id. */
+  useReleaseSeams: (impl: { spawned: boolean; archived: boolean; ready: boolean; reason?: string } | null) => void
+  /** Every markPending call the resolve made, in order, with whether the double wrote. */
+  pendingMarks: () => Array<{ sessionId: string; reason: string; wrote: boolean }>
+  /** Every releaseNow call the resolve's after-commit step made, in order. */
+  releaseCalls: () => Array<{ sessionId: string; detail: string }>
+  /** Register a spawned session record holding `taskId` (R2/R14's release worlds). */
+  spawnRecord: (sessionId: string, taskId: string) => void
   service: PauseService
   now: () => Date
   inDays: (days: number) => string
@@ -90,6 +98,15 @@ export async function pauseTargetsBench(prefix: string): Promise<PauseTargetsBen
   // failing read and back. Tests that swap must restore (try/finally).
   let adaptHeadImpl: NonNullable<PauseServiceDeps['adaptHead']> = () =>
     Promise.resolve({ ok: true as const, startCommit: 'adapt-head-sha', artifacts: {} })
+  // R2's release seams (rev4 §4): test doubles behind the same structural
+  // deps the production composition wires. `useReleaseSeams(null)` unwires
+  // them (the holder record then reads null and the release reads 'never');
+  // a wired readiness receives the holder id, and every markPending call is
+  // recorded for the tests to judge. Default: unwired — fail-closed.
+  let releaseSeams: NonNullable<PauseServiceDeps['releases']> | null = null
+  let holderRecordImpl: NonNullable<PauseServiceDeps['holderRecord']> | null = null
+  let pendingMarks: Array<{ sessionId: string; reason: string; wrote: boolean }> = []
+  let releasedNow: Array<{ sessionId: string; detail: string }> = []
   const service = new PauseService({
     pauses, holds, plans: bench.plans, planService: bench.service, executions,
     assignments: bench.assignmentStore, mailbox: bench.mail, sessionExists: id => bench.records.has(id), wake, now,
@@ -98,6 +115,20 @@ export async function pauseTargetsBench(prefix: string): Promise<PauseTargetsBen
     // head without git — a distinguishable one the manifest must record
     // verbatim; the composition test proves the real lsRemoteHead wiring.
     adaptHead: (...args) => adaptHeadImpl(...args),
+    releases: {
+      readiness: id => releaseSeams?.readiness(id) ?? { ready: false, reason: 'release seams unwired' },
+      releaseNow: (id, detail) => {
+        const outcome = releaseSeams?.releaseNow(id, detail) ?? null
+        releasedNow.push({ sessionId: id, detail })
+        return outcome
+      },
+      markPending: (id, reason) => {
+        const wrote = releaseSeams?.markPending(id, reason) ?? false
+        pendingMarks.push({ sessionId: id, reason, wrote })
+        return wrote
+      },
+    },
+    holderRecord: id => holderRecordImpl?.(id) ?? null,
   })
 
   function expectOk<T>(outcome: { ok: boolean; message?: string; result?: T }): T {
@@ -176,6 +207,24 @@ export async function pauseTargetsBench(prefix: string): Promise<PauseTargetsBen
   return {
     world, bench, teamId, holds, pauses, executions, tasks, checkpoints, assignments: assignmentService,
     useAdaptHead: impl => { adaptHeadImpl = impl },
+    useReleaseSeams: impl => {
+      releaseSeams = impl === null ? null : {
+        readiness: id => (bench.records.has(id) ? (impl.ready ? { ready: true } : { ready: false, reason: impl.reason ?? 'busy with its turn' }) : { ready: false, reason: 'gone' }),
+        releaseNow: id => {
+          if (!impl.ready || !bench.records.has(id)) throw new Error(`release refused for ${id}`)
+          bench.records.delete(id)
+          return { ok: true }
+        },
+        markPending: () => impl.spawned && !impl.archived,
+      }
+      holderRecordImpl = impl === null ? null : (id: string) =>
+        bench.records.has(id) ? { spawned: impl.spawned, archivedAt: impl.archived ? '2026-11-01T00:00:00.000Z' : null } : null
+    },
+    pendingMarks: () => pendingMarks,
+    releaseCalls: () => releasedNow,
+    spawnRecord: (sessionId, taskId) => {
+      bench.records.set(sessionId, { ...sessionRow(sessionId, 'middle-devs', world.feature), spawned: true, taskId })
+    },
     service, now, inDays,
     wakes: () => wakeCount,
     expectOk,

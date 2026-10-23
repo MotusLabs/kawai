@@ -41,6 +41,8 @@ export type PauseResolveBench = PauseTargetsBench & {
   pausedReview: (opts?: { superseded?: boolean; notes?: boolean; pending?: boolean }) => Promise<{ planId: string; executionId: string; taskId: string; pauseId: string }>
   /** The update target (gating, newest update row out) recorded Paused. */
   pausedUpdate: (opts?: { manifest?: AttemptManifest }) => Promise<{ planId: string; executionId: string; taskId: string; updateAssignmentId: string; pauseId: string }>
+  /** A still-pausing target — the pause placed, Paused not recorded (R10-R15's base world). `checkpoint` plants THIS pause's own newest checkpoint, kind `commit` with its push effect in `effectState` (undefined = no effect row) or kind `result` (work on origin). */
+  pausing: (opts?: { holder?: string; queued?: boolean; withdrawn?: boolean; checkpoint?: { kind: 'commit'; effectState?: 'done' | 'failed' | 'running' } | { kind: 'result' } }) => Promise<{ planId: string; executionId: string; taskId: string; assignmentId: string; pauseId: string }>
 }
 
 export async function pauseResolveBench(prefix: string): Promise<PauseResolveBench> {
@@ -154,7 +156,47 @@ export async function pauseResolveBench(prefix: string): Promise<PauseResolveBen
     toPaused(pause.id, 'api')
     return { planId, executionId, taskId: update.taskId, updateAssignmentId: update.assignmentId, pauseId: pause.id }
   }
-  return { ...wired, resolve, resumeMails, resolvedEvents, toPaused, mintOwed, mintAttempt, answerNewestRow, answerNewestRowViaStage, republish, pausedAttempt, pausedReview, pausedUpdate }
+  // R10-R15's base world: the pause placed, the tick never run — the target
+  // is still pausing, carrying whatever causes its facts derive. The
+  // optional checkpoint is THIS pause's own newest one (keyed by the pause
+  // id, D5), planted the way the checkpoint tool records one: a `commit`
+  // checkpoint carries its push-checkpoint effect in `effectState`
+  // (undefined = the effect row never existed), a `result` checkpoint is
+  // work on origin outright. `withdrawn` marks the target withdrawn before
+  // the tick (R15 — the store row the service's own paths never leave,
+  // since a withdrawal records Paused beside it, D6).
+  const pausing = async (opts: { holder?: string; queued?: boolean; withdrawn?: boolean;
+      checkpoint?: { kind: 'commit'; effectState?: 'done' | 'failed' | 'running' } | { kind: 'result' } } = {}):
+    Promise<{ planId: string; executionId: string; taskId: string; assignmentId: string; pauseId: string }> => {
+    const { planId, executionId } = await wired.executionWith(['api'])
+    const flight = await wired.inFlight(executionId, 'api', opts.holder ?? 'dev', opts.queued === true ? 'queued' : 'claim')
+    const hold = wired.placeHold(planId, ['api'], `hold-${++fixtureSequence}`)
+    const pause = ok(wired.pause({ planId, holdId: hold.id, commandId: `pause-${++fixtureSequence}` })).pause
+    if (opts.checkpoint !== undefined && opts.checkpoint.kind === 'commit' && opts.checkpoint.effectState !== undefined) {
+      const effect = wired.executions.insertEffect({ executionId, change: 'api', roundId: null, kind: 'push-checkpoint', effectKey: `push-checkpoint:${pause.id}`, command: {} })
+      const state = opts.checkpoint.effectState
+      if (state === 'running') wired.executions.markEffectRunning(effect.id)
+      else wired.executions.setEffectOutcome(effect.id, { state, outcome: {}, error: state === 'failed' ? 'the push refused' : null })
+      wired.checkpoints.insert({
+        executionId, change: 'api', pauseId: pause.id, attemptId: null, sessionId: 'dev', kind: 'commit',
+        commitSha: 'checkpoint-sha', baselineCommit: null, manifestHash: null, resultId: null,
+        summary: 'the holder checkpoint', unfinished: null, errorsTests: null, nextSteps: 'none',
+        effectId: effect.id,
+      })
+    } else if (opts.checkpoint !== undefined && opts.checkpoint.kind === 'result') {
+      wired.checkpoints.insert({
+        executionId, change: 'api', pauseId: pause.id, attemptId: null, sessionId: 'dev', kind: 'result',
+        commitSha: 'checkpoint-sha', baselineCommit: null, manifestHash: null, resultId: null,
+        summary: 'the holder checkpoint', unfinished: null, errorsTests: null, nextSteps: 'none',
+        effectId: null,
+      })
+    }
+    if (opts.withdrawn === true) {
+      wired.bench.db.db.prepare('UPDATE plan_pause_targets SET withdrawn = 1 WHERE pause_id = ? AND change = ?').run(pause.id, 'api')
+    }
+    return { planId, executionId, taskId: flight.taskId, assignmentId: flight.assignmentId, pauseId: pause.id }
+  }
+  return { ...wired, resolve, resumeMails, resolvedEvents, toPaused, mintOwed, mintAttempt, answerNewestRow, answerNewestRowViaStage, republish, pausedAttempt, pausedReview, pausedUpdate, pausing }
 }
 
 /** The pause target of `change` on the pause, asserted present. */
