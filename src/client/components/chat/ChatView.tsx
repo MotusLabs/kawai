@@ -2,22 +2,19 @@
 // identity and chrome around the shared ChatSurface. The wrapper owns the
 // palette root (its `--chat-font-size` sizes chat text through the em-based
 // text-chat-body / text-chat-meta utilities), the header (ChatHeader,
-// chat-header-layout D1: identity, status, controls), the usage bar, the
-// notification strip, the debug side slot, and the Team navigation — the
-// Team button and the task chip open the Team page for the chat's team key
-// (team-workspace-pages D2), so every chat of one team shares those views.
-// The transcript column itself — messages, activity, request cards, the
-// archived Restore bar or the composer with its submit and local reset
-// flow, and the wire attach/detach ownership — lives in ChatSurface, so an
-// embedded host renders the same component.
+// chat-header-layout D1: identity, status, controls), the debug side slot,
+// and the Team navigation — the Team button and the task chip open the Team
+// page for the chat's team key (team-workspace-pages D2), so every chat of
+// one team shares those views. Everything the conversation needs — usage,
+// notifications, workers/background tasks, the error banner, the transcript
+// column, and the wire attach/detach ownership — lives in ChatSurface, so
+// an embedded host renders the same component (the wrapper passes its
+// subscribe through: the full-screen host is lifecycle-capable).
 // Attach on selection and reconnect; detaching never stops the agent. The
 // approval policy renders from the broadcast Session, never local state.
 // During an in-flight turn an activity row (design D6) follows ChatMessages:
 // the live phase with a client-ticked timer, hidden while text streams, while
 // a request awaits the user, and in archived chats (design D4).
-// Under the header, the usage bar is joined by the notification strip
-// (notification strip design D7): the session's active notices, styled by
-// severity and closable, hidden when there are none.
 // Archived chats render read-only: the transcript and debug view stay, the
 // composer/Stop/request actions are replaced by a Restore bar, and archiving
 // a live turn asks for confirmation first (the server interrupts it).
@@ -40,9 +37,6 @@ import { closedDebugView, useChatDebugStore } from '../../stores/chatDebugStore'
 import ChatHeader from './ChatHeader'
 import ChatDebugPanel from './ChatDebugPanel'
 import ChatSurface from './ChatSurface'
-import ChatWorkersStrip from './ChatWorkersStrip'
-import NotificationStrip from './NotificationStrip'
-import UsageBar from './UsageBar'
 import { requestChatArchive } from '../../utils/chatArchive'
 import { openParticipantChat } from './openParticipant'
 import { teamKeyOf } from '../../utils/teamKey'
@@ -67,12 +61,8 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
   const profileId = session.claudeProfileId ?? 'default'
   const { profileLabel, providerLabel } = profileIdentityLabels(catalog.profiles, profileId)
   const chatFontSize = useSettingsStore(state => state.chatFontSize)
-  // Plan usage is per profile (usage bar design D4): every session of the
-  // profile renders the same shared report.
-  const usage = useChatStore(state => state.usage[profileId]) ?? null
   const transcript = useChatStore(state => state.sessions[session.id]) ?? EMPTY
   const connected = connectionStatus === 'connected'
-  const archived = session.archivedAt != null
   const debug = useChatDebugStore(state => state.views[session.id]) ?? CLOSED_DEBUG
   const debugOpen = debug.open
   useEffect(() => {
@@ -110,35 +100,17 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
       onRename={name => sendMessage({ type: 'session-rename', sessionId: session.id, newName: name })}
       onToggleApproval={toggleApprovalPolicy} onArchive={handleArchive} onKill={onKill} onClose={onClose}
       fontSizePx={chatFontSize} />
-    <UsageBar report={usage} />
-    {/* The notification strip (design D7): under the header, beside the
-        usage bar. Archived chats are read-only surfaces that no agent feeds,
-        so they render account notices only (design D4). */}
-    <NotificationStrip
-      notifications={
-        archived
-          ? transcript.notifications.filter((notice) => notice.source === 'account')
-          : transcript.notifications
-      }
-      onClose={(notice) =>
-        useChatStore.getState().closeNotification(session.id, notice, sendMessage)
-      }
-    />
-    {error && <p role="alert" className="border-b border-border p-3 text-chat-body text-chat-danger">{error}</p>}
     <div className="flex min-h-0 flex-1">
-      {/* The shared surface owns the content column (§6.1); the workers
-          strip rides its documented children seam until the expansion phase
-          moves it into the surface. Passing sendMessage through unchanged:
-          its identity is the attachment registry key (ChatSurface). */}
+      {/* The shared surface owns everything below the header (§6.1): usage,
+          notifications, workers, the error banner and the content column.
+          Passing sendMessage through unchanged: its identity is the
+          attachment registry key (ChatSurface). */}
       <ChatSurface session={session} sendMessage={sendMessage} subscribe={subscribe}
         connectionStatus={connectionStatus} connectionEpoch={connectionEpoch}
+        error={error}
         className={debugOpen ? 'hidden md:flex' : 'flex'}
         participantDirectory={participantDirectory}
-        onOpenParticipant={openParticipantChat}>
-        {/* The live-workers strip (design D8): live rows only, hidden in
-            archived chats and when nothing runs (the strip hides itself). */}
-        {!archived && <ChatWorkersStrip sessionId={session.id} sendMessage={sendMessage} connected={connected} />}
-      </ChatSurface>
+        onOpenParticipant={openParticipantChat} />
       {/* The side slot hosts only the debug panel (team-workspace-pages D4). */}
       {debugOpen && <ChatDebugPanel key={session.id} sessionId={session.id} view={debug} sendMessage={sendMessage}
         connected={connected} onClose={toggleDebug}

@@ -1,13 +1,25 @@
 // The host-independent conversation surface (plan-workspace §6.1, design
-// D7): the chat view's content column — the transcript scroller with the
-// activity row, the request cards and the end anchor, then the archived
-// Restore bar or the composer with its submit and local /clear-/reset-/new
-// flow — moved whole out of ChatView so a full-screen wrapper and an
-// embedded host render the same component. The HOST owns the root element:
-// it carries the `chat-palette chat-root` classes and the `--chat-font-size`
-// variable; the surface renders the column below. Header/identity, the
-// debug panel, global navigation, the error banner and the usage and
-// notification strips stay in the wrapper.
+// D7): everything a conversation needs below the page chrome — the usage
+// bar, the notification strip (with the archived account-only filter), the
+// live workers/background-tasks strip, the connection error banner, the
+// transcript scroller with the activity row, the request cards and the end
+// anchor, then the archived Restore bar or the composer with its submit and
+// local /clear-/reset-/new flow — so a full-screen wrapper and an embedded
+// host render the same component and keep ordinary behavior. The HOST owns
+// the root element: it carries the `chat-palette chat-root` classes and the
+// `--chat-font-size` variable; the surface renders the strips and column
+// inside it. Header/identity, the debug panel and global navigation stay in
+// the wrapper.
+//
+// Host contract (advisory 396ee67b R2/R5): a host that wants local reset
+// support (/clear, /reset, /new composing a new chat and archiving the old
+// one) MUST pass `subscribe` — the lifecycle subscription the flow needs to
+// observe the created replacement and creation failures. Without it the
+// surface is not lifecycle-capable: a reset command refuses visibly (and
+// keeps the typed text) instead of half-creating a chat nothing archives.
+// `onResetCreated` is the §6.4 seam, invoked when a local reset created the
+// replacement chat, before the previous chat archives; binding transfer is
+// NOT implemented here, F2 decides its final shape.
 //
 // Attachment ownership lives in chatAttachment.ts and keys on the
 // connection identity: `sendMessage` MUST be the connection's stable
@@ -19,20 +31,12 @@
 // Reveal consumption is claimed here and gated to the designated host
 // (`revealEnabled={false}` renders statically and never claims).
 //
-// `children` is the one documented checkpoint-2 seam: wrapper-retained
-// siblings (the workers strip) render above the transcript until the
-// expansion phase moves them into the surface.
-//
 // Two hosts of one session share chatStore state exactly like two browser
 // tabs: the draft is per session (last write wins, a submit clears it for
 // both) and both hosts render the same request cards; a second host
 // answering an already-resolved request gets the server's stale error
 // inline — accepted and documented, not disabled.
-//
-// The §6.4 seam: `onResetCreated` is invoked when a local reset command
-// created the replacement chat, before the previous chat archives. Binding
-// transfer is NOT implemented here; F2 decides its final shape.
-import { useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { SendClientMessage, ServerMessage, Session } from '@shared/types'
 import type { SessionDirectoryEntry } from '@shared/team'
 import type { ConnectionStatus } from '../../stores/sessionStore'
@@ -43,6 +47,9 @@ import ChatActivityRow from './ChatActivityRow'
 import ChatMessages from './ChatMessages'
 import ChatRequests from './ChatRequests'
 import ChatComposer from './ChatComposer'
+import ChatWorkersStrip from './ChatWorkersStrip'
+import NotificationStrip from './NotificationStrip'
+import UsageBar from './UsageBar'
 import { AsideRow } from './ChatRow'
 import { agentLabelOf } from './transcriptLayout'
 import { useHistoryAnchor } from './useHistoryAnchor'
@@ -58,7 +65,7 @@ const CLEAR_COMMAND = /^\/(clear|reset|new)(?:\s+(.*))?$/
 export default function ChatSurface({
   session, sendMessage, subscribe, connectionStatus, connectionEpoch,
   revealEnabled = true, onOpenParticipant, onResetCreated, participantDirectory,
-  children, className = 'flex',
+  error = null, className = 'flex',
 }: {
   session: Session
   /** The connection's stable sendMessage — the attachment registry keys on it. */
@@ -74,8 +81,8 @@ export default function ChatSurface({
   onResetCreated?: (newSessionId: string, previousSessionId: string) => void
   /** The team message directory for naming killed participants (wrapper-owned). */
   participantDirectory?: SessionDirectoryEntry[]
-  /** Wrapper-retained siblings above the transcript (checkpoint 2: workers strip). */
-  children?: ReactNode
+  /** The connection/server error banner text; null renders nothing. */
+  error?: string | null
   /** Extra layout classes on the column root (the wrapper's debug-aware visibility). */
   className?: string
 }) {
@@ -107,10 +114,25 @@ export default function ChatSurface({
   }, [registry, session.id, connected, connectionEpoch])
   // `/clear` composition (design D6): remember which session awaits archival;
   // the matching session-created (a new chat in this project) archives it,
-  // an error reply leaves it untouched. Never sent to the agent.
+  // an error reply leaves it untouched. Never sent to the agent. The flow is
+  // lifecycle-capable only with `subscribe` (host contract above): without a
+  // subscription nothing would observe the created replacement to archive
+  // this chat, so the command refuses visibly instead of half-creating.
   const profileId = session.claudeProfileId ?? 'default'
+  // Plan usage is per profile (usage bar design D4): every session of the
+  // profile renders the same shared report.
+  const usage = useChatStore(state => state.usage[profileId]) ?? null
+  const [resetRefusal, setResetRefusal] = useState(false)
+  // The refused command's text, restored after the composer's own post-submit
+  // clear (an effect runs once the submit flow has finished writing).
+  const [restoreDraft, setRestoreDraft] = useState<string | null>(null)
+  useEffect(() => {
+    if (restoreDraft === null) return
+    useChatStore.getState().setDraft(session.id, restoreDraft)
+    setRestoreDraft(null)
+  }, [restoreDraft, session.id])
   const pendingClearRef = useRef<string | null>(null)
-  useEffect(() => { pendingClearRef.current = null }, [session.id])
+  useEffect(() => { pendingClearRef.current = null; setResetRefusal(false); setRestoreDraft(null) }, [session.id])
   useEffect(() => {
     if (!subscribe) return
     return subscribe((message) => {
@@ -136,8 +158,17 @@ export default function ChatSurface({
   const submitText = (trimmed: string) => {
     const clear = CLEAR_COMMAND.exec(trimmed)
     if (clear) {
+      if (!subscribe) {
+        // The composer already cleared its draft; restore the command after
+        // the submit flow so the refusal keeps the user's text editable
+        // (no silent half-reset).
+        setResetRefusal(true)
+        setRestoreDraft(trimmed)
+        return
+      }
       const name = clear[2]?.trim()
       pendingClearRef.current = session.id
+      setResetRefusal(false)
       sendMessage({
         type: 'session-create',
         projectPath: session.projectPath,
@@ -153,6 +184,7 @@ export default function ChatSurface({
       })
       return
     }
+    setResetRefusal(false)
     sendMessage({ type: 'chat-send', sessionId: session.id, text: trimmed })
   }
   // A pending search reveal owns the scroll position: stick-to-bottom yields
@@ -206,9 +238,31 @@ export default function ChatSurface({
   // ones keep their name through the wrapper's team directory when loaded.
   const liveSessions = useSessionStore(state => state.sessions)
   const directory = participantDirectory ?? NO_DIRECTORY
-  return <>
+  // One column root so the strips stack above the transcript inside any
+  // host layout — the wrapper places this root beside its debug slot in a
+  // row; the strips must never become row items.
+  return <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+    {/* Plan usage (usage bar design D4) and the notification strip (design
+        D7) under wherever the host renders its header: every session of the
+        profile shares the report; archived chats are read-only surfaces no
+        agent feeds, so they render account notices only (design D4). */}
+    <UsageBar report={usage} />
+    <NotificationStrip
+      notifications={
+        archived
+          ? transcript.notifications.filter((notice) => notice.source === 'account')
+          : transcript.notifications
+      }
+      onClose={(notice) =>
+        useChatStore.getState().closeNotification(session.id, notice, sendMessage)
+      }
+    />
+    {error && <p role="alert" className="border-b border-border p-3 text-chat-body text-chat-danger">{error}</p>}
     <div className={`min-h-0 min-w-0 flex-1 flex-col ${className}`}>
-      {children}
+      {/* The live-workers strip (workers design D8, background tasks D2):
+          live rows only, hidden in archived chats and when nothing runs
+          (the strip hides itself). */}
+      {!archived && <ChatWorkersStrip sessionId={session.id} sendMessage={sendMessage} connected={connected} />}
       {/* overflow-anchor off (chat-history-window D4): the history anchor
           owns the scroll adjustment across a prepend; the browser's own
           anchoring would compensate twice. */}
@@ -230,6 +284,14 @@ export default function ChatSurface({
           <div ref={end} />
         </div>
       </div>
+      {/* The reset refusal (host contract, R2): a host without the lifecycle
+          subscription says so at the composer instead of half-creating. */}
+      {resetRefusal && (
+        <p role="alert" data-testid="chat-reset-unsupported"
+          className="border-t border-border p-3 text-chat-body text-chat-danger">
+          Local reset (/clear, /reset, /new) is unavailable in this host: it has no chat lifecycle subscription.
+        </p>
+      )}
       {archived ? (
         <div className="border-t border-border p-3" data-testid="chat-archived-bar">
           <div className="mx-auto flex max-w-4xl items-center justify-between gap-2">
@@ -244,5 +306,5 @@ export default function ChatSurface({
           onInterrupt={() => sendMessage({ type: 'chat-interrupt', sessionId: session.id })} />
       )}
     </div>
-  </>
+  </div>
 }
