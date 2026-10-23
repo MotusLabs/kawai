@@ -98,10 +98,14 @@ latest journal. The body names the worktree, branch, base/head SHAs,
      - a security or data-loss bug, with a reproducer.
    - From round 2, only regressions, still-unfixed findings, and new
      counterexamples with reproducers block.
-   - Everything else is an optional follow-up. A defect the tables have no
-     row for is a new class: report it as a proposed oracle amendment (the
-     Lead decides, not you) plus an entry for docs/oracle-hazards.md, not as
-     a blocking finding.
+   - Everything outside these three classes is an optional follow-up. A
+     defect outside them and outside the tables is a new class: report it
+     as a proposed oracle amendment (the Lead decides, not you) plus an
+     entry for docs/oracle-hazards.md, not as a blocking finding. A missing
+     row alone never overrides the classes above or the mutation rule in
+     step 6: a counterexample to a stated property, or a security or
+     data-loss bug with a reproducer, blocks whether or not the tables
+     anticipated it.
    - This never relaxes the mutation rule in step 6: a survivor still blocks
      when production wiring or a specified behavior has no test — an oracle
      exercised only through a hand-built harness is the M1 class in
