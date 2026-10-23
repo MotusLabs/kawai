@@ -206,7 +206,8 @@ The design's "Acceptance oracles" subsection holds:
   seeded command sequences with replays, supersessions, and a crash at each
   transaction boundary.
 
-Before code starts, the tables get a blind second reading:
+For a state machine with recovery, the tables get a blind second reading
+before code starts; other oracle work may opt in:
 
 1. Commit A1 holds the inputs only, with every output `?`.
 2. An advisor from another model family fills in the outputs from the spec
@@ -217,10 +218,11 @@ Before code starts, the tables get a blind second reading:
 
 The executable forms follow the table into the test tree: each row is
 committed verbatim as a table-driven test next to the code it covers, and
-each property runs as a seeded generator over the named seams. The
-completeness test expands the axes over the table and the unreachable list,
-so it has no gap and no overlap; a failing seed found on the way becomes a
-named table row.
+each property runs as a seeded generator over the named seams. For a state
+machine with recovery, the completeness test expands the axes over the
+table and the unreachable list, so it has no gap and no overlap, and the
+model-based tests run the table as the reference model; a failing seed
+found on the way becomes a named table row.
 
 Keep a coverage map from every requirement and behavioral scenario in the
 assigned scope to its oracle row and test, and keep it current across task
@@ -237,12 +239,15 @@ a security or data-loss bug with a reproducer; from round 2, only
 regressions, unfixed findings, and new counterexamples with reproducers
 block.
 
-Amendments go through the table, not around it: a finding outside the rows
-is a new defect class, proposed as an oracle amendment the Lead decides and
-recorded as an entry in `docs/oracle-hazards.md` — the hazard catalog
-organized by change class. Add an entry for every new blocking finding,
-naming the class, the hazard, the oracle row or property that would have
-caught it, and the source finding.
+Amendments go through the table, not around it: a defect that is neither in
+the tables nor in the verdict rule's three blocking classes is a new defect
+class, proposed as an oracle amendment the Lead decides and recorded as an
+entry in `docs/oracle-hazards.md` — the hazard catalog organized by change
+class. A missing row alone never downgrades a blocking class: a stated
+property's counterexample and a reproducible security or data-loss bug
+block with or without a row, as does untested production wiring. Add an
+entry for every new blocking finding, naming the class, the hazard, the
+oracle row or property that would have caught it, and the source finding.
 
 Read the rule's effect through `team_metrics`: first-pass review yield and
 fix iterations, with reopen rate as the guard metric. Pilot evidence: RC E
