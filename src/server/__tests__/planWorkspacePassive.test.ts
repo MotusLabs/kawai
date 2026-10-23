@@ -1,14 +1,17 @@
-// INVARIANT P (plan-workspace 3.2, design D5): opening, closing, or
-// inspecting the workspace, and deriving health, never call a start,
-// restore, attach, send, or usage refresh/poll method on any session or
-// usage source; only same-team sessions relevant to the linked work plus the
-// two conversation roles are exposed; missing telemetry is unknown, never
-// zero. The manager stub counts every forbidden seam — the one list any call
-// shows up in, asserted empty after every exercised path. The unit rows pin
-// LC5's applicability split (CP1 rev 3, R1/R4) on the pure predicate and the
-// quota mapping.
+// INVARIANT P (plan-workspace 3.2, design D5; revision 2 LC6: full passivity):
+// opening, closing, or inspecting the workspace, and deriving health, never
+// call a start, restore, attach, send, or usage refresh/poll method on any
+// session or usage source, never write a database row, and never wake the
+// dispatcher or staffing; only same-team sessions relevant to the linked work
+// plus the two conversation roles are exposed; missing telemetry is unknown,
+// never zero. The manager stub counts every forbidden seam — the one list any
+// call shows up in, asserted empty after every exercised path — and the raw
+// database's `total_changes()` counter proves the read pass wrote nothing.
+// The unit rows pin LC5's applicability split (CP1 rev 3, R1/R4) on the pure
+// predicate and the quota mapping.
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
+import type { Database } from 'bun:sqlite'
 import type { ChatSessionManager } from '../chat/ChatSessionManager'
 import { ChatConnections } from '../chat/ChatConnections'
 import { TeamScopes } from '../team/teamScope'
@@ -59,8 +62,9 @@ const HOST_LOGIN: MergedProvider = {
   originFile: 'providers.default.json',
 }
 
-// INVARIANT P: these seams start, restore, attach, send, or refresh — the
-// one list any call shows up in, asserted empty after every exercised path.
+// INVARIANT P: these seams start, restore, attach, send, refresh, or wake
+// the dispatcher and staffing (LC6) — the one list any call shows up in,
+// asserted empty after every exercised path.
 function forbid(what: string): () => never {
   return () => {
     forbiddenCalls.push(what)
@@ -68,9 +72,49 @@ function forbid(what: string): () => never {
   }
 }
 
+/**
+ * A database whose writes land in the same forbidden list (LC6/N1): the
+ * workspace composition is a read pass, so any run/exec during a snapshot
+ * is a side effect the invariant forbids, not one it tolerates.
+ */
+function readOnly(db: Database): Database {
+  return new Proxy(db, {
+    get(target, prop) {
+      if (prop === 'prepare') {
+        return (sql: string) => {
+          const statement = target.prepare(sql)
+          return new Proxy(statement, {
+            get(t, p) {
+              if (p === 'run') {
+                return () => {
+                  forbiddenCalls.push(`db-write: ${sql.trim().slice(0, 80)}`)
+                  throw new Error('INVARIANT P: the composition wrote')
+                }
+              }
+              const value = Reflect.get(t, p)
+              return typeof value === 'function' ? value.bind(t) : value
+            },
+          })
+        }
+      }
+      if (prop === 'exec' || prop === 'run') {
+        return (sql: string) => {
+          forbiddenCalls.push(`db-write: ${String(sql).trim().slice(0, 80)}`)
+          throw new Error('INVARIANT P: the composition wrote')
+        }
+      }
+      const value = Reflect.get(target, prop)
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  })
+}
+
+/** The raw database's change counter (LC6): reads leave it unmoved. */
+const totalChanges = (): number => (sup.db.db.prepare('SELECT total_changes() AS n').get() as { n: number }).n
+
 function wire(bench: SupervisionBench): void {
   const reads: SupervisionReads = {
-    db: bench.db.db, mail: bench.mail,
+    db: readOnly(bench.db.db), mail: bench.mail,
     executions: bench.executions, plans: bench.plans, decisions: bench.decisions,
     conditionsOf: () => [],
     runtime: {
@@ -103,6 +147,10 @@ function wire(bench: SupervisionBench): void {
     loadHistory: forbid('loadHistory'),
     send: forbid('send'),
     claimPull: forbid('claimPull'),
+    // LC6: the dispatcher and staffing wakes are as forbidden as the
+    // process seams — the real field and method names on the manager.
+    dispatcher: { notify: forbid('dispatcher.notify') },
+    teamMail: { staffing: { spawnFor: forbid('staffing.spawnFor') } },
   } as unknown as ChatSessionManager
   connections = new ChatConnections(manager)
 }
@@ -191,6 +239,8 @@ describe('passive workspace composition', () => {
     sup.db.db.prepare("UPDATE team_task_assignments SET claimed_by = 'dev' WHERE task_id = ?").run(taskId)
     // A bound architect beside the execution holder: both roles are exposed.
     new PlanWorkspaceStore(sup.db.db).bind(world.team.teamId, `bind-${Date.now()}`, { role: 'architect', sessionId: 'arch', expectedVersion: null })
+    // Every fixture write is done: from here the composition must be a read pass.
+    const changesAtRest = totalChanges()
     messages = []
     await send({ type: 'team-plan-workspace-open', teamPath: world.repo, planId })
     const snapshot = lastSnapshot()!
@@ -212,6 +262,7 @@ describe('passive workspace composition', () => {
     expect(dev.context).toEqual({ used: 0.5, measuredAt: '2026-10-22T22:00:00.000Z' })
     expect(dev.quota).toMatchObject({ status: 'ok', used: 0.5, source: 'profile' })
     expect(dev.quotaApplicable).toBe(true)
+    expect(totalChanges()).toBe(changesAtRest)
     expect(forbiddenCalls).toEqual([])
   })
 
@@ -222,6 +273,7 @@ describe('passive workspace composition', () => {
     const messageId = outcome.assignment.messageId!
     expect(messageId).toBeTruthy()
     blockers.set(messageId, 'group at cap')
+    const changesAtRest = totalChanges()
     messages = []
     await send({ type: 'team-plan-workspace-open', teamPath: world.repo, planId })
     const runtime = lastSnapshot()!.workspace.runtime!
@@ -231,6 +283,7 @@ describe('passive workspace composition', () => {
     expect(api.holders).toEqual([
       { taskId: task.id, holder: { kind: 'group-unclaimed', groupId: 'middle-devs' }, stage: 'unstarted', waitingReason: 'group at cap' },
     ])
+    expect(totalChanges()).toBe(changesAtRest)
     expect(forbiddenCalls).toEqual([])
   })
 
@@ -242,10 +295,12 @@ describe('passive workspace composition', () => {
     teamOfMap.set('idle', { teamId: world.team.teamId })
     const bound = new PlanWorkspaceStore(sup.db.db)
     bound.bind(world.team.teamId, `bind-${Date.now()}`, { role: 'architect', sessionId: 'arch', expectedVersion: null })
+    const changesAtRest = totalChanges()
     messages = []
     await send({ type: 'team-plan-workspace-open', teamPath: world.repo, planId })
     const health = lastSnapshot()!.workspace.health!
     expect(health.map(agent => agent.sessionId).sort()).toEqual(['arch'])
+    expect(totalChanges()).toBe(changesAtRest)
     expect(forbiddenCalls).toEqual([])
   })
 
@@ -254,20 +309,24 @@ describe('passive workspace composition', () => {
     const bound = new PlanWorkspaceStore(sup.db.db)
     bound.bind(world.team.teamId, `bind-${Date.now()}`, { role: 'lead', sessionId: 'dev', expectedVersion: null })
     contextReadings.delete('dev') // the worker holds no reading
+    const changesAtRest = totalChanges()
     messages = []
     await send({ type: 'team-plan-workspace-open', teamPath: world.repo, planId })
     const health = lastSnapshot()!.workspace.health!
     const dev = health.find(agent => agent.sessionId === 'dev')!
     expect(dev.relevance).toBe('lead')
     expect(dev.context).toBeNull()
+    expect(totalChanges()).toBe(changesAtRest)
     expect(forbiddenCalls).toEqual([])
   })
 
   test('closing the workspace calls nothing and pushes nothing further', async () => {
     const planId = await approvedPlan()
+    const changesAtRest = totalChanges()
     await send({ type: 'team-plan-workspace-open', teamPath: world.repo, planId })
     const pushesAfterOpen = messages.length
     await send({ type: 'team-plan-workspace-close', teamPath: world.repo, planId })
+    expect(totalChanges()).toBe(changesAtRest)
     expect(forbiddenCalls).toEqual([])
     expect(messages.length).toBe(pushesAfterOpen)
   })
