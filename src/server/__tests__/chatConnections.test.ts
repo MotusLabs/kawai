@@ -26,6 +26,9 @@ function harness(wireLogs?: ChatWireLogs) {
   const manager = {
     isArchived: (_id: string) => false,
     whenRestored: () => Promise.resolve(),
+    // No team membership in this fixture: the plan-workspace publishes (3.4)
+    // read it and find no team, so no snapshot is dirtied.
+    teams: { teamOf: () => undefined },
     loadHistory: async (id: string) => { loadHistoryCalls.push(id) },
     has: (id: string) => id === 'chat-1' || id === 'chat-2' || id === 'chat-3' || id === 'chat-4' || id === 'chat-5',
     profileIdOf: (id: string) => (id === 'chat-2' || id === 'chat-4' ? 'glm' : id === 'chat-5' ? 'glm-flash' : 'default'),
