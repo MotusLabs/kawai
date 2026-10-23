@@ -2,6 +2,9 @@
 // relative targets resolve against the displayed document's directory and
 // never leave the worktree; external https opens separately; every other
 // scheme, escape, and empty target is refused without exposure.
+// Fixtures name real repository shapes under watched roots — resolver
+// inputs as data, never runtime reads — declared for the reads guard.
+// @reads: openspec/**, docs/**
 import { describe, expect, test } from 'bun:test'
 import {
   readerAssetUrl, refusedReasonLabel, resolveReaderImage, resolveReaderLink,

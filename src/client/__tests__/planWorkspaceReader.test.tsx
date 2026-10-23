@@ -3,6 +3,8 @@
 // displayed document shows provenance with current/last-valid/broken states,
 // and nested relative links navigate within the reader while refused targets
 // render inert.
+// Fixture paths name repository shapes as data, never runtime reads.
+// @reads: docs/**
 import { afterEach, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import type { WorkspaceDocumentView, WorkspaceRefView } from '@shared/planWorkspace'
