@@ -141,6 +141,25 @@ export interface WorkspaceMessageContext {
   documentRefId: string | null
 }
 
+/**
+ * The wire envelope a client attaches to a chat-send (design D7): what the
+ * sender saw when they composed the message. `executionRevision` and
+ * `documentHash` are validation-only and never stored — the stored context
+ * (WorkspaceMessageContext) keeps the snapshot the server validated.
+ */
+export interface WorkspaceMessageEnvelope {
+  teamId: string
+  planId: string
+  version: WorkspaceContextVersion
+  executionId?: string | null
+  /** Validation-only: compared against the execution row's revision (V6). */
+  executionRevision?: number
+  changeName?: string | null
+  documentRefId?: string | null
+  /** Validation-only: the document hash the sender read (V8). */
+  documentHash?: string
+}
+
 /** One parsed checklist item (design D3); keys are local to the document hash and position. */
 export interface WorkspaceChecklistItem {
   key: string
@@ -284,4 +303,67 @@ export function parseExecutionSelector(value: unknown): WorkspaceExecutionSelect
   return isRecord(value) && typeof value.executionId === 'string' && value.executionId.trim() !== ''
     ? { executionId: value.executionId }
     : null
+}
+
+const nonEmptyString = (value: unknown): value is string =>
+  typeof value === 'string' && value.trim() !== ''
+
+/**
+ * Defensive parse of a chat-send's workspace context, fail-closed (design
+ * D7): an absent field is an unscoped send (today's behavior), while a
+ * present-but-malformed envelope parses to null and the caller refuses the
+ * send rather than silently dropping the context.
+ */
+export function parseWorkspaceMessageEnvelope(value: unknown): WorkspaceMessageEnvelope | null {
+  if (!isRecord(value) || !nonEmptyString(value.teamId) || !nonEmptyString(value.planId)) return null
+  const raw = isRecord(value.version) ? value.version : null
+  let version: WorkspaceContextVersion | null = null
+  if (raw?.kind === 'revision') {
+    const { revision, contentHash } = raw
+    if (typeof revision === 'number' && Number.isInteger(revision) && revision >= 1 && nonEmptyString(contentHash)) {
+      version = { kind: 'revision', revision, contentHash }
+    }
+  } else if (raw?.kind === 'draft') {
+    const { draftId, contentHash } = raw
+    if (nonEmptyString(draftId) && nonEmptyString(contentHash)) {
+      version = { kind: 'draft', draftId, contentHash }
+    }
+  }
+  if (!version) return null
+  const envelope: WorkspaceMessageEnvelope = { teamId: value.teamId, planId: value.planId, version }
+  if (value.executionId !== undefined && !(value.executionId === null || nonEmptyString(value.executionId))) return null
+  if (value.executionId !== undefined) envelope.executionId = value.executionId as string | null
+  if (value.executionRevision !== undefined) {
+    const { executionRevision } = value
+    if (typeof executionRevision !== 'number' || !Number.isInteger(executionRevision) || executionRevision < 1) return null
+    envelope.executionRevision = executionRevision
+  }
+  if (value.changeName !== undefined && !(value.changeName === null || nonEmptyString(value.changeName))) return null
+  if (value.changeName !== undefined) envelope.changeName = value.changeName as string | null
+  if (value.documentRefId !== undefined && !(value.documentRefId === null || nonEmptyString(value.documentRefId))) return null
+  if (value.documentRefId !== undefined) envelope.documentRefId = value.documentRefId as string | null
+  if (value.documentHash !== undefined) {
+    if (!nonEmptyString(value.documentHash)) return null
+    envelope.documentHash = value.documentHash
+  }
+  return envelope
+}
+
+/**
+ * The plain-text context block a contextual submit pastes beside the typed
+ * text (design D7): stable labeled lines, full hashes, no XML — the CLI may
+ * wrap the entry in its own tags. Absent optional facts read `none`.
+ */
+export function workspaceContextBlock(context: WorkspaceMessageContext): string {
+  const version = context.version.kind === 'revision'
+    ? `revision ${context.version.revision} (hash ${context.version.contentHash})`
+    : `draft ${context.version.draftId} (hash ${context.version.contentHash})`
+  return [
+    `Plan: ${context.planTitle} (${context.planId})`,
+    `Version: ${version}`,
+    `Execution: ${context.executionId ?? 'none'}`,
+    `Change: ${context.changeName ?? 'none'}`,
+    `Document: ${context.documentRefId ?? 'none'}`,
+    `Team: ${context.teamId}`,
+  ].join('\n')
 }

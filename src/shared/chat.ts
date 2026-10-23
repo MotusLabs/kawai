@@ -7,6 +7,7 @@
 
 import type { ChatPeerTaskContext, RevisionNotice } from './teamTasks'
 import type { ChatHandoffPackage } from './team'
+import type { WorkspaceMessageContext } from './planWorkspace'
 
 /**
  * Base shape of every conversation event. `id` is stable and unique
@@ -166,8 +167,24 @@ export type ChatEvent =
        */
       trigger?: ChatTurnTrigger
     })
-  | (ChatTurnEventBase & { type: 'user_message'; text: string })
-  | (ChatTurnEventBase & ChatPeerMessage & { type: 'peer_message' })
+  | (ChatTurnEventBase & {
+      type: 'user_message'
+      text: string
+      /**
+       * The driver-minted client uuid of this message (plan-workspace §4):
+       * the key replay joins on to re-attach the stored context. Every live
+       * user message carries one; a replayed event carries it when the CLI
+       * transcript recorded the supplied uuid.
+       */
+      messageUuid?: string
+      /** The plan context the server validated and stored for this message. */
+      workspaceContext?: WorkspaceMessageContext
+    })
+  | (ChatTurnEventBase & ChatPeerMessage & {
+      type: 'peer_message'
+      /** Replay-only: a reconstructed peer record's uuid; never joined. */
+      messageUuid?: string
+    })
   | (ChatTurnEventBase & {
       type: 'command_output'
       /** Output text of a local slash command run in this turn. */
