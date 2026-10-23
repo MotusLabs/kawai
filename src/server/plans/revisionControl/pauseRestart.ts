@@ -153,11 +153,11 @@ function restartAttempt(deps: PauseServiceDeps, caller: PlanCaller & { kind: 'hu
     ? { id: checkpoint.id, commit: checkpoint.commitSha }
     : null
   // K7 (L3, rev4 §10): the pre-transaction head read refuses here — after
-  // every earlier refusal — when the start commit would come from it. A
-  // contained checkpoint supplies the start commit itself, so the read's
-  // failure beside one does not block the resolution (the read is a gather).
+  // every earlier refusal — whatever a contained checkpoint supplies. The
+  // design's K7 row has no checkpoint exception (LC2): the resolution is
+  // not accepted on an origin Kawai could not read.
   const facts = head ?? null
-  if (facts !== null && !facts.ok && contained === null) {
+  if (facts !== null && !facts.ok) {
     throw new ResolveRefusal('head-unreadable', `Change ${target.change}'s pre-transaction read of origin's branch head failed; nothing was written. Resolve again once the git read succeeds.`)
   }
   const newest = deps.executions.attempts(pause.executionId, target.change).at(-1) ?? null

@@ -154,19 +154,22 @@ test('K7: a restart over an unreadable origin head refuses head-unreadable and w
   }
 })
 
-// The read is a gather: with a contained checkpoint the start commit does
-// not come from the head, so a failed read beside one does not block the
-// resolution (the checkpoint supplies the start commit itself).
-test('K7: a failed head read beside a contained checkpoint still restarts from the checkpoint', async () => {
+// K7 is strict for restart (LC2): a failed pre-transaction head read
+// refuses whatever a contained checkpoint supplies — the design's K7 row
+// has no checkpoint exception, so the resolution is not accepted on an
+// origin Kawai could not read.
+test('K7: a failed head read refuses even beside a contained checkpoint (strict, LC2)', async () => {
   const world = await wired.pausing({ checkpoint: { kind: 'commit', effectState: 'done' } })
   wired.toPaused(world.pauseId, 'api')
   openGate(world.planId, world.executionId)
   wired.useAdaptHead(() => Promise.resolve({ ok: false as const }))
   try {
-    ok(await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'restart' }))
-    const attempts = wired.executions.attempts(world.executionId, 'api')
-    expect(attempts.at(-1)!.manifest.startCommit).toBe('checkpoint-sha')
-    expect(attempts.at(-1)!.manifest.checkpoint?.commit).toBe('checkpoint-sha')
+    const outcome = refusal(await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'restart' }))
+    expect(outcome.reason).toBe('head-unreadable')
+    expect(outcome.message).toContain('nothing was written')
+    expect(wired.executions.attempts(world.executionId, 'api')).toHaveLength(1)
+    expect(targetOf(wired, world.pauseId, 'api').decision).toBeNull()
+    expect(wired.resolvedEvents(world.planId)).toHaveLength(0)
   } finally {
     wired.useAdaptHead(() => Promise.resolve({ ok: true as const, startCommit: 'adapt-head-sha', artifacts: {} }))
   }
