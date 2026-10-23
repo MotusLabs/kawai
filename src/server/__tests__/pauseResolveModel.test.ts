@@ -36,8 +36,8 @@ function mulberry32(seed: number): () => number {
 type Variant = 'plain answered' | 'owed after mint' | 'rev-pending'
 const VARIANTS: Variant[] = ['plain answered', 'owed after mint', 'rev-pending']
 
-/** One fresh paused attempt target in a seeded variant; returns the ids every command needs. */
-async function pausedTarget(rand: () => number): Promise<{ planId: string; executionId: string; taskId: string; pauseId: string }> {
+/** One fresh paused attempt target in a seeded variant; returns the ids every command needs, and the variant the ROUND RULE is observed against. */
+async function pausedTarget(rand: () => number): Promise<{ planId: string; executionId: string; taskId: string; pauseId: string; variant: Variant }> {
   const variant = VARIANTS[Math.floor(rand() * VARIANTS.length)]
   const { planId, executionId } = await wired.executionWith(['api'])
   const flight = await wired.inFlight(executionId, 'api')
@@ -50,7 +50,7 @@ async function pausedTarget(rand: () => number): Promise<{ planId: string; execu
     wired.republish(flight.taskId)
   }
   if (variant === 'owed after mint') wired.mintOwed(executionId, 'api', 'fix')
-  return { planId, executionId, taskId: flight.taskId, pauseId: pause.id }
+  return { planId, executionId, taskId: flight.taskId, pauseId: pause.id, variant }
 }
 
 /** The observable state the invariants are read from, after any command. */
@@ -164,6 +164,53 @@ test('P-I1 adapt: 40 seeded cases — the publication lands once, the round supe
       else expectRefusal(await wired.resolve({ ...payload, choice: 'continue', commandId: `${commandId}-c${step}` }), 'state')
       expect(counts(world.planId, world.executionId, world.taskId, world.pauseId)).toMatchObject({
         events: 1, resumes: 0, notices: 1, attempts: baseline.attempts + 1, decided: 'adapt',
+      })
+    }
+    expect(counts(world.planId, world.executionId, world.taskId, world.pauseId).closed).not.toBeNull()
+  }
+}, 60000)
+
+// The restart twin (rev4 §10 step 5, P-I1): same shape, choice `restart`,
+// seed 20261024. Restart publishes nothing and resumes nothing — the
+// invariants after a fresh accept are ONE new attempt row, no resume, no
+// notice, one event, the decision — and the ROUND RULE is observed per
+// variant: the rev-pending round pins the older revision and supersedes, a
+// plain answer's round survives (the condition fails), the owed variant's
+// world has no round at all. The replay replays, and every post-decision
+// follow-up refuses naming the standing decision, as for continue and adapt.
+test('P-I1 restart: 40 seeded cases — one new row, the ROUND RULE observed, the replay replays', async () => {
+  const rand = mulberry32(20261024)
+  const FOLLOW_UPS = ['replay', 'fresh id', 'mutated rationale', 'restart'] as const
+  for (let index = 0; index < 40; index += 1) {
+    const world = await pausedTarget(rand)
+    const commandId = `model-restart-${index}`
+    const payload = {
+      planId: world.planId, pauseId: world.pauseId, change: 'api' as const, choice: 'restart' as const,
+      rationale: 'rethink', releaseHold: false, commandId,
+    }
+    const baseline = counts(world.planId, world.executionId, world.taskId, world.pauseId)
+    expect(baseline.attempts).toBeGreaterThan(0)
+    expectFreshAccept(await wired.resolve(payload))
+    const after = counts(world.planId, world.executionId, world.taskId, world.pauseId)
+    expect(after).toMatchObject({
+      events: 1, resumes: 0, notices: 0, attempts: baseline.attempts + 1, decided: 'restart',
+    })
+    if (world.variant === 'rev-pending') expect(after.roundOutcomes).toEqual(['superseded'])
+    if (world.variant === 'plain answered') expect(after.roundOutcomes).toEqual([null])
+    if (world.variant === 'owed after mint') expect(after.roundOutcomes).toEqual([])
+    expectReplay(await wired.resolve({ ...payload }))
+    expect(counts(world.planId, world.executionId, world.taskId, world.pauseId)).toMatchObject({
+      events: 1, resumes: 0, notices: 0, attempts: baseline.attempts + 1, decided: 'restart',
+    })
+    const followUps = 1 + Math.floor(rand() * 3)
+    for (let step = 0; step < followUps; step += 1) {
+      const kind = FOLLOW_UPS[Math.floor(rand() * FOLLOW_UPS.length)]
+      if (kind === 'replay') expectReplay(await wired.resolve({ ...payload }))
+      else if (kind === 'fresh id') expectRefusal(await wired.resolve({ ...payload, commandId: `${commandId}-x${step}` }), 'state')
+      else if (kind === 'mutated rationale') expectRefusal(await wired.resolve({ ...payload, rationale: 'changed while replaying' }), 'payload')
+      else expectRefusal(await wired.resolve({ ...payload, choice: 'continue', commandId: `${commandId}-c${step}` }), 'state')
+      expect(counts(world.planId, world.executionId, world.taskId, world.pauseId)).toMatchObject({
+        events: 1, resumes: 0, notices: 0, attempts: baseline.attempts + 1, decided: 'restart',
       })
     }
     expect(counts(world.planId, world.executionId, world.taskId, world.pauseId).closed).not.toBeNull()
