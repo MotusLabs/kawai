@@ -213,6 +213,26 @@ describe('validateWorkspaceSend', () => {
     expect(retry.ok).toBe(true)
   })
 
+  test.each(['superseded', 'withdrawn'] as const)('I7 a %s revision is accepted and labelled', async (status) => {
+    // I7's positive side: an immutable historical revision stays valid as a
+    // discussion label — validation never reads the status, only the hash —
+    // and the stored snapshot still names the plan and the exact version.
+    const historical = { ...revisionOf(2, HASH2, ['plan-workspace']), status }
+    const outcome = await validateWorkspaceSend(
+      '/repo/example/session',
+      envelopeOf(),
+      depsFor({ ...baseState(), revisions: [historical] }),
+    )
+    expect(outcome).toEqual({
+      ok: true,
+      context: {
+        teamId: TEAM, planId: 'plan-1', planTitle: 'Workspace roadmap',
+        version: { kind: 'revision', revision: 2, contentHash: HASH2 },
+        executionId: null, changeName: null, documentRefId: null,
+      },
+    })
+  })
+
   // V8 reads the real document: a local ref needs the hash the sender read,
   // fail-closed, by a fresh read at validation time.
   describe('V8 the document ref', () => {
