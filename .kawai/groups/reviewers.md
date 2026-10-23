@@ -2,14 +2,15 @@
 label: Reviewers
 description: Review a dev branch's diff for correctness and fit; read-only; report findings to the lead
 # Reviewers on different model families, so a change is never reviewed by the
-# family that wrote it: Claude Code and MiMo profiles. Configured caps are not
+# family that wrote it: Claude Code, MiMo, and the OpenRouter DeepSeek and
+# MiniMax profiles. Configured caps are not
 # running-agent counts; discover eligible sessions at dispatch. Review requests
 # are direct task mail to a chosen session (only group mail is
 # worktree-scoped); unscoped group mail does not spawn reviewers.
 # Each reviewer chat is created on its profile by hand, in the main checkout
 # or an empty directory under .worktrees/, never in a dev worktree: removing
 # that worktree after its branch lands leaves the chat unable to start.
-profiles: { default: 1, mimo: 2 }
+profiles: { default: 1, mimo: 2, openrouter-deepseek-flash: 2, openrouter-minimax-flash: 2 }
 # Applies to every reviewer in the group, MiMo included.
 effort: medium
 # Receive review context across task worktrees.

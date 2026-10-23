@@ -22,6 +22,8 @@ The shipped default catalog, grouped by provider:
 | openrouter-opus | OpenRouter Opus | OpenRouter | starts on Opus; Opus and Fable map to `~anthropic/claude-opus-latest[1m]` — provider env below |
 | openrouter-sonnet | OpenRouter Sonnet | OpenRouter | starts on Sonnet; Sonnet maps to `~anthropic/claude-sonnet-latest[1m]` — provider env below |
 | openrouter-haiku | OpenRouter Haiku | OpenRouter | starts on Haiku; Haiku maps to `~anthropic/claude-haiku-latest` — provider env below |
+| openrouter-deepseek-flash | OpenRouter DeepSeek V4.1 Flash | OpenRouter | starts on `deepseek/deepseek-v4.1-flash-1017`; every alias maps to it — provider env below |
+| openrouter-minimax-flash | OpenRouter MiniMax M3.1 Flash | OpenRouter | starts on `minimax/minimax-m3.1-flash`; every alias maps to it — provider env below |
 
 Provider Z.AI carries the pair's shared routing at the provider level:
 base URL `https://api.z.ai/api/anthropic`, the four tier maps above,
@@ -201,7 +203,27 @@ that has one, copy the entry there to offer OpenRouter:
     "models": {
       "openrouter-opus": { "label": "OpenRouter Opus", "model": "opus" },
       "openrouter-sonnet": { "label": "OpenRouter Sonnet", "model": "sonnet" },
-      "openrouter-haiku": { "label": "OpenRouter Haiku", "model": "haiku" }
+      "openrouter-haiku": { "label": "OpenRouter Haiku", "model": "haiku" },
+      "openrouter-deepseek-flash": {
+        "label": "OpenRouter DeepSeek V4.1 Flash",
+        "model": "deepseek/deepseek-v4.1-flash-1017",
+        "env": {
+          "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek/deepseek-v4.1-flash-1017",
+          "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek/deepseek-v4.1-flash-1017",
+          "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek/deepseek-v4.1-flash-1017",
+          "ANTHROPIC_DEFAULT_FABLE_MODEL": "deepseek/deepseek-v4.1-flash-1017"
+        }
+      },
+      "openrouter-minimax-flash": {
+        "label": "OpenRouter MiniMax M3.1 Flash",
+        "model": "minimax/minimax-m3.1-flash",
+        "env": {
+          "ANTHROPIC_DEFAULT_OPUS_MODEL": "minimax/minimax-m3.1-flash",
+          "ANTHROPIC_DEFAULT_SONNET_MODEL": "minimax/minimax-m3.1-flash",
+          "ANTHROPIC_DEFAULT_HAIKU_MODEL": "minimax/minimax-m3.1-flash",
+          "ANTHROPIC_DEFAULT_FABLE_MODEL": "minimax/minimax-m3.1-flash"
+        }
+      }
     }
   }
 }

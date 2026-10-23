@@ -1,7 +1,7 @@
 ---
 label: Middle Dev
 description: Implement ordinary feature and fix tasks in their own worktree and branch; report to the lead
-profiles: { glm-flash: 4, sonnet: 2, mimo: 1 }
+profiles: { glm-flash: 4, openrouter-deepseek-flash: 2, openrouter-minimax-flash: 2, sonnet: 2, mimo: 1 }
 strategy: profile-order
 approval: auto
 onLimit: { parkIfResetWithin: 1h, otherwise: forward, forwardTo: middle-devs }
