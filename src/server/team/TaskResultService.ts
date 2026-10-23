@@ -132,8 +132,9 @@ export class TaskResultService {
     if (tests.some(row => !row.description || !row.outcome)) throw new Error('Each test needs a description and an outcome')
     // plan-execution D9: for an owned change, the commit must be on its
     // branch and contain origin's head of it, checked before anything is
-    // written. Every other stage accepts a result, findings included.
-    const refusal = await (this.options.ownership ?? NULL_OWNERSHIP).checkResult(taskId, { commit })
+    // written; the old holder of a Restarted change is refused outright
+    // (revision-control D9, ruling L6).
+    const refusal = await (this.options.ownership ?? NULL_OWNERSHIP).checkResult(taskId, { commit, submitter: actor.sessionId, kind: 'result' })
     if (refusal !== null) throw new Error(refusal)
     const session = this.options.getSession(actor.sessionId)
     // The result and its journal note commit together, as a dispatch and its journal entry do.
@@ -166,6 +167,12 @@ export class TaskResultService {
     if (!result || result.taskId !== taskId) throw new Error(`Result ${input.resultId} is not a result of task ${taskId}`)
     const findings = input.findings.trim()
     if (!findings) throw new Error('Findings need text')
+    // revision-control D9 (ruling L6): the old holder of a Restarted change
+    // is refused findings like its result, judged from the rows, before
+    // anything is written. Findings carry no commit and every stage accepted
+    // them, so this is the only ownership check they run.
+    const refusal = await (this.options.ownership ?? NULL_OWNERSHIP).checkResult(taskId, { commit: null, submitter: actor.sessionId, kind: 'findings' })
+    if (refusal !== null) throw new Error(refusal)
     const handoff = this.store.outstandingAssignment(taskId)
     const answers = handoff?.handoffKind && handoff.resultId === result.id && handoff.claimedBy === actor.sessionId
     const stored = this.store.results.insertFindings({

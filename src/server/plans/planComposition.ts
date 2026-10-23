@@ -28,7 +28,7 @@ import { ValidationDetailCache } from './validation/validationDetail'
 import { ExecutionStore } from './execution/executionStore'
 import { ExecutionService } from './execution/ExecutionService'
 import { ExecutionRevisionStore } from './revisionControl/executionRevisionStore'
-import { executionOwnership, type ExecutionOwnership } from './execution/executionOwnership'
+import { executionOwnership, ownershipRowReads, type ExecutionOwnership } from './execution/executionOwnership'
 import { executionViewReads, executionViews } from './execution/executionView'
 import { ExecutionExecutor } from './execution/executor'
 import { ExecutionRuntime, ExecutionWakes } from './execution/executionRuntime'
@@ -120,7 +120,7 @@ export function composeExecutionCore(db: Database): ExecutionCore {
   }, messageId => {
     const row = db.prepare('SELECT from_kind FROM team_messages WHERE id = ?').get(messageId) as { from_kind?: string } | undefined
     return row?.from_kind === 'system' ? 'system' : row === undefined ? null : row.from_kind === 'human' ? 'human' : 'agent'
-  })
+  }, ownershipRowReads(db))
   return { executionStore, ownership, wakes: new ExecutionWakes(executionStore, ownership) }
 }
 
