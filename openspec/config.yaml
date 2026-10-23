@@ -30,3 +30,29 @@ schema: spec-driven
 #     archive:
 #       guidance:
 #         - Summarize the archive outcome before finishing
+
+# Acceptance oracles (adopted 2026-10-23, from the revision-control pilot).
+# See docs/agent-collaboration.md, "Write acceptance as oracles", and
+# docs/oracle-hazards.md for the hazard catalog.
+rules:
+  design:
+    - Add an "Acceptance oracles" subsection whenever the change has decision
+      logic, a state machine, parsing or security checks, or concurrency;
+      small, well-specified changes need none.
+    - Write decision tables of observable results only — inputs × outputs,
+      `*` for a don't-care, and unreachable combinations listed with their
+      reasons — and give every row an oracle id.
+    - State one property per invariant, giving the property, the generator,
+      the seams, a fixed seed and a case count, with no new dependency.
+    - For a state machine with recovery, add a completeness claim (every
+      combination of the axes matches exactly one row or one unreachable
+      claim) and model-based tests that run the table as the reference model,
+      under seeded command sequences with replays, supersessions, and a crash
+      at each transaction boundary.
+    - Consult docs/oracle-hazards.md before finalizing the tables.
+  tasks:
+    - Make every Verify bullet cite its oracle ids and name the mutant each
+      must kill.
+    - Have the tables committed verbatim as table-driven tests, together with
+      the code they cover.
+    - Make the result map each oracle id to a test title and a killed mutant.
