@@ -35,6 +35,8 @@ import type {
   ChatWorker,
 } from '../../shared/chat'
 import type { ClientMessage, ServerMessage } from '../../shared/types'
+import { parseWorkspaceMessageEnvelope } from '../../shared/planWorkspace'
+import type { WorkspaceMessageEnvelope } from '../../shared/planWorkspace'
 import type { ChatSessionManager } from './ChatSessionManager'
 import type { ChatWireLogs } from './ChatWireLogs'
 import { MailboxConnections } from '../team/mailboxConnections'
@@ -698,7 +700,18 @@ export class ChatConnections {
         return
       }
       case 'chat-send': {
-        const result = await this.manager.send(sessionId, message.text)
+        // The wire envelope is untrusted (plan-workspace §4): an absent
+        // field is an unscoped send; a malformed one refuses before the
+        // manager touches anything.
+        let envelope: WorkspaceMessageEnvelope | null | undefined
+        if (message.workspaceContext !== undefined) {
+          envelope = parseWorkspaceMessageEnvelope(message.workspaceContext)
+          if (!envelope) {
+            connection.send({ type: 'error', message: "The message's plan context is malformed; nothing was sent." })
+            return
+          }
+        }
+        const result = await this.manager.send(sessionId, message.text, envelope ?? undefined)
         if (!result.ok) connection.send({ type: 'error', message: result.error })
         return
       }

@@ -279,6 +279,9 @@ export function parseTranscriptContent(
       typeof record.uuid === 'string' && record.uuid
         ? record.uuid
         : `line-${lineIndex}`
+    // The replay join key (plan-workspace §4.3): the record's own uuid when
+    // it carries one — never the `line-<n>` synthetic above.
+    const recordUuid = typeof record.uuid === 'string' && record.uuid ? record.uuid : undefined
     // An undated record stays undated (chat-transcript-layout D2): an empty
     // `at` means unknown, never the replay time presented as recorded.
     const at =
@@ -356,6 +359,7 @@ export function parseTranscriptContent(
               sequence: 0,
               at,
               turnId: `hist-turn-${turnCounter}`,
+              ...(recordUuid ? { messageUuid: recordUuid } : {}),
               ...(peer ? { type: 'peer_message' as const, ...peer } : { type: 'user_message' as const, text: typed }),
             })
           }
@@ -406,6 +410,7 @@ export function parseTranscriptContent(
                   sequence: 0,
                   at,
                   turnId: `hist-turn-${turnCounter}`,
+                  ...(recordUuid ? { messageUuid: recordUuid } : {}),
                   ...(peer ? { type: 'peer_message' as const, ...peer } : { type: 'user_message' as const, text: typed }),
                 })
               }
