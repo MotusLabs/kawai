@@ -283,4 +283,44 @@ describe('the composed resolve reads origin (L3, A3.2)', () => {
     expect(store.attempts(world_.executionId, 'api')).toHaveLength(1)
     expect(bench.tasks.revisions(world_.taskId)).toHaveLength(1)
   })
+
+  test("the restarted attempt row starts from origin's head and dispatches inline through the composition (rev4 §10 step 5)", async () => {
+    // The K7 test dangled the remote; point it back at the fixture bare
+    // origin and refresh the change's branch head.
+    const bare = path.join(world.root, 'origin.git')
+    runGitChecked(['remote', 'set-url', 'origin', bare], { cwd: world.repo })
+    runGitChecked(['push', 'origin', 'HEAD:refs/heads/api-branch'], { cwd: world.repo })
+    const read = await lsRemoteHead(world.repo, 'refs/heads/api-branch')
+    if (!read.ok || read.sha === null) throw new Error('the fixture origin has no head to read')
+    const world_ = await pausedTarget(3)
+    const row = store.change(world_.executionId, 'api')!
+    expect(store.transition(world_.executionId, 'api', row, { baselineCommit: read.sha })).not.toBeNull()
+    // The inline arm: the hold releases before the resolve, so the gate —
+    // read after the decision — is open.
+    const released = holds.release(bench.human, { planId: world_.planId, holdId: world_.holdId, reason: 'the dispatch may go', commandId: 'pause-comp-release-restart-1' })
+    if (!released.ok) throw new Error(released.message)
+    const resolved = await pauses.resolve(bench.human, { planId: world_.planId, pauseId: world_.pauseId, change: 'api', choice: 'restart', rationale: 'rethink', releaseHold: false, commandId: 'pause-comp-resolve-restart-1' })
+    if (!resolved.ok) throw new Error(resolved.message)
+    const attempts = store.attempts(world_.executionId, 'api')
+    expect(attempts).toHaveLength(2)
+    expect(attempts[1].kind).toBe('implement')
+    // L3's seam serves restart too: the start commit is origin's true head,
+    // never the newest attempt's stale one ('s').
+    expect(attempts[1].manifest.startCommit).toBe(read.sha)
+    expect(attempts[1].manifest.checkpoint).toBeUndefined()
+    // M1: the inline dispatch through the composed AssignmentService, with
+    // D5's may-predates note (nothing of this pause reached origin).
+    expect(attempts[1].assignmentId).not.toBeNull()
+    const assignment = bench.assignmentStore.byId(attempts[1].assignmentId!)
+    expect(assignment?.requestKey).toBe(`exec:${world_.executionId}:api:attempt:2:${store.change(world_.executionId, 'api')!.generation}`)
+    const instruction = bench.mail.get(assignment?.messageId ?? '')
+    expect(instruction?.body).toContain('Kawai restarted this work')
+    expect(instruction?.body).toContain('may predate')
+    // R2's release bookkeeping through the production seams
+    // (restartReleaseSeams): the holder's record reads not spawned, so the
+    // decision releases never.
+    const target = pauseRows.target(world_.pauseId, 'api')!
+    expect(target.decision).toBe('restart')
+    expect(target.decisionDetail).toMatchObject({ holder: 'comp-adapt-3', release: 'never' })
+  })
 })
