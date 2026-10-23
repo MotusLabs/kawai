@@ -4,6 +4,9 @@
 // no fallback to main, the ambiguous archive, the refusal when the producer
 // omits the source root, and the watch target moving on an equal view (F4).
 // The openspec listings are runner doubles; no CLI runs, no agent starts.
+// Fixture paths name repository shapes as data, never runtime reads —
+// declared for the reads guard.
+// @reads: openspec/**
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import crypto from 'node:crypto'
 import fs from 'node:fs'

@@ -2,8 +2,9 @@
 // keyed by team and plan, composed checklists and documents by their
 // subscription keys, keyed command results, and the client-local view state
 // that survives tab switches.
-// Fixture paths name repository shapes as data, never runtime reads.
-// @reads: docs/**
+// Fixture paths name repository shapes as data, never runtime reads —
+// declared for the reads guard.
+// @reads: docs/**, openspec/**
 import { beforeEach, describe, expect, test } from 'bun:test'
 import {
   useTeamPlanWorkspaceStore, documentKey,

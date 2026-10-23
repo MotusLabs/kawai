@@ -4,6 +4,9 @@
 // unmount, and shows the explicit no-version state without fabricating plan
 // content. Opening the workspace never starts or attaches a worker, and
 // every existing plan section and gate stays where it was.
+// Fixture paths name repository shapes as data, never runtime reads —
+// declared for the reads guard.
+// @reads: openspec/**
 import { afterEach, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import type { ClientMessage } from '@shared/types'
