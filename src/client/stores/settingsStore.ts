@@ -5,6 +5,8 @@ import { create } from 'zustand'
 import { persist, createJSONStorage } from 'zustand/middleware'
 import type { ChatApprovalPolicy } from '@shared/types'
 import { parseApprovalPolicy } from '@shared/chat'
+import { parseQuestionAutoAnswerMinutes } from '@shared/chatQuestionAutoAnswer'
+import { QUESTION_AUTO_ANSWER_DEFAULT_MINUTES } from '@shared/types'
 import { safeStorage } from '../utils/storage'
 
 // Empty means "not set" — fall back to the server's default directory
@@ -172,6 +174,14 @@ interface SettingsState {
   /** Starting approval policy for new chat sessions; 'manual' unless saved as 'auto'. */
   defaultApprovalPolicy: ChatApprovalPolicy
   setDefaultApprovalPolicy: (policy: ChatApprovalPolicy) => void
+  /**
+   * The server's question auto-answer wait in minutes (question-auto-answer
+   * D5): a memory cache of `app_settings`, loaded from
+   * /api/settings/question-auto-answer and updated by its change broadcast.
+   * Never persisted here — the server's copy is the only truth.
+   */
+  questionAutoAnswerMinutes: number
+  setQuestionAutoAnswerMinutes: (minutes: unknown) => void
   lineHeight: number
   setLineHeight: (height: number) => void
   letterSpacing: number
@@ -252,6 +262,13 @@ export const useSettingsStore = create<SettingsState>()(
       defaultApprovalPolicy: 'manual',
       setDefaultApprovalPolicy: (policy) =>
         set({ defaultApprovalPolicy: parseApprovalPolicy(policy) }),
+      questionAutoAnswerMinutes: QUESTION_AUTO_ANSWER_DEFAULT_MINUTES,
+      setQuestionAutoAnswerMinutes: (minutes) => {
+        // A bad wire value never enters the store (QA-S4): the validated
+        // whole number of minutes is the only thing cached.
+        const parsed = parseQuestionAutoAnswerMinutes(minutes)
+        if (parsed.valid) set({ questionAutoAnswerMinutes: parsed.minutes })
+      },
       lineHeight: 1.0,
       setLineHeight: (height) => set({ lineHeight: Math.max(1.0, Math.min(2.0, height)) }),
       letterSpacing: 0,
@@ -337,6 +354,14 @@ export const useSettingsStore = create<SettingsState>()(
       name: 'agentboard-settings',
       storage: createJSONStorage(() => safeStorage),
       version: 7,
+      // The question auto-answer wait mirrors server state (question-auto-
+      // answer D5): only the running server's value is true, so it is never
+      // written to localStorage — a stale cached wait could disagree with
+      // what the server will actually do.
+      partialize: (state) => {
+        const { questionAutoAnswerMinutes: _value, setQuestionAutoAnswerMinutes: _set, ...persisted } = state
+        return persisted as SettingsState
+      },
       // Same shallow merge as the default, plus re-clamping of the pane
       // fractions and chat font size and re-sanitizing of the default
       // approval policy: a hand-edited or corrupt persisted value must not
