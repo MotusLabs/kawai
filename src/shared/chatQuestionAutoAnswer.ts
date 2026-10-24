@@ -4,6 +4,7 @@
 // beside `chat.ts` (design D7), which re-exports them for existing importers.
 
 import type { ChatEventBase, ChatQuestionAnswer } from './chat'
+import { QUESTION_AUTO_ANSWER_MAX_MINUTES, QUESTION_AUTO_ANSWER_MIN_MINUTES } from './types'
 
 /**
  * The auto-answer deadline of one pending question request, carried by the
@@ -34,4 +35,29 @@ export type ChatRequestTimeoutAnswers = Record<string, string>
 export type ChatQuestionAutoAnswerHeldEvent = ChatEventBase & {
   type: 'question_auto_answer_held'
   requestId: string
+}
+
+/**
+ * The one saved-wait partition (QA-S4) both enforcement points read: the PUT
+ * route refuses with the returned message, the Settings field refuses inline
+ * with it before any request, and a wire push carrying a bad value is
+ * ignored.
+ */
+export type QuestionAutoAnswerMinutesParse =
+  | { valid: true; minutes: number }
+  | { valid: false; error: string }
+
+export function parseQuestionAutoAnswerMinutes(value: unknown): QuestionAutoAnswerMinutesParse {
+  if (
+    typeof value !== 'number' ||
+    !Number.isInteger(value) ||
+    value < QUESTION_AUTO_ANSWER_MIN_MINUTES ||
+    value > QUESTION_AUTO_ANSWER_MAX_MINUTES
+  ) {
+    return {
+      valid: false,
+      error: `minutes must be a whole number between ${QUESTION_AUTO_ANSWER_MIN_MINUTES} and ${QUESTION_AUTO_ANSWER_MAX_MINUTES}`,
+    }
+  }
+  return { valid: true, minutes: value }
 }

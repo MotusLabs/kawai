@@ -15,6 +15,7 @@ import {
   QUESTION_AUTO_ANSWER_DEFAULT_MINUTES,
   type ServerMessage,
 } from '../../shared/types'
+import { parseQuestionAutoAnswerMinutes } from '../../shared/chatQuestionAutoAnswer'
 import type { initDatabase } from '../db'
 import type { SessionManager } from '../SessionManager'
 import type { SessionRefreshLoop } from '../refresh/SessionRefreshLoop'
@@ -298,15 +299,11 @@ export function createSettingsRoutes(deps: SettingsRouteDeps) {
     } catch {
       return c.json({ error: 'Invalid request body' }, 400)
     }
-    const minutes = body.minutes
-    if (
-      typeof minutes !== 'number' ||
-      !Number.isInteger(minutes) ||
-      minutes < QUESTION_AUTO_ANSWER_MIN_MINUTES ||
-      minutes > QUESTION_AUTO_ANSWER_MAX_MINUTES
-    ) {
-      return c.json({ error: `minutes must be a whole number between ${QUESTION_AUTO_ANSWER_MIN_MINUTES} and ${QUESTION_AUTO_ANSWER_MAX_MINUTES}` }, 400)
+    const parsed = parseQuestionAutoAnswerMinutes(body.minutes)
+    if (!parsed.valid) {
+      return c.json({ error: parsed.error }, 400)
     }
+    const minutes = parsed.minutes
     try {
       db.setAppSetting(QUESTION_AUTO_ANSWER_MINUTES_KEY, String(minutes))
     } catch (error) {
