@@ -14,8 +14,9 @@ import {
   pruneRecords,
   readRecord,
   recordsDir,
+  recordsForTree,
   writeRecord,
-} from '../../../scripts/lib/checkRecords'
+} from '../checks/checkRecords'
 
 let tempRoot: string
 let repo: string
@@ -79,6 +80,17 @@ function seedTmp(pid: number, mtime: number) {
   const file = path.join(dir, `.${'a'.repeat(64)}.${pid}.tmp`)
   fs.writeFileSync(file, '{"key":"') // the partial body of a crashed write
   fs.utimesSync(file, mtime / 1000, mtime / 1000)
+}
+
+/** A deterministic pseudo-random generator over a fixed seed (mulberry32). */
+function mulberry32(seed: number): () => number {
+  let state = seed >>> 0
+  return () => {
+    state = (state + 0x6d2b79f5) | 0
+    let mixed = Math.imul(state ^ (state >>> 15), 1 | state)
+    mixed = (mixed + Math.imul(mixed ^ (mixed >>> 7), 61 | mixed)) ^ mixed
+    return ((mixed ^ (mixed >>> 14)) >>> 0) / 4294967296
+  }
 }
 
 beforeEach(() => {
@@ -274,5 +286,101 @@ describe('records are shared across linked worktrees', () => {
     writeRecord(fromWorktree, written)
     // Read back through the other worktree's resolution of the same directory.
     expect(readRecord(recordsDir(repo), written.key)).toEqual(written)
+  })
+})
+
+describe('recordsForTree', () => {
+  // The age limit judges the record's own `at` against this fixed instant, so
+  // the fixtures neither expire nor shift with the suite's wall clock.
+  const NOW = Date.parse('2026-10-20T12:00:00.000Z')
+  const at = (msBefore: number) => new Date(NOW - msBefore).toISOString()
+
+  function seed(fixture: CheckRecord) {
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, `${fixture.key}.json`), JSON.stringify(fixture))
+  }
+
+  test('returns every record of the tree across Bun versions, newest first', () => {
+    seed(record({ key: hexKey(1), treeId: 'tree-t', bun: '1.4.0', at: at(5_000) }))
+    seed(record({ key: hexKey(2), treeId: 'tree-t', bun: '1.4.3', at: at(1_000) }))
+    expect(recordsForTree(dir, 'tree-t', NOW).map((entry) => [entry.bun, entry.key])).toEqual([
+      ['1.4.3', hexKey(2)],
+      ['1.4.0', hexKey(1)],
+    ])
+  })
+
+  test('a record past the age limit is not returned, the TTL boundary excluded', () => {
+    seed(record({ key: hexKey(3), treeId: 'tree-t', at: at(RECORD_TTL_MS + 1) }))
+    expect(recordsForTree(dir, 'tree-t', NOW)).toEqual([])
+    seed(record({ key: hexKey(4), treeId: 'tree-t', at: at(RECORD_TTL_MS) }))
+    expect(recordsForTree(dir, 'tree-t', NOW)).toEqual([])
+    seed(record({ key: hexKey(5), treeId: 'tree-t', at: at(RECORD_TTL_MS - 1) }))
+    expect(recordsForTree(dir, 'tree-t', NOW).map((entry) => entry.key)).toEqual([hexKey(5)])
+  })
+
+  test('a malformed or truncated file is skipped without throwing, its valid neighbors returned', () => {
+    seed(record({ key: hexKey(6), treeId: 'tree-t', at: at(1_000) }))
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, `${hexKey(7)}.json`), '{"key":"') // a truncated write
+    fs.writeFileSync(path.join(dir, `${hexKey(8)}.json`), 'not json at all')
+    fs.writeFileSync(path.join(dir, `${hexKey(9)}.json`), JSON.stringify({ key: hexKey(9), treeId: 'tree-t' }))
+    // A well-formed record under a non-record name is not scanned at all.
+    fs.writeFileSync(path.join(dir, 'notes.json'), JSON.stringify(record({ key: hexKey(10), treeId: 'tree-t' })))
+    expect(recordsForTree(dir, 'tree-t', NOW).map((entry) => entry.key)).toEqual([hexKey(6)])
+  })
+
+  test('a record of another tree is not returned', () => {
+    seed(record({ key: hexKey(11), treeId: 'tree-other', at: at(1_000) }))
+    expect(recordsForTree(dir, 'tree-t', NOW)).toEqual([])
+    seed(record({ key: hexKey(12), treeId: 'tree-t', at: at(2_000) }))
+    expect(recordsForTree(dir, 'tree-t', NOW).map((entry) => entry.key)).toEqual([hexKey(12)])
+  })
+
+  test('an empty or missing record directory returns no records', () => {
+    fs.mkdirSync(dir, { recursive: true }) // existing and empty, not merely absent
+    expect(recordsForTree(dir, 'tree-t', NOW)).toEqual([])
+    expect(recordsForTree(path.join(dir, 'not-there'), 'tree-t', NOW)).toEqual([])
+  })
+
+  test('random record sets resolve to exactly the unexpired, well-formed records of the tree', () => {
+    // A tiny seeded PRNG (mulberry32): the property needs reproducibility,
+    // not cryptography, and the suite adds no dependency for it.
+    const random = mulberry32(0x5eed1234)
+    const trees = ['tree-a', 'tree-b', 'tree-c']
+    const buns = ['1.4.0', '1.4.3', '1.5.0']
+    for (let set = 0; set < 220; set++) {
+      fs.rmSync(dir, { recursive: true, force: true })
+      const target = trees[(random() * trees.length) | 0]
+      const entries: CheckRecord[] = []
+      const count = 1 + ((random() * 6) | 0)
+      for (let n = 0; n < count; n++) {
+        entries.push(
+          record({
+            key: hexKey(set * 16 + n + 1),
+            treeId: trees[(random() * trees.length) | 0],
+            bun: buns[(random() * buns.length) | 0],
+            // Quantized to a coarse grid so same-`at` ties actually occur.
+            at: at(((random() * 10) | 0) * (RECORD_TTL_MS / 5)),
+          })
+        )
+      }
+      const corrupted = random() < 0.3 ? (random() * entries.length) | 0 : -1
+      const foreignName = random() < 0.2 ? (random() * entries.length) | 0 : -1
+      fs.mkdirSync(dir, { recursive: true })
+      entries.forEach((entry, index) => {
+        const name = index === foreignName ? 'notes.json' : `${entry.key}.json`
+        fs.writeFileSync(path.join(dir, name), index === corrupted ? '{"key":' : JSON.stringify(entry))
+      })
+      const expected = entries
+        .filter((entry, index) => index !== corrupted && index !== foreignName)
+        .filter((entry) => NOW - Date.parse(entry.at) < RECORD_TTL_MS)
+        .filter((entry) => entry.treeId === target)
+        .sort((a, b) => {
+          const byAt = Date.parse(b.at) - Date.parse(a.at)
+          if (byAt !== 0) return byAt
+          return a.key < b.key ? -1 : a.key > b.key ? 1 : 0
+        })
+      expect(recordsForTree(dir, target, NOW)).toEqual(expected)
+    }
   })
 })

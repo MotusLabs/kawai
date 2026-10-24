@@ -232,7 +232,7 @@ describe('the commit hook never writes a record (I1)', () => {
     expect(closure).toEqual(
       expect.arrayContaining([
         'scripts/lib/treeRecord.ts',
-        'scripts/lib/checkRecords.ts',
+        'src/server/checks/checkRecords.ts',
         'scripts/lib/checkRun.ts',
         'scripts/planBatches.ts',
       ])
@@ -240,7 +240,7 @@ describe('the commit hook never writes a record (I1)', () => {
     const writer = /writeRecord|removeRecord|runCheck\b/
     const offenders = closure.filter(
       (file) =>
-        file !== 'scripts/lib/checkRecords.ts' &&
+        file !== 'src/server/checks/checkRecords.ts' &&
         file !== 'scripts/lib/checkRun.ts' &&
         writer.test(fs.readFileSync(path.join(REPO_ROOT, file), 'utf8'))
     )

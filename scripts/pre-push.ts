@@ -10,8 +10,8 @@
 
 import path from 'node:path'
 import { runGit } from '../src/server/git/gitCommand'
-import { listHiddenEntries } from './lib/checkKey'
-import { recordsDir } from './lib/checkRecords'
+import { listHiddenEntries } from '../src/server/checks/checkKey'
+import { recordsDir } from '../src/server/checks/checkRecords'
 import { stepEnv } from './lib/checkRun'
 import { decidePush, isZeroSha, parsePushInput, settleFallback, type PushLine, type RefFacts } from './lib/pushCheck'
 import { readTreeRecord } from './lib/treeRecord'
