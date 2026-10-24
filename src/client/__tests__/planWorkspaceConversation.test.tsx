@@ -134,6 +134,14 @@ const sentRequestId = (panel: ReturnType<typeof mountPanel>): string | undefined
   return send?.requestId
 }
 
+/** The requestId of the panel's Nth (0-based) contextual chat-send. */
+const sentRequestAt = (panel: ReturnType<typeof mountPanel>, index: number): string => {
+  const send = panel.sent.filter(message => message.type === 'chat-send')[index] as
+    | { requestId?: string } | undefined
+  if (!send?.requestId) throw new Error(`no chat-send #${index} carried a requestId`)
+  return send.requestId
+}
+
 describe('PlanWorkspaceConversation binding (§6.2)', () => {
   beforeEach(() => { seedRepositories() })
 
@@ -411,27 +419,109 @@ describe('PlanWorkspaceConversation captured scope (§6.3)', () => {
     expect(panel.renderer.root.findByType('textarea').props.value).toBe('hello')
   })
 
-  // (The former "the session user_message proves acceptance" test asserted the
-  // B1 bug — an unrelated user_message, e.g. another host's send, consuming
-  // the pending entry — and was removed with the r4 review; the acceptance
-  // seam and its regression tests land with the B1 disposition.)
-
-  test('a disconnect drops the pending contextual send; emptying the text drops the scope', () => {
+  test('an unrelated user_message never settles a pending send; a later correlated refusal still restores', () => {
     const panel = boundPanel()
     type(panel, 'hello')
     submit(panel)
-    panel.rerender({ connected: false })
-    // The pending send died with the connection: even its correlated refusal
-    // (arriving over a stale listener) restores nothing.
-    panel.deliver({ type: 'error', message: 'late refusal',
+    // A user_message arrives — another host's send, or this one's own echo:
+    // neither can be told apart, so neither settles the entry (B1).
+    panel.deliver({ type: 'chat-events', sessionId: 's-a', events: [
+      { id: 'u1', sequence: 1, at: '2026-10-24T09:00:00.000Z', turnId: 't1', type: 'user_message', text: 'hello' },
+    ] })
+    expect(pendingContextSends.size).toBe(1)
+    // The correlated refusal still restores text and attachment afterwards.
+    panel.deliver({ type: 'error', message: 'Workspace context is stale: revision has moved on.',
       requestId: sentRequestId(panel), sessionId: 's-a' })
-    expect(panel.renderer.root.findByType('textarea').props.value).toBe('')
-    expect(sends(panel)).toHaveLength(1)
+    expect(panel.renderer.root.findByType('textarea').props.value).toBe('hello')
+    expect(panel.has('composer-scope')).toBe(true)
     expect(pendingContextSends.size).toBe(0)
-    // The scope's lifetime matches the draft's: a fresh nonempty draft captures
-    // again, and emptying the text drops it.
-    type(panel, 'once more')
-    expect(usePlanWorkspaceScopeStore.getState().scopes['s-a']).not.toBeUndefined()
+    expect(sends(panel)).toHaveLength(1)
+  })
+
+  test('the sender-only acceptance drops the entry, in either order against the user_message frame', () => {
+    // Acceptance first, user_message second.
+    const first = boundPanel()
+    type(first, 'one')
+    submit(first)
+    first.deliver({ type: 'chat-send-result', sessionId: 's-a', requestId: sentRequestId(first)!, accepted: true })
+    expect(pendingContextSends.size).toBe(0)
+    first.deliver({ type: 'chat-events', sessionId: 's-a', events: [
+      { id: 'u1', sequence: 1, at: '2026-10-24T09:00:00.000Z', turnId: 't1', type: 'user_message', text: 'one' },
+    ] })
+    expect(first.renderer.root.findByType('textarea').props.value).toBe('')
+    expect(sends(first)).toHaveLength(1)
+    // user_message first, acceptance second: the outcome is the same.
+    const second = boundPanel()
+    type(second, 'two')
+    submit(second)
+    second.deliver({ type: 'chat-events', sessionId: 's-a', events: [
+      { id: 'u2', sequence: 2, at: '2026-10-24T09:00:01.000Z', turnId: 't1', type: 'user_message', text: 'two' },
+    ] })
+    second.deliver({ type: 'chat-send-result', sessionId: 's-a', requestId: sentRequestId(second)!, accepted: true })
+    expect(pendingContextSends.size).toBe(0)
+    expect(second.renderer.root.findByType('textarea').props.value).toBe('')
+    expect(sends(second)).toHaveLength(1)
+  })
+
+  test('rapid sends settle independently, each only on its own answer', () => {
+    const panel = boundPanel()
+    type(panel, 'first')
+    submit(panel)
+    const firstRequest = sentRequestAt(panel, 0)
+    type(panel, 'second')
+    submit(panel)
+    const secondRequest = sentRequestAt(panel, 1)
+    expect(firstRequest).not.toEqual(secondRequest)
+    expect(pendingContextSends.size).toBe(2)
+    // The second send's refusal consumes only its own entry; the draft was
+    // empty (post-submit clear), so its text and attachment restore, and the
+    // first entry stays pending.
+    panel.deliver({ type: 'error', message: 'stale', requestId: secondRequest, sessionId: 's-a' })
+    expect(pendingContextSends.size).toBe(1)
+    expect(panel.renderer.root.findByType('textarea').props.value).toBe('second')
+    // The first send's acceptance drops the last entry, restoring nothing.
+    panel.deliver({ type: 'chat-send-result', sessionId: 's-a', requestId: firstRequest!, accepted: true })
+    expect(pendingContextSends.size).toBe(0)
+    expect(panel.renderer.root.findByType('textarea').props.value).toBe('second')
+  })
+
+  test('an answer naming another session never consumes this session entry', () => {
+    const panel = boundPanel()
+    type(panel, 'hello')
+    submit(panel)
+    const request = sentRequestId(panel)!
+    panel.deliver({ type: 'chat-send-result', sessionId: 's-other', requestId: request, accepted: true })
+    panel.deliver({ type: 'error', message: 'late', requestId: request, sessionId: 's-other' })
+    expect(pendingContextSends.size).toBe(1)
+    // The correctly addressed acceptance still settles it.
+    panel.deliver({ type: 'chat-send-result', sessionId: 's-a', requestId: request, accepted: true })
+    expect(pendingContextSends.size).toBe(0)
+  })
+
+  test('a disconnect restores the oldest unanswered send into an empty draft; the rest are retained, never resent', () => {
+    const panel = boundPanel()
+    type(panel, 'first text')
+    submit(panel)
+    const firstRequest = sentRequestAt(panel, 0)
+    type(panel, 'second text')
+    submit(panel)
+    const secondRequest = sentRequestAt(panel, 1)
+    panel.rerender({ connected: false })
+    // The oldest fills the empty composer — recovery of unconfirmed text, no
+    // resend — and the second entry stays retained.
+    expect(panel.renderer.root.findByType('textarea').props.value).toBe('first text')
+    expect(panel.has('composer-scope')).toBe(true)
+    expect(pendingContextSends.size).toBe(1)
+    expect(sends(panel)).toHaveLength(2)
+    // The restored send's late correlated refusal is moot (entry already
+    // recovered); the retained entry's refusal cannot overwrite the restored
+    // draft — restore needs an empty draft, so only the error shows.
+    panel.deliver({ type: 'error', message: 'late', requestId: firstRequest, sessionId: 's-a' })
+    expect(panel.renderer.root.findByType('textarea').props.value).toBe('first text')
+    panel.deliver({ type: 'error', message: 'stale', requestId: secondRequest, sessionId: 's-a' })
+    expect(panel.renderer.root.findByType('textarea').props.value).toBe('first text')
+    expect(pendingContextSends.size).toBe(0)
+    // Emptying the text drops the restored scope.
     type(panel, '')
     expect(usePlanWorkspaceScopeStore.getState().scopes['s-a']).toBeUndefined()
   })

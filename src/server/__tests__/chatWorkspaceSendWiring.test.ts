@@ -6,8 +6,11 @@
 // client-minted correlation id: every refusal of a send that carried a
 // readable bounded requestId echoes it with the session id — malformed
 // context, unknown session, manager refusal — while sends without one keep
-// today's exact error shape. Harness slimmed from chatConnections.test.ts,
-// which is far past 500 lines.
+// today's exact error shape. The B1 describe covers the sender-only
+// acceptance answer: an accepted send with a readable requestId gets exactly
+// one `chat-send-result` on the sending connection, after the manager
+// accepted, never beside a refusal. Harness slimmed from
+// chatConnections.test.ts, which is far past 500 lines.
 import { describe, expect, test } from 'bun:test'
 import type { ServerMessage } from '../../shared/types'
 import type { WorkspaceMessageEnvelope } from '../../shared/planWorkspace'
@@ -116,14 +119,38 @@ describe('chatWorkspaceSendWiring: the client-minted correlation (§6.3, Q2)', (
     }])
   })
 
-  test('an accepted send with requestId answers nothing', async () => {
+  test('an accepted send with requestId answers exactly one chat-send-result, on the sending connection only', async () => {
+    const order: string[] = []
     const calls: Array<{ sessionId: string; text: string; context: WorkspaceMessageEnvelope | undefined }> = []
+    const manager = {
+      whenRestored: () => Promise.resolve(),
+      has: () => true,
+      send: async (sessionId: string, text: string, context?: WorkspaceMessageEnvelope) => {
+        order.push('manager-accepted')
+        calls.push({ sessionId, text, context })
+        return { ok: true as const }
+      },
+    } as unknown as ChatSessionManager
     const messages: ServerMessage[] = []
-    await new ChatConnections(fakeManager(calls)).handle(connection(messages), {
+    await new ChatConnections(manager).handle(connection(messages), {
       type: 'chat-send', sessionId: 'chat-1', text: 'x', requestId: 'req-ok', workspaceContext: envelope,
     })
-    expect(calls).toHaveLength(1)
-    expect(messages).toEqual([])
+    // The acceptance follows the manager's accept — it is the terminal
+    // answer, past the last refusal point — exactly once, shaped accepted.
+    // The handler's only send target is the sending `connection` (the
+    // `messages` array): no broadcast path exists in the answer at all.
+    expect(order).toEqual(['manager-accepted'])
+    expect(messages).toEqual([
+      { type: 'chat-send-result', sessionId: 'chat-1', requestId: 'req-ok', accepted: true },
+    ])
+  })
+
+  test('a refused send never gains the acceptance answer (the answers are exclusive)', async () => {
+    const messages: ServerMessage[] = []
+    await new ChatConnections(fakeManager([], { ok: false, error: 'stale hash' })).handle(connection(messages), {
+      type: 'chat-send', sessionId: 'chat-1', text: 'x', requestId: 'req-no', workspaceContext: envelope,
+    })
+    expect(messages).toEqual([{ type: 'error', message: 'stale hash', requestId: 'req-no', sessionId: 'chat-1' }])
   })
 
   test('a requestId that is not readable and bounded keeps the legacy shape; the boundary is inclusive', async () => {

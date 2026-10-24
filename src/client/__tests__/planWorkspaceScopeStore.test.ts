@@ -9,7 +9,7 @@ import { beforeEach, describe, expect, test } from 'bun:test'
 import type { ClientMessage, ServerMessage } from '@shared/types'
 import type { WorkspaceSnapshot, WorkspaceBindingView } from '@shared/planWorkspace'
 import {
-  pendingContextSends, sameEnvelope, usePlanWorkspaceScopeStore,
+  pendingContextSends, pendingContextSendsFor, sameEnvelope, usePlanWorkspaceScopeStore,
   type CapturedWorkspaceScope,
 } from '../stores/planWorkspaceScopeStore'
 import { transferBindingsOnReset } from '../utils/planWorkspaceResetTransfer'
@@ -171,11 +171,17 @@ describe('transferBindingsOnReset', () => {
     expect(all[0]!.action).toEqual({ kind: 'skipped-unknown', teamPath: '' })
   })
 
-  test('pendingContextSends is a plain module map the surface owns', () => {
-    pendingContextSends.set('s1', { text: 'hi', scope: scope('p1'), requestId: 'req-1' })
-    expect(pendingContextSends.get('s1')!.text).toBe('hi')
-    expect(pendingContextSends.get('s1')!.requestId).toBe('req-1')
-    pendingContextSends.delete('s1')
-    expect(pendingContextSends.has('s1')).toBe(false)
+  test('pendingContextSends is a plain module map the surface owns, keyed by requestId', () => {
+    pendingContextSends.set('req-1', { sessionId: 's1', text: 'hi', scope: scope('p1') })
+    expect(pendingContextSends.get('req-1')!.text).toBe('hi')
+    expect(pendingContextSends.get('req-1')!.sessionId).toBe('s1')
+    pendingContextSends.set('req-2', { sessionId: 's1', text: 'again', scope: scope('p2') })
+    pendingContextSends.set('req-3', { sessionId: 's2', text: 'other', scope: scope('p1') })
+    // The per-session view keeps insertion order (oldest first), for the
+    // disconnect recovery.
+    expect(pendingContextSendsFor('s1').map(pending => pending.requestId)).toEqual(['req-1', 'req-2'])
+    expect(pendingContextSendsFor('s1')[0]).toMatchObject({ requestId: 'req-1', text: 'hi' })
+    pendingContextSends.delete('req-1')
+    expect(pendingContextSends.has('req-1')).toBe(false)
   })
 })
