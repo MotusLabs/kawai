@@ -60,7 +60,6 @@ const SECOND_REPORT = `<?xml version="1.0" encoding="UTF-8"?>
   </testsuite>
 </testsuites>`
 
-// @covers: dev-checks › Full-check records list the tests that ran › Pass with its test list
 describe('parseJUnitTestEntries converts a real report into list entries', () => {
   test('statuses, describe chain, file source, and entity unescaping', () => {
     const entries = parseJUnitTestEntries(GOOD_REPORT)

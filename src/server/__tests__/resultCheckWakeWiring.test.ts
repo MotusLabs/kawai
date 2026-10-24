@@ -57,7 +57,6 @@ beforeEach(async () => {
 })
 afterEach(() => { runtime.close(); db.close(); fs.rmSync(dir, { recursive: true, force: true }) })
 
-// @covers: specs/task-results "Result checks never block or gate"
 test('the composition wakes the check service: a submitted result settles with no manual wake, and its recheck too', async () => {
   const task = await runtime.tasks.create(agent('lead'), { title: 'Wired', direction: 'v1' })
   // Submit through the real service the mailbox owns; nothing in this test

@@ -4,8 +4,6 @@
 // other open branches", plus the runner rules (a call that does not answer
 // is unavailable; the budget is bounded) and the read-only invariant: the
 // check changes no ref, no index, and no worktree file.
-// @covers: specs/task-results "Kawai checks a result's commit"
-// @covers: specs/task-results "Kawai checks a result against the base and other open branches"
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -82,6 +80,7 @@ const baseAt = (fixture: Fixture, sha: string): void => {
   fixture.git(['update-ref', 'refs/remotes/origin/HEAD', sha])
 }
 
+// @covers: task-results › Kawai checks a result's commit › A clean, checked commit
 test('a clean, checked commit: every fact passes', async () => {
   const repo = makeRepo()
   const sha = repo.commit('.bun-version', `${BUN}\n`, 'pin bun')
@@ -101,6 +100,7 @@ test('a clean, checked commit: every fact passes', async () => {
   expect(facts.recorded?.commitBun).toBe(BUN)
 })
 
+// @covers: task-results › Kawai checks a result's commit › Unknown commit
 test('unknown commit: the check records not found and checks nothing else', async () => {
   const repo = makeRepo()
   const wt = repo.worktree(path.join(tempRoot, 'wt'), 'feature')
@@ -114,6 +114,7 @@ test('unknown commit: the check records not found and checks nothing else', asyn
   expect(facts.branches.status).toBe('unknown')
 })
 
+// @covers: task-results › Kawai checks a result's commit › HEAD moved past the commit
 test('HEAD moved past the commit: ahead two on its branch, a warning', async () => {
   const repo = makeRepo()
   const sha = repo.commit('a.txt', 'a\n', 'c1')
@@ -128,6 +129,7 @@ test('HEAD moved past the commit: ahead two on its branch, a warning', async () 
   expect(facts.head?.status).toBe('warn')
 })
 
+// @covers: task-results › Kawai checks a result's commit › Dirty worktree
 test('dirty worktree: the modified tracked file and the untracked file are listed', async () => {
   const repo = makeRepo()
   const sha = repo.commit('tracked.txt', 'one\n', 'c1')
@@ -140,6 +142,7 @@ test('dirty worktree: the modified tracked file and the untracked file are liste
   expect(facts.clean?.status).toBe('warn')
 })
 
+// @covers: task-results › Kawai checks a result's commit › No recorded pass
 test('no recorded pass: the check says so, as a warning', async () => {
   const repo = makeRepo()
   const sha = repo.commit('a.txt', 'a\n', 'c1')
@@ -150,6 +153,7 @@ test('no recorded pass: the check says so, as a warning', async () => {
   expect(facts.recorded?.recordBun).toBeNull()
 })
 
+// @covers: task-results › Kawai checks a result's commit › Pass under another Bun version
 test('pass under another Bun version: both versions shown, marked as a warning', async () => {
   const repo = makeRepo()
   const sha = repo.commit('.bun-version', `${BUN}\n`, 'pin bun')
@@ -161,6 +165,7 @@ test('pass under another Bun version: both versions shown, marked as a warning',
   expect(facts.recorded?.commitBun).toBe(BUN)
 })
 
+// @covers: task-results › Kawai checks a result's commit › Result without a commit
 test('result without a commit: recorded as nothing to check', async () => {
   const repo = makeRepo()
   const facts = await check(repo, {})
@@ -172,6 +177,7 @@ test('result without a commit: recorded as nothing to check', async () => {
   expect(facts.branches.status).toBe('unknown')
 })
 
+// @covers: task-results › Kawai checks a result's commit › Worktree removed
 test('worktree removed: HEAD and cleanliness unknown with the reason, the commit still checked', async () => {
   const repo = makeRepo()
   const sha = repo.commit('a.txt', 'a\n', 'c1')
@@ -188,6 +194,7 @@ test('worktree removed: HEAD and cleanliness unknown with the reason, the commit
   expect(facts.base?.status).toBe('pass')
 })
 
+// @covers: task-results › Kawai checks a result against the base and other open branches › Clean against the base
 test('clean against the base: the base commit named, the merge clean, three commits behind', async () => {
   const repo = makeRepo()
   const branchPoint = repo.git(['rev-parse', 'HEAD']).stdout.trim()
@@ -205,6 +212,7 @@ test('clean against the base: the base commit named, the merge clean, three comm
   expect(branchPoint).not.toBe(tip)
 })
 
+// @covers: task-results › Kawai checks a result against the base and other open branches › Conflict with the base
 test('conflict with the base: both conflicting files listed, a failure', async () => {
   const repo = makeRepo()
   const wt = repo.worktree(path.join(tempRoot, 'wt'), 'feature')
@@ -220,6 +228,7 @@ test('conflict with the base: both conflicting files listed, a failure', async (
   expect([...(facts.base?.conflicts ?? [])].sort()).toEqual(['shared1.txt', 'shared2.txt'])
 })
 
+// @covers: task-results › Kawai checks a result against the base and other open branches › Conflict with another open task's branch
 test('conflict with another open task branch: the task, its head, and the files', async () => {
   const repo = makeRepo()
   const wt = repo.worktree(path.join(tempRoot, 'wt'), 'feature')
@@ -241,6 +250,7 @@ test('conflict with another open task branch: the task, its head, and the files'
   expect(entry?.status).toBe('fail')
 })
 
+// @covers: task-results › Kawai checks a result against the base and other open branches › Shared files without a conflict
 test('shared files without a conflict: overlap named, not a conflict', async () => {
   const repo = makeRepo()
   // Both branches grow from the base commit, so their shared-file edits can
@@ -264,6 +274,7 @@ test('shared files without a conflict: overlap named, not a conflict', async () 
   expect(facts.base?.status).toBe('pass')
 })
 
+// @covers: task-results › Kawai checks a result against the base and other open branches › Landed or contained heads
 test('landed or contained heads: a head the base contains is not compared', async () => {
   const repo = makeRepo()
   const wt = repo.worktree(path.join(tempRoot, 'wt'), 'feature')
@@ -281,6 +292,7 @@ test('landed or contained heads: a head the base contains is not compared', asyn
   expect(facts.branches.skipped).toBe(0)
 })
 
+// @covers: task-results › Kawai checks a result against the base and other open branches › More open branches than the cap
 test('more open branches than the cap: thirty newest compared, five counted', async () => {
   const repo = makeRepo()
   const wt = repo.worktree(path.join(tempRoot, 'wt'), 'feature')

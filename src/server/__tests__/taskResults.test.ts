@@ -125,7 +125,7 @@ test('task_submit_result binds the calling session and round-trips; it registers
 
 // Agents read the checks (independent-verification D12, task 2.5): task_get's
 // detail carries each result's newest check and the count of earlier ones.
-// @covers: specs/task-results "Checks and coverage maps are kept and read with their results"
+// @covers: task-results › Checks and coverage maps are kept and read with their results › Agents read the checks
 test('task_get carries each result its newest check and earlier count: unchecked reads null and 0, a settled recheck becomes the newest with earlier 1', async () => {
   const task = await tasks.create(agent('lead'), { title: 'Read', direction: 'v1' })
   // A result written without a check row (an older server's) reads unchecked.
