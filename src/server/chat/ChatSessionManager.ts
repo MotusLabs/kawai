@@ -285,6 +285,14 @@ export interface ChatSessionManagerOptions {
    */
   profileCatalogHome?: string
   /**
+   * The saved question auto-answer wait in minutes (question-auto-answer D5),
+   * read live so the next question after a change uses the new value while a
+   * pending deadline stands (QA-S3, QA-S5, QA-P4). Claude drivers only: the
+   * manager converts to milliseconds per question; Codex drivers never arm a
+   * deadline (QA-U4), so this never reaches ChatDriverSharedOptions.
+   */
+  getQuestionAutoAnswerMinutes?: () => number
+  /**
    * Injected in tests; production uses global fetch for the provider usage
    * pull (the session provider's own quota endpoint).
    */
@@ -1180,6 +1188,9 @@ export class ChatSessionManager {
       onError: error => logger.warn('team_mailbox_dispatch_failed', { error: String(error) }),
       ownership: executionCore.ownership,
       onTaskResultWrite: taskId => executionCore.wakes.resultWrite(taskId),
+      // A settled check changes what the task detail reads (independent-
+      // verification D12): the human's open views refresh like on a task write.
+      onCheckSettled: teamId => options.onTaskChange?.(teamId),
     })
     this.mailbox = this.teamMail.mailbox
     this.tasks = this.teamMail.tasks
@@ -2184,6 +2195,20 @@ export class ChatSessionManager {
     return driver.answerQuestion(requestId, answers)
   }
 
+  /** Hold a question's deadline (question-auto-answer D4, Wait for me). */
+  holdQuestion(sessionId: string, requestId: string): ChatActionResult {
+    const driver = this.drivers.get(sessionId)
+    if (!driver) {
+      return {
+        ok: false,
+        error: this.records.has(sessionId)
+          ? `No pending question with id ${requestId}; the session has no in-flight turn`
+          : `Unknown chat session ${sessionId}`,
+      }
+    }
+    return driver.holdQuestion(requestId)
+  }
+
   getPendingRequests(sessionId: string): ChatPendingRequest[] {
     return this.drivers.get(sessionId)?.getPendingRequests() ?? []
   }
@@ -2816,6 +2841,11 @@ export class ChatSessionManager {
             options: {
               ...shared,
               queryFactory: queryFactory!,
+              // The wait is read per question through this getter, so a
+              // setting change reaches the next question without rebuilding
+              // the driver (question-auto-answer D5, hazard M1).
+              getQuestionAutoAnswerMs: () =>
+                (this.options.getQuestionAutoAnswerMinutes?.() ?? 0) * 60_000,
               ...(teamMcpServer ? { teamMcpServer } : {}),
               getProviderEnv: () => this.providerEnv(),
               claudeProfileId: record.claudeProfileId,

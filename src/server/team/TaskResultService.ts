@@ -9,7 +9,9 @@
 import { partyName } from './actorRow'
 import type { ChatSessionRecord } from '../db'
 import { NULL_OWNERSHIP, type ExecutionOwnership } from '../plans/execution/executionOwnership'
-import type { AssignmentTarget, TaskFindings, TaskHandoffKind, TaskResult, TaskTestClaim, TeamTask, TeamTaskAssignment, TeamTaskSummary } from '../../shared/teamTasks'
+import { isSealed, rawCoverage, validateCoverageMap, withheldCoverage } from '../../shared/coverageMaps'
+import type { TaskResultCheck } from '../../shared/teamTasks'
+import type { AssignmentTarget, TaskFindings, TaskHandoffKind, TaskResult, TaskTestClaim, TeamTask, TeamTaskAssignment, TeamTaskDetail, TeamTaskSummary } from '../../shared/teamTasks'
 import { TASK_HANDOFF_KINDS } from '../../shared/teamTasks'
 import { targetLabel, type AssignmentService } from './AssignmentService'
 import type { MemberRelease } from './memberRelease'
@@ -24,6 +26,8 @@ export interface ResultSubmission {
   diff?: string | null
   tests?: TaskTestClaim[]
   limitations?: string | null
+  /** The submitter's coverage map (independent-verification D5); validated, never free text. */
+  coverage?: unknown
 }
 
 export interface FindingsSubmission {
@@ -73,6 +77,14 @@ export function handoffInstruction(kind: TaskHandoffKind, result: TaskResult, in
     `Expected response: ${expectedResponse ?? DEFAULT_RESPONSE[kind]}`
 }
 
+/** A check whose facts carry no coverage outcomes (D6): the outcomes reveal the withheld map's shape, so a sealed reader never sees them. */
+function withoutCoverageOutcomes(check: TaskResultCheck): TaskResultCheck {
+  if (check.facts === null || check.facts.coverage === undefined) return check
+  const facts = { ...check.facts }
+  delete facts.coverage
+  return { ...check, facts }
+}
+
 /** What an acceptance closed, with what the human was shown before it (D5). */
 export interface AcceptOutcome {
   task: TeamTask
@@ -99,6 +111,10 @@ export class TaskResultService {
     ownership?: ExecutionOwnership
     /** A result or findings write landed (plan-execution D5): the composition wakes the owner's executor. */
     onWrite?: (taskId: string) => void
+    /** A result committed (independent-verification D1): the composition hands it to ResultCheckService. */
+    onResult?: (result: TaskResult, teamId: string) => void
+    /** A recheck was requested (independent-verification D4): the composition wakes the check service. */
+    onRecheck?: (teamId: string) => void
   }) {
     this.release = options.releases && options.records
       ? new TaskRelease(this, {
@@ -130,6 +146,10 @@ export class TaskResultService {
     if (!commit && !diff) throw new Error('A result needs a commit or a diff reference')
     const tests = (input.tests ?? []).map(row => ({ description: row.description.trim(), outcome: row.outcome.trim() }))
     if (tests.some(row => !row.description || !row.outcome)) throw new Error('Each test needs a description and an outcome')
+    // The coverage map (independent-verification D5): validated before
+    // anything is written, so a refused submission leaves no result row and
+    // no check row (J1); the validated map is what the transaction stores.
+    const coverage = input.coverage === undefined ? null : validateCoverageMap(input.coverage)
     // plan-execution D9: for an owned change, the commit must be on its
     // branch and contain origin's head of it, checked before anything is
     // written; the old holder of a Restarted change is refused outright
@@ -137,17 +157,23 @@ export class TaskResultService {
     const refusal = await (this.options.ownership ?? NULL_OWNERSHIP).checkResult(taskId, { commit, submitter: actor.sessionId, kind: 'result' })
     if (refusal !== null) throw new Error(refusal)
     const session = this.options.getSession(actor.sessionId)
-    // The result and its journal note commit together, as a dispatch and its journal entry do.
+    // The result, its journal note, and the pending check row commit together
+    // (independent-verification D1/I1): the check runs only after this
+    // transaction commits, and a crash between loses nothing — the startup
+    // run picks the pending row up. Nothing the check reads or computes
+    // happens inside the transaction.
     const result = this.store.atomically(() => {
       const inserted = this.store.results.insert({
         teamId: team.teamId, taskId, summary, commit, diff,
         worktree: task.worktree ?? (session ? worktreeRootOf(session.projectPath) : null),
-        tests, limitations: blankToNull(input.limitations), taskRevision: task.revision, submittedBy: actor,
+        tests, limitations: blankToNull(input.limitations), coverage, taskRevision: task.revision, submittedBy: actor,
       })
       this.store.appendJournal(taskId, actor, `Submitted result ${inserted.id}: ${summary}`)
+      this.store.checks.insertPending({ teamId: team.teamId, taskId, resultId: inserted.id, trigger: 'submit', requestedBy: actor })
       return inserted
     })
     this.options.onWrite?.(taskId)
+    this.options.onResult?.(this.store.results.get(result.id)!, team.teamId)
     return this.store.results.get(result.id)!
   }
 
@@ -182,6 +208,104 @@ export class TaskResultService {
     this.store.appendJournal(taskId, actor, `${input.kind === 'qa' ? 'QA' : 'Review'} findings on result ${result.id}: ${input.verdict}`)
     this.options.onWrite?.(taskId)
     return stored
+  }
+
+  /**
+   * Record the session's own coverage map for a result (independent-
+   * verification D6, "reviewers record their own coverage map first"):
+   * validated exactly like a submission's map — the refusal names the clause
+   * index and writes nothing (J1) — then appended to the append-only
+   * table. Recording a map for the result its outstanding review handoff
+   * names unseals the task's submitter maps for this session. The task's
+   * status is nobody's business here.
+   */
+  async submitCoverage(caller: TaskCaller, taskId: string, input: { resultId: string; coverage: unknown }): Promise<TaskResult> {
+    refuseSystem(caller, 'submit')
+    const { team, actor } = await this.tasks.context(caller)
+    if (actor.kind !== 'agent') throw new Error('Coverage maps are recorded by the member that made them, with task_submit_coverage')
+    this.tasks.sameTeamTask(team, taskId)
+    const result = this.store.results.get(input.resultId)
+    if (!result || result.taskId !== taskId) throw new Error(`Result ${input.resultId} is not a result of task ${taskId}`)
+    const coverage = validateCoverageMap(input.coverage)
+    this.store.checks.insertCoverageMap({
+      teamId: team.teamId, taskId, resultId: result.id, authorSession: actor.sessionId,
+      coverage: JSON.stringify(coverage),
+    })
+    this.options.onWrite?.(taskId)
+    // The return is a read like any other, so it passes through the same
+    // seal: mapping a result other than the handoff's returns the withheld
+    // stub; mapping the handoff's own unseals, and the call returns the raw
+    // pair with the comparison.
+    const fresh = this.store.results.get(result.id)!
+    const joined = { ...fresh, reviewerMaps: this.store.results.reviewerMapsOf(fresh.id, rawCoverage(fresh.coverage)) }
+    return this.sealResults(actor.sessionId, taskId, [joined])[0]!
+  }
+
+  /**
+   * The reader's view of a task detail (D6/D12): the human sees everything;
+   * a sealed reader — the holder of the task's outstanding review handoff
+   * with no map recorded for its result — sees every submitter map withheld
+   * down to `{ withheld, clauses }`, its own reviewer-map rows without their
+   * comparisons, no comparison of its own, and no coverage outcomes in any
+   * check facts (the outcomes give the map's shape away). Unsealed, the
+   * reading session's own comparison rides the result.
+   */
+  applySeal(caller: TaskCaller, taskId: string, detail: TeamTaskDetail): TeamTaskDetail {
+    if (caller.kind !== 'agent' || detail.results === undefined) return detail
+    return { ...detail, results: this.sealResults(caller.sessionId, taskId, detail.results) }
+  }
+
+  /**
+   * The seal projection over a list of results (D6) — the one implementation
+   * behind every agent reader surface: task_get's applySeal and
+   * task_submit_coverage's return alike, so recording a map through the tool
+   * can never hand back more than the reader may see. The predicate is
+   * evaluated at read time: a call that records the handoff result's own map
+   * reads unsealed here, because its insert has already landed.
+   */
+  private sealResults(sessionId: string, taskId: string, results: TaskResult[]): TaskResult[] {
+    const outstanding = this.store.outstandingAssignment(taskId)
+    const handoffResultId = outstanding?.handoffKind === 'review' ? outstanding.resultId ?? null : null
+    const sealed = handoffResultId !== null &&
+      isSealed(outstanding ?? null, sessionId, this.store.checks.hasCoverageMap(handoffResultId, sessionId))
+    return results.map(result => {
+      if (sealed) {
+        const ownMaps = (result.reviewerMaps ?? []).filter(row => row.authorSession === sessionId)
+          .map(row => ({ ...row, comparison: null }))
+        const checks = result.checks
+          ? { ...result.checks, newest: result.checks.newest === null ? null : withoutCoverageOutcomes(result.checks.newest) }
+          : undefined
+        return {
+          ...result,
+          // detail() carries the raw map; the withheld form exists only here.
+          coverage: withheldCoverage(rawCoverage(result.coverage)),
+          reviewerMaps: ownMaps, comparison: null, ...(checks ? { checks } : {}),
+        }
+      }
+      const ownNewest = (result.reviewerMaps ?? []).find(row => row.authorSession === sessionId)
+      return { ...result, comparison: ownNewest?.comparison ?? null }
+    })
+  }
+
+  /**
+   * Request a new check of a result (independent-verification D4): the
+   * human, or any team member. A request made while a check is pending
+   * returns the standing pending row instead of starting another; a new row
+   * is recorded beside the earlier ones, which stay readable. The request
+   * never runs the check itself — the composition wakes the service, which
+   * runs it outside every gate.
+   */
+  async recheck(caller: TaskCaller, taskId: string, resultId: string): Promise<TaskResultCheck> {
+    refuseSystem(caller, 'recheck')
+    const { team, actor } = await this.tasks.context(caller)
+    this.tasks.sameTeamTask(team, taskId)
+    const result = this.store.results.get(resultId)
+    if (!result || result.taskId !== taskId) throw new Error(`Result ${resultId} is not a result of task ${taskId}`)
+    const { check } = this.store.checks.insertPending({
+      teamId: team.teamId, taskId, resultId: result.id, trigger: 'recheck', requestedBy: actor,
+    })
+    this.options.onRecheck?.(team.teamId)
+    return check
   }
 
   /**

@@ -10,6 +10,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { runGit } from '../git/gitCommand'
+import { removeTestList, testListName, type RecordTestList } from './testLists'
 
 export interface CheckStep {
   name: string
@@ -25,19 +26,43 @@ export interface CheckRecord {
   at: string
   worktree: string
   steps: CheckStep[]
+  /** The record's test list pointer (independent-verification D7), absent
+   * on records written before test lists existed and on a pass whose
+   * reports could not be merged — both read as no list upstream. */
+  tests?: RecordTestList
 }
 
 export const RECORDS_DIR_NAME = 'kawai-checks'
 export const RECORD_TTL_MS = 14 * 24 * 60 * 60 * 1000
 export const MAX_RECORDS = 500
+/** D7's list-retention rule, settled by task 4.2's measurement (8,030
+ * entries, 1.4 MB raw, 218.5 KiB gzipped per list — over the 200 KB
+ * threshold): only the newest MAX_KEPT_LISTS records keep their lists, in
+ * the order master's count cap uses (mtime, newest first). An older record
+ * keeps its pass and loses only its list — its citations read run unknown
+ * (K2 case 3). The record itself is never touched. */
+export const MAX_KEPT_LISTS = 100
 /** A temp file older than this is removed even while its writer's pid still
  * answers: pids are reused, so age is the final judge. */
 export const TMP_TTL_MS = 60 * 60 * 1000
 
 const KEY_PATTERN = /^[0-9a-f]{64}$/
 /** The temporaries writeRecord leaves behind on a crash between the write
- * and the rename: `.<key>.<pid>.tmp` (writeRecord builds the same shape). */
+ * and the rename: `.<key>.<pid>.tmp` (writeTestList builds the same shape). */
 const TMP_NAME = /^\.([0-9a-f]{64})\.(\d+)\.tmp$/
+/** The test lists beside the records: `<key>.tests.json.gz` (D7). */
+const LIST_NAME = /^([0-9a-f]{64})\.tests\.json\.gz$/
+/** An orphan list younger than this survives any prune: its writer may sit
+ * between renaming the list and renaming its record — the records directory
+ * is shared by every linked worktree, so another worktree's prune can run
+ * in exactly that window — and removing the list there would leave the
+ * record pointing at nothing. Age, not absence, decides; a writer stalled
+ * longer than the grace loses only its list, and the record reads as
+ * list-less (never fabricated data). The grace is TMP_TTL_MS (K2 case 2,
+ * task revision 2): the same one-hour window that judges a stale temp file
+ * judges an orphan list, so the in-flight answer is one constant, and a
+ * test pins the equality. */
+export const LIST_ORPHAN_GRACE_MS = TMP_TTL_MS
 
 /** The shared records directory for the repository behind `cwd`. Throws when
  * git cannot resolve a common directory (outside a repository). */
@@ -78,6 +103,23 @@ export function readRecord(dir: string, key: string, now = Date.now()): CheckRec
   if (typeof record.worktree !== 'string' || record.worktree === '') return null
   if (!Array.isArray(record.steps)) return null
   if (!record.steps.every((step) => isStep(step))) return null
+  // The test-list pointer is parsed but never invalidates the record: a
+  // malformed `tests` on an otherwise good pass drops the pointer (the
+  // record reads as list-less, run unknown upstream) instead of discarding
+  // the certificate. Absent on older records.
+  let tests: RecordTestList | undefined
+  if (record.tests !== undefined) {
+    if (
+      typeof record.tests === 'object' &&
+      record.tests !== null &&
+      (record.tests as RecordTestList).file === testListName(key) &&
+      typeof (record.tests as RecordTestList).count === 'number' &&
+      Number.isInteger((record.tests as RecordTestList).count) &&
+      (record.tests as RecordTestList).count >= 0
+    ) {
+      tests = { file: (record.tests as RecordTestList).file, count: (record.tests as RecordTestList).count }
+    }
+  }
   return {
     key,
     treeId: typeof record.treeId === 'string' ? record.treeId : '',
@@ -87,6 +129,7 @@ export function readRecord(dir: string, key: string, now = Date.now()): CheckRec
     at: record.at,
     worktree: record.worktree,
     steps: record.steps.map((step) => ({ name: step.name, ms: step.ms })),
+    ...(tests !== undefined ? { tests } : {}),
   }
 }
 
@@ -131,9 +174,13 @@ export function recordsForTree(dir: string, treeId: string, now = Date.now()): C
   })
 }
 
-/** Remove the record for `key`, whatever wrote it. Best-effort: a file that
- * is already absent, or a store that cannot be written, is fine — removal
- * must never turn a failing check into a crash. */
+/** Remove the record for `key`, whatever wrote it, and its test list with
+ * it (D7 pruning; C1 advisor point 1): the record-less list would be an
+ * orphan the next prune removes anyway, but the paths that drop a record —
+ * a failed or forced run — must not leave the list pointing at a pass that
+ * is gone. Best-effort: a file that is already absent, or a store that
+ * cannot be written, is fine — removal must never turn a failing check
+ * into a crash. */
 export function removeRecord(dir: string, key: string): void {
   if (!KEY_PATTERN.test(key)) return
   try {
@@ -141,6 +188,7 @@ export function removeRecord(dir: string, key: string): void {
   } catch {
     // Already absent, or unwritable: nothing left to remove.
   }
+  removeTestList(dir, key)
 }
 
 /** Write a record atomically and prune the directory. The rename makes a
@@ -194,9 +242,14 @@ function pruneTempFiles(dir: string, names: string[], now: number): void {
 }
 
 /** Keep records newer than the TTL, and at most MAX_RECORDS of those, the
- * newest by mtime, and remove the temp files of crashed writers. Only files
- * shaped `<key>.json` are records; anything else in the directory is left
- * alone except those temporaries. */
+ * newest by mtime, and remove the temp files of crashed writers. A record
+ * this prune removes takes its test list with it (D7: pruned together), a
+ * list is removed when it has no record and is older than the orphan grace
+ * (the interrupted-writing scenario), and — D7's thinning, since 4.2
+ * measured a list over the 200 KB threshold — the kept records beyond the
+ * newest MAX_KEPT_LISTS lose only their lists, their records and passes
+ * staying (K2's three removal cases; a record the age-and-count rule keeps
+ * is never removed). */
 export function pruneRecords(dir: string, now = Date.now()): void {
   let names: string[]
   try {
@@ -205,9 +258,11 @@ export function pruneRecords(dir: string, now = Date.now()): void {
     return
   }
   pruneTempFiles(dir, names, now)
+  const recordNames = new Set<string>()
   const records: { name: string; mtime: number }[] = []
   for (const name of names) {
     if (!/^[0-9a-f]{64}\.json$/.test(name)) continue
+    recordNames.add(name)
     const absolute = path.join(dir, name)
     try {
       records.push({ name, mtime: fs.statSync(absolute).mtimeMs })
@@ -217,18 +272,43 @@ export function pruneRecords(dir: string, now = Date.now()): void {
   }
   const fresh = records.filter((record) => now - record.mtime < RECORD_TTL_MS)
   fresh.sort((a, b) => b.mtime - a.mtime)
-  for (const stale of records.filter((record) => now - record.mtime >= RECORD_TTL_MS)) {
+  const prunedRecords = [
+    ...records.filter((record) => now - record.mtime >= RECORD_TTL_MS),
+    ...fresh.slice(MAX_RECORDS),
+  ]
+  for (const record of prunedRecords) {
     try {
-      fs.unlinkSync(path.join(dir, stale.name))
+      fs.unlinkSync(path.join(dir, record.name))
+    } catch {
+      // Already gone; pruning is best-effort.
+    }
+    removeTestList(dir, record.name.slice(0, -'.json'.length))
+  }
+  // Orphaned lists (D7 "Interrupted writing"): the writer renamed its list
+  // and died before the record. One younger than the grace may still be
+  // mid-write; an older one has no writer coming.
+  for (const name of names) {
+    const match = LIST_NAME.exec(name)
+    if (!match || recordNames.has(`${match[1]}.json`)) continue
+    const absolute = path.join(dir, name)
+    let mtime: number
+    try {
+      mtime = fs.statSync(absolute).mtimeMs
+    } catch {
+      continue // Vanished between readdir and stat.
+    }
+    if (now - mtime < LIST_ORPHAN_GRACE_MS) continue
+    try {
+      fs.unlinkSync(absolute)
     } catch {
       // Already gone; pruning is best-effort.
     }
   }
-  for (const old of fresh.slice(MAX_RECORDS)) {
-    try {
-      fs.unlinkSync(path.join(dir, old.name))
-    } catch {
-      // Already gone; pruning is best-effort.
-    }
+  // D7's thinning (K2 case 3): the kept records beyond the newest
+  // MAX_KEPT_LISTS lose only their lists — the pass stays recorded, and its
+  // stale `tests` pointer reads as a missing list upstream (run unknown).
+  // fresh is mtime-descending, the same order the count cap keeps.
+  for (const record of fresh.slice(MAX_KEPT_LISTS, MAX_RECORDS)) {
+    removeTestList(dir, record.name.slice(0, -'.json'.length))
   }
 }

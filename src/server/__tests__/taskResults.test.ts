@@ -123,6 +123,32 @@ test('task_submit_result binds the calling session and round-trips; it registers
   expect(TEAM_ALLOWED_TOOLS).toContain('mcp__kawai-team__task_submit_result')
 })
 
+// Agents read the checks (independent-verification D12, task 2.5): task_get's
+// detail carries each result's newest check and the count of earlier ones.
+// @covers: task-results › Checks and coverage maps are kept and read with their results › Agents read the checks
+test('task_get carries each result its newest check and earlier count: unchecked reads null and 0, a settled recheck becomes the newest with earlier 1', async () => {
+  const task = await tasks.create(agent('lead'), { title: 'Read', direction: 'v1' })
+  // A result written without a check row (an older server's) reads unchecked.
+  const bare = tasks.store.results.insert({ teamId: team.teamId, taskId: task.id, summary: 'Old', commit: 'abc123', diff: null,
+    worktree: null, tests: [], limitations: null, taskRevision: task.revision, submittedBy: { kind: 'agent', sessionId: 'dev' } })
+  const result = await results.submit(agent('dev'), task.id, submission)
+  const viewsOf = async () => ((await taskHandlers(tasks, 'dev', results).task_get({ task_id: task.id })).results as
+    Array<{ id: string; checks: { newest: { id: string; status: string } | null; earlier: number } }>)
+  const view = (rows: Awaited<ReturnType<typeof viewsOf>>, id: string) => rows.find(row => row.id === id)!.checks
+  // The bare result: nothing recorded. The submitted one: its pending row is the newest.
+  let rows = await viewsOf()
+  expect(view(rows, result.id)).toMatchObject({ newest: { status: 'pending', trigger: 'submit' }, earlier: 0 })
+  expect(view(rows, bare.id)).toEqual({ newest: null, earlier: 0 })
+  // After a settled submit check and a settled recheck: the recheck is the newest, one earlier beside it.
+  const checks = tasks.store.checks
+  checks.settle(checks.pendingForResult(result.id)!.id, 'done', '{}', null)
+  const rechecked = await taskHandlers(tasks, 'dev', results).task_check_result!({ task_id: task.id, result_id: result.id }) as { id: string }
+  checks.settle(rechecked.id, 'done', '{}', null)
+  rows = await viewsOf()
+  expect(view(rows, result.id).newest).toMatchObject({ id: rechecked.id, status: 'done' })
+  expect(view(rows, result.id).earlier).toBe(1)
+})
+
 // Findings (4.1/4.2, D4): bound to the examined result, never inherited.
 test('findings attach to the named result with author and verdict; a newer result has none until its own are submitted', async () => {
   const task = await tasks.create(agent('lead'), { title: 'Export', direction: 'v1' })

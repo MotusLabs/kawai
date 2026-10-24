@@ -1,7 +1,12 @@
 // Interactive pending requests are authoritative server snapshots/events.
-import { useState } from 'react'
+// A question with a standing auto-answer deadline shows what will be chosen
+// and when, offers Wait for me, and holds the deadline on the form's first
+// edit so the timeout never overrides an unsubmitted answer (D4/D6).
+import { useRef, useState } from 'react'
 import type { ChatPendingRequest, ChatQuestionAnswer } from '@shared/chat'
 import type { SendClientMessage } from '@shared/types'
+import { autoAnswerChoiceLabels, formatCountdown } from './autoAnswerLabels'
+import { useTickingClock } from './chatElapsed'
 
 function QuestionForm({ request, sessionId, sendMessage, disabled }: {
   request: Extract<ChatPendingRequest, { kind: 'question' }>
@@ -10,7 +15,21 @@ function QuestionForm({ request, sessionId, sendMessage, disabled }: {
   disabled: boolean
 }) {
   const [answers, setAnswers] = useState<Record<string, ChatQuestionAnswer>>({})
-  const update = (question: string, answer: ChatQuestionAnswer) => setAnswers(current => ({ ...current, [question]: answer }))
+  // One hold per form, sent on the first edit while a deadline stands (D4);
+  // once sent — or when no deadline ever stood — later edits are ordinary.
+  const holdSent = useRef(false)
+  const update = (question: string, answer: ChatQuestionAnswer) => {
+    if (!holdSent.current) {
+      holdSent.current = true
+      if (request.autoAnswer) {
+        sendMessage({ type: 'chat-question-hold', sessionId, requestId: request.requestId })
+      }
+    }
+    setAnswers(current => ({ ...current, [question]: answer }))
+  }
+  // The countdown ticks on the client clock while the deadline stands; the
+  // server's timer decides, so 0:00 just waits for the resolution (D6).
+  const now = useTickingClock(request.autoAnswer !== undefined)
   return <form className="space-y-3 border border-border bg-elevated p-4" onSubmit={event => {
     event.preventDefault()
     sendMessage({ type: 'chat-answer', sessionId, requestId: request.requestId, answers })
@@ -44,6 +63,15 @@ function QuestionForm({ request, sessionId, sendMessage, disabled }: {
         </div>
       </fieldset>
     })}
+    {request.autoAnswer && <div className="flex items-center gap-3" data-testid="auto-answer-deadline">
+      <p className="text-chat-meta text-secondary" data-testid="auto-answer-countdown">
+        Will choose {autoAnswerChoiceLabels(request.autoAnswer.answers)} in {formatCountdown(request.autoAnswer.at, now)}
+      </p>
+      <button type="button" className="btn text-chat-meta" disabled={disabled}
+        onClick={() => sendMessage({ type: 'chat-question-hold', sessionId, requestId: request.requestId })}>
+        Wait for me
+      </button>
+    </div>}
     <button className="btn btn-primary text-chat-meta" disabled={disabled || request.questions.some(question => {
       const answer = answers[question.question]
       return !answer?.text?.trim() && !answer?.options?.length

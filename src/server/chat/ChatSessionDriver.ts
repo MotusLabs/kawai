@@ -49,8 +49,10 @@ import type { SessionStatus } from '../../shared/types'
 import {
   ASK_USER_QUESTION_TOOL,
   parseQuestions,
+  recommendedAnswers,
   toolResultText,
 } from './contentBlocks'
+import { realTimerScheduler, type ChatTimerScheduler } from './timerScheduler'
 import {
   activityBody,
   contentBlockToInput,
@@ -172,6 +174,19 @@ export interface ChatSessionDriverOptions extends ChatDriverCallbacks {
    * Omitted = manual (today's behavior).
    */
   getApprovalPolicy?: () => ChatApprovalPolicy
+  /**
+   * The question auto-answer wait in milliseconds, read once per question
+   * when it is asked (question-auto-answer D2); 0 or omitted = off. A
+   * deadline is set only when every question of the request marks a
+   * recommended option. The manager supplies this for Claude chats only —
+   * never for Codex (design QA-U4).
+   */
+  getQuestionAutoAnswerMs?: () => number
+  /**
+   * Timer seam behind the auto-answer deadline (question-auto-answer D2).
+   * Defaults to real timers; tests advance a manual clock by hand.
+   */
+  timerScheduler?: ChatTimerScheduler
   /** Persisted session profile; omitted for legacy Default sessions. */
   claudeProfileId?: string
   /**
@@ -239,6 +254,15 @@ interface PendingRequest {
   at: string
   settled: boolean
   settle: (result: PermissionResult) => void
+  /**
+   * The auto-answer deadline (question-auto-answer D2), present only while
+   * one stands: when it fires, what it answers, the wait it came from, and
+   * the scheduler handle every settlement path clears first.
+   */
+  autoAnswerAt?: string
+  autoAnswers?: Record<string, ChatQuestionAnswer>
+  waitMs?: number
+  autoAnswerTimer?: unknown
 }
 
 /** Omit that distributes over the ChatEvent union, keeping each member's type. */
@@ -249,6 +273,8 @@ type ChatEventDraft = DistributiveOmit<ChatEvent, 'id' | 'sequence' | 'at'>
 
 export class ChatSessionDriver implements ChatAgentDriver {
   private readonly options: ChatSessionDriverOptions
+  /** Timer seam behind the auto-answer deadline (question-auto-answer D2). */
+  private readonly scheduler: ChatTimerScheduler
   private readonly queue = new TurnQueue()
   /** Slash-command list state; this driver is its only feeder (design D2). */
   private commands = new ChatCommandTracker()
@@ -335,6 +361,7 @@ export class ChatSessionDriver implements ChatAgentDriver {
 
   constructor(options: ChatSessionDriverOptions) {
     this.options = options
+    this.scheduler = options.timerScheduler ?? realTimerScheduler
     this.commands = new ChatCommandTracker(options.onCommandState)
     this.claudeExecutablePath = options.claudeExecutablePath
     this.sessionProjectPath = options.projectPath
@@ -661,6 +688,8 @@ export class ChatSessionDriver implements ChatAgentDriver {
       return validated
     }
     this.pendingRequests.delete(requestId)
+    // First answer wins (QA-U3): the deadline dies with this settlement.
+    this.clearAutoAnswerTimer(pending)
     pending.settled = true
     pending.settle({
       behavior: 'allow',
@@ -674,6 +703,36 @@ export class ChatSessionDriver implements ChatAgentDriver {
     })
     this.emit({ type: 'request_resolved', requestId, outcome: 'answered', decidedBy: 'user' })
     this.refreshStatus()
+    return { ok: true }
+  }
+
+  /**
+   * Hold a question's deadline (question-auto-answer D4, Wait for me): the
+   * question waits for the user and is never answered automatically. Refused
+   * unless the request is a pending question whose deadline still stands; a
+   * hold drops the whole deadline — the timer and every `autoAnswer` field —
+   * because the stale-settlement guard reads `autoAnswerAt` (advisor C2 D),
+   * and emits `question_auto_answer_held` so clients drop the countdown.
+   */
+  holdQuestion(requestId: string): { ok: true } | { ok: false; error: string } {
+    const pending = this.pendingRequests.get(requestId)
+    if (!pending || pending.settled) {
+      return {
+        ok: false,
+        error: `No pending question with id ${requestId}; it may already be answered or cancelled`,
+      }
+    }
+    if (pending.kind !== 'question' || !pending.questions) {
+      return { ok: false, error: `Request ${requestId} is not a question` }
+    }
+    if (!pending.autoAnswerAt) {
+      return { ok: false, error: `Request ${requestId} has no auto-answer deadline to hold` }
+    }
+    this.clearAutoAnswerTimer(pending)
+    pending.autoAnswerAt = undefined
+    pending.autoAnswers = undefined
+    pending.waitMs = undefined
+    this.emit({ type: 'question_auto_answer_held', requestId })
     return { ok: true }
   }
 
@@ -693,6 +752,9 @@ export class ChatSessionDriver implements ChatAgentDriver {
             requestId: pending.requestId,
             questions: pending.questions ?? [],
             at: pending.at,
+            ...(pending.autoAnswerAt && pending.autoAnswers
+              ? { autoAnswer: { at: pending.autoAnswerAt, answers: pending.autoAnswers } }
+              : {}),
           }
     )
   }
@@ -1447,12 +1509,18 @@ export class ChatSessionDriver implements ChatAgentDriver {
         if (questions) {
           pending.kind = 'question'
           pending.questions = questions
+          // Register before arming, so a settlement timer can never observe
+          // an unregistered request (C2 follow-up E).
           this.pendingRequests.set(requestId, pending)
+          this.armQuestionAutoAnswer(pending)
           this.emit({
             type: 'question_request',
             turnId,
             requestId,
             questions,
+            ...(pending.autoAnswerAt && pending.autoAnswers
+              ? { autoAnswer: { at: pending.autoAnswerAt, answers: pending.autoAnswers } }
+              : {}),
           })
           this.refreshStatus()
           return
@@ -1506,6 +1574,9 @@ export class ChatSessionDriver implements ChatAgentDriver {
     const pending = this.pendingRequests.get(requestId)
     if (!pending || pending.settled) return
     this.pendingRequests.delete(requestId)
+    // Interrupt, kill, shutdown, markDead, and the SDK abort all funnel
+    // through here: the deadline dies with the cancellation (QA-5–QA-7).
+    this.clearAutoAnswerTimer(pending)
     pending.settled = true
     pending.settle({
       behavior: 'deny',
@@ -1520,6 +1591,83 @@ export class ChatSessionDriver implements ChatAgentDriver {
     for (const requestId of Array.from(this.pendingRequests.keys())) {
       this.cancelRequest(requestId, reason)
     }
+  }
+
+  /**
+   * The auto-answer deadline (question-auto-answer D2): the wait is read
+   * once, here, when the question is asked. A deadline exists only when
+   * every question of the request marks a recommended option and the wait
+   * is positive (QA-P3) — the same `recommendedAnswers` derivation the
+   * shown payload reads.
+   */
+  private armQuestionAutoAnswer(pending: PendingRequest): void {
+    // No deadline after a teardown began (advisor C1 #3): markDead reuses
+    // this object, so a callback arriving after cancelAllRequests could
+    // otherwise arm a deadline whose timer answers post-kill.
+    if (this.killed || this.dead) return
+    const waitMs = this.options.getQuestionAutoAnswerMs?.() ?? 0
+    const answers = pending.questions ? recommendedAnswers(pending.questions) : null
+    // QA-P3: a deadline exists only for a full recommendation and a positive
+    // finite wait (NaN compares false against 0, so it is excluded too).
+    if (!answers || !Number.isFinite(waitMs) || waitMs <= 0) return
+    pending.autoAnswers = answers
+    pending.waitMs = waitMs
+    pending.autoAnswerAt = new Date(Date.parse(pending.at) + waitMs).toISOString()
+    pending.autoAnswerTimer = this.scheduler.schedule(waitMs, () => {
+      this.settleByAutoAnswer(pending)
+    })
+  }
+
+  /** Cancel a deadline's timer handle; every settlement path calls this first. */
+  private clearAutoAnswerTimer(pending: PendingRequest): void {
+    if (pending.autoAnswerTimer === undefined) return
+    this.scheduler.cancel(pending.autoAnswerTimer)
+    pending.autoAnswerTimer = undefined
+  }
+
+  /**
+   * The deadline's settlement (question-auto-answer D2/D3): the same
+   * validation and resolution a user answer takes, so first-answer-wins,
+   * status, and client removal behave identically. A stale callback — one
+   * that fires after any other settlement, a hold, or a teardown began —
+   * is inert: the guard runs before anything else and the deadline fields
+   * must still stand (advisor C1 #2; QA-P1/QA-P2).
+   */
+  private settleByAutoAnswer(pending: PendingRequest): void {
+    if (
+      pending.settled ||
+      pending.kind !== 'question' ||
+      !pending.questions ||
+      !pending.autoAnswers ||
+      !pending.autoAnswerAt ||
+      this.killed ||
+      this.dead
+    ) {
+      return
+    }
+    const validated = validateAnswers(pending.questions, pending.autoAnswers)
+    // Unreachable for a deadline (the labels came verbatim from the
+    // questions), but a refusal consumes nothing: the request stays pending.
+    if (!validated.ok) return
+    this.pendingRequests.delete(pending.requestId)
+    pending.settled = true
+    pending.autoAnswerTimer = undefined
+    pending.settle({
+      behavior: 'allow',
+      updatedInput: {
+        ...pending.input,
+        answers: validated.answers,
+        response: `No answer from the user within ${Math.round(pending.waitMs! / 60000)} minute${Math.round(pending.waitMs! / 60000) === 1 ? '' : 's'}; the recommended option was selected automatically.`,
+      },
+    })
+    this.emit({
+      type: 'request_resolved',
+      requestId: pending.requestId,
+      outcome: 'answered',
+      decidedBy: 'timeout',
+      answers: validated.answers,
+    })
+    this.refreshStatus()
   }
 
   private refreshStatus(): void {

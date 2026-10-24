@@ -22,6 +22,7 @@ import ChatTaskRow from './ChatTaskRow'
 import ChatWorkerRow from './ChatWorkerRow'
 import ParticipantName from './ParticipantName'
 import { toolCallDetail } from './toolCallLabel'
+import { timeoutAnswerLabels } from './autoAnswerLabels'
 import { isVisibleEntry, layoutRows, toolEntries } from './transcriptLayout'
 import { chatDayKey } from '../../utils/chatTimeFormat'
 
@@ -220,10 +221,16 @@ function ChatMessagesView({ events, projectPath, sessionId, sendMessage, connect
       case 'error': return <p key={event.id} data-anchor-id={event.id} role="alert" className="text-chat-body text-chat-danger">{event.message}</p>
       case 'turn_interrupted': return <p key={event.id} className="text-chat-meta text-secondary">Turn stopped</p>
       case 'request_resolved': {
-        // Who decided: policy grants stand apart from the user's own calls.
+        // Who decided: policy grants, the auto-answer deadline, and the
+        // user's own calls each render apart (question-auto-answer D6).
         if (event.decidedBy === 'policy') {
           return <p key={event.id} className="text-chat-meta text-secondary" data-testid="auto-approved">
             Auto-approved {event.tool ?? 'tool'}
+          </p>
+        }
+        if (event.decidedBy === 'timeout') {
+          return <p key={event.id} className="text-chat-meta text-secondary" data-testid="auto-answered">
+            Answered automatically: {timeoutAnswerLabels(event.answers ?? {})}
           </p>
         }
         if (event.decidedBy === 'user' && (event.outcome === 'allowed' || event.outcome === 'denied')) {
@@ -233,6 +240,10 @@ function ChatMessagesView({ events, projectPath, sessionId, sendMessage, connect
         }
         return <p key={event.id} className="text-chat-meta text-secondary">Request {event.outcome}</p>
       }
+      case 'question_auto_answer_held':
+        // Wait for me, or the form's first edit: the deadline is gone and
+        // the question waits for the user (D4).
+        return <p key={event.id} className="text-chat-meta text-secondary" data-testid="auto-answer-held">Auto-answer held</p>
       case 'turn_completed': return <p key={event.id} className="text-chat-meta text-muted">
         Turn complete · {event.subtype}<TurnCost estimate={event.totalCostUsd} provider={event.providerCostUsd} />
         {event.numTurns !== undefined ? ` · ${event.numTurns} turns` : ''}

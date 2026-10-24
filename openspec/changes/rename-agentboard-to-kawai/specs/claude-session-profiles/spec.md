@@ -1,14 +1,22 @@
 ## MODIFIED Requirements
 
 ### Requirement: Users select a predefined chat profile
-The system SHALL offer the profiles resolved from the catalog files for the session's project path when creating a Claude chat session. The selection SHALL apply to the created session and remain visible in its chat view. Omitted selections SHALL use Default. Terminal session creation SHALL retain its existing behavior.
+The system SHALL offer the profiles resolved from the catalog files for the session's project path, grouped under their providers, when creating a chat session, Claude and Codex profiles alike, each identified by its runtime. The selection SHALL apply to the created session, and its chat view SHALL identify the session's provider and profile. Omitted selections SHALL use Default. Terminal session creation SHALL retain its existing behavior.
 
 #### Scenario: Select a provider profile
 - **WHEN** a user creates a chat session with MiMo selected from the resolved catalog
 - **THEN** the session is created with MiMo as its profile and the chat view identifies it as MiMo
 
+#### Scenario: Models are grouped by provider
+- **WHEN** the resolved catalog's provider Z.AI holds models GLM and GLM Flash
+- **THEN** the picker lists both under Z.AI, and a session created on GLM Flash is identified by Z.AI and GLM Flash
+
+#### Scenario: Select a Codex profile
+- **WHEN** a user creates a chat session with a Codex profile selected
+- **THEN** the session is created as a Codex chat and the picker and chat view identify its profile as Codex
+
 #### Scenario: Project-level catalog extends the picker
-- **WHEN** a `.kawai/profiles.json` in the session's project path (or a directory above it) defines an additional profile
+- **WHEN** a `.kawai/profiles.json` or `.kawai/providers.json` in the session's project path (or a directory above it) defines an additional model
 - **THEN** the picker for that project path offers it alongside the inherited catalog, and project paths without that file do not
 
 #### Scenario: Older client omits the profile
@@ -17,7 +25,7 @@ The system SHALL offer the profiles resolved from the catalog files for the sess
 
 #### Scenario: Catalog loading fails
 - **WHEN** the profile list cannot be loaded for the selected project path
-- **THEN** the form reports the failure and does not silently replace a selected provider with Default
+- **THEN** the form reports the failure and does not silently replace a selected runtime with Default
 
 ### Requirement: Named profiles configure independent provider sessions
 Each named profile SHALL apply its predefined environment configuration to its agent session without changing the backend environment or other sessions. The session's environment SHALL be the backend environment merged with the effective global provider overrides, with profile settings taking precedence over conflicting user, project, or local Claude settings for the profile-controlled variables.

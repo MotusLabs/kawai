@@ -45,6 +45,7 @@ export function planRun(input: {
   mainLabel: string
   seedText: string | null
   seedTimings: (seedText: string | null) => string | null
+  junitReportDir?: string
 }): RunPlan {
   const fullRun = input.args.fileArgs.length === 0 && !hasTestNameFilter(input.args.passthrough)
   const timingsPath = fullRun ? input.seedTimings(input.seedText) : null
@@ -66,6 +67,10 @@ export function planRun(input: {
       mainLabel: input.mainLabel,
       timingsPath: timingsPath ?? undefined,
       updateTimings: timingsPath !== null,
+      // Per-batch JUnit reports ride only when a full check asked for them
+      // (independent-verification D7); the runner passes the directory
+      // through untouched.
+      junitReportDir: input.junitReportDir,
     },
     fullRun,
   }

@@ -8,6 +8,7 @@
 // @reads: AGENTS.md, docs/**
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { indexTreeRecorded } from '../pre-commit'
 import { createHookRepo, type HookRepo } from './helpers/hookRepo'
@@ -71,6 +72,27 @@ describe('the commit hook in a temporary repository', () => {
     const result = fixture.commit(['-m', 'broken leaf'])
     expect(result.code).not.toBe(0)
     expect(fixture.git(['rev-parse', 'HEAD'])).toBe(head)
+  })
+
+  test('a hook run inside a full check keeps its own report (nested KAWAI_TEST_JUNIT_DIR)', () => {
+    // The suite a full check runs carries KAWAI_TEST_JUNIT_DIR; a hook the
+    // suite spawns must still count from its own report, not lose it to the
+    // check's directory (bun test takes the last --reporter-outfile).
+    const nested = fs.mkdtempSync(path.join(os.tmpdir(), 'nested-junit-'))
+    const previous = process.env.KAWAI_TEST_JUNIT_DIR
+    process.env.KAWAI_TEST_JUNIT_DIR = nested
+    try {
+      stage('src/shared/leaf.ts', 'export const leaf = 1 // nested\n')
+      const result = fixture.commit(['-m', 'leaf nested'])
+      expect(result.code).toBe(0)
+      expect(result.output).toContain('ran 1 test file(s) (declaration: 0, changed: 1)')
+      // The runner wrote nothing into the check's report directory.
+      expect(fs.existsSync(nested) ? fs.readdirSync(nested) : []).toEqual([])
+    } finally {
+      if (previous === undefined) delete process.env.KAWAI_TEST_JUNIT_DIR
+      else process.env.KAWAI_TEST_JUNIT_DIR = previous
+      fs.rmSync(nested, { recursive: true, force: true })
+    }
   })
 
   test('an escape path runs the full check, which records the tree (I3)', () => {

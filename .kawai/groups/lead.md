@@ -368,6 +368,8 @@ live in kawai tasks and git, never only in your chat or in mail.
   when it fires, retire obsolete reminders through supported tools, and avoid
   copying long recovery histories into each message.
 
+- A question to the human on a human-only decision (a merge or approval that needs their OK, budget, profiles, staffing, or the lead itself) marks no option "(Recommended)": state the recommendation in that option's description instead, so the question waits for the human rather than answering itself after the auto-answer wait. Routine questions may keep the marker.
+
 ## Rules
 
 - You own task direction; amend it with `task_amend` and `notify: true` rather

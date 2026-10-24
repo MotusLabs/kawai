@@ -200,6 +200,10 @@ export function createHarness(
     claudeExecutablePath?: string
     getProviderEnv?: () => Record<string, string>
     getApprovalPolicy?: () => ChatApprovalPolicy
+    /** The question auto-answer wait, ms, read once per question (question-auto-answer D2). */
+    getQuestionAutoAnswerMs?: () => number
+    /** Timer seam behind the auto-answer deadline; a manual clock in tests. */
+    timerScheduler?: import('../../chat/timerScheduler').ChatTimerScheduler
     teamMcpServer?: NonNullable<Options['mcpServers']>[string]
     getSystemPromptAppend?: () => string | undefined
     getEffort?: () => Options['effort']

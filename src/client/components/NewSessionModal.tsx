@@ -1,4 +1,4 @@
-// New-session dialog: project/worktree/branch selection, agent and Claude
+// New-session dialog: project/worktree/branch selection, agent and chat
 // profile choice, and per-session approval policy.
 import { useClaudeProfiles } from './chat/useClaudeProfiles'
 import { capWarning, useTeamGroups } from './chat/useTeamGroups'
@@ -37,7 +37,7 @@ type StartWithValue = AutoStartAgent | 'none'
 /**
  * The session kind a fresh open preselects. A change-section launch exists to
  * offer the terminal-only first-prompt ("Start with") selector, so that entry
- * point keeps Terminal; every other open defaults to Claude chat. Recalculated
+ * point keeps Terminal; every other open defaults to chat. Recalculated
  * on every open rather than remembered, so the previous open's choice never
  * leaks into the next one.
  */
@@ -546,7 +546,7 @@ export default function NewSessionModal({
             <select ref={kindSelectRef} aria-label="Session kind" className="input mt-1.5" value={kind}
               onChange={event => setKind(event.target.value as 'terminal' | 'chat')}>
               <option value="terminal">Terminal</option>
-              <option value="chat">Claude chat</option>
+              <option value="chat">Chat</option>
             </select>
           </label>
           {kind === 'chat' && <div>

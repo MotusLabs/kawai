@@ -1,11 +1,24 @@
 // Server-level messages: host status, config, update state, and the
 // error/terminal banners.
 import { useSessionStore } from '../stores/sessionStore'
+import { useSettingsStore } from '../stores/settingsStore'
 import { useUpdateStore } from '../stores/updateStore'
 import { consumeSendAnswer } from '../stores/pendingSendRecovery'
 import { setClientLogLevel } from '../utils/clientLog'
 import type { ServerMessage } from '@shared/types'
 import type { MessageRouterDeps } from './types'
+
+/**
+ * The server's question auto-answer wait changed (question-auto-answer D5):
+ * the settings store follows, so an open Settings dialog updates live and a
+ * bad value is ignored by the setter's validation.
+ */
+export function handleQuestionAutoAnswerChanged(
+  message: Extract<ServerMessage, { type: 'question-auto-answer-changed' }>,
+  _deps: MessageRouterDeps
+): void {
+  useSettingsStore.getState().setQuestionAutoAnswerMinutes(message.minutes)
+}
 
 export function handleHostStatus(
   message: Extract<ServerMessage, { type: 'host-status' }>,
