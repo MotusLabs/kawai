@@ -337,6 +337,7 @@ describe('recordsForTree', () => {
   })
 
   test('an empty or missing record directory returns no records', () => {
+    fs.mkdirSync(dir, { recursive: true }) // existing and empty, not merely absent
     expect(recordsForTree(dir, 'tree-t', NOW)).toEqual([])
     expect(recordsForTree(path.join(dir, 'not-there'), 'tree-t', NOW)).toEqual([])
   })
