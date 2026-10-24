@@ -2,10 +2,13 @@
 // (ChatSessionDriver) and transcript replay (transcriptReplay). SDK-specific
 // types stay out of here: these helpers only read the JSON shapes the CLI
 // writes to transcripts and the SDK streams as messages.
-import type { ChatQuestion } from '../../shared/chat'
+import type { ChatQuestion, ChatQuestionAnswer } from '../../shared/chat'
 
 const ASK_USER_QUESTION_TOOL = 'AskUserQuestion'
 export { ASK_USER_QUESTION_TOOL }
+
+/** Claude Code's AskUserQuestion convention: the recommendation is the label suffix. */
+const RECOMMENDED_MARKER = /\(recommended\)\s*$/i
 
 /** Flatten a tool_result content value into display text. */
 export function toolResultText(content: unknown): string {
@@ -62,4 +65,28 @@ export function parseQuestions(
     })
   }
   return questions
+}
+
+/**
+ * The recommended answers of a parsed AskUserQuestion request, or null when
+ * any question lacks one (question-auto-answer D1): a deadline exists only
+ * when every question marks an option whose label ends with `(Recommended)`
+ * (case-insensitive, trailing whitespace allowed). Single-select takes the
+ * first match, multi-select every match; labels are returned verbatim so
+ * `validateAnswers` accepts them.
+ */
+export function recommendedAnswers(
+  questions: ChatQuestion[]
+): Record<string, ChatQuestionAnswer> | null {
+  const answers: Record<string, ChatQuestionAnswer> = {}
+  for (const question of questions) {
+    const recommended = question.options
+      .filter((option) => RECOMMENDED_MARKER.test(option.label))
+      .map((option) => option.label)
+    if (recommended.length === 0) return null
+    answers[question.question] = question.multiSelect
+      ? { options: recommended }
+      : { options: [recommended[0]!] }
+  }
+  return answers
 }

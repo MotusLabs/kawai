@@ -10,8 +10,12 @@ import { TmuxTimeoutError } from '../tmuxTimeout'
 import {
   HISTORY_MAX_AGE_MIN_HOURS,
   HISTORY_MAX_AGE_MAX_HOURS,
+  QUESTION_AUTO_ANSWER_MIN_MINUTES,
+  QUESTION_AUTO_ANSWER_MAX_MINUTES,
+  QUESTION_AUTO_ANSWER_DEFAULT_MINUTES,
   type ServerMessage,
 } from '../../shared/types'
+import { parseQuestionAutoAnswerMinutes } from '../../shared/chatQuestionAutoAnswer'
 import type { initDatabase } from '../db'
 import type { SessionManager } from '../SessionManager'
 import type { SessionRefreshLoop } from '../refresh/SessionRefreshLoop'
@@ -24,6 +28,7 @@ const TMUX_MOUSE_MODE_KEY = 'tmux_mouse_mode'
 const HISTORY_MAX_AGE_HOURS_KEY = 'inactive_max_age_hours'
 const PREFER_WINDOW_NAME_KEY = 'prefer_window_name'
 const TERMINAL_COLORS_ENABLED_KEY = 'terminal_colors_enabled'
+const QUESTION_AUTO_ANSWER_MINUTES_KEY = 'question_auto_answer_minutes'
 
 /** Stored booleans are the strings 'true'/'false'; null when never saved. */
 function readStoredBoolean(db: SessionDatabase, key: string): boolean | null {
@@ -36,6 +41,8 @@ export interface StoredSettings {
   initialMouseMode: boolean
   /** Starting runtime history max age, in hours. */
   historyMaxAgeHours: number
+  /** Starting auto-answer wait for recommended questions, in minutes. */
+  questionAutoAnswerMinutes: number
 }
 
 /**
@@ -56,6 +63,20 @@ export function loadStoredSettings(db: SessionDatabase): StoredSettings {
     historyMaxAgeHours = 24
   }
 
+  // Question auto-answer wait (default: 5; 0 disables the deadline). A stored
+  // value that fails today's validation reads as the default, like history's.
+  const storedQuestionAutoAnswerMinutes = db.getAppSetting(QUESTION_AUTO_ANSWER_MINUTES_KEY)
+  let questionAutoAnswerMinutes = storedQuestionAutoAnswerMinutes !== null
+    ? Number(storedQuestionAutoAnswerMinutes)
+    : QUESTION_AUTO_ANSWER_DEFAULT_MINUTES
+  if (
+    !Number.isInteger(questionAutoAnswerMinutes) ||
+    questionAutoAnswerMinutes < QUESTION_AUTO_ANSWER_MIN_MINUTES ||
+    questionAutoAnswerMinutes > QUESTION_AUTO_ANSWER_MAX_MINUTES
+  ) {
+    questionAutoAnswerMinutes = QUESTION_AUTO_ANSWER_DEFAULT_MINUTES
+  }
+
   // Prefer window name: AGENTBOARD_PREFER_WINDOW_NAME (already folded into
   // config) is only the initial default.
   const preferWindowName = readStoredBoolean(db, PREFER_WINDOW_NAME_KEY)
@@ -70,7 +91,7 @@ export function loadStoredSettings(db: SessionDatabase): StoredSettings {
     config.terminalColorsEnabled = terminalColorsEnabled
   }
 
-  return { initialMouseMode, historyMaxAgeHours }
+  return { initialMouseMode, historyMaxAgeHours, questionAutoAnswerMinutes }
 }
 
 export interface SettingsRouteDeps {
@@ -80,10 +101,12 @@ export interface SettingsRouteDeps {
   broadcast: (message: ServerMessage) => void
   /** Runtime history max age, shared with the refresh loop. */
   historyMaxAgeHours: { get: () => number; set: (hours: number) => void }
+  /** Runtime question auto-answer wait in minutes, shared with the chat manager. */
+  questionAutoAnswerMinutes: { get: () => number; set: (minutes: number) => void }
 }
 
 export function createSettingsRoutes(deps: SettingsRouteDeps) {
-  const { db, sessionManager, refresh, broadcast, historyMaxAgeHours } = deps
+  const { db, sessionManager, refresh, broadcast, historyMaxAgeHours, questionAutoAnswerMinutes } = deps
   const routes = new Hono()
 
   // Tmux mouse mode setting
@@ -260,6 +283,39 @@ export function createSettingsRoutes(deps: SettingsRouteDeps) {
   routes.put('/history-max-age-hours', putHistoryMaxAgeHours)
   routes.get('/inactive-max-age-hours', getHistoryMaxAgeHours)
   routes.put('/inactive-max-age-hours', putHistoryMaxAgeHours)
+
+  // Question auto-answer wait (question-auto-answer D5): the deadline a fully
+  // recommended question gets, in whole minutes; 0 disables. Persist-then-
+  // apply: a failed persist leaves the runtime value untouched, so it never
+  // diverges from what a restart will read.
+  routes.get('/question-auto-answer', (c) => {
+    return c.json({ minutes: questionAutoAnswerMinutes.get() })
+  })
+
+  routes.put('/question-auto-answer', async (c) => {
+    let body: { minutes?: unknown }
+    try {
+      body = await c.req.json()
+    } catch {
+      return c.json({ error: 'Invalid request body' }, 400)
+    }
+    const parsed = parseQuestionAutoAnswerMinutes(body.minutes)
+    if (!parsed.valid) {
+      return c.json({ error: parsed.error }, 400)
+    }
+    const minutes = parsed.minutes
+    try {
+      db.setAppSetting(QUESTION_AUTO_ANSWER_MINUTES_KEY, String(minutes))
+    } catch (error) {
+      logger.warn('question_auto_answer_minutes_persist_failed', {
+        message: error instanceof Error ? error.message : String(error),
+      })
+      return c.json({ error: 'Unable to persist question auto-answer wait' }, 500)
+    }
+    questionAutoAnswerMinutes.set(minutes)
+    broadcast({ type: 'question-auto-answer-changed', minutes })
+    return c.json({ minutes })
+  })
 
   return routes
 }

@@ -1,11 +1,13 @@
 // ChatSettings.tsx - the Chat tab of the Settings modal: the default approval
 // policy for new chat sessions (segmented, design D7), the Claude provider
-// environment settings, and the chat font size. Both drafts live in the modal
-// shell and commit on Save (design D5).
+// environment settings, the chat font size, and the server-persisted
+// question auto-answer wait. The drafts live in the modal shell and commit
+// on Save (design D5); the auto-answer wait saves itself.
 import type { Ref } from 'react'
 import type { ChatApprovalPolicy } from '@shared/types'
 import ChatProviderSettings, { type ChatProviderSettingsHandle } from '../ChatProviderSettings'
 import FontSizeStepper from '../FontSizeStepper'
+import QuestionAutoAnswerSetting from './QuestionAutoAnswerSetting'
 import {
   CHAT_FONT_SIZE_MIN,
   CHAT_FONT_SIZE_MAX,
@@ -105,6 +107,10 @@ export default function ChatSettings({
           onChange={onDraftChatFontSizeChange}
         />
       </div>
+
+      {/* The server-persisted question auto-answer wait saves itself with its
+          own control (question-auto-answer D5); it is not a modal draft. */}
+      <QuestionAutoAnswerSetting />
     </>
   )
 }

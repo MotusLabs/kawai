@@ -2,6 +2,11 @@
 export const HISTORY_MAX_AGE_MIN_HOURS = 1
 export const HISTORY_MAX_AGE_MAX_HOURS = 168 // 7 days
 
+// Question auto-answer wait limits (in whole minutes; 0 disables the deadline)
+export const QUESTION_AUTO_ANSWER_MIN_MINUTES = 0
+export const QUESTION_AUTO_ANSWER_MAX_MINUTES = 1440
+export const QUESTION_AUTO_ANSWER_DEFAULT_MINUTES = 5
+
 import type {
   MessageCursor,
   MessageQueryFilters,
@@ -306,6 +311,9 @@ export type ServerMessage =
       appMouse?: boolean
     }
   | { type: 'server-config'; remoteAllowControl: boolean; remoteAllowAttach: boolean; hostLabel: string; preferWindowName: boolean; clientLogLevel?: string }
+  // Question auto-answer wait changed (question-auto-answer D5): open
+  // Settings dialogs update to the new value.
+  | { type: 'question-auto-answer-changed'; minutes: number }
   // Update availability is additive too: older clients ignore it, and the
   // payload rides server-info for first paint and this push for changes.
   | { type: 'update-state'; update: UpdateState }
@@ -693,6 +701,13 @@ export type ClientMessage =
       requestId: string
       /** Answers keyed by question text (matches the SDK's answer map). */
       answers: Record<string, ChatQuestionAnswer>
+    }
+  // Hold a question's auto-answer deadline — Wait for me (question-auto-answer
+  // D4): the question waits for the user and never auto-answers.
+  | {
+      type: 'chat-question-hold'
+      sessionId: string
+      requestId: string
     }
   // Switches the session's approval policy live (chat-auto-approve-tools
   // design D4): manual/auto only, no agent restart.

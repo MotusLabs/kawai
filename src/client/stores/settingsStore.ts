@@ -5,17 +5,24 @@ import { create } from 'zustand'
 import { persist, createJSONStorage } from 'zustand/middleware'
 import type { ChatApprovalPolicy } from '@shared/types'
 import { parseApprovalPolicy } from '@shared/chat'
+import { parseQuestionAutoAnswerMinutes } from '@shared/chatQuestionAutoAnswer'
+import { QUESTION_AUTO_ANSWER_DEFAULT_MINUTES } from '@shared/types'
 import { safeStorage } from '../utils/storage'
+// The command-preset model and the localStorage migration live beside the
+// store in `settingsPresets.ts`; their public names are re-exported below so
+// existing importers keep their import paths.
+import {
+  DEFAULT_PRESETS,
+  DEFAULT_PROJECT_DIR,
+  MAX_PRESETS,
+  generatePresetId,
+  migratePersistedSettings,
+  normalizePreset,
+  resolveDefaultPresetId,
+  type CommandPreset,
+} from './settingsPresets'
 
-// Empty means "not set" — fall back to the server's default directory
-// (AGENTBOARD_PROJECT_DIR, else its working directory; both exposed via
-// /api/server-info) when pre-filling new sessions.
-const DEFAULT_PROJECT_DIR = ''
-// Pre-v7 hardcoded default; cleared during migration so the server
-// working directory takes over for anyone who never customized it.
-const LEGACY_DEFAULT_PROJECT_DIR = '~/Documents/GitHub'
 const DEFAULT_COMMAND = 'claude'
-const MAX_PRESETS = 50
 
 // WebGL renderer produces blurry text on Safari Retina (texture atlas DPR bug)
 const isSafariDesktop = typeof navigator !== 'undefined'
@@ -55,62 +62,6 @@ export function getFontFamily(fontOption: FontOption, customFontFamily: string):
 export type SessionSortMode = 'status' | 'created' | 'manual'
 export type SessionSortDirection = 'asc' | 'desc'
 export type ShortcutModifier = 'ctrl-option' | 'ctrl-shift' | 'cmd-option' | 'cmd-shift'
-
-// Command preset system
-export interface CommandPreset {
-  id: string
-  label: string
-  command: string
-  isBuiltIn: boolean
-  agentType?: 'claude' | 'codex' | 'pi'
-}
-
-export const DEFAULT_PRESETS: CommandPreset[] = [
-  { id: 'claude', label: 'Claude', command: 'claude', isBuiltIn: true, agentType: 'claude' },
-  { id: 'codex', label: 'Codex', command: 'codex', isBuiltIn: true, agentType: 'codex' },
-  { id: 'pi', label: 'Pi', command: 'pi', isBuiltIn: true, agentType: 'pi' },
-]
-
-// Validation and helper functions
-export function isValidPreset(p: unknown): p is CommandPreset {
-  if (typeof p !== 'object' || p === null) return false
-  const obj = p as Record<string, unknown>
-  return (
-    typeof obj.id === 'string' && obj.id.length >= 1 && obj.id.length <= 128 &&
-    typeof obj.label === 'string' && obj.label.trim().length >= 1 && obj.label.length <= 64 &&
-    typeof obj.command === 'string' && obj.command.trim().length >= 1 && obj.command.length <= 1024 &&
-    typeof obj.isBuiltIn === 'boolean' &&
-    (obj.agentType === undefined || obj.agentType === 'claude' || obj.agentType === 'codex' || obj.agentType === 'pi')
-  )
-}
-
-export function normalizePreset(p: CommandPreset): CommandPreset {
-  return {
-    ...p,
-    label: p.label.trim().slice(0, 64),
-    command: p.command.trim().slice(0, 1024),
-  }
-}
-
-export function getFullCommand(preset: CommandPreset): string {
-  return preset.command.trim()
-}
-
-export function generatePresetId(existing: Set<string>): string {
-  const maxAttempts = 100
-  for (let i = 0; i < maxAttempts; i++) {
-    const id = `custom-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
-    if (!existing.has(id)) return id
-  }
-  return `custom-${Date.now()}-${Math.random().toString(36).slice(2)}`
-}
-
-export function resolveDefaultPresetId(
-  presets: CommandPreset[],
-  currentId: string
-): string {
-  return presets.some(p => p.id === currentId) ? currentId : presets[0]?.id || 'claude'
-}
 
 // Sidebar width constraints
 const SIDEBAR_MIN_WIDTH = 180
@@ -172,6 +123,14 @@ interface SettingsState {
   /** Starting approval policy for new chat sessions; 'manual' unless saved as 'auto'. */
   defaultApprovalPolicy: ChatApprovalPolicy
   setDefaultApprovalPolicy: (policy: ChatApprovalPolicy) => void
+  /**
+   * The server's question auto-answer wait in minutes (question-auto-answer
+   * D5): a memory cache of `app_settings`, loaded from
+   * /api/settings/question-auto-answer and updated by its change broadcast.
+   * Never persisted here — the server's copy is the only truth.
+   */
+  questionAutoAnswerMinutes: number
+  setQuestionAutoAnswerMinutes: (minutes: unknown) => void
   lineHeight: number
   setLineHeight: (height: number) => void
   letterSpacing: number
@@ -252,6 +211,13 @@ export const useSettingsStore = create<SettingsState>()(
       defaultApprovalPolicy: 'manual',
       setDefaultApprovalPolicy: (policy) =>
         set({ defaultApprovalPolicy: parseApprovalPolicy(policy) }),
+      questionAutoAnswerMinutes: QUESTION_AUTO_ANSWER_DEFAULT_MINUTES,
+      setQuestionAutoAnswerMinutes: (minutes) => {
+        // A bad wire value never enters the store (QA-S4): the validated
+        // whole number of minutes is the only thing cached.
+        const parsed = parseQuestionAutoAnswerMinutes(minutes)
+        if (parsed.valid) set({ questionAutoAnswerMinutes: parsed.minutes })
+      },
       lineHeight: 1.0,
       setLineHeight: (height) => set({ lineHeight: Math.max(1.0, Math.min(2.0, height)) }),
       letterSpacing: 0,
@@ -337,6 +303,14 @@ export const useSettingsStore = create<SettingsState>()(
       name: 'agentboard-settings',
       storage: createJSONStorage(() => safeStorage),
       version: 7,
+      // The question auto-answer wait mirrors server state (question-auto-
+      // answer D5): only the running server's value is true, so it is never
+      // written to localStorage — a stale cached wait could disagree with
+      // what the server will actually do.
+      partialize: (state) => {
+        const { questionAutoAnswerMinutes: _value, setQuestionAutoAnswerMinutes: _set, ...persisted } = state
+        return persisted as SettingsState
+      },
       // Same shallow merge as the default, plus re-clamping of the pane
       // fractions and chat font size and re-sanitizing of the default
       // approval policy: a hand-edited or corrupt persisted value must not
@@ -357,129 +331,27 @@ export const useSettingsStore = create<SettingsState>()(
           defaultApprovalPolicy: parseApprovalPolicy(merged.defaultApprovalPolicy),
         }
       },
-      migrate: (persistedState: unknown, version: number) => {
-        const state = persistedState as Record<string, unknown>
-        // v7: drop the stale '~/Documents/GitHub' hardcoded default so the
-        // server's directory becomes the default again for users who never
-        // explicitly customized the setting.
-        if (version < 7 && state.defaultProjectDir === LEGACY_DEFAULT_PROJECT_DIR) {
-          state.defaultProjectDir = DEFAULT_PROJECT_DIR
-        }
-        if (
-          typeof state.historySessionsExpanded !== 'boolean' &&
-          typeof state.inactiveSessionsExpanded === 'boolean'
-        ) {
-          state.historySessionsExpanded = state.inactiveSessionsExpanded
-        }
-        if (
-          typeof state.hibernatingSessionsExpanded !== 'boolean' &&
-          typeof state.snoozedSessionsExpanded === 'boolean'
-        ) {
-          state.hibernatingSessionsExpanded = state.snoozedSessionsExpanded
-        }
-
-        // Helper to migrate old preset format (baseCommand+modifiers) to new (command)
-        const migrateOldPreset = (p: Record<string, unknown>): CommandPreset => {
-          // Check if already new format
-          if (typeof p.command === 'string') {
-            return p as unknown as CommandPreset
-          }
-          // Migrate from baseCommand+modifiers
-          const base = typeof p.baseCommand === 'string' ? p.baseCommand.trim() : ''
-          const mods = typeof p.modifiers === 'string' ? p.modifiers.trim() : ''
-          const command = mods ? `${base} ${mods}` : base
-          return {
-            id: p.id as string,
-            label: p.label as string,
-            command: command || 'claude',
-            isBuiltIn: p.isBuiltIn as boolean,
-            agentType: p.agentType as 'claude' | 'codex' | 'pi' | undefined,
-          }
-        }
-
-        if (version === 0 || !Array.isArray(state.commandPresets)) {
-          // Migrate from old defaultCommand to new preset system
-          const oldCmd = typeof state.defaultCommand === 'string'
-            ? state.defaultCommand
-            : 'claude'
-          const presets: CommandPreset[] = [...DEFAULT_PRESETS]
-          let defaultPresetId = 'claude'
-
-          if (oldCmd === 'codex') {
-            defaultPresetId = 'codex'
-          } else if (oldCmd !== 'claude') {
-            const existingIds = new Set(presets.map(p => p.id))
-            const customPreset: CommandPreset = {
-              id: generatePresetId(existingIds),
-              label: 'Migrated',
-              command: oldCmd,
-              isBuiltIn: false,
-            }
-            presets.push(customPreset)
-            defaultPresetId = customPreset.id
-          }
-
-          console.info('[agentboard:settings] Migrated from v0 to v2')
-          return {
-            ...state,
-            commandPresets: presets,
-            defaultPresetId,
-            defaultCommand: oldCmd,
-            recentPaths: [],
-          }
-        }
-
-        // Migrate v1 presets (baseCommand+modifiers) to v2 (single command)
-        const rawPresets = state.commandPresets as Record<string, unknown>[]
-        const migratedPresets = rawPresets.map(migrateOldPreset)
-
-        // Validate migrated presets
-        const validPresets = migratedPresets.filter(isValidPreset)
-        const hasBuiltIns = validPresets.some(p => p.id === 'claude') &&
-                           validPresets.some(p => p.id === 'codex')
-
-        if (!hasBuiltIns || validPresets.length === 0) {
-          console.warn('[agentboard:settings] Invalid presets, resetting to defaults')
-          return {
-            ...state,
-            commandPresets: DEFAULT_PRESETS,
-            defaultPresetId: 'claude',
-          }
-        }
-
-        // Trim to max if needed
-        const trimmedPresets = validPresets.length > MAX_PRESETS
-          ? [...validPresets.filter(p => p.isBuiltIn),
-             ...validPresets.filter(p => !p.isBuiltIn).slice(0, MAX_PRESETS - 2)]
-          : validPresets
-
-        // Ensure all built-in presets from DEFAULT_PRESETS are present
-        const existingIds = new Set(trimmedPresets.map(p => p.id))
-        const missingBuiltIns = DEFAULT_PRESETS.filter(p => p.isBuiltIn && !existingIds.has(p.id))
-        const finalPresets = [...trimmedPresets, ...missingBuiltIns]
-
-        if (version < 7) {
-          console.info(`[agentboard:settings] Migrated from v${version} to v7`)
-        }
-
-        return {
-          ...state,
-          commandPresets: finalPresets.map(normalizePreset),
-          defaultPresetId: resolveDefaultPresetId(
-            trimmedPresets,
-            state.defaultPresetId as string
-          ),
-        }
-      },
+      migrate: migratePersistedSettings,
     }
   )
 )
 
+export { DEFAULT_COMMAND }
+
 export {
   DEFAULT_PROJECT_DIR,
   LEGACY_DEFAULT_PROJECT_DIR,
-  DEFAULT_COMMAND,
   MAX_PRESETS,
+  DEFAULT_PRESETS,
+  isValidPreset,
+  normalizePreset,
+  getFullCommand,
+  generatePresetId,
+  resolveDefaultPresetId,
+} from './settingsPresets'
+export type { CommandPreset } from './settingsPresets'
+
+export {
   SIDEBAR_MIN_WIDTH,
   SIDEBAR_MAX_WIDTH,
   SIDEBAR_DEFAULT_WIDTH,

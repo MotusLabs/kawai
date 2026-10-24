@@ -8,6 +8,21 @@
 import type { ChatPeerTaskContext, RevisionNotice } from './teamTasks'
 import type { ChatHandoffPackage } from './team'
 import type { WorkspaceMessageContext } from './planWorkspace'
+import type {
+  ChatQuestionAutoAnswer,
+  ChatQuestionAutoAnswerHeldEvent,
+  ChatRequestDecidedByTimeout,
+  ChatRequestTimeoutAnswers,
+} from './chatQuestionAutoAnswer'
+
+// Recommended-option auto answer contracts (question-auto-answer D7), defined
+// beside this file and re-exported for existing importers.
+export type {
+  ChatQuestionAutoAnswer,
+  ChatQuestionAutoAnswerHeldEvent,
+  ChatRequestDecidedByTimeout,
+  ChatRequestTimeoutAnswers,
+} from './chatQuestionAutoAnswer'
 
 /**
  * Base shape of every conversation event. `id` is stable and unique
@@ -219,6 +234,11 @@ export type ChatEvent =
       type: 'question_request'
       requestId: string
       questions: ChatQuestion[]
+      /**
+       * The auto-answer deadline, present only while one stands
+       * (question-auto-answer D2): what will be chosen and when.
+       */
+      autoAnswer?: ChatQuestionAutoAnswer
     })
   | (ChatEventBase & {
       type: 'request_resolved'
@@ -228,6 +248,11 @@ export type ChatEvent =
       decidedBy?: ChatRequestDecidedBy
       /** Tool name for policy grants that never showed a card. */
       tool?: string
+      /**
+       * The labels an automatic (timeout) answer chose, keyed by question
+       * text; present only on `decidedBy: 'timeout'` resolutions.
+       */
+      answers?: ChatRequestTimeoutAnswers
     })
   | (ChatTurnEventBase & {
       type: 'turn_completed'
@@ -251,6 +276,7 @@ export type ChatEvent =
       terminalReason?: string
     })
   | (ChatTurnEventBase & { type: 'turn_interrupted' })
+  | ChatQuestionAutoAnswerHeldEvent
   | (ChatEventBase & {
       type: 'notice'
       text: string
@@ -270,8 +296,11 @@ export type ChatRequestOutcome =
   | 'answered'
   | 'cancelled'
 
-/** Who settled a request: the user answering, or the session's approval policy. */
-export type ChatRequestDecidedBy = 'user' | 'policy'
+/**
+ * Who settled a request: the user answering, the session's approval policy,
+ * or the request's auto-answer deadline.
+ */
+export type ChatRequestDecidedBy = 'user' | 'policy' | ChatRequestDecidedByTimeout
 
 /** Per-session approval policy: manual shows approval cards; auto grants them. */
 export type ChatApprovalPolicy = 'manual' | 'auto'
@@ -535,6 +564,8 @@ export type ChatPendingRequest =
       requestId: string
       questions: ChatQuestion[]
       at: string
+      /** The auto-answer deadline, present only while one stands (D2/D4). */
+      autoAnswer?: ChatQuestionAutoAnswer
     }
 
 /** User decision on a pending approval_request. */

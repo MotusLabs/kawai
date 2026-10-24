@@ -36,6 +36,7 @@ export const CHAT_CONNECTION_TYPES = [
   'chat-restore',
   'chat-approval',
   'chat-answer',
+  'chat-question-hold',
   'chat-set-approval-policy',
   'chat-debug-open',
   'chat-debug-page',

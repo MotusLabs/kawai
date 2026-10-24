@@ -138,6 +138,14 @@ export class CodexRequests {
     return { ok: true }
   }
 
+  /** Hold a question's deadline; Codex chats never arm one (QA-U4). */
+  holdQuestion(requestId: string): { ok: true } | { ok: false; error: string } {
+    const pending = this.pending.get(requestId)
+    if (!pending) return { ok: false, error: `No pending question with id ${requestId}; it may already be answered or cancelled` }
+    if (pending.kind !== 'question' || !pending.questions) return { ok: false, error: `Request ${requestId} is not a question` }
+    return { ok: false, error: `Request ${requestId} has no auto-answer deadline to hold` }
+  }
+
   /** A live switch to auto grants pending approval cards; questions stay. */
   policyChanged(policy: ChatApprovalPolicy): void {
     if (policy !== 'auto') return
