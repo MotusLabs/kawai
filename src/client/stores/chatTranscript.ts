@@ -135,7 +135,22 @@ export function applyChatEvents(state: ChatTranscript, incoming: ChatEvent[]): C
       next.pendingRequests.push({ kind: 'approval', requestId: event.requestId, tool: event.tool, input: event.input, at: event.at })
     }
     if (event.type === 'question_request') {
-      next.pendingRequests.push({ kind: 'question', requestId: event.requestId, questions: event.questions, at: event.at })
+      // The auto-answer deadline rides the request only while it stands
+      // (question-auto-answer D2/D4): a later hold event drops it in place.
+      next.pendingRequests.push({
+        kind: 'question',
+        requestId: event.requestId,
+        questions: event.questions,
+        at: event.at,
+        ...(event.autoAnswer ? { autoAnswer: event.autoAnswer } : {}),
+      })
+    }
+    if (event.type === 'question_auto_answer_held') {
+      next.pendingRequests = next.pendingRequests.map(request => {
+        if (request.requestId !== event.requestId || request.kind !== 'question') return request
+        const { autoAnswer: _dropped, ...withoutAutoAnswer } = request
+        return withoutAutoAnswer
+      })
     }
     if (event.type === 'request_resolved') {
       next.pendingRequests = next.pendingRequests.filter(request => request.requestId !== event.requestId)
