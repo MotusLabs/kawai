@@ -183,12 +183,21 @@ test('task_submit_coverage\'s return keeps the seal: mapping a result other than
   await reviewOf(task.id, first.id, { kind: 'session', id: 'reviewer' })
   const newer = [{ clause: 'The newer clause', tests: [cite('src/newer.test.ts', 'covers newer')] }]
   const second = await submitWithMap(task.id, newer, 'CSV export, v2')
+  // Another reviewer's map on the same result precedes the call: blindness is
+  // task-wide while sealed, not just about the submitter's map.
+  await taskHandlers(tasks, 'second', results)
+    .task_submit_coverage!({ task_id: task.id, result_id: second.id, coverage: [{ clause: 'Second reading', tests: [] }] })
   // The reviewer records a map for the newer result, not the handoff's own:
   // still sealed, so the tool's return is the withheld stub, never the map.
   const returned = await taskHandlers(tasks, 'reviewer', results)
     .task_submit_coverage!({ task_id: task.id, result_id: second.id, coverage: [{ clause: 'My reading', tests: [] }] })
   expect(returned.coverage).toEqual({ withheld: true, clauses: 1 })
   expect(JSON.stringify(returned)).not.toContain('covers newer')
+  expect(JSON.stringify(returned)).not.toContain('Second reading')
+  // Only the reader's own rows survive, and without their comparisons — the
+  // same projection task_get applies, so no surface can rebuild the rest.
+  expect((returned.reviewerMaps as Array<{ authorSession: string; comparison: unknown }>).map(row => [row.authorSession, row.comparison]))
+    .toEqual([['reviewer', null]])
   // The read after it stays sealed too: the own-map condition keys on the handoff's result.
   const rows = await readAs('reviewer', task.id)
   expect(rows.map(row => row.coverage)).toEqual([{ withheld: true, clauses: 1 }, null])
