@@ -221,7 +221,8 @@ export class SessionMailbox {
       onWrite: options.onTaskResultWrite,
       // The check starts only after the result's transaction has committed,
       // and never blocks the submitter (independent-verification D1).
-      onResult: (_result, teamId) => this.resultChecks.wake(teamId) })
+      onResult: (_result, teamId) => this.resultChecks.wake(teamId),
+      onRecheck: teamId => this.resultChecks.wake(teamId) })
     this.resultChecks = new ResultCheckService({
       store: this.tasks.store.checks,
       sources: {

@@ -178,3 +178,27 @@ test('release on another team\'s task is refused and archives nothing', async ()
   expect(last('team-task-result')!.error).toContain('not found in this team')
   expect(archived).toEqual([])
 })
+
+// Recheck (independent-verification D4): the human's command records a new
+// check beside the earlier ones; a request while a check is pending returns
+// that pending check instead of starting another.
+test('recheck records a check requested by the human; a request while pending returns it', async () => {
+  const task = await tasks.create(human(), { title: 'Export', direction: 'v1' })
+  const result = resultFor(task.id)
+  await send({ type: 'team-task-recheck', teamPath: '/repo', requestId: 'r1', taskId: task.id, resultId: result.id })
+  expect(last('team-task-result')!.task?.id).toBe(task.id)
+  const checks = tasks.store.checks.allForResult(result.id)
+  expect(checks).toHaveLength(1)
+  expect(checks[0]).toMatchObject({ trigger: 'recheck', status: 'pending', requestedBy: { kind: 'human' } })
+  // A request while that check is pending returns it — one row, not two.
+  await send({ type: 'team-task-recheck', teamPath: '/repo', requestId: 'r2', taskId: task.id, resultId: result.id })
+  expect(tasks.store.checks.allForResult(result.id)).toHaveLength(1)
+})
+
+test('recheck on another team\'s task is refused and writes nothing', async () => {
+  const foreign = await tasks.create(human('other'), { title: 'Foreign', direction: 'd' })
+  const result = resultFor(foreign.id)
+  await send({ type: 'team-task-recheck', teamPath: '/repo', requestId: 'x', taskId: foreign.id, resultId: result.id })
+  expect(last('team-task-result')!.error).toBeTruthy()
+  expect(tasks.store.checks.allForResult(result.id)).toHaveLength(0)
+})

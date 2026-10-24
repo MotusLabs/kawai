@@ -514,6 +514,17 @@ describe('result checks over a submitted result', () => {
       conflicts: ['src/export.ts'], moreConflicts: 0, status: 'fail', note: null },
     branches: { compared: [], comparedCount: 0, skipped: 0, status: 'pass' },
   })
+  /** Clean facts, for the check a recheck supersedes. */
+  const cleanFacts = () => JSON.stringify({
+    version: 1,
+    commit: { given: 'abc123', sha: 'abc123', resolvedAtCheckTime: true, status: 'pass', note: null },
+    head: null,
+    clean: null,
+    recorded: { status: 'unknown', recordBun: null, recordAt: null, commitBun: null, note: 'not checked' },
+    base: { ref: 'refs/remotes/origin/HEAD', sha: null, behind: 0, mergeClean: true,
+      conflicts: [], moreConflicts: 0, status: 'pass', note: null },
+    branches: { compared: [], comparedCount: 0, skipped: 0, status: 'pass' },
+  })
 
   test('submit commits a pending check with the result; the service settles it; a restart finds nothing (I1, C2)', async () => {
     const task = await tasks.create(agent('lead'), { title: 'Checked', direction: 'v1' })
@@ -555,5 +566,33 @@ describe('result checks over a submitted result', () => {
     await results.accept(human(), task.id, result.id)
     expect(tasks.store.get(task.id)?.status).toBe('done')
     expect(tasks.store.results.get(result.id)!.acceptedAt).not.toBeNull()
+  })
+
+  test('task_check_result rechecks after the base moved: a new check beside the readable earlier one', async () => {
+    const task = await tasks.create(agent('lead'), { title: 'Rechecked', direction: 'v1' })
+    const result = await results.submit(agent('dev'), task.id, submission)
+    const checks = tasks.store.checks
+    // The submit check ran clean; then the base gained a conflicting commit.
+    const first = checks.pendingForResult(result.id)!
+    expect(checks.settle(first.id, 'done', cleanFacts(), null)).toBe(true)
+    const tool = taskHandlers(tasks, 'dev', results)
+    const rechecked = await tool.task_check_result!({ task_id: task.id, result_id: result.id }) as { id: string; seq: number; trigger: string; status: string }
+    expect(rechecked).toMatchObject({ seq: 2, trigger: 'recheck', status: 'pending' })
+    checks.settle(rechecked.id, 'done', failingFacts(), null)
+    const all = checks.allForResult(result.id)
+    expect(all).toHaveLength(2)
+    // Newest first: the conflict, then the earlier clean check, still readable.
+    expect(all[0]?.facts?.base).toMatchObject({ mergeClean: false, conflicts: ['src/export.ts'] })
+    expect(all[1]?.facts?.base).toMatchObject({ mergeClean: true })
+  })
+
+  test('a recheck requested while a check is pending returns it, and no second check runs', async () => {
+    const task = await tasks.create(agent('lead'), { title: 'Pending', direction: 'v1' })
+    const result = await results.submit(agent('dev'), task.id, submission)
+    const standing = tasks.store.checks.pendingForResult(result.id)!.id
+    const tool = taskHandlers(tasks, 'dev', results)
+    const again = await tool.task_check_result!({ task_id: task.id, result_id: result.id }) as { id: string }
+    expect(again.id).toBe(standing)
+    expect(tasks.store.checks.allForResult(result.id)).toHaveLength(1)
   })
 })

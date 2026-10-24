@@ -102,6 +102,8 @@ export class TaskResultService {
     onWrite?: (taskId: string) => void
     /** A result committed (independent-verification D1): the composition hands it to ResultCheckService. */
     onResult?: (result: TaskResult, teamId: string) => void
+    /** A recheck was requested (independent-verification D4): the composition wakes the check service. */
+    onRecheck?: (teamId: string) => void
   }) {
     this.release = options.releases && options.records
       ? new TaskRelease(this, {
@@ -191,6 +193,27 @@ export class TaskResultService {
     this.store.appendJournal(taskId, actor, `${input.kind === 'qa' ? 'QA' : 'Review'} findings on result ${result.id}: ${input.verdict}`)
     this.options.onWrite?.(taskId)
     return stored
+  }
+
+  /**
+   * Request a new check of a result (independent-verification D4): the
+   * human, or any team member. A request made while a check is pending
+   * returns the standing pending row instead of starting another; a new row
+   * is recorded beside the earlier ones, which stay readable. The request
+   * never runs the check itself — the composition wakes the service, which
+   * runs it outside every gate.
+   */
+  async recheck(caller: TaskCaller, taskId: string, resultId: string): Promise<TaskResultCheck> {
+    refuseSystem(caller, 'recheck')
+    const { team, actor } = await this.tasks.context(caller)
+    this.tasks.sameTeamTask(team, taskId)
+    const result = this.store.results.get(resultId)
+    if (!result || result.taskId !== taskId) throw new Error(`Result ${resultId} is not a result of task ${taskId}`)
+    const { check } = this.store.checks.insertPending({
+      teamId: team.teamId, taskId, resultId: result.id, trigger: 'recheck', requestedBy: actor,
+    })
+    this.options.onRecheck?.(team.teamId)
+    return check
   }
 
   /**
