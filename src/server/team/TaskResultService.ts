@@ -232,7 +232,13 @@ export class TaskResultService {
       coverage: JSON.stringify(coverage),
     })
     this.options.onWrite?.(taskId)
-    return this.store.results.get(result.id)!
+    // The return is a read like any other, so it passes through the same
+    // seal: mapping a result other than the handoff's returns the withheld
+    // stub; mapping the handoff's own unseals, and the call returns the raw
+    // pair with the comparison.
+    const fresh = this.store.results.get(result.id)!
+    const joined = { ...fresh, reviewerMaps: this.store.results.reviewerMapsOf(fresh.id, rawCoverage(fresh.coverage)) }
+    return this.sealResults(actor.sessionId, taskId, [joined])[0]!
   }
 
   /**
@@ -245,13 +251,24 @@ export class TaskResultService {
    * reading session's own comparison rides the result.
    */
   applySeal(caller: TaskCaller, taskId: string, detail: TeamTaskDetail): TeamTaskDetail {
-    if (caller.kind !== 'agent') return detail
-    const sessionId = caller.sessionId
+    if (caller.kind !== 'agent' || detail.results === undefined) return detail
+    return { ...detail, results: this.sealResults(caller.sessionId, taskId, detail.results) }
+  }
+
+  /**
+   * The seal projection over a list of results (D6) — the one implementation
+   * behind every agent reader surface: task_get's applySeal and
+   * task_submit_coverage's return alike, so recording a map through the tool
+   * can never hand back more than the reader may see. The predicate is
+   * evaluated at read time: a call that records the handoff result's own map
+   * reads unsealed here, because its insert has already landed.
+   */
+  private sealResults(sessionId: string, taskId: string, results: TaskResult[]): TaskResult[] {
     const outstanding = this.store.outstandingAssignment(taskId)
     const handoffResultId = outstanding?.handoffKind === 'review' ? outstanding.resultId ?? null : null
     const sealed = handoffResultId !== null &&
       isSealed(outstanding ?? null, sessionId, this.store.checks.hasCoverageMap(handoffResultId, sessionId))
-    const results = detail.results?.map(result => {
+    return results.map(result => {
       if (sealed) {
         const ownMaps = (result.reviewerMaps ?? []).filter(row => row.authorSession === sessionId)
           .map(row => ({ ...row, comparison: null }))
@@ -268,7 +285,6 @@ export class TaskResultService {
       const ownNewest = (result.reviewerMaps ?? []).find(row => row.authorSession === sessionId)
       return { ...result, comparison: ownNewest?.comparison ?? null }
     })
-    return { ...detail, ...(results ? { results } : {}) }
   }
 
   /**

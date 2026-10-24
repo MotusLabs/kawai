@@ -176,6 +176,38 @@ test('a newer result\'s map is withheld from the holder of the earlier result\'s
   ])
 })
 
+// @covers: task-results › Reviewers record their own coverage map first › The tool return keeps the seal
+test('task_submit_coverage\'s return keeps the seal: mapping a result other than the handoff\'s leaks nothing', async () => {
+  const task = await tasks.create(agent('lead'), { title: 'Export', direction: 'v1' })
+  const first = await results.submit(agent('dev'), task.id, { summary: 'CSV export', commit: 'abc123', tests: [] })
+  await reviewOf(task.id, first.id, { kind: 'session', id: 'reviewer' })
+  const newer = [{ clause: 'The newer clause', tests: [cite('src/newer.test.ts', 'covers newer')] }]
+  const second = await submitWithMap(task.id, newer, 'CSV export, v2')
+  // The reviewer records a map for the newer result, not the handoff's own:
+  // still sealed, so the tool's return is the withheld stub, never the map.
+  const returned = await taskHandlers(tasks, 'reviewer', results)
+    .task_submit_coverage!({ task_id: task.id, result_id: second.id, coverage: [{ clause: 'My reading', tests: [] }] })
+  expect(returned.coverage).toEqual({ withheld: true, clauses: 1 })
+  expect(JSON.stringify(returned)).not.toContain('covers newer')
+  // The read after it stays sealed too: the own-map condition keys on the handoff's result.
+  const rows = await readAs('reviewer', task.id)
+  expect(rows.map(row => row.coverage)).toEqual([{ withheld: true, clauses: 1 }, null])
+})
+
+// @covers: task-results › Reviewers record their own coverage map first › Map shown after recording
+test('recording the handoff result\'s own map returns it unsealed: the raw pair with the comparison', async () => {
+  const task = await tasks.create(agent('lead'), { title: 'Export', direction: 'v1' })
+  const result = await submitWithMap(task.id)
+  await reviewOf(task.id, result.id, { kind: 'session', id: 'reviewer' })
+  const reviewerMap = [{ clause: 'My reading', tests: [] }]
+  const returned = await taskHandlers(tasks, 'reviewer', results)
+    .task_submit_coverage!({ task_id: task.id, result_id: result.id, coverage: reviewerMap })
+  // That call unseals: the return is the submitter's map plus the reader's
+  // own comparison, exactly what the following task_get shows.
+  expect(returned.coverage).toEqual(submitterMap)
+  expect(returned.comparison).toEqual(compareCoverageMaps(submitterMap, reviewerMap))
+})
+
 // @covers: task-results › Reviewers record their own coverage map first › Others see the submitter's map
 test('the human and sessions without the handoff see the submitter\'s maps', async () => {
   const task = await tasks.create(agent('lead'), { title: 'Export', direction: 'v1' })
@@ -183,13 +215,19 @@ test('the human and sessions without the handoff see the submitter\'s maps', asy
   await reviewOf(task.id, result.id, { kind: 'session', id: 'reviewer' })
   // A sealed reviewer for one task is not sealed for another task of the team.
   const other = await tasks.create(agent('lead'), { title: 'Import', direction: 'v1' })
-  await submitWithMap(other.id)
+  const otherResult = await submitWithMap(other.id)
   expect((await readAs('second', task.id))[0]!.coverage).toEqual(submitterMap)
   expect((await readAs('reviewer', other.id))[0]!.coverage).toEqual(submitterMap)
   // The submitter reads its own map back, with no comparison of its own yet.
   expect((await readAs('dev', task.id))[0]!.coverage).toEqual(submitterMap)
   expect((await readAs('dev', task.id))[0]!.comparison).toBeNull()
-  expect((await readHuman(other.id)).results![0]!.coverage).toEqual(submitterMap)
+  // The human read carries every reviewer map with its comparison (C2 pin).
+  const secondMap = [{ clause: 'Second reading', tests: [] }]
+  await taskHandlers(tasks, 'second', results).task_submit_coverage!({ task_id: other.id, result_id: otherResult.id, coverage: secondMap })
+  const humanRow = (await readHuman(other.id)).results![0]!
+  expect(humanRow.coverage).toEqual(submitterMap)
+  expect(humanRow.reviewerMaps).toMatchObject([{ authorSession: 'second', coverage: secondMap }])
+  expect(humanRow.reviewerMaps![0]!.comparison).toEqual(compareCoverageMaps(submitterMap, secondMap))
 })
 
 // @covers: task-results › Reviewers record their own coverage map first › Map withheld from the reviewer
