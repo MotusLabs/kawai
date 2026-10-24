@@ -3,6 +3,7 @@
 // driver, over the manual clock (design's timerScheduler seam). The design's
 // "Acceptance oracles" QA-* ids name the row each test pins.
 import { expect, test } from 'bun:test'
+import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk'
 import type { ChatEvent, ChatPendingRequest } from '../../shared/chat'
 import {
   createHarness,
@@ -29,18 +30,29 @@ function questionInput(specs: QuestionSpec[]): Record<string, unknown> {
   }
 }
 
+/** One canUseTool question ask, with its bridge promise and abort handle. */
+function askQuestionRaw(
+  harness: ReturnType<typeof createHarness>,
+  specs: QuestionSpec[],
+  toolUseID = 'q1'
+): { promise: Promise<PermissionResult | null>; abort: () => void } {
+  const fake = harness.fakes[0]!
+  const controller = new AbortController()
+  const promise = fake.options.canUseTool!(
+    'AskUserQuestion',
+    questionInput(specs),
+    { signal: controller.signal, toolUseID, requestId: 'r' }
+  ) as Promise<PermissionResult | null>
+  return { promise, abort: () => controller.abort() }
+}
+
 /** Ask one question through the fake query's canUseTool and settle plumbing. */
 async function askQuestion(
   harness: ReturnType<typeof createHarness>,
   specs: QuestionSpec[],
   toolUseID = 'q1'
 ): Promise<void> {
-  const fake = harness.fakes[0]!
-  void fake.options.canUseTool!(
-    'AskUserQuestion',
-    questionInput(specs),
-    { signal: new AbortController().signal, toolUseID, requestId: 'r' }
-  )
+  void askQuestionRaw(harness, specs, toolUseID).promise
   await flush()
 }
 
@@ -54,6 +66,18 @@ function snapshotOf(harness: ReturnType<typeof createHarness>, requestId: string
     .getPendingRequests()
     .find((pending): pending is Extract<ChatPendingRequest, { kind: 'question' }> =>
       pending.kind === 'question' && pending.requestId === requestId)
+}
+
+/**
+ * Await a settlement promise bounded by a real 100 ms timer, so a mutant
+ * that never settles fails the assertion instead of hanging the run (bun's
+ * test timeout does not interrupt `await expect(p).resolves`).
+ */
+async function bounded(promise: Promise<PermissionResult | null>): Promise<PermissionResult | null> {
+  return Promise.race([
+    promise,
+    new Promise<null>((resolve) => setTimeout(() => resolve(null), 100)),
+  ])
 }
 
 test('a fully recommended question gets a deadline: event and snapshot carry autoAnswer at +wait (QA-1)', async () => {
@@ -186,21 +210,201 @@ test('the wait is read per question: a later question uses the new value and the
   harness.driver.kill()
 })
 
-test('a fired deadline settles nothing before settlement lands (2.1 interim)', async () => {
+test('the deadline answers with the recommendation, the D3 note, and timeout decided-by (QA-1)', async () => {
   const clock = new ManualClock()
   const harness = createHarness({
     getQuestionAutoAnswerMs: () => WAIT_MS,
     timerScheduler: clock,
   })
   harness.driver.send('ask')
-  await askQuestion(harness, [{ question: 'Deploy?', options: ['Yes (Recommended)', 'No'] }])
+  const ask = askQuestionRaw(harness, [{ question: 'Deploy?', options: ['Yes (Recommended)', 'No'] }])
+  try {
+    await flush()
 
-  clock.advance(WAIT_MS)
+    clock.advance(WAIT_MS)
+    const settled = await bounded(ask.promise)
+    expect(settled).toMatchObject({
+      behavior: 'allow',
+      updatedInput: {
+        answers: { 'Deploy?': 'Yes (Recommended)' },
+        response: 'No answer from the user within 1 minutes; the recommended option was selected automatically.',
+      },
+    })
+    const resolved = harness.events.find((event) => event.type === 'request_resolved') as
+      | Extract<ChatEvent, { type: 'request_resolved' }>
+    expect(resolved).toMatchObject({
+      outcome: 'answered',
+      decidedBy: 'timeout',
+      answers: { 'Deploy?': 'Yes (Recommended)' },
+    })
+    // QA-1: the session leaves permission and the agent continues — the turn
+    // is still in flight, so `working`, not `permission`.
+    expect(harness.statuses.at(-1)).toBe('working')
+    expect(harness.driver.getPendingRequests()).toHaveLength(0)
+    expect(clock.pendingCount).toBe(0)
+  } finally {
+    // Drain the bridge promise even when an assertion above fails, so a
+    // mutant run fails cleanly instead of wedging bun's exit.
+    harness.driver.kill()
+  }
+})
+
+test('a user answer before the deadline wins and no second settlement follows (QA-2, QA-15)', async () => {
+  const clock = new ManualClock()
+  const harness = createHarness({
+    getQuestionAutoAnswerMs: () => WAIT_MS,
+    timerScheduler: clock,
+  })
+  harness.driver.send('ask')
+  const ask = askQuestionRaw(harness, [{ question: 'Deploy?', options: ['Yes (Recommended)', 'No'] }])
   await flush()
-  // Settlement is task 2.2: a fired deadline answers nothing yet, and the
-  // question keeps waiting.
-  expect(harness.events.some((event) => event.type === 'request_resolved')).toBe(false)
-  expect(harness.driver.getPendingRequests()).toHaveLength(1)
-  // Drain the pending question so its bridge promise resolves.
+  const request = questionRequests(harness.events).at(-1)!
+
+  expect(harness.driver.answerQuestion(request.requestId, { 'Deploy?': { options: ['No'] } })).toEqual({ ok: true })
+  await expect(ask.promise).resolves.toMatchObject({ behavior: 'allow' })
+  expect(clock.pendingCount).toBe(0)
+
+  clock.advance(WAIT_MS * 10)
+  await flush()
+  const resolutions = harness.events.filter((event) => event.type === 'request_resolved')
+  expect(resolutions).toHaveLength(1)
+  expect(resolutions[0]).toMatchObject({ decidedBy: 'user' })
+})
+
+test('a second user answer after the timeout is refused stale (QA-12)', async () => {
+  const clock = new ManualClock()
+  const harness = createHarness({
+    getQuestionAutoAnswerMs: () => WAIT_MS,
+    timerScheduler: clock,
+  })
+  harness.driver.send('ask')
+  const ask = askQuestionRaw(harness, [{ question: 'Deploy?', options: ['Yes (Recommended)', 'No'] }])
+  try {
+    await flush()
+    const request = questionRequests(harness.events).at(-1)!
+
+    clock.advance(WAIT_MS)
+    const settled = await bounded(ask.promise)
+    expect(settled).toMatchObject({ behavior: 'allow' })
+    const late = harness.driver.answerQuestion(request.requestId, { 'Deploy?': { options: ['No'] } })
+    expect(late).toMatchObject({ ok: false })
+    expect(harness.events.filter((event) => event.type === 'request_resolved')).toHaveLength(1)
+  } finally {
+    harness.driver.kill()
+  }
+})
+
+test('an abort before the deadline cancels and never auto-answers (QA-5, QA-20)', async () => {
+  const clock = new ManualClock()
+  const harness = createHarness({
+    getQuestionAutoAnswerMs: () => WAIT_MS,
+    timerScheduler: clock,
+  })
+  harness.driver.send('ask')
+  const ask = askQuestionRaw(harness, [{ question: 'Deploy?', options: ['Yes (Recommended)', 'No'] }])
+  await flush()
+
+  ask.abort()
+  await expect(ask.promise).resolves.toMatchObject({ behavior: 'deny' })
+  expect(clock.pendingCount).toBe(0)
+  clock.advance(WAIT_MS * 10)
+  await flush()
+  const resolutions = harness.events.filter((event) => event.type === 'request_resolved')
+  expect(resolutions).toHaveLength(1)
+  expect(resolutions[0]).toMatchObject({ outcome: 'cancelled' })
+  expect(harness.events.some((event) =>
+    event.type === 'request_resolved' &&
+    (event as { decidedBy?: string }).decidedBy === 'timeout')).toBe(false)
+})
+
+test('a kill before the deadline cancels and never auto-answers (QA-6)', async () => {
+  const clock = new ManualClock()
+  const harness = createHarness({
+    getQuestionAutoAnswerMs: () => WAIT_MS,
+    timerScheduler: clock,
+  })
+  harness.driver.send('ask')
+  const ask = askQuestionRaw(harness, [{ question: 'Deploy?', options: ['Yes (Recommended)', 'No'] }])
+  await flush()
+
   harness.driver.kill()
+  await expect(ask.promise).resolves.toMatchObject({ behavior: 'deny' })
+  expect(clock.pendingCount).toBe(0)
+  clock.advance(WAIT_MS * 10)
+  await flush()
+  const resolutions = harness.events.filter((event) => event.type === 'request_resolved')
+  expect(resolutions).toHaveLength(1)
+  expect(resolutions[0]).toMatchObject({ outcome: 'cancelled' })
+})
+
+test('an orderly shutdown settles like a kill and never auto-answers (QA-7)', async () => {
+  const clock = new ManualClock()
+  const harness = createHarness({
+    getQuestionAutoAnswerMs: () => WAIT_MS,
+    timerScheduler: clock,
+  })
+  harness.driver.send('ask')
+  const ask = askQuestionRaw(harness, [{ question: 'Deploy?', options: ['Yes (Recommended)', 'No'] }])
+  await flush()
+
+  harness.driver.shutdown()
+  await expect(ask.promise).resolves.toMatchObject({ behavior: 'deny' })
+  expect(clock.pendingCount).toBe(0)
+  clock.advance(WAIT_MS * 10)
+  await flush()
+  expect(harness.events.filter((event) => event.type === 'request_resolved')).toHaveLength(1)
+  expect(harness.events.some((event) =>
+    event.type === 'request_resolved' &&
+    (event as { decidedBy?: string }).decidedBy === 'timeout')).toBe(false)
+})
+
+test('a refused user answer consumes nothing: the deadline still settles first (advisor C1 #1)', async () => {
+  const clock = new ManualClock()
+  const harness = createHarness({
+    getQuestionAutoAnswerMs: () => WAIT_MS,
+    timerScheduler: clock,
+  })
+  harness.driver.send('ask')
+  const ask = askQuestionRaw(harness, [{ question: 'Deploy?', options: ['Yes (Recommended)', 'No'] }])
+  try {
+    await flush()
+    const request = questionRequests(harness.events).at(-1)!
+
+    // Both an option and own text is refused; the request stays pending.
+    expect(harness.driver.answerQuestion(request.requestId, {
+      'Deploy?': { options: ['No'], text: 'mine' },
+    })).toMatchObject({ ok: false })
+    expect(harness.driver.getPendingRequests()).toHaveLength(1)
+
+    clock.advance(WAIT_MS)
+    const settled = await bounded(ask.promise)
+    expect(settled).toMatchObject({
+      behavior: 'allow',
+      updatedInput: { answers: { 'Deploy?': 'Yes (Recommended)' } },
+    })
+    expect(harness.events.filter((event) => event.type === 'request_resolved')).toHaveLength(1)
+  } finally {
+    harness.driver.kill()
+  }
+})
+
+test('a callback arriving after a kill arms no deadline (advisor C1 #3)', async () => {
+  const clock = new ManualClock()
+  const harness = createHarness({
+    getQuestionAutoAnswerMs: () => WAIT_MS,
+    timerScheduler: clock,
+  })
+  harness.driver.send('ask')
+  await flush()
+  harness.driver.kill()
+  await askQuestion(harness, [{ question: 'Deploy?', options: ['Yes (Recommended)', 'No'] }], 'q-after-kill')
+
+  const request = questionRequests(harness.events).at(-1)!
+  expect(request.autoAnswer).toBeUndefined()
+  expect(clock.pendingCount).toBe(0)
+  clock.advance(WAIT_MS * 10)
+  await flush()
+  expect(harness.events.some((event) =>
+    event.type === 'request_resolved' &&
+    (event as { decidedBy?: string }).decidedBy === 'timeout')).toBe(false)
 })
