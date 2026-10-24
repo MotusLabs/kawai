@@ -49,8 +49,10 @@ import type { SessionStatus } from '../../shared/types'
 import {
   ASK_USER_QUESTION_TOOL,
   parseQuestions,
+  recommendedAnswers,
   toolResultText,
 } from './contentBlocks'
+import { realTimerScheduler, type ChatTimerScheduler } from './timerScheduler'
 import {
   activityBody,
   contentBlockToInput,
@@ -172,6 +174,19 @@ export interface ChatSessionDriverOptions extends ChatDriverCallbacks {
    * Omitted = manual (today's behavior).
    */
   getApprovalPolicy?: () => ChatApprovalPolicy
+  /**
+   * The question auto-answer wait in milliseconds, read once per question
+   * when it is asked (question-auto-answer D2); 0 or omitted = off. A
+   * deadline is set only when every question of the request marks a
+   * recommended option. The manager supplies this for Claude chats only —
+   * never for Codex (design QA-U4).
+   */
+  getQuestionAutoAnswerMs?: () => number
+  /**
+   * Timer seam behind the auto-answer deadline (question-auto-answer D2).
+   * Defaults to real timers; tests advance a manual clock by hand.
+   */
+  timerScheduler?: ChatTimerScheduler
   /** Persisted session profile; omitted for legacy Default sessions. */
   claudeProfileId?: string
   /**
@@ -239,6 +254,15 @@ interface PendingRequest {
   at: string
   settled: boolean
   settle: (result: PermissionResult) => void
+  /**
+   * The auto-answer deadline (question-auto-answer D2), present only while
+   * one stands: when it fires, what it answers, the wait it came from, and
+   * the scheduler handle every settlement path clears first.
+   */
+  autoAnswerAt?: string
+  autoAnswers?: Record<string, ChatQuestionAnswer>
+  waitMs?: number
+  autoAnswerTimer?: unknown
 }
 
 /** Omit that distributes over the ChatEvent union, keeping each member's type. */
@@ -249,6 +273,8 @@ type ChatEventDraft = DistributiveOmit<ChatEvent, 'id' | 'sequence' | 'at'>
 
 export class ChatSessionDriver implements ChatAgentDriver {
   private readonly options: ChatSessionDriverOptions
+  /** Timer seam behind the auto-answer deadline (question-auto-answer D2). */
+  private readonly scheduler: ChatTimerScheduler
   private readonly queue = new TurnQueue()
   /** Slash-command list state; this driver is its only feeder (design D2). */
   private commands = new ChatCommandTracker()
@@ -335,6 +361,7 @@ export class ChatSessionDriver implements ChatAgentDriver {
 
   constructor(options: ChatSessionDriverOptions) {
     this.options = options
+    this.scheduler = options.timerScheduler ?? realTimerScheduler
     this.commands = new ChatCommandTracker(options.onCommandState)
     this.claudeExecutablePath = options.claudeExecutablePath
     this.sessionProjectPath = options.projectPath
@@ -693,6 +720,9 @@ export class ChatSessionDriver implements ChatAgentDriver {
             requestId: pending.requestId,
             questions: pending.questions ?? [],
             at: pending.at,
+            ...(pending.autoAnswerAt && pending.autoAnswers
+              ? { autoAnswer: { at: pending.autoAnswerAt, answers: pending.autoAnswers } }
+              : {}),
           }
     )
   }
@@ -1447,12 +1477,16 @@ export class ChatSessionDriver implements ChatAgentDriver {
         if (questions) {
           pending.kind = 'question'
           pending.questions = questions
+          this.armQuestionAutoAnswer(pending)
           this.pendingRequests.set(requestId, pending)
           this.emit({
             type: 'question_request',
             turnId,
             requestId,
             questions,
+            ...(pending.autoAnswerAt && pending.autoAnswers
+              ? { autoAnswer: { at: pending.autoAnswerAt, answers: pending.autoAnswers } }
+              : {}),
           })
           this.refreshStatus()
           return
@@ -1520,6 +1554,25 @@ export class ChatSessionDriver implements ChatAgentDriver {
     for (const requestId of Array.from(this.pendingRequests.keys())) {
       this.cancelRequest(requestId, reason)
     }
+  }
+
+  /**
+   * The auto-answer deadline (question-auto-answer D2): the wait is read
+   * once, here, when the question is asked. A deadline exists only when
+   * every question of the request marks a recommended option and the wait
+   * is positive (QA-P3) — the same `recommendedAnswers` derivation the
+   * shown payload reads.
+   */
+  private armQuestionAutoAnswer(pending: PendingRequest): void {
+    const waitMs = this.options.getQuestionAutoAnswerMs?.() ?? 0
+    const answers = pending.questions ? recommendedAnswers(pending.questions) : null
+    if (!answers || waitMs <= 0) return
+    pending.autoAnswers = answers
+    pending.waitMs = waitMs
+    pending.autoAnswerAt = new Date(Date.parse(pending.at) + waitMs).toISOString()
+    pending.autoAnswerTimer = this.scheduler.schedule(waitMs, () => {
+      // Settlement is task 2.2; until it lands a fired deadline answers nothing.
+    })
   }
 
   private refreshStatus(): void {
