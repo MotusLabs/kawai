@@ -11,6 +11,8 @@ import os from 'node:os'
 import path from 'node:path'
 import type { Database } from 'bun:sqlite'
 import { runGit } from '../git/gitCommand'
+import { recordsDir, writeRecord } from '../checks/checkRecords'
+import { testListName, writeTestList } from '../checks/testLists'
 import { schemaDb } from './schemaDb'
 import { ResultCheckStore } from '../verification/resultCheckStore'
 import { ResultCheckService } from '../verification/resultCheckService'
@@ -109,6 +111,43 @@ describe('ResultCheckService over its store', () => {
     const stored = checks.get(check.id)
     expect(stored?.status).toBe('done')
     expect(stored?.facts?.coverage).toEqual([['run-unknown']])
+  })
+
+  // The wired reader (independent-verification D7, task 4.3): the check
+  // service's real testList resolves the tree's newest usable record, so a
+  // citation a seeded record answers reads ran-passed — no injection.
+  test('the wired reader answers a citation from the tree\'s recorded list', async () => {
+    const fixture = makeRepo(path.join(tempRoot, 'wired'))
+    fs.writeFileSync(path.join(fixture.root, 'src.test.ts'), "test('covers the clause', () => {})\n")
+    fixture.git(['add', '--', 'src.test.ts'])
+    fixture.git(['commit', '-q', '-m', 'tests'])
+    const sha = fixture.git(['rev-parse', 'HEAD']).stdout.trim()
+    const tree = fixture.git(['rev-parse', `${sha}^{tree}`]).stdout.trim()
+    const dir = recordsDir(fixture.root)
+    const key = 'c'.repeat(64)
+    writeTestList(dir, key, [
+      { file: 'src.test.ts', path: 'src.test.ts', name: 'covers the clause', status: 'passed' },
+    ])
+    writeRecord(dir, {
+      key, treeId: tree, bun: '1.4.3', platform: 'linux', arch: 'x64',
+      at: new Date().toISOString(), worktree: fixture.root,
+      steps: [{ name: 'test', ms: 1000 }],
+      tests: { file: testListName(key), count: 1 },
+    })
+    const { check } = pending(fixture, 'result-wired')
+    const service = new ResultCheckService({
+      store: checks,
+      sources: {
+        ...sources(fixture),
+        result: () => ({
+          commit: sha, worktree: fixture.worktree,
+          coverage: [{ clause: 'The clause', tests: ['`src.test.ts` › `covers the clause`'] }],
+        }),
+      },
+    })
+    service.wake(teamIdOf(fixture))
+    await service.quiesce()
+    expect(checks.get(check.id)?.facts?.coverage).toEqual([['ran-passed']])
   })
 
   test('a pending row whose result is gone is unavailable, with the reason', async () => {

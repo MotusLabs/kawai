@@ -8,9 +8,11 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import {
-  CheckUnavailable, RESULT_CHECK_BUDGET_MS, computeResultFacts, makeCheckGit, serializeFacts,
+  CheckUnavailable, RESULT_CHECK_BUDGET_MS, computeResultFacts, makeCheckGit,
   type CheckGit, type OtherTaskHead, type ResultCheckInput,
 } from './resultChecks'
+import { serializeFacts } from './serializeFacts'
+import { readTreeTestList } from './treeTestList'
 import type { ResultCheckStore } from './resultCheckStore'
 import type { CoverageMap } from '../../shared/coverageMaps'
 import type { TaskResultCheck } from '../../shared/teamTasks'
@@ -152,6 +154,9 @@ export class ResultCheckService {
       repoRoot,
       others,
       host: { platform: process.platform, arch: process.arch },
+      // The real reader (D7, task 4.3): the tree's newest usable recorded
+      // list answers the citations; without one they read run-unknown.
+      testList: (treeId) => readTreeTestList(repoRoot, treeId),
     }
   }
 }
