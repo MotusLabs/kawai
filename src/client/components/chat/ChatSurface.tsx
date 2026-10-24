@@ -51,7 +51,7 @@ import type { SessionDirectoryEntry } from '@shared/team'
 import type { ConnectionStatus } from '../../stores/sessionStore'
 import { emptyTranscript, useChatStore } from '../../stores/chatStore'
 import { useSessionStore } from '../../stores/sessionStore'
-import { pendingContextSends, usePlanWorkspaceScopeStore, type CapturedWorkspaceScope } from '../../stores/planWorkspaceScopeStore'
+import { pendingContextSends, pendingContextSendsFor, usePlanWorkspaceScopeStore, type CapturedWorkspaceScope } from '../../stores/planWorkspaceScopeStore'
 import { claimReveal, createHostToken, isRevealDesignated, registryFor, releaseReveal } from '../../stores/chatAttachment'
 import ChatActivityRow from './ChatActivityRow'
 import ChatMessages from './ChatMessages'
@@ -154,30 +154,42 @@ export default function ChatSurface({
   }, [restoreDraft, session.id])
   const pendingClearRef = useRef<string | null>(null)
   useEffect(() => { pendingClearRef.current = null; setResetRefusal(false); setRestoreDraft(null) }, [session.id])
-  // A contextual send is outstanding only while its connection lives: after a
-  // drop the refusal (or the acceptance event) may never arrive, and a later
-  // unrelated error must not restore the text (D7: reconnect restores
-  // history, never sends).
+  // A contextual send is answered exactly once on its connection (B1): after
+  // a drop its terminal answer may never arrive, so the unanswered sends are
+  // recovered — the oldest fills an empty draft, and the rest stay retained
+  // to recover in turn on the next settlement or reconnect while the draft is
+  // empty. Recovery of unsent or unconfirmed text, never a resend (D7:
+  // reconnect restores history, never sends).
   useEffect(() => {
-    if (!connected) pendingContextSends.delete(session.id)
+    if (connected) return
+    if ((useChatStore.getState().drafts[session.id] ?? '') !== '') return
+    const pending = pendingContextSendsFor(session.id)
+    if (pending.length === 0) return
+    const [{ requestId, text, scope }] = pending
+    pendingContextSends.delete(requestId)
+    useChatStore.getState().setDraft(session.id, text)
+    usePlanWorkspaceScopeStore.getState().setScope(session.id, scope)
   }, [connected, session.id])
   useEffect(() => {
     if (!subscribe) return
     return subscribe((message) => {
-      // Contextual sends (§6.3): the session's user_message proves the send
-      // was accepted. A refusal restores the text and the captured scope
-      // only when it is THAT send's correlated refusal (Q2 — the echoed
-      // requestId), and only while the composer's post-submit clear left the
-      // draft empty — typing since means the human moved on. No other error
-      // touches the pending entry; no automatic resend either way.
-      if (message.type === 'chat-events' && message.sessionId === session.id
-        && pendingContextSends.has(session.id)
-        && message.events.some(event => event.type === 'user_message')) {
-        pendingContextSends.delete(session.id)
-      } else if (message.type === 'error' && message.sessionId === session.id && message.requestId !== undefined) {
-        const pending = pendingContextSends.get(session.id)
-        if (pending && pending.requestId === message.requestId) {
-          pendingContextSends.delete(session.id)
+      // Contextual sends (§6.3, B1): each pending entry settles only on its
+      // own terminal answer — the sender-only `chat-send-result` acceptance,
+      // or THAT send's correlated refusal (Q2 — the echoed requestId), which
+      // restores the text and captured scope only while the composer's
+      // post-submit clear left the draft empty (typing since means the human
+      // moved on). A `user_message` event never settles a pending send: it
+      // cannot be told from another host's message. The entry's own
+      // sessionId is checked on every settlement, so a malformed or
+      // unrelated answer never consumes another session's entry; no
+      // automatic resend either way.
+      if (message.type === 'chat-send-result' && message.accepted
+        && pendingContextSends.get(message.requestId)?.sessionId === message.sessionId) {
+        pendingContextSends.delete(message.requestId)
+      } else if (message.type === 'error' && message.requestId !== undefined) {
+        const pending = pendingContextSends.get(message.requestId)
+        if (pending && pending.sessionId === message.sessionId) {
+          pendingContextSends.delete(message.requestId)
           if ((useChatStore.getState().drafts[session.id] ?? '') === '') {
             useChatStore.getState().setDraft(session.id, pending.text)
             usePlanWorkspaceScopeStore.getState().setScope(session.id, pending.scope)
@@ -235,12 +247,13 @@ export default function ChatSurface({
     setResetRefusal(false)
     // A workspace host supplies the draft's captured scope (§6.3); reset
     // commands above never carry context. The envelope rides the additive
-    // chat-send field with a client-minted requestId (Q2) the server echoes
-    // on any refusal; the host's scope is kept until acceptance or the
-    // correlated refusal restores it.
+    // chat-send field with a client-minted requestId (Q2) that gets exactly
+    // one terminal answer (B1): the sender-only acceptance, or the correlated
+    // refusal, which restores text and attachment. Entries are keyed by the
+    // requestId, so rapid sends stay independent.
     const scope = onSubmitContext?.() ?? null
     const requestId = scope ? crypto.randomUUID() : undefined
-    if (scope) pendingContextSends.set(session.id, { text: trimmed, scope, requestId: requestId! })
+    if (scope) pendingContextSends.set(requestId!, { sessionId: session.id, text: trimmed, scope })
     sendMessage({
       type: 'chat-send', sessionId: session.id, text: trimmed,
       ...(scope ? { workspaceContext: scope.envelope, requestId } : {}),

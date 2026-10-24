@@ -604,6 +604,13 @@ export type ServerMessage =
   // can restore the draft and its captured attachment; other errors carry
   // neither field, exactly as before.
   | { type: 'error'; message: string; requestId?: string; sessionId?: string }
+  // The sender-only acceptance answer for a chat-send that carried a readable
+  // `requestId` (plan-workspace §6.3, B1): sent to the sending connection
+  // only, once the manager accepted the send — past the last refusal point.
+  // Never a ChatEvent: not sequenced, persisted, replayed, or broadcast; a
+  // send carries either this or its correlated refusal, never both, and a
+  // send without a readable requestId carries neither.
+  | { type: 'chat-send-result'; sessionId: string; requestId: string; accepted: true }
   | { type: 'kill-failed'; sessionId: string; message: string }
 
 export interface WakeError {

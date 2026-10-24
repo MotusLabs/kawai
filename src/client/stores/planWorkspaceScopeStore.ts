@@ -85,15 +85,26 @@ export const usePlanWorkspaceScopeStore = create<PlanWorkspaceScopeState>(set =>
 }))
 
 /**
- * A contextual send is pending from submit until the session's next
- * user_message proves acceptance or the send's correlated refusal (Q2)
- * restores it. The client-minted `requestId` is the only refusal
- * correlation: an unrelated error never touches the pending entry, and a
- * resend never happens (D7: reconnect restores history, not sends). The
- * whole captured scope is kept so a refusal restores the attachment chip
- * exactly as it was.
+ * A contextual send is pending from submit until its own terminal answer
+ * (B1, Lead-authorized): the sender-only `chat-send-result` acceptance, or
+ * the send's correlated refusal (Q2), which restores text and attachment.
+ * The map is keyed by the client-minted `requestId` — a session may have
+ * several outstanding sends, and each settles only on its own answer, with
+ * the entry's `sessionId` checked so a malformed or unrelated answer never
+ * consumes another session's entry. `user_message` events never settle a
+ * pending send (they cannot be told from another host's message), and a
+ * resend never happens (D7: reconnect restores history, not sends — a
+ * disconnect restores the unanswered text into an empty draft, which is
+ * recovery, not authorization to resend). The whole captured scope is kept
+ * so a restore brings the attachment chip back exactly as it was.
  */
-export const pendingContextSends = new Map<string, { text: string; scope: CapturedWorkspaceScope; requestId: string }>()
+export const pendingContextSends = new Map<string, { sessionId: string; text: string; scope: CapturedWorkspaceScope }>()
+
+/** This session's unanswered contextual sends, oldest first. */
+export const pendingContextSendsFor = (sessionId: string): Array<{ requestId: string; text: string; scope: CapturedWorkspaceScope }> =>
+  [...pendingContextSends.entries()]
+    .filter(([, pending]) => pending.sessionId === sessionId)
+    .map(([requestId, pending]) => ({ requestId, ...pending }))
 
 /** True when two envelopes name the same context (used for the mismatch line). */
 export const sameEnvelope = (a: WorkspaceMessageEnvelope, b: WorkspaceMessageEnvelope): boolean =>

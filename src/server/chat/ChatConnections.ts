@@ -740,7 +740,18 @@ export class ChatConnections {
           }
         }
         const result = await this.manager.send(sessionId, message.text, envelope ?? undefined)
-        if (!result.ok) connection.send({ type: 'error', message: result.error, ...sendCorrelation })
+        if (!result.ok) {
+          connection.send({ type: 'error', message: result.error, ...sendCorrelation })
+          return
+        }
+        // The manager accepted the send — context stored with the visible
+        // user_message, turn enqueued or started — past the last refusal
+        // point. The sender-only acceptance answer (plan-workspace §6.3, B1)
+        // completes the send exactly once, on this connection only; it is
+        // never a ChatEvent and never sent without a readable requestId.
+        if (sendCorrelation.requestId !== undefined) {
+          connection.send({ type: 'chat-send-result', sessionId, requestId: sendCorrelation.requestId, accepted: true })
+        }
         return
       }
       case 'chat-interrupt': {
