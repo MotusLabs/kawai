@@ -30,6 +30,9 @@ export const taskSchemas = {
     ...taskId, summary: z.string().min(1), commit: z.string().optional(), diff: z.string().optional(),
     tests: z.array(z.object({ description: z.string().min(1), outcome: z.string().min(1) })).optional(),
     limitations: z.string().optional(),
+    // The coverage map's shape is D5's, checked by validateCoverageMap at the
+    // service boundary — a clause-indexed refusal the zod layer cannot name.
+    coverage: z.unknown().optional(),
   }),
   task_submit_findings: z.object({
     ...taskId, result_id: z.string().min(1), kind: z.enum(['review', 'qa']), verdict: z.enum(['pass', 'fail']), findings: z.string().min(1),

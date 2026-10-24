@@ -9,6 +9,7 @@
 import { partyName } from './actorRow'
 import type { ChatSessionRecord } from '../db'
 import { NULL_OWNERSHIP, type ExecutionOwnership } from '../plans/execution/executionOwnership'
+import { validateCoverageMap } from '../../shared/coverageMaps'
 import type { TaskResultCheck } from '../../shared/teamTasks'
 import type { AssignmentTarget, TaskFindings, TaskHandoffKind, TaskResult, TaskTestClaim, TeamTask, TeamTaskAssignment, TeamTaskSummary } from '../../shared/teamTasks'
 import { TASK_HANDOFF_KINDS } from '../../shared/teamTasks'
@@ -25,6 +26,8 @@ export interface ResultSubmission {
   diff?: string | null
   tests?: TaskTestClaim[]
   limitations?: string | null
+  /** The submitter's coverage map (independent-verification D5); validated, never free text. */
+  coverage?: unknown
 }
 
 export interface FindingsSubmission {
@@ -135,6 +138,10 @@ export class TaskResultService {
     if (!commit && !diff) throw new Error('A result needs a commit or a diff reference')
     const tests = (input.tests ?? []).map(row => ({ description: row.description.trim(), outcome: row.outcome.trim() }))
     if (tests.some(row => !row.description || !row.outcome)) throw new Error('Each test needs a description and an outcome')
+    // The coverage map (independent-verification D5): validated before
+    // anything is written, so a refused submission leaves no result row and
+    // no check row (J1). Storing it lands with the rest of task 3.1.
+    if (input.coverage !== undefined) validateCoverageMap(input.coverage)
     // plan-execution D9: for an owned change, the commit must be on its
     // branch and contain origin's head of it, checked before anything is
     // written; the old holder of a Restarted change is refused outright
