@@ -80,6 +80,8 @@ export function startServer(): void {
   const storedSettings = loadStoredSettings(db)
   const initialMouseMode = storedSettings.initialMouseMode
   let runtimeHistoryMaxAgeHours = storedSettings.historyMaxAgeHours
+  // The chat manager reads this live at each question (question-auto-answer D5).
+  let runtimeQuestionAutoAnswerMinutes = storedSettings.questionAutoAnswerMinutes
 
   // Chat provider environment: the Settings override wins over
   // AGENTBOARD_CHAT_ENV; read live by the chat manager at each SDK spawn.
@@ -403,6 +405,10 @@ export function startServer(): void {
     historyMaxAgeHours: {
       get: () => runtimeHistoryMaxAgeHours,
       set: (hours) => { runtimeHistoryMaxAgeHours = hours },
+    },
+    questionAutoAnswerMinutes: {
+      get: () => runtimeQuestionAutoAnswerMinutes,
+      set: (minutes) => { runtimeQuestionAutoAnswerMinutes = minutes },
     },
   }))
 
