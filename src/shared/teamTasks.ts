@@ -217,9 +217,11 @@ export type ResultHeadRelation = 'same' | 'ahead' | 'behind' | 'diverged'
 /**
  * The versioned facts one check recorded (independent-verification D2), at
  * most 64 KB as stored. Lists are capped (20 names plus a count, 30 compared
- * heads); a fact the check could not run reads `unknown`. `head` and `clean`
- * are null when the result's worktree does not exist; the commit is still
- * checked from the repository.
+ * heads); a fact whose precondition is missing reads `unknown` with its
+ * note. `head` and `clean` are null only when the check ended at the commit
+ * fact — nothing else was checked; a worktree that exists but reads badly
+ * carries `unknown` with the reason, and the commit is still checked from
+ * the repository.
  */
 export interface ResultCheckFacts {
   version: 1
@@ -232,20 +234,22 @@ export interface ResultCheckFacts {
     note: string | null
   }
   head: {
-    sha: string
+    sha: string | null
     branch: string | null
-    relation: ResultHeadRelation
-    ahead: number
-    behind: number
+    relation: ResultHeadRelation | null
+    ahead: number | null
+    behind: number | null
     status: ResultFactStatus
+    note: string | null
   } | null
   clean: {
-    clean: boolean
+    clean: boolean | null
     /** The first uncommitted paths, capped. */
     paths: string[]
     /** How many more uncommitted paths were found past the cap. */
     more: number
     status: ResultFactStatus
+    note: string | null
   } | null
   recorded: {
     status: ResultFactStatus
