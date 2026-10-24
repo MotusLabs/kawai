@@ -114,7 +114,9 @@ describe('result checks over a submitted result', () => {
     branches: { compared: [], comparedCount: 0, skipped: 0, status: 'pass' },
   })
 
-  // @covers: task-results › Result checks never block or gate › Restart during a check
+  // No @covers here: the test restarts after the check settled, the opposite
+  // leg of "Restart during a check" (its faithful test is resultCheckService
+  // › startup runs every pending row once, for every team) — C3 finding B1.
   test('submit commits a pending check with the result; the service settles it; a restart finds nothing (I1, C2)', async () => {
     const task = await tasks.create(agent('lead'), { title: 'Checked', direction: 'v1' })
     const checks = tasks.store.checks
