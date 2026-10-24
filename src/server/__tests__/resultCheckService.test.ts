@@ -118,6 +118,7 @@ describe('ResultCheckService over its store', () => {
     expect([first, second].map(row => checks.get(row.id)?.status)).toEqual(['done', 'done'])
   })
 
+  // @covers: specs/task-results "Result checks never block or gate"
   test('a call that does not answer: unavailable, and the next check still runs', async () => {
     const fixture = makeRepo(path.join(tempRoot, 'refusing'))
     const first = pending(fixture, 'result-1').check
@@ -157,6 +158,7 @@ describe('ResultCheckService over its store', () => {
     expect(stored?.reason).toBe('the team repository is missing')
   })
 
+  // @covers: specs/task-results "Result checks never block or gate"
   test('startup runs every pending row once, for every team', async () => {
     const fixture = makeRepo(path.join(tempRoot, 'startup'))
     pending(fixture, 'result-1')
