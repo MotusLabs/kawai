@@ -730,29 +730,44 @@ export class ChatConnections {
         // The wire envelope is untrusted (plan-workspace §4): an absent
         // field is an unscoped send; a malformed one refuses before the
         // manager touches anything. Every refusal echoes the readable
-        // requestId's correlation (Q2 above).
-        let envelope: WorkspaceMessageEnvelope | null | undefined
-        if (message.workspaceContext !== undefined) {
-          envelope = parseWorkspaceMessageEnvelope(message.workspaceContext)
-          if (!envelope) {
-            connection.send({ type: 'error', message: "The message's plan context is malformed; nothing was sent.", ...sendCorrelation })
+        // requestId's correlation (Q2 above). A throw before acceptance
+        // (F-C1) is a refusal too — exactly one correlated error, never a
+        // post-acceptance one — rethrown so the router's fire-and-forget
+        // still logs it; a send without a readable id keeps today's
+        // frame-less behavior.
+        try {
+          let envelope: WorkspaceMessageEnvelope | null | undefined
+          if (message.workspaceContext !== undefined) {
+            envelope = parseWorkspaceMessageEnvelope(message.workspaceContext)
+            if (!envelope) {
+              connection.send({ type: 'error', message: "The message's plan context is malformed; nothing was sent.", ...sendCorrelation })
+              return
+            }
+          }
+          const result = await this.manager.send(sessionId, message.text, envelope ?? undefined)
+          if (!result.ok) {
+            connection.send({ type: 'error', message: result.error, ...sendCorrelation })
             return
           }
-        }
-        const result = await this.manager.send(sessionId, message.text, envelope ?? undefined)
-        if (!result.ok) {
-          connection.send({ type: 'error', message: result.error, ...sendCorrelation })
+          // The manager accepted the send — context stored with the visible
+          // user_message, turn enqueued or started — past the last refusal
+          // point. The sender-only acceptance answer (plan-workspace §6.3, B1)
+          // completes the send exactly once, on this connection only; it is
+          // never a ChatEvent and never sent without a readable requestId.
+          if (sendCorrelation.requestId !== undefined) {
+            connection.send({ type: 'chat-send-result', sessionId, requestId: sendCorrelation.requestId, accepted: true })
+          }
           return
+        } catch (cause) {
+          if (sendCorrelation.requestId !== undefined) {
+            connection.send({
+              type: 'error',
+              message: `The chat could not accept the message: ${cause instanceof Error ? cause.message : String(cause)}`,
+              ...sendCorrelation,
+            })
+          }
+          throw cause
         }
-        // The manager accepted the send — context stored with the visible
-        // user_message, turn enqueued or started — past the last refusal
-        // point. The sender-only acceptance answer (plan-workspace §6.3, B1)
-        // completes the send exactly once, on this connection only; it is
-        // never a ChatEvent and never sent without a readable requestId.
-        if (sendCorrelation.requestId !== undefined) {
-          connection.send({ type: 'chat-send-result', sessionId, requestId: sendCorrelation.requestId, accepted: true })
-        }
-        return
       }
       case 'chat-interrupt': {
         const result = this.manager.interrupt(sessionId)

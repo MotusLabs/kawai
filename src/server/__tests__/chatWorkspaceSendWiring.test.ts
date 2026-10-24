@@ -187,3 +187,43 @@ describe('chatWorkspaceSendWiring: the client-minted correlation (§6.3, Q2)', (
     expect(messages).toEqual([{ type: 'error', message: 'Unknown chat session gone' }])
   })
 })
+
+describe('chatWorkspaceSendWiring: a throwing manager.send still answers (F-C1)', () => {
+  const explodingManager = () => ({
+    whenRestored: () => Promise.resolve(),
+    has: () => true,
+    send: async () => { throw new Error('driver exploded') },
+  }) as unknown as ChatSessionManager
+
+  test('a send carrying requestId gets exactly one correlated error, no acceptance, and the throw propagates', async () => {
+    const messages: ServerMessage[] = []
+    let thrown: unknown
+    try {
+      await new ChatConnections(explodingManager()).handle(connection(messages), {
+        type: 'chat-send', sessionId: 'chat-1', text: 'x', requestId: 'req-boom', workspaceContext: envelope,
+      })
+    } catch (cause) { thrown = cause }
+    // The client learns the send did not land — the correlated refusal is the
+    // terminal answer, so a pending send never waits forever on an exception
+    // boundary, and it arrives before the rethrow (never post-acceptance).
+    expect(messages).toEqual([{
+      type: 'error',
+      message: 'The chat could not accept the message: driver exploded',
+      requestId: 'req-boom', sessionId: 'chat-1',
+    }])
+    expect((thrown as Error)?.message).toBe('driver exploded')
+  })
+
+  test('a throw in a send without requestId keeps the frame-less shape, throw still propagates', async () => {
+    const messages: ServerMessage[] = []
+    let thrown: unknown
+    try {
+      await new ChatConnections(explodingManager()).handle(connection(messages), {
+        type: 'chat-send', sessionId: 'chat-1', text: 'x',
+      })
+    } catch (cause) { thrown = cause }
+    // Today's exact behavior for uncorrelated sends: no frame, the error logs.
+    expect(messages).toEqual([])
+    expect((thrown as Error)?.message).toBe('driver exploded')
+  })
+})

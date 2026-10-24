@@ -2,6 +2,7 @@
 // error/terminal banners.
 import { useSessionStore } from '../stores/sessionStore'
 import { useUpdateStore } from '../stores/updateStore'
+import { consumeSendAnswer } from '../stores/pendingSendRecovery'
 import { setClientLogLevel } from '../utils/clientLog'
 import type { ServerMessage } from '@shared/types'
 import type { MessageRouterDeps } from './types'
@@ -38,6 +39,9 @@ export function handleError(
   message: Extract<ServerMessage, { type: 'error' }>,
   deps: MessageRouterDeps
 ): void {
+  // A correlated refusal (plan-workspace §6.3, B1) settles its pending send
+  // at the connection consumer first; the error itself still shows as today.
+  consumeSendAnswer(message)
   deps.setTransientError(message.message)
 }
 

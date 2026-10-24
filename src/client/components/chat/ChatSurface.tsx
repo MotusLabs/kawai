@@ -51,7 +51,7 @@ import type { SessionDirectoryEntry } from '@shared/team'
 import type { ConnectionStatus } from '../../stores/sessionStore'
 import { emptyTranscript, useChatStore } from '../../stores/chatStore'
 import { useSessionStore } from '../../stores/sessionStore'
-import { pendingContextSends, pendingContextSendsFor, usePlanWorkspaceScopeStore, type CapturedWorkspaceScope } from '../../stores/planWorkspaceScopeStore'
+import { pendingContextSends, type CapturedWorkspaceScope } from '../../stores/planWorkspaceScopeStore'
 import { claimReveal, createHostToken, isRevealDesignated, registryFor, releaseReveal } from '../../stores/chatAttachment'
 import ChatActivityRow from './ChatActivityRow'
 import ChatMessages from './ChatMessages'
@@ -154,48 +154,13 @@ export default function ChatSurface({
   }, [restoreDraft, session.id])
   const pendingClearRef = useRef<string | null>(null)
   useEffect(() => { pendingClearRef.current = null; setResetRefusal(false); setRestoreDraft(null) }, [session.id])
-  // A contextual send is answered exactly once on its connection (B1): after
-  // a drop its terminal answer may never arrive, so the unanswered sends are
-  // recovered — the oldest fills an empty draft, and the rest stay retained
-  // to recover in turn on the next settlement or reconnect while the draft is
-  // empty. Recovery of unsent or unconfirmed text, never a resend (D7:
-  // reconnect restores history, never sends).
-  useEffect(() => {
-    if (connected) return
-    if ((useChatStore.getState().drafts[session.id] ?? '') !== '') return
-    const pending = pendingContextSendsFor(session.id)
-    if (pending.length === 0) return
-    const [{ requestId, text, scope }] = pending
-    pendingContextSends.delete(requestId)
-    useChatStore.getState().setDraft(session.id, text)
-    usePlanWorkspaceScopeStore.getState().setScope(session.id, scope)
-  }, [connected, session.id])
   useEffect(() => {
     if (!subscribe) return
     return subscribe((message) => {
-      // Contextual sends (§6.3, B1): each pending entry settles only on its
-      // own terminal answer — the sender-only `chat-send-result` acceptance,
-      // or THAT send's correlated refusal (Q2 — the echoed requestId), which
-      // restores the text and captured scope only while the composer's
-      // post-submit clear left the draft empty (typing since means the human
-      // moved on). A `user_message` event never settles a pending send: it
-      // cannot be told from another host's message. The entry's own
-      // sessionId is checked on every settlement, so a malformed or
-      // unrelated answer never consumes another session's entry; no
-      // automatic resend either way.
-      if (message.type === 'chat-send-result' && message.accepted
-        && pendingContextSends.get(message.requestId)?.sessionId === message.sessionId) {
-        pendingContextSends.delete(message.requestId)
-      } else if (message.type === 'error' && message.requestId !== undefined) {
-        const pending = pendingContextSends.get(message.requestId)
-        if (pending && pending.sessionId === message.sessionId) {
-          pendingContextSends.delete(message.requestId)
-          if ((useChatStore.getState().drafts[session.id] ?? '') === '') {
-            useChatStore.getState().setDraft(session.id, pending.text)
-            usePlanWorkspaceScopeStore.getState().setScope(session.id, pending.scope)
-          }
-        }
-      }
+      // Contextual-send answers (§6.3, B1) are settled by the connection
+      // consumer (pendingSendRecovery, wired into the message router), not
+      // here — a role switch, a closed Plans tab, or a closed full-screen
+      // view must never strand an unanswered send or its recovery.
       const previous = pendingClearRef.current
       if (!previous) return
       if (
@@ -248,7 +213,8 @@ export default function ChatSurface({
     // A workspace host supplies the draft's captured scope (§6.3); reset
     // commands above never carry context. The envelope rides the additive
     // chat-send field with a client-minted requestId (Q2) that gets exactly
-    // one terminal answer (B1): the sender-only acceptance, or the correlated
+    // one terminal answer (B1), settled by the connection consumer
+    // (pendingSendRecovery): the sender-only acceptance, or the correlated
     // refusal, which restores text and attachment. Entries are keyed by the
     // requestId, so rapid sends stay independent.
     const scope = onSubmitContext?.() ?? null

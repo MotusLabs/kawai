@@ -11,28 +11,90 @@
 // sends unscoped.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
-import type { ComponentProps } from 'react'
+import { cloneElement, useState, type ComponentProps, type MutableRefObject, type ReactElement } from 'react'
 import type { ClientMessage, ServerMessage, Session } from '@shared/types'
 import type { WorkspaceRepository, WorkspaceSnapshot as ClientWorkspaceSnapshot } from '@shared/workspace'
 import type { WorkspaceBindingView, WorkspaceSnapshot } from '@shared/planWorkspace'
 import { normalizePlanContent, type PlanRevision } from '@shared/plans'
 import PlanWorkspaceConversation from '../components/team/PlanWorkspaceConversation'
+import NewSessionModal from '../components/NewSessionModal'
 import { planDetail, planSummary } from './planViewFixtures'
+import { createMessageRouter } from '../protocol/messageRouter'
+import type { MessageRouterDeps } from '../protocol/types'
 import { useChatStore } from '../stores/chatStore'
+import { useSessionStore } from '../stores/sessionStore'
 import { useWorkspaceStore } from '../stores/workspaceStore'
+import { DEFAULT_PRESETS } from '../stores/settingsStore'
 import { useTeamPlanWorkspaceStore } from '../stores/teamPlanWorkspaceStore'
 import { pendingContextSends, usePlanWorkspaceScopeStore } from '../stores/planWorkspaceScopeStore'
 
 const renderers: TestRenderer.ReactTestRenderer[] = []
+// The New Session dialog needs window/document handles (focus, Escape); the
+// conversation-level chain (B5-T1) mounts the REAL modal, so the stubs live
+// here beside the originals' restoration.
+const globalAny = globalThis as typeof globalThis & {
+  window?: Window & typeof globalThis
+  document?: Document
+}
+const originalWindow = globalAny.window
+const originalDocument = globalAny.document
+const originalFetch = globalThis.fetch
+/** Minimal window/document the dialog's focus and key handling bind to. */
+const setupDom = () => {
+  globalAny.document = { querySelector: () => ({ removeAttribute: () => {}, focus: () => {} }) } as unknown as Document
+  const keyHandlers = new Map<string, EventListener>()
+  globalAny.window = {
+    addEventListener: (event: string, handler: EventListener) => { keyHandlers.set(event, handler) },
+    removeEventListener: (event: string) => { keyHandlers.delete(event) },
+    setTimeout: (() => 1 as unknown as ReturnType<typeof setTimeout>) as unknown as typeof setTimeout,
+  } as unknown as Window & typeof globalThis
+  return { keyHandlers }
+}
+/** The chat create path's catalog fetch never reaches the network in tests. */
+const stubCatalogFetch = () => {
+  globalThis.fetch = (async (url: string) =>
+    String(url).startsWith('/api/chat/groups')
+      ? Response.json({ groups: [], errors: [] })
+      : Response.json({ profiles: [{ id: 'default', label: 'Default' }], errors: [] })) as unknown as typeof fetch
+}
+/** Drains the dialog's catalog microtasks after it opens. */
+const settleCatalog = async () => {
+  await act(async () => { for (let i = 0; i < 12; i++) await Promise.resolve() })
+}
 afterEach(() => {
   for (const renderer of renderers) act(() => renderer.unmount())
   renderers.length = 0
+  globalAny.window = originalWindow
+  globalAny.document = originalDocument
+  globalThis.fetch = originalFetch
   useChatStore.setState({ sessions: {}, drafts: {}, pendingReveal: null })
+  useSessionStore.setState({ connectionStatus: 'connected', connectionEpoch: 1 })
   useWorkspaceStore.setState({ snapshot: null })
   useTeamPlanWorkspaceStore.setState({ views: {}, teamBindings: {} })
   usePlanWorkspaceScopeStore.setState({ scopes: {}, attempts: {} })
   pendingContextSends.clear()
 })
+
+// Contextual-send answers settle through the REAL router (the dispatcher App
+// subscribes for its lifetime), never through a surface's private listener.
+const emptyRef = <T,>(): MutableRefObject<T> => ({ current: undefined as unknown as T })
+const routerDeps: MessageRouterDeps = {
+  getConnectionEpoch: () => 1,
+  sendClient: () => {},
+  setTransientError: () => {},
+  clearTransientError: () => {},
+  openSessionFormPrefilled: () => {},
+  setPendingHibernatingSession: () => {},
+  pendingKills: { current: new Map() },
+  pendingHibernateSelection: emptyRef(),
+  pendingWakeSelection: emptyRef(),
+  pendingWorktreeLaunch: emptyRef(),
+  pendingChangeLaunch: emptyRef(),
+}
+const route = (message: ServerMessage) =>
+  // Settlement and recovery write stores the mounted panel renders from, so
+  // every routed answer is an act-wrapped update like any user-visible one.
+  act(() => { createMessageRouter(routerDeps)(message) })
 
 const makeSession = (id: string, overrides: Partial<Session> = {}) =>
   ({
@@ -79,7 +141,7 @@ const selectionWith = (bindings: WorkspaceBindingView[], leadGroup?: string) => 
 
 type PanelProps = ComponentProps<typeof PlanWorkspaceConversation>
 
-const mountPanel = (overrides: Partial<PanelProps> = {}) => {
+const mountPanel = (overrides: Partial<PanelProps> = {}, wrap?: (panel: ReactElement) => ReactElement) => {
   const sent: ClientMessage[] = []
   let listeners: Array<(message: ServerMessage) => void> = []
   const subscribe = (listener: (message: ServerMessage) => void) => {
@@ -91,8 +153,10 @@ const mountPanel = (overrides: Partial<PanelProps> = {}) => {
     teamPath: '/repo', sessions: [],
     connected: true, connectionEpoch: 1, sendMessage, subscribe, selection: null,
   }
-  const element = (extra: Partial<PanelProps> = {}) =>
-    <PlanWorkspaceConversation {...base} {...overrides} {...extra} />
+  const element = (extra: Partial<PanelProps> = {}) => {
+    const panel = <PlanWorkspaceConversation {...base} {...overrides} {...extra} />
+    return wrap ? wrap(panel) : panel
+  }
   let renderer!: TestRenderer.ReactTestRenderer
   act(() => { renderer = TestRenderer.create(element()) })
   renderers.push(renderer)
@@ -191,7 +255,7 @@ describe('PlanWorkspaceConversation binding (§6.2)', () => {
 
   test('create-then-bind binds only an observed same-team chat; any creation discharges the arm; an error disarms', () => {
     const panel = mountPanel({ sessions: [], onOpenNewSession: () => {} })
-    panel.byId('conversation-new-chat-architect').props.onClick()
+    act(() => { panel.byId('conversation-new-chat-architect').props.onClick() })
     // An other-team creation is never bound — and it still discharges the arm.
     panel.deliver({ type: 'session-created', session: {
       id: 's-x', name: 'x', kind: 'chat', projectPath: '/elsewhere',
@@ -199,7 +263,7 @@ describe('PlanWorkspaceConversation binding (§6.2)', () => {
     } as unknown as Session })
     expect(panel.sent.filter(message => message.type === 'team-plan-workspace-bind')).toEqual([])
     // Re-arm: a same-team creation binds with the created id.
-    panel.byId('conversation-new-chat-architect').props.onClick()
+    act(() => { panel.byId('conversation-new-chat-architect').props.onClick() })
     panel.deliver({ type: 'session-created', session: {
       id: 's-new', name: 'n', kind: 'chat', projectPath: '/repo',
       status: 'waiting', lastActivity: 'now', createdAt: 'now', source: 'managed',
@@ -217,10 +281,55 @@ describe('PlanWorkspaceConversation binding (§6.2)', () => {
 
   test('a creation error disarms create-then-bind: nothing binds afterwards', () => {
     const panel = mountPanel({ sessions: [], onOpenNewSession: () => {} })
-    panel.byId('conversation-new-chat-architect').props.onClick()
+    act(() => { panel.byId('conversation-new-chat-architect').props.onClick() })
     panel.deliver({ type: 'error', message: 'Claude Agent SDK is unavailable.' })
     panel.deliver({ type: 'session-created', session: {
       id: 's-late', name: 'l', kind: 'chat', projectPath: '/repo',
+      status: 'waiting', lastActivity: 'now', createdAt: 'now', source: 'managed',
+    } as unknown as Session })
+    expect(panel.sent.filter(message => message.type === 'team-plan-workspace-bind')).toEqual([])
+  })
+
+  test('a real dialog Cancel disarms create-then-bind through the full chain; a later unrelated creation binds nothing (B5-T1)', async () => {
+    setupDom()
+    stubCatalogFetch()
+    const glue: { current: ((created: boolean) => void) | null } = { current: null }
+    const dismissals: boolean[] = []
+    // The host wiring App uses (§6.2): the panel's onOpenNewSession stores the
+    // dialog's dismiss callback and opens the REAL modal; every dialog exit is
+    // reported through onDismiss exactly once and discharges the stored arm.
+    const wrap = (panelElement: ReactElement) => {
+      const Harness = () => {
+        const [dialogOpen, setDialogOpen] = useState(false)
+        return <>
+          {cloneElement(panelElement, {
+            onOpenNewSession: (onDismissed?: (created: boolean) => void) => {
+              glue.current = onDismissed ?? null
+              setDialogOpen(true)
+            },
+          })}
+          <NewSessionModal isOpen={dialogOpen} onClose={() => setDialogOpen(false)}
+            onDismiss={created => { dismissals.push(created); glue.current?.(created); glue.current = null }}
+            onCreate={() => setDialogOpen(false)}
+            defaultProjectDir="/repo" commandPresets={DEFAULT_PRESETS} defaultPresetId="claude" />
+        </>
+      }
+      return <Harness />
+    }
+    const panel = mountPanel({ sessions: [] }, wrap)
+    // The arm opens the REAL modal — not a stub of the dialog.
+    act(() => { panel.byId('conversation-new-chat-architect').props.onClick() })
+    expect(panel.renderer.root.findByProps({ role: 'dialog' })).toBeTruthy()
+    await settleCatalog()
+    // A real Cancel click abandons creation: the modal reports dismissed(false)
+    // and the panel's callback disarms the arm.
+    const cancel = panel.renderer.root.findAllByType('button')
+      .find(button => button.props.children === 'Cancel')!
+    act(() => { cancel.props.onClick() })
+    expect(dismissals).toEqual([false])
+    // The discharged arm binds nothing — not even a same-team creation.
+    panel.deliver({ type: 'session-created', session: {
+      id: 's-new', name: 'n', kind: 'chat', projectPath: '/repo',
       status: 'waiting', lastActivity: 'now', createdAt: 'now', source: 'managed',
     } as unknown as Session })
     expect(panel.sent.filter(message => message.type === 'team-plan-workspace-bind')).toEqual([])
@@ -314,6 +423,10 @@ describe('PlanWorkspaceConversation binding (§6.2)', () => {
 describe('PlanWorkspaceConversation captured scope (§6.3)', () => {
   beforeEach(() => {
     seedRepositories()
+    // Production: the app is connected while composing (the composer refuses
+    // offline sends), and the connection consumer keys recovery off the real
+    // status store.
+    act(() => { useSessionStore.getState().setConnectionState('connected', null, 1) })
     act(() => { useChatStore.getState().snapshot(snapshotMessage({ sessionId: 's-a' })) })
   })
 
@@ -391,7 +504,7 @@ describe('PlanWorkspaceConversation captured scope (§6.3)', () => {
     expect(useChatStore.getState().drafts['s-a']).toBeUndefined()
     // The refusal echoes the send's client-minted requestId (Q2): that is the
     // only restore trigger.
-    panel.deliver({ type: 'error', message: 'Workspace context is stale: revision has moved on.',
+    route({ type: 'error', message: 'Workspace context is stale: revision has moved on.',
       requestId: sentRequestId(panel), sessionId: 's-a' })
     expect(panel.renderer.root.findByType('textarea').props.value).toBe('hello')
     expect(panel.has('composer-scope')).toBe(true)
@@ -399,9 +512,9 @@ describe('PlanWorkspaceConversation captured scope (§6.3)', () => {
     // The pending was consumed: even a correlated-looking later error restores
     // nothing, and a generic unrelated error never did.
     act(() => { panel.renderer.root.findByType('textarea').props.onChange({ target: { value: '' } }) })
-    panel.deliver({ type: 'error', message: 'something else',
+    route({ type: 'error', message: 'something else',
       requestId: 'different-request', sessionId: 's-a' })
-    panel.deliver({ type: 'error', message: 'generic server error' })
+    route({ type: 'error', message: 'generic server error' })
     expect(panel.renderer.root.findByType('textarea').props.value).toBe('')
   })
 
@@ -410,12 +523,12 @@ describe('PlanWorkspaceConversation captured scope (§6.3)', () => {
     type(panel, 'hello')
     submit(panel)
     // A legacy-shaped or mis-addressed error must not consume the pending.
-    panel.deliver({ type: 'error', message: 'Workspace context is stale: revision has moved on.' })
-    panel.deliver({ type: 'error', message: 'stale', requestId: sentRequestId(panel), sessionId: 'other' })
+    route({ type: 'error', message: 'Workspace context is stale: revision has moved on.' })
+    route({ type: 'error', message: 'stale', requestId: sentRequestId(panel), sessionId: 'other' })
     expect(panel.renderer.root.findByType('textarea').props.value).toBe('')
     expect(pendingContextSends.size).toBe(1)
     // The real correlated refusal still works afterwards.
-    panel.deliver({ type: 'error', message: 'stale', requestId: sentRequestId(panel), sessionId: 's-a' })
+    route({ type: 'error', message: 'stale', requestId: sentRequestId(panel), sessionId: 's-a' })
     expect(panel.renderer.root.findByType('textarea').props.value).toBe('hello')
   })
 
@@ -425,12 +538,12 @@ describe('PlanWorkspaceConversation captured scope (§6.3)', () => {
     submit(panel)
     // A user_message arrives — another host's send, or this one's own echo:
     // neither can be told apart, so neither settles the entry (B1).
-    panel.deliver({ type: 'chat-events', sessionId: 's-a', events: [
+    route({ type: 'chat-events', sessionId: 's-a', events: [
       { id: 'u1', sequence: 1, at: '2026-10-24T09:00:00.000Z', turnId: 't1', type: 'user_message', text: 'hello' },
     ] })
     expect(pendingContextSends.size).toBe(1)
     // The correlated refusal still restores text and attachment afterwards.
-    panel.deliver({ type: 'error', message: 'Workspace context is stale: revision has moved on.',
+    route({ type: 'error', message: 'Workspace context is stale: revision has moved on.',
       requestId: sentRequestId(panel), sessionId: 's-a' })
     expect(panel.renderer.root.findByType('textarea').props.value).toBe('hello')
     expect(panel.has('composer-scope')).toBe(true)
@@ -443,9 +556,9 @@ describe('PlanWorkspaceConversation captured scope (§6.3)', () => {
     const first = boundPanel()
     type(first, 'one')
     submit(first)
-    first.deliver({ type: 'chat-send-result', sessionId: 's-a', requestId: sentRequestId(first)!, accepted: true })
+    route({ type: 'chat-send-result', sessionId: 's-a', requestId: sentRequestId(first)!, accepted: true })
     expect(pendingContextSends.size).toBe(0)
-    first.deliver({ type: 'chat-events', sessionId: 's-a', events: [
+    route({ type: 'chat-events', sessionId: 's-a', events: [
       { id: 'u1', sequence: 1, at: '2026-10-24T09:00:00.000Z', turnId: 't1', type: 'user_message', text: 'one' },
     ] })
     expect(first.renderer.root.findByType('textarea').props.value).toBe('')
@@ -454,10 +567,10 @@ describe('PlanWorkspaceConversation captured scope (§6.3)', () => {
     const second = boundPanel()
     type(second, 'two')
     submit(second)
-    second.deliver({ type: 'chat-events', sessionId: 's-a', events: [
+    route({ type: 'chat-events', sessionId: 's-a', events: [
       { id: 'u2', sequence: 2, at: '2026-10-24T09:00:01.000Z', turnId: 't1', type: 'user_message', text: 'two' },
     ] })
-    second.deliver({ type: 'chat-send-result', sessionId: 's-a', requestId: sentRequestId(second)!, accepted: true })
+    route({ type: 'chat-send-result', sessionId: 's-a', requestId: sentRequestId(second)!, accepted: true })
     expect(pendingContextSends.size).toBe(0)
     expect(second.renderer.root.findByType('textarea').props.value).toBe('')
     expect(sends(second)).toHaveLength(1)
@@ -476,11 +589,11 @@ describe('PlanWorkspaceConversation captured scope (§6.3)', () => {
     // The second send's refusal consumes only its own entry; the draft was
     // empty (post-submit clear), so its text and attachment restore, and the
     // first entry stays pending.
-    panel.deliver({ type: 'error', message: 'stale', requestId: secondRequest, sessionId: 's-a' })
+    route({ type: 'error', message: 'stale', requestId: secondRequest, sessionId: 's-a' })
     expect(pendingContextSends.size).toBe(1)
     expect(panel.renderer.root.findByType('textarea').props.value).toBe('second')
     // The first send's acceptance drops the last entry, restoring nothing.
-    panel.deliver({ type: 'chat-send-result', sessionId: 's-a', requestId: firstRequest!, accepted: true })
+    route({ type: 'chat-send-result', sessionId: 's-a', requestId: firstRequest!, accepted: true })
     expect(pendingContextSends.size).toBe(0)
     expect(panel.renderer.root.findByType('textarea').props.value).toBe('second')
   })
@@ -490,11 +603,11 @@ describe('PlanWorkspaceConversation captured scope (§6.3)', () => {
     type(panel, 'hello')
     submit(panel)
     const request = sentRequestId(panel)!
-    panel.deliver({ type: 'chat-send-result', sessionId: 's-other', requestId: request, accepted: true })
-    panel.deliver({ type: 'error', message: 'late', requestId: request, sessionId: 's-other' })
+    route({ type: 'chat-send-result', sessionId: 's-other', requestId: request, accepted: true })
+    route({ type: 'error', message: 'late', requestId: request, sessionId: 's-other' })
     expect(pendingContextSends.size).toBe(1)
     // The correctly addressed acceptance still settles it.
-    panel.deliver({ type: 'chat-send-result', sessionId: 's-a', requestId: request, accepted: true })
+    route({ type: 'chat-send-result', sessionId: 's-a', requestId: request, accepted: true })
     expect(pendingContextSends.size).toBe(0)
   })
 
@@ -506,7 +619,9 @@ describe('PlanWorkspaceConversation captured scope (§6.3)', () => {
     type(panel, 'second text')
     submit(panel)
     const secondRequest = sentRequestAt(panel, 1)
-    panel.rerender({ connected: false })
+    // The drop is the CONNECTION's (B1-R2), not a panel prop: recovery runs
+    // in the connection consumer whether or not this surface is mounted.
+    act(() => { useSessionStore.getState().setConnectionState('disconnected', null, 1) })
     // The oldest fills the empty composer — recovery of unconfirmed text, no
     // resend — and the second entry stays retained.
     expect(panel.renderer.root.findByType('textarea').props.value).toBe('first text')
@@ -516,13 +631,31 @@ describe('PlanWorkspaceConversation captured scope (§6.3)', () => {
     // The restored send's late correlated refusal is moot (entry already
     // recovered); the retained entry's refusal cannot overwrite the restored
     // draft — restore needs an empty draft, so only the error shows.
-    panel.deliver({ type: 'error', message: 'late', requestId: firstRequest, sessionId: 's-a' })
+    route({ type: 'error', message: 'late', requestId: firstRequest, sessionId: 's-a' })
     expect(panel.renderer.root.findByType('textarea').props.value).toBe('first text')
-    panel.deliver({ type: 'error', message: 'stale', requestId: secondRequest, sessionId: 's-a' })
+    route({ type: 'error', message: 'stale', requestId: secondRequest, sessionId: 's-a' })
     expect(panel.renderer.root.findByType('textarea').props.value).toBe('first text')
     expect(pendingContextSends.size).toBe(0)
     // Emptying the text drops the restored scope.
     type(panel, '')
     expect(usePlanWorkspaceScopeStore.getState().scopes['s-a']).toBeUndefined()
+  })
+
+  test('a drop into an occupied draft restores nothing; emptying the composer while disconnected recovers the original', () => {
+    const panel = boundPanel()
+    type(panel, 'in flight')
+    submit(panel)
+    type(panel, 'the human typed since')
+    // The drop cannot overwrite typed text: the original stays retained.
+    act(() => { useSessionStore.getState().setConnectionState('disconnected', null, 1) })
+    expect(panel.renderer.root.findByType('textarea').props.value).toBe('the human typed since')
+    expect(pendingContextSends.size).toBe(1)
+    expect(sends(panel)).toHaveLength(1)
+    // Still disconnected, emptying the composer recovers the original — with
+    // its own captured scope — exactly once.
+    type(panel, '')
+    expect(panel.renderer.root.findByType('textarea').props.value).toBe('in flight')
+    expect(panel.has('composer-scope')).toBe(true)
+    expect(pendingContextSends.size).toBe(0)
   })
 })
