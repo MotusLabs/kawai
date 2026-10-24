@@ -764,6 +764,9 @@ export type ClientMessage =
   // task under the existing closing rights; a reason when it is flagged or
   // child work is open.
   | { type: 'team-task-accept-result'; teamPath: string; requestId: string; taskId: string; resultId: string; reason?: string }
+  // Request a new check of one result (independent-verification D4); a
+  // request while a check is pending returns that pending check.
+  | { type: 'team-task-recheck'; teamPath: string; requestId: string; taskId: string; resultId: string }
   // Request review / Request QA / Return for fixes (D3): a handoff of one
   // result to a role, idempotent under the client's request key.
   | {

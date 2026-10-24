@@ -325,7 +325,7 @@ describe('spawn-time registration', () => {
     // impact tools (strategy-revision-impact D10; read and propose, no decide), and the
     // read-only metrics tool (team-process-metrics D5), and the report tools
     // (team-process-metrics D6; no decide/apply/withdraw/relink/unlink).
-    const resultTools = ['task_submit_result', 'task_submit_findings', 'task_handoff']
+    const resultTools = ['task_submit_result', 'task_submit_findings', 'task_handoff', 'task_check_result']
     const planTools = ['plan_list', 'plan_get', 'plan_create', 'plan_save_draft', 'plan_submit_for_review']
     // Validation tools (plan-validation D10; validate, read, assess — no decide or approve).
     const validationTools = ['plan_validate', 'plan_validation_get', 'plan_assess']

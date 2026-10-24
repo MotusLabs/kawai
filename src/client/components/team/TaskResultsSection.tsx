@@ -97,6 +97,11 @@ export default function TaskResultsSection({ detail, groups, sessions, connected
         <button type="button" className="btn text-chat-meta" data-testid="task-accept" disabled={disabled || result.acceptedAt !== null}
           title={!connected ? 'Reconnect to accept' : result.acceptedAt !== null ? 'Already accepted' : undefined}
           onClick={() => { setAccepting(result.id); setReason('') }}>Accept result</button>
+        {/* Recheck (independent-verification D4): asks Kawai to check again; idempotent
+            while a check is pending, so no request key is armed. */}
+        <button type="button" className="btn text-chat-meta" data-testid="task-recheck" disabled={disabled}
+          title={!connected ? 'Reconnect to recheck' : undefined}
+          onClick={() => act('recheck', { type: 'team-task-recheck', resultId: result.id })}>Recheck</button>
         {result.supersededBy === null && TASK_HANDOFF_KINDS.map(kind => <button key={kind} type="button" className="btn text-chat-meta"
           data-testid={`task-handoff-${kind}`} disabled={disabled}
           onClick={() => setHandoff(current => current?.kind === kind ? current
