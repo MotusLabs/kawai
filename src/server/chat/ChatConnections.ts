@@ -765,6 +765,14 @@ export class ChatConnections {
         if (!result.ok) connection.send({ type: 'error', message: result.error })
         return
       }
+      case 'chat-question-hold': {
+        // Wait for me (question-auto-answer D4): the hold rides the driver's
+        // ordinary event broadcast, so every attached client sees the held
+        // event; failures echo to the sender only.
+        const result = this.manager.holdQuestion(sessionId, message.requestId)
+        if (!result.ok) connection.send({ type: 'error', message: result.error })
+        return
+      }
       case 'chat-dismiss-notification': {
         // The manager removes the key and pushes the new list to every
         // subscribed connection (notification strip design D6); unknown keys
