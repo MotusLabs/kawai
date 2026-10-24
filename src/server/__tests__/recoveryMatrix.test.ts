@@ -9,21 +9,11 @@
 import { describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import path from 'node:path'
+import { testTitles } from '../checks/testTitles'
 
 const REPO = path.resolve(import.meta.dir, '../../..')
 const MATRIX = path.join(REPO, 'docs', 'recovery-matrix.md')
 const COLUMNS = ['Fault', 'Mechanism', 'Owning change', 'Contract', 'Test']
-
-/** Every literal title of a `test`, `it`, or `describe` call (modifiers such as `.skip` included), unescaped. */
-function testTitles(source: string): Set<string> {
-  const titles = new Set<string>()
-  const call = /\b(?:test|it|describe)(?:\.\w+)*\(\s*(['"`])((?:\\.|(?!\1)[^\\])*)\1/g
-  for (const match of source.matchAll(call)) {
-    if (match[1] === '`' && match[2]!.includes('${')) continue
-    titles.add(match[2]!.replace(/\\(.)/g, '$1'))
-  }
-  return titles
-}
 
 const cells = (line: string) => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(cell => cell.trim())
 

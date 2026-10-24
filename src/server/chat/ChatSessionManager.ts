@@ -1180,6 +1180,9 @@ export class ChatSessionManager {
       onError: error => logger.warn('team_mailbox_dispatch_failed', { error: String(error) }),
       ownership: executionCore.ownership,
       onTaskResultWrite: taskId => executionCore.wakes.resultWrite(taskId),
+      // A settled check changes what the task detail reads (independent-
+      // verification D12): the human's open views refresh like on a task write.
+      onCheckSettled: teamId => options.onTaskChange?.(teamId),
     })
     this.mailbox = this.teamMail.mailbox
     this.tasks = this.teamMail.tasks

@@ -12,7 +12,7 @@
 // only through the explicit `indexFile` option.
 
 import path from 'node:path'
-import { computeContentKey } from './checkKey'
+import { computeContentKey } from '../../src/server/checks/checkKey'
 import {
   readRecord,
   recordsDir,
@@ -20,7 +20,7 @@ import {
   writeRecord,
   type CheckRecord,
   type CheckStep,
-} from './checkRecords'
+} from '../../src/server/checks/checkRecords'
 
 export interface CheckStepSpec {
   name: string

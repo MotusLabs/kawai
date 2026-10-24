@@ -3,10 +3,34 @@
 // so both render assistant text with the same elements and styling. Sizes are
 // em-relative and the wrapper sets none, so the renderer inherits its base
 // size: the chat's --chat-font-size, or the preview's own text-sm.
+// Optional reader resolvers (plan-workspace 5.3): a host may pass
+// `resolveLink`/`resolveImage` to route relative targets through itself —
+// every option is additive and absent by default, so chat rendering keeps
+// its exact behavior (links open externally; images render plainly).
 import { memo } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
+import type { RefusedLink, ResolvedImage, ResolvedLink } from '../utils/planWorkspaceMarkdown'
+import { refusedReasonLabel } from '../utils/planWorkspaceMarkdown'
+
+/** How the reader resolves relative Markdown links and images (plan-workspace 5.3). */
+export interface MarkdownResolvers {
+  resolveLink?: (href: string) => ResolvedLink | null
+  resolveImage?: (src: string) => ResolvedImage | null
+  /** A resolved relative link's navigation (the reader swaps the displayed document). */
+  onOpenDocument?: (relativePath: string) => void
+}
+
+const linkClass = 'text-accent underline underline-offset-2 hover:text-primary'
+
+/** A refused link or image, rendered inert with its reason (never fetched). */
+function RefusedInline({ refusal, children }: { refusal: RefusedLink; children?: React.ReactNode }) {
+  return <span title={refusal.href} className="text-chat-meta text-secondary" data-refused-reason={refusal.reason}>
+    {children}
+    <span className="ml-1 text-[0.85em]">({refusedReasonLabel(refusal.reason)})</span>
+  </span>
+}
 
 // Tailwind-styled element overrides for rendered markdown (no typography plugin).
 const markdownComponents: Components = {
@@ -76,10 +100,38 @@ const markdownComponents: Components = {
   td: ({ children, style }) => <td style={style} className="border border-border px-2 py-1 align-top">{children}</td>,
 }
 
-function Markdown({ content }: { content: string }) {
+function Markdown({ content, resolvers }: { content: string; resolvers?: MarkdownResolvers }) {
+  const components: Components = resolvers
+    ? {
+        ...markdownComponents,
+        a: ({ children, href }) => {
+          const resolved = href !== undefined ? resolvers.resolveLink?.(href) ?? null : null
+          if (resolved === null) {
+            return <a href={href} target="_blank" rel="noreferrer noopener" className={linkClass}>{children}</a>
+          }
+          if (resolved.kind === 'document') {
+            return <button type="button" className={`${linkClass} text-left`} data-reader-link={resolved.relativePath}
+              onClick={() => resolvers.onOpenDocument?.(resolved.relativePath)}>{children}</button>
+          }
+          if (resolved.kind === 'external') {
+            return <a href={resolved.href} target="_blank" rel="noreferrer noopener" className={linkClass}>{children}</a>
+          }
+          return <RefusedInline refusal={resolved}>{children}</RefusedInline>
+        },
+        img: ({ src, alt }) => {
+          const source = typeof src === 'string' ? src : ''
+          const resolved = source !== '' ? resolvers.resolveImage?.(source) ?? null : null
+          if (resolved === null) return <img src={source} alt={alt ?? ''} />
+          if (resolved.kind === 'image') {
+            return <img src={resolved.src} alt={alt ?? ''} className="max-w-full" data-reader-image={resolved.relativePath} />
+          }
+          return <RefusedInline refusal={resolved}>{alt ?? resolved.href}</RefusedInline>
+        },
+      }
+    : markdownComponents
   return (
     <div className="min-w-0 break-words leading-[1.6] text-primary [overflow-wrap:anywhere]">
-      <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]} components={markdownComponents}>
+      <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]} components={components}>
         {content}
       </ReactMarkdown>
     </div>

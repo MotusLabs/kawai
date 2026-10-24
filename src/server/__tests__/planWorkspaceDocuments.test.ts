@@ -2,9 +2,8 @@
 // invalidation on a watch event and through the reconciliation pass, source
 // deletion holding last-valid content labelled stale, the execution pin's
 // match/mismatch/unknown, and the refusal of unlisted worktrees and foreign
-// ids before any read. Every path asserts zero agent starts (invariant I6).
-// Fixtures live in the plan harness's temporary repository; the openspec
-// listing the checklist resolver sees is a runner double, so no CLI runs.
+// ids before any read. Every path asserts zero agent starts (invariant I6);
+// the openspec listing is a runner double, so no CLI runs.
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
@@ -322,10 +321,9 @@ describe('document subscriptions', () => {
     insertAttemptPinning(executionId, 'alpha-b', { 'notes/design.md': sha('other content\n') })
     await openDocument(planId, { executionId })
     expect(last('team-plan-workspace-document')!.view).toMatchObject({ executionMatch: 'match', executionId })
-    // The main checkout hosts no change of the execution: no pin at all. It
-    // does host the file — byte-identical to A's pin — so the read succeeds
-    // and the worktree-scoped pin lookup actually runs; without a change
-    // provisioned here the match must still read unknown.
+    // The main checkout hosts no change of the execution: no pin at all, yet
+    // it hosts the file — byte-identical to A's pin — so the read succeeds
+    // and the worktree-scoped pin lookup actually runs; the match reads unknown.
     fs.mkdirSync(path.join(world.repo, 'notes'), { recursive: true })
     fs.writeFileSync(path.join(world.repo, 'notes', 'design.md'), 'alpha content\n')
     await docSend({ type: 'team-plan-workspace-document-close', teamPath: world.repo, planId, worktreeId: world.feature, relativePath: 'notes/design.md' })
@@ -337,23 +335,23 @@ describe('document subscriptions', () => {
   test('a compose throw answers the open with an explicit unavailable state (O3)', async () => {
     const { planId } = await bench.draftInReview()
     const throwing = new PlanWorkspaceDocumentConnections(managerDouble, {
-      host: fixture.host,
-      resolver: new ChangeArtifactsResolver(runner),
+      host: fixture.host, resolver: new ChangeArtifactsResolver(runner),
       read: async () => { throw new Error('reader exploded') },
     })
     const sendTo = (target: PlanWorkspaceDocumentConnections, message: ClientMessage) =>
       target.handle(connection, message as Parameters<typeof target.handle>[1])
-    // A document open still answers: missing, with the failure named.
+    // A document open still answers: missing, with the fixed shape-only
+    // reason — the raw error text stays server-side (D4).
     await sendTo(throwing, { type: 'team-plan-workspace-document-open', teamPath: world.repo, planId, worktreeId: world.feature, relativePath: 'notes/design.md' })
     const document = last('team-plan-workspace-document')!
     expect(document.view).toMatchObject({ availability: 'missing', stale: false, executionMatch: 'unknown', executionId: null })
-    expect(document.view.reason).toContain('reader exploded')
+    expect(document.view.reason).toBe('The document could not be read.')
     // A checklist open still answers: explicitly unreadable, not silence.
     await sendTo(throwing, { type: 'team-plan-workspace-checklist-open', teamPath: world.repo, planId, changeName: 'alpha' })
     const checklist = last('team-plan-workspace-checklist')!
     expect(checklist.checklist).toBeNull()
     expect(checklist.unavailable).toMatchObject({ state: 'unreadable' })
-    expect(checklist.unavailable!.message).toContain('reader exploded')
+    expect(checklist.unavailable!.message).toBe('The checklist of "alpha" could not be composed.')
     throwing.stop()
     expect(agentStarts).toBe(0)
   })

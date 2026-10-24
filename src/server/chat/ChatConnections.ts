@@ -46,7 +46,9 @@ import { StrategyConnections } from '../strategy/strategyConnections'
 import { WorkspaceConnections } from '../team/workspaceConnections'
 import { PlanConnections } from '../plans/planConnections'
 import { PlanWorkspaceConnections } from '../plans/workspace/workspaceConnections'
+import { ChangeArtifactsResolver } from '../plans/workspace/changeArtifacts'
 import { PlanWorkspaceDocumentConnections } from '../plans/workspace/workspaceDocuments'
+import { PlanWorkspaceArtifactsConnections } from '../plans/workspace/workspaceArtifacts'
 import { PlanChecklistTotals } from '../plans/workspace/checklistTotals'
 import type { PlanWorkspaceClientMessage } from '../../shared/planWorkspaceMessages'
 import { ExecutionConnections } from '../plans/execution/executionConnections'
@@ -97,6 +99,9 @@ export class ChatConnections {
   private readonly planConnections: PlanConnections
   private readonly planWorkspaceConnections: PlanWorkspaceConnections
   private readonly planWorkspaceDocuments: PlanWorkspaceDocumentConnections
+  private readonly planWorkspaceArtifacts: PlanWorkspaceArtifactsConnections
+  /** The one resolver (and its 2-slot pool) both workspace subscription sides share. */
+  private readonly planWorkspaceResolver: ChangeArtifactsResolver
   /** The composed checklists' totals, shared documents → snapshot (N3); public for compositions that build the documents side separately. */
   readonly planWorkspaceTotals = new PlanChecklistTotals()
   private readonly executionConnections: ExecutionConnections
@@ -107,7 +112,9 @@ export class ChatConnections {
   constructor(
     private readonly manager: ChatSessionManager,
     private readonly wireLogs?: ChatWireLogs,
-    private readonly broadcastMailboxNotice?: (message: ServerMessage) => void
+    private readonly broadcastMailboxNotice?: (message: ServerMessage) => void,
+    /** Test seam: inject the shared canonical resolver (one 2-slot pool). */
+    private readonly options?: { planWorkspaceResolver?: ChangeArtifactsResolver }
   ) {
     this.mailboxConnections = new MailboxConnections(manager)
     this.taskConnections = new TaskConnections(manager)
@@ -117,7 +124,12 @@ export class ChatConnections {
     this.planConnections = new PlanConnections(manager)
     // One totals cache shared by the two connections (N3): the documents
     // side records every composed checklist, the snapshot side reads it.
-    this.planWorkspaceDocuments = new PlanWorkspaceDocumentConnections(manager, { totals: this.planWorkspaceTotals })
+    // The canonical resolver — and with it the bounded 2-slot CLI pool — is
+    // shared too: two independent pools would double the openspec
+    // concurrency the cap promises (plan-workspace 5.3, expansion 3).
+    this.planWorkspaceResolver = options?.planWorkspaceResolver ?? new ChangeArtifactsResolver()
+    this.planWorkspaceDocuments = new PlanWorkspaceDocumentConnections(manager, { totals: this.planWorkspaceTotals, resolver: this.planWorkspaceResolver })
+    this.planWorkspaceArtifacts = new PlanWorkspaceArtifactsConnections(manager, { resolver: this.planWorkspaceResolver })
     this.planWorkspaceConnections = new PlanWorkspaceConnections(manager, this.planWorkspaceTotals)
     this.executionConnections = new ExecutionConnections(manager)
     this.promotionConnections = new PromotionConnections(manager)
@@ -222,6 +234,7 @@ export class ChatConnections {
     this.planConnections.disconnect(connection)
     this.planWorkspaceConnections.disconnect(connection)
     this.planWorkspaceDocuments.disconnect(connection)
+    this.planWorkspaceArtifacts.disconnect(connection)
     this.outboundConnections.disconnect(connection)
     this.metricsConnections.disconnect(connection)
     this.subscriptions.delete(connection)
@@ -240,6 +253,7 @@ export class ChatConnections {
   /** Stop every connection group's watches and timers (server shutdown, O2). */
   stop(): void {
     this.planWorkspaceDocuments.stop()
+    this.planWorkspaceArtifacts.stop()
   }
 
   /**
@@ -625,6 +639,9 @@ export class ChatConnections {
     if (message.type.startsWith('team-workspace-')) return this.workspaceConnections.handle(connection, message as Extract<ClientMessage, { type: `team-workspace-${string}` }>)
     if (PROMOTION_MESSAGE_TYPES.has(message.type)) return this.promotionConnections.handle(connection, message as PromotionClientMessage)
     if (message.type.startsWith('team-plan-execution-')) return this.executionConnections.handle(connection, message as Extract<ClientMessage, { type: `team-plan-execution-${string}` }>)
+    if (message.type.startsWith('team-plan-workspace-artifacts-')) {
+      return this.planWorkspaceArtifacts.handle(connection, message as Extract<PlanWorkspaceClientMessage, { type: `team-plan-workspace-artifacts-${string}` }>)
+    }
     if (message.type.startsWith('team-plan-workspace-checklist-') || message.type.startsWith('team-plan-workspace-document-')) {
       return this.planWorkspaceDocuments.handle(connection, message as Extract<PlanWorkspaceClientMessage, { type: `team-plan-workspace-checklist-${string}` | `team-plan-workspace-document-${string}` }>)
     }

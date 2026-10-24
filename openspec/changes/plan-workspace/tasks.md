@@ -30,10 +30,10 @@ Implement after `team-workspace-pages`, `durable-plans`, and `plan-supervision` 
 
 ## 5. Dependency workspace and document reader UI
 
-- [ ] 5.1 Mount the workspace within the Plans tab, retaining plan intent/review/validation/history/decision/report sections and existing action gates; verify empty-state planning and unavailable prerequisites do not fabricate plans or execution state using component/route tests.
-- [ ] 5.2 Build the deterministic WBS/dependency table with depth columns, edges, expansion, selection, active/blocked filters and textual dependency alternatives; verify parallel A/B joining C, cycle fallback, version switching and change-level ownership/count separation with layout/component tests.
-- [ ] 5.3 Add the document reader and scoped Markdown link/image resolvers while preserving chat Markdown defaults; add reference add/remove controls and provenance/broken/unsupported states. Verify nested relative navigation, rendered architecture/image mockups, current-vs-pinned labels and unchanged chat link behavior in component tests.
-- [ ] 5.4 Add agent health dots with keyboard-accessible explanations and clock-driven freshness; verify partial telemetry, quota sharing, text equivalents and returning from a worker chat preserve workspace selection. Add user-facing workspace instructions to AGENTS.md for maps, checklists and documents.
+- [x] 5.1 Mount the workspace within the Plans tab, retaining plan intent/review/validation/history/decision/report sections and existing action gates; verify empty-state planning and unavailable prerequisites do not fabricate plans or execution state using component/route tests.
+- [x] 5.2 Build the deterministic WBS/dependency table with depth columns, edges, expansion, selection, active/blocked filters and textual dependency alternatives; verify parallel A/B joining C, cycle fallback, version switching and change-level ownership/count separation with layout/component tests.
+- [x] 5.3 Add the document reader and scoped Markdown link/image resolvers while preserving chat Markdown defaults; add reference add/remove controls and provenance/broken/unsupported states. Verify nested relative navigation, rendered architecture/image mockups, current-vs-pinned labels and unchanged chat link behavior in component tests.
+- [x] 5.4 Add agent health dots with keyboard-accessible explanations and clock-driven freshness; verify partial telemetry, quota sharing, text equivalents and returning from a worker chat preserve workspace selection. Add user-facing workspace instructions to AGENTS.md for maps, checklists and documents.
 
 ## 6. Repository conversation panel
 

@@ -208,6 +208,110 @@ export interface TaskTestClaim {
   outcome: string
 }
 
+/** The status of one checked fact (independent-verification D2). */
+export type ResultFactStatus = 'pass' | 'warn' | 'fail' | 'unknown'
+
+/** How a result's commit relates to its worktree's HEAD (D2). */
+export type ResultHeadRelation = 'same' | 'ahead' | 'behind' | 'diverged'
+
+/**
+ * The versioned facts one check recorded (independent-verification D2), at
+ * most 64 KB as stored. Lists are capped (20 names plus a count, 30 compared
+ * heads); a fact whose precondition is missing reads `unknown` with its
+ * note. `head` and `clean` are null only when the check ended at the commit
+ * fact — nothing else was checked; a worktree that exists but reads badly
+ * carries `unknown` with the reason, and the commit is still checked from
+ * the repository.
+ */
+export interface ResultCheckFacts {
+  version: 1
+  commit: {
+    given: string | null
+    sha: string | null
+    /** True when the given text was not already a full sha. */
+    resolvedAtCheckTime: boolean
+    status: ResultFactStatus
+    note: string | null
+  }
+  head: {
+    sha: string | null
+    branch: string | null
+    relation: ResultHeadRelation | null
+    ahead: number | null
+    behind: number | null
+    status: ResultFactStatus
+    note: string | null
+  } | null
+  clean: {
+    clean: boolean | null
+    /** The first uncommitted paths, capped. */
+    paths: string[]
+    /** How many more uncommitted paths were found past the cap. */
+    more: number
+    status: ResultFactStatus
+    note: string | null
+  } | null
+  recorded: {
+    status: ResultFactStatus
+    /** The matching record's facts, when one exists. */
+    recordBun: string | null
+    recordAt: string | null
+    /** The commit's own .bun-version, when it has one. */
+    commitBun: string | null
+    note: string | null
+  }
+  base: {
+    ref: string
+    sha: string | null
+    /** How many base commits the result lacks; null when unreadable. */
+    behind: number | null
+    mergeClean: boolean | null
+    conflicts: string[]
+    moreConflicts: number
+    status: ResultFactStatus
+    note: string | null
+  }
+  branches: {
+    compared: Array<{
+      taskId: string
+      head: string
+      conflicts: string[]
+      moreConflicts: number
+      overlap: string[]
+      moreOverlap: number
+      status: ResultFactStatus
+    }>
+    comparedCount: number
+    /** Distinct heads found but not compared, past the cap. */
+    skipped: number
+    status: ResultFactStatus
+  }
+}
+
+/** One stored check of one result (independent-verification D4). */
+export interface TaskResultCheck {
+  id: string
+  teamId: string
+  taskId: string
+  resultId: string
+  seq: number
+  trigger: 'submit' | 'recheck'
+  requestedBy: ActingParty
+  status: 'pending' | 'done' | 'unavailable'
+  /** The versioned facts; null while pending (and for an unavailable check). */
+  facts: ResultCheckFacts | null
+  /** Why a check is `unavailable`; null otherwise. */
+  reason: string | null
+  createdAt: string
+  finishedAt: string | null
+}
+
+/** A result's checks as its readers see them (D12): the newest, and how many earlier ones exist. */
+export interface TaskResultChecks {
+  newest: TaskResultCheck | null
+  earlier: number
+}
+
 /** Review or QA findings, bound to the exact result examined (D4). */
 export interface TaskFindings {
   id: string
@@ -251,6 +355,8 @@ export interface TaskResult {
   needsReevaluation: boolean
   /** Findings bound to this result, oldest first. */
   findings: TaskFindings[]
+  /** Kawai's checks of this result, newest plus the earlier count (independent-verification D12); absent before that change. */
+  checks?: TaskResultChecks
   createdAt: string
 }
 

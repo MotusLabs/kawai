@@ -308,10 +308,13 @@ export class PlanWorkspaceDocumentConnections {
     // rows read the last composed value (N3). A checklist or document
     // refresh itself never pushes the workspace projection (CP1).
     this.totals.record(sub.teamId, sub.planId, sub.changeName, payload.checklist)
+    // The watch target moves before any early return: an equal view from a
+    // moved change root (same projection, new location) must still re-target
+    // the watcher, or the stale watch never fires again (F4).
+    this.updateWatchTargets()
     if (JSON.stringify(payload) === JSON.stringify(sub.push)) return
     sub.push = payload
     connection.send({ type: 'team-plan-workspace-checklist', teamPath, planId: sub.planId, changeName: sub.changeName, ...payload })
-    this.updateWatchTargets()
   }
 
   private async refreshDocument(connection: ChatConnection, teamPath: string, sub: DocumentSubscription): Promise<void> {
@@ -346,7 +349,10 @@ export class PlanWorkspaceDocumentConnections {
     } catch (error) {
       // Compose is total (O3): an open always answers, so a throwing
       // resolver, listing or read names the existing `unreadable` state.
-      return { checklist: null, unavailable: { state: 'unreadable', message: `The checklist of "${sub.changeName}" could not be composed (${errorText(error)}).` } }
+      // The client-visible message is fixed shape-only text (D4); the
+      // throw's own detail — possibly an absolute path — stays in the log.
+      console.error(`[workspace] the checklist of "${sub.changeName}" could not be composed:`, error)
+      return { checklist: null, unavailable: { state: 'unreadable', message: `The checklist of "${sub.changeName}" could not be composed.` } }
     }
   }
 
@@ -374,8 +380,10 @@ export class PlanWorkspaceDocumentConnections {
       // Compose is total (O3): an open always answers, so a throwing reader
       // names the failure on the view's `missing` state instead of dropping
       // the snapshot. Like a refused read, last-valid content is held stale
-      // and the execution match stays unknown.
-      return this.unavailableDocument(sub, `The document could not be read (${errorText(error)}).`)
+      // and the execution match stays unknown. The client-visible reason is
+      // fixed shape-only text (D4); the throw's detail stays in the log.
+      console.error(`[workspace] the document could not be read:`, error)
+      return this.unavailableDocument(sub, 'The document could not be read.')
     }
   }
 
@@ -471,11 +479,6 @@ export class PlanWorkspaceDocumentConnections {
 }
 
 const documentChainKey = (worktreeId: string, relativePath: string): string => `document\0${worktreeId}\0${relativePath}`
-
-/** The error's own text, for a reason or message that names the failure. */
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
 
 /** A watch event touches a document when it is the file, inside its directory, or an ancestor of it. */
 function touchesDocument(changed: string, absPath: string): boolean {

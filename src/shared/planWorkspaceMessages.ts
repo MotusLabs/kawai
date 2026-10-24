@@ -8,8 +8,8 @@
 // reply) and a `commandId` (the ledger key), so a resend replays instead of
 // repeating. `team-plan-workspace-close` only ends the subscription.
 import type {
-  PlanWorkspaceRole, WorkspaceChecklist, WorkspaceChecklistUnavailable, WorkspaceDocumentView,
-  WorkspaceRefView, WorkspaceSnapshot, WorkspaceVersionSelector,
+  PlanWorkspaceRole, WorkspaceArtifactsView, WorkspaceChecklist, WorkspaceChecklistUnavailable,
+  WorkspaceDocumentView, WorkspaceRefView, WorkspaceSnapshot, WorkspaceVersionSelector,
 } from './planWorkspace'
 
 export type PlanWorkspaceServerMessage =
@@ -41,6 +41,17 @@ export type PlanWorkspaceServerMessage =
       worktreeId: string
       relativePath: string
       view: WorkspaceDocumentView
+    }
+  // One change's canonical artifact enumeration (5.3): lazy descriptors in
+  // the source worktree's address space (S2), or the named refusal. The
+  // descriptors' pairs are exactly what `team-plan-workspace-document-open`
+  // accepts; per-document metadata comes only from that open.
+  | {
+      type: 'team-plan-workspace-artifacts'
+      teamPath: string
+      planId: string
+      changeName: string
+      view: WorkspaceArtifactsView
     }
   // Result of a keyed workspace command: what a commit recorded — the bind's
   // `binding`, the reference a ref-add created, the id a ref-remove took —
@@ -115,3 +126,8 @@ export type PlanWorkspaceClientMessage =
       worktreeId: string
       relativePath: string
     }
+  // One change's canonical artifact enumeration (5.3): the open answers an
+  // authoritative first push; the close only ends the subscription. The
+  // change name is shape-checked before any resolver or listing call.
+  | { type: 'team-plan-workspace-artifacts-open'; teamPath: string; planId: string; changeName: string }
+  | { type: 'team-plan-workspace-artifacts-close'; teamPath: string; planId: string; changeName: string }

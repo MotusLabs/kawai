@@ -34,6 +34,6 @@ describe('the escape set covers the check machinery (D2)', () => {
   test('the walk sees the hook scripts and their library modules', () => {
     expect(ENTRIES).toContain('scripts/pre-commit.ts')
     const closure = importClosure(ENTRIES)
-    expect(closure).toEqual(expect.arrayContaining(['scripts/lib/checkKey.ts', 'scripts/lib/treeRecord.ts']))
+    expect(closure).toEqual(expect.arrayContaining(['src/server/checks/checkKey.ts', 'src/server/checks/checkRecords.ts', 'scripts/lib/treeRecord.ts']))
   })
 })

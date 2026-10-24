@@ -9,6 +9,7 @@
 import { partyName } from './actorRow'
 import type { ChatSessionRecord } from '../db'
 import { NULL_OWNERSHIP, type ExecutionOwnership } from '../plans/execution/executionOwnership'
+import type { TaskResultCheck } from '../../shared/teamTasks'
 import type { AssignmentTarget, TaskFindings, TaskHandoffKind, TaskResult, TaskTestClaim, TeamTask, TeamTaskAssignment, TeamTaskSummary } from '../../shared/teamTasks'
 import { TASK_HANDOFF_KINDS } from '../../shared/teamTasks'
 import { targetLabel, type AssignmentService } from './AssignmentService'
@@ -99,6 +100,10 @@ export class TaskResultService {
     ownership?: ExecutionOwnership
     /** A result or findings write landed (plan-execution D5): the composition wakes the owner's executor. */
     onWrite?: (taskId: string) => void
+    /** A result committed (independent-verification D1): the composition hands it to ResultCheckService. */
+    onResult?: (result: TaskResult, teamId: string) => void
+    /** A recheck was requested (independent-verification D4): the composition wakes the check service. */
+    onRecheck?: (teamId: string) => void
   }) {
     this.release = options.releases && options.records
       ? new TaskRelease(this, {
@@ -137,7 +142,11 @@ export class TaskResultService {
     const refusal = await (this.options.ownership ?? NULL_OWNERSHIP).checkResult(taskId, { commit, submitter: actor.sessionId, kind: 'result' })
     if (refusal !== null) throw new Error(refusal)
     const session = this.options.getSession(actor.sessionId)
-    // The result and its journal note commit together, as a dispatch and its journal entry do.
+    // The result, its journal note, and the pending check row commit together
+    // (independent-verification D1/I1): the check runs only after this
+    // transaction commits, and a crash between loses nothing — the startup
+    // run picks the pending row up. Nothing the check reads or computes
+    // happens inside the transaction.
     const result = this.store.atomically(() => {
       const inserted = this.store.results.insert({
         teamId: team.teamId, taskId, summary, commit, diff,
@@ -145,9 +154,11 @@ export class TaskResultService {
         tests, limitations: blankToNull(input.limitations), taskRevision: task.revision, submittedBy: actor,
       })
       this.store.appendJournal(taskId, actor, `Submitted result ${inserted.id}: ${summary}`)
+      this.store.checks.insertPending({ teamId: team.teamId, taskId, resultId: inserted.id, trigger: 'submit', requestedBy: actor })
       return inserted
     })
     this.options.onWrite?.(taskId)
+    this.options.onResult?.(this.store.results.get(result.id)!, team.teamId)
     return this.store.results.get(result.id)!
   }
 
@@ -182,6 +193,27 @@ export class TaskResultService {
     this.store.appendJournal(taskId, actor, `${input.kind === 'qa' ? 'QA' : 'Review'} findings on result ${result.id}: ${input.verdict}`)
     this.options.onWrite?.(taskId)
     return stored
+  }
+
+  /**
+   * Request a new check of a result (independent-verification D4): the
+   * human, or any team member. A request made while a check is pending
+   * returns the standing pending row instead of starting another; a new row
+   * is recorded beside the earlier ones, which stay readable. The request
+   * never runs the check itself — the composition wakes the service, which
+   * runs it outside every gate.
+   */
+  async recheck(caller: TaskCaller, taskId: string, resultId: string): Promise<TaskResultCheck> {
+    refuseSystem(caller, 'recheck')
+    const { team, actor } = await this.tasks.context(caller)
+    this.tasks.sameTeamTask(team, taskId)
+    const result = this.store.results.get(resultId)
+    if (!result || result.taskId !== taskId) throw new Error(`Result ${resultId} is not a result of task ${taskId}`)
+    const { check } = this.store.checks.insertPending({
+      teamId: team.teamId, taskId, resultId: result.id, trigger: 'recheck', requestedBy: actor,
+    })
+    this.options.onRecheck?.(team.teamId)
+    return check
   }
 
   /**
