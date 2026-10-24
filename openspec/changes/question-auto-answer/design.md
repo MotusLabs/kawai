@@ -113,8 +113,9 @@ The pending question is a small state machine (pending → settled or held)
 without recovery: a deadline is in-memory only, and a restart cancels every
 pending question without restoring it, so nothing survives to re-converge.
 These oracles are the change's acceptance surface. Every row id (`QA-*`) is
-cited by a `tasks.md` Verify bullet, and each Verify bullet names the mutant
-its tests must kill.
+cited by a `tasks.md` Verify bullet and each Verify bullet names the mutant
+its tests must kill; a preserved-behavior task with no row of its own (1.0)
+cites the named spec scenario it guards.
 
 ### Decision tables
 
@@ -131,17 +132,28 @@ shown" is whether `question_request` and `getPendingRequests` carry
 | QA-3 | all marked | positive | Wait for me | none | dropped on the held event | `question_auto_answer_held { requestId }` | still `permission`, waits for the user |
 | QA-4 | all marked | positive | the first form edit (option or text, unsubmitted) | none | dropped on the held event | `question_auto_answer_held { requestId }` | still `permission`, waits for the user |
 | QA-5 | all marked | positive | cancel or interrupt | none | yes, until the cancellation | the request's ordinary cancellation resolution | as a cancelled approval today |
-| QA-6 | all marked | positive | kill | none | yes, until the kill | none — the agent process ends | the kill path as today |
-| QA-7 | all marked | positive | server restart | none | yes, until the restart | none — the pending question is cancelled, no deadline restored | as today |
+| QA-6 | all marked | positive | kill | none | yes, until the kill | the cancellation resolution (see the cancellation note), then the agent process ends | the kill path as today |
+| QA-7 | all marked | positive | server restart | none | yes, until the restart | the cancellation resolution (an orderly shutdown settles like a kill); no deadline restored | as today |
 | QA-8 | * | * | the user answers | `user` | no | `request_resolved { outcome: 'answered', decidedBy: 'user' }` | leaves `permission` |
 | QA-9 | * | * | cancel or interrupt | none | no | the ordinary cancellation resolution | as a cancelled approval today |
-| QA-10 | * | * | kill | none | no | none | the kill path as today |
-| QA-11 | * | * | server restart | none | no | none | the restart path as today |
+| QA-10 | * | * | kill | none | no | the cancellation resolution, then the process ends | the kill path as today |
+| QA-11 | * | * | server restart | none | no | the cancellation resolution; no deadline restored | the restart path as today |
+| QA-27 | * | * | the first form edit | none | no | none — the form sends no hold without a deadline; the edit is an ordinary unsubmitted answer | still `permission`, pending |
 
-Rows QA-8…QA-11 carry `*` for marking and wait: the three combinations
-that set no deadline — all marked with a zero wait, one unmarked with a
-positive wait, one unmarked with a zero wait — behave identically from
-there; QA-P3 pins which combinations those are.
+Rows QA-8…QA-11 and QA-27 carry `*` for marking and wait: the three
+combinations that set no deadline — all marked with a zero wait, one
+unmarked with a positive wait, one unmarked with a zero wait — behave
+identically from there; QA-P3 pins which combinations those are.
+
+Cancellation note (QA-5, QA-6, QA-7, QA-9, QA-10, QA-11): every teardown
+path settles a pending request with the ordinary
+`request_resolved { outcome: 'cancelled' }` resolution before the process
+goes — interrupt (`ChatSessionDriver.ts:531`), kill (`:563`), an orderly
+server shutdown (`:587–589`, shutdown() calls kill(); `ChatSessionManager.ts:2201`
+and `:2252` route both) and an agent-process crash (`:938`) — through the
+emit at `:1515`. The timer is cleared with the request and no automatic
+answer is recorded. Only a whole-server crash emits nothing (no code runs);
+nothing is restored on the next boot.
 
 Table 2 — a later event on a request that is no longer deadline-bearing.
 State is how it left the pending-with-deadline state; kill and restart
@@ -169,23 +181,31 @@ For the timeout state, "the original deadline passes" is the settlement
 row QA-1 itself — the deadline that passes is the settlement, and the
 timer is not re-armed.
 
-Table 3 — the wait setting, its own decision surface:
+Table 3 — the saved wait value, a partition of the value axis:
 
 | Oracle id | Saved value | Observable result |
 |---|---|---|
 | QA-S1 | never saved | the default 5 minutes applies (the spec's default scenario) |
-| QA-S2 | 0 | automatic answers off — no deadline ever (the QA-8…QA-11 class) |
-| QA-S3 | 1–1440 | that wait applies to questions asked after the save |
-| QA-S4 | 1441, -1, or 2.5 | refused with an error; nothing is stored |
-| QA-S5 | changed while a question is pending | the pending deadline keeps its original time (QA-P4; the spec's change scenario) |
+| QA-S2 | 0, a whole number in range | automatic answers off — no deadline is ever set afterwards (the QA-8…QA-11 class) |
+| QA-S3 | a whole number 1–1440 | that wait applies to questions asked after the save |
+| QA-S4 | any value outside 0–1440 or not a whole number (1441, -1, 2.5, 1442, 1.5, …) | refused with an error; nothing is stored and nothing changes |
+
+Table 4 — a save against a pending deadline, one orthogonal invariant
+rather than a fifth value row: a save matches exactly one of QA-S1…QA-S4
+and, when a question with a deadline is pending, also QA-S5.
+
+| Oracle id | Input | Observable result |
+|---|---|---|
+| QA-S5 | any valid save (0–1440) that commits while a question with a deadline is pending | that pending deadline keeps its original time (QA-P4; the spec's change scenario) |
 
 Unreachable combinations:
 
 - **QA-U1** — a deadline fires when the wait is 0 or a question is
   unmarked: no timer exists (QA-P3).
-- **QA-U2** — Wait for me or a form-edit hold on a request without a
-  deadline: `holdQuestion` refuses it (D4), and the form sends the hold
-  only while a deadline stands.
+- **QA-U2** — a hold taking effect on a request without a deadline:
+  `holdQuestion` refuses a deadline-less request (D4), and the form sends a
+  hold only while one stands. The ordinary first edit without a deadline is
+  reachable — QA-27, not an unreachable cell.
 - **QA-U3** — two settlements of one request in any order: every
   settlement path clears the timer first (D2); the second attempt is
   refused or inert (QA-12…QA-16, QA-19…QA-21).
@@ -216,8 +236,10 @@ manager's setting getter.
   instant of the wait window — the first tick after creation through the
   last tick before the deadline — advancing the clock arbitrarily far
   never settles the request, and `getPendingRequests` stops carrying
-  `autoAnswer`. Generator: hold time uniform over [0, wait], then an
-  advance of wait × k for k ∈ {1, 10, 1000}. 200 cases.
+  `autoAnswer`. Generator: hold time uniform over [0, wait) — same-tick
+  arrivals at the deadline itself are QA-P1's sequences, and a hold
+  refused at an already-settled request is QA-13's row — then an advance
+  of wait × k for k ∈ {1, 10, 1000}. 200 cases.
 - **QA-P3 — no deadline without a full recommendation.** A deadline
   (`autoAnswerAt` and a live timer) exists if and only if
   `recommendedAnswers` returned answers and the wait was positive.
@@ -239,13 +261,17 @@ Every combination of the axes matches exactly one row or one unreachable
 claim. Marking {all marked, one unmarked} × wait {0, positive} × first
 event {the deadline, the user answers, Wait for me, the first form edit,
 cancel/interrupt, kill, restart} is 28 cells: 7 deadline-bearing rows
-(QA-1…QA-7), 12 covered by QA-8…QA-11 with `*`, and 9 unreachable
-(QA-U1, QA-U2). State {answered by the timeout, answered by the user,
-cancelled, held} × later event {a second user answer, Wait for me, the
-first form edit, the original deadline passes, restart then replay} is 20
-cells, all covered by QA-12…QA-26 (QA-12 and QA-14 name two states each;
-the timeout state's deadline cell is QA-1). The setting's values are
-QA-S1…QA-S5. No gap, no overlap.
+(QA-1…QA-7) and, per no-deadline combination, 5 reachable rows (QA-8…QA-11
+and QA-27 carry the three combinations each with `*`) and 2 unreachable
+claims (QA-U1, QA-U2) — 15 reachable plus 6 unreachable cells. State
+{answered by the timeout, answered by the user, cancelled, held} × later
+event {a second user answer, Wait for me, the first form edit, the
+original deadline passes, restart then replay} is 20 cells, all covered by
+QA-12…QA-26 (QA-12 and QA-14 name two states each; the timeout state's
+deadline cell is QA-1). The saved value is partitioned by QA-S1…QA-S4
+(QA-S4 is the whole invalid class); QA-S5 is the orthogonal
+pending-deadline invariant, matched additionally by any save that commits
+while a deadline stands. No gap, no overlap.
 
 ### Model-based tests
 
