@@ -36,6 +36,25 @@ function markedQuestion(label: string): Record<string, unknown> {
   }
 }
 
+function pendingRequestId(events: ChatEvent[], label: string): string {
+  const request = events.find(
+    (event): event is Extract<ChatEvent, { type: 'question_request' }> =>
+      event.type === 'question_request' && event.questions.some((q) => q.question === label)
+  )
+  if (!request) throw new Error(`No question_request for ${label}`)
+  return request.requestId
+}
+
+function stillPendingAfterHold(
+  manager: { getPendingRequests: (id: string) => Array<{ kind: string; questions?: Array<{ question: string }>; autoAnswer?: unknown }> },
+  id: string,
+  label: string
+): { autoAnswer?: unknown } | undefined {
+  return manager.getPendingRequests(id).find(
+    (request) => request.kind === 'question' && request.questions?.some((q) => q.question === label)
+  )
+}
+
 describe('ChatSessionManager question auto-answer', () => {
   let tempDir: string
   let db: SessionDatabase
@@ -112,6 +131,17 @@ describe('ChatSessionManager question auto-answer', () => {
         (request) => request.kind === 'question' && request.questions.some((q) => q.question === 'Deploy?')
       )
       expect(stillPending?.kind === 'question' ? stillPending.autoAnswer : undefined).toBeDefined()
+      expect(events.some((event) => event.type === 'request_resolved')).toBe(false)
+
+      // A hold through the manager (the chat-question-hold path) drops the
+      // deadline and its held event reaches the broadcast input (QA-3).
+      expect(manager.holdQuestion(id, pendingRequestId(events, 'Deploy?'))).toEqual({ ok: true })
+      const held = events.find((event): event is Extract<ChatEvent, { type: 'question_auto_answer_held' }> =>
+        event.type === 'question_auto_answer_held')
+      expect(held).toBeDefined()
+      expect(
+        stillPendingAfterHold(manager, id, 'Deploy?')?.autoAnswer
+      ).toBeUndefined()
       expect(events.some((event) => event.type === 'request_resolved')).toBe(false)
     } finally {
       manager.kill(id)

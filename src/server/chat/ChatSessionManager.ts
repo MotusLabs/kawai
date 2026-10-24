@@ -2192,6 +2192,20 @@ export class ChatSessionManager {
     return driver.answerQuestion(requestId, answers)
   }
 
+  /** Hold a question's deadline (question-auto-answer D4, Wait for me). */
+  holdQuestion(sessionId: string, requestId: string): ChatActionResult {
+    const driver = this.drivers.get(sessionId)
+    if (!driver) {
+      return {
+        ok: false,
+        error: this.records.has(sessionId)
+          ? `No pending question with id ${requestId}; the session has no in-flight turn`
+          : `Unknown chat session ${sessionId}`,
+      }
+    }
+    return driver.holdQuestion(requestId)
+  }
+
   getPendingRequests(sessionId: string): ChatPendingRequest[] {
     return this.drivers.get(sessionId)?.getPendingRequests() ?? []
   }

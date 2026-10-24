@@ -702,6 +702,13 @@ export type ClientMessage =
       /** Answers keyed by question text (matches the SDK's answer map). */
       answers: Record<string, ChatQuestionAnswer>
     }
+  // Hold a question's auto-answer deadline — Wait for me (question-auto-answer
+  // D4): the question waits for the user and never auto-answers.
+  | {
+      type: 'chat-question-hold'
+      sessionId: string
+      requestId: string
+    }
   // Switches the session's approval policy live (chat-auto-approve-tools
   // design D4): manual/auto only, no agent restart.
   | {
