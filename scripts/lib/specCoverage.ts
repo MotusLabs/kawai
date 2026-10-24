@@ -70,10 +70,14 @@ export interface Annotation {
 
 const ANNOTATION_RE = /^\s*\/\/\s*@covers:\s*(\S.*?)\s*$/
 // The next non-blank, non-comment line after an annotation must open a
-// `test(` or `it(` call, modifiers included: `test.skip(`, `it.each(…)(`.
-// A bare-word suffix (`testx(`) does not match; the generic arguments of
-// `test<T>(` may not contain parentheses.
-const TEST_OPENER_RE = /^(?:test|it)\s*(?:\.[A-Za-z_$][\w$]*)*\s*(?:<[^()]*>)?\s*\(/
+// `test(`/`it(` call. Only test-call modifiers may chain (`test.skip(`,
+// `test.only(`, `it.each(…)(`); suites, hooks, and fixtures (`test.describe(`,
+// `test.beforeEach(`, `test.use(`) are not tests and must fail. The check is
+// a prefix match on the line — enough for placement, not a full parse:
+// `it.each([…])(` matches at the `.each(` paren, which is all placement
+// needs. The generic arguments of `test<T>(` may not contain parentheses.
+const TEST_OPENER_RE =
+  /^(?:test|it)(?:\.(?:skip|only|todo|fails|failing|each|concurrent|sequential|fixme|runIf|skipIf|serial))*\s*(?:<[^()]*>)?\s*\(/
 
 // --- spec parsing ---
 

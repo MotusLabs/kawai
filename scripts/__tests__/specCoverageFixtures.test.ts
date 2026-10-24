@@ -170,6 +170,31 @@ describe('the @covers grammar (5.1)', () => {
     )
     expect(failuresOf(root)).toEqual([])
   })
+
+  test('suites and hooks are not test calls', () => {
+    const root = makeTree()
+    write(root, 'openspec/specs/cap/spec.md', mainSpec('Widget serves', 'It serves'))
+    write(root, 'openspec/coverage.json', CONFIG)
+    write(
+      root,
+      'src/a.test.ts',
+      [
+        '// @covers: cap › Widget serves › It serves',
+        "test.describe('a suite', () => {",
+        "  test('inner', () => {})",
+        '})',
+        '',
+        '// @covers: cap › Widget serves › It serves',
+        'test.beforeEach(async () => {})',
+        '',
+        '// @covers: cap › Widget serves › It serves',
+        "test.use({ colorScheme: 'dark' })",
+      ].join('\n')
+    )
+    const failures = failuresOf(root)
+    expect(failures).toHaveLength(3)
+    expect(failures.every((failure) => failure.kind === 'annotation-not-above-test')).toBe(true)
+  })
 })
 
 describe('newly archived changes have covered scenarios (5.2)', () => {
