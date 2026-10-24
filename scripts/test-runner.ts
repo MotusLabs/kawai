@@ -430,6 +430,10 @@ async function main() {
     // to planBatches verbatim. The timings record rides full runs only (D4):
     // planRun seeds the snapshot through this callback — a records directory
     // that cannot be resolved only costs the scheduling order, never the run.
+    // A full check exports KAWAI_TEST_JUNIT_DIR (independent-verification
+    // D7); the runner gives every batch its own report inside it. Unset, no
+    // report is written and nothing else changes.
+    const junitReportDir = process.env.KAWAI_TEST_JUNIT_DIR || undefined
     const plan = planRun({
       args,
       workers,
@@ -437,6 +441,7 @@ async function main() {
       serialFiles,
       mainLabel,
       seedText: readTimingsSeed(recordsDir(process.cwd())),
+      junitReportDir,
       seedTimings: (seed) => {
         try {
           return seedTimingsSnapshot(runRoot, seed)
