@@ -4,7 +4,10 @@
 // matches by (D6). Table-driven over the validator so each limit and each
 // malformed shape is one row.
 import { describe, expect, test } from 'bun:test'
-import { COVERAGE_LIMITS, normalizeCitation, normalizeClause, parseCitation, validateCoverageMap } from '../coverageMaps'
+import {
+  CITATION_OUTCOMES, COVERAGE_LIMITS, clauseStatus, compareCoverageMaps, isSealed, normalizeCitation, normalizeClause,
+  parseCitation, validateCoverageMap, withheldCoverage,
+} from '../coverageMaps'
 
 const clause = (text: string, tests: string[] = []) => ({ clause: text, tests })
 
@@ -93,5 +96,134 @@ describe('normalization (D6)', () => {
   test('citations match by normalized path and title', () => {
     expect(normalizeCitation({ path: ' Src/A.test.ts ', title: '  It   WORKS ' }))
       .toBe(normalizeCitation({ path: 'src/a.test.ts', title: 'it works' }))
+  })
+
+  test('whitespace padding inside the backticks is refused, not stored', () => {
+    expect(parseCitation('`path ` › `t`')).toBeNull()
+    expect(parseCitation('`path` › ` t`')).toBeNull()
+    expect(parseCitation('` p` › `t`')).toBeNull()
+    expect(parseCitation('`a b` › `c d`')).toEqual({ path: 'a b', title: 'c d' })
+  })
+})
+
+describe('clauseStatus (D5 six rows, first match)', () => {
+  test('the outcome enum is exactly D5\'s six values', () => {
+    const D5_OUTCOMES = ['ran-passed', 'not-found', 'not-run', 'not-in-run', 'run-unknown', 'unresolved'] as const
+    expect([...CITATION_OUTCOMES].sort()).toEqual([...D5_OUTCOMES].sort())
+  })
+
+  test('the table, row by row', () => {
+    // Row 1: cites nothing — declared uncovered whatever else holds.
+    expect(clauseStatus(0, null, false)).toBe('declared-uncovered')
+    expect(clauseStatus(0, [], false)).toBe('declared-uncovered')
+    // Row 2: unresolved reads the cause (no resolved commit), never the outcomes.
+    expect(clauseStatus(1, null, false)).toBe(null)
+    expect(clauseStatus(1, ['unresolved'], false)).toBe('unresolved')
+    expect(clauseStatus(2, ['unresolved', 'unresolved'], false)).toBe('unresolved')
+    // Row 3: covered.
+    expect(clauseStatus(1, ['ran-passed'], true)).toBe('covered')
+    expect(clauseStatus(3, ['ran-passed', 'ran-passed', 'ran-passed'], true)).toBe('covered')
+    // Row 4: covered, run unknown — no usable list.
+    expect(clauseStatus(1, ['run-unknown'], true)).toBe('covered-run-unknown')
+    // Row 5: partly covered.
+    expect(clauseStatus(2, ['ran-passed', 'not-found'], true)).toBe('partly-covered')
+    expect(clauseStatus(2, ['run-unknown', 'not-in-run'], true)).toBe('partly-covered')
+    // Row 6: not covered.
+    expect(clauseStatus(1, ['not-found'], true)).toBe('not-covered')
+    expect(clauseStatus(2, ['not-run', 'not-in-run'], true)).toBe('not-covered')
+  })
+
+  test('no recorded outcomes leaves no status beyond declared-uncovered', () => {
+    expect(clauseStatus(2, null, true)).toBe(null)
+  })
+
+  test('rows 3 and 4 are exact: a mixed good-good clause is unreachable and falls through to not covered', () => {
+    // D5: a tree either has a usable list or has none, so a clause never
+    // mixes ran-and-passed with found-run-unknown. The fallthrough reads
+    // not-covered — never a covered row on a non-exact match.
+    expect(clauseStatus(2, ['ran-passed', 'run-unknown'], true)).toBe('not-covered')
+  })
+})
+
+describe('isSealed (D6/J3)', () => {
+  const review = { handoffKind: 'review', resultId: 'R', targetKind: 'session' as const, targetId: 'S', claimedBy: null }
+  const groupReview = { handoffKind: 'review', resultId: 'R', targetKind: 'group' as const, targetId: 'reviewers', claimedBy: 'S' }
+
+  test('sealed: the session target or the claimant of the outstanding review handoff, with no map row for R', () => {
+    expect(isSealed(review, 'S', false)).toBe(true)
+    expect(isSealed(groupReview, 'S', false)).toBe(true)
+  })
+
+  test('not sealed: a third session, a map row already recorded for R, or no assignment', () => {
+    expect(isSealed(review, 'other', false)).toBe(false)
+    expect(isSealed(review, 'S', true)).toBe(false)
+    expect(isSealed(groupReview, 'S', true)).toBe(false)
+    expect(isSealed(null, 'S', false)).toBe(false)
+  })
+
+  test('not sealed: other handoff kinds, a resultless row, or an unclaimed group handoff', () => {
+    expect(isSealed({ ...review, handoffKind: 'qa' }, 'S', false)).toBe(false)
+    expect(isSealed({ ...review, handoffKind: 'fix' }, 'S', false)).toBe(false)
+    expect(isSealed({ ...review, resultId: null }, 'S', false)).toBe(false)
+    expect(isSealed({ ...groupReview, claimedBy: null }, 'S', false)).toBe(false)
+  })
+})
+
+describe('withheldCoverage', () => {
+  test('a mapped result withholds with its clause count; an unmapped one reads null', () => {
+    expect(withheldCoverage([clause('a'), clause('b', ['`f.ts` › `t`'])])).toEqual({ withheld: true, clauses: 2 })
+    expect(withheldCoverage(null)).toBeNull()
+  })
+})
+
+describe('compareCoverageMaps (D6)', () => {
+  const submitter = [
+    clause('Alpha covers the thing', ['`a.test.ts` › `one`', '`a.test.ts` › `two`']),
+    clause('Beta only the submitter names', ['`b.test.ts` › `three`']),
+    clause('Gamma declared uncovered'),
+  ]
+  const reviewer = [
+    clause('  alpha  covers  THE thing ', ['`a.test.ts` › `one`', '`c.test.ts` › `four`']),
+    clause('delta only the reviewer names', ['`d.test.ts` › `five`']),
+    clause('gamma declared UNCOVERED', ['`g.test.ts` › `six`']),
+  ]
+
+  test('the three kinds of difference, matched by normalized text', () => {
+    const comparison = compareCoverageMaps(submitter, reviewer)!
+    expect(comparison.onlySubmitter).toEqual(['Beta only the submitter names'])
+    expect(comparison.onlyReviewer).toEqual(['delta only the reviewer names'])
+    expect(comparison.differingCitations).toEqual([
+      { clause: 'Alpha covers the thing', onlySubmitter: ['a.test.ts › two'], onlyReviewer: ['c.test.ts › four'] },
+      { clause: 'Gamma declared uncovered', onlySubmitter: [], onlyReviewer: ['g.test.ts › six'] },
+    ])
+    expect(comparison.uncoveredDisputes).toEqual(['Gamma declared uncovered'])
+  })
+
+  test('null while either side has no map', () => {
+    expect(compareCoverageMaps(null, reviewer)).toBeNull()
+    expect(compareCoverageMaps(submitter, null)).toBeNull()
+  })
+
+  test('identical maps compare empty', () => {
+    const comparison = compareCoverageMaps(submitter, submitter)!
+    expect(comparison).toEqual({ onlySubmitter: [], onlyReviewer: [], differingCitations: [], uncoveredDisputes: [] })
+  })
+
+  test('duplicate clause texts union their citations under the first-seen text', () => {
+    const withDuplicate = [clause('Same clause', ['`a.test.ts` › `one`']), clause('Same clause', ['`z.test.ts` › `nine`'])]
+    const other = [clause('same CLAUSE', ['`a.test.ts` › `one`'])]
+    const comparison = compareCoverageMaps(withDuplicate, other)!
+    expect(comparison.onlySubmitter).toEqual([])
+    expect(comparison.differingCitations).toEqual([
+      { clause: 'Same clause', onlySubmitter: ['z.test.ts › nine'], onlyReviewer: [] },
+    ])
+  })
+
+  test('deterministic order: normalized-key sorted clauses and citations', () => {
+    const a = [clause('zeta'), clause('alpha', ['`b.test.ts` › `x`', '`a.test.ts` › `y`'])]
+    const b = [clause('ALPHA', ['`b.test.ts` › `x`']), clause('Zeta', ['`q.test.ts` › `z`'])]
+    const comparison = compareCoverageMaps(a, b)!
+    expect(comparison.onlySubmitter).toEqual([])
+    expect(comparison.differingCitations[0]!.onlySubmitter).toEqual(['a.test.ts › y'])
   })
 })
