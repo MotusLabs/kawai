@@ -303,7 +303,8 @@ export function buildScenarioIndex(root: string): ScenarioIndex {
 }
 
 // True when `name` is an active change directory or an archived change
-// (`<date>-<name>`), so an exempt entry naming neither fails (E2).
+// (`<date>-<name>`, matched on the exact name after the date prefix), so an
+// exempt entry naming neither fails (E2).
 export function changeExists(root: string, name: string): boolean {
   if (fs.existsSync(path.join(root, 'openspec/changes', name))) return true
   const archive = path.join(root, 'openspec/changes/archive')
@@ -313,7 +314,10 @@ export function changeExists(root: string, name: string): boolean {
   } catch {
     return false
   }
-  return entries.some((entry) => entry.isDirectory() && entry.name.endsWith(`-${name}`))
+  return entries.some((entry) => {
+    const match = ARCHIVE_RE.exec(entry.name)
+    return entry.isDirectory() && match !== null && match[2] === name
+  })
 }
 
 const ARCHIVE_RE = /^(\d{4}-\d{2}-\d{2})-(.+)$/

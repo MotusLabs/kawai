@@ -224,6 +224,19 @@ describe('newly archived changes have covered scenarios (5.2)', () => {
     expect(failures[0]!.message).toContain('ghost-change')
   })
 
+  test('an exempt entry matching only a suffix of an archived name is stale', () => {
+    const root = makeTree()
+    write(root, 'openspec/specs/cap/spec.md', mainSpec('Widget serves', 'It serves'))
+    write(root, 'openspec/coverage.json', JSON.stringify({ since: '2026-01-01', exempt: ['lore'] }))
+    archiveSpec(root, '2026-02-01', 'widget-lore', 'Widget serves', 'It serves')
+    const failures = failuresOf(root)
+    expect(failures).toHaveLength(2)
+    expect(failures.map((failure) => failure.kind)).toEqual([
+      'stale-exemption',
+      'uncovered-scenario',
+    ])
+  })
+
   // @covers: spec-coverage › Newly archived changes have covered scenarios › Scenario since removed or renamed
   test('a scenario since removed or renamed is not required under its old name', () => {
     const root = makeTree()
