@@ -23,7 +23,7 @@ import type {
 import { partyFromRow } from './actorRow'
 import { TASK_STATUSES } from '../../shared/teamTasks'
 import { outstandingOf, type AssignmentStore } from './assignmentStore'
-import type { CoverageMap } from '../../shared/coverageMaps'
+import { rawCoverage } from '../../shared/coverageMaps'
 import type { MailboxStore } from './mailboxStore'
 import { migrateRevisionSchema } from './taskRevisionSchema'
 import { TaskDraftStore } from './taskDrafts'
@@ -243,9 +243,7 @@ export class TaskStore {
       results: this.results.listByTask(id).map(result => ({
         ...result,
         checks: this.checks.viewForResult(result.id),
-        // detail() always carries the raw map; the withheld form exists only
-        // after TaskResultService.applySeal projects a sealed reader's view.
-        reviewerMaps: this.results.reviewerMapsOf(result.id, (result.coverage ?? null) as CoverageMap | null),
+        reviewerMaps: this.results.reviewerMapsOf(result.id, rawCoverage(result.coverage)),
       })),
     }
   }

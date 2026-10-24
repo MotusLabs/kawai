@@ -9,7 +9,7 @@
 import { partyName } from './actorRow'
 import type { ChatSessionRecord } from '../db'
 import { NULL_OWNERSHIP, type ExecutionOwnership } from '../plans/execution/executionOwnership'
-import { isSealed, validateCoverageMap, withheldCoverage, type CoverageMap } from '../../shared/coverageMaps'
+import { isSealed, rawCoverage, validateCoverageMap, withheldCoverage } from '../../shared/coverageMaps'
 import type { TaskResultCheck } from '../../shared/teamTasks'
 import type { AssignmentTarget, TaskFindings, TaskHandoffKind, TaskResult, TaskTestClaim, TeamTask, TeamTaskAssignment, TeamTaskDetail, TeamTaskSummary } from '../../shared/teamTasks'
 import { TASK_HANDOFF_KINDS } from '../../shared/teamTasks'
@@ -261,7 +261,7 @@ export class TaskResultService {
         return {
           ...result,
           // detail() carries the raw map; the withheld form exists only here.
-          coverage: withheldCoverage((result.coverage ?? null) as CoverageMap | null),
+          coverage: withheldCoverage(rawCoverage(result.coverage)),
           reviewerMaps: ownMaps, comparison: null, ...(checks ? { checks } : {}),
         }
       }

@@ -67,7 +67,7 @@ describe('ResultCheckService over its store', () => {
     } as Parameters<ResultCheckStore['insertPending']>[0])
 
   const sources = (fixture: RepoFixture) => ({
-    result: (id: string) => ({ commit: fixture.sha, worktree: fixture.worktree }),
+    result: (id: string) => ({ commit: fixture.sha, worktree: fixture.worktree, coverage: null }),
     openTasks: (teamId: string) => [{ id: 'task-1', worktree: fixture.worktree, createdAt: '2026-10-24T00:00:00Z' }],
     listedWorktrees: async (teamId: string) => [fixture.root, fixture.worktree],
   })
@@ -82,6 +82,33 @@ describe('ResultCheckService over its store', () => {
     expect(stored?.status).toBe('done')
     expect(stored?.facts?.version).toBe(1)
     expect(stored?.facts?.commit.sha).toBe(fixture.sha)
+  })
+
+  // The production path for the coverage map (independent-verification
+  // 3.1): the sources' map reaches the check, whose facts resolve its
+  // citations at the commit — found with no list, so run-unknown.
+  test('a result carrying a coverage map settles facts that resolve its citations', async () => {
+    const fixture = makeRepo(path.join(tempRoot, 'mapped'))
+    fs.writeFileSync(path.join(fixture.root, 'src.test.ts'), "test('covers the clause', () => {})\n")
+    fixture.git(['add', '--', 'src.test.ts'])
+    fixture.git(['commit', '-q', '-m', 'tests'])
+    const sha = fixture.git(['rev-parse', 'HEAD']).stdout.trim()
+    const { check } = pending(fixture, 'result-mapped')
+    const service = new ResultCheckService({
+      store: checks,
+      sources: {
+        ...sources(fixture),
+        result: () => ({
+          commit: sha, worktree: fixture.worktree,
+          coverage: [{ clause: 'The clause', tests: ['`src.test.ts` › `covers the clause`'] }],
+        }),
+      },
+    })
+    service.wake(teamIdOf(fixture))
+    await service.quiesce()
+    const stored = checks.get(check.id)
+    expect(stored?.status).toBe('done')
+    expect(stored?.facts?.coverage).toEqual([['run-unknown']])
   })
 
   test('a pending row whose result is gone is unavailable, with the reason', async () => {

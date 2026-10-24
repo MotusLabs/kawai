@@ -13,6 +13,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { runGitAsync, type GitCommandResult } from '../git/gitCommand'
 import { RECORDS_DIR_NAME, recordsForTree } from '../checks/checkRecords'
+import { testTitles } from '../checks/testTitles'
+import { parseCitation, type CitationOutcome, type CoverageMap } from '../../shared/coverageMaps'
 import type { ResultCheckFacts, ResultHeadRelation } from '../../shared/teamTasks'
 
 /** The whole-check budget (D1): a check that exceeds it is unavailable. */
@@ -74,6 +76,16 @@ export interface ResultCheckInput {
   others: OtherTaskHead[]
   /** The server's own platform and architecture, for the record comparison. */
   host: { platform: string; arch: string }
+  /** The result's coverage map (D5): its citations resolve at the commit. Absent or null when the result carries none. */
+  coverage?: CoverageMap | null
+  /**
+   * How the tree's recorded pass answers for one cited test (D5), injected
+   * until a later task wires the check records' own test lists: 'passed'
+   * when the run lists the test as passed, 'skipped' when it lists it as
+   * skipped, 'absent' when the run lists nothing for it. Without a list,
+   * a found citation reads run-unknown.
+   */
+  testList?: (path: string, title: string) => 'passed' | 'skipped' | 'absent'
   baseRef?: string
 }
 
@@ -340,6 +352,44 @@ async function readBranches(
   }
 }
 
+/**
+ * Resolve a map's citations at the commit (D5): per clause, one outcome per
+ * citation, positionally — nothing normalizes, dedupes, or reorders, so the
+ * array always joins the stored map by index. Each distinct path is read
+ * once; a path `git show` cannot read, or a title the file's tests do not
+ * carry, reads not-found. A found citation's run comes from the test list;
+ * without one, found reads run-unknown.
+ */
+async function resolveCoverage(
+  git: CheckGit,
+  repoRoot: string,
+  sha: string,
+  coverage: CoverageMap,
+  testList: ResultCheckInput['testList'],
+): Promise<CitationOutcome[][]> {
+  const titlesByPath = new Map<string, Set<string> | null>()
+  const titlesFor = async (citationPath: string): Promise<Set<string> | null> => {
+    let titles = titlesByPath.get(citationPath)
+    if (titles === undefined) {
+      const show = await git(['show', `${sha}:${citationPath}`], { cwd: repoRoot })
+      titles = show.ok ? testTitles(show.stdout, { testsOnly: true }) : null
+      titlesByPath.set(citationPath, titles)
+    }
+    return titles
+  }
+  return Promise.all(coverage.map(clause => Promise.all(clause.tests.map(async citation => {
+    const parsed = parseCitation(citation)
+    if (parsed === null) return 'not-found' as const
+    const titles = await titlesFor(parsed.path)
+    if (titles === null || !titles.has(parsed.title)) return 'not-found' as const
+    const run = testList?.(parsed.path, parsed.title)
+    if (run === 'passed') return 'ran-passed' as const
+    if (run === 'skipped') return 'not-run' as const
+    if (run === 'absent') return 'not-in-run' as const
+    return 'run-unknown' as const
+  }))))
+}
+
 /** Run one check (D2): the versioned facts about a result's commit. A check
  * that ends at the commit fact (no commit given, or one that does not
  * resolve) records that fact alone — nothing else is checked — with the
@@ -359,6 +409,10 @@ export async function computeResultFacts(input: ResultCheckInput, git: CheckGit)
         conflicts: [], moreConflicts: 0, status: 'unknown', note,
       },
       branches: { compared: [], comparedCount: 0, skipped: 0, status: 'unknown' },
+      // There is no commit to resolve at (D5): every cited test reads
+      // unresolved, whatever the map says. Declared-uncovered clauses carry
+      // an empty outcome list, so the join still reads them by row 1.
+      ...(input.coverage ? { coverage: input.coverage.map(clause => clause.tests.map(() => 'unresolved' as const)) } : {}),
     }
   }
   const baseRef = input.baseRef ?? DEFAULT_BASE_REF
@@ -377,6 +431,7 @@ export async function computeResultFacts(input: ResultCheckInput, git: CheckGit)
     recorded: await readRecorded(git, input.repoRoot, commit.sha, commit.tree, input.host),
     base,
     branches,
+    ...(input.coverage ? { coverage: await resolveCoverage(git, input.repoRoot, commit.sha, input.coverage, input.testList) } : {}),
   }
 }
 
@@ -417,9 +472,14 @@ export function serializeFacts(facts: ResultCheckFacts): string {
     if (Buffer.byteLength(json) <= FACTS_MAX_BYTES) return json
   }
   // A facts object still over the cap with single-item lists cannot happen
-  // through computeResultFacts; store the capped skeleton rather than fail.
+  // through computeResultFacts; the coverage outcomes go before that: they
+  // join the map positionally (D5), so a cut array would silently misalign
+  // every later clause — they are dropped whole or kept whole.
+  const withoutCoverage = JSON.stringify({ ...facts, coverage: undefined })
+  if (Buffer.byteLength(withoutCoverage) <= FACTS_MAX_BYTES) return withoutCoverage
   return JSON.stringify({
     ...facts,
+    coverage: undefined,
     clean: facts.clean === null ? null : { ...facts.clean, paths: [], more: facts.clean.paths.length + facts.clean.more },
     base: { ...facts.base, conflicts: [], moreConflicts: facts.base.conflicts.length + facts.base.moreConflicts },
     branches: { ...facts.branches, compared: [], skipped: facts.branches.skipped + facts.branches.comparedCount },

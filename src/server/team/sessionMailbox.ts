@@ -27,6 +27,7 @@ import { AssignmentStore } from './assignmentStore'
 import { AssignmentService } from './AssignmentService'
 import { TaskResultService } from './TaskResultService'
 import { ResultCheckService } from '../verification/resultCheckService'
+import { rawCoverage } from '../../shared/coverageMaps'
 import { buildTaskContext } from './taskContext'
 import { PlanStore } from '../plans/planStore'
 import { WorktreeStaffing, type SpawnRequest, type SpawnResult } from './staffing'
@@ -230,7 +231,7 @@ export class SessionMailbox {
       sources: {
         result: id => {
           const row = this.tasks.store.results.get(id)
-          return row === null ? null : { commit: row.commit, worktree: row.worktree }
+          return row === null ? null : { commit: row.commit, worktree: row.worktree, coverage: rawCoverage(row.coverage) }
         },
         // A comparison reads only tasks still open for work; finished ones
         // are landed or abandoned and their branches are not in the way.

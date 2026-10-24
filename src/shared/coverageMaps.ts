@@ -196,6 +196,16 @@ export function withheldCoverage(map: CoverageMap | null): WithheldCoverage | nu
 }
 
 /**
+ * The raw map behind a stored or projected result: storage never produces
+ * the withheld form — only the seal's projection does — so a clause array
+ * is the map and anything else is no map. This is the one narrowing every
+ * raw-map reader uses.
+ */
+export function rawCoverage(coverage: CoverageMap | WithheldCoverage | null | undefined): CoverageMap | null {
+  return Array.isArray(coverage) ? coverage : null
+}
+
+/**
  * What the comparison reports (D6): the clauses only one map names; per
  * shared clause, the citations only one side gives; the shared clauses one
  * side declares uncovered while the other cites tests. Clauses match by
