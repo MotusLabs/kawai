@@ -291,6 +291,7 @@ export interface ResultCheckFacts {
 /** One stored check of one result (independent-verification D4). */
 export interface TaskResultCheck {
   id: string
+  teamId: string
   taskId: string
   resultId: string
   seq: number

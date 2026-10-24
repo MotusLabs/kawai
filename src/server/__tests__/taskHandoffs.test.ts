@@ -8,7 +8,7 @@
 // recipient kind rides the same dispatch — recipient validation, ordinary
 // direct task mail, atomic supersession — and the standing equivalent is
 // returned whatever recipient a retry names, with both sides on a mismatch.
-import { afterAll, beforeAll, beforeEach, expect, test } from 'bun:test'
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -27,6 +27,7 @@ import { WorktreeStaffing } from '../team/staffing'
 import { TeamCaps } from '../team/teamCaps'
 import { TeamWorktrees } from '../team/worktreeRoots'
 import { clearTeamCache, resolveTeam, type TeamIdentity } from '../team/teamIdentity'
+import { ResultCheckService } from '../verification/resultCheckService'
 
 function git(args: string[], cwd?: string) {
   const result = spawnSync('git', args, { cwd, encoding: 'utf8', env: cleanGitEnv() })
@@ -485,4 +486,74 @@ test('findings answer a claimed session handoff by exact result and handoff id; 
   const second = await results.submit(agent('dev'), task.id, { ...submission, summary: 'CSV export, header fixed' })
   expect(tasks.store.results.get(second.id)!.findings).toEqual([])
   expect(tasks.store.results.get(second.id)!.acceptedAt).toBeNull()
+})
+
+// Result checks ride the result's own write (independent-verification D1):
+// submit commits the pending row in the result's transaction (I1) and the
+// service settles it afterwards, outside every gate — a failing check never
+// blocks a handoff, findings, or acceptance (I4).
+describe('result checks over a submitted result', () => {
+  const checkSources = () => ({
+    result: (id: string) => {
+      const row = tasks.store.results.get(id)
+      return row === null ? null : { commit: row.commit, worktree: row.worktree }
+    },
+    openTasks: (teamId: string) => tasks.store.list(teamId)
+      .filter(task => task.status === 'open' || task.status === 'active' || task.status === 'blocked')
+      .map(task => ({ id: task.id, worktree: task.worktree, createdAt: task.createdAt })),
+    listedWorktrees: (teamId: string) => new TeamWorktrees().list(teamId),
+  })
+  /** Failing facts a settled check can carry (a base conflict), for I4. */
+  const failingFacts = () => JSON.stringify({
+    version: 1,
+    commit: { given: 'abc123', sha: 'abc123', resolvedAtCheckTime: true, status: 'fail', note: 'commit not found' },
+    head: null,
+    clean: null,
+    recorded: { status: 'unknown', recordBun: null, recordAt: null, commitBun: null, note: 'not checked' },
+    base: { ref: 'refs/remotes/origin/HEAD', sha: null, behind: null, mergeClean: false,
+      conflicts: ['src/export.ts'], moreConflicts: 0, status: 'fail', note: null },
+    branches: { compared: [], comparedCount: 0, skipped: 0, status: 'pass' },
+  })
+
+  test('submit commits a pending check with the result; the service settles it; a restart finds nothing (I1, C2)', async () => {
+    const task = await tasks.create(agent('lead'), { title: 'Checked', direction: 'v1' })
+    const checks = tasks.store.checks
+    const result = await results.submit(agent('dev'), task.id, submission)
+    // The pending row committed in the result's transaction: submit returns
+    // with it already standing.
+    const pendingRow = checks.pendingForResult(result.id)
+    expect(pendingRow).toMatchObject({ status: 'pending', trigger: 'submit', taskId: task.id, seq: 1 })
+    // The service runs it against the real repository (the harness repo; the
+    // given text 'abc123' is no commit there, so the commit fact fails).
+    const service = new ResultCheckService({ store: checks, sources: checkSources() })
+    service.wake(team.teamId)
+    await service.quiesce()
+    const stored = checks.get(pendingRow!.id)
+    expect(stored?.status).toBe('done')
+    expect(stored?.facts?.commit).toMatchObject({ status: 'fail', note: 'commit not found' })
+    expect(stored?.facts?.head).toBeNull()
+    // Restart (C2's last leg): nothing is pending, and a fresh start() runs
+    // nothing — the row settled exactly once.
+    expect(checks.pendingForResult(result.id)).toBeNull()
+    expect(checks.teamsWithPending()).toEqual([])
+    new ResultCheckService({ store: checks, sources: checkSources() }).start()
+    await service.quiesce()
+    expect(checks.allForResult(result.id)).toHaveLength(1)
+  })
+
+  test('a settled check with failing facts never gates findings, handoff, or acceptance (I4)', async () => {
+    const task = await tasks.create(agent('lead'), { title: 'Gated?', direction: 'v1' })
+    const result = await results.submit(agent('dev'), task.id, submission)
+    const pendingRow = tasks.store.checks.pendingForResult(result.id)!
+    // The check came back failing: a conflict with the base.
+    expect(tasks.store.checks.settle(pendingRow.id, 'done', failingFacts(), null)).toBe(true)
+    const findings = await results.submitFindings(agent('reviewer'), task.id,
+      { kind: 'review', resultId: result.id, verdict: 'pass', findings: 'ok' })
+    expect(findings.verdict).toBe('pass')
+    const handed = await results.handoff(human(), task.id, review(result.id))
+    expect(handed.assignment).toMatchObject({ handoffKind: 'review', state: 'queued' })
+    await results.accept(human(), task.id, result.id)
+    expect(tasks.store.get(task.id)?.status).toBe('done')
+    expect(tasks.store.results.get(result.id)!.acceptedAt).not.toBeNull()
+  })
 })

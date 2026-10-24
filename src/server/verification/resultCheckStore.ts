@@ -156,6 +156,7 @@ export class ResultCheckStore {
   private map(row: Record<string, unknown>): TaskResultCheck {
     return {
       id: String(row.id),
+      teamId: String(row.team_id),
       taskId: String(row.task_id),
       resultId: String(row.result_id),
       seq: Number(row.seq),

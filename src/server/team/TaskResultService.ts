@@ -101,7 +101,7 @@ export class TaskResultService {
     /** A result or findings write landed (plan-execution D5): the composition wakes the owner's executor. */
     onWrite?: (taskId: string) => void
     /** A result committed (independent-verification D1): the composition hands it to ResultCheckService. */
-    onResult?: (result: TaskResult) => void
+    onResult?: (result: TaskResult, teamId: string) => void
   }) {
     this.release = options.releases && options.records
       ? new TaskRelease(this, {
@@ -156,7 +156,7 @@ export class TaskResultService {
       return inserted
     })
     this.options.onWrite?.(taskId)
-    this.options.onResult?.(this.store.results.get(result.id)!)
+    this.options.onResult?.(this.store.results.get(result.id)!, team.teamId)
     return this.store.results.get(result.id)!
   }
 
