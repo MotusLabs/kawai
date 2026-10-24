@@ -7,7 +7,7 @@ import type { TaskService } from './TaskService'
 import type { TaskResultService } from './TaskResultService'
 
 export const TASK_TOOL_NAMES = ['task_create', 'task_get', 'task_note', 'task_update_status', 'task_amend', 'task_list', 'task_acknowledge',
-  'task_submit_result', 'task_submit_findings', 'task_handoff', 'task_check_result'] as const
+  'task_submit_result', 'task_submit_coverage', 'task_submit_findings', 'task_handoff', 'task_check_result'] as const
 
 const status = z.enum(TASK_STATUSES as [TaskStatus, ...TaskStatus[]])
 const taskId = { task_id: z.string().min(1) }
@@ -34,6 +34,9 @@ export const taskSchemas = {
     // service boundary — a clause-indexed refusal the zod layer cannot name.
     coverage: z.unknown().optional(),
   }),
+  task_submit_coverage: z.object({
+    ...taskId, result_id: z.string().min(1), coverage: z.unknown(),
+  }),
   task_submit_findings: z.object({
     ...taskId, result_id: z.string().min(1), kind: z.enum(['review', 'qa']), verdict: z.enum(['pass', 'fail']), findings: z.string().min(1),
   }),
@@ -58,6 +61,7 @@ export const taskDescriptions: Record<(typeof TASK_TOOL_NAMES)[number], string> 
   task_list: "List this team's tasks, optionally by status.",
   task_acknowledge: 'State the published task revision you are now working from (the revision in the task header). Call it when you start or take over work on a task, and after a revision notice.',
   task_submit_result: 'Submit a result for a task: a summary, a commit and/or diff reference (at least one), the tests you ran with their outcomes, and known limitations. Your test outcomes are shown as claimed, not verified. Supersedes the task\'s previous result; does not close the task.',
+  task_submit_coverage: 'Record your own coverage map for a result (result_id from task_get): the same clause/citation map a submission carries. While you hold a task\'s outstanding review handoff and have recorded no map for its result, the submitter\'s maps stay withheld from you — recording yours unseals them. Maps are append-only; your newest map for a result counts.',
   task_submit_findings: 'Report review or QA findings on one exact result (result_id from task_get): kind review|qa, verdict pass|fail, and the findings. They stay bound to that result — a newer result inherits nothing.',
   task_handoff: 'Hand a result off (kind review, qa, or fix — return for fixes; the result_id, instructions, and an optional expected_response) to a recipient: target_kind "group" (the default when omitted, even for a session-shaped id) with target: <group id>, or target_kind "session" with target: <session id> to dispatch ordinary direct task mail to that exact session — no other member is chosen. While an equivalent handoff (same task, result, kind) is outstanding, this returns it instead of dispatching again; if the standing handoff names another recipient, the notice says so and nothing is reassigned. Optional worker (group targets only) limits who may take it to one provider (e.g. claude) or one model (provider/model, or a bare model key) of the group\'s workers, as on send_message; a handoff naming another worker is another handoff.',
   task_check_result: 'Ask Kawai to check a result again (result_id from task_get): the commit, its worktree state, the recorded full-check pass, and merges against the base and other open tasks\' branches. The check never gates anything; it runs in the background and the newest check rides task_get. A request while a check is pending returns that pending check.',
@@ -67,7 +71,14 @@ export function taskHandlers(tasks: TaskService, sessionId: string, results?: Ta
   const caller = { kind: 'agent' as const, sessionId }
   return {
     task_create: async (input: unknown) => tasks.create(caller, taskSchemas.task_create.parse(input)),
-    task_get: async (input: unknown) => tasks.get(caller, taskSchemas.task_get.parse(input).task_id),
+    task_get: async (input: unknown) => {
+      const { task_id } = taskSchemas.task_get.parse(input)
+      const detail = await tasks.get(caller, task_id)
+      // The blind-first seal (independent-verification D6): project the
+      // results for the reading session when the server has a result
+      // service; the human's path (humanDetail) never seals.
+      return results ? results.applySeal(caller, task_id, detail) : detail
+    },
     task_note: async (input: unknown) => {
       const { task_id, text } = taskSchemas.task_note.parse(input)
       return tasks.note(caller, task_id, text)
@@ -89,6 +100,10 @@ export function taskHandlers(tasks: TaskService, sessionId: string, results?: Ta
       task_submit_result: async (input: unknown) => {
         const { task_id, ...submission } = taskSchemas.task_submit_result.parse(input)
         return results.submit(caller, task_id, submission)
+      },
+      task_submit_coverage: async (input: unknown) => {
+        const { task_id, result_id, coverage } = taskSchemas.task_submit_coverage.parse(input)
+        return results.submitCoverage(caller, task_id, { resultId: result_id, coverage })
       },
       task_submit_findings: async (input: unknown) => {
         const { task_id, result_id, kind, verdict, findings } = taskSchemas.task_submit_findings.parse(input)

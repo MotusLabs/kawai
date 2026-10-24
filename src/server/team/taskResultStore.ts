@@ -12,6 +12,7 @@
 import type { ActingParty } from '../../shared/team'
 import { actorFromRow, partyFromRow } from './actorRow'
 import type { Database } from 'bun:sqlite'
+import { compareCoverageMaps, validateCoverageMap, type CoverageMap, type ReviewerCoverageMap } from '../../shared/coverageMaps'
 import type { TaskActor, TaskFindings, TaskResult, TaskTestClaim } from '../../shared/teamTasks'
 
 export interface ResultInsert {
@@ -23,6 +24,8 @@ export interface ResultInsert {
   worktree: string | null
   tests: TaskTestClaim[]
   limitations: string | null
+  /** The submitter's validated coverage map (independent-verification D5); null when none was given. */
+  coverage?: CoverageMap | null
   taskRevision: number
   submittedBy: TaskActor & { kind: 'agent' }
 }
@@ -54,6 +57,16 @@ function parseTests(value: unknown): TaskTestClaim[] {
   }
 }
 
+/** A stored map re-validated at read; a corrupt blob reads as no map (D5's shape is the storage contract). */
+export function parseCoverage(value: unknown): CoverageMap | null {
+  if (value === null || value === undefined) return null
+  try {
+    return validateCoverageMap(JSON.parse(String(value)))
+  } catch {
+    return null
+  }
+}
+
 export class TaskResultStore {
   constructor(private readonly db: Database) {}
 
@@ -63,11 +76,12 @@ export class TaskResultStore {
     this.db.transaction(() => {
       const previous = this.outstandingId(input.taskId)
       this.db.prepare(`INSERT INTO team_task_results
-        (id, team_id, task_id, summary, commit_ref, diff_ref, worktree, tests, limitations, task_revision,
+        (id, team_id, task_id, summary, commit_ref, diff_ref, worktree, tests, limitations, coverage, task_revision,
          submitted_by_kind, submitted_by_session, supersedes_result_id, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
         id, input.teamId, input.taskId, input.summary, input.commit, input.diff, input.worktree,
-        JSON.stringify(input.tests), input.limitations, input.taskRevision,
+        JSON.stringify(input.tests), input.limitations,
+        input.coverage === null || input.coverage === undefined ? null : JSON.stringify(input.coverage), input.taskRevision,
         input.submittedBy.kind, input.submittedBy.sessionId, previous, now,
       )
     })()
@@ -160,6 +174,7 @@ export class TaskResultStore {
       worktree: text(row.worktree),
       tests: parseTests(row.tests),
       limitations: text(row.limitations),
+      coverage: parseCoverage(row.coverage),
       taskRevision,
       submittedBy: actorOf(row.submitted_by_kind, row.submitted_by_session),
       supersedesResultId: text(row.supersedes_result_id),
@@ -170,5 +185,25 @@ export class TaskResultStore {
       findings: this.findingsFor(id),
       createdAt: String(row.created_at),
     }
+  }
+
+  /**
+   * A result's reviewer maps as readers see them (D12): the newest map per
+   * author session, each with its comparison against the submitter's map.
+   * Derived at read time (D6), never stored. Sealing is the caller's
+   * projection (TaskResultService): this is the always-complete view.
+   */
+  reviewerMapsOf(resultId: string, coverage: CoverageMap | null): ReviewerCoverageMap[] {
+    const bySession = new Map<string, { authorSession: string; createdAt: string; coverage: CoverageMap }>()
+    const rows = this.db.prepare('SELECT * FROM team_task_coverage_maps WHERE result_id = ? ORDER BY created_at, rowid')
+      .all(resultId) as Array<Record<string, unknown>>
+    for (const row of rows) {
+      const parsed = parseCoverage(row.coverage)
+      if (parsed === null) continue
+      bySession.set(String(row.author_session), { authorSession: String(row.author_session), createdAt: String(row.created_at), coverage: parsed })
+    }
+    return [...bySession.values()].map(entry => ({
+      ...entry, comparison: compareCoverageMaps(coverage, entry.coverage),
+    }))
   }
 }

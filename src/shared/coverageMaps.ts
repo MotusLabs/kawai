@@ -27,6 +27,14 @@ export interface CoverageClause {
 /** A whole coverage map, as submitted, stored, and read. */
 export type CoverageMap = CoverageClause[]
 
+/** One reviewer's map as a reader sees it (D12): its newest map for the result, with the comparison against the submitter's (null while either side has none, or dropped from a sealed reader's view). */
+export interface ReviewerCoverageMap {
+  authorSession: string
+  createdAt: string
+  coverage: CoverageMap
+  comparison: MapComparison | null
+}
+
 /** D5's input limits; malformed input is refused at submission, naming the clause index. */
 export const COVERAGE_LIMITS = {
   maxClauses: 200,

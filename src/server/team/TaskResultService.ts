@@ -9,9 +9,9 @@
 import { partyName } from './actorRow'
 import type { ChatSessionRecord } from '../db'
 import { NULL_OWNERSHIP, type ExecutionOwnership } from '../plans/execution/executionOwnership'
-import { validateCoverageMap } from '../../shared/coverageMaps'
+import { isSealed, validateCoverageMap, withheldCoverage, type CoverageMap } from '../../shared/coverageMaps'
 import type { TaskResultCheck } from '../../shared/teamTasks'
-import type { AssignmentTarget, TaskFindings, TaskHandoffKind, TaskResult, TaskTestClaim, TeamTask, TeamTaskAssignment, TeamTaskSummary } from '../../shared/teamTasks'
+import type { AssignmentTarget, TaskFindings, TaskHandoffKind, TaskResult, TaskTestClaim, TeamTask, TeamTaskAssignment, TeamTaskDetail, TeamTaskSummary } from '../../shared/teamTasks'
 import { TASK_HANDOFF_KINDS } from '../../shared/teamTasks'
 import { targetLabel, type AssignmentService } from './AssignmentService'
 import type { MemberRelease } from './memberRelease'
@@ -77,6 +77,14 @@ export function handoffInstruction(kind: TaskHandoffKind, result: TaskResult, in
     `Expected response: ${expectedResponse ?? DEFAULT_RESPONSE[kind]}`
 }
 
+/** A check whose facts carry no coverage outcomes (D6): the outcomes reveal the withheld map's shape, so a sealed reader never sees them. */
+function withoutCoverageOutcomes(check: TaskResultCheck): TaskResultCheck {
+  if (check.facts === null || check.facts.coverage === undefined) return check
+  const facts = { ...check.facts }
+  delete facts.coverage
+  return { ...check, facts }
+}
+
 /** What an acceptance closed, with what the human was shown before it (D5). */
 export interface AcceptOutcome {
   task: TeamTask
@@ -140,8 +148,8 @@ export class TaskResultService {
     if (tests.some(row => !row.description || !row.outcome)) throw new Error('Each test needs a description and an outcome')
     // The coverage map (independent-verification D5): validated before
     // anything is written, so a refused submission leaves no result row and
-    // no check row (J1). Storing it lands with the rest of task 3.1.
-    if (input.coverage !== undefined) validateCoverageMap(input.coverage)
+    // no check row (J1); the validated map is what the transaction stores.
+    const coverage = input.coverage === undefined ? null : validateCoverageMap(input.coverage)
     // plan-execution D9: for an owned change, the commit must be on its
     // branch and contain origin's head of it, checked before anything is
     // written; the old holder of a Restarted change is refused outright
@@ -158,7 +166,7 @@ export class TaskResultService {
       const inserted = this.store.results.insert({
         teamId: team.teamId, taskId, summary, commit, diff,
         worktree: task.worktree ?? (session ? worktreeRootOf(session.projectPath) : null),
-        tests, limitations: blankToNull(input.limitations), taskRevision: task.revision, submittedBy: actor,
+        tests, limitations: blankToNull(input.limitations), coverage, taskRevision: task.revision, submittedBy: actor,
       })
       this.store.appendJournal(taskId, actor, `Submitted result ${inserted.id}: ${summary}`)
       this.store.checks.insertPending({ teamId: team.teamId, taskId, resultId: inserted.id, trigger: 'submit', requestedBy: actor })
@@ -200,6 +208,67 @@ export class TaskResultService {
     this.store.appendJournal(taskId, actor, `${input.kind === 'qa' ? 'QA' : 'Review'} findings on result ${result.id}: ${input.verdict}`)
     this.options.onWrite?.(taskId)
     return stored
+  }
+
+  /**
+   * Record the session's own coverage map for a result (independent-
+   * verification D6, "reviewers record their own coverage map first"):
+   * validated exactly like a submission's map — the refusal names the clause
+   * index and writes nothing (J1) — then appended to the append-only
+   * table. Recording a map for the result its outstanding review handoff
+   * names unseals the task's submitter maps for this session. The task's
+   * status is nobody's business here.
+   */
+  async submitCoverage(caller: TaskCaller, taskId: string, input: { resultId: string; coverage: unknown }): Promise<TaskResult> {
+    refuseSystem(caller, 'submit')
+    const { team, actor } = await this.tasks.context(caller)
+    if (actor.kind !== 'agent') throw new Error('Coverage maps are recorded by the member that made them, with task_submit_coverage')
+    this.tasks.sameTeamTask(team, taskId)
+    const result = this.store.results.get(input.resultId)
+    if (!result || result.taskId !== taskId) throw new Error(`Result ${input.resultId} is not a result of task ${taskId}`)
+    const coverage = validateCoverageMap(input.coverage)
+    this.store.checks.insertCoverageMap({
+      teamId: team.teamId, taskId, resultId: result.id, authorSession: actor.sessionId,
+      coverage: JSON.stringify(coverage),
+    })
+    this.options.onWrite?.(taskId)
+    return this.store.results.get(result.id)!
+  }
+
+  /**
+   * The reader's view of a task detail (D6/D12): the human sees everything;
+   * a sealed reader — the holder of the task's outstanding review handoff
+   * with no map recorded for its result — sees every submitter map withheld
+   * down to `{ withheld, clauses }`, its own reviewer-map rows without their
+   * comparisons, no comparison of its own, and no coverage outcomes in any
+   * check facts (the outcomes give the map's shape away). Unsealed, the
+   * reading session's own comparison rides the result.
+   */
+  applySeal(caller: TaskCaller, taskId: string, detail: TeamTaskDetail): TeamTaskDetail {
+    if (caller.kind !== 'agent') return detail
+    const sessionId = caller.sessionId
+    const outstanding = this.store.outstandingAssignment(taskId)
+    const handoffResultId = outstanding?.handoffKind === 'review' ? outstanding.resultId ?? null : null
+    const sealed = handoffResultId !== null &&
+      isSealed(outstanding ?? null, sessionId, this.store.checks.hasCoverageMap(handoffResultId, sessionId))
+    const results = detail.results?.map(result => {
+      if (sealed) {
+        const ownMaps = (result.reviewerMaps ?? []).filter(row => row.authorSession === sessionId)
+          .map(row => ({ ...row, comparison: null }))
+        const checks = result.checks
+          ? { ...result.checks, newest: result.checks.newest === null ? null : withoutCoverageOutcomes(result.checks.newest) }
+          : undefined
+        return {
+          ...result,
+          // detail() carries the raw map; the withheld form exists only here.
+          coverage: withheldCoverage((result.coverage ?? null) as CoverageMap | null),
+          reviewerMaps: ownMaps, comparison: null, ...(checks ? { checks } : {}),
+        }
+      }
+      const ownNewest = (result.reviewerMaps ?? []).find(row => row.authorSession === sessionId)
+      return { ...result, comparison: ownNewest?.comparison ?? null }
+    })
+    return { ...detail, ...(results ? { results } : {}) }
   }
 
   /**
