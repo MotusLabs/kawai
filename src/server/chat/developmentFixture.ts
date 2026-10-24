@@ -74,7 +74,13 @@ export const fixtureQueryFactory: ChatQueryFactory = ({ prompt, options, wire })
     assistant('**Fixture response** — chat streaming, tools, and permissions are ready.')
     if (/approval|question/i.test(text)) {
       const tool = /question/i.test(text) ? 'AskUserQuestion' : 'Bash'
-      const input = tool === 'Bash' ? { description: 'Print the fixture greeting', command: 'echo fixture' } : {
+      // "recommended question" asks one that marks a (Recommended) option, so
+      // a positive auto-answer wait arms a deadline (question-auto-answer
+      // 5.2); the plain question flow above stays exactly as it was.
+      const input = tool === 'Bash' ? { description: 'Print the fixture greeting', command: 'echo fixture' } : /recommended/i.test(text) ? {
+        questions: [{ question: 'Deploy which color?', header: 'Color', multiSelect: false,
+          options: [{ label: 'Blue (Recommended)', description: 'Ocean' }, { label: 'Green', description: 'Forest' }] }],
+      } : {
         questions: [{ question: 'Which color?', header: 'Color', multiSelect: true,
           options: [{ label: 'Blue', description: 'Ocean' }, { label: 'Green', description: 'Forest' }] }],
       }
