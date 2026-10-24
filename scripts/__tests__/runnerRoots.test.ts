@@ -315,6 +315,64 @@ describe('the real runner gives each file its own root', () => {
       reports: [report],
     })
   }, 30_000)
+
+  // The no-planned-reports path (C2 advisor review, note 2): a caller
+  // carrying its own --reporter-outfile (the hook's affected-tests pass,
+  // nested under a full check) must write NOTHING into the directory the
+  // env names — no report, and no manifest, since a manifest here would
+  // fail the owning run's exact-set merge. readdir cannot see an overwrite
+  // (the name survives), so the seeded case asserts bytes.
+  test('a caller-reporter run leaves an empty foreign report directory empty', async () => {
+    const foreignDir = fs.mkdtempSync(path.join(os.tmpdir(), 'runner-roots-junit-foreign-'))
+    probeDirs.push(foreignDir)
+    const callerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'runner-roots-caller-'))
+    probeDirs.push(callerDir)
+    const proc = spawnRunner(
+      [
+        '--skip-real-tmux',
+        '--skip-slow',
+        PASSING_PROBES[0]!,
+        '--reporter=junit',
+        `--reporter-outfile=${path.join(callerDir, 'caller.junit.xml')}`,
+      ],
+      { KAWAI_TEST_JUNIT_DIR: foreignDir }
+    )
+    const { code, stderr } = await drainAndExit(proc)
+    expect(code, stderr.slice(-2000)).toBe(0)
+    // The probe hands only an empty directory; nothing may appear in it.
+    expect(fs.readdirSync(foreignDir)).toEqual([])
+    // The caller's own report landed at the path the caller named.
+    expect(fs.existsSync(path.join(callerDir, 'caller.junit.xml'))).toBe(true)
+  }, 30_000)
+
+  test('a caller-reporter run leaves a seeded foreign report directory byte-for-byte intact', async () => {
+    const foreignDir = fs.mkdtempSync(path.join(os.tmpdir(), 'runner-roots-junit-foreign-'))
+    probeDirs.push(foreignDir)
+    const callerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'runner-roots-caller-'))
+    probeDirs.push(callerDir)
+    // A foreign writer's manifest and report, as the owning run left them.
+    const manifestBytes = Buffer.from(JSON.stringify({ reports: ['0-parallel-1-2.junit.xml'] }))
+    const reportBytes = Buffer.from('<testsuites name="foreign"></testsuites>')
+    fs.writeFileSync(path.join(foreignDir, 'planned.json'), manifestBytes)
+    fs.writeFileSync(path.join(foreignDir, '0-parallel-1-2.junit.xml'), reportBytes)
+    const proc = spawnRunner(
+      [
+        '--skip-real-tmux',
+        '--skip-slow',
+        PASSING_PROBES[0]!,
+        '--reporter=junit',
+        `--reporter-outfile=${path.join(callerDir, 'caller.junit.xml')}`,
+      ],
+      { KAWAI_TEST_JUNIT_DIR: foreignDir }
+    )
+    const { code, stderr } = await drainAndExit(proc)
+    expect(code, stderr.slice(-2000)).toBe(0)
+    // Byte equality, not name equality: an overwrite keeps the name.
+    expect(fs.readFileSync(path.join(foreignDir, 'planned.json'))).toEqual(manifestBytes)
+    expect(fs.readFileSync(path.join(foreignDir, '0-parallel-1-2.junit.xml'))).toEqual(reportBytes)
+    expect(fs.readdirSync(foreignDir).sort()).toEqual(['0-parallel-1-2.junit.xml', 'planned.json'])
+    expect(fs.existsSync(path.join(callerDir, 'caller.junit.xml'))).toBe(true)
+  }, 30_000)
 })
 
 // Production-path probes for the timings record (review B3): these drive the

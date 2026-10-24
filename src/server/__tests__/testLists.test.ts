@@ -119,6 +119,17 @@ describe('a missing or damaged list reads as unknown, never fabricated (K1)', ()
     fs.writeFileSync(testListPath(dir, KEY), gzipSync(Buffer.from(JSON.stringify(entries))))
     expect(readTestList(dir, record(KEY, 2))).toBeNull()
   })
+
+  test('a list decompressing over the size cap reads as unknown (C2 advisory b)', () => {
+    // The decompressed-size cap bounds read-time memory; over it the answer
+    // is null, never a throw into the caller. The body is otherwise a valid
+    // one-entry list (trailing JSON whitespace parses fine and the count
+    // agrees), so only the cap can refuse it.
+    const one = JSON.stringify([entry()])
+    const padded = Buffer.from(one + ' '.repeat(33 * 1024 * 1024 - one.length), 'utf8')
+    fs.writeFileSync(testListPath(dir, KEY), gzipSync(padded))
+    expect(readTestList(dir, record(KEY, 1))).toBeNull()
+  })
 })
 
 describe('a mismatched record pointer reads as unknown (K1, C1 advisor point 3)', () => {

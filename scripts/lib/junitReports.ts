@@ -63,7 +63,11 @@ export function plannedReportNames(batches: ReadonlyArray<{ report?: string | un
 }
 
 /** Write the plan before the first batch: one sorted row of report
- * basenames per planned batch. */
+ * basenames per planned batch. The write is last-writer-wins: a nested run
+ * that overwrote the directory owner's manifest would fail the owner's
+ * exact-set comparison and merge null — fail-closed, never a partial list
+ * — and the runner never plans reports into a directory it does not own,
+ * so the overwrite needs a foreign writer to happen at all. */
 export function writePlannedReports(dir: string, names: string[]): void {
   fs.writeFileSync(
     path.join(dir, PLANNED_REPORTS_NAME),
@@ -152,15 +156,17 @@ interface SuiteFrame {
  * without any file source, or a failure/error child — none of which a
  * full pass produces — makes the whole report unusable (null). A skip is
  * `<skipped />`; a todo is `<skipped message="TODO" />` (4.1 spike). The
- * `name` attribute is the bare title `testTitles` extracts, not
- * describe-qualified (spike: describe-qualification rides `classname`,
- * which is reversed and unused). */
+ * entry's file is the testcase's own `file` attribute when it carries one,
+ * the enclosing suite chain's nearest `file` otherwise (D7); Bun 1.4.3
+ * writes them equal. The `name` attribute is the bare title `testTitles`
+ * extracts, not describe-qualified (spike: describe-qualification rides
+ * `classname`, which is reversed and unused). */
 export function parseJUnitTestEntries(xml: string): TestListEntry[] | null {
   let sawRoot = false
   const suites: SuiteFrame[] = [{ file: null, describe: [] }]
   // Nesting depth of elements opened inside the current testcase, so a
   // nested </testcase>-looking construct cannot end it early.
-  let testcase: { name: string; skipMessage: string | null; failed: boolean; depth: number } | null = null
+  let testcase: { name: string; file: string | null; skipMessage: string | null; failed: boolean; depth: number } | null = null
   const entries: TestListEntry[] = []
   TAG.lastIndex = 0
   let match: RegExpExecArray | null
@@ -177,7 +183,7 @@ export function parseJUnitTestEntries(xml: string): TestListEntry[] | null {
       if (testcase !== null) {
         if (name === 'testcase' && testcase.depth === 0) {
           if (testcase.failed) return null
-          const file = suiteFile(suites)
+          const file = testcase.file ?? suiteFile(suites)
           if (file === null) return null
           entries.push({
             file,
@@ -210,9 +216,17 @@ export function parseJUnitTestEntries(xml: string): TestListEntry[] | null {
     if (name === 'testcase') {
       if (testcase !== null) return null
       if (attrs.name === undefined) return null
-      testcase = { name: attrs.name, skipMessage: null, failed: false, depth: 0 }
+      // The testcase's own file wins over the suite chain (advisory (a),
+      // C2 review); `./` is stripped by the shared convention.
+      testcase = {
+        name: attrs.name,
+        file: attrs.file !== undefined ? attrs.file.replace(/^\.\//, '') : null,
+        skipMessage: null,
+        failed: false,
+        depth: 0,
+      }
       if (selfClosing) {
-        const file = suiteFile(suites)
+        const file = testcase.file ?? suiteFile(suites)
         if (file === null) return null
         entries.push({ file, path: suites[suites.length - 1]!.describe.join(' > '), name: testcase.name, status: 'passed' })
         testcase = null

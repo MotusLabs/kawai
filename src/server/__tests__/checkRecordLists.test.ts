@@ -14,6 +14,7 @@ import {
   LIST_ORPHAN_GRACE_MS,
   MAX_RECORDS,
   RECORD_TTL_MS,
+  TMP_TTL_MS,
   type CheckRecord,
   pruneRecords,
   readRecord,
@@ -175,6 +176,13 @@ describe('orphaned lists (D7 "Interrupted writing")', () => {
     fs.writeFileSync(file, Buffer.from([0x1f, 0x8b, 0, 0]))
     fs.utimesSync(file, mtime / 1000, mtime / 1000)
   }
+
+  test('the orphan grace is TMP_TTL_MS — the same one-hour window, not merely some grace', () => {
+    // K2 case 2 (task revision 2) words the orphan grace as TMP_TTL_MS; a
+    // regression to a shorter constant must fail here, not only change
+    // behavior.
+    expect(LIST_ORPHAN_GRACE_MS).toBe(TMP_TTL_MS)
+  })
 
   // @covers: dev-checks › Full-check records list the tests that ran › Interrupted writing
   test('an orphan list older than the grace is removed by the next prune', () => {

@@ -58,8 +58,11 @@ const LIST_NAME = /^([0-9a-f]{64})\.tests\.json\.gz$/
  * in exactly that window — and removing the list there would leave the
  * record pointing at nothing. Age, not absence, decides; a writer stalled
  * longer than the grace loses only its list, and the record reads as
- * list-less (never fabricated data). */
-export const LIST_ORPHAN_GRACE_MS = 60_000
+ * list-less (never fabricated data). The grace is TMP_TTL_MS (K2 case 2,
+ * task revision 2): the same one-hour window that judges a stale temp file
+ * judges an orphan list, so the in-flight answer is one constant, and a
+ * test pins the equality. */
+export const LIST_ORPHAN_GRACE_MS = TMP_TTL_MS
 
 /** The shared records directory for the repository behind `cwd`. Throws when
  * git cannot resolve a common directory (outside a repository). */

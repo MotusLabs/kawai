@@ -78,6 +78,26 @@ describe('parseJUnitTestEntries converts a real report into list entries', () =>
     ])
   })
 
+  test("a testcase's own file attribute wins over the suite chain (C2 advisory a)", () => {
+    // D7 words the entry's file as the testcase's own `file` with the suite
+    // chain as fallback; Bun 1.4.3 writes them equal, so the preference only
+    // shows on a report where they differ.
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="bun test" tests="3">
+  <testsuite name="src/suite.test.ts" file="src/suite.test.ts">
+    <testcase name="own file, self-closing" file="./src/own.test.ts" time="0.000"/>
+    <testcase name="own file, skipped" file="src/own.test.ts"><skipped/></testcase>
+    <testcase name="no own file falls back to the suite"/>
+  </testsuite>
+</testsuites>`
+    const entries = parseJUnitTestEntries(xml)
+    expect(entries).toEqual([
+      { file: 'src/own.test.ts', path: '', name: 'own file, self-closing', status: 'passed' },
+      { file: 'src/own.test.ts', path: '', name: 'own file, skipped', status: 'skipped' },
+      { file: 'src/suite.test.ts', path: '', name: 'no own file falls back to the suite', status: 'passed' },
+    ])
+  })
+
   test('a report carrying a failure is unusable', () => {
     const xml = GOOD_REPORT.replace(
       '<testcase name="passes" classname="inner &amp; tight &gt; outer &gt; passes" time="0.001"/>',
