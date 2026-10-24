@@ -210,12 +210,20 @@ test('usage is kept per home: the fill read lands before a message and both prof
 
 // --- PR E (codex-chat-sessions 7.2): limit events through the manager ---
 
+// The exhausted windows' resets are computed at load, not pinned: a pinned
+// instant stops cooling anything once it slips into the past (1792879251 was
+// 2026-10-24T22:00:51Z, and the cooldown assertions read `until` only while
+// an end is still ahead), and each duration keeps its own window length.
+const EXHAUSTED_AT = Math.floor(Date.now() / 1000)
+const PRIMARY_RESET = EXHAUSTED_AT + 300 * 60
+const SECONDARY_RESET = EXHAUSTED_AT + 10080 * 60
+
 const EXHAUSTED = {
   limitId: 'codex',
   limitName: null,
   normalModelSlug: null,
-  primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: 1792337450 },
-  secondary: { usedPercent: 100, windowDurationMins: 10080, resetsAt: 1792879251 },
+  primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: PRIMARY_RESET },
+  secondary: { usedPercent: 100, windowDurationMins: 10080, resetsAt: SECONDARY_RESET },
   credits: null,
   individualLimit: null,
   spendControlReached: null,
@@ -259,12 +267,11 @@ test('a usage-limit turn failure records one final event for the home with the l
   const [event] = manager.limitEvents.forProfile('codex')
   expect(event).toMatchObject({
     profileId: 'codex', sessionId: id, kind: 'usageLimitExceeded', final: true,
-    resetsAt: new Date(1792879251 * 1000).toISOString(), window: null, status: null,
+    resetsAt: new Date(SECONDARY_RESET * 1000).toISOString(), window: null, status: null,
   })
   expect(event.providerId).toBe(homeProvider)
   // One event for the home, none copied to the sibling profile. Both windows
-  // were exhausted; the weekly 2-day reset (1792879251) decides, not the
-  // five-hour 1-hour one (1792337450).
+  // were exhausted; the later (weekly) reset decides, not the five-hour one.
   expect(manager.limitEvents.forProvider(homeProvider)).toHaveLength(1)
   expect(manager.limitEvents.forProfile('codex-fast')).toEqual([])
 })
