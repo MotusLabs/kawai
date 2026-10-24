@@ -358,3 +358,78 @@ test('the script reports the same facts as the module Kawai runs, green when all
   )
   expect(scriptFacts).toEqual(kawaiFacts)
 }, 30_000)
+
+// --- K6: the script is read-only and a usage error exits 2 ---
+
+/** Every path under `root` — directories by name, files with a sha256 of
+ * their bytes, sorted: a content snapshot. Bytes, not mtimes: git may
+ * freshen an existing loose object's mtime without writing a byte (the
+ * carve-out resultChecks.ts documents for merge-tree). */
+function snapshotTree(root: string): string[] {
+  const lines: string[] = []
+  const walk = (relative: string): void => {
+    const absolute = path.join(root, relative)
+    const stats = fs.lstatSync(absolute)
+    if (stats.isDirectory()) {
+      lines.push(`d ${relative}`)
+      for (const entry of fs.readdirSync(absolute).sort()) {
+        walk(path.join(relative, entry))
+      }
+    } else if (stats.isFile()) {
+      const hash = new Bun.CryptoHasher('sha256').update(fs.readFileSync(absolute)).digest('hex')
+      lines.push(`f ${relative} ${hash}`)
+    } else {
+      lines.push(`o ${relative}`)
+    }
+  }
+  walk('')
+  return lines
+}
+
+test('a full green run leaves the worktree, git dir, and records dir byte-for-byte unchanged (K6)', async () => {
+  const sha = commitFile(
+    'src/a.test.ts',
+    "import { test } from 'bun:test'\ntest('adds numbers', () => {})\n"
+  )
+  const tree = runGit(['rev-parse', `${sha}^{tree}`], { cwd: repo, timeoutMs: 10_000 }).stdout.trim()
+  // A recorded pass with a list, exactly as the machinery writes it.
+  const dir = recordsDir(repo)
+  const key = 'a'.repeat(64)
+  writeTestList(dir, key, [{ file: 'src/a.test.ts', path: '', name: 'adds numbers', status: 'passed' }])
+  writeRecord(dir, {
+    key,
+    treeId: tree,
+    bun: '1.4.3',
+    platform: process.platform,
+    arch: process.arch,
+    at: new Date().toISOString(),
+    worktree: repo,
+    steps: [],
+    tests: { file: testListName(key), count: 1 },
+  })
+  // The base is HEAD itself: merge-tree --write-tree then merges the tree
+  // onto itself and writes no new object, so the one write git may make on
+  // this path stays out of the comparison.
+  setBase(sha)
+  const mapFile = path.join(tempDir, 'map.json')
+  fs.writeFileSync(
+    mapFile,
+    JSON.stringify([{ clause: 'adds', tests: [cite('src/a.test.ts', 'adds numbers')] }])
+  )
+  const before = snapshotTree(repo)
+  const { code, stderr } = await runScript(['--worktree', repo, '--commit', sha, '--coverage', mapFile])
+  if (code !== 0) throw new Error(`expected a green run, got ${code}: ${stderr}`)
+  expect(snapshotTree(repo)).toEqual(before)
+}, 30_000)
+
+test('a usage error exits 2: an unknown flag, and an unreadable --coverage file (K6)', async () => {
+  expect((await runScript(['--wat'])).code).toBe(2)
+  const sha = commitFile(
+    'src/a.test.ts',
+    "import { test } from 'bun:test'\ntest('adds numbers', () => {})\n"
+  )
+  const missing = path.join(tempDir, 'no-such-map.json')
+  const unreadable = await runScript(['--worktree', repo, '--commit', sha, '--coverage', missing])
+  expect(unreadable.code).toBe(2)
+  expect(unreadable.stderr).toContain('cannot read the coverage file')
+}, 30_000)
