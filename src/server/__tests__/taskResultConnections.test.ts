@@ -182,7 +182,7 @@ test('release on another team\'s task is refused and archives nothing', async ()
 // Recheck (independent-verification D4): the human's command records a new
 // check beside the earlier ones; a request while a check is pending returns
 // that pending check instead of starting another.
-// @covers: specs/task-results "Results can be rechecked"
+// @covers: task-results › Results can be rechecked › Recheck while pending
 test('recheck records a check requested by the human; a request while pending returns it', async () => {
   const task = await tasks.create(human(), { title: 'Export', direction: 'v1' })
   const result = resultFor(task.id)
@@ -196,7 +196,6 @@ test('recheck records a check requested by the human; a request while pending re
   expect(tasks.store.checks.allForResult(result.id)).toHaveLength(1)
 })
 
-// @covers: specs/task-results "Results can be rechecked"
 test('recheck on another team\'s task is refused and writes nothing', async () => {
   const foreign = await tasks.create(human('other'), { title: 'Foreign', direction: 'd' })
   const result = resultFor(foreign.id)

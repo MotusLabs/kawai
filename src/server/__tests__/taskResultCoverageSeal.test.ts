@@ -176,7 +176,7 @@ test('a newer result\'s map is withheld from the holder of the earlier result\'s
   ])
 })
 
-// @covers: task-results › Reviewers record their own coverage map first › The tool return keeps the seal
+// @covers: task-results › Reviewers record their own coverage map first › Map withheld from the reviewer
 test('task_submit_coverage\'s return keeps the seal: mapping a result other than the handoff\'s leaks nothing', async () => {
   const task = await tasks.create(agent('lead'), { title: 'Export', direction: 'v1' })
   const first = await results.submit(agent('dev'), task.id, { summary: 'CSV export', commit: 'abc123', tests: [] })

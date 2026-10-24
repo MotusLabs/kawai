@@ -114,7 +114,9 @@ describe('result checks over a submitted result', () => {
     branches: { compared: [], comparedCount: 0, skipped: 0, status: 'pass' },
   })
 
-  // @covers: specs/task-results "Result checks never block or gate"
+  // No @covers here: the test restarts after the check settled, the opposite
+  // leg of "Restart during a check" (its faithful test is resultCheckService
+  // › startup runs every pending row once, for every team) — C3 finding B1.
   test('submit commits a pending check with the result; the service settles it; a restart finds nothing (I1, C2)', async () => {
     const task = await tasks.create(agent('lead'), { title: 'Checked', direction: 'v1' })
     const checks = tasks.store.checks
@@ -141,7 +143,7 @@ describe('result checks over a submitted result', () => {
     expect(checks.allForResult(result.id)).toHaveLength(1)
   })
 
-  // @covers: specs/task-results "Result checks never block or gate"
+  // @covers: task-results › Result checks never block or gate › A failing check does not gate
   test('a settled check with failing facts never gates findings, handoff, or acceptance (I4)', async () => {
     const task = await tasks.create(agent('lead'), { title: 'Gated?', direction: 'v1' })
     const result = await results.submit(agent('dev'), task.id, submission)
@@ -158,7 +160,7 @@ describe('result checks over a submitted result', () => {
     expect(tasks.store.results.get(result.id)!.acceptedAt).not.toBeNull()
   })
 
-  // @covers: specs/task-results "Results can be rechecked"
+  // @covers: task-results › Results can be rechecked › Recheck after the base moved
   test('task_check_result rechecks after the base moved: a new check beside the readable earlier one', async () => {
     const task = await tasks.create(agent('lead'), { title: 'Rechecked', direction: 'v1' })
     const result = await results.submit(agent('dev'), task.id, submission)
@@ -177,7 +179,7 @@ describe('result checks over a submitted result', () => {
     expect(all[1]?.facts?.base).toMatchObject({ mergeClean: true })
   })
 
-  // @covers: specs/task-results "Results can be rechecked"
+  // @covers: task-results › Results can be rechecked › Recheck while pending
   test('a recheck requested while a check is pending returns it, and no second check runs', async () => {
     const task = await tasks.create(agent('lead'), { title: 'Pending', direction: 'v1' })
     const result = await results.submit(agent('dev'), task.id, submission)

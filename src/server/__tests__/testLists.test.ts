@@ -51,8 +51,8 @@ function record(key: string, count: number): CheckRecord {
 
 const KEY = 'a'.repeat(64)
 
-// @covers: dev-checks › Full-check records list the tests that ran › Pass with its test list
 describe('a written list reads back whole (K4)', () => {
+  // @covers: dev-checks › Full-check records list the tests that ran › Pass with its test list
   test('writeTestList sorts with the shared comparator and readTestList returns the entries', () => {
     const entries = [
       entry({ file: 'src/b.test.ts', name: 'zeta' }),

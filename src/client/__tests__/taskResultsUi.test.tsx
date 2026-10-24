@@ -195,7 +195,6 @@ const checkFacts = (): ResultCheckFacts => ({
   branches: { compared: [], comparedCount: 1, skipped: 0, status: 'pass' },
 })
 
-// @covers: specs/task-results "Checks and coverage maps are kept and read with their results"
 test('the card shows the check as Checked by Kawai with each fact; the test list stays claimed', async () => {
   await mount(detail({ results: [result('r1', { checks: { newest: doneCheck({ facts: checkFacts() }), earlier: 1 } })] }))
   const card = one('task-result')
@@ -209,7 +208,6 @@ test('the card shows the check as Checked by Kawai with each fact; the test list
   expect(textOf(card)).toContain("outcomes are the submitter's claims, not verified evidence")
 })
 
-// @covers: specs/task-results "Checks and coverage maps are kept and read with their results"
 test('a conflicting base fact reads fail with its files; pending and unavailable checks say so', async () => {
   const facts = checkFacts()
   const failing = { ...facts, base: { ...facts.base, mergeClean: false, conflicts: ['src/export.ts'], status: 'fail' as const } }
@@ -222,7 +220,6 @@ test('a conflicting base fact reads fail with its files; pending and unavailable
   expect(textOf(one('result-check-unavailable'))).toContain('did not answer')
 })
 
-// @covers: specs/task-results "Results can be rechecked"
 test('Recheck sends team-task-recheck for the result and disables while disconnected; unchecked results say Not checked yet', async () => {
   await mount(detail({ results: [result('r1', { checks: { newest: null, earlier: 0 } })] }))
   expect(textOf(one('result-check'))).toContain('Checked by Kawai')
