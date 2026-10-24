@@ -53,13 +53,13 @@ rules as approvals.
 ## ADDED Requirements
 
 ### Requirement: Recommended answers are taken after a configurable wait
-When every question of a pending agent question request has at least one
-option whose label ends with `(Recommended)` (case-insensitive, after
-trimming) and the auto-answer wait is not zero, the system SHALL set a
-deadline of the request's time plus the wait. If no answer, hold,
-cancellation, or interruption settles the request first, the server SHALL
-answer it with each question's recommended option — every recommended option
-for a multi-select question, the first one otherwise.
+When every question of a pending agent question request in a Claude chat
+has at least one option whose label ends with `(Recommended)`
+(case-insensitive, trimmed) and the auto-answer wait is not zero, the
+system SHALL set a deadline of the request's time plus the wait. If no
+answer, hold, cancellation, or interruption settles the request first, the
+server SHALL answer it with each question's recommended option — every
+recommended option for a multi-select question, the first one otherwise.
 
 #### Scenario: Unanswered question takes the recommendation
 - **WHEN** the agent asks one single-select question with options `A (Recommended)` and `B`, the wait is 5 minutes, and nobody answers for 5 minutes
@@ -72,6 +72,10 @@ for a multi-select question, the first one otherwise.
 #### Scenario: Question without a recommendation keeps waiting
 - **WHEN** a request has two questions and only one of them has a recommended option
 - **THEN** no deadline is set and the request waits for the user as before
+
+#### Scenario: A Codex chat question waits for the user
+- **WHEN** a Codex chat session asks a question whose options include a recommended one
+- **THEN** no deadline is set and the question waits for the user as before
 
 #### Scenario: Multi-select takes every recommendation
 - **WHEN** a multi-select question marks two options as recommended and its deadline passes

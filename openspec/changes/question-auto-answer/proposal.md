@@ -17,8 +17,11 @@ leaving the human the first say.
   convention) gets an auto-answer deadline: when the human has not answered
   by then, the server answers it with the recommended option(s).
 - The wait is configurable from Settings (server-persisted, default
-  5 minutes, `0` turns the feature off) and applies to every chat session
-  whatever its approval policy; a change applies to questions asked after it.
+  5 minutes, `0` turns the feature off) and applies to every Claude chat
+  session whatever its approval policy; a change applies to questions asked
+  after it.
+- Codex chats keep today's behavior: their question cards keep waiting for
+  the user, and a follow-up change covers them.
 - Questions with no recommended option (in any of their questions) keep
   today's behavior: they wait for the human indefinitely.
 - The question card shows a countdown to the auto-answer and names the

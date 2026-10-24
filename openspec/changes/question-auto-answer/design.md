@@ -99,6 +99,173 @@ renders `decidedBy: 'timeout'` as "Answered automatically: <labels>" and the
 held event as "Auto-answer held". `SettingsModal.tsx` gains a minutes field
 with inline refusal.
 
+**D7 — New shared contracts go in a new shared module.** The `autoAnswer`
+payload, the `'timeout'` decided-by value, the resolved answer labels, and
+the `question_auto_answer_held` event are defined in a new module beside
+`src/shared/chat.ts`, which re-exports them for existing importers: `chat.ts`
+is already 578 lines, and this change adds four public shapes to it.
+Alternative — extend `chat.ts` in place: rejected, the file is past the size
+where another append is free.
+
+## Acceptance oracles
+
+The pending question is a small state machine (pending → settled or held)
+without recovery: a deadline is in-memory only, and a restart cancels every
+pending question without restoring it, so nothing survives to re-converge.
+These oracles are the change's acceptance surface. Every row id (`QA-*`) is
+cited by a `tasks.md` Verify bullet, and each Verify bullet names the mutant
+its tests must kill.
+
+### Decision tables
+
+Table 1 — one pending question, from creation to its first settlement or
+hold. "all marked" = every question of the request has a recommended
+option; `decidedBy` is the resolution's decided-by value; "autoAnswer
+shown" is whether `question_request` and `getPendingRequests` carry
+`autoAnswer`.
+
+| Oracle id | Marking | Wait | First event | decidedBy | autoAnswer shown | Events after | Status after |
+|---|---|---|---|---|---|---|---|
+| QA-1 | all marked | positive | the deadline fires | `timeout` | yes | `request_resolved { outcome: 'answered', decidedBy: 'timeout', answers }` plus the D3 note to the agent | leaves `permission`, the agent continues |
+| QA-2 | all marked | positive | the user answers | `user` | yes | `request_resolved { outcome: 'answered', decidedBy: 'user' }` | leaves `permission`; the timer is cleared, no later settlement |
+| QA-3 | all marked | positive | Wait for me | none | dropped on the held event | `question_auto_answer_held { requestId }` | still `permission`, waits for the user |
+| QA-4 | all marked | positive | the first form edit (option or text, unsubmitted) | none | dropped on the held event | `question_auto_answer_held { requestId }` | still `permission`, waits for the user |
+| QA-5 | all marked | positive | cancel or interrupt | none | yes, until the cancellation | the request's ordinary cancellation resolution | as a cancelled approval today |
+| QA-6 | all marked | positive | kill | none | yes, until the kill | none — the agent process ends | the kill path as today |
+| QA-7 | all marked | positive | server restart | none | yes, until the restart | none — the pending question is cancelled, no deadline restored | as today |
+| QA-8 | * | * | the user answers | `user` | no | `request_resolved { outcome: 'answered', decidedBy: 'user' }` | leaves `permission` |
+| QA-9 | * | * | cancel or interrupt | none | no | the ordinary cancellation resolution | as a cancelled approval today |
+| QA-10 | * | * | kill | none | no | none | the kill path as today |
+| QA-11 | * | * | server restart | none | no | none | the restart path as today |
+
+Rows QA-8…QA-11 carry `*` for marking and wait: the three combinations
+that set no deadline — all marked with a zero wait, one unmarked with a
+positive wait, one unmarked with a zero wait — behave identically from
+there; QA-P3 pins which combinations those are.
+
+Table 2 — a later event on a request that is no longer deadline-bearing.
+State is how it left the pending-with-deadline state; kill and restart
+admit no later event on the request itself (QA-U5).
+
+| Oracle id | State | Later event | Observable result |
+|---|---|---|---|
+| QA-12 | answered by the timeout, or by the user | a second user answer | refused as stale like any late answer; no second resolution |
+| QA-13 | answered by the timeout | Wait for me | refused — not a pending question; nothing changes |
+| QA-14 | answered by the timeout, or by the user | the first form edit | nothing — no deadline stands; the edit is an ordinary unsubmitted answer |
+| QA-15 | answered by the user | the original deadline passes | nothing — the timer was cleared at settlement; no second resolution |
+| QA-16 | answered by the user | Wait for me | refused — not a pending question; nothing changes |
+| QA-17 | answered by the timeout | restart, then replay | the automatic answer reaches replayed history through the tool result's note (D3), never as a live marker |
+| QA-18 | answered by the user | restart, then replay | the answer replays as today |
+| QA-19 | cancelled | the user answers or Wait for me | refused as stale like any late answer |
+| QA-20 | cancelled | the original deadline passes | nothing — the timer was cleared at cancellation |
+| QA-21 | held | the original deadline passes | nothing — the timer was cleared at the hold; the request stays pending |
+| QA-22 | held | the user answers | an ordinary user settlement |
+| QA-23 | held | Wait for me or the first form edit | refused / inert — no deadline stands (D4 refuses a deadline-less request; the form sends a hold only while one stands) |
+| QA-24 | held | restart, then replay | the pending question is cancelled by the restart like any other; nothing auto-answers |
+| QA-25 | cancelled | the first form edit | nothing — the request is settled; a racing client's edit is inert |
+| QA-26 | cancelled | restart, then replay | the cancellation replays as today |
+
+For the timeout state, "the original deadline passes" is the settlement
+row QA-1 itself — the deadline that passes is the settlement, and the
+timer is not re-armed.
+
+Table 3 — the wait setting, its own decision surface:
+
+| Oracle id | Saved value | Observable result |
+|---|---|---|
+| QA-S1 | never saved | the default 5 minutes applies (the spec's default scenario) |
+| QA-S2 | 0 | automatic answers off — no deadline ever (the QA-8…QA-11 class) |
+| QA-S3 | 1–1440 | that wait applies to questions asked after the save |
+| QA-S4 | 1441, -1, or 2.5 | refused with an error; nothing is stored |
+| QA-S5 | changed while a question is pending | the pending deadline keeps its original time (QA-P4; the spec's change scenario) |
+
+Unreachable combinations:
+
+- **QA-U1** — a deadline fires when the wait is 0 or a question is
+  unmarked: no timer exists (QA-P3).
+- **QA-U2** — Wait for me or a form-edit hold on a request without a
+  deadline: `holdQuestion` refuses it (D4), and the form sends the hold
+  only while a deadline stands.
+- **QA-U3** — two settlements of one request in any order: every
+  settlement path clears the timer first (D2); the second attempt is
+  refused or inert (QA-12…QA-16, QA-19…QA-21).
+- **QA-U4** — a deadline on a Codex chat's question: deadlines are
+  created only in Claude chat sessions (the spec's Codex scenario).
+- **QA-U5** — a later event on the request after kill or restart: the
+  request no longer exists; only the replay rows (QA-17, QA-18, QA-24,
+  QA-26) observe anything.
+
+### Properties
+
+All four run as plain seeded generators over the seams named here — no new
+dependency. Fixed seed 20261024 for every property. The seams: the driver's
+injectable timer scheduler (D2's `setTimeout`/`clearTimeout` behind a seam
+the tests advance by hand), the public `answerQuestion`/`cancelRequest`/
+`holdQuestion` entry points, the pure `recommendedAnswers`, and the
+manager's setting getter.
+
+- **QA-P1 — settled exactly once under any interleaving.** For any
+  interleaving of settlement attempts — user answer, Wait for me,
+  form-edit hold, cancel, timer fire, including duplicates and same-tick
+  arrivals — the request emits at most one resolution, its `decidedBy` is
+  the first settling attempt's, and every later attempt is refused or
+  inert. Generator: seeded shuffles of attempt sequences of length 1–5
+  over the five attempts, each sequence also run once with every attempt
+  on the same fake tick. 500 cases.
+- **QA-P2 — a held question never auto-answers.** After a hold at any
+  instant of the wait window — the first tick after creation through the
+  last tick before the deadline — advancing the clock arbitrarily far
+  never settles the request, and `getPendingRequests` stops carrying
+  `autoAnswer`. Generator: hold time uniform over [0, wait], then an
+  advance of wait × k for k ∈ {1, 10, 1000}. 200 cases.
+- **QA-P3 — no deadline without a full recommendation.** A deadline
+  (`autoAnswerAt` and a live timer) exists if and only if
+  `recommendedAnswers` returned answers and the wait was positive.
+  Generator: question sets over count 1–3 × single/multi-select × 0–4
+  options per question × marker variants (trailing marked, mid-label
+  marker, case and whitespace variants, absent) × wait {0, positive}.
+  300 cases.
+- **QA-P4 — a setting change never moves a pending deadline.** Changing
+  the saved wait at any instant between a question's creation and its
+  deadline leaves that request's `autoAnswerAt` and firing time unchanged;
+  only questions created after the change read the new value. Generator:
+  (initial wait, new wait, change instant) triples, waits from
+  {0, 1, 5, 1440} minutes, the change uniform over the wait window.
+  200 cases.
+
+### Completeness
+
+Every combination of the axes matches exactly one row or one unreachable
+claim. Marking {all marked, one unmarked} × wait {0, positive} × first
+event {the deadline, the user answers, Wait for me, the first form edit,
+cancel/interrupt, kill, restart} is 28 cells: 7 deadline-bearing rows
+(QA-1…QA-7), 12 covered by QA-8…QA-11 with `*`, and 9 unreachable
+(QA-U1, QA-U2). State {answered by the timeout, answered by the user,
+cancelled, held} × later event {a second user answer, Wait for me, the
+first form edit, the original deadline passes, restart then replay} is 20
+cells, all covered by QA-12…QA-26 (QA-12 and QA-14 name two states each;
+the timeout state's deadline cell is QA-1). The setting's values are
+QA-S1…QA-S5. No gap, no overlap.
+
+### Model-based tests
+
+Not required: no deadline survives a restart (QA-7, QA-24) — the state
+machine has no recovery axis, so there is no resumed state for a
+model-based run to re-converge and no crash boundary to replay. The blind
+second reading required for state machines with recovery does not apply;
+the Lead may still opt in.
+
+### Hazard notes
+
+Consulted `docs/oracle-hazards.md`: **M1** — at least one test per guarded
+seam runs through the production composition (a driver constructed by
+`ChatSessionManager`), and the wiring mutants (M-2.1, M-3.2) are killed
+only there (tasks 3.2 and 5.2); **several readers disagreeing on derived
+state** — `recommendedAnswers` is the one derivation of "recommended", and
+both the deadline decision and the shown `autoAnswer` read it; **refusals
+missing the success envelope** — QA-13, QA-16, QA-19, and QA-23 assert the
+same error envelope the success paths emit.
+
 ## Risks / Trade-offs
 
 - [The human is mid-way through the form when the deadline fires] → the
