@@ -204,7 +204,7 @@ test('the wait is read per question: a later question uses the new value and the
   await askQuestion(harness, [{ question: 'Merge?', options: ['Later (Recommended)', 'Now'] }], 'q2')
   const second = questionRequests(harness.events).at(-1)!
 
-  expect(Date.parse(second.autoAnswer!.at) - Date.parse(second.at)).toBe(10 * WAIT_MS)
+  expect(Date.parse(second.autoAnswer!.at) - Date.parse(snapshotOf(harness, second.requestId)!.at)).toBe(10 * WAIT_MS)
   // The first request's deadline did not move.
   expect(snapshotOf(harness, first.requestId)?.autoAnswer?.at).toBe(firstDeadline)
   harness.driver.kill()
