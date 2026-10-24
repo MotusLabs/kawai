@@ -168,6 +168,7 @@ All storage arrives in the next free migration. At this proposal's base, 35d2d30
 - **Size.**
   - Estimate: about 6,500 entries, about 0.8 MB raw and 80 KB gzipped per record. That is up to about 40 MB at the 500-record cap.
   - Task 4.2 measures the real size. If it exceeds 200 KB, only the newest 100 records keep lists.
+  - Measured (4.2, 2026-10-24): 8,030 entries, about 1.4 MB raw and 218.5 KiB (223,742 bytes) gzipped per record — over the 200 KB threshold, so the rule applies: only the newest 100 records keep lists (about 22 MB steady-state at the 500-record cap), in the order the count cap uses. An older record keeps its pass, loses only its list, and reads run unknown.
 - **Rejected:** detecting skips statically, because `describe.skip`, `test.if`, and the runner's own exclusions are invisible to a regex.
 
 ### D8. `@covers` annotations and the archived-change rule

@@ -35,6 +35,13 @@ export interface CheckRecord {
 export const RECORDS_DIR_NAME = 'kawai-checks'
 export const RECORD_TTL_MS = 14 * 24 * 60 * 60 * 1000
 export const MAX_RECORDS = 500
+/** D7's list-retention rule, settled by task 4.2's measurement (8,030
+ * entries, 1.4 MB raw, 218.5 KiB gzipped per list — over the 200 KB
+ * threshold): only the newest MAX_KEPT_LISTS records keep their lists, in
+ * the order master's count cap uses (mtime, newest first). An older record
+ * keeps its pass and loses only its list — its citations read run unknown
+ * (K2 case 3). The record itself is never touched. */
+export const MAX_KEPT_LISTS = 100
 /** A temp file older than this is removed even while its writer's pid still
  * answers: pids are reused, so age is the final judge. */
 export const TMP_TTL_MS = 60 * 60 * 1000
@@ -235,10 +242,11 @@ function pruneTempFiles(dir: string, names: string[], now: number): void {
  * newest by mtime, and remove the temp files of crashed writers. A record
  * this prune removes takes its test list with it (D7: pruned together), a
  * list is removed when it has no record and is older than the orphan grace
- * (the interrupted-writing scenario), and nothing else in the directory is
- * touched. The rule never removes a record the age-and-count rule keeps —
- * lists are removed only beside their own records, as orphans, and (never,
- * at this size) by any thinning rule (K2). */
+ * (the interrupted-writing scenario), and — D7's thinning, since 4.2
+ * measured a list over the 200 KB threshold — the kept records beyond the
+ * newest MAX_KEPT_LISTS lose only their lists, their records and passes
+ * staying (K2's three removal cases; a record the age-and-count rule keeps
+ * is never removed). */
 export function pruneRecords(dir: string, now = Date.now()): void {
   let names: string[]
   try {
@@ -292,5 +300,12 @@ export function pruneRecords(dir: string, now = Date.now()): void {
     } catch {
       // Already gone; pruning is best-effort.
     }
+  }
+  // D7's thinning (K2 case 3): the kept records beyond the newest
+  // MAX_KEPT_LISTS lose only their lists — the pass stays recorded, and its
+  // stale `tests` pointer reads as a missing list upstream (run unknown).
+  // fresh is mtime-descending, the same order the count cap keeps.
+  for (const record of fresh.slice(MAX_KEPT_LISTS, MAX_RECORDS)) {
+    removeTestList(dir, record.name.slice(0, -'.json'.length))
   }
 }

@@ -122,6 +122,7 @@ describe('a missing or damaged list reads as unknown, never fabricated (K1)', ()
 })
 
 describe('a mismatched record pointer reads as unknown (K1, C1 advisor point 3)', () => {
+  // @covers: dev-checks › Full-check records list the tests that ran › Record without a list
   test('a record without tests reads as no list (records written before this change)', () => {
     writeTestList(dir, KEY, [entry()])
     const listless = { ...record(KEY, 1), tests: undefined }
