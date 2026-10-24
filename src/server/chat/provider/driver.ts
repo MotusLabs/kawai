@@ -177,6 +177,12 @@ export interface ChatAgentDriver {
   resolveApproval(requestId: string, decision: ChatApprovalDecision): { ok: true } | { ok: false; error: string }
   /** Answer a question card; answers validate against the offered questions. */
   answerQuestion(requestId: string, answers: Record<string, ChatQuestionAnswer>): { ok: true } | { ok: false; error: string }
+  /**
+   * Hold a question's auto-answer deadline (question-auto-answer D4): the
+   * question waits for the user and never auto-answers. Refused unless the
+   * request is a pending question whose deadline still stands.
+   */
+  holdQuestion(requestId: string): { ok: true } | { ok: false; error: string }
   /** Snapshot of still-pending approvals/questions (for chat-snapshot). */
   getPendingRequests(): ChatPendingRequest[]
   /** Tool use ids this live stream has produced events for (replay guard). */

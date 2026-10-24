@@ -706,6 +706,36 @@ export class ChatSessionDriver implements ChatAgentDriver {
     return { ok: true }
   }
 
+  /**
+   * Hold a question's deadline (question-auto-answer D4, Wait for me): the
+   * question waits for the user and is never answered automatically. Refused
+   * unless the request is a pending question whose deadline still stands; a
+   * hold drops the whole deadline — the timer and every `autoAnswer` field —
+   * because the stale-settlement guard reads `autoAnswerAt` (advisor C2 D),
+   * and emits `question_auto_answer_held` so clients drop the countdown.
+   */
+  holdQuestion(requestId: string): { ok: true } | { ok: false; error: string } {
+    const pending = this.pendingRequests.get(requestId)
+    if (!pending || pending.settled) {
+      return {
+        ok: false,
+        error: `No pending question with id ${requestId}; it may already be answered or cancelled`,
+      }
+    }
+    if (pending.kind !== 'question' || !pending.questions) {
+      return { ok: false, error: `Request ${requestId} is not a question` }
+    }
+    if (!pending.autoAnswerAt) {
+      return { ok: false, error: `Request ${requestId} has no auto-answer deadline to hold` }
+    }
+    this.clearAutoAnswerTimer(pending)
+    pending.autoAnswerAt = undefined
+    pending.autoAnswers = undefined
+    pending.waitMs = undefined
+    this.emit({ type: 'question_auto_answer_held', requestId })
+    return { ok: true }
+  }
+
   /** Snapshot of still-pending approvals/questions (for chat-snapshot). */
   getPendingRequests(): ChatPendingRequest[] {
     return Array.from(this.pendingRequests.values()).map((pending) =>

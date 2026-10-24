@@ -176,6 +176,10 @@ export class CodexSessionDriver implements ChatAgentDriver {
     return this.requests.answerQuestion(requestId, answers)
   }
 
+  holdQuestion(requestId: string): { ok: true } | { ok: false; error: string } {
+    return this.requests.holdQuestion(requestId)
+  }
+
   getPendingRequests(): ChatPendingRequest[] {
     return this.requests.snapshot()
   }

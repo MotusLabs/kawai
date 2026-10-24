@@ -435,3 +435,114 @@ test('a callback arriving after a kill arms no deadline (advisor C1 #3)', async 
     event.type === 'request_resolved' &&
     (event as { decidedBy?: string }).decidedBy === 'timeout')).toBe(false)
 })
+
+test('holdQuestion refuses unknown, non-question, deadline-less, settled, and cancelled requests (QA-13, QA-16, QA-19, QA-U2)', async () => {
+  const clock = new ManualClock()
+  const harness = createHarness({
+    getQuestionAutoAnswerMs: () => WAIT_MS,
+    timerScheduler: clock,
+  })
+  harness.driver.send('ask')
+
+  expect(harness.driver.holdQuestion('no-such-id')).toMatchObject({ ok: false })
+
+  // Deadline-less: an unmarked question (and an approval) refuse a hold.
+  await askQuestion(harness, [{ question: 'Deploy?', options: ['Yes', 'No'] }], 'q-unmarked')
+  const unmarked = questionRequests(harness.events).at(-1)!
+  expect(harness.driver.holdQuestion(unmarked.requestId)).toMatchObject({
+    ok: false,
+    error: expect.stringContaining('no auto-answer deadline'),
+  })
+  expect(harness.events.filter((event) => event.type === 'question_auto_answer_held')).toHaveLength(0)
+
+  // Settled by the timeout: refused like any late attempt (QA-13).
+  const ask = askQuestionRaw(harness, [{ question: 'Deploy?', options: ['Yes (Recommended)', 'No'] }], 'q-timeout')
+  try {
+    await flush()
+    const marked = questionRequests(harness.events).at(-1)!
+    clock.advance(WAIT_MS)
+    const settled = await bounded(ask.promise)
+    expect(settled).toMatchObject({ behavior: 'allow' })
+    expect(harness.driver.holdQuestion(marked.requestId)).toMatchObject({ ok: false })
+
+    // Settled by the user: refused too (QA-16).
+    const ask2 = askQuestionRaw(harness, [{ question: 'Merge?', options: ['Later (Recommended)', 'Now'] }], 'q-user')
+    await flush()
+    const userMarked = questionRequests(harness.events).at(-1)!
+    expect(harness.driver.answerQuestion(userMarked.requestId, { 'Merge?': { options: ['Now'] } })).toEqual({ ok: true })
+    await bounded(ask2.promise)
+    expect(harness.driver.holdQuestion(userMarked.requestId)).toMatchObject({ ok: false })
+
+    // Cancelled: the request is gone, so the refusal names it unknown (QA-19).
+    const ask3 = askQuestionRaw(harness, [{ question: 'Ship?', options: ['Go (Recommended)', 'Hold'] }], 'q-cancel')
+    await flush()
+    const cancelled = questionRequests(harness.events).at(-1)!
+    ask3.abort()
+    await bounded(ask3.promise)
+    expect(harness.driver.holdQuestion(cancelled.requestId)).toMatchObject({ ok: false })
+
+    expect(harness.events.filter((event) => event.type === 'question_auto_answer_held')).toHaveLength(0)
+  } finally {
+    harness.driver.kill()
+  }
+})
+
+test('a hold drops the deadline: held event, no autoAnswer in the snapshot, never auto-answers (QA-3, QA-21)', async () => {
+  const clock = new ManualClock()
+  const harness = createHarness({
+    getQuestionAutoAnswerMs: () => WAIT_MS,
+    timerScheduler: clock,
+  })
+  harness.driver.send('ask')
+  await askQuestion(harness, [{ question: 'Deploy?', options: ['Yes (Recommended)', 'No'] }])
+  const request = questionRequests(harness.events).at(-1)!
+  expect(clock.pendingCount).toBe(1)
+
+  expect(harness.driver.holdQuestion(request.requestId)).toEqual({ ok: true })
+  expect(clock.pendingCount).toBe(0)
+  expect(snapshotOf(harness, request.requestId)?.autoAnswer).toBeUndefined()
+  const held = harness.events.find((event) => event.type === 'question_auto_answer_held') as
+    | Extract<ChatEvent, { type: 'question_auto_answer_held' }>
+  expect(held).toMatchObject({ type: 'question_auto_answer_held', requestId: request.requestId })
+  // QA-3: still `permission`, waiting for the user.
+  expect(harness.statuses.at(-1)).toBe('permission')
+
+  clock.advance(WAIT_MS * 1000)
+  await flush()
+  expect(harness.events.filter((event) => event.type === 'request_resolved')).toHaveLength(0)
+  expect(harness.driver.getPendingRequests()).toHaveLength(1)
+})
+
+test('after a hold the user answers ordinarily and a second hold is refused (QA-22, QA-23)', async () => {
+  const clock = new ManualClock()
+  const harness = createHarness({
+    getQuestionAutoAnswerMs: () => WAIT_MS,
+    timerScheduler: clock,
+  })
+  harness.driver.send('ask')
+  const ask = askQuestionRaw(harness, [{ question: 'Deploy?', options: ['Yes (Recommended)', 'No'] }])
+  try {
+    await flush()
+    const request = questionRequests(harness.events).at(-1)!
+    expect(harness.driver.holdQuestion(request.requestId)).toEqual({ ok: true })
+
+    // A second hold refuses: no deadline stands (QA-23, D4).
+    expect(harness.driver.holdQuestion(request.requestId)).toMatchObject({
+      ok: false,
+      error: expect.stringContaining('no auto-answer deadline'),
+    })
+
+    expect(harness.driver.answerQuestion(request.requestId, { 'Deploy?': { options: ['No'] } })).toEqual({ ok: true })
+    const settled = await bounded(ask.promise)
+    expect(settled).toMatchObject({ behavior: 'allow' })
+    const resolutions = harness.events.filter((event) => event.type === 'request_resolved')
+    expect(resolutions).toHaveLength(1)
+    expect(resolutions[0]).toMatchObject({ decidedBy: 'user' })
+    expect(harness.events.some((event) =>
+      event.type === 'request_resolved' &&
+      (event as { decidedBy?: string }).decidedBy === 'timeout')).toBe(false)
+  } finally {
+    harness.driver.kill()
+  }
+})
+
