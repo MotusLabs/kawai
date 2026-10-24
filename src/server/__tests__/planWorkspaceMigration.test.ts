@@ -10,6 +10,7 @@ import { Database } from 'bun:sqlite'
 import { initDatabase } from '../db'
 import { MIGRATIONS, type Migration } from '../dbSafety/migrations'
 import { PLAN_WORKSPACE_TABLES, planWorkspaceMigration } from '../plans/workspace/workspaceSchema'
+import { VERIFICATION_TABLES } from '../verification/verificationSchema'
 
 const UP_TO_18: readonly Migration[] = MIGRATIONS.filter(migration => migration.version <= 18)
 
@@ -67,7 +68,9 @@ test('a database at version 18 with plan and session rows upgrades, twice, keepi
   for (let run = 0; run < 2; run++) initDatabase({ path: dbPath, migrations: MIGRATIONS }).close()
   const after = tables(dbPath)
   for (const [table, rows] of Object.entries(before)) expect(after[table]).toEqual(rows)
-  expect(Object.keys(after).filter(table => !(table in before)).sort()).toEqual([...PLAN_WORKSPACE_TABLES].sort())
+  // Migration 20 (result-checks) also lands in this upgrade.
+  expect(Object.keys(after).filter(table => !(table in before)).sort())
+    .toEqual([...PLAN_WORKSPACE_TABLES, ...VERIFICATION_TABLES].sort())
   expect(versions(dbPath).filter(row => row.version === 19)).toHaveLength(1)
 })
 

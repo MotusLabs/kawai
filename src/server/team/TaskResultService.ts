@@ -9,6 +9,7 @@
 import { partyName } from './actorRow'
 import type { ChatSessionRecord } from '../db'
 import { NULL_OWNERSHIP, type ExecutionOwnership } from '../plans/execution/executionOwnership'
+import type { TaskResultCheck } from '../../shared/teamTasks'
 import type { AssignmentTarget, TaskFindings, TaskHandoffKind, TaskResult, TaskTestClaim, TeamTask, TeamTaskAssignment, TeamTaskSummary } from '../../shared/teamTasks'
 import { TASK_HANDOFF_KINDS } from '../../shared/teamTasks'
 import { targetLabel, type AssignmentService } from './AssignmentService'
@@ -99,6 +100,8 @@ export class TaskResultService {
     ownership?: ExecutionOwnership
     /** A result or findings write landed (plan-execution D5): the composition wakes the owner's executor. */
     onWrite?: (taskId: string) => void
+    /** A result committed (independent-verification D1): the composition hands it to ResultCheckService. */
+    onResult?: (result: TaskResult) => void
   }) {
     this.release = options.releases && options.records
       ? new TaskRelease(this, {
@@ -137,7 +140,11 @@ export class TaskResultService {
     const refusal = await (this.options.ownership ?? NULL_OWNERSHIP).checkResult(taskId, { commit, submitter: actor.sessionId, kind: 'result' })
     if (refusal !== null) throw new Error(refusal)
     const session = this.options.getSession(actor.sessionId)
-    // The result and its journal note commit together, as a dispatch and its journal entry do.
+    // The result, its journal note, and the pending check row commit together
+    // (independent-verification D1/I1): the check runs only after this
+    // transaction commits, and a crash between loses nothing — the startup
+    // run picks the pending row up. Nothing the check reads or computes
+    // happens inside the transaction.
     const result = this.store.atomically(() => {
       const inserted = this.store.results.insert({
         teamId: team.teamId, taskId, summary, commit, diff,
@@ -145,9 +152,11 @@ export class TaskResultService {
         tests, limitations: blankToNull(input.limitations), taskRevision: task.revision, submittedBy: actor,
       })
       this.store.appendJournal(taskId, actor, `Submitted result ${inserted.id}: ${summary}`)
+      this.store.checks.insertPending({ teamId: team.teamId, taskId, resultId: inserted.id, trigger: 'submit', requestedBy: actor })
       return inserted
     })
     this.options.onWrite?.(taskId)
+    this.options.onResult?.(this.store.results.get(result.id)!)
     return this.store.results.get(result.id)!
   }
 

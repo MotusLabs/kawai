@@ -29,6 +29,7 @@ import { TaskDraftStore } from './taskDrafts'
 import { TaskAcknowledgements } from './taskAcknowledgements'
 import { TaskNotices } from './taskNotices'
 import { TaskResultStore } from './taskResultStore'
+import { ResultCheckStore } from '../verification/resultCheckStore'
 import { createPayloadDiff, publishPayloadDiff } from './taskPayloadDiff'
 
 const CREATE_TABLES_SQL = `
@@ -149,6 +150,8 @@ export class TaskStore {
   readonly notices: TaskNotices | null
   /** Submitted results and their findings (task-results-handoffs D1). */
   readonly results: TaskResultStore
+  /** Result checks and coverage maps (independent-verification D4). */
+  readonly checks: ResultCheckStore
 
   constructor(private readonly db: Database, private readonly mail?: MailboxStore, private readonly assignments?: AssignmentStore) {
     // A claim or release of a task's instruction mail changes what the task
@@ -161,6 +164,7 @@ export class TaskStore {
     this.acknowledgements = new TaskAcknowledgements(db)
     this.notices = mail && assignments ? new TaskNotices(db, mail, assignments, this.acknowledgements) : null
     this.results = new TaskResultStore(db)
+    this.checks = new ResultCheckStore(db)
   }
 
   /** Every committed change, with the task as it is now. */
@@ -235,7 +239,7 @@ export class TaskStore {
       messages: this.messages(id),
       publications: this.notices?.publications(task, revisions) ?? [],
       acknowledgements: this.acknowledgements.list(id),
-      results: this.results.listByTask(id),
+      results: this.results.listByTask(id).map(result => ({ ...result, checks: this.checks.viewForResult(result.id) })),
     }
   }
 
