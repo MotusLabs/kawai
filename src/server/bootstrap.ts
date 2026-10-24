@@ -150,6 +150,9 @@ export function startServer(): void {
   const chatSessionManager = new ChatSessionManager({
     registry,
     db,
+    // The saved question auto-answer wait (question-auto-answer D5), read
+    // live by every Claude driver's next question.
+    getQuestionAutoAnswerMinutes: () => runtimeQuestionAutoAnswerMinutes,
     onEvent: (sessionId, event) => {
       chatConnections.publish(sessionId, event)
       // The workspace's request and turn triggers live in one mapping (team-workspace).
