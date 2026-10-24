@@ -12,14 +12,15 @@ import {
   type CheckGit, type OtherTaskHead, type ResultCheckInput,
 } from './resultChecks'
 import type { ResultCheckStore } from './resultCheckStore'
+import type { CoverageMap } from '../../shared/coverageMaps'
 import type { TaskResultCheck } from '../../shared/teamTasks'
 
 /** What the service reads about results and tasks, prepared by the
  * composition (sessionMailbox): the store rows name ids; the facts' inputs
  * come from the task and result stores. */
 export interface ResultCheckSources {
-  /** The result to check: its commit text and pinned worktree. */
-  result: (id: string) => { commit: string | null; worktree: string | null } | null
+  /** The result to check: its commit text, pinned worktree, and coverage map. */
+  result: (id: string) => { commit: string | null; worktree: string | null; coverage: CoverageMap | null } | null
   /** Every open, active, or blocked task of the team, with creation times. */
   openTasks: (teamId: string) => Array<{ id: string; worktree: string | null; createdAt: string }>
   /** The team's listed worktree roots (task worktrees are validated against these). */
@@ -136,7 +137,7 @@ export class ResultCheckService {
    * other open task's listed worktree, newest task first. */
   private async buildInput(
     check: TaskResultCheck,
-    result: { commit: string | null; worktree: string | null },
+    result: { commit: string | null; worktree: string | null; coverage: CoverageMap | null },
     repoRoot: string,
   ): Promise<ResultCheckInput> {
     const listed = new Set(await this.options.sources.listedWorktrees(check.teamId))
@@ -147,6 +148,7 @@ export class ResultCheckService {
     return {
       given: result.commit,
       worktree: result.worktree,
+      coverage: result.coverage,
       repoRoot,
       others,
       host: { platform: process.platform, arch: process.arch },

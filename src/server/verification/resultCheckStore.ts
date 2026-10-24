@@ -142,7 +142,7 @@ export class ResultCheckStore {
     return id
   }
 
-  /** A result's coverage maps, oldest first (raw JSON; PR C adds the shape). */
+  /** A result's coverage maps, oldest first (raw JSON; the read model parses them). */
   coverageMapsFor(resultId: string): Array<{ id: string; authorSession: string; coverage: string; createdAt: string }> {
     return (this.db.prepare('SELECT * FROM team_task_coverage_maps WHERE result_id = ? ORDER BY created_at, rowid')
       .all(resultId) as Array<Record<string, unknown>>).map(row => ({
@@ -151,6 +151,12 @@ export class ResultCheckStore {
       coverage: String(row.coverage),
       createdAt: String(row.created_at),
     }))
+  }
+
+  /** Whether the session has any coverage-map row for the result (D6's own-map condition — the seal reads existence, never content). */
+  hasCoverageMap(resultId: string, authorSession: string): boolean {
+    return this.db.prepare('SELECT 1 FROM team_task_coverage_maps WHERE result_id = ? AND author_session = ? LIMIT 1')
+      .get(resultId, authorSession) !== null
   }
 
   private map(row: Record<string, unknown>): TaskResultCheck {

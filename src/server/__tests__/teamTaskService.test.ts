@@ -320,12 +320,13 @@ describe('spawn-time registration', () => {
     // read/propose only, no approve/publish/withdraw tool anywhere — and so
     // does release_member (member-release D6; registered when a MemberRelease
     // is wired, always allowed).
-    // Result tools (task-results-handoffs) are allowed too, registered only with a result service;
+    // Result tools (task-results-handoffs; task_submit_coverage is
+    // independent-verification D6) are allowed too, registered only with a result service;
     // so are the plan tools (durable-plans D11; no approve/withdraw/close/reopen) and the
     // impact tools (strategy-revision-impact D10; read and propose, no decide), and the
     // read-only metrics tool (team-process-metrics D5), and the report tools
     // (team-process-metrics D6; no decide/apply/withdraw/relink/unlink).
-    const resultTools = ['task_submit_result', 'task_submit_findings', 'task_handoff', 'task_check_result']
+    const resultTools = ['task_submit_result', 'task_submit_coverage', 'task_submit_findings', 'task_handoff', 'task_check_result']
     const planTools = ['plan_list', 'plan_get', 'plan_create', 'plan_save_draft', 'plan_submit_for_review']
     // Validation tools (plan-validation D10; validate, read, assess — no decide or approve).
     const validationTools = ['plan_validate', 'plan_validation_get', 'plan_assess']

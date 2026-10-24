@@ -11,6 +11,7 @@ import type { ReactNode } from 'react'
 import type { Session } from '@shared/types'
 import type { ResultFactStatus, TaskResult, TaskResultCheck } from '@shared/teamTasks'
 import { actorLabel } from './teamTaskLabels'
+import CoverageMapView from './CoverageMapView'
 
 const STATUS_LABEL: Record<ResultFactStatus, string> = { pass: 'pass', warn: 'warn', fail: 'fail', unknown: 'unknown' }
 
@@ -87,6 +88,9 @@ export default function TaskResultCard({ result, sessions, children }: {
       </p>)}
     </div>
     {result.limitations && <p className="mt-1 whitespace-pre-wrap text-chat-meta">Limitations: {result.limitations}</p>}
+    {(result.coverage !== null && result.coverage !== undefined || (result.reviewerMaps?.length ?? 0) > 0) &&
+      <CoverageMapView coverage={result.coverage ?? null} reviewerMaps={result.reviewerMaps} comparison={result.comparison}
+        facts={result.checks?.newest?.facts ?? null} sessions={sessions} />}
     {result.checks && <div className="mt-1 text-chat-meta" data-testid="result-check">
       <p className="text-secondary">Checked by Kawai — informational, never a gate
         {result.checks.newest ? <> · {new Date(result.checks.newest.createdAt).toLocaleString()}</> : null}

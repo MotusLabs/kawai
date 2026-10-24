@@ -23,6 +23,7 @@ import type {
 import { partyFromRow } from './actorRow'
 import { TASK_STATUSES } from '../../shared/teamTasks'
 import { outstandingOf, type AssignmentStore } from './assignmentStore'
+import { rawCoverage } from '../../shared/coverageMaps'
 import type { MailboxStore } from './mailboxStore'
 import { migrateRevisionSchema } from './taskRevisionSchema'
 import { TaskDraftStore } from './taskDrafts'
@@ -239,7 +240,11 @@ export class TaskStore {
       messages: this.messages(id),
       publications: this.notices?.publications(task, revisions) ?? [],
       acknowledgements: this.acknowledgements.list(id),
-      results: this.results.listByTask(id).map(result => ({ ...result, checks: this.checks.viewForResult(result.id) })),
+      results: this.results.listByTask(id).map(result => ({
+        ...result,
+        checks: this.checks.viewForResult(result.id),
+        reviewerMaps: this.results.reviewerMapsOf(result.id, rawCoverage(result.coverage)),
+      })),
     }
   }
 

@@ -23,6 +23,7 @@ import { WorktreeStaffing } from '../team/staffing'
 import { TeamCaps } from '../team/teamCaps'
 import { TeamWorktrees } from '../team/worktreeRoots'
 import { clearTeamCache, resolveTeam, type TeamIdentity } from '../team/teamIdentity'
+import { rawCoverage } from '../../shared/coverageMaps'
 import { ResultCheckService } from '../verification/resultCheckService'
 
 function git(args: string[], cwd?: string) {
@@ -83,7 +84,7 @@ describe('result checks over a submitted result', () => {
   const checkSources = () => ({
     result: (id: string) => {
       const stored = tasks.store.results.get(id)
-      return stored === null ? null : { commit: stored.commit, worktree: stored.worktree }
+      return stored === null ? null : { commit: stored.commit, worktree: stored.worktree, coverage: rawCoverage(stored.coverage) }
     },
     openTasks: (teamId: string) => tasks.store.list(teamId)
       .filter(task => task.status === 'open' || task.status === 'active' || task.status === 'blocked')

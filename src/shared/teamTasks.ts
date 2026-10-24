@@ -2,6 +2,7 @@
 // client views. A task's direction and acceptance criteria live in numbered,
 // immutable revisions; `TeamTask` carries the latest one inline.
 import type { ActingParty, TeamActor, TeamMessage } from './team'
+import type { CitationOutcome, CoverageMap, MapComparison, ReviewerCoverageMap, WithheldCoverage } from './coverageMaps'
 
 export type TaskStatus = 'open' | 'active' | 'blocked' | 'done' | 'cancelled'
 export const TASK_STATUSES: readonly TaskStatus[] = ['open', 'active', 'blocked', 'done', 'cancelled']
@@ -286,6 +287,14 @@ export interface ResultCheckFacts {
     skipped: number
     status: ResultFactStatus
   }
+  /**
+   * How the check resolved the result's coverage citations (independent-
+   * verification D5): per clause, per citation, in the stored map's order —
+   * the join with the map is positional. Present only when the result
+   * carries a map and the check resolved it; absent otherwise, and dropped
+   * from a sealed reader's view (D6: the outcomes give the map's shape away).
+   */
+  coverage?: CitationOutcome[][]
 }
 
 /** One stored check of one result (independent-verification D4). */
@@ -355,6 +364,17 @@ export interface TaskResult {
   needsReevaluation: boolean
   /** Findings bound to this result, oldest first. */
   findings: TaskFindings[]
+  /**
+   * The submitter's coverage map (independent-verification D5) — its claim —
+   * or the withheld form for a reviewer holding the task's outstanding
+   * review handoff with no map recorded (D6). Null when the result carries
+   * no map; absent on records written before that change.
+   */
+  coverage?: CoverageMap | WithheldCoverage | null
+  /** Reviewer maps, newest per session, each with its comparison against the submitter's map (D12). */
+  reviewerMaps?: ReviewerCoverageMap[]
+  /** The reading session's own newest map against the submitter's, derived at read time (D6); null for the human and for a sealed reader. */
+  comparison?: MapComparison | null
   /** Kawai's checks of this result, newest plus the earlier count (independent-verification D12); absent before that change. */
   checks?: TaskResultChecks
   createdAt: string

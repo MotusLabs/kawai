@@ -236,3 +236,65 @@ test('Recheck sends team-task-recheck for the result and disables while disconne
   await mount(detail())
   expect(byTestId('result-check')).toHaveLength(0)
 })
+
+// The coverage map's reader view (independent-verification 3.3/D5/D6/D12).
+const map = [
+  { clause: 'A clean export downloads', tests: ['`src/export.test.ts` › downloads a csv', '`src/export.test.ts` › keeps the header'] },
+  { clause: 'Rows keep their order', tests: [] },
+]
+
+// @covers: task-results › Results carry a coverage map › The map is a claim
+test('the coverage map renders as the submitter\'s claim; only citation outcomes are checked by Kawai', async () => {
+  const facts = { ...checkFacts(), coverage: [['ran-passed', 'not-found'], []] as const }
+  await mount(detail({ results: [result('r1', {
+    coverage: map, checks: { newest: doneCheck({ facts: facts as unknown as ResultCheckFacts }), earlier: 0 },
+  })] }))
+  const view = one('result-coverage')
+  expect(textOf(view)).toContain("Coverage map — the submitter's claim")
+  expect(textOf(view)).not.toContain('checked by Kawai (claimed)')
+  const clauses = byTestId('result-coverage-clause')
+  expect(clauses.map(node => node.props['data-clause-status'])).toEqual(['partly-covered', 'declared-uncovered'])
+  expect(textOf(clauses[1]!)).toContain('No tests cited')
+  const citations = byTestId('result-coverage-citation').map(textOf)
+  expect(citations[0]).toContain('ran and passed (checked by Kawai)')
+  expect(citations[1]).toContain('not found at the commit (checked by Kawai)')
+  expect(textOf(clauses[0]!)).toContain('partly covered')
+})
+
+// @covers: task-results › Reviewers record their own coverage map first › Map withheld from the reviewer
+test('a withheld map names its clause count and how to unseal it; unmapped results render no coverage view', async () => {
+  await mount(detail({ results: [result('r1', { coverage: { withheld: true, clauses: 2 } })] }))
+  expect(textOf(one('result-coverage-withheld'))).toContain('withheld (2 clauses)')
+  expect(textOf(one('result-coverage-withheld'))).toContain('task_submit_coverage')
+  await mount(detail())
+  expect(byTestId('result-coverage')).toHaveLength(0)
+})
+
+// @covers: task-results › Reviewers record their own coverage map first › Map shown after recording
+test('reviewer maps render beside the submitter\'s with the comparison\'s differences; own maps carry no outcome chips', async () => {
+  const reviewerMap = [{ clause: 'A clean export downloads', tests: ['`src/export.test.ts` › `downloads a csv`'] }]
+  const comparison = {
+    onlySubmitter: [], onlyReviewer: ['Only the reviewer checks the header'],
+    differingCitations: [{ clause: 'A clean export downloads', onlySubmitter: ['src/export.test.ts › keeps the header'], onlyReviewer: [] }],
+    uncoveredDisputes: ['Rows keep their order'],
+  }
+  await mount(detail({ results: [result('r1', {
+    coverage: map, reviewerMaps: [{ authorSession: 'reviewer', createdAt: '2026-10-24T00:00:00.000Z', coverage: reviewerMap, comparison }],
+  })] }))
+  const view = one('result-coverage')
+  expect(textOf(one('result-reviewer-maps'))).toContain('Reviewer maps')
+  expect(textOf(one('result-reviewer-map'))).toContain('A clean export downloads: `src/export.test.ts` › `downloads a csv`')
+  expect(byTestId('result-reviewer-clause').map(textOf)[0]).not.toContain('checked by Kawai')
+  expect(textOf(one('result-coverage-comparison'))).toContain("Only the reviewer's map names: Only the reviewer checks the header")
+  expect(textOf(one('result-coverage-differing'))).toContain('only the submitter cites src/export.test.ts › keeps the header')
+  expect(textOf(view)).toContain('Called uncovered by one side, cited by the other: Rows keep their order')
+})
+
+// @covers: task-results › Results carry a coverage map › Record without a test list
+test('a check without stored outcomes leaves the citations unchipped and the clause status unknown', async () => {
+  await mount(detail({ results: [result('r1', { coverage: map, checks: { newest: doneCheck({ facts: checkFacts() }), earlier: 0 } })] }))
+  const clauses = byTestId('result-coverage-clause')
+  expect(clauses.map(node => node.props['data-clause-status'])).toEqual(['unknown', 'declared-uncovered'])
+  expect(byTestId('result-coverage-citation').map(textOf)[0]).not.toContain('checked by Kawai')
+})
+
