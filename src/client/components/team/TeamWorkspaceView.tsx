@@ -71,8 +71,9 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, subs
   sendMessage: SendClientMessage
   /** The chat lifecycle subscription (the conversation panel's reset/create flows). */
   subscribe?: (listener: (message: ServerMessage) => void) => () => void
-  /** Opens the normal New Session dialog (App-owned) for an unbound conversation role. */
-  onOpenNewSession?: (teamPath: string) => void
+  /** Opens the normal New Session dialog (App-owned) for an unbound conversation role;
+      `onDismissed` reports how the dialog flow ended (create-then-bind arm, B5). */
+  onOpenNewSession?: (teamPath: string, onDismissed?: (created: boolean) => void) => void
   connected: boolean
   connectionEpoch: number
   /** Opens the repository branch browser (the task pickers' worktree creation). */
@@ -303,7 +304,7 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, subs
       />}
       {plansOpen && plans && <TeamPlansView
         teamPath={teamKey} view={plans} sendMessage={sendMessage} subscribe={subscribe}
-        onOpenNewSession={() => onOpenNewSession?.(teamKey)} connected={connected}
+        onOpenNewSession={onDismissed => onOpenNewSession?.(teamKey, onDismissed)} connected={connected}
         connectionEpoch={connectionEpoch} sessions={sessions}
         onOpenTask={taskId => navigate({ teamKey, tab: 'tasks', id: taskId })}
         onSelectedPlan={planId => navigate(planId ? { teamKey, tab: 'plans', id: planId } : { teamKey, tab: 'plans' })}

@@ -73,6 +73,9 @@ export default function App() {
   const [newSessionInitialPath, setNewSessionInitialPath] = useState<string | undefined>(undefined)
   const [newSessionInitialCommand, setNewSessionInitialCommand] = useState<string | undefined>(undefined)
   const [newSessionInitialAutoStartChange, setNewSessionInitialAutoStartChange] = useState<string | undefined>(undefined)
+  // How the open new-session dialog ended (plan-workspace B5): stored at open
+  // so the panel's create-then-bind arm learns a cancel vs a create-close.
+  const newSessionDismissRef = useRef<((created: boolean) => void) | null>(null)
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
   const [branchBrowserRepositoryId, setBranchBrowserRepositoryId] = useState<string | null>(null)
   const [createWorktreeBranch, setCreateWorktreeBranch] = useState<WorkspaceBranch | null>(null)
@@ -777,8 +780,9 @@ export default function App() {
   // the normal dialog, prefilled with the team's repository root so the
   // created chat lands in this team's project (the panel binds only
   // same-team chats, and only after an observed creation).
-  const handleOpenNewSessionForTeam = useCallback((teamPath: string) => {
+  const handleOpenNewSessionForTeam = useCallback((teamPath: string, onDismiss?: (created: boolean) => void) => {
     if (!settingsHydrated) return
+    newSessionDismissRef.current = onDismiss ?? null
     setNewSessionInitialHost(undefined)
     setNewSessionInitialPath(teamPath)
     setNewSessionInitialCommand(undefined)
@@ -1032,6 +1036,10 @@ export default function App() {
 
       <NewSessionModal
         isOpen={isModalOpen}
+        onDismiss={created => {
+          newSessionDismissRef.current?.(created)
+          newSessionDismissRef.current = null
+        }}
         onClose={() => setIsModalOpen(false)}
         onCreate={handleCreateSession}
         defaultProjectDir={effectiveDefaultProjectDir}

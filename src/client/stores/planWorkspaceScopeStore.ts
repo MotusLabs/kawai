@@ -30,9 +30,13 @@ export interface ResetTransferAttempt {
   previousSessionId: string
   /** What the helper did: sent a CAS bind, or refused to act and why. */
   action:
-    | { kind: 'sent'; role: 'architect' | 'lead'; expectedVersion: number; teamPath: string }
+    | { kind: 'sent'; role: 'architect' | 'lead'; expectedVersion: number; teamPath: string; requestId: string }
     | { kind: 'skipped-not-bound' }
     | { kind: 'skipped-unknown'; teamPath: string }
+  /** The bind command's keyed result once it arrived; unset while the wire
+      answer is outstanding (D6: a refusal leaves the winner bound and the
+      created chat unbound, and the panel explains exactly that). */
+  outcome?: { ok: boolean; error: string | null }
 }
 
 /** Kept per team so a returning panel explains what a full-screen reset did. */
@@ -43,6 +47,9 @@ interface PlanWorkspaceScopeState {
   attempts: Record<string, ResetTransferAttempt[]>
   setScope: (sessionId: string, scope: CapturedWorkspaceScope | null) => void
   recordAttempt: (teamPath: string, attempt: ResetTransferAttempt) => void
+  /** The keyed result of a transfer bind (B2): settled on the attempt that
+      carries the requestId, wherever its team key lives. */
+  recordTransferOutcome: (requestId: string, outcome: { ok: boolean; error: string | null }) => void
 }
 
 export const usePlanWorkspaceScopeStore = create<PlanWorkspaceScopeState>(set => ({
@@ -60,6 +67,20 @@ export const usePlanWorkspaceScopeStore = create<PlanWorkspaceScopeState>(set =>
   recordAttempt: (teamPath, attempt) => set(state => {
     const kept = [...(state.attempts[teamPath] ?? []), attempt].slice(-MAX_ATTEMPTS_PER_TEAM)
     return { attempts: { ...state.attempts, [teamPath]: kept } }
+  }),
+  recordTransferOutcome: (requestId, outcome) => set(state => {
+    let changed = false
+    const attempts: Record<string, ResetTransferAttempt[]> = {}
+    for (const [teamPath, kept] of Object.entries(state.attempts)) {
+      const next = kept.map(attempt => {
+        if (attempt.action.kind !== 'sent' || attempt.action.requestId !== requestId
+          || attempt.outcome) return attempt
+        changed = true
+        return { ...attempt, outcome }
+      })
+      attempts[teamPath] = next
+    }
+    return changed ? { attempts } : state
   }),
 }))
 

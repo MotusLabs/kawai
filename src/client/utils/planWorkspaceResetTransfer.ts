@@ -6,15 +6,21 @@
 // ChatView) call this one helper, so a reset transfers exactly once from
 // either.
 //
-// CAS safety: the expected version is the last snapshot the client observed.
-// A concurrent replacement that committed first refuses the bind (`stale`),
-// the store writes nothing, and the created chat simply stays unbound — the
-// panel derives the conflict from the authoritative re-pushed snapshot and
-// explains it. With no observed snapshot (Plans never opened this page
-// load), the helper refuses to act at all: a blind expectedVersion=null bind
-// could overwrite a concurrent replacement, so explicit rebind is the only
-// path. Every team binding the old session follows — the conversation is the
-// same one wherever it was bound as a role.
+// The authoritative read (B3) is the team bindings slot in
+// teamPlanWorkspaceStore (`teamBindings`), which both the per-plan snapshot
+// and the Q1 bindings push reconcile into — so a binding known only through
+// the no-plan path, or after the Plans view closed, transfers exactly the
+// same. With no observed bindings at all (this page load never saw the
+// team), the helper refuses to act: a blind expectedVersion=null bind could
+// overwrite a concurrent replacement, so explicit rebind is the only path.
+//
+// CAS safety: the expected version is the last observed one. A concurrent
+// replacement that committed first refuses the bind (`stale`), the store
+// writes nothing, and the created chat stays unbound. The bind's requestId
+// is recorded on the attempt, and the panel settles the outcome from the
+// keyed `team-plan-workspace-result` (or derives an unconfirmed conflict
+// from the slot at mount), explaining the binding conflict beside the
+// created chat (B2) — the attempt is never write-only.
 import type { SendClientMessage } from '@shared/types'
 import { useTeamPlanWorkspaceStore } from '../stores/teamPlanWorkspaceStore'
 import { usePlanWorkspaceScopeStore, type ResetTransferAttempt } from '../stores/planWorkspaceScopeStore'
@@ -25,32 +31,32 @@ import { usePlanWorkspaceScopeStore, type ResetTransferAttempt } from '../stores
  * (or one skip) so a returning panel can explain what happened.
  */
 export function transferBindingsOnReset(sendMessage: SendClientMessage, newSessionId: string, previousSessionId: string): void {
-  const views = useTeamPlanWorkspaceStore.getState().views
+  const { teamBindings, views } = useTeamPlanWorkspaceStore.getState()
   const scopeStore = usePlanWorkspaceScopeStore.getState()
   let bound = false
-  for (const [teamPath, view] of Object.entries(views)) {
-    const bindings = view.snapshot?.bindings
-    if (!bindings) continue // no observed snapshot for this team: the version is unknown
+  for (const [teamPath, bindings] of Object.entries(teamBindings)) {
     for (const binding of bindings) {
       if (binding.sessionId !== previousSessionId) continue
       bound = true
+      const requestId = crypto.randomUUID()
       scopeStore.recordAttempt(teamPath, {
         at: new Date().toISOString(), newSessionId, previousSessionId,
-        action: { kind: 'sent', role: binding.role, expectedVersion: binding.version, teamPath },
+        action: { kind: 'sent', role: binding.role, expectedVersion: binding.version, teamPath, requestId },
       })
       sendMessage({
-        type: 'team-plan-workspace-bind', teamPath, requestId: crypto.randomUUID(),
-        commandId: crypto.randomUUID(), role: binding.role, sessionId: newSessionId,
-        expectedVersion: binding.version,
+        type: 'team-plan-workspace-bind', teamPath, requestId, commandId: crypto.randomUUID(),
+        role: binding.role, sessionId: newSessionId, expectedVersion: binding.version,
       })
     }
   }
   if (!bound) {
-    const known = Object.entries(views).filter(([, view]) => view.snapshot !== null)
-    const teamPath = known.length > 0 ? known[0]![0] : ''
+    // Teams this client observed bindings for — the slot, or a plan snapshot.
+    const known = new Set([...Object.keys(teamBindings),
+      ...Object.entries(views).filter(([, view]) => view.snapshot !== null).map(([teamPath]) => teamPath)])
+    const teamPath = known.values().next().value ?? ''
     scopeStore.recordAttempt(teamPath, {
       at: new Date().toISOString(), newSessionId, previousSessionId,
-      action: known.length > 0 ? { kind: 'skipped-not-bound' } : { kind: 'skipped-unknown', teamPath },
+      action: known.size > 0 ? { kind: 'skipped-not-bound' } : { kind: 'skipped-unknown', teamPath },
     })
   }
 }

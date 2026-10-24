@@ -40,7 +40,8 @@ import { useWorkspaceStore } from '../../stores/workspaceStore'
 import { useChatStore } from '../../stores/chatStore'
 import { useTeamPlanWorkspaceStore } from '../../stores/teamPlanWorkspaceStore'
 import {
-  sameEnvelope, usePlanWorkspaceScopeStore, type CapturedWorkspaceScope,
+  sameEnvelope, usePlanWorkspaceScopeStore,
+  type CapturedWorkspaceScope, type ResetTransferAttempt,
 } from '../../stores/planWorkspaceScopeStore'
 import ChatSurface from '../chat/ChatSurface'
 import { transferBindingsOnReset } from '../../utils/planWorkspaceResetTransfer'
@@ -51,6 +52,15 @@ const AVAILABILITY_LABELS: Record<WorkspaceBindingView['availability'], string> 
 }
 /** Stable empty list so an absent slot never re-renders (getSnapshot caching). */
 const EMPTY_BINDINGS: WorkspaceBindingView[] = []
+
+/**
+ * Opens the normal New Session dialog (App-owned) for the panel's
+ * create-then-bind flow. The optional callback reports how the dialog flow
+ * ended: `created: false` — a cancel/close that abandons the arm (B5);
+ * `created: true` — a creation was requested, whose `session-created` (or
+ * error) reply settles the arm.
+ */
+export type OpenNewSessionForRole = (onDismissed?: (created: boolean) => void) => void
 
 /** What the host needs to name and refine the captured scope (plan detail only). */
 export interface ConversationSelection {
@@ -75,8 +85,8 @@ export default function PlanWorkspaceConversation({ teamPath, sessions, connecte
   subscribe?: (listener: (message: ServerMessage) => void) => () => void
   /** The selected plan's workspace facts when a plan is open; null in the list/empty state. */
   selection: ConversationSelection | null
-  /** Opens the normal New Session dialog (App-owned). */
-  onOpenNewSession?: () => void
+  /** Opens the normal New Session dialog (App-owned) — see {@link OpenNewSessionForRole}. */
+  onOpenNewSession?: OpenNewSessionForRole
 }) {
   // The lazy team bindings subscription (Q1): open while this panel is
   // mounted, re-sent on reconnect, closed on unmount. It starts no agent —
@@ -89,11 +99,12 @@ export default function PlanWorkspaceConversation({ teamPath, sessions, connecte
   const bindings = useTeamPlanWorkspaceStore(state => state.teamBindings[teamPath]) ?? EMPTY_BINDINGS
   const [role, setRole] = useState<PlanWorkspaceRole>('architect')
   const [bindError, setBindError] = useState<string | null>(null)
-  // The role awaiting its created chat (create-then-bind): armed by the New
-  // Session dialog open, discharged by the first created same-team chat or
-  // any error reply (the same shape as ChatSurface's reset flow, which binds
-  // a created replacement the same way).
-  const [awaitingCreateRole, setAwaitingCreateRole] = useState<PlanWorkspaceRole | null>(null)
+  // The create-then-bind arm (B5): the role plus the binding version the arm
+  // observed when the dialog opened. Discharged by the dialog closing without
+  // a creation, a picker pick, a role switch, any error reply, or the first
+  // created chat — any creation, same-team or not, so the arm never dangles
+  // for a later unrelated chat.
+  const [awaitingCreate, setAwaitingCreate] = useState<{ role: PlanWorkspaceRole; expectedVersion: number | null } | null>(null)
   const repositories = useWorkspaceStore(state => state.snapshot?.repositories)
   const binding = bindings.find(entry => entry.role === role) ?? null
   const otherBinding = bindings.find(entry => entry.role !== role) ?? null
@@ -123,36 +134,76 @@ export default function PlanWorkspaceConversation({ teamPath, sessions, connecte
   useEffect(() => {
     if (!subscribe) return
     return subscribe(message => {
+      // A reset transfer's keyed result settles its attempt (B2), including
+      // transfers issued by the full-screen view while this panel was closed.
+      if (message.type === 'team-plan-workspace-result') {
+        usePlanWorkspaceScopeStore.getState().recordTransferOutcome(message.requestId,
+          { ok: !message.error, error: message.error ?? null })
+      }
       if (message.type === 'team-plan-workspace-result' && ownRequests.current.has(message.requestId)) {
         ownRequests.current.delete(message.requestId)
         if (message.error) setBindError(message.error)
-      } else if (message.type === 'error' && awaitingCreateRole !== null) {
-        setAwaitingCreateRole(null)
-      } else if (message.type === 'session-created' && awaitingCreateRole !== null) {
+      } else if (message.type === 'error' && awaitingCreate !== null) {
+        setAwaitingCreate(null)
+      } else if (message.type === 'session-created' && awaitingCreate !== null) {
         // One creation discharges the arm — same-team or not — so a creation
         // that is not this role's chat never leaves the arm dangling for a
-        // later, unrelated chat. Bind only a same-team ordinary chat (D6):
-        // it takes the armed role with the CAS token last observed.
-        const armed = awaitingCreateRole
-        setAwaitingCreateRole(null)
+        // later, unrelated chat. Bind only a same-team ordinary chat (D6),
+        // and only while the role's binding is still exactly what the arm
+        // observed when the dialog opened: a concurrent explicit bind or
+        // replacement is never overwritten — the created chat stays unbound.
+        const armed = awaitingCreate
+        setAwaitingCreate(null)
         if (message.session.kind === 'chat' && sameTeam(message.session)) {
-          bindRole(armed, message.session.id, bindings.find(entry => entry.role === armed)?.version ?? null)
+          const current = useTeamPlanWorkspaceStore.getState().teamBindings[teamPath]
+            ?.find(entry => entry.role === armed.role)?.version ?? null
+          if (current === armed.expectedVersion) {
+            bindRole(armed.role, message.session.id, armed.expectedVersion)
+          }
         }
       }
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [subscribe, awaitingCreateRole, bindings, connected, repositories, teamPath, sendMessage])
+  }, [subscribe, awaitingCreate, connected, repositories, teamPath, sendMessage])
   // The plan's execution Lead role, to compare with the bound Lead chat's
   // group (D6): the displayed content's leadGroup, when one is set.
   const shownLeadGroup = selection ? shownRevisionLeadGroup(selection.detail, selection.snapshot) : null
   const leadGroupMismatch = shownLeadGroup !== null && leadSession !== null
     && (leadSession.groupId ?? null) !== shownLeadGroup
+  // Reset-transfer conflicts (B2, D6 "explain the binding conflict"): an
+  // attempt whose keyed result refused, or — for a transfer issued while this
+  // panel was closed (the full-screen view), whose result was never observed
+  // here — one the authoritative slot proves did not move the role onto the
+  // created chat. Attempts that appear while mounted wait for their result.
+  const transferAttempts = usePlanWorkspaceScopeStore(state => state.attempts[teamPath])
+  const preexistingTransfers = useRef<Set<string> | null>(null)
+  if (preexistingTransfers.current === null) {
+    preexistingTransfers.current = new Set((transferAttempts ?? []).flatMap(attempt =>
+      attempt.action.kind === 'sent' ? [attempt.action.requestId] : []))
+  }
+  const transferConflicts = useMemo(() => {
+    const conflicts: Array<{ attempt: ResetTransferAttempt; role: PlanWorkspaceRole; error: string | null }> = []
+    for (const attempt of transferAttempts ?? []) {
+      const sent = attempt.action
+      if (sent.kind !== 'sent') continue
+      if (attempt.outcome) {
+        if (!attempt.outcome.ok) conflicts.push({ attempt, role: sent.role, error: attempt.outcome.error })
+        continue
+      }
+      if (!preexistingTransfers.current!.has(sent.requestId)) continue
+      const current = bindings.find(entry => entry.role === sent.role) ?? null
+      if (current?.sessionId !== attempt.newSessionId) {
+        conflicts.push({ attempt, role: sent.role, error: null })
+      }
+    }
+    return conflicts
+  }, [transferAttempts, bindings])
   return <section data-testid="plan-workspace-conversation" aria-label="Repository conversation" className="mt-4 border border-border p-2">
     <div role="tablist" aria-label="Conversation role" className="flex gap-2">
       {(['architect', 'lead'] as const).map(entry => (
         <button key={entry} role="tab" aria-selected={entry === role} data-testid={`conversation-role-${entry}`}
           className={`btn text-chat-meta ${entry === role ? 'btn-primary' : ''}`}
-          onClick={() => { setAwaitingCreateRole(null); setBindError(null); setRole(entry) }}>
+          onClick={() => { setAwaitingCreate(null); setBindError(null); setRole(entry) }}>
           {ROLE_LABELS[entry]}{bindings.some(b => b.role === entry) ? '' : ' (unbound)'}
         </button>
       ))}
@@ -161,14 +212,29 @@ export default function PlanWorkspaceConversation({ teamPath, sessions, connecte
       </span>
     </div>
     {bindError !== null && <p role="alert" data-testid="conversation-bind-error" className="mt-1 text-chat-meta text-chat-danger">{bindError}</p>}
+    {transferConflicts.map((conflict, index) => {
+      const created = sessions.find(entry => entry.id === conflict.attempt.newSessionId)
+      const holder = sessions.find(entry => entry.id === conflict.attempt.previousSessionId)
+      return <p key={index} role="alert" data-testid="conversation-transfer-conflict"
+        className="mt-1 text-chat-meta text-chat-danger">
+        A reset created {created?.name ?? conflict.attempt.newSessionId}, but the {ROLE_LABELS[conflict.role]} role
+        {' '}stays with {holder?.name ?? conflict.attempt.previousSessionId}
+        {conflict.error ? `: ${conflict.error}` : ' — the binding moved on concurrently'}. Rebind explicitly if the new chat should take the role.
+      </p>
+    })}
     {binding === null && <div className="mt-2 text-chat-meta text-secondary" data-testid={`conversation-unbound-${role}`}>
       <p>No {ROLE_LABELS[role].toLowerCase()} chat is bound. Pick an existing same-team chat or create one; the role is a label, not an authority.</p>
-      <RolePicker candidates={candidates} disabled={!connected} onPick={sessionId =>
-        bindRole(role, sessionId, null)} />
+      <RolePicker candidates={candidates} disabled={!connected} onPick={sessionId => {
+        setAwaitingCreate(null) // an explicit pick abandons the create-then-bind arm
+        bindRole(role, sessionId, null)
+      }} />
       {onOpenNewSession && <button type="button" className="btn mt-1 text-chat-meta" disabled={!connected}
         data-testid={`conversation-new-chat-${role}`}
-        onClick={() => { setAwaitingCreateRole(role); onOpenNewSession() }}>
-        New chat…{awaitingCreateRole === role ? ' (binding after creation)' : ''}
+        onClick={() => {
+          setAwaitingCreate({ role, expectedVersion: bindings.find(entry => entry.role === role)?.version ?? null })
+          onOpenNewSession(created => { if (!created) setAwaitingCreate(null) })
+        }}>
+        New chat…{awaitingCreate?.role === role ? ' (binding after creation)' : ''}
       </button>}
       {!subscribe && <p className="mt-1">Create-then-bind and local reset are unavailable in this host: no chat lifecycle subscription.</p>}
     </div>}
@@ -179,8 +245,10 @@ export default function PlanWorkspaceConversation({ teamPath, sessions, connecte
         The binding grants no authority; execution routing and decisions follow the plan.
       </p>}
       <RolePicker candidates={candidates.filter(entry => entry.id !== binding.sessionId)} disabled={!connected}
-        label={`Replace ${ROLE_LABELS[role].toLowerCase()} with…`} onPick={sessionId =>
-          bindRole(role, sessionId, binding.version)} />
+        label={`Replace ${ROLE_LABELS[role].toLowerCase()} with…`} onPick={sessionId => {
+          setAwaitingCreate(null) // an explicit pick abandons the create-then-bind arm
+          bindRole(role, sessionId, binding.version)
+        }} />
     </div>}
     {boundSession && <ConversationHost key={`${role}:${boundSession.id}`} teamPath={teamPath}
       session={boundSession} role={role} connected={connected} connectionEpoch={connectionEpoch}

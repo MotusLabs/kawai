@@ -30,6 +30,7 @@ import PlanWorkspaceConversation from './PlanWorkspaceConversation'
 import PlanLifecycleControls from './PlanLifecycleControls'
 import { pinLabel, planActorLabel } from './planLabels'
 import PlanImpactBadge, { ImpactGateText, OpenImpactReview } from './PlanImpactBadge'
+import type { OpenNewSessionForRole } from './PlanWorkspaceConversation'
 import type { PlanImpact } from '@shared/strategyImpact'
 
 export default function TeamPlansView({ teamPath, view, sendMessage, subscribe, connected, connectionEpoch, sessions, onOpenTask, onSelectedPlan, onOpenImpactReview, onCaptureStrategy, onOpenNewSession }: {
@@ -50,7 +51,7 @@ export default function TeamPlansView({ teamPath, view, sendMessage, subscribe, 
   /** Opens the Strategy tab's capture affordance, from the Unassessed note (plan-validation D11). */
   onCaptureStrategy?: () => void
   /** Opens the normal New Session dialog (App-owned) for an unbound conversation role. */
-  onOpenNewSession?: () => void
+  onOpenNewSession?: OpenNewSessionForRole
 }) {
   const selected = view.selected
   useEffect(() => {
@@ -118,7 +119,7 @@ function PlansListWithConversation({ teamPath, view, sessions, connected, connec
   connectionEpoch: number
   sendMessage: SendClientMessage
   subscribe?: (listener: (message: ServerMessage) => void) => () => void
-  onOpenNewSession?: () => void
+  onOpenNewSession?: OpenNewSessionForRole
   onSelect: (planId: string) => void
   onOpenImpactReview?: (revision: number) => void
 }) {
@@ -176,7 +177,7 @@ function PlanDetailPane({ teamPath, planId, detail, sessions, sendMessage, subsc
   sessions: Session[]
   sendMessage: SendClientMessage
   subscribe?: (listener: (message: ServerMessage) => void) => () => void
-  onOpenNewSession?: () => void
+  onOpenNewSession?: OpenNewSessionForRole
   connected: boolean
   /** Bumps on every reconnect; the workspace section re-sends its subscription. */
   connectionEpoch: number

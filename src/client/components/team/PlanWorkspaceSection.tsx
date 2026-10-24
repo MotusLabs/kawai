@@ -22,7 +22,7 @@ import PlanWorkspaceMap from './PlanWorkspaceMap'
 import PlanWorkspaceReader, { type ReaderRefAdd, type ReaderWorktree } from './PlanWorkspaceReader'
 import PlanWorkspaceArtifacts from './PlanWorkspaceArtifacts'
 import PlanWorkspaceHealth from './PlanWorkspaceHealth'
-import PlanWorkspaceConversation from './PlanWorkspaceConversation'
+import PlanWorkspaceConversation, { type OpenNewSessionForRole } from './PlanWorkspaceConversation'
 
 export default function PlanWorkspaceSection({ teamPath, detail, sessions, connected, connectionEpoch, sendMessage, subscribe, onOpenNewSession }: {
   teamPath: string
@@ -35,7 +35,7 @@ export default function PlanWorkspaceSection({ teamPath, detail, sessions, conne
   /** The chat lifecycle subscription the conversation panel's reset and create-then-bind flows need. */
   subscribe?: (listener: (message: ServerMessage) => void) => () => void
   /** Opens the normal New Session dialog (App-owned) for an unbound role. */
-  onOpenNewSession?: () => void
+  onOpenNewSession?: OpenNewSessionForRole
 }) {
   const planId = detail.plan.id
   const view = useTeamPlanWorkspaceStore(state => state.views[teamPath])
@@ -200,7 +200,7 @@ function WorkspaceBody({ teamPath, detail, sessions, snapshot, view, connected, 
   connectionEpoch: number
   sendMessage: SendClientMessage
   subscribe?: (listener: (message: ServerMessage) => void) => () => void
-  onOpenNewSession?: () => void
+  onOpenNewSession?: OpenNewSessionForRole
 }) {
   const store = useTeamPlanWorkspaceStore.getState()
   const planId = detail.plan.id
