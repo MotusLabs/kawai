@@ -104,6 +104,8 @@ export const CHAT_CONNECTION_TYPES = [
   'team-plan-workspace-checklist-close',
   'team-plan-workspace-document-open',
   'team-plan-workspace-document-close',
+  'team-plan-workspace-artifacts-open',
+  'team-plan-workspace-artifacts-close',
   'team-plan-execution-preview',
   'team-plan-execution-start',
   'team-plan-execution-stop',

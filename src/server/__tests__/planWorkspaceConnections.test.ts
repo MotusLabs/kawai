@@ -408,6 +408,7 @@ test('every new workspace client type is listed for the WS router', () => {
     'team-plan-workspace-ref-add', 'team-plan-workspace-ref-remove',
     'team-plan-workspace-checklist-open', 'team-plan-workspace-checklist-close',
     'team-plan-workspace-document-open', 'team-plan-workspace-document-close',
+    'team-plan-workspace-artifacts-open', 'team-plan-workspace-artifacts-close',
   ]) {
     expect(CHAT_CONNECTION_TYPES as readonly string[]).toContain(type)
   }
