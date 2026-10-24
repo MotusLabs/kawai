@@ -408,3 +408,24 @@ export function workspaceContextBlock(context: WorkspaceMessageContext): string 
     `Team: ${context.teamId}`,
   ].join('\n')
 }
+
+/**
+ * The one-line attachment label a transcript row shows for a stored message
+ * context (§6.3): the exact facts the server validated, never the client's
+ * current selection. A proposal revision reads "in review" only through its
+ * caller — this label states identity, not approval.
+ */
+export function workspaceContextLabel(context: WorkspaceMessageContext): string {
+  const version = context.version.kind === 'revision'
+    ? `revision ${context.version.revision} (${shortContextHash(context.version.contentHash)})`
+    : `draft ${context.version.draftId} (${shortContextHash(context.version.contentHash)})`
+  const parts = [
+    `Plan: ${context.planTitle} · ${version}`,
+    context.executionId ? `Execution: ${context.executionId}` : null,
+    context.changeName ? `Change: ${context.changeName}` : null,
+    context.documentRefId ? `Document: ${context.documentRefId}` : null,
+  ].filter(part => part !== null)
+  return parts.join(' · ')
+}
+
+const shortContextHash = (hash: string): string => hash.slice(0, 8)

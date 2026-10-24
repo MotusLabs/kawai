@@ -653,9 +653,19 @@ export class ChatConnections {
     if (message.type.startsWith('process-report-')) return this.metricsConnections.handleReport(connection, message as Extract<ClientMessage, { type: `process-report-${string}` }>)
     if (!message.type.startsWith('chat-') || !('sessionId' in message)) return
     const { sessionId } = message
+    // Contextual-send correlation (plan-workspace §6.3, Q2): a chat-send that
+    // carried a readable bounded `requestId` gets it echoed — with the
+    // session id — on EVERY refusal of that send, from the malformed-context
+    // parse through the unknown-session guard to manager refusals (stale
+    // hashes, archived, killed, wrong team). Any other error, and any send
+    // without a readable id, keeps today's exact shape.
+    const sendCorrelation = message.type === 'chat-send' && typeof message.requestId === 'string'
+      && message.requestId.length > 0 && message.requestId.length <= 200
+      ? { requestId: message.requestId, sessionId }
+      : {}
     if (!this.manager.has(sessionId)) {
       if (this.pendingAttach.get(connection)?.get(sessionId) === token) this.pendingAttach.get(connection)?.delete(sessionId)
-      connection.send({ type: 'error', message: `Unknown chat session ${sessionId}` })
+      connection.send({ type: 'error', message: `Unknown chat session ${sessionId}`, ...sendCorrelation })
       return
     }
     switch (message.type) {
@@ -719,17 +729,18 @@ export class ChatConnections {
       case 'chat-send': {
         // The wire envelope is untrusted (plan-workspace §4): an absent
         // field is an unscoped send; a malformed one refuses before the
-        // manager touches anything.
+        // manager touches anything. Every refusal echoes the readable
+        // requestId's correlation (Q2 above).
         let envelope: WorkspaceMessageEnvelope | null | undefined
         if (message.workspaceContext !== undefined) {
           envelope = parseWorkspaceMessageEnvelope(message.workspaceContext)
           if (!envelope) {
-            connection.send({ type: 'error', message: "The message's plan context is malformed; nothing was sent." })
+            connection.send({ type: 'error', message: "The message's plan context is malformed; nothing was sent.", ...sendCorrelation })
             return
           }
         }
         const result = await this.manager.send(sessionId, message.text, envelope ?? undefined)
-        if (!result.ok) connection.send({ type: 'error', message: result.error })
+        if (!result.ok) connection.send({ type: 'error', message: result.error, ...sendCorrelation })
         return
       }
       case 'chat-interrupt': {

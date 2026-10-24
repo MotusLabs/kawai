@@ -7,7 +7,7 @@
 // location (D3) names the tab, sub-view, and selection; navigation goes
 // through `useTeamLocationStore` so Back and Forward move with it.
 import { useCallback, useEffect, useMemo, useRef } from 'react'
-import type { SendClientMessage } from '@shared/types'
+import type { SendClientMessage, ServerMessage } from '@shared/types'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useStrategyStore, type StrategyView } from '../../stores/strategyStore'
 import { useTeamMessageStore } from '../../stores/teamMessageStore'
@@ -65,10 +65,14 @@ export function strategyStatusLine(view: StrategyView | undefined): { text: stri
     : { text: `Strategy: ${approvalText}${reviewText}`, sub: 'overview' }
 }
 
-export default function TeamWorkspaceView({ teamKey, location, sendMessage, connected, connectionEpoch, onCreateWorktree }: {
+export default function TeamWorkspaceView({ teamKey, location, sendMessage, subscribe, onOpenNewSession, connected, connectionEpoch, onCreateWorktree }: {
   teamKey: string
   location: TeamLocation
   sendMessage: SendClientMessage
+  /** The chat lifecycle subscription (the conversation panel's reset/create flows). */
+  subscribe?: (listener: (message: ServerMessage) => void) => () => void
+  /** Opens the normal New Session dialog (App-owned) for an unbound conversation role. */
+  onOpenNewSession?: (teamPath: string) => void
   connected: boolean
   connectionEpoch: number
   /** Opens the repository branch browser (the task pickers' worktree creation). */
@@ -298,7 +302,8 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, conn
         {...(onCreateWorktree ? { onCreateWorktree: () => onCreateWorktree(teamKey) } : {})}
       />}
       {plansOpen && plans && <TeamPlansView
-        teamPath={teamKey} view={plans} sendMessage={sendMessage} connected={connected}
+        teamPath={teamKey} view={plans} sendMessage={sendMessage} subscribe={subscribe}
+        onOpenNewSession={() => onOpenNewSession?.(teamKey)} connected={connected}
         connectionEpoch={connectionEpoch} sessions={sessions}
         onOpenTask={taskId => navigate({ teamKey, tab: 'tasks', id: taskId })}
         onSelectedPlan={planId => navigate(planId ? { teamKey, tab: 'plans', id: planId } : { teamKey, tab: 'plans' })}

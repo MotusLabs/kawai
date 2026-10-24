@@ -1,15 +1,17 @@
 // Composer state stays below ChatView so editing never renders history.
 // Remounted by session id to reset caret/menu state while stored drafts survive.
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { ChatCommandState } from '@shared/chat'
 import type { SessionStatus } from '@shared/types'
 import { useChatStore } from '../../stores/chatStore'
 import SlashCommandMenu from './SlashCommandMenu'
 import { filterChatCommands, insertCommand, slashTokenAt } from './slashCommandFilter'
 
-export default function ChatComposer({ sessionId, status, connected, commandState, onSubmit, onInterrupt }: {
+export default function ChatComposer({ sessionId, status, connected, commandState, onSubmit, onInterrupt, attachment }: {
   sessionId: string; status: SessionStatus; connected: boolean; commandState: ChatCommandState
   onSubmit: (text: string) => void; onInterrupt: () => void
+  /** The captured-plan-attachment line (§6.3); absent in ordinary hosts. */
+  attachment?: ReactNode
 }) {
   const text = useChatStore(state => state.drafts[sessionId] ?? '')
   const setDraft = useChatStore(state => state.setDraft)
@@ -115,6 +117,7 @@ export default function ChatComposer({ sessionId, status, connected, commandStat
             onChoose={command => chooseCommand(command.name)} />
         </div>
       )}
+      {attachment}
       <div className="flex items-end gap-2">
         <textarea ref={composerRef} aria-label="Message Claude" className="input chat-composer min-h-20 flex-1 resize-y text-chat-body" value={text}
           disabled={!connected} placeholder="Message Claude…" onChange={handleComposerChange}

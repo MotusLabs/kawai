@@ -276,6 +276,7 @@ test('the workspace starts no worker and displaces no existing section or gate',
     'team-plan-workspace-checklist-open', 'team-plan-workspace-checklist-close',
     'team-plan-workspace-document-open', 'team-plan-workspace-document-close',
     'team-plan-workspace-artifacts-open', 'team-plan-workspace-artifacts-close',
+    'team-plan-workspace-bindings-open', 'team-plan-workspace-bindings-close',
   ])
   for (const message of sent) expect(allowed.has(message.type)).toBe(true)
   // The existing sections and their gates render beside the workspace.

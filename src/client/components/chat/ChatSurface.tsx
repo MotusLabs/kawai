@@ -45,12 +45,13 @@
 // both) and both hosts render the same request cards; a second host
 // answering an already-resolved request gets the server's stale error
 // inline — accepted and documented, not disabled.
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { SendClientMessage, ServerMessage, Session } from '@shared/types'
 import type { SessionDirectoryEntry } from '@shared/team'
 import type { ConnectionStatus } from '../../stores/sessionStore'
 import { emptyTranscript, useChatStore } from '../../stores/chatStore'
 import { useSessionStore } from '../../stores/sessionStore'
+import { pendingContextSends, usePlanWorkspaceScopeStore, type CapturedWorkspaceScope } from '../../stores/planWorkspaceScopeStore'
 import { claimReveal, createHostToken, isRevealDesignated, registryFor, releaseReveal } from '../../stores/chatAttachment'
 import ChatActivityRow from './ChatActivityRow'
 import ChatMessages from './ChatMessages'
@@ -74,6 +75,7 @@ const CLEAR_COMMAND = /^\/(clear|reset|new)(?:\s+(.*))?$/
 export default function ChatSurface({
   session, sendMessage, subscribe, connectionStatus, connectionEpoch,
   revealEnabled = true, onOpenParticipant, onResetCreated, participantDirectory,
+  onSubmitContext, composerAttachment,
   error = null, className = 'flex', showStrips = true,
 }: {
   session: Session
@@ -88,6 +90,10 @@ export default function ChatSurface({
   onOpenParticipant?: (sessionId: string) => void
   /** §6.4 seam: the local reset created `newSessionId` to replace `previousSessionId`. */
   onResetCreated?: (newSessionId: string, previousSessionId: string) => void
+  /** §6.3 seam: the draft's captured scope at submit time; null/absent sends unscoped. */
+  onSubmitContext?: () => CapturedWorkspaceScope | null
+  /** The captured-attachment line rendered above the composer input (§6.3). */
+  composerAttachment?: ReactNode
   /** The team message directory for naming killed participants (wrapper-owned). */
   participantDirectory?: SessionDirectoryEntry[]
   /** The connection/server error banner text; null renders nothing. */
@@ -148,9 +154,36 @@ export default function ChatSurface({
   }, [restoreDraft, session.id])
   const pendingClearRef = useRef<string | null>(null)
   useEffect(() => { pendingClearRef.current = null; setResetRefusal(false); setRestoreDraft(null) }, [session.id])
+  // A contextual send is outstanding only while its connection lives: after a
+  // drop the refusal (or the acceptance event) may never arrive, and a later
+  // unrelated error must not restore the text (D7: reconnect restores
+  // history, never sends).
+  useEffect(() => {
+    if (!connected) pendingContextSends.delete(session.id)
+  }, [connected, session.id])
   useEffect(() => {
     if (!subscribe) return
     return subscribe((message) => {
+      // Contextual sends (§6.3): the session's user_message proves the send
+      // was accepted. A refusal restores the text and the captured scope
+      // only when it is THAT send's correlated refusal (Q2 — the echoed
+      // requestId), and only while the composer's post-submit clear left the
+      // draft empty — typing since means the human moved on. No other error
+      // touches the pending entry; no automatic resend either way.
+      if (message.type === 'chat-events' && message.sessionId === session.id
+        && pendingContextSends.has(session.id)
+        && message.events.some(event => event.type === 'user_message')) {
+        pendingContextSends.delete(session.id)
+      } else if (message.type === 'error' && message.sessionId === session.id && message.requestId !== undefined) {
+        const pending = pendingContextSends.get(session.id)
+        if (pending && pending.requestId === message.requestId) {
+          pendingContextSends.delete(session.id)
+          if ((useChatStore.getState().drafts[session.id] ?? '') === '') {
+            useChatStore.getState().setDraft(session.id, pending.text)
+            usePlanWorkspaceScopeStore.getState().setScope(session.id, pending.scope)
+          }
+        }
+      }
       const previous = pendingClearRef.current
       if (!previous) return
       if (
@@ -160,8 +193,8 @@ export default function ChatSurface({
         message.session.projectPath === session.projectPath
       ) {
         pendingClearRef.current = null
-        // §6.4 seam: the host may transfer a repository binding to the
-        // replacement before the old chat archives (not implemented here).
+        // §6.4 seam: the host transfers a repository binding to the
+        // replacement (planWorkspaceResetTransfer) before the old archives.
         onResetCreated?.(message.session.id, previous)
         sendMessage({ type: 'chat-archive', sessionId: previous })
       } else if (message.type === 'error') {
@@ -169,7 +202,7 @@ export default function ChatSurface({
         pendingClearRef.current = null
       }
     })
-  }, [subscribe, sendMessage, session.projectPath, onResetCreated])
+  }, [subscribe, sendMessage, session.projectPath, session.id, onResetCreated])
   const submitText = (trimmed: string) => {
     const clear = CLEAR_COMMAND.exec(trimmed)
     if (clear) {
@@ -200,7 +233,18 @@ export default function ChatSurface({
       return
     }
     setResetRefusal(false)
-    sendMessage({ type: 'chat-send', sessionId: session.id, text: trimmed })
+    // A workspace host supplies the draft's captured scope (§6.3); reset
+    // commands above never carry context. The envelope rides the additive
+    // chat-send field with a client-minted requestId (Q2) the server echoes
+    // on any refusal; the host's scope is kept until acceptance or the
+    // correlated refusal restores it.
+    const scope = onSubmitContext?.() ?? null
+    const requestId = scope ? crypto.randomUUID() : undefined
+    if (scope) pendingContextSends.set(session.id, { text: trimmed, scope, requestId: requestId! })
+    sendMessage({
+      type: 'chat-send', sessionId: session.id, text: trimmed,
+      ...(scope ? { workspaceContext: scope.envelope, requestId } : {}),
+    })
   }
   // A pending search reveal owns the scroll position: stick-to-bottom yields
   // to it (the reveal hook below runs after this effect in the same commit).
@@ -303,6 +347,7 @@ export default function ChatSurface({
       ) : (
         <ChatComposer key={session.id} sessionId={session.id} status={session.status}
           connected={connected} commandState={transcript.commands} onSubmit={submitText}
+          attachment={composerAttachment}
           onInterrupt={() => sendMessage({ type: 'chat-interrupt', sessionId: session.id })} />
       )}
   </div>

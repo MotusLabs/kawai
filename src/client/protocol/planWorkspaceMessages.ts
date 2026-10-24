@@ -33,6 +33,11 @@ export function handlePlanWorkspaceMessage(message: WorkspaceMessage): void {
       store.applyArtifacts(teamPath === message.teamPath ? message : { ...message, teamPath })
       return
     }
+    case 'team-plan-workspace-bindings': {
+      const teamPath = routedTeamPath(message.teamPath, store.views)
+      store.applyBindings(teamPath === message.teamPath ? message : { ...message, teamPath })
+      return
+    }
     case 'team-plan-workspace-result': {
       const teamPath = routedTeamPath(message.teamPath, store.views)
       store.applyResult(teamPath === message.teamPath ? message : { ...message, teamPath })

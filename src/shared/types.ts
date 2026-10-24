@@ -599,7 +599,11 @@ export type ServerMessage =
       hasOlder?: boolean
     }
   | { type: 'pong'; seq?: number }
-  | { type: 'error'; message: string }
+  // A refusal. For a chat-send that carried a readable `requestId` (§6.3,
+  // Lead-authorized Q2), the reply echoes it with `sessionId` so the client
+  // can restore the draft and its captured attachment; other errors carry
+  // neither field, exactly as before.
+  | { type: 'error'; message: string; requestId?: string; sessionId?: string }
   | { type: 'kill-failed'; sessionId: string; message: string }
 
 export interface WakeError {
@@ -674,7 +678,7 @@ export type ClientMessage =
   // oldest held event, widened back to throughId when a search reveal needs
   // an older entry (an event id or a tool:<callId> anchor).
   | { type: 'chat-history-page'; sessionId: string; beforeId: string; throughId?: string }
-  | { type: 'chat-send'; sessionId: string; text: string; /** Plan-workspace context (§4): validated server-side before anything is stored. */ workspaceContext?: WorkspaceMessageEnvelope }
+  | { type: 'chat-send'; sessionId: string; text: string; /** Plan-workspace context (§4): validated server-side before anything is stored. */ workspaceContext?: WorkspaceMessageEnvelope; /** Client-minted correlation (§6.3, Q2): echoed on every refusal, absent on acceptance. */ requestId?: string }
   | { type: 'chat-interrupt'; sessionId: string }
   // Archive stops the agent process but keeps the record, conversation, and
   // protocol log; restore clears the archived state (chat-archive design D2).

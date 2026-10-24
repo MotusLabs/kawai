@@ -773,6 +773,19 @@ export default function App() {
     return true
   }
 
+  // The workspace conversation panel's create flow (plan-workspace §6.2):
+  // the normal dialog, prefilled with the team's repository root so the
+  // created chat lands in this team's project (the panel binds only
+  // same-team chats, and only after an observed creation).
+  const handleOpenNewSessionForTeam = useCallback((teamPath: string) => {
+    if (!settingsHydrated) return
+    setNewSessionInitialHost(undefined)
+    setNewSessionInitialPath(teamPath)
+    setNewSessionInitialCommand(undefined)
+    setNewSessionInitialAutoStartChange(undefined)
+    setIsModalOpen(true)
+  }, [settingsHydrated])
+
   // Contextual new-session from a section header: preselect the worktree
   // root; command presets, names, and hosts flow through the normal form.
   // From a change section the form also offers the apply auto-start.
@@ -973,6 +986,8 @@ export default function App() {
         teamKey={teamLocation.teamKey}
         location={teamLocation}
         sendMessage={sendMessage}
+        subscribe={subscribe}
+        onOpenNewSession={handleOpenNewSessionForTeam}
         connected={connectionStatus === 'connected'}
         connectionEpoch={connectionEpoch}
         onCreateWorktree={handleBrowseBranchesForPath}

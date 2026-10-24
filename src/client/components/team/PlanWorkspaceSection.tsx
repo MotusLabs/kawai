@@ -9,7 +9,7 @@
 // attaches a worker (design D5's read-only rule).
 import { useEffect, useRef } from 'react'
 import type { PlanContent, PlanDetail } from '@shared/plans'
-import type { SendClientMessage } from '@shared/types'
+import type { SendClientMessage, ServerMessage, Session } from '@shared/types'
 import type { WorkspaceSnapshot, WorkspaceVersionSelector } from '@shared/planWorkspace'
 import { PLAN_REVISION_LABELS } from './planLabels'
 import { shortHash } from '../chat/strategyLabels'
@@ -22,13 +22,20 @@ import PlanWorkspaceMap from './PlanWorkspaceMap'
 import PlanWorkspaceReader, { type ReaderRefAdd, type ReaderWorktree } from './PlanWorkspaceReader'
 import PlanWorkspaceArtifacts from './PlanWorkspaceArtifacts'
 import PlanWorkspaceHealth from './PlanWorkspaceHealth'
+import PlanWorkspaceConversation from './PlanWorkspaceConversation'
 
-export default function PlanWorkspaceSection({ teamPath, detail, connected, connectionEpoch, sendMessage }: {
+export default function PlanWorkspaceSection({ teamPath, detail, sessions, connected, connectionEpoch, sendMessage, subscribe, onOpenNewSession }: {
   teamPath: string
   detail: PlanDetail
+  /** The session list, for naming bound chats and offering the bind picker. */
+  sessions: Session[]
   connected: boolean
   connectionEpoch: number
   sendMessage: SendClientMessage
+  /** The chat lifecycle subscription the conversation panel's reset and create-then-bind flows need. */
+  subscribe?: (listener: (message: ServerMessage) => void) => () => void
+  /** Opens the normal New Session dialog (App-owned) for an unbound role. */
+  onOpenNewSession?: () => void
 }) {
   const planId = detail.plan.id
   const view = useTeamPlanWorkspaceStore(state => state.views[teamPath])
@@ -94,8 +101,9 @@ export default function PlanWorkspaceSection({ teamPath, detail, connected, conn
         No displayable version: the plan has no approved revision, no revision in review, and no draft.
       </p>
     )}
-    <WorkspaceBody teamPath={teamPath} detail={detail} snapshot={snapshot} view={view} connected={connected}
-      connectionEpoch={connectionEpoch} sendMessage={sendMessage} />
+    <WorkspaceBody teamPath={teamPath} detail={detail} sessions={sessions} snapshot={snapshot} view={view}
+      connected={connected} connectionEpoch={connectionEpoch} sendMessage={sendMessage}
+      subscribe={subscribe} onOpenNewSession={onOpenNewSession} />
   </section>
 }
 
@@ -182,14 +190,17 @@ function displayedContentOf(detail: PlanDetail, snapshot: WorkspaceSnapshot | nu
   return detail.revisions.find(revision => revision.revision === displayed.revision)?.content ?? null
 }
 
-function WorkspaceBody({ teamPath, detail, snapshot, view, connected, connectionEpoch, sendMessage }: {
+function WorkspaceBody({ teamPath, detail, sessions, snapshot, view, connected, connectionEpoch, sendMessage, subscribe, onOpenNewSession }: {
   teamPath: string
   detail: PlanDetail
+  sessions: Session[]
   snapshot: WorkspaceSnapshot | null
   view: PlanWorkspaceView
   connected: boolean
   connectionEpoch: number
   sendMessage: SendClientMessage
+  subscribe?: (listener: (message: ServerMessage) => void) => () => void
+  onOpenNewSession?: () => void
 }) {
   const store = useTeamPlanWorkspaceStore.getState()
   const planId = detail.plan.id
@@ -257,6 +268,16 @@ function WorkspaceBody({ teamPath, detail, snapshot, view, connected, connection
       <ChecklistSubscription key={change} teamPath={teamPath} planId={planId} change={change}
         connected={connected} connectionEpoch={connectionEpoch} sendMessage={sendMessage} />
     ))}
+    {/* The repository conversation (§6.2–6.4): the team bindings slot keeps
+        the roles live (Q1); the captured scope (§6.3) rides the surface. */}
+    <PlanWorkspaceConversation teamPath={teamPath}
+      sessions={sessions} connected={connected} connectionEpoch={connectionEpoch}
+      sendMessage={sendMessage} subscribe={subscribe} onOpenNewSession={onOpenNewSession}
+      selection={{
+        detail, snapshot, teamId: view.teamId,
+        version: view.version, executionId: view.executionId,
+        selectedChange: view.selectedChange, selectedDocument: view.selectedDocument,
+      }} />
   </>
 }
 

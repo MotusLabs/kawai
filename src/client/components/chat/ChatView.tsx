@@ -45,6 +45,7 @@ import ChatSurface from './ChatSurface'
 import NotificationStrip from './NotificationStrip'
 import UsageBar from './UsageBar'
 import { requestChatArchive } from '../../utils/chatArchive'
+import { transferBindingsOnReset } from '../../utils/planWorkspaceResetTransfer'
 import { openParticipantChat } from './openParticipant'
 import { teamKeyOf } from '../../utils/teamKey'
 import { useWorkspaceStore } from '../../stores/workspaceStore'
@@ -139,7 +140,9 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
         showStrips={false}
         className={debugOpen ? 'hidden md:flex' : 'flex'}
         participantDirectory={participantDirectory}
-        onOpenParticipant={openParticipantChat} />
+        onOpenParticipant={openParticipantChat}
+        onResetCreated={(newSessionId, previousSessionId) =>
+          transferBindingsOnReset(sendMessage, newSessionId, previousSessionId)} />
       {/* The side slot hosts only the debug panel (team-workspace-pages D4). */}
       {debugOpen && <ChatDebugPanel key={session.id} sessionId={session.id} view={debug} sendMessage={sendMessage}
         connected={connected} onClose={toggleDebug}

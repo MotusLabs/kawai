@@ -12,8 +12,8 @@
 import { create } from 'zustand'
 import type { ServerMessage } from '@shared/types'
 import type {
-  WorkspaceArtifactsView, WorkspaceChecklist, WorkspaceChecklistUnavailable, WorkspaceDocumentView,
-  WorkspaceSnapshot, WorkspaceVersionSelector,
+  WorkspaceArtifactsView, WorkspaceBindingView, WorkspaceChecklist, WorkspaceChecklistUnavailable,
+  WorkspaceDocumentView, WorkspaceSnapshot, WorkspaceVersionSelector,
 } from '@shared/planWorkspace'
 import { routedTeamPath } from '../utils/teamKeyAliases'
 
@@ -31,6 +31,25 @@ export interface WorkspaceDocumentSelection {
 export const documentKey = (selection: WorkspaceDocumentSelection): string =>
   `${selection.worktreeId}\0${selection.relativePath}`
 
+/**
+ * The one authoritative bindings slot per team (Q1, Lead-authorized):
+ * per-plan snapshots and team bindings pushes reconcile here per role by the
+ * CAS version, so the two read paths can never diverge. Versions only grow;
+ * an equal version refreshes availability in place (neither side is older).
+ */
+export const mergeBindings = (
+  current: WorkspaceBindingView[] | undefined,
+  incoming: WorkspaceBindingView[],
+): WorkspaceBindingView[] => {
+  if (!current || current.length === 0) return incoming
+  const byRole = new Map(current.map(binding => [binding.role, binding]))
+  for (const next of incoming) {
+    const existing = byRole.get(next.role)
+    if (!existing || next.version >= existing.version) byRole.set(next.role, next)
+  }
+  return [...byRole.values()]
+}
+
 export interface PlanWorkspaceView {
   planId: string
   /** The open's version selector; null = the default (approved, else newest in review, else newest draft). */
@@ -39,6 +58,8 @@ export interface PlanWorkspaceView {
   executionId: string | null
   /** null until the first snapshot. */
   snapshot: WorkspaceSnapshot | null
+  /** The server-assigned team id from the snapshot wire message (V2's addressee). */
+  teamId: string | null
   /** Composed checklists by change name. */
   checklists: Record<string, { checklist: WorkspaceChecklist | null; unavailable: WorkspaceChecklistUnavailable | null }>
   /** Composed documents by subscription key. */
@@ -60,12 +81,15 @@ export interface PlanWorkspaceView {
 }
 
 const emptyView = (planId: string): PlanWorkspaceView => ({
-  planId, version: null, executionId: null, snapshot: null, checklists: {}, documents: {}, artifacts: {},
+  planId, version: null, executionId: null, snapshot: null, teamId: null,
+  checklists: {}, documents: {}, artifacts: {},
   pending: {}, error: null, expanded: [], selectedChange: null, selectedDocument: null, filter: 'all',
 })
 
 interface PlanWorkspaceState {
   views: Record<string, PlanWorkspaceView>
+  /** The team bindings slot (Q1): reconciled from plan snapshots and bindings pushes. */
+  teamBindings: Record<string, WorkspaceBindingView[]>
   open: (teamKey: string, planId: string) => void
   /** Drop the view (the tab closed); an unmount keeps it for the return trip. */
   close: (teamKey: string) => void
@@ -84,6 +108,7 @@ interface PlanWorkspaceState {
   applyChecklist: (message: Extract<ServerMessage, { type: 'team-plan-workspace-checklist' }>) => void
   applyDocument: (message: Extract<ServerMessage, { type: 'team-plan-workspace-document' }>) => void
   applyArtifacts: (message: Extract<ServerMessage, { type: 'team-plan-workspace-artifacts' }>) => void
+  applyBindings: (message: Extract<ServerMessage, { type: 'team-plan-workspace-bindings' }>) => void
   applyResult: (message: Extract<ServerMessage, { type: 'team-plan-workspace-result' }>) => void
 }
 
@@ -95,6 +120,7 @@ const update = (state: PlanWorkspaceState, teamKey: string, patch: Partial<PlanW
 
 export const useTeamPlanWorkspaceStore = create<PlanWorkspaceState>(set => ({
   views: {},
+  teamBindings: {},
   open: (teamKey, planId) => set(state => {
     const view = state.views[teamKey]
     if (view?.planId === planId) return state
@@ -109,11 +135,19 @@ export const useTeamPlanWorkspaceStore = create<PlanWorkspaceState>(set => ({
   rekey: (from, to) => set(state => {
     if (from === to) return state
     const view = state.views[from]
-    if (!view) return state
+    const bindings = state.teamBindings[from]
+    if (!view && !bindings) return state
     const views = { ...state.views }
-    delete views[from]
-    if (!views[to]) views[to] = view
-    return { views }
+    const teamBindings = { ...state.teamBindings }
+    if (view) {
+      delete views[from]
+      if (!views[to]) views[to] = view
+    }
+    if (bindings) {
+      delete teamBindings[from]
+      if (!teamBindings[to]) teamBindings[to] = bindings
+    }
+    return { views, teamBindings }
   }),
   setVersion: (teamKey, version) => set(state => update(state, teamKey, { version })),
   setExecution: (teamKey, executionId) => set(state => update(state, teamKey, { executionId })),
@@ -139,8 +173,12 @@ export const useTeamPlanWorkspaceStore = create<PlanWorkspaceState>(set => ({
   applySnapshot: message => set(state => {
     const key = routedTeamPath(message.teamPath, state.views)
     const view = state.views[key]
-    if (!view || view.planId !== message.planId) return state
-    return update(state, key, { snapshot: message.workspace })
+    // The snapshot's bindings reconcile into the team slot like a push (Q1).
+    const merged = mergeBindings(state.teamBindings[key], message.workspace.bindings)
+    const teamBindings = state.teamBindings[key] === merged
+      ? state.teamBindings : { ...state.teamBindings, [key]: merged }
+    if (!view || view.planId !== message.planId) return { teamBindings }
+    return { teamBindings, ...update(state, key, { snapshot: message.workspace, teamId: message.teamId }) }
   }),
   applyChecklist: message => set(state => {
     const key = routedTeamPath(message.teamPath, state.views)
@@ -164,6 +202,12 @@ export const useTeamPlanWorkspaceStore = create<PlanWorkspaceState>(set => ({
     return update(state, key, {
       artifacts: { ...view.artifacts, [message.changeName]: message.view },
     })
+  }),
+  applyBindings: message => set(state => {
+    const key = routedTeamPath(message.teamPath, state.views)
+    const merged = mergeBindings(state.teamBindings[key], message.bindings)
+    if (state.teamBindings[key] === merged) return state
+    return { teamBindings: { ...state.teamBindings, [key]: merged } }
   }),
   applyResult: message => set(state => {
     const key = routedTeamPath(message.teamPath, state.views)
