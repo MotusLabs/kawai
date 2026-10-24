@@ -1,12 +1,12 @@
 // treeTestList.integration.test.ts - The acceptance path of task 4.3
 // (independent-verification): "Citation resolves and ran" and "Cited test
 // was skipped" answered against a REAL record that a real `bun run check`
-// wrote in a temporary repository — the real runCheck pipeline, a real
-// `bun test` step reporting JUnit into the check's report directory, the
-// real list-then-record write, and the real tree reader.
+// wrote — the real runCheck pipeline, whose test step is the real unit-suite
+// runner planning its own JUnit reports and their planned-report manifest
+// into the check's report directory, the real merge, the real list-then-
+// record write, and the real tree reader.
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { readRecord, recordsDir } from '../checks/checkRecords'
 import { readTestList } from '../checks/testLists'
@@ -15,23 +15,52 @@ import { computeResultFacts, makeCheckGit } from '../verification/resultChecks'
 import { readTreeTestList } from '../verification/treeTestList'
 import { runCheck } from '../../../scripts/lib/checkRun'
 
+const REPO_ROOT = path.resolve(import.meta.dir, '..', '..', '..')
+const RUNNER = path.join(REPO_ROOT, 'scripts', 'test-runner.ts')
 const HOST = { platform: process.platform, arch: process.arch }
 const COMMIT_ENV = {
   GIT_AUTHOR_NAME: 'test', GIT_AUTHOR_EMAIL: 'test@example.com',
   GIT_COMMITTER_NAME: 'test', GIT_COMMITTER_EMAIL: 'test@example.com',
 }
 
-let tempRoot: string
+// The fixture repository lives beneath the driving repository (ignored, see
+// .gitignore), the runnerRoots publish-probe pattern: the runner's bare
+// --preload path resolves at the nearest enclosing package.json, which only
+// the driving repository provides, and the copied preload keeps the probe
+// self-describing. /tmp cannot host it.
+const FIXTURES_PARENT = path.join(REPO_ROOT, '.kawai-fixture-probes')
+
 let repo: string
 
 beforeEach(() => {
-  tempRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-tree-list-e2e-')))
-  repo = path.join(tempRoot, 'repo')
-  fs.mkdirSync(repo)
+  fs.mkdirSync(FIXTURES_PARENT, { recursive: true })
+  repo = fs.realpathSync(fs.mkdtempSync(path.join(FIXTURES_PARENT, 'tree-list-check-')))
   const init = runGit(['init', '--initial-branch=master', repo], { timeoutMs: 10_000 })
   if (!init.ok) throw new Error(`git init failed: ${init.stderr}`)
+  // Every source tree collectFiles() scans, existing but empty, and the
+  // production preload the runner passes to every `bun test` child.
+  for (const tree of ['src/server/__tests__', 'src/client/__tests__', 'src/shared/__tests__', 'scripts/__tests__']) {
+    fs.mkdirSync(path.join(repo, tree), { recursive: true })
+  }
+  fs.copyFileSync(path.join(REPO_ROOT, 'scripts', 'test-preload.ts'), path.join(repo, 'scripts', 'test-preload.ts'))
+  // The preload is committed: the check's key is the working tree's content
+  // (tracked and untracked non-ignored), and an untracked file would make
+  // the record's tree differ from the commit's tree the citations resolve.
+  const setup = runGit(['add', '--', 'scripts/test-preload.ts'], { cwd: repo, timeoutMs: 10_000 })
+  if (!setup.ok) throw new Error(`git add failed: ${setup.stderr}`)
+  const commitPreload = runGit(['commit', '-m', 'preload'], {
+    cwd: repo, timeoutMs: 10_000, env: COMMIT_ENV,
+  })
+  if (!commitPreload.ok) throw new Error(`git commit failed: ${commitPreload.stderr}`)
 })
-afterEach(() => { fs.rmSync(tempRoot, { recursive: true, force: true }) })
+afterEach(() => {
+  fs.rmSync(repo, { recursive: true, force: true })
+  try {
+    fs.rmdirSync(FIXTURES_PARENT)
+  } catch {
+    // a concurrent probe run still holds the parent
+  }
+})
 
 function commit(file: string, content: string): void {
   fs.writeFileSync(path.join(repo, file), content)
@@ -48,34 +77,32 @@ const cite = (file: string, title: string) => `\`${file}\` › \`${title}\``
 
 // @covers: task-results › Results carry a coverage map › Citation resolves and ran
 // @covers: task-results › Results carry a coverage map › Cited test was skipped
-test('the citations answer from a real record a real bun run check wrote in a temporary repository', async () => {
+test('the citations answer from a real record a real bun run check wrote through the real runner', async () => {
   commit(
-    'tiny.test.ts',
+    'src/server/__tests__/tiny.test.ts',
     "import { test, expect } from 'bun:test'\n"
     + "test('adds numbers', () => { expect(1 + 1).toBe(2) })\n"
     + "test.skip('skipped addition', () => { expect(1).toBe(2) })\n"
   )
-  // A second file at the same commit whose tests the check's step never
-  // ran: its titles exist at the commit but nothing lists them.
+  // A file at the same commit whose test the check's run never collects
+  // (outside every tree the runner scans): its title exists at the commit
+  // but nothing lists it — the genuine not-in-run shape.
   commit(
-    'other.test.ts',
-    "import { test } from 'bun:test'\ntest('not run by the check', () => {})\n"
+    'unlisted.test.ts',
+    "import { test } from 'bun:test'\ntest('exists but is never collected', () => {})\n"
   )
   const sha = head()
-  // The real pipeline: the test step is exactly what the runner plans —
-  // the JUnit pair pointing into the check's report directory, which the
-  // pipeline exports as KAWAI_TEST_JUNIT_DIR.
+  // The real pipeline end to end: the test step is the production runner
+  // over the fixture repository's whole suite — it consumes the check's
+  // KAWAI_TEST_JUNIT_DIR, plans its batch reports, writes the planned-report
+  // manifest, and runs both files under the real per-file machinery.
   const outcome = await runCheck({
     cwd: repo,
     steps: [
       { name: 'lint', command: ['true'] },
       { name: 'typecheck', command: ['true'] },
-      {
-        name: 'test',
-        command: ['bash', '-c', 'exec bun test --reporter=junit --reporter-outfile="$KAWAI_TEST_JUNIT_DIR/0-test-0.junit.xml" ./tiny.test.ts'],
-      },
+      { name: 'test', command: [process.execPath, RUNNER, '--skip-real-tmux'] },
     ],
-    env: { ...process.env, ...COMMIT_ENV },
   })
   if (outcome.kind !== 'passed') throw new Error(`the check did not pass: ${JSON.stringify(outcome)}`)
   expect(outcome.recorded).toBe(true)
@@ -86,8 +113,8 @@ test('the citations answer from a real record a real bun run check wrote in a te
   const record = readRecord(dir, outcome.key)
   expect(record?.tests).toEqual({ file: `${outcome.key}.tests.json.gz`, count: 2 })
   expect(readTestList(dir, record!)?.map((entry) => [entry.file, entry.name, entry.status])).toEqual([
-    ['tiny.test.ts', 'adds numbers', 'passed'],
-    ['tiny.test.ts', 'skipped addition', 'skipped'],
+    ['src/server/__tests__/tiny.test.ts', 'adds numbers', 'passed'],
+    ['src/server/__tests__/tiny.test.ts', 'skipped addition', 'skipped'],
   ])
 
   // The citations answer from that record through the real reader: the
@@ -99,9 +126,9 @@ test('the citations answer from a real record a real bun run check wrote in a te
       coverage: [{
         clause: 'The clause',
         tests: [
-          cite('tiny.test.ts', 'adds numbers'),
-          cite('tiny.test.ts', 'skipped addition'),
-          cite('other.test.ts', 'not run by the check'),
+          cite('src/server/__tests__/tiny.test.ts', 'adds numbers'),
+          cite('src/server/__tests__/tiny.test.ts', 'skipped addition'),
+          cite('unlisted.test.ts', 'exists but is never collected'),
         ],
       }],
       testList: (treeId) => readTreeTestList(repo, treeId),
@@ -110,4 +137,4 @@ test('the citations answer from a real record a real bun run check wrote in a te
   )
   expect(facts.recorded.status).toBe('pass')
   expect(facts.coverage).toEqual([['ran-passed', 'not-run', 'not-in-run']])
-}, 30_000)
+}, 60_000)

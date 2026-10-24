@@ -10,13 +10,18 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
+  PLANNED_REPORTS_NAME,
   REPORT_SUFFIX,
   junitReporterArgs,
   junitReportPath,
   mergeJUnitReports,
   parseJUnitTestEntries,
+  plannedReportNames,
+  readPlannedReports,
   trustworthyEntries,
+  writePlannedReports,
 } from '../lib/junitReports'
+import { planBatches } from '../planBatches'
 
 let dir: string
 
@@ -106,9 +111,15 @@ describe('parseJUnitTestEntries converts a real report into list entries', () =>
   })
 })
 
-describe('the merge is all-or-nothing (C1 advisor point 2)', () => {
-  // @covers: dev-checks › Full-check records list the tests that ran › Interrupted writing
-  test('every report present and parseable merges into a sorted list', () => {
+describe('the merge is all-or-nothing against the planned set (C1 point 2, C2 advisor review)', () => {
+  /** Write the manifest the runner would: the plan before the reports. */
+  function plan(...names: string[]) {
+    writePlannedReports(dir, names)
+  }
+
+  // @covers: dev-checks › Full-check records list the tests that ran › Pass with its test list
+  test('exactly the planned reports, every one parseable, merge into a sorted list', () => {
+    plan('1-parallel-x.junit.xml', '2-real-tmux-y.junit.xml')
     report('1-parallel-x', GOOD_REPORT)
     report('2-real-tmux-y', SECOND_REPORT)
     const entries = mergeJUnitReports(dir)
@@ -120,29 +131,117 @@ describe('the merge is all-or-nothing (C1 advisor point 2)', () => {
     ])
   })
 
-  test('one malformed report among good ones yields no list at all', () => {
+  test('one malformed report among good planned ones yields no list at all', () => {
+    plan('1-parallel-x.junit.xml', '2-real-tmux-y.junit.xml')
     report('1-parallel-x', GOOD_REPORT)
     report('2-real-tmux-y', '<testsuites><testsuite name="torn">')
     expect(mergeJUnitReports(dir)).toBeNull()
   })
 
-  test('reports that all parse but hold no testcase yield no list (a fabricated count 0 would read not-in-run)', () => {
-    report('1-parallel-x', '<testsuites><testsuite name="torn">')
-    report('2-real-tmux-y', '<testsuites></testsuites>')
+  test('a planned report that never landed yields no list (vanish among good ones)', () => {
+    // The C2 advisor's probe 4: the directory scan alone merges the survivor
+    // and every test of the lost batch reads not-in-run — fabricated.
+    plan('1-parallel-x.junit.xml', '2-real-tmux-y.junit.xml')
+    report('1-parallel-x', GOOD_REPORT)
     expect(mergeJUnitReports(dir)).toBeNull()
   })
 
-  test('an empty, vanished, or empty-directory merge is null', () => {
-    expect(mergeJUnitReports(dir)).toBeNull() // no reports written (a crashed run)
+  test('a present planned report without testcases yields no list (a fabricated count 0 would read not-in-run)', () => {
+    // An empty <testsuites> parses fine to zero entries: a planned report
+    // that holds no testcase is an unusable one, not a quiet shrink.
+    plan('1-parallel-x.junit.xml', '2-real-tmux-y.junit.xml')
+    report('1-parallel-x', GOOD_REPORT)
+    report('2-real-tmux-y', '<?xml version="1.0"?>\n<testsuites name="bun test" tests="0"></testsuites>')
+    expect(mergeJUnitReports(dir)).toBeNull()
+  })
+
+  test('a report on disk beyond the planned set yields no list (a foreign writer sneaks nothing in)', () => {
+    plan('1-parallel-x.junit.xml')
+    report('1-parallel-x', GOOD_REPORT)
+    report('9-nested-writer', SECOND_REPORT)
+    expect(mergeJUnitReports(dir)).toBeNull()
+  })
+
+  test('no manifest, an unreadable one, or a malformed one yields no list — even with good reports', () => {
+    report('1-parallel-x', GOOD_REPORT)
+    expect(mergeJUnitReports(dir)).toBeNull() // no manifest at all
+    fs.writeFileSync(path.join(dir, PLANNED_REPORTS_NAME), '{not json')
+    expect(mergeJUnitReports(dir)).toBeNull()
+    fs.writeFileSync(path.join(dir, PLANNED_REPORTS_NAME), '{"reports": "0-parallel-x.junit.xml"}')
+    expect(mergeJUnitReports(dir)).toBeNull() // not an array
+    fs.writeFileSync(path.join(dir, PLANNED_REPORTS_NAME), '{"reports": [7]}')
+    expect(mergeJUnitReports(dir)).toBeNull() // not strings
+    fs.writeFileSync(path.join(dir, PLANNED_REPORTS_NAME), '{"reports": ["0-parallel-x.xml"]}')
+    expect(mergeJUnitReports(dir)).toBeNull() // not the report suffix
+    fs.writeFileSync(path.join(dir, PLANNED_REPORTS_NAME), '{"reports": ["../x.junit.xml"]}')
+    expect(mergeJUnitReports(dir)).toBeNull() // not a plain basename
+    fs.writeFileSync(
+      path.join(dir, PLANNED_REPORTS_NAME),
+      '{"reports": ["1-a.junit.xml", "1-a.junit.xml"]}'
+    )
+    expect(mergeJUnitReports(dir)).toBeNull() // duplicates
+  })
+
+  test('an empty directory, a missing one, or reports with no manifest are null', () => {
+    expect(mergeJUnitReports(dir)).toBeNull() // nothing written (a crashed run)
     expect(mergeJUnitReports(path.join(dir, 'missing'))).toBeNull()
     report('only', '')
-    expect(mergeJUnitReports(dir)).toBeNull()
+    expect(mergeJUnitReports(dir)).toBeNull() // a lone unparseable report, still no plan
   })
 
-  test('non-report files in the directory are ignored', () => {
+  test('non-report files in the directory are ignored, the manifest still required', () => {
+    plan('1-parallel-x.junit.xml')
     report('1-parallel-x', GOOD_REPORT)
     fs.writeFileSync(path.join(dir, 'timings.json'), '{}')
     expect(mergeJUnitReports(dir)?.map((entry) => entry.name)).toEqual(['a todo', 'passes', 'skips'])
+  })
+})
+
+describe('the planned-report manifest', () => {
+  // @covers: dev-checks › Full-check records list the tests that ran › Pass with its test list
+  test('plannedReportNames reads the report basenames out of real planBatches output', () => {
+    const batches = planBatches({
+      workers: 1,
+      mainFiles: ['src/a.test.ts'],
+      serialFiles: ['integration.test.ts'],
+      passthrough: [],
+      skipRealTmux: false,
+      junitReportDir: '/run/reports',
+    })
+    const names = plannedReportNames(batches)
+    expect(names).toHaveLength(2)
+    for (const name of names) {
+      expect(name).toMatch(/^\d+-[\w-]+-\d+-\d+\.junit\.xml$/)
+      expect(name.includes('/')).toBe(false)
+    }
+    // A caller carrying its own reporter plans nothing (planBatches drops
+    // the directory): the manifest must stay empty, matching the disk.
+    const overridden = planBatches({
+      workers: 1,
+      mainFiles: ['src/a.test.ts'],
+      serialFiles: [],
+      passthrough: ['--reporter-outfile=/hook/dir/changed.junit.xml'],
+      skipRealTmux: true,
+      junitReportDir: '/run/reports',
+    })
+    expect(plannedReportNames(overridden)).toEqual([])
+  })
+
+  test('the writer stores the sorted plan; the reader round-trips it', () => {
+    writePlannedReports(dir, ['2-b.junit.xml', '1-a.junit.xml'])
+    expect(readPlannedReports(dir)).toEqual(['1-a.junit.xml', '2-b.junit.xml'])
+    expect(JSON.parse(fs.readFileSync(path.join(dir, PLANNED_REPORTS_NAME), 'utf8'))).toEqual({
+      reports: ['1-a.junit.xml', '2-b.junit.xml'],
+    })
+  })
+
+  test('the reader fails closed on the malformed shapes the merge refuses', () => {
+    expect(readPlannedReports(dir)).toBeNull() // absent
+    expect(readPlannedReports(path.join(dir, 'missing'))).toBeNull()
+    for (const body of ['{not json', '[]', '{"reports": 3}', '{"reports": ["x.xml"]}', '{"reports": ["a.junit.xml", "a.junit.xml"]}']) {
+      fs.writeFileSync(path.join(dir, PLANNED_REPORTS_NAME), body)
+      expect(readPlannedReports(dir)).toBeNull()
+    }
   })
 })
 

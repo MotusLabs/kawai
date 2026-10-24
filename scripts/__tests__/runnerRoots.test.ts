@@ -304,9 +304,16 @@ describe('the real runner gives each file its own root', () => {
     const { code, stderr } = await drainAndExit(proc)
     expect(code, stderr.slice(-2000)).toBe(0)
     expect(await readProbeEntries(out, 2, 1_000)).toHaveLength(2)
+    // The run's plan sits beside its one report (C2 advisor review): the
+    // manifest names exactly the report the runner planned and wrote.
     const planned = fs.readdirSync(junitDir)
-    expect(planned).toHaveLength(1)
-    expect(planned[0]).toMatch(/\.junit\.xml$/)
+    expect(planned).toHaveLength(2)
+    expect(planned).toContain('planned.json')
+    const report = planned.find((name) => name.endsWith('.junit.xml'))
+    expect(report).toMatch(/^\d+-[\w-]+-\d+-\d+\.junit\.xml$/)
+    expect(JSON.parse(fs.readFileSync(path.join(junitDir, 'planned.json'), 'utf8'))).toEqual({
+      reports: [report],
+    })
   }, 30_000)
 })
 

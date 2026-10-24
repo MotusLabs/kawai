@@ -7,18 +7,16 @@ import { buildBunTestArgs, planBatches, type PlannedBatch } from '../planBatches
 import { hasTestNameFilter, planRun, runBatchesAndPublish } from '../runPlan'
 import {
   collectFiles,
-  defaultWorkers,
   forwardSignalAndReap,
   isOwnerAlive,
-  parseCpuQuota,
   parseRunArgs,
   readOwnerMarker,
   readProcStartTime,
   refuseBatchAfterSignal,
   sweepStaleRoots,
-  workersFromEnv,
   writeOwnerMarker,
 } from '../test-runner'
+import { defaultWorkers, parseCpuQuota, workersFromEnv } from '../lib/workerCount'
 
 describe('refuseBatchAfterSignal', () => {
   test('a handled signal refuses the batch with its name; otherwise it passes (N1)', () => {
