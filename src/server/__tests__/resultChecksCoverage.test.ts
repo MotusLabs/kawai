@@ -10,10 +10,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { runGit } from '../git/gitCommand'
-import {
-  computeResultFacts, makeCheckGit, serializeFacts,
-  type ResultCheckInput,
-} from '../verification/resultChecks'
+import { computeResultFacts, makeCheckGit, type ResultCheckInput } from '../verification/resultChecks'
+import { serializeFacts } from '../verification/serializeFacts'
 import { clauseStatus, type CitationOutcome } from '../../shared/coverageMaps'
 import type { ResultCheckFacts } from '../../shared/teamTasks'
 
@@ -71,7 +69,7 @@ test('citation resolves and ran: the file and title exist at the commit and the 
   const sha = repo.commit('src/export.test.ts', "test('downloads a csv', () => {})\n", 'tests')
   const facts = await check(repo, {
     given: sha, coverage: mapWith(cite('src/export.test.ts', 'downloads a csv')),
-    testList: () => 'passed',
+    testList: () => () => 'passed',
   })
   expect(facts.coverage).toEqual([['ran-passed']])
   // The clause the reader derives: covered by a test that ran and passed.
@@ -84,7 +82,7 @@ test('cited test does not exist: the title no test in the file carries reads not
   const sha = repo.commit('src/export.test.ts', "test('downloads a csv', () => {})\n", 'tests')
   const facts = await check(repo, {
     given: sha, coverage: mapWith(cite('src/export.test.ts', 'uploads a csv'), cite('src/missing.test.ts', 'any')),
-    testList: () => 'passed',
+    testList: () => () => 'passed',
   })
   expect(facts.coverage).toEqual([['not-found', 'not-found']])
   expect(clauseStatus(2, facts.coverage![0]!, true)).toBe('not-covered')
@@ -96,7 +94,7 @@ test('cited test was skipped: the test list says skipped, the citation reads not
   const sha = repo.commit('src/export.test.ts', "test.skip('downloads a csv', () => {})\n", 'tests')
   const facts = await check(repo, {
     given: sha, coverage: mapWith(cite('src/export.test.ts', 'downloads a csv')),
-    testList: () => 'skipped',
+    testList: () => () => 'skipped',
   })
   expect(facts.coverage).toEqual([['not-run']])
   expect(clauseStatus(1, facts.coverage![0]!, true)).toBe('not-covered')
@@ -108,7 +106,7 @@ test('partly covered clause: the first citation ran and passed, the second does 
   const sha = repo.commit('src/export.test.ts', "test('downloads a csv', () => {})\n", 'tests')
   const facts = await check(repo, {
     given: sha, coverage: mapWith(cite('src/export.test.ts', 'downloads a csv'), cite('src/gone.test.ts', 'deleted')),
-    testList: (file, title) => file === 'src/export.test.ts' && title === 'downloads a csv' ? 'passed' : 'absent',
+    testList: () => (file, title) => file === 'src/export.test.ts' && title === 'downloads a csv' ? 'passed' : 'absent',
   })
   expect(facts.coverage).toEqual([['ran-passed', 'not-found']])
   expect(clauseStatus(2, facts.coverage![0]!, true)).toBe('partly-covered')
@@ -138,11 +136,11 @@ test('citations without a commit: every cited test reads unresolved, the clause 
   repo.commit('src/export.test.ts', "test('downloads a csv', () => {})\n", 'tests')
   const map = mapWith(cite('src/export.test.ts', 'downloads a csv'))
   // A diff-only result has no commit to resolve at.
-  const facts = await check(repo, { given: null, coverage: map, testList: () => 'passed' })
+  const facts = await check(repo, { given: null, coverage: map, testList: () => () => 'passed' })
   expect(facts.coverage).toEqual([['unresolved']])
   expect(clauseStatus(1, facts.coverage![0]!, false)).toBe('unresolved')
   // So does a commit that does not resolve.
-  const missing = await check(repo, { given: 'deadbeef'.repeat(5), coverage: map, testList: () => 'passed' })
+  const missing = await check(repo, { given: 'deadbeef'.repeat(5), coverage: map, testList: () => () => 'passed' })
   expect(missing.coverage).toEqual([['unresolved']])
 })
 
@@ -154,7 +152,7 @@ test('resolution reads the commit, not the worktree: an uncommitted test file is
   const facts = await check(repo, {
     given: sha,
     coverage: mapWith(cite('src/kept.test.ts', 'kept'), cite('src/uncommitted.test.ts', 'uncommitted')),
-    testList: () => 'passed',
+    testList: () => () => 'passed',
   })
   expect(facts.coverage).toEqual([['ran-passed', 'not-found']])
 })
@@ -167,7 +165,7 @@ test('each distinct path is read once and the outcomes join positionally across 
     { clause: 'Second', tests: [cite('src/a.test.ts', 'two'), cite('src/a.test.ts', 'one')] },
     { clause: 'Third', tests: [] },
   ]
-  const facts = await check(repo, { given: sha, coverage, testList: (file, title) => title === 'one' ? 'passed' : 'absent' })
+  const facts = await check(repo, { given: sha, coverage, testList: () => (file, title) => title === 'one' ? 'passed' : 'absent' })
   expect(facts.coverage).toEqual([
     ['ran-passed'],
     ['not-in-run', 'ran-passed'],

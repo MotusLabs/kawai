@@ -5,6 +5,7 @@
 // which order.
 
 import path from 'node:path'
+import { junitReporterArgs, junitReportPath } from './lib/junitReports'
 
 // These spawn real servers, PTYs, and tmux clients, so they run one process
 // at a time after the main batch. They still need process isolation from
@@ -62,6 +63,11 @@ export interface PlannedBatch {
   kind: 'parallel' | 'real-tmux'
   label: string
   cmd: string[]
+  /** The basename of the JUnit report this batch writes into
+   * `junitReportDir` (K3) — recorded exactly when the runner's own reporter
+   * was appended, so the planned-report manifest names what will land in
+   * the directory, never a caller's own report. */
+  report?: string
 }
 
 // Bun treats a relative path outside the bunfig test root as a filter unless
@@ -120,6 +126,14 @@ export function stripCoverageArgs(args: string[]) {
 // excludes the slow tier (D7): no `*.integration.test.ts` file in the main
 // batch and no tmux batch. The timings flags ride the main batch only: the
 // serial files are one-file processes whose scheduling never reorders.
+// `junitReportDir` (independent-verification D7, set only by a full check)
+// gives every `bun test` invocation — the parallel batch included — its own
+// unique JUnit report path (K3); unset, no reporter arguments are added and
+// ordinary runs stay report-free. A passthrough that already carries a
+// reporter wins outright: bun test takes the last `--reporter-outfile`, so
+// appending ours would silently move a caller's report (a hook nested in a
+// full check inherits KAWAI_TEST_JUNIT_DIR and counts its own reports from
+// it — the caller's report would land in the check's directory instead).
 export function planBatches(options: {
   workers: number
   mainFiles: string[]
@@ -130,10 +144,22 @@ export function planBatches(options: {
   mainLabel?: string
   timingsPath?: string
   updateTimings?: boolean
+  junitReportDir?: string
 }): PlannedBatch[] {
   const batches: PlannedBatch[] = []
+  const callerReports = options.passthrough.some(
+    (arg) => arg === '--reporter=junit' || arg.startsWith('--reporter-outfile=')
+  )
+  const reports = options.junitReportDir !== undefined && !callerReports ? options.junitReportDir : undefined
+  let reportIndex = 0
+  const reporter = (kind: string): { args: string[]; report?: string } => {
+    if (reports === undefined) return { args: [] }
+    const reportPath = junitReportPath(reports, reportIndex++, kind)
+    return { args: junitReporterArgs(reportPath), report: path.basename(reportPath) }
+  }
   const mainFiles = options.skipSlowTier ? excludeSlowTier(options.mainFiles) : options.mainFiles
   if (mainFiles.length > 0) {
+    const main = reporter('parallel')
     batches.push({
       kind: 'parallel',
       label: options.mainLabel ?? 'main batch',
@@ -147,12 +173,15 @@ export function planBatches(options: {
           timingsPath: options.timingsPath,
           updateTimings: options.updateTimings,
         }),
+        ...main.args,
       ],
+      report: main.report,
     })
   }
   if (!options.skipRealTmux && !options.skipSlowTier) {
     const passthrough = stripCoverageArgs(options.passthrough)
     for (const file of options.serialFiles) {
+      const report = reporter('real-tmux')
       batches.push({
         kind: 'real-tmux',
         label: `real-tmux: ${file}`,
@@ -164,7 +193,9 @@ export function planBatches(options: {
           `--timeout=${DEFAULT_TEST_TIMEOUT_MS}`,
           ...passthrough,
           toTestFilePath(file),
+          ...report.args,
         ],
+        report: report.report,
       })
     }
   }

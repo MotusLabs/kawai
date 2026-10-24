@@ -4,7 +4,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
-import { effectiveQuota } from '../test-runner'
+import { effectiveQuota } from '../lib/workerCount'
 
 describe('effectiveQuota', () => {
   test('prefers the cgroup cpu.max over the platform parallelism (F7)', () => {

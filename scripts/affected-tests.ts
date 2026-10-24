@@ -85,9 +85,12 @@ export function isDocsOnlyCommit(staged: readonly string[]): boolean {
 export const ESCAPE_CLOSURE_FILES: ReadonlySet<string> = new Set([
   'src/server/git/gitCommand.ts',
   // The check-record and content-key modules, which the check pipeline and
-  // both hooks import from src/server/checks/ (independent-verification D3).
+  // both hooks import from src/server/checks/ (independent-verification D3),
+  // and the test-list module the check pipeline writes and the citation
+  // check reads (independent-verification D7).
   'src/server/checks/checkRecords.ts',
   'src/server/checks/checkKey.ts',
+  'src/server/checks/testLists.ts',
 ])
 
 const ESCAPE_FILES = new Set([

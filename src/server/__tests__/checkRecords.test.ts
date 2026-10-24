@@ -7,6 +7,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { runGit } from '../git/gitCommand'
 import {
+  LIST_ORPHAN_GRACE_MS,
   MAX_RECORDS,
   RECORD_TTL_MS,
   TMP_TTL_MS,
@@ -15,6 +16,7 @@ import {
   readRecord,
   recordsDir,
   recordsForTree,
+  removeRecord,
   writeRecord,
 } from '../checks/checkRecords'
 

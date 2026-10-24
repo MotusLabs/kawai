@@ -168,6 +168,7 @@ All storage arrives in the next free migration. At this proposal's base, 35d2d30
 - **Size.**
   - Estimate: about 6,500 entries, about 0.8 MB raw and 80 KB gzipped per record. That is up to about 40 MB at the 500-record cap.
   - Task 4.2 measures the real size. If it exceeds 200 KB, only the newest 100 records keep lists.
+  - Measured (4.2, 2026-10-24): 8,030 entries, about 1.4 MB raw and 218.5 KiB (223,742 bytes) gzipped per record — over the 200 KB threshold, so the rule applies: only the newest 100 records keep lists (about 22 MB steady-state at the 500-record cap), in the order the count cap uses. An older record keeps its pass, loses only its list, and reads run unknown.
 - **Rejected:** detecting skips statically, because `describe.skip`, `test.if`, and the runner's own exclusions are invisible to a regex.
 
 ### D8. `@covers` annotations and the archived-change rule
@@ -207,7 +208,7 @@ The fixture-spec lister and its guards are now the sibling change `ci-fixture-sp
 - **The module.** `src/server/verification/resultChecks.ts` computes D2 over an injected git runner and a source of "other heads".
 - **The server** supplies the open tasks' worktrees.
 - **The script.** `scripts/verify-result.ts [--worktree P] [--commit R] [--coverage F] [--json]` supplies the other `git worktree list` heads and prints the same facts.
-  - It exits 0 when no fact fails, 1 when one fails, and 2 on a usage error.
+  - Exit rule, settled at C1 (dev task journal note-9869a2ec) — stricter than this bullet's first draft ("0 when no fact fails"), within its letter: exit 0 only when every fact is `pass` **and** every citation reads `ran-passed` (a declared-uncovered clause carries no outcomes and passes); any fail, warn, or unknown fact, or a not-found, not-run, not-in-run, unresolved, or run-unknown citation, exits 1; a usage error (an unknown flag, an unreadable `--coverage` file) exits 2. A green run never implies a recorded pass when there is none.
   - It is the lead's pre-push check and a dev's self-check. Run by the author, its output is still a claim, which the procedure says.
 
 ### D11. Hot files and the procedure
@@ -261,5 +262,5 @@ Rollback: every part is additive. Reverting a PR leaves its tables in place, sin
 
 ## Open Questions
 
-- The test-list size per record (measured in 4.2) decides whether the newest-100 rule applies.
-- The exact per-test fields of Bun 1.4.3's JUnit output: whether a test case carries its file, and how describe blocks nest. Task 4.1 checks this in a scratch project, as parallel-suite 1.2 checked runner behavior. If a test case lacks its file, the entry takes it from its enclosing file-level suite.
+- Answered — the test-list size per record: 4.2 measured 8,030 entries, about 1.4 MB raw and 218.5–223.7 KiB (223,742 bytes) gzipped, over the 200 KB threshold, so D7's newest-100 rule applies (D7's Size bullet holds the rule and the measurement).
+- The exact per-test fields of Bun 1.4.3's JUnit output — answered by the 4.1 spike (a scratch project under Bun 1.4.3, with and without `--parallel`): one invocation writes one aggregated `<testsuites>` document, and `--parallel` does not change the shape. Every `<testcase>` carries its file as a repo-relative `file` attribute, so the entry's file is the testcase's own `file`; the enclosing `<testsuite>` chain repeats it and stays the fallback the question allowed for. Describe blocks nest as `<testsuite>` inside the file's suite, and the describe path is the enclosing `<testsuite name>` chain in source order (`outer > inner`); the testcase's `classname` attribute repeats the same chain reversed (`inner > outer`) and XML-escaped, so it is not used. A plain skip is a `<skipped />` child, a todo is `<skipped message="TODO" />`, a failure is a `<failure>` child. `test.each` writes one testcase per row under the expanded title (`row 1`), and duplicate names in one file repeat as separate entries. Attribute values are XML-escaped, so the reader unescapes names before listing them.

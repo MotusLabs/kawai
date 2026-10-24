@@ -13,9 +13,10 @@ import path from 'node:path'
 import { runGit } from '../git/gitCommand'
 import { recordsDir, writeRecord } from '../checks/checkRecords'
 import {
-  CheckUnavailable, computeResultFacts, makeCheckGit, serializeFacts,
+  CheckUnavailable, computeResultFacts, makeCheckGit,
   type OtherTaskHead, type ResultCheckInput,
 } from '../verification/resultChecks'
+import { serializeFacts } from '../verification/serializeFacts'
 import type { ResultCheckFacts } from '../../shared/teamTasks'
 
 const HOST = { platform: process.platform, arch: process.arch }

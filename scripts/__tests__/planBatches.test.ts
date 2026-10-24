@@ -165,3 +165,53 @@ describe('skipSlowTier', () => {
     expect(isSlowTierFile('src/server/__tests__/indexHandlers.test.ts')).toBe(false)
   })
 })
+
+describe('junit report wiring (independent-verification D7, task 4.2)', () => {
+  // @covers: dev-checks › Full-check records list the tests that ran › Interrupted writing
+  test('every invocation gets its own unique report path (K3)', () => {
+    const batches = planBatches({
+      ...BASE,
+      serialFiles: ['src/server/__tests__/integration.test.ts'],
+      junitReportDir: '/run/reports',
+    })
+    const reportArgs = batches.map((batch) =>
+      batch.cmd.filter((arg) => arg.startsWith('--reporter-outfile='))
+    )
+    // Every batch carries exactly the reporter pair.
+    for (const args of reportArgs) {
+      expect(args).toHaveLength(1)
+    }
+    const paths = reportArgs.map((args) => args[0]!.slice('--reporter-outfile='.length))
+    expect(new Set(paths).size).toBe(paths.length)
+    // All inside the asked-for directory, all .junit.xml.
+    for (const reportPath of paths) {
+      expect(reportPath.startsWith('/run/reports/')).toBe(true)
+      expect(reportPath.endsWith('.junit.xml')).toBe(true)
+    }
+    // The parallel batch names its own kind, the serial batches theirs.
+    expect(paths[0]).toContain('-parallel-')
+    expect(paths[1]).toContain('-real-tmux-')
+  })
+
+  test('unset junitReportDir adds no reporter arguments', () => {
+    for (const batch of planBatches(BASE)) {
+      expect(batch.cmd.some((arg) => arg.startsWith('--reporter'))).toBe(false)
+    }
+  })
+
+  test('a passthrough reporter wins: no second --reporter-outfile is appended', () => {
+    // bun test takes the last --reporter-outfile; appending ours would move
+    // a caller's report (a hook nested in a full check inherits the env).
+    const batches = planBatches({
+      ...BASE,
+      serialFiles: ['src/server/__tests__/integration.test.ts'],
+      passthrough: ['--reporter=junit', '--reporter-outfile=/hook/dir/changed.junit.xml'],
+      junitReportDir: '/run/check-reports',
+    })
+    for (const batch of batches) {
+      expect(batch.cmd.filter((arg) => arg.startsWith('--reporter-outfile='))).toEqual([
+        '--reporter-outfile=/hook/dir/changed.junit.xml',
+      ])
+    }
+  })
+})
