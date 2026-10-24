@@ -411,18 +411,10 @@ describe('PlanWorkspaceConversation captured scope (§6.3)', () => {
     expect(panel.renderer.root.findByType('textarea').props.value).toBe('hello')
   })
 
-  test('the session user_message proves acceptance; a later error then restores nothing', () => {
-    const panel = boundPanel()
-    type(panel, 'hello')
-    submit(panel)
-    panel.deliver({ type: 'chat-events', sessionId: 's-a', events: [
-      { id: 'u1', sequence: 1, at: '2026-10-24T09:00:00.000Z', turnId: 't1', type: 'user_message', text: 'hello' },
-    ] })
-    panel.deliver({ type: 'error', message: 'late refusal',
-      requestId: sentRequestId(panel), sessionId: 's-a' })
-    expect(panel.renderer.root.findByType('textarea').props.value).toBe('')
-    expect(sends(panel)).toHaveLength(1)
-  })
+  // (The former "the session user_message proves acceptance" test asserted the
+  // B1 bug — an unrelated user_message, e.g. another host's send, consuming
+  // the pending entry — and was removed with the r4 review; the acceptance
+  // seam and its regression tests land with the B1 disposition.)
 
   test('a disconnect drops the pending contextual send; emptying the text drops the scope', () => {
     const panel = boundPanel()

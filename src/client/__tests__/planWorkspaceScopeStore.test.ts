@@ -37,7 +37,7 @@ describe('planWorkspaceScopeStore', () => {
   beforeEach(() => {
     usePlanWorkspaceScopeStore.setState({ scopes: {}, attempts: {} })
     pendingContextSends.clear()
-    useTeamPlanWorkspaceStore.setState({ views: {} })
+    useTeamPlanWorkspaceStore.setState({ views: {}, teamBindings: {} })
   })
 
   test('setScope stores per session and drops on null', () => {
@@ -91,7 +91,7 @@ describe('transferBindingsOnReset', () => {
   beforeEach(() => {
     usePlanWorkspaceScopeStore.setState({ scopes: {}, attempts: {} })
     pendingContextSends.clear()
-    useTeamPlanWorkspaceStore.setState({ views: {} })
+    useTeamPlanWorkspaceStore.setState({ views: {}, teamBindings: {} })
   })
 
   const observe = (teamPath: string, bindings: WorkspaceBindingView[]) => {
@@ -111,8 +111,21 @@ describe('transferBindingsOnReset', () => {
     const attempts = usePlanWorkspaceScopeStore.getState().attempts['/repo']!
     expect(attempts).toEqual([{
       at: attempts[0]!.at, newSessionId: 'new-chat', previousSessionId: 'old',
-      action: { kind: 'sent', role: 'architect', expectedVersion: 3, teamPath: '/repo' },
+      action: { kind: 'sent', role: 'architect', expectedVersion: 3, teamPath: '/repo',
+        requestId: expect.any(String) },
     }])
+  })
+
+  test('a binding known only through the bindings push — never a plan snapshot — transfers the same (B3)', () => {
+    useTeamPlanWorkspaceStore.getState().applyBindings({
+      type: 'team-plan-workspace-bindings', teamPath: '/repo', teamId: 't',
+      bindings: [binding('architect', 'old', 4)],
+    })
+    expect(useTeamPlanWorkspaceStore.getState().views['/repo']).toBeUndefined()
+    const sent: ClientMessage[] = []
+    transferBindingsOnReset(message => { sent.push(message) }, 'new-chat', 'old')
+    expect(sent.filter(message => message.type === 'team-plan-workspace-bind'))
+      .toMatchObject([{ teamPath: '/repo', role: 'architect', sessionId: 'new-chat', expectedVersion: 4 }])
   })
 
   test('a session bound as a role in two teams transfers in both', () => {
@@ -127,7 +140,7 @@ describe('transferBindingsOnReset', () => {
       .toEqual(['/other-repo', '/repo'])
   })
 
-  test('an unbound reset records skipped-not-bound when a snapshot was observed', () => {
+  test('an unbound reset records skipped-not-bound when bindings were observed', () => {
     observe('/repo', [binding('architect', 'someone-else', 1)])
     const sent: ClientMessage[] = []
     transferBindingsOnReset(message => { sent.push(message) }, 'new-chat', 'old')
@@ -138,7 +151,7 @@ describe('transferBindingsOnReset', () => {
     }])
   })
 
-  test('with no observed snapshot the helper refuses to act at all', () => {
+  test('with no observed bindings the helper refuses to act at all', () => {
     const sent: ClientMessage[] = []
     transferBindingsOnReset(message => { sent.push(message) }, 'new-chat', 'old')
     expect(sent).toEqual([])
@@ -149,7 +162,7 @@ describe('transferBindingsOnReset', () => {
     }])
   })
 
-  test('a view still loading (no snapshot yet) counts as unknown, not as permission', () => {
+  test('a view still loading counts as unknown, not as permission', () => {
     useTeamPlanWorkspaceStore.getState().open('/repo', 'p1')
     const sent: ClientMessage[] = []
     transferBindingsOnReset(message => { sent.push(message) }, 'new-chat', 'old')
