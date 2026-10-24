@@ -434,6 +434,12 @@ async function main() {
     // D7); the runner gives every batch its own report inside it. Unset, no
     // report is written and nothing else changes.
     const junitReportDir = process.env.KAWAI_TEST_JUNIT_DIR || undefined
+    // Consumed here, never inherited (D7): the batches get their report paths
+    // as explicit --reporter-outfile arguments, so a runner spawned by a test
+    // (runnerRoots' probes, a hook a suite test commits with) that inherits
+    // this environment must plan no reports of its own into the check's
+    // directory — its failure-path probes would poison the check's merge.
+    delete env.KAWAI_TEST_JUNIT_DIR
     const plan = planRun({
       args,
       workers,

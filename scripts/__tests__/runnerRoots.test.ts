@@ -282,6 +282,32 @@ describe('the real runner gives each file its own root', () => {
     expect(stderr).toContain('KAWAI_TEST_WORKERS')
     expect(fs.readdirSync(privateTmp)).toEqual([])
   }, 30_000)
+
+  test('KAWAI_TEST_JUNIT_DIR is consumed by the runner, never inherited by a batch (D7)', async () => {
+    // Inside a full check the suite env carries the report directory; the
+    // runner plans its own batch reports from it, and a runner a test
+    // spawns (this file's probes, a hook a suite test commits with) must
+    // plan none into it — its failure-path probes would poison the check's
+    // merge. The envProbe asserts the batch environment is clean; the report
+    // this spawning runner itself planned is the only one in the directory.
+    const junitDir = fs.mkdtempSync(path.join(os.tmpdir(), 'runner-roots-junit-'))
+    probeDirs.push(junitDir)
+    const out = makeProbeOut()
+    const proc = spawnRunner(
+      ['--skip-real-tmux', ...PASSING_PROBES, path.join(FIXTURE_DIR, 'envProbe.test.ts')],
+      {
+        KAWAI_TEST_WORKERS: '2',
+        KAWAI_PROBE_OUT: out,
+        KAWAI_TEST_JUNIT_DIR: junitDir,
+      }
+    )
+    const { code, stderr } = await drainAndExit(proc)
+    expect(code, stderr.slice(-2000)).toBe(0)
+    expect(await readProbeEntries(out, 2, 1_000)).toHaveLength(2)
+    const planned = fs.readdirSync(junitDir)
+    expect(planned).toHaveLength(1)
+    expect(planned[0]).toMatch(/\.junit\.xml$/)
+  }, 30_000)
 })
 
 // Production-path probes for the timings record (review B3): these drive the
@@ -382,4 +408,3 @@ describe('the real runner publishes the timings record (B3)', () => {
     expect(fs.existsSync(recordsDir(repo))).toBe(false)
   }, 45_000)
 })
-
