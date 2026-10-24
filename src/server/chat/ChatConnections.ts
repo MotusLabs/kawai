@@ -735,6 +735,7 @@ export class ChatConnections {
         // post-acceptance one — rethrown so the router's fire-and-forget
         // still logs it; a send without a readable id keeps today's
         // frame-less behavior.
+        let accepted: { type: 'chat-send-result'; sessionId: string; requestId: string; accepted: true } | null = null
         try {
           let envelope: WorkspaceMessageEnvelope | null | undefined
           if (message.workspaceContext !== undefined) {
@@ -751,13 +752,13 @@ export class ChatConnections {
           }
           // The manager accepted the send — context stored with the visible
           // user_message, turn enqueued or started — past the last refusal
-          // point. The sender-only acceptance answer (plan-workspace §6.3, B1)
-          // completes the send exactly once, on this connection only; it is
-          // never a ChatEvent and never sent without a readable requestId.
+          // point. The acceptance answer (plan-workspace §6.3, B1) is only
+          // PREPARED here; it is sent after the try (below), so a socket
+          // failure delivering it can never read as a refusal of a send the
+          // manager accepted — no blind post-acceptance error.
           if (sendCorrelation.requestId !== undefined) {
-            connection.send({ type: 'chat-send-result', sessionId, requestId: sendCorrelation.requestId, accepted: true })
+            accepted = { type: 'chat-send-result', sessionId, requestId: sendCorrelation.requestId, accepted: true }
           }
-          return
         } catch (cause) {
           if (sendCorrelation.requestId !== undefined) {
             connection.send({
@@ -768,6 +769,10 @@ export class ChatConnections {
           }
           throw cause
         }
+        // Outside the try: the send is accepted, so delivering its terminal
+        // answer must not convert a dead-socket throw into a refusal.
+        if (accepted) connection.send(accepted)
+        return
       }
       case 'chat-interrupt': {
         const result = this.manager.interrupt(sessionId)

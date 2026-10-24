@@ -226,4 +226,30 @@ describe('chatWorkspaceSendWiring: a throwing manager.send still answers (F-C1)'
     expect(messages).toEqual([])
     expect((thrown as Error)?.message).toBe('driver exploded')
   })
+
+  test('a socket failure delivering the acceptance never reads as a refusal', async () => {
+    const frames: ServerMessage[] = []
+    const failingConnection = {
+      send: (message: ServerMessage) => {
+        if (message.type === 'chat-send-result') throw new Error('socket gone')
+        frames.push(message)
+      },
+    }
+    const acceptedManager = {
+      whenRestored: () => Promise.resolve(),
+      has: () => true,
+      send: async () => ({ ok: true as const }),
+    } as unknown as ChatSessionManager
+    let thrown: unknown
+    try {
+      await new ChatConnections(acceptedManager).handle(failingConnection, {
+        type: 'chat-send', sessionId: 'chat-1', text: 'x', requestId: 'req-dead', workspaceContext: envelope,
+      })
+    } catch (cause) { thrown = cause }
+    // The manager accepted, so the dead acceptance send must not convert
+    // into a correlated refusal of an accepted send (no post-acceptance
+    // error, F-C1); the throw surfaces to the router's logging as-is.
+    expect(frames).toEqual([])
+    expect((thrown as Error)?.message).toBe('socket gone')
+  })
 })
