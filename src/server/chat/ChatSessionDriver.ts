@@ -1479,8 +1479,10 @@ export class ChatSessionDriver implements ChatAgentDriver {
         if (questions) {
           pending.kind = 'question'
           pending.questions = questions
-          this.armQuestionAutoAnswer(pending)
+          // Register before arming, so a settlement timer can never observe
+          // an unregistered request (C2 follow-up E).
           this.pendingRequests.set(requestId, pending)
+          this.armQuestionAutoAnswer(pending)
           this.emit({
             type: 'question_request',
             turnId,
@@ -1625,7 +1627,7 @@ export class ChatSessionDriver implements ChatAgentDriver {
       updatedInput: {
         ...pending.input,
         answers: validated.answers,
-        response: `No answer from the user within ${Math.round(pending.waitMs! / 60000)} minutes; the recommended option was selected automatically.`,
+        response: `No answer from the user within ${Math.round(pending.waitMs! / 60000)} minute${Math.round(pending.waitMs! / 60000) === 1 ? '' : 's'}; the recommended option was selected automatically.`,
       },
     })
     this.emit({

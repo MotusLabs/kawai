@@ -227,7 +227,7 @@ test('the deadline answers with the recommendation, the D3 note, and timeout dec
       behavior: 'allow',
       updatedInput: {
         answers: { 'Deploy?': 'Yes (Recommended)' },
-        response: 'No answer from the user within 1 minutes; the recommended option was selected automatically.',
+        response: 'No answer from the user within 1 minute; the recommended option was selected automatically.',
       },
     })
     const resolved = harness.events.find((event) => event.type === 'request_resolved') as
@@ -386,6 +386,33 @@ test('a refused user answer consumes nothing: the deadline still settles first (
   } finally {
     harness.driver.kill()
   }
+})
+
+test('a process crash before the deadline cancels and never auto-answers (QA-6 crash leg)', async () => {
+  const clock = new ManualClock()
+  const harness = createHarness({
+    getQuestionAutoAnswerMs: () => WAIT_MS,
+    timerScheduler: clock,
+  })
+  harness.driver.send('ask')
+  const ask = askQuestionRaw(harness, [{ question: 'Deploy?', options: ['Yes (Recommended)', 'No'] }])
+  await flush()
+
+  // The markDead funnel (runQueryLoop's exit path) must clear the timer like
+  // kill and shutdown do — only kill() was driven before (C2 follow-up B).
+  harness.fakes[0]!.exit()
+  await flush()
+  expect(harness.driver.isDead).toBe(true)
+  await expect(ask.promise).resolves.toMatchObject({ behavior: 'deny' })
+  expect(clock.pendingCount).toBe(0)
+  clock.advance(WAIT_MS * 10)
+  await flush()
+  const resolutions = harness.events.filter((event) => event.type === 'request_resolved')
+  expect(resolutions).toHaveLength(1)
+  expect(resolutions[0]).toMatchObject({ outcome: 'cancelled' })
+  expect(harness.events.some((event) =>
+    event.type === 'request_resolved' &&
+    (event as { decidedBy?: string }).decidedBy === 'timeout')).toBe(false)
 })
 
 test('a callback arriving after a kill arms no deadline (advisor C1 #3)', async () => {
