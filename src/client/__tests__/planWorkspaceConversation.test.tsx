@@ -258,18 +258,18 @@ describe('PlanWorkspaceConversation binding (§6.2)', () => {
     expect(panel.has('conversation-lead-mismatch')).toBe(false)
   })
 
-  test('an embedded local reset transfers the binding by the same CAS bind, exactly once', () => {
-    seedBindings('/repo', [binding('architect', 's-old', 2)])
+  test('an embedded local reset transfers the binding by the same CAS bind, exactly once, leaving the other role untouched', () => {
+    seedBindings('/repo', [binding('architect', 's-old', 2), binding('lead', 's-lead', 1)])
     act(() => {
       useTeamPlanWorkspaceStore.getState().open('/repo', 'p1')
       useTeamPlanWorkspaceStore.getState().applySnapshot({
         type: 'team-plan-workspace-snapshot', teamPath: '/repo', teamId: 't', planId: 'p1',
-        workspace: workspaceSnapshot([binding('architect', 's-old', 2)]),
+        workspace: workspaceSnapshot([binding('architect', 's-old', 2), binding('lead', 's-lead', 1)]),
       })
     })
     act(() => { useChatStore.getState().snapshot(snapshotMessage({ sessionId: 's-old' })) })
     const panel = mountPanel({
-      sessions: [makeSession('s-old')],
+      sessions: [makeSession('s-old'), makeSession('s-lead')],
     })
     act(() => { panel.renderer.root.findByType('textarea').props.onChange({ target: { value: '/clear' } }) })
     act(() => { panel.renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} }) })
@@ -284,6 +284,22 @@ describe('PlanWorkspaceConversation binding (§6.2)', () => {
     expect(panel.sent).toContainEqual({ type: 'chat-archive', sessionId: 's-old' })
     expect(panel.sent.filter(message =>
       message.type === 'team-plan-workspace-bind' && message.role === 'architect')).toHaveLength(1)
+    // The other role's binding (s-lead) is never rebound (§6.4).
+    expect(panel.sent.filter(message =>
+      message.type === 'team-plan-workspace-bind' && message.role === 'lead')).toHaveLength(0)
+  })
+
+  test('switching roles restores each session draft; neither role starts the other agent', () => {
+    seedBindings('/repo', [binding('architect', 's-a', 1), binding('lead', 's-b', 1)])
+    const panel = mountPanel({
+      sessions: [makeSession('s-a'), makeSession('s-b')],
+    })
+    act(() => { panel.renderer.root.findByType('textarea').props.onChange({ target: { value: 'architect thought' } }) })
+    act(() => { panel.byId('conversation-role-lead').props.onClick() })
+    act(() => { panel.renderer.root.findByType('textarea').props.onChange({ target: { value: 'lead note' } }) })
+    expect(useChatStore.getState().drafts['s-b']).toBe('lead note')
+    act(() => { panel.byId('conversation-role-architect').props.onClick() })
+    expect(panel.renderer.root.findByType('textarea').props.value).toBe('architect thought')
   })
 })
 
