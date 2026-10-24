@@ -206,6 +206,19 @@ describe('ResultCheckService over its store', () => {
     expect(all[0]?.status).toBe('done')
   })
 
+  test('a settled row tells the composition once, with its team (D12)', async () => {
+    const fixture = makeRepo(path.join(tempRoot, 'settled-notify'))
+    pending(fixture, 'result-1')
+    pending(fixture, 'result-2')
+    const told: string[] = []
+    const service = new ResultCheckService({
+      store: checks, sources: sources(fixture), onSettled: teamId => told.push(teamId),
+    })
+    service.wake(teamIdOf(fixture))
+    await service.quiesce()
+    expect(told).toEqual([teamIdOf(fixture), teamIdOf(fixture)])
+  })
+
   test('other open tasks feed the comparison; another team never appears', async () => {
     const fixture = makeRepo(path.join(tempRoot, 'teams'))
     const otherWt = path.join(tempRoot, 'teams', 'other')

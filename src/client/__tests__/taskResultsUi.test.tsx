@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import type { ClientMessage } from '@shared/types'
-import type { HumanTaskDetail, TaskResult, TeamTaskSummary } from '@shared/teamTasks'
+import type { HumanTaskDetail, ResultCheckFacts, TaskResult, TaskResultCheck, TeamTaskSummary } from '@shared/teamTasks'
 import TeamTaskDetail from '../components/team/TeamTaskDetail'
 import TeamTasksPanel from '../components/team/TeamTasksView'
 import { useTeamTaskStore } from '../stores/teamTaskStore'
@@ -172,4 +172,64 @@ test('the handoff form stays open over an earlier same-kind handoff and closes w
     detail: detail({ task: task({ assignment: handoff('mine') }) }), directory: [] }))
   rerender()
   expect(byTestId('task-handoff-form')).toHaveLength(0)
+})
+
+// Kawai's check of a result (independent-verification D12/D4): "Checked by
+// Kawai" carries each fact with its status beside the claimed test list,
+// a pending or unavailable check says so, and Recheck asks for a new check.
+type Check = TaskResultCheck
+
+const doneCheck = (extra: Partial<Check> = {}): Check => ({
+  id: 'check-1', teamId: 'team', taskId: 't1', resultId: 'r1', seq: 1, trigger: 'submit',
+  requestedBy: { kind: 'agent', sessionId: 'dev' }, status: 'done', facts: null, reason: null,
+  createdAt: '2026-10-24T00:00:00.000Z', finishedAt: '2026-10-24T00:00:05.000Z', ...extra,
+})
+
+const checkFacts = (): ResultCheckFacts => ({
+  version: 1,
+  commit: { given: 'abc123', sha: 'abc123', resolvedAtCheckTime: true, status: 'pass', note: null },
+  head: { sha: 'abc123', branch: 'feature', relation: 'same', ahead: 0, behind: 0, status: 'pass', note: null },
+  clean: { clean: true, paths: [], more: 0, status: 'pass', note: null },
+  recorded: { status: 'pass', recordBun: '1.4.3', recordAt: '2026-10-24T00:00:00.000Z', commitBun: '1.4.3', note: null },
+  base: { ref: 'refs/remotes/origin/HEAD', sha: 'base000', behind: 2, mergeClean: true, conflicts: [], moreConflicts: 0, status: 'pass', note: null },
+  branches: { compared: [], comparedCount: 1, skipped: 0, status: 'pass' },
+})
+
+test('the card shows the check as Checked by Kawai with each fact; the test list stays claimed', async () => {
+  await mount(detail({ results: [result('r1', { checks: { newest: doneCheck({ facts: checkFacts() }), earlier: 1 } })] }))
+  const card = one('task-result')
+  expect(textOf(card.findByProps({ 'data-testid': 'result-check' }))).toContain('Checked by Kawai')
+  expect(textOf(card.findByProps({ 'data-testid': 'result-check' }))).toContain('1 earlier check')
+  const facts = card.findAllByProps({ 'data-testid': 'result-check-fact' }).map(textOf)
+  expect(facts[0]).toContain('Commit abc123')
+  expect(facts[0]).toContain('pass')
+  expect(facts).toHaveLength(6)
+  expect(card.findAllByProps({ 'data-testid': 'result-check-pass' }).map(textOf)).toEqual(Array(6).fill('pass'))
+  expect(textOf(card)).toContain("outcomes are the submitter's claims, not verified evidence")
+})
+
+test('a conflicting base fact reads fail with its files; pending and unavailable checks say so', async () => {
+  const facts = checkFacts()
+  const failing = { ...facts, base: { ...facts.base, mergeClean: false, conflicts: ['src/export.ts'], status: 'fail' as const } }
+  await mount(detail({ results: [result('r1', { checks: { newest: doneCheck({ facts: failing }), earlier: 0 } })] }))
+  expect(textOf(one('result-check-fail'))).toBe('fail')
+  expect(textOf(one('result-check'))).toContain('conflicts: src/export.ts')
+  await mount(detail({ results: [result('r1', { checks: { newest: doneCheck({ status: 'pending' }), earlier: 0 } })] }))
+  expect(textOf(one('result-check-pending'))).toContain('Check running')
+  await mount(detail({ results: [result('r1', { checks: { newest: doneCheck({ status: 'unavailable', reason: 'git rev-parse did not answer' }), earlier: 0 } })] }))
+  expect(textOf(one('result-check-unavailable'))).toContain('did not answer')
+})
+
+test('Recheck sends team-task-recheck for the result and disables while disconnected; unchecked results say Not checked yet', async () => {
+  await mount(detail({ results: [result('r1', { checks: { newest: null, earlier: 0 } })] }))
+  expect(textOf(one('result-check'))).toContain('Checked by Kawai')
+  expect(textOf(one('result-check-pending'))).toBe('Not checked yet')
+  act(() => one('task-recheck').props.onClick())
+  expect(ofType('team-task-recheck')).toMatchObject([{ taskId: 't1', resultId: 'r1' }])
+  const { rerender } = await mount(detail({ results: [result('r1', { checks: { newest: null, earlier: 0 } })] }), false)
+  expect(one('task-recheck').props.disabled).toBe(true)
+  rerender(false)
+  // A result stored before the change carries no checks field at all.
+  await mount(detail())
+  expect(byTestId('result-check')).toHaveLength(0)
 })

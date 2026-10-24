@@ -51,6 +51,8 @@ export class ResultCheckService {
     /** Test seam: one CheckGit per check, over the injected budget default. */
     runner?: () => CheckGit
     repoRootOf?: (teamId: string) => string | null
+    /** A check settled (independent-verification D12): the composition refreshes the team's readers. */
+    onSettled?: (teamId: string) => void
   }) {}
 
   /**
@@ -104,6 +106,14 @@ export class ResultCheckService {
    * unavailable with the reason (D1). Returns whether the row changed;
    * never throws — a store failure leaves the row pending. */
   private async runOne(check: TaskResultCheck): Promise<boolean> {
+    const settled = await this.settleOne(check)
+    // The readers' view derives at read time (D12): a settled row is what
+    // changed it, so the composition learns here and never inside a gate.
+    if (settled) this.options.onSettled?.(check.teamId)
+    return settled
+  }
+
+  private async settleOne(check: TaskResultCheck): Promise<boolean> {
     try {
       const repoRoot = (this.options.repoRootOf ?? repoRootOf)(check.teamId)
       if (repoRoot === null) {

@@ -135,6 +135,8 @@ export class SessionMailbox {
     ownership: import('../plans/execution/executionOwnership').ExecutionOwnership
     /** A result or findings write landed (plan-execution D5); the composition's wake hub. Required (I1). */
     onTaskResultWrite: (taskId: string) => void
+    /** A result check settled (independent-verification D12): the readers' views refresh. */
+    onCheckSettled?: (teamId: string) => void
   }) {
     const store = new MailboxStore(db, {
       recipientExists: id => !!options.getRecord(id),
@@ -237,6 +239,7 @@ export class SessionMailbox {
           .map(task => ({ id: task.id, worktree: task.worktree, createdAt: task.createdAt })),
         listedWorktrees: teamId => this.tasks.worktrees.list(teamId),
       },
+      ...(options.onCheckSettled ? { onSettled: options.onCheckSettled } : {}),
     })
     // Worktree scoping (member-release D5): an unscoped group's task mail goes
     // to any member and never spawns; a missing definition stays scoped.
