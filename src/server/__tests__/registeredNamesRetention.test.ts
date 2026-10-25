@@ -28,7 +28,7 @@ function writeBaseCatalog(): void {
       label: 'OR2',
       authTokenEnv: 'OR2_KEY',
       balanceKeyEnv: 'OR2_MANAGEMENT_KEY',
-      env: { ANTHROPIC_BASE_URL: 'https://openrouter.ai/api' },
+      env: { ANTHROPIC_BASE_URL: 'https://or2.example.internal/api' },
       models: { 'or2-sonnet': { label: 'OR2 Sonnet', model: 'sonnet' } },
     },
     zai: {

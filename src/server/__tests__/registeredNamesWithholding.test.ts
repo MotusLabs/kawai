@@ -38,7 +38,7 @@ function writeBaseCatalog(): void {
       label: 'OR2',
       authTokenEnv: 'OR2_KEY',
       balanceKeyEnv: 'OR2_MANAGEMENT_KEY',
-      env: { ANTHROPIC_BASE_URL: 'https://openrouter.ai/api' },
+      env: { ANTHROPIC_BASE_URL: 'https://or2.example.internal/api' },
       models: { 'or2-sonnet': { label: 'OR2 Sonnet', model: 'sonnet' } },
     },
     zai: {
@@ -181,7 +181,7 @@ describe('every launch branch withholds the registered-name set (D5 composition 
     expect(launch.env?.ANTHROPIC_AUTH_TOKEN).toBe('or-inference-sentinel')
     expect(launch.env?.ANTHROPIC_API_KEY).toBe('')
     expect(launch.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe('')
-    expect(launch.env?.ANTHROPIC_BASE_URL).toBe('https://openrouter.ai/api')
+    expect(launch.env?.ANTHROPIC_BASE_URL).toBe('https://or2.example.internal/api')
     expect(launch.env?.HTTPS_PROXY).toBe('http://192.0.2.10:3128')
     expect(launch.env?.HTTP_PROXY).toBe('')
     expect(launch.env?.NO_PROXY).toBe('')
@@ -351,7 +351,7 @@ describe('registered secret names stay withheld (provider-credentials delta scen
     writeProvidersCatalog({
       or2: {
         label: 'OR2',
-        env: { ANTHROPIC_BASE_URL: 'https://openrouter.ai/api' },
+        env: { ANTHROPIC_BASE_URL: 'https://or2.example.internal/api' },
         models: { 'or2-sonnet': { label: 'OR2 Sonnet', model: 'sonnet' } },
       },
     })
@@ -381,7 +381,7 @@ describe('registered secret names stay withheld (provider-credentials delta scen
     const cred = BRANCH_PROBES.credentialed()
     assertDeliveryUnchanged(cred.env ?? {}, input, REGISTERED, {
       deleted: PROFILE_CONTROLLED_ENV.filter(name => name !== 'ANTHROPIC_BASE_URL'),
-      overwritten: { ANTHROPIC_BASE_URL: 'https://openrouter.ai/api' },
+      overwritten: { ANTHROPIC_BASE_URL: 'https://or2.example.internal/api' },
       added: {
         ANTHROPIC_AUTH_TOKEN: 'or-inference-sentinel',
         ANTHROPIC_API_KEY: '',
