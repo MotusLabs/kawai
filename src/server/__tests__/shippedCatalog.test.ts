@@ -115,6 +115,21 @@ describe('grouped shipped default on a fresh HOME', () => {
     }
   })
 
+  test('the shipped Codex entries resolve with runtime codex and their models', () => {
+    const { profiles, errors } = resolveProfileCatalog(freshHomeCtx())
+    expect(errors).toEqual([])
+    for (const [id, label, model] of [
+      ['codex-sol', 'Codex Sol', 'gpt-6.1-sol'],
+      ['codex-luna', 'Codex Luna', 'gpt-6-luna'],
+    ]) {
+      // Codex entries sit outside every provider: the provider id is the
+      // resolved home's hash (R2), so it is shape-checked, then echoed.
+      const profile = profiles.get(id!)
+      expect(profile?.providerId).toMatch(/^codex-home-[0-9a-f]{12}$/)
+      expect(profile).toEqual({ label, env: {}, model, runtime: 'codex', providerId: profile!.providerId })
+    }
+  })
+
   test('the providers view orders the default-holder first, then file order (D13)', () => {
     const { providers } = resolveProfileCatalog(freshHomeCtx())
     expect([...providers.keys()]).toEqual(['claude', 'zai', 'openrouter', 'minimax', 'mimo', 'kimi'])

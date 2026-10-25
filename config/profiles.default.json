@@ -35,5 +35,15 @@
       "ANTHROPIC_DEFAULT_FABLE_MODEL": "kimi-k3[1m]",
       "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000"
     }
+  },
+  "codex-sol": {
+    "label": "Codex Sol",
+    "runtime": "codex",
+    "model": "gpt-6.1-sol"
+  },
+  "codex-luna": {
+    "label": "Codex Luna",
+    "runtime": "codex",
+    "model": "gpt-6-luna"
   }
 }
