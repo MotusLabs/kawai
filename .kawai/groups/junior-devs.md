@@ -170,15 +170,15 @@ with a note and tell the lead rather than pushing on.
   names the task clauses the result completes (for example `2.1 Verify`),
   replacing the "every ticked tasks.md item is implemented" self-check.
 - Before each `task_submit_result`, run `bun scripts/verify-result.ts`,
-  with `--coverage` when there is a map, and state its exit code. Its
-  output is still a claim.
+  with `--coverage <map.json>` when there is a map (write the map to a
+  JSON file first), and state its exit code. Its output is still a claim.
 - When acceptance criteria hold and checks pass, call `task_submit_result`
   with the task id, summary, exact full commit SHA, changed paths, checks
   actually run with outcomes, and limitations. Record the coverage map in
   the `coverage` field, never as prose. For a checkpoint, distinguish
   covered requirements from tests still planned for later work; claim only
-  the completed scope. Put detailed evidence in the result and journal. Send
-  one concise report to the Lead: DONE/CHECKPOINT/
+  the completed scope. Put other detailed evidence in the result and
+  journal. Send one concise report to the Lead: DONE/CHECKPOINT/
   BLOCKED first, task id and revision, result or note id, worktree, branch,
   exact HEAD, check summary, and next action or blocker. Aim for at most 1,200
   characters; reference records instead of repeating their contents. Submit a

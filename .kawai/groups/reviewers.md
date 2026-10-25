@@ -66,8 +66,9 @@ latest journal. The body names the worktree, branch, base/head SHAs,
    regressions. Document justified exceptions, such as requirements that cannot
    be meaningfully automated, for the Lead to resolve before approval.
 5. Record the coverage map blind-first, from the previous step's mapping:
-   list the clauses from the spec and the task, map each to the test that
-   covers it in the diff, and record the map with `task_submit_coverage`
+   list the clauses from the spec and the task, map each from the diff to
+   the test that covers it (existing tests count), and record the map with
+   `task_submit_coverage`
    (clauses of `` `path` › `title` `` citations). Only then read the
    author's map with `task_get` — it stays sealed until your own map is
    recorded — and treat each difference as a finding or explain it in the
