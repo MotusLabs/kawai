@@ -26,6 +26,13 @@
 //     position and document state, and the conversation pane never scrolls
 //     itself — the bound chat's transcript is the scroller, with the
 //     composer reachable.
+// 11b. a real viewport roundtrip flips narrow→desktop→narrow→desktop — the
+//      observer re-observes each replaced section so the layout truly
+//      changes every time — and the pane selection, both scroll records and
+//      the bound conversation survive it without a duplicate response;
+// 11c. an immediate wheel into an in-place team switch, with no settle:
+//      the outgoing team keeps the live position from the navigation
+//      boundary and the incoming team its own record, tail included.
 // Requires the fixture webServer (AGENTBOARD_CHAT_FIXTURE=1) on its own
 // port; never run test:e2e against a live kawai server.
 import { expect, test, type Page } from '@playwright/test'
@@ -438,6 +445,54 @@ test('deep links, reload, Back/Forward, the full-screen return, and the pane con
     await expect(documentsPane).toBeVisible()
     await expect.poll(topOf(documentsPane), 'the documents position survives the switch too').toBeCloseTo(narrowDocumentsTop, 6)
     await page.screenshot({ path: info.outputPath('workspace-narrow.png') })
+
+    // 19. A real viewport roundtrip: every flip replaces the section and
+    // the observer re-observes the mounted one, so the layout truly changes
+    // each time. Pane selection, both scroll records and the bound
+    // conversation survive the roundtrip without a duplicated response.
+    await page.setViewportSize({ width: 1200, height: 900 })
+    await expect(panes).toHaveAttribute('data-layout', 'desktop')
+    await expect(mapPane).toBeVisible()
+    const fixtureResponses = await conversationPane.getByText('Fixture response').count()
+    expect(fixtureResponses).toBeGreaterThan(0)
+    await page.setViewportSize({ width: 800, height: 900 })
+    await expect(panes).toHaveAttribute('data-layout', 'narrow')
+    // The selection kept the documents pane shown, at its own position.
+    await expect(documentsPane).toBeVisible()
+    await expect.poll(topOf(documentsPane), 'the documents position survives the flips').toBeCloseTo(narrowDocumentsTop, 6)
+    await page.getByTestId('workspace-narrow-back').click()
+    await expect.poll(topOf(mapPane), 'the map position survives the flips').toBeCloseTo(narrowMapTop, 6)
+    // A third flip: the layout still changes, and the conversation stayed
+    // bound — no new turn started, nothing duplicated.
+    await page.setViewportSize({ width: 1200, height: 900 })
+    await expect(panes).toHaveAttribute('data-layout', 'desktop')
+    await expect(mapPane).toBeVisible()
+    await expect.poll(topOf(mapPane), 'the map restores a non-zero position on desktop').toBeGreaterThan(0)
+    await expect(conversationPane.getByText('Fixture response')).toHaveCount(fixtureResponses)
+    await expect(conversationPane.getByText('Sizing message 12')).toHaveCount(1)
+    await expect(page.getByTestId('conversation-binding-lead')).toBeVisible()
+
+    // 20. An immediate wheel into an in-place team switch, with no settle:
+    // the outgoing team keeps the live boundary position (the unit
+    // counterexample owns the queued-event window); the incoming team
+    // restores its own record — post-restore wheel tail records as its own.
+    await setHash(page, teamHash(root2, `plans/${team2PlanId}`))
+    await expect(page.getByTestId('plan-workspace')).toBeVisible()
+    const team2Record = (await scrollState(mapPane)).top
+    await setHash(page, teamHash(root, `plans/${planId}`))
+    await expect(mapPane).toBeVisible()
+    await mapPane.hover()
+    await page.mouse.wheel(0, 300)
+    const boundaryTop = (await scrollState(mapPane)).top
+    await setHash(page, teamHash(root2, `plans/${team2PlanId}`))
+    await expect(page.getByTestId('plan-workspace')).toBeVisible()
+    await expect.poll(topOf(mapPane), 'team two restores its own record').toBeGreaterThanOrEqual(team2Record)
+    expect((await scrollState(mapPane)).top, 'any excess is the wheel tail alone').toBeLessThanOrEqual(team2Record + 300)
+    await setHash(page, teamHash(root, `plans/${planId}`))
+    await expect(mapPane).toBeVisible()
+    const capturedTop = (await scrollState(mapPane)).top
+    expect(capturedTop, 'the live boundary position is captured for the outgoing team').toBeGreaterThanOrEqual(boundaryTop)
+    expect(capturedTop, 'the captured position stays within the wheel delta').toBeLessThan(boundaryTop + 300)
   } finally {
     rmSync(root, { recursive: true, force: true })
     rmSync(root2, { recursive: true, force: true })
