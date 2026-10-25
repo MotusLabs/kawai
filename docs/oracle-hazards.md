@@ -71,3 +71,35 @@ or property that would have caught it, and the source finding.
   gets its own table row over that shared derivation.
 - **Source finding.** RC E seed (no finding record — cataloged at rule
   adoption).
+
+## Launch composition
+
+### A registered name frozen at creation
+
+- **Hazard.** A launch seam derives the registered-name set once — at
+  session creation or driver construction — and reuses it, so a name that
+  registers later reaches the spawned or respawned child.
+- **Oracle that catches it.** The set is re-derived at every spawn through
+  a provider holding the persistence store, and a manager-level test
+  registers a name after the driver exists and asserts the respawned
+  child's environment (`src/server/__tests__/registeredNamesManagerWiring.test.ts`
+  › "a respawn re-derives the set and keeps removed entries withheld
+  (M-freeze, M1a)").
+- **Source finding.** Advisories note-da7f0861 + note-0f4155a0 (correction
+  A of provider-relay-setup).
+
+### A branch re-composing a name it filtered
+
+- **Hazard.** A launch branch filters registered names from its catalog
+  entries but then composes its own neutralization — a controlled settings
+  map, route pins, credential blanks, or the Codex home — re-introducing a
+  registered name under its own key; dropping the key instead silently
+  weakens the protection the branch exists to provide.
+- **Oracle that catches it.** A typed pre-spawn refusal on every composing
+  branch (credentialed pins+blanks+controlled, named-profile controlled,
+  Codex home), asserted per row at the resolve, driver, and manager seams
+  with a hostile settings file on disk, zero launches, and a settled
+  failed send (`src/server/__tests__/registeredNamesRefusals.test.ts`,
+  `src/server/__tests__/registeredNamesRefusalWiring.test.ts`).
+- **Source finding.** The Lead's rev 5.1 conformance disposition
+  (note-f6467fdb; correction B of provider-relay-setup).
