@@ -179,7 +179,7 @@ export default function PlanWorkspaceSection({ teamPath, detail, sessions, conne
     <VersionExecutionBar detail={detail} snapshot={snapshot} view={view} connected={connected}
       onVersion={selector => { useTeamPlanWorkspaceStore.getState().setVersion(teamPath, selector); navigateWorkspace() }}
       onExecution={id => { useTeamPlanWorkspaceStore.getState().setExecution(teamPath, id); navigateWorkspace() }} />
-    {!connected && <p role="status" className="text-chat-meta text-secondary">Disconnected — workspace facts are stale and edits are disabled.</p>}
+    {!connected && <p role="status" data-testid="plan-workspace-offline" className="text-chat-meta text-secondary">Disconnected — workspace facts are stale and edits are disabled.</p>}
     {view.error !== null && <p role="alert" data-testid="plan-workspace-error" className="text-chat-meta text-chat-danger">{view.error}</p>}
     {view.urlNotice !== null && <p role="status" data-testid="plan-workspace-url-notice" className="text-chat-meta text-approval">{view.urlNotice}</p>}
     {snapshot !== null && <BindingsLine snapshot={snapshot} />}

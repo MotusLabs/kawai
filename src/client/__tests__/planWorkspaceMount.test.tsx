@@ -85,7 +85,7 @@ const detail = () => {
     executions: [execution('e2', 2, '2026-10-21T00:00:00.000Z'), execution('e1', 1, '2026-10-20T00:00:00.000Z')] })
 }
 
-const mount = (planFixture = detail()) => {
+const mount = (planFixture = detail(), connected = true) => {
   useTeamPlanStore.getState().open('/repo')
   act(() => {
     useTeamPlanStore.getState().select('/repo', 'p1')
@@ -95,7 +95,7 @@ const mount = (planFixture = detail()) => {
   let renderer!: TestRenderer.ReactTestRenderer
   const sendMessage = (message: ClientMessage) => { sent.push(message) }
   const element = (epoch = 0) => <TeamPlansView teamPath="/repo" view={useTeamPlanStore.getState().views['/repo']!}
-    sendMessage={sendMessage} connected connectionEpoch={epoch} sessions={[]} />
+    sendMessage={sendMessage} connected={connected} connectionEpoch={epoch} sessions={[]} />
   act(() => { renderer = TestRenderer.create(element()) })
   renderers.push(renderer)
   const rerender = (epoch = 0) => act(() => renderer.update(element(epoch)))
@@ -467,5 +467,17 @@ describe('the plans query (plan-workspace 7.1)', () => {
       worktreeId: '/repo', relativePath: 'openspec/changes/api/proposal.md',
     })
     expect(pushed.at(-1)).toBe('#/team/%2Frepo/plans/p1?c=api&dw=%2Frepo&dp=openspec%2Fchanges%2Fapi%2Fproposal.md')
+  })
+
+  test('offline keeps the stale workspace shown and its mutations disabled (plan-workspace 7.2)', () => {
+    const { byId, has } = mount(detail(), false)
+    loadSnapshot()
+    // The stale content stays visible — no loading state, the map renders.
+    expect(has('plan-workspace-loading')).toBe(false)
+    expect(has('wbs-row-api')).toBe(true)
+    expect(has('plan-workspace-url-notice')).toBe(false)
+    // The identity pickers keep their existing offline gate.
+    expect(byId('workspace-version-picker').props.disabled).toBe(true)
+    expect(has('plan-workspace-offline')).toBe(true)
   })
 })
