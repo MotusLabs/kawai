@@ -170,10 +170,10 @@ with a note and tell the lead rather than pushing on.
   names the task clauses the result completes (for example `2.1 Verify`),
   replacing the "every ticked tasks.md item is implemented" self-check.
 - Before each `task_submit_result`, run
-  `bun scripts/verify-result.ts --commit <head-sha>` — in a linked
-  worktree the default commit resolves at the repository root — with
-  `--coverage <map.json>` when there is a map (a JSON file), and state
-  its exit code. Its output is still a claim.
+  `bun scripts/verify-result.ts --commit <head-sha>`, where `<head-sha>`
+  is the exact commit you submit, with `--coverage <map.json>` when
+  there is a map (a JSON file), and state its exit code. Its output is
+  still a claim.
 - When acceptance criteria hold and checks pass, call `task_submit_result`
   with the task id, summary, exact full commit SHA, changed paths, checks
   actually run with outcomes, and limitations. Record the coverage map in
