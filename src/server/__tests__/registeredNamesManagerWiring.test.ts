@@ -21,6 +21,7 @@ import { CodexSessionDriver } from '../chat/codex/CodexSessionDriver'
 import type { CodexClient } from '../chat/codex/codexThread'
 import { ChatSessionManager } from '../chat/ChatSessionManager'
 import type { ChatWireLogs } from '../chat/ChatWireLogs'
+import type { ChatEvent } from '../../shared/chat'
 import { readRetainedNames } from '../chat/secretNameRegistry'
 import { resetCodexExecutableCache } from '../chat/codex/codexExecutable'
 import { initDatabase, type SessionDatabase } from '../db'
@@ -41,6 +42,14 @@ let project: string
 let home: string
 let codexHome: string
 let db: SessionDatabase
+// The fake Codex child emits its exit event asynchronously: a test failing
+// before its own kill must not leave that event firing into the next test's
+// closed database, so afterEach ends the live session first (advisor
+// A-checkpoint nit) and every mutant kill reads as its own assertion.
+let liveCodexSession: { manager: ChatSessionManager; id: string } | null = null
+// The Codex seam's driver events, for synchronizing a respawn on the
+// previous child's settled exit (the driver announces it as an error event).
+const codexEvents: ChatEvent[] = []
 
 // A trusted-catalog provider whose credential names must never reach a
 // launch, in any entry state; hosts and names are examples throughout.
@@ -88,12 +97,22 @@ describe('registered names through the real manager wiring', () => {
     resetCodexExecutableCache()
   })
 
-  afterEach(() => {
+  afterEach(async () => {
     for (const key of ENV_KEYS) {
       if (originalEnv[key] === undefined) delete process.env[key]
       else process.env[key] = originalEnv[key]
     }
     resetCodexExecutableCache()
+    if (liveCodexSession) {
+      const { manager, id } = liveCodexSession
+      liveCodexSession = null
+      try {
+        manager.kill(id)
+      } catch {
+        // Already gone is exactly what the net is for.
+      }
+      await Bun.sleep(50)
+    }
     closeDispatchers()
     db.close()
     fs.rmSync(tempDir, { recursive: true, force: true })
@@ -102,6 +121,21 @@ describe('registered names through the real manager wiring', () => {
   describe('manager Codex seam', () => {
     /** Three boot runs (start, resume, resume), each with a completed turn:
      * the fake exits after replaying its run, so every send respawns. */
+    /** The rate-limit payload the recorded boot fill answers with. */
+    const FILL = {
+      limitId: 'codex', limitName: null, normalModelSlug: null,
+      primary: { usedPercent: 20, windowDurationMins: 300, resetsAt: 1792337450 },
+      secondary: { usedPercent: 3, windowDurationMins: 10080, resetsAt: 1792879251 },
+      credits: null, individualLimit: null, spendControlReached: null,
+      planType: 'plus', rateLimitReachedType: null,
+    }
+
+    /** Three boot runs (start, resume, resume): the fake exits after
+     * replaying its run, so every send respawns. Run 1 serves only the start
+     * boot — the first spawn sends no prompt — plus the boot's fill read
+     * (PR E 7.1): the manager claims it once per home, so runs 2 and 3,
+     * whose store already holds the report, never read, and an un-expected
+     * read would fail the fake's replay check. */
     function writeCodexTranscript(): void {
       const rolloutPath = path.join(codexHome, 'sessions', `rollout-${THREAD_ID}.jsonl`)
       fs.mkdirSync(path.dirname(rolloutPath), { recursive: true })
@@ -111,7 +145,8 @@ describe('registered names through the real manager wiring', () => {
           .turn(turn)
           .item('completed', turn, { type: 'agentMessage', id: `msg-${turn}`, text, questions: null })
           .completed(turn, 'completed', [{ type: 'agentMessage', id: `msg-${turn}`, text }])
-      const script = run('thread/start', 'ct-1', 'one')
+      const script = new Script().boot('thread/start', 'gpt-test', rolloutPath)
+        .request('account/rateLimits/read', { rateLimits: FILL })
       script.lines.push(...run('thread/resume', 'ct-2', 'two').lines)
       script.lines.push(...run('thread/resume', 'ct-3', 'three').lines)
       process.env.FAKE_TRANSCRIPT = script.write(tempDir)
@@ -121,23 +156,25 @@ describe('registered names through the real manager wiring', () => {
     function codexManager(): Promise<ChatSessionManager> {
       const wireLogs = { get: () => ({ record: () => {} }), pruneOrphans: async () => {}, delete: async () => {} }
       return managedManager({
-        db, registry: new SessionRegistry(), onEvent: () => {},
+        db, registry: new SessionRegistry(), onEvent: (_sessionId, event) => codexEvents.push(event),
         profileCatalogHome: home, availabilityProbe: async () => {},
         wireLogs: wireLogs as unknown as ChatWireLogs,
       })
     }
 
     /** One child per call: the fake exits after its replay, so a send
-     * respawns the same driver — never a fresh creation. The settle lets
-     * the child's exit event reach the driver before the next trigger. */
+     * respawns the same driver — never a fresh creation. A send into a child
+     * whose exit has not settled yet would be eaten by the dead process, so
+     * each spawn after the first waits for the previous child's settled
+     * exit (the driver announces it as an error event) before triggering. */
     async function spawnChild(manager: ChatSessionManager, id: string, namesFile: string, run: number, trigger: () => Promise<unknown>): Promise<string[]> {
+      const settledExits = () => codexEvents.filter(event => event.type === 'error' && event.message.includes('exited with code 0')).length
+      await until(() => settledExits() >= run - 1, 10_000)
       fs.rmSync(namesFile, { force: true })
       process.env.FAKE_RUN = String(run)
       await trigger()
       await until(() => fs.existsSync(namesFile))
-      const names = fs.readFileSync(namesFile, 'utf8').split('\n')
-      await Bun.sleep(100)
-      return names
+      return fs.readFileSync(namesFile, 'utf8').split('\n')
     }
 
     test('a respawn re-derives the set and keeps removed entries withheld (M-freeze, M1a)', async () => {
@@ -155,6 +192,7 @@ describe('registered names through the real manager wiring', () => {
       const created = await manager.createAvailableSession({ projectPath: project, claudeProfileId: 'codex' })
       if (!created.ok) throw new Error(created.error)
       const id = created.session.id
+      liveCodexSession = { manager, id }
 
       const first = await spawnChild(manager, id, namesFile, 1, () => manager.start(id))
       expect(first).toContain('CODEX_HOME')
@@ -181,11 +219,8 @@ describe('registered names through the real manager wiring', () => {
       expect(third).not.toContain('RELAY_TOKEN_ENV')
       expect(third).not.toContain('RELAY_BALANCE_ENV')
       expect(third).not.toContain('RELAY2_TOKEN_ENV')
-
-      // End the child in-test: a live fake process would deliver its exit
-      // event into the next test, after this test's db has closed.
-      expect(manager.kill(id)).toBe(true)
-      await Bun.sleep(50)
+      // The live child ends in afterEach, so a mid-test failure can no
+      // longer fire its exit event into the next test's closed database.
     })
   })
 
