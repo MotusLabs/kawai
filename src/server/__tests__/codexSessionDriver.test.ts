@@ -145,10 +145,10 @@ test('a compaction item reports onCompaction and the compacted notice; usage nam
   expect(sources).toEqual(['model-window-fallback'])
 })
 
-test('effort maps onto Codex levels: max becomes xhigh, numbers are dropped', () => {
+test('effort passes through to the Codex levels the models advertise; numbers are dropped', () => {
   expect(codexEffort('low')).toBe('low')
   expect(codexEffort('xhigh')).toBe('xhigh')
-  expect(codexEffort('max')).toBe('xhigh')
+  expect(codexEffort('max')).toBe('max')
   expect(codexEffort(3)).toBeUndefined()
   expect(codexEffort(undefined)).toBeUndefined()
 })

@@ -54,7 +54,7 @@ test('developerInstructions carries the prompt append, security note included, a
   }
 })
 
-test('the group effort rides turn/start.effort, mapped to a Codex level', async () => {
+test('the group effort rides turn/start.effort, passed through unchanged', async () => {
   let effort: 'high' | 'max' = 'high'
   const script = new Script().boot().turn('ct-1').completed('ct-1').turn('ct-2').completed('ct-2')
   harness = startHarness(script, { getEffort: () => effort })
@@ -64,7 +64,7 @@ test('the group effort rides turn/start.effort, mapped to a Codex level', async 
   harness.driver.send('two')
   await until(() => harness!.events.filter(event => event.type === 'turn_completed').length === 2)
   expect(sentRequest(harness, 'turn/start', 0)!.effort).toBe('high')
-  expect(sentRequest(harness, 'turn/start', 1)!.effort).toBe('xhigh')
+  expect(sentRequest(harness, 'turn/start', 1)!.effort).toBe('max')
 })
 
 test('no effort configured sends no effort field', async () => {
