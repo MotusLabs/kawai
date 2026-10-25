@@ -70,7 +70,7 @@ afterEach(() => {
   useChatStore.setState({ sessions: {}, drafts: {}, pendingReveal: null })
   useSessionStore.setState({ connectionStatus: 'connected', connectionEpoch: 1 })
   useWorkspaceStore.setState({ snapshot: null })
-  useTeamPlanWorkspaceStore.setState({ views: {}, teamBindings: {} })
+  useTeamPlanWorkspaceStore.setState({ views: {}, teamBindings: {}, roles: {}, panes: {} })
   usePlanWorkspaceScopeStore.setState({ scopes: {}, attempts: {} })
   pendingContextSends.clear()
 })
@@ -657,5 +657,44 @@ describe('PlanWorkspaceConversation captured scope (§6.3)', () => {
     expect(panel.renderer.root.findByType('textarea').props.value).toBe('in flight')
     expect(panel.has('composer-scope')).toBe(true)
     expect(pendingContextSends.size).toBe(0)
+  })
+})
+
+describe('the active role (plan-workspace 7.1)', () => {
+  test('a pick writes the per-team store role and mirrors it once; it survives unmount', () => {
+    let roleSelected = 0
+    const first = mountPanel({ onRoleSelected: () => { roleSelected++ } })
+    expect(first.byId('conversation-role-architect').props['aria-selected']).toBe(true)
+    act(() => first.byId('conversation-role-lead').props.onClick())
+    expect(useTeamPlanWorkspaceStore.getState().roles['/repo']).toBe('lead')
+    expect(roleSelected).toBe(1)
+    expect(first.byId('conversation-role-lead').props['aria-selected']).toBe(true)
+    act(() => first.renderer.unmount())
+    renderers.length = 0
+    // The role rode the team store: the remounted panel opens on it.
+    const second = mountPanel({})
+    expect(second.byId('conversation-role-lead').props['aria-selected']).toBe(true)
+    // Another team kept its own role.
+    useTeamPlanWorkspaceStore.getState().setRole('/other', 'architect')
+    expect(useTeamPlanWorkspaceStore.getState().roles['/other']).toBe('architect')
+  })
+
+  test('a linked role seed opens the panel on the Lead tab', () => {
+    act(() => useTeamPlanWorkspaceStore.getState().setRole('/repo', 'lead'))
+    const { byId } = mountPanel({})
+    expect(byId('conversation-role-lead').props['aria-selected']).toBe(true)
+    expect(byId('conversation-role-architect').props['aria-selected']).toBe(false)
+  })
+
+  test('switching roles discharges the create-then-bind arm and never crosses roles', () => {
+    const { byId } = mountPanel({ onOpenNewSession: () => {} })
+    act(() => byId('conversation-new-chat-architect').props.onClick())
+    const armed = () => (byId('conversation-new-chat-architect').props.children as (string | undefined)[])
+      .join('')
+    expect(armed()).toContain('binding after creation')
+    // The switch clears the arm (the old role's pick must not bind a new chat).
+    act(() => byId('conversation-role-lead').props.onClick())
+    act(() => byId('conversation-role-architect').props.onClick())
+    expect(armed()).not.toContain('binding after creation')
   })
 })
