@@ -101,6 +101,31 @@ export function collidingLaunchEnvNames(
   return [...registered].filter(name => name in deliveryEnv).sort()
 }
 
+/**
+ * The typed pre-spawn refusal (provider-relay-setup correction B): a launch
+ * branch whose mandatory composition would carry a registered name — a
+ * controlled setting, a transport pin, a credential blank, or the Codex
+ * home — refuses instead of delivering the name under its own composition.
+ * Names only, never values; the caller settles the send failed with this
+ * error's message and no child starts.
+ */
+export class RegisteredNameRefusal extends Error {
+  constructor(
+    /** The launch branch that would have composed the names. */
+    readonly branch: string,
+    /** The registered names the branch would have composed, sorted. */
+    readonly names: string[]
+  ) {
+    super(
+      `Registered secret name(s) ${names.join(', ')} cannot be launched on the ${branch} branch: ` +
+      `that branch must compose them (controlled setting, transport pin, or credential blank) to ` +
+      `protect the credential, and a registered name is never composed. Remove or rename the ` +
+      `variable in the catalog — the name itself stays withheld once registered.`
+    )
+    this.name = 'RegisteredNameRefusal'
+  }
+}
+
 /** The registered set for a resolved catalog: its parsed-layer names plus
  * whatever the persisted retained set holds (headers and store keys remain
  * explicit, empty sources until §4/§2 plug in — the filter is unchanged). */

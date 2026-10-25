@@ -75,6 +75,7 @@ import {
   type ClaudeLaunchConfiguration,
   type ProfileCatalogContext,
 } from './ClaudeProfiles'
+import { RegisteredNameRefusal } from './secretNameRegistry'
 import { logger } from '../logger'
 import { probeSdkAvailability } from './sdkAvailability'
 import { AccountNoticeStore, credentialsPathFor } from './accountNotices'
@@ -1946,13 +1947,32 @@ export class ChatSessionManager {
       if (!driver.sendWorkspaceContext) {
         return { ok: false, error: "This chat's runtime does not carry plan-workspace contexts." }
       }
-      const sent = driver.sendWorkspaceContext(text, stored)
+      const sent = this.sendDriverText(driver, text, stored)
       if (!sent.ok) return { ok: false, error: sent.error }
     } else {
-      driver.send(text)
+      const sent = this.sendDriverText(driver, text)
+      if (!sent.ok) return { ok: false, error: sent.error }
     }
     this.touch(sessionId)
     return { ok: true }
+  }
+
+  /**
+   * Submit a user turn, settling a launch refusal as a failed send
+   * (provider-relay-setup correction B): the typed pre-spawn refusal means
+   * no child composed or started, so the caller sees the refusal instead of
+   * a rejection. Every other throw rejects exactly as before.
+   */
+  private sendDriverText(driver: ChatAgentDriver, text: string, stored?: WorkspaceMessageContext): { ok: true } | { ok: false; error: string } {
+    try {
+      // The caller checked sendWorkspaceContext exists whenever stored is set.
+      if (stored) return driver.sendWorkspaceContext!(text, stored)
+      driver.send(text)
+      return { ok: true }
+    } catch (error) {
+      if (error instanceof RegisteredNameRefusal) return { ok: false, error: error.message }
+      throw error
+    }
   }
 
   /** The validation reads, wired to the plan services (plan-workspace §4.1). */
@@ -2020,7 +2040,14 @@ export class ChatSessionManager {
     if (!driver) {
       return { ok: false, error: `Unknown chat session ${sessionId}` }
     }
-    driver.start()
+    // The same launch refusal as send: the start settles failed and no
+    // child composed (correction B).
+    try {
+      driver.start()
+    } catch (error) {
+      if (error instanceof RegisteredNameRefusal) return { ok: false, error: error.message }
+      throw error
+    }
     return { ok: true }
   }
 

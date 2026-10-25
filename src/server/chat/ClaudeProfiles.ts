@@ -14,7 +14,7 @@ import {
   withoutCredentials,
   type ChatProviderEnv,
 } from './chatProviderEnv'
-import { catalogRegisteredNames, type RetainedNamesDb } from './secretNameRegistry'
+import { catalogRegisteredNames, RegisteredNameRefusal, type RetainedNamesDb } from './secretNameRegistry'
 import { CODEX_PROVIDER_LABEL, resolveCodexHome, type CodexLaunchConfiguration } from './codexProfiles'
 import {
   PROFILE_CONTROLLED_ENV,
@@ -137,7 +137,24 @@ export function resolveClaudeProfile(
   // credentials stay out of default and executable-backed launches too. The
   // filter runs before every branch's own operations (table W).
   const base = withoutCredentials(serverEnv, registered)
-  return buildClaudeLaunch(profile, base, serverEnv)
+  return buildClaudeLaunch(profile, base, serverEnv, registered)
+}
+
+/**
+ * The overlay entries a launch may copy (table W rows 2/8): a registered
+ * name never re-enters under its own name through a profile's env — the key
+ * is dropped, not refused, because the overlay adds nothing the launch
+ * needs. On the named-profile branches the controlled refusal below already
+ * dominates every possible entry (a parsed catalog's env keys are all
+ * profile-controlled), so this helper is load-bearing on the wrapper branch.
+ */
+function withoutRegistered(env: Record<string, string>, registered: ReadonlySet<string>): Record<string, string> {
+  if (registered.size === 0) return env
+  const filtered: Record<string, string> = {}
+  for (const [name, value] of Object.entries(env)) {
+    if (!registered.has(name)) filtered[name] = value
+  }
+  return filtered
 }
 
 /**
@@ -152,7 +169,8 @@ export function resolveClaudeProfile(
 export function buildClaudeLaunch(
   profile: CatalogProfile,
   base: Record<string, string | undefined>,
-  serverEnv: Record<string, string | undefined>
+  serverEnv: Record<string, string | undefined>,
+  registered: ReadonlySet<string>
 ): ClaudeLaunchConfiguration {
   // The provider's own token, read before the names are withheld (D3/D4).
   const credential = profile.authTokenEnv !== undefined
@@ -172,12 +190,31 @@ export function buildClaudeLaunch(
     // named credential (D2): the parser refuses credentialed executables, and
     // a catalog that bypassed the parser must not hand the key to a wrapper
     // that can send it anywhere. A wrapper that needs a key sets its own.
+    // The overlay skips registered names (rows 2/8): the branch composes no
+    // neutralization of its own, so a dropped key leaves a safe launch.
     return {
-      env: { ...base, ...profile.env },
+      env: { ...base, ...withoutRegistered(profile.env, registered) },
       executable: profile.executable,
       runtime: 'claude',
       ...(profile.model !== undefined ? { model: profile.model } : {}),
     }
+  }
+  // Correction B (provider-relay-setup): a branch that composes its own
+  // neutralization map refuses a registered name outright — composing it
+  // would deliver the name, and dropping the key would silently weaken the
+  // protection the branch exists to provide. The credentialed branch composes
+  // the controlled blanks, the route pins, and the credential blanks into
+  // settings.env; the named noncredentialed branch composes the controlled
+  // map alone. The token's own ANTHROPIC_AUTH_TOKEN key is the designed W2
+  // channel and never a collision (it is in neither list).
+  const controlledCollisions = PROFILE_CONTROLLED_ENV.filter(name => registered.has(name))
+  if (credential) {
+    const pinnedCollisions = ['ANTHROPIC_BASE_URL', ...TRANSPORT_PIN_ENV].filter(name => registered.has(name))
+    const blankCollisions = Object.keys(BLANK_OTHER_CREDENTIALS).filter(name => registered.has(name))
+    const collisions = [...new Set([...controlledCollisions, ...pinnedCollisions, ...blankCollisions])].sort()
+    if (collisions.length > 0) throw new RegisteredNameRefusal('credentialed', collisions)
+  } else if (controlledCollisions.length > 0) {
+    throw new RegisteredNameRefusal('named-profile', controlledCollisions)
   }
   const env = base
   const controlled: ChatProviderEnv = {}
