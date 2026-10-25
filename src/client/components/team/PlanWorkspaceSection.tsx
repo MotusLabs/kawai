@@ -156,7 +156,6 @@ export default function PlanWorkspaceSection({ teamPath, detail, sessions, conne
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [teamPath, planId, connected, connectionEpoch, documentKey, executionId, sendMessage])
-  /* __WORKSPACE_BODY__ */
   if (view === undefined) return null
   // A user act mirrors the store into the URL (store → URL only here, never
   // from pushes), so Back and Forward walk the workspace's own selections.
