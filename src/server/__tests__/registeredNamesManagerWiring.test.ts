@@ -82,6 +82,9 @@ describe('registered names through the real manager wiring', () => {
     // a correct withholding keeps them out of a launch.
     process.env.RELAY_TOKEN_ENV = 'relay-token-value'
     process.env.RELAY_BALANCE_ENV = 'relay-balance-value'
+    // Ambient from the start: a later catalog registration must still
+    // withhold it (the frozen-launch mutant delivers this value).
+    process.env.RELAY2_TOKEN_ENV = 'relay2-token-value'
     resetCodexExecutableCache()
   })
 
@@ -165,7 +168,6 @@ describe('registered names through the real manager wiring', () => {
         'relay-provider': relayProvider('RELAY_TOKEN_ENV'),
         'relay-2': relayProvider('RELAY2_TOKEN_ENV', 'm2'),
       })
-      process.env.RELAY2_TOKEN_ENV = 'relay2-token-value'
       const second = await spawnChild(manager, id, namesFile, 2, async () => {
         expect((await manager.send(id, 'second')).ok).toBe(true)
       })
@@ -219,9 +221,13 @@ describe('registered names through the real manager wiring', () => {
       // The driver seam observed and persisted the names (retained growth).
       expect([...readRetainedNames(db)]).toContain('RELAY_TOKEN_ENV')
 
-      // The entry disappears; the retained set keeps its names withheld at
-      // the respawn — the db-less mutant delivers them here.
-      writeProviders({})
+      // A name that registers only after the driver exists withholds at
+      // the respawn — spawnQuery re-resolves per spawn (freshness); the
+      // catalog keeps both entries here.
+      writeProviders({
+        'relay-provider': relayProvider('RELAY_TOKEN_ENV'),
+        'relay-2': relayProvider('RELAY2_TOKEN_ENV', 'm2'),
+      })
       handles[0]!.query.close()
       await flush()
       expect((await manager.send(id, 'second')).ok).toBe(true)
@@ -230,6 +236,12 @@ describe('registered names through the real manager wiring', () => {
       const secondEnv = handles[1]!.options.env ?? {}
       expect(secondEnv['RELAY_TOKEN_ENV']).toBeUndefined()
       expect(secondEnv['RELAY_BALANCE_ENV']).toBeUndefined()
+      expect(secondEnv['RELAY2_TOKEN_ENV']).toBeUndefined()
+
+      // Every entry then disappears: the retained set (the db the manager
+      // threads into the driver) keeps the names withheld — the db-less
+      // mutant delivers them after a restart.
+      writeProviders({})
 
       // A fresh manager on the same db (a restart) withholds too.
       const restarted: FakeHandle[] = []
