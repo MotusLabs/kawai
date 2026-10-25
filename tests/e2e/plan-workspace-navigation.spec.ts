@@ -10,7 +10,9 @@
 //    link and Forward restores the pick;
 // 5. a full-screen chat visit and the Team button return restore the same
 //    plan, version, and role;
-// 6. the legacy routes still parse; the divider resizes by keyboard; the
+// 6. a second plan never sees the first's expansion; returning restores it
+//    (retained state isolates by plan);
+// 7. the legacy routes still parse; the divider resizes by keyboard; the
 //    conversation column hides; the narrow navigation shows one pane, moves
 //    focus with the switch, and Back returns to the map.
 // Requires the fixture webServer (AGENTBOARD_CHAT_FIXTURE=1) on its own
@@ -37,7 +39,7 @@ async function createChat(page: Page, root: string, name: string, group: string)
 }
 
 /** Create a plan with two in-review revisions, as the lead agent would. */
-function seedPlanAsAgent(sessionId: string): string {
+function seedPlanAsAgent(sessionId: string, title = 'Navigation Wave'): string {
   const dbPath = process.env.AGENTBOARD_DB_PATH!
   if (!dbPath.startsWith(process.env.E2E_TMUX_TMPDIR!)) throw new Error('Refuse seeding a non-isolated database')
   execFileSync('bun', ['-e', `
@@ -47,7 +49,7 @@ function seedPlanAsAgent(sessionId: string): string {
     import { planHandlers } from './src/server/plans/planTools';
     import { StrategyStore } from './src/server/strategy/strategyStore';
     import { retryOnSqliteBusy } from './src/server/__tests__/sqliteBusyRetry';
-    const [file, sessionId] = JSON.parse(await Bun.stdin.text());
+    const [file, sessionId, title] = JSON.parse(await Bun.stdin.text());
     const sessions = initDatabase({ path: file });
     sessions.db.exec('PRAGMA busy_timeout = 5000');
     const service = new PlanService(new PlanStore(sessions.db), {
@@ -62,7 +64,7 @@ function seedPlanAsAgent(sessionId: string): string {
       ],
       roles: [{ group: 'devs', profiles: [] }], reviewGroup: 'devs',
     });
-    const planId = (await retryOnSqliteBusy(() => tools.plan_create({ title: 'Navigation Wave' }))).plan.id;
+    const planId = (await retryOnSqliteBusy(() => tools.plan_create({ title }))).plan.id;
     for (const goal of ['first', 'second']) {
       const stored = await tools.plan_get({ plan_id: planId });
       const draft = stored.drafts?.find(entry => entry.draftId === sessionId) ?? null;
@@ -76,7 +78,7 @@ function seedPlanAsAgent(sessionId: string): string {
     }
     sessions.close();
     console.log(planId);
-  `], { cwd: process.cwd(), input: JSON.stringify([dbPath, sessionId]), encoding: 'utf8' }).trim()
+  `], { cwd: process.cwd(), input: JSON.stringify([dbPath, sessionId, title]), encoding: 'utf8' }).trim()
 }
 
 const teamHash = (root: string, rest: string): string => `#/team/${encodeURIComponent(root)}/${rest}`
@@ -93,6 +95,10 @@ test('deep links, reload, Back/Forward, the full-screen return, and the pane con
     await page.goto('/')
     const lead = await createChat(page, root, 'Plan lead', 'leads')
     seedPlanAsAgent(lead)
+    // The twin exists before the list is ever subscribed: a direct database
+    // write does not re-push the plans snapshot, so seeding it mid-visit
+    // would never reach the open list.
+    seedPlanAsAgent(lead, 'Retention Twin')
     // Everything after `#/team/<key>/` in the hash: `plans/<id>[?query]`.
     const plansBase = 'plans'
 
@@ -160,7 +166,26 @@ test('deep links, reload, Back/Forward, the full-screen return, and the pane con
     expect(await hashNow(page)).toBe(teamHash(root, deepLink))
     await page.screenshot({ path: info.outputPath('workspace-returned.png') })
 
-    // 7. The legacy routes still parse: the Tasks tab opens by its URL.
+    // 7. Retained state isolates by plan: expand A's checklist, visit the
+    // second plan (whose own rows start collapsed), and return to A — its
+    // expansion is still shown.
+    await page.getByTestId('wbs-expand-plan-api').click()
+    await expect(page.getByTestId('wbs-expand-plan-api')).toHaveAttribute('aria-expanded', 'true')
+    await setHash(page, teamHash(root, plansBase))
+    await expect(page.getByTestId('plan-list')).toBeVisible()
+    await page.getByTestId('plan-list').getByRole('button', { name: /Retention Twin/ }).click()
+    await expect(page.getByTestId('plan-workspace')).toBeVisible()
+    await expect(page.getByTestId('wbs-row-plan-api')).toBeVisible()
+    await expect(page.getByTestId('wbs-expand-plan-api')).toHaveAttribute('aria-expanded', 'false')
+    await setHash(page, teamHash(root, plansBase))
+    await expect(page.getByTestId('plan-list')).toBeVisible()
+    await page.getByTestId('plan-list').getByRole('button', { name: /Navigation Wave/ }).click()
+    await expect(page.getByTestId('plan-workspace')).toBeVisible()
+    await expect(page.getByTestId('wbs-row-plan-api')).toBeVisible()
+    await expect(page.getByTestId('wbs-expand-plan-api')).toHaveAttribute('aria-expanded', 'true')
+    await page.screenshot({ path: info.outputPath('workspace-retention.png') })
+
+    // 8. The legacy routes still parse: the Tasks tab opens by its URL.
     await setHash(page, teamHash(root, 'tasks'))
     await expect(page.getByTestId('team-tasks')).toBeVisible()
 
@@ -169,7 +194,7 @@ test('deep links, reload, Back/Forward, the full-screen return, and the pane con
     await expect(page.getByTestId('plan-workspace-panes')).toBeVisible()
     await expect(page.getByTestId('plan-workspace-panes')).toHaveAttribute('data-layout', 'desktop')
 
-    // 8. The divider is a keyboard control with a bounded, labelled value.
+    // 9. The divider is a keyboard control with a bounded, labelled value.
     const divider = page.getByTestId('workspace-panes-divider')
     await expect(divider).toHaveAttribute('aria-valuenow', '45')
     await divider.focus()
@@ -178,13 +203,13 @@ test('deep links, reload, Back/Forward, the full-screen return, and the pane con
     await page.keyboard.press('End')
     await expect(divider).toHaveAttribute('aria-valuenow', '70')
 
-    // 9. The conversation column hides and comes back.
+    // 10. The conversation column hides and comes back.
     await page.getByTestId('workspace-conversation-toggle').click()
     await expect(page.getByTestId('workspace-pane-conversation')).toHaveCount(0)
     await page.getByTestId('workspace-conversation-toggle').click()
     await expect(page.getByTestId('workspace-pane-conversation')).toBeVisible()
 
-    // 10. A narrow host: one pane behind the explicit navigation, focus
+    // 11. A narrow host: one pane behind the explicit navigation, focus
     // moves with the switch, and Back returns to the map.
     await page.setViewportSize({ width: 800, height: 900 })
     const panes = page.getByTestId('plan-workspace-panes')
