@@ -157,13 +157,17 @@ redaction alone SHALL NOT be trusted to remove a known secret.
 - **THEN** the reported message carries no credential value
 
 ### Requirement: Failure classes are distinguished with their evidence
-Failed relay requests SHALL be classified by one ordered, total rule list:
-the existing limit predicate first, then one disjoint class for every
-non-limit failure — missing credential, gateway authentication failure,
-virtual-key restriction, model-catalog failure, network failure, timeout,
-relay error, header configuration error, or evidence-qualified unknown.
-Only a documented structured error type SHALL name an auth class; prose is
-never evidence; unmatched evidence SHALL read as the unknown.
+Failed requests SHALL classify through one ordered, total rule list: the
+existing limit predicate first, then the resolver's required-credential
+refusal, then one disjoint class per non-limit failure
+— gateway authentication, virtual-key restriction, model-catalog failure,
+network failure, timeout, relay error, header configuration error, or the
+evidence-qualified unknown. Only a documented structured error type names
+an auth class; prose is never evidence; unmatched evidence reads unknown.
+
+#### Scenario: A missing declared token refuses despite other credentials
+- **WHEN** a credentialed profile's declared token variable resolves nothing while a bound header variable and a host login resolve
+- **THEN** the class is missing credential with the production refusal, decided before any request outcome
 
 #### Scenario: A documented restriction type reads as restriction
 - **WHEN** the model request returns 403 without a limit class and its body carries the relay's documented virtual-key type

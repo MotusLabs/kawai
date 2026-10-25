@@ -46,8 +46,12 @@ secret source never reaches a launch under its own name.
 - **THEN** the gate, injection, and provider pulls see the store's value, and the listing marks the store as overriding
 
 #### Scenario: A launch-env entry is delivered unchanged
-- **WHEN** the store holds a launch-env entry for a variable
+- **WHEN** the store holds a launch-env entry for a variable nothing registers
 - **THEN** the launch receives that value exactly as the legacy Settings map delivered it, and the listing shows it as a launch-env entry
+
+#### Scenario: A seed-only sibling key survives
+- **WHEN** the chat-env seed holds two variables and the store holds a launch-env entry for only one of them
+- **THEN** delivery composes per variable — the store's value for that variable, the seed's value for the other
 
 #### Scenario: A secret source never rides the launch environment
 - **WHEN** the store holds a secret source for a variable no binding uses
@@ -84,10 +88,12 @@ listing. No credential value SHALL be written to SQLite again.
 
 ### Requirement: Registered secret names stay withheld
 Every credential variable named at any catalog layer in any state, every
-header variable, and every secret-source store key is registered; removing
-a provider entry, disabling an id, or clearing a binding SHALL NOT stop
-withholding its names. The retained names persist as names only. Launch-env
-entries are not withheld.
+header variable, every secret-source store key, and every retained name is
+registered; removal, disabling, or clearing SHALL NOT stop withholding.
+Retained names persist as names only. A launch-env entry whose name is
+registered SHALL NOT be delivered under its own name: it stays inert and
+the collision is reported naming the variable; unregistered launch-env
+entries are delivered unchanged.
 
 #### Scenario: Removing a provider keeps its names withheld
 - **WHEN** an operator removes a provider entry that named a credential variable
@@ -96,6 +102,18 @@ entries are not withheld.
 #### Scenario: A disabled entry's variables stay withheld
 - **WHEN** a user-level entry is disabled
 - **THEN** its credential and header variables remain withheld from every launch
+
+#### Scenario: An ambient route survives a Default launch
+- **WHEN** nothing registers the base-URL or proxy variable a Default or wrapper launch would inherit
+- **THEN** the launch keeps those ambient values exactly as before — they are not in the registered set
+
+#### Scenario: A launch-env entry colliding with a registered name stays inert
+- **WHEN** a launch-env entry's name is a registered credential name (a catalog binding or a retained name)
+- **THEN** no launch receives that variable under its own name, and the listing reports the collision naming the variable and the supported credential setting
+
+#### Scenario: Reclassification does not end withholding
+- **WHEN** a secret-source key is reclassified as a launch-env entry while its name stays registered
+- **THEN** the variable remains withheld from launches while the name is registered
 
 ### Requirement: Store changes apply at the next launch
 Importing, replacing, clearing, or reclassifying a store entry SHALL take

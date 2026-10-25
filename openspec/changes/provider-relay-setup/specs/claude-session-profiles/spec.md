@@ -42,17 +42,21 @@ follow the install mode.
 - **THEN** the mounted entries alone are offered for those ids, exactly as the previous replace-the-defaults rule produced
 
 ### Requirement: Named profiles configure independent provider sessions
-Each named profile SHALL apply its predefined environment configuration to
-its agent session without changing the backend environment or other
-sessions. The session's environment SHALL be the backend environment merged
-with the effective global provider overrides — the credential store's
-launch-env entries when present, else the chat-env seed — with profile
-settings taking precedence over conflicting Claude settings for the
-profile-controlled variables.
+Each named profile SHALL apply its predefined configuration to its agent
+session without changing the backend environment or other sessions. The
+session's environment SHALL be the backend environment merged per variable
+with the effective global provider overrides — each variable takes the
+credential store's launch-env entry when one exists, otherwise its seed
+value — with profile settings taking precedence over conflicting Claude
+settings for the profile-controlled variables.
 
 #### Scenario: Effective global provider overrides
 - **WHEN** the system assembles a session's environment
-- **THEN** the effective global provider overrides are the credential store's launch-env entries when present — imported once from the persisted Settings map at upgrade — otherwise KAWAI_CHAT_ENV, merged over the backend environment
+- **THEN** each variable takes the credential store's launch-env entry when one exists — imported once from the persisted Settings map at upgrade — otherwise its KAWAI_CHAT_ENV value, merged per variable over the backend environment
+
+#### Scenario: A seed-only sibling key survives
+- **WHEN** KAWAI_CHAT_ENV holds two variables and the store holds a launch-env entry for only one of them
+- **THEN** the session carries the store's value for that variable and the seed's value for the other — composition is per variable, never wholesale
 
 #### Scenario: Default and named profiles over the merged environment
 - **WHEN** Default and a named profile session start from the merged environment
@@ -85,12 +89,13 @@ profile-controlled variables.
 ## ADDED Requirements
 
 ### Requirement: The install mode decides how the shipped tier composes
-Catalog assembly SHALL follow a durable, non-secret install-mode stamp:
-fresh installs merge operator files over the shipped tier; existing
-installs without a user-level catalog file merge over the shipped tier plus
-the retained-defaults layer; existing installs with user-level files keep
-whole-file replace until the operator opts into merge after previewing the
-effective-catalog difference. `default` cannot be disabled.
+Catalog assembly SHALL follow a durable, non-secret install-state record —
+mode (merge/replace) and retained layer (present or retired) — recorded
+once, changed only by the operator: fresh installs
+merge over the shipped tier alone; existing installs without user-level
+catalog files merge over shipped plus the retained layer; existing
+installs with user files keep whole-file replace until the operator opts
+into merge after previewing the difference. `default` cannot be disabled.
 
 #### Scenario: A fresh install merges over the shipped tier
 - **WHEN** a fresh instance defines a user-level entry overlaying one field of a shipped id
@@ -107,6 +112,18 @@ effective-catalog difference. `default` cannot be disabled.
 #### Scenario: The retained layer serves removed ids
 - **WHEN** an upgraded install without user-level files resolves a removed shipped id
 - **THEN** the retained default serves it with its exact shipped facts until it is retired
+
+#### Scenario: A fresh install never acquires the retained layer
+- **WHEN** a fresh install restarts with no user-level catalog file
+- **THEN** no removed entry is served — the fresh state persists across restarts and crashes
+
+#### Scenario: An upgraded install keeps the retained layer across restarts
+- **WHEN** an install whose record holds a retained-defaults layer restarts
+- **THEN** the layer still serves its entries with their exact shipped facts
+
+#### Scenario: Retire stays retired
+- **WHEN** an install whose retained layer was retired restarts or crashes
+- **THEN** the retirement persists and no removed entry is re-acquired
 
 #### Scenario: The default profile cannot be disabled
 - **WHEN** a catalog entry sets `enabled: false` on `default`
@@ -197,14 +214,23 @@ are pinned.
 
 ### Requirement: The shipped catalog carries Anthropic and OpenAI only
 The shipped defaults SHALL define the `claude` provider (Default, Claude
-Opus, Claude Sonnet, Claude Haiku) and one Codex entry `openai` (label
-"OpenAI (Codex)", runtime codex, default Codex home, no pinned model). No
-other shipped provider or profile SHALL exist; the removed entries ship as
-setup templates preserving their ids.
+Opus, Claude Sonnet, Claude Haiku) and exactly the Codex entries a tracked
+group file names — at the trim, `openai` (label "OpenAI (Codex)", runtime
+codex, default Codex home, no pinned model) plus `codex-sol` and
+`codex-luna`. No other shipped provider SHALL exist; the removed entries
+ship as setup templates preserving their ids.
 
-#### Scenario: A fresh instance resolves two providers
+#### Scenario: A fresh instance resolves the shipped set
 - **WHEN** a fresh instance with no user-level catalog resolves profiles
-- **THEN** only the Claude provider and the OpenAI Codex entry are offered
+- **THEN** the Claude provider and the tracked Codex entries (`openai`, `codex-sol`, `codex-luna`) are offered, and nothing else
+
+#### Scenario: A tracked relay id warns on a fresh install
+- **WHEN** a tracked group names a removed relay id the fresh catalog does not define
+- **THEN** the group loads with the unknown-id warning, a declared list of only such ids waits without a default fallback, and the matching template is offered
+
+#### Scenario: A retained context resolves every tracked worker
+- **WHEN** an upgraded install without user-level files resolves every profile id a tracked group file names
+- **THEN** each id resolves from the shipped catalog or the retained-defaults layer, so a name-level typo still fails the guard
 
 #### Scenario: Templates carry the removed ids
 - **WHEN** the operator lists the setup templates

@@ -186,7 +186,8 @@ persists its values in `app_settings`, and every database backup copies them.
   bullets.
 - **No schema migration:** stored profile ids are unchanged; the one-time
   Settings-map-to-store move is a data move recorded by a stamp (plus the
-  install-mode stamp), not a schema change. The retained-defaults layer
+  durable install-state record), not a schema change. The retained-defaults
+  layer
   keeps existing installs working without operator action; the degrade path
   (unknown stored profiles stay visible and blocked, naming the template)
   applies after a retire or for ids with no template.

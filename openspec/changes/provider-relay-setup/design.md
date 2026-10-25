@@ -60,8 +60,11 @@ reads stay cheap. Concurrent saves serialize in-process; a failed save leaves
 the previous file untouched and is reported. **Threat boundary, stated
 honestly:** mode 0600 protects against other users on the host — it is not
 isolation from tools running as the same user, which can read the file.
-What keeps values from agents is that no launch receives them except inside
-the two composed variables (D2), and no prompt, tool allowlist, or read API
+What keeps values from agents is that no launch receives a **secret
+source** except inside the two composed variables (D2); launch-env entries
+are delivered unchanged — migrated legacy values included (table W's W6/W9,
+the one stated exception to the composed-forms rule, possibly secret and
+never called non-secret) — and no prompt, tool allowlist, or read API
 exposes the store's contents or path semantics beyond presence and source.
 
 **Two kinds of entries (L-B).** The store holds two kinds, both write-only
@@ -72,8 +75,11 @@ on every read surface (name, presence, source — never a value or prefix):
   provider's `authTokenEnv`/`balanceKeyEnv`, or a `headers` binding.
 - **Launch-env entries** — delivered to launches **unchanged**, exactly as
   the legacy Settings map is delivered today: composed per variable into
-  the launch environment. A launch-env entry is not a secret and is not
-  withheld.
+  the launch environment. A launch-env entry is not a withheld kind; the
+  one thing that stops its delivery is a **registered name** (table W7/W8):
+  a launch-env entry whose name a catalog binding, a secret source, or the
+  retained-names set already registers stays inert, and the collision is
+  reported — registration follows names, not kinds.
 
 The migration imports every legacy Settings map entry as a **launch-env
 entry**, so post-upgrade delivery is behavior-identical to today's; the
@@ -125,10 +131,13 @@ environment (unchanged rule for Settings and catalogs).
 **Upgrade migration (L-B): file first, then SQLite.** At the first startup
 after this change, when the Settings provider-env map (`app_settings`) is
 non-empty: (1) each map entry is written once into the store file as a
-launch-env entry — the store file is written durably (atomic rename +
-fsync) **before** any SQLite write; (2) then, in one SQLite transaction,
-the map row is deleted and the migration stamp is committed. The stamp's
-presence never re-runs the migration.
+launch-env entry — an entry whose name the registry already holds (a
+catalog binding or a retained name) is imported **inert** per table W7,
+the collision listed in the source listing naming the variable and the
+supported credential setting — the store file is written durably (atomic
+rename + fsync) **before** any SQLite write; (2) then, in one SQLite
+transaction, the map row is deleted and the migration stamp is committed.
+The stamp's presence never re-runs the migration.
 
 **Crash, collision, and restart table** (each row is the state a restart
 finds, and what it does):
@@ -209,30 +218,42 @@ settings layer never carries a token or header value**; (d) **an explicitly
 filtered environment on every branch** — no launch branch inherits the
 server process environment raw: every Claude and Codex launch receives an
 explicitly filtered environment (D5's composition table). The withheld set
-on every branch is every name Kawai's configuration registers as a
-credential source: every catalog binding name (`authTokenEnv`,
-`balanceKeyEnv`, every header variable) at any layer in any state — enabled,
-disabled, retained default, or template — every secret-source store key,
-every retained name, and the controlled/transport-pin variables Kawai names
-itself. An ambient credential whose name nothing registers (a bare
-`ANTHROPIC_AUTH_TOKEN` in the server env with no catalog entry naming it)
-passes the filter exactly as it does today — stated, not hidden (D5).
+on every branch is the registered-name set of table W: every catalog
+binding name (`authTokenEnv`, `balanceKeyEnv`, every header variable) at
+any layer in any state — enabled, disabled, retained default, or template —
+every secret-source store key, and every retained name. The controlled/
+transport-pin variables are **not** in that set: their deletion and pinning
+are branch-specific operations the composition table applies (named-profile
+deletion, credentialed/header transport pins, Codex's trusted-tier facts),
+so a Default or wrapper launch keeps an ambient `ANTHROPIC_BASE_URL` or
+`HTTPS_PROXY` exactly as at the base. An ambient credential whose name
+nothing registers (a bare `ANTHROPIC_AUTH_TOKEN` in the server env with no
+catalog entry naming it) passes the filter exactly as it does today —
+stated, not hidden (D5, W1).
 What a Bash child
 actually sees on the supported CLI is established by the sentinel-only
 fixture test (D12); until that evidence exists this design claims **parity
 of mechanism** with the token path, not parity of measured exposure.
 
-**Secret-name registry.** Withholding can no longer derive only from the
-resolved catalog (`withheldCredentialNames` reads resolved entries, so
-removing or disabling an entry un-hides its variables — `chatProviderEnv.ts:
-95–112`). The withheld set becomes the union of: every credential variable
-named at **any** catalog layer (parsed before `enabled` filtering, so a
-disabled entry's names stay withheld), every header variable, every store
+**Secret-name registry (the one registered-name set, table W).**
+Withholding can no longer derive only from the resolved catalog
+(`withheldCredentialNames` reads resolved entries, so removing or disabling
+an entry un-hides its variables — `chatProviderEnv.ts:95–112`). The
+registered set is the union of: every credential variable named at **any**
+catalog layer (parsed before `enabled` filtering, so a disabled entry's
+names stay withheld), every header variable, every **secret-source** store
 key, and the **retained names** — every name ever registered, persisted in
 an `app_settings` key (names only, never values; names are not secrets).
-Removing a provider entry, disabling an id, or clearing a header binding
-never stops withholding its names; a remove-provider or remove-binding
-oracle test pins this (P7).
+Registration follows **names**, not kinds: a launch-env store entry is
+delivered unchanged (W6) unless its name is in this set, in which case save,
+import, and the migration keep it inert and report the collision, naming
+the variable and the supported credential setting (W7); reclassifying an
+entry between kinds never ends withholding while the name stays registered
+(W8). A migrated legacy credential name that nothing registers is the one
+delivery exception (W9): it keeps its pre-upgrade delivery and is stated as
+possibly secret, never non-secret. Removing a provider entry, disabling an
+id, or clearing a header binding never stops withholding its names; a
+remove-provider or remove-binding oracle test pins this (P7).
 
 **Alternatives:** values inline in catalog files — refused forever
 (credential values never enter files); per-model headers — a header binds to
@@ -242,25 +263,34 @@ rejected `ANTHROPIC_CUSTOM_HEADERS` path that started this.
 ## D3 — Catalog assembly: install modes; merge by construction; `default` untouchable
 
 **Install modes (L-A).** How the shipped tier composes with operator files
-follows a durable, non-secret **install-mode stamp** (an `app_settings`
-key), recorded once, idempotent across restarts and crashes, and changed
-only by the operator:
+follows a durable, non-secret **install-state record** (an `app_settings`
+key, tables S/ST/SR): `{ mode: 'merge' | 'replace', retained: 'none' |
+'present' | 'retired' }`, written once from stable install facts, idempotent
+across restarts and crashes, and changed only by the operator. The record —
+not the file layout — is what restarts read, so fresh and retained installs
+stay distinct after their first start:
 
-- **Fresh install** (no database before this version): the shipped catalog
-  is Anthropic + OpenAI only (D4), and user/project files **merge** over it
-  field by field. No mode choice exists; the stamp records `merge`.
-- **Existing install, no user-level catalog file at upgrade**: the trimmed
-  shipped set applies plus the **retained-defaults layer** (D4 — the removed
-  entries stay at the shipped tier with their exact facts). User/project
-  files merge over shipped+retained, so every pre-upgrade reference keeps
-  resolving exactly as before. Stamp: `merge`.
-- **Existing install with a user-level catalog file at upgrade**:
-  **whole-file replace semantics are kept** — the user files stand alone,
-  no shipped or retained entries sit beneath them, exactly today's
-  behavior — until the operator switches to merge from the source listing
-  **after previewing the effective-catalog difference** (D7). Stamp:
-  `replace` until the switch. Absence is preserved exactly (P3): an
-  omitted optional model field or env key stays absent under replace.
+- **Fresh install** (S1, `{merge, none}`): the shipped catalog is Anthropic +
+  OpenAI only (D4), and user/project files **merge** over it field by field.
+  No mode choice exists. The bootstrap records the durable fresh origin
+  fact (tables S/ST/SR) and the state commits at the same startup; a crash
+  in between recovers as fresh (SR5) — no fresh install ever acquires the
+  retained layer.
+- **Existing install, no user-level catalog file at upgrade** (S2,
+  `{merge, present}`): the trimmed shipped set applies plus the
+  **retained-defaults layer** (D4 — the removed entries stay at the shipped
+  tier with their exact facts). User/project files merge over
+  shipped+retained, so every pre-upgrade reference keeps resolving exactly
+  as before. Restarts keep the layer (SR2); retiring it persists `retired`
+  (ST2/SR3).
+- **Existing install with a user-level catalog file at upgrade** (S3,
+  `{replace, none}`): **whole-file replace semantics are kept** — the user
+  files stand alone, no shipped or retained entries sit beneath them,
+  exactly today's behavior — until the operator switches to merge from the
+  source listing **after previewing the effective-catalog difference**
+  (D7; ST1 persists the switch and never grants retained entries). Absence
+  is preserved exactly (P3): an omitted optional model field or env key
+  stays absent under replace.
 
 **Merge semantics** (fresh and opted-in installs, and project files in
 every mode). Same-id entries merge per field as they already merge across
@@ -287,15 +317,20 @@ the project tier sits below the user tier's explicit removal. A user-level
 entry for the same id **without** `enabled: false` replaces the tombstone.
 Tombstone suppression covers a named id's synthesis paths; **`default` is
 never tombstonable** — the resolved catalog always includes `default` (main
-spec), so `enabled: false` on the `default` profile or its provider is
-refused at parse naming the file, and the implicit-default synthesis
+spec), so `enabled: false` on the `default` profile is refused at parse
+naming the file, and so is `enabled: false` on a provider that carries it
+(the shipped `claude` provider holds the `default` profile — removing the
+provider would remove `default`; the layering table's tombstone fixtures
+are non-default holders, L2/L5), and the implicit-default synthesis
 (`catalogMerge.ts` `finish()`) is never suppressed. `enabled` below the
 user level is rejected whole, naming the file. A model id re-homed under a
 *different* provider id is a different id and resolves normally unless that
 id is itself tombstoned.
 
 **Fixture honesty for the layering table.** After D4 the only shipped
-provider is `claude`; layering rows use ids that remain shipped (`claude`,
+provider entry in `providers.default.json` is `claude`, beside the tracked
+Codex entries in `profiles.default.json` (`openai`, `codex-sol`,
+`codex-luna`; table G); layering rows use ids that remain shipped (`claude`,
 `openai`), retained defaults (`mimo`, `zai`, … on upgraded installs), or
 explicitly labeled synthetic fixtures (a user-defined `relay` id). A `zai`
 fixture on a fresh install is labeled synthetic — `zai` ships only in
@@ -318,12 +353,15 @@ refusal is the documented runtime-origin behavior, tested as its own case.
 
 **Choice.** `config/providers.default.json` keeps only the `claude` provider
 (Default, Opus, Sonnet, Haiku — host claude.ai login / global credentials).
-`config/profiles.default.json` is replaced by one entry, `openai`:
-`runtime: "codex"`, label "OpenAI (Codex)", no pinned model (the Codex
-app-server default), default Codex home — the shipped Codex path exists only
-through user catalogs today, and this gives a fresh instance a working
-non-Claude provider without credentials in kawai's control. The removed
-entries — `zai` (glm, glm-flash), `minimax`, `mimo`, `kimi`, `openrouter`
+`config/profiles.default.json` keeps exactly the Codex entries a tracked
+group file names (table G, L-G): `openai` (`runtime: "codex"`, label
+"OpenAI (Codex)", no pinned model — the Codex app-server default, default
+Codex home) plus `codex-sol` and `codex-luna`, the shipped Codex profiles
+task-b38ad618 adds and tracked dev groups name as workers; composition with
+that task is G8 (whichever change lands second rebases onto the other). A
+fresh instance keeps working non-Claude providers without credentials in
+kawai's control. The removed entries — `zai` (glm, glm-flash), `minimax`,
+`mimo`, `kimi`, `openrouter`
 (openrouter-opus/sonnet/haiku/deepseek-flash/minimax-flash) — ship verbatim
 in a new `config/provider-templates.json`, each with the credential variables
 to import (`ZAI_API_KEY`, `MINIMAX_API_KEY`, `MIMO_API_KEY`, `KIMI_API_KEY`,
@@ -350,7 +388,9 @@ already were**:
   default"** and offers **Retire** beside it, enabled after the operator
   previews the effective-catalog difference (which ids and fields go away,
   which stored sessions and groups would degrade). Retiring removes the
-  entries; from then on the unknown-profile degrade and the no-worker wait
+  entries and persists `retained: 'retired'` in the install-state record
+  (ST2/SR3) — it stays retired across restarts and crashes; from then on
+  the unknown-profile degrade and the no-worker wait
   (below) are the honest signals, and the templates restore ids on demand.
   Fresh installs have no retained layer — it exists only where the previous
   shipped entries were actually served.
@@ -359,8 +399,9 @@ already were**:
   deliberately curated catalog.
 - **Fresh installs**: Anthropic + OpenAI only; templates one click away.
 
-The install-mode stamp (D3) records which mode applies and nothing else;
-no discovery pass runs at startup.
+The install-state record (D3, tables S/ST/SR) persists the mode and the
+retained layer's presence or retirement — nothing secret, nothing else; no
+discovery pass runs at startup.
 
 **No default fallback (L-A), scoped to declared lists.** A group that
 **declares** a worker list (`workers`/`profiles`/`profile`, bare or
@@ -386,7 +427,9 @@ with no template (a hand-typed id never existed shipped) and for ids whose
 template was not adopted after a retire.
 
 **Upgrade-compatibility tests (required by the direction).** (a) A fresh
-instance resolves exactly Anthropic + OpenAI. (b) An upgraded install
+instance resolves exactly the shipped catalog — the `claude` provider and
+the tracked Codex entries (`openai`, `codex-sol`, `codex-luna`; G1/G2).
+(b) An upgraded install
 without user files keeps `mimo`, `glm-flash`, and `openrouter-*` resolving
 through the retained layer — a stored session resumes, the group's workers
 spawn, the listing marks "retained default". (c) An upgraded install with a
@@ -397,7 +440,13 @@ or waits (declared worker list) with the named reasons, and adopting its
 template restores it. (e) Partial project overlays of a retained id keep
 applying before and after retire (before: retained facts beneath; after:
 the overlay alone, or nothing), and an omitted optional field under a
-post-retire merge behaves per P3's merge half.
+post-retire merge behaves per P3's merge half. (f) The tracked-worker guard
+(G7), revised by name in the trim PR (`shippedCatalog.test.ts` › "the
+tracked group files name profile ids the shipped catalog resolves"):
+resolves each named id against shipped ∪ the retained-defaults inventory so
+a typo still fails — a fresh-context scenario (Claude and Codex ids resolve,
+others warn as unknown ids) and a retained-context scenario (every tracked
+id resolves).
 
 **Alternatives:** keep the entries but hide them — the picker stays noisy and
 the trim's purpose (a fresh instance shows only what works out of the box)
@@ -426,10 +475,13 @@ setup edits, when the two differ).
 inherits the server process environment raw: every launch receives an
 explicitly filtered environment — today's default resolve already does
 (`ClaudeProfiles.ts:124–130, 153–155`) — and the withheld set on **every**
-branch is the registry of D2 (d): catalog binding names in any layer and
-state, secret-source store keys, retained names, and the controlled/
-transport-pin variables. Ambient credentials pass only when nothing
-registers their name. What each branch receives:
+branch is the registered-name set of table W (D2's registry): catalog
+binding names in any layer and state, secret-source store keys, retained
+names. The controlled-variable deletions and transport pins are branch
+operations the table applies below, not members of that set — a Default or
+wrapper launch keeps an ambient base URL or proxy as at the base (W1).
+Ambient credentials pass only when nothing registers their name. What each
+branch receives:
 
 | Branch | Environment the CLI process receives | Composed credentials in it | Notes |
 | --- | --- | --- | --- |
@@ -441,8 +493,10 @@ registers their name. What each branch receives:
 
 Direct legacy auth (an ambient `ANTHROPIC_AUTH_TOKEN` or the claude.ai
 login in the server env) rides the filtered env on the Default branch
-exactly as today; the filter removes it only once a catalog binding or
-store key registers that name, and the source listing shows which source
+exactly as today; the filter removes it only once a catalog binding, a
+secret-source store key, or a retained name registers that name
+(W2–W5 — an unregistered launch-env entry delivers instead, W6), and the
+source listing shows which source
 wins (D1's resolution order).
 
 Unreachable combination: a project file setting `authTokenEnv`,
@@ -476,9 +530,9 @@ reason — and, for rejections, the supported setting to use instead
 to credential variables with "headers" in a user-level providers.json, and
 import its value in Settings → Credentials`). Credential sources are listed
 per variable of the composed environment (D1's three sources), each with its
-presence and origin. Entries adopted at upgrade (D4) are marked **"adopted
-at upgrade"**, so an operator can see why an id they never configured is
-offered. The New Session dialog and Settings render the listing prominently
+presence and origin. Entries served by the retained-defaults layer (D4)
+are marked **"retained default"**, so an operator can see why an id they
+never configured is offered. The New Session dialog and Settings render the listing prominently
 (a visible panel, not a console log): catalog errors already block nothing
 today, which is exactly why they must be loud.
 
@@ -580,11 +634,20 @@ never a diagnostic — the diagnostics layer applies only to failures the
 predicate does not treat as limits, which makes "diagnostics never change
 limit handling" true by construction.
 
-**Rule 1 — credential resolution.** No token variable, no header variable,
-and no other credential source resolves → `missing-credential` (creation
-refusal, today's message). A host-login profile (no credential fields at
-all) is tested with its login and its row notes that only the login could be
-exercised.
+**Rule 1 — the production resolver's required-credential gate (B6).** The
+class is what the resolver session creation uses decides, not a separate
+global-OR: a profile the resolver refuses for a **missing required
+credential** — a credentialed profile whose declared `authTokenEnv` does
+not resolve through the composed environment (D8's gate), whatever else
+resolves beside it: an ambient host login or a bound header value never
+substitutes for the declared token — maps to `missing-credential` with
+today's refusal message; on the test path it is the **preflight refusal**
+outcome (nothing spawns). A **headers-only** profile (no `authTokenEnv`)
+has no token gate; a **host-login** profile (no credential fields at all)
+is tested with its login and its row notes that only the login could be
+exercised. Counterexample pinned in the table: declared token missing while
+a bound header resolves and a host login exists is still
+`missing-credential` — the other credentials do not rescue the gate.
 
 **Rule 2 — the request outcome decides; only documented structured evidence
 names an auth class.** A model list result **never proves or disproves
@@ -602,6 +665,7 @@ consults the list only as a **note** beside the class.
 
 | Request outcome | Structured evidence | Class | Evidence shown |
 | --- | --- | --- | --- |
+| preflight refusal — the resolver refuses the required credential (declared token missing, even with a resolving header and a host login) | — | `missing-credential` | the resolver's refusal, naming the variable |
 | ok (model reply) | — | `success` | list unavailable → note "catalog unverifiable"; list ok but wire ID absent → note "the provider's list lacks the model ID" (never a failure) |
 | timeout (bounded) | — | `timeout` | the bound that fired |
 | connect / TLS / DNS error | — | `network-failure` | the transport error text (redacted) |
@@ -730,9 +794,10 @@ assigns each to a task.
    mechanism, not measured exposure.
 2. **Credential-store IO** (D1): atomic write (temp + fsync + rename),
    symlink refusal, permission pin, concurrent-save serialization, and the
-   crash-safe migration (stamp recorded in the same transaction as the
-   move, retried on a later start; a restored pre-upgrade backup re-runs
-   it).
+   crash-safe migration per D1's table — the durable store-file write lands
+   **before** the one SQLite transaction that deletes the map row and
+   commits the stamp (the file write is never transactional with SQLite);
+   a restored pre-upgrade backup re-runs it.
 3. **Connection-test lifecycle** (D8): end-to-end deadline, process-group
    kill and reap on every exit path, transcript-persistence disable,
    bounded output, and redaction-before-sink with split-chunk safety
@@ -795,10 +860,10 @@ runs as a table-driven test next to the code it covers.
 | # | Id | User-level entry | Project entry | Resolved |
 | --- | --- | --- | --- | --- |
 | L1 | `claude` (shipped, non-credentialed) | none | none | present, shipped settings |
-| L2 | `claude` | `enabled: false` | * | absent — trusted tombstone |
+| L2 | `zai` (retained default on an upgraded install — a non-default holder; D3 refuses disabling any provider carrying `default`) | `enabled: false` | * | absent, with every model key resolving to it (`glm`, `glm-flash`) — trusted tombstone |
 | L3 | `claude` | overrides base URL | none | present, user base URL, shipped siblings intact |
 | L4 | `claude` | none | overrides base URL | present, project base URL for that project path — **non-credentialed ids only**; a credential-bearing (incl. headers-only) id rejects the project file whole instead, per D3 |
-| L5 | `claude` | `enabled: false` | re-defines `claude` (no `enabled` key) | still absent for that project path — the tombstone suppresses nearer tiers; a project file can neither set `enabled` (rejected whole) nor resurrect the id |
+| L5 | `zai` (upgraded install, as L2) | `enabled: false` | re-defines `zai` (no `enabled` key) | still absent for that project path — the tombstone suppresses nearer tiers; a project file can neither set `enabled` (rejected whole) nor resurrect the id |
 | L6 | none (new id `relay`) | defines `relay` | none | present as user provider |
 | L7 | `claude` | defines `claude` complete (non-runtime fields) | none | replace-mode install: identical resolved settings to today (P3's replace half); after an opt-in to merge: identical for complete copies; omitted optional fields inherit per the merge rules the opt-in preview showed (P3's merge half); runtime-origin placements excluded and covered by their own runtime-origin test (D3) |
 | L8 | `claude` | sets only `headers` | none | `claude` gains headers; base URL, models, env inherited (fixture synthetic: `claude` plus headers makes it headers-only credentialed — requires a trusted base URL in the entry) |
@@ -819,18 +884,24 @@ store key, and every retained name (persisted names-only, never removed).
 Not in the set: launch-env store entries as such, the controlled/
 transport-pin variables (branch operations, not secrets — the composition
 table applies them per branch), and ambient names nothing registers.
+**Stage:** this table decides the registered-name **filter, which runs
+before the launch branch**; D5's composition table then applies each
+branch's own operations to what passed. A `balanceKeyEnv` name is
+registered like every binding name, but its only channel is the
+**server-side usage pull** — no launch receives it at all, through no
+binding.
 
-| W# | Name registered? | Store entry kind | Launch receives it under its own name | Where it reaches a launch | Listing shows |
+| W# | Name registered? | Store entry kind | Passes the pre-branch filter? | Where it reaches a launch | Listing shows |
 | --- | --- | --- | --- | --- | --- |
-| W1 | no (ambient; nothing registers it) | — | yes — every branch, exactly as today; Default and wrapper keep an ambient base URL or proxy | as itself | source: process env / seed |
-| W2 | yes — catalog binding, any entry state | — | no | only through a binding (token / composed headers) | registered name |
+| W1 | no (ambient; nothing registers it) | — | yes — on every branch; the branch's own operations then apply (Default/wrapper keep it unchanged; a named-profile branch still deletes controlled variables the profile does not set; Codex composes its own env) | per D5's table — for Default/wrapper, unchanged ambient base URL or proxy, as today | source: process env / seed |
+| W2 | yes — catalog binding, any entry state | — | no (`balanceKeyEnv`: its channel is the server-side usage pull, never a launch) | only through a binding (token / composed headers) | registered name |
 | W3 | yes — secret-source store key | secret source | no | only through a binding | kind: secret source |
 | W4 | yes — header variable, any state | — | no | only inside composed `ANTHROPIC_CUSTOM_HEADERS` | registered name |
 | W5 | yes — retained name | — | no | only through a binding | registered name |
-| W6 | no | launch-env | yes, unchanged (legacy parity) | as itself | kind: launch-env |
+| W6 | no | launch-env | yes — delivered through the branch's composition, like W1 | as itself (branch operations as W1) | kind: launch-env |
 | W7 | yes | launch-env (migrated or saved) | **no** — registered-name withholding wins over delivery (L-H); save/import/migration keep it inert | — | collision, naming the variable and the supported credential setting |
 | W8 | yes — name stayed registered through reclassification | launch-env (was a secret source) | no, while the name stays registered | — | collision, naming the variable |
-| W9 | no | launch-env migrated from a legacy credential name (e.g. the Settings `ANTHROPIC_API_KEY`) | yes — the one legacy exception to "only composed token/header forms reach a launch"; possibly secret, never called non-secret | as itself (pre-upgrade delivery kept) | kind: launch-env (legacy) |
+| W9 | no | launch-env migrated from a legacy credential name (e.g. the Settings `ANTHROPIC_API_KEY`) | yes — the one legacy exception to "only composed token/header forms reach a launch"; possibly secret, never called non-secret | as itself, through the branch's composition (pre-upgrade delivery kept) | kind: launch-env (legacy) |
 
 Unreachable rows (with reasons): (i) a launch-env entry **delivered** while
 its name is registered — W7/W8 withhold it; every write path (save, import,
@@ -856,17 +927,21 @@ One durable, non-secret record (an `app_settings` key) holds the install
 state: `{ mode: 'merge' | 'replace', retained: 'none' | 'present' | 'retired' }`.
 It is the single source the catalog assembly reads, written once from
 stable install facts, changed only by operator transitions, and never
-re-derived from file absence. A fresh database and its state record are
-created in the same startup; a crash before either lands leaves nothing a
-session can resolve, so the startup re-runs the pair.
+re-derived from file absence. **Creation is not atomic with the database**:
+the database file, the schema, and the state record commit at separate
+instants of the same startup, so recovery reads a **durable origin fact**
+the bootstrap itself records — the baseline (version 1) writes whether it
+created the schema from an empty database file (`origin: 'fresh'`), stamped
+with the version row and surviving every crash. Install-state init
+consults that fact, never "does a file exist".
 
 Init rows (inputs → state; each install observation matches exactly one):
 
 | S# | Install observed | State persisted | Assembly selected |
 | --- | --- | --- | --- |
-| S1 | no database existed before this version | `{merge, none}` | shipped Anthropic+OpenAI (D4); user/project files merge |
-| S2 | database existed, no user-level catalog file | `{merge, present}` | shipped + retained-defaults layer; user/project merge above |
-| S3 | database existed, a user-level catalog file exists | `{replace, none}` | the user files stand alone; nothing beneath them |
+| S1 | origin `fresh` (the baseline created this database) | `{merge, none}` | shipped Anthropic+OpenAI (D4); user/project files merge |
+| S2 | pre-existing database (no fresh origin), no user-level catalog file | `{merge, present}` | shipped + retained-defaults layer; user/project merge above |
+| S3 | pre-existing database, a user-level catalog file exists | `{replace, none}` | the user files stand alone; nothing beneath them |
 
 Operator transitions (each persists durably before taking effect):
 
@@ -875,19 +950,23 @@ Operator transitions (each persists durably before taking effect):
 | ST1 | opt into merge, after previewing the effective-catalog difference | `mode: 'replace' → 'merge'`; `retained` unchanged — a legacy-replace install never acquires the retained layer |
 | ST2 | retire the retained layer, after the preview | `retained: 'present' → 'retired'` |
 
-Recovery rows:
+Recovery rows — partial states **fail closed**: a fresh-origin database
+never serves the retained layer, whatever a crash left behind, and a
+malformed state record is reported and re-derived once:
 
 | SR# | State found at restart | Behavior |
 | --- | --- | --- |
-| SR1 | `{merge, none}` (fresh) | no retained entries acquired, ever — fresh stays fresh |
+| SR1 | `{merge, none}`, origin fresh | no retained entries acquired, ever — fresh stays fresh |
 | SR2 | `{merge, present}` (upgraded) | the retained layer still serves its entries with their exact shipped facts — nothing is lost |
 | SR3 | `{merge, retired}` | stays retired across restart and crash — retirement is recorded, not inferred |
 | SR4 | `{replace, none}` | replace holds until ST1; once recorded, the opt-in persists |
-| SR5 | database exists, no state record | init re-runs on the same install facts (S2/S3) and records the same state — idempotent |
-| SR6 | no database, no state record | S1's paired creation runs at startup; a crash in between is SR6 again |
+| SR5 | database exists, no state record, origin fresh | init runs S1 — a crash after baseline but before the state commit recovers as fresh; the trimmed shipped set is the closed failure, never the retained layer |
+| SR6 | database exists, no state record, pre-existing origin | init runs S2/S3 on the install facts — idempotent, the facts are stable |
+| SR7 | no database file | baseline (with the origin fact) and the state record are written at startup; a crash at any point leaves SR7 or SR5, both closing to fresh |
+| SR8 | state record unreadable or self-contradictory (e.g. fresh origin with `retained: present`) | reported in the source listing, then re-derived once from the durable origin and install facts; origin fresh forces S1 |
 
-Unreachable: `{merge, present}` on a fresh install (S1 records `none`; the
-layer exists only where the removed entries were actually served); two
+Unreachable: `{merge, present}` on a fresh-origin install (SR5 forces S1;
+the layer exists only where the removed entries were actually served); two
 records or two stamps (one record, one write); a retired layer
 re-acquired (SR3); an upgraded install losing the layer (SR2); a
 legacy-replace install acquiring retained entries at ST1 (ST1 leaves
@@ -898,7 +977,7 @@ legacy-replace install acquiring retained entries at ST1 (ST1 leaves
 Shipping policy: the shipped catalog is the `claude` provider plus exactly
 the Codex entries a tracked group file names — at the trim, `openai` and
 `codex-sol`/`codex-luna` (task-b38ad618's shipped Codex profiles). Every
-other tracked worker id (`glm`, `glm-flash`, `mimo`, `minimax-*`, `kimi`,
+other tracked worker id (`glm`, `glm-flash`, `mimo`, `minimax`, `kimi`,
 `openrouter-*`) leaves the shipped tier: it lives in the retained-defaults
 layer where that layer exists, and resolves as an unknown id nowhere else,
 until the operator defines it (template adoption or a user entry).
@@ -907,7 +986,7 @@ until the operator defines it (template adoption or a user entry).
 | --- | --- | --- | --- |
 | G1 | fresh | `claude` ids (default, opus, sonnet, haiku) | shipped; resolves |
 | G2 | fresh | `openai`, `codex-sol`, `codex-luna` | shipped (L-G); resolves |
-| G3 | fresh | `glm`, `glm-flash`, `mimo`, `minimax-*`, `kimi`, `openrouter-*` | unknown id: today's group warning; a declared list of only such ids waits with the named reason (no default fallback); the matching template is offered |
+| G3 | fresh | `glm`, `glm-flash`, `mimo`, `minimax`, `kimi`, `openrouter-*` | unknown id: today's group warning; a declared list of only such ids waits with the named reason (no default fallback); the matching template is offered |
 | G4 | upgraded, no user files (S2) | the removed ids | retained default, exact shipped facts; resolves; the listing marks "retained default" |
 | G5 | upgraded, user files (S3) | whatever the user files define | unchanged from today (replace mode) |
 | G6 | upgraded, retained retired (SR3) | a still-referenced removed id | degrade (stored session) / wait (declared list) with the named reasons; template adoption restores |
@@ -925,7 +1004,10 @@ serving a retained entry — S1/SR1.
   wire-log frame, SQLite row, flag settings layer, or client payload —
   including the retired Settings path (post-migration, `app_settings`
   gains no new values); the only agent-visible forms are
-  `ANTHROPIC_AUTH_TOKEN` and the composed `ANTHROPIC_CUSTOM_HEADERS`
+  `ANTHROPIC_AUTH_TOKEN`, the composed `ANTHROPIC_CUSTOM_HEADERS`, and the
+  launch-env entries table W delivers (W6, and the legacy exception W9 —
+  possibly secret, never called non-secret); every registered name is
+  absent under its own name
   (mechanism parity with today's token path; measured exposure is the
   sentinel fixture's, D12). Redaction of exact values is tested with
   unshaped sentinels, split chunks, and overlapping values, not only the
@@ -944,15 +1026,20 @@ serving a retained entry — S1/SR1.
   mode* (fresh or opted-in): complete copies resolve identically to
   replace; an omitted optional field reappears from the lower layer, and
   that inheritance is asserted as exactly the difference the opt-in
-  preview shows — never claimed absent. Excluded and separately tested:
-  runtime-origin placements — a nearer Codex entry over a farther-tier
-  Claude origin is refused under merge per the runtime-origin rules
-  (`addCodexProfile`), where replace silently allowed the conversion; the
-  refusal is the documented behavior, asserted as its own case, and P3's
-  generator excludes it. Generator: shipped/retained catalog × user
-  catalogs with field mutations, including removed-field/negative-space
-  cases; seam: `resolveProfileCatalog` with injected homes. Fixed seed,
-  100 cases.
+  preview shows — never claimed absent. The identity claim is on the
+  **resolved values and presence**: placement-derived differences merge
+  legitimately introduces are not folded into it but carried by their own
+  rows — the tier a field reports as origin when the user file omits it
+  (the previewed difference), runtime-origin placements (below), and trust
+  refusals that attach to a placement rather than a value (P6). Excluded
+  and separately tested: runtime-origin placements — a nearer Codex entry
+  over a farther-tier Claude origin is refused under merge per the
+  runtime-origin rules (`addCodexProfile`), where replace silently allowed
+  the conversion; the refusal is the documented behavior, asserted as its
+  own case, and P3's generator excludes it. Generator: shipped/retained
+  catalog × user catalogs with field mutations, including
+  removed-field/negative-space cases; seam: `resolveProfileCatalog` with
+  injected homes. Fixed seed, 100 cases.
 - **P4 — Limits first, diagnostics disjoint, tests pure.** Every diagnostic
   class (D9 rules 1–2) records no limit event, no cooldown, no
   park/forward/release. In the **live** context every limit-shaped signal —
@@ -975,28 +1062,35 @@ serving a retained entry — S1/SR1.
   headers-only provider counts as credential-bearing for these refusals
   and for the trusted invariants. Generator: each field × each project
   file position; seam: the catalog parsers.
-- **P7 — Withholding survives removal.** Removing a provider entry,
-  disabling an id, or clearing a header binding never stops withholding
-  its registered secret names (all-layer catalog names ∪ header variables
-  ∪ secret-source store keys ∪ retained names, names only in
-  `app_settings`; launch-env entries are delivered, never withheld); no
-  Claude or Codex launch receives a registered name under its own name.
-  Generator: remove/disable/clear sequences with a probe launch; seams:
-  the withheld-name set successor and the launch composer.
+- **P7 — Withholding survives removal; registration wins delivery.**
+  Removing a provider entry, disabling an id, or clearing a header binding
+  never stops withholding its registered secret names (all-layer catalog
+  names ∪ header variables ∪ secret-source store keys ∪ retained names,
+  names only in `app_settings`); no Claude or Codex launch receives a
+  registered name under its own name — a launch-env entry whose name is
+  registered stays inert with the collision reported (W7/W8), while
+  unregistered launch-env entries deliver unchanged (W6) and a Default or
+  wrapper launch keeps its ambient base URL or proxy (W1).
+  Generator: remove/disable/clear/reclassify sequences with a probe launch;
+  seams: the withheld-name set successor and the launch composer.
 
 ### Completeness claim (D9)
 
 Axes: limit-predicate match (yes/no) × write context (live / test) ×
-credential resolution (none / host-login-only / resolved) × request outcome
-(ok / timeout / network / 404 / 401-or-403 / other-4xx / 5xx-or-malformed /
-header-composition-refused / cancelled) × structured evidence (none /
-documented key-refusal type / documented virtual-key type) × list outcome
-(ok-with-id / ok-without-id / auth-failure / unavailable). The classifier
-is an ordered rule list, so every combination maps to exactly one class by
-first match; the previously ambiguous cells land by rule, not by omission:
-prose-only or unmatched-evidence 401/403 reads `auth-unknown` whatever the
-list says (an anonymous-list + invalid-token case included); both-refused
-without a documented type reads `auth-unknown`; a schema-valid
+credential gate (not required — host-login or headers-only / required and
+resolved / required and missing despite a resolving header and a host login
+— the counterexample / required and missing, nothing else) × request
+outcome (preflight refusal / ok / timeout / network / 404 / 401-or-403 /
+other-4xx / 5xx-or-malformed / header-composition-refused / cancelled) ×
+structured evidence (none / documented key-refusal type / documented
+virtual-key type) × list outcome (ok-with-id / ok-without-id / auth-failure
+/ unavailable). The classifier is an ordered rule list, so every
+combination maps to exactly one class by first match; the previously
+ambiguous cells land by rule, not by omission: the required-credential
+counterexample reads `missing-credential` before any request outcome
+exists; prose-only or unmatched-evidence 401/403 reads `auth-unknown`
+whatever the list says (an anonymous-list + invalid-token case included);
+both-refused without a documented type reads `auth-unknown`; a schema-valid
 400/405/409/422 reads `relay-error`; a refused header composition reads
 `header-config-error`. The write-context axis decides side effects only:
 live records limits per rule 0, test records nothing (P4's two halves).
