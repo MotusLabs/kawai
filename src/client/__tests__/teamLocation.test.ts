@@ -1,6 +1,9 @@
 // The Team page's URL location (team-workspace-pages D3): the hash grammar
 // `#/team/<key>/<tab>[/<sub>][/<id>]`, its pure parse/format round trip, and
 // the location store's navigate/leave history writes.
+// Fixture paths name repository shapes as data, never runtime reads —
+// declared for the reads guard.
+// @reads: openspec/**
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import { createElement } from 'react'
 import { act } from 'react-dom/test-utils'

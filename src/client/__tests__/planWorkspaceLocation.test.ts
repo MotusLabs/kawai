@@ -4,6 +4,9 @@
 // notice, no apply), an unknown selector falls back with exactly one
 // explanatory notice and no patch, and a valid field patches only where it
 // differs from the current selection.
+// Fixture paths name repository shapes as data, never runtime reads —
+// declared for the reads guard.
+// @reads: docs/**, openspec/**
 import { describe, expect, test } from 'bun:test'
 import {
   applyPlansQuery, plansQueryOfState, versionParamOf, versionSelectorFromParam,
