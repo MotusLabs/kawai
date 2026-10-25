@@ -85,6 +85,17 @@ describe('loaded-data validation', () => {
     const malformed = applyPlansQuery({ version: 'banana' }, loaded(), current())
     expect(malformed.patch.version).toBeUndefined()
     expect(malformed.notices[0]).toContain('neither a revision nor a draft')
+
+    // A value the URL could not decode stays raw and is explained by name (r2).
+    const raw = applyPlansQuery({ version: '%zz' }, loaded(), current())
+    expect(raw.patch.version).toBeUndefined()
+    expect(raw.notices[0]).toContain('%zz')
+
+    // A partial document pair is explained, not dropped.
+    const partial = applyPlansQuery(
+      { document: { worktreeId: '/repo', relativePath: '' } }, loaded(), current())
+    expect(partial.patch.selectedDocument).toBeUndefined()
+    expect(partial.notices[0]).toContain('without a worktree or path')
   })
 
   test('an unknown execution or change, or an undiscovered document worktree, each explain the fallback', () => {
@@ -114,6 +125,10 @@ describe('loaded-data validation', () => {
     const lead = applyPlansQuery({ role: 'lead' }, loaded(), current({ role: 'architect' }))
     expect(lead.patch.role).toBe('lead')
     expect(lead.notices).toEqual([])
+    // An explicit valid role from the URL overrides the retained one on Back/Forward (r2).
+    const back = applyPlansQuery({ role: 'architect' }, loaded(), current({ role: 'lead' }))
+    expect(back.patch.role).toBe('architect')
+    expect(back.notices).toEqual([])
   })
 
   test('a fallback notice names the selection actually kept, not always the default', () => {

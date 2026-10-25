@@ -183,9 +183,17 @@ test('an empty plans query writes no ?; a bare ? parses to no selection', () => 
   })
 })
 
-test('a malformed plans-query escape is dropped; the rest of the query still parses', () => {
+test('a malformed plans-query escape keeps its raw value so the validator can explain it (7.1 r2)', () => {
   expect(parseTeamHash('#/team/%2Frepo/plans/p1?c=%E0&v=rev%3A3&r=x%2Fy')).toEqual({
-    teamKey: '/repo', tab: 'plans', id: 'p1', plans: { version: 'rev:3', role: 'x/y' },
+    teamKey: '/repo', tab: 'plans', id: 'p1', plans: { change: '%E0', version: 'rev:3', role: 'x/y' },
+  })
+  // An explicitly empty value names a (bad) selection too, never silence.
+  expect(parseTeamHash('#/team/%2Frepo/plans/p1?v=')).toEqual({
+    teamKey: '/repo', tab: 'plans', id: 'p1', plans: { version: '' },
+  })
+  // A partial document pair yields the pair with the missing half empty.
+  expect(parseTeamHash('#/team/%2Frepo/plans/p1?dw=%2Frepo')).toEqual({
+    teamKey: '/repo', tab: 'plans', id: 'p1', plans: { document: { worktreeId: '/repo', relativePath: '' } },
   })
 })
 

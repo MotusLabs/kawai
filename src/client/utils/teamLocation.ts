@@ -92,9 +92,12 @@ export function plansQueryOf(query: PlansLocationQuery | undefined): string | nu
 }
 
 /**
- * The plans query of a raw (still-encoded) `?`-suffix. A value with a
- * malformed escape is dropped, like a malformed id (D3); unknown keys are
- * not selections and are dropped by the next write.
+ * The plans query of a raw (still-encoded) `?`-suffix. A value the URL wrote
+ * stays visible even when it cannot decode (plan-workspace 7.1 r2): a
+ * malformed percent-escape keeps its raw text and an empty value stays `''`,
+ * so the validator explains the fallback by name instead of the field
+ * vanishing. Unknown keys are not selections and are dropped by the next
+ * write. (The id and team-key segments keep D3's drop-on-malformed.)
  */
 export function parsePlansQuery(raw: string): PlansLocationQuery {
   const query: PlansLocationQuery = {}
@@ -102,8 +105,9 @@ export function parsePlansQuery(raw: string): PlansLocationQuery {
     if (pair === '') continue
     const eq = pair.indexOf('=')
     const key = eq < 0 ? pair : pair.slice(0, eq)
-    const decoded = decodeSegment(eq < 0 ? '' : pair.slice(eq + 1))
-    if (decoded === null) continue
+    const rawValue = eq < 0 ? '' : pair.slice(eq + 1)
+    let decoded: string
+    try { decoded = decodeURIComponent(rawValue) } catch { decoded = rawValue }
     if (key === 'v') query.version = decoded
     else if (key === 'e') query.execution = decoded
     else if (key === 'c') query.change = decoded
