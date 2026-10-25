@@ -32,6 +32,7 @@ export function workspaceLayoutForWidth(widthPx: number): WorkspacePaneLayout {
 
 function useWorkspaceLayout(ref: RefObject<HTMLElement | null>): WorkspacePaneLayout {
   const [width, setWidth] = useState<number | null>(null)
+  const layout: WorkspacePaneLayout = width === null ? 'desktop' : workspaceLayoutForWidth(width)
   useLayoutEffect(() => {
     const element = ref.current
     if (!element || typeof ResizeObserver === 'undefined') return
@@ -41,8 +42,12 @@ function useWorkspaceLayout(ref: RefObject<HTMLElement | null>): WorkspacePaneLa
     })
     observer.observe(element)
     return () => observer.disconnect()
-  }, [ref])
-  return width === null ? 'desktop' : workspaceLayoutForWidth(width)
+    // A flip replaces the section element, so the effect re-runs on the
+    // layout: the replaced target is disconnected and the section now
+    // mounted is observed — an observer left on the removed box never
+    // fires again.
+  }, [ref, layout])
+  return layout
 }
 
 const NARROW_PANE_LABELS: Record<WorkspaceNarrowPane, string> = {
@@ -74,6 +79,10 @@ function PaneBody({ teamKey, planId, pane, focusRef, children }: {
   children: ReactNode
 }) {
   const restoreRef = useRef<HTMLDivElement | null>(null)
+  // The element this pane last attached. Unlike restoreRef it survives the
+  // ref detach that precedes the layout cleanup, so the cleanup below can
+  // still read the outgoing element.
+  const elementRef = useRef<HTMLDivElement | null>(null)
   useLayoutEffect(() => {
     const element = restoreRef.current
     if (element) element.scrollTop = paneScrollOf(teamKey, planId, pane)
@@ -81,8 +90,23 @@ function PaneBody({ teamKey, planId, pane, focusRef, children }: {
     // the restore when the unkeyed plans view swaps the team or plan in
     // place — the section stays mounted across that switch, so a mount-only
     // effect would leave the previous identity's position in the element.
+    // The identity this effect run applied is the outgoing one when the
+    // cleanup fires. Measured in Chromium: on every pane switch — a narrow
+    // remount, an expansion, an in-place team or plan swap — the cleanup
+    // runs while the element is still connected and before the incoming
+    // restore, and a scroll whose event has not dispatched yet leaves the
+    // element's true position ahead of the last recorded one, so capture it
+    // from the element itself. A detached element has no scroll box and
+    // would read 0, so only a connected element may be captured (mock nodes
+    // carry no isConnected and are captured like connected ones).
+    return () => {
+      const outgoing = elementRef.current
+      if (outgoing && outgoing.isConnected !== false) {
+        setPaneScroll(teamKey, planId, pane, outgoing.scrollTop)
+      }
+    }
   }, [teamKey, planId, pane])
-  return <div ref={node => { restoreRef.current = node; focusRef.current = node }} tabIndex={-1}
+  return <div ref={node => { restoreRef.current = node; if (node) elementRef.current = node; focusRef.current = node }} tabIndex={-1}
     data-testid={`workspace-pane-${pane}`}
     className={pane === 'conversation' ? 'flex min-h-0 flex-col' : 'min-h-0 overflow-y-auto'}
     style={{ overflowAnchor: 'none' }}

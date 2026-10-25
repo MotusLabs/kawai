@@ -93,6 +93,68 @@ test('the layout flips at the narrow bound', () => {
   expect(workspaceLayoutForWidth(WORKSPACE_NARROW_MAX_PX)).toBe('desktop')
 })
 
+test('a layout flip re-observes the section it replaced, so the flip works both ways (7.2 r3)', () => {
+  // A flip replaces the section element — each layout renders its own — and
+  // a ResizeObserver left on the replaced element never fires again: a
+  // detached box does not resize. The hook must re-run on the flip so the
+  // replaced target is disconnected and the mounted section is observed.
+  class FakeResizeObserver {
+    static instances: FakeResizeObserver[] = []
+    observed: unknown[] = []
+    disconnected = false
+    constructor(readonly callback: (entries: { contentRect: { width: number } }[]) => void) {
+      FakeResizeObserver.instances.push(this)
+    }
+    observe(target: unknown): void { this.observed.push(target) }
+    unobserve(): void {}
+    disconnect(): void { this.disconnected = true }
+  }
+  const globalScope = globalThis as { ResizeObserver?: unknown }
+  const previous = globalScope.ResizeObserver
+  globalScope.ResizeObserver = FakeResizeObserver
+  try {
+    const { mocks, createNodeMock } = capturedMocks()
+    const { byId } = mountPanes('/repo', 'plan-a', { createNodeMock })
+    const layout = () => byId('plan-workspace-panes').props['data-layout']
+    expect(layout()).toBe('desktop')
+    // The map scrolls to 120 and records it before the flips.
+    mocks['workspace-pane-map']!.scrollTop = 120
+    act(() => byId('workspace-pane-map').props.onScroll({ currentTarget: mocks['workspace-pane-map'] }))
+    // Only an observer still watching the mounted section can fire — the
+    // browser never reports a resize for a removed box.
+    const fire = (width: number) => {
+      for (const instance of FakeResizeObserver.instances) {
+        if (!instance.disconnected && instance.observed.includes(mocks['plan-workspace-panes'])) {
+          act(() => instance.callback([{ contentRect: { width } }]))
+        }
+      }
+    }
+    fire(700)
+    expect(layout()).toBe('narrow')
+    // Without the re-observe the only observer still watches the replaced
+    // narrow section, nothing reports the wider width, and the layout
+    // freezes narrow forever.
+    fire(1000)
+    expect(layout()).toBe('desktop')
+    fire(700)
+    expect(layout()).toBe('narrow')
+    // Each flip left exactly one live observer, watching the section that is
+    // mounted now; every replaced one is disconnected.
+    const live = FakeResizeObserver.instances.filter(instance => !instance.disconnected)
+    expect(live.length).toBe(1)
+    expect(live[0].observed.includes(mocks['plan-workspace-panes'])).toBe(true)
+    // The flips keep the pane's own state: no control fired, so the store
+    // still holds no pane record and the selection stays the default, and
+    // the remounted map applies its recorded 120.
+    expect(useTeamPlanWorkspaceStore.getState().panes['/repo']).toBeUndefined()
+    expect(paneScrollOf('/repo', 'plan-a', 'map')).toBe(120)
+    expect(mocks['workspace-pane-map']?.scrollTop).toBe(120)
+  } finally {
+    globalScope.ResizeObserver = previous
+    FakeResizeObserver.instances.length = 0
+  }
+})
+
 test('the desktop divider exposes its bounded value and the keyboard steps move it', () => {
   const { byId } = mountPanes()
   const divider = byId('workspace-panes-divider')
@@ -281,6 +343,75 @@ describe('the narrow navigation', () => {
     act(() => renderer.update(<IdentityHost teamKey="/repo" planId="plan-a" rootRef={rootRef} />))
     expect(mocks['workspace-pane-map']?.scrollTop).toBe(200)
   })
+  test('a scroll whose event has not dispatched yet is captured at the identity switch, and the late event cannot contaminate the incoming record (7.2 r3)', () => {
+    // Scroll events dispatch after the scroll itself, so when the user
+    // switches identity the element's true position can be ahead of the last
+    // recorded one. The outgoing identity must capture that true position,
+    // and the queued event delivered after the switch must read the
+    // incoming identity's restored value, never the outgoing tail.
+    const { mocks, createNodeMock } = capturedMocks()
+    const rootRef: MutableRefObject<HTMLElement | null> = { current: null }
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => { renderer = TestRenderer.create(<IdentityHost teamKey="/repo" planId="plan-a" rootRef={rootRef} />, { createNodeMock }) })
+    renderers.push(renderer)
+    const mapPane = () => renderer.root.findByProps({ 'data-testid': 'workspace-pane-map' })
+    // The map scrolls to 200 and the event records it.
+    mocks['workspace-pane-map']!.scrollTop = 200
+    act(() => mapPane().props.onScroll({ currentTarget: mocks['workspace-pane-map'] }))
+    expect(paneScrollOf('/repo', 'plan-a', 'map')).toBe(200)
+    // The browser moves the element again; that scroll event is still queued
+    // when the user switches plans, so no further event records it.
+    mocks['workspace-pane-map']!.scrollTop = 215
+    act(() => renderer.update(<IdentityHost teamKey="/repo" planId="plan-b" rootRef={rootRef} />))
+    // Plan A keeps the true pre-switch position 215, not the stale 200.
+    expect(paneScrollOf('/repo', 'plan-a', 'map')).toBe(215)
+    // Plan B's element was restored to its own (empty) record.
+    expect(mocks['workspace-pane-map']?.scrollTop).toBe(0)
+    // The queued old event, delivered after the switch, reads the restored
+    // value: plan B's record stays its own and plan A's stays 215.
+    act(() => mapPane().props.onScroll({ currentTarget: mocks['workspace-pane-map'] }))
+    expect(paneScrollOf('/repo', 'plan-b', 'map')).toBe(0)
+    expect(paneScrollOf('/repo', 'plan-a', 'map')).toBe(215)
+    // Returning to plan A restores the captured 215.
+    act(() => renderer.update(<IdentityHost teamKey="/repo" planId="plan-a" rootRef={rootRef} />))
+    expect(mocks['workspace-pane-map']?.scrollTop).toBe(215)
+  })
+
+  test('a detached pane element never overwrites its record at the identity switch', () => {
+    // The browser gives a detached element no scroll box, so a cleanup that
+    // reads it anyway would corrupt the record; only an element that is
+    // still connected may be captured.
+    const { mocks, createNodeMock } = capturedMocks()
+    const rootRef: MutableRefObject<HTMLElement | null> = { current: null }
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => { renderer = TestRenderer.create(<IdentityHost teamKey="/repo" planId="plan-a" rootRef={rootRef} />, { createNodeMock }) })
+    renderers.push(renderer)
+    const mapPane = () => renderer.root.findByProps({ 'data-testid': 'workspace-pane-map' })
+    mocks['workspace-pane-map']!.scrollTop = 200
+    act(() => mapPane().props.onScroll({ currentTarget: mocks['workspace-pane-map'] }))
+    // Simulate the detached node an unmount path would leave behind.
+    ;(mocks['workspace-pane-map'] as { isConnected?: boolean }).isConnected = false
+    mocks['workspace-pane-map']!.scrollTop = 0
+    act(() => renderer.update(<IdentityHost teamKey="/repo" planId="plan-b" rootRef={rootRef} />))
+    expect(paneScrollOf('/repo', 'plan-a', 'map')).toBe(200)
+  })
+
+  test('a remount captures the shown pane’s unrecorded scroll before the element is dropped (7.2 r3)', () => {
+    // On a narrow switch the shown pane unmounts. Measured in Chromium, the
+    // layout cleanup runs while the element is still connected and before
+    // its removal, so the outgoing position — which can be ahead of the
+    // last dispatched event — is captured on the remount path too.
+    const { mocks, createNodeMock } = capturedMocks()
+    const { byId } = mountNarrow('/repo', 'plan-a', { createNodeMock })
+    // The user scrolls the map; that scroll event has not dispatched yet.
+    mocks['workspace-pane-map']!.scrollTop = 75
+    // Switching away unmounts the map element and must capture 75…
+    act(() => byId('workspace-narrow-documents').props.onClick())
+    expect(paneScrollOf('/repo', 'plan-a', 'map')).toBe(75)
+    // …and returning restores the captured 75 into the fresh element.
+    act(() => byId('workspace-narrow-back').props.onClick())
+    expect(mocks['workspace-pane-map']?.scrollTop).toBe(75)
+  })
 })
 
 test('the desktop expand and restore reapplies the map’s remembered scroll into the remounted pane (7.2 r3)', () => {
@@ -293,6 +424,18 @@ test('the desktop expand and restore reapplies the map’s remembered scroll int
   expect(mocks['workspace-pane-documents']?.scrollTop).toBe(0)
   act(() => byId('workspace-expand-documents').props.onClick())
   expect(mocks['workspace-pane-map']?.scrollTop).toBe(200)
+})
+
+test('a desktop expansion captures the map’s unrecorded scroll and the restore reapplies it (7.2 r3)', () => {
+  const { mocks, createNodeMock } = capturedMocks()
+  const { byId } = mountPanes('/repo', 'plan-a', { createNodeMock })
+  mocks['workspace-pane-map']!.scrollTop = 140
+  // Expanding the documents pane unmounts the map; the cleanup captures
+  // the unrecorded 140 before the element is dropped.
+  act(() => byId('workspace-expand-documents').props.onClick())
+  expect(paneScrollOf('/repo', 'plan-a', 'map')).toBe(140)
+  act(() => byId('workspace-expand-documents').props.onClick())
+  expect(mocks['workspace-pane-map']?.scrollTop).toBe(140)
 })
 
 /** The tab buttons inside the narrow navigation, in DOM order. */
