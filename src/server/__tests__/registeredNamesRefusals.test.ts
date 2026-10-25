@@ -63,6 +63,7 @@ describe('named-profile controlled collisions (row 3)', () => {
     }))
   }
 
+  // @covers: provider-credentials › Registered secret names stay withheld › A launch-env entry colliding with a registered name stays inert
   test('a retained controlled key refuses the launch, naming it', () => {
     writeNamedProfile({ ANTHROPIC_MODEL: 'claude-opus' })
     seedRetained(['ANTHROPIC_MODEL'])
@@ -72,6 +73,7 @@ describe('named-profile controlled collisions (row 3)', () => {
     expect(refusal.message).toContain('ANTHROPIC_MODEL')
   })
 
+  // @covers: provider-credentials › Registered secret names stay withheld › A launch-env entry colliding with a registered name stays inert
   test('a provider binding registers a controlled key and refuses without retention', () => {
     // A provider whose token variable IS a controlled key: the catalog
     // layer alone registers it — no seeded row — and every named-profile
@@ -87,6 +89,7 @@ describe('named-profile controlled collisions (row 3)', () => {
     expect(refusal.names).toEqual(['ANTHROPIC_MODEL'])
   })
 
+  // @covers: provider-credentials › Registered secret names stay withheld › An ambient route survives a Default launch
   test('an unregistered controlled key still launches and delivers the entry (W1)', () => {
     writeNamedProfile({ ANTHROPIC_MODEL: 'claude-opus' })
     seedRetained(['ANTHROPIC_API_KEY'])
@@ -110,6 +113,7 @@ describe('credentialed pin and blank collisions (rows 4, 5)', () => {
   const launchCredentialed = (serverEnv: Record<string, string>) =>
     resolveClaudeProfile('or2-opus', serverEnv, ctx(), undefined, db)
 
+  // @covers: provider-credentials › Registered secret names stay withheld › A launch-env entry colliding with a registered name stays inert
   test('a retained transport-pin key refuses the credentialed launch (row 4)', () => {
     seedRetained(['HTTPS_PROXY'])
     const refusal = refusalOf(() => launchCredentialed({ RELAY_TOKEN_ENV: 'relay-token-value', HTTPS_PROXY: 'https://proxy.example.internal:3128' }))
@@ -117,18 +121,21 @@ describe('credentialed pin and blank collisions (rows 4, 5)', () => {
     expect(refusal.names).toEqual(['HTTPS_PROXY'])
   })
 
+  // @covers: provider-credentials › Registered secret names stay withheld › A launch-env entry colliding with a registered name stays inert
   test('a retained base URL refuses the pinned route too (row 4)', () => {
     seedRetained(['ANTHROPIC_BASE_URL'])
     const refusal = refusalOf(() => launchCredentialed({ RELAY_TOKEN_ENV: 'relay-token-value' }))
     expect(refusal.names).toEqual(['ANTHROPIC_BASE_URL'])
   })
 
+  // @covers: provider-credentials › Registered secret names stay withheld › A launch-env entry colliding with a registered name stays inert
   test('a retained credential blank refuses the launch (row 5)', () => {
     seedRetained(['ANTHROPIC_API_KEY'])
     const refusal = refusalOf(() => launchCredentialed({ RELAY_TOKEN_ENV: 'relay-token-value' }))
     expect(refusal.names).toEqual(['ANTHROPIC_API_KEY'])
   })
 
+  // @covers: provider-credentials › Registered secret names stay withheld › A launch-env entry colliding with a registered name stays inert
   test('every collision is named together, sorted', () => {
     seedRetained(['NO_PROXY', 'CLAUDE_CODE_OAUTH_TOKEN'])
     const refusal = refusalOf(() => launchCredentialed({ RELAY_TOKEN_ENV: 'relay-token-value' }))
@@ -151,6 +158,7 @@ describe('credentialed pin and blank collisions (rows 4, 5)', () => {
 })
 
 describe('preserved channels (rows 6, 8)', () => {
+  // @covers: provider-credentials › Registered secret names stay withheld › Removing a provider keeps its names withheld
   test('a retained token name still delivers under ANTHROPIC_AUTH_TOKEN after removal (row 6)', () => {
     // The provider entry is GONE; only the retained row remembers the name.
     // The W2 channel is the one live composed destination and must survive.
@@ -161,6 +169,7 @@ describe('preserved channels (rows 6, 8)', () => {
     expect(launch.env?.RELAY_TOKEN_ENV).toBeUndefined()
   })
 
+  // @covers: provider-credentials › Registered secret names stay withheld › An ambient route survives a Default launch
   test('a wrapper overlay drops a registered key and keeps the rest (row 8)', () => {
     fs.writeFileSync(path.join(home, '.kawai', 'profiles.json'), JSON.stringify({
       wrap: {
@@ -175,6 +184,7 @@ describe('preserved channels (rows 6, 8)', () => {
     expect(launch.env?.ANTHROPIC_DEFAULT_MODEL).toBe('claude-sonnet')
   })
 
+  // @covers: provider-credentials › Registered secret names stay withheld › An ambient route survives a Default launch
   test('a Default launch keeps unregistered ambient route variables (row 8, W1)', () => {
     seedRetained(['ANTHROPIC_MODEL'])
     const launch = resolveClaudeProfile('default', {
@@ -189,6 +199,7 @@ describe('preserved channels (rows 6, 8)', () => {
 })
 
 describe('Codex home collisions (row 7)', () => {
+  // @covers: provider-credentials › Registered secret names stay withheld › A launch-env entry colliding with a registered name stays inert
   test('codexSpawnEnv refuses a registered CODEX_HOME before composing', () => {
     expect(() => codexSpawnEnv({ PATH: '/usr/bin', CODEX_HOME: '/secret/example-internal/home' }, '/tmp/kawai-codex-home', new Set(['CODEX_HOME'])))
       .toThrow(RegisteredNameRefusal)
@@ -208,6 +219,7 @@ describe('Codex home collisions (row 7)', () => {
 })
 
 describe('Codex driver refusal across spawns (row 7)', () => {
+  // @covers: provider-credentials › Registered secret names stay withheld › A launch-env entry colliding with a registered name stays inert
   test('a CODEX_HOME registered before any spawn refuses the first send with no client', () => {
     const harness = startHarness(new Script().boot(), { withheldCredentials: () => new Set(['CODEX_HOME']) })
     try {
@@ -218,6 +230,7 @@ describe('Codex driver refusal across spawns (row 7)', () => {
     }
   })
 
+  // @covers: provider-credentials › Registered secret names stay withheld › A launch-env entry colliding with a registered name stays inert
   test('a CODEX_HOME registered after creation refuses the respawn, not the first spawn', async () => {
     let registered = new Set<string>()
     const clients: unknown[] = []
