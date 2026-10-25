@@ -24,24 +24,41 @@ path, or check that a selected model exists before creating a session.
   are shown, values are never returned. A store value overrides the server
   environment's variable, and the precedence is shown per variable. A change
   takes effect at the next launch without a restart.
+- **SQLite retires as a credential source.** **BREAKING**: at upgrade, the
+  Settings provider-env map's values move once into the credential store and
+  are cleared from `app_settings`; from then on the Settings env editor
+  writes the store, no read surface serves stored values, and no credential
+  value is written to SQLite again. Backups taken before the upgrade still
+  hold the old values — the docs state this and advise rotation; there is no
+  retroactive guarantee.
 - **Relay setup as one flow.** A setup surface configures, per provider, the
   base URL, the access-token variable, custom header names (each bound to a
   credential variable — `x-bf-vk` is a secret), and the model IDs together,
   writing one user-level catalog entry plus credential variables.
 - **Custom headers are supported.** A trusted catalog provider may bind
   header names to credential variables; the launch composes
-  `ANTHROPIC_CUSTOM_HEADERS` from their values, with no more agent exposure
-  than today's token path. Values are still refused in catalog files.
+  `ANTHROPIC_CUSTOM_HEADERS` from their values in the process environment —
+  the same delivery mechanism as today's token. Every registered secret name
+  is withheld from every agent launch, including disabled, removed, and
+  template entries; what a CLI subprocess can read is established by a
+  sentinel fixture, and the design claims parity of mechanism, not measured
+  exposure. Values are still refused in catalog files.
 - **Small overrides preserve defaults.** **BREAKING**: the user-level catalog
   merges over the shipped defaults per entry and field instead of replacing
-  them when either file exists; an entry may disable a shipped one. An
-  instance whose user-level files are already complete keeps the same
-  effective catalog (regression oracle).
-- **The shipped catalog is trimmed.** **BREAKING**: shipped providers reduce
-  to Anthropic (Claude login) and OpenAI (Codex). The removed zai, minimax,
-  mimo, kimi, and openrouter entries ship as setup templates with the same
-  ids, so adopting one restores resolution for stored sessions, group files,
-  and routing that name them.
+  them when either file exists; a user-level entry may disable an id with a
+  tombstone nearer tiers cannot resurrect. An instance whose user-level
+  files are already complete keeps the same effective catalog for every
+  non-runtime field (regression oracle; runtime-origin placements follow the
+  runtime-origin rules).
+- **The shipped catalog is trimmed, with upgrade adoption.** **BREAKING**:
+  shipped providers reduce to Anthropic (Claude login) and OpenAI (Codex) on
+  fresh installs. The removed zai, minimax, mimo, kimi, and openrouter
+  entries ship as setup templates with the same ids; at upgrade, a removed
+  id still referenced by stored sessions, groups, routing, or queued mail
+  and defined by no layer is adopted once from its template into the
+  user-level catalog, so existing installs keep working with no operator
+  action. A worker list that resolves to nothing never falls back to the
+  default profile — such mail waits with a named reason.
 - **Precedence is explicit.** One precedence table covers every field
   (shipped/user/project; provider vs profile; env vs catalog fields).
   Conflicting overrides warn, and the New Session dialog previews the
@@ -51,17 +68,29 @@ path, or check that a selected model exists before creating a session.
 - **Validation failures are prominent.** The operator sees every configuration
   source listed with its status (loaded, missing, rejected, and the reason),
   and each rejection names the supported setting.
-- **A connection test through the real launch path.** The test resolves the
-  profile exactly as session creation would and makes a minimal model request
-  with the same executable and environment, under a bounded time.
-- **Failure classes are distinguished.** Missing server credentials, gateway
-  authentication failures, virtual-key restrictions, and provider
-  model-catalog failures are reported with the evidence that tells them apart,
-  as diagnostics — never as limit events, so no profile cools because a relay
-  refused a virtual key.
-- **Model availability is checked.** The server queries the relay's model list
-  with the provider's own credentials, compares the exact model ID a profile
-  sends against it, and marks unavailable profiles in the picker.
+- **A connection test through the real launch path (Claude runtime in v1).**
+  The test resolves the profile and composes the same launch settings session
+  creation would (cwd, settings sources, executable) and makes one minimal
+  model request under a bounded time, creating nothing. Codex profiles keep
+  their existing login check and show the test as not supported (non-goal
+  for v1).
+- **Failure classes are distinguished, with limits first.** The existing
+  limit predicate runs unchanged — 429, 402, and the limit error classes
+  keep cooling on any status. Failures it does not treat as limits are
+  classified by one ordered, disjoint rule list — missing credential,
+  gateway authentication failure, virtual-key restriction, model-catalog
+  failure, network failure, timeout, relay error, evidence-qualified
+  unknown — with the evidence that tells them apart, as diagnostics that
+  never record a limit. The same classification runs on a live session's
+  failed turns, not only the test; a model-list result never proves
+  authentication, and ambiguous evidence reads as an evidence-qualified
+  unknown.
+- **Model availability is checked.** The server queries the relay's
+  Anthropic-compatible model list at the configured base URL (path
+  preserved) with the provider's own credentials, compares the exact
+  wire model ID a launch sends (after CLI alias resolution), and marks
+  profiles whose model is absent — but only on a complete, valid list;
+  anything else reads as unknown and never blocks creation.
 
 ## Capabilities
 
@@ -114,17 +143,22 @@ path, or check that a selected model exists before creating a session.
   OpenAI Codex entry); a new `config/provider-templates.json`;
   `docs/claude-session-profiles.md` and the AGENTS.md profile/credentials
   bullets.
-- **No database migration:** stored profile ids are unchanged; unknown stored
-  profiles already stay visible and block sending until their entry is
-  restored — the trim's migration test pins that degrade-and-restore path,
-  including group files and routing that name removed ids.
+- **No schema migration:** stored profile ids are unchanged; the one-time
+  Settings-map-to-store move is a data move recorded by a stamp, not a
+  schema change. Upgrade adoption (above) keeps existing installs working
+  without operator action; the degrade path (unknown stored profiles stay
+  visible and blocked, naming the template) remains for ids with no
+  template.
 - **Security:** the store is the only new place a credential value exists; it
   is user-level, mode 0600, outside every backup path, and write-only from
   every client surface. Header values compose into `ANTHROPIC_CUSTOM_HEADERS`
   exactly where `ANTHROPIC_AUTH_TOKEN` rides today, and never enter the flag
-  settings layer. Every diagnostic path redacts values before output.
+  settings layer. Every diagnostic path redacts exact credential values
+  (not only shape patterns) before output. Pre-upgrade database backups
+  still contain the old Settings-map values; the docs advise rotation.
 - **Compatibility:** instances with user-level catalogs keep their effective
-  catalog byte-for-byte (oracle); instances relying on the old
+  catalog for every non-runtime field (oracle; runtime-origin placements
+  follow the runtime-origin rules); instances relying on the old
   replace-the-defaults rule disable the shipped entries they do not want;
-  sessions on removed shipped ids stay visible and blocked until the operator
-  adopts the matching template or re-adds the entry.
+  referenced removed ids are adopted from templates at upgrade, and sessions
+  on ids adopted-then-removed degrade visibly, naming the template.
