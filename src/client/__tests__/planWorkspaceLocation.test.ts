@@ -110,9 +110,21 @@ describe('loaded-data validation', () => {
     const role = applyPlansQuery({ role: 'chef' }, loaded(), current())
     expect(role.patch.role).toBeUndefined()
     expect(role.notices[0]).toContain('chef')
+    expect(role.notices[0]).toContain('showing Architect')
     const lead = applyPlansQuery({ role: 'lead' }, loaded(), current({ role: 'architect' }))
     expect(lead.patch.role).toBe('lead')
     expect(lead.notices).toEqual([])
+  })
+
+  test('a fallback notice names the selection actually kept, not always the default', () => {
+    // After a Back to a stale selector the retained selection stays shown.
+    const stale = applyPlansQuery({ version: 'rev:9' }, loaded(),
+      current({ version: { kind: 'revision', revision: 2 } }))
+    expect(stale.notices[0]).toContain('showing revision 2')
+    expect(stale.patch.version).toBeUndefined()
+    // A retained change selection reads the same way.
+    const kept = applyPlansQuery({ change: 'ghost' }, loaded(), current({ selectedChange: 'api' }))
+    expect(kept.notices[0]).toContain('keeps “api” selected')
   })
 
   test('a valid field patches only where it differs; equal fields write nothing', () => {

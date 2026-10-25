@@ -70,11 +70,18 @@ export function plansQueryOfState(state: WorkspaceAddressableState & { role: Pla
   return Object.keys(query).length > 0 ? query : undefined
 }
 
+/** What a fallback notice names as shown: the selection the workspace actually keeps. */
+const describeVersion = (selector: WorkspaceVersionSelector | null): string =>
+  selector === null ? 'the default version'
+    : selector.kind === 'revision' ? `revision ${selector.revision}` : `draft “${selector.draftId.slice(0, 8)}”`
+
 /**
  * Validate a query against the loaded data. Valid fields become patch
  * entries (only where they differ from `current`, so applying is cheap);
- * present-but-invalid fields produce one notice each and no patch; fields
- * whose data has not loaded are skipped whole (pending, not invalid).
+ * present-but-invalid fields produce one notice each and no patch — the
+ * notice names what actually stays shown, which on a fresh load is the
+ * default and after a Back to a stale selector is the retained selection;
+ * fields whose data has not loaded are skipped whole (pending, not invalid).
  */
 export function applyPlansQuery(query: PlansLocationQuery, loaded: PlansQueryLoadedData, current: WorkspaceAddressableState & { role: PlanWorkspaceRole }): { patch: PlansSelectionPatch; notices: string[] } {
   const patch: PlansSelectionPatch = {}
@@ -85,25 +92,26 @@ export function applyPlansQuery(query: PlansLocationQuery, loaded: PlansQueryLoa
       ? loaded.revisions.includes(selector.revision)
       : loaded.draftIds.includes(selector.draftId))
     if (!known) {
-      notices.push(selector === null
-        ? `Link names version “${query.version}”, which is neither a revision nor a draft — showing the default version.`
+      const named = selector === null
+        ? `version “${query.version}”, which is neither a revision nor a draft`
         : selector.kind === 'revision'
-          ? `Link names revision ${selector.revision}, which this plan does not have — showing the default version.`
-          : `Link names draft “${selector.draftId.slice(0, 8)}”, which this plan does not have — showing the default version.`)
+          ? `revision ${selector.revision}, which this plan does not have`
+          : `draft “${selector.draftId.slice(0, 8)}”, which this plan does not have`
+      notices.push(`Link names ${named} — showing ${describeVersion(current.version)}.`)
     } else if (query.version !== (current.version === null ? undefined : versionParamOf(current.version))) {
       patch.version = selector
     }
   }
   if (query.execution !== undefined && loaded.executionIds !== null) {
     if (!loaded.executionIds.includes(query.execution)) {
-      notices.push(`Link names execution “${query.execution.slice(0, 8)}”, which this plan does not have — showing the latest execution.`)
+      notices.push(`Link names execution “${query.execution.slice(0, 8)}”, which this plan does not have — showing ${current.executionId === null ? 'the latest execution' : `execution “${current.executionId.slice(0, 8)}”`}.`)
     } else if (query.execution !== current.executionId) {
       patch.executionId = query.execution
     }
   }
   if (query.change !== undefined && loaded.changeNames !== null) {
     if (!loaded.changeNames.includes(query.change)) {
-      notices.push(`Link names change “${query.change}”, which the displayed version does not list.`)
+      notices.push(`Link names change “${query.change}”, which the displayed version does not list — the map keeps ${current.selectedChange === null ? 'no change selected' : `“${current.selectedChange}” selected`}.`)
     } else if (query.change !== current.selectedChange) {
       patch.selectedChange = query.change
     }
@@ -121,7 +129,7 @@ export function applyPlansQuery(query: PlansLocationQuery, loaded: PlansQueryLoa
   }
   if (query.role !== undefined) {
     if (!(PLAN_WORKSPACE_ROLES as readonly string[]).includes(query.role)) {
-      notices.push(`Link names role “${query.role}” — showing Architect.`)
+      notices.push(`Link names role “${query.role}” — showing ${current.role === 'architect' ? 'Architect' : 'Lead'}.`)
     } else if (query.role !== current.role) {
       patch.role = query.role as PlanWorkspaceRole
     }
