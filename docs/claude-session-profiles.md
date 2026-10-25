@@ -24,6 +24,8 @@ The shipped default catalog, grouped by provider:
 | openrouter-haiku | OpenRouter Haiku | OpenRouter | starts on Haiku; Haiku maps to `~anthropic/claude-haiku-latest` — provider env below |
 | openrouter-deepseek-flash | OpenRouter DeepSeek V4.1 Flash | OpenRouter | starts on `deepseek/deepseek-v4.1-flash-1017`; every alias maps to it — provider env below |
 | openrouter-minimax-flash | OpenRouter MiniMax M3.1 Flash | OpenRouter | starts on `minimax/minimax-m3.1-flash`; every alias maps to it — provider env below |
+| codex-sol | Codex Sol | Codex | Codex runtime on the host Codex login (default Codex home); model `gpt-6.1-sol` |
+| codex-luna | Codex Luna | Codex | Codex runtime on the host Codex login (default Codex home); model `gpt-6-luna` |
 
 Provider Z.AI carries the pair's shared routing at the provider level:
 base URL `https://api.z.ai/api/anthropic`, the four tier maps above,

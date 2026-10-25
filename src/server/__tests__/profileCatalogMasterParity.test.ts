@@ -62,6 +62,7 @@ const SHIPPED: Record<string, Omit<CatalogProfile, 'providerId'>> = {
 
 const ADDED_SINCE_MASTER = new Set([
   'openrouter-opus', 'openrouter-sonnet', 'openrouter-haiku', 'openrouter-deepseek-flash', 'openrouter-minimax-flash',
+  'codex-sol', 'codex-luna',
 ])
 
 let root: string

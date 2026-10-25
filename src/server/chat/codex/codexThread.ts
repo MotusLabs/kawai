@@ -83,10 +83,15 @@ export async function threadParams(input: { cwd: string; network: boolean; instr
   }
 }
 
-/** Kawai's effort levels on Codex: `max` is `xhigh`, raw numbers are dropped. */
+/**
+ * Kawai's effort levels on Codex. Codex 0.163.0's app-server schema types
+ * reasoning effort as any non-empty string the model advertises, and
+ * gpt-6-luna and gpt-6.1-sol advertise low/medium/high/xhigh/max, so every
+ * named level passes through unchanged; raw numbers are dropped.
+ */
 export function codexEffort(effort: ChatEffort | undefined): string | undefined {
   if (effort === undefined || typeof effort === 'number') return undefined
-  return effort === 'max' ? 'xhigh' : effort
+  return effort
 }
 
 /**
