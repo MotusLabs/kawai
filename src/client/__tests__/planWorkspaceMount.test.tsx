@@ -7,7 +7,7 @@
 // Fixture paths name repository shapes as data, never runtime reads —
 // declared for the reads guard.
 // @reads: openspec/**
-import { afterEach, expect, test } from 'bun:test'
+import { afterAll, afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import type { ClientMessage } from '@shared/types'
 import { normalizePlanContent, type PlanRevision } from '@shared/plans'
@@ -17,6 +17,8 @@ import type { PlanExecutionView } from '@shared/planExecution'
 import TeamPlansView from '../components/team/TeamPlansView'
 import { useTeamPlanStore } from '../stores/teamPlanStore'
 import { useTeamPlanWorkspaceStore } from '../stores/teamPlanWorkspaceStore'
+import { resetTeamLocationForTests, useTeamLocationStore } from '../hooks/useTeamLocation'
+import { useWorkspaceStore } from '../stores/workspaceStore'
 import { planDetail, planSummary } from './planViewFixtures'
 import PlanWorkspaceHealth from '../components/team/PlanWorkspaceHealth'
 
@@ -25,7 +27,9 @@ afterEach(() => {
   for (const renderer of renderers) act(() => renderer.unmount())
   renderers.length = 0
   useTeamPlanStore.setState({ views: {}, reveal: null })
-  useTeamPlanWorkspaceStore.setState({ views: {} })
+  useTeamPlanWorkspaceStore.setState({ views: {}, roles: {}, panes: {} })
+  useWorkspaceStore.setState({ snapshot: null })
+  resetTeamLocationForTests()
 })
 
 const textOf = (node: TestRenderer.ReactTestInstance | string): string =>
@@ -333,4 +337,135 @@ test('the health list recomputes on a client clock at most a minute apart, clear
   expect(cleared.length).toBe(1)
   globalThis.setInterval = original
   globalThis.clearInterval = realClear
+})
+
+// The plans query against the loaded data (plan-workspace 7.1, design D8):
+// the section syncs the URL one way into the store — loading is pending, an
+// unknown selector falls back with its notice and keeps the URL, and a user
+// act mirrors the store back into the URL exactly once.
+describe('the plans query (plan-workspace 7.1)', () => {
+  const globalAny = globalThis as typeof globalThis & { window?: Window & typeof globalThis }
+  const originalWindow = globalAny.window
+  const pushed: string[] = []
+  const replaced: string[] = []
+
+  beforeEach(() => {
+    pushed.length = 0
+    replaced.length = 0
+    globalAny.window = {
+      location: { hash: '', pathname: '/app', search: '' },
+      history: {
+        pushState: (_s: unknown, _t: string, url: string | URL) => { pushed.push(String(url)) },
+        replaceState: (_s: unknown, _t: string, url: string | URL) => { replaced.push(String(url)) },
+      },
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    } as unknown as Window & typeof globalThis
+  })
+
+  afterAll(() => { globalAny.window = originalWindow })
+
+  /** Mount with a location as a deep link would have left it; loadSnapshot loads the workspace. */
+  const mountAt = (plans: Record<string, unknown> | undefined) => {
+    useTeamLocationStore.setState({
+      location: { teamKey: '/repo', tab: 'plans', id: 'p1', ...(plans !== undefined ? { plans } : {}) },
+    })
+    return mount()
+  }
+
+  const loadSnapshot = () => {
+    act(() => useTeamPlanWorkspaceStore.getState().applySnapshot({
+      type: 'team-plan-workspace-snapshot', teamPath: '/repo', teamId: 't', planId: 'p1', workspace: snapshot(),
+    }))
+  }
+
+  const pushArtifacts = () => {
+    act(() => useTeamPlanWorkspaceStore.getState().applyArtifacts({
+      type: 'team-plan-workspace-artifacts', teamPath: '/repo', planId: 'p1', changeName: 'api',
+      view: {
+        ok: true, changeName: 'api', source: { kind: 'main', worktreeId: '/repo' },
+        artifacts: [{ kind: 'proposal', relativePath: 'openspec/changes/api/proposal.md' }],
+      },
+    }))
+  }
+
+  test('a deep link selects version and execution while loading, then the change once it loads', () => {
+    const { byId, has, sent } = mountAt({ version: 'rev:2', execution: 'e2', change: 'api', role: 'lead' })
+    // Valid selectors apply as their data arrives; the change waits (pending, not invalid).
+    expect(has('plan-workspace-url-notice')).toBe(false)
+    expect(useTeamPlanWorkspaceStore.getState().views['/repo']?.version).toEqual({ kind: 'revision', revision: 2 })
+    expect(useTeamPlanWorkspaceStore.getState().views['/repo']?.executionId).toBe('e2')
+    expect(useTeamPlanWorkspaceStore.getState().views['/repo']?.selectedChange).toBeNull()
+    expect(useTeamPlanWorkspaceStore.getState().roles['/repo']).toBe('lead')
+    // The workspace subscription carried the linked identity.
+    const open = sent.filter(message => message.type === 'team-plan-workspace-open').at(-1)!
+    expect(open.version).toEqual({ kind: 'revision', revision: 2 })
+    expect(open.execution).toEqual({ executionId: 'e2' })
+    // The displayed version loaded: the pending change applies, still no notice.
+    loadSnapshot()
+    expect(useTeamPlanWorkspaceStore.getState().views['/repo']?.selectedChange).toBe('api')
+    expect(has('plan-workspace-url-notice')).toBe(false)
+    expect(byId('workspace-version-picker').props.value).toBe('rev:2')
+  })
+
+  test('an unknown selector falls back with its notice and keeps the URL for the next reload', () => {
+    const { byId, has } = mountAt({ version: 'rev:9', change: 'ghost', role: 'chef' })
+    loadSnapshot()
+    expect(has('plan-workspace-url-notice')).toBe(true)
+    const notice = textOf(byId('plan-workspace-url-notice'))
+    expect(notice).toContain('revision 9')
+    expect(notice).toContain('ghost')
+    expect(notice).toContain('chef')
+    // Nothing was silently selected instead.
+    const view = useTeamPlanWorkspaceStore.getState().views['/repo']!
+    expect(view.version).toBeNull()
+    expect(view.selectedChange).toBeNull()
+    expect(useTeamPlanWorkspaceStore.getState().roles['/repo']).toBeUndefined()
+    // The URL keeps the stale selectors, so a reload explains again.
+    expect(useTeamLocationStore.getState().location?.plans).toEqual({ version: 'rev:9', change: 'ghost', role: 'chef' })
+    // And no history was written by the fallback itself.
+    expect(pushed).toEqual([])
+  })
+
+  test('the next user act rewrites the query from store truth and clears the notice', () => {
+    const { byId, has } = mountAt({ version: 'rev:9' })
+    loadSnapshot()
+    expect(has('plan-workspace-url-notice')).toBe(true)
+    act(() => byId('workspace-version-picker').props.onChange({ target: { value: 'rev:2' } }))
+    expect(useTeamPlanWorkspaceStore.getState().views['/repo']?.version).toEqual({ kind: 'revision', revision: 2 })
+    expect(useTeamLocationStore.getState().location?.plans).toEqual({ version: 'rev:2' })
+    expect(has('plan-workspace-url-notice')).toBe(false)
+    expect(pushed).toEqual(['#/team/%2Frepo/plans/p1?v=rev%3A2'])
+  })
+
+  test('a map act mirrors the store into the URL exactly once; nothing loops', () => {
+    const { byId, rerender } = mountAt(undefined)
+    loadSnapshot()
+    expect(useTeamLocationStore.getState().location?.plans).toBeUndefined()
+    act(() => byId('wbs-select-api').props.onClick())
+    expect(useTeamPlanWorkspaceStore.getState().views['/repo']?.selectedChange).toBe('api')
+    expect(useTeamLocationStore.getState().location?.plans).toEqual({ change: 'api' })
+    expect(pushed).toEqual(['#/team/%2Frepo/plans/p1?c=api'])
+    // The sync pass the navigation triggered applies nothing and pushes nothing.
+    rerender()
+    rerender(1)
+    expect(pushed).toHaveLength(1)
+    expect(useTeamPlanWorkspaceStore.getState().views['/repo']?.urlNotice).toBeNull()
+  })
+
+  test('opening a document from the reader names both its fields in the URL', () => {
+    const { byId } = mountAt(undefined)
+    loadSnapshot()
+    act(() => { byId('wbs-select-api').props.onClick() })
+    pushArtifacts()
+    const artifact = byId('plan-workspace-artifact-proposal')
+    act(() => artifact.props.onClick())
+    expect(useTeamPlanWorkspaceStore.getState().views['/repo']?.selectedDocument).toEqual({
+      worktreeId: '/repo', relativePath: 'openspec/changes/api/proposal.md',
+    })
+    expect(useTeamLocationStore.getState().location?.plans?.document).toEqual({
+      worktreeId: '/repo', relativePath: 'openspec/changes/api/proposal.md',
+    })
+    expect(pushed.at(-1)).toBe('#/team/%2Frepo/plans/p1?c=api&dw=%2Frepo&dp=openspec%2Fchanges%2Fapi%2Fproposal.md')
+  })
 })

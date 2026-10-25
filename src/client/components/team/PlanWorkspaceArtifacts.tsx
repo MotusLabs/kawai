@@ -17,7 +17,7 @@ const KIND_LABELS: Record<string, string> = {
   proposal: 'Proposal', design: 'Design', tasks: 'Tasks', specs: 'Spec',
 }
 
-export default function PlanWorkspaceArtifacts({ teamPath, planId, change, view, connected, connectionEpoch, sendMessage }: {
+export default function PlanWorkspaceArtifacts({ teamPath, planId, change, view, connected, connectionEpoch, sendMessage, onOpenDocument }: {
   teamPath: string
   planId: string
   change: string
@@ -25,6 +25,8 @@ export default function PlanWorkspaceArtifacts({ teamPath, planId, change, view,
   connected: boolean
   connectionEpoch: number
   sendMessage: SendClientMessage
+  /** The document-open route (defaults to the store write); the section adds the URL mirror (7.1). */
+  onOpenDocument?: (selection: { worktreeId: string; relativePath: string }) => void
 }) {
   // The client half of B3: the close rides this effect's cleanup, so a
   // change, plan or team switch — and unmount — ends the subscription; a
@@ -43,15 +45,17 @@ export default function PlanWorkspaceArtifacts({ teamPath, planId, change, view,
   }
   return <div data-testid="plan-workspace-artifacts" className="mt-2 border border-border p-2">
     <h4 className="font-medium">Canonical artifacts</h4>
-    <ArtifactsBody teamPath={teamPath} change={change} enumeration={enumeration} view={view} />
+    <ArtifactsBody teamPath={teamPath} change={change} enumeration={enumeration} view={view}
+      onOpenDocument={onOpenDocument ?? (selection => useTeamPlanWorkspaceStore.getState().openDocument(teamPath, selection))} />
   </div>
 }
 
-function ArtifactsBody({ teamPath, change, enumeration, view }: {
+function ArtifactsBody({ teamPath, change, enumeration, view, onOpenDocument }: {
   teamPath: string
   change: string
   enumeration: WorkspaceArtifactsView
   view: PlanWorkspaceView
+  onOpenDocument: (selection: { worktreeId: string; relativePath: string }) => void
 }) {
   if (!enumeration.ok) {
     // The server's fixed, path-free reason for this state (missing,
@@ -70,7 +74,8 @@ function ArtifactsBody({ teamPath, change, enumeration, view }: {
     <ul className="mt-1 space-y-0.5" data-testid="plan-workspace-artifacts-list">
       {enumeration.artifacts.map(artifact => (
         <ArtifactRow key={artifact.relativePath} teamPath={teamPath}
-          worktreeId={enumeration.source.worktreeId} artifact={artifact} view={view} />
+          worktreeId={enumeration.source.worktreeId} artifact={artifact} view={view}
+          onOpenDocument={onOpenDocument} />
       ))}
     </ul>
   </>
@@ -82,11 +87,12 @@ function ArtifactsBody({ teamPath, change, enumeration, view }: {
  * then the row reads `unread`; once read it shows that view's real
  * availability, never a fabricated hash or size.
  */
-function ArtifactRow({ teamPath, worktreeId, artifact, view }: {
+function ArtifactRow({ teamPath, worktreeId, artifact, view, onOpenDocument }: {
   teamPath: string
   worktreeId: string
   artifact: WorkspaceArtifactDescriptor
   view: PlanWorkspaceView
+  onOpenDocument: (selection: { worktreeId: string; relativePath: string }) => void
 }) {
   const key = documentKey({ worktreeId, relativePath: artifact.relativePath })
   const observed = view.documents[key] ?? null
@@ -95,7 +101,7 @@ function ArtifactRow({ teamPath, worktreeId, artifact, view }: {
     <button type="button" data-testid={`plan-workspace-artifact-${artifact.kind}`}
       aria-current={selected ? 'true' : undefined}
       className={selected ? 'text-left font-medium underline' : 'text-left underline'}
-      onClick={() => useTeamPlanWorkspaceStore.getState().openDocument(teamPath, { worktreeId, relativePath: artifact.relativePath })}>
+      onClick={() => onOpenDocument({ worktreeId, relativePath: artifact.relativePath })}>
       {KIND_LABELS[artifact.kind] ?? artifact.kind}
     </button>
     <span className="text-chat-meta text-secondary">{artifact.relativePath}</span>

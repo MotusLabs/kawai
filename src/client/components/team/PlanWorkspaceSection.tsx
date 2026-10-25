@@ -251,7 +251,8 @@ function documentsContent(view: PlanWorkspaceView, teamPath: string, connected: 
   return <>
     {view.selectedChange !== null && <PlanWorkspaceArtifacts teamPath={teamPath} planId={planId}
       change={view.selectedChange} view={view} connected={connected} connectionEpoch={connectionEpoch}
-      sendMessage={sendMessage} />}
+      sendMessage={sendMessage}
+      onOpenDocument={selection => { store.openDocument(teamPath, selection); navigateWorkspace() }} />}
     <PlanWorkspaceReader teamPath={teamPath} refs={view.snapshot?.references ?? []}
       selectedChange={view.selectedChange} executionId={view.executionId} view={view}
       worktrees={worktrees} connected={connected}
