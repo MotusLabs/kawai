@@ -4,7 +4,8 @@
 // 20261024 for every property; the design pins the case counts.
 import { expect, test } from 'bun:test'
 import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk'
-import type { ChatEvent, ChatPendingRequest } from '../../shared/chat'
+import type { ChatEvent, ChatPendingRequest, ChatQuestion } from '../../shared/chat'
+import { recommendationCases } from './fixtures/recommendationCases'
 import {
   createHarness,
   flush,
@@ -38,7 +39,7 @@ function shuffle<T>(items: T[], random: () => number): T[] {
 interface QuestionSpec {
   question: string
   multiSelect?: boolean
-  options: string[]
+  options: Array<string | ChatQuestion['options'][number]>
 }
 
 function questionInput(specs: QuestionSpec[]): Record<string, unknown> {
@@ -47,7 +48,7 @@ function questionInput(specs: QuestionSpec[]): Record<string, unknown> {
       question: spec.question,
       header: spec.question,
       multiSelect: spec.multiSelect === true,
-      options: spec.options.map((label) => ({ label })),
+      options: spec.options.map((option) => typeof option === 'string' ? { label: option } : option),
     })),
   }
 }
@@ -245,31 +246,19 @@ test('QA-P2: a held question never auto-answers, at any hold instant (200 seeded
   }
 }, 120_000)
 
-const MARKER_VARIANTS = [
-  ['Yes (Recommended)', 'No'],            // trailing marked
-  ['yes (recommended)', 'No'],            // case-insensitive
-  ['Yes (Recommended)  ', 'No'],          // trailing whitespace
-  ['(Recommended) Yes', 'No'],            // mid-label marker never matches
-  ['Yes', 'No'],                          // absent
-] as const
-
-/**
- * Whether every question in the set yields a full recommendation — the same
- * predicate `recommendedAnswers` applies (trailing `(recommended)`,
- * case-insensitive; the first marked label is taken for single-select).
- */
-function fullyRecommended(specs: QuestionSpec[]): boolean {
-  return specs.every((spec) => spec.options.some((label) => /\(recommended\)\s*$/i.test(label)))
-}
-
 test('QA-P3: a deadline exists iff a full recommendation and a positive wait (300 seeded cases)', async () => {
   const random = rng(SEED)
   for (let i = 0; i < 300; i++) {
     const count = 1 + Math.floor(random() * 3)
+    const marked: boolean[] = []
     const specs: QuestionSpec[] = Array.from({ length: count }, (_, q) => {
-      const optionCount = 1 + Math.floor(random() * 4)
-      const variant = MARKER_VARIANTS[Math.floor(random() * MARKER_VARIANTS.length)]!
-      const options = Array.from({ length: optionCount }, (_, o) => variant[o % variant.length]!)
+      const optionCount = Math.floor(random() * 5)
+      const fixtures = Array.from({ length: optionCount }, () =>
+        recommendationCases[Math.floor(random() * recommendationCases.length)]!)
+      // The oracle is independently classified fixture data, never the
+      // detector under test or a regex that repeats its implementation.
+      marked.push(fixtures.some((fixture) => fixture.matches))
+      const options = fixtures.map((fixture) => fixture.option)
       return {
         question: `Q${q}?`,
         multiSelect: random() < 0.5,
@@ -277,7 +266,7 @@ test('QA-P3: a deadline exists iff a full recommendation and a positive wait (30
       }
     })
     const waitPositive = random() < 0.5
-    const expected = fullyRecommended(specs) && waitPositive
+    const expected = marked.every(Boolean) && waitPositive
 
     const clock = new ManualClock()
     const harness = createHarness({
@@ -290,7 +279,7 @@ test('QA-P3: a deadline exists iff a full recommendation and a positive wait (30
       await flush()
       const request = questionRequests(harness.events).at(-1)!
       expect(request !== undefined && request.autoAnswer !== undefined).toBe(expected)
-      expect(snapshotOf(harness, request.requestId ?? '')?.autoAnswer !== undefined).toBe(expected)
+      expect(snapshotOf(harness, request?.requestId ?? '')?.autoAnswer !== undefined).toBe(expected)
       expect(clock.pendingCount).toBe(expected ? 1 : 0)
     } finally {
       harness.driver.kill()
