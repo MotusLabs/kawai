@@ -44,8 +44,8 @@ Implement after `team-workspace-pages`, `durable-plans`, and `plan-supervision` 
 
 ## 7. Navigation, accessibility and integration verification
 
-- [ ] 7.1 Extend Plans route parse/format for plan/version/execution/change/document/role selectors and view-state retention; verify reload/Back/Forward, invalid links, full-screen chat return and unchanged legacy Team routes with route and browser tests.
-- [ ] 7.2 Add desktop pane sizing/expansion and narrow-screen Map/Documents/Conversation navigation with explicit return paths; verify keyboard resize, focus order, non-color status labels and mobile selection preservation with accessibility/component checks.
+- [x] 7.1 Extend Plans route parse/format for plan/version/execution/change/document/role selectors and view-state retention; verify reload/Back/Forward, invalid links, full-screen chat return and unchanged legacy Team routes with route and browser tests.
+- [x] 7.2 Add desktop pane sizing/expansion and narrow-screen Map/Documents/Conversation navigation with explicit return paths; verify keyboard resize, focus order, non-color status labels and mobile selection preservation with accessibility/component checks.
 - [ ] 7.3 Add `tests/e2e/plan-workspace.spec.ts` using an isolated server/database/repository: parallel plan branches, checklist refresh, checked-but-in-review work, holder/health updates, Markdown/mockup reading, distinct repository chats reused across two plans, plan-scoped messages, pending question resolution, reconnect/reload and preserved workspace on chat return. Register it in the fixture CI invocation and verify the walkthrough passes.
 - [ ] 7.4 Exercise a 100-change/2,000-item fixture; verify changes start collapsed, only expanded checklists/selected documents load, map selection and typing remain responsive, and workspace observation starts no worker processes; record the measured result in the change handoff.
 - [ ] 7.5 Run `bun run lint && bun run typecheck && bun run test` and the isolated Plan workspace browser walkthrough after implementation; record outcomes and any limitations without substituting checkbox completion for verified execution success.
