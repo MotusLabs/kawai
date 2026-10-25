@@ -92,8 +92,9 @@ test('deep links, reload, Back/Forward, the full-screen return, and the pane con
   try {
     await page.goto('/')
     const lead = await createChat(page, root, 'Plan lead', 'leads')
-    const planId = seedPlanAsAgent(lead)
-    const plansBase = `${encodeURIComponent(root)}/plans`
+    seedPlanAsAgent(lead)
+    // Everything after `#/team/<key>/` in the hash: `plans/<id>[?query]`.
+    const plansBase = 'plans'
 
     // 1. The workspace opens on the newest in-review revision by default.
     await setHash(page, teamHash(root, 'plans'))
@@ -102,6 +103,9 @@ test('deep links, reload, Back/Forward, the full-screen return, and the pane con
     await expect(page.getByTestId('plan-workspace')).toBeVisible()
     await expect(page.getByTestId('workspace-displayed-label')).toContainText('revision 2')
     await expect(page.getByTestId('plan-workspace-url-notice')).toHaveCount(0)
+    // The selected plan names itself in the URL; take the id from there rather
+    // than from the seeder's stdout.
+    const planId = decodeURIComponent((await hashNow(page)).split('/').pop()!.split('?')[0]!)
 
     // 2. A deep link selects the version and the role, in the URL's own words.
     const deepLink = `${plansBase}/${planId}?v=rev%3A1&r=lead`
@@ -159,6 +163,11 @@ test('deep links, reload, Back/Forward, the full-screen return, and the pane con
     // 7. The legacy routes still parse: the Tasks tab opens by its URL.
     await setHash(page, teamHash(root, 'tasks'))
     await expect(page.getByTestId('team-tasks')).toBeVisible()
+
+    // Back to the workspace by its URL for the pane controls.
+    await setHash(page, teamHash(root, deepLink))
+    await expect(page.getByTestId('plan-workspace-panes')).toBeVisible()
+    await expect(page.getByTestId('plan-workspace-panes')).toHaveAttribute('data-layout', 'desktop')
 
     // 8. The divider is a keyboard control with a bounded, labelled value.
     const divider = page.getByTestId('workspace-panes-divider')
