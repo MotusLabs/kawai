@@ -2827,8 +2827,11 @@ export class ChatSessionManager {
               network: codexLaunch.network,
               ...(codexLaunch.model ? { model: codexLaunch.model } : {}),
               wire: wire ?? { record: () => {} },
-              // The catalog at the chat's path names the credentials (D3).
-              withheldCredentials: withheldCredentialNamesAt(this.catalogCtx(record.projectPath)),
+              // The registered-name set at the chat's path (D3/D2): the
+              // catalog's names plus the retained ones, observed with the
+              // store so a removed entry's credential stays withheld on the
+              // Codex arm too.
+              withheldCredentials: withheldCredentialNamesAt(this.catalogCtx(record.projectPath), this.options.db),
               teamTools: teamToolTable(this.mailbox, record.sessionId, teamServices),
               // Codex fills a home holding no report with one read (PR E
               // 7.1); the store claims it once per home.

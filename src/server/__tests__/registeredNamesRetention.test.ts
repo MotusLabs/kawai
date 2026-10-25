@@ -100,6 +100,7 @@ describe('P7 — withholding survives every mutation op (generated at the regist
     }
   }
 
+  // @covers: provider-credentials › Registered secret names stay withheld › Reclassification does not end withholding
   test('every remove/disable/clear/reclassify sequence keeps registered names withheld', () => {
     const random = rng(SEED)
     for (let caseIndex = 0; caseIndex < CASES; caseIndex++) {

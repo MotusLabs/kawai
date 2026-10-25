@@ -3,11 +3,9 @@
 // a name stays withheld after its entry is removed or dropped, because the
 // registry persists it (names only, app_settings "registered_secret_names");
 // and an unregistered ambient variable passes exactly as before on every
-// branch (W1). Checkpoint 2 covers the four Claude branches; the Codex branch
-// joins when its call site threads the store. The seeded P7 generator and the
-// registry's failure behavior live in registeredNamesRetention.test.ts; the
-// scenarios that must fail on origin/master live in
-// registeredNameSurvivesRemoval.test.ts.
+// branch (W1). The seeded P7 generator and the registry's failure behavior
+// live in registeredNamesRetention.test.ts; the scenarios that must fail on
+// origin/master live in registeredNameSurvivesRemoval.test.ts.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -15,8 +13,10 @@ import path from 'node:path'
 import {
   PROFILE_CONTROLLED_ENV,
   resolveClaudeProfile,
+  withheldCredentialNamesAt,
   type ClaudeLaunchConfiguration,
 } from '../chat/ClaudeProfiles'
+import { codexSpawnEnv } from '../chat/codexProfiles'
 import {
   RETAINED_SECRET_NAMES_KEY,
   collidingLaunchEnvNames,
@@ -108,15 +108,17 @@ const AMBIENT = {
   CLAUDE_CODE_MAX_OUTPUT_TOKENS: '32000',
 }
 
-/** One launch of each Claude kind, so every branch is audited against the
- * same ambient environment and the same registered set (D5's withheld-set
- * row). The registry's db rides the production arguments: resolution
- * persists the catalog's names before filtering. */
+/** One launch of each kind, so every branch is audited against the same
+ * ambient environment and the same registered set (D5's withheld-set row).
+ * The registry's db rides the production arguments: resolution persists the
+ * catalog's names before filtering, and the Codex arm's set comes from the
+ * same store-backed read the manager makes. */
 const BRANCH_PROBES = {
   default: () => resolveClaudeLaunch('default', AMBIENT, ctx(), undefined, db),
   namedProfile: () => resolveClaudeLaunch('glm', AMBIENT, ctx(), undefined, db),
   wrapper: () => resolveClaudeLaunch('wrap', AMBIENT, ctx(), undefined, db),
   credentialed: () => resolveClaudeLaunch('or2-sonnet', AMBIENT, ctx(), undefined, db),
+  codex: () => codexSpawnEnv({ ...process.env, ...AMBIENT }, '/srv/codex', withheldCredentialNamesAt(ctx(), db)),
 } as const
 
 describe('every launch branch withholds the registered-name set (D5 composition table)', () => {
@@ -191,6 +193,24 @@ describe('every launch branch withholds the registered-name set (D5 composition 
     expect(launch.env).not.toHaveProperty('DROP_KEY')
     expect(launch.env?.UNRELATED_VAR).toBe('kept-value')
   })
+
+  test('the Codex branch filters registered names beside its provider variables', () => {
+    // The arm composes from the server environment; its set is the same
+    // store-backed read the manager makes (withheldCredentialNamesAt with
+    // the db), so retained names are withheld here too.
+    resolveClaudeLaunch('or2-sonnet', AMBIENT, ctx(), undefined, db)
+    const env = BRANCH_PROBES.codex()
+    expect(env.OR2_KEY).toBeUndefined()
+    expect(env.OR2_MANAGEMENT_KEY).toBeUndefined()
+    expect(env.DROP_KEY).toBeUndefined()
+    expect(env.UNRELATED_VAR).toBe('kept-value')
+    // The Codex branch's own operations (D5 row): every ANTHROPIC_*/CLAUDE_*
+    // variable dropped, CODEX_HOME set — the ambient base URL goes with them.
+    expect(env.ANTHROPIC_BASE_URL).toBeUndefined()
+    expect(env.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBeUndefined()
+    expect(env.CODEX_HOME).toBe('/srv/codex')
+    expect(env.HTTPS_PROXY).toBe('http://192.0.2.10:3128')
+  })
 })
 
 describe('registered secret names stay withheld (provider-credentials delta scenarios)', () => {
@@ -209,6 +229,13 @@ describe('registered secret names stay withheld (provider-credentials delta scen
     expect(launch.env).not.toHaveProperty('OR2_KEY')
     expect(launch.env).not.toHaveProperty('OR2_MANAGEMENT_KEY')
     expect(launch.env?.UNRELATED_VAR).toBe('kept-value')
+    // And the Codex arm withholds through the same persisted set: its read
+    // carries the retained names, so the removed entry's credentials stay
+    // out of its spawn environment.
+    const codex = codexSpawnEnv({ ...process.env, ...AMBIENT }, '/srv/codex', withheldCredentialNamesAt(ctx(), db))
+    expect(codex.OR2_KEY).toBeUndefined()
+    expect(codex.OR2_MANAGEMENT_KEY).toBeUndefined()
+    expect(codex.UNRELATED_VAR).toBe('kept-value')
   })
 
   // @covers: provider-credentials › Registered secret names stay withheld › A disabled entry's variables stay withheld
@@ -220,6 +247,8 @@ describe('registered secret names stay withheld (provider-credentials delta scen
     const launch = resolveClaudeLaunch('default', AMBIENT, ctx(), undefined, db)
     expect(launch.env).not.toHaveProperty('DROP_KEY')
     expect(launch.env?.UNRELATED_VAR).toBe('kept-value')
+    const codex = codexSpawnEnv({ ...process.env, ...AMBIENT }, '/srv/codex', withheldCredentialNamesAt(ctx(), db))
+    expect(codex.DROP_KEY).toBeUndefined()
   })
 
   // @covers: provider-credentials › Registered secret names stay withheld › An ambient route survives a Default launch
@@ -363,6 +392,16 @@ describe('registered secret names stay withheld (provider-credentials delta scen
             .map(name => [name, '']),
         ),
       },
+    })
+    // Codex composes from the server environment; the probe passes one
+    // explicitly instead of the runner's process.env. Its own operations:
+    // ANTHROPIC_*/CLAUDE_CODE_* dropped (the ambient base URL and the
+    // controlled output-tokens variable with them), CODEX_HOME added.
+    const codexInput = { PATH: '/usr/bin', HOME: tempHome, ...AMBIENT }
+    const codex = codexSpawnEnv(codexInput, '/srv/codex', withheldCredentialNamesAt(ctx(), db))
+    assertDeliveryUnchanged(codex, codexInput, REGISTERED, {
+      deleted: ['ANTHROPIC_BASE_URL', 'CLAUDE_CODE_MAX_OUTPUT_TOKENS'],
+      added: { CODEX_HOME: '/srv/codex' },
     })
   })
 
