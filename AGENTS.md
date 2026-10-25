@@ -13,9 +13,10 @@ bun run test       # unit tests
 bun run check      # lint + typecheck + tests, cached by content
 ```
 
-`bun run test` gives each test file fresh temporary database, log, and config
-directories and runs files with per-file isolation; a bare `bun test` keeps
-the old shared-process mode. Non-tmux files run in one parallel `bun test`
+`bun run test` gives each test file fresh temporary database, log, config, and
+home directories (HOME points into the run root, so no test reads the real
+~/.kawai, ~/.agentboard, or ~/.claude) and runs files with per-file isolation;
+a bare `bun test` keeps the old shared-process mode. Non-tmux files run in one parallel `bun test`
 step, and the real-tmux files serially after it (`--skip-real-tmux` skips
 them). `--skip-slow` excludes the slow tier — every `*.integration.test.ts`
 file plus the real-tmux files — and runs the rest; by default both tiers
