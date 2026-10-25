@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { initDatabase, type SessionDatabase } from '../db'
+import { resolveProjectPath } from '../paths'
 import { SessionRegistry } from '../SessionRegistry'
 import { managedManager, closeDispatchers, createHarness, flush, installManagerCleanup } from './helpers/chatSessionManagerHarness'
 
@@ -96,7 +97,12 @@ describe('ChatSessionManager', () => {
       })
       const result = manager.createSession({ projectPath: '~/work/app' })
       if (!result.ok) throw new Error('create failed')
-      const expected = path.join(os.homedir(), 'work', 'app')
+      // paths.ts captures HOME at module load (the preload's per-file home
+      // under the runner), so the expectation comes from the same resolver
+      // rather than the host's real home; the suffix check keeps the
+      // expansion itself pinned — a literal `~` must not pass.
+      const expected = resolveProjectPath('~/work/app')
+      expect(expected.endsWith(path.join('work', 'app'))).toBe(true)
       expect(checked).toEqual([expected])
       expect(result.session.projectPath).toBe(expected)
       expect(db.getChatSession(result.session.id)?.projectPath).toBe(expected)
