@@ -146,18 +146,33 @@ whether a takeover is needed.
   - Client effects: every id or path a request uses is in its deps (e.g.
     `teamPath`); every cache is invalidated by each write that changes its
     inputs. Date logic holds across DST days in a non-UTC zone.
-  - Claims match the commit: every ticked `tasks.md` item is implemented, the
-    spec and design state what the code does, commit titles describe their
-    diffs, and the branch contains `origin/master` when the direction says so.
+  - Claims match the commit: the coverage map names every task clause the
+    result completes, the spec and design state what the code does, commit
+    titles describe their diffs, and the branch contains `origin/master`
+    when the direction says so.
   - Hygiene: no new lint warnings or debug output, no file pushed past 500
     lines, no private hostnames in the diff.
+- Record the map from spec and task clauses to tests in
+  `task_submit_result`'s `coverage` field — clauses of
+  `` `path` › `title` `` citations — never as prose.
+- Name each test that covers a spec scenario with
+  `// @covers: <capability> › <requirement> › <scenario>` directly above
+  its `test`/`it` call, as AGENTS.md's spec coverage bullet says.
+- Leave `tasks.md` checkboxes alone; the archive PR ticks them. The map
+  names the task clauses the result completes (for example `2.1 Verify`),
+  replacing the "every ticked tasks.md item is implemented" self-check.
+- Before each `task_submit_result`, run
+  `bun scripts/verify-result.ts --commit <head-sha>`, where `<head-sha>`
+  is the exact commit you submit, with `--coverage <map.json>` when
+  there is a map (a JSON file), and state its exit code. Its output is
+  still a claim.
 - When acceptance criteria hold and checks pass, call `task_submit_result`
   with the task id, summary, exact full commit SHA, changed paths, checks
-  actually run with outcomes, and limitations. Include the spec-to-test
-  coverage mapping in the submitted result. For a checkpoint, distinguish
+  actually run with outcomes, and limitations. Record the coverage map in
+  the `coverage` field, never as prose. For a checkpoint, distinguish
   covered requirements from tests still planned for later work; claim only
-  the completed scope. Put detailed evidence in the result and journal. Send
-  one concise report to the Lead: DONE/CHECKPOINT/
+  the completed scope. Put other detailed evidence in the result and
+  journal. Send one concise report to the Lead: DONE/CHECKPOINT/
   BLOCKED first, task id and revision, result or note id, worktree, branch,
   exact HEAD, check summary, and next action or blocker. Aim for at most 1,200
   characters; reference records instead of repeating their contents. Submit a
