@@ -8,7 +8,7 @@
 import { expect, type Locator, type Page } from '@playwright/test'
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 /** The GitHub-shaped remote the walkthrough origins hide behind. */
 export const GITHUB_URL = 'https://github.com/acme/walkthrough.git'
@@ -70,14 +70,21 @@ export function serveDeltas(deltas: Record<string, readonly StubTouch[]>): void 
  * A git repository whose OpenSpec root registers each named change (a
  * proposal and a chat spec file), plus the team's group files, so a plan
  * naming the changes validates as registered. Returns nothing; callers pass
- * the root as the chat's project path.
+ * the root as the chat's project path. `extraFiles` optionally writes more
+ * repository files (repo-relative paths), e.g. a long proposal a workspace
+ * reader can scroll; the walkthroughs that need none are unaffected.
  */
-export function initPlanRepository(root: string, changes: readonly string[], groups: Record<string, string>): void {
+export function initPlanRepository(root: string, changes: readonly string[], groups: Record<string, string>,
+  extraFiles: Readonly<Record<string, string>> = {}): void {
   execFileSync('git', ['init', '-q', root])
   for (const change of changes) {
     mkdirSync(join(root, 'openspec', 'changes', change, 'specs', 'chat'), { recursive: true })
     writeFileSync(join(root, 'openspec', 'changes', change, 'proposal.md'), `# ${change}\n`)
     writeFileSync(join(root, 'openspec', 'changes', change, 'specs', 'chat', 'spec.md'), '## ADDED Requirements\n### Requirement: Presence\n')
+  }
+  for (const [path, content] of Object.entries(extraFiles)) {
+    mkdirSync(dirname(join(root, path)), { recursive: true })
+    writeFileSync(join(root, path), content)
   }
   mkdirSync(join(root, '.kawai', 'groups'), { recursive: true })
   for (const [id, body] of Object.entries(groups)) {
