@@ -129,6 +129,68 @@ test('HEAD moved past the commit: ahead two on its branch, a warning', async () 
   expect(facts.head?.status).toBe('warn')
 })
 
+// The commit fact resolves a worktree-local ref such as HEAD in the
+// result's own worktree, never at the repository root (the bare-run
+// defect): a linked worktree's HEAD differs from the main checkout's.
+test('a given HEAD resolves in the result\'s own linked worktree, not at the root', async () => {
+  const repo = makeRepo()
+  const rootHead = repo.commit('root.txt', 'r\n', 'root work')
+  const wt = repo.worktree(path.join(tempRoot, 'wt'), 'feature')
+  const wtHead = repo.commit('wt.txt', 'w\n', 'worktree work', wt)
+  expect(wtHead).not.toBe(rootHead)
+  const facts = await check(repo, { given: 'HEAD', worktree: wt })
+  expect(facts.commit.given).toBe('HEAD')
+  expect(facts.commit.sha).toBe(wtHead)
+  expect(facts.commit.resolvedAtCheckTime).toBe(true)
+  // The resolved commit is the worktree's own head, so the relation reads same.
+  expect(facts.head?.relation).toBe('same')
+})
+
+test('with no worktree, a given HEAD resolves at the repository root', async () => {
+  const repo = makeRepo()
+  const rootHead = repo.commit('root.txt', 'r\n', 'root work')
+  const facts = await check(repo, { given: 'HEAD', worktree: null })
+  expect(facts.commit.sha).toBe(rootHead)
+  expect(facts.head?.note).toBe('the result names no worktree')
+})
+
+test('a missing worktree directory resolves the given HEAD at the root', async () => {
+  const repo = makeRepo()
+  const rootHead = repo.commit('root.txt', 'r\n', 'root work')
+  const wt = repo.worktree(path.join(tempRoot, 'wt'), 'feature')
+  repo.commit('wt.txt', 'w\n', 'worktree work', wt)
+  fs.rmSync(wt, { recursive: true, force: true })
+  const facts = await check(repo, { given: 'HEAD', worktree: wt })
+  expect(facts.commit.sha).toBe(rootHead)
+  expect(facts.head?.status).toBe('unknown')
+})
+
+test('a worktree of another repository does not resolve the given HEAD there', async () => {
+  const repo = makeRepo()
+  const rootHead = repo.commit('root.txt', 'r\n', 'root work')
+  const stranger = path.join(tempRoot, 'stranger')
+  fs.mkdirSync(stranger)
+  runGit(['init', '--initial-branch=master', stranger], { timeoutMs: 10_000 })
+  fs.writeFileSync(path.join(stranger, 's.txt'), 's\n')
+  runGit(['add', '--', 's.txt'], { cwd: stranger, timeoutMs: 10_000, env: COMMIT_ENV })
+  runGit(['commit', '-m', 'stranger'], { cwd: stranger, timeoutMs: 10_000, env: COMMIT_ENV })
+  const strangerHead = runGit(['rev-parse', 'HEAD'], { cwd: stranger, timeoutMs: 10_000 }).stdout.trim()
+  expect(strangerHead).not.toBe(rootHead)
+  const facts = await check(repo, { given: 'HEAD', worktree: stranger })
+  expect(facts.commit.sha).toBe(rootHead)
+  expect(facts.commit.sha).not.toBe(strangerHead)
+})
+
+test('a full sha resolves as before, whatever the worktree', async () => {
+  const repo = makeRepo()
+  const sha = repo.commit('root.txt', 'r\n', 'root work')
+  const wt = repo.worktree(path.join(tempRoot, 'wt'), 'feature')
+  repo.commit('wt.txt', 'w\n', 'worktree work', wt)
+  const facts = await check(repo, { given: sha, worktree: wt })
+  expect(facts.commit.sha).toBe(sha)
+  expect(facts.commit.resolvedAtCheckTime).toBe(false)
+})
+
 // @covers: task-results › Kawai checks a result's commit › Dirty worktree
 test('dirty worktree: the modified tracked file and the untracked file are listed', async () => {
   const repo = makeRepo()

@@ -1,14 +1,15 @@
 // The check computation (independent-verification design D2, task 2.2): what
 // one check reads about a result's commit, and the facts it records. Every
 // git call is read-only at the repository's objects, run at the team main
-// checkout (rev-parse, merge-tree, diff, merge-base, rev-list, show); only
-// the result's own worktree is read for HEAD, its branch, and its status.
-// A call that does not answer — a timeout or a spawn failure — throws
-// `CheckUnavailable`: the whole check is unavailable (D1), never a per-fact
-// unknown. A fact whose precondition is missing (no commit, no worktree, an
-// unset base ref) reads `unknown` with its reason instead. The only write
-// anywhere is merge-tree's unreferenced objects, which gc prunes; status
-// runs under --no-optional-locks so the index is never touched.
+// checkout (merge-tree, diff, merge-base, rev-list, show); the result's own
+// worktree is read for the given commit text's resolution, HEAD, its branch,
+// and its status. A call that does not answer — a timeout or a spawn
+// failure — throws `CheckUnavailable`: the whole check is unavailable (D1),
+// never a per-fact unknown. A fact whose precondition is missing (no
+// commit, no worktree, an unset base ref) reads `unknown` with its reason
+// instead. The only write anywhere is merge-tree's unreferenced objects,
+// which gc prunes; status runs under --no-optional-locks so the index is
+// never touched.
 import fs from 'node:fs'
 import path from 'node:path'
 import { runGitAsync, type GitCommandResult } from '../git/gitCommand'
@@ -124,8 +125,25 @@ async function revCount(git: CheckGit, repoRoot: string, range: string): Promise
   return Number.isNaN(count) ? null : count
 }
 
+/** Where the given commit text resolves (D2 1): a worktree-local ref such
+ * as HEAD names the resolving worktree's head, so the text resolves in the
+ * result's own worktree when that worktree exists and belongs to this
+ * repository — its git common dir is the repository's. Every other case —
+ * no worktree, a missing directory, another repository — resolves at the
+ * repository root as before. Read-only; a call that answers with a failure
+ * falls back to the root, one that does not answer is unavailable (D1). */
+async function commitResolveCwd(git: CheckGit, repoRoot: string, worktree: string | null): Promise<string> {
+  if (worktree === null || !fs.existsSync(path.join(worktree, '.git'))) return repoRoot
+  const here = await git(['rev-parse', '--git-common-dir'], { cwd: repoRoot })
+  if (!here.ok) return repoRoot
+  const there = await git(['rev-parse', '--git-common-dir'], { cwd: worktree })
+  if (!there.ok) return repoRoot
+  const common = (cwd: string, answer: GitCommandResult): string => path.resolve(cwd, answer.stdout.trim())
+  return common(repoRoot, here) === common(worktree, there) ? worktree : repoRoot
+}
+
 /** The commit fact (D2 1): resolves the given text, or ends the check. */
-async function checkCommit(git: CheckGit, repoRoot: string, given: string | null): Promise<{
+async function checkCommit(git: CheckGit, repoRoot: string, given: string | null, worktree: string | null): Promise<{
   fact: ResultCheckFacts['commit']
   sha: string | null
   tree: string | null
@@ -136,7 +154,7 @@ async function checkCommit(git: CheckGit, repoRoot: string, given: string | null
       sha: null, tree: null,
     }
   }
-  const result = await git(['rev-parse', '--verify', `${given}^{commit}`], { cwd: repoRoot })
+  const result = await git(['rev-parse', '--verify', `${given}^{commit}`], { cwd: await commitResolveCwd(git, repoRoot, worktree) })
   if (!result.ok) {
     return { fact: { given, sha: null, resolvedAtCheckTime: false, status: 'fail', note: 'commit not found' }, sha: null, tree: null }
   }
@@ -404,7 +422,7 @@ async function resolveCoverage(
  * resolve) records that fact alone — nothing else is checked — with the
  * worktree facts null (never read). */
 export async function computeResultFacts(input: ResultCheckInput, git: CheckGit): Promise<ResultCheckFacts> {
-  const commit = await checkCommit(git, input.repoRoot, input.given)
+  const commit = await checkCommit(git, input.repoRoot, input.given, input.worktree)
   if (commit.sha === null) {
     const note = commit.fact.note ?? 'no commit to check'
     return {
