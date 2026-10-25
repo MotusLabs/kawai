@@ -99,6 +99,8 @@ export const CHAT_CONNECTION_TYPES = [
   'team-plan-override',
   'team-plan-workspace-open',
   'team-plan-workspace-close',
+  'team-plan-workspace-bindings-open',
+  'team-plan-workspace-bindings-close',
   'team-plan-workspace-bind',
   'team-plan-workspace-ref-add',
   'team-plan-workspace-ref-remove',

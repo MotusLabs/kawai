@@ -40,6 +40,7 @@ type WorkspaceBindMessage = Extract<PlanWorkspaceClientMessage, { type: 'team-pl
 type WorkspaceOpenMessage = Extract<PlanWorkspaceClientMessage, { type: 'team-plan-workspace-open' }>
 type WorkspaceRefAddMessage = Extract<PlanWorkspaceClientMessage, { type: 'team-plan-workspace-ref-add' }>
 type WorkspaceRefRemoveMessage = Extract<PlanWorkspaceClientMessage, { type: 'team-plan-workspace-ref-remove' }>
+type WorkspaceBindingsMessage = Extract<PlanWorkspaceClientMessage, { type: 'team-plan-workspace-bindings-open' | 'team-plan-workspace-bindings-close' }>
 
 interface WorkspaceSubscription {
   teamId: string
@@ -63,6 +64,10 @@ export class PlanWorkspaceConnections {
   private flushScheduled = false
   /** The workspace payload last pushed per connection and target — the O6 no-op key. */
   private readonly lastPushed = new Map<ChatConnection, Map<string, string>>()
+  /** The team bindings subscription (Q1): per connection, teamPath → resolved team id. */
+  private readonly bindingSubs = new Map<ChatConnection, Map<string, string>>()
+  /** Binding pushes dirtied by a committed write, flushed in the same coalesced pass. */
+  private dirtyBindings = new Map<ChatConnection, Set<string>>()
 
   constructor(
     private readonly manager: ChatSessionManager,
@@ -75,6 +80,8 @@ export class PlanWorkspaceConnections {
     this.pending.delete(connection)
     this.dirty.delete(connection)
     this.lastPushed.delete(connection)
+    this.bindingSubs.delete(connection)
+    this.dirtyBindings.delete(connection)
   }
 
   /** Retire an open/close reservation, but only while it is still the latest one for its target. */
@@ -97,6 +104,16 @@ export class PlanWorkspaceConnections {
           targets.set(`${teamPath}\0${planId}`, { teamPath, teamId, planId, selector })
         }
         this.dirty.set(connection, targets)
+      }
+    }
+    // A committed binding write re-pushes the team bindings too (Q1) — a
+    // bind, a replacement, and the /clear transfer all come through here.
+    for (const [connection, subs] of this.bindingSubs) {
+      for (const [teamPath, boundTeamId] of subs) {
+        if (boundTeamId !== teamId) continue
+        const dirty = this.dirtyBindings.get(connection) ?? new Set<string>()
+        dirty.add(teamPath)
+        this.dirtyBindings.set(connection, dirty)
       }
     }
     this.scheduleFlush()
@@ -155,12 +172,37 @@ export class PlanWorkspaceConnections {
         })
       }
     }
+    const pendingBindings = this.dirtyBindings
+    this.dirtyBindings = new Map()
+    for (const [connection, teamPaths] of pendingBindings) {
+      for (const teamPath of teamPaths) {
+        const teamId = this.bindingSubs.get(connection)?.get(teamPath)
+        // Unsubscribe cleanup: a team closed before the pass pushes nothing.
+        if (!teamId) continue
+        this.pushBindings(connection, teamPath, teamId)
+      }
+    }
+  }
+
+  /** The bindings payload push (Q1): diffed by the same O6 key, so an unchanged pass stays quiet. */
+  private pushBindings(connection: ChatConnection, teamPath: string, teamId: string) {
+    const bindings = this.bindingViews(teamId)
+    const json = JSON.stringify(bindings)
+    const key = `${teamPath}\0bindings`
+    const pushed = this.lastPushed.get(connection) ?? new Map<string, string>()
+    if (pushed.get(key) === json) return
+    pushed.set(key, json)
+    this.lastPushed.set(connection, pushed)
+    connection.send({ type: 'team-plan-workspace-bindings', teamPath, teamId, bindings })
   }
 
   async handle(connection: ChatConnection, message: WorkspaceClientMessage) {
     if (message.type === 'team-plan-workspace-bind') return this.bind(connection, message as WorkspaceBindMessage)
     if (message.type === 'team-plan-workspace-ref-add') return this.refAdd(connection, message as WorkspaceRefAddMessage)
     if (message.type === 'team-plan-workspace-ref-remove') return this.refRemove(connection, message as WorkspaceRefRemoveMessage)
+    if (message.type === 'team-plan-workspace-bindings-open' || message.type === 'team-plan-workspace-bindings-close') {
+      return this.bindingsSubscription(connection, message as WorkspaceBindingsMessage)
+    }
     const { teamPath, planId } = message
     const target = `${teamPath}\0${planId}`
     const token = {}
@@ -218,6 +260,26 @@ export class PlanWorkspaceConnections {
     subscription.plans.set(planId, selector)
     // The open's first snapshot is authoritative: awaited, not pushed.
     this.emitSnapshot(connection, teamPath, team.teamId, resolved, displayedVersion)
+  }
+
+  /** The team bindings subscription (Q1): an unknown team refuses; the open's first push is authoritative. */
+  private async bindingsSubscription(connection: ChatConnection, message: WorkspaceBindingsMessage) {
+    if (message.type === 'team-plan-workspace-bindings-close') {
+      this.bindingSubs.get(connection)?.delete(message.teamPath)
+      this.dirtyBindings.get(connection)?.delete(message.teamPath)
+      // The diff key goes with it, so a later re-open pushes from scratch.
+      this.lastPushed.get(connection)?.delete(`${message.teamPath}\0bindings`)
+      return
+    }
+    const team = await this.manager.teamScopes.resolve(message.teamPath)
+    if (!team) {
+      connection.send({ type: 'error', message: unknownTeamError(message.teamPath) })
+      return
+    }
+    const subs = this.bindingSubs.get(connection) ?? new Map<string, string>()
+    this.bindingSubs.set(connection, subs)
+    subs.set(message.teamPath, team.teamId)
+    this.pushBindings(connection, message.teamPath, team.teamId)
   }
 
   /** The plan identity and version inputs a snapshot is built from; null when the plan row is gone. */

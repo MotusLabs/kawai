@@ -8,8 +8,9 @@
 // reply) and a `commandId` (the ledger key), so a resend replays instead of
 // repeating. `team-plan-workspace-close` only ends the subscription.
 import type {
-  PlanWorkspaceRole, WorkspaceArtifactsView, WorkspaceChecklist, WorkspaceChecklistUnavailable,
-  WorkspaceDocumentView, WorkspaceRefView, WorkspaceSnapshot, WorkspaceVersionSelector,
+  PlanWorkspaceRole, WorkspaceArtifactsView, WorkspaceBindingView, WorkspaceChecklist,
+  WorkspaceChecklistUnavailable, WorkspaceDocumentView, WorkspaceRefView, WorkspaceSnapshot,
+  WorkspaceVersionSelector,
 } from './planWorkspace'
 
 export type PlanWorkspaceServerMessage =
@@ -19,6 +20,15 @@ export type PlanWorkspaceServerMessage =
       teamId: string
       planId: string
       workspace: WorkspaceSnapshot
+    }
+  // The team's role bindings (Q1, Lead-authorized): one push per subscribed
+  // team, on open/reconnect and after every committed binding write — never
+  // on a refusal. The no-plan empty state binds through this alone.
+  | {
+      type: 'team-plan-workspace-bindings'
+      teamPath: string
+      teamId: string
+      bindings: WorkspaceBindingView[]
     }
   // One change's checklist projection (2.4): the snapshot, or the explicit
   // unavailable state — never a silent empty projection. Re-pushed on
@@ -79,6 +89,10 @@ export type PlanWorkspaceClientMessage =
       execution?: { executionId: string }
     }
   | { type: 'team-plan-workspace-close'; teamPath: string; planId: string }
+  // The team-scoped bindings subscription (Q1): lazy — opened only while a
+  // conversation panel is mounted; starts no agent; an unknown team refuses.
+  | { type: 'team-plan-workspace-bindings-open'; teamPath: string }
+  | { type: 'team-plan-workspace-bindings-close'; teamPath: string }
   | {
       type: 'team-plan-workspace-bind'
       teamPath: string

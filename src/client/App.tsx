@@ -73,6 +73,9 @@ export default function App() {
   const [newSessionInitialPath, setNewSessionInitialPath] = useState<string | undefined>(undefined)
   const [newSessionInitialCommand, setNewSessionInitialCommand] = useState<string | undefined>(undefined)
   const [newSessionInitialAutoStartChange, setNewSessionInitialAutoStartChange] = useState<string | undefined>(undefined)
+  // How the open new-session dialog ended (plan-workspace B5): stored at open
+  // so the panel's create-then-bind arm learns a cancel vs a create-close.
+  const newSessionDismissRef = useRef<((created: boolean) => void) | null>(null)
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
   const [branchBrowserRepositoryId, setBranchBrowserRepositoryId] = useState<string | null>(null)
   const [createWorktreeBranch, setCreateWorktreeBranch] = useState<WorkspaceBranch | null>(null)
@@ -773,6 +776,20 @@ export default function App() {
     return true
   }
 
+  // The workspace conversation panel's create flow (plan-workspace §6.2):
+  // the normal dialog, prefilled with the team's repository root so the
+  // created chat lands in this team's project (the panel binds only
+  // same-team chats, and only after an observed creation).
+  const handleOpenNewSessionForTeam = useCallback((teamPath: string, onDismiss?: (created: boolean) => void) => {
+    if (!settingsHydrated) return
+    newSessionDismissRef.current = onDismiss ?? null
+    setNewSessionInitialHost(undefined)
+    setNewSessionInitialPath(teamPath)
+    setNewSessionInitialCommand(undefined)
+    setNewSessionInitialAutoStartChange(undefined)
+    setIsModalOpen(true)
+  }, [settingsHydrated])
+
   // Contextual new-session from a section header: preselect the worktree
   // root; command presets, names, and hosts flow through the normal form.
   // From a change section the form also offers the apply auto-start.
@@ -973,6 +990,8 @@ export default function App() {
         teamKey={teamLocation.teamKey}
         location={teamLocation}
         sendMessage={sendMessage}
+        subscribe={subscribe}
+        onOpenNewSession={handleOpenNewSessionForTeam}
         connected={connectionStatus === 'connected'}
         connectionEpoch={connectionEpoch}
         onCreateWorktree={handleBrowseBranchesForPath}
@@ -1017,6 +1036,10 @@ export default function App() {
 
       <NewSessionModal
         isOpen={isModalOpen}
+        onDismiss={created => {
+          newSessionDismissRef.current?.(created)
+          newSessionDismissRef.current = null
+        }}
         onClose={() => setIsModalOpen(false)}
         onCreate={handleCreateSession}
         defaultProjectDir={effectiveDefaultProjectDir}

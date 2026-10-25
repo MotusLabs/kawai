@@ -653,9 +653,19 @@ export class ChatConnections {
     if (message.type.startsWith('process-report-')) return this.metricsConnections.handleReport(connection, message as Extract<ClientMessage, { type: `process-report-${string}` }>)
     if (!message.type.startsWith('chat-') || !('sessionId' in message)) return
     const { sessionId } = message
+    // Contextual-send correlation (plan-workspace §6.3, Q2): a chat-send that
+    // carried a readable bounded `requestId` gets it echoed — with the
+    // session id — on EVERY refusal of that send, from the malformed-context
+    // parse through the unknown-session guard to manager refusals (stale
+    // hashes, archived, killed, wrong team). Any other error, and any send
+    // without a readable id, keeps today's exact shape.
+    const sendCorrelation = message.type === 'chat-send' && typeof message.requestId === 'string'
+      && message.requestId.length > 0 && message.requestId.length <= 200
+      ? { requestId: message.requestId, sessionId }
+      : {}
     if (!this.manager.has(sessionId)) {
       if (this.pendingAttach.get(connection)?.get(sessionId) === token) this.pendingAttach.get(connection)?.delete(sessionId)
-      connection.send({ type: 'error', message: `Unknown chat session ${sessionId}` })
+      connection.send({ type: 'error', message: `Unknown chat session ${sessionId}`, ...sendCorrelation })
       return
     }
     switch (message.type) {
@@ -719,17 +729,49 @@ export class ChatConnections {
       case 'chat-send': {
         // The wire envelope is untrusted (plan-workspace §4): an absent
         // field is an unscoped send; a malformed one refuses before the
-        // manager touches anything.
-        let envelope: WorkspaceMessageEnvelope | null | undefined
-        if (message.workspaceContext !== undefined) {
-          envelope = parseWorkspaceMessageEnvelope(message.workspaceContext)
-          if (!envelope) {
-            connection.send({ type: 'error', message: "The message's plan context is malformed; nothing was sent." })
+        // manager touches anything. Every refusal echoes the readable
+        // requestId's correlation (Q2 above). A throw before acceptance
+        // (F-C1) is a refusal too — exactly one correlated error, never a
+        // post-acceptance one — rethrown so the router's fire-and-forget
+        // still logs it; a send without a readable id keeps today's
+        // frame-less behavior.
+        let accepted: { type: 'chat-send-result'; sessionId: string; requestId: string; accepted: true } | null = null
+        try {
+          let envelope: WorkspaceMessageEnvelope | null | undefined
+          if (message.workspaceContext !== undefined) {
+            envelope = parseWorkspaceMessageEnvelope(message.workspaceContext)
+            if (!envelope) {
+              connection.send({ type: 'error', message: "The message's plan context is malformed; nothing was sent.", ...sendCorrelation })
+              return
+            }
+          }
+          const result = await this.manager.send(sessionId, message.text, envelope ?? undefined)
+          if (!result.ok) {
+            connection.send({ type: 'error', message: result.error, ...sendCorrelation })
             return
           }
+          // The manager accepted the send — context stored with the visible
+          // user_message, turn enqueued or started — past the last refusal
+          // point. The acceptance answer (plan-workspace §6.3, B1) is only
+          // PREPARED here; it is sent after the try (below), so a socket
+          // failure delivering it can never read as a refusal of a send the
+          // manager accepted — no blind post-acceptance error.
+          if (sendCorrelation.requestId !== undefined) {
+            accepted = { type: 'chat-send-result', sessionId, requestId: sendCorrelation.requestId, accepted: true }
+          }
+        } catch (cause) {
+          if (sendCorrelation.requestId !== undefined) {
+            connection.send({
+              type: 'error',
+              message: `The chat could not accept the message: ${cause instanceof Error ? cause.message : String(cause)}`,
+              ...sendCorrelation,
+            })
+          }
+          throw cause
         }
-        const result = await this.manager.send(sessionId, message.text, envelope ?? undefined)
-        if (!result.ok) connection.send({ type: 'error', message: result.error })
+        // Outside the try: the send is accepted, so delivering its terminal
+        // answer must not convert a dead-socket throw into a refusal.
+        if (accepted) connection.send(accepted)
         return
       }
       case 'chat-interrupt': {

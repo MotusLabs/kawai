@@ -12,8 +12,8 @@
 // with each failing approval precondition, show inline — a pin refusal with
 // its strategy impact (strategy-revision-impact D6) beside it, the same state
 // the plan's impact badge shows, linking to the impact review.
-import { useEffect, useRef } from 'react'
-import type { SendClientMessage, Session } from '@shared/types'
+import { useEffect, useRef, useState } from 'react'
+import type { SendClientMessage, ServerMessage, Session } from '@shared/types'
 import { PLAN_STATE_LABELS, type PlanDetail, type PlanSummary } from '@shared/plans'
 import type { PlanRevisionValidation } from '@shared/planValidation'
 import { useTeamPlanStore, type PlanView } from '../../stores/teamPlanStore'
@@ -26,15 +26,19 @@ import PlanUsageSection from './PlanUsageSection'
 import { PlanDecisionsList } from './PlanDecisionCard'
 import PlanRevisionsSection from './PlanRevisionsSection'
 import PlanWorkspaceSection from './PlanWorkspaceSection'
+import PlanWorkspaceConversation from './PlanWorkspaceConversation'
 import PlanLifecycleControls from './PlanLifecycleControls'
 import { pinLabel, planActorLabel } from './planLabels'
 import PlanImpactBadge, { ImpactGateText, OpenImpactReview } from './PlanImpactBadge'
+import type { OpenNewSessionForRole } from './PlanWorkspaceConversation'
 import type { PlanImpact } from '@shared/strategyImpact'
 
-export default function TeamPlansView({ teamPath, view, sendMessage, connected, connectionEpoch, sessions, onOpenTask, onSelectedPlan, onOpenImpactReview, onCaptureStrategy }: {
+export default function TeamPlansView({ teamPath, view, sendMessage, subscribe, connected, connectionEpoch, sessions, onOpenTask, onSelectedPlan, onOpenImpactReview, onCaptureStrategy, onOpenNewSession }: {
   teamPath: string
   view: PlanView
   sendMessage: SendClientMessage
+  /** The chat lifecycle subscription (the conversation panel's reset/create flows). */
+  subscribe?: (listener: (message: ServerMessage) => void) => () => void
   connected: boolean
   /** Bumps on every reconnect, so subscriptions are re-sent. */
   connectionEpoch: number
@@ -46,6 +50,8 @@ export default function TeamPlansView({ teamPath, view, sendMessage, connected, 
   onOpenImpactReview?: (revision: number) => void
   /** Opens the Strategy tab's capture affordance, from the Unassessed note (plan-validation D11). */
   onCaptureStrategy?: () => void
+  /** Opens the normal New Session dialog (App-owned) for an unbound conversation role. */
+  onOpenNewSession?: OpenNewSessionForRole
 }) {
   const selected = view.selected
   useEffect(() => {
@@ -88,11 +94,50 @@ export default function TeamPlansView({ teamPath, view, sendMessage, connected, 
     <div className="min-h-0 flex-1 overflow-y-auto p-3">
       {selected
         ? <PlanDetailPane teamPath={teamPath} planId={selected} detail={view.detail} validation={view.detailValidation} onCaptureStrategy={onCaptureStrategy} sessions={sessions} sendMessage={sendMessage}
+          subscribe={subscribe} onOpenNewSession={onOpenNewSession}
           connected={connected} connectionEpoch={connectionEpoch} busy={busy} onBack={() => select(null)} onOpenTask={onOpenTask}
           impact={view.detailImpact ?? view.impact[selected] ?? null} onOpenImpactReview={onOpenImpactReview} />
-        : <PlanList plans={view.plans} loading={view.loading} onSelect={select} impact={view.impact} onOpenImpactReview={onOpenImpactReview} />}
+        : <PlansListWithConversation teamPath={teamPath} view={view} sessions={sessions} connected={connected}
+          connectionEpoch={connectionEpoch}
+          sendMessage={sendMessage} subscribe={subscribe} onOpenNewSession={onOpenNewSession}
+          onSelect={select} onOpenImpactReview={onOpenImpactReview} />}
     </div>
   </div>
+}
+
+/**
+ * The plans list (and the repository's no-plan empty state) with the
+ * optional conversation panel (§6.2): available even with no plan selected,
+ * planning unscoped. The panel owns its team bindings subscription (Q1), so
+ * a fresh visit with no plan record binds exactly like the plan detail.
+ */
+function PlansListWithConversation({ teamPath, view, sessions, connected, connectionEpoch, sendMessage, subscribe, onOpenNewSession, onSelect, onOpenImpactReview }: {
+  teamPath: string
+  view: PlanView
+  sessions: Session[]
+  connected: boolean
+  connectionEpoch: number
+  sendMessage: SendClientMessage
+  subscribe?: (listener: (message: ServerMessage) => void) => () => void
+  onOpenNewSession?: OpenNewSessionForRole
+  onSelect: (planId: string) => void
+  onOpenImpactReview?: (revision: number) => void
+}) {
+  const [conversationOpen, setConversationOpen] = useState(false)
+  return <>
+    <PlanList plans={view.plans} loading={view.loading} onSelect={onSelect} impact={view.impact} onOpenImpactReview={onOpenImpactReview} />
+    <div className="mt-3">
+      <button type="button" className="btn text-chat-meta" data-testid="plans-conversation-toggle"
+        aria-expanded={conversationOpen} onClick={() => setConversationOpen(open => !open)}>
+        {conversationOpen ? 'Hide conversation' : 'Conversation'}
+      </button>
+      {conversationOpen && <PlanWorkspaceConversation teamPath={teamPath}
+        sessions={sessions} connected={connected}
+        connectionEpoch={connectionEpoch}
+        sendMessage={sendMessage} subscribe={subscribe} onOpenNewSession={onOpenNewSession}
+        selection={null} />}
+    </div>
+  </>
 }
 
 function PlanList({ plans, loading, onSelect, impact, onOpenImpactReview }: {
@@ -125,12 +170,14 @@ function PlanList({ plans, loading, onSelect, impact, onOpenImpactReview }: {
   </ul>
 }
 
-function PlanDetailPane({ teamPath, planId, detail, sessions, sendMessage, connected, connectionEpoch, busy, onBack, onOpenTask, impact, onOpenImpactReview, validation, onCaptureStrategy }: {
+function PlanDetailPane({ teamPath, planId, detail, sessions, sendMessage, subscribe, onOpenNewSession, connected, connectionEpoch, busy, onBack, onOpenTask, impact, onOpenImpactReview, validation, onCaptureStrategy }: {
   teamPath: string
   planId: string
   detail: PlanDetail | null
   sessions: Session[]
   sendMessage: SendClientMessage
+  subscribe?: (listener: (message: ServerMessage) => void) => () => void
+  onOpenNewSession?: OpenNewSessionForRole
   connected: boolean
   /** Bumps on every reconnect; the workspace section re-sends its subscription. */
   connectionEpoch: number
@@ -207,8 +254,9 @@ function PlanDetailPane({ teamPath, planId, detail, sessions, sendMessage, conne
     </>}
     {/* The dependency workspace (plan-workspace 5.1): map, documents, and health
         beside the sections above — which it never replaces or gates. */}
-    <PlanWorkspaceSection teamPath={teamPath} detail={detail} connected={connected}
-      connectionEpoch={connectionEpoch} sendMessage={sendMessage} />
+    <PlanWorkspaceSection teamPath={teamPath} detail={detail} sessions={sessions} connected={connected}
+      connectionEpoch={connectionEpoch} sendMessage={sendMessage}
+      subscribe={subscribe} onOpenNewSession={onOpenNewSession} />
     <PlanRevisionsSection teamPath={teamPath} detail={detail} sessions={sessions} sendMessage={sendMessage} connected={connected} busy={busy}
       validation={validation} onCaptureStrategy={onCaptureStrategy} />
     <PlanLifecycleControls teamPath={teamPath} detail={detail} sendMessage={sendMessage} connected={connected} busy={busy} />

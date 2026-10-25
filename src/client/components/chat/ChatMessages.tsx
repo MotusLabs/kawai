@@ -11,6 +11,7 @@
 // column. transcriptLayout decides turn and author breaks and day separators;
 // nested worker transcripts reuse this component and reflow on their own width.
 import type { ChatEvent } from '@shared/chat'
+import { workspaceContextLabel } from '@shared/planWorkspace'
 import { snippetLabel } from '@shared/sessionSearch'
 import type { SendClientMessage, Session } from '@shared/types'
 import type { SessionDirectoryEntry } from '@shared/team'
@@ -77,7 +78,13 @@ function ChatMessagesView({ events, projectPath, sessionId, sendMessage, connect
     switch (event.type) {
       case 'user_message':
         return { author: 'You', role: 'user', bodyClassName: 'border border-border bg-elevated px-3 py-2',
-          body: <p className="whitespace-pre-wrap break-words text-chat-body">{event.text}</p> }
+          body: <>
+            {/* The attachment the server validated for this exact message
+                (§6.3): the stored snapshot, never the current selection. */}
+            {event.workspaceContext && <p className="mb-1 text-chat-meta text-secondary"
+              data-testid="message-workspace-context">{workspaceContextLabel(event.workspaceContext)}</p>}
+            <p className="whitespace-pre-wrap break-words text-chat-body">{event.text}</p>
+          </> }
       case 'assistant_text':
         return { author: agentLabel, role: 'assistant', body: <Markdown content={event.text} /> }
       case 'peer_message':
