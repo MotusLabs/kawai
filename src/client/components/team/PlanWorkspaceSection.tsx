@@ -1,13 +1,17 @@
 // The plan workspace's mount (plan-workspace 5.1, design D1/D8): one
 // section inside the Plans detail that subscribes to the workspace
 // projection, offers the displayed-version and execution pickers, and lays
-// out the map, the documents, and the health dots. Every existing plan
-// section and action gate stays where it was — this adds, it never
-// replaces. A plan with no displayable version (no approved revision, no
-// review, no draft) shows that state explicitly and fabricates neither plan
-// content nor execution facts; opening the workspace never starts or
-// attaches a worker (design D5's read-only rule).
-import { useEffect, useRef } from 'react'
+// the map, the documents, and the conversation out as panes (7.2). The URL's
+// plans query (7.1, design D8) names the workspace identity: this section
+// syncs it one way into the store — validating each selector against the
+// loaded data and falling back with a notice — and mirrors the store back
+// into the URL only on user acts, so reload, Back, and Forward restore the
+// same selections while a pick writes one history entry. A selector the
+// loaded data does not name keeps its URL and explains the fallback; loading
+// is never invalid. Every existing plan section and action gate stays where
+// it was — this adds, it never replaces. Opening the workspace never starts
+// or attaches a worker (design D5's read-only rule).
+import { useEffect, useMemo, useRef } from 'react'
 import type { PlanContent, PlanDetail } from '@shared/plans'
 import type { SendClientMessage, ServerMessage, Session } from '@shared/types'
 import type { WorkspaceSnapshot, WorkspaceVersionSelector } from '@shared/planWorkspace'
@@ -15,10 +19,13 @@ import { PLAN_REVISION_LABELS } from './planLabels'
 import { shortHash } from '../chat/strategyLabels'
 import { repositoryTeamKey } from '../../utils/teamKey'
 import { useWorkspaceStore } from '../../stores/workspaceStore'
+import { useTeamLocationStore } from '../../hooks/useTeamLocation'
 import {
   useTeamPlanWorkspaceStore, type PlanWorkspaceView, type WorkspaceDocumentSelection,
 } from '../../stores/teamPlanWorkspaceStore'
+import { applyPlansQuery, plansQueryOfState } from './planWorkspaceLocation'
 import PlanWorkspaceMap from './PlanWorkspaceMap'
+import PlanWorkspacePanes from './PlanWorkspacePanes'
 import PlanWorkspaceReader, { type ReaderRefAdd, type ReaderWorktree } from './PlanWorkspaceReader'
 import PlanWorkspaceArtifacts from './PlanWorkspaceArtifacts'
 import PlanWorkspaceHealth from './PlanWorkspaceHealth'
@@ -41,6 +48,25 @@ export default function PlanWorkspaceSection({ teamPath, detail, sessions, conne
   const view = useTeamPlanWorkspaceStore(state => state.views[teamPath])
   const version = useTeamPlanWorkspaceStore(state => state.views[teamPath]?.version ?? null)
   const executionId = useTeamPlanWorkspaceStore(state => state.views[teamPath]?.executionId ?? null)
+  const viewPlanId = useTeamPlanWorkspaceStore(state => state.views[teamPath]?.planId)
+  const snapshot = view?.snapshot ?? null
+  // The team's discovered worktrees (the reader picker and document-link
+  // validation); worktreePaths is null while discovery has not reported or
+  // has not named this team's repository — pending, never invalid.
+  const repositories = useWorkspaceStore(state => state.snapshot?.repositories)
+  const worktrees = useMemo<ReaderWorktree[]>(() => {
+    if (repositories === undefined) return []
+    const repository = repositories.find(candidate => repositoryTeamKey(candidate) === teamPath)
+    return (repository?.worktrees ?? []).map(worktree => ({
+      path: worktree.path,
+      label: `${worktree.path.split('/').filter(Boolean).at(-1) ?? worktree.path}${worktree.isMain ? ' (main)' : ''}`,
+    }))
+  }, [repositories, teamPath])
+  const worktreePaths = useMemo(() => {
+    if (repositories === undefined) return null
+    const repository = repositories.find(candidate => repositoryTeamKey(candidate) === teamPath)
+    return repository === undefined ? null : repository.worktrees.map(worktree => worktree.path)
+  }, [repositories, teamPath])
   // The store view exists for this plan; selecting another plan resets it.
   useEffect(() => { useTeamPlanWorkspaceStore.getState().open(teamPath, planId) }, [teamPath, planId])
   // A result lost with the connection never leaves a command pending.
@@ -52,6 +78,50 @@ export default function PlanWorkspaceSection({ teamPath, detail, sessions, conne
     wasConnected.current = connected
     lastEpoch.current = connectionEpoch
   }, [connected, connectionEpoch, teamPath])
+  // URL → store (plan-workspace 7.1): validate the location's plans query
+  // against the loaded data and apply what it names. Re-runs when the query,
+  // the loaded data, or the view (a plan switch recreates it) changes; each
+  // run is idempotent — it applies only differing fields and keeps the
+  // notice in step, so a user's store-then-navigate write never loops back.
+  const locationPlans = useTeamLocationStore(state => {
+    const current = state.location
+    return current !== null && current.teamKey === teamPath && current.tab === 'plans' ? current.plans : undefined
+  })
+  const locationPlansKey = JSON.stringify(locationPlans ?? null)
+  const revisionsKey = detail.revisions.map(revision => revision.revision).join(',')
+  const draftsKey = detail.drafts.map(draft => draft.draftId).join(',')
+  const executionsKey = (detail.executions ?? []).map(execution => execution.id).join(',')
+  const displayedContent = displayedContentOf(detail, snapshot)
+  const changeNamesKey = displayedContent === null ? '' : displayedContent.changes.map(change => change.change).join('\0')
+  const worktreesKey = worktreePaths === null ? '' : worktreePaths.join('\0')
+  useEffect(() => {
+    const store = useTeamPlanWorkspaceStore.getState()
+    const currentView = store.views[teamPath]
+    if (locationPlans === undefined) {
+      if (currentView?.urlNotice !== null && currentView?.urlNotice !== undefined) store.setUrlNotice(teamPath, null)
+      return
+    }
+    const { patch, notices } = applyPlansQuery(locationPlans, {
+      revisions: detail.revisions.map(revision => revision.revision),
+      draftIds: detail.drafts.map(draft => draft.draftId),
+      executionIds: (detail.executions ?? []).map(execution => execution.id),
+      changeNames: displayedContent === null ? null : displayedContent.changes.map(change => change.change),
+      worktreePaths,
+    }, {
+      version: currentView?.version ?? null,
+      executionId: currentView?.executionId ?? null,
+      selectedChange: currentView?.selectedChange ?? null,
+      selectedDocument: currentView?.selectedDocument ?? null,
+      role: store.roles[teamPath] ?? 'architect',
+    })
+    if (patch.version !== undefined) store.setVersion(teamPath, patch.version)
+    if (patch.executionId !== undefined) store.setExecution(teamPath, patch.executionId)
+    if (patch.selectedChange !== undefined) store.selectChange(teamPath, patch.selectedChange)
+    if (patch.selectedDocument !== undefined) store.openDocument(teamPath, patch.selectedDocument)
+    if (patch.role !== undefined) store.setRole(teamPath, patch.role)
+    store.setUrlNotice(teamPath, notices.length > 0 ? notices.join(' ') : null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [teamPath, locationPlansKey, viewPlanId, revisionsKey, draftsKey, executionsKey, changeNamesKey, worktreesKey])
   // The subscription: re-sent on reconnect and on a version or execution
   // change; the close rides the same effect's cleanup, so a switch ends the
   // old one. The view appears one commit after mount (the open effect above
@@ -86,25 +156,127 @@ export default function PlanWorkspaceSection({ teamPath, detail, sessions, conne
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [teamPath, planId, connected, connectionEpoch, documentKey, executionId, sendMessage])
+  /* __WORKSPACE_BODY__ */
   if (view === undefined) return null
-  const snapshot = view.snapshot
+  // A user act mirrors the store into the URL (store → URL only here, never
+  // from pushes), so Back and Forward walk the workspace's own selections.
+  const navigateWorkspace = () => {
+    const current = useTeamLocationStore.getState().location
+    if (current === null || current.teamKey !== teamPath || current.tab !== 'plans') return
+    const store = useTeamPlanWorkspaceStore.getState()
+    const currentView = store.views[teamPath]
+    const query = plansQueryOfState({
+      version: currentView?.version ?? null,
+      executionId: currentView?.executionId ?? null,
+      selectedChange: currentView?.selectedChange ?? null,
+      selectedDocument: currentView?.selectedDocument ?? null,
+      role: store.roles[teamPath] ?? 'architect',
+    })
+    useTeamLocationStore.getState().navigate({ ...current, plans: query })
+  }
   return <section data-testid="plan-workspace" aria-labelledby="plan-workspace-heading" className="mt-4 border-t border-border pt-2">
     <h3 id="plan-workspace-heading" className="font-medium">Workspace</h3>
     <VersionExecutionBar detail={detail} snapshot={snapshot} view={view} connected={connected}
-      onVersion={selector => useTeamPlanWorkspaceStore.getState().setVersion(teamPath, selector)}
-      onExecution={id => useTeamPlanWorkspaceStore.getState().setExecution(teamPath, id)} />
+      onVersion={selector => { useTeamPlanWorkspaceStore.getState().setVersion(teamPath, selector); navigateWorkspace() }}
+      onExecution={id => { useTeamPlanWorkspaceStore.getState().setExecution(teamPath, id); navigateWorkspace() }} />
     {!connected && <p role="status" className="text-chat-meta text-secondary">Disconnected — workspace facts are stale and edits are disabled.</p>}
     {view.error !== null && <p role="alert" data-testid="plan-workspace-error" className="text-chat-meta text-chat-danger">{view.error}</p>}
+    {view.urlNotice !== null && <p role="status" data-testid="plan-workspace-url-notice" className="text-chat-meta text-approval">{view.urlNotice}</p>}
     {snapshot !== null && <BindingsLine snapshot={snapshot} />}
-    {snapshot?.displayedVersion === null && snapshot !== null && (
+    {snapshot !== null && snapshot.displayedVersion === null && (
       <p data-testid="plan-workspace-no-version" className="text-chat-meta text-secondary">
         No displayable version: the plan has no approved revision, no revision in review, and no draft.
       </p>
     )}
-    <WorkspaceBody teamPath={teamPath} detail={detail} sessions={sessions} snapshot={snapshot} view={view}
-      connected={connected} connectionEpoch={connectionEpoch} sendMessage={sendMessage}
-      subscribe={subscribe} onOpenNewSession={onOpenNewSession} />
+    {snapshot === null
+      ? <p role="status" className="mt-2 text-chat-meta text-secondary" data-testid="plan-workspace-loading">Loading workspace…</p>
+      : <PlanWorkspacePanes teamKey={teamPath}
+        map={mapContent(displayedContent, view, teamPath, connected, navigateWorkspace, worktrees)}
+        documents={documentsContent(view, teamPath, connected, connectionEpoch, sendMessage, worktrees, navigateWorkspace)}
+        conversation={<PlanWorkspaceConversation teamPath={teamPath}
+          sessions={sessions} connected={connected} connectionEpoch={connectionEpoch}
+          sendMessage={sendMessage} subscribe={subscribe} onOpenNewSession={onOpenNewSession}
+          onRoleSelected={navigateWorkspace}
+          selection={{
+            detail, snapshot, teamId: view.teamId,
+            version: view.version, executionId: view.executionId,
+            selectedChange: view.selectedChange, selectedDocument: view.selectedDocument,
+          }} />} />}
+    {view.expanded.map(change => (
+      <ChecklistSubscription key={change} teamPath={teamPath} planId={planId} change={change}
+        connected={connected} connectionEpoch={connectionEpoch} sendMessage={sendMessage} />
+    ))}
   </section>
+}
+
+/** The map pane: breakdown, outside-version work, health (each a separate fact). */
+function mapContent(content: PlanContent | null, view: PlanWorkspaceView, teamPath: string, connected: boolean,
+  navigateWorkspace: () => void, worktrees: ReaderWorktree[]) {
+  const store = useTeamPlanWorkspaceStore.getState()
+  const snapshot = view.snapshot
+  const runtime = snapshot?.runtime ?? null
+  return <>
+    {content !== null && runtime !== null
+      ? <PlanWorkspaceMap content={content} runtime={runtime} view={view}
+        onToggleExpanded={change => store.toggleExpanded(teamPath, change)}
+        onSelectChange={change => { store.selectChange(teamPath, change); navigateWorkspace() }}
+        onSetFilter={filter => store.setFilter(teamPath, filter)} />
+      : content !== null && runtime === null && <p className="text-chat-meta text-secondary" data-testid="plan-workspace-runtime-unavailable">
+        Execution state is unavailable for this workspace (no supervision module).
+      </p>}
+    {runtime !== null && (runtime.outside.changes.length > 0 || runtime.outside.tasks.length > 0) && (
+      <div data-testid="plan-workspace-outside" className="mt-2 border border-border p-2 text-chat-meta">
+        <h4 className="font-medium">Work outside this version</h4>
+        {runtime.outside.changes.length > 0 && <p>
+          In the execution&rsquo;s revision {runtime.outside.changes[0]!.executionRevision} but not displayed:
+          {' '}{runtime.outside.changes.map(change => change.change).join(', ')}
+        </p>}
+        {runtime.outside.tasks.length > 0 && <ul className="mt-1 list-disc pl-5">
+          {runtime.outside.tasks.map(task => <li key={task.taskId}>
+            {task.title} — change {task.planChange}, {task.holders.length} holder{task.holders.length === 1 ? '' : 's'}
+          </li>)}
+        </ul>}
+      </div>
+    )}
+    <PlanWorkspaceHealth readings={snapshot?.health ?? []} connected={connected} />
+    {content !== null && <span className="sr-only">{worktrees.length} discovered worktrees offer documents for {view.planId}.</span>}
+  </>
+}
+
+/** The documents pane (7.2): the selected change's artifacts above the reader. */
+function documentsContent(view: PlanWorkspaceView, teamPath: string, connected: boolean, connectionEpoch: number,
+  sendMessage: SendClientMessage, worktrees: ReaderWorktree[], navigateWorkspace: () => void) {
+  const store = useTeamPlanWorkspaceStore.getState()
+  const planId = view.planId
+  return <>
+    {view.selectedChange !== null && <PlanWorkspaceArtifacts teamPath={teamPath} planId={planId}
+      change={view.selectedChange} view={view} connected={connected} connectionEpoch={connectionEpoch}
+      sendMessage={sendMessage} />}
+    <PlanWorkspaceReader teamPath={teamPath} refs={view.snapshot?.references ?? []}
+      selectedChange={view.selectedChange} executionId={view.executionId} view={view}
+      worktrees={worktrees} connected={connected}
+      onOpenDocument={(selection: WorkspaceDocumentSelection | null) => {
+        store.openDocument(teamPath, selection)
+        navigateWorkspace()
+      }}
+      onAddRef={(payload: ReaderRefAdd) => {
+        const requestId = crypto.randomUUID()
+        store.begin(teamPath, requestId, 'ref-add')
+        sendMessage({
+          type: 'team-plan-workspace-ref-add', teamPath, requestId, commandId: crypto.randomUUID(),
+          planId, label: payload.label, kind: payload.kind,
+          ...(payload.changeName !== undefined ? { changeName: payload.changeName } : {}),
+          ...(payload.worktreeId !== undefined ? { worktreeId: payload.worktreeId } : {}),
+          ...(payload.relativePath !== undefined ? { relativePath: payload.relativePath } : {}),
+          ...(payload.url !== undefined ? { url: payload.url } : {}),
+        })
+      }}
+      onRemoveRef={refId => {
+        const requestId = crypto.randomUUID()
+        store.begin(teamPath, requestId, 'ref-remove')
+        sendMessage({ type: 'team-plan-workspace-ref-remove', teamPath, requestId, commandId: crypto.randomUUID(), refId })
+      }} />
+  </>
 }
 
 /** The two explicit identities (design D2): what is displayed, and what an execution runs. */
@@ -188,97 +360,6 @@ function displayedContentOf(detail: PlanDetail, snapshot: WorkspaceSnapshot | nu
     return detail.drafts.find(draft => draft.draftId === displayed.draftId)?.content ?? null
   }
   return detail.revisions.find(revision => revision.revision === displayed.revision)?.content ?? null
-}
-
-function WorkspaceBody({ teamPath, detail, sessions, snapshot, view, connected, connectionEpoch, sendMessage, subscribe, onOpenNewSession }: {
-  teamPath: string
-  detail: PlanDetail
-  sessions: Session[]
-  snapshot: WorkspaceSnapshot | null
-  view: PlanWorkspaceView
-  connected: boolean
-  connectionEpoch: number
-  sendMessage: SendClientMessage
-  subscribe?: (listener: (message: ServerMessage) => void) => () => void
-  onOpenNewSession?: OpenNewSessionForRole
-}) {
-  const store = useTeamPlanWorkspaceStore.getState()
-  const planId = detail.plan.id
-  if (snapshot === null) {
-    return <p role="status" className="mt-2 text-chat-meta text-secondary" data-testid="plan-workspace-loading">Loading workspace…</p>
-  }
-  const runtime = snapshot.runtime ?? null
-  const content = displayedContentOf(detail, snapshot)
-  // The reader's worktree picker: the discovered repository's worktrees, root paths (the server
-  // matches the value lexically against its listed roots).
-  const repositories = useWorkspaceStore.getState().snapshot?.repositories ?? []
-  const repository = repositories.find(candidate => repositoryTeamKey(candidate) === teamPath)
-  const worktrees: ReaderWorktree[] = (repository?.worktrees ?? []).map(worktree => ({
-    path: worktree.path,
-    label: `${worktree.path.split('/').filter(Boolean).at(-1) ?? worktree.path}${worktree.isMain ? ' (main)' : ''}`,
-  }))
-  return <>
-    {content !== null && runtime !== null
-      ? <PlanWorkspaceMap content={content} runtime={runtime} view={view}
-        onToggleExpanded={change => store.toggleExpanded(teamPath, change)}
-        onSelectChange={change => store.selectChange(teamPath, change)}
-        onSetFilter={filter => store.setFilter(teamPath, filter)} />
-      : content !== null && runtime === null && <p className="text-chat-meta text-secondary" data-testid="plan-workspace-runtime-unavailable">
-        Execution state is unavailable for this workspace (no supervision module).
-      </p>}
-    {runtime !== null && (runtime.outside.changes.length > 0 || runtime.outside.tasks.length > 0) && (
-      <div data-testid="plan-workspace-outside" className="mt-2 border border-border p-2 text-chat-meta">
-        <h4 className="font-medium">Work outside this version</h4>
-        {runtime.outside.changes.length > 0 && <p>
-          In the execution&rsquo;s revision {runtime.outside.changes[0]!.executionRevision} but not displayed:
-          {' '}{runtime.outside.changes.map(change => change.change).join(', ')}
-        </p>}
-        {runtime.outside.tasks.length > 0 && <ul className="mt-1 list-disc pl-5">
-          {runtime.outside.tasks.map(task => <li key={task.taskId}>
-            {task.title} — change {task.planChange}, {task.holders.length} holder{task.holders.length === 1 ? '' : 's'}
-          </li>)}
-        </ul>}
-      </div>
-    )}
-    <PlanWorkspaceHealth readings={snapshot.health ?? []} connected={connected} />
-    {view.selectedChange !== null && <PlanWorkspaceArtifacts teamPath={teamPath} planId={planId}
-      change={view.selectedChange} view={view} connected={connected} connectionEpoch={connectionEpoch}
-      sendMessage={sendMessage} />}
-    <PlanWorkspaceReader teamPath={teamPath} refs={snapshot.references} selectedChange={view.selectedChange}
-      executionId={view.executionId} view={view} worktrees={worktrees} connected={connected}
-      onOpenDocument={(selection: WorkspaceDocumentSelection | null) => store.openDocument(teamPath, selection)}
-      onAddRef={(payload: ReaderRefAdd) => {
-        const requestId = crypto.randomUUID()
-        useTeamPlanWorkspaceStore.getState().begin(teamPath, requestId, 'ref-add')
-        sendMessage({
-          type: 'team-plan-workspace-ref-add', teamPath, requestId, commandId: crypto.randomUUID(),
-          planId, label: payload.label, kind: payload.kind,
-          ...(payload.changeName !== undefined ? { changeName: payload.changeName } : {}),
-          ...(payload.worktreeId !== undefined ? { worktreeId: payload.worktreeId } : {}),
-          ...(payload.relativePath !== undefined ? { relativePath: payload.relativePath } : {}),
-          ...(payload.url !== undefined ? { url: payload.url } : {}),
-        })
-      }}
-      onRemoveRef={refId => {
-        const requestId = crypto.randomUUID()
-        useTeamPlanWorkspaceStore.getState().begin(teamPath, requestId, 'ref-remove')
-        sendMessage({ type: 'team-plan-workspace-ref-remove', teamPath, requestId, commandId: crypto.randomUUID(), refId })
-      }} />
-    {view.expanded.map(change => (
-      <ChecklistSubscription key={change} teamPath={teamPath} planId={planId} change={change}
-        connected={connected} connectionEpoch={connectionEpoch} sendMessage={sendMessage} />
-    ))}
-    {/* The repository conversation (§6.2–6.4): the team bindings slot keeps
-        the roles live (Q1); the captured scope (§6.3) rides the surface. */}
-    <PlanWorkspaceConversation teamPath={teamPath}
-      sessions={sessions} connected={connected} connectionEpoch={connectionEpoch}
-      sendMessage={sendMessage} subscribe={subscribe} onOpenNewSession={onOpenNewSession}
-      selection={{
-        detail, snapshot, teamId: view.teamId,
-        version: view.version, executionId: view.executionId,
-        selectedChange: view.selectedChange, selectedDocument: view.selectedDocument,
-      }} />
-  </>
 }
 
 /** One expanded change's checklist subscription (open on expand, close on collapse). */

@@ -12,7 +12,7 @@
 import { create } from 'zustand'
 import type { ServerMessage } from '@shared/types'
 import type {
-  WorkspaceArtifactsView, WorkspaceBindingView, WorkspaceChecklist, WorkspaceChecklistUnavailable,
+  PlanWorkspaceRole, WorkspaceArtifactsView, WorkspaceBindingView, WorkspaceChecklist, WorkspaceChecklistUnavailable,
   WorkspaceDocumentView, WorkspaceSnapshot, WorkspaceVersionSelector,
 } from '@shared/planWorkspace'
 import { routedTeamPath } from '../utils/teamKeyAliases'
@@ -21,6 +21,32 @@ import { routedTeamPath } from '../utils/teamKeyAliases'
 export type WorkspaceFilter = 'all' | 'active' | 'blocked'
 /** The keyed workspace commands (design D4/D6). */
 export type WorkspaceCommand = 'bind' | 'ref-add' | 'ref-remove'
+/** The pane the narrow navigation shows (plan-workspace 7.2). */
+export type WorkspaceNarrowPane = 'map' | 'documents' | 'conversation'
+/** The pane expanded over the others (design D8); null = all visible. */
+export type WorkspaceExpandedPane = 'reader' | 'conversation' | null
+
+/** The documents pane's share bounds of the resizable desktop area (7.2). */
+export const READER_FRACTION_MIN = 0.15
+export const READER_FRACTION_MAX = 0.7
+export const READER_FRACTION_DEFAULT = 0.45
+export const READER_FRACTION_STEP = 0.03
+
+/** Per-team pane state (design D8): sizes and expansions survive navigation. */
+export interface WorkspacePanesState {
+  readerFraction: number
+  expandedPane: WorkspaceExpandedPane
+  narrowPane: WorkspaceNarrowPane
+  /** Whether the desktop layout shows the right conversation column. */
+  conversationOpen: boolean
+}
+
+export const defaultPanes = (): WorkspacePanesState => ({
+  readerFraction: READER_FRACTION_DEFAULT, expandedPane: null, narrowPane: 'map', conversationOpen: true,
+})
+
+const clampFraction = (fraction: number): number =>
+  Math.min(READER_FRACTION_MAX, Math.max(READER_FRACTION_MIN, fraction))
 
 /** The document the reader displays: the subscription identity (design D4). */
 export interface WorkspaceDocumentSelection {
@@ -70,6 +96,12 @@ export interface PlanWorkspaceView {
   pending: Record<string, WorkspaceCommand>
   /** The last command refusal, until the next command or a success. */
   error: string | null
+  /**
+   * The location validator's last fallback notice (plan-workspace 7.1): a
+   * linked selector the loaded data does not name. Cleared when the query and
+   * the store agree again.
+   */
+  urlNotice: string | null
   // View state (design D8), client-local:
   /** Changes whose checklist rows are expanded. */
   expanded: string[]
@@ -83,13 +115,18 @@ export interface PlanWorkspaceView {
 const emptyView = (planId: string): PlanWorkspaceView => ({
   planId, version: null, executionId: null, snapshot: null, teamId: null,
   checklists: {}, documents: {}, artifacts: {},
-  pending: {}, error: null, expanded: [], selectedChange: null, selectedDocument: null, filter: 'all',
+  pending: {}, error: null, urlNotice: null,
+  expanded: [], selectedChange: null, selectedDocument: null, filter: 'all',
 })
 
 interface PlanWorkspaceState {
   views: Record<string, PlanWorkspaceView>
   /** The team bindings slot (Q1): reconciled from plan snapshots and bindings pushes. */
   teamBindings: Record<string, WorkspaceBindingView[]>
+  /** Each team's active conversation role (design D6); survives plan switches and navigation. */
+  roles: Record<string, PlanWorkspaceRole>
+  /** Each team's pane sizing and expansion (design D8). */
+  panes: Record<string, WorkspacePanesState>
   open: (teamKey: string, planId: string) => void
   /** Drop the view (the tab closed); an unmount keeps it for the return trip. */
   close: (teamKey: string) => void
@@ -101,6 +138,12 @@ interface PlanWorkspaceState {
   selectChange: (teamKey: string, change: string | null) => void
   openDocument: (teamKey: string, selection: WorkspaceDocumentSelection | null) => void
   setFilter: (teamKey: string, filter: WorkspaceFilter) => void
+  setRole: (teamKey: string, role: PlanWorkspaceRole) => void
+  setReaderFraction: (teamKey: string, fraction: number) => void
+  setExpandedPane: (teamKey: string, pane: WorkspaceExpandedPane) => void
+  setNarrowPane: (teamKey: string, pane: WorkspaceNarrowPane) => void
+  setConversationOpen: (teamKey: string, open: boolean) => void
+  setUrlNotice: (teamKey: string, notice: string | null) => void
   begin: (teamKey: string, requestId: string, command: WorkspaceCommand) => void
   /** The connection came back: results of pending commands are lost, so stop waiting. */
   reconnected: (teamKey: string) => void
@@ -121,6 +164,8 @@ const update = (state: PlanWorkspaceState, teamKey: string, patch: Partial<PlanW
 export const useTeamPlanWorkspaceStore = create<PlanWorkspaceState>(set => ({
   views: {},
   teamBindings: {},
+  roles: {},
+  panes: {},
   open: (teamKey, planId) => set(state => {
     const view = state.views[teamKey]
     if (view?.planId === planId) return state
@@ -136,9 +181,13 @@ export const useTeamPlanWorkspaceStore = create<PlanWorkspaceState>(set => ({
     if (from === to) return state
     const view = state.views[from]
     const bindings = state.teamBindings[from]
-    if (!view && !bindings) return state
+    const role = state.roles[from]
+    const panes = state.panes[from]
+    if (view === undefined && bindings === undefined && role === undefined && panes === undefined) return state
     const views = { ...state.views }
     const teamBindings = { ...state.teamBindings }
+    const roles = { ...state.roles }
+    const paneMap = { ...state.panes }
     if (view) {
       delete views[from]
       if (!views[to]) views[to] = view
@@ -147,7 +196,15 @@ export const useTeamPlanWorkspaceStore = create<PlanWorkspaceState>(set => ({
       delete teamBindings[from]
       if (!teamBindings[to]) teamBindings[to] = bindings
     }
-    return { views, teamBindings }
+    if (role !== undefined) {
+      delete roles[from]
+      if (!roles[to]) roles[to] = role
+    }
+    if (panes !== undefined) {
+      delete paneMap[from]
+      if (!paneMap[to]) paneMap[to] = panes
+    }
+    return { views, teamBindings, roles, panes: paneMap }
   }),
   setVersion: (teamKey, version) => set(state => update(state, teamKey, { version })),
   setExecution: (teamKey, executionId) => set(state => update(state, teamKey, { executionId })),
@@ -162,6 +219,35 @@ export const useTeamPlanWorkspaceStore = create<PlanWorkspaceState>(set => ({
   selectChange: (teamKey, change) => set(state => update(state, teamKey, { selectedChange: change })),
   openDocument: (teamKey, selection) => set(state => update(state, teamKey, { selectedDocument: selection })),
   setFilter: (teamKey, filter) => set(state => update(state, teamKey, { filter })),
+  setRole: (teamKey, role) => set(state => {
+    if (state.roles[teamKey] === role) return state
+    return { roles: { ...state.roles, [teamKey]: role } }
+  }),
+  setReaderFraction: (teamKey, fraction) => set(state => {
+    const panes = state.panes[teamKey] ?? defaultPanes()
+    const next = clampFraction(fraction)
+    if (panes.readerFraction === next) return state
+    return { panes: { ...state.panes, [teamKey]: { ...panes, readerFraction: next } } }
+  }),
+  setExpandedPane: (teamKey, pane) => set(state => {
+    const panes = state.panes[teamKey] ?? defaultPanes()
+    if (panes.expandedPane === pane) return state
+    return { panes: { ...state.panes, [teamKey]: { ...panes, expandedPane: pane } } }
+  }),
+  setNarrowPane: (teamKey, pane) => set(state => {
+    const panes = state.panes[teamKey] ?? defaultPanes()
+    if (panes.narrowPane === pane) return state
+    return { panes: { ...state.panes, [teamKey]: { ...panes, narrowPane: pane } } }
+  }),
+  setConversationOpen: (teamKey, open) => set(state => {
+    const panes = state.panes[teamKey] ?? defaultPanes()
+    if (panes.conversationOpen === open) return state
+    return { panes: { ...state.panes, [teamKey]: { ...panes, conversationOpen: open } } }
+  }),
+  setUrlNotice: (teamKey, notice) => set(state => {
+    if (state.views[teamKey]?.urlNotice === notice) return state
+    return update(state, teamKey, { urlNotice: notice })
+  }),
   begin: (teamKey, requestId, command) => set(state => update(state, teamKey, {
     pending: { ...state.views[teamKey]?.pending, [requestId]: command }, error: null,
   })),

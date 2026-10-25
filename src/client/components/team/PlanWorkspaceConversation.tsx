@@ -74,7 +74,7 @@ export interface ConversationSelection {
   selectedDocument: { worktreeId: string; relativePath: string } | null
 }
 
-export default function PlanWorkspaceConversation({ teamPath, sessions, connected, connectionEpoch, sendMessage, subscribe, selection, onOpenNewSession }: {
+export default function PlanWorkspaceConversation({ teamPath, sessions, connected, connectionEpoch, sendMessage, subscribe, selection, onOpenNewSession, onRoleSelected }: {
   teamPath: string
   sessions: Session[]
   connected: boolean
@@ -87,6 +87,8 @@ export default function PlanWorkspaceConversation({ teamPath, sessions, connecte
   selection: ConversationSelection | null
   /** Opens the normal New Session dialog (App-owned) — see {@link OpenNewSessionForRole}. */
   onOpenNewSession?: OpenNewSessionForRole
+  /** Mirrors a role pick into the plans URL (plan-workspace 7.1); the store write happens here. */
+  onRoleSelected?: () => void
 }) {
   // The lazy team bindings subscription (Q1): open while this panel is
   // mounted, re-sent on reconnect, closed on unmount. It starts no agent —
@@ -97,7 +99,16 @@ export default function PlanWorkspaceConversation({ teamPath, sessions, connecte
     return () => sendMessage({ type: 'team-plan-workspace-bindings-close', teamPath })
   }, [teamPath, connected, connectionEpoch, sendMessage])
   const bindings = useTeamPlanWorkspaceStore(state => state.teamBindings[teamPath]) ?? EMPTY_BINDINGS
-  const [role, setRole] = useState<PlanWorkspaceRole>('architect')
+  // The active role is per-team store state (plan-workspace 7.1): it
+  // survives navigation and a linked `r=` query restores it. A pick writes
+  // the store, then mirrors the workspace into the URL.
+  const role = useTeamPlanWorkspaceStore(state => state.roles[teamPath] ?? 'architect')
+  const selectRole = (next: PlanWorkspaceRole) => {
+    setAwaitingCreate(null)
+    setBindError(null)
+    useTeamPlanWorkspaceStore.getState().setRole(teamPath, next)
+    onRoleSelected?.()
+  }
   const [bindError, setBindError] = useState<string | null>(null)
   // The create-then-bind arm (B5): the role plus the binding version the arm
   // observed when the dialog opened. Discharged by the dialog closing without
@@ -203,7 +214,7 @@ export default function PlanWorkspaceConversation({ teamPath, sessions, connecte
       {(['architect', 'lead'] as const).map(entry => (
         <button key={entry} role="tab" aria-selected={entry === role} data-testid={`conversation-role-${entry}`}
           className={`btn text-chat-meta ${entry === role ? 'btn-primary' : ''}`}
-          onClick={() => { setAwaitingCreate(null); setBindError(null); setRole(entry) }}>
+          onClick={() => selectRole(entry)}>
           {ROLE_LABELS[entry]}{bindings.some(b => b.role === entry) ? '' : ' (unbound)'}
         </button>
       ))}
