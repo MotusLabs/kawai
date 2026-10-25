@@ -8,7 +8,9 @@
 // equivalent keyboard step (labelled, bounded, with its value exposed), and
 // focus moves to the shown pane when the narrow navigation switches, so the
 // transition never strands a keyboard user. Pane scrolls are remembered
-// per team (planWorkspacePaneScroll) and restored on remount.
+// per team (planWorkspacePaneScroll) and restored on remount. The two
+// layouts are components; the default export only measures its own width and
+// picks one, so each layout is mountable — and testable — on its own.
 import { useLayoutEffect, useRef, useState, type MutableRefObject, type ReactNode, type RefObject } from 'react'
 import {
   READER_FRACTION_MAX, READER_FRACTION_MIN, READER_FRACTION_STEP,
@@ -52,6 +54,9 @@ const PANE_ARIA: Record<WorkspaceNarrowPane, string> = {
 
 const NARROW_PANES: readonly WorkspaceNarrowPane[] = ['map', 'documents', 'conversation']
 
+/** The three panes' content, keyed the way both layouts show them. */
+export type WorkspacePaneContent = Record<WorkspaceNarrowPane, ReactNode>
+
 /** One pane's scrollable body: restores its remembered scroll on mount, records it on scroll. */
 function PaneBody({ teamKey, pane, focusRef, children }: {
   teamKey: string
@@ -83,9 +88,74 @@ export default function PlanWorkspacePanes({ teamKey, map, documents, conversati
   /** The conversation pane's content: the repository conversation panel. */
   conversation: ReactNode
 }) {
-  const rootRef = useRef<HTMLElement | null>(null)
+  const rootRef = useRef<HTMLElement>(null)
   const layout = useWorkspaceLayout(rootRef)
   const panes: WorkspacePanesState = useTeamPlanWorkspaceStore(state => state.panes[teamKey]) ?? defaultPanes()
+  const content: WorkspacePaneContent = { map, documents, conversation }
+  return layout === 'narrow'
+    ? <WorkspaceNarrowPanes teamKey={teamKey} panes={panes} rootRef={rootRef} content={content} />
+    : <WorkspaceDesktopPanes teamKey={teamKey} panes={panes} rootRef={rootRef} content={content} />
+}
+
+/** The narrow layout (7.2): one pane behind an explicit navigation; a switch reveals it and moves focus with it. */
+export function WorkspaceNarrowPanes({ teamKey, panes, rootRef, content }: {
+  teamKey: string
+  panes: WorkspacePanesState
+  rootRef: RefObject<HTMLElement>
+  content: WorkspacePaneContent
+}) {
+  const paneRefs = {
+    map: useRef<HTMLDivElement | null>(null),
+    documents: useRef<HTMLDivElement | null>(null),
+    conversation: useRef<HTMLDivElement | null>(null),
+  }
+  const store = useTeamPlanWorkspaceStore.getState()
+  // A navigation switch moves focus to the pane it revealed, so the next Tab
+  // starts inside the pane the user asked for. The first render does not
+  // steal focus.
+  const previousNarrow = useRef<WorkspaceNarrowPane | null>(null)
+  useLayoutEffect(() => {
+    const previous = previousNarrow.current
+    previousNarrow.current = panes.narrowPane
+    if (previous === null || previous === panes.narrowPane) return
+    paneRefs[panes.narrowPane].current?.focus()
+  }, [panes.narrowPane])
+  return <section ref={rootRef} data-testid="plan-workspace-panes" data-layout="narrow"
+    aria-label="Workspace panes" className="mt-3">
+    <div role="tablist" aria-label="Workspace panes" className="flex gap-1" data-testid="workspace-narrow-nav">
+      {NARROW_PANES.map(pane => (
+        <button key={pane} type="button" role="tab" aria-selected={panes.narrowPane === pane}
+          data-testid={`workspace-narrow-${pane}`}
+          className={`btn text-xs ${panes.narrowPane === pane ? 'btn-primary' : ''}`}
+          onClick={() => {
+            if (pane === 'conversation') store.setConversationOpen(teamKey, true)
+            store.setNarrowPane(teamKey, pane)
+          }}>
+          {NARROW_PANE_LABELS[pane]}
+        </button>
+      ))}
+      {panes.narrowPane !== 'map' && <button type="button" className="btn text-xs" data-testid="workspace-narrow-back"
+        aria-label={`Back to the map from the ${NARROW_PANE_LABELS[panes.narrowPane]} pane`}
+        onClick={() => store.setNarrowPane(teamKey, 'map')}>← Map</button>}
+    </div>
+    <p className="sr-only" role="status" data-testid="workspace-narrow-status">
+      Showing the {NARROW_PANE_LABELS[panes.narrowPane]} pane.
+    </p>
+    <div className="mt-2 flex min-h-0 flex-col" data-testid="workspace-narrow-body">
+      <PaneBody teamKey={teamKey} pane={panes.narrowPane} focusRef={paneRefs[panes.narrowPane]}>
+        {content[panes.narrowPane]}
+      </PaneBody>
+    </div>
+  </section>
+}
+
+/** The desktop layout (7.2): the map beside a resizable documents pane and an optional right conversation. */
+function WorkspaceDesktopPanes({ teamKey, panes, rootRef, content }: {
+  teamKey: string
+  panes: WorkspacePanesState
+  rootRef: RefObject<HTMLElement>
+  content: WorkspacePaneContent
+}) {
   const store = useTeamPlanWorkspaceStore.getState()
   const containerRef = useRef<HTMLDivElement | null>(null)
   const dragging = useRef(false)
@@ -124,24 +194,13 @@ export default function PlanWorkspacePanes({ teamKey, map, documents, conversati
     event.currentTarget.releasePointerCapture(event.pointerId)
   }
 
-  // A narrow navigation switch moves focus to the pane it revealed, so the
-  // next Tab starts inside the pane the user asked for. The first render does
-  // not steal focus.
-  const previousNarrow = useRef<WorkspaceNarrowPane | null>(null)
-  useLayoutEffect(() => {
-    const previous = previousNarrow.current
-    previousNarrow.current = panes.narrowPane
-    if (layout !== 'narrow' || previous === null || previous === panes.narrowPane) return
-    paneRefs[panes.narrowPane].current?.focus()
-  }, [panes.narrowPane, layout])
-
   const paneToolbar = (pane: WorkspaceNarrowPane) => {
     // The documents pane expands under its store key 'reader'.
     const expandedKey: WorkspaceExpandedPane = pane === 'documents' ? 'reader' : 'conversation'
     const isExpanded = panes.expandedPane === expandedKey
     return (
       <div className="flex items-center justify-end gap-1">
-        {layout === 'desktop' && pane !== 'map' && (
+        {pane !== 'map' && (
           <button type="button" className="btn px-1.5 py-0.5 text-xs" data-testid={`workspace-expand-${pane}`}
             aria-pressed={isExpanded}
             aria-label={isExpanded
@@ -153,36 +212,6 @@ export default function PlanWorkspacePanes({ teamKey, map, documents, conversati
         )}
       </div>
     )
-  }
-
-  if (layout === 'narrow') {
-    return <section ref={rootRef} data-testid="plan-workspace-panes" data-layout="narrow"
-      aria-label="Workspace panes" className="mt-3">
-      <div role="tablist" aria-label="Workspace panes" className="flex gap-1" data-testid="workspace-narrow-nav">
-        {NARROW_PANES.map(pane => (
-          <button key={pane} type="button" role="tab" aria-selected={panes.narrowPane === pane}
-            data-testid={`workspace-narrow-${pane}`}
-            className={`btn text-xs ${panes.narrowPane === pane ? 'btn-primary' : ''}`}
-            onClick={() => {
-              if (pane === 'conversation') store.setConversationOpen(teamKey, true)
-              store.setNarrowPane(teamKey, pane)
-            }}>
-            {NARROW_PANE_LABELS[pane]}
-          </button>
-        ))}
-        {panes.narrowPane !== 'map' && <button type="button" className="btn text-xs" data-testid="workspace-narrow-back"
-          aria-label={`Back to the map from the ${NARROW_PANE_LABELS[panes.narrowPane]} pane`}
-          onClick={() => store.setNarrowPane(teamKey, 'map')}>← Map</button>}
-      </div>
-      <p className="sr-only" role="status" data-testid="workspace-narrow-status">
-        Showing the {NARROW_PANE_LABELS[panes.narrowPane]} pane.
-      </p>
-      <div className="mt-2 flex min-h-0 flex-col" data-testid="workspace-narrow-body">
-        {panes.narrowPane === 'map' && <PaneBody teamKey={teamKey} pane="map" focusRef={paneRefs.map}>{map}</PaneBody>}
-        {panes.narrowPane === 'documents' && <PaneBody teamKey={teamKey} pane="documents" focusRef={paneRefs.documents}>{documents}</PaneBody>}
-        {panes.narrowPane === 'conversation' && <PaneBody teamKey={teamKey} pane="conversation" focusRef={paneRefs.conversation}>{conversation}</PaneBody>}
-      </div>
-    </section>
   }
 
   const expanded = panes.expandedPane
@@ -202,7 +231,7 @@ export default function PlanWorkspacePanes({ teamKey, map, documents, conversati
         <div className="flex min-w-0 flex-1" ref={containerRef} data-testid="workspace-resizable">
           <div className="flex min-w-0 flex-col" style={{ flexGrow: mapFlex, flexBasis: 0 }}>
             {paneToolbar('map')}
-            <PaneBody teamKey={teamKey} pane="map" focusRef={paneRefs.map}>{map}</PaneBody>
+            <PaneBody teamKey={teamKey} pane="map" focusRef={paneRefs.map}>{content.map}</PaneBody>
           </div>
           <div role="separator" aria-orientation="vertical" tabIndex={0}
             data-testid="workspace-panes-divider"
@@ -218,21 +247,21 @@ export default function PlanWorkspacePanes({ teamKey, map, documents, conversati
             onPointerCancel={endDrag} />
           <div className="flex min-w-0 flex-col" style={{ flexGrow: readerFlex, flexBasis: 0 }}>
             {paneToolbar('documents')}
-            <PaneBody teamKey={teamKey} pane="documents" focusRef={paneRefs.documents}>{documents}</PaneBody>
+            <PaneBody teamKey={teamKey} pane="documents" focusRef={paneRefs.documents}>{content.documents}</PaneBody>
           </div>
         </div>
         {panes.conversationOpen && <div className="flex w-[26em] min-w-0 flex-col border-l border-border pl-2">
           {paneToolbar('conversation')}
-          <PaneBody teamKey={teamKey} pane="conversation" focusRef={paneRefs.conversation}>{conversation}</PaneBody>
+          <PaneBody teamKey={teamKey} pane="conversation" focusRef={paneRefs.conversation}>{content.conversation}</PaneBody>
         </div>}
       </>}
       {expanded === 'reader' && <div className="flex min-w-0 flex-1 flex-col">
         {paneToolbar('documents')}
-        <PaneBody teamKey={teamKey} pane="documents" focusRef={paneRefs.documents}>{documents}</PaneBody>
+        <PaneBody teamKey={teamKey} pane="documents" focusRef={paneRefs.documents}>{content.documents}</PaneBody>
       </div>}
       {expanded === 'conversation' && <div className="flex min-w-0 flex-1 flex-col">
         {paneToolbar('conversation')}
-        <PaneBody teamKey={teamKey} pane="conversation" focusRef={paneRefs.conversation}>{conversation}</PaneBody>
+        <PaneBody teamKey={teamKey} pane="conversation" focusRef={paneRefs.conversation}>{content.conversation}</PaneBody>
       </div>}
     </div>
   </section>

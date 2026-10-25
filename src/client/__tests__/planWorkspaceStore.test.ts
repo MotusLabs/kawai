@@ -179,3 +179,56 @@ describe('view state', () => {
     expect(view.filter).toBe('blocked')
   })
 })
+
+describe('roles, panes, and the url notice (plan-workspace 7.1-7.2)', () => {
+  beforeEach(() => {
+    useTeamPlanWorkspaceStore.setState({ views: {}, roles: {}, panes: {} })
+  })
+
+  test('the role is per-team, defaults to Architect, and survives a plan switch', () => {
+    const store = useTeamPlanWorkspaceStore.getState()
+    expect(store.roles['/repo']).toBeUndefined()
+    store.setRole('/repo', 'lead')
+    store.setRole('/other', 'architect')
+    expect(useTeamPlanWorkspaceStore.getState().roles).toEqual({ '/repo': 'lead', '/other': 'architect' })
+    // A same-role write is a no-op (no re-render churn).
+    store.setRole('/repo', 'lead')
+    expect(useTeamPlanWorkspaceStore.getState().roles['/repo']).toBe('lead')
+    // rekey moves the role with the team.
+    useTeamPlanWorkspaceStore.getState().rekey('/repo', '/moved')
+    expect(useTeamPlanWorkspaceStore.getState().roles).toEqual({ '/moved': 'lead', '/other': 'architect' })
+  })
+
+  test('pane sizing clamps to its bounds and defaults fill the gaps', () => {
+    const store = useTeamPlanWorkspaceStore.getState()
+    store.setReaderFraction('/repo', 0.9)
+    expect(useTeamPlanWorkspaceStore.getState().panes['/repo']?.readerFraction).toBe(0.7)
+    store.setReaderFraction('/repo', 0.01)
+    expect(useTeamPlanWorkspaceStore.getState().panes['/repo']?.readerFraction).toBe(0.15)
+    store.setReaderFraction('/repo', 0.51)
+    store.setNarrowPane('/repo', 'documents')
+    store.setExpandedPane('/repo', 'reader')
+    store.setConversationOpen('/repo', false)
+    const panes = useTeamPlanWorkspaceStore.getState().panes['/repo']!
+    expect(panes.readerFraction).toBe(0.51)
+    expect(panes.narrowPane).toBe('documents')
+    expect(panes.expandedPane).toBe('reader')
+    expect(panes.conversationOpen).toBe(false)
+    // rekey moves the panes too; a team with no entry stays default-shaped.
+    useTeamPlanWorkspaceStore.getState().rekey('/repo', '/moved')
+    expect(useTeamPlanWorkspaceStore.getState().panes['/moved']?.readerFraction).toBe(0.51)
+    expect(useTeamPlanWorkspaceStore.getState().panes['/moved']?.narrowPane).toBe('documents')
+  })
+
+  test('the url notice rides the view: written, cleared, and reset with the plan', () => {
+    const store = useTeamPlanWorkspaceStore.getState()
+    store.open('/repo', 'p1')
+    store.setUrlNotice('/repo', 'Link names revision 9 — showing the default version.')
+    expect(useTeamPlanWorkspaceStore.getState().views['/repo']?.urlNotice).toContain('revision 9')
+    store.setUrlNotice('/repo', null)
+    expect(useTeamPlanWorkspaceStore.getState().views['/repo']?.urlNotice).toBeNull()
+    // A team with no view writes nothing and throws nothing.
+    store.setUrlNotice('/ghost', 'boo')
+    expect(useTeamPlanWorkspaceStore.getState().views['/ghost']).toBeUndefined()
+  })
+})

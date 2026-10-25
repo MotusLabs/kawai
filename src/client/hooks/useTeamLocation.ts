@@ -7,7 +7,7 @@
 // `hashchange` (a typed or edited hash) and `popstate` (Back/Forward) sync
 // the store from the URL, and `leave()` — selecting a session — pushes the
 // hashless URL so Back returns to the page.
-import { useCallback, useEffect, useRef } from 'react'
+import { useEffect, useRef } from 'react'
 import { create } from 'zustand'
 import { useSessionStore } from '../stores/sessionStore'
 import { useTeamWorkspaceStore } from '../stores/teamWorkspaceStore'
@@ -107,12 +107,34 @@ export function resetTeamLocationForTests(): void {
 }
 
 /**
+ * The entry points' shared opener (team-workspace-pages D3): a team's page
+ * opens on the tab last used for that team, Tasks the first time. Returning
+ * from a full-screen bound chat restores the plans sub-location
+ * (plan-workspace 7.1): the same plan, version, change, document, and role —
+ * the workspace state itself never left the stores. A location that names no
+ * plan reopens the list, as it was left.
+ */
+export function openTeamPage(teamKey: string): void {
+  const last = useTeamWorkspaceStore.getState().views[teamKey]?.tab
+  const tab = last !== undefined && RENDERED_WORKSPACE_TABS.includes(last) ? last : DEFAULT_WORKSPACE_TAB
+  const lastPlans = useTeamLocationStore.getState().lastPlansLocations[teamKey]
+  if (tab === 'plans' && lastPlans) {
+    useTeamLocationStore.getState().navigate({
+      teamKey, tab: 'plans',
+      ...(lastPlans.id !== null ? { id: lastPlans.id } : {}),
+      ...(lastPlans.query !== undefined ? { plans: lastPlans.query } : {}),
+    })
+    return
+  }
+  useTeamLocationStore.getState().navigate({ teamKey, tab })
+}
+
+/**
  * The Team page route as App uses it (team-workspace-pages D3, team-workspace
- * D10): the current location, the entry points' shared opener — a team's
- * page opens on the tab last used for that team, Tasks the first time — and
- * the leave-on-selection rule. A selection *act* after mount (selectionEpoch,
- * never persisted) leaves the route so Back returns to the same tab and item,
- * while a reload's restored selection must not.
+ * D10): the current location and the leave-on-selection rule. A selection
+ * *act* after mount (selectionEpoch, never persisted) leaves the route so
+ * Back returns to the same tab and item, while a reload's restored selection
+ * must not.
  */
 export function useTeamPageRoute(): { teamLocation: TeamLocation | null; openTeamPage: (teamKey: string) => void } {
   const teamLocation = useTeamLocation()
@@ -123,23 +145,5 @@ export function useTeamPageRoute(): { teamLocation: TeamLocation | null; openTea
       useTeamLocationStore.getState().leave()
     }
   }, [selectionEpoch])
-  const openTeamPage = useCallback((teamKey: string) => {
-    const last = useTeamWorkspaceStore.getState().views[teamKey]?.tab
-    const tab = last !== undefined && RENDERED_WORKSPACE_TABS.includes(last) ? last : DEFAULT_WORKSPACE_TAB
-    // Returning from a full-screen bound chat restores the plans sub-location
-    // (plan-workspace 7.1): the same plan, version, change, document, and
-    // role — the workspace state itself never left the stores. A location
-    // that names no plan reopens the list, as it was left.
-    const lastPlans = useTeamLocationStore.getState().lastPlansLocations[teamKey]
-    if (tab === 'plans' && lastPlans) {
-      useTeamLocationStore.getState().navigate({
-        teamKey, tab: 'plans',
-        ...(lastPlans.id !== null ? { id: lastPlans.id } : {}),
-        ...(lastPlans.query !== undefined ? { plans: lastPlans.query } : {}),
-      })
-      return
-    }
-    useTeamLocationStore.getState().navigate({ teamKey, tab })
-  }, [])
   return { teamLocation, openTeamPage }
 }

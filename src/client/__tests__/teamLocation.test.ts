@@ -7,7 +7,8 @@ import {
   parseTeamHash,
   teamHashOf,
 } from '../utils/teamLocation'
-import { resetTeamLocationForTests, useTeamLocationStore } from '../hooks/useTeamLocation'
+import { openTeamPage, resetTeamLocationForTests, useTeamLocationStore } from '../hooks/useTeamLocation'
+import { useTeamWorkspaceStore } from '../stores/teamWorkspaceStore'
 
 const globalAny = globalThis as typeof globalThis & { window?: Window & typeof globalThis }
 const originalWindow = globalAny.window
@@ -136,4 +137,103 @@ test('a window change pushes a history entry; the same window pushes nothing', (
   store.navigate({ teamKey: '/repo', tab: 'metrics', window: '1d' })
   store.navigate({ teamKey: '/repo', tab: 'metrics', window: '1d' })
   expect(pushed).toEqual(['#/team/%2Frepo/metrics/7d', '#/team/%2Frepo/metrics/1d'])
+})
+
+test('a plans location carries the workspace query after the id in fixed order (plan-workspace 7.1)', () => {
+  const hashString = teamHashOf({
+    teamKey: '/repo', tab: 'plans', id: 'plan-1',
+    plans: {
+      version: 'rev:2', execution: 'exec-9', change: 'core-landing',
+      document: { worktreeId: '/repo/.worktrees/main', relativePath: 'openspec/changes/x/proposal.md' },
+      role: 'lead',
+    },
+  })
+  expect(hashString).toBe('#/team/%2Frepo/plans/plan-1?v=rev%3A2&e=exec-9&c=core-landing'
+    + '&dw=%2Frepo%2F.worktrees%2Fmain&dp=openspec%2Fchanges%2Fx%2Fproposal.md&r=lead')
+  expect(parseTeamHash(hashString)).toEqual({
+    teamKey: '/repo', tab: 'plans', id: 'plan-1',
+    plans: {
+      version: 'rev:2', execution: 'exec-9', change: 'core-landing',
+      document: { worktreeId: '/repo/.worktrees/main', relativePath: 'openspec/changes/x/proposal.md' },
+      role: 'lead',
+    },
+  })
+})
+
+test('plans query values keep reserved characters through the round trip', () => {
+  const hashString = teamHashOf({
+    teamKey: '/repo', tab: 'plans', id: 'p&1', plans: {
+      change: 'a&b c/d', document: { worktreeId: '/repo/w?x', relativePath: 'a#b?c.md' },
+    },
+  })
+  const parsed = parseTeamHash(hashString)
+  expect(parsed).toEqual({
+    teamKey: '/repo', tab: 'plans', id: 'p&1',
+    plans: { change: 'a&b c/d', document: { worktreeId: '/repo/w?x', relativePath: 'a#b?c.md' } },
+  })
+})
+
+test('an empty plans query writes no ?; a bare ? parses to no selection', () => {
+  expect(teamHashOf({ teamKey: '/repo', tab: 'plans', id: 'p1', plans: {} })).toBe('#/team/%2Frepo/plans/p1')
+  expect(parseTeamHash('#/team/%2Frepo/plans/p1?')).toEqual({ teamKey: '/repo', tab: 'plans', id: 'p1' })
+  expect(parseTeamHash('#/team/%2Frepo/plans/p1?&')).toEqual({ teamKey: '/repo', tab: 'plans', id: 'p1' })
+  // An id-less plans segment stays an id-less plans location, with its query.
+  expect(parseTeamHash('#/team/%2Frepo/plans/?v=rev%3A2')).toEqual({
+    teamKey: '/repo', tab: 'plans', plans: { version: 'rev:2' },
+  })
+})
+
+test('a malformed plans-query escape is dropped; the rest of the query still parses', () => {
+  expect(parseTeamHash('#/team/%2Frepo/plans/p1?c=%E0&v=rev%3A3&r=x%2Fy')).toEqual({
+    teamKey: '/repo', tab: 'plans', id: 'p1', plans: { version: 'rev:3', role: 'x/y' },
+  })
+})
+
+test('a non-plans id is never split at a ? and legacy routes format byte-identically', () => {
+  const hashString = teamHashOf({ teamKey: '/repo', tab: 'tasks', id: 't?1' })
+  expect(hashString).toBe('#/team/%2Frepo/tasks/t%3F1')
+  expect(parseTeamHash(hashString)).toEqual({ teamKey: '/repo', tab: 'tasks', id: 't?1' })
+  // The pre-query grammar is untouched: no plans field, no ? handling.
+  expect(parseTeamHash('#/team/%2Frepo/plans/plan-9')).toEqual({ teamKey: '/repo', tab: 'plans', id: 'plan-9' })
+  expect(teamHashOf({ teamKey: '/repo', tab: 'plans', id: 'plan-9' })).toBe('#/team/%2Frepo/plans/plan-9')
+})
+
+test('a query-only plans change pushes a history entry; the identical query does not', () => {
+  const store = useTeamLocationStore.getState()
+  store.navigate({ teamKey: '/repo', tab: 'plans', id: 'p1' })
+  store.navigate({ teamKey: '/repo', tab: 'plans', id: 'p1', plans: { change: 'api' } })
+  store.navigate({ teamKey: '/repo', tab: 'plans', id: 'p1', plans: { change: 'api' } })
+  expect(pushed).toEqual(['#/team/%2Frepo/plans/p1', '#/team/%2Frepo/plans/p1?c=api'])
+  // A different id with the same query is still a different location.
+  store.navigate({ teamKey: '/repo', tab: 'plans', id: 'p2', plans: { change: 'api' } })
+  expect(pushed).toHaveLength(3)
+})
+
+test('opening the Team page restores the team’s last plans id and query (full-screen-chat return)', () => {
+  useTeamWorkspaceStore.setState(state => ({
+    views: { ...state.views, '/repo': { tab: 'plans', tabs: {} as never } as never },
+  }))
+  const store = useTeamLocationStore.getState()
+  store.navigate({ teamKey: '/repo', tab: 'plans', id: 'p1', plans: { change: 'api', role: 'lead' } })
+  // A full-screen chat selection leaves the route (the hash clears).
+  store.leave()
+  expect(useTeamLocationStore.getState().location).toBeNull()
+  openTeamPage('/repo')
+  expect(useTeamLocationStore.getState().location).toEqual({
+    teamKey: '/repo', tab: 'plans', id: 'p1', plans: { change: 'api', role: 'lead' },
+  })
+  expect(pushed.at(-1)).toBe('#/team/%2Frepo/plans/p1?c=api&r=lead')
+  // A plans location that named no plan reopens the list, as it was left.
+  useTeamLocationStore.getState().navigate({ teamKey: '/repo', tab: 'plans' })
+  store.leave()
+  openTeamPage('/repo')
+  expect(useTeamLocationStore.getState().location).toEqual({ teamKey: '/repo', tab: 'plans' })
+  // Another team keeps its own sub-location.
+  useTeamWorkspaceStore.setState(state => ({
+    views: { ...state.views, '/other': { tab: 'plans', tabs: {} as never } as never },
+  }))
+  useTeamLocationStore.getState().navigate({ teamKey: '/other', tab: 'plans', id: 'q7' })
+  useTeamLocationStore.getState().navigate({ teamKey: '/repo', tab: 'tasks', id: 't-1' })
+  openTeamPage('/other')
+  expect(useTeamLocationStore.getState().location).toEqual({ teamKey: '/other', tab: 'plans', id: 'q7' })
 })
