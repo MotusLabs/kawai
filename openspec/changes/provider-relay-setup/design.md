@@ -85,10 +85,14 @@ name, e.g. `{"x-bf-vk": "RELAY_VIRTUAL_KEY"}`. Rules:
 - Every header variable joins `withheldCredentialNames`' set: no agent
   receives it under its own name.
 - At launch, the provider's resolvable headers compose into
-  `ANTHROPIC_CUSTOM_HEADERS` as newline-separated `Name: value` pairs, set in
-  the process environment only — never in the flag settings layer, exactly
-  like the auth token today ("no more agent exposure than today's token
-  path").
+  `ANTHROPIC_CUSTOM_HEADERS` as newline-separated `Name: Value` pairs — the
+  format the Claude Code CLI documents (`Name: Value`, newline-separated for
+  multiple; needs CLI v2.1.227+, inside our 2.1.289 baseline; a name or value
+  with a character an HTTP header cannot carry fails the request, the error
+  naming the pair by position — the connection test surfaces that as its own
+  evidence) — set in the process environment only, never in the flag settings
+  layer, exactly like the auth token today ("no more agent exposure than
+  today's token path").
 - A variable that resolves empty omits its header; the preview marks it
   missing, and the connection test reports the gap (D9). Creation is **not**
   gated on header variables (alternative considered and rejected: a creation
@@ -393,3 +397,8 @@ with request success — the request path shares the list's credentials) are
 listed here with their reasons. Model-based tests run the table as the
 reference classifier over seeded evidence sequences, including a test-run
 timeout at the process-kill boundary and a cached-list TTL expiry mid-test.
+The ANTHROPIC_CUSTOM_HEADERS format flagged in the design-challenge note is
+now grounded: the CLI documents `Name: Value`, newline-separated for multiple
+headers (v2.1.227+; a malformed character fails the request naming the pair) —
+D2 cites it; the fixture e2e still asserts the composed value reaches the
+relay.
