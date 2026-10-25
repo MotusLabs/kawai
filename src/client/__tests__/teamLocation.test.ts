@@ -267,7 +267,7 @@ test('a deep link the URL itself named is recorded too — direct load, then cha
     // location the URL named, with no navigate having ever written it.
     useTeamLocationStore.getState().leave()
     expect(useTeamLocationStore.getState().location).toBeNull()
-    openTeamPage('/repo')
+    act(() => openTeamPage('/repo'))
     expect(useTeamLocationStore.getState().location).toEqual({
       teamKey: '/repo', tab: 'plans', id: 'p1', plans: { version: 'rev:1', role: 'lead' },
     })

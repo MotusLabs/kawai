@@ -190,7 +190,7 @@ export default function PlanWorkspaceSection({ teamPath, detail, sessions, conne
     )}
     {snapshot === null
       ? <p role="status" className="mt-2 text-chat-meta text-secondary" data-testid="plan-workspace-loading">Loading workspace…</p>
-      : <PlanWorkspacePanes teamKey={teamPath}
+      : <PlanWorkspacePanes teamKey={teamPath} planId={planId}
         map={mapContent(displayedContent, view, teamPath, connected, navigateWorkspace, worktrees)}
         documents={documentsContent(view, teamPath, connected, connectionEpoch, sendMessage, worktrees, navigateWorkspace)}
         conversation={<PlanWorkspaceConversation teamPath={teamPath}

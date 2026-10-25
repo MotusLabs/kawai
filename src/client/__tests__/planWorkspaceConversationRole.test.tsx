@@ -15,7 +15,7 @@ const renderers: TestRenderer.ReactTestRenderer[] = []
 afterEach(() => {
   for (const renderer of renderers) renderer.unmount()
   renderers.length = 0
-  useTeamPlanWorkspaceStore.setState({ views: {}, teamBindings: {}, roles: {}, panes: {} })
+  useTeamPlanWorkspaceStore.setState({ views: {}, teamBindings: {}, roles: {}, panes: {}, retained: {} })
 })
 
 const mountPanel = (overrides: Partial<Parameters<typeof PlanWorkspaceConversation>[0]> = {}) => {

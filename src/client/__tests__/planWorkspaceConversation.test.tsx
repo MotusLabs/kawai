@@ -70,7 +70,7 @@ afterEach(() => {
   useChatStore.setState({ sessions: {}, drafts: {}, pendingReveal: null })
   useSessionStore.setState({ connectionStatus: 'connected', connectionEpoch: 1 })
   useWorkspaceStore.setState({ snapshot: null })
-  useTeamPlanWorkspaceStore.setState({ views: {}, teamBindings: {}, roles: {}, panes: {} })
+  useTeamPlanWorkspaceStore.setState({ views: {}, teamBindings: {}, roles: {}, panes: {}, retained: {} })
   usePlanWorkspaceScopeStore.setState({ scopes: {}, attempts: {} })
   pendingContextSends.clear()
 })

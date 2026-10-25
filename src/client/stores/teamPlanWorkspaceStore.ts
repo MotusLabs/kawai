@@ -119,14 +119,46 @@ const emptyView = (planId: string): PlanWorkspaceView => ({
   expanded: [], selectedChange: null, selectedDocument: null, filter: 'all',
 })
 
+/**
+ * The plan-scoped client state a plan switch or tab close retains
+ * (plan-workspace 7.1 r2), keyed `<teamKey>\0<planId>`: returning or
+ * switching A→B→A restores A, while B never sees it. The pane expansion
+ * rides with its plan (7.2's reader/chat expansion and restore); pane
+ * *sizes* stay per team.
+ */
+interface RetainedPlanState {
+  expanded: string[]
+  filter: WorkspaceFilter
+  selectedChange: string | null
+  selectedDocument: WorkspaceDocumentSelection | null
+  expandedPane: WorkspaceExpandedPane
+}
+
+const retainedKey = (teamKey: string, planId: string): string => `${teamKey}\0${planId}`
+
+/** The outgoing view's retained state (the live copy stays authoritative until the switch commits). */
+const retainedOf = (state: PlanWorkspaceState, teamKey: string): [string, RetainedPlanState] | null => {
+  const view = state.views[teamKey]
+  if (!view) return null
+  return [retainedKey(teamKey, view.planId), {
+    expanded: view.expanded,
+    filter: view.filter,
+    selectedChange: view.selectedChange,
+    selectedDocument: view.selectedDocument,
+    expandedPane: state.panes[teamKey]?.expandedPane ?? null,
+  }]
+}
+
 interface PlanWorkspaceState {
   views: Record<string, PlanWorkspaceView>
   /** The team bindings slot (Q1): reconciled from plan snapshots and bindings pushes. */
   teamBindings: Record<string, WorkspaceBindingView[]>
   /** Each team's active conversation role (design D6); survives plan switches and navigation. */
   roles: Record<string, PlanWorkspaceRole>
-  /** Each team's pane sizing and expansion (design D8). */
+  /** Each team's pane sizing and expansion (design D8); the expansion is swapped per plan on a switch. */
   panes: Record<string, WorkspacePanesState>
+  /** Each (team, plan)'s retained client state (7.1 r2), keyed `<teamKey>\0<planId>`. */
+  retained: Record<string, RetainedPlanState>
   open: (teamKey: string, planId: string) => void
   /** Drop the view (the tab closed); an unmount keeps it for the return trip. */
   close: (teamKey: string) => void
@@ -166,16 +198,45 @@ export const useTeamPlanWorkspaceStore = create<PlanWorkspaceState>(set => ({
   teamBindings: {},
   roles: {},
   panes: {},
+  retained: {},
   open: (teamKey, planId) => set(state => {
     const view = state.views[teamKey]
     if (view?.planId === planId) return state
-    return { views: { ...state.views, [teamKey]: emptyView(planId) } }
+    // The outgoing plan's client state is retained under its own key; the
+    // incoming plan resumes its own (7.1 r2) — never the other plan's.
+    const retained = { ...state.retained }
+    const outgoing = retainedOf(state, teamKey)
+    if (outgoing) retained[outgoing[0]] = outgoing[1]
+    const nextView = emptyView(planId)
+    const saved = retained[retainedKey(teamKey, planId)]
+    if (saved) {
+      nextView.expanded = saved.expanded
+      nextView.filter = saved.filter
+      nextView.selectedChange = saved.selectedChange
+      nextView.selectedDocument = saved.selectedDocument
+    }
+    // The pane expansion is plan-scoped too (7.1 r2): a different plan shows
+    // its own expansion, or none — never the outgoing plan's.
+    const incomingExpansion = saved ? saved.expandedPane : null
+    const panes = state.panes[teamKey]
+    const panesChanged = panes !== undefined && panes.expandedPane !== incomingExpansion
+    const nextPanes = panesChanged ? { ...panes, expandedPane: incomingExpansion } : panes
+    return {
+      retained,
+      views: { ...state.views, [teamKey]: nextView },
+      ...(panesChanged ? { panes: { ...state.panes, [teamKey]: nextPanes } } : {}),
+    }
   }),
   close: teamKey => set(state => {
     if (!state.views[teamKey]) return state
+    // Closing drops the live subscriptions' view, never the retained state
+    // (7.1 r2): reopening the same plan resumes where it left off.
+    const retained = { ...state.retained }
+    const outgoing = retainedOf(state, teamKey)
+    if (outgoing) retained[outgoing[0]] = outgoing[1]
     const views = { ...state.views }
     delete views[teamKey]
-    return { views }
+    return { retained, views }
   }),
   rekey: (from, to) => set(state => {
     if (from === to) return state
@@ -183,11 +244,13 @@ export const useTeamPlanWorkspaceStore = create<PlanWorkspaceState>(set => ({
     const bindings = state.teamBindings[from]
     const role = state.roles[from]
     const panes = state.panes[from]
-    if (view === undefined && bindings === undefined && role === undefined && panes === undefined) return state
+    const retainedKeys = Object.keys(state.retained).filter(key => key.startsWith(`${from}\0`))
+    if (view === undefined && bindings === undefined && role === undefined && panes === undefined && retainedKeys.length === 0) return state
     const views = { ...state.views }
     const teamBindings = { ...state.teamBindings }
     const roles = { ...state.roles }
     const paneMap = { ...state.panes }
+    const retained = { ...state.retained }
     if (view) {
       delete views[from]
       if (!views[to]) views[to] = view
@@ -204,7 +267,12 @@ export const useTeamPlanWorkspaceStore = create<PlanWorkspaceState>(set => ({
       delete paneMap[from]
       if (!paneMap[to]) paneMap[to] = panes
     }
-    return { views, teamBindings, roles, panes: paneMap }
+    for (const key of retainedKeys) {
+      const moved = `${to}${key.slice(from.length)}`
+      delete retained[key]
+      if (!retained[moved]) retained[moved] = state.retained[key]
+    }
+    return { views, teamBindings, roles, panes: paneMap, retained }
   }),
   setVersion: (teamKey, version) => set(state => update(state, teamKey, { version })),
   setExecution: (teamKey, executionId) => set(state => update(state, teamKey, { executionId })),

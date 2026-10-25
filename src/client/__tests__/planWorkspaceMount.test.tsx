@@ -27,7 +27,7 @@ afterEach(() => {
   for (const renderer of renderers) act(() => renderer.unmount())
   renderers.length = 0
   useTeamPlanStore.setState({ views: {}, reveal: null })
-  useTeamPlanWorkspaceStore.setState({ views: {}, roles: {}, panes: {} })
+  useTeamPlanWorkspaceStore.setState({ views: {}, roles: {}, panes: {}, retained: {} })
   useWorkspaceStore.setState({ snapshot: null })
   resetTeamLocationForTests()
 })

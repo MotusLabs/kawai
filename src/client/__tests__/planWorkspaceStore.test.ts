@@ -29,7 +29,7 @@ const snapshotMessage = (extra: { teamPath?: string; planId?: string } = {}) => 
 })
 
 beforeEach(() => {
-  useTeamPlanWorkspaceStore.setState({ views: {} })
+  useTeamPlanWorkspaceStore.setState({ views: {}, retained: {} })
 })
 
 describe('open and close', () => {
@@ -182,7 +182,7 @@ describe('view state', () => {
 
 describe('roles, panes, and the url notice (plan-workspace 7.1-7.2)', () => {
   beforeEach(() => {
-    useTeamPlanWorkspaceStore.setState({ views: {}, roles: {}, panes: {} })
+    useTeamPlanWorkspaceStore.setState({ views: {}, roles: {}, panes: {}, retained: {} })
   })
 
   test('the role is per-team, defaults to Architect, and survives a plan switch', () => {
@@ -230,5 +230,67 @@ describe('roles, panes, and the url notice (plan-workspace 7.1-7.2)', () => {
     // A team with no view writes nothing and throws nothing.
     store.setUrlNotice('/ghost', 'boo')
     expect(useTeamPlanWorkspaceStore.getState().views['/ghost']).toBeUndefined()
+  })
+})
+
+describe('plan-scoped retention (plan-workspace 7.1 r2)', () => {
+  test('a switch retains each plan’s view state; B never sees A’s, and A→B→A restores A', () => {
+    const store = useTeamPlanWorkspaceStore.getState()
+    store.open('/repo', 'pA')
+    store.toggleExpanded('/repo', 'a')
+    store.setFilter('/repo', 'active')
+    store.selectChange('/repo', 'chg-1')
+    store.openDocument('/repo', { worktreeId: '/repo', relativePath: 'docs/a.md' })
+    store.setExpandedPane('/repo', 'reader')
+    // Plan B was never visited: a fresh view, and never A's pane expansion.
+    store.open('/repo', 'pB')
+    const fresh = useTeamPlanWorkspaceStore.getState().views['/repo']!
+    expect(fresh.planId).toBe('pB')
+    expect(fresh.expanded).toEqual([])
+    expect(fresh.filter).toBe('all')
+    expect(fresh.selectedChange).toBeNull()
+    expect(fresh.selectedDocument).toBeNull()
+    expect(useTeamPlanWorkspaceStore.getState().panes['/repo']?.expandedPane).toBeNull()
+    // B's own state is kept apart from A's.
+    store.toggleExpanded('/repo', 'b')
+    // Returning to A restores exactly what A had.
+    store.open('/repo', 'pA')
+    const restored = useTeamPlanWorkspaceStore.getState().views['/repo']!
+    expect(restored.expanded).toEqual(['a'])
+    expect(restored.filter).toBe('active')
+    expect(restored.selectedChange).toBe('chg-1')
+    expect(restored.selectedDocument).toEqual({ worktreeId: '/repo', relativePath: 'docs/a.md' })
+    expect(useTeamPlanWorkspaceStore.getState().panes['/repo']?.expandedPane).toBe('reader')
+    // And B resumes its own state, still without A's.
+    store.open('/repo', 'pB')
+    expect(useTeamPlanWorkspaceStore.getState().views['/repo']?.expanded).toEqual(['b'])
+    expect(useTeamPlanWorkspaceStore.getState().panes['/repo']?.expandedPane).toBeNull()
+  })
+
+  test('closing the tab retains the view; reopening the same plan resumes it', () => {
+    const store = useTeamPlanWorkspaceStore.getState()
+    store.open('/repo', 'p1')
+    store.toggleExpanded('/repo', 'a')
+    store.selectChange('/repo', 'chg-9')
+    store.setExpandedPane('/repo', 'conversation')
+    store.close('/repo')
+    expect(useTeamPlanWorkspaceStore.getState().views['/repo']).toBeUndefined()
+    expect(useTeamPlanWorkspaceStore.getState().retained['/repo\0p1']).toBeDefined()
+    store.open('/repo', 'p1')
+    const view = useTeamPlanWorkspaceStore.getState().views['/repo']!
+    expect(view.expanded).toEqual(['a'])
+    expect(view.selectedChange).toBe('chg-9')
+    expect(useTeamPlanWorkspaceStore.getState().panes['/repo']?.expandedPane).toBe('conversation')
+  })
+
+  test('rekey moves the retained state with the team', () => {
+    const store = useTeamPlanWorkspaceStore.getState()
+    store.open('/old', 'p1')
+    store.toggleExpanded('/old', 'x')
+    store.close('/old')
+    store.rekey('/old', '/new')
+    expect(useTeamPlanWorkspaceStore.getState().retained['/old\0p1']).toBeUndefined()
+    store.open('/new', 'p1')
+    expect(useTeamPlanWorkspaceStore.getState().views['/new']?.expanded).toEqual(['x'])
   })
 })

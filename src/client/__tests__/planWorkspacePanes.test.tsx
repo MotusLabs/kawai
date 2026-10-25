@@ -25,10 +25,10 @@ const CONTENT = {
   conversation: <div>conversation content</div>,
 }
 
-const mountPanes = (teamKey = '/repo') => {
+const mountPanes = (teamKey = '/repo', planId = 'p1') => {
   let renderer!: TestRenderer.ReactTestRenderer
   act(() => {
-    renderer = TestRenderer.create(<PlanWorkspacePanes teamKey={teamKey} {...CONTENT} />)
+    renderer = TestRenderer.create(<PlanWorkspacePanes teamKey={teamKey} planId={planId} {...CONTENT} />)
   })
   renderers.push(renderer)
   const byId = (testId: string) => renderer.root.findByProps({ 'data-testid': testId })
@@ -37,15 +37,15 @@ const mountPanes = (teamKey = '/repo') => {
 }
 
 /** The narrow layout with the store's live pane state, as the chooser renders it. */
-const NarrowHost = ({ teamKey }: { teamKey: string }) => {
+const NarrowHost = ({ teamKey, planId }: { teamKey: string; planId: string }) => {
   const panes = useTeamPlanWorkspaceStore(state => state.panes[teamKey]) ?? defaultPanes()
   const rootRef = useRef<HTMLElement | null>(null)
-  return <WorkspaceNarrowPanes teamKey={teamKey} panes={panes} rootRef={rootRef} content={CONTENT} />
+  return <WorkspaceNarrowPanes teamKey={teamKey} planId={planId} panes={panes} rootRef={rootRef} content={CONTENT} />
 }
 
-const mountNarrow = (teamKey = '/repo') => {
+const mountNarrow = (teamKey = '/repo', planId = 'p1') => {
   let renderer!: TestRenderer.ReactTestRenderer
-  act(() => { renderer = TestRenderer.create(<NarrowHost teamKey={teamKey} />) })
+  act(() => { renderer = TestRenderer.create(<NarrowHost teamKey={teamKey} planId={planId} />) })
   renderers.push(renderer)
   const byId = (testId: string) => renderer.root.findByProps({ 'data-testid': testId })
   const has = (testId: string) => renderer.root.findAllByProps({ 'data-testid': testId }).length > 0
@@ -53,7 +53,7 @@ const mountNarrow = (teamKey = '/repo') => {
 }
 
 beforeEach(() => {
-  useTeamPlanWorkspaceStore.setState({ views: {}, roles: {}, panes: {} })
+  useTeamPlanWorkspaceStore.setState({ views: {}, roles: {}, panes: {}, retained: {} })
   clearPaneScrollsForTests()
 })
 
@@ -155,17 +155,23 @@ describe('the narrow navigation', () => {
     expect(has('workspace-pane-conversation')).toBe(true)
   })
 
-  test('a pane records its scroll per team; the restore itself runs in the browser fixture (RTR attaches no host refs)', () => {
-    const first = mountNarrow()
+  test('a pane records its scroll per team and plan; the restore itself runs in the browser fixture (RTR attaches no host refs)', () => {
+    const first = mountNarrow('/repo', 'plan-a')
     const mapPane = first.byId('workspace-pane-map')
     act(() => mapPane.props.onScroll({ currentTarget: { scrollTop: 42 } }))
-    expect(paneScrollOf('/repo', 'map')).toBe(42)
+    expect(paneScrollOf('/repo', 'plan-a', 'map')).toBe(42)
+    // Plan B on the same team reads no scroll of Plan A's (per-plan isolation).
+    const second = mountNarrow('/repo', 'plan-b')
+    expect(paneScrollOf('/repo', 'plan-b', 'map')).toBe(0)
+    act(() => second.byId('workspace-pane-map').props.onScroll({ currentTarget: { scrollTop: 5 } }))
+    expect(paneScrollOf('/repo', 'plan-b', 'map')).toBe(5)
+    expect(paneScrollOf('/repo', 'plan-a', 'map')).toBe(42)
     // Another team's scroll record is its own.
     act(() => useTeamPlanWorkspaceStore.getState().setNarrowPane('/other', 'map'))
-    const other = mountNarrow('/other')
+    const other = mountNarrow('/other', 'plan-a')
     act(() => other.byId('workspace-pane-map').props.onScroll({ currentTarget: { scrollTop: 7 } }))
-    expect(paneScrollOf('/other', 'map')).toBe(7)
-    expect(paneScrollOf('/repo', 'map')).toBe(42)
+    expect(paneScrollOf('/other', 'plan-a', 'map')).toBe(7)
+    expect(paneScrollOf('/repo', 'plan-a', 'map')).toBe(42)
   })
 })
 
