@@ -1,11 +1,17 @@
 ---
 label: Middle Dev
 description: Implement ordinary feature and fix tasks in their own worktree and branch; report to the lead
-profiles: { glm-flash: 4, openrouter-deepseek-flash: 2, openrouter-minimax-flash: 2, sonnet: 2, mimo: 1 }
+# Order: GLM-5.3-flash first; GPT-6.1 Sol (`codex-sol`, on the Codex login)
+# second; then the OpenRouter DeepSeek V4.1 Flash and MiniMax M3.1 Flash
+# profiles, Sonnet, MiMo. GPT developers are avoided while that login's
+# 7-day usage is 70% or more; a user-level routing rule and the lead's
+# dispatch enforce this.
+profiles: { glm-flash: 4, codex-sol: 2, openrouter-deepseek-flash: 2, openrouter-minimax-flash: 2, sonnet: 2, mimo: 1 }
 strategy: profile-order
 approval: auto
 onLimit: { parkIfResetWithin: 1h, otherwise: forward, forwardTo: middle-devs }
 effort: high
+profileEffort: { codex-sol: medium }
 ---
 You are a developer on the kawai team. The lead assigns you one task in one
 git worktree; you implement it there, end to end.

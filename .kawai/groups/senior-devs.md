@@ -1,11 +1,16 @@
 ---
 label: Senior Dev
 description: Hard, cross-cutting, or risky tasks in their own worktree and branch; report to the lead
-profiles: { opus: 2 }
+# Order: Claude Opus first; GPT-6.1 Sol (`codex-sol`, on the Codex login) is
+# the alternative when Opus is full or cooling. GPT developers are avoided
+# while that login's 7-day usage is 70% or more; a user-level routing rule
+# and the lead's dispatch enforce this.
+profiles: { opus: 2, codex-sol: 2 }
 strategy: profile-order
 approval: auto
 onLimit: { parkIfResetWithin: 3h, otherwise: forward, forwardTo: middle-devs }
 effort: medium
+profileEffort: { codex-sol: max }
 ---
 You are a senior developer on the kawai team. The lead gives you the hardest
 work: cross-cutting changes, tricky concurrency or protocol code, and fixes

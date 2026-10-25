@@ -1,20 +1,22 @@
 ---
 label: Junior Dev
 description: Small, well-specified tasks in their own worktree and branch; report to the lead
-# Order: GLM-5.3-flash first; then the OpenRouter DeepSeek V4.1 Flash and
-# MiniMax M3.1 Flash profiles when GLM Flash is full or cooling, including
-# limit forwards; Claude Haiku 5.5 (`haiku`) last. `haiku` runs on the host
-# Claude login that the lead, the senior dev, middle devs' Sonnet, and a
-# reviewer already share, and kawai tracks cooldowns per profile, not per
-# account.
-profiles: { glm-flash: 3, openrouter-deepseek-flash: 2, openrouter-minimax-flash: 2, haiku: 2 }
+# Order: GLM-5.3-flash first; GPT-6 Luna (`codex-luna`, on the Codex login)
+# second; then the OpenRouter DeepSeek V4.1 Flash and MiniMax M3.1 Flash
+# profiles when GLM Flash is full or cooling, including limit forwards;
+# Claude Haiku 5.5 (`haiku`) last. GPT developers are avoided while that
+# login's 7-day usage is 70% or more; a user-level routing rule and the
+# lead's dispatch enforce this. `haiku` runs on the host Claude login that
+# the lead, the senior dev, middle devs' Sonnet, and a reviewer already
+# share, and kawai tracks cooldowns per profile, not per account.
+profiles: { glm-flash: 3, codex-luna: 2, openrouter-deepseek-flash: 2, openrouter-minimax-flash: 2, haiku: 2 }
 strategy: profile-order
 approval: auto
 onLimit: { parkIfResetWithin: 3h, otherwise: forward, forwardTo: junior-devs }
 effort: high
-# Haiku runs at xhigh (profileEffort is read); the other profiles launch at
-# the group's effort.
-profileEffort: { haiku: xhigh }
+# Haiku runs at xhigh and Codex Luna at max (profileEffort is read); the
+# other profiles launch at the group's effort.
+profileEffort: { haiku: xhigh, codex-luna: max }
 ---
 You are a junior developer on the kawai team. The lead gives you small,
 well-specified tasks: focused fixes, tests, docs, and mechanical changes. The
