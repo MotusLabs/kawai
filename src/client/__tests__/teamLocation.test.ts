@@ -2,12 +2,15 @@
 // `#/team/<key>/<tab>[/<sub>][/<id>]`, its pure parse/format round trip, and
 // the location store's navigate/leave history writes.
 import { afterEach, beforeEach, expect, test } from 'bun:test'
+import { createElement } from 'react'
+import { act } from 'react-dom/test-utils'
+import TestRenderer from 'react-test-renderer'
 import {
   DEFAULT_WORKSPACE_TAB,
   parseTeamHash,
   teamHashOf,
 } from '../utils/teamLocation'
-import { openTeamPage, resetTeamLocationForTests, useTeamLocationStore } from '../hooks/useTeamLocation'
+import { openTeamPage, resetTeamLocationForTests, useTeamLocation, useTeamLocationStore } from '../hooks/useTeamLocation'
 import { useTeamWorkspaceStore } from '../stores/teamWorkspaceStore'
 
 const globalAny = globalThis as typeof globalThis & { window?: Window & typeof globalThis }
@@ -244,4 +247,29 @@ test('opening the Team page restores the team’s last plans id and query (full-
   useTeamLocationStore.getState().navigate({ teamKey: '/repo', tab: 'tasks', id: 't-1' })
   openTeamPage('/other')
   expect(useTeamLocationStore.getState().location).toEqual({ teamKey: '/other', tab: 'plans', id: 'q7' })
+})
+
+test('a deep link the URL itself named is recorded too — direct load, then chat, then the opener returns (7.1 r2)', () => {
+  // The hash is set as a pasted link would leave it; the hook's mount sync
+  // (never a navigate) adopts and records it.
+  globalAny.window.location.hash = '#/team/%2Frepo/plans/p1?v=rev%3A1&r=lead'
+  useTeamWorkspaceStore.setState(state => ({
+    views: { ...state.views, '/repo': { tab: 'plans', tabs: {} as never } as never },
+  }))
+  let mounted!: TestRenderer.ReactTestRenderer
+  const Probe = () => { useTeamLocation(); return null }
+  act(() => { mounted = TestRenderer.create(createElement(Probe)) })
+  try {
+    expect(useTeamLocationStore.getState().location).toEqual({
+      teamKey: '/repo', tab: 'plans', id: 'p1', plans: { version: 'rev:1', role: 'lead' },
+    })
+    // A full-screen chat visit clears the route; the opener restores the
+    // location the URL named, with no navigate having ever written it.
+    useTeamLocationStore.getState().leave()
+    expect(useTeamLocationStore.getState().location).toBeNull()
+    openTeamPage('/repo')
+    expect(useTeamLocationStore.getState().location).toEqual({
+      teamKey: '/repo', tab: 'plans', id: 'p1', plans: { version: 'rev:1', role: 'lead' },
+    })
+  } finally { act(() => mounted.unmount()) }
 })

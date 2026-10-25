@@ -43,6 +43,23 @@ const sameLocation = (a: TeamLocation | null, b: TeamLocation | null): boolean =
   a?.teamKey === b?.teamKey && a?.tab === b?.tab && a?.sub === b?.sub && a?.window === b?.window && a?.id === b?.id
   && samePlansQuery(a?.plans, b?.plans)
 
+/**
+ * Record a plans location as its team's last, from whichever path set it
+ * (plan-workspace 7.1 r2): the opener restores it on return from a
+ * full-screen chat — including a location that only ever lived in the URL
+ * (a direct deep link, a reload, Back/Forward), not just one a `navigate`
+ * wrote.
+ */
+const recordPlansLocation = (location: TeamLocation): void => {
+  if (location.tab !== 'plans') return
+  useTeamLocationStore.setState(state => ({
+    lastPlansLocations: {
+      ...state.lastPlansLocations,
+      [location.teamKey]: { id: location.id ?? null, ...(location.plans !== undefined ? { query: location.plans } : {}) },
+    },
+  }))
+}
+
 export const useTeamLocationStore = create<TeamLocationState>(() => ({
   // The mount effect of `useTeamLocation` reads the URL (a reload restores
   // the location), so the store starts null rather than touching window at
@@ -58,16 +75,7 @@ export const useTeamLocationStore = create<TeamLocationState>(() => ({
     const hash = teamHashOf(location)
     if (options?.replace) historyApi()?.replaceState(null, '', hash)
     else historyApi()?.pushState(null, '', hash)
-    // Record the plans sub-location as it is navigated to, so the Team page's
-    // opener can restore it (a rekey's replace navigates here too).
-    if (location.tab === 'plans') {
-      useTeamLocationStore.setState(state => ({
-        lastPlansLocations: {
-          ...state.lastPlansLocations,
-          [location.teamKey]: { id: location.id ?? null, ...(location.plans !== undefined ? { query: location.plans } : {}) },
-        },
-      }))
-    }
+    recordPlansLocation(location)
     useTeamLocationStore.setState({ location })
   },
   leave: () => {
@@ -86,6 +94,9 @@ export function useTeamLocation(): TeamLocation | null {
       const parsed = typeof window === 'undefined' || !window.location
         ? null
         : parseTeamHash(window.location.hash)
+      // A plans location the URL itself named (direct deep link, reload,
+      // Back/Forward) is recorded too, so the opener restores it (r2).
+      if (parsed !== null) recordPlansLocation(parsed)
       if (!sameLocation(useTeamLocationStore.getState().location, parsed)) {
         useTeamLocationStore.setState({ location: parsed })
       }
