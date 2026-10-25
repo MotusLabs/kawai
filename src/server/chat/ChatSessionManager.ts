@@ -2848,6 +2848,10 @@ export class ChatSessionManager {
                 (this.options.getQuestionAutoAnswerMinutes?.() ?? 0) * 60_000,
               ...(teamMcpServer ? { teamMcpServer } : {}),
               getProviderEnv: () => this.providerEnv(),
+              // The secret-name registry observes and persists at every
+              // Claude spawn (provider-relay-setup D2), so a name once seen
+              // survives its catalog entry's removal.
+              retainedNamesDb: this.options.db,
               claudeProfileId: record.claudeProfileId,
               ...(this.options.profileCatalogHome
                 ? { profileCatalogHome: this.options.profileCatalogHome }
@@ -2994,7 +2998,10 @@ export class ChatSessionManager {
   private launchFor(profileId: string | undefined, projectPath?: string): ChatLaunchConfiguration {
     const report = this.options.catalogErrorLog
       ?? (errors => logger.warn('chat_profile_catalog_errors', { errors }))
-    return resolveClaudeProfile(profileId, this.providerEnv(), this.catalogCtx(projectPath), report)
+    // The registry observes here too (provider-relay-setup D2): a name is
+    // registered by the first catalog read that names it, launch or not —
+    // an entry removed before any spawn stays withheld.
+    return resolveClaudeProfile(profileId, this.providerEnv(), this.catalogCtx(projectPath), report, this.options.db)
   }
 
   /**

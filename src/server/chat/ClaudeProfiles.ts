@@ -14,6 +14,7 @@ import {
   withoutCredentials,
   type ChatProviderEnv,
 } from './chatProviderEnv'
+import { catalogRegisteredNames, type RetainedNamesDb } from './secretNameRegistry'
 import { CODEX_PROVIDER_LABEL, resolveCodexHome, type CodexLaunchConfiguration } from './codexProfiles'
 import {
   PROFILE_CONTROLLED_ENV,
@@ -79,19 +80,24 @@ export function claudeProfileMetadata(
 }
 
 /**
- * The credential variables the catalog resolved at `ctx`'s project path
- * names (openrouter-provider D3): the set every launch withholds. The Codex
+ * The registered secret names at `ctx`'s catalog (provider-relay-setup D2):
+ * the set every launch withholds — parsed-layer catalog names in any entry
+ * state plus the persisted retained names when a store is supplied. The Codex
  * launch path reads it here, since its configuration carries no env.
  */
-export function withheldCredentialNamesAt(ctx: ProfileCatalogContext = {}): Set<string> {
-  return withheldCredentialNames(resolveProfileCatalog(ctx))
+export function withheldCredentialNamesAt(
+  ctx: ProfileCatalogContext = {},
+  retainedNamesDb?: RetainedNamesDb
+): Set<string> {
+  return catalogRegisteredNames(retainedNamesDb, resolveProfileCatalog(ctx))
 }
 
 export function resolveClaudeProfile(
   id: string = 'default',
   globalEnv: ChatProviderEnv = {},
   ctx: ProfileCatalogContext = {},
-  onCatalogErrors?: (errors: string[]) => void
+  onCatalogErrors?: (errors: string[]) => void,
+  retainedNamesDb?: RetainedNamesDb
 ): ChatLaunchConfiguration {
   const catalog = resolveProfileCatalog(ctx)
   // A failed file skips silently otherwise; report it (the rest resolves).
@@ -121,12 +127,16 @@ export function resolveClaudeProfile(
       ...(profile.model !== undefined ? { model: profile.model } : {}),
     }
   }
-  const withheld = withheldCredentialNames(catalog)
+  // The registered-name set (provider-relay-setup D2): parsed-layer catalog
+  // names plus the retained names, observed and persisted per launch when a
+  // store is supplied — a name seen here survives its entry's later removal.
+  const registered = catalogRegisteredNames(retainedNamesDb, catalog)
   const serverEnv = effectiveChatEnv(globalEnv)
   // Every launch passes an explicit, filtered environment (openrouter-provider
   // D3): never a bare inheritance of process.env, so the catalog-named
-  // credentials stay out of default and executable-backed launches too.
-  const base = withoutCredentials(serverEnv, withheld)
+  // credentials stay out of default and executable-backed launches too. The
+  // filter runs before every branch's own operations (table W).
+  const base = withoutCredentials(serverEnv, registered)
   return buildClaudeLaunch(profile, base, serverEnv)
 }
 

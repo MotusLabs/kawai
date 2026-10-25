@@ -5,6 +5,7 @@
 // REPLACES the subprocess environment rather than merging it, so the merge
 // with process.env happens here, in one place. Credential variables a
 // trusted catalog names are withheld from every launch here too.
+import { registeredSecretNames } from './secretNameRegistry'
 
 export type ChatProviderEnv = Record<string, string>
 
@@ -86,30 +87,18 @@ export function buildChatOptionsEnv(
   return Object.keys(providerEnv).length > 0 ? effectiveChatEnv(providerEnv) : undefined
 }
 
-/** The credential-naming fields of a resolved catalog entry (openrouter-provider D1). */
-export interface CredentialNames {
-  authTokenEnv?: string
-  balanceKeyEnv?: string
-}
-
 /**
- * Every server variable the resolved catalog names as a credential
- * (openrouter-provider D3): no agent launch, under any profile, may inherit
- * one under its own name. The set comes from the catalog alone — never from
- * Settings — so removing a provider's entry stops withholding its variables.
+ * The registered catalog names a resolved catalog carries (provider-relay-setup
+ * D2): every credential variable named at any parsed catalog layer, in any
+ * entry state — collected by `resolveProfileCatalog` before the merge, so
+ * removing a provider's entry, dropping it, or (§3) disabling it never stops
+ * withholding. Retained names, header variables and store keys join through
+ * the registry (secretNameRegistry.ts); this is the catalog's contribution.
  */
 export function withheldCredentialNames(catalog: {
-  profiles: ReadonlyMap<string, CredentialNames>
-  providers: ReadonlyMap<string, CredentialNames>
+  credentialNames: ReadonlySet<string>
 }): Set<string> {
-  const names = new Set<string>()
-  for (const entries of [catalog.profiles, catalog.providers]) {
-    for (const entry of entries.values()) {
-      if (entry.authTokenEnv) names.add(entry.authTokenEnv)
-      if (entry.balanceKeyEnv) names.add(entry.balanceKeyEnv)
-    }
-  }
-  return names
+  return registeredSecretNames({ catalogNames: catalog.credentialNames })
 }
 
 /** A copy of `env` without the withheld names. */

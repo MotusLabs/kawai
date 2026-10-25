@@ -121,6 +121,13 @@ export interface ProfileCatalog {
   providers: Map<string, CatalogProvider>
   /** The raw merged provider definitions (env and credential names included), for routing facts like host-login applicability. */
   merged: Map<string, MergedProvider>
+  /**
+   * Every credential variable named at any parsed catalog layer, collected
+   * before the merge (provider-relay-setup D2): an entry the trusted
+   * invariants drop, or one a later section disables, keeps its names here —
+   * the secret-name registry withholds them whatever happens to the entry.
+   */
+  credentialNames: ReadonlySet<string>
   /** Per-file validation failures; the rest of the catalog still resolves. */
   errors: string[]
 }
@@ -282,6 +289,12 @@ export function resolveProfileCatalog(
 ): ProfileCatalog {
   const merger = new CatalogMerger()
   const errors: string[] = []
+  // Parsed-layer credential names (provider-relay-setup D2): collected as
+  // each providers.json layer parses, before the merge drops or re-homes
+  // anything, so removal or an entry state never un-hides a variable.
+  // profiles.json entries and Codex entries cannot name credentials — the
+  // parsers refuse the fields — so the providers layers are the whole set.
+  const credentialNames = new Set<string>()
   const levels = profileCatalogLevels(ctx)
   for (const level of levels) {
     // Only the shipped base falls back to the embedded shipped defaults;
@@ -296,6 +309,10 @@ export function resolveProfileCatalog(
       if (!parsed.ok) {
         errors.push(parsed.error)
         continue
+      }
+      for (const provider of parsed.providers.values()) {
+        if (provider.authTokenEnv !== undefined) credentialNames.add(provider.authTokenEnv)
+        if (provider.balanceKeyEnv !== undefined) credentialNames.add(provider.balanceKeyEnv)
       }
       merger.addProviders(level.file, level.shipped ?? false, parsed.providers, level.tier, level.trusted)
       continue
@@ -369,7 +386,7 @@ export function resolveProfileCatalog(
   if (!profiles.has('default')) {
     profiles.set('default', { label: 'Default', env: {}, providerId: 'default' })
   }
-  return { profiles, providers, merged: merger.providers, errors }
+  return { profiles, providers, merged: merger.providers, credentialNames, errors }
 }
 
 /**
