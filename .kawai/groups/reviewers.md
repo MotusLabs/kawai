@@ -55,8 +55,8 @@ latest journal. The body names the worktree, branch, base/head SHAs,
    revision and review request. Map each delta-spec requirement and behavioral
    scenario in that scope to tests asserting its observable outcome; existing
    tests count when they cover it. For tasks without delta specs, use the task's
-   direction and acceptance criteria. Record the coverage mapping in the
-   result-bound findings. For subset submissions, list requirements explicitly
+   direction and acceptance criteria. Record the mapping blind-first, as
+   the next step describes. For subset submissions, list requirements explicitly
    deferred to later tasks separately; their missing implementation or tests do
    not block this stage. Still check regressions caused by the submitted subset
    in affected existing behavior. If the stage boundary is ambiguous or conflicts
@@ -65,14 +65,22 @@ latest journal. The body names the worktree, branch, base/head SHAs,
    behavior must detect its absence; tests for preserved behavior must detect
    regressions. Document justified exceptions, such as requirements that cannot
    be meaningfully automated, for the Lead to resolve before approval.
-5. Optionally run checks (`bun run check`, normally a recorded hit when the
+5. Record the coverage map blind-first, from the previous step's mapping:
+   list the clauses from the spec and the task, map each to the test that
+   covers it in the diff, and record the map with `task_submit_coverage`
+   (clauses of `` `path` › `title` `` citations). Only then read the
+   author's map with `task_get` — it stays sealed until your own map is
+   recorded — and treat each difference as a finding or explain it in the
+   result-bound findings. The formal verdict stays `task_submit_findings`
+   bound to the exact result; the coverage map never replaces it.
+6. Optionally run checks (`bun run check`, normally a recorded hit when the
    dev already passed that tree) and probes, but only in a disposable
    checkout of the head SHA: `git worktree add --detach /tmp/kawai-review-<sha7> <head-sha>`, then
    `bun install` there. Remove it with `git worktree remove` once your
    verdict is sent. In the dev's worktree, use only read-only git
    (`git -C <worktree> log`, `diff`, `show`, `status`): the dev may be
    working there. Never `bun run test:e2e`.
-6. Run mutation checks only on the diff's wiring and decision points: call
+7. Run mutation checks only on the diff's wiring and decision points: call
    sites passing values, guards, filters, ordering, and defaults. Run at most
    5 mutants per review, and none for docs, proposals, archives, measurement
    work, or small fixes.
@@ -86,7 +94,7 @@ latest journal. The body names the worktree, branch, base/head SHAs,
      killed by `file › exact title`, survived, or equivalent (with the reason).
    - A survivor blocks only when production wiring or a specified behavior has
      no test. Every other survivor is a follow-up.
-7. For work whose acceptance carries acceptance oracles — a design's
+8. For work whose acceptance carries acceptance oracles — a design's
    "Acceptance oracles" subsection (docs/agent-collaboration.md, "Write
    acceptance as oracles") — judge the result against its tables and
    properties, and let them decide what blocks:
@@ -103,10 +111,10 @@ latest journal. The body names the worktree, branch, base/head SHAs,
      as a proposed oracle amendment (the Lead decides, not you) plus an
      entry for docs/oracle-hazards.md, not as a blocking finding. A missing
      row alone never overrides the classes above or the mutation rule in
-     step 6: a counterexample to a stated property, or a security or
+     step 7: a counterexample to a stated property, or a security or
      data-loss bug with a reproducer, blocks whether or not the tables
      anticipated it.
-   - This never relaxes the mutation rule in step 6: a survivor still blocks
+   - This never relaxes the mutation rule in step 7: a survivor still blocks
      when production wiring or a specified behavior has no test — an oracle
      exercised only through a hand-built harness is the M1 class in
      docs/oracle-hazards.md.
