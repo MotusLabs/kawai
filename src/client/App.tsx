@@ -31,6 +31,7 @@ import { useWebSocket } from './hooks/useWebSocket'
 import { invalidateSnapshotCache } from './terminal/snapshotCache'
 import { useVisualViewport } from './hooks/useVisualViewport'
 import { sortSessions } from './utils/sessions'
+import { pageTitle } from './utils/pageTitle'
 import { buildWorkspaceView } from './utils/workspaceView'
 import { requestChatArchive } from './utils/chatArchive'
 import { flushSync } from 'react-dom'
@@ -915,6 +916,10 @@ export default function App() {
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
   }, [theme])
+
+  useEffect(() => {
+    document.title = pageTitle(serverInfo)
+  }, [serverInfo])
 
   // Fetch server info (including Tailscale IP) on mount and on every
   // reconnect: after an update the server across the socket is a different
