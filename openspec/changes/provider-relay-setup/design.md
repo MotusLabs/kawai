@@ -271,14 +271,14 @@ today — the diagnostic layer never swallows one.
 | # | Token variable present | Model list result | Model request result | Class | Surface |
 | --- | --- | --- | --- | --- | --- |
 | F1 | no | * | * | `missing-credential` | creation refusal (today's message, naming provider and variable) |
-| F2 | yes | auth failure (401/403) | * | `gateway-auth-failure` | test result card; first-turn failure row |
-| F3 | yes | ok | auth failure (401/403) | `virtual-key-restriction` (relay authenticated the key, refuses this resource) | test card; first-turn row; preview hint |
+| F2 | yes | auth failure (401/403) | * | `gateway-auth-failure` | test result card; live failure row |
+| F3 | yes | ok | auth failure (401/403) | `virtual-key-restriction` (relay authenticated the key, refuses this resource) | test card; live row; preview hint |
 | F4 | yes | ok, model absent | * | `model-catalog-failure` | picker mark; test card |
 | F5 | yes | ok | 404 model-not-found | `model-catalog-failure` | picker mark; test card |
 | F6 | yes | unavailable (no endpoint/404) | ok | `success` (catalog unverifiable — noted, not failed) | test card note |
 | F7 | yes | * | ok | `success` | test card |
-| F8 | yes | * | connect/TLS error | `network-failure` | test card; first-turn row |
-| F9 | yes | * | timeout (bounded) | `timeout` | test card; first-turn row |
+| F8 | yes | * | connect/TLS error | `network-failure` | test card; live row |
+| F9 | yes | * | timeout (bounded) | `timeout` | test card; live row |
 
 The distinguishing evidence between F2 and F3 is the **model list**: the
 same credentials that fail a model request but succeed at the list prove the
@@ -288,10 +288,21 @@ Header-variable gaps are reported beside any class: a class observed while a
 bound header variable resolves empty carries "header <name>: variable
 <VAR> is not set".
 
-**First-turn integration.** When a session's first failed turn's error
-matches one of these evidence shapes, the transcript error row shows the
-class and its guidance (redacted). Classification is additive display:
-turn outcomes, mail outcomes, and limits behave exactly as today.
+**Live-session integration.** The misleading 403 appeared during real use,
+not at setup — so classification is **not** a first-turn or setup-only
+feature: every failed model turn in any live session passes through the
+same classifier, from the evidence the driver already has at the failure
+point (the error class, the status parsed from the text as `limitSignals`
+reads it, the message body, and the provider's cached model-list result
+when one exists). The transcript error row then carries the class and its
+guidance beside today's text, whichever turn failed — first turn, mid-work,
+or after hours of use; a session that hit `gateway-auth-failure` after
+working for a while reads exactly like one that never worked. The row
+payload gains an optional additive diagnostic field; nothing else about the
+turn changes. Classification is additive display: turn outcomes, mail
+outcomes, and limits behave exactly as today, and the connection test (D8)
+shares the classifier so the setup card and the live row never disagree
+about the same evidence.
 
 ## D10 — Model availability checked against the provider's catalog
 
