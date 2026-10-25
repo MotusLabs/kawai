@@ -928,7 +928,10 @@ export default function App() {
   // target the previous build pushed — and refreshes the shown version.
   useEffect(() => {
     fetch('/api/server-info')
-      .then((res) => res.json())
+      .then((res) => {
+        if (!res.ok) throw new Error(`Server information request failed: ${res.status}`)
+        return res.json()
+      })
       .then((info: ServerInfo) => {
         setServerInfo(info)
         useUpdateStore.getState().setFromServerInfo(info.update)

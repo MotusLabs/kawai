@@ -1,6 +1,6 @@
 # Validation results
 
-All 18 temporary production-code mutations were rejected by the focused tests. Each mutated file was restored immediately after its run. No mutation-testing dependency was added.
+All 19 temporary production-code mutations were rejected by the focused tests. Each mutated file was restored immediately after its run. No mutation-testing dependency was added.
 
 | Oracle | Test title (suite prefix omitted) | Rejected mutation |
 | --- | --- | --- |
@@ -27,19 +27,14 @@ All 18 temporary production-code mutations were rejected by the focused tests. E
 | L4 | L4: reconnect success yields manga-studio - Kawai | omit server-info effect dependency |
 | L5 | L5: reconnect failure yields anime-studio - Kawai | clear title on fetch failure |
 | L6 | L6: reconnect nameless yields Kawai | retain old title for nameless success |
+| L5 HTTP failure | L5 HTTP failure: reconnect HTTP failure yields anime-studio - Kawai | accept server-info JSON from an HTTP 503 response |
 
 ## Project checks
 
-- `bun run test src/client/utils/__tests__/pageTitle.test.ts`: 10 passed.
-- `bun run test src/client/__tests__/app.test.tsx`: 47 passed, including all 10 title lifecycle cases.
+- `bun run test src/client/utils/__tests__/pageTitle.test.ts src/client/__tests__/app.test.tsx`: 59 passed (10 formatter cases and 49 App tests, including 12 title lifecycle cases).
+- HTTP 503 regression: the reconnect test fails without the response-status guard and passes with it. Network and HTTP failures both retain the last successful title; initial failures keep `Kawai`.
+- All 19 temporary mutations were rejected by the focused tests. The Team-route mutant reads the production route state; the alternative-source mutants react to those sources so their behavior is exercised.
+- Chromium/Playwright smoke with stubbed server metadata and an inert WebSocket: initial `Kawai`, loaded `anime-studio - Kawai`, unchanged after Team navigation; no page errors. Screenshot captured and inspected locally.
 - `openspec validate workspace-page-title --strict`: passed.
 - `git diff --check`: passed.
-- `bun run check`: lint passed with 27 warnings; typecheck passed; the non-tmux suite reported 7,905 passed and 3 failed across 724 files. The runner stopped before the serial real-tmux tier, and no full-pass certificate was recorded.
-
-The three failures are in unchanged backend code in `src/server/__tests__/codexChatLifecycle.test.ts` and also reproduce with `bun run test src/server/__tests__/codexChatLifecycle.test.ts`:
-
-1. `a login limit cools both profiles on the home and none on another home`: cooldown is null at line 290.
-2. `a session budget failure records for its profile alone, with no provider`: cooldown is null at line 308.
-3. `a Codex launch withholds the catalog-named credentials (openrouter-provider 1.8)`: the child environment still names `OPENROUTER_API_KEY` at line 359.
-
-Full validation remains open (task 3.1); these backend failures require work outside the page-title change. Existing unrelated working-tree edits were preserved. Implementation and tests are uncommitted.
+- Final repository validation uses `bun run check` on the clean committed tree and the repository's required pre-push certificate; the PR validation summary reports the final result.

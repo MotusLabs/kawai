@@ -2552,6 +2552,7 @@ describe('App team route (team-workspace-pages D3, team-workspace D10)', () => {
 const titleLifecycleCases = [
   ['L1 pending', 'Kawai', 'initial pending', 'Kawai'],
   ['L1 failure', 'Kawai', 'initial failure', 'Kawai'],
+  ['L1 HTTP failure', 'Kawai', 'initial HTTP failure', 'Kawai'],
   ['L2', 'Kawai', 'initial success', 'anime-studio - Kawai'],
   ['L3 selection', 'anime-studio - Kawai', 'selection', 'anime-studio - Kawai'],
   ['L3 Team route', 'anime-studio - Kawai', 'Team route', 'anime-studio - Kawai'],
@@ -2559,6 +2560,7 @@ const titleLifecycleCases = [
   ['L3 browser default', 'anime-studio - Kawai', 'browser default', 'anime-studio - Kawai'],
   ['L4', 'anime-studio - Kawai', 'reconnect success', 'manga-studio - Kawai'],
   ['L5', 'anime-studio - Kawai', 'reconnect failure', 'anime-studio - Kawai'],
+  ['L5 HTTP failure', 'anime-studio - Kawai', 'reconnect HTTP failure', 'anime-studio - Kawai'],
   ['L6', 'anime-studio - Kawai', 'reconnect nameless', 'Kawai'],
 ] as const
 
@@ -2567,14 +2569,15 @@ describe('App workspace title', () => {
     test(`${oracle}: ${event} yields ${expected}`, async () => {
       const originalFetch = globalThis.fetch
       const originalDefault = useSettingsStore.getState().defaultProjectDir
-      let response: 'success' | 'pending' | 'failure' | 'changed' | 'nameless' =
-        event === 'initial pending' ? 'pending' : event === 'initial failure' ? 'failure' : 'success'
+      let response: 'success' | 'pending' | 'failure' | 'http-failure' | 'changed' | 'nameless' =
+        event === 'initial pending' ? 'pending' : event === 'initial failure' ? 'failure' : event === 'initial HTTP failure' ? 'http-failure' : 'success'
       let infoCalls = 0
       globalThis.fetch = (async (input: RequestInfo | URL) => {
         if (String(input) !== '/api/server-info') return new Response('{}')
         infoCalls++
         if (response === 'pending') return new Promise<Response>(() => {})
         if (response === 'failure') throw new Error('server unavailable')
+        if (response === 'http-failure') return new Response(JSON.stringify({ error: 'server unavailable' }), { status: 503 })
         return new Response(JSON.stringify(response === 'nameless'
           ? { defaultProjectDir: '/', cwd: '///' }
           : { defaultProjectDir: response === 'changed' ? '/projects/manga-studio' : '/projects/anime-studio', cwd: '/opt/kawai' }))
@@ -2603,8 +2606,9 @@ describe('App workspace title', () => {
               break
             case 'reconnect success':
             case 'reconnect failure':
+            case 'reconnect HTTP failure':
             case 'reconnect nameless':
-              response = event === 'reconnect success' ? 'changed' : event === 'reconnect failure' ? 'failure' : 'nameless'
+              response = event === 'reconnect success' ? 'changed' : event === 'reconnect failure' ? 'failure' : event === 'reconnect HTTP failure' ? 'http-failure' : 'nameless'
               useSessionStore.setState({ connectionEpoch: 1 })
               break
           }
