@@ -59,9 +59,11 @@ export interface CodexSessionDriverOptions extends ChatDriverCallbacks {
   /**
    * The catalog-named credential variables the child never inherits
    * (openrouter-provider D3, task 1.8); required, so no launch path can
-   * forget it.
+   * forget it. Evaluated at every ensureClient spawn (provider-relay-setup
+   * correction A), so a name registered after the driver's creation — by a
+   * catalog edit or a retention write — withholds from the respawn too.
    */
-  withheldCredentials: ReadonlySet<string>
+  withheldCredentials: () => ReadonlySet<string>
   /** Builds the app-server client; default the real AppServerClient. */
   createClient?: (options: AppServerClientOptions) => CodexClient
   /** How long interrupt waits for the app-server's acknowledgement. */
