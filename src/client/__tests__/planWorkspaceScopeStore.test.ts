@@ -172,11 +172,12 @@ describe('transferBindingsOnReset', () => {
   })
 
   test('pendingContextSends is a plain module map the surface owns, keyed by requestId', () => {
-    pendingContextSends.set('req-1', { sessionId: 's1', text: 'hi', scope: scope('p1') })
+    pendingContextSends.set('req-1', { sessionId: 's1', text: 'hi', scope: scope('p1'), eligible: false })
     expect(pendingContextSends.get('req-1')!.text).toBe('hi')
     expect(pendingContextSends.get('req-1')!.sessionId).toBe('s1')
-    pendingContextSends.set('req-2', { sessionId: 's1', text: 'again', scope: scope('p2') })
-    pendingContextSends.set('req-3', { sessionId: 's2', text: 'other', scope: scope('p1') })
+    expect(pendingContextSends.get('req-1')!.eligible).toBe(false)
+    pendingContextSends.set('req-2', { sessionId: 's1', text: 'again', scope: scope('p2'), eligible: false })
+    pendingContextSends.set('req-3', { sessionId: 's2', text: 'other', scope: scope('p1'), eligible: false })
     // The per-session view keeps insertion order (oldest first), for the
     // disconnect recovery.
     expect(pendingContextSendsFor('s1').map(pending => pending.requestId)).toEqual(['req-1', 'req-2'])

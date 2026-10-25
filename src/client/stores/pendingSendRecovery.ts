@@ -1,14 +1,17 @@
 // Connection-level owner of pending contextual-send answers and recovery
-// (plan-workspace §6.3, B1 / rev-6 B1-R1+R2): a contextual send settles only
-// on its own terminal answer — the sender-only `chat-send-result`
-// acceptance, or its correlated refusal (the echoed requestId + sessionId) —
-// and a send still unanswered when the connection drops is recovered into an
-// empty draft. Both live here, at the ACTUAL connection consumers (the
-// message router's chat/error handlers and the connection-status store),
-// not in a mounted chat surface: a role switch, a closed Plans tab, or a
-// closed full-screen view must never strand an unanswered original. Every
-// restore is recovery of unconfirmed text, never a resend (D7: reconnect
-// restores history, not sends).
+// (plan-workspace §6.3, B1 / rev-6 B1-R1+R2, rev-8 eligibility): a
+// contextual send settles only on its own terminal answer — the sender-only
+// `chat-send-result` acceptance, or its correlated refusal (the echoed
+// requestId + sessionId) — and a send whose connection has dropped is
+// recovered into an empty draft. Both live here, at the ACTUAL connection
+// consumers (the message router's chat/error handlers and the
+// connection-status store), not in a mounted chat surface: a role switch, a
+// closed Plans tab, or a closed full-screen view must never strand an
+// unanswered original. Every restore is recovery of unconfirmed text, never
+// a resend (D7: reconnect restores history, not sends). Live and recoverable
+// are per-entry states: a just-sent entry is invisible to recovery until its
+// connection drops, and after the drop it drains into whatever empty draft
+// appears next, connected or not.
 import type { ServerMessage } from '@shared/types'
 import { useChatStore } from './chatStore'
 import { useSessionStore, type ConnectionStatus } from './sessionStore'
@@ -42,14 +45,17 @@ export function consumeSendAnswer(message: ServerMessage): void {
 }
 
 /**
- * Recovers the oldest unanswered send of one session into an empty draft —
- * recovery of unconfirmed text, never a resend. One entry per call: the next
- * trigger (a later drop, reconnect, or the draft emptying again) recovers
- * the next, so every retained original has a real path without ever
- * concatenating two entries' texts or merging their captured scopes.
+ * Recovers the oldest recovery-eligible send of one session into an empty
+ * draft — recovery of unconfirmed text, never a resend. A live just-sent
+ * entry (eligible: false) is invisible here: only a connection drop makes an
+ * entry recoverable, which is what keeps the composer's post-submit clear
+ * from ever pulling it back. One entry per call: the next trigger (a later
+ * drop, reconnect, or the draft emptying again) recovers the next, so every
+ * retained original has a real path without ever concatenating two entries'
+ * texts or merging their captured scopes.
  */
 function tryRecover(sessionId: string): boolean {
-  const [oldest] = pendingContextSendsFor(sessionId)
+  const oldest = pendingContextSendsFor(sessionId).find(entry => entry.eligible)
   if (!oldest) return false
   if ((useChatStore.getState().drafts[sessionId] ?? '') !== '') return false
   pendingContextSends.delete(oldest.requestId)
@@ -63,10 +69,21 @@ const sessionsWithPending = (): string[] =>
   [...new Set([...pendingContextSends.values()].map(pending => pending.sessionId))]
 
 /**
+ * A real connected→non-connected transition marks every outstanding entry
+ * recovery-eligible BEFORE the recovery pass: the terminal answer was
+ * connection-scoped, so from this drop on each retained original is
+ * unconfirmed — whether or not a reconnect follows. Eligibility then
+ * survives the reconnect.
+ */
+function markAllEligible(): void {
+  for (const entry of pendingContextSends.values()) entry.eligible = true
+}
+
+/**
  * Offers every pending session one recovery (each keeps its own draft).
  * Runs on connection drops AND reconnects alike: after a close the terminal
- * answer was connection-scoped and can never arrive, and a reconnect does
- * not change that, so both transitions are recovery opportunities.
+ * answer was connection-scoped, and a reconnect does not restore it, so both
+ * transitions are recovery opportunities.
  */
 function recoverAcrossSessions(): void {
   for (const sessionId of sessionsWithPending()) tryRecover(sessionId)
@@ -82,16 +99,17 @@ useSessionStore.subscribe((state) => {
   const previous = lastStatus
   lastStatus = status
   if (previous === undefined || status === previous) return
+  if (previous === 'connected' && status !== 'connected') markAllEligible()
   if (previous === 'connected' || status === 'connected') recoverAcrossSessions()
 })
 
-// The draft-emptied trigger: while disconnected, emptying the composer (the
-// restored text read and cleared) recovers the next retained original. While
-// connected there is nothing to recover that its own answer would not settle
-// — and the composer's post-submit clear must never pull a just-sent entry
-// back — so this trigger is disconnected-only.
+// The draft-emptied trigger: ANY nonempty→empty transition — the human
+// clearing a recovered text, or a composer's post-submit clear — may reveal
+// the next eligible original, connected or not. A live just-sent entry is
+// ineligible, so its own submit's clear can never pull it back; recovery
+// writes drafts, never sends.
 useChatStore.subscribe((state, previousState) => {
-  if (useSessionStore.getState().connectionStatus === 'connected') return
+  if (pendingContextSends.size === 0) return
   for (const sessionId of sessionsWithPending()) {
     if ((state.drafts[sessionId] ?? '') === '' && (previousState.drafts[sessionId] ?? '') !== '') {
       tryRecover(sessionId)

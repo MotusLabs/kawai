@@ -219,7 +219,10 @@ export default function ChatSurface({
     // requestId, so rapid sends stay independent.
     const scope = onSubmitContext?.() ?? null
     const requestId = scope ? crypto.randomUUID() : undefined
-    if (scope) pendingContextSends.set(requestId!, { sessionId: session.id, text: trimmed, scope })
+    // The entry starts LIVE (ineligible): recovery (pendingSendRecovery)
+    // cannot pull it back through the composer's post-submit clear — only a
+    // connection drop makes an outstanding entry recoverable.
+    if (scope) pendingContextSends.set(requestId!, { sessionId: session.id, text: trimmed, scope, eligible: false })
     sendMessage({
       type: 'chat-send', sessionId: session.id, text: trimmed,
       ...(scope ? { workspaceContext: scope.envelope, requestId } : {}),

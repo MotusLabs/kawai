@@ -97,11 +97,18 @@ export const usePlanWorkspaceScopeStore = create<PlanWorkspaceScopeState>(set =>
  * disconnect restores the unanswered text into an empty draft, which is
  * recovery, not authorization to resend). The whole captured scope is kept
  * so a restore brings the attachment chip back exactly as it was.
+ *
+ * `eligible` is the entry's recovery state (rev-8): a just-sent entry is
+ * live (`false`) — it may still settle on its own answer and is invisible to
+ * recovery, so the composer's post-submit clear never pulls it back; once
+ * its connection has dropped the entry is recovery-eligible (`true`) —
+ * UNCONFIRMED, not answer-impossible: it may still settle while retained,
+ * and recovery (pendingSendRecovery) may surface it into an empty draft.
  */
-export const pendingContextSends = new Map<string, { sessionId: string; text: string; scope: CapturedWorkspaceScope }>()
+export const pendingContextSends = new Map<string, { sessionId: string; text: string; scope: CapturedWorkspaceScope; eligible: boolean }>()
 
 /** This session's unanswered contextual sends, oldest first. */
-export const pendingContextSendsFor = (sessionId: string): Array<{ requestId: string; text: string; scope: CapturedWorkspaceScope }> =>
+export const pendingContextSendsFor = (sessionId: string): Array<{ requestId: string; text: string; scope: CapturedWorkspaceScope; eligible: boolean }> =>
   [...pendingContextSends.entries()]
     .filter(([, pending]) => pending.sessionId === sessionId)
     .map(([requestId, pending]) => ({ requestId, ...pending }))
