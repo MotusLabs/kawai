@@ -99,6 +99,7 @@ import {
   parseUsageReport,
 } from './usageLimits'
 import type { ChatProviderEnv } from './chatProviderEnv'
+import type { RetainedNamesDb } from './secretNameRegistry'
 import { ChatCommandTracker, type RawChatCommand } from './chatCommands'
 import { decideApproval } from './approvalPolicy'
 import { resolveClaudeProfile } from './ClaudeProfiles'
@@ -168,6 +169,13 @@ export interface ChatSessionDriverOptions extends ChatDriverCallbacks {
   resumeSessionId?: string
   /** Provider overrides, read at each spawn so Settings changes apply. */
   getProviderEnv?: () => ChatProviderEnv
+  /**
+   * The secret-name registry's persistence seam (provider-relay-setup D2),
+   * read at each spawn so a catalog edit re-registers at the next launch and
+   * a name once seen survives its entry's removal. Omitted = catalog-only
+   * withholding (tests, direct resolution).
+   */
+  retainedNamesDb?: RetainedNamesDb
   /**
    * Session approval policy, read at each canUseTool call so a live policy
    * switch applies to the next request without a respawn (design D2).
@@ -804,7 +812,9 @@ export class ChatSessionDriver implements ChatAgentDriver {
         ...(this.options.profileCatalogHome
           ? { homeDir: this.options.profileCatalogHome }
           : {}),
-      }
+      },
+      undefined,
+      this.options.retainedNamesDb,
     )
     // A Codex chat never spawns the Claude SDK: its driver (§5.6) runs the
     // app-server instead. Until that wiring lands its start is refused

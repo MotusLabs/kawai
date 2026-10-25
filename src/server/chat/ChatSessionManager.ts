@@ -75,6 +75,7 @@ import {
   type ClaudeLaunchConfiguration,
   type ProfileCatalogContext,
 } from './ClaudeProfiles'
+import { RegisteredNameRefusal } from './secretNameRegistry'
 import { logger } from '../logger'
 import { probeSdkAvailability } from './sdkAvailability'
 import { AccountNoticeStore, credentialsPathFor } from './accountNotices'
@@ -1946,13 +1947,32 @@ export class ChatSessionManager {
       if (!driver.sendWorkspaceContext) {
         return { ok: false, error: "This chat's runtime does not carry plan-workspace contexts." }
       }
-      const sent = driver.sendWorkspaceContext(text, stored)
+      const sent = this.sendDriverText(driver, text, stored)
       if (!sent.ok) return { ok: false, error: sent.error }
     } else {
-      driver.send(text)
+      const sent = this.sendDriverText(driver, text)
+      if (!sent.ok) return { ok: false, error: sent.error }
     }
     this.touch(sessionId)
     return { ok: true }
+  }
+
+  /**
+   * Submit a user turn, settling a launch refusal as a failed send
+   * (provider-relay-setup correction B): the typed pre-spawn refusal means
+   * no child composed or started, so the caller sees the refusal instead of
+   * a rejection. Every other throw rejects exactly as before.
+   */
+  private sendDriverText(driver: ChatAgentDriver, text: string, stored?: WorkspaceMessageContext): { ok: true } | { ok: false; error: string } {
+    try {
+      // The caller checked sendWorkspaceContext exists whenever stored is set.
+      if (stored) return driver.sendWorkspaceContext!(text, stored)
+      driver.send(text)
+      return { ok: true }
+    } catch (error) {
+      if (error instanceof RegisteredNameRefusal) return { ok: false, error: error.message }
+      throw error
+    }
   }
 
   /** The validation reads, wired to the plan services (plan-workspace §4.1). */
@@ -2020,7 +2040,14 @@ export class ChatSessionManager {
     if (!driver) {
       return { ok: false, error: `Unknown chat session ${sessionId}` }
     }
-    driver.start()
+    // The same launch refusal as send: the start settles failed and no
+    // child composed (correction B).
+    try {
+      driver.start()
+    } catch (error) {
+      if (error instanceof RegisteredNameRefusal) return { ok: false, error: error.message }
+      throw error
+    }
     return { ok: true }
   }
 
@@ -2827,8 +2854,11 @@ export class ChatSessionManager {
               network: codexLaunch.network,
               ...(codexLaunch.model ? { model: codexLaunch.model } : {}),
               wire: wire ?? { record: () => {} },
-              // The catalog at the chat's path names the credentials (D3).
-              withheldCredentials: withheldCredentialNamesAt(this.catalogCtx(record.projectPath)),
+              // The registered-name set at the chat's path (D3/D2): a
+              // per-spawn provider, so a respawn re-derives the catalog's
+              // names plus the retained ones (correction A) — a name
+              // registered after this driver's creation still withholds.
+              withheldCredentials: () => withheldCredentialNamesAt(this.catalogCtx(record.projectPath), this.options.db),
               teamTools: teamToolTable(this.mailbox, record.sessionId, teamServices),
               // Codex fills a home holding no report with one read (PR E
               // 7.1); the store claims it once per home.
@@ -2848,6 +2878,10 @@ export class ChatSessionManager {
                 (this.options.getQuestionAutoAnswerMinutes?.() ?? 0) * 60_000,
               ...(teamMcpServer ? { teamMcpServer } : {}),
               getProviderEnv: () => this.providerEnv(),
+              // The secret-name registry observes and persists at every
+              // Claude spawn (provider-relay-setup D2), so a name once seen
+              // survives its catalog entry's removal.
+              retainedNamesDb: this.options.db,
               claudeProfileId: record.claudeProfileId,
               ...(this.options.profileCatalogHome
                 ? { profileCatalogHome: this.options.profileCatalogHome }
@@ -2994,7 +3028,10 @@ export class ChatSessionManager {
   private launchFor(profileId: string | undefined, projectPath?: string): ChatLaunchConfiguration {
     const report = this.options.catalogErrorLog
       ?? (errors => logger.warn('chat_profile_catalog_errors', { errors }))
-    return resolveClaudeProfile(profileId, this.providerEnv(), this.catalogCtx(projectPath), report)
+    // The registry observes here too (provider-relay-setup D2): a name is
+    // registered by the first catalog read that names it, launch or not —
+    // an entry removed before any spawn stays withheld.
+    return resolveClaudeProfile(profileId, this.providerEnv(), this.catalogCtx(projectPath), report, this.options.db)
   }
 
   /**

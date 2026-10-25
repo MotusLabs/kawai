@@ -6,6 +6,7 @@
 // caller injects the environment, so tests never touch process.env.
 import { createHash } from 'node:crypto'
 import path from 'node:path'
+import { RegisteredNameRefusal } from './secretNameRegistry'
 
 /** The environment a Codex home resolves against; both optional. */
 export interface CodexHomeEnv {
@@ -67,6 +68,13 @@ export function codexSpawnEnv(
   resolvedHome: string,
   withheld: ReadonlySet<string>,
 ): Record<string, string> {
+  // The spawn must set CODEX_HOME — the resolved home is where the login and
+  // usage key live — so a registered CODEX_HOME cannot be withheld by
+  // absence (provider-relay-setup correction B, row 7): refuse before any
+  // spawn, on every spawn.
+  if (withheld.has('CODEX_HOME')) {
+    throw new RegisteredNameRefusal('Codex', ['CODEX_HOME'])
+  }
   const env: Record<string, string> = {}
   for (const [name, value] of Object.entries(serverEnv)) {
     if (value === undefined) continue

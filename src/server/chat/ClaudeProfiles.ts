@@ -14,6 +14,7 @@ import {
   withoutCredentials,
   type ChatProviderEnv,
 } from './chatProviderEnv'
+import { catalogRegisteredNames, RegisteredNameRefusal, type RetainedNamesDb } from './secretNameRegistry'
 import { CODEX_PROVIDER_LABEL, resolveCodexHome, type CodexLaunchConfiguration } from './codexProfiles'
 import {
   PROFILE_CONTROLLED_ENV,
@@ -79,19 +80,24 @@ export function claudeProfileMetadata(
 }
 
 /**
- * The credential variables the catalog resolved at `ctx`'s project path
- * names (openrouter-provider D3): the set every launch withholds. The Codex
+ * The registered secret names at `ctx`'s catalog (provider-relay-setup D2):
+ * the set every launch withholds — parsed-layer catalog names in any entry
+ * state plus the persisted retained names when a store is supplied. The Codex
  * launch path reads it here, since its configuration carries no env.
  */
-export function withheldCredentialNamesAt(ctx: ProfileCatalogContext = {}): Set<string> {
-  return withheldCredentialNames(resolveProfileCatalog(ctx))
+export function withheldCredentialNamesAt(
+  ctx: ProfileCatalogContext = {},
+  retainedNamesDb?: RetainedNamesDb
+): Set<string> {
+  return catalogRegisteredNames(retainedNamesDb, resolveProfileCatalog(ctx))
 }
 
 export function resolveClaudeProfile(
   id: string = 'default',
   globalEnv: ChatProviderEnv = {},
   ctx: ProfileCatalogContext = {},
-  onCatalogErrors?: (errors: string[]) => void
+  onCatalogErrors?: (errors: string[]) => void,
+  retainedNamesDb?: RetainedNamesDb
 ): ChatLaunchConfiguration {
   const catalog = resolveProfileCatalog(ctx)
   // A failed file skips silently otherwise; report it (the rest resolves).
@@ -121,13 +127,34 @@ export function resolveClaudeProfile(
       ...(profile.model !== undefined ? { model: profile.model } : {}),
     }
   }
-  const withheld = withheldCredentialNames(catalog)
+  // The registered-name set (provider-relay-setup D2): parsed-layer catalog
+  // names plus the retained names, observed and persisted per launch when a
+  // store is supplied — a name seen here survives its entry's later removal.
+  const registered = catalogRegisteredNames(retainedNamesDb, catalog)
   const serverEnv = effectiveChatEnv(globalEnv)
   // Every launch passes an explicit, filtered environment (openrouter-provider
   // D3): never a bare inheritance of process.env, so the catalog-named
-  // credentials stay out of default and executable-backed launches too.
-  const base = withoutCredentials(serverEnv, withheld)
-  return buildClaudeLaunch(profile, base, serverEnv)
+  // credentials stay out of default and executable-backed launches too. The
+  // filter runs before every branch's own operations (table W).
+  const base = withoutCredentials(serverEnv, registered)
+  return buildClaudeLaunch(profile, base, serverEnv, registered)
+}
+
+/**
+ * The overlay entries a launch may copy (table W rows 2/8): a registered
+ * name never re-enters under its own name through a profile's env — the key
+ * is dropped, not refused, because the overlay adds nothing the launch
+ * needs. On the named-profile branches the controlled refusal below already
+ * dominates every possible entry (a parsed catalog's env keys are all
+ * profile-controlled), so this helper is load-bearing on the wrapper branch.
+ */
+function withoutRegistered(env: Record<string, string>, registered: ReadonlySet<string>): Record<string, string> {
+  if (registered.size === 0) return env
+  const filtered: Record<string, string> = {}
+  for (const [name, value] of Object.entries(env)) {
+    if (!registered.has(name)) filtered[name] = value
+  }
+  return filtered
 }
 
 /**
@@ -142,7 +169,8 @@ export function resolveClaudeProfile(
 export function buildClaudeLaunch(
   profile: CatalogProfile,
   base: Record<string, string | undefined>,
-  serverEnv: Record<string, string | undefined>
+  serverEnv: Record<string, string | undefined>,
+  registered: ReadonlySet<string>
 ): ClaudeLaunchConfiguration {
   // The provider's own token, read before the names are withheld (D3/D4).
   const credential = profile.authTokenEnv !== undefined
@@ -162,12 +190,31 @@ export function buildClaudeLaunch(
     // named credential (D2): the parser refuses credentialed executables, and
     // a catalog that bypassed the parser must not hand the key to a wrapper
     // that can send it anywhere. A wrapper that needs a key sets its own.
+    // The overlay skips registered names (rows 2/8): the branch composes no
+    // neutralization of its own, so a dropped key leaves a safe launch.
     return {
-      env: { ...base, ...profile.env },
+      env: { ...base, ...withoutRegistered(profile.env, registered) },
       executable: profile.executable,
       runtime: 'claude',
       ...(profile.model !== undefined ? { model: profile.model } : {}),
     }
+  }
+  // Correction B (provider-relay-setup): a branch that composes its own
+  // neutralization map refuses a registered name outright — composing it
+  // would deliver the name, and dropping the key would silently weaken the
+  // protection the branch exists to provide. The credentialed branch composes
+  // the controlled blanks, the route pins, and the credential blanks into
+  // settings.env; the named noncredentialed branch composes the controlled
+  // map alone. The token's own ANTHROPIC_AUTH_TOKEN key is the designed W2
+  // channel and never a collision (it is in neither list).
+  const controlledCollisions = PROFILE_CONTROLLED_ENV.filter(name => registered.has(name))
+  if (credential) {
+    const pinnedCollisions = ['ANTHROPIC_BASE_URL', ...TRANSPORT_PIN_ENV].filter(name => registered.has(name))
+    const blankCollisions = Object.keys(BLANK_OTHER_CREDENTIALS).filter(name => registered.has(name))
+    const collisions = [...new Set([...controlledCollisions, ...pinnedCollisions, ...blankCollisions])].sort()
+    if (collisions.length > 0) throw new RegisteredNameRefusal('credentialed', collisions)
+  } else if (controlledCollisions.length > 0) {
+    throw new RegisteredNameRefusal('named-profile', controlledCollisions)
   }
   const env = base
   const controlled: ChatProviderEnv = {}
