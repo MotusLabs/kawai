@@ -7,7 +7,7 @@
 // layouts mount separately here; the default export's width pick is a pure
 // function beside them, and the real switch runs in the browser fixture.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { useRef } from 'react'
+import { useRef, type MutableRefObject } from 'react'
 import TestRenderer, { act } from 'react-test-renderer'
 import PlanWorkspacePanes, {
   WorkspaceNarrowPanes, WORKSPACE_NARROW_MAX_PX, workspaceLayoutForWidth,
@@ -64,6 +64,18 @@ const mountNarrow = (teamKey = '/repo', planId = 'p1', options?: MountOptions) =
   const byId = (testId: string) => renderer.root.findByProps({ 'data-testid': testId })
   const has = (testId: string) => renderer.root.findAllByProps({ 'data-testid': testId }).length > 0
   return { renderer, byId, has }
+}
+
+/** A host whose team and plan identity change in place — the unkeyed
+ * TeamPlansView re-renders them without unmounting, so the panes' own
+ * restore lifecycle has to react to the identity change. */
+const IdentityHost = ({ teamKey, planId, rootRef }: {
+  teamKey: string
+  planId: string
+  rootRef: MutableRefObject<HTMLElement | null>
+}) => {
+  const panes = useTeamPlanWorkspaceStore(state => state.panes[teamKey]) ?? defaultPanes()
+  return <WorkspaceNarrowPanes teamKey={teamKey} planId={planId} panes={panes} rootRef={rootRef} content={CONTENT} />
 }
 
 beforeEach(() => {
@@ -194,8 +206,12 @@ describe('the narrow navigation', () => {
     // thing that can move a scrollTop off 0.
     setPaneScroll('/repo', 'plan-a', 'map', 200)
     const { mocks, createNodeMock } = capturedMocks()
-    mountNarrow('/repo', 'plan-a', { createNodeMock })
+    const { byId } = mountNarrow('/repo', 'plan-a', { createNodeMock })
     expect(mocks['workspace-pane-map']?.scrollTop).toBe(200)
+    // Scroll anchoring must stay off on the pane: an async insertion above
+    // the fold would otherwise shift a just-restored position, and the
+    // scroll handler would record the shifted value as the pane's own.
+    expect(byId('workspace-pane-map').props.style?.overflowAnchor).toBe('none')
     // Remounting re-applies the record into the fresh element.
     mountNarrow('/repo', 'plan-a', { createNodeMock })
     expect(mocks['workspace-pane-map']?.scrollTop).toBe(200)
@@ -230,6 +246,39 @@ describe('the narrow navigation', () => {
     mountNarrow('/repo', 'plan-b', { createNodeMock })
     expect(mocks['workspace-pane-map']?.scrollTop).toBe(0)
     mountNarrow('/repo', 'plan-a', { createNodeMock })
+    expect(mocks['workspace-pane-map']?.scrollTop).toBe(200)
+  })
+
+  test('an in-place team or plan switch keeps the panes mounted and each identity applies its own scroll (7.2 r3)', () => {
+    // The unkeyed plans view keeps this section mounted across a team
+    // switch (the browser fixture proves it on the real element); the root
+    // ref's identity here proves the same for the mount-only effects: the
+    // restore must re-run from the identity change, not wait for a remount.
+    const { mocks, createNodeMock } = capturedMocks()
+    const rootRef: MutableRefObject<HTMLElement | null> = { current: null }
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => { renderer = TestRenderer.create(<IdentityHost teamKey="/repo" planId="plan-a" rootRef={rootRef} />, { createNodeMock }) })
+    renderers.push(renderer)
+    const section = rootRef.current
+    expect(section, 'the host mounted its pane section').not.toBeNull()
+    const mapPane = () => renderer.root.findByProps({ 'data-testid': 'workspace-pane-map' })
+    mocks['workspace-pane-map']!.scrollTop = 200
+    act(() => mapPane().props.onScroll({ currentTarget: mocks['workspace-pane-map'] }))
+    expect(paneScrollOf('/repo', 'plan-a', 'map')).toBe(200)
+    // Team B in place: the section stays mounted, and the map applies team
+    // B's own (empty) record — never team A's 200.
+    act(() => renderer.update(<IdentityHost teamKey="/other" planId="plan-a" rootRef={rootRef} />))
+    expect(rootRef.current, 'the pane section stayed mounted across the team switch').toBe(section)
+    expect(mocks['workspace-pane-map']?.scrollTop).toBe(0)
+    // Back to team A: its 200 applies again, still the same mounted section.
+    act(() => renderer.update(<IdentityHost teamKey="/repo" planId="plan-a" rootRef={rootRef} />))
+    expect(rootRef.current).toBe(section)
+    expect(mocks['workspace-pane-map']?.scrollTop).toBe(200)
+    // A plan identity changes in place the same way.
+    act(() => renderer.update(<IdentityHost teamKey="/repo" planId="plan-b" rootRef={rootRef} />))
+    expect(rootRef.current).toBe(section)
+    expect(mocks['workspace-pane-map']?.scrollTop).toBe(0)
+    act(() => renderer.update(<IdentityHost teamKey="/repo" planId="plan-a" rootRef={rootRef} />))
     expect(mocks['workspace-pane-map']?.scrollTop).toBe(200)
   })
 })

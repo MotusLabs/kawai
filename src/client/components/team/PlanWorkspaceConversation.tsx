@@ -209,7 +209,11 @@ export default function PlanWorkspaceConversation({ teamPath, sessions, connecte
     }
     return conflicts
   }, [transferAttempts, bindings])
-  return <section data-testid="plan-workspace-conversation" aria-label="Repository conversation" className="mt-4 border border-border p-2">
+  // The panes bound the body's height, so the section passes it down: a
+  // flex column that fills its pane and shrinks, making the chat surface's
+  // own transcript the one scroller (the section never scrolls itself).
+  return <section data-testid="plan-workspace-conversation" aria-label="Repository conversation"
+    className="mt-4 flex min-h-0 flex-1 flex-col border border-border p-2">
     <div role="tablist" aria-label="Conversation role" className="flex gap-2">
       {(['architect', 'lead'] as const).map(entry => (
         <button key={entry} role="tab" aria-selected={entry === role} data-testid={`conversation-role-${entry}`}
@@ -261,17 +265,15 @@ export default function PlanWorkspaceConversation({ teamPath, sessions, connecte
           bindRole(role, sessionId, binding.version)
         }} />
     </div>}
-    {boundSession && <ConversationHost key={`${role}:${boundSession.id}`} teamPath={teamPath}
-      session={boundSession} role={role} connected={connected} connectionEpoch={connectionEpoch}
+    {boundSession && <ConversationHost key={`${role}:${boundSession.id}`}
+      session={boundSession} connected={connected} connectionEpoch={connectionEpoch}
       sendMessage={sendMessage} subscribe={subscribe} selection={selection} />}
   </section>
 }
 
 /** The mounted conversation of the selected role — the only surface this panel attaches. */
-function ConversationHost({ teamPath, session, role, connected, connectionEpoch, sendMessage, subscribe, selection }: {
-  teamPath: string
+function ConversationHost({ session, connected, connectionEpoch, sendMessage, subscribe, selection }: {
   session: Session
-  role: PlanWorkspaceRole
   connected: boolean
   connectionEpoch: number
   sendMessage: SendClientMessage
@@ -303,7 +305,12 @@ function ConversationHost({ teamPath, session, role, connected, connectionEpoch,
     if (previous !== '' || store.scopes[session.id] || capture === null) return
     store.setScope(session.id, capture)
   }, [draftText, session.id, capture])
+  // The column's flex display class is the host's (ChatSurface renders
+  // `flex-col flex-1` against it): ChatView passes `flex`, and this pane is
+  // a bounded column host too — without it the transcript never becomes the
+  // scroller and the pane overflows instead.
   return <ChatSurface session={session} sendMessage={sendMessage} subscribe={subscribe}
+    className="flex"
     connectionStatus={connected ? 'connected' : 'disconnected'} connectionEpoch={connectionEpoch}
     revealEnabled={false}
     onResetCreated={(newSessionId, previousSessionId) => transferBindingsOnReset(sendMessage, newSessionId, previousSessionId)}

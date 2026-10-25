@@ -7,8 +7,9 @@
 // switch. The divider is a real separator control: pointer drag and an
 // equivalent keyboard step (labelled, bounded, with its value exposed), and
 // focus moves to the shown pane when the narrow navigation switches, so the
-// transition never strands a keyboard user. Pane scrolls are remembered
-// per team (planWorkspacePaneScroll) and restored on remount. The two
+// transition never strands a keyboard user. Pane scrolls are remembered per
+// team, plan and pane (planWorkspacePaneScroll), restored on mount and again
+// when the unkeyed plans view swaps the team or plan in place. The two
 // layouts are components; the default export only measures its own width and
 // picks one, so each layout is mountable — and testable — on its own.
 import { useLayoutEffect, useRef, useState, type MutableRefObject, type ReactNode, type RefObject } from 'react'
@@ -57,7 +58,14 @@ const NARROW_PANES: readonly WorkspaceNarrowPane[] = ['map', 'documents', 'conve
 /** The three panes' content, keyed the way both layouts show them. */
 export type WorkspacePaneContent = Record<WorkspaceNarrowPane, ReactNode>
 
-/** One pane's scrollable body: restores its remembered scroll on mount, records it on scroll. */
+/** One pane's scrollable body: restores its remembered scroll on mount, records it on scroll.
+ * The map and documents panes scroll themselves; the conversation pane is a
+ * fill host — the bound chat's surface owns the transcript scroller, so the
+ * body only passes the bounded height down and never scrolls itself.
+ * Scroll anchoring is off (overflowAnchor: none, like the chat transcript):
+ * the panes' content resolves through async subscriptions, and an insertion
+ * above the fold would otherwise shift a just-restored position and the
+ * scroll handler would record the shifted value as the pane's own. */
 function PaneBody({ teamKey, planId, pane, focusRef, children }: {
   teamKey: string
   planId: string
@@ -69,12 +77,15 @@ function PaneBody({ teamKey, planId, pane, focusRef, children }: {
   useLayoutEffect(() => {
     const element = restoreRef.current
     if (element) element.scrollTop = paneScrollOf(teamKey, planId, pane)
-    // Restore once per mount; the scroll handler keeps the record current.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+    // The scroll handler keeps the record current; the identity deps re-run
+    // the restore when the unkeyed plans view swaps the team or plan in
+    // place — the section stays mounted across that switch, so a mount-only
+    // effect would leave the previous identity's position in the element.
+  }, [teamKey, planId, pane])
   return <div ref={node => { restoreRef.current = node; focusRef.current = node }} tabIndex={-1}
     data-testid={`workspace-pane-${pane}`}
-    className="min-h-0 overflow-y-auto"
+    className={pane === 'conversation' ? 'flex min-h-0 flex-col' : 'min-h-0 overflow-y-auto'}
+    style={{ overflowAnchor: 'none' }}
     onScroll={event => setPaneScroll(teamKey, planId, pane, event.currentTarget.scrollTop)}>
     {children}
   </div>
@@ -145,7 +156,7 @@ export function WorkspaceNarrowPanes({ teamKey, planId, panes, rootRef, content 
     <p className="sr-only" role="status" data-testid="workspace-narrow-status">
       Showing the {NARROW_PANE_LABELS[panes.narrowPane]} pane.
     </p>
-    <div className="mt-2 flex min-h-0 flex-col" data-testid="workspace-narrow-body">
+    <div className="mt-2 flex max-h-[32rem] min-h-0 flex-col" data-testid="workspace-narrow-body">
       {/* The key remounts the shown pane on a switch: the reused element
           would keep the previous pane's scrollTop and skip the mount-only
           restore, so each pane never inherits its neighbour's scroll. */}
@@ -234,7 +245,11 @@ function WorkspaceDesktopPanes({ teamKey, planId, panes, rootRef, content }: {
         {panes.conversationOpen ? 'Hide conversation' : 'Show conversation'}
       </button>
     </div>
-    <div className="flex min-h-0" data-testid="workspace-desktop-body">
+    <div className="flex max-h-[32rem] min-h-0" data-testid="workspace-desktop-body">
+      {/* 32rem, not less: the conversation pane's own furniture (usage bar,
+          composer, bind controls) has an intrinsic floor near 29rem, and a
+          shorter cap would overflow the pane the transcript was meant to
+          own. */}
       {expanded === null && <>
         <div className="flex min-w-0 flex-1" ref={containerRef} data-testid="workspace-resizable">
           <div className="flex min-w-0 flex-col" style={{ flexGrow: mapFlex, flexBasis: 0 }}>
