@@ -310,6 +310,31 @@ test('a coverage file is checked citation by citation as Kawai does', async () =
   expect(stdout).toContain('not-found')
 }, 30_000)
 
+// The bare run (no --commit) defaults the given text to HEAD, and HEAD is a
+// worktree-local ref: in a linked worktree it must name that worktree's
+// head, never the main checkout's.
+test('a bare run in a linked worktree reports the linked worktree\'s HEAD, not the main checkout\'s', async () => {
+  commitFile('main-only.txt', 'main\n')
+  const linked = path.join(tempDir, 'linked')
+  git(['worktree', 'add', '-b', 'feature', linked])
+  const worktreeGit = (args: string[]): void => {
+    const result = runGit(args, { cwd: linked, timeoutMs: 10_000, env: COMMIT_ENV })
+    if (!result.ok) throw new Error(`git ${args[0]} failed: ${result.stderr}`)
+  }
+  fs.writeFileSync(path.join(linked, 'wt-only.txt'), 'wt\n')
+  worktreeGit(['add', '--', 'wt-only.txt'])
+  worktreeGit(['commit', '-m', 'fixture'])
+  const linkedHead = runGit(['rev-parse', 'HEAD'], { cwd: linked, timeoutMs: 10_000 }).stdout.trim()
+  const mainHead = runGit(['rev-parse', 'HEAD'], { cwd: repo, timeoutMs: 10_000 }).stdout.trim()
+  expect(linkedHead).not.toBe(mainHead)
+  const { code, stdout, stderr } = await runScript(['--worktree', linked, '--json'])
+  if (code !== 1) throw new Error(`expected exit 1, got ${code}: ${stderr}${stdout}`)
+  const facts = JSON.parse(stdout) as ResultCheckFacts
+  expect(facts.commit.given).toBe('HEAD')
+  expect(facts.commit.sha).toBe(linkedHead)
+  expect(facts.head?.sha).toBe(linkedHead)
+}, 30_000)
+
 // @covers: dev-checks › A local script reports a result's checks › Same answer as Kawai
 test('the script reports the same facts as the module Kawai runs, green when all green', async () => {
   const sha = commitFile(

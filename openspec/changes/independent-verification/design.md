@@ -58,7 +58,7 @@ Every call is read-only, so a running commit hook in that worktree is never dist
 
 The only write is `git merge-tree --write-tree`, which adds unreferenced objects that gc prunes.
 
-1. **Commit.** `rev-parse --verify <given>^{commit}` gives the full sha and its tree. When the given text is not a full sha, the check records it as resolved at check time. A miss ends the check: `commit: not found`.
+1. **Commit.** `rev-parse --verify <given>^{commit}` gives the full sha and its tree. When the given text is not a full sha, the check records it as resolved at check time. A miss ends the check: `commit: not found`. The text resolves in the result's own worktree when that worktree exists and its git common dir is the repository's (so a worktree-local ref such as `HEAD` names that worktree's head); every other case — no worktree, a missing directory, another repository — resolves at the repository root, and full shas and `resolvedAtCheckTime` are unaffected.
 2. **HEAD.** The worktree's HEAD sha and its branch (or `detached`), related to the commit as `same`, `ahead n`, `behind n`, or `diverged`, via `merge-base --is-ancestor` and `rev-list --count`.
 3. **Clean.** `status --porcelain=v1 -z` lists modified, staged, and untracked non-ignored paths: the first 20, plus a count.
 4. **Recorded pass** (D3). Whether a record exists for the commit's tree. The check compares each record's Bun version with `git show <sha>:.bun-version`, and its platform and architecture with the server's.
