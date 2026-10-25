@@ -1,13 +1,13 @@
 ## ADDED Requirements
 
 ### Requirement: Imported credentials live in the server-owned store
-The system SHALL store operator-imported credential values in one user-level
-file (`~/.kawai/credentials.json`, created mode 0600 and never widened) that
-maps environment variable names to values. Values SHALL NOT be stored in
-SQLite, in repository or project files, or in any database backup. The store
-SHALL exist only at the user level. A store file that is unreadable or
-malformed SHALL be reported in the configuration-source listing and treated
-as absent.
+The system SHALL store credential values in one user-level file
+(`~/.kawai/credentials.json`, mode 0600, never widened), holding secret
+sources (withheld from every launch under their own names; reachable only
+through a binding) and launch-env entries delivered to launches unchanged.
+Values SHALL NOT be stored in SQLite, repository files, or backups taken
+after the migration commit. An unreadable or malformed store SHALL be
+reported in the source listing and treated as absent.
 
 #### Scenario: Import writes only the store
 - **WHEN** an operator imports a value for a credential variable through Settings
@@ -18,59 +18,76 @@ as absent.
 - **THEN** the configuration-source listing reports it with the reason, launches compose credentials from the server environment alone, and nothing fails silently
 
 ### Requirement: The credential UI is write-only
-Read surfaces SHALL show each named variable's presence and source, and
-SHALL NOT return a stored value, a prefix of it, or its length. Setting or
-replacing a value SHALL require typing it anew; clearing SHALL be an
-explicit act.
+Read surfaces SHALL show each named variable's kind, presence, and source,
+and SHALL NOT return a stored value, a prefix of it, or its length, whatever
+the variable is named. Setting or replacing a value SHALL require typing it
+anew; clearing SHALL be an explicit act; reclassifying an entry between
+secret source and launch-env entry SHALL be an explicit act.
 
 #### Scenario: Presence without value
 - **WHEN** a client requests the credential listing
-- **THEN** each variable shows set or absent with its source, and the response carries no value or prefix for any set variable
+- **THEN** each variable shows set or absent with its kind and source, and the response carries no value or prefix for any set variable
 
 #### Scenario: Replace requires retyping
 - **WHEN** an operator replaces a stored value
 - **THEN** the input starts empty and the previous value is never rendered back
 
-### Requirement: Store values override the server environment per variable
-The effective credential source SHALL compose per variable: the process
-environment, then the `AGENTBOARD_CHAT_ENV` seed, then the store — a store
-value overrides the same-named lower source, a blank exports the variable
-empty, an unset key shows the lower source through; the Settings env editor
-writes the store. The listing SHALL show each source present per variable
-and warn on conflicts. Injection, the authentication gate, and provider
-usage pulls SHALL read this composition.
+### Requirement: Credential resolution composes per variable
+The effective credential source SHALL compose per variable, last writer
+winning: process env, then the chat-env seed, then the store — a store
+entry overrides the lower source, a blank exports empty, an unset key
+passes through. Injection, the auth gate, and provider pulls SHALL read
+this composition. A launch SHALL receive the delivery composition:
+launch-env entries as configured, minus every registered secret name — a
+secret source never reaches a launch under its own name.
 
 #### Scenario: Store overrides the ambient environment
 - **WHEN** the process environment holds a variable and the store holds the same variable
-- **THEN** launches, the authentication gate, and provider pulls see the store's value, and the listing marks the store as overriding
+- **THEN** the gate, injection, and provider pulls see the store's value, and the listing marks the store as overriding
 
-#### Scenario: A blank exports the variable empty
-- **WHEN** the store holds an empty value for a variable the process environment sets
-- **THEN** launches see the variable empty, and the listing shows it as blanked by the store
+#### Scenario: A launch-env entry is delivered unchanged
+- **WHEN** the store holds a launch-env entry for a variable
+- **THEN** the launch receives that value exactly as the legacy Settings map delivered it, and the listing shows it as a launch-env entry
+
+#### Scenario: A secret source never rides the launch environment
+- **WHEN** the store holds a secret source for a variable no binding uses
+- **THEN** no launch receives that variable under its own name
 
 #### Scenario: Gate and spawn agree through the store
 - **WHEN** a provider's token variable resolves only through the store
-- **THEN** session creation passes the authentication check and the spawned agent receives that same value
+- **THEN** session creation passes the authentication check and the spawned agent receives that same value inside its composed token variable
 
 ### Requirement: Legacy Settings credentials migrate to the store at upgrade
-At the first startup after adoption, the server SHALL move every value of
-the Settings provider-env map once into the credential store and clear the
-map from `app_settings`; the move SHALL be recorded by a stamp so a crash
-retries safely, and no credential value SHALL be written to SQLite again.
+At the first startup after adoption, the server SHALL move every Settings
+provider-env map entry once into the credential store and clear the map
+from `app_settings`. The store file SHALL be written durably (atomic
+rename, fsync) before any SQLite write; the map deletion and the migration
+stamp SHALL commit in one transaction. A re-run SHALL absorb same-valued
+entries and let the store win collisions, listing skips in the source
+listing. No credential value SHALL be written to SQLite again.
 
 #### Scenario: Migration moves the map once
 - **WHEN** the server starts with a non-empty Settings provider-env map in `app_settings`
-- **THEN** the store holds every map value, the map row is gone, and a restart performs no second move
+- **THEN** the store holds every map entry as launch-env entries, the map row is gone, and a restart performs no second move
+
+#### Scenario: A crash before the database commit recovers
+- **WHEN** the store file was written but the SQLite transaction never committed
+- **THEN** the next startup re-runs the migration, absorbs the identically valued entries, resolves collisions with the store winning and the skips listed, and commits the map deletion with the stamp
 
 #### Scenario: A restored pre-upgrade backup re-runs the migration
 - **WHEN** a database backup taken before the upgrade is restored
-- **THEN** the next startup moves its map values into the store the same way
+- **THEN** the next startup moves its map entries into the store the same way
+
+#### Scenario: Backups taken before the commit are named honestly
+- **WHEN** the operator reads the migration documentation
+- **THEN** it states that every backup taken before the migration's commit — including the upgrade's own startup snapshot — may hold the old map values, advises rotation, and states when rotation ages them out
 
 ### Requirement: Registered secret names stay withheld
-Every credential variable named at any catalog layer, every header variable,
-and every store key is registered; removing a provider entry, disabling an
-id, or clearing a binding SHALL NOT stop withholding its names. The retained
-names persist as names only.
+Every credential variable named at any catalog layer in any state, every
+header variable, and every secret-source store key is registered; removing
+a provider entry, disabling an id, or clearing a binding SHALL NOT stop
+withholding its names. The retained names persist as names only. Launch-env
+entries are not withheld.
 
 #### Scenario: Removing a provider keeps its names withheld
 - **WHEN** an operator removes a provider entry that named a credential variable
@@ -81,14 +98,14 @@ names persist as names only.
 - **THEN** its credential and header variables remain withheld from every launch
 
 ### Requirement: Store changes apply at the next launch
-Importing, replacing, or clearing a credential SHALL take effect at the next
-agent launch or catalog-driven read without a server restart. Running
-processes keep their environment.
+Importing, replacing, clearing, or reclassifying a store entry SHALL take
+effect at the next agent launch or catalog-driven read without a server
+restart. Running processes keep their environment.
 
 #### Scenario: Import then create
 - **WHEN** an operator imports a previously missing token variable and immediately creates a session
 - **THEN** creation succeeds without a restart
 
 #### Scenario: Running session keeps its environment
-- **WHEN** a credential changes while an agent is running
+- **WHEN** a store entry changes while an agent is running
 - **THEN** the running process keeps its previous environment until its next launch

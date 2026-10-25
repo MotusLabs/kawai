@@ -15,12 +15,34 @@ offer the shipped provider templates for adoption under their original ids.
 - **WHEN** the operator adopts a shipped template
 - **THEN** its provider or profile id resolves again exactly as the removed shipped entry did
 
+### Requirement: The setup write path is safe under failure and concurrency
+Catalog edits from the setup surface SHALL go through one owned write path
+that validates through the production parsers, saves the user-level catalog
+files atomically, and detects concurrent edits: a request carrying a stale
+catalog stamp SHALL be reported as a conflict and overwrite nothing. An
+invalid entry SHALL refuse the write whole, naming the field, leaving the
+file untouched. Credential values from adoption or editing SHALL be
+imported only into the credential store.
+
+#### Scenario: Invalid entry refuses whole
+- **WHEN** an operator saves a provider entry with a malformed base URL or an unknown field
+- **THEN** the write is refused naming the field and the catalog file is untouched
+
+#### Scenario: A concurrent edit conflicts instead of overwriting
+- **WHEN** two edits race and the second carries the catalog stamp the first replaced
+- **THEN** the second is reported as a conflict with the current stamp and nothing partial lands
+
+#### Scenario: Adoption imports values only into the store
+- **WHEN** an operator adopts a template with its credential values
+- **THEN** the entry ids are written verbatim and the values exist only in the credential store
+
 ### Requirement: Configuration sources are listed with their status
 The system SHALL list every configuration source profile resolution reads:
 each catalog file with loaded, missing, or rejected status and the rejection
 reason, and each credential variable of the composed environment with its
-presence and source. Entries adopted at upgrade are marked. The listing
-SHALL be reachable from New Session and from Settings.
+presence, kind, and source. The install mode is labeled; entries kept by the
+retained-defaults layer are marked "retained default"; migration skips are
+listed. The listing SHALL be reachable from New Session and from Settings.
 
 #### Scenario: Rejected file is named
 - **WHEN** a project catalog file fails validation
@@ -30,9 +52,13 @@ SHALL be reachable from New Session and from Settings.
 - **WHEN** the composed environment holds a credential variable only the store provides
 - **THEN** the listing shows that variable as set with source store
 
-#### Scenario: Adopted entry is marked
-- **WHEN** an entry was adopted at upgrade
-- **THEN** the listing marks it adopted at upgrade
+#### Scenario: Retained entries are marked
+- **WHEN** an entry is served by the retained-defaults layer
+- **THEN** the listing marks it "retained default" and offers its retire action with a preview of the difference
+
+#### Scenario: A migration skip is listed
+- **WHEN** the Settings migration skipped a legacy entry whose name the store already held with a different value
+- **THEN** the listing shows the skip naming the variable so the operator can resolve it
 
 ### Requirement: Validation failures name the supported setting
 Each catalog rejection SHALL render prominently beside the profile picker
@@ -72,12 +98,12 @@ equal the launch configuration's field.
 
 ### Requirement: The connection test runs through the real launch path
 A per-profile test SHALL resolve the profile as session creation does and
-compose the same launch settings — cwd, settings sources, transport pins,
-the resolved baseline-checked executable — then make one minimal model
-request with transcript persistence disabled, bounded in time, the process
-group killed and reaped on every exit path. A second concurrent test reports
-busy. The test SHALL create no session and persist nothing; creation SHALL
-NOT require the test.
+compose the same launch settings creation would, then make one minimal
+model request with transcript persistence disabled, the process group
+killed and reaped on every exit path. A second concurrent test reports
+busy. The test SHALL create no session, persist nothing, and record no
+row; a limit-shaped outcome SHALL be reported as its class, writing
+nothing. Creation SHALL NOT require the test.
 
 #### Scenario: Test exercises the resolved launch
 - **WHEN** the test runs for a profile
@@ -91,6 +117,10 @@ NOT require the test.
 - **WHEN** a test completes
 - **THEN** no session, transcript, wire log, or database row exists for it
 
+#### Scenario: A limit-shaped test outcome records nothing
+- **WHEN** the test's request returns 429, or 402, or a limit error class on any status
+- **THEN** the result reports the limit class with the reset time when stated, and no limit event, cooldown, or other row is written
+
 #### Scenario: Concurrent test reports busy
 - **WHEN** a second test for the same provider starts while one runs
 - **THEN** it reports busy without queueing
@@ -98,11 +128,18 @@ NOT require the test.
 ### Requirement: The connection test covers Claude-runtime profiles
 In v1 the test SHALL cover Claude-runtime profiles only. A Codex profile
 SHALL show the test as not supported and keep its existing login check as
-its verification.
+its verification. Credential gates SHALL be the same resolver session
+creation uses: a credentialed profile's token variable must resolve through
+the composed environment before anything spawns; a headers-only profile has
+no token gate; a host-login profile is tested with its login.
 
 #### Scenario: Codex test is not supported
 - **WHEN** the test is requested for a Codex-runtime profile
 - **THEN** the surface reports the test as not supported and the existing login check still runs
+
+#### Scenario: A headers-only profile tests without a token gate
+- **WHEN** the test runs for a headers-only profile whose header variables resolve
+- **THEN** no token presence is required and the request is made
 
 ### Requirement: Diagnostic output is redacted before any sink
 Diagnostic surfaces SHALL pass output through a redactor holding the exact
@@ -120,21 +157,25 @@ redaction alone SHALL NOT be trusted to remove a known secret.
 - **THEN** the reported message carries no credential value
 
 ### Requirement: Failure classes are distinguished with their evidence
-Failed relay requests SHALL be classified by one ordered rule list: the
-existing limit predicate first — 429, 402, and the limit error classes keep
-recording limits on any status — then, only for non-limit failures, one
-disjoint class: missing credential, gateway authentication failure,
+Failed relay requests SHALL be classified by one ordered, total rule list:
+the existing limit predicate first, then one disjoint class for every
+non-limit failure — missing credential, gateway authentication failure,
 virtual-key restriction, model-catalog failure, network failure, timeout,
-relay error, or evidence-qualified unknown. A model-list result never proves
-authentication; ambiguous evidence reads as the unknown.
+relay error, header configuration error, or evidence-qualified unknown.
+Only a documented structured error type SHALL name an auth class; prose is
+never evidence; unmatched evidence SHALL read as the unknown.
 
-#### Scenario: Restriction is not misread as an authentication failure
-- **WHEN** the model list succeeds with the provider's credentials and the model request returns 403 without a limit class
+#### Scenario: A documented restriction type reads as restriction
+- **WHEN** the model request returns 403 without a limit class and its body carries the relay's documented virtual-key type
 - **THEN** the class is virtual-key restriction, shown with that evidence
 
-#### Scenario: Ambiguous evidence reads as unknown
-- **WHEN** the model list cannot be retrieved and the model request returns 403
-- **THEN** the class is the evidence-qualified unknown, not a guessed one
+#### Scenario: Prose is never evidence
+- **WHEN** the model request returns a 403 whose body is the prose "Failed to authenticate" and the model list succeeded
+- **THEN** the class is the evidence-qualified unknown, with the list state shown as a note that never upgrades the class
+
+#### Scenario: A schema-valid other 4xx reads as relay error
+- **WHEN** the model request fails with 400, 405, 409, or 422 and a schema-valid response
+- **THEN** the class is relay error with the response shape as evidence
 
 #### Scenario: A limit-shaped 403 still cools
 - **WHEN** a failed request returns 403 carrying a rate_limit error class
@@ -148,11 +189,16 @@ authentication; ambiguous evidence reads as the unknown.
 A live session's failed model turns SHALL show the same classification as
 the connection test, on the transcript error row, additively, at any point
 in the session's life. The display SHALL NOT change turn, mail, or limit
-outcomes.
+outcomes: live limit recording stays exactly as the limit predicate defines
+it, and only failures it does not treat as limits carry a diagnostic class.
 
-#### Scenario: A live failure shows its class
-- **WHEN** a live session's model request returns a relay's "Failed to authenticate" 403 while the provider's model list succeeds
+#### Scenario: A documented restriction shows its class live
+- **WHEN** a live session's model request returns a 403 carrying the relay's documented virtual-key type while the provider's model list succeeds
 - **THEN** the transcript error row shows virtual-key restriction and no limit event is recorded
+
+#### Scenario: A prose-only 403 shows the unknown live
+- **WHEN** a live session's model request returns a 403 whose body carries no documented structured type
+- **THEN** the transcript error row shows the evidence-qualified unknown with the list state noted
 
 ### Requirement: Model availability is checked against the provider's catalog
 The server SHALL query `{base URL}/v1/models` — the configured path

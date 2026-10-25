@@ -64,13 +64,36 @@ What keeps values from agents is that no launch receives them except inside
 the two composed variables (D2), and no prompt, tool allowlist, or read API
 exposes the store's contents or path semantics beyond presence and source.
 
-**The store is the Settings provider-env map's new backing.** The whole map
-retires from SQLite: the Settings env editor writes the store, and everything
-the store holds composes into the launch environment per variable exactly as
-the map did (`effectiveChatEnv`), so non-credential overrides an operator
-kept there keep working. The write-only read rule applies to every store
-entry: read surfaces show name, presence, and source — the old GET that
-served non-secret-named values verbatim is gone.
+**Two kinds of entries (L-B).** The store holds two kinds, both write-only
+on every read surface (name, presence, source — never a value or prefix):
+
+- **Secret sources** — values withheld from every launch under their own
+  names (the registry, D2); they reach an agent only through a binding: a
+  provider's `authTokenEnv`/`balanceKeyEnv`, or a `headers` binding.
+- **Launch-env entries** — delivered to launches **unchanged**, exactly as
+  the legacy Settings map is delivered today: composed per variable into
+  the launch environment. A launch-env entry is not a secret and is not
+  withheld.
+
+The migration imports every legacy Settings map entry as a **launch-env
+entry**, so post-upgrade delivery is behavior-identical to today's; the
+operator may reclassify an entry as a secret source in Settings. The
+Settings env editor writes the store (launch-env by default; reclassification
+is an explicit act). The old GET that served non-secret-named values
+verbatim is gone.
+
+**Two compositions, stated apart.** *Resolution* — what the auth gate,
+injection, and provider usage pulls read for a variable: process env <
+`KAWAI_CHAT_ENV` seed (the `AGENTBOARD_CHAT_ENV` seed until
+`rename-agentboard-to-kawai` archives; `routes/chatProviderEnv.ts:39–43`)
+< store — any store entry wins, secret source or launch-env entry. *Delivery*
+— what a launch receives: the same composition, minus every registered
+secret name — a secret source never rides the launch env under its own
+name; it reaches the CLI only inside a composed binding (`ANTHROPIC_AUTH_TOKEN`,
+`ANTHROPIC_CUSTOM_HEADERS`). Launch-env entries ride unchanged. The source
+listing shows every source present per variable and warns on conflicts. The
+old wholesale-replacement semantics (`current()` returning override-or-seed)
+is retired with the override.
 
 **Why not SQLite:** backups copy the database (`DatabaseBackups`); a
 credential in a row lands in every snapshot and in `status()` listings —
@@ -99,29 +122,37 @@ surfaces (the source listing, the preview) show name, presence
 catalog files; a save applies at the next spawn. Active processes keep their
 environment (unchanged rule for Settings and catalogs).
 
-**Upgrade migration (L-B).** At the first startup after this change, when the
-Settings provider-env map (`app_settings`) is non-empty, its values move once
-into the credential store and the map row is deleted — keyed by a recorded
-migration stamp so a crash between the two writes retries instead of
-duplicating or dropping. From then on no credential value is written to
-SQLite again. **Honest scope:** database backups taken *before* the upgrade
-still contain the old map values; nothing retroactively scrubs them, and a
-backup restored later would bring the map back (the migration re-runs on it).
-`docs/claude-session-profiles.md` states this and advises rotating any
-pre-upgrade credential whose presence in old backups matters.
+**Upgrade migration (L-B): file first, then SQLite.** At the first startup
+after this change, when the Settings provider-env map (`app_settings`) is
+non-empty: (1) each map entry is written once into the store file as a
+launch-env entry — the store file is written durably (atomic rename +
+fsync) **before** any SQLite write; (2) then, in one SQLite transaction,
+the map row is deleted and the migration stamp is committed. The stamp's
+presence never re-runs the migration.
 
-**Composed credential environment (after migration).** Per variable, exactly
-one winner — the last source holding it:
+**Crash, collision, and restart table** (each row is the state a restart
+finds, and what it does):
 
-| Order | Source | Semantics |
-| --- | --- | --- |
-| 1 | server process environment | today's ambient env |
-| 2 | `AGENTBOARD_CHAT_ENV` seed | the process-env map the Settings route used to replace wholesale (`routes/chatProviderEnv.ts:39–43`); it now composes **per variable** as its own listed source |
-| 3 | credential store | set overrides; blank exports empty; unset shows through |
+| Crash point | Store file | `app_settings` | Restart behavior |
+| --- | --- | --- | --- |
+| before the store write | old | map present, no stamp | migration re-runs from the start; nothing was moved |
+| after the store write, before the SQLite transaction | moved entries present | map present, no stamp | re-run: a map entry whose store name already holds the **same** value is absorbed silently (idempotent); a **different** value is a collision — the store entry wins, and the skip is recorded in the source listing as "legacy Settings `<NAME>` not migrated: the store already holds `<NAME>`"; then the map row is deleted and the stamp commits |
+| after the SQLite transaction | moved entries present | map deleted, stamp set | never re-runs (stamp) |
 
-Injection (`ANTHROPIC_AUTH_TOKEN`), the creation-time auth gate, withholding,
-and provider usage pulls read this composed environment (`effectiveChatEnv`
-gains the seed and store layers), so the gate and the spawn cannot disagree.
+A restored pre-upgrade backup (map present, no stamp) re-runs the migration
+the same way; entries the later store already holds absorb or collide per
+the middle row. Concurrent store saves serialize in-process.
+
+**Backup honesty.** Every backup taken **before** the migration's SQLite
+commit may hold the old map values — including the upgrade's own startup
+snapshot (`dbSafety` snapshots before application migrations run) and every
+`pre-migration-<n>` backup. Nothing retroactively scrubs them.
+`docs/claude-session-profiles.md` says so, advises rotating any pre-upgrade
+credential whose presence in old backups matters, and states when rotation
+ages them out (24 hourly `interval` snapshots ≈ a day, 7 `startup`
+snapshots, migrations' own backups while the newest-three-migrations
+rotation retains them). **No backup taken after the commit holds the map
+values.** The store file itself is never copied by `DatabaseBackups`.
 The source listing shows every source present per variable and warns when
 more than one holds the same variable. The old wholesale-replacement
 semantics (`current()` returning override-or-seed) is retired with the
@@ -174,7 +205,19 @@ environment. The guarantees are: (a) **omission** — every registered secret
 name (below) is withheld from every agent launch under its own name; (b)
 **composition** — the values reach the CLI only inside the two composed
 variables, which is exactly today's token delivery mechanism; (c) **the flag
-settings layer never carries a token or header value**. What a Bash child
+settings layer never carries a token or header value**; (d) **an explicitly
+filtered environment on every branch** — no launch branch inherits the
+server process environment raw: every Claude and Codex launch receives an
+explicitly filtered environment (D5's composition table). The withheld set
+on every branch is every name Kawai's configuration registers as a
+credential source: every catalog binding name (`authTokenEnv`,
+`balanceKeyEnv`, every header variable) at any layer in any state — enabled,
+disabled, retained default, or template — every secret-source store key,
+every retained name, and the controlled/transport-pin variables Kawai names
+itself. An ambient credential whose name nothing registers (a bare
+`ANTHROPIC_AUTH_TOKEN` in the server env with no catalog entry naming it)
+passes the filter exactly as it does today — stated, not hidden (D5).
+What a Bash child
 actually sees on the supported CLI is established by the sentinel-only
 fixture test (D12); until that evidence exists this design claims **parity
 of mechanism** with the token path, not parity of measured exposure.
@@ -196,54 +239,80 @@ oracle test pins this (P7).
 the relay account, not the model; a free-form env entry — that is the
 rejected `ANTHROPIC_CUSTOM_HEADERS` path that started this.
 
-## D3 — Small overrides: the user level merges over the shipped defaults
+## D3 — Catalog assembly: install modes; merge by construction; `default` untouchable
 
-**Choice.** `profileCatalogLevels` always reads the shipped defaults (files,
-or the embedded copies when missing) as tier 0 and the user level, when
-either of its files exists, as tier 1 above them; project files keep their
-tiers. Same-id entries merge per field as they already merge across project
-levels (nearer wins per env key, empty neutralizes, scalars nearest-set-wins)
-— with the existing trust refusals applying **before** any merge: a project
-file may overlay labels and model mappings on a non-credentialed id, but a
-project file touching a **credential-bearing** id (now including
-headers-only providers) is rejected whole exactly as today
+**Install modes (L-A).** How the shipped tier composes with operator files
+follows a durable, non-secret **install-mode stamp** (an `app_settings`
+key), recorded once, idempotent across restarts and crashes, and changed
+only by the operator:
+
+- **Fresh install** (no database before this version): the shipped catalog
+  is Anthropic + OpenAI only (D4), and user/project files **merge** over it
+  field by field. No mode choice exists; the stamp records `merge`.
+- **Existing install, no user-level catalog file at upgrade**: the trimmed
+  shipped set applies plus the **retained-defaults layer** (D4 — the removed
+  entries stay at the shipped tier with their exact facts). User/project
+  files merge over shipped+retained, so every pre-upgrade reference keeps
+  resolving exactly as before. Stamp: `merge`.
+- **Existing install with a user-level catalog file at upgrade**:
+  **whole-file replace semantics are kept** — the user files stand alone,
+  no shipped or retained entries sit beneath them, exactly today's
+  behavior — until the operator switches to merge from the source listing
+  **after previewing the effective-catalog difference** (D7). Stamp:
+  `replace` until the switch. Absence is preserved exactly (P3): an
+  omitted optional model field or env key stays absent under replace.
+
+**Merge semantics** (fresh and opted-in installs, and project files in
+every mode). Same-id entries merge per field as they already merge across
+project levels (nearer wins per env key, empty neutralizes, scalars
+nearest-set-wins). The existing trust refusals apply **before** any merge,
+with `openrouter-provider`'s precise boundary: a project file may overlay
+**labels and model mappings** on a credential-bearing id (now including
+headers-only providers), but a project file that sets or overrides its base
+URL (route), re-homes its model under another provider id, or names a
+credential field (`authTokenEnv`, `balanceKeyEnv`, `headers`) — or sets
+`enabled`/`executable` — is rejected whole exactly as today
 (`enforceTrustedCredentialInvariants` and the trusted-tier checks;
-`catalogMerge.ts:175–184, 379–426, 430–437`) — it cannot override a
-credentialed base URL, re-home its model, or bind headers.
+`catalogMerge.ts:175–184, 379–426, 430–437`). Labels and model mappings
+staying overlayable is the preserved openrouter-provider behavior, not a
+new relaxation.
 
-**Disable is a trusted tombstone.** `enabled: false` on a **user-level**
-entry removes the id from the resolved catalog — the provider entry, every
-model key that resolves to that provider, and any Codex profile of that id —
-and leaves a tombstone that **nearer tiers cannot resurrect**: a project file
-re-defining the id (with or without `enabled`) resolves nothing for that id
-while the tombstone stands, because the project tier sits below the user
-tier's explicit removal. The advisor's point taken: rejecting `enabled`
-below the user level alone proves nothing — a project file can re-define the
-id without naming `enabled` at all — so the tombstone's suppression, not the
-field refusal, is what blocks resurrection. A user-level entry for the same
-id **without** `enabled: false` (a same-or-nearer trusted statement)
-replaces the tombstone. Suppression also covers the implicit-default
-synthesis path (`catalogMerge.ts` `finish()`): a tombstoned id cannot
-reappear through synthesis. A model id re-homed under a *different*
-provider id is a different id and resolves normally unless that id is itself
-tombstoned. `enabled` below the user level is still rejected whole, naming
-the file.
+**Disable is a trusted tombstone — named ids only.** `enabled: false` on a
+**user-level** entry removes that named id from the resolved catalog — the
+provider entry, every model key that resolves to that provider, and any
+Codex profile of that id — and leaves a tombstone that **nearer tiers
+cannot resurrect**: a project file re-defining the id (with or without
+`enabled`) resolves nothing for that id while the tombstone stands, because
+the project tier sits below the user tier's explicit removal. A user-level
+entry for the same id **without** `enabled: false` replaces the tombstone.
+Tombstone suppression covers a named id's synthesis paths; **`default` is
+never tombstonable** — the resolved catalog always includes `default` (main
+spec), so `enabled: false` on the `default` profile or its provider is
+refused at parse naming the file, and the implicit-default synthesis
+(`catalogMerge.ts` `finish()`) is never suppressed. `enabled` below the
+user level is rejected whole, naming the file. A model id re-homed under a
+*different* provider id is a different id and resolves normally unless that
+id is itself tombstoned.
 
 **Fixture honesty for the layering table.** After D4 the only shipped
-provider is `claude`; layering rows use ids that actually remain shipped
-(`claude`, `openai`) or are explicitly labeled synthetic (a `zai` fixture
-stands for any user-defined or adopted id, since `zai` ships only in
-templates).
+provider is `claude`; layering rows use ids that remain shipped (`claude`,
+`openai`), retained defaults (`mimo`, `zai`, … on upgraded installs), or
+explicitly labeled synthetic fixtures (a user-defined `relay` id). A `zai`
+fixture on a fresh install is labeled synthetic — `zai` ships only in
+templates there.
 
-**Regression oracle.** An instance whose user-level files already define
-every id they care about (today's forced full copy) resolves to the same
-effective catalog under merge as under the old replace rule **for every
-non-runtime field**: ids, labels, env per key. The runtime-origin rules are
-the one exclusion (P3): under replace, a user-level Codex entry could
-convert a model key because the shipped files had vanished; under merge the
-shipped Claude origin sits beneath and `addCodexProfile` refuses the
-conversion (`catalogMerge.ts:451–458`) — that refusal is the documented
-runtime-origin behavior, tested as its own case, not smoothed over.
+**Regression oracle (P3, two halves).** (a) *Replace mode*: an upgrade
+changes nothing — user-file catalogs resolve identically before and after,
+including complete copies, partial copies, omitted optional model fields,
+and absent env keys (absence preserved exactly). (b) *Merge mode*: complete
+copies resolve identically to replace; an omitted optional field reappears
+from the lower layer — that inheritance is the documented difference the
+opt-in preview shows, asserted as the previewed difference, never claimed
+absent. Runtime-origin placements are the one exclusion: under replace a
+user-level Codex entry could convert a model key because the shipped files
+had vanished; under merge the shipped Claude origin sits beneath and
+`addCodexProfile` refuses the conversion (`catalogMerge.ts:451–458`) — the
+refusal is the documented runtime-origin behavior, tested as its own case.
 
 ## D4 — Shipped catalog trimmed to Anthropic and OpenAI (Codex); templates
 
@@ -264,59 +333,80 @@ the repository. The setup surface (D7) offers each template for adoption:
 writing the entry into the user-level catalog unchanged (ids preserved) and
 importing the credential values into the store (D1).
 
-**Upgrade adoption (L-A) — existing installs keep working with no operator
-action.** Manual template adoption alone is not a migration: it would break
-this team's `glm-flash`/`mimo`/`openrouter-*` workers at upgrade. So at
-startup kawai adopts removed shipped ids automatically: for each template id,
-if a **reference** exists and **no catalog layer** (user or project) defines
-that id, the template entry is written once, verbatim, into the user-level
-catalog (creating the file if needed). References are: a non-killed stored
-session's `profile_id`; a group file's `workers`/`profiles` list, `profile`
-field, or `modelEffort`/`profileEffort` key naming it (bare or
-`provider/model`-qualified); a routing rule pick; queued mail's
-`workerChoice` or `allowedProfiles`. An adopted entry is marked **"adopted
-at upgrade"** in the source listing and named in the server log. Adoption is
-once per id per install (a durable stamp): the operator's later removal of
-an adopted entry wins and is never re-adopted; a session created on the id
-later is served by the normal unknown-profile degrade, which names the
-template. Credential values are **not** imported by adoption — an adopted
-entry surfaces its missing variables through the normal diagnostics.
+**Compatibility by construction (L-A) — no adoption writes, no reference
+discovery.** Kawai does not scan stored sessions, group files, routing
+rules, or queued mail to reconstruct what the trim removed (routing-rule
+picks are computed by `route(ctx)`, not enumerable, and adoption would
+change a file's origin under it); it **keeps the removed entries where they
+already were**:
 
-**No default fallback (L-A).** A worker list that resolves to nothing never
-substitutes the default profile: `workerEligibility.ts:198`'s
-`profiles.length > 0 ? profiles : [DEFAULT_PROFILE_ID]` fallback is removed,
-and the router's worker-choice resolution against an empty list narrows to
-nothing instead of defaulting. Group mail whose group has no defined worker
-waits with a named reason ("no defined worker for group …; profile(s) … are
-not in the catalog") and the group shows a warning — it does not silently
-run on `default`. With adoption in place this state is transient (the
-referenced ids come back at startup); it is reachable only when an operator
-explicitly disables or removes an id that is still referenced — then the
-wait is the honest signal.
+- **Existing installs without a user-level catalog file** (most installs —
+  including this repository's): the removed entries **stay at the shipped
+  tier, verbatim, as the retained-defaults layer**. Every consumer keeps
+  resolving exactly as before the trim: stored sessions on
+  `mimo`/`zai`/`openrouter-*` resume; group workers (`glm-flash`, …) and
+  routing rules' dynamic picks resolve; project overlays of retained ids
+  apply as they always did. The source listing labels the layer **"retained
+  default"** and offers **Retire** beside it, enabled after the operator
+  previews the effective-catalog difference (which ids and fields go away,
+  which stored sessions and groups would degrade). Retiring removes the
+  entries; from then on the unknown-profile degrade and the no-worker wait
+  (below) are the honest signals, and the templates restore ids on demand.
+  Fresh installs have no retained layer — it exists only where the previous
+  shipped entries were actually served.
+- **Existing installs with user-level files**: whole-file replace semantics
+  are unchanged (D3) — nothing an upgrade does can inject entries under a
+  deliberately curated catalog.
+- **Fresh installs**: Anthropic + OpenAI only; templates one click away.
 
-**Degrade before adoption is unreachable in practice, but specified:** a
-stored session on an unknown id stays visible and blocks sending with the
-restore message naming the template; unknown group worker keys are warned
-and dropped (`groupCatalog.ts:125–159`) — both paths keep today's shape for
-ids with no template (a hand-typed id never existed shipped).
+The install-mode stamp (D3) records which mode applies and nothing else;
+no discovery pass runs at startup.
 
-**Migration test (required by the direction).** (a) A fresh instance with no
-references resolves exactly Anthropic + OpenAI. (b) An upgraded instance
-with a stored session on `mimo` and a group naming `glm-flash` adopts both
-templates at startup — the session resumes, the group's workers spawn, the
-listing marks both "adopted at upgrade". (c) After the operator disables an
-adopted id, it stays gone and referenced mail waits with the named
-no-worker reason instead of falling back to `default`. (d) Adopting the
-`openrouter` template manually (after removal) restores its ids exactly as
-the shipped entry behaved.
+**No default fallback (L-A), scoped to declared lists.** A group that
+**declares** a worker list (`workers`/`profiles`/`profile`, bare or
+qualified) whose ids all fail to resolve never falls back to the default
+profile: `workerEligibility.ts:198`'s
+`profiles.length > 0 ? profiles : [DEFAULT_PROFILE_ID]` substitution is
+removed for declared lists, and the router's worker-choice resolution
+against such a list narrows to nothing. The group's mail waits with a named
+reason ("no defined worker for group …; profile(s) … are not in the
+catalog") and the group shows a warning — it does not silently run on
+`default`. A group with **no** worker field keeps today's behavior (the
+default profile — the main staffing spec's unspecified case), and
+**`default` itself cannot be tombstoned** (D3), so the fallback's target
+always exists for the no-field case. The declared-list wait is reachable
+only after an operator retired retained entries or disabled ids still
+referenced — then the wait is the honest signal.
+
+**Degrade (post-retire or template-less):** a stored session on an unknown
+id stays visible and blocks sending with the restore message naming the
+matching template when one exists; unknown group worker keys are warned and
+dropped (`groupCatalog.ts:125–159`). Both paths keep today's shape for ids
+with no template (a hand-typed id never existed shipped) and for ids whose
+template was not adopted after a retire.
+
+**Upgrade-compatibility tests (required by the direction).** (a) A fresh
+instance resolves exactly Anthropic + OpenAI. (b) An upgraded install
+without user files keeps `mimo`, `glm-flash`, and `openrouter-*` resolving
+through the retained layer — a stored session resumes, the group's workers
+spawn, the listing marks "retained default". (c) An upgraded install with a
+complete-copy user catalog resolves exactly today's catalog (replace mode;
+P3's replace half). (d) Retiring the retained layer after the preview
+removes the entries; a still-referenced id then degrades (stored session)
+or waits (declared worker list) with the named reasons, and adopting its
+template restores it. (e) Partial project overlays of a retained id keep
+applying before and after retire (before: retained facts beneath; after:
+the overlay alone, or nothing), and an omitted optional field under a
+post-retire merge behaves per P3's merge half.
 
 **Alternatives:** keep the entries but hide them — the picker stays noisy and
 the trim's purpose (a fresh instance shows only what works out of the box)
 fails; drop removed ids entirely — breaks this team's own workers and every
-stored session; manual adoption only — every existing install breaks at
-upgrade until a human edits JSON, which is the behavior being removed;
-temporary fallback routing to `default` — silently runs team work on the
-host login, the failure mode L-A rejects.
+stored session; auto-adopt referenced ids — unbounded discovery (route(ctx)
+picks are computed, not stored) and adoption changes origin-holder facts
+under the reference (L-A rejects it); temporary fallback routing to
+`default` — silently runs team work on the host login, the failure mode L-A
+rejects.
 
 ## D5 — One precedence table
 
@@ -328,20 +418,32 @@ setup edits, when the two differ).
 | --- | --- | --- |
 | Catalog entry fields — label, model, env (per key), executable, limitResetTimeZone, authTokenEnv, balanceKeyEnv, headers | shipped < user < project | per field and per env key; trust refusals (D3) apply before merge for credential-bearing ids |
 | Catalog runtime keys — `runtime`, `codexHome`, `network` | **runtime-origin rules, not nearest-wins**: a nearer file cannot flip a runtime a farther tier fixed (`addCodexProfile` ignores the nearer entry with that file's error); `codexHome`/`network` arrive only from trusted files; the same-tier release rule applies | `catalogMerge.ts:451–479` |
-| Credential values | process env < `AGENTBOARD_CHAT_ENV` seed < credential store | per variable (D1); Settings is no longer a source; conflicts warn naming the sources |
-| Launch env | see the branch table below | pinning is existing behavior (openrouter-provider D3), extended to headers-only providers |
+| Credential values | process env < `KAWAI_CHAT_ENV` seed < credential store | per variable, the resolution order (D1); a launch receives the delivery composition minus the registry (the composition table below); Settings is no longer a source; conflicts warn naming the sources |
+| Launch env | see the composition table below | pinning is existing behavior (openrouter-provider D3), extended to headers-only providers |
 | Model ID sent | startup `model` option; else `ANTHROPIC_MODEL`; tier aliases resolved through `ANTHROPIC_DEFAULT_*_MODEL` | the wire ID is the post-alias string the CLI actually sends (D10); env keys compose `inherited < provider < model` (`flattenModel`) |
 
-**Launch-env branches** (`ClaudeProfiles.ts:157–185`), so no row overstates a
-branch that does not apply:
+**Launch composition — one table, every branch (L-E, B1).** No branch
+inherits the server process environment raw: every launch receives an
+explicitly filtered environment — today's default resolve already does
+(`ClaudeProfiles.ts:124–130, 153–155`) — and the withheld set on **every**
+branch is the registry of D2 (d): catalog binding names in any layer and
+state, secret-source store keys, retained names, and the controlled/
+transport-pin variables. Ambient credentials pass only when nothing
+registers their name. What each branch receives:
 
-| Branch | Composition |
-| --- | --- |
-| No overrides, no catalog entry | SDK `env` option omitted; the CLI inherits the server process env unchanged |
-| Named profile, no credentials/headers | composed env (process env + seed + store) overlaid; every controlled variable **deleted** from the composed env; absent catalog keys blanked in the flag settings layer |
-| Wrapper (`executable`) launch | the wrapper branch: the wrapper receives the composed env; a credential-bearing id can never take an executable (trusted invariant), so wrappers never carry tokens or headers |
-| Credentialed or headers-only launch | branch above **plus** transport pins (base URL + `TRANSPORT_PIN_ENV`) in env and flag settings; `ANTHROPIC_AUTH_TOKEN` and composed `ANTHROPIC_CUSTOM_HEADERS` in env only |
-| Codex runtime | no Claude env composition; `codexHome`/`network` from trusted tiers per the runtime-origin rules; credentials via the Codex login in its home |
+| Branch | Environment the CLI process receives | Composed credentials in it | Notes |
+| --- | --- | --- | --- |
+| Claude, Default (no profile), no overrides | the filtered env: process env − withheld names, plus store launch-env entries as configured | none — host claude.ai login path (or an unregistered ambient `ANTHROPIC_AUTH_TOKEN`), unchanged | today's behavior: the resolve supplies an explicit env; routing or unrelated overrides an operator set ride the launch-env entries |
+| Claude, named non-wrapper profile | the filtered env + launch-env entries + the profile's catalog env overlaid; every controlled variable the profile does not set **deleted**; absent catalog keys blanked in the flag settings layer | none unless the profile is credentialed (row below) | unrelated variables (operator overrides, launch-env entries) are retained, per today's named-profile rule |
+| Claude, wrapper (`executable`) | the filtered env + launch-env entries + the wrapper's overlay env | none **composed** — a credential-bearing id can never take an executable (trusted invariant); an unregistered ambient token passes only by name, like Default | wrappers never gain tokens or headers through the catalog |
+| Claude, credentialed or headers-only | the named-profile branch **plus** transport pins (base URL + `TRANSPORT_PIN_ENV`) in env and flag settings | `ANTHROPIC_AUTH_TOKEN` (credentialed) and composed `ANTHROPIC_CUSTOM_HEADERS` (headers) in env only | the token reaches the CLI exactly as today; headers-only has no token |
+| Codex | the filtered env; `codexHome`/`network` from trusted tiers per the runtime-origin rules | none via Claude composition — credentials via the Codex login in its home | one workspace-write sandbox as today |
+
+Direct legacy auth (an ambient `ANTHROPIC_AUTH_TOKEN` or the claude.ai
+login in the server env) rides the filtered env on the Default branch
+exactly as today; the filter removes it only once a catalog binding or
+store key registers that name, and the source listing shows which source
+wins (D1's resolution order).
 
 Unreachable combination: a project file setting `authTokenEnv`,
 `balanceKeyEnv`, `headers`, `enabled`, or `executable` never contributes —
@@ -438,6 +540,23 @@ asking client only, like activity and notices. Creation does **not** require
 the test (the operator decides), but the dialog offers it beside the
 preview.
 
+**Purity (L-F).** The test writes **nothing**: no limit event, no cooldown,
+no park/forward/release, no row of any kind. A limit-shaped test outcome —
+HTTP 429, HTTP 402, or a limit error class on any status — is **reported as
+the test's class** (the classifier's limit rows) with the reset time when
+the response states one, and records nothing. Live-session limit recording
+is unchanged (D9's rule 0); the two contexts never share a write path.
+
+**Gates through the production resolver (L-E).** Every credential gate the
+test applies is the **same resolver session creation uses**: a credentialed
+profile's `authTokenEnv` must resolve through the composed environment
+(store included) or the test refuses before anything spawns, with today's
+message — an ambient host login or header value never substitutes for a
+declared `authTokenEnv` (existing rule, unchanged). A headers-only profile
+has no token gate: the test runs without one, and a missing header variable
+is a diagnostic beside the class, not a refusal. A host-login profile is
+tested with its login. The test invents no new gate decision.
+
 **Alternatives:** raw HTTP `POST /v1/messages` composed from the env —
 faster, but it bypasses the executable, which is exactly where the reported
 failures lived; a full SDK session — exercises more plumbing at the cost of
@@ -467,29 +586,44 @@ refusal, today's message). A host-login profile (no credential fields at
 all) is tested with its login and its row notes that only the login could be
 exercised.
 
-**Rule 2 — the request outcome decides, list evidence qualifies.** A model
-list result **never proves or disproves inference authentication** (L-C):
-endpoints may allow anonymous listing, use different middleware, or enforce
-different scopes — so every class below states its *evidence*, and the
-display wording is "evidence: …", never "proves". Request success wins over
-any list state; request failure consults the list only to qualify the
-refusal.
+**Rule 2 — the request outcome decides; only documented structured evidence
+names an auth class.** A model list result **never proves or disproves
+inference authentication** (L-C): endpoints may allow anonymous listing, use
+different middleware, or enforce different scopes. Evidence is **structured
+only**: the adapter's documented-evidence table (D10) names, per supported
+relay family, the structured response fields (`error.type` / `error.code`
+values) the relay documents for each refusal kind; a response whose
+structured fields match the table maps to its class; **prose text —
+"Failed to authenticate" and the like — is never evidence**; anything else
+(unsupported type values, prose-only bodies, no body) is the
+evidence-qualified `auth-unknown`. The display wording is "evidence: …",
+never "proves". Request success wins over any list state; request failure
+consults the list only as a **note** beside the class.
 
-| Request outcome | List state | Class | Evidence shown |
+| Request outcome | Structured evidence | Class | Evidence shown |
 | --- | --- | --- | --- |
-| ok (model reply) | * | `success` | list unavailable → note "catalog unverifiable"; list ok but startup ID absent → note "the provider's list lacks the model ID" (stale/wrong catalog — never a failure) |
-| timeout (bounded) | * | `timeout` | the bound that fired |
-| connect / TLS / DNS error | * | `network-failure` | the transport error text (redacted) |
-| 404 / model-not-found | * | `model-catalog-failure` | the relay's refusal; list state noted |
-| 401/403, no limit class | list ok | `virtual-key-restriction` | "the relay served its model list with the same credentials but refused this request" |
-| 401/403, no limit class | list auth failure | `gateway-auth-failure` | "the relay refused both its model list and this request" |
-| 401/403, no limit class | list unavailable | `auth-unknown` | evidence-qualified unknown: cannot distinguish an invalid key from a scoped refusal |
-| 5xx / malformed / non-JSON | * | `relay-error` | the raw failure shape (redacted) |
-| cancelled before an outcome | * | `cancelled` | — |
+| ok (model reply) | — | `success` | list unavailable → note "catalog unverifiable"; list ok but wire ID absent → note "the provider's list lacks the model ID" (never a failure) |
+| timeout (bounded) | — | `timeout` | the bound that fired |
+| connect / TLS / DNS error | — | `network-failure` | the transport error text (redacted) |
+| 404 / model-not-found | — | `model-catalog-failure` | the relay's refusal; list state noted |
+| 401/403, no limit class | documented type = key refusal | `gateway-auth-failure` | the matched documented type |
+| 401/403, no limit class | documented type = virtual-key scope/quota refusal | `virtual-key-restriction` | the matched documented type |
+| 401/403, no limit class | none (prose, unknown type, or empty body) | `auth-unknown` | evidence-qualified unknown; list state shown as a note ("the relay served its model list with these credentials") that never upgrades the class |
+| other 4xx (400/405/409/422…), schema-valid response | — | `relay-error` | the response shape (redacted) |
+| 5xx / malformed / non-JSON | — | `relay-error` | the raw failure shape (redacted) |
+| header composition refused (CR/LF/NUL in a value) | — | `header-config-error` | the header's name, never its value |
+| cancelled before an outcome | — | `cancelled` | — |
 
 Header-variable gaps are reported beside any class: a class observed while a
 bound header variable resolves empty carries "header \<name\>: variable
 \<VAR\> is not set".
+
+**Two write contexts (L-C, L-F).** The classifier is one pure function over
+evidence; its callers differ only in side effects. The **live** driver path
+records limits exactly as today (rule 0) and attaches the diagnostic
+display-only. The **test** path records nothing anywhere; a limit-shaped
+test outcome is reported as its class with the reset time when the response
+states one (D8's purity).
 
 **Live-session integration (advisory point 6, PROCEED).** The misleading 403
 appeared during real use, not at setup — so the same classifier runs for
@@ -551,20 +685,36 @@ creation.
 cannot distinguish a scoped refusal from a catalog gap; check only on test —
 the operator wants the mark while browsing profiles, before any test.
 
-## D11 — Composition with `openrouter-provider` (active, 19/20)
+## D11 — Composition with the active changes
 
-This change builds on that change's landed deltas (`authTokenEnv`,
-`balanceKeyEnv`, withholding, base-URL pinning, the `credit` window) and
-**REMOVEs** its ADDED requirement "The shipped catalog includes OpenRouter"
-(the shipped `openrouter` provider moves into the templates verbatim, ids
-preserved). **Archive order: `openrouter-provider` first, then this
-change**; the REMOVED block is authored against that requirement's final
-text and re-checked at rebase before this change archives. If it stalls
-before archiving, this change's spec work pauses on that one delta (the
-rest is independent of it) rather than emitting a REMOVED against text that
-does not exist yet. This change does not modify its credit-limit,
-usage-pull, or cost-display deltas; `limitSignals`' table is untouched
-(D9).
+**`openrouter-provider` (19/20).** This change builds on its landed deltas
+(`authTokenEnv`, `balanceKeyEnv`, withholding, base-URL pinning, the
+`credit` window) and **REMOVEs** its ADDED requirement "The shipped catalog
+includes OpenRouter" (the shipped `openrouter` provider moves into the
+templates verbatim, ids preserved; the REMOVED block's migration text
+describes the retained-defaults layer and templates, per D4). Its precise
+project-file boundary — labels and model mappings overlayable; route,
+re-home, credential fields, `executable` rejected — is restated, not
+broadened (D3).
+
+**`rename-agentboard-to-kawai` (active, 0/35).** It renames the chat-env
+seed `AGENTBOARD_CHAT_ENV` → `KAWAI_CHAT_ENV` in main specs and code and
+MODIFIES the same main requirement this change modifies ("Named profiles
+configure independent provider sessions"). **Archive order:
+`rename-agentboard-to-kawai`, then `openrouter-provider`, then this
+change.** This change's MODIFIED "Named profiles…" block is authored
+against rename's final text — all eight scenarios, `KAWAI_CHAT_ENV`
+spelling — changing only the "Effective global provider overrides"
+scenario (the persisted Settings override becomes the store's launch-env
+entries, per L-B), and is re-checked at rebase before this change archives.
+This design's tables write `KAWAI_CHAT_ENV` for the seed with the old name
+noted once. If rename stalls before archiving, this change's spec work
+pauses on that one delta rather than emitting a MODIFIED against text that
+does not exist yet.
+
+This change does not modify openrouter-provider's credit-limit, usage-pull,
+or cost-display deltas, or rename's other deltas; `limitSignals`' table is
+untouched (D9).
 
 ## D12 — Implementation proof obligations (advisory unresolved risks)
 
@@ -594,6 +744,42 @@ assigns each to a task.
 5. **Credential-generation cache invalidation** (D10): store, header, and
    catalog changes each invalidate the availability cache; a bare provider
    id key does not survive across project layers.
+6. **Migration crash/collision/restart table** (D1): the file-first
+   ordering (store write durable before any SQLite write), absorption and
+   collision behavior at each crash point, stamp idempotence, and the
+   restored-pre-upgrade-backup re-run.
+7. **Connection-test purity** (D8, L-F): a limit-shaped test outcome —
+   429, 402, a limit class on any status — records no row anywhere and
+   reports the class with the reset time when stated; the live path's
+   limit recording is untouched (P4's test-context half).
+8. **Setup write path** (D13): invalid-entry refusal naming the field with
+   the file untouched; stale-stamp conflict with nothing partial landed;
+   adoption writing ids verbatim and values only into the store; crash
+   between temp-file write and rename leaving the previous catalog
+   serving.
+
+## D13 — The setup write path (the owning surface for operator catalog edits)
+
+The setup flow's writes go through **one owned path** (one PR owns it, per
+L-G/B8), never scattered file pokes: a catalog-edit API that validates
+through the production parsers, saves the user-level catalog files
+atomically (temp file in place, fsync, rename — the credential store's
+discipline), detects concurrent edits (the request carries the catalog
+stamp it read; a stamp mismatch is a **conflict** reported to the operator,
+never a silent overwrite), and serves both the New Session/Settings
+provider editor (create or overlay a provider entry: base URL, token
+variable, header bindings, model IDs) and template adoption (write the
+template entry verbatim into the user level; credential values go only
+into the store). In replace-mode installs the editor states that saving
+creates or extends the replace-mode files before the first save.
+
+**Oracles.** (a) An invalid entry (bad URL shape, unknown field, a
+trust-violating placement) refuses the write whole and names the field —
+the file is untouched. (b) Two edits racing on one stale stamp: the loser
+receives the conflict with the current stamp and nothing partial lands.
+(c) Adoption writes entry ids verbatim and imports values only into the
+store. (d) A crash between the temp-file write and the rename leaves the
+previous catalog serving.
 
 ## Acceptance oracles
 
@@ -612,9 +798,10 @@ executable form runs as a table-driven test next to the code it covers.
 | L4 | `claude` | none | overrides base URL | present, project base URL for that project path — **non-credentialed ids only**; a credential-bearing (incl. headers-only) id rejects the project file whole instead, per D3 |
 | L5 | `claude` | `enabled: false` | re-defines `claude` (no `enabled` key) | still absent for that project path — the tombstone suppresses nearer tiers; a project file can neither set `enabled` (rejected whole) nor resurrect the id |
 | L6 | none (new id `relay`) | defines `relay` | none | present as user provider |
-| L7 | `claude` | defines `claude` complete (non-runtime fields) | none | identical resolved settings to today's replace semantics (P3); runtime-origin placements are excluded and covered by their own runtime-origin test (D3) |
+| L7 | `claude` | defines `claude` complete (non-runtime fields) | none | replace-mode install: identical resolved settings to today (P3's replace half); after an opt-in to merge: identical for complete copies; omitted optional fields inherit per the merge rules the opt-in preview showed (P3's merge half); runtime-origin placements excluded and covered by their own runtime-origin test (D3) |
 | L8 | `claude` | sets only `headers` | none | `claude` gains headers; base URL, models, env inherited (fixture synthetic: `claude` plus headers makes it headers-only credentialed — requires a trusted base URL in the entry) |
-| L9 | `mimo` (template id, post-trim) | referenced by a stored session, no layer defines it | none | adopted once at startup from the template; resolves again; listing marks "adopted at upgrade"; operator removal then wins (D4) |
+| L9 | `mimo` (removed shipped id, upgraded install, no user files) | none — retained default | none | the retained-defaults layer serves the id with its exact shipped facts (D4): stored sessions resume, groups spawn, listing marks "retained default"; Retire (after the preview) removes it, and then the degrade/wait paths apply; adopting the template restores it. No startup pass adopts, discovers references, or writes files (L-A) |
+| L10 | `default` | `enabled: false` | * | refused at parse, naming the file — `default` cannot be disabled; the resolved catalog always includes `default` (main spec) |
 
 L5's mechanism is the tombstone's suppression, not the `enabled` field
 refusal alone: a project file re-defining the id without naming `enabled`
@@ -639,23 +826,31 @@ resolves nothing while the tombstone stands (D3).
   never the value or a prefix, whatever the variable is named (the old
   name-regex hole is closed). Generator: random operation sequences; seam:
   the Settings/projector read paths.
-- **P3 — Merge regression (non-runtime).** For any user-level catalog that
-  defines every shipped id completely with no Codex runtime conversion in
-  play, the resolved catalog equals the old replace-semantics catalog (ids,
-  labels, env per key). Excluded and separately tested: runtime-origin
-  placements — a nearer Codex entry over a farther-tier Claude origin is
-  refused under merge per the runtime-origin rules (`addCodexProfile`),
-  where replace silently allowed the conversion; the refusal is the
-  documented behavior, asserted as its own case, and P3's generator
-  excludes it. Generator: shipped catalog × complete overlays with field
-  mutations, including removed-field/negative-space cases; seam:
-  `resolveProfileCatalog` with injected homes. Fixed seed, 100 cases.
-- **P4 — Limits first, diagnostics disjoint.** Every diagnostic class (D9
-  rules 1–3) records no limit event, no cooldown, no park/forward/release;
-  every limit-shaped signal — 429, 402, and the three limit classes **on
-  any status, 403-with-`rate_limit` included** — records exactly as today.
+- **P3 — Mode regression (non-runtime).** (a) *Replace mode*: an upgrade
+  changes nothing — a generated user catalog (complete copies, partial
+  copies, omitted optional model fields, absent env keys) resolves
+  identically before and after; absence is preserved exactly. (b) *Merge
+  mode* (fresh or opted-in): complete copies resolve identically to
+  replace; an omitted optional field reappears from the lower layer, and
+  that inheritance is asserted as exactly the difference the opt-in
+  preview shows — never claimed absent. Excluded and separately tested:
+  runtime-origin placements — a nearer Codex entry over a farther-tier
+  Claude origin is refused under merge per the runtime-origin rules
+  (`addCodexProfile`), where replace silently allowed the conversion; the
+  refusal is the documented behavior, asserted as its own case, and P3's
+  generator excludes it. Generator: shipped/retained catalog × user
+  catalogs with field mutations, including removed-field/negative-space
+  cases; seam: `resolveProfileCatalog` with injected homes. Fixed seed,
+  100 cases.
+- **P4 — Limits first, diagnostics disjoint, tests pure.** Every diagnostic
+  class (D9 rules 1–2) records no limit event, no cooldown, no
+  park/forward/release. In the **live** context every limit-shaped signal —
+  429, 402, and the three limit classes **on any status,
+  403-with-`rate_limit` included** — records exactly as today; in the
+  **test** context a limit-shaped outcome records nothing anywhere and is
+  reported as its class, with the reset time when the response states one.
   Generator: every D9 row plus the limit-predicate table through the
-  classifier and the limit path; seams: `connectionDiagnostics` +
+  classifier in both contexts; seams: `connectionDiagnostics` +
   `limitSignals` unchanged outputs.
 - **P5 — Preview equals launch.** For every profile and project path, each
   non-credential preview field equals the production launch composition's
@@ -672,22 +867,29 @@ resolves nothing while the tombstone stands (D3).
 - **P7 — Withholding survives removal.** Removing a provider entry,
   disabling an id, or clearing a header binding never stops withholding
   its registered secret names (all-layer catalog names ∪ header variables
-  ∪ store keys ∪ retained names, names only in `app_settings`); no Claude
-  or Codex launch receives a registered name under its own name. Generator:
-  remove/disable/clear sequences with a probe launch; seams:
+  ∪ secret-source store keys ∪ retained names, names only in
+  `app_settings`; launch-env entries are delivered, never withheld); no
+  Claude or Codex launch receives a registered name under its own name.
+  Generator: remove/disable/clear sequences with a probe launch; seams:
   the withheld-name set successor and the launch composer.
 
 ### Completeness claim (D9)
 
-Axes: limit-predicate match (yes/no) × credential resolution (none /
-host-login-only / resolved) × request outcome (ok / timeout / network /
-404 / 401-or-403 / other-error / cancelled) × list outcome (ok-with-id /
-ok-without-id / auth-failure / unavailable). The classifier is an ordered
-rule list, so every combination maps to exactly one class by first match;
-the previously ambiguous cells (list-unavailable with a 401/403 request,
-list auth-failure with request success, list-lacks-id with request success)
-land in `auth-unknown`, `success`, and `success`-with-note respectively by
-rule, not by omission. Model-based tests run the classifier as the
-reference over seeded evidence sequences, including a test-run timeout at
-the process-kill boundary, a cached-list TTL expiry mid-test, and list
-evidence from a superseded credential generation (never consulted).
+Axes: limit-predicate match (yes/no) × write context (live / test) ×
+credential resolution (none / host-login-only / resolved) × request outcome
+(ok / timeout / network / 404 / 401-or-403 / other-4xx / 5xx-or-malformed /
+header-composition-refused / cancelled) × structured evidence (none /
+documented key-refusal type / documented virtual-key type) × list outcome
+(ok-with-id / ok-without-id / auth-failure / unavailable). The classifier
+is an ordered rule list, so every combination maps to exactly one class by
+first match; the previously ambiguous cells land by rule, not by omission:
+prose-only or unmatched-evidence 401/403 reads `auth-unknown` whatever the
+list says (an anonymous-list + invalid-token case included); both-refused
+without a documented type reads `auth-unknown`; a schema-valid
+400/405/409/422 reads `relay-error`; a refused header composition reads
+`header-config-error`. The write-context axis decides side effects only:
+live records limits per rule 0, test records nothing (P4's two halves).
+Model-based tests run the classifier as the reference over seeded evidence
+sequences, including a test-run timeout at the process-kill boundary, a
+cached-list TTL expiry mid-test, and list evidence from a superseded
+credential generation (never consulted).
