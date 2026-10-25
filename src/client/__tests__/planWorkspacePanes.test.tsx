@@ -15,9 +15,23 @@ import PlanWorkspacePanes, {
 import {
   defaultPanes, useTeamPlanWorkspaceStore,
 } from '../stores/teamPlanWorkspaceStore'
-import { clearPaneScrollsForTests, paneScrollOf } from '../utils/planWorkspacePaneScroll'
+import { clearPaneScrollsForTests, paneScrollOf, setPaneScroll } from '../utils/planWorkspacePaneScroll'
 
 const renderers: TestRenderer.ReactTestRenderer[] = []
+
+/** Scrollable mock host nodes keyed by the pane's test id, as the DOM would offer them. */
+const capturedMocks = () => {
+  const mocks: Record<string, { scrollTop: number; focus: () => void }> = {}
+  const createNodeMock = (element: { props?: Record<string, unknown> }) => {
+    const mock = { scrollTop: 0, focus: () => {} }
+    const testId = element?.props?.['data-testid']
+    if (typeof testId === 'string') mocks[testId] = mock
+    return mock
+  }
+  return { mocks, createNodeMock }
+}
+
+type MountOptions = Parameters<typeof TestRenderer.create>[1]
 
 const CONTENT = {
   map: <div>map content</div>,
@@ -25,10 +39,10 @@ const CONTENT = {
   conversation: <div>conversation content</div>,
 }
 
-const mountPanes = (teamKey = '/repo', planId = 'p1') => {
+const mountPanes = (teamKey = '/repo', planId = 'p1', options?: MountOptions) => {
   let renderer!: TestRenderer.ReactTestRenderer
   act(() => {
-    renderer = TestRenderer.create(<PlanWorkspacePanes teamKey={teamKey} planId={planId} {...CONTENT} />)
+    renderer = TestRenderer.create(<PlanWorkspacePanes teamKey={teamKey} planId={planId} {...CONTENT} />, options)
   })
   renderers.push(renderer)
   const byId = (testId: string) => renderer.root.findByProps({ 'data-testid': testId })
@@ -43,9 +57,9 @@ const NarrowHost = ({ teamKey, planId }: { teamKey: string; planId: string }) =>
   return <WorkspaceNarrowPanes teamKey={teamKey} planId={planId} panes={panes} rootRef={rootRef} content={CONTENT} />
 }
 
-const mountNarrow = (teamKey = '/repo', planId = 'p1') => {
+const mountNarrow = (teamKey = '/repo', planId = 'p1', options?: MountOptions) => {
   let renderer!: TestRenderer.ReactTestRenderer
-  act(() => { renderer = TestRenderer.create(<NarrowHost teamKey={teamKey} planId={planId} />) })
+  act(() => { renderer = TestRenderer.create(<NarrowHost teamKey={teamKey} planId={planId} />, options) })
   renderers.push(renderer)
   const byId = (testId: string) => renderer.root.findByProps({ 'data-testid': testId })
   const has = (testId: string) => renderer.root.findAllByProps({ 'data-testid': testId }).length > 0
@@ -173,6 +187,63 @@ describe('the narrow navigation', () => {
     expect(paneScrollOf('/other', 'plan-a', 'map')).toBe(7)
     expect(paneScrollOf('/repo', 'plan-a', 'map')).toBe(42)
   })
+
+  test('a mounted pane applies its remembered scroll to its own host element, and a fresh mount reapplies it (7.2 r3)', () => {
+    // The restore must write the element itself: these mocks stand in for the
+    // host nodes the ref receives, so the production assignment is the only
+    // thing that can move a scrollTop off 0.
+    setPaneScroll('/repo', 'plan-a', 'map', 200)
+    const { mocks, createNodeMock } = capturedMocks()
+    mountNarrow('/repo', 'plan-a', { createNodeMock })
+    expect(mocks['workspace-pane-map']?.scrollTop).toBe(200)
+    // Remounting re-applies the record into the fresh element.
+    mountNarrow('/repo', 'plan-a', { createNodeMock })
+    expect(mocks['workspace-pane-map']?.scrollTop).toBe(200)
+  })
+
+  test('a narrow switch remounts the shown pane, so each pane applies its own scroll, never the previous pane’s (7.2 r3)', () => {
+    const { mocks, createNodeMock } = capturedMocks()
+    const { byId } = mountNarrow('/repo', 'plan-a', { createNodeMock })
+    // The user scrolls the map to 200: the browser moves the element, the
+    // event records it.
+    mocks['workspace-pane-map']!.scrollTop = 200
+    act(() => byId('workspace-pane-map').props.onScroll({ currentTarget: mocks['workspace-pane-map'] }))
+    expect(paneScrollOf('/repo', 'plan-a', 'map')).toBe(200)
+    // Switching to Documents must mount a fresh element for it, which applies
+    // Documents' own record — never the map's 200.
+    act(() => byId('workspace-narrow-documents').props.onClick())
+    const documentsMock = mocks['workspace-pane-documents']
+    expect(documentsMock, 'the Documents pane must mount its own element on the switch').toBeDefined()
+    expect(documentsMock?.scrollTop).toBe(0)
+    documentsMock!.scrollTop = 50
+    act(() => byId('workspace-pane-documents').props.onScroll({ currentTarget: documentsMock }))
+    expect(paneScrollOf('/repo', 'plan-a', 'documents')).toBe(50)
+    // Back to the map: its 200 is restored into the remounted element.
+    act(() => byId('workspace-narrow-back').props.onClick())
+    expect(mocks['workspace-pane-map']?.scrollTop).toBe(200)
+    // Documents again: its own 50 is restored.
+    act(() => byId('workspace-narrow-documents').props.onClick())
+    expect(mocks['workspace-pane-documents']?.scrollTop).toBe(50)
+    // Returning across plan identities: plan B's map shows its own (empty)
+    // record, and back on plan A the map's 200 applies again.
+    act(() => useTeamPlanWorkspaceStore.getState().setNarrowPane('/repo', 'map'))
+    mountNarrow('/repo', 'plan-b', { createNodeMock })
+    expect(mocks['workspace-pane-map']?.scrollTop).toBe(0)
+    mountNarrow('/repo', 'plan-a', { createNodeMock })
+    expect(mocks['workspace-pane-map']?.scrollTop).toBe(200)
+  })
+})
+
+test('the desktop expand and restore reapplies the map’s remembered scroll into the remounted pane (7.2 r3)', () => {
+  const { mocks, createNodeMock } = capturedMocks()
+  const { byId } = mountPanes('/repo', 'plan-a', { createNodeMock })
+  mocks['workspace-pane-map']!.scrollTop = 200
+  act(() => byId('workspace-pane-map').props.onScroll({ currentTarget: mocks['workspace-pane-map'] }))
+  // Expanding the documents pane unmounts the map; restoring brings it back.
+  act(() => byId('workspace-expand-documents').props.onClick())
+  expect(mocks['workspace-pane-documents']?.scrollTop).toBe(0)
+  act(() => byId('workspace-expand-documents').props.onClick())
+  expect(mocks['workspace-pane-map']?.scrollTop).toBe(200)
 })
 
 /** The tab buttons inside the narrow navigation, in DOM order. */

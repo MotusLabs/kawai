@@ -146,7 +146,10 @@ export function WorkspaceNarrowPanes({ teamKey, planId, panes, rootRef, content 
       Showing the {NARROW_PANE_LABELS[panes.narrowPane]} pane.
     </p>
     <div className="mt-2 flex min-h-0 flex-col" data-testid="workspace-narrow-body">
-      <PaneBody teamKey={teamKey} planId={planId} pane={panes.narrowPane} focusRef={paneRefs[panes.narrowPane]}>
+      {/* The key remounts the shown pane on a switch: the reused element
+          would keep the previous pane's scrollTop and skip the mount-only
+          restore, so each pane never inherits its neighbour's scroll. */}
+      <PaneBody key={panes.narrowPane} teamKey={teamKey} planId={planId} pane={panes.narrowPane} focusRef={paneRefs[panes.narrowPane]}>
         {content[panes.narrowPane]}
       </PaneBody>
     </div>
