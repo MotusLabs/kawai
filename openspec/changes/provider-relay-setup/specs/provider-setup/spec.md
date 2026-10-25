@@ -60,6 +60,10 @@ listed. The listing SHALL be reachable from New Session and from Settings.
 - **WHEN** the Settings migration skipped a legacy entry whose name the store already held with a different value
 - **THEN** the listing shows the skip naming the variable so the operator can resolve it
 
+#### Scenario: A damaged install-state record is named
+- **WHEN** the install-state record is damaged or missing after init
+- **THEN** the listing names the `app_settings` key, shows the stored value, and states the fault, and every catalog-dependent action refuses with that error until the operator repairs it or restores a backup
+
 ### Requirement: Validation failures name the supported setting
 Each catalog rejection SHALL render prominently beside the profile picker
 and in Settings, and its message SHALL name the supported way to achieve the

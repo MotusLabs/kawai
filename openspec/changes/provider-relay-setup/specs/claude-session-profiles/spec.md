@@ -90,12 +90,12 @@ settings for the profile-controlled variables.
 
 ### Requirement: The install mode decides how the shipped tier composes
 Catalog assembly SHALL follow a durable, non-secret install-state record —
-mode (merge/replace) and retained layer (present or retired) — recorded
-once, changed only by the operator: fresh installs
-merge over the shipped tier alone; existing installs without user-level
-catalog files merge over shipped plus the retained layer; existing
-installs with user files keep whole-file replace until the operator opts
-into merge after previewing the difference. `default` cannot be disabled.
+mode (merge/replace), retained layer (none, present, or retired) — changed
+only by the operator: fresh installs merge over the shipped tier; installs
+without user-level catalog files merge over shipped plus the retained
+layer; installs with user files keep whole-file replace until an operator
+opt-in after a preview. A damaged or missing record after init refuses
+assembly, never re-derived. `default` cannot be disabled.
 
 #### Scenario: A fresh install merges over the shipped tier
 - **WHEN** a fresh instance defines a user-level entry overlaying one field of a shipped id
@@ -124,6 +124,10 @@ into merge after previewing the difference. `default` cannot be disabled.
 #### Scenario: Retire stays retired
 - **WHEN** an install whose retained layer was retired restarts or crashes
 - **THEN** the retirement persists and no removed entry is re-acquired
+
+#### Scenario: A damaged record refuses instead of re-deriving
+- **WHEN** the record is unreadable or self-contradictory after init — for example after a retirement or a merge opt-in — or missing while the init migration's row exists
+- **THEN** catalog assembly refuses with a named error in the source listing until the operator repairs the record through the previewed choice or restores a backup, nothing is re-derived from install facts, and no retained entry is served while the record is damaged
 
 #### Scenario: The default profile cannot be disabled
 - **WHEN** a catalog entry sets `enabled: false` on `default`
@@ -214,10 +218,11 @@ are pinned.
 
 ### Requirement: The shipped catalog carries Anthropic and OpenAI only
 The shipped defaults SHALL define the `claude` provider (Default, Claude
-Opus, Claude Sonnet, Claude Haiku) and exactly the Codex entries a tracked
-group file names — at the trim, `openai` (label "OpenAI (Codex)", runtime
-codex, default Codex home, no pinned model) plus `codex-sol` and
-`codex-luna`. No other shipped provider SHALL exist; the removed entries
+Opus, Claude Sonnet, Claude Haiku), the baseline `openai` Codex entry
+(label "OpenAI (Codex)", runtime codex, default Codex home, no pinned
+model), and every other Codex entry a tracked group file names — at the
+trim, `codex-sol` and `codex-luna`; `openai` itself need not appear in a
+tracked group. No other shipped provider SHALL exist; the removed entries
 ship as setup templates preserving their ids.
 
 #### Scenario: A fresh instance resolves the shipped set

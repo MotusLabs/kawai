@@ -42,12 +42,19 @@ persists its values in `app_settings`, and every database backup copies them.
   commit holds them.
 - **An explicit, filtered environment on every launch.** No launch branch
   inherits the server process environment raw: every Claude and Codex launch
-  receives an explicitly filtered environment, and the withheld set — every
-  catalog binding name in any layer and state (enabled, disabled, retained,
-  template), every secret-source store key, every retained name, and the
-  controlled/transport-pin variables — never reaches an agent under its own
-  name. What a CLI subprocess can read is established by a sentinel fixture;
-  the design claims parity of mechanism, not measured exposure.
+  receives an explicitly filtered environment, and one registered-name set
+  never reaches an agent under its own name — every catalog binding name
+  (`authTokenEnv`, `balanceKeyEnv`, every header variable) at any layer in
+  any state (enabled, disabled, retained, template), every secret-source
+  store key, and every retained name. The controlled/transport-pin
+  variables are not in that set: deleting or pinning them is a
+  branch-specific operation (named-profile deletion, the credentialed and
+  header transport pins, Codex's trusted-tier facts), so a Default or
+  wrapper launch keeps an ambient `ANTHROPIC_BASE_URL` or `HTTPS_PROXY`
+  exactly as at the base, and an unregistered ambient credential passes as
+  it does today. What a CLI subprocess can read is established by a
+  sentinel fixture; the design claims parity of mechanism, not measured
+  exposure.
 - **Relay setup as one flow, through an owned write path.** A setup surface
   configures, per provider, the base URL, the access-token variable, custom
   header names (each bound to a credential variable — `x-bf-vk` is a secret),
@@ -184,10 +191,11 @@ persists its values in `app_settings`, and every database backup copies them.
   OpenAI Codex entry); a new `config/provider-templates.json`;
   `docs/claude-session-profiles.md` and the AGENTS.md profile/credentials
   bullets.
-- **No schema migration:** stored profile ids are unchanged; the one-time
-  Settings-map-to-store move is a data move recorded by a stamp (plus the
-  durable install-state record), not a schema change. The retained-defaults
-  layer
+- **No profile schema change:** stored profile ids are unchanged; the
+  one-time Settings-map-to-store move is a data move recorded by a stamp,
+  and the durable install-state record is an `app_settings` key whose init
+  runs inside its own numbered migration (tables S/ST/SR). The
+  retained-defaults layer
   keeps existing installs working without operator action; the degrade path
   (unknown stored profiles stay visible and blocked, naming the template)
   applies after a retire or for ids with no template.

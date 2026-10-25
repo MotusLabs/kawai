@@ -272,10 +272,10 @@ stay distinct after their first start:
 
 - **Fresh install** (S1, `{merge, none}`): the shipped catalog is Anthropic +
   OpenAI only (D4), and user/project files **merge** over it field by field.
-  No mode choice exists. The bootstrap records the durable fresh origin
-  fact (tables S/ST/SR) and the state commits at the same startup; a crash
-  in between recovers as fresh (SR5) — no fresh install ever acquires the
-  retained layer.
+  No mode choice exists. The baseline records the durable fresh origin
+  fact and the init migration (which writes the state) commits at the same
+  startup; a crash rolls that migration back whole and its re-run recovers
+  as fresh (SR5) — no fresh install ever acquires the retained layer.
 - **Existing install, no user-level catalog file at upgrade** (S2,
   `{merge, present}`): the trimmed shipped set applies plus the
   **retained-defaults layer** (D4 — the removed entries stay at the shipped
@@ -788,7 +788,9 @@ assigns each to a task.
 1. **Sentinel-only CLI fixture** (D2's exposure boundary, P1): a fixture
    relay and sentinel secret values establish what the CLI process env
    holds, what a Bash tool child sees on the supported CLI baseline (the
-   withheld names absent; only the two composed variables present), and
+   withheld names absent; the only credential values present in this
+   baseline are the two composed variables — a configured launch-env entry
+   delivers as itself, W6/W9), and
    that the flag settings layer carries no token or header value. Recorded
    as an e2e assertion; until it runs, the design claims parity of
    mechanism, not measured exposure.
@@ -927,13 +929,18 @@ One durable, non-secret record (an `app_settings` key) holds the install
 state: `{ mode: 'merge' | 'replace', retained: 'none' | 'present' | 'retired' }`.
 It is the single source the catalog assembly reads, written once from
 stable install facts, changed only by operator transitions, and never
-re-derived from file absence. **Creation is not atomic with the database**:
-the database file, the schema, and the state record commit at separate
-instants of the same startup, so recovery reads a **durable origin fact**
-the bootstrap itself records — the baseline (version 1) writes whether it
-created the schema from an empty database file (`origin: 'fresh'`), stamped
-with the version row and surviving every crash. Install-state init
-consults that fact, never "does a file exist".
+re-derived from file absence. **Init is a numbered migration** (its number
+is assigned at landing): the init rows S1–S3 run only inside that
+migration's transaction, so the record and the migration's
+`schema_migrations` row commit together and the row is durable evidence
+init ran — once it exists the init rows never re-run, and a missing record
+is damage (SR6), not absence to re-init from. **Creation is still not
+atomic with the database**: the database file, the schema, and then the
+init migration commit at separate instants of the same startup, so init
+reads a **durable origin fact** the baseline itself records — version 1
+writes whether it created the schema from an empty database file
+(`origin: 'fresh'`), stamped with the version row and surviving every
+crash. Init consults that fact, never "does a file exist".
 
 Init rows (inputs → state; each install observation matches exactly one):
 
@@ -949,10 +956,16 @@ Operator transitions (each persists durably before taking effect):
 | --- | --- | --- |
 | ST1 | opt into merge, after previewing the effective-catalog difference | `mode: 'replace' → 'merge'`; `retained` unchanged — a legacy-replace install never acquires the retained layer |
 | ST2 | retire the retained layer, after the preview | `retained: 'present' → 'retired'` |
+| ST3 | repair a damaged or missing record, after the preview | one explicit `{mode, retained}` choice — the same effective-catalog preview ST1 and ST2 use; recorded like any operator transition |
 
-Recovery rows — partial states **fail closed**: a fresh-origin database
-never serves the retained layer, whatever a crash left behind, and a
-malformed state record is reported and re-derived once:
+Recovery rows — partial states **fail closed**, and recovery never undoes
+an operator transition: a fresh-origin database never serves the retained
+layer, whatever a crash left behind, and after init a damaged or missing
+record is refused with a named error until the operator repairs it (ST3)
+or restores a backup — never re-derived. The init rows run only where
+durable evidence shows init never ran: the init migration's
+`schema_migrations` row (SR5). Its row present without a record proves the
+record was lost after init:
 
 | SR# | State found at restart | Behavior |
 | --- | --- | --- |
@@ -960,23 +973,29 @@ malformed state record is reported and re-derived once:
 | SR2 | `{merge, present}` (upgraded) | the retained layer still serves its entries with their exact shipped facts — nothing is lost |
 | SR3 | `{merge, retired}` | stays retired across restart and crash — retirement is recorded, not inferred |
 | SR4 | `{replace, none}` | replace holds until ST1; once recorded, the opt-in persists |
-| SR5 | database exists, no state record, origin fresh | init runs S1 — a crash after baseline but before the state commit recovers as fresh; the trimmed shipped set is the closed failure, never the retained layer |
-| SR6 | database exists, no state record, pre-existing origin | init runs S2/S3 on the install facts — idempotent, the facts are stable |
-| SR7 | no database file | baseline (with the origin fact) and the state record are written at startup; a crash at any point leaves SR7 or SR5, both closing to fresh |
-| SR8 | state record unreadable or self-contradictory (e.g. fresh origin with `retained: present`) | reported in the source listing, then re-derived once from the durable origin and install facts; origin fresh forces S1 |
+| SR5 | database exists, the init migration's row absent (init never ran — a new database, or a pre-upgrade backup restored) | the init migration runs at this startup: one transaction persists S1/S2/S3 from the durable origin and install facts together with the migration row; a crash rolls it back whole and the next startup re-runs it — a fresh origin keeps every run closed to fresh, never the retained layer |
+| SR6 | database exists, the init migration's row present, the record missing | refused exactly like SR8 — the row proves init ran, so the init rows never re-run and nothing is re-derived |
+| SR7 | no database file | baseline (with the origin fact) and the init migration (with the record) commit in order at startup; a crash at any point leaves SR7 or SR5, both closing to fresh |
+| SR8 | record unreadable or self-contradictory (e.g. fresh origin with `retained: present`) | refused — kawai still starts; the source listing names the `app_settings` key, shows the stored value (it is not secret), and states the fault; session creation, agent start, and the connection test refuse with that error until ST3 or a backup restore. Never re-derived: re-deriving would serve a retired layer again and cannot tell a post-ST1 install from a pre-ST1 one |
+| SR9 | record malformed after ST2 (retired) | refused (SR8) — no retained entry is served while the record is damaged |
+| SR10 | record malformed after ST1 (merge opted in) | refused (SR8) — replace is never silently re-assumed |
+| SR11 | operator repair (ST3) of a damaged or missing record | the chosen `{mode, retained}` takes effect after the preview, recorded like any operator transition |
 
-Unreachable: `{merge, present}` on a fresh-origin install (SR5 forces S1;
-the layer exists only where the removed entries were actually served); two
-records or two stamps (one record, one write); a retired layer
-re-acquired (SR3); an upgraded install losing the layer (SR2); a
+Unreachable: `{merge, present}` on a fresh-origin install (S1/SR5 force
+it; the layer exists only where the removed entries were actually served);
+two records or two stamps (one record, one write); a retired layer
+re-acquired by any automatic path (SR3, and recovery refuses instead of
+re-deriving — SR6/SR8); an upgraded install losing the layer (SR2); a
 legacy-replace install acquiring retained entries at ST1 (ST1 leaves
-`retained` unchanged).
+`retained` unchanged); a damaged or missing record silently re-derived at
+restart (SR6/SR8 refuse until ST3 or a backup restore).
 
 ### Tracked-workers table (N1, L-G) — table G
 
-Shipping policy: the shipped catalog is the `claude` provider plus exactly
-the Codex entries a tracked group file names — at the trim, `openai` and
-`codex-sol`/`codex-luna` (task-b38ad618's shipped Codex profiles). Every
+Shipping policy: the shipped catalog is the `claude` provider plus the
+baseline `openai` entry plus every other Codex entry a tracked group file
+names — at the trim, `codex-sol`/`codex-luna` (task-b38ad618's shipped
+Codex profiles); `openai` itself need not appear in a tracked group. Every
 other tracked worker id (`glm`, `glm-flash`, `mimo`, `minimax`, `kimi`,
 `openrouter-*`) leaves the shipped tier: it lives in the retained-defaults
 layer where that layer exists, and resolves as an unknown id nowhere else,
