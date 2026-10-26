@@ -58,7 +58,7 @@ Automatic capacity retries SHALL continue from the existing thread history, pres
 - **THEN** original user and peer input appear once, completed tool results remain available, and any recovery continuation input is marked as internal rather than shown as a new human instruction
 
 ### Requirement: Codex internal retries retain control of their attempt
-When Codex reports `willRetry: true`, Kawai SHALL display retry activity and SHALL NOT start a competing capacity retry. Kawai SHALL schedule its own retry only after the matching attempt has terminally failed with `serverOverloaded`. Duplicate or stale notifications SHALL NOT start extra attempts or extend the deadline.
+When Codex reports `willRetry: true`, Kawai SHALL display retry activity and SHALL NOT start a competing capacity retry. Kawai SHALL schedule its own retry only after the matching attempt has terminally failed with `serverOverloaded`. Duplicate or stale notifications SHALL NOT start extra attempts or extend the deadline; a stale callback may only interrupt the already-dispatched cancelled attempt.
 
 #### Scenario: Codex retries internally
 - **WHEN** Codex reports a retrying capacity error before eventually succeeding
@@ -67,9 +67,12 @@ When Codex reports `willRetry: true`, Kawai SHALL display retry activity and SHA
 #### Scenario: Terminal duplicate
 - **WHEN** the same failed attempt completion arrives twice
 - **THEN** only one retry is scheduled and its deadline is unchanged
+#### Scenario: Stale start response after Stop
+- **WHEN** Stop cancels recovery after a capacity attempt was dispatched and the old `turn/start` response later supplies that attempt's id
+- **THEN** the id is interrupted once as cleanup, no new request is sent, and the cancelled logical turn stays closed
 
 ### Requirement: Capacity retries are visible and cancellable
-While waiting for a capacity retry, the chat SHALL display its attempt number, time until the next attempt, and retry deadline. Stop SHALL cancel the pending retry immediately. Interrupt, archive, kill, shutdown, process exit, and superseding human input SHALL invalidate pending recovery. A browser reconnect SHALL restore current retry activity without scheduling an extra retry; backend restart SHALL NOT automatically resume an old retry timer.
+While waiting for a capacity retry, the chat SHALL display its attempt number, time until the next attempt, and retry deadline. Stop SHALL cancel the pending retry immediately. Interrupt, archive, kill, shutdown, process exit, superseding human input, or an urgent direct delivery SHALL invalidate pending recovery. A browser reconnect SHALL restore current retry activity without scheduling an extra retry; backend restart SHALL NOT automatically resume an old retry timer.
 
 #### Scenario: Stop during backoff
 - **WHEN** the user presses Stop while waiting for a retry
@@ -78,6 +81,9 @@ While waiting for a capacity retry, the chat SHALL display its attempt number, t
 #### Scenario: Human input during backoff
 - **WHEN** the user sends a new message while waiting for a retry
 - **THEN** the old recovery is cancelled and only the new input is sent to the same thread
+#### Scenario: Urgent delivery during backoff
+- **WHEN** an urgent direct message interrupts the session while a capacity retry waits
+- **THEN** the pending recovery is cancelled with its timer cleared, the urgent message is delivered once with its original receipt, and no cancelled continuation starts afterward
 
 #### Scenario: Lifecycle termination
 - **WHEN** a session with a pending retry is archived, killed, shut down, or loses its agent process

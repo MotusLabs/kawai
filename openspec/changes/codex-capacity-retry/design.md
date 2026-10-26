@@ -48,9 +48,9 @@ The local generated `TurnStartParams` permits an input array but does not establ
 
 ### D5: Cancel through one generation guard
 
-Pending effects capture driver/client identity, logical turn generation, and retired attempt identity. Stop, interrupt, archive/kill/shutdown, process exit, and superseding input during backoff invalidate the generation and clear the timer before emitting a terminal event. Guard asynchronous `ready`/`turn/start` resolution as well as timer callbacks, including before sending after an await. A late start response must still be interrupted if an attempt was actually dispatched before Stop, following the existing `turnStarting` handshake; it must never reopen the cancelled logical turn.
+Pending effects capture driver/client identity, logical turn generation, and retired attempt identity. Stop, interrupt, archive/kill/shutdown, process exit, and superseding input during backoff invalidate the generation and clear the timer before emitting a terminal event. Guard asynchronous `ready`/`turn/start` resolution as well as timer callbacks, including before sending after an await. A late start response must still be interrupted if an attempt was actually dispatched before Stop, following the existing `turnStarting` handshake; it must never reopen the cancelled logical turn. Stale callbacks therefore cannot dispatch, complete, replace activity, or extend the budget; their one permitted effect is a single cleanup interrupt of the already-dispatched cancelled attempt, scoped to its original client, thread, and attempt id (a retry dispatched and then stopped still awaits its `turn/start` response, and the driver interrupts the id that response supplies through the existing `turnStarting` handshake). A stale callback never touches a newer attempt.
 
-When a human sends during backoff, interrupt the old logical turn locally and start the new human turn on the same thread. During an actually running attempt retain current steering behavior. A new mailbox delivery cannot supersede the recovery because the recipient stays working. An unexpected process exit uses existing process-error settlement and cancels recovery; reconnect alone has no scheduling effect.
+When a human sends during backoff, interrupt the old logical turn locally and start the new human turn on the same thread. During an actually running attempt retain current steering behavior. Ordinary group and normal direct deliveries cannot arrive mid-turn because the recipient stays working. Urgent direct mail is the preserved exception: the dispatcher deliberately selects the busy recipient, interrupts it, and delivers the envelope (`dispatcher.ts:219-233` selects the busy recipient, `:440` interrupts, `:457` delivers; the main codex-chat-sessions spec's "Interrupting a Codex turn" requirement mandates it). That interruption invalidates the recovery generation and clears the timer before the urgent turn starts, and the interrupted logical turn is not resumed into recovery afterward. An unexpected process exit uses existing process-error settlement and cancels recovery; reconnect alone has no scheduling effect.
 
 ### D6: Additive activity data and existing Stop control
 
@@ -70,18 +70,18 @@ Classification table: axes are structured kind, source, and quota snapshot. Sour
 | C4 | sessionBudgetExceeded | * | * | Existing final/non-final rules apply with profile-only scope |
 | C5 | any other kind, missing, or object variant | * | * | No capacity recovery; existing unrelated-error behavior |
 
-Lifecycle table axes: callback owner is current or stale; state is active attempt (A), backoff (B), or ended (E); event classes are those below. Validity normalizes notifications for already-retired ids to stale. Deadline due and retry due are distinguished by checking the current clock, not by trusting the timer's name.
+Lifecycle table axes: callback owner is current or stale; state is active attempt (A), backoff (B), or ended (E); event classes are those below. Validity normalizes notifications for already-retired ids to stale. Deadline due and retry due are distinguished by checking the current clock, not by trusting the timer's name. Expiry is evaluated first: whenever now >= deadline the expiry rows apply, so L8's early-wake row also requires now < deadline; D3's expiring state (an armed deadline wakeup while the recorded retry time is already at or past the deadline) resolves as expiry (L10), never as a retained early wake.
 
 | Oracle | Owner | State | Event / time condition | Observable result |
 | --- | --- | --- | --- | --- |
-| L1 | stale | * | any | No request, terminal event, activity replacement, or budget extension |
+| L1 | stale | * | any | No dispatch, terminal event, activity replacement, or budget extension; the one permitted effect is a single cleanup interrupt scoped to the already-dispatched cancelled attempt's original client, thread, and attempt id, never a newer attempt |
 | L2 | current | A | matching capacity completion, next due < deadline | Remain working; publish retry timing; schedule exactly one wakeup |
 | L3 | current | A | matching capacity completion, now < deadline <= next due | Remain working until deadline; no further attempt; publish expiring recovery |
 | L4 | current | A | matching capacity completion, now >= deadline | One terminal capacity error/completion; waiting; no quota outcome |
 | L5 | current | A | matching success completion | One success completion; waiting; no timer |
 | L6 | current | A | matching non-capacity failure or start RPC rejection | Existing terminal error/quota handling once; no capacity timer |
 | L7 | current | A | upstream error notification | No competing dispatch or completion; show upstream retry activity only if willRetry |
-| L8 | current | B | wakeup, now < next due | No dispatch; retain one wakeup for due time |
+| L8 | current | B | wakeup, now < deadline and now < next due | No dispatch; retain one wakeup for due time |
 | L9 | current | B | wakeup, next due <= now < deadline | One continuation request, same thread/model; working |
 | L10 | current | B | wakeup, now >= deadline | One exhausted-capacity completion/error; waiting; no continuation |
 | L11 | current | A or B | Stop / interrupt | One interruption; no pending retry; interrupt dispatched attempt if necessary |
@@ -93,8 +93,9 @@ Lifecycle table axes: callback owner is current or stale; state is active attemp
 | L17 | current | A | item / usage / approval / question frames | Existing streaming/request behavior; usage baseline spans attempts |
 | L18 | current | E | new human input | One new logical turn and input; fresh capacity budget if subsequently needed |
 | L19 | current | E | other notification / timer / lifecycle / reconnect | No automatic capacity request or reopened old turn; existing idle/lifecycle behavior |
+| L20 | current | A or B | urgent direct delivery | Existing urgent interruption after pending cards resolve; recovery generation invalidated and timer cleared before the urgent turn starts; a dispatched attempt is interrupted if one is running; no recovery resumes afterward |
 
-Completeness claim: for the listed event alphabet, each reachable combination of owner, state, event, and timing matches exactly one row. Owner-stale takes precedence by definition; the other rows are disjoint by event class. In E, only new input is L18; all remaining events are L19. In B, matching attempt/item/upstream-error frames are unreachable as current: the attempt was retired and maps to L1. In A, a retry wakeup is unreachable as current because dispatch consumes its timer token; delayed duplicate wakeups map to L1. A matching capacity completion with no deadline initializes it before the three disjoint timing cases L2/L3/L4. Account-level usage updates remain independent of attempt recovery. Unsupported protocol frame types retain the existing ignore behavior and cannot dispatch retries.
+Completeness claim: for the listed event alphabet, each reachable combination of owner, state, event, and timing matches exactly one row. Owner-stale takes precedence by definition. Expiry is evaluated before wake timing: in B, L8 requires now < deadline and now < next due while L10 covers now >= deadline, so the rows stay disjoint; the other rows are disjoint by event class. In E, only new input is L18; all remaining events are L19; urgent direct delivery in E is ordinary idle delivery outside the recovery model. In B, matching attempt/item/upstream-error frames are unreachable as current: the attempt was retired and maps to L1. In A, a retry wakeup is unreachable as current because dispatch consumes its timer token; delayed duplicate wakeups map to L1. Urgent direct delivery in A or B is row L20, the only mailbox event that can interrupt recovery. A matching capacity completion with no deadline initializes it before the three disjoint timing cases L2/L3/L4. Account-level usage updates remain independent of attempt recovery. Unsupported protocol frame types retain the existing ignore behavior and cannot dispatch retries.
 
 Timing table uses an injected random fraction r in `[0,1)`, integer milliseconds, and an injected monotonic clock. The sampled formula is `floor(cap/2 + r * (cap/2 + 1))` clamped to cap.
 
@@ -118,16 +119,26 @@ Composition/replay table:
 | W5 | Rollout with original input and internal continuation inputs | Original input appears once; recovery inputs are notices, not human/peer input; no new receipt; completed tools retained |
 | W6 | Independent pre-existing quota cooldown plus capacity error | Existing cooldown neither cleared nor extended |
 | W7 | Capacity backoff activity delivered through production snapshot/push and client row | Actual attempt/countdown/deadline visible; no false 1/1 maximum; ordinary upstream retry rendering remains compatible |
+| W8 | Production manager/mailbox: urgent direct mail delivered during backoff | Urgent envelope delivered once with its original receipt; recovery generation invalidated; no old continuation dispatched afterward; the urgent mail is never parked, forwarded, or released |
 
 Properties, each with one invariant and no new dependency:
 
 - P1: At most one capacity continuation is pending or active. Generate 1,000 seeded command sequences of 100 events from lifecycle rows, duplicate completions, early/late timers, and upstream retries; seams are pure policy plus scripted production driver with fake client/clock/timers/random; seed `0xCA9AC17`.
 - P2: No continuation starts at or after the original monotonic deadline. Generate 1,000 timing sequences including equality, oversleep, wall-clock jumps, and repeated failures; seam is dispatched requests from the real driver; seed `0xCA9AC18`.
-- P3: Invalidation prevents every old generation from dispatching later work. Generate 1,000 cancellation/supersession sequences with deferred ready/start responses and stale notifications; seam is driver dispatch/event log; seed `0xCA9AC19`.
+- P3: Invalidation prevents every old generation from dispatching later work. Generate 1,000 cancellation/supersession sequences with deferred ready/start responses, stale notifications, urgent-delivery invalidations, and stale cleanup interrupts; seam is driver dispatch/event log; seed `0xCA9AC19`.
 - P4: Capacity alone produces zero quota limit events. Generate 1,000 capacity chains with exhausted snapshots and sibling profiles through production manager/limit-store wiring; seed `0xCA9AC20`.
 - P5: Automatic continuation never duplicates the original input. Generate 1,000 chains with human or peer input and completed tools; seam is request payloads plus replayed events; seed `0xCA9AC21`.
 
 Run model-based tests using the lifecycle table as the independent reference model (not production reducer output). Include replay, supersession, and crash injection before/after continuation dispatch and before/after final event emission; there is no retry database transaction. Also interrupt between `ready` resolution, request dispatch, and start response. After crash, a newly constructed driver has no pending retry and replay performs no effects. Cover C/W rows through the real manager/limit composition and W7 through the production activity pipeline to kill the M1 missing-wiring hazard. Report each oracle id with its test title and the named mutant it kills.
+
+### Deferred to implementation evidence
+
+The following are planning dispositions, not executed evidence; each becomes a captured obligation in the implementation's evidence map (task 4.2):
+
+- Current/stale normalization for `turn/started` and a remotely interrupted `turn/completed` follows the driver's existing rules: frames naming an interrupted or retired turn id are dropped or normalize to stale (`codexEvents.ts` turn mapping, `CodexSessionDriver.ts` apply/interrupted checks, `protocol/v2/TurnStatus.ts`). The independent reference model applies the same normalization instead of new rows.
+- Approvals, questions, and dynamic tool calls are server requests, not notifications (`CodexSessionDriver.ts` `onServerRequest`; an answered async question sends its own `turn/start` through `codexThread.ts`; `requests.cancelAll()` settles them on process exit). A retired attempt's outstanding request is cancelled with the attempt. Whether the installed server re-raises such frames after a terminal failed turn is unknown until runtime evidence; if they arrive they are retired-attempt input (L1 class).
+- The internal continuation wrapper's exact bytes, grammar, malformed/lookalike fallback, and replay fixtures are pinned during implementation (task 3.2); planning names no wrapper bytes or new shared message names.
+- `TurnStartParams` accepting text input is a type shape, not proof of installed behavior: whether the installed app-server retains failed-turn context, its frame ordering, and its id timing remain future prerequisite evidence to capture at implementation time. The ten-minute window, sixty-second cap, classification, and cancellation contracts are the confirmed planning behavior.
 
 ## Risks / Trade-offs
 
