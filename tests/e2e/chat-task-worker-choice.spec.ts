@@ -100,8 +100,13 @@ test('a worker chosen in the New task form spawns on that provider; a cooling ch
     await expect(row.getByTestId('waiting-reason')).toContainText(/Waiting for the chosen worker zai \(cooling until .+\)/, { timeout: 15_000 })
     await page.screenshot({ path: info.outputPath('04-mailbox-row-waits-on-choice.png'), fullPage: true })
     await row.screenshot({ path: info.outputPath('05-mailbox-row-reason.png') })
-    // Never routed elsewhere: still the one spawned member.
-    await expect(page.getByTestId('session-spawned-badge')).toHaveCount(1)
+    // Never routed elsewhere: this team's only spawned session is still the Z.AI
+    // member — scoped to the team's checkouts, since earlier specs on the same
+    // server leave spawned sessions of their own teams in the navigator.
+    const ours = page.locator('[data-session-id^="chat-"]').filter({ has: page.getByTestId('session-spawned-badge') })
+      .filter({ has: page.locator([root, exportRoot, importRoot].map(path => `[title="${path}"]`).join(', ')) })
+    await expect(ours).toHaveCount(1)
+    await expect(ours).toHaveAttribute('data-session-id', member)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
