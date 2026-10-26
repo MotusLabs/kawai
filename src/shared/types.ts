@@ -21,6 +21,7 @@ import type { HumanTaskDetail, TaskDispatchPreview, TaskHandoffKind, TaskStatus,
 import type { ProductStrategy, StrategyDetail, StrategyDraft, StrategyRevision } from './productStrategy'
 import type { ImpactDecision, ImpactDisposition, StrategyImpactDetail } from './strategyImpact'
 import type { TeamWorkspaceSnapshot } from './teamWorkspace'
+import type { TeamCapacityAnswer } from './teamCapacity'
 import type { PlanClientMessage, PlanServerMessage } from './planMessages'
 import type { WorkspaceMessageEnvelope } from './planWorkspace'
 import type { PlanWorkspaceClientMessage, PlanWorkspaceServerMessage } from './planWorkspaceMessages'
@@ -480,6 +481,15 @@ export type ServerMessage =
       preview?: TaskDispatchPreview
       error?: string
     }
+  // The worker picker's data (dispatch-worker-choice 4.3): the same answer the
+  // `team_capacity` tool gives, read for the addressed team.
+  | {
+      type: 'team-task-capacity-result'
+      teamPath: string
+      requestId: string
+      capacity?: TeamCapacityAnswer
+      error?: string
+    }
   // The pickers' team-scoped worktrees and OpenSpec changes (task-assignment 4.1).
   | {
       type: 'team-task-targets-result'
@@ -806,6 +816,8 @@ export type ClientMessage =
       instructions: string
       expectedResponse?: string
       requestKey: string
+      /** Optional worker choice for a group target (dispatch-worker-choice D7): normalized and validated by the server. */
+      worker?: string
     }
   // Release worktree and hand off (D7): archive the task's ready spawned
   // members, then dispatch the review handoff to a reviewer group.
@@ -818,6 +830,8 @@ export type ClientMessage =
       instructions: string
       expectedResponse?: string
       requestKey: string
+      /** Optional worker choice for a group target (dispatch-worker-choice D7): normalized and validated by the server. */
+      worker?: string
     }
   | { type: 'team-task-note'; teamPath: string; requestId: string; taskId: string; text: string }
   | { type: 'team-task-status'; teamPath: string; requestId: string; taskId: string; status: TaskStatus }
@@ -833,6 +847,8 @@ export type ClientMessage =
       instruction: string
       requestKey: string
       handling?: 'notify' | 'stop'
+      /** Optional worker choice for a group target (dispatch-worker-choice D7): normalized and validated by the server. */
+      worker?: string
     }
   // Read-only preview of a dispatch: the task's stored worktree, or the
   // worktree the create form has (resolved by the same server rules).
@@ -843,12 +859,17 @@ export type ClientMessage =
       taskId?: string
       worktree?: string
       target: { kind: 'group' | 'session'; id: string }
+      /** A group target's worker choice (dispatch-worker-choice 4.2). */
+      worker?: string
     }
   // The pickers' data (worktrees with branches, changes with locations).
   // `worktree` narrows the change list to the roots validateChange accepts
   // for it (the main checkout plus that worktree); the worktree list stays
   // team-wide.
   | { type: 'team-task-targets'; teamPath: string; requestId: string; worktree?: string }
+  // The worker picker's data (dispatch-worker-choice 4.3): the team's capacity,
+  // or only `group`'s.
+  | { type: 'team-task-capacity'; teamPath: string; requestId: string; group?: string }
   // Messages view (team-message-threads 5.1): a list subscription carries the
   // filters (and optional page cursor) the view is on; a thread open carries
   // the thread to keep live. Human sends and replies are one message — `to`

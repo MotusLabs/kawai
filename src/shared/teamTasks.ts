@@ -469,8 +469,15 @@ export interface TaskDispatchPreview {
   idleMembers: string[]
   /** Whether staffing could add a member, and what a spawn would use. */
   spawn: { allowed: boolean; profile: string | null; blockedBy: string | null }
-  /** Advisory warning (e.g. a session target outside the task's worktree). */
+  /** Advisory warning (e.g. a session target outside the task's worktree, or a cooling worker choice). */
   warning: string | null
+  /**
+   * The group target's worker choice (dispatch-worker-choice D7), absent
+   * without one: its canonical selector, the group's models it resolves to,
+   * and — when every candidate of the choice cools — the cooldown end the
+   * instruction waits for.
+   */
+  worker?: { selector: string; profiles: string[]; cooldownUntil: string | null }
 }
 
 /** The pickers' data (task-assignment D8): team-scoped worktrees and changes. */

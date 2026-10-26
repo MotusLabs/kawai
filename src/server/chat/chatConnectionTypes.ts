@@ -69,6 +69,7 @@ export const CHAT_CONNECTION_TYPES = [
   'team-task-assign',
   'team-task-preview',
   'team-task-targets',
+  'team-task-capacity',
   'team-messages-open',
   'team-messages-close',
   'team-thread-open',

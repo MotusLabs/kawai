@@ -312,6 +312,15 @@ export const fixtureQueryFactory: ChatQueryFactory = ({ prompt, options, wire })
       }
       return
     }
+    if (/rate-limit/i.test(text)) {
+      // Worker-choice walkthrough (dispatch-worker-choice 5.1): a final 429
+      // the driver records as a limit of the session's profile and provider.
+      if (!closed && turn === generation) {
+        push({ type: 'assistant', message: { id: crypto.randomUUID(), role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text: 'API Error: 429 {"error":"usage limit reached"}' }] }, error: 'rate_limit' })
+        push({ type: 'result', subtype: 'error_during_execution', is_error: true, total_cost_usd: 0, num_turns: 1, ...resultUsage, ...echo() })
+      }
+      return
+    }
     if (!closed && turn === generation) push({ type: 'result', subtype: 'success', result: '', total_cost_usd: 0, num_turns: 1, ...resultUsage, ...echo() })
   }
   void (async () => {

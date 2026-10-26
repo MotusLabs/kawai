@@ -5,15 +5,22 @@
 // server refuses with an actionable reason while any member is busy, awaits
 // a request, holds mail, or runs a background worker; the dialog keeps its
 // input through that, and closes once every member it listed is released.
-// Offered only while the preview says it applies.
+// Offered only while the preview says it applies. A claimed or delivered
+// review of the outstanding result is named beside the members: it stays
+// live, and a review naming another worker runs beside it (Q2b).
 import { useEffect, useState } from 'react'
+import type { Session } from '@shared/types'
 import type { HumanTaskDetail } from '@shared/teamTasks'
+import { sessionLabel } from './teamTaskLabels'
 import type { TaskActFn } from './TaskDirectionEditor'
-import { RoleRequestFields, emptyRoleRequest, requestPayload, requestReady, type RoleRequest } from './TaskHandoffForm'
+import { RoleRequestFields, emptyRoleRequest, requestPayload, requestReady, workerField, type RoleRequest, type WorkerPickerHost } from './TaskHandoffForm'
 import type { TeamGroupOption } from '../chat/useTeamGroups'
 
-export default function TaskReleaseDialog({ detail, groups, connected, disabled, act }: {
+export default function TaskReleaseDialog({ detail, groups, sessions, connected, disabled, act, host }: {
   detail: HumanTaskDetail
+  sessions: Session[]
+  /** Where the review request's worker picker reads capacity. */
+  host: WorkerPickerHost
   groups: TeamGroupOption[]
   connected: boolean
   disabled: boolean
@@ -31,6 +38,12 @@ export default function TaskReleaseDialog({ detail, groups, connected, disabled,
   const current = release?.members.map(member => member.sessionId) ?? []
   const released = openedWith !== null && openedWith.length > 0 && !openedWith.some(id => current.includes(id))
   useEffect(() => { if (released) setOpenedWith(null) }, [released])
+  // A standing review of the outstanding result that can no longer be
+  // cancelled (claimed, delivered, parked): a release naming a different
+  // worker dispatches a new review beside it (dispatch-worker-choice Q2b).
+  const outstanding = detail.task.assignment
+  const liveReview = outstanding && outstanding.handoffKind === 'review' && outstanding.resultId === release?.outstandingResultId &&
+    (outstanding.state === 'claimed' || outstanding.state === 'delivered' || outstanding.state === 'parked') ? outstanding : null
   if (!release) return null
   if (release.unavailable) {
     return <p className="mt-2 text-chat-meta text-secondary" data-testid="task-release-unavailable">Release worktree and hand off: {release.unavailable}</p>
@@ -49,12 +62,17 @@ export default function TaskReleaseDialog({ detail, groups, connected, disabled,
       <p>Other live sessions in this worktree are not archived and can still edit it — the spawned-writer cap does not cover them:</p>
       {release.others.map(other => <p key={other.sessionId}>· {other.name}</p>)}
     </div>}
-    <RoleRequestFields value={request} onChange={setRequest} groups={groups} disabled={!connected} label="Review" />
+    {liveReview && <p className="text-chat-meta" data-testid="release-live-review">
+      A review of this result is already {liveReview.state}{liveReview.claimedBy ? ` by ${sessionLabel(liveReview.claimedBy, sessions)}` : ''}
+      {liveReview.workerChoice ? ` (worker ${liveReview.workerChoice})` : ''}. It stays live: a review naming another worker is
+      dispatched beside it, so two reviews can run.</p>}
+    <RoleRequestFields value={request} onChange={setRequest} groups={groups} disabled={!connected} label="Review" host={host} connected={connected} />
     <div className="mt-2 flex gap-2">
       <button type="button" className="btn btn-primary" data-testid="task-release-confirm-button" disabled={disabled || !requestReady(request)}
         onClick={() => act('release', {
           type: 'team-task-release', target: request.target, instructions: request.instructions.trim(),
           ...(request.expectedResponse.trim() ? { expectedResponse: request.expectedResponse.trim() } : {}),
+          ...workerField(request),
         }, { slot: `release:${detail.task.id}`, payload: requestPayload('release', release.outstandingResultId ?? '', request) })}>
         Release and hand off</button>
       <button type="button" className="btn" onClick={() => setOpenedWith(null)}>Cancel</button>

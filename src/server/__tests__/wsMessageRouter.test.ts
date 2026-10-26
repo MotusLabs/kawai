@@ -39,13 +39,15 @@ describe('messageRouter task-assignment forwarding', () => {
     const create: ClientMessage = {
       type: 'team-task-create', teamPath: '/repo', requestId: 'r4', title: 'T', direction: 'D', requestKey: 'k2',
     }
+    const capacity: ClientMessage = { type: 'team-task-capacity', teamPath: '/repo', requestId: 'r5', group: 'devs' }
     deliver(assign)
     deliver(preview)
     deliver(targets)
     deliver(create)
+    deliver(capacity)
     await Promise.resolve()
     expect(forwarded.map(message => message.type)).toEqual([
-      'team-task-assign', 'team-task-preview', 'team-task-targets', 'team-task-create',
+      'team-task-assign', 'team-task-preview', 'team-task-targets', 'team-task-create', 'team-task-capacity',
     ])
     expect(forwarded[0]).toMatchObject(assign)
     expect(sent.filter(message => message.type === 'error')).toEqual([])

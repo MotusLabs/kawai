@@ -91,7 +91,7 @@ test('task detail names its message participants and links into each thread', ()
   }
   const view: TaskView = {
     open: true, loading: false, tasks: [summary], selectedTaskId: 't1', detail, directory, pending: {}, error: null,
-    draft: emptyDraft(), flow: null, preview: null, previewPending: {}, targets: null, targetsLoading: false,
+    draft: emptyDraft(), flow: null, preview: null, previewPending: {}, targets: null, targetsLoading: false, capacity: null,
     commands: {}, commandRequests: {},
   }
   let renderer!: TestRenderer.ReactTestRenderer

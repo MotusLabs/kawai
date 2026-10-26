@@ -2,15 +2,19 @@
 // frees a task's worktree for review. It composes two landed primitives and
 // adds no lifecycle: team-member-release's readiness, archive, and system
 // journal entry, and the review handoff (D3) through task-assignment's
-// dispatch. The order is fixed — validate the review request; readiness-check
+// dispatch. The order is fixed — validate the review request (its worker choice
+// included, so a bad worker archives nobody); readiness-check
 // every live spawned member of the task before archiving any (one not-ready
 // member refuses the whole release, naming it and the blocking fact, with
 // nothing archived or dispatched); archive each (never kill); then dispatch.
 // A dispatch failure after the archive is surfaced with the release already
 // done: archive is the human's intent and is never rolled back; Request
 // review retries the dispatch alone. A review handoff of the result that
-// already stands (queued behind the occupied worktree) is not doubled: the
-// release frees the slot it waits for. Release is immediate — it refuses
+// already stands with the same worker choice (queued behind the occupied
+// worktree) is not doubled: the release frees the slot it waits for. One with
+// another worker is superseded by the new review through the stop branch — a
+// claimed or delivered one stays live, so two reviews can run, as with Request
+// review (dispatch-worker-choice D7). Release is immediate — it refuses
 // rather than defers, unlike the pending release a task close records.
 import type { ChatSessionRecord } from '../db'
 import { NULL_OWNERSHIP, type ExecutionOwnership } from '../plans/execution/executionOwnership'
@@ -28,6 +32,8 @@ export interface ReleaseRequest {
   expectedResponse?: string | null
   /** The human's client request key: a resend replays the handoff, never a second release. */
   requestKey: string
+  /** The review's worker choice (dispatch-worker-choice D7), as on any handoff. */
+  worker?: string
 }
 
 export interface ReleaseOutcome {
@@ -83,9 +89,11 @@ export class TaskRelease {
     }
     const task = this.results.tasks.sameTeamTask(team, taskId)
     const outstanding = this.results.tasks.store.results.outstanding(taskId)
+    const target = { kind: 'group' as const, id: request.target }
     const handoff = {
-      kind: 'review' as const, resultId: outstanding?.id ?? '', target: { kind: 'group' as const, id: request.target },
+      kind: 'review' as const, resultId: outstanding?.id ?? '', target,
       instructions: request.instructions, expectedResponse: request.expectedResponse ?? null, requestKey: request.requestKey,
+      ...(request.worker !== undefined ? { worker: request.worker } : {}),
     }
     // A resend of a release that already dispatched replays its handoff — never a second release.
     const key = request.requestKey.trim()
@@ -99,12 +107,15 @@ export class TaskRelease {
     const catalog = loadGroupCatalog({ groupsRoot: team.groupsRoot, ...(this.options.homeDir ? { homeDir: this.options.homeDir } : {}) })
     if (!catalog.groups.has(request.target)) throw new Error(`Unknown group: ${request.target}`)
     if (!request.instructions.trim()) throw new Error('A review request needs instructions')
+    // The worker choice is validated and normalized here, before any archive (D7).
+    const workerChoice = this.results.workerChoice(caller, team, target, request.worker)
+    const review = { ...handoff, ...(workerChoice !== null ? { worker: workerChoice } : {}) }
     // 2. Readiness for every member first (team-member-release D3).
     const members = this.options.releases.membersOf(taskId)
     // Nobody left to release while a review of this result stands: a resend
     // after the standing-review path below (which records no key of its own)
     // replays that review rather than failing.
-    if (members.length === 0 && this.standingReview(taskId, outstanding.id)) return { released: [], handoff: this.standingOutcome(taskId, outstanding.id) }
+    if (members.length === 0 && this.standingReview(taskId, outstanding.id, workerChoice)) return { released: [], handoff: this.standingOutcome(taskId, outstanding.id, workerChoice) }
     if (members.length === 0) throw new Error('No live spawned member holds the worktree; nothing to release. Use Request review to dispatch the review.')
     const blocked = members.flatMap(member => {
       const readiness = this.options.releases.readiness(member.sessionId)
@@ -121,26 +132,26 @@ export class TaskRelease {
       released.push(member.sessionId)
     }
     // 4. Dispatch the review handoff into the freed slot — unless one of this
-    // result already stands (Request review queued it behind the occupied
-    // worktree): the release frees the slot it waits for, and a second
-    // review would double the reviewers.
-    if (this.standingReview(taskId, outstanding.id)) return { released, handoff: this.standingOutcome(taskId, outstanding.id) }
+    // result with the same worker choice already stands (Request review
+    // queued it behind the occupied worktree): the release frees the slot it
+    // waits for.
+    if (this.standingReview(taskId, outstanding.id, workerChoice)) return { released, handoff: this.standingOutcome(taskId, outstanding.id, workerChoice) }
     try {
-      return { released, handoff: await this.results.handoff(caller, taskId, handoff) }
+      return { released, handoff: await this.results.handoff(caller, taskId, review) }
     } catch (error) {
       throw new Error(`The worktree was released (${released.join(', ')}), but the review dispatch failed: ` +
         `${error instanceof Error ? error.message : String(error)}. Use Request review to dispatch it.`)
     }
   }
 
-  /** A review handoff of this result that still stands (D3's equivalence: not superseded, not failed). */
-  private standingReview(taskId: string, resultId: string) {
+  /** A review handoff of this result with this worker choice that still stands (D3/D7's equivalence: not superseded, not failed). */
+  private standingReview(taskId: string, resultId: string, workerChoice: string | null) {
     return this.results.tasks.store.assignmentsOf(taskId).find(row => row.handoffKind === 'review' &&
-      row.resultId === resultId && row.supersededBy === null && row.state !== 'failed') ?? null
+      row.resultId === resultId && (row.workerChoice ?? null) === workerChoice && row.supersededBy === null && row.state !== 'failed') ?? null
   }
 
-  private standingOutcome(taskId: string, resultId: string): HandoffOutcome {
-    const standing = this.standingReview(taskId, resultId)!
+  private standingOutcome(taskId: string, resultId: string, workerChoice: string | null): HandoffOutcome {
+    const standing = this.standingReview(taskId, resultId, workerChoice)!
     return { assignment: standing, duplicate: true,
       notice: `The review handoff already queued for result ${resultId} (${standing.id}) proceeds in the freed worktree; nothing new was dispatched.` }
   }

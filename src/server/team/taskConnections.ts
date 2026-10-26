@@ -117,6 +117,7 @@ export class TaskConnections {
       const error = unknownTeamError(teamPath)
       if (message.type === 'team-task-preview') connection.send({ type: 'team-task-preview-result', teamPath, requestId, error })
       else if (message.type === 'team-task-targets') connection.send({ type: 'team-task-targets-result', teamPath, requestId, error })
+      else if (message.type === 'team-task-capacity') connection.send({ type: 'team-task-capacity-result', teamPath, requestId, error })
       else connection.send({ type: 'team-task-result', teamPath, requestId, error })
       return
     }
@@ -160,6 +161,7 @@ export class TaskConnections {
           const outcome = await this.manager.results.handoff(caller, message.taskId, {
             kind: message.kind, resultId: message.resultId, target: message.target, instructions: message.instructions,
             expectedResponse: message.expectedResponse ?? null, requestKey: message.requestKey,
+            ...(message.worker !== undefined ? { worker: message.worker } : {}),
           })
           result({ assignment: outcome.assignment, replay: outcome.duplicate, task: tasks.store.get(message.taskId) ?? undefined })
           return
@@ -168,7 +170,7 @@ export class TaskConnections {
           if (!this.manager.results.release) throw new Error('Release worktree and hand off is not available')
           const outcome = await this.manager.results.release.release(caller, message.taskId, {
             target: message.target, instructions: message.instructions, expectedResponse: message.expectedResponse ?? null,
-            requestKey: message.requestKey,
+            requestKey: message.requestKey, ...(message.worker !== undefined ? { worker: message.worker } : {}),
           })
           result({ assignment: outcome.handoff.assignment, replay: outcome.handoff.duplicate, task: tasks.store.get(message.taskId) ?? undefined })
           return
@@ -196,6 +198,7 @@ export class TaskConnections {
           const outcome = await this.manager.assignments.dispatch(caller, {
             taskId: message.taskId, target: message.target, instruction: message.instruction,
             requestKey: message.requestKey, ...(message.handling ? { handling: message.handling } : {}),
+            ...(message.worker !== undefined ? { worker: message.worker } : {}),
           })
           result({ assignment: outcome.assignment, ...(outcome.message?.taskId ? { task: tasks.store.get(outcome.message.taskId) ?? undefined } : {}) })
           return
@@ -205,6 +208,7 @@ export class TaskConnections {
             ...(message.taskId ? { taskId: message.taskId } : {}),
             ...(message.worktree ? { worktree: message.worktree } : {}),
             target: message.target,
+            ...(message.worker !== undefined ? { worker: message.worker } : {}),
           })
           connection.send({ type: 'team-task-preview-result', teamPath, requestId, preview })
           return
@@ -212,6 +216,14 @@ export class TaskConnections {
         case 'team-task-targets': {
           const targets = await this.manager.assignments.targets(caller, message.worktree)
           connection.send({ type: 'team-task-targets-result', teamPath, requestId, targets })
+          return
+        }
+        case 'team-task-capacity': {
+          // The one TeamCapacity the `team_capacity` tool reads (D6): the
+          // answer carries ids, counts, usage, and times only (I5).
+          const capacity = this.manager.capacity.readTeam(team, this.manager.teams.catalogForTeam(team),
+            message.group !== undefined ? { group: message.group } : {})
+          connection.send({ type: 'team-task-capacity-result', teamPath, requestId, capacity })
           return
         }
       }
@@ -224,6 +236,10 @@ export class TaskConnections {
       }
       if (message.type === 'team-task-targets') {
         connection.send({ type: 'team-task-targets-result', teamPath, requestId, error: text })
+        return
+      }
+      if (message.type === 'team-task-capacity') {
+        connection.send({ type: 'team-task-capacity-result', teamPath, requestId, error: text })
         return
       }
       result({ error: text })

@@ -41,6 +41,7 @@ export function handleTeamMessage(message: TeamMessage, _deps: MessageRouterDeps
     case 'team-task-result': tasks.applyResult(routed(message, tasks.views)); return
     case 'team-task-preview-result': tasks.applyPreviewResult(routed(message, tasks.views)); return
     case 'team-task-targets-result': tasks.applyTargetsResult(routed(message, tasks.views)); return
+    case 'team-task-capacity-result': tasks.applyCapacityResult(routed(message, tasks.views)); return
     case 'team-workspace-snapshot':
     case 'team-workspace': handleTeamWorkspaceMessage(message); return
     case 'team-messages-snapshot': messages.applySnapshot(routed(message, messages.views)); return

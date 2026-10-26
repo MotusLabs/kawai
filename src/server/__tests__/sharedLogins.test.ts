@@ -37,7 +37,8 @@ describe('storedLoginKey', () => {
     ['ANTHROPIC_API_KEY', ''],
     ['ANTHROPIC_AUTH_TOKEN', ''],
   ])('%s present (value %p) in the env is never the stored login', (name, value) => {
-    expect(storedLoginKey(claude({ CLAUDE_CONFIG_DIR: DIR, [name]: value }), {})).toBeNull()
+    // The inherited env alone would key on DIR: only the launch env's credential refuses it.
+    expect(storedLoginKey(claude({ CLAUDE_CONFIG_DIR: DIR, [name]: value }), { CLAUDE_CONFIG_DIR: DIR })).toBeNull()
   })
 
   test('a credential in the flag settings layer counts too', () => {

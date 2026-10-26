@@ -22,7 +22,7 @@ import type { SpawnContext, WorktreeStaffing } from '../staffing'
 import { builtinPick } from './builtin'
 import { DEFAULT_PROFILE_ID } from './candidates'
 import { evaluateEligibility, type EligibilityResult } from './workerEligibility'
-import { resolveWorkerSelector } from './workerSelector'
+import { workerChoiceState } from './workerSelector'
 import type { LimitEventStore } from './limitEvents'
 import type { RuleRegistry } from './ruleLoader'
 
@@ -108,11 +108,7 @@ export class ProfileRouter implements GroupRouter {
     // The sender's worker choice (dispatch-worker-choice D1/D2), resolved to
     // the group's model keys on each pass, so a group or catalog edit after
     // sending applies the way every other group edit does.
-    const workerChoice = message.workerChoice ? {
-      selector: message.workerChoice,
-      profiles: resolveWorkerSelector(message.workerChoice,
-        group.profiles.length > 0 ? group.profiles.map(entry => entry.profileId) : [DEFAULT_PROFILE_ID], providerOf),
-    } : null
+    const workerChoice = workerChoiceState(message.workerChoice, group, providerOf)
     const { candidates, group: routeGroup, excluded } = evaluateEligibility({
       group,
       members: members.map(member => memberState(member, eligible.get(member.sessionId))),

@@ -18,6 +18,7 @@ import { useTeamWorkspaceStore } from '../../stores/teamWorkspaceStore'
 import TeamTaskDetail from './TeamTaskDetail'
 import SearchablePicker from './SearchablePicker'
 import { TaskPreviewView, TaskTargetSelect } from './taskAssignFields'
+import { TaskWorkerPicker } from './TaskWorkerPicker'
 import { useTeamGroups } from '../chat/useTeamGroups'
 import { openParticipantChat } from '../chat/openParticipant'
 import TaskListFilters, { queryFromFilters } from './TaskListFilters'
@@ -126,6 +127,8 @@ export default function TeamTasksView({ teamPath, projectPath, view, rows, sendM
     if (wasConnected.current === false && connected) useTeamTaskStore.getState().reconnected(teamPath)
     wasConnected.current = connected
   }, [connected, teamPath])
+  // The worker choice applies to a group target only (I3).
+  const groupWorker = draft.targetKind === 'group' ? draft.worker : ''
   const preview = () => {
     const requestId = crypto.randomUUID()
     useTeamTaskStore.getState().beginPreview(teamPath, requestId)
@@ -133,6 +136,7 @@ export default function TeamTasksView({ teamPath, projectPath, view, rows, sendM
       type: 'team-task-preview', teamPath, requestId,
       ...(draft.worktree.trim() ? { worktree: draft.worktree.trim() } : {}),
       target: { kind: draft.targetKind as 'group' | 'session', id: draft.targetId },
+      ...(groupWorker ? { worker: groupWorker } : {}),
     })
   }
   const create = (assign: boolean) => {
@@ -177,12 +181,12 @@ export default function TeamTasksView({ teamPath, projectPath, view, rows, sendM
   useEffect(() => {
     if (!flow || flow.mode !== 'create-and-assign' || !flow.taskId || flow.assignFailed || busy) return
     const payload = { kind: draft.targetKind as 'group' | 'session', id: draft.targetId }
-    useTeamTaskStore.getState().flowSendAssign(teamPath, { targetKind: payload.kind, targetId: payload.id, instruction: draft.instruction })
+    useTeamTaskStore.getState().flowSendAssign(teamPath, { targetKind: payload.kind, targetId: payload.id, worker: groupWorker, instruction: draft.instruction })
     const requestId = crypto.randomUUID()
     useTeamTaskStore.getState().begin(teamPath, requestId, 'assign')
     sendMessage({
       type: 'team-task-assign', teamPath, requestId, taskId: flow.taskId, requestKey: flow.requestKey,
-      target: payload, instruction: draft.instruction,
+      target: payload, instruction: draft.instruction, ...(groupWorker ? { worker: groupWorker } : {}),
     })
   }, [flow?.taskId, flow?.assignFailed, busy]) // eslint-disable-line react-hooks/exhaustive-deps
   const retryAssign = () => {
@@ -251,8 +255,10 @@ export default function TeamTasksView({ teamPath, projectPath, view, rows, sendM
             <fieldset className="flex flex-col gap-2 border-t border-border pt-2" data-testid="task-assign-section">
               <legend>Assignment (optional)</legend>
               <TaskTargetSelect testId="task-assign-target" kind={draft.targetKind} id={draft.targetId}
-                onKind={kind => setDraft({ targetKind: kind })} onId={id => setDraft({ targetId: id })}
+                onKind={kind => setDraft({ targetKind: kind, worker: '' })} onId={id => setDraft({ targetId: id, worker: '' })}
                 groups={groups} sessions={sessions.filter(session => session.kind === 'chat')} disabled={!connected} />
+              {draft.targetKind === 'group' && <TaskWorkerPicker testId="task-assign-worker" teamPath={teamPath} group={draft.targetId}
+                value={draft.worker} onChange={worker => setDraft({ worker })} sendMessage={sendMessage} connected={connected} disabled={!connected} label="Assignment" />}
               <textarea className="input min-h-12" aria-label="Assignment instruction" placeholder="Initial instruction"
                 value={draft.instruction} disabled={!connected}
                 onChange={event => setDraft({ instruction: event.target.value })} />

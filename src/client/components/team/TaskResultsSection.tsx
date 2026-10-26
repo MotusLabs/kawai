@@ -14,11 +14,13 @@ import { useTeamPlanStore } from '../../stores/teamPlanStore'
 import { TASK_HANDOFF_KINDS } from '@shared/teamTasks'
 import type { TaskActFn } from './TaskDirectionEditor'
 import TaskResultCard from './TaskResultCard'
-import { HANDOFF_ACTIONS, HANDOFF_ROLE_HINT, RoleRequestFields, emptyRoleRequest, requestPayload, requestReady, type RoleRequest } from './TaskHandoffForm'
+import { HANDOFF_ACTIONS, HANDOFF_ROLE_HINT, RoleRequestFields, emptyRoleRequest, requestPayload, requestReady, workerField, type RoleRequest, type WorkerPickerHost } from './TaskHandoffForm'
 import type { TeamGroupOption } from '../chat/useTeamGroups'
 
-export default function TaskResultsSection({ detail, groups, sessions, connected, disabled, act }: {
+export default function TaskResultsSection({ detail, groups, sessions, connected, disabled, act, host }: {
   detail: HumanTaskDetail
+  /** Where the handoff form's worker picker reads capacity. */
+  host: WorkerPickerHost
   groups: TeamGroupOption[]
   sessions: Session[]
   connected: boolean
@@ -78,12 +80,13 @@ export default function TaskResultsSection({ detail, groups, sessions, connected
 
   const handoffForm = (result: TaskResult, kind: TaskHandoffKind, request: RoleRequest) => <div className="mt-2 border border-border p-2" data-testid="task-handoff-form" data-kind={kind}>
     <p className="font-medium">{HANDOFF_ACTIONS[kind]} — result {result.id}</p>
-    <RoleRequestFields value={request} onChange={next => setHandoff(current => (current ? { ...current, request: next } : current))} groups={groups} disabled={!connected} label={HANDOFF_ACTIONS[kind]} />
+    <RoleRequestFields value={request} onChange={next => setHandoff(current => (current ? { ...current, request: next } : current))} groups={groups} disabled={!connected} label={HANDOFF_ACTIONS[kind]} host={host} connected={connected} />
     <div className="mt-2 flex gap-2">
       <button type="button" className="btn btn-primary" data-testid="task-handoff-send" disabled={disabled || !requestReady(request)}
         onClick={() => act('handoff', {
           type: 'team-task-handoff', kind, resultId: result.id, target: { kind: 'group', id: request.target },
           instructions: request.instructions.trim(), ...(request.expectedResponse.trim() ? { expectedResponse: request.expectedResponse.trim() } : {}),
+          ...workerField(request),
         }, { slot: `handoff:${task.id}:${kind}`, payload: requestPayload(kind, result.id, request) })}>Send {HANDOFF_ACTIONS[kind].toLowerCase()}</button>
       <button type="button" className="btn" onClick={() => setHandoff(null)}>Close</button>
     </div>

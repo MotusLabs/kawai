@@ -25,6 +25,7 @@ import type { TeamMessage } from './mailboxStore'
 import { MailboxStore } from './mailboxStore'
 import { messageEnvelope } from './envelope'
 import { memberExclusions, messageExclusions, type MemberExclusion, type MemberExclusionKind } from './memberCauses'
+import { groupPathEligible } from './routing/workerEligibility'
 
 export interface MailRecipient {
   sessionId: string
@@ -357,9 +358,8 @@ export class MailDispatcher {
       const idle = this.idleSince.get(row.sessionId)
       if (!idle) return []
       if (row.teamId !== message.teamId || row.groupId !== message.toId) return []
-      const groupPath = memberExclusions(row, message, { targetWorktree: target, now, startupFailed: this.failedThisPass.has(row.sessionId) })
-        .some(cause => cause.kind !== 'excluded-profile' && cause.kind !== 'profile-cooling')
-      return groupPath ? [] : [{ ...row, idleForMs: now - idle.at }]
+      return groupPathEligible(row, message, { targetWorktree: target, now, startupFailed: this.failedThisPass.has(row.sessionId) })
+        ? [{ ...row, idleForMs: now - idle.at }] : []
     })
   }
 

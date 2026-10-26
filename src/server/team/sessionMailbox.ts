@@ -216,6 +216,7 @@ export class SessionMailbox {
       ...(options.homeDir ? { homeDir: options.homeDir } : {}),
       plans: this.plans,
       cooldownUntil: profileId => sessionCooldown(this.limits, this.options.homeDir, profileId).until,
+      recipient: id => this.recipient(id),
       ownership: options.ownership,
     })
     this.results = new TaskResultService(this.tasks, { getSession: options.getRecord, assignments: this.assignments,

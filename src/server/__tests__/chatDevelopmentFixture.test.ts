@@ -115,6 +115,30 @@ describe('development fixture context-exhaustion turn', () => {
   })
 })
 
+describe('development fixture rate-limit turn', () => {
+  test('a rate-limit turn reports a final 429 limit and ends failed', async () => {
+    const events: ChatEvent[] = []
+    const limits: unknown[] = []
+    const driver = new ChatSessionDriver({
+      sessionId: 'chat-fixture-limited',
+      projectPath: '/tmp/project',
+      queryFactory: fixtureQueryFactory,
+      onEvent: (event) => events.push(event),
+      onStatus: () => {},
+      onWorkers: () => {},
+      onLimitEvent: (signal) => limits.push(signal),
+    })
+    driver.send('go rate-limit')
+    const deadline = Date.now() + 3_000
+    while (!events.some((event) => event.type === 'turn_completed') && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+    expect(limits).toEqual([expect.objectContaining({ kind: 'rate_limit', final: true, status: 429 })])
+    expect(events.find((event) => event.type === 'turn_completed')).toMatchObject({ isError: true })
+    driver.kill()
+  })
+})
+
 describe('development fixture activity turns', () => {
   /** Collapse the human-scale phase holds to near-zero. */
   beforeEach(() => {

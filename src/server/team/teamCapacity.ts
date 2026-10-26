@@ -8,56 +8,18 @@
 // counts, usage, and times; never an env value, credential, path, or URL —
 // the login keys `sharesLoginWith` is computed from stay inside `read`.
 import type { ChatUsageReport } from '../../shared/chat'
-import type { RouteUsage } from '../../shared/routing'
+import type { CapacityGroup, TeamCapacityAnswer } from '../../shared/teamCapacity'
 import type { ChatSessionRecord } from '../db'
 import type { LimitEventStore } from './routing/limitEvents'
 import { buildCandidates } from './routing/candidates'
 import { liveGroupMembers, usageView } from './routing/router'
 import { sharedLogins } from './routing/sharedLogins'
+import type { GroupCatalog } from './groupCatalog'
 import type { SessionTeams } from './sessionTeams'
+import type { TeamIdentity } from './teamIdentity'
 import type { PendingSpawnRow } from './teamRoster'
 
-export interface CapacityWorker {
-  /** The model key (the stored profile id). */
-  model: string
-  provider: string
-  /** The group's cap on live members of this worker; null when uncapped. */
-  cap: number | null
-  /** Live members on this worker, pending spawn reservations included. */
-  live: number
-  /** The worker's effective cooldown end (ISO); null when not cooling. */
-  cooldownUntil: string | null
-  /** Set when an out-of-credit limit decides that end. */
-  credit?: true
-}
-
-export interface CapacityGroup {
-  id: string
-  /** Live-member cap of the whole group. */
-  max: number
-  /** Live members, pending spawn reservations included. */
-  live: number
-  strategy: 'first-available' | 'profile-order'
-  /** In preference order. */
-  workers: CapacityWorker[]
-}
-
-export interface CapacityProvider {
-  id: string
-  label: string | null
-  /** The latest report kawai holds; null = unknown (none since the server started). */
-  usage: RouteUsage | null
-  /** The provider's own cooldown end (ISO); null when not cooling. */
-  cooldownUntil: string | null
-  /** Other team providers detected as drawing on the same login; empty = not detected. */
-  sharesLoginWith: string[]
-}
-
-export interface TeamCapacityAnswer {
-  computedAt: string
-  groups: CapacityGroup[]
-  providers: CapacityProvider[]
-}
+export type { CapacityGroup, CapacityProvider, CapacityWorker, TeamCapacityAnswer } from '../../shared/teamCapacity'
 
 export interface TeamCapacityOptions {
   teams: Pick<SessionTeams, 'teamOf' | 'catalogOf'>
@@ -85,10 +47,18 @@ export class TeamCapacity {
 
   /** The caller's team capacity, or only `group`'s; an unknown group is refused by name. */
   read(sessionId: string, input: { group?: string | undefined } = {}): TeamCapacityAnswer {
-    const { teams, limits, providerOf } = this.options
-    const team = teams.teamOf(sessionId)
-    const catalog = teams.catalogOf(sessionId)
+    const team = this.options.teams.teamOf(sessionId)
+    const catalog = this.options.teams.catalogOf(sessionId)
     if (!team || !catalog) throw new Error('This session belongs to no team yet, so there is no capacity to read.')
+    return this.readTeam(team, catalog, input)
+  }
+
+  /**
+   * One team's capacity — the one function both the agent tool (through
+   * `read`) and the human's worker picker (`team-task-capacity`) answer from.
+   */
+  readTeam(team: TeamIdentity, catalog: GroupCatalog, input: { group?: string | undefined } = {}): TeamCapacityAnswer {
+    const { teams, limits, providerOf } = this.options
     if (input.group !== undefined && !catalog.groups.has(input.group)) {
       throw new Error(`Unknown group "${input.group}" in your team.`)
     }
