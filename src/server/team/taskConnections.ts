@@ -117,6 +117,7 @@ export class TaskConnections {
       const error = unknownTeamError(teamPath)
       if (message.type === 'team-task-preview') connection.send({ type: 'team-task-preview-result', teamPath, requestId, error })
       else if (message.type === 'team-task-targets') connection.send({ type: 'team-task-targets-result', teamPath, requestId, error })
+      else if (message.type === 'team-task-capacity') connection.send({ type: 'team-task-capacity-result', teamPath, requestId, error })
       else connection.send({ type: 'team-task-result', teamPath, requestId, error })
       return
     }
@@ -217,6 +218,14 @@ export class TaskConnections {
           connection.send({ type: 'team-task-targets-result', teamPath, requestId, targets })
           return
         }
+        case 'team-task-capacity': {
+          // The one TeamCapacity the `team_capacity` tool reads (D6): the
+          // answer carries ids, counts, usage, and times only (I5).
+          const capacity = this.manager.capacity.readTeam(team, this.manager.teams.catalogForTeam(team),
+            message.group !== undefined ? { group: message.group } : {})
+          connection.send({ type: 'team-task-capacity-result', teamPath, requestId, capacity })
+          return
+        }
       }
       result(task ? { task } : {})
     } catch (error) {
@@ -227,6 +236,10 @@ export class TaskConnections {
       }
       if (message.type === 'team-task-targets') {
         connection.send({ type: 'team-task-targets-result', teamPath, requestId, error: text })
+        return
+      }
+      if (message.type === 'team-task-capacity') {
+        connection.send({ type: 'team-task-capacity-result', teamPath, requestId, error: text })
         return
       }
       result({ error: text })
