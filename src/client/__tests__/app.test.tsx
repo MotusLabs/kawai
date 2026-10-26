@@ -2566,6 +2566,14 @@ const titleLifecycleCases = [
 
 describe('App workspace title', () => {
   for (const [oracle, priorTitle, event, expected] of titleLifecycleCases) {
+    // L1 covers the first scenario, L2 the second, L3 the third, L4 the fourth,
+    // L5 the fifth, L6 the sixth (workspace-page-title design table).
+    // @covers: instance-identity › Title has a usable loading and missing-name fallback › Initial load has no server information
+    // @covers: instance-identity › Workspace name leads the browser title › Configured project directory identifies the instance
+    // @covers: instance-identity › Title follows the server instance across navigation › Navigate within one instance
+    // @covers: instance-identity › Title follows the server instance across navigation › Reconnect refreshes instance information
+    // @covers: instance-identity › Title has a usable loading and missing-name fallback › Refresh fails after a successful load
+    // @covers: instance-identity › Title has a usable loading and missing-name fallback › Root directories have no workspace name
     test(`${oracle}: ${event} yields ${expected}`, async () => {
       const originalFetch = globalThis.fetch
       const originalDefault = useSettingsStore.getState().defaultProjectDir
