@@ -31,6 +31,7 @@ import { useWebSocket } from './hooks/useWebSocket'
 import { invalidateSnapshotCache } from './terminal/snapshotCache'
 import { useVisualViewport } from './hooks/useVisualViewport'
 import { sortSessions } from './utils/sessions'
+import { pageTitle } from './utils/pageTitle'
 import { buildWorkspaceView } from './utils/workspaceView'
 import { requestChatArchive } from './utils/chatArchive'
 import { flushSync } from 'react-dom'
@@ -916,6 +917,10 @@ export default function App() {
     document.documentElement.setAttribute('data-theme', theme)
   }, [theme])
 
+  useEffect(() => {
+    document.title = pageTitle(serverInfo)
+  }, [serverInfo])
+
   // Fetch server info (including Tailscale IP) on mount and on every
   // reconnect: after an update the server across the socket is a different
   // build, and a fresh build never re-broadcasts the update state (its
@@ -923,7 +928,10 @@ export default function App() {
   // target the previous build pushed — and refreshes the shown version.
   useEffect(() => {
     fetch('/api/server-info')
-      .then((res) => res.json())
+      .then((res) => {
+        if (!res.ok) throw new Error(`Server information request failed: ${res.status}`)
+        return res.json()
+      })
       .then((info: ServerInfo) => {
         setServerInfo(info)
         useUpdateStore.getState().setFromServerInfo(info.update)
