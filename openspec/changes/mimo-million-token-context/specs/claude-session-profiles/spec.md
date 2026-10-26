@@ -71,12 +71,12 @@ Claude profiles, providers, and provider models SHALL accept optional integer `a
 - **THEN** the effective MiMo definition inherits that lower definition's window, and where no lower definition exists no preference is synthesized and a retired id is never resurrected
 
 ### Requirement: Selected window preferences compose within the launch's protections
-Keys a Claude launch composes for a selected window — the window and each cleared disable flag — SHALL join the launch's fresh per-spawn registered-name set, and a composition that would carry a registered name SHALL refuse the launch before spawn. When the launch's model declaration explicitly carries `[1m]`, a selected value SHALL also clear the 1M opt-out flag in both launch env layers; otherwise that flag keeps its existing behavior. Capacity is never inferred from the window alone.
+A Claude launch composing a selected window SHALL check the newly composed keys — the window and each cleared disable flag — against its fresh per-spawn registered-name set before writing either env layer, never adding them to that set; a nonempty intersection SHALL refuse the launch before spawn. An explicit `[1m]` model declaration adds the 1M opt-out flag to the composed keys, cleared in both env layers; otherwise that flag keeps its existing behavior.
 
 #### Scenario: Registered-name collision refuses the launch
-- **WHEN** a selected preference's launch composition would carry a variable whose name is registered for withholding
-- **THEN** the launch refuses before spawn with a names-only error and no child starts
+- **WHEN** the newly composed keys for a selected preference intersect the launch's freshly derived registered-name set
+- **THEN** the launch refuses before either layer is written with a names-only error and no child starts, and the composed keys are never added to the registered-name set
 
 #### Scenario: 1M opt-out cleared only under the explicit condition
 - **WHEN** a launch declares an explicit `[1m]` model and a selected numeric preference applies
-- **THEN** the 1M opt-out flag is cleared in both launch env layers, while a launch without either the explicit declaration or a selected value keeps that flag's existing behavior
+- **THEN** the 1M opt-out flag is cleared in both launch env layers, while a launch without either the explicit declaration or a selected value keeps that flag's existing behavior and capacity is never inferred from the window alone

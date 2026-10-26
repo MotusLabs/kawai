@@ -45,7 +45,7 @@ Invalid compaction settings SHALL produce group warnings without rejecting the r
 - **THEN** a warning is reported and the role's valid default still applies
 
 #### Scenario: Duplicate keys
-- **WHEN** two entries resolve to the same known model profile
+- **WHEN** two valid entries resolve to the same known model profile
 - **THEN** the first entry determines its preference and the later entry produces a warning
 
 #### Scenario: Invalid written key before a valid alias
