@@ -222,7 +222,7 @@ describe('the task Accept note', () => {
 
   const resultsSection = (planId: string | null, planChange: string | null) => createElement(TaskResultsSection, {
     detail: taskDetail(planId, planChange),
-    groups: [], sessions: [], connected: true, disabled: false,
+    groups: [], sessions: [], connected: true, disabled: false, host: { teamPath: '/repo', sendMessage: () => {} },
     act: (kind: string) => {
       // The Accept confirm button calls act('accept'); the note is what is
       // under test, so the act itself is a no-op here.

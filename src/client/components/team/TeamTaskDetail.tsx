@@ -28,10 +28,13 @@ import TaskDirectionEditor, { type TaskActFn } from './TaskDirectionEditor'
 import TaskPublications from './TaskPublications'
 import TaskResultsSection from './TaskResultsSection'
 import TaskReleaseDialog from './TaskReleaseDialog'
+import { TaskWorkerPicker } from './TaskWorkerPicker'
 
 interface DetailAssignForm {
   kind: AssignTargetKind
   id: string
+  /** A group target's worker choice; '' = any worker. */
+  worker: string
   instruction: string
   /** Armed when the first dispatch is sent; reused by every retry of it. */
   requestKey: string | null
@@ -40,7 +43,7 @@ interface DetailAssignForm {
   preview: boolean
 }
 
-const emptyAssignForm = (): DetailAssignForm => ({ kind: '', id: '', instruction: '', requestKey: null, preview: false })
+const emptyAssignForm = (): DetailAssignForm => ({ kind: '', id: '', worker: '', instruction: '', requestKey: null, preview: false })
 
 /** The section that starts collapsed once a team's Tasks tab first opens. */
 const DEFAULT_COLLAPSED = ['Revision history']
@@ -116,6 +119,8 @@ export default function TeamTaskDetail({ teamPath, projectPath, view, sendMessag
     `${row.targetKind === 'group' ? `group ${row.targetId}` : sessionLabel(row.targetId, sessions)} · ${row.state}` +
     (row.claimedBy ? ` · claimed by ${sessionLabel(row.claimedBy, sessions)}` : '')
 
+  // The worker choice applies to a group target only (I3).
+  const groupWorker = form.kind === 'group' ? form.worker : ''
   const previewAssign = () => {
     const requestId = crypto.randomUUID()
     useTeamTaskStore.getState().beginPreview(teamPath, requestId)
@@ -123,12 +128,13 @@ export default function TeamTaskDetail({ teamPath, projectPath, view, sendMessag
     sendMessage({
       type: 'team-task-preview', teamPath, requestId, taskId: task.id,
       target: { kind: form.kind as 'group' | 'session', id: form.id },
+      ...(groupWorker ? { worker: groupWorker } : {}),
     })
   }
   /** Dispatch: over an outstanding assignment the choice is explicit (D7). */
   const sendAssign = (handling?: 'notify' | 'stop') => {
     if (form.kind === '' || !form.id) return
-    const payload = `${form.kind}:${form.id}:${form.instruction}`
+    const payload = JSON.stringify([form.kind, form.id, groupWorker, form.instruction])
     // Reuse the key while the form still asks for the same dispatch; an edit
     // is a new intent (the refused one wrote nothing, so re-keying is safe).
     const requestKey = form.requestKey && form.sent === payload ? form.requestKey : crypto.randomUUID()
@@ -136,7 +142,7 @@ export default function TeamTaskDetail({ teamPath, projectPath, view, sendMessag
     act('assign', {
       type: 'team-task-assign', requestKey,
       target: { kind: form.kind, id: form.id }, instruction: form.instruction,
-      ...(handling ? { handling } : {}),
+      ...(handling ? { handling } : {}), ...(groupWorker ? { worker: groupWorker } : {}),
     })
   }
   const assignDisabled = !connected || disabled || form.kind === '' || !form.id || !form.instruction.trim()
@@ -160,8 +166,10 @@ export default function TeamTaskDetail({ teamPath, projectPath, view, sendMessag
       {!choosing ? <>
         <div className="mt-2 flex flex-col gap-2" data-testid="task-assign-form">
           <TaskTargetSelect testId="task-detail-target" kind={form.kind} id={form.id}
-            onKind={kind => setForm(current => ({ ...current, kind, id: '' }))} onId={id => setForm(current => ({ ...current, id }))}
+            onKind={kind => setForm(current => ({ ...current, kind, id: '', worker: '' }))} onId={id => setForm(current => ({ ...current, id, worker: '' }))}
             groups={groups} sessions={sessions.filter(session => session.kind === 'chat')} disabled={!connected} />
+          {form.kind === 'group' && <TaskWorkerPicker testId="task-detail-worker" teamPath={teamPath} group={form.id} value={form.worker}
+            onChange={worker => setForm(current => ({ ...current, worker }))} sendMessage={sendMessage} connected={connected} disabled={!connected} label="Assignment" />}
           <textarea className="input min-h-12 text-chat-body" aria-label="Assignment instruction" placeholder="Instruction"
             value={form.instruction} disabled={!connected} onChange={event => setForm(current => ({ ...current, instruction: event.target.value }))} />
           <p className="text-chat-meta text-secondary">Group dispatch selects one eligible member of the group.</p>
@@ -221,10 +229,10 @@ export default function TeamTaskDetail({ teamPath, projectPath, view, sendMessag
     </Section>
 
     <Section teamPath={teamPath} name="Results">
-      <TaskResultsSection detail={detail} groups={groups} sessions={sessions} connected={connected} disabled={disabled} act={act} />
+      <TaskResultsSection detail={detail} groups={groups} sessions={sessions} connected={connected} disabled={disabled} act={act} host={{ teamPath, sendMessage }} />
     </Section>
     <Section teamPath={teamPath} name="Release">
-      <TaskReleaseDialog detail={detail} groups={groups} connected={connected} disabled={disabled} act={act} />
+      <TaskReleaseDialog detail={detail} groups={groups} sessions={sessions} connected={connected} disabled={disabled} act={act} host={{ teamPath, sendMessage }} />
     </Section>
 
     <Section teamPath={teamPath} name="Publications">

@@ -14,6 +14,7 @@ import { create } from 'zustand'
 import type { ServerMessage } from '@shared/types'
 import type { SessionDirectoryEntry } from '@shared/team'
 import type { HumanTaskDetail, TaskDispatchPreview, TaskTargetOptions, TeamTaskSummary } from '@shared/teamTasks'
+import type { TeamCapacityAnswer } from '@shared/teamCapacity'
 
 export type TaskAction = 'create' | 'create-assign' | 'assign' | 'draft' | 'publish' | 'notify' | 'note' | 'status' | 'handoff' | 'accept' | 'release' | 'recheck'
 
@@ -37,12 +38,14 @@ export interface TaskFormDraft {
   /** The assignment target's kind; '' = none chosen (plain Create task). */
   targetKind: '' | 'group' | 'session'
   targetId: string
+  /** A group target's worker choice (dispatch-worker-choice 4.3); '' = any worker. */
+  worker: string
   instruction: string
 }
 
 export const emptyDraft = (): TaskFormDraft => ({
   title: '', direction: '', acceptance: '', parentId: '', worktree: '', openspecChange: '', planId: '', planChange: '',
-  targetKind: '', targetId: '', instruction: '',
+  targetKind: '', targetId: '', worker: '', instruction: '',
 })
 
 /**
@@ -60,7 +63,7 @@ export interface TaskCreateFlow {
   /** The last assign leg was refused: the form offers Retry assignment. */
   assignFailed: boolean
   /** The dispatch payload the key was armed for, once its leg was sent. */
-  sentPayload?: { targetKind: 'group' | 'session'; targetId: string; instruction: string }
+  sentPayload?: { targetKind: 'group' | 'session'; targetId: string; worker?: string; instruction: string }
   /** The create payload the key was armed for, once its leg was sent. */
   sentCreatePayload?: TaskCreatePayload
 }
@@ -101,6 +104,8 @@ export interface TaskView {
   /** The pickers' team-scoped worktrees and changes (team-task-targets). */
   targets: TaskTargetOptions | null
   targetsLoading: boolean
+  /** The worker pickers' data: the team's capacity (team-task-capacity, dispatch-worker-choice 4.3). */
+  capacity: TeamCapacityAnswer | null
   /** Armed publish/notify commands by slot (`publish:<task>`, `notify:<task>:<revision>`); kept across reconnects. */
   commands: Record<string, ArmedCommand>
   /** Which slot each pending publish/notify request was sent under, by request id. */
@@ -109,7 +114,7 @@ export interface TaskView {
 
 export const closedTaskView = (): TaskView => ({
   open: false, loading: false, tasks: [], selectedTaskId: null, detail: null, directory: [], pending: {}, error: null,
-  draft: emptyDraft(), flow: null, preview: null, previewPending: {}, targets: null, targetsLoading: false,
+  draft: emptyDraft(), flow: null, preview: null, previewPending: {}, targets: null, targetsLoading: false, capacity: null,
   commands: {}, commandRequests: {},
 })
 
@@ -151,6 +156,7 @@ interface TaskState {
   applyPreviewResult: (message: Extract<ServerMessage, { type: 'team-task-preview-result' }>) => void
   beginTargets: (teamKey: string) => void
   applyTargetsResult: (message: Extract<ServerMessage, { type: 'team-task-targets-result' }>) => void
+  applyCapacityResult: (message: Extract<ServerMessage, { type: 'team-task-capacity-result' }>) => void
   applySnapshot: (message: Extract<ServerMessage, { type: 'team-tasks-snapshot' }>) => void
   applyDetail: (message: Extract<ServerMessage, { type: 'team-task-detail' }>) => void
   applyResult: (message: Extract<ServerMessage, { type: 'team-task-result' }>) => void
@@ -223,14 +229,14 @@ export const useTeamTaskStore = create<TaskState>(set => ({
     const view = state.views[teamKey]
     if (!view?.open || !view.flow?.assignFailed) return state
     // Reuse the key for a true retry (the server replays the committed
-    // outcome). An edited target or instruction is a new intent on the same
+    // outcome). An edited target, worker, or instruction is a new intent on the same
     // task — the prior dispatch wrote nothing, so a fresh key is safe and
     // the old one would be refused for a different payload.
     const draft = view.draft
-    const payload = { targetKind: draft.targetKind as 'group' | 'session', targetId: draft.targetId, instruction: draft.instruction }
+    const payload = { targetKind: draft.targetKind as 'group' | 'session', targetId: draft.targetId, worker: draft.worker, instruction: draft.instruction }
     const changed = view.flow.sentPayload &&
       (view.flow.sentPayload.targetKind !== payload.targetKind || view.flow.sentPayload.targetId !== payload.targetId ||
-        view.flow.sentPayload.instruction !== payload.instruction)
+        (view.flow.sentPayload.worker ?? '') !== payload.worker || view.flow.sentPayload.instruction !== payload.instruction)
     const flow = { ...view.flow, assignFailed: false, sentPayload: payload,
       ...(changed ? { requestKey: crypto.randomUUID() } : {}) }
     return { views: { ...state.views, [teamKey]: { ...view, flow, error: null } } }
@@ -280,6 +286,9 @@ export const useTeamTaskStore = create<TaskState>(set => ({
       error: message.error ?? view.error,
     } } }
   }),
+  // A refused read keeps the last answer: the picker still offers its workers.
+  applyCapacityResult: message => set(state =>
+    message.capacity ? update(state, message.teamPath, { capacity: message.capacity }) : state),
   applySnapshot: message => set(state => update(state, message.teamPath, { loading: false, tasks: message.tasks })),
   applyDetail: message => set(state =>
     state.views[message.teamPath]?.selectedTaskId === message.detail.task.id
