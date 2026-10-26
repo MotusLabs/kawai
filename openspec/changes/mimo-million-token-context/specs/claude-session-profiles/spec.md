@@ -40,10 +40,10 @@ Each named profile SHALL apply its predefined environment configuration to its a
 ## ADDED Requirements
 
 ### Requirement: Claude catalog entries can specify an auto-compaction window
-Claude profiles, providers, and provider models SHALL accept optional integer `autoCompactWindow` values from 100000 through 1000000 tokens. A configured value SHALL enable automatic compaction and set its window independently of model capacity. A model value SHALL override its provider value, and nearer catalog values SHALL override farther values at the same scope. Existing role overrides SHALL take precedence at agent start.
+Claude profiles, providers, and provider models SHALL accept optional integer `autoCompactWindow` values from 100000 through 1000000 tokens. A configured value SHALL enable automatic compaction and set its window independently of model capacity. A model value SHALL override its provider value, and nearer catalog values SHALL override farther values at the same scope. Catalog assembly follows the durable install mode. Existing role overrides SHALL take precedence at agent start.
 
 #### Scenario: MiMo global default
-- **WHEN** a MiMo chat starts with the shipped catalog and no role override
+- **WHEN** a MiMo chat starts against an effective MiMo definition that declares 1M capacity and the 300000-token window — the shipped pre-trim entry or the relay-adopted template — with no role override
 - **THEN** automatic compaction is enabled with a 300000-token window while the model capacity is declared as 1M
 
 #### Scenario: A model overrides the provider default
@@ -62,6 +62,21 @@ Claude profiles, providers, and provider models SHALL accept optional integer `a
 - **WHEN** a Codex catalog entry or an executable-backed Claude entry specifies autoCompactWindow
 - **THEN** its file is rejected with an actionable incompatibility error
 
-#### Scenario: Replacement catalog
-- **WHEN** a user-level catalog defines MiMo without autoCompactWindow and replaces the shipped catalog
+#### Scenario: Replacement catalog (replace mode)
+- **WHEN** a replace-mode operator catalog defines MiMo without autoCompactWindow
 - **THEN** the shipped 300000-token preference is not injected into that operator definition
+
+#### Scenario: Merge-mode inheritance
+- **WHEN** a merge-mode catalog omits autoCompactWindow and a shipped or retained MiMo definition is available below it
+- **THEN** the effective MiMo definition inherits that lower definition's window, and where no lower definition exists no preference is synthesized and a retired id is never resurrected
+
+### Requirement: Selected window preferences compose within the launch's protections
+Keys a Claude launch composes for a selected window — the window and each cleared disable flag — SHALL join the launch's fresh per-spawn registered-name set, and a composition that would carry a registered name SHALL refuse the launch before spawn. When the launch's model declaration explicitly carries `[1m]`, a selected value SHALL also clear the 1M opt-out flag in both launch env layers; otherwise that flag keeps its existing behavior. Capacity is never inferred from the window alone.
+
+#### Scenario: Registered-name collision refuses the launch
+- **WHEN** a selected preference's launch composition would carry a variable whose name is registered for withholding
+- **THEN** the launch refuses before spawn with a names-only error and no child starts
+
+#### Scenario: 1M opt-out cleared only under the explicit condition
+- **WHEN** a launch declares an explicit `[1m]` model and a selected numeric preference applies
+- **THEN** the 1M opt-out flag is cleared in both launch env layers, while a launch without either the explicit declaration or a selected value keeps that flag's existing behavior
