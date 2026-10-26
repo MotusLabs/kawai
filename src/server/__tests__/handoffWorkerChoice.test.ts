@@ -99,6 +99,7 @@ async function refusal(run: () => Promise<unknown>): Promise<string> {
 const written = (taskId: string) => ({ assignments: tasks.store.assignmentsOf(taskId).length, mail: mail.forTask(taskId).length })
 
 describe('a group handoff carries the worker', () => {
+  // @covers: task-results › Handoffs can name a worker › Review on another provider
   test('the normalized choice rides the row and the instruction mail', async () => {
     const { task, result } = await submitted()
     const handed = await results.handoff(human(), task.id, review(result.id, { worker: 'glm' }))
@@ -106,6 +107,7 @@ describe('a group handoff carries the worker', () => {
     expect(mail.get(handed.assignment.messageId!)).toMatchObject({ toKind: 'group', toId: 'reviewers', workerChoice: 'zai/glm' })
   })
 
+  // @covers: task-results › Handoffs can name a worker › Review on another provider
   test('task_handoff passes worker through to the dispatch', async () => {
     const { task, result } = await submitted()
     expect(Object.keys(taskSchemas.task_handoff.shape)).toContain('worker')
@@ -125,6 +127,7 @@ describe('a group handoff carries the worker', () => {
 })
 
 describe('payload identity', () => {
+  // @covers: task-results › Handoffs can name a worker › Same key, different worker
   test('the same key with a different worker is refused naming worker; the normalized form replays', async () => {
     const { task, result } = await submitted()
     const first = await results.handoff(human(), task.id, review(result.id, { worker: 'zai/glm' }))
@@ -148,6 +151,7 @@ describe('payload identity', () => {
     expect(assignmentStore.insert({ ...base, workerChoice: 'zai' }).replay).toBe(true)
   })
 
+  // @covers: task-results › Handoffs can name a worker › Same key, different worker
   test('an agent retry is equivalent only with the same worker; another worker is another handoff', async () => {
     const { task, result } = await submitted()
     const ask = (worker?: string) => results.handoff(agent('dev'), task.id,
@@ -163,6 +167,7 @@ describe('payload identity', () => {
 })
 
 describe('refusals write nothing', () => {
+  // @covers: task-results › Handoffs can name a worker › Worker on a session target
   test('a session target refuses a worker: a choice applies only to group targets', async () => {
     const { task, result } = await submitted()
     const before = written(task.id)
@@ -185,6 +190,7 @@ describe('refusals write nothing', () => {
     expect(written(task.id)).toEqual(before)
   })
 
+  // @covers: task-results › Handoffs can name a worker › Plan-execution handoffs carry no choice
   test('Kawai never carries a worker choice', async () => {
     const { task } = await submitted()
     const system = { kind: 'system' as const, team, origin: { kind: 'execution' as const, executionId: 'exec-1' } }

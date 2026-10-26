@@ -7,7 +7,6 @@
     "process-observability",
     "openrouter-provider",
     "per-result-suite",
-    "dispatch-worker-choice",
     "ci-fixture-specs"
   ]
 }

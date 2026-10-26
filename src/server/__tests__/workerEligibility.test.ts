@@ -62,6 +62,7 @@ describe('evaluateEligibility exclusion reasons', () => {
     ])
   })
 
+  // @covers: agent-mailbox › A worker choice does not survive a limit forward › Chosen provider hits its limit
   test('a cooling excluded provider removes its other models', () => {
     const result = evaluateEligibility(state({
       group: group('profiles: [glm, glm-flash, haiku]\nmax: 5'),
@@ -105,6 +106,7 @@ describe('evaluateEligibility at a stated time', () => {
   const at = (iso: string) => Date.parse(iso)
   const cooldowns = { glm: '2026-10-18T18:00:00.000Z' }
 
+  // @covers: team-routing-rules › Eligibility is one reusable pure check › Evaluation at an incident cutoff
   test('an incident cutoff uses the cooldowns then in force and reads no current state', () => {
     // At 17:00 the cooldown was in force; the same state at 19:00 has it over.
     const before = evaluateEligibility(state({ cooldowns, now: at('2026-10-18T17:00:00.000Z') }))
@@ -125,6 +127,7 @@ describe('evaluateEligibility at a stated time', () => {
 })
 
 describe('evaluateEligibility is the candidate builder', () => {
+  // @covers: team-routing-rules › Eligibility is one reusable pure check › Same answer as a live pass
   test('buildCandidates returns exactly the check\'s candidates and counts', () => {
     const input = state({
       members: [member('a', 'sonnet', { idleForMs: 900 }), member('b', 'glm', { eligible: false })],

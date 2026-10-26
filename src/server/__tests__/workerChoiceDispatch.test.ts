@@ -138,6 +138,8 @@ beforeEach(() => {
 afterEach(() => { dispatcher.close(); db.close() })
 
 describe('the dispatcher pass routes inside the worker choice (2.2)', () => {
+  // @covers: team-routing-rules › A worker choice filters route candidates › Members on other workers are skipped
+  // @covers: agent-mailbox › Group mail can name a worker › Provider choice
   test('the chosen provider\'s member is picked over a longer-idle member elsewhere', async () => {
     writeGroup('profiles: [sonnet, glm]\nmax: 4')
     records.set('long', record('long', 'sonnet'))
@@ -155,6 +157,7 @@ describe('the dispatcher pass routes inside the worker choice (2.2)', () => {
     expect(delivered).toEqual([{ to: 'zai', id: chosen.id }, { to: 'long', id: plain.id }])
   })
 
+  // @covers: team-worktree-staffing › Spawns honor the worker choice › Chosen worker at its cap
   test('a capped chosen worker waits instead of spawning on another worker', async () => {
     writeGroup('profiles: { glm: 1, sonnet: 1 }\nmax: 3')
     records.set('busy-glm', record('busy-glm', 'glm', { status: 'working' }))
@@ -174,6 +177,8 @@ describe('the dispatcher pass routes inside the worker choice (2.2)', () => {
 })
 
 describe('the worker-choice waiting constraint (2.4)', () => {
+  // @covers: team-routing-rules › A cooling chosen worker holds the message › Chosen provider is cooling
+  // @covers: team-waiting-reasons › Waiting reasons name the worker choice › Held by a cooling choice
   test('a cooling choice holds with the cooldown end, and the pass routes it then with no other change', async () => {
     writeGroup('profiles: [sonnet, glm]\nmax: 2')
     // Real time: the dispatcher's own timer must fire at the cooldown end.
@@ -197,6 +202,7 @@ describe('the worker-choice waiting constraint (2.4)', () => {
     expect(delivered).toEqual([{ to: 'zai', id: chosen.id }])
   })
 
+  // @covers: team-waiting-reasons › Waiting reasons name the worker choice › Held by the chosen worker's cap
   test('a capped chosen worker reports profile-cap first, plus the choice', async () => {
     writeGroup('profiles: { glm: 1, sonnet: 1 }\nmax: 3')
     records.set('busy-glm', record('busy-glm', 'glm', { status: 'working' }))
@@ -208,6 +214,7 @@ describe('the worker-choice waiting constraint (2.4)', () => {
     expect(reason?.others.filter(entry => entry.kind === 'worker-choice')).toEqual([{ kind: 'worker-choice', detail: 'zai/glm' }])
   })
 
+  // @covers: team-waiting-reasons › Waiting reasons name the worker choice › Held by the chosen worker's cap
   test('a choice reports only its own worker\'s cap, even when another worker\'s cap sorts first', async () => {
     writeGroup('profiles: { sonnet: 1, glm: 1 }\nmax: 3')
     records.set('busy-sonnet', record('busy-sonnet', 'sonnet', { status: 'working' }))

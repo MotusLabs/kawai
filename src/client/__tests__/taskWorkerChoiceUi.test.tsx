@@ -95,6 +95,7 @@ async function mountDetail(view: HumanTaskDetail) {
   return () => act(() => renderer!.update(element()))
 }
 
+// @covers: task-assignment › Human dispatch can name a worker › Replay with a different worker
 test('store: Retry assignment reuses the key while the worker is unchanged and re-mints it when the worker changes', () => {
   useTeamTaskStore.getState().open('dev')
   const store = useTeamTaskStore.getState()
@@ -117,6 +118,7 @@ test('store: Retry assignment reuses the key while the worker is unchanged and r
   expect(flow.sentPayload).toEqual({ targetKind: 'group', targetId: 'devs', worker: 'zai/glm-flash', instruction: 'Go' })
 })
 
+// @covers: task-assignment › Human dispatch can name a worker › Session target
 test('create form: the picker shows for a group target only, reads the team\'s capacity, and groups workers by provider with usage and cooldown', async () => {
   const rerender = await mountPanel()
   expect(byTestId('task-assign-worker')).toHaveLength(0)
@@ -150,6 +152,7 @@ test('create form: the picker shows for a group target only, reads the team\'s c
   expect(useTeamTaskStore.getState().views.dev!.draft.worker).toBe('')
 })
 
+// @covers: task-assignment › The dispatch preview reflects the worker choice › Cooling choice in the preview
 test('create form: the preview and the assign leg carry the worker; changing the group clears it', async () => {
   const rerender = await mountPanel()
   change('Task title', 'Export')
@@ -190,6 +193,8 @@ test('create form: the preview and the assign leg carry the worker; changing the
   expect(useTeamTaskStore.getState().views.dev!.draft.worker).toBe('')
 })
 
+// @covers: task-assignment › Human dispatch can name a worker › Session target
+// @covers: task-assignment › Human dispatch can name a worker › Replay with a different worker
 test('detail Assign: the worker is part of the sent payload — unchanged reuses the key, changed re-mints; a session target sends none', async () => {
   const rerender = await mountDetail(detail())
   change('Assignment target kind', 'group')

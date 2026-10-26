@@ -57,16 +57,19 @@ async function refusal(run: () => Promise<unknown>): Promise<string> {
 }
 
 describe('group mail names a worker', () => {
+  // @covers: agent-mailbox › Group mail can name a worker › Provider choice
   test('a provider is stored as the provider and routed by it', async () => {
     const sent = await lead.send_message({ ...group, worker: 'zai' })
     expect(store.get(sent.id)).toMatchObject({ toKind: 'group', state: 'queued', workerChoice: 'zai' })
   })
 
+  // @covers: agent-mailbox › Group mail can name a worker › Exact model
   test('a bare model key is stored as provider/model; provider/model is kept', async () => {
     expect((await lead.send_message({ ...group, worker: 'glm-flash' })).workerChoice).toBe('zai/glm-flash')
     expect((await lead.send_message({ ...group, worker: 'claude/sonnet' })).workerChoice).toBe('claude/sonnet')
   })
 
+  // @covers: agent-mailbox › Group mail can name a worker › Scheduled mail keeps its choice
   test('schedule_message stores the choice on the scheduled row', async () => {
     const scheduled = await lead.schedule_message({ ...group, worker: 'claude', delay_seconds: 60 })
     expect(store.get(scheduled.id)).toMatchObject({ workerChoice: 'claude', deliverAt: scheduled.deliverAt })
@@ -87,23 +90,28 @@ describe('group mail names a worker', () => {
 })
 
 describe('invalid worker choices are refused with nothing queued', () => {
+  // @covers: agent-mailbox › Invalid worker choices are refused › Not among the group's workers
   test('a worker the group does not list is refused naming the group\'s workers', async () => {
     const error = await refusal(() => lead.send_message({ ...group, worker: 'claude/opus' }))
     expect(error).toContain('not among group devs\'s workers: claude/sonnet, zai/glm, zai/glm-flash')
     expect(queued()).toEqual([])
   })
 
+  // @covers: agent-mailbox › Invalid worker choices are refused › Unknown worker
   test('an unknown worker is refused naming the catalog', async () => {
     expect(await refusal(() => lead.send_message({ ...group, worker: 'nobody' }))).toContain('names no provider or model')
     expect(await refusal(() => lead.schedule_message({ ...group, worker: 'zai/opus', delay_seconds: 5 }))).toContain('names no model opus of provider zai')
     expect(queued()).toEqual([])
   })
 
+  // @covers: agent-mailbox › Invalid worker choices are refused › Ambiguous bare id
   test('an ambiguous bare id asks for the provider/model form', async () => {
     expect(await refusal(() => lead.send_message({ ...group, worker: 'glm' }))).toContain('use the provider/model form (zai/glm)')
     expect(queued()).toEqual([])
   })
 
+  // @covers: agent-mailbox › Invalid worker choices are refused › Direct mail
+  // @covers: agent-mailbox › Invalid worker choices are refused › Mail to the human
   test('direct mail and mail to the human are refused: a choice applies only to group mail', async () => {
     const direct = await refusal(() => lead.send_message({ to_kind: 'session', to_id: 'dev', body: 'Go', worker: 'zai' }))
     expect(direct).toContain('applies only to group mail')
@@ -118,6 +126,7 @@ describe('invalid worker choices are refused with nothing queued', () => {
     expect(queued()).toEqual([])
   })
 
+  // @covers: agent-mailbox › Invalid worker choices are refused › Reply does not take a choice
   test('a worker given on reply is refused naming the reason', async () => {
     const asked = await mailboxHandlers(mailbox, 'dev').send_message({ to_kind: 'session', to_id: 'lead', body: 'Question' })
     store.claim(asked.id, 'lead'); store.markPushed(asked.id); store.markDelivered(asked.id)

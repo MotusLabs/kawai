@@ -75,6 +75,8 @@ beforeEach(() => {
 })
 
 describe('the router narrows to the worker choice (2.1)', () => {
+  // @covers: team-routing-rules › A worker choice filters route candidates › Members on other workers are skipped
+  // @covers: agent-mailbox › Group mail can name a worker › Provider choice
   test('members on other workers are skipped: the chosen provider\'s member is picked over a longer-idle one', async () => {
     const view = { eligible: [eligible('b', 500), eligible('a', 5)], attempt: 0 }
     expect(await makeRouter().route(message({ workerChoice: 'zai' }), view)).toEqual({ kind: 'member', sessionId: 'a' })
@@ -86,6 +88,8 @@ describe('the router narrows to the worker choice (2.1)', () => {
       .toEqual({ kind: 'member', sessionId: 'b' })
   })
 
+  // @covers: team-worktree-staffing › Spawns honor the worker choice › Spawn on the chosen provider
+  // @covers: agent-mailbox › Group mail can name a worker › Exact model
   test('spawn slots are limited to the choice and keep the group\'s order', async () => {
     def = group('profiles: [sonnet, glm, glm-flash]\nmax: 6\nstrategy: profile-order')
     members = []
@@ -111,6 +115,7 @@ describe('the router narrows to the worker choice (2.1)', () => {
     ])
   })
 
+  // @covers: team-routing-rules › A worker choice filters route candidates › Choice within a role's profiles
   test('a choice with a role keeps only the intersection, in the role\'s order', async () => {
     def = group('profiles: [sonnet, glm, glm-flash, opus]\nmax: 6\nstrategy: profile-order')
     members = []
@@ -140,6 +145,7 @@ describe('the eligibility check states each member\'s cause (2.1)', () => {
     ]),
   })
 
+  // @covers: team-routing-rules › A worker choice filters route candidates › Choice within a role's profiles
   test('the role is tested first: outside both reads outside-role alone; inside the role but off the choice reads worker-choice', () => {
     expect(summary(evaluateEligibility(state({ allowedProfiles: ['glm-flash', 'sonnet', 'glm'], workerChoice: choice('zai') })))).toEqual({
       candidates: ['member:g', 'spawn:glm-flash', 'spawn:glm'],
@@ -169,6 +175,7 @@ describe('the eligibility check states each member\'s cause (2.1)', () => {
     expect(evaluateEligibility(state({ workerChoice: null }))).toEqual(evaluateEligibility(state({})))
   })
 
+  // @covers: team-routing-rules › Eligibility is one reusable pure check › Exclusion reasons per alternative
   test('exclusion reasons per alternative: the off-choice member by worker-choice, the capped chosen slot by profile-cap', () => {
     const result = evaluateEligibility(state({
       group: { id: 'devs', profiles: [{ profileId: 'sonnet' }, { profileId: 'glm', cap: 1 }], max: 8, strategy: 'profile-order' },
@@ -193,6 +200,7 @@ describe('the eligibility check states each member\'s cause (2.1)', () => {
 })
 
 describe('a rule pick outside the filtered set (2.3)', () => {
+  // @covers: team-routing-rules › A worker choice filters route candidates › Rule pick outside the choice
   test('naming a filtered-out member reads as unknown and falls back to the built-in pick', async () => {
     const seen: RouteContext[] = []
     rule = async ctx => { seen.push(ctx); return { type: 'pick', candidateId: 'member:b' } }
@@ -207,6 +215,7 @@ describe('a rule pick outside the filtered set (2.3)', () => {
 })
 
 describe('rules see the worker choice (2.6)', () => {
+  // @covers: team-routing-rules › Rules see the worker choice › Rule reads the choice
   test('the route context names the choice beside the other metadata, and omits it without one', async () => {
     const seen: RouteContext[] = []
     rule = async ctx => { seen.push(ctx); return { type: 'default' } }

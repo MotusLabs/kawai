@@ -25,6 +25,7 @@ describe('team_messages.worker_choice', () => {
     teamId: TEAM, toKind: 'group', toId: 'devs', fromSession: 'chat-lead', fromGroup: 'lead', originPath: '/repo', body: 'Build it', ...over,
   })
 
+  // @covers: agent-mailbox › Group mail can name a worker › Scheduled mail keeps its choice
   test('a choice round-trips through enqueue, get, and the due group queue', () => {
     const sent = send({ workerChoice: 'zai/glm-flash' })
     expect(sent.workerChoice).toBe('zai/glm-flash')
@@ -40,6 +41,7 @@ describe('team_messages.worker_choice', () => {
     expect(db.prepare('SELECT worker_choice FROM team_messages WHERE id = ?').get(sent.id)).toEqual({ worker_choice: null })
   })
 
+  // @covers: agent-mailbox › Group mail can name a worker › Scheduled mail keeps its choice
   test('scheduled mail keeps its choice until it is due', () => {
     const sent = send({ workerChoice: 'claude', deliverAt: '2999-01-01T00:00:00.000Z' })
     expect(store.dueGroupMail()).toEqual([])

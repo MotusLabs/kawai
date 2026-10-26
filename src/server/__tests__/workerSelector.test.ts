@@ -33,6 +33,7 @@ describe('normalizeWorkerSelector', () => {
     expect(normalizeWorkerSelector('mimo', catalog)).toEqual({ ok: true, selector: 'mimo' })
   })
 
+  // @covers: agent-mailbox › Invalid worker choices are refused › Ambiguous bare id
   test('a bare id that is a provider and a model of another provider is refused asking for provider/model', () => {
     const result = normalizeWorkerSelector('claude', catalog)
     expect(result.ok).toBe(false)
@@ -42,6 +43,7 @@ describe('normalizeWorkerSelector', () => {
     expect(normalizeWorkerSelector('proxy/claude', catalog)).toEqual({ ok: true, selector: 'proxy/claude' })
   })
 
+  // @covers: agent-mailbox › Invalid worker choices are refused › Unknown worker
   test('an id naming neither a provider nor a model is refused naming the catalog', () => {
     const result = normalizeWorkerSelector('gemini', catalog)
     expect(result).toMatchObject({ ok: false, reason: 'unknown' })
@@ -67,6 +69,7 @@ describe('resolveWorkerSelector', () => {
     expect(resolveWorkerSelector('zai', group, providerOf)).toEqual(['glm-flash', 'glm'])
   })
 
+  // @covers: agent-mailbox › Group mail can name a worker › Exact model
   test('provider/model resolves to that model alone', () => {
     expect(resolveWorkerSelector('zai/glm-flash', group, providerOf)).toEqual(['glm-flash'])
   })
@@ -89,6 +92,7 @@ describe('validateWorkerChoice', () => {
     expect(validateWorkerChoice('zai', catalog, devs)).toEqual({ ok: true, selector: 'zai', profiles: ['glm'] })
   })
 
+  // @covers: agent-mailbox › Invalid worker choices are refused › Not among the group's workers
   test('a worker the group does not list is refused naming the group\'s workers', () => {
     const result = validateWorkerChoice('opus', catalog, devs)
     expect(result).toMatchObject({ ok: false, reason: 'outside-group' })
