@@ -36,6 +36,9 @@ function git(args: string[], cwd?: string) {
   return result.stdout
 }
 
+// @covers: team-waiting-reasons › Waiting reasons name the worker choice › Held by a cooling choice
+// @covers: team-worktree-staffing › Spawns honor the worker choice › Spawn on the chosen provider
+// @covers: agent-capacity-view › Agents can read their team's capacity › Lead reads the team's capacity
 test('a lead reads team_capacity, sends group task mail naming another provider, a member spawns on it in the task worktree, and a cooling choice waits with its reason', async () => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-worker-lead-')))
   const repo = path.join(root, 'repo')

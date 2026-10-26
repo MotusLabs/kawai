@@ -76,6 +76,7 @@ async function limitedChoice(): Promise<TeamMessage> {
 }
 
 describe('a worker choice across limit outcomes (2.5)', () => {
+  // @covers: agent-mailbox › A worker choice does not survive a limit forward › Chosen provider hits its limit
   test('a forward carries no choice and still excludes the limited worker', async () => {
     group('devs', 'onLimit: { otherwise: forward }')
     const message = await limitedChoice()
@@ -93,6 +94,7 @@ describe('a worker choice across limit outcomes (2.5)', () => {
     expect(store.get(message.id)).toMatchObject({ state: 'queued', toKind: 'group', toId: 'devs', workerChoice: 'zai' })
   })
 
+  // @covers: team-routing-rules › Rules see the worker choice › Rule reads the choice
   test('the onLimit rule sees the choice (2.6)', async () => {
     group('devs')
     const seen: LimitOutcomeContext[] = []

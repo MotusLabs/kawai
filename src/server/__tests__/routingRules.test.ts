@@ -147,6 +147,7 @@ export default {
     expect(registry!.rule('devs')!.timeoutMs).toBe(10_000)
   })
 
+  // @covers: team-routing-rules › Rules see the worker choice › Rule reads the choice
   test('a rule reads the message\'s worker choice, and the published types carry it (dispatch-worker-choice 2.6)', async () => {
     write('devs.ts', `import type { RoutingRule } from './kawai-routing'
 const rule: RoutingRule = {

@@ -17,6 +17,7 @@ const claude = (env: Record<string, string | undefined>, extra: Partial<ChatLaun
   ({ runtime: 'claude', env, ...extra }) as ChatLaunchConfiguration
 
 describe('storedLoginKey', () => {
+  // @covers: agent-capacity-view › Capacity flags providers that share a login › Different config directories
   test('a launch with no credential and no base URL keys on its resolved config dir', () => {
     expect(storedLoginKey(claude({ CLAUDE_CONFIG_DIR: `${DIR}/../claude/` }), {})).toBe(DIR)
     expect(storedLoginKey(claude({ HOME: '/tmp/kawai-shared-login-example' }), {})).toBe('/tmp/kawai-shared-login-example/.claude')
@@ -30,6 +31,7 @@ describe('storedLoginKey', () => {
     expect(storedLoginKey({ runtime: 'claude' } as ChatLaunchConfiguration, { CLAUDE_CONFIG_DIR: DIR, ANTHROPIC_API_KEY: fake('sk-', 'x') })).toBeNull()
   })
 
+  // @covers: agent-capacity-view › Capacity flags providers that share a login › Unknown credentials are never assumed shared
   test.each([
     ['ANTHROPIC_API_KEY', fake('sk-ant-', 'example')],
     ['ANTHROPIC_AUTH_TOKEN', fake('tok-', 'example')],
@@ -45,6 +47,7 @@ describe('storedLoginKey', () => {
     expect(storedLoginKey(claude({ CLAUDE_CONFIG_DIR: DIR }, { settings: { env: { CLAUDE_CODE_OAUTH_TOKEN: '' } } }), {})).toBeNull()
   })
 
+  // @covers: agent-capacity-view › Capacity flags providers that share a login › Unknown credentials are never assumed shared
   test.each([
     'https://gateway.example.internal/api/anthropic',
     'http://api.anthropic.com',
@@ -66,6 +69,7 @@ describe('storedLoginKey', () => {
 })
 
 describe('sharedLogins', () => {
+  // @covers: agent-capacity-view › Capacity flags providers that share a login › Different config directories
   test('providers on one key name each other, sorted; different keys and null keys stay unmarked', () => {
     const logins = sharedLogins([
       { provider: 'claude', key: '/a' }, { provider: 'zeta', key: '/a' }, { provider: 'alpha', key: '/a' },
@@ -102,6 +106,8 @@ describe('through the real catalog resolution', () => {
   })
   afterEach(() => fs.rmSync(home, { recursive: true, force: true }))
 
+  // @covers: agent-capacity-view › Capacity flags providers that share a login › Two Claude profiles on one claude.ai account
+  // @covers: agent-capacity-view › Capacity flags providers that share a login › Unknown credentials are never assumed shared
   test('two stored-login profiles of different providers on one config dir are marked both ways; a credentialed one on that dir is not', () => {
     // Blank out any host credential so only the injected environment decides.
     const env = {

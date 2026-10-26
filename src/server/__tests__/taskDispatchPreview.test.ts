@@ -137,6 +137,7 @@ describe('with a worker the preview applies the choice through the eligibility c
     expect((await preview(task.id, 'devs', 'zai')).idleMembers).toEqual(['glm-dev'])
   })
 
+  // @covers: task-assignment › The dispatch preview reflects the worker choice › Cooling choice in the preview
   test('a cooling choice warns with the cooldown end, spawn reads false with its reason, and dispatch stays allowed', async () => {
     const task = await worktreeTask()
     cooldowns.set('glm-flash', FUTURE)

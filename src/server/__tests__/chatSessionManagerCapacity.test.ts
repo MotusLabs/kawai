@@ -68,6 +68,7 @@ async function startedTools(options: Partial<ConstructorParameters<typeof ChatSe
   return (server.instance as { _registeredTools: Registered })._registeredTools
 }
 
+// @covers: agent-capacity-view › Agents can read their team's capacity › Lead reads the team's capacity
 test('a started Claude chat\'s kawai-team server carries team_capacity, answering for its team from the manager\'s routing objects', async () => {
   const registered = await startedTools()
   expect(Object.keys(registered)).toContain('team_capacity')
@@ -87,6 +88,8 @@ test('a started Claude chat\'s kawai-team server carries team_capacity, answerin
   expect(refused.content[0]!.text).toBe('Unknown group "nobody" in your team.')
 })
 
+// @covers: agent-capacity-view › Capacity flags providers that share a login › Two Claude profiles on one claude.ai account
+// @covers: agent-capacity-view › Capacity flags providers that share a login › Unknown credentials are never assumed shared
 test('sharesLoginWith marks two stored-login providers on the manager\'s one config dir, never a credentialed one', async () => {
   fs.mkdirSync(path.join(root, '.kawai'), { recursive: true })
   fs.writeFileSync(path.join(root, '.kawai/providers.json'), JSON.stringify({

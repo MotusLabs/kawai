@@ -106,6 +106,7 @@ beforeEach(() => {
 afterEach(() => db.close())
 
 describe('team_capacity groups (3.3)', () => {
+  // @covers: agent-capacity-view › Agents can read their team's capacity › Lead reads the team's capacity
   test('no arguments lists every group of the caller\'s team with each worker\'s provider, cap, and live count', () => {
     addRecord('dev-1')
     const answer = capacity().read('lead')
@@ -122,12 +123,14 @@ describe('team_capacity groups (3.3)', () => {
     expect(answer.providers.map(provider => provider.id)).toEqual(['zai', 'claude'])
   })
 
+  // @covers: agent-capacity-view › Agents can read their team's capacity › One group
   test('a group argument lists only that group and its providers', () => {
     const answer = capacity().read('lead', { group: 'leads' })
     expect(answer.groups.map(entry => entry.id)).toEqual(['leads'])
     expect(answer.providers.map(provider => provider.id)).toEqual(['claude'])
   })
 
+  // @covers: agent-capacity-view › Agents can read their team's capacity › Unknown group
   test('an unknown group is refused naming it, and another team\'s group is unknown to the caller', () => {
     expect(() => capacity().read('lead', { group: 'nobody' })).toThrow('Unknown group "nobody" in your team.')
     expect(() => capacity().read('lead', { group: 'ops' })).toThrow('Unknown group "ops" in your team.')
@@ -146,6 +149,7 @@ describe('team_capacity groups (3.3)', () => {
 })
 
 describe('team_capacity live counts equal routing\'s (I2)', () => {
+  // @covers: agent-capacity-view › Capacity reads the routing state › Matches what routing sees
   test('routing counting two live members on a worker capped at two reports 2 of 2', () => {
     addRecord('dev-1')
     reserve('devs', 'glm')
@@ -153,6 +157,8 @@ describe('team_capacity live counts equal routing\'s (I2)', () => {
     expect([glm.live, glm.cap]).toEqual([2, 2])
   })
 
+  // @covers: agent-capacity-view › Capacity reads the routing state › Matches what routing sees
+  // @covers: team-routing-rules › Eligibility is one reusable pure check › Same answer as a live pass
   test('with a busy member and a pending spawn, the counts equal buildCandidates\' and the router\'s rule context', async () => {
     addRecord('dev-busy', { status: 'working' })
     addRecord('dev-idle', { claudeProfileId: 'opus' })
@@ -191,6 +197,7 @@ describe('team_capacity live counts equal routing\'s (I2)', () => {
 })
 
 describe('team_capacity usage and cooldowns', () => {
+  // @covers: agent-capacity-view › Capacity reports provider usage and cooldown › No usage after a restart
   test('a provider kawai holds no report for reads usage null, never zero, with its cooldown still reported', () => {
     limits.record({
       profileId: 'glm', sessionId: 'dev-1', groupId: 'devs', kind: 'rate_limit', final: true, status: 429, message: 'quota',
@@ -201,6 +208,7 @@ describe('team_capacity usage and cooldowns', () => {
     expect(zai.cooldownUntil).toBe(new Date(T0 + 3_600_000).toISOString())
   })
 
+  // @covers: agent-capacity-view › Capacity reports provider usage and cooldown › Provider with a usage report
   test('a held report shows each window\'s percent used and reset, status, received time, and source', () => {
     usage.set('claude', {
       status: 'warning', receivedAt: '2026-10-22T02:59:00.000Z', source: 'push',
@@ -215,6 +223,7 @@ describe('team_capacity usage and cooldowns', () => {
     expect(claude.sharesLoginWith).toEqual([])
   })
 
+  // @covers: agent-capacity-view › Capacity reports provider usage and cooldown › Cooling provider
   test('a cooling provider names its end on the provider and on each worker, taken from cooldownFor', () => {
     const end = new Date(T0 + 2 * 3_600_000).toISOString()
     limits.record({
@@ -299,6 +308,7 @@ describe('team_capacity sharesLoginWith (3.3a)', () => {
   })
   afterEach(() => { delete PROVIDERS['first-opus'] })
 
+  // @covers: agent-capacity-view › Capacity flags providers that share a login › Two Claude profiles on one claude.ai account
   test('providers whose workers all key on one login name each other', () => {
     for (const id of ['opus', 'sonnet', 'first-opus']) loginKeys.set(id, '/home/example/.claude')
     const providers = capacity().read('lead').providers

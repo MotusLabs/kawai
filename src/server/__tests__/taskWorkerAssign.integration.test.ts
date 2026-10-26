@@ -36,6 +36,8 @@ function git(args: string[], cwd?: string) {
   return result.stdout
 }
 
+// @covers: task-assignment › Human dispatch can name a worker › Assign on a chosen provider
+// @covers: team-worktree-staffing › Spawns honor the worker choice › Spawn on the chosen provider
 test('a human assign naming a worker spawns on that provider in the task worktree; another worker under the key is refused', async () => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-worker-assign-')))
   const repo = path.join(root, 'repo')

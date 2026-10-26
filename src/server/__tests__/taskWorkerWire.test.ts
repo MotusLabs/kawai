@@ -95,6 +95,7 @@ describe('team-task-assign', () => {
     instruction: 'Build the export', requestKey: 'assign-1', ...extra,
   })
 
+  // @covers: task-assignment › Human dispatch can name a worker › Assign on a chosen provider
   test('the normalized worker rides the assignment row and its instruction mail', async () => {
     const task = await tasks.create(human(), { title: 'Export', direction: 'v1' })
     await assign(task.id, 'a1', { worker: 'glm-flash' })
@@ -112,6 +113,7 @@ describe('team-task-assign', () => {
     expect(mail.forTask(task.id).map(message => message.workerChoice ?? null)).toEqual([null])
   })
 
+  // @covers: task-assignment › Human dispatch can name a worker › Replay with a different worker
   test('the same key with a different worker is refused naming worker; a normalized-equal worker replays', async () => {
     const task = await tasks.create(human(), { title: 'Export', direction: 'v1' })
     await assign(task.id, 'a1', { worker: 'zai/glm-flash' })
@@ -126,6 +128,7 @@ describe('team-task-assign', () => {
     expect(mail.forTask(task.id)).toHaveLength(1)
   })
 
+  // @covers: task-assignment › Human dispatch can name a worker › Session target
   test('a session target with a worker is refused and writes nothing', async () => {
     const task = await tasks.create(human(), { title: 'Export', direction: 'v1' })
     records.set('dev', { sessionId: 'dev', name: 'dev', projectPath: dir, sdkSessionId: null, status: 'waiting', createdAt: '', lastActivityAt: '', groupId: 'devs' })
@@ -145,6 +148,8 @@ describe('team-task-assign', () => {
 })
 
 describe('team-task-handoff', () => {
+  // @covers: task-results › Handoffs can name a worker › Review on another provider
+  // @covers: task-results › Handoffs can name a worker › Same key, different worker
   test('a review handoff carries the worker; another worker under the same key is refused naming worker', async () => {
     const task = await tasks.create(human(), { title: 'Export', direction: 'v1' })
     const result = resultFor(task.id)
@@ -162,6 +167,7 @@ describe('team-task-handoff', () => {
     expect(mail.forTask(task.id)).toHaveLength(1)
   })
 
+  // @covers: task-results › Handoffs can name a worker › Worker on a session target
   test('a session-target handoff naming a worker is refused and writes nothing', async () => {
     const task = await tasks.create(human(), { title: 'Export', direction: 'v1' })
     const result = resultFor(task.id)
