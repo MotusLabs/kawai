@@ -69,7 +69,7 @@ When Codex reports `willRetry: true`, Kawai SHALL display retry activity and SHA
 - **THEN** only one retry is scheduled and its deadline is unchanged
 #### Scenario: Stale start response after Stop
 - **WHEN** Stop cancels recovery after a capacity attempt was dispatched and the old `turn/start` response later supplies that attempt's id
-- **THEN** the id is interrupted once as cleanup, no new request is sent, and the cancelled logical turn stays closed
+- **THEN** exactly one cleanup `turn/interrupt` targets the cancelled attempt using its original client, thread and attempt id; the stale callback sends no `turn/start` or continuation request, does not reopen the cancelled logical turn, and never affects a newer attempt
 
 ### Requirement: Capacity retries are visible and cancellable
 While waiting for a capacity retry, the chat SHALL display its attempt number, time until the next attempt, and retry deadline. Stop SHALL cancel the pending retry immediately. Interrupt, archive, kill, shutdown, process exit, superseding human input, or an urgent direct delivery SHALL invalidate pending recovery. A browser reconnect SHALL restore current retry activity without scheduling an extra retry; backend restart SHALL NOT automatically resume an old retry timer.
