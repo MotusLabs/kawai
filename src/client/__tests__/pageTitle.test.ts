@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { pageTitle } from '../pageTitle'
+import { pageTitle } from '../utils/pageTitle'
 
 // The acceptance table from workspace-page-title/design.md, including absent variants.
 const cases = [
