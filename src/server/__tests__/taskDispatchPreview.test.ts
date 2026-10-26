@@ -44,6 +44,7 @@ beforeEach(() => {
   fs.writeFileSync(path.join(groups, 'devs.md'), '---\nprofiles: [sonnet, glm-flash]\nmax: 4\n---\nBuild features')
   fs.writeFileSync(path.join(groups, 'capped.md'), '---\nprofiles: { sonnet: 1, glm-flash: 1 }\n---\nCapped')
   fs.writeFileSync(path.join(groups, 'pair.md'), '---\nprofiles: { sonnet: 2, glm-flash: 1 }\n---\nPaired')
+  fs.writeFileSync(path.join(groups, 'solo.md'), '---\nprofiles: { sonnet: 1 }\nmax: 3\n---\nSolo')
   db = initDatabase({ path: path.join(dir, 'db.sqlite') })
   mail = new MailboxStore(db.db)
   const assignmentStore = new AssignmentStore(db.db, mail)
@@ -177,6 +178,15 @@ describe('with a worker the preview applies the choice through the eligibility c
     // sonnet: 1 pending of 2 — counted twice it would read full and fall to glm-flash.
     expect((await preview(task.id, 'pair', 'claude')).profile).toBe('sonnet')
     expect((await preview(task.id, 'pair')).profile).toBe('sonnet')
+  })
+
+  test('one pending spawn fills a cap-1 profile, so no spawn is claimed', async () => {
+    const task = await worktreeTask()
+    pendingSpawn('solo', 'sonnet')
+    // sonnet: 1 pending of 1 — dropped, the preview would claim a spawn while dispatch waits on the cap.
+    expect((await preview(task.id, 'solo')).spawn).toEqual({ allowed: false, profile: null, blockedBy: 'every allowed profile is at its cap or cooling down' })
+    expect((await preview(task.id, 'solo')).profile).toBeNull()
+    expect((await preview(task.id, 'solo', 'claude')).spawn).toEqual({ allowed: false, profile: null, blockedBy: 'every profile of worker claude (sonnet) is at its cap' })
   })
 
   test('a session target with a worker is refused, as dispatch refuses it', async () => {
