@@ -4,7 +4,7 @@ The optional design document is omitted: this is a display-copy change with no n
 
 ## 1. Dialog copy and supporting instructions
 
-- [ ] 1.1 Change the agent-backed Session kind option text to exactly `AI agent` in `NewSessionModal.tsx`, preserving `value="chat"` and existing handlers. Update directly related test comments/descriptions. Verify UI1 by inspecting the rendered selector with Claude and Codex profiles: the label stays `AI agent`, Terminal stays available, and profile controls remain present; this must catch the old `Claude chat`/interim `Chat` label or a profile-dependent label mutant. Preserve unrelated working-tree edits; no new test harness is needed for this copy-only edit.
+- [ ] 1.1 Change the agent-backed Session kind option text to exactly `AI agent` in `NewSessionModal.tsx`, preserving `value="chat"` and existing handlers. Update directly related test comments/descriptions. Verify UI1 by inspecting the rendered selector with Claude and Codex profiles: the label stays `AI agent`, Terminal stays available, and profile controls remain present; this must catch a regression to either prior label (`Claude chat` or the committed base `Chat`) or a profile-dependent label mutant. Work on an isolated future implementation branch and preserve unrelated edits on main; no new test harness is needed for this copy-only edit.
 - [ ] 1.2 Update the opening selection instructions in `docs/claude-session-profiles.md` to tell users to choose `AI agent`. Verify DOC1 by comparing those instructions with the rendered dialog; this must catch documentation still directing users to the removed `Claude chat` label. Keep the document's runtime-specific technical details scoped as they are.
 
 ## 2. Integration verification

@@ -2,7 +2,7 @@
 
 ## Why
 
-The New Session dialog labels its agent-backed session kind “Claude chat,” although the same form supports Claude and Codex runtimes and multiple providers. “AI agent” accurately describes the available choice before a user selects a profile.
+The New Session dialog labels its agent-backed session kind “Chat,” although the same form supports Claude and Codex runtimes and multiple providers. `AI agent` accurately describes the available choice before a user selects a profile.
 
 ## What Changes
 
@@ -24,4 +24,4 @@ None.
 
 `src/client/components/NewSessionModal.tsx`, directly related descriptions in `src/client/__tests__/newSessionModal.test.tsx`, and the opening instructions in `docs/claude-session-profiles.md`. No backend, stored identifiers, protocols, or runtime selection changes.
 
-The working tree already changes the committed label from `Claude chat` to `Chat`. Implementation must reconcile that same line to `AI agent` while preserving unrelated edits. No implementation edits are part of this proposal.
+The committed base labels this option `Chat` (`src/client/components/NewSessionModal.tsx:549`, `<option value="chat">Chat</option>`). Implementation changes that one line to `AI agent` on an isolated future implementation branch; unrelated edits on main and in any working tree are out of scope and preserved. No implementation edits are part of this proposal.
