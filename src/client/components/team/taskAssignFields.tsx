@@ -1,7 +1,8 @@
 // Shared pieces of the assignment UI (task-assignment 5.2/5.4): the
 // group-or-session target chooser and the dispatch preview rendering. Both
 // the create form and the task detail's Assign / send task use them, so the
-// two stay worded and behaved the same.
+// two stay worded and behaved the same. The preview names a group target's
+// worker choice and its models (dispatch-worker-choice 4.2).
 import type { Session } from '@shared/types'
 import type { TaskDispatchPreview } from '@shared/teamTasks'
 import type { TeamGroupOption } from '../chat/useTeamGroups'
@@ -47,6 +48,9 @@ export function TaskPreviewView({ preview }: { preview: TaskDispatchPreview }) {
     <p>{preview.target.kind === 'group' ? `Role: ${preview.role ?? preview.target.id} (group)` : `Session: ${preview.target.id}`}</p>
     <p>Worktree: {preview.worktree ?? 'none'}</p>
     {preview.sessionWorktree && <p>Session worktree: {preview.sessionWorktree}</p>}
+    {preview.worker && <p data-testid="task-preview-worker">
+      Worker: {preview.worker.selector} ({preview.worker.profiles.join(', ') || 'no model of the group'})
+      {preview.worker.cooldownUntil ? ` · cooling until ${new Date(preview.worker.cooldownUntil).toLocaleString()}` : ''}</p>}
     <p>Effective profile: {preview.profile ?? 'none available'}</p>
     <p>Approval: {preview.approval}</p>
     {preview.target.kind === 'group' && <p data-testid="task-preview-idle">

@@ -165,6 +165,16 @@ test('create form: the preview and the assign leg carry the worker; changing the
   rerender()
   act(() => one('task-assign-preview-button').props.onClick())
   expect(ofType('team-task-preview').at(-1)).toMatchObject({ target: { kind: 'group', id: 'devs' }, worker: 'zai/glm-flash' })
+  const previewed = ofType('team-task-preview').at(-1)!
+  act(() => useTeamTaskStore.getState().applyPreviewResult({ type: 'team-task-preview-result', teamPath: 'dev', requestId: previewed.requestId, preview: {
+    target: { kind: 'group', id: 'devs' }, worktree: null, role: 'devs', profile: 'glm-flash', approval: 'manual', sessionWorktree: null, idleMembers: [],
+    spawn: { allowed: false, profile: 'glm-flash', blockedBy: 'worker zai/glm-flash (glm-flash) is cooling' },
+    warning: 'Worker zai/glm-flash is cooling; the instruction waits until then',
+    worker: { selector: 'zai/glm-flash', profiles: ['glm-flash'], cooldownUntil: COOLING },
+  } }))
+  rerender()
+  expect(textOf(one('task-preview-worker'))).toContain('Worker: zai/glm-flash (glm-flash) · cooling until')
+  expect(textOf(one('task-assign-preview'))).toContain('Effective profile: glm-flash')
   act(() => one('task-create-assign-button').props.onClick())
   const [create] = ofType('team-task-create')
   // team-task-create takes no worker: it rides the assign leg (Q1).
