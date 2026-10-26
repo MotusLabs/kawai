@@ -106,6 +106,45 @@ export async function openTaskId(page: Page) {
   return (await page.getByTestId('task-detail').getAttribute('data-task-id'))!
 }
 
+/**
+ * Seed a result on the worktree's real HEAD (independent-verification 2.5's
+ * e2e: the check names a commit that exists), with Kawai's check already
+ * settled done over that commit — the render seed. The live **Recheck**
+ * control then runs the running server's real check service. Returns the
+ * result id and the commit it names.
+ */
+export function seedCheckedResult(taskId: string, session: string, worktree: string): { id: string; sha: string } {
+  const dbPath = process.env.AGENTBOARD_DB_PATH!
+  if (!dbPath.startsWith(process.env.E2E_TMUX_TMPDIR!)) throw new Error('Refuse seeding a non-isolated database')
+  const sha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: worktree, encoding: 'utf8', env: cleanGitEnv() }).trim()
+  const id = execFileSync('bun', ['-e', `
+    import { Database } from 'bun:sqlite';
+    import { TaskResultStore } from './src/server/team/taskResultStore';
+    import { ResultCheckStore } from './src/server/verification/resultCheckStore';
+    import { retryOnSqliteBusy } from './src/server/__tests__/sqliteBusyRetry';
+    const [file, taskId, session, worktree, sha] = JSON.parse(await Bun.stdin.text());
+    const db = new Database(file); db.exec('PRAGMA busy_timeout = 5000');
+    const task = db.query('SELECT id, team_id, revision FROM team_tasks WHERE id = ?').get(taskId);
+    const store = new ResultCheckStore(db);
+    const result = await retryOnSqliteBusy(() => new TaskResultStore(db).insert({ teamId: task.team_id, taskId: task.id,
+      summary: 'CSV export', commit: sha, diff: null, worktree, tests: [{ description: 'bun run test', outcome: 'pass' }],
+      limitations: null, taskRevision: task.revision, submittedBy: { kind: 'agent', sessionId: session } }));
+    // A settled done check over the real commit: the fact groups this seed can
+    // know without the service; Recheck re-derives all of them live.
+    const facts = { version: 1, commit: { given: sha, sha, resolvedAtCheckTime: false, status: 'pass', note: null },
+      head: null, clean: null,
+      recorded: { status: 'unknown', recordBun: null, recordAt: null, commitBun: null, note: 'no full check passed for this tree' },
+      base: { ref: 'refs/remotes/origin/HEAD', sha: null, behind: null, mergeClean: null, conflicts: [], moreConflicts: 0,
+        status: 'unknown', note: 'refs/remotes/origin/HEAD is unset; git remote set-head origin --auto fixes it' },
+      branches: { compared: [], comparedCount: 0, skipped: 0, status: 'pass' } };
+    const check = await retryOnSqliteBusy(() => store.insertPending({ teamId: task.team_id, taskId: task.id, resultId: result.id,
+      trigger: 'submit', requestedBy: { kind: 'agent', sessionId: session } }));
+    if (!store.settle(check.check.id, 'done', JSON.stringify(facts), null)) throw new Error('the seeded check did not settle');
+    console.log(result.id); db.close();
+  `], { cwd: process.cwd(), input: JSON.stringify([dbPath, taskId, session, worktree, sha]), encoding: 'utf8' }).trim()
+  return { id, sha }
+}
+
 /** Seed a result for the task, submitted by `session` at the task's current revision; returns its id. */
 export function seedResult(taskId: string, session: string, worktree: string | null): string {
   const dbPath = process.env.AGENTBOARD_DB_PATH!

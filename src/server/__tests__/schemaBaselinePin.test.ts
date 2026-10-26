@@ -32,7 +32,9 @@
 // decisions, fix tasks, and stall alerts; migration 17
 // (`revision-control`) the hold, pause, checkpoint, and execution-revision
 // tables; migration 18 (`worker-choice`) the nullable `worker_choice` on
-// `team_messages` and `team_task_assignments`.
+// `team_messages` and `team_task_assignments`; migration 19
+// (`plan-workspace`) the bindings, document references, turn-context
+// snapshots, and command-ledger tables.
 import { expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { initDatabase } from '../db'
@@ -439,10 +441,66 @@ const migration17: SchemaShape['tables'] = {
   },
 }
 
+// Migration 19's delta: the plan-workspace tables (plan-workspace 1.2). The
+// roles' and refs' CHECK constraints and every UNIQUE key are autoindexes,
+// which the shape skips.
+const migration19: SchemaShape['tables'] = {
+  plan_workspace_chats: {
+    columns: [keyPart('team_id', 1), keyPart('role', 2), column('session_id'), integer('version'), column('bound_at')],
+    indexes: [],
+  },
+  plan_document_refs: {
+    columns: [
+      id, ...['team_id', 'plan_id'].map(name => column(name)), optional('change_name'), column('label'), column('kind'),
+      optional('worktree_id'), optional('relative_path'), optional('url'), column('created_at'),
+    ],
+    indexes: [],
+  },
+  chat_workspace_turn_context: {
+    columns: [
+      keyPart('session_id', 1), keyPart('message_uuid', 2), optional('turn_id'), column('context_json'),
+      optional('team_id'), optional('plan_id'), column('recorded_at'),
+    ],
+    indexes: [],
+  },
+  plan_workspace_commands: {
+    columns: [keyPart('team_id', 1), keyPart('command_id', 2), column('kind'), column('payload'), column('outcome'), column('at')],
+    indexes: [],
+  },
+}
+
+// Migration 20's delta: result checks and coverage maps (independent-
+// verification D4). The UNIQUE (result_id, seq) key is a named index (not an
+// autoindex, which the shape skips); the one-pending partial index and the
+// team-pending lookup are named too. Migration 20 also adds the nullable
+// `coverage` column to team_task_results, applied beside the tables below.
+const migration20: SchemaShape['tables'] = {
+  team_task_result_checks: {
+    columns: [
+      id, ...['team_id', 'task_id', 'result_id'].map(name => column(name)), integer('seq'), column('trigger'),
+      column('requested_by_kind'), optional('requested_by_session'), column('status'), optional('facts'), optional('reason'),
+      column('created_at'), optional('finished_at'),
+    ],
+    indexes: [
+      { name: 'team_task_result_checks_one_pending', unique: 1, columns: ['result_id'] },
+      { name: 'team_task_result_checks_seq', unique: 1, columns: ['result_id', 'seq'] },
+      { name: 'team_task_result_checks_team_pending', unique: 0, columns: ['team_id', 'status', 'created_at'] },
+    ],
+  },
+  team_task_coverage_maps: {
+    columns: [id, ...['team_id', 'task_id', 'result_id', 'author_session', 'coverage', 'created_at'].map(name => column(name))],
+    indexes: [],
+  },
+}
+
 test('a fresh database opened by this build has the same shape plus each migration\'s delta and schema_migrations', () => {
   const session = initDatabase({ path: ':memory:' })
-  const added = { ...migration2, ...migration3, ...migration4, ...migration5, ...migration6, ...migration7, ...migration8, ...migration9, ...migration10, ...migration11, ...migration13, ...migration16, ...migration17 }
+  const added = { ...migration2, ...migration3, ...migration4, ...migration5, ...migration6, ...migration7, ...migration8, ...migration9, ...migration10, ...migration11, ...migration13, ...migration16, ...migration17, ...migration19, ...migration20 }
   expect(Object.keys(added).filter(table => table in expected.tables)).toEqual([])
+  // Migration 20's: the submitter's nullable coverage map (independent-
+  // verification D4), appended after the baseline columns.
+  const results = expected.tables.team_task_results!
+  const withCoverage = { ...results, columns: [...results.columns, optional('coverage')] }
   const messages = expected.tables.team_messages!
   // Migration 18's: the sender's worker choice (dispatch-worker-choice D1).
   const withProfiles = { ...messages, columns: [...messages.columns, optional('allowed_profiles'), optional('worker_choice')] }
@@ -474,7 +532,7 @@ test('a fresh database opened by this build has the same shape plus each migrati
     indexes: [{ name: 'profile_limit_events_at', unique: 0, columns: ['at'] }, ...limitEvents.indexes],
   }
   expect(schemaShape(session.db)).toEqual({
-    tables: { ...expected.tables, ...added, team_messages: withProfiles, team_task_assignments: withChoice, chat_sessions: withFlag, profile_limit_events: withLimitContext },
+    tables: { ...expected.tables, ...added, team_messages: withProfiles, team_task_assignments: withChoice, chat_sessions: withFlag, profile_limit_events: withLimitContext, team_task_results: withCoverage },
   })
   const extra = session.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'").get()
   expect(extra).toEqual({ name: 'schema_migrations' })

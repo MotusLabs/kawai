@@ -180,6 +180,7 @@ describe('afterLanded cancels the landed change\'s live landing-kind rows (A7, O
       plans: h.bench.plans, results: h.results, plansService: h.plansService,
       conditionsOf: () => [], records: () => h.bench.records.values(),
       now: () => new Date(h.clock.now).toISOString(), revisionAttempt: async () => false,
+      updateAttempt: async () => { throw new Error('the integration table never dispatches an update attempt') },
       taskStatusOf: taskId => h.tasks.store.get(taskId)?.status ?? null,
     }
     await afterLanded(deps, row, executionId, commit)

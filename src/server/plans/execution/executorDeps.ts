@@ -10,7 +10,7 @@ import type { LandingDeps } from './executionLanding'
 import type { LandingMechanism } from '../landing/landingMechanisms'
 import { EffectRunner } from './effects'
 import { dispatchRevisionAttempt, openPrAdapter, pushAdapter, rerunAdapter, roundAdapters, type RoundDeps } from './executionRounds'
-import type { DispatchDeps } from './executionDispatch'
+import { dispatchUpdateAttempt, type DispatchDeps } from './executionDispatch'
 import type { GhCommandOptions } from '../landing/ghCommand'
 import type { ExecutorDeps } from './executor'
 
@@ -31,6 +31,7 @@ export function roundDeps(deps: ExecutorDeps, team: TeamIdentity, repo: string, 
     groupScoped: deps.groupScoped,
     now: () => (deps.now?.() ?? new Date()).toISOString(),
     ...(gate ? { gate } : {}),
+    ...(deps.reviewRestart ? { reviewRestart: deps.reviewRestart } : {}),
   }
 }
 
@@ -42,6 +43,9 @@ export function landingDeps(deps: ExecutorDeps, team: TeamIdentity, repo: string
     ...(deps.ghOptions ? { ghOptions: deps.ghOptions } : {}),
     now: () => (deps.now?.() ?? new Date()).toISOString(),
     revisionAttempt: (changeRow, round, update) => dispatchRevisionAttempt(rounds(), changeRow, round, update),
+    updateAttempt: (changeRow, round, update) => dispatchUpdateAttempt(dispatchDeps(deps, team), {
+      executionId: changeRow.executionId, change: changeRow.change, round, update,
+    }),
     taskStatusOf: taskId => deps.tasks.store.get(taskId)?.status ?? null,
     ...(gate ? { gate } : {}),
   }
@@ -59,6 +63,7 @@ export function outcomeDeps(deps: ExecutorDeps, mechanismOf: (executionId: strin
     taskStatusOf: taskId => deps.tasks.store.get(taskId)?.status ?? null,
     mechanismOf: executionId => mechanismOf(executionId),
     now: () => deps.now?.() ?? new Date(),
+    ...(deps.checkpoints ? { recordResultCheckpoint: (executionId: string, change: string, roundId: string) => deps.checkpoints!.recordResultCheckpoint(executionId, change, roundId) } : {}),
   }
 }
 
@@ -73,7 +78,7 @@ export function effectRunner(deps: ExecutorDeps, mechanismOf: (executionId: stri
         const landing = deps.landingAdapters ?? landingAdapters
         const gh: GhCommandOptions | undefined = deps.ghOptions
         const adapter = adapters[effect.kind]
-          ?? (effect.kind === 'push' ? pushAdapter(rounds)
+          ?? (effect.kind === 'push' || effect.kind === 'push-checkpoint' ? pushAdapter(rounds)
             : effect.kind === 'open-pr' ? openPrAdapter(rounds, gh)
               : effect.kind === 'rerun' ? rerunAdapter(rounds, gh)
                 : effect.kind === 'remove-worktree' ? removeWorktreeAdapter()

@@ -1,4 +1,4 @@
-// New-session dialog: project/worktree/branch selection, agent and Claude
+// New-session dialog: project/worktree/branch selection, agent and chat
 // profile choice, and per-session approval policy.
 import { useClaudeProfiles } from './chat/useClaudeProfiles'
 import { capWarning, useTeamGroups } from './chat/useTeamGroups'
@@ -37,7 +37,7 @@ type StartWithValue = AutoStartAgent | 'none'
 /**
  * The session kind a fresh open preselects. A change-section launch exists to
  * offer the terminal-only first-prompt ("Start with") selector, so that entry
- * point keeps Terminal; every other open defaults to Claude chat. Recalculated
+ * point keeps Terminal; every other open defaults to chat. Recalculated
  * on every open rather than remembered, so the previous open's choice never
  * leaks into the next one.
  */
@@ -66,6 +66,11 @@ function defaultStartWith(
 interface NewSessionModalProps {
   isOpen: boolean
   onClose: () => void
+  /** How the dialog flow ended, reported beside the close: `created` is true
+      only when a creation was just requested through the form — the
+      create-then-bind arm distinguishes a cancel from a create-close
+      (plan-workspace §6.2, B5). */
+  onDismiss?: (created: boolean) => void
   onCreate: (
     projectPath: string,
     name?: string,
@@ -134,6 +139,7 @@ export function profilePickerGroups(profiles: ClaudeProfileMetadata[]): Array<{
 export default function NewSessionModal({
   isOpen,
   onClose,
+  onDismiss,
   onCreate,
   defaultProjectDir,
   commandPresets,
@@ -383,7 +389,7 @@ export default function NewSessionModal({
 
       if (e.key === 'Escape') {
         if (typeof e.stopPropagation === 'function') e.stopPropagation()
-        onClose()
+        dismiss(false)
         return
       }
 
@@ -426,7 +432,13 @@ export default function NewSessionModal({
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [isOpen, onClose, showBrowser])
+  }, [isOpen, onClose, onDismiss, showBrowser])
+
+  // One close path so every exit reports how the flow ended (B5).
+  const dismiss = (created: boolean) => {
+    onClose()
+    onDismiss?.(created)
+  }
 
   if (!isOpen) {
     return null
@@ -464,7 +476,7 @@ export default function NewSessionModal({
       // A group no longer offered (path changed since picking) is dropped.
       const group = teamGroups.groups.some(option => option.id === groupId) ? groupId : undefined
       onCreate(trimmedPath, name.trim() || undefined, undefined, undefined, undefined, undefined, 'chat', claudeProfileId, autoApprove ? 'auto' : 'manual', group)
-      onClose()
+      dismiss(true)
       return
     }
 
@@ -481,7 +493,7 @@ export default function NewSessionModal({
       initialAutoStartChange && startWithAgent ? initialAutoStartChange : undefined,
       startWithAgent
     )
-    onClose()
+    dismiss(true)
   }
 
   // Build button list: presets + Custom
@@ -516,7 +528,7 @@ export default function NewSessionModal({
       aria-labelledby="new-session-title"
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
       onClick={(e) => {
-        if (e.target === e.currentTarget) onClose()
+        if (e.target === e.currentTarget) dismiss(false)
       }}
     >
       <form
@@ -534,7 +546,7 @@ export default function NewSessionModal({
             <select ref={kindSelectRef} aria-label="Session kind" className="input mt-1.5" value={kind}
               onChange={event => setKind(event.target.value as 'terminal' | 'chat')}>
               <option value="terminal">Terminal</option>
-              <option value="chat">Claude chat</option>
+              <option value="chat">Chat</option>
             </select>
           </label>
           {kind === 'chat' && <div>
@@ -802,7 +814,7 @@ export default function NewSessionModal({
         </div>
 
         <div className="mt-6 flex justify-end gap-2">
-          <button type="button" onClick={onClose} className="btn">
+          <button type="button" onClick={() => dismiss(false)} className="btn">
             Cancel
           </button>
           <button

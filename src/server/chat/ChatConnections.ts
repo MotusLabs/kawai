@@ -35,6 +35,8 @@ import type {
   ChatWorker,
 } from '../../shared/chat'
 import type { ClientMessage, ServerMessage } from '../../shared/types'
+import { parseWorkspaceMessageEnvelope } from '../../shared/planWorkspace'
+import type { WorkspaceMessageEnvelope } from '../../shared/planWorkspace'
 import type { ChatSessionManager } from './ChatSessionManager'
 import type { ChatWireLogs } from './ChatWireLogs'
 import { MailboxConnections } from '../team/mailboxConnections'
@@ -43,6 +45,12 @@ import { MessageConnections } from '../team/messageConnections'
 import { StrategyConnections } from '../strategy/strategyConnections'
 import { WorkspaceConnections } from '../team/workspaceConnections'
 import { PlanConnections } from '../plans/planConnections'
+import { PlanWorkspaceConnections } from '../plans/workspace/workspaceConnections'
+import { ChangeArtifactsResolver } from '../plans/workspace/changeArtifacts'
+import { PlanWorkspaceDocumentConnections } from '../plans/workspace/workspaceDocuments'
+import { PlanWorkspaceArtifactsConnections } from '../plans/workspace/workspaceArtifacts'
+import { PlanChecklistTotals } from '../plans/workspace/checklistTotals'
+import type { PlanWorkspaceClientMessage } from '../../shared/planWorkspaceMessages'
 import { ExecutionConnections } from '../plans/execution/executionConnections'
 import { PROMOTION_MESSAGE_TYPES, PromotionConnections, type PromotionClientMessage } from '../plans/landing/integration/promotionConnections'
 import { OutboundConnections } from '../outbound/outboundConnections'
@@ -89,6 +97,13 @@ export class ChatConnections {
   private readonly strategyConnections: StrategyConnections
   private readonly workspaceConnections: WorkspaceConnections
   private readonly planConnections: PlanConnections
+  private readonly planWorkspaceConnections: PlanWorkspaceConnections
+  private readonly planWorkspaceDocuments: PlanWorkspaceDocumentConnections
+  private readonly planWorkspaceArtifacts: PlanWorkspaceArtifactsConnections
+  /** The one resolver (and its 2-slot pool) both workspace subscription sides share. */
+  private readonly planWorkspaceResolver: ChangeArtifactsResolver
+  /** The composed checklists' totals, shared documents → snapshot (N3); public for compositions that build the documents side separately. */
+  readonly planWorkspaceTotals = new PlanChecklistTotals()
   private readonly executionConnections: ExecutionConnections
   private readonly promotionConnections: PromotionConnections
   private readonly outboundConnections: OutboundConnections
@@ -97,7 +112,9 @@ export class ChatConnections {
   constructor(
     private readonly manager: ChatSessionManager,
     private readonly wireLogs?: ChatWireLogs,
-    private readonly broadcastMailboxNotice?: (message: ServerMessage) => void
+    private readonly broadcastMailboxNotice?: (message: ServerMessage) => void,
+    /** Test seam: inject the shared canonical resolver (one 2-slot pool). */
+    private readonly options?: { planWorkspaceResolver?: ChangeArtifactsResolver }
   ) {
     this.mailboxConnections = new MailboxConnections(manager)
     this.taskConnections = new TaskConnections(manager)
@@ -105,6 +122,15 @@ export class ChatConnections {
     this.strategyConnections = new StrategyConnections(manager)
     this.workspaceConnections = new WorkspaceConnections(manager)
     this.planConnections = new PlanConnections(manager)
+    // One totals cache shared by the two connections (N3): the documents
+    // side records every composed checklist, the snapshot side reads it.
+    // The canonical resolver — and with it the bounded 2-slot CLI pool — is
+    // shared too: two independent pools would double the openspec
+    // concurrency the cap promises (plan-workspace 5.3, expansion 3).
+    this.planWorkspaceResolver = options?.planWorkspaceResolver ?? new ChangeArtifactsResolver()
+    this.planWorkspaceDocuments = new PlanWorkspaceDocumentConnections(manager, { totals: this.planWorkspaceTotals, resolver: this.planWorkspaceResolver })
+    this.planWorkspaceArtifacts = new PlanWorkspaceArtifactsConnections(manager, { resolver: this.planWorkspaceResolver })
+    this.planWorkspaceConnections = new PlanWorkspaceConnections(manager, this.planWorkspaceTotals)
     this.executionConnections = new ExecutionConnections(manager)
     this.promotionConnections = new PromotionConnections(manager)
     this.outboundConnections = new OutboundConnections(manager)
@@ -119,6 +145,7 @@ export class ChatConnections {
   publishTasks(teamId: string): void {
     this.taskConnections.publish(teamId)
     this.workspaceConnections.publish(teamId)
+    this.planWorkspaceConnections.publish(teamId)
   }
 
   /** A live workspace fact changed outside the task and mailbox paths. */
@@ -145,12 +172,23 @@ export class ChatConnections {
       event.type === 'approval_request' || event.type === 'question_request' ||
       event.type === 'request_resolved' || event.type === 'turn_completed' ||
       event.type === 'turn_started'
-    ) this.publishWorkspaceOf(sessionId)
+    ) {
+      this.publishWorkspaceOf(sessionId)
+      // The plan workspace's supervision facts and binding availability read
+      // session state (3.4); the pass's diff keeps an unchanged view quiet.
+      const teamId = this.manager.teams.teamOf(sessionId)?.teamId
+      if (teamId) this.planWorkspaceConnections.publish(teamId)
+    }
   }
 
   /** Resolves once every scheduled workspace publish has run (test seam). */
   flushWorkspace(): Promise<void> {
     return this.workspaceConnections.settled()
+  }
+
+  /** Resolves once the plan workspace's coalesced push pass has run (test seam, 3.4). */
+  flushPlanWorkspace(): Promise<void> {
+    return this.planWorkspaceConnections.settled()
   }
 
   /** A committed strategy change: re-send that team's strategy snapshots. */
@@ -167,6 +205,7 @@ export class ChatConnections {
   publishPlans(teamId: string, planId?: string): void {
     this.planConnections.publish(teamId, planId)
     this.workspaceConnections.publish(teamId)
+    this.planWorkspaceConnections.publish(teamId)
   }
 
   /** A committed process report or decision: re-send that team's metrics snapshots (never on mail changes). */
@@ -193,6 +232,9 @@ export class ChatConnections {
     this.strategyConnections.disconnect(connection)
     this.workspaceConnections.disconnect(connection)
     this.planConnections.disconnect(connection)
+    this.planWorkspaceConnections.disconnect(connection)
+    this.planWorkspaceDocuments.disconnect(connection)
+    this.planWorkspaceArtifacts.disconnect(connection)
     this.outboundConnections.disconnect(connection)
     this.metricsConnections.disconnect(connection)
     this.subscriptions.delete(connection)
@@ -206,6 +248,12 @@ export class ChatConnections {
     for (const unsubscribe of this.debugSubscriptions.get(connection)?.values() ?? []) unsubscribe()
     this.debugSubscriptions.delete(connection)
     this.debugBatches.delete(connection)
+  }
+
+  /** Stop every connection group's watches and timers (server shutdown, O2). */
+  stop(): void {
+    this.planWorkspaceDocuments.stop()
+    this.planWorkspaceArtifacts.stop()
   }
 
   /**
@@ -224,6 +272,9 @@ export class ChatConnections {
     if (message?.taskId) this.taskConnections.publish(teamId)
     // The workspace reads mail state and waiting reasons; see publishTasks.
     this.workspaceConnections.publish(teamId)
+    // The plan workspace reads claims and waiting reasons through the same
+    // facts (3.4); its pass's diff keeps an unchanged view quiet.
+    this.planWorkspaceConnections.publish(teamId)
     if (message?.state === 'dead' && message.reason === 'hop-limit') {
       this.notice(teamId, { type: 'team-mailbox-dead-letter', teamId, messageId: message.id, senderSession: message.fromSession })
     }
@@ -300,6 +351,10 @@ export class ChatConnections {
       this.contextBatches.set(connection, latest)
     }
     this.scheduleFlush()
+    // A held context reading is a plan-workspace health fact (3.4); a
+    // value-identical tick composes unchanged and pushes nothing (O6).
+    const teamId = this.manager.teams.teamOf(sessionId)?.teamId
+    if (teamId) this.planWorkspaceConnections.publish(teamId)
   }
 
   /**
@@ -366,6 +421,9 @@ export class ChatConnections {
       }
     }
     this.scheduleFlush()
+    // The report is provider-scoped: mark every subscribed team dirty and
+    // let the plan-workspace pass's diff keep an unaffected team quiet (3.4).
+    this.planWorkspaceConnections.publishSubscribed()
   }
 
   /**
@@ -581,6 +639,13 @@ export class ChatConnections {
     if (message.type.startsWith('team-workspace-')) return this.workspaceConnections.handle(connection, message as Extract<ClientMessage, { type: `team-workspace-${string}` }>)
     if (PROMOTION_MESSAGE_TYPES.has(message.type)) return this.promotionConnections.handle(connection, message as PromotionClientMessage)
     if (message.type.startsWith('team-plan-execution-')) return this.executionConnections.handle(connection, message as Extract<ClientMessage, { type: `team-plan-execution-${string}` }>)
+    if (message.type.startsWith('team-plan-workspace-artifacts-')) {
+      return this.planWorkspaceArtifacts.handle(connection, message as Extract<PlanWorkspaceClientMessage, { type: `team-plan-workspace-artifacts-${string}` }>)
+    }
+    if (message.type.startsWith('team-plan-workspace-checklist-') || message.type.startsWith('team-plan-workspace-document-')) {
+      return this.planWorkspaceDocuments.handle(connection, message as Extract<PlanWorkspaceClientMessage, { type: `team-plan-workspace-checklist-${string}` | `team-plan-workspace-document-${string}` }>)
+    }
+    if (message.type.startsWith('team-plan-workspace-')) return this.planWorkspaceConnections.handle(connection, message as Extract<ClientMessage, { type: `team-plan-workspace-${string}` }>)
     if (message.type.startsWith('team-plan')) return this.planConnections.handle(connection, message as Extract<ClientMessage, { type: `team-plan${string}` }>)
     if (message.type.startsWith('team-audit-')) return this.outboundConnections.handle(connection, message as Extract<ClientMessage, { type: `team-audit-${string}` }>)
     if (message.type.startsWith('process-metrics-')) return this.metricsConnections.handle(connection, message as Extract<ClientMessage, { type: `process-metrics-${string}` }>)
@@ -588,9 +653,19 @@ export class ChatConnections {
     if (message.type.startsWith('process-report-')) return this.metricsConnections.handleReport(connection, message as Extract<ClientMessage, { type: `process-report-${string}` }>)
     if (!message.type.startsWith('chat-') || !('sessionId' in message)) return
     const { sessionId } = message
+    // Contextual-send correlation (plan-workspace §6.3, Q2): a chat-send that
+    // carried a readable bounded `requestId` gets it echoed — with the
+    // session id — on EVERY refusal of that send, from the malformed-context
+    // parse through the unknown-session guard to manager refusals (stale
+    // hashes, archived, killed, wrong team). Any other error, and any send
+    // without a readable id, keeps today's exact shape.
+    const sendCorrelation = message.type === 'chat-send' && typeof message.requestId === 'string'
+      && message.requestId.length > 0 && message.requestId.length <= 200
+      ? { requestId: message.requestId, sessionId }
+      : {}
     if (!this.manager.has(sessionId)) {
       if (this.pendingAttach.get(connection)?.get(sessionId) === token) this.pendingAttach.get(connection)?.delete(sessionId)
-      connection.send({ type: 'error', message: `Unknown chat session ${sessionId}` })
+      connection.send({ type: 'error', message: `Unknown chat session ${sessionId}`, ...sendCorrelation })
       return
     }
     switch (message.type) {
@@ -652,8 +727,51 @@ export class ChatConnections {
         return
       }
       case 'chat-send': {
-        const result = await this.manager.send(sessionId, message.text)
-        if (!result.ok) connection.send({ type: 'error', message: result.error })
+        // The wire envelope is untrusted (plan-workspace §4): an absent
+        // field is an unscoped send; a malformed one refuses before the
+        // manager touches anything. Every refusal echoes the readable
+        // requestId's correlation (Q2 above). A throw before acceptance
+        // (F-C1) is a refusal too — exactly one correlated error, never a
+        // post-acceptance one — rethrown so the router's fire-and-forget
+        // still logs it; a send without a readable id keeps today's
+        // frame-less behavior.
+        let accepted: { type: 'chat-send-result'; sessionId: string; requestId: string; accepted: true } | null = null
+        try {
+          let envelope: WorkspaceMessageEnvelope | null | undefined
+          if (message.workspaceContext !== undefined) {
+            envelope = parseWorkspaceMessageEnvelope(message.workspaceContext)
+            if (!envelope) {
+              connection.send({ type: 'error', message: "The message's plan context is malformed; nothing was sent.", ...sendCorrelation })
+              return
+            }
+          }
+          const result = await this.manager.send(sessionId, message.text, envelope ?? undefined)
+          if (!result.ok) {
+            connection.send({ type: 'error', message: result.error, ...sendCorrelation })
+            return
+          }
+          // The manager accepted the send — context stored with the visible
+          // user_message, turn enqueued or started — past the last refusal
+          // point. The acceptance answer (plan-workspace §6.3, B1) is only
+          // PREPARED here; it is sent after the try (below), so a socket
+          // failure delivering it can never read as a refusal of a send the
+          // manager accepted — no blind post-acceptance error.
+          if (sendCorrelation.requestId !== undefined) {
+            accepted = { type: 'chat-send-result', sessionId, requestId: sendCorrelation.requestId, accepted: true }
+          }
+        } catch (cause) {
+          if (sendCorrelation.requestId !== undefined) {
+            connection.send({
+              type: 'error',
+              message: `The chat could not accept the message: ${cause instanceof Error ? cause.message : String(cause)}`,
+              ...sendCorrelation,
+            })
+          }
+          throw cause
+        }
+        // Outside the try: the send is accepted, so delivering its terminal
+        // answer must not convert a dead-socket throw into a refusal.
+        if (accepted) connection.send(accepted)
         return
       }
       case 'chat-interrupt': {
@@ -686,6 +804,14 @@ export class ChatConnections {
       case 'chat-set-approval-policy': {
         // The manager validates the value; failures echo to the sender only.
         const result = this.manager.setApprovalPolicy(sessionId, message.policy)
+        if (!result.ok) connection.send({ type: 'error', message: result.error })
+        return
+      }
+      case 'chat-question-hold': {
+        // Wait for me (question-auto-answer D4): the hold rides the driver's
+        // ordinary event broadcast, so every attached client sees the held
+        // event; failures echo to the sender only.
+        const result = this.manager.holdQuestion(sessionId, message.requestId)
         if (!result.ok) connection.send({ type: 'error', message: result.error })
         return
       }
@@ -749,6 +875,7 @@ function opensSubscription(type: ClientMessage['type']): boolean {
     type === 'team-mailbox-open' || type === 'team-tasks-open' || type === 'team-task-open' ||
     type === 'team-messages-open' || type === 'team-thread-open' ||
     type === 'strategy-open' || type === 'team-workspace-open' || type === 'team-plans-open' || type === 'team-plan-open' ||
+    type === 'team-plan-workspace-open' ||
     type === 'team-audit-open' ||
     type === 'process-metrics-open' || type === 'process-report-open'
 }

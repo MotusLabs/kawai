@@ -78,7 +78,8 @@ function catalogWithLan(): void {
 describe('Claude profile resolution', () => {
   test('catalog metadata has stable order and carries providers, identifiers, labels, and runtimes', () => {
     // D13 order: the provider holding default first, then file order.
-    expect(claudeProfileMetadata({ homeDir: tempHome })).toEqual([
+    const metadata = claudeProfileMetadata({ homeDir: tempHome })
+    expect(metadata.filter(profile => profile.runtime === 'claude')).toEqual([
       { id: 'default', label: 'Default', providerId: 'claude', providerLabel: 'Claude', runtime: 'claude' },
       { id: 'opus', label: 'Claude Opus', providerId: 'claude', providerLabel: 'Claude', runtime: 'claude' },
       { id: 'sonnet', label: 'Claude Sonnet', providerId: 'claude', providerLabel: 'Claude', runtime: 'claude' },
@@ -88,10 +89,21 @@ describe('Claude profile resolution', () => {
       { id: 'openrouter-opus', label: 'OpenRouter Opus', providerId: 'openrouter', providerLabel: 'OpenRouter', runtime: 'claude' },
       { id: 'openrouter-sonnet', label: 'OpenRouter Sonnet', providerId: 'openrouter', providerLabel: 'OpenRouter', runtime: 'claude' },
       { id: 'openrouter-haiku', label: 'OpenRouter Haiku', providerId: 'openrouter', providerLabel: 'OpenRouter', runtime: 'claude' },
+      { id: 'openrouter-deepseek-flash', label: 'OpenRouter DeepSeek V4.1 Flash', providerId: 'openrouter', providerLabel: 'OpenRouter', runtime: 'claude' },
+      { id: 'openrouter-minimax-flash', label: 'OpenRouter MiniMax M3.1 Flash', providerId: 'openrouter', providerLabel: 'OpenRouter', runtime: 'claude' },
       { id: 'minimax', label: 'MiniMax', providerId: 'minimax', providerLabel: 'MiniMax', runtime: 'claude' },
       { id: 'mimo', label: 'MiMo', providerId: 'mimo', providerLabel: 'MiMo', runtime: 'claude' },
       { id: 'kimi', label: 'Kimi', providerId: 'kimi', providerLabel: 'Kimi', runtime: 'claude' },
     ])
+    // The shipped Codex entries follow the provider models in catalog order;
+    // their provider id is the resolved home's hash (R2), so it is
+    // shape-checked while ids and labels stay exact.
+    const codexRows = metadata.filter(profile => profile.runtime === 'codex')
+    expect(codexRows.map(({ id, label, providerLabel }) => ({ id, label, providerLabel }))).toEqual([
+      { id: 'codex-sol', label: 'Codex Sol', providerLabel: 'Codex' },
+      { id: 'codex-luna', label: 'Codex Luna', providerLabel: 'Codex' },
+    ])
+    for (const row of codexRows) expect(row.providerId).toMatch(/^codex-home-[0-9a-f]{12}$/)
   })
   test('Codex entries follow the provider models, each under the fixed Codex provider (task 3.4)', () => {
     userCatalog({
@@ -113,8 +125,12 @@ describe('Claude profile resolution', () => {
   })
   test('documentation matches catalog labels and effective mappings', () => {
     const doc = fs.readFileSync(path.resolve(import.meta.dir, '../../../docs/claude-session-profiles.md'), 'utf8')
-    for (const { id, label } of claudeProfileMetadata({ homeDir: tempHome })) {
+    for (const { id, label, runtime } of claudeProfileMetadata({ homeDir: tempHome })) {
       expect(doc).toContain(`| ${id} | ${label} |`)
+      // Codex launches carry no controlled env (configuration travels as -c
+      // overrides); their doc rows state the model, which the shippedCatalog
+      // assertions pin against the catalog.
+      if (runtime === 'codex') continue
       const launch = resolveClaudeLaunch(id, {}, { homeDir: tempHome })
       if (id === 'default') continue
       for (const name of PROFILE_CONTROLLED_ENV) {

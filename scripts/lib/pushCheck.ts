@@ -14,7 +14,7 @@
 // listed as not checked (Q1). Otherwise at most one fallback runs — every
 // eligible ref is HEAD's commit, so they share HEAD's tree.
 
-import { describeHidden, type HiddenEntry } from './checkKey'
+import { describeHidden, type HiddenEntry } from '../../src/server/checks/checkKey'
 
 export interface PushLine {
   localRef: string

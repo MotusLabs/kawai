@@ -14,8 +14,8 @@ import {
   contentKeyFrom,
   hiddenEntries,
   resolveIndexPath,
-} from '../../../scripts/lib/checkKey'
-import { recordsDir } from '../../../scripts/lib/checkRecords'
+} from '../checks/checkKey'
+import { recordsDir } from '../checks/checkRecords'
 import { runCheck } from '../../../scripts/lib/checkRun'
 
 let tempRoot: string

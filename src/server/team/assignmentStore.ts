@@ -192,6 +192,11 @@ export class AssignmentStore {
     return row ? this.row(String((row as Record<string, unknown>).id)) : null
   }
 
+  /** One assignment by id, or null (the pause tick's spawn-vs-forward read). */
+  byId(id: string): TeamTaskAssignment | null {
+    return this.row(id)
+  }
+
   /** A team's assignment under a request key (idempotency reads). */
   byKey(teamId: string, requestKey: string): TeamTaskAssignment | null {
     const row = this.db.prepare('SELECT id FROM team_task_assignments WHERE team_id = ? AND request_key = ?').get(teamId, requestKey)

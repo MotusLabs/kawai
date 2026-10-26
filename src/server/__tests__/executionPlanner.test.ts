@@ -14,7 +14,7 @@ import type { PlannedStage } from '../plans/execution/executionPlanner'
 const change = (name: string, state: ChangeState, over: Partial<PlannedChange> = {}): PlannedChange => ({
   executionId: 'e1', change: name, state, step: null, generation: 0, taskId: null,
   worktree: null, branch: null, baselineCommit: null, prNumber: null, passedAt: null, dependsOn: [], group: 'devs',
-  task: null, round: null, newestAttempt: null, landing: null, landingEffect: null, roundEffects: [], ...over,
+  task: null, round: null, newestAttempt: null, newestAttemptOwed: false, landing: null, landingEffect: null, roundEffects: [], ...over,
 })
 
 const withTask = (state: ChangeState, task: Partial<NonNullable<PlannedChange['task']>>, over: Partial<PlannedChange> = {}): PlannedChange =>
@@ -222,14 +222,46 @@ describe('planSteps under holds (revision-control 3.2)', () => {
       results: [{ id: 'r1', commit: 'c1', taskRevision: 1, submittedBySession: 'dev' }],
     }, { round: { id: 'round-1', executionId: 'e1', change: 'api', number: 1, attemptId: 'at1', resultId: 'r1', commitSha: 'c1', fixRound: false, pushedAt: 't', outcome: 'fail' } as unknown as PlannedChange['round'] })
     expect(withHolds([gating], [hold('api')]).fixes.map(fix => fix.change)).toEqual(['api'])
-    // The owed marker: the newest attempt is a fix whose handoff never
-    // dispatched (the assignment still carries the implement attempt's key).
-    const owed = withTask('implementing', { assignment: { id: 'a1', state: 'delivered', reason: null, requestKey: 'exec:e1:api:attempt:1:0' } }, { newestAttempt: { number: 2, kind: 'fix' } })
+    // The owed marker (H″ O1): the newest attempt is a fix still owed — the
+    // snapshot derived it (no assignment carries the row's exact key), and
+    // the planner reads the derived marker.
+    const owed = withTask('implementing', { assignment: { id: 'a1', state: 'delivered', reason: null, requestKey: 'exec:e1:api:attempt:1:0' } }, { newestAttempt: { number: 2, kind: 'fix' }, newestAttemptOwed: true })
     expect(withHolds([owed], [hold('api')]).dispatches).toEqual([])
-    expect(withHolds([owed], []).dispatches).toEqual([{ executionId: 'e1', change: 'api', group: 'devs', kind: 'fix' }])
-    // Already dispatched: the assignment carries the fix attempt's key, nothing is owed.
-    const done = withTask('implementing', { assignment: { id: 'a2', state: 'delivered', reason: null, requestKey: 'exec:e1:api:attempt:2:1' } }, { newestAttempt: { number: 2, kind: 'fix' } })
+    expect(withHolds([owed], []).dispatches).toEqual([{ executionId: 'e1', change: 'api', group: 'devs', kind: 'owed' }])
+    // Already dispatched: the marker is false (the exact-key clause), nothing is owed.
+    const done = withTask('implementing', { assignment: { id: 'a2', state: 'delivered', reason: null, requestKey: 'exec:e1:api:attempt:2:1' } }, { newestAttempt: { number: 2, kind: 'fix' }, newestAttemptOwed: false })
     expect(withHolds([done], []).dispatches).toEqual([])
+  })
+
+  test('an owed update row dispatches from gating with no step and no passed round (A1)', () => {
+    const task = { assignment: { id: 'a1', state: 'delivered', reason: null, requestKey: 'exec:e1:api:attempt:1:0' }, results: [{ id: 'r1', commit: 'c1', taskRevision: 1, submittedBySession: 'dev' }] }
+    const owed = withTask('gating', task, { passedAt: null, newestAttempt: { number: 2, kind: 'update' }, newestAttemptOwed: true })
+    expect(steps([owed]).dispatches).toEqual([{ executionId: 'e1', change: 'api', group: 'devs', kind: 'owed' }])
+    // Any gating step, or a passed round (the landing stage's round), keeps
+    // the update row where it is — the landing stage re-runs the update.
+    expect(steps([withTask('gating', task, { step: 'up-to-date', newestAttempt: { number: 2, kind: 'update' }, newestAttemptOwed: true })]).dispatches).toEqual([])
+    expect(steps([withTask('gating', task, { passedAt: 't', newestAttempt: { number: 2, kind: 'update' }, newestAttemptOwed: true })]).dispatches).toEqual([])
+    // The hold withholds the dispatch; the release plans it again.
+    expect(withHolds([owed], [hold('api')]).dispatches).toEqual([])
+  })
+
+  test("an owed newest attempt holds the revision stage back (H″ O2): one writer, no revision fix beside it", () => {
+    // The update row is owed and the round's result is pinned to an older
+    // task revision: superseding the round before the row's dispatch
+    // committed would orphan the attempt, so the revision stage waits.
+    const revisionRound = { id: 'round-1', executionId: 'e1', change: 'api', number: 1, attemptId: 'at1', resultId: 'r1', commitSha: 'c1', fixRound: false, pushedAt: 't', outcome: 'pass' } as unknown as PlannedChange['round']
+    const revisionTask = {
+      assignment: { id: 'a1', state: 'delivered', reason: null, requestKey: 'exec:e1:api:attempt:1:0' },
+      results: [{ id: 'r1', commit: 'c1', taskRevision: 1, submittedBySession: 'dev' }],
+      revision: 2,
+    }
+    const owed = withTask('gating', revisionTask, { passedAt: null, round: revisionRound, newestAttempt: { number: 2, kind: 'update' }, newestAttemptOwed: true })
+    const planned = steps([owed])
+    expect(planned.dispatches).toEqual([{ executionId: 'e1', change: 'api', group: 'devs', kind: 'owed' }])
+    expect(planned.stages.filter(stage => stage.kind === 'revision')).toEqual([])
+    // Once the row is out the stage plans again (the same shape, marker false).
+    const out = withTask('gating', revisionTask, { passedAt: null, round: revisionRound, newestAttempt: { number: 2, kind: 'update' }, newestAttemptOwed: false })
+    expect(steps([out]).stages.map(stage => stage.kind)).toContain('revision')
   })
 
   test('a changes hold leaves an unheld sibling advancing', () => {
@@ -273,5 +305,57 @@ describe('planSteps under holds (revision-control 3.2)', () => {
     expect(result.stages.map(stage => stage.kind)).toEqual(['landing-outcome'])
     expect(result.stages[0]).toMatchObject({ change: 'api', effectId: 'f1' })
     expect(result.transitions).toEqual([])
+  })
+})
+
+// The owed review-restart stage (revision-control 4.5 LC1): a held restart
+// drops the round's stale pointer and marks the change's step, so the
+// planner routes the restart dispatch — never a verdict that would wait on
+// the superseded handoff, and not the CI stage that would re-fire the
+// un-restarted key.
+describe('the owed review-restart stage (revision-control 4.5 LC1)', () => {
+  const round = (reviewAssignmentId: string | null): RoundRow => ({
+    id: 'r1', executionId: 'e1', change: 'api', attemptId: 'a1', number: 1, resultId: 'res-1', commitSha: 'c1',
+    fixRound: false, carriedFrom: null, pushedAt: 't', ciWindowFrom: null, ci: null, rerunAt: null,
+    reviewAssignmentId, verdictFindingsId: null, extra: null, outcome: null, decidedAt: null,
+  })
+  const reviewing = (step: 'reviewing' | 'review-restart', reviewAssignmentId: string | null): PlannedChange =>
+    change('api', 'gating', {
+      step, taskId: 't1', round: round(reviewAssignmentId),
+      task: { status: 'active', revision: 1, results: [], assignment: null },
+    })
+
+  test('the owed step routes the restart stage — never a verdict, never CI', () => {
+    expect(steps([reviewing('review-restart', null)]).stages).toEqual([
+      { executionId: 'e1', change: 'api', kind: 'review-restart', roundId: 'r1', resultId: null },
+    ])
+  })
+
+  test('a reviewing change keeps the old routing: pointer set is a verdict, pointer clear re-fires from CI', () => {
+    expect(steps([reviewing('reviewing', 'a9')]).stages.map(stage => stage.kind)).toEqual(['verdict'])
+    expect(steps([reviewing('reviewing', null)]).stages.map(stage => stage.kind)).toEqual(['ci'])
+  })
+
+  test('a standing hold keeps the debt owed: the restart stage waits for the gate (LC1)', () => {
+    const debt = reviewing('review-restart', null)
+    const held = steps([debt], {
+      executions: [{
+        ...snapshot([debt]).executions[0]!,
+        changes: [debt],
+        holds: [{ id: 'h-api', scope: 'changes' as const, changes: ['api'] }],
+        openTargets: [],
+      }],
+    })
+    expect(held.stages).toEqual([])
+    // The pause-side closure (an undecided target) closes the gate too.
+    const pausing = steps([debt], {
+      executions: [{
+        ...snapshot([debt]).executions[0]!,
+        changes: [debt],
+        holds: [],
+        openTargets: [{ pauseId: 'p1', change: 'api', decision: null }],
+      }],
+    })
+    expect(pausing.stages).toEqual([])
   })
 })

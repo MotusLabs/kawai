@@ -127,6 +127,73 @@ test('under auto a blocking question still asks, and the answer returns keyed by
   expect(reply(harness, 104)).toEqual({ answers: { q1: { answers: ['dev'] } } })
 })
 
+test('a blocking question carries isSecret and isOther into the card; the answer returns keyed by question id', async () => {
+  const script = new Script().boot().turn('ct-1')
+    .serverRequest(107, 'item/tool/requestUserInput', {
+      threadId: THREAD_ID, turnId: 'ct-1', itemId: 'q-item',
+      questions: [{ id: 'q1', header: 'Token', question: 'Paste the token?', isOther: true, isSecret: true, options: [] }],
+    })
+    .completed('ct-1')
+  harness = startHarness(script, { getApprovalPolicy: () => 'manual' })
+  harness.driver.send('ask me')
+  await until(() => harness!.driver.getPendingRequests().length === 1)
+  const question = ofType(harness, 'question_request')[0]!
+  expect(question.questions[0]).toEqual({ question: 'Paste the token?', header: 'Token', multiSelect: false, options: [], isSecret: true, isOther: true })
+  expect(harness.driver.answerQuestion(question.requestId, { 'Paste the token?': { text: 'sk-test' } })).toEqual({ ok: true })
+  await until(() => turnDone(harness!))
+  expect(reply(harness, 107)).toEqual({ answers: { q1: { answers: ['sk-test'] } } })
+})
+
+test('isOther false rides the card without isSecret; flags a sender omits stay absent', async () => {
+  const script = new Script().boot().turn('ct-1')
+    .serverRequest(108, 'item/tool/requestUserInput', {
+      threadId: THREAD_ID, turnId: 'ct-1', itemId: 'q-item',
+      questions: [{ id: 'q1', header: 'Mode', question: 'Which mode?', isOther: false, isSecret: false, options: [{ label: 'fast' }] }],
+    })
+    .serverRequest(109, 'item/tool/requestUserInput', {
+      threadId: THREAD_ID, turnId: 'ct-1', itemId: 'q-item-2',
+      questions: [{ id: 'q2', header: 'Branch', question: 'Which branch?', options: [{ label: 'main' }] }],
+    })
+    .completed('ct-1')
+  harness = startHarness(script, { getApprovalPolicy: () => 'manual' })
+  harness.driver.send('ask me')
+  await until(() => harness!.driver.getPendingRequests().length === 1)
+  // An explicit isOther: false is carried (it hides free text); a false
+  // isSecret is the default state and stays unset.
+  expect(ofType(harness, 'question_request')[0]!.questions[0]).toEqual({
+    question: 'Which mode?', header: 'Mode', multiSelect: false, options: [{ label: 'fast' }], isOther: false,
+  })
+  harness.driver.answerQuestion(ofType(harness, 'question_request')[0]!.requestId, { 'Which mode?': { options: ['fast'] } })
+  await until(() => harness!.driver.getPendingRequests().length === 1)
+  // Flags the sender omitted (an older fixture, or a Claude-shaped payload)
+  // leave the card exactly as it rendered before this change.
+  expect(ofType(harness, 'question_request')[1]!.questions[0]).toEqual({
+    question: 'Which branch?', header: 'Branch', multiSelect: false, options: [{ label: 'main' }],
+  })
+  harness.driver.answerQuestion(ofType(harness, 'question_request')[1]!.requestId, { 'Which branch?': { options: ['main'] } })
+  await until(() => turnDone(harness!))
+})
+
+test('a protocol question with options null, isOther false, isSecret true carries a masked card and takes a text answer', async () => {
+  const script = new Script().boot().turn('ct-1')
+    .serverRequest(110, 'item/tool/requestUserInput', {
+      threadId: THREAD_ID, turnId: 'ct-1', itemId: 'q-item',
+      questions: [{ id: 'q1', header: 'Token', question: 'Paste the token?', isOther: false, isSecret: true, options: null }],
+    })
+    .completed('ct-1')
+  harness = startHarness(script, { getApprovalPolicy: () => 'manual' })
+  harness.driver.send('ask me')
+  await until(() => harness!.driver.getPendingRequests().length === 1)
+  // The protocol's options: null maps to [], so the client sees a question
+  // with no options: free text is its only answer and must be offered.
+  expect(ofType(harness, 'question_request')[0]!.questions[0]).toEqual({
+    question: 'Paste the token?', header: 'Token', multiSelect: false, options: [], isOther: false, isSecret: true,
+  })
+  expect(harness.driver.answerQuestion(ofType(harness, 'question_request')[0]!.requestId, { 'Paste the token?': { text: 'sk-test' } })).toEqual({ ok: true })
+  await until(() => turnDone(harness!))
+  expect(reply(harness, 110)).toEqual({ answers: { q1: { answers: ['sk-test'] } } })
+})
+
 test('under auto an async question still asks; its answer is input to the active turn', async () => {
   const asking = { type: 'agentMessage', id: 'ask-1', text: 'Proceed?\n- yes\n- no', delivery: 'async', questions: [{ title: 'Proceed?', options: ['yes', 'no'] }] }
   const script = new Script().boot().turn('ct-1')

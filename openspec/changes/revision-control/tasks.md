@@ -39,7 +39,7 @@ Implement after these have landed on master: `plan-execution`, `integration-cand
 - [x] 3.2 Wire `holdGate` into `planSteps` (D5). Verify with executor tests:
   - provisioning, each attempt kind, the review and fix handoffs, D9's revision fix, and Retry's dispatch wait under a hold;
   - the round outcome is still recorded;
-  - release wakes the executor, and each deferred dispatch runs exactly once;
+  - release wakes the executor, and each deferred dispatch runs while the change still stands on that attempt's round;
   - a running turn gets no mail.
 - [x] 3.3 Wire the gate into direct and integration landing and promotion (D5), and append `no-hold` to `START_PRECONDITIONS` and `PROMOTE_PRECONDITIONS`. Verify with tests:
   - a slot holder before merge gives up the slot, and another change takes it;
@@ -51,27 +51,27 @@ Implement after these have landed on master: `plan-execution`, `integration-cand
 
 ## 4. Pause and checkpoints
 
-- [ ] 4.1 Implement `PauseService.pause` (D6): the targets, withdrawal of unclaimed instructions through the stop branch, and urgent `plan-pause` system mail in the same transaction. Verify with tests:
+- [x] 4.1 Implement `PauseService.pause` (D6): the targets, withdrawal of unclaimed instructions through the stop branch, and urgent `plan-pause` system mail in the same transaction. Verify with tests:
   - one mail per holder, following forwards;
   - Kawai-held steps are listed as having no active work;
   - a queued instruction is superseded without `instruction-failed`;
   - a spawning instruction gets its mail after the claim;
   - a replay sends nothing;
   - an agent caller is refused.
-- [ ] 4.2 Implement `task_checkpoint` and the `push-checkpoint` effect with its inspector (D7). Verify with tests against a bare remote:
-  - each refusal (no pause, wrong caller, not the branch head, dirty or untracked worktree listing paths, missing origin head, Kawai writing the branch) writes nothing;
+- [x] 4.2 Implement `task_checkpoint` and the `push-checkpoint` effect with its inspector (D7). Verify with tests against a bare remote:
+  - each refusal (no pause, wrong caller, not the branch head, dirty or untracked worktree listing paths, a commit that does not contain origin's head, Kawai writing the branch) writes nothing;
   - a valid call pushes without force;
   - an unknown effect is inspected after restart;
   - a failed push leaves the target Pausing with `checkpoint-push-failed`;
   - a result round counts as a checkpoint.
-- [ ] 4.3 Record Paused in the executor tick (D8). Verify with tests:
+- [x] 4.3 Record Paused in the executor tick (D8). Verify with tests:
   - checkpoint pushed but the holder busy stays Pausing;
   - a pending approval stays pending and reads Pausing as `request` (R11);
   - an archived holder counts as ready, and a killed holder with nothing pushed reads Pausing as `holder-killed`;
   - a parked or cooling holder reads `provider-limit` with its reset, and the pause mail is never refused for cooling;
   - a change whose merge started lists as landing in progress;
   - Paused is recorded once.
-- [ ] 4.4 Implement `PauseService.resolve` (D9): Continue, Adapt through the `within` task publication, and Restart with the manifest's optional `checkpoint`. Stop closes the pause. Verify with tests:
+- [x] 4.4 Implement `PauseService.resolve` (D9): Continue, Adapt through the `within` task publication, and Restart with the manifest's optional `checkpoint`. Stop closes the pause. Verify with tests:
   - Continue sends one `plan-resume` mail and creates no attempt, and is refused for a killed holder (`holder-gone`) and a withdrawn target;
   - Adapt publishes one revision with its notice, and D9's fix attempt follows;
   - Restart supersedes without cancelling claimed work, and the manifest names the checkpoint;
@@ -85,7 +85,7 @@ Implement after these have landed on master: `plan-execution`, `integration-cand
   - Continue resumes under a hold;
   - a task revision published while the target is undecided dispatches nothing, and the following resolution names the newest revision with no second dispatch;
   - an old manifest's hash is unchanged by the optional field.
-- [ ] 4.5 Write the R01 and R18 integration tests:
+- [x] 4.5 Write the R01 and R18 integration tests:
   - R01: restart with a Paused target keeps the execution, attempt, and checkpoint, and Continue creates no attempt;
   - R18: restart after the pause mail and before any checkpoint re-derives Pausing, records no Paused, and sends no resume.
 

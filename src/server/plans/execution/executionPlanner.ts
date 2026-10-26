@@ -29,19 +29,19 @@ export interface PlannedEffect {
   command: Record<string, unknown>
 }
 
-/** The dispatch step (D7/D8; the owed fix of a released hold, revision-control 3.2): performed, never an effect row. */
+/** The dispatch step (D7/D8; the owed attempt of a released hold or refused send, revision-control 3.2, PR E A1): performed, never an effect row. */
 export interface PlannedDispatch {
   executionId: string
   change: string
   group: string
-  kind: 'implement' | 'fix'
+  kind: 'implement' | 'owed'
 }
 
 /** One round-pipeline stage (D9-D11), performed by the executor in order. */
 export interface PlannedStage {
   executionId: string
   change: string
-  kind: 'result' | 'push' | 'open-pr' | 'ci' | 'review' | 'verdict' | 'revision' | 'landing' | 'post-ci' | 'redispatch' | 'landing-outcome'
+  kind: 'result' | 'push' | 'open-pr' | 'ci' | 'review' | 'review-restart' | 'verdict' | 'revision' | 'landing' | 'post-ci' | 'redispatch' | 'landing-outcome'
   roundId: string | null
   resultId: string | null
   /** A `landing-outcome` stage's settled merge or update-branch effect. */
@@ -152,21 +152,28 @@ export function planSteps(snapshot: ExecutionSnapshot, _now: string): PlanSteps 
         if (!held) steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'redispatch', roundId: null, resultId: null })
         continue
       }
-      // The implement dispatch: a change without its task, or whose task
-      // exists but whose dispatch never committed (a refused one, retried).
-      if (!held && change.state === 'implementing' && change.group !== null
+      // The implement dispatch (H4): only a change without any attempt row —
+      // no task, or a task whose dispatch never committed (a refused one,
+      // retried). An existing undispatched row belongs to the owed step, and
+      // the dispatch's own H4 guard (revision-control PR E, A3) backs this up
+      // for every caller.
+      if (!held && change.state === 'implementing' && change.group !== null && change.newestAttempt === null
         && (change.taskId === null || (change.task !== null && change.task.assignment === null && change.task.results.length === 0))) {
         steps.dispatches.push({ executionId: change.executionId, change: change.change, group: change.group, kind: 'implement' })
       }
-      // The owed fix dispatch (revision-control 3.2): the newest attempt is
-      // a fix whose handoff never dispatched — the attempt is the owed
-      // marker, the assignment still carrying the previous attempt's key.
-      // It runs exactly once on the first tick after release, under the
-      // attempt's own request key.
-      if (!held && change.state === 'implementing' && change.group !== null && change.task !== null
-        && change.newestAttempt?.kind === 'fix'
-        && (change.task.assignment === null || !(change.task.assignment.requestKey ?? '').startsWith(`exec:${change.executionId}:${change.change}:attempt:${change.newestAttempt.number}:`))) {
-        steps.dispatches.push({ executionId: change.executionId, change: change.change, group: change.group, kind: 'fix' })
+      // The owed dispatch (revision-control 3.2, PR E A1/H1): the newest
+      // attempt is still owed — never dispatched (no assignment carries its
+      // exact key, no stamp) and no round answers it (H″ O1). Implement and
+      // fix rows are owed in `implementing`; an update row is owed in
+      // `gating` with no step and no passed round — the failed update
+      // returned the change before its dispatch committed. It runs exactly
+      // once on the first tick it is reachable, under the attempt's own
+      // request key; the row's one writer beside the fixes step (H″ O2).
+      if (!held && change.group !== null && change.task !== null && change.newestAttemptOwed
+        && (change.newestAttempt?.kind === 'update'
+          ? change.state === 'gating' && change.step === null && change.passedAt === null
+          : change.state === 'implementing')) {
+        steps.dispatches.push({ executionId: change.executionId, change: change.change, group: change.group, kind: 'owed' })
       }
       // D13's follow-ons: a settled merge or update-branch effect of a
       // landing change is applied by the tick (merge → landed, or back to
@@ -268,12 +275,19 @@ export function planSteps(snapshot: ExecutionSnapshot, _now: string): PlanSteps 
         continue
       }
       const round = change.round
-      // D9: a result pinned to an older task revision can never pass — the
-      // change returns for a fix attempt naming the revision (a landing
-      // change too, releasing the slot), unless its merge started or an
-      // update-branch effect is still settling. A round superseded once
-      // stays superseded: its fix attempt is already out.
-      if (round !== null && round.outcome !== 'superseded' && change.task.results.some(result => result.id === round.resultId && result.taskRevision < change.task!.revision)) {
+      // D9, narrowed by revision-control PR E (H2): a result pinned to an
+      // older task revision can never pass — the change returns for a fix
+      // attempt naming the revision (a landing change too, releasing the
+      // slot), unless its merge started or an update-branch effect is still
+      // settling. The stage fires for an open or passed round only: a failed
+      // round's fix is already out and answers that round, so it carries the
+      // newest revision through its notice instead, and a superseded round's
+      // fix attempt is already out. An owed newest attempt is the change's
+      // next instruction and the owed step is its one writer (H″ O2): the
+      // gate holds the revision fix until the row is out — superseding its
+      // round before the dispatch committed would orphan the attempt; the
+      // next failed update, or this stage once the row is out, re-mints.
+      if (round !== null && !change.newestAttemptOwed && (round.outcome === null || round.outcome === 'pass') && change.task.results.some(result => result.id === round.resultId && result.taskRevision < change.task!.revision)) {
         steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'revision', roundId: round.id, resultId: null })
         continue
       }
@@ -305,7 +319,13 @@ export function planSteps(snapshot: ExecutionSnapshot, _now: string): PlanSteps 
       if (round.outcome === 'fail') {
         // A failed round returns the change for fixes under the count rule
         // (D12) — a carried round that failed base-merge CI too, leaving the
-        // slot; the executor decides stop versus dispatch.
+        // slot; the executor decides stop versus dispatch. The fixes step is
+        // applyFix's own row's one writer (H″ O2): the dispatch runs before
+        // the transition, so a refused or interrupted send leaves the change
+        // gating on the failed round and this step re-runs it — after Retry,
+        // or on the next pass — re-sending the same key: a refused send
+        // wrote nothing, and a committed one replays by key and payload. The
+        // owed step never fires there: 'gating' is not a fix row's owed state.
         steps.fixes.push({ executionId: change.executionId, change: change.change, roundId: round.id })
         continue
       }
@@ -338,7 +358,16 @@ export function planSteps(snapshot: ExecutionSnapshot, _now: string): PlanSteps 
         }
         if (live(pull)) continue
       }
-      if (round.reviewAssignmentId !== null) {
+      // A held restart's owed review handoff (revision-control 4.5 LC1): the
+      // change's step marks the debt, the round's pointer is already clear —
+      // so this routes to the restart stage, never to a verdict that would
+      // wait on the superseded handoff. The stage dispatches the one fresh
+      // handoff and returns the step to `reviewing`; until then it re-plans.
+      // A standing hold keeps the debt owed: like every dispatch stage, it
+      // waits for the gate (the release routes it here).
+      if (change.step === 'review-restart') {
+        if (!held) steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'review-restart', roundId: round.id, resultId: null })
+      } else if (round.reviewAssignmentId !== null) {
         steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'verdict', roundId: round.id, resultId: null })
       } else {
         ciStage()

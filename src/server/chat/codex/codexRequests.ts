@@ -138,6 +138,14 @@ export class CodexRequests {
     return { ok: true }
   }
 
+  /** Hold a question's deadline; Codex chats never arm one (QA-U4). */
+  holdQuestion(requestId: string): { ok: true } | { ok: false; error: string } {
+    const pending = this.pending.get(requestId)
+    if (!pending) return { ok: false, error: `No pending question with id ${requestId}; it may already be answered or cancelled` }
+    if (pending.kind !== 'question' || !pending.questions) return { ok: false, error: `Request ${requestId} is not a question` }
+    return { ok: false, error: `Request ${requestId} has no auto-answer deadline to hold` }
+  }
+
   /** A live switch to auto grants pending approval cards; questions stay. */
   policyChanged(policy: ChatApprovalPolicy): void {
     if (policy !== 'auto') return
@@ -180,6 +188,12 @@ export class CodexRequests {
             ...(typeof option.description === 'string' && option.description ? { description: option.description } : {}),
           }))
         : [],
+      // F3 (codex-chat-sessions): carry the answer-shape flags into the card —
+      // free text only where Codex allows another answer, masked where secret.
+      // Absent fields read as today, so a sender omitting them cannot make a
+      // card unanswerable.
+      ...(typeof question.isOther === 'boolean' ? { isOther: question.isOther } : {}),
+      ...(question.isSecret === true ? { isSecret: true } : {}),
     }))
     return new Promise((resolve) => {
       const requestId = newRequestId()

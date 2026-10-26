@@ -486,3 +486,6 @@ test('findings answer a claimed session handoff by exact result and handoff id; 
   expect(tasks.store.results.get(second.id)!.findings).toEqual([])
   expect(tasks.store.results.get(second.id)!.acceptedAt).toBeNull()
 })
+
+// Result checks over a submitted result (independent-verification D1/D4/I1/I4)
+// live in resultCheckTaskHandoffs.test.ts, beside their own scaffolding.

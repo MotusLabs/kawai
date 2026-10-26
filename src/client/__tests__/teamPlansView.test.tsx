@@ -277,11 +277,18 @@ test('every control disables while disconnected; reconnecting re-subscribes and 
   const { sent, byId, rerender, renderer } = openDetail()
   act(() => useTeamPlanStore.getState().begin('/repo', 'lost', 'approve'))
   rerender({ connected: false })
-  expect(textOf(renderer.root.findByProps({ role: 'status' }))).toContain('Disconnected')
+  // The view and its workspace section each show a status region.
+  const statuses = renderer.root.findAllByProps({ role: 'status' }).map(textOf)
+  expect(statuses.some(text => text.includes('Disconnected'))).toBe(true)
   for (const id of ['plan-approve-2', 'plan-withdraw-2', 'plan-discard-lead', 'plan-complete', 'plan-cancel']) expect(byId(id).props.disabled).toBe(true)
   const before = sent.length
   rerender({ connected: true, epoch: 1 })
-  expect(sent.slice(before)).toEqual([{ type: 'team-plans-open', teamPath: '/repo' }, { type: 'team-plan-open', teamPath: '/repo', planId: 'p1' }])
+  // The re-subscription now includes the workspace's (plan-workspace 5.1).
+  expect(sent.slice(before).filter(message => message.type.endsWith('-open'))).toEqual([
+    { type: 'team-plan-workspace-open', teamPath: '/repo', planId: 'p1' },
+    { type: 'team-plans-open', teamPath: '/repo' },
+    { type: 'team-plan-open', teamPath: '/repo', planId: 'p1' },
+  ])
   expect(useTeamPlanStore.getState().views['/repo']!.pending).toEqual({})
 })
 
@@ -292,7 +299,11 @@ test('a reconnect seen only as a new epoch still drops waiting requests', () => 
   expect(byId('plan-approve-2').props.disabled).toBe(true)
   const before = sent.length
   rerender({ epoch: 1 })
-  expect(sent.slice(before).filter(message => message.type.endsWith('-open'))).toEqual([{ type: 'team-plans-open', teamPath: '/repo' }, { type: 'team-plan-open', teamPath: '/repo', planId: 'p1' }])
+  expect(sent.slice(before).filter(message => message.type.endsWith('-open'))).toEqual([
+    { type: 'team-plan-workspace-open', teamPath: '/repo', planId: 'p1' },
+    { type: 'team-plans-open', teamPath: '/repo' },
+    { type: 'team-plan-open', teamPath: '/repo', planId: 'p1' },
+  ])
   expect(useTeamPlanStore.getState().views['/repo']!.pending).toEqual({})
   rerender({ epoch: 1 })
   expect(byId('plan-approve-2').props.disabled).toBe(false)

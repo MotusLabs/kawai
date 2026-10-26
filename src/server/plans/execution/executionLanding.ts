@@ -22,7 +22,6 @@ import type { GhCommandOptions } from '../landing/ghCommand'
 import type { MergeMethod } from '../../../shared/planExecution'
 import { runGit } from '../../git/gitCommand'
 import { logger } from '../../logger'
-import { refusable } from './stepRefusal'
 import { ExecutionConflict } from './executionPatch'
 import { EffectPinConflict } from './executionEffectStore'
 import { cleanMergeCheck } from '../landing/cleanMerge'
@@ -48,6 +47,12 @@ export interface LandingDeps {
    * and files. Resolves false when no revision is pending.
    */
   revisionAttempt: (changeRow: { executionId: string; change: string; taskId: string | null }, round: RoundRow, update: { base: string; files: string[] }) => Promise<boolean>
+  /**
+   * D13's update attempt (revision-control PR E, A1): the failed branch
+   * update's fix handoff, carried by its kind-'update' attempt row — minted,
+   * dispatched, and stamped through the dispatch module.
+   */
+  updateAttempt: (changeRow: { executionId: string; change: string }, round: RoundRow, update: { base: string; files: string[] }) => Promise<void>
   /** The task's live status: a task the human closed is never touched again (D19). */
   taskStatusOf: (taskId: string) => string | null
   /** The hold gate (revision-control 3.2): true when the change is held. */
@@ -137,7 +142,7 @@ export async function applyLanding(deps: LandingDeps, adapters: LandingAdapters,
       // applyLandingOutcome reaches under a hold.
       const fresh = store.change(changeRow.executionId, changeRow.change)!
       store.transition(changeRow.executionId, changeRow.change, fresh, { state: 'gating', step: null, stopReason: null, stopDetail: null, passedAt: null })
-      return dispatchUpdateAttempt(deps, changeRow, round, { kind: 'conflict', files: prediction.conflicts, base: base.sha })
+      return deps.updateAttempt(changeRow, round, { files: prediction.conflicts, base: base.sha })
     }
     // Clean: the update-branch effect runs, pinned to the reviewed head.
     // The pre-guard (A1): a live landing-kind row of another identity —
@@ -216,34 +221,7 @@ async function failedUpdate(deps: LandingDeps, row: ChangeRow, updateRound: Roun
   const round = updateRound ?? store.rounds(row.executionId, row.change).at(-1) ?? null
   if (round === null) return
   if (await deps.revisionAttempt(row, round, update)) return
-  await dispatchUpdateAttempt(deps, row, round, update.files.length > 0 ? { kind: 'conflict', files: update.files, base: update.base } : { kind: 'failed-check' })
-}
-
-/** D13's update attempt: a fix handoff naming the conflict or the failed update. */
-async function dispatchUpdateAttempt(deps: LandingDeps, changeRow: { executionId: string; change: string; taskId: string | null }, round: RoundRow, detail: { kind: 'conflict'; files: string[]; base: string } | { kind: 'failed-check' }): Promise<void> {
-  if (changeRow.taskId === null) return
-  const taskId = changeRow.taskId
-  const files = detail.kind === 'conflict' ? detail.files : []
-  const base = detail.kind === 'conflict' ? detail.base : ''
-  // The update attempt goes to the change's implementing group (D13).
-  const execution = deps.executions.execution(changeRow.executionId)
-  const revision = execution === null ? null : deps.plans.revision(execution.planId, execution.revision)
-  const group = revision?.content.changes.find(entry => entry.change === changeRow.change)?.group ?? null
-  if (group === null) return
-  const roleProfiles = revision?.content.roles.find(role => role.group === group)?.profiles ?? []
-  const generation = deps.executions.change(changeRow.executionId, changeRow.change)?.generation ?? 0
-  await refusable('update', () => deps.results.handoff({ kind: 'system', team: deps.team, origin: { kind: 'execution', executionId: changeRow.executionId } }, taskId, {
-    kind: 'fix', resultId: round.resultId, target: { kind: 'group', id: group },
-    ...(roleProfiles.length > 0 ? { allowedProfiles: roleProfiles } : {}),
-    instructions: [
-      `Bring the branch up to date with the base branch.`,
-      detail.kind === 'conflict'
-        ? `The merge conflicts with the base${base ? ` (base head ${base})` : ''} in: ${files.join(', ')}. Resolve the conflicts and commit the merge.`
-        : `GitHub's branch update did not produce a clean merge. Merge the base branch yourself and push.`,
-      `Then submit a new result with task_submit_result.`,
-    ].join('\n\n'),
-    requestKey: `exec:${changeRow.executionId}:${changeRow.change}:attempt:update:${round.number}:${generation}`,
-  }))
+  await deps.updateAttempt(row, round, update)
 }
 
 /** The update-branch effect: GitHub merges the base into the PR, pinned to the reviewed head. */

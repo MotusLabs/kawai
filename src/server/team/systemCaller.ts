@@ -35,6 +35,9 @@ export type SystemRight =
   | 'note'
   | 'submit'
   | 'acknowledge'
+  // A recheck is requested by the human or a team member (independent-
+  // verification D4); no origin holds it — Kawai never rechecks on its own.
+  | 'recheck'
 
 const EXECUTION_RIGHTS: readonly SystemRight[] = ['read', 'create-linked', 'dispatch', 'handoff', 'accept', 'close', 'status', 'note', 'submit', 'acknowledge']
 const DECISION_RIGHTS: readonly SystemRight[] = ['create-fix', 'dispatch', 'close']

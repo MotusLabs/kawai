@@ -66,11 +66,18 @@ export async function inspectEffect(effect: EffectRow, reads: InspectorReads): P
         const branch = await reads.localBranch(text('repo'), text('branch'))
         return branch !== null ? { found: 'done', outcome: { head: branch } } : { found: 'not-done' }
       }
-      case 'push': {
-        // origin's head contains the commit: done; else run again.
-        const head = await reads.remoteHead(text('cwd'), `refs/heads/${text('branch')}`)
+      case 'push':
+      case 'push-checkpoint': {
+        // origin's head contains the commit: done (D14's row; the checkpoint
+        // push, revision-control D7, inspects the same way) — a checkpoint
+        // pushed past the round commit contains it, and an equality-only read
+        // would run the push again and fail it non-fast-forward.
+        const ref = `refs/heads/${text('branch')}`
+        const head = await reads.remoteHead(text('cwd'), ref)
         if (head === null) return { found: 'not-done' }
-        return head === text('commit') || head.startsWith(text('commit')) ? { found: 'done', outcome: { head } }
+        if (head === text('commit') || head.startsWith(text('commit'))) return { found: 'done', outcome: { head } }
+        return (await reads.contains(text('cwd'), ref, text('commit'), head))
+          ? { found: 'done', outcome: { head } }
           : { found: 'not-done', outcome: { head } }
       }
       case 'open-pr': {

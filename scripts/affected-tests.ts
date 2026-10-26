@@ -82,7 +82,16 @@ export function isDocsOnlyCommit(staged: readonly string[]): boolean {
 // manifest, the lockfile, the Bun pin, the bunfig, the hooks, and the root
 // TypeScript configs. The rule errs toward the full check. Evaluated before
 // docs-only classification and before tier exclusion.
-export const ESCAPE_CLOSURE_FILES: ReadonlySet<string> = new Set(['src/server/git/gitCommand.ts'])
+export const ESCAPE_CLOSURE_FILES: ReadonlySet<string> = new Set([
+  'src/server/git/gitCommand.ts',
+  // The check-record and content-key modules, which the check pipeline and
+  // both hooks import from src/server/checks/ (independent-verification D3),
+  // and the test-list module the check pipeline writes and the citation
+  // check reads (independent-verification D7).
+  'src/server/checks/checkRecords.ts',
+  'src/server/checks/checkKey.ts',
+  'src/server/checks/testLists.ts',
+])
 
 const ESCAPE_FILES = new Set([
   'scripts/test-runner.ts',

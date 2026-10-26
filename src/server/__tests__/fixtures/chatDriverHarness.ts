@@ -200,6 +200,10 @@ export function createHarness(
     claudeExecutablePath?: string
     getProviderEnv?: () => Record<string, string>
     getApprovalPolicy?: () => ChatApprovalPolicy
+    /** The question auto-answer wait, ms, read once per question (question-auto-answer D2). */
+    getQuestionAutoAnswerMs?: () => number
+    /** Timer seam behind the auto-answer deadline; a manual clock in tests. */
+    timerScheduler?: import('../../chat/timerScheduler').ChatTimerScheduler
     teamMcpServer?: NonNullable<Options['mcpServers']>[string]
     getSystemPromptAppend?: () => string | undefined
     getEffort?: () => Options['effort']
@@ -225,6 +229,13 @@ export function createHarness(
     onNotification?: (notification: ChatNotification, timeoutMs?: number) => void
     /** Replaces the harness's process-end capture. */
     onProcessEnd?: () => void
+    /** The plan-workspace context record (PR D §4); a refused or throwing store refuses the send. */
+    recordWorkspaceContext?: (input: {
+      sessionId: string
+      messageUuid: string
+      turnId: string
+      context: import('../../../shared/planWorkspace').WorkspaceMessageContext
+    }) => import('../../plans/workspace/workspaceContext').WorkspaceContextOutcome
   } = {}
 ): Harness {
   const events: ChatEvent[] = []

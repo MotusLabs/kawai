@@ -8,8 +8,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { cleanGitEnv } from '../../src/server/git/gitCommand'
-import { recordsDir } from '../lib/checkRecords'
-import { TIMINGS_FILE_NAME, isRunSnapshotName } from '../testTimings'
+import { recordsDir } from '../../src/server/checks/checkRecords'
+import { isRunSnapshotName } from '../testTimings'
 import { isProcDead } from './fixtures/runnerProbe/procState'
 
 const REPO_ROOT = path.resolve(import.meta.dir, '..', '..')
@@ -282,6 +282,97 @@ describe('the real runner gives each file its own root', () => {
     expect(stderr).toContain('KAWAI_TEST_WORKERS')
     expect(fs.readdirSync(privateTmp)).toEqual([])
   }, 30_000)
+
+  test('KAWAI_TEST_JUNIT_DIR is consumed by the runner, never inherited by a batch (D7)', async () => {
+    // Inside a full check the suite env carries the report directory; the
+    // runner plans its own batch reports from it, and a runner a test
+    // spawns (this file's probes, a hook a suite test commits with) must
+    // plan none into it — its failure-path probes would poison the check's
+    // merge. The envProbe asserts the batch environment is clean; the report
+    // this spawning runner itself planned is the only one in the directory.
+    const junitDir = fs.mkdtempSync(path.join(os.tmpdir(), 'runner-roots-junit-'))
+    probeDirs.push(junitDir)
+    const out = makeProbeOut()
+    const proc = spawnRunner(
+      ['--skip-real-tmux', ...PASSING_PROBES, path.join(FIXTURE_DIR, 'envProbe.test.ts')],
+      {
+        KAWAI_TEST_WORKERS: '2',
+        KAWAI_PROBE_OUT: out,
+        KAWAI_TEST_JUNIT_DIR: junitDir,
+      }
+    )
+    const { code, stderr } = await drainAndExit(proc)
+    expect(code, stderr.slice(-2000)).toBe(0)
+    expect(await readProbeEntries(out, 2, 1_000)).toHaveLength(2)
+    // The run's plan sits beside its one report (C2 advisor review): the
+    // manifest names exactly the report the runner planned and wrote.
+    const planned = fs.readdirSync(junitDir)
+    expect(planned).toHaveLength(2)
+    expect(planned).toContain('planned.json')
+    const report = planned.find((name) => name.endsWith('.junit.xml'))
+    expect(report).toMatch(/^\d+-[\w-]+-\d+-\d+\.junit\.xml$/)
+    expect(JSON.parse(fs.readFileSync(path.join(junitDir, 'planned.json'), 'utf8'))).toEqual({
+      reports: [report],
+    })
+  }, 30_000)
+
+  // The no-planned-reports path (C2 advisor review, note 2): a caller
+  // carrying its own --reporter-outfile (the hook's affected-tests pass,
+  // nested under a full check) must write NOTHING into the directory the
+  // env names — no report, and no manifest, since a manifest here would
+  // fail the owning run's exact-set merge. readdir cannot see an overwrite
+  // (the name survives), so the seeded case asserts bytes.
+  test('a caller-reporter run leaves an empty foreign report directory empty', async () => {
+    const foreignDir = fs.mkdtempSync(path.join(os.tmpdir(), 'runner-roots-junit-foreign-'))
+    probeDirs.push(foreignDir)
+    const callerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'runner-roots-caller-'))
+    probeDirs.push(callerDir)
+    const proc = spawnRunner(
+      [
+        '--skip-real-tmux',
+        '--skip-slow',
+        PASSING_PROBES[0]!,
+        '--reporter=junit',
+        `--reporter-outfile=${path.join(callerDir, 'caller.junit.xml')}`,
+      ],
+      { KAWAI_TEST_JUNIT_DIR: foreignDir }
+    )
+    const { code, stderr } = await drainAndExit(proc)
+    expect(code, stderr.slice(-2000)).toBe(0)
+    // The probe hands only an empty directory; nothing may appear in it.
+    expect(fs.readdirSync(foreignDir)).toEqual([])
+    // The caller's own report landed at the path the caller named.
+    expect(fs.existsSync(path.join(callerDir, 'caller.junit.xml'))).toBe(true)
+  }, 30_000)
+
+  test('a caller-reporter run leaves a seeded foreign report directory byte-for-byte intact', async () => {
+    const foreignDir = fs.mkdtempSync(path.join(os.tmpdir(), 'runner-roots-junit-foreign-'))
+    probeDirs.push(foreignDir)
+    const callerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'runner-roots-caller-'))
+    probeDirs.push(callerDir)
+    // A foreign writer's manifest and report, as the owning run left them.
+    const manifestBytes = Buffer.from(JSON.stringify({ reports: ['0-parallel-1-2.junit.xml'] }))
+    const reportBytes = Buffer.from('<testsuites name="foreign"></testsuites>')
+    fs.writeFileSync(path.join(foreignDir, 'planned.json'), manifestBytes)
+    fs.writeFileSync(path.join(foreignDir, '0-parallel-1-2.junit.xml'), reportBytes)
+    const proc = spawnRunner(
+      [
+        '--skip-real-tmux',
+        '--skip-slow',
+        PASSING_PROBES[0]!,
+        '--reporter=junit',
+        `--reporter-outfile=${path.join(callerDir, 'caller.junit.xml')}`,
+      ],
+      { KAWAI_TEST_JUNIT_DIR: foreignDir }
+    )
+    const { code, stderr } = await drainAndExit(proc)
+    expect(code, stderr.slice(-2000)).toBe(0)
+    // Byte equality, not name equality: an overwrite keeps the name.
+    expect(fs.readFileSync(path.join(foreignDir, 'planned.json'))).toEqual(manifestBytes)
+    expect(fs.readFileSync(path.join(foreignDir, '0-parallel-1-2.junit.xml'))).toEqual(reportBytes)
+    expect(fs.readdirSync(foreignDir).sort()).toEqual(['0-parallel-1-2.junit.xml', 'planned.json'])
+    expect(fs.existsSync(path.join(callerDir, 'caller.junit.xml'))).toBe(true)
+  }, 30_000)
 })
 
 // Production-path probes for the timings record (review B3): these drive the
@@ -374,12 +465,11 @@ describe('the real runner publishes the timings record (B3)', () => {
     // A filtered run must not publish (D4): on the production path, planRun
     // seeds and publishes for a full run only, so the real runner given
     // explicit files leaves the scratch repository's records directory
-    // without a timings record — and without a seed call side effect.
+    // absent — no record, and no run snapshot beside one (N4).
     const repo = makeProbeRepo("import { test, expect } from 'bun:test'\ntest('passes', () => {\n  expect(1).toBe(1)\n})\n")
     const proc = spawnRunner(repo, 'src/server/__tests__/publishProbe.test.ts')
     const { code, stderr } = await drainAndExit(proc)
     expect(code, stderr.slice(-2000)).toBe(0)
-    expect(fs.existsSync(path.join(recordsDir(repo), TIMINGS_FILE_NAME))).toBe(false)
+    expect(fs.existsSync(recordsDir(repo))).toBe(false)
   }, 45_000)
 })
-

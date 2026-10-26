@@ -7,20 +7,16 @@ import { buildBunTestArgs, planBatches, type PlannedBatch } from '../planBatches
 import { hasTestNameFilter, planRun, runBatchesAndPublish } from '../runPlan'
 import {
   collectFiles,
-  defaultWorkers,
-  effectiveQuota,
   forwardSignalAndReap,
   isOwnerAlive,
-  parseCpuQuota,
   parseRunArgs,
-  readCpuQuota,
   readOwnerMarker,
   readProcStartTime,
   refuseBatchAfterSignal,
   sweepStaleRoots,
-  workersFromEnv,
   writeOwnerMarker,
 } from '../test-runner'
+import { defaultWorkers, parseCpuQuota, workersFromEnv } from '../lib/workerCount'
 
 describe('refuseBatchAfterSignal', () => {
   test('a handled signal refuses the batch with its name; otherwise it passes (N1)', () => {
@@ -96,7 +92,6 @@ describe('planRun', () => {
     expect(plan.batchOptions.skipSlowTier).toBe(false)
     expect(planBatches(plan.batchOptions).some((batch) => batch.kind === 'real-tmux')).toBe(true)
     expect(plan.fullRun).toBe(true)
-    expect(plan.publishTimings).toBe(true)
     expect(plan.batchOptions.timingsPath).toBe('/run-root/timings.json')
     expect(plan.batchOptions.updateTimings).toBe(true)
     expect(seededWith).toBe(base.seedText)
@@ -105,9 +100,9 @@ describe('planRun', () => {
   test('a full run whose seed failed plans no publish (F5)', () => {
     const plan = planRun({ ...base, args: parseRunArgs([]), seedTimings: () => null })
     expect(plan.fullRun).toBe(true)
-    expect(plan.publishTimings).toBe(false)
-    // The batch options carry the same decision: nothing seeded, nothing to
-    // update, and no publish path for main() to wire into the run.
+    // The batch options carry the whole publish decision (N1): nothing
+    // seeded, nothing to update, and no publish path for main() to wire
+    // into the run.
     expect(plan.batchOptions.timingsPath).toBeUndefined()
     expect(plan.batchOptions.updateTimings).toBe(false)
   })
@@ -126,7 +121,6 @@ describe('planRun', () => {
     ]) {
       const plan = planRun({ ...base, args: parseRunArgs(argv), seedTimings })
       expect(plan.fullRun).toBe(false)
-      expect(plan.publishTimings).toBe(false)
       expect(plan.batchOptions.timingsPath).toBeUndefined()
       expect(plan.batchOptions.updateTimings).toBe(false)
     }
@@ -286,22 +280,6 @@ describe('defaultWorkers', () => {
     expect(defaultWorkers(16)).toBe(4)
     expect(defaultWorkers(2)).toBe(2)
     expect(defaultWorkers(0)).toBe(1)
-  })
-})
-
-describe('effectiveQuota', () => {
-  test('prefers the cgroup cpu.max over the platform parallelism (F7)', () => {
-    expect(effectiveQuota(() => 2)).toBe(2)
-    expect(effectiveQuota(() => 9)).toBe(9)
-  })
-
-  test('falls back to the platform parallelism when cpu.max is absent', () => {
-    expect(effectiveQuota(() => null)).toBe(os.availableParallelism())
-  })
-
-  test('the default reader is the production cgroup read (F6)', () => {
-    // The default parameter binds the production reader, not a constant.
-    expect(effectiveQuota()).toBe(readCpuQuota() ?? os.availableParallelism())
   })
 })
 

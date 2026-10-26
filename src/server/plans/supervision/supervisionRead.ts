@@ -23,6 +23,7 @@ import type { ExecutionStore } from '../execution/executionStore'
 import type { IntegrationStore } from '../landing/integration/integrationStore'
 import type { PlanStore } from '../planStore'
 import type { PlanRevision } from '../../../shared/plans'
+import { agentHeldStage, attemptStatus } from '../execution/attemptStatus'
 
 /** The runtime facts the session and mailbox modules expose (D10). */
 export interface SupervisionRuntime {
@@ -36,7 +37,7 @@ export interface SupervisionReads {
   db: Database
   mail: MailboxStore
   executions: ExecutionStore
-  plans: Pick<PlanStore, 'forTeam' | 'revision' | 'approvedRevision'>
+  plans: Pick<PlanStore, 'forTeam' | 'revision' | 'approvedRevision' | 'linkedTasks'>
   decisions: DecisionStore
   integration?: IntegrationStore
   /** The execution's unresolved acceptance conditions (V2), as landing reads them. */
@@ -52,8 +53,6 @@ export interface PlanSupervisionRead {
   revision: number | null
   inputs: SupervisionInput[]
 }
-
-const AGENT_HELD = new Set(['implementing'])
 
 /** A round passed CI once its review was dispatched, or a carried round's verdict decided it. */
 function ciPassedAt(round: RoundRow, reviewCreatedAt: string | null): string | null {
@@ -127,12 +126,19 @@ function readInputs(reads: SupervisionReads, teamId: string, planId: string): Pl
           verdict: verdict?.verdict ?? null, verdictAt: verdict?.createdAt ?? null, findingsSummary: verdict?.findings ?? null,
         }
       })
-      const agentHeld = AGENT_HELD.has(row.state) || (row.state === 'gating' && row.step === 'reviewing')
+      // O3′ (revision-control PR E): the one agent-held predicate. An owed
+      // newest attempt names no holder — the outstanding assignment would be
+      // the previous stage's, so the instruction reads null instead.
+      const newest = reads.executions.attempts(execution.id, entry.change).at(-1) ?? null
+      const attempt = newest === null ? null : {
+        kind: newest.kind,
+        status: attemptStatus(newest, taskAssignments, reads.executions.rounds(execution.id, entry.change)),
+      }
+      const agentHeld = agentHeldStage(row, attempt) !== null
       const outstanding = agentHeld ? outstandingOf(taskAssignments) : null
       const message = outstanding?.messageId ? reads.mail.get(outstanding.messageId) : null
       const holderId = message?.claimedBy ?? (outstanding?.targetKind === 'session' ? outstanding.targetId : null)
       const decided = (cardId: string) => cardState(reads.decisions.decisionsOfCard(teamId, cardId)) !== 'open'
-      const attempt = reads.executions.attempts(execution.id, entry.change).at(-1) ?? null
       return {
         change: entry.change,
         dependsOn: entry.dependsOn,
@@ -143,7 +149,7 @@ function readInputs(reads: SupervisionReads, teamId: string, planId: string): Pl
         landing: landingOf(entry.change),
         dependencies: [],
         parallelLimit: execution.maxParallel,
-        attempt: attempt ? { kind: attempt.kind } : null,
+        attempt,
         rounds,
         effects: effects.filter(effect => effect.change === entry.change || effect.change === null)
           .map(effect => ({ kind: effect.kind, state: effect.state, tries: effect.tries, nextAt: effect.nextAt })),

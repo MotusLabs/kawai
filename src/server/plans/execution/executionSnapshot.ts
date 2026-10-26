@@ -8,6 +8,7 @@ import type { ChangeState, ChangeStep } from '../../../shared/planExecution'
 import type { ActiveHold } from '../../../shared/planRevisionControl'
 import type { OpenPauseTarget } from '../revisionControl/holdGate'
 import type { PlanContent } from '../../../shared/plans'
+import { attemptStatus, type AttemptKeyFacts } from './attemptStatus'
 import type { EffectRow, ExecutionRow, RoundRow } from './executionRows'
 import type { ExecutionStore } from './executionStore'
 import type { PlanStore } from '../planStore'
@@ -53,6 +54,8 @@ export interface PlannedChange {
   round: RoundRow | null
   /** The change's newest attempt, any kind — a fix attempt whose handoff never dispatched is the owed dispatch's marker. */
   newestAttempt: { number: number; kind: string } | null
+  /** Whether the newest attempt is still owed (H″ O1): never dispatched, and no round answers it. */
+  newestAttemptOwed: boolean
   /** The change's landing fact, once it landed (D13). */
   landing: { mergeSha: string; postCi: unknown; mechanism: string } | null
   /** The change's newest merge, update-branch, or fast-forward effect, any state (D13's follow-ons). */
@@ -93,6 +96,7 @@ const LANDING_KINDS: ReadonlySet<string> = new Set(['merge', 'update-branch', 'f
 export function executionSnapshot(teamId: string, main: string, executions: ExecutionStore, plans: PlanStore,
   resultsOf: (taskId: string) => ResultFact[] = () => [], taskRevisionOf: (taskId: string) => number = () => 1,
   taskStatusOf: (taskId: string) => string = () => 'active', assignmentOf: (taskId: string) => AssignmentFact | null = () => null,
+  assignmentKeysOf: (taskId: string) => AttemptKeyFacts[] = () => [],
   holdsOf: (planId: string) => ActiveHold[] = () => [], openTargetsOf: (planId: string) => OpenPauseTarget[] = () => []): ExecutionSnapshot {
   const running = [...executions.runningForTeam(teamId), ...executions.settlingForTeam(teamId)]
   const contentOf = new Map<string, PlanContent>()
@@ -127,6 +131,13 @@ export function executionSnapshot(teamId: string, main: string, executions: Exec
         newestAttempt: (() => {
           const attempt = executions.attempts(row.executionId, row.change).at(-1)
           return attempt === undefined ? null : { number: attempt.number, kind: attempt.kind }
+        })(),
+        // The owed marker is derived, never stored (H″ O1): an unstamped row
+        // whose assignment carries its exact key is out, never owed.
+        newestAttemptOwed: (() => {
+          const attempt = executions.attempts(row.executionId, row.change).at(-1)
+          if (attempt === undefined || row.taskId === null) return false
+          return attemptStatus(attempt, assignmentKeysOf(row.taskId), executions.rounds(row.executionId, row.change)) === 'owed'
         })(),
         task: row.taskId === null ? null : { status: taskStatusOf(row.taskId), revision: taskRevisionOf(row.taskId), results: resultsOf(row.taskId), assignment: assignmentOf(row.taskId) },
         ...(() => {

@@ -29,11 +29,27 @@ export async function inspectDueUnknownEffects(deps: { store: ExecutionStore; re
     // recorded by its mechanism; a stopped or exhausted one stops every
     // change still waiting on it.
     onInspected: (effect, verdict) => {
-      if (effect.change !== null) return
+      // A round `push` the inspection settles done still reaches the outcome
+      // path — markRoundPushed plus revision-control D7's result checkpoint —
+      // or the planner's pushedAt heal re-issues the push, and a checkpoint
+      // pushed past the round commit fails that second push non-fast-forward.
+      // The other change-level kinds keep the planner's heal: a re-run is
+      // idempotent for them, and the provision inspection's outcome is only
+      // a head.
+      if (effect.change !== null) {
+        if (effect.kind === 'push' && verdict.found === 'done' && deps.outcomes) {
+          applyEffectOutcome(deps.outcomes, { ...effect, state: 'done', outcome: verdict.outcome })
+        }
+        return
+      }
       if (verdict.found === 'done' && deps.outcomes) applyEffectOutcome(deps.outcomes, { ...effect, state: 'done', outcome: verdict.outcome })
       if (verdict.found === 'stop') stopWaitingChanges(deps.store, effect.executionId, effect.kind, effect.id, verdict.detail.message ?? `stopped as ${verdict.reason}`)
     },
     onUnknownSettled: effect => {
+      // revision-control D7: a push-checkpoint never stops its change — the
+      // settled row reads Pausing checkpoint-push-failed and the holder may
+      // record again. Keyed on the kind only.
+      if (effect.kind === 'push-checkpoint') return
       if (effect.change === null) return stopWaitingChanges(deps.store, effect.executionId, effect.kind, effect.id, effect.error ?? 'the outcome could not be determined')
       const row = deps.store.change(effect.executionId, effect.change)
       // A stopped execution's merge is settled by its landing-outcome stage.

@@ -380,17 +380,42 @@ function checkExceptionEntry(entry: { file: string; reason: string }, seen: Set<
 }
 
 describe('SLOW_TIER_EXCEPTIONS', () => {
-  test('the per-entry check accepts a valid entry and rejects an invalid one (F4)', () => {
+  test('the per-entry check accepts a valid entry (F4)', () => {
     // The shape a listed entry must have: a real non-tier file and its
     // N=1 measurement.
     const valid = { file: 'src/shared/__tests__/chatTime.test.ts', reason: '9.4 s at N=1' }
     expect(() => checkExceptionEntry(valid, new Set())).not.toThrow()
+  })
 
-    // A stale entry — the file no longer exists — fails and names it.
-    const invalid = { file: 'src/server/__tests__/noLongerThere.test.ts', reason: '9.4 s at N=1' }
-    expect(() => checkExceptionEntry(invalid, new Set())).toThrow(
-      'src/server/__tests__/noLongerThere.test.ts no longer exists'
-    )
+  test.each([
+    [
+      'a slow-tier file',
+      new Set<string>(),
+      { file: 'src/server/__tests__/codexRolloutReplay.integration.test.ts', reason: '9.4 s at N=1' },
+      'belongs to the slow tier',
+    ],
+    [
+      'a duplicate',
+      new Set(['src/shared/__tests__/chatTime.test.ts']),
+      { file: 'src/shared/__tests__/chatTime.test.ts', reason: '9.4 s at N=1' },
+      'listed twice',
+    ],
+    ['an empty reason', new Set<string>(), { file: 'src/shared/__tests__/chatTime.test.ts', reason: '   ' }, null],
+    [
+      'a reason not in the N=1 format',
+      new Set<string>(),
+      { file: 'src/shared/__tests__/chatTime.test.ts', reason: 'measured slow' },
+      'states no N=1 time',
+    ],
+    [
+      'a missing file',
+      new Set<string>(),
+      { file: 'src/server/__tests__/noLongerThere.test.ts', reason: '9.4 s at N=1' },
+      'no longer exists',
+    ],
+  ] as const)('the per-entry check rejects %s (F4)', (_name, seen, entry, message) => {
+    if (message === null) expect(() => checkExceptionEntry(entry, seen)).toThrow()
+    else expect(() => checkExceptionEntry(entry, seen)).toThrow(message)
   })
 
   test('every entry names an existing non-tier file, once, with its N=1 time', () => {

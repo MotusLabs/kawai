@@ -75,12 +75,14 @@ import {
   type ClaudeLaunchConfiguration,
   type ProfileCatalogContext,
 } from './ClaudeProfiles'
+import { RegisteredNameRefusal } from './secretNameRegistry'
 import { logger } from '../logger'
 import { probeSdkAvailability } from './sdkAvailability'
 import { AccountNoticeStore, credentialsPathFor } from './accountNotices'
 import { UsageLimitStore } from './usageLimits'
 import { withTextReset } from './limitSignals'
-import { providerOf, resolveProfileCatalog } from './profileCatalog'
+import { profileCatalogStamp, providerOf, resolveProfileCatalog } from './profileCatalog'
+import type { MergedProvider } from './catalogMerge'
 import { ensureCodexExecutable } from './codex/codexExecutable'
 import { codexLoginErrorMessage, hasCodexLogin } from './codex/codexAuth'
 import { codexLimitProviderId } from './codex/codexLimits'
@@ -124,6 +126,7 @@ import { codexRolloutReceipt } from '../team/codexReceipt'
 import type { LimitEventStore } from '../team/routing/limitEvents'
 import { sessionCooldown } from '../team/cooldowns'
 import { supervisionRuntime } from '../plans/supervision/supervisionRuntime'
+import { pauseHolderFacts } from '../plans/revisionControl/pauseTick'
 import type { HandoffTarget } from '../team/routing/limitOutcomes'
 import type { RuleLoadReport, TeamRoutingState } from '../../shared/routing'
 import { SessionMailbox, type ClaimRef } from '../team/sessionMailbox'
@@ -155,6 +158,9 @@ import {
 } from './transcriptReplay'
 import { canRetryCodexMemo, replayCodexRollout, replayCodexRolloutAsync } from './codex/codexRollout'
 import { watchTranscriptTitle, type TranscriptTitleWatcher } from './transcriptTitleWatcher'
+import { resolveTeam } from '../team/teamIdentity'
+import { validateWorkspaceSend } from './workspaceSendValidation'
+import type { WorkspaceMessageContext, WorkspaceMessageEnvelope } from '../../shared/planWorkspace'
 
 export type { ChatQueryFactory }
 export { chatAuthErrorMessage, hasClaudeAuth }
@@ -280,6 +286,14 @@ export interface ChatSessionManagerOptions {
    */
   profileCatalogHome?: string
   /**
+   * The saved question auto-answer wait in minutes (question-auto-answer D5),
+   * read live so the next question after a change uses the new value while a
+   * pending deadline stands (QA-S3, QA-S5, QA-P4). Claude drivers only: the
+   * manager converts to milliseconds per question; Codex drivers never arm a
+   * deadline (QA-U4), so this never reaches ChatDriverSharedOptions.
+   */
+  getQuestionAutoAnswerMinutes?: () => number
+  /**
    * Injected in tests; production uses global fetch for the provider usage
    * pull (the session provider's own quota endpoint).
    */
@@ -388,6 +402,8 @@ export class ChatSessionManager {
    * over the stored column. Survives respawns; a restart begins with none.
    */
   private readonly contextReadings = new Map<string, ChatContextUsage>()
+  /** Merged provider definitions per catalog stamp (host-login routing facts); re-resolved when the stamp moves. */
+  private readonly providerDefinitions = new Map<string, Map<string, MergedProvider>>()
   /**
    * Latest worker roster per session (workers design D2): the last publish
    * of a live driver, or the recovered sidecar rows of a restarted one. A
@@ -590,7 +606,7 @@ export class ChatSessionManager {
     return {
       type: 'chat-snapshot', sessionId,
       profileId: this.records.get(sessionId)?.claudeProfileId ?? 'default',
-      events: window.events,
+      events: this.attachWorkspaceContext(sessionId, window.events),
       pendingRequests: this.getPendingRequests(sessionId),
       status: this.options.registry.get(sessionId)?.status ?? 'waiting',
       // The live tail, not the window: older live events outside the window
@@ -640,7 +656,7 @@ export class ChatSessionManager {
       [...(this.snapshotHistory.get(sessionId) ?? []), ...(this.liveEvents.get(sessionId) ?? [])],
       { beforeId, ...(throughId !== undefined ? { throughId } : {}) }
     )
-    return { events: window.events, hasOlder: window.hasOlder, stale: window.stale === true }
+    return { events: this.attachWorkspaceContext(sessionId, window.events), hasOlder: window.hasOlder, stale: window.stale === true }
   }
 
   /**
@@ -1173,6 +1189,9 @@ export class ChatSessionManager {
       onError: error => logger.warn('team_mailbox_dispatch_failed', { error: String(error) }),
       ownership: executionCore.ownership,
       onTaskResultWrite: taskId => executionCore.wakes.resultWrite(taskId),
+      // A settled check changes what the task detail reads (independent-
+      // verification D12): the human's open views refresh like on a task write.
+      onCheckSettled: teamId => options.onTaskChange?.(teamId),
     })
     this.mailbox = this.teamMail.mailbox
     this.tasks = this.teamMail.tasks
@@ -1294,16 +1313,30 @@ export class ChatSessionManager {
           waitingFor: teamId => this.teamMail.waitingFor(teamId),
           cooldownUntil: record => sessionCooldown(this.teamMail.limits, options.profileCatalogHome, record.claudeProfileId ?? 'default', record.projectPath).until,
         }),
+        // The pause tick's holder facts (revision-control D8), from the same reads.
+        pauseFacts: pauseHolderFacts({
+          getRecord: id => this.records.get(id),
+          pendingRequest: id => (this.drivers.get(id)?.getPendingRequests().length ?? 0) > 0,
+          hasLiveWorkers: id => this.hasLiveWorkers(id), hasRunningBackgroundTasks: id => this.hasRunningBackgroundTasks(id),
+          parkedResumes: id => this.teamMail.mailbox.store.parkedBy(id).map(row => row.parkedUntil),
+          cooldownUntil: record => sessionCooldown(this.teamMail.limits, options.profileCatalogHome, record.claudeProfileId ?? 'default', record.projectPath).until,
+        }),
       },
       ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
     })
     this.validation = planServices.validation
     this.decisions = planServices.decisions
     this.plans = planServices.plans
+    this.planWorkspace = planServices.workspaceStore
+    this.planWorkspaceRefs = planServices.workspaceRefs
+    this.planWorkspaceContext = planServices.workspaceContext
+    this.planWorkspaceRuntimeReads = planServices.supervisionReads
+    this.planExecutionStore = planServices.executionStore
     this.executions = planServices.executions
     this.executionRuntime = planServices.runtime
     this.supervisionMonitor = planServices.monitor
     this.promotions = planServices.promotions
+    this.checkpoints = planServices.checkpoints
     this.validationDetail = planServices.validationDetail
     this.validationAdapter = planServices.adapter
     // The plan attention's gatherer reads (plan-supervision D13): the same
@@ -1630,6 +1663,16 @@ export class ChatSessionManager {
   private readonly mailGuard = new DriverMailGuard()
   /** Durable plans (durable-plans); the plan tools and UI actions go through it. */
   readonly plans: PlanService
+  /** The plan workspace's bindings and command ledger (plan-workspace 1.2); the workspace connection reads it. */
+  readonly planWorkspace: import('../plans/workspace/workspaceStore').PlanWorkspaceStore
+  /** The plan workspace's document references (plan-workspace 1.2); the workspace connection reads it. */
+  readonly planWorkspaceRefs: import('../plans/workspace/workspaceRefs').PlanWorkspaceRefs
+  /** The per-message context store (plan-workspace §4); the send path records through it. */
+  readonly planWorkspaceContext: import('../plans/workspace/workspaceContext').PlanWorkspaceContext
+  /** The execution pin's read-only surface (plan-workspace 2.4, O4): the accessors executionPin.ts reads, no writer. */
+  readonly planExecutionStore: import('../plans/workspace/executionPin').ExecutionPinStore
+  /** The workspace runtime's supervision reads (plan-workspace 3.1); null without team services. */
+  readonly planWorkspaceRuntimeReads: import('../plans/supervision/supervisionRead').SupervisionReads | null
   /** Plan executions (plan-execution): the human Start/Stop/Retry commands. */
   readonly executions: import('../plans/execution/ExecutionService').ExecutionService
   /** The execution runtime (plan-execution D5): boot recovery, wakes, and stop. */
@@ -1637,6 +1680,8 @@ export class ChatSessionManager {
   private readonly supervisionMonitor: import('../plans/supervision/SupervisionMonitor').SupervisionMonitor | null
   /** Promote, Cancel, and the promotion preview (integration-candidates D9). */
   readonly promotions: import('../plans/landing/integration/PromotionService').PromotionService
+  /** The `task_checkpoint` tool (revision-control D7); null when plan services are absent. */
+  readonly checkpoints: import('../plans/revisionControl/checkpointTool').CheckpointTool | null
   /** The one execution store, its ownership, and its wake hub (plan-execution D5/D7). */
   private readonly executionCore: ReturnType<typeof composeExecutionCore>
   /** The user-level team settings (plan-execution D16's floor map lives here). */
@@ -1792,6 +1837,44 @@ export class ChatSessionManager {
   }
 
   /**
+   * The session's live context reading, or the record's last persisted one,
+   * else null (the snapshot's precedence, read-only for the workspace's
+   * passive health — design D5). Never attaches to the driver or refreshes
+   * anything.
+   */
+  contextReadingOf(sessionId: string): ChatContextUsage | null {
+    return this.contextReadings.get(sessionId) ?? this.records.get(sessionId)?.contextUsage ?? null
+  }
+
+  /**
+   * The provider's latest plan-usage report, or null (providers-and-workers
+   * 5.1): a read-only public accessor over the same in-memory store the
+   * snapshot and TeamCapacity read. Never claims a pull or refreshes.
+   */
+  providerUsageOf(providerId: string): ChatUsageReport | null {
+    return this.usageLimits.get(providerId)
+  }
+
+  /**
+   * The catalog's merged definition of the provider the session's profile
+   * belongs to (read-only, for routing facts like host-login applicability,
+   * plan-workspace LC5.4): cached per catalog stamp like `providerOf`. A
+   * provider the catalog no longer defines has no definition.
+   */
+  providerDefinitionOf(sessionId: string): MergedProvider | null {
+    const record = this.records.get(sessionId)
+    const ctx = catalogCtx(this.options.profileCatalogHome, record?.projectPath)
+    const key = `${ctx.homeDir ?? process.env.HOME ?? os.homedir()}\n${ctx.projectPath ?? ''}\n${profileCatalogStamp(ctx)}`
+    let known = this.providerDefinitions.get(key)
+    if (!known) {
+      if (this.providerDefinitions.size >= 32) this.providerDefinitions.clear()
+      known = resolveProfileCatalog(ctx).merged
+      this.providerDefinitions.set(key, known)
+    }
+    return known.get(this.providerIdOf(sessionId)) ?? null
+  }
+
+  /**
    * Read-only history for a chat session: the stored SDK transcript replayed
    * into ChatEvents (with dead requests marked cancelled), or a
    * "history unavailable" notice. Sessions that never started have no SDK id
@@ -1830,7 +1913,7 @@ export class ChatSessionManager {
    * refuses the turn rather than silently starting a fresh conversation
    * (design D5): the id is kept so a restored transcript can still resume.
    */
-  async send(sessionId: string, text: string): Promise<ChatActionResult> {
+  async send(sessionId: string, text: string, workspaceContext?: WorkspaceMessageEnvelope): Promise<ChatActionResult> {
     // Recovery can replace the record's path: finish it before checking the
     // directory or resolving the launch configuration.
     this.captureHistory(sessionId)
@@ -1842,6 +1925,15 @@ export class ChatSessionManager {
     if (blocked) {
       return { ok: false, error: blocked }
     }
+    // A contextual send validates whole before the driver mints anything
+    // (plan-workspace §4 S1): a refusal stores no row, opens no turn, and
+    // leaves the client draft intact.
+    let stored: WorkspaceMessageContext | null = null
+    if (workspaceContext !== undefined) {
+      const validated = await validateWorkspaceSend(record.projectPath, workspaceContext, this.workspaceSendDeps())
+      if (!validated.ok) return { ok: false, error: validated.error }
+      stored = validated.context
+    }
     let driver: ChatAgentDriver | null
     try {
       driver = await this.ensureDriver(sessionId)
@@ -1851,9 +1943,73 @@ export class ChatSessionManager {
     if (!driver) {
       return { ok: false, error: `Unknown chat session ${sessionId}` }
     }
-    driver.send(text)
+    if (stored) {
+      if (!driver.sendWorkspaceContext) {
+        return { ok: false, error: "This chat's runtime does not carry plan-workspace contexts." }
+      }
+      const sent = this.sendDriverText(driver, text, stored)
+      if (!sent.ok) return { ok: false, error: sent.error }
+    } else {
+      const sent = this.sendDriverText(driver, text)
+      if (!sent.ok) return { ok: false, error: sent.error }
+    }
     this.touch(sessionId)
     return { ok: true }
+  }
+
+  /**
+   * Submit a user turn, settling a launch refusal as a failed send
+   * (provider-relay-setup correction B): the typed pre-spawn refusal means
+   * no child composed or started, so the caller sees the refusal instead of
+   * a rejection. Every other throw rejects exactly as before.
+   */
+  private sendDriverText(driver: ChatAgentDriver, text: string, stored?: WorkspaceMessageContext): { ok: true } | { ok: false; error: string } {
+    try {
+      // The caller checked sendWorkspaceContext exists whenever stored is set.
+      if (stored) return driver.sendWorkspaceContext!(text, stored)
+      driver.send(text)
+      return { ok: true }
+    } catch (error) {
+      if (error instanceof RegisteredNameRefusal) return { ok: false, error: error.message }
+      throw error
+    }
+  }
+
+  /** The validation reads, wired to the plan services (plan-workspace §4.1). */
+  private workspaceSendDeps() {
+    return {
+      resolveTeam: (projectPath: string) => resolveTeam(projectPath),
+      planForTeam: (teamId: string, planId: string) => {
+        const plan = this.plans.store.forTeam(teamId, planId)
+        return plan ? { id: plan.id, title: plan.title } : null
+      },
+      versionInputs: (planId: string) => ({
+        approved: this.plans.store.approvedRevision(planId),
+        revisions: this.plans.store.revisions(planId),
+        drafts: this.plans.store.drafts(planId),
+      }),
+      execution: (executionId: string) => this.planExecutionStore.execution(executionId),
+      refsOf: (teamId: string, planId: string) => this.planWorkspaceRefs.refsOf(teamId, planId),
+    }
+  }
+
+  /**
+   * Re-attach the stored context to user events by message uuid
+   * (plan-workspace §4.3): snapshot and history assembly join through here,
+   * so a replayed transcript renders the attachment the live event showed.
+   * A row whose message never reached the transcript renders nothing, and
+   * an event without a uuid (legacy) reads as absent.
+   */
+  private attachWorkspaceContext(sessionId: string, events: ChatEvent[]): ChatEvent[] {
+    let attached = false
+    const joined = events.map(event => {
+      if (event.type !== 'user_message' || typeof event.messageUuid !== 'string' || event.messageUuid === '') return event
+      const stored = this.planWorkspaceContext.contextOf(sessionId, event.messageUuid)
+      if (!stored) return event
+      attached = true
+      return { ...event, workspaceContext: stored.context }
+    })
+    return attached ? joined : events
   }
 
   /**
@@ -1884,7 +2040,14 @@ export class ChatSessionManager {
     if (!driver) {
       return { ok: false, error: `Unknown chat session ${sessionId}` }
     }
-    driver.start()
+    // The same launch refusal as send: the start settles failed and no
+    // child composed (correction B).
+    try {
+      driver.start()
+    } catch (error) {
+      if (error instanceof RegisteredNameRefusal) return { ok: false, error: error.message }
+      throw error
+    }
     return { ok: true }
   }
 
@@ -2057,6 +2220,20 @@ export class ChatSessionManager {
       }
     }
     return driver.answerQuestion(requestId, answers)
+  }
+
+  /** Hold a question's deadline (question-auto-answer D4, Wait for me). */
+  holdQuestion(sessionId: string, requestId: string): ChatActionResult {
+    const driver = this.drivers.get(sessionId)
+    if (!driver) {
+      return {
+        ok: false,
+        error: this.records.has(sessionId)
+          ? `No pending question with id ${requestId}; the session has no in-flight turn`
+          : `Unknown chat session ${sessionId}`,
+      }
+    }
+    return driver.holdQuestion(requestId)
   }
 
   getPendingRequests(sessionId: string): ChatPendingRequest[] {
@@ -2677,8 +2854,11 @@ export class ChatSessionManager {
               network: codexLaunch.network,
               ...(codexLaunch.model ? { model: codexLaunch.model } : {}),
               wire: wire ?? { record: () => {} },
-              // The catalog at the chat's path names the credentials (D3).
-              withheldCredentials: withheldCredentialNamesAt(this.catalogCtx(record.projectPath)),
+              // The registered-name set at the chat's path (D3/D2): a
+              // per-spawn provider, so a respawn re-derives the catalog's
+              // names plus the retained ones (correction A) — a name
+              // registered after this driver's creation still withholds.
+              withheldCredentials: () => withheldCredentialNamesAt(this.catalogCtx(record.projectPath), this.options.db),
               teamTools: teamToolTable(this.mailbox, record.sessionId, teamServices),
               // Codex fills a home holding no report with one read (PR E
               // 7.1); the store claims it once per home.
@@ -2691,8 +2871,17 @@ export class ChatSessionManager {
             options: {
               ...shared,
               queryFactory: queryFactory!,
+              // The wait is read per question through this getter, so a
+              // setting change reaches the next question without rebuilding
+              // the driver (question-auto-answer D5, hazard M1).
+              getQuestionAutoAnswerMs: () =>
+                (this.options.getQuestionAutoAnswerMinutes?.() ?? 0) * 60_000,
               ...(teamMcpServer ? { teamMcpServer } : {}),
               getProviderEnv: () => this.providerEnv(),
+              // The secret-name registry observes and persists at every
+              // Claude spawn (provider-relay-setup D2), so a name once seen
+              // survives its catalog entry's removal.
+              retainedNamesDb: this.options.db,
               claudeProfileId: record.claudeProfileId,
               ...(this.options.profileCatalogHome
                 ? { profileCatalogHome: this.options.profileCatalogHome }
@@ -2711,6 +2900,10 @@ export class ChatSessionManager {
               ...(this.backgroundTaskRecords.has(record.sessionId)
                 ? { recoveredBackgroundTasks: this.backgroundTaskRecords.get(record.sessionId) ?? [] }
                 : {}),
+              // The context store's record (plan-workspace §4 S4): the one
+              // DB write a contextual submit makes, inside the driver's
+              // mint→record→open→emit→enqueue order.
+              recordWorkspaceContext: input => this.planWorkspaceContext.record(input),
               // The SDK's usage pull is Claude's alone (providers-and-workers).
               claimUsagePull: () =>
                 this.claimProviderUsagePull(record),
@@ -2835,7 +3028,10 @@ export class ChatSessionManager {
   private launchFor(profileId: string | undefined, projectPath?: string): ChatLaunchConfiguration {
     const report = this.options.catalogErrorLog
       ?? (errors => logger.warn('chat_profile_catalog_errors', { errors }))
-    return resolveClaudeProfile(profileId, this.providerEnv(), this.catalogCtx(projectPath), report)
+    // The registry observes here too (provider-relay-setup D2): a name is
+    // registered by the first catalog read that names it, launch or not —
+    // an entry removed before any spawn stays withheld.
+    return resolveClaudeProfile(profileId, this.providerEnv(), this.catalogCtx(projectPath), report, this.options.db)
   }
 
   /**
@@ -2874,6 +3070,7 @@ export class ChatSessionManager {
   private teamServices(): MailboxServerServices {
     return {
       tasks: this.tasks, results: this.results, strategies: this.strategies, plans: this.plans, validation: this.validation, ...(this.decisions ? { decisions: this.decisions } : {}), releases: this.teamMail.releases, management: this.management,
+      ...(this.checkpoints ? { checkpoints: this.checkpoints } : {}),
       metrics: { teamOf: id => this.teams.teamOf(id)?.teamId ?? null, reader: this.metrics },
       reports: { caller: id => this.reportCaller(id), service: this.reports },
       capacity: this.capacity,

@@ -64,6 +64,8 @@ export const sessionRow = (sessionId: string, groupId: string | null, projectPat
 export interface PlanBench {
   db: SessionDatabase
   tasks: TaskStore
+  mail: MailboxStore
+  assignmentStore: AssignmentStore
   strategies: StrategyStore
   plans: PlanStore
   service: PlanService
@@ -83,7 +85,8 @@ let benchCounter = 0
 export function createPlanBench(world: PlanWorld, options: Partial<ConstructorParameters<typeof PlanService>[1]> = {}): PlanBench {
   const db = initDatabase({ path: path.join(fs.mkdtempSync(path.join(world.root, 'db-')), 'plans.db') })
   const mail = new MailboxStore(db.db)
-  const tasks = new TaskStore(db.db, mail, new AssignmentStore(db.db, mail))
+  const assignmentStore = new AssignmentStore(db.db, mail)
+  const tasks = new TaskStore(db.db, mail, assignmentStore)
   const strategies = new StrategyStore(db.db)
   const plans = new PlanStore(db.db)
   const records = new Map<string, ChatSessionRecord>([
@@ -100,7 +103,7 @@ export function createPlanBench(world: PlanWorld, options: Partial<ConstructorPa
     expectedApprovedRevision: plans.get(planId)!.currentApprovedRevision, commandId,
   })
   return {
-    db, tasks, strategies, plans, service, records, human, agent, approve,
+    db, tasks, mail, assignmentStore, strategies, plans, service, records, human, agent, approve,
     draftInReview: async (overrides = {}) => {
       const { plan } = await service.create(agent('lead'), { title: 'Wave C', content: planInput(overrides) })
       const submitted = await service.submit(agent('lead'), { plan_id: plan.id })

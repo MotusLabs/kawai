@@ -23,7 +23,7 @@ test('catalog returns identifiers and labels only', async () => {
   expect(response.status).toBe(200)
   const data = await response.json()
   expect(data.errors).toEqual([])
-  expect(data.profiles).toHaveLength(12)
+  expect(data.profiles).toHaveLength(16)
   // providerId and providerLabel ride additively (task 2.1), runtime with
   // them (task 3.4); no env, base URL, executable, or credential names.
   for (const item of data.profiles) expect(Object.keys(item).sort()).toEqual(['id', 'label', 'providerId', 'providerLabel', 'runtime'])

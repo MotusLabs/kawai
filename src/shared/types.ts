@@ -2,6 +2,11 @@
 export const HISTORY_MAX_AGE_MIN_HOURS = 1
 export const HISTORY_MAX_AGE_MAX_HOURS = 168 // 7 days
 
+// Question auto-answer wait limits (in whole minutes; 0 disables the deadline)
+export const QUESTION_AUTO_ANSWER_MIN_MINUTES = 0
+export const QUESTION_AUTO_ANSWER_MAX_MINUTES = 1440
+export const QUESTION_AUTO_ANSWER_DEFAULT_MINUTES = 5
+
 import type {
   MessageCursor,
   MessageQueryFilters,
@@ -17,6 +22,8 @@ import type { ProductStrategy, StrategyDetail, StrategyDraft, StrategyRevision }
 import type { ImpactDecision, ImpactDisposition, StrategyImpactDetail } from './strategyImpact'
 import type { TeamWorkspaceSnapshot } from './teamWorkspace'
 import type { PlanClientMessage, PlanServerMessage } from './planMessages'
+import type { WorkspaceMessageEnvelope } from './planWorkspace'
+import type { PlanWorkspaceClientMessage, PlanWorkspaceServerMessage } from './planWorkspaceMessages'
 import type { OutboundAuditClientMessage, OutboundAuditServerMessage } from './outbound'
 import type { MetricsClientMessage, MetricsServerMessage } from './metricsMessages'
 import type {
@@ -248,6 +255,8 @@ export interface UpdateState {
 export type ServerMessage =
   // Durable plans (durable-plans D12): see planMessages.ts.
   | PlanServerMessage
+  // The plan workspace (plan-workspace D1): see planWorkspaceMessages.ts.
+  | PlanWorkspaceServerMessage
   // The owner's audit view (execution-safety-recovery D9): see outbound.ts.
   | OutboundAuditServerMessage
   // Process metrics (team-process-metrics D5): see metricsMessages.ts.
@@ -302,6 +311,9 @@ export type ServerMessage =
       appMouse?: boolean
     }
   | { type: 'server-config'; remoteAllowControl: boolean; remoteAllowAttach: boolean; hostLabel: string; preferWindowName: boolean; clientLogLevel?: string }
+  // Question auto-answer wait changed (question-auto-answer D5): open
+  // Settings dialogs update to the new value.
+  | { type: 'question-auto-answer-changed'; minutes: number }
   // Update availability is additive too: older clients ignore it, and the
   // payload rides server-info for first paint and this push for changes.
   | { type: 'update-state'; update: UpdateState }
@@ -595,7 +607,18 @@ export type ServerMessage =
       hasOlder?: boolean
     }
   | { type: 'pong'; seq?: number }
-  | { type: 'error'; message: string }
+  // A refusal. For a chat-send that carried a readable `requestId` (§6.3,
+  // Lead-authorized Q2), the reply echoes it with `sessionId` so the client
+  // can restore the draft and its captured attachment; other errors carry
+  // neither field, exactly as before.
+  | { type: 'error'; message: string; requestId?: string; sessionId?: string }
+  // The sender-only acceptance answer for a chat-send that carried a readable
+  // `requestId` (plan-workspace §6.3, B1): sent to the sending connection
+  // only, once the manager accepted the send — past the last refusal point.
+  // Never a ChatEvent: not sequenced, persisted, replayed, or broadcast; a
+  // send carries either this or its correlated refusal, never both, and a
+  // send without a readable requestId carries neither.
+  | { type: 'chat-send-result'; sessionId: string; requestId: string; accepted: true }
   | { type: 'kill-failed'; sessionId: string; message: string }
 
 export interface WakeError {
@@ -606,6 +629,8 @@ export interface WakeError {
 export type ClientMessage =
   // Durable plans (durable-plans D12): see planMessages.ts.
   | PlanClientMessage
+  // The plan workspace (plan-workspace D1): see planWorkspaceMessages.ts.
+  | PlanWorkspaceClientMessage
   // The owner's audit view (execution-safety-recovery D9/D10): see outbound.ts.
   | OutboundAuditClientMessage
   // Process metrics (team-process-metrics D5): see metricsMessages.ts.
@@ -668,7 +693,7 @@ export type ClientMessage =
   // oldest held event, widened back to throughId when a search reveal needs
   // an older entry (an event id or a tool:<callId> anchor).
   | { type: 'chat-history-page'; sessionId: string; beforeId: string; throughId?: string }
-  | { type: 'chat-send'; sessionId: string; text: string }
+  | { type: 'chat-send'; sessionId: string; text: string; /** Plan-workspace context (§4): validated server-side before anything is stored. */ workspaceContext?: WorkspaceMessageEnvelope; /** Client-minted correlation (§6.3, Q2): echoed on every refusal, absent on acceptance. */ requestId?: string }
   | { type: 'chat-interrupt'; sessionId: string }
   // Archive stops the agent process but keeps the record, conversation, and
   // protocol log; restore clears the archived state (chat-archive design D2).
@@ -687,6 +712,13 @@ export type ClientMessage =
       requestId: string
       /** Answers keyed by question text (matches the SDK's answer map). */
       answers: Record<string, ChatQuestionAnswer>
+    }
+  // Hold a question's auto-answer deadline — Wait for me (question-auto-answer
+  // D4): the question waits for the user and never auto-answers.
+  | {
+      type: 'chat-question-hold'
+      sessionId: string
+      requestId: string
     }
   // Switches the session's approval policy live (chat-auto-approve-tools
   // design D4): manual/auto only, no agent restart.
@@ -758,6 +790,9 @@ export type ClientMessage =
   // task under the existing closing rights; a reason when it is flagged or
   // child work is open.
   | { type: 'team-task-accept-result'; teamPath: string; requestId: string; taskId: string; resultId: string; reason?: string }
+  // Request a new check of one result (independent-verification D4); a
+  // request while a check is pending returns that pending check.
+  | { type: 'team-task-recheck'; teamPath: string; requestId: string; taskId: string; resultId: string }
   // Request review / Request QA / Return for fixes (D3): a handoff of one
   // result to a role, idempotent under the client's request key.
   | {

@@ -31,6 +31,7 @@ import { TeamCaps } from '../team/teamCaps'
 import { ImpactService } from '../strategy/ImpactService'
 import { ImpactStore } from '../strategy/impactStore'
 import { composeExecutionCore, composePlanServices, type ExecutionCore } from '../plans/planComposition'
+import { pauseHolderFacts } from '../plans/revisionControl/pauseTick'
 import type { ExecutionRuntime } from '../plans/execution/executionRuntime'
 import type { ExecutionStore } from '../plans/execution/executionStore'
 import { roundAdapters } from '../plans/execution/executionRounds'
@@ -153,6 +154,13 @@ async function compose(): Promise<void> {
       identityOf: id => (id === world.team.teamId ? world.team : undefined),
       teamOfSession: teamOf,
       supervision: { holder: () => null, blocker: () => null },
+      // The pause tick's holder facts (revision-control D8): bench records,
+      // nothing pending or busy, no provider limit.
+      pauseFacts: pauseHolderFacts({
+        getRecord: id => bench.records.get(id),
+        pendingRequest: () => false, hasLiveWorkers: () => false, hasRunningBackgroundTasks: () => false,
+        parkedResumes: () => [], cooldownUntil: () => null,
+      }),
     },
     executionValidation: {
       prepareStanding: async () => ({}),

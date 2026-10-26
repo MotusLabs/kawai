@@ -59,9 +59,11 @@ export interface CodexSessionDriverOptions extends ChatDriverCallbacks {
   /**
    * The catalog-named credential variables the child never inherits
    * (openrouter-provider D3, task 1.8); required, so no launch path can
-   * forget it.
+   * forget it. Evaluated at every ensureClient spawn (provider-relay-setup
+   * correction A), so a name registered after the driver's creation — by a
+   * catalog edit or a retention write — withholds from the respawn too.
    */
-  withheldCredentials: ReadonlySet<string>
+  withheldCredentials: () => ReadonlySet<string>
   /** Builds the app-server client; default the real AppServerClient. */
   createClient?: (options: AppServerClientOptions) => CodexClient
   /** How long interrupt waits for the app-server's acknowledgement. */
@@ -83,10 +85,15 @@ export async function threadParams(input: { cwd: string; network: boolean; instr
   }
 }
 
-/** Kawai's effort levels on Codex: `max` is `xhigh`, raw numbers are dropped. */
+/**
+ * Kawai's effort levels on Codex. Codex 0.163.0's app-server schema types
+ * reasoning effort as any non-empty string the model advertises, and
+ * gpt-6-luna and gpt-6.1-sol advertise low/medium/high/xhigh/max, so every
+ * named level passes through unchanged; raw numbers are dropped.
+ */
 export function codexEffort(effort: ChatEffort | undefined): string | undefined {
   if (effort === undefined || typeof effort === 'number') return undefined
-  return effort === 'max' ? 'xhigh' : effort
+  return effort
 }
 
 /**

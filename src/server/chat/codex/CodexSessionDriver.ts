@@ -25,10 +25,11 @@ import type {
 import type { SessionStatus } from '../../../shared/types'
 import { logger } from '../../logger'
 import { formatEnvelope } from '../../team/envelope'
-import { activityBody, initialChatActivityState, projectActivity, reduceActivity, type ChatActivityInput } from '../chatActivity'
+import { initialChatActivityState, type ChatActivityInput } from '../chatActivity'
 import type { BackgroundTaskRecord } from '../chatBackgroundTasks'
 import { codexSpawnEnv } from '../codexProfiles'
 import type { ChatAgentDriver, ChatDriverCallbacks } from '../provider/driver'
+import { activityFrameFor, publishCodexActivity } from './codexActivity'
 import { AppServerClient, type AppServerClientOptions, type AppServerExit } from './appServerClient'
 import { auditDeniedCard, auditItem, auditSpawnEnd } from './codexAudit'
 import { dispatchTeamToolCall, teamNamespaceSpec } from './codexTools'
@@ -176,6 +177,10 @@ export class CodexSessionDriver implements ChatAgentDriver {
     return this.requests.answerQuestion(requestId, answers)
   }
 
+  holdQuestion(requestId: string): { ok: true } | { ok: false; error: string } {
+    return this.requests.holdQuestion(requestId)
+  }
+
   getPendingRequests(): ChatPendingRequest[] {
     return this.requests.snapshot()
   }
@@ -225,7 +230,9 @@ export class CodexSessionDriver implements ChatAgentDriver {
     this.dead = false
     if (this.client) return
     this.spawnId = `ob-s-${crypto.randomUUID()}`
-    const env = codexSpawnEnv(this.options.serverEnv ?? process.env, this.options.codexHome, this.options.withheldCredentials)
+    // The provider runs per spawn: the registered-name set is re-derived at
+    // every (re)start, never frozen at driver creation (correction A).
+    const env = codexSpawnEnv(this.options.serverEnv ?? process.env, this.options.codexHome, this.options.withheldCredentials())
     const clientOptions: AppServerClientOptions = {
       executable: this.options.executable,
       env,
@@ -481,18 +488,13 @@ export class CodexSessionDriver implements ChatAgentDriver {
   }
 
   private feedActivity(input: ChatActivityInput): void {
-    const previous = this.activity
-    this.activity = reduceActivity(this.activity, input)
-    const changed = JSON.stringify(activityBody(previous)) !== JSON.stringify(activityBody(this.activity))
-      || previous.phaseStartedAt !== this.activity.phaseStartedAt
-    if (changed) this.options.onActivity?.(projectActivity(this.activity))
+    this.activity = publishCodexActivity(this.activity, input, a => this.options.onActivity?.(a))
   }
 
   private emit(draft: CodexEventDraft): void {
     this.sequence += 1
     this.options.onEvent({ ...draft, id: `evt-${crypto.randomUUID()}`, sequence: this.sequence, at: new Date().toISOString() } as Parameters<ChatDriverCallbacks['onEvent']>[0])
-    if (draft.type === 'turn_started') this.feedActivity({ type: 'turn_started' })
-    else if (draft.type === 'turn_completed' || draft.type === 'turn_interrupted') this.feedActivity({ type: 'turn_end' })
-    else if (draft.type === 'request_resolved') this.feedActivity({ type: 'request_resolved' })
+    const frame = activityFrameFor(draft)
+    if (frame) this.feedActivity(frame)
   }
 }

@@ -12,6 +12,7 @@ import { handleMetricsMessage } from './metricsMessages'
 import {
   handleError,
   handleHostStatus,
+  handleQuestionAutoAnswerChanged,
   handleServerConfig,
   handleTerminalError,
   handleTerminalReady,
@@ -70,6 +71,7 @@ export function createMessageRouter(
       case 'workspace-operation-result': return handleWorkspaceOperationResult(message, deps)
       case 'host-status': return handleHostStatus(message, deps)
       case 'server-config': return handleServerConfig(message, deps)
+      case 'question-auto-answer-changed': return handleQuestionAutoAnswerChanged(message, deps)
       case 'update-state': return handleUpdateState(message, deps)
       case 'strategy-snapshot':
       case 'strategy-detail':

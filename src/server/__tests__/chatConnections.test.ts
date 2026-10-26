@@ -15,6 +15,7 @@ function harness(wireLogs?: ChatWireLogs) {
   const pageCalls: Array<{ id: string; beforeId: string; throughId?: string }> = []
   const loadHistoryCalls: string[] = []
   let page: { events: ChatEvent[]; hasOlder: boolean; stale: boolean } | null = null
+  let holdResult: { ok: true } | { ok: false; error: string } = { ok: true }
   const snapshot: Extract<ServerMessage, { type: 'chat-snapshot' }> = {
     type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default', events: [],
     pendingRequests: [{ kind: 'approval', requestId: 'approval-1', tool: 'Bash', input: {}, at: 'now' }],
@@ -26,6 +27,9 @@ function harness(wireLogs?: ChatWireLogs) {
   const manager = {
     isArchived: (_id: string) => false,
     whenRestored: () => Promise.resolve(),
+    // No team membership in this fixture: the plan-workspace publishes (3.4)
+    // read it and find no team, so no snapshot is dirtied.
+    teams: { teamOf: () => undefined },
     loadHistory: async (id: string) => { loadHistoryCalls.push(id) },
     has: (id: string) => id === 'chat-1' || id === 'chat-2' || id === 'chat-3' || id === 'chat-4' || id === 'chat-5',
     profileIdOf: (id: string) => (id === 'chat-2' || id === 'chat-4' ? 'glm' : id === 'chat-5' ? 'glm-flash' : 'default'),
@@ -51,6 +55,10 @@ function harness(wireLogs?: ChatWireLogs) {
       return { ok: true }
     },
     answerQuestion: (...args: unknown[]) => { calls.push(['answer', ...args]); return { ok: true } },
+    holdQuestion: (...args: unknown[]) => {
+      calls.push(['holdQuestion', ...args])
+      return holdResult
+    },
     getWorkerTranscript: (id: string, workerId: string) => {
       calls.push(['workerTranscript', id, workerId])
       return workerId === 'toolu_spawn_1'
@@ -73,7 +81,7 @@ function harness(wireLogs?: ChatWireLogs) {
   const connections = new ChatConnections(manager, wireLogs)
   const messages: ServerMessage[] = []
   const connection = { send: (message: ServerMessage) => messages.push(message) }
-  return { connections, connection, messages, calls, snapshot, manager, snapshotCalls, pageCalls, loadHistoryCalls, setPage: (next: typeof page) => { page = next } }
+  return { connections, connection, messages, calls, snapshot, manager, snapshotCalls, pageCalls, loadHistoryCalls, setPage: (next: typeof page) => { page = next }, setHoldResult: (next: typeof holdResult) => { holdResult = next } }
 }
 
 const delta = (sequence: number, turnId = 'turn-1'): ChatEvent => ({
@@ -113,6 +121,23 @@ describe('chat WebSocket subscriptions', () => {
     await h.connections.handle(h.connection, { type: 'chat-approval', sessionId: 'chat-1', requestId: 'approval-1', decision: 'allow' })
     expect(h.calls).toEqual([
       ['send', 'chat-1', 'hello'], ['interrupt', 'chat-1'], ['answer', 'chat-1', 'question-1', {}], ['approval', 'chat-1', 'approval-1', 'allow'],
+    ])
+  })
+
+  test('routes a question hold through the manager; success sends nothing to the connection (QA-3, QA-23)', async () => {
+    const h = harness()
+    await h.connections.handle(h.connection, { type: 'chat-question-hold', sessionId: 'chat-1', requestId: 'question-1' })
+    expect(h.calls).toEqual([['holdQuestion', 'chat-1', 'question-1']])
+    // The held state reaches clients through the manager's event broadcast
+    // (bootstrap wires onEvent to publish), never as a direct reply here —
+    // a hold that pushes only to the requesting connection is M-3.3.
+    expect(h.messages).toEqual([])
+
+    // A stale or deadline-less id echoes the error to the sender only.
+    h.setHoldResult({ ok: false, error: 'Request question-1 has no auto-answer deadline to hold' })
+    await h.connections.handle(h.connection, { type: 'chat-question-hold', sessionId: 'chat-1', requestId: 'question-1' })
+    expect(h.messages).toEqual([
+      { type: 'error', message: 'Request question-1 has no auto-answer deadline to hold' },
     ])
   })
 

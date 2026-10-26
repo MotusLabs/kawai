@@ -61,7 +61,9 @@ export default function ProductStrategyView({ teamPath, view, sendMessage, conne
   const inReview = useMemo(() => detail ? detail.revisions.filter(entry => entry.status === 'in_review') : [], [detail])
 
   const request = (message: Parameters<SendClientMessage>[0], action: StrategyAction) => {
-    if (!('requestId' in message)) return
+    // chat-send also carries an optional requestId (§6.3 Q2), so the `in`
+    // check alone no longer proves a usable one.
+    if (!('requestId' in message) || typeof message.requestId !== 'string') return
     useStrategyStore.getState().begin(teamPath, message.requestId, action)
     sendMessage(message)
   }

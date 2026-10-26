@@ -49,8 +49,10 @@ import type { SessionStatus } from '../../shared/types'
 import {
   ASK_USER_QUESTION_TOOL,
   parseQuestions,
+  recommendedAnswers,
   toolResultText,
 } from './contentBlocks'
+import { realTimerScheduler, type ChatTimerScheduler } from './timerScheduler'
 import {
   activityBody,
   contentBlockToInput,
@@ -97,6 +99,7 @@ import {
   parseUsageReport,
 } from './usageLimits'
 import type { ChatProviderEnv } from './chatProviderEnv'
+import type { RetainedNamesDb } from './secretNameRegistry'
 import { ChatCommandTracker, type RawChatCommand } from './chatCommands'
 import { decideApproval } from './approvalPolicy'
 import { resolveClaudeProfile } from './ClaudeProfiles'
@@ -108,6 +111,9 @@ import { outboundAuditHooks } from '../outbound/auditHooks'
 import type { OutboundAuditSink } from '../outbound/observer'
 import { TEAM_MCP_SERVER } from '../team/teamPrompt'
 import { formatEnvelope } from '../team/envelope'
+import { workspaceContextBlock, type WorkspaceMessageContext } from '../../shared/planWorkspace'
+import type { WorkspaceContextOutcome } from '../plans/workspace/workspaceContext'
+import type { ChatSendOutcome } from './provider/driver'
 import { createWireTappedSpawn, type ChatWireRecorder } from './wireTap'
 import {
   assistantLimitSignal,
@@ -144,6 +150,17 @@ export type ChatQueryFactory = (params: {
 export interface ChatSessionDriverOptions extends ChatDriverCallbacks {
   /** Opaque unique turn identity; injectable for deterministic protocol tests. */
   createTurnId?: () => string
+  /**
+   * The plan-workspace context store's record (PR D §4): the one DB write a
+   * contextual submit makes, before the turn opens and before the SDK
+   * message is enqueued (invariant I1). Omitted = contextual sends refuse.
+   */
+  recordWorkspaceContext?: (input: {
+    sessionId: string
+    messageUuid: string
+    turnId: string
+    context: WorkspaceMessageContext
+  }) => WorkspaceContextOutcome
   /** Agentboard session id (chat-<uuid>); used for logging context only. */
   sessionId: string
   projectPath: string
@@ -153,11 +170,31 @@ export interface ChatSessionDriverOptions extends ChatDriverCallbacks {
   /** Provider overrides, read at each spawn so Settings changes apply. */
   getProviderEnv?: () => ChatProviderEnv
   /**
+   * The secret-name registry's persistence seam (provider-relay-setup D2),
+   * read at each spawn so a catalog edit re-registers at the next launch and
+   * a name once seen survives its entry's removal. Omitted = catalog-only
+   * withholding (tests, direct resolution).
+   */
+  retainedNamesDb?: RetainedNamesDb
+  /**
    * Session approval policy, read at each canUseTool call so a live policy
    * switch applies to the next request without a respawn (design D2).
    * Omitted = manual (today's behavior).
    */
   getApprovalPolicy?: () => ChatApprovalPolicy
+  /**
+   * The question auto-answer wait in milliseconds, read once per question
+   * when it is asked (question-auto-answer D2); 0 or omitted = off. A
+   * deadline is set only when every question of the request marks a
+   * recommended option. The manager supplies this for Claude chats only —
+   * never for Codex (design QA-U4).
+   */
+  getQuestionAutoAnswerMs?: () => number
+  /**
+   * Timer seam behind the auto-answer deadline (question-auto-answer D2).
+   * Defaults to real timers; tests advance a manual clock by hand.
+   */
+  timerScheduler?: ChatTimerScheduler
   /** Persisted session profile; omitted for legacy Default sessions. */
   claudeProfileId?: string
   /**
@@ -225,6 +262,15 @@ interface PendingRequest {
   at: string
   settled: boolean
   settle: (result: PermissionResult) => void
+  /**
+   * The auto-answer deadline (question-auto-answer D2), present only while
+   * one stands: when it fires, what it answers, the wait it came from, and
+   * the scheduler handle every settlement path clears first.
+   */
+  autoAnswerAt?: string
+  autoAnswers?: Record<string, ChatQuestionAnswer>
+  waitMs?: number
+  autoAnswerTimer?: unknown
 }
 
 /** Omit that distributes over the ChatEvent union, keeping each member's type. */
@@ -235,6 +281,8 @@ type ChatEventDraft = DistributiveOmit<ChatEvent, 'id' | 'sequence' | 'at'>
 
 export class ChatSessionDriver implements ChatAgentDriver {
   private readonly options: ChatSessionDriverOptions
+  /** Timer seam behind the auto-answer deadline (question-auto-answer D2). */
+  private readonly scheduler: ChatTimerScheduler
   private readonly queue = new TurnQueue()
   /** Slash-command list state; this driver is its only feeder (design D2). */
   private commands = new ChatCommandTracker()
@@ -269,6 +317,12 @@ export class ChatSessionDriver implements ChatAgentDriver {
   private readonly seenToolCallIds = new Set<string>()
   /** Echo suppression: texts we submitted that the SDK may echo back. */
   private readonly sentEchoTexts = new Map<string, number>()
+  /**
+   * Echo suppression: client message uuids a contextual submit sent (LC-D3),
+   * each paired with the typed text it was submitted under, so suppression
+   * consumes both tokens whatever text the CLI's merged echo carries.
+   */
+  private readonly sentEchoUuids = new Map<string, string>()
   private capturedSdkSessionId: string | undefined
   /** Last model reported to onModel; undefined before the first report. */
   private lastReportedModel: string | undefined
@@ -315,6 +369,7 @@ export class ChatSessionDriver implements ChatAgentDriver {
 
   constructor(options: ChatSessionDriverOptions) {
     this.options = options
+    this.scheduler = options.timerScheduler ?? realTimerScheduler
     this.commands = new ChatCommandTracker(options.onCommandState)
     this.claudeExecutablePath = options.claudeExecutablePath
     this.sessionProjectPath = options.projectPath
@@ -371,8 +426,13 @@ export class ChatSessionDriver implements ChatAgentDriver {
    * paths — user send, peer delivery, agent self-start — funnel through
    * here so the buffer can never outlive the turn it should name.
    */
-  private startTurn(trigger?: ChatTurnTrigger): string {
-    const turnId = this.options.createTurnId?.() ?? `turn-${crypto.randomUUID()}`
+  /** The turn identity mint, shared by startTurn and the pre-record mint (PR D S4). */
+  private nextTurnId(): string {
+    return this.options.createTurnId?.() ?? `turn-${crypto.randomUUID()}`
+  }
+
+  private startTurn(trigger?: ChatTurnTrigger, presetTurnId?: string): string {
+    const turnId = presetTurnId ?? this.nextTurnId()
     this.activeTurnId = turnId
     this.pendingTaskNotifications = []
     this.turnProviderCost = null
@@ -390,25 +450,86 @@ export class ChatSessionDriver implements ChatAgentDriver {
     return this.binder.framesBelongToActive() ? this.activeTurnId : null
   }
 
-  /** Hand a prompt to the CLI under a fresh client uuid bound to `turnId`. */
-  private enqueue(turnId: string, message: Omit<SDKUserMessage, 'uuid'>): void {
-    const uuid = crypto.randomUUID()
+  /** Hand a prompt to the CLI under the submit's pre-minted client uuid. */
+  private enqueue(turnId: string, message: Omit<SDKUserMessage, 'uuid'>, uuid: ReturnType<typeof crypto.randomUUID>): void {
     this.binder.promptSent(uuid, turnId)
     this.queue.push({ ...message, uuid })
   }
 
   /** Submit a user turn. Spawns the SDK lazily on the first turn. */
   send(text: string): void {
-    if (this.killed) return
+    this.submit(text)
+  }
+
+  /**
+   * Submit a user turn carrying a plan-workspace context (PR D §4, the
+   * S-path): mint the message uuid (S3), record the context row — the one
+   * DB write (S4) — then open the turn only if none was open (S5), emit the
+   * visible event (S6), and enqueue (S7). A failure at any earlier step
+   * opens no turn, emits no event, and enqueues nothing.
+   */
+  sendWorkspaceContext(text: string, context: WorkspaceMessageContext): ChatSendOutcome {
+    return this.submit(text, context) ?? { ok: true }
+  }
+
+  /**
+   * S4: the one DB write a contextual submit makes, before anything
+   * observable. A refused record — or a throwing store — refuses the send
+   * and leaves no turn, no event, and no prompt.
+   */
+  private recordContext(messageUuid: string, turnId: string, context: WorkspaceMessageContext): ChatSendOutcome | null {
+    try {
+      const recorded = this.options.recordWorkspaceContext?.({
+        sessionId: this.options.sessionId,
+        messageUuid,
+        turnId,
+        context,
+      })
+      if (!recorded || !recorded.ok) {
+        const why = recorded?.message ?? 'The plan context could not be recorded.'
+        return { ok: false, error: `${why} The message was not sent.` }
+      }
+      return null
+    } catch (error) {
+      return { ok: false, error: `The plan context could not be recorded (${error instanceof Error ? error.message : String(error)}); the message was not sent.` }
+    }
+  }
+
+  /** The one submit path: mint, record, open, emit, enqueue (PR D S3–S7). */
+  private submit(text: string, context?: WorkspaceMessageContext): ChatSendOutcome | void {
+    if (this.killed) {
+      return context ? { ok: false, error: 'This session was killed; the message was not sent.' } : undefined
+    }
     this.ensureQuery()
-    const turnId = this.activeTurnId ?? this.startTurn()
+    // S3: the user-message uuid is minted independently of the turn id, so
+    // two messages in one active turn keep distinct contexts (invariant I2).
+    const messageUuid = crypto.randomUUID()
+    // S4: reuse an open turn, else mint a turn id the record may still name —
+    // the turn opens only after storage succeeded (S5).
+    const turnId = this.activeTurnId ?? this.nextTurnId()
+    if (context) {
+      const refusal = this.recordContext(messageUuid, turnId, context)
+      if (refusal) return refusal
+    }
+    if (!this.activeTurnId) this.startTurn(undefined, turnId)
+    if (context) {
+      // Echo suppression by uuid beside today's text fallback (LC-D3): the
+      // token pairs the uuid with the typed text so suppression consumes both.
+      this.sentEchoUuids.set(messageUuid, text)
+    }
     this.trackEcho(text)
-    this.emit({ type: 'user_message', turnId, text })
+    // I4's answer: every user message carries the uuid the enqueue already
+    // minted — the replay join key exists on every live user message.
+    this.emit(context
+      ? { type: 'user_message', turnId, text, messageUuid, workspaceContext: context }
+      : { type: 'user_message', turnId, text, messageUuid })
     this.enqueue(turnId, {
       type: 'user',
       message: { role: 'user', content: text },
       parent_tool_use_id: null,
-    })
+      // I3: the typed text stays literal; the context rides pasted_content.
+      ...(context ? { pasted_content: [workspaceContextBlock(context)] } : {}),
+    }, messageUuid)
     this.refreshStatus()
   }
 
@@ -428,7 +549,7 @@ export class ChatSessionDriver implements ChatAgentDriver {
       parent_tool_use_id: null,
       // A human sender has no session id; the envelope's senderKind says so.
       origin: { kind: 'peer', from: envelope.senderSession ?? 'human' },
-    })
+    }, crypto.randomUUID())
     this.refreshStatus()
   }
 
@@ -575,6 +696,8 @@ export class ChatSessionDriver implements ChatAgentDriver {
       return validated
     }
     this.pendingRequests.delete(requestId)
+    // First answer wins (QA-U3): the deadline dies with this settlement.
+    this.clearAutoAnswerTimer(pending)
     pending.settled = true
     pending.settle({
       behavior: 'allow',
@@ -588,6 +711,36 @@ export class ChatSessionDriver implements ChatAgentDriver {
     })
     this.emit({ type: 'request_resolved', requestId, outcome: 'answered', decidedBy: 'user' })
     this.refreshStatus()
+    return { ok: true }
+  }
+
+  /**
+   * Hold a question's deadline (question-auto-answer D4, Wait for me): the
+   * question waits for the user and is never answered automatically. Refused
+   * unless the request is a pending question whose deadline still stands; a
+   * hold drops the whole deadline — the timer and every `autoAnswer` field —
+   * because the stale-settlement guard reads `autoAnswerAt` (advisor C2 D),
+   * and emits `question_auto_answer_held` so clients drop the countdown.
+   */
+  holdQuestion(requestId: string): { ok: true } | { ok: false; error: string } {
+    const pending = this.pendingRequests.get(requestId)
+    if (!pending || pending.settled) {
+      return {
+        ok: false,
+        error: `No pending question with id ${requestId}; it may already be answered or cancelled`,
+      }
+    }
+    if (pending.kind !== 'question' || !pending.questions) {
+      return { ok: false, error: `Request ${requestId} is not a question` }
+    }
+    if (!pending.autoAnswerAt) {
+      return { ok: false, error: `Request ${requestId} has no auto-answer deadline to hold` }
+    }
+    this.clearAutoAnswerTimer(pending)
+    pending.autoAnswerAt = undefined
+    pending.autoAnswers = undefined
+    pending.waitMs = undefined
+    this.emit({ type: 'question_auto_answer_held', requestId })
     return { ok: true }
   }
 
@@ -607,6 +760,9 @@ export class ChatSessionDriver implements ChatAgentDriver {
             requestId: pending.requestId,
             questions: pending.questions ?? [],
             at: pending.at,
+            ...(pending.autoAnswerAt && pending.autoAnswers
+              ? { autoAnswer: { at: pending.autoAnswerAt, answers: pending.autoAnswers } }
+              : {}),
           }
     )
   }
@@ -656,7 +812,9 @@ export class ChatSessionDriver implements ChatAgentDriver {
         ...(this.options.profileCatalogHome
           ? { homeDir: this.options.profileCatalogHome }
           : {}),
-      }
+      },
+      undefined,
+      this.options.retainedNamesDb,
     )
     // A Codex chat never spawns the Claude SDK: its driver (§5.6) runs the
     // app-server instead. Until that wiring lands its start is refused
@@ -1009,10 +1167,15 @@ export class ChatSessionDriver implements ChatAgentDriver {
     if (!turnId) return
     const content = message.message.content
     if (typeof content === 'string') {
-      this.maybeEchoUserText(content, turnId)
+      if (this.takeSentEchoUuid(message)) return
+      this.maybeEchoUser(content, turnId)
       return
     }
     const subagent = isSubagentContentFrame(message)
+    // Suppression is decided once per message: one uuid match suppresses
+    // every text block of that message and consumes exactly one typed-text
+    // token, however many text blocks the CLI merged into the echo.
+    const echoed = !subagent && this.takeSentEchoUuid(message)
     for (const block of content) {
       if (block.type === 'tool_result') {
         // D4 carve-out: only the tool_result of a kept Agent/Task call (a
@@ -1042,19 +1205,45 @@ export class ChatSessionDriver implements ChatAgentDriver {
         }
       } else if (block.type === 'text') {
         if (subagent) continue
-        this.maybeEchoUserText(block.text, turnId)
+        if (echoed) continue
+        this.maybeEchoUser(block.text, turnId)
       }
     }
   }
 
-  /** The SDK echoes streamed user turns; suppress the copy we already sent. */
-  private maybeEchoUserText(text: string, turnId: string): void {
-    const outstanding = this.sentEchoTexts.get(text) ?? 0
-    if (outstanding > 0) {
-      this.sentEchoTexts.set(text, outstanding - 1)
-      return
-    }
+  /**
+   * The SDK echoes streamed user turns; suppress the copy we already sent.
+   * A uuid we minted suppresses first (LC-D3) at message level; an echo
+   * without one of ours takes today's text path per block.
+   */
+  private maybeEchoUser(text: string, turnId: string): void {
+    if (this.consumeEchoText(text)) return
     this.emit({ type: 'user_message', turnId, text })
+  }
+
+  /**
+   * Consume this message's sent uuid token once; true when the frame is our
+   * own echo. The token pairs the uuid with the typed text, so suppression
+   * consumes both — the echoed text of a contextual send can differ from
+   * what was submitted (the CLI appends each pasted_content entry).
+   */
+  private takeSentEchoUuid(message: SDKUserMessage): boolean {
+    const uuid = typeof message.uuid === 'string' ? message.uuid : ''
+    if (uuid === '') return false
+    const submitted = this.sentEchoUuids.get(uuid)
+    if (submitted === undefined) return false
+    this.sentEchoUuids.delete(uuid)
+    this.consumeEchoText(submitted)
+    return true
+  }
+
+  /** Consume one outstanding echo token for `text`; true when one was held. */
+  private consumeEchoText(text: string): boolean {
+    const outstanding = this.sentEchoTexts.get(text) ?? 0
+    if (outstanding <= 0) return false
+    if (outstanding === 1) this.sentEchoTexts.delete(text)
+    else this.sentEchoTexts.set(text, outstanding - 1)
+    return true
   }
 
   private trackEcho(text: string): void {
@@ -1330,12 +1519,18 @@ export class ChatSessionDriver implements ChatAgentDriver {
         if (questions) {
           pending.kind = 'question'
           pending.questions = questions
+          // Register before arming, so a settlement timer can never observe
+          // an unregistered request (C2 follow-up E).
           this.pendingRequests.set(requestId, pending)
+          this.armQuestionAutoAnswer(pending)
           this.emit({
             type: 'question_request',
             turnId,
             requestId,
             questions,
+            ...(pending.autoAnswerAt && pending.autoAnswers
+              ? { autoAnswer: { at: pending.autoAnswerAt, answers: pending.autoAnswers } }
+              : {}),
           })
           this.refreshStatus()
           return
@@ -1389,6 +1584,9 @@ export class ChatSessionDriver implements ChatAgentDriver {
     const pending = this.pendingRequests.get(requestId)
     if (!pending || pending.settled) return
     this.pendingRequests.delete(requestId)
+    // Interrupt, kill, shutdown, markDead, and the SDK abort all funnel
+    // through here: the deadline dies with the cancellation (QA-5–QA-7).
+    this.clearAutoAnswerTimer(pending)
     pending.settled = true
     pending.settle({
       behavior: 'deny',
@@ -1403,6 +1601,83 @@ export class ChatSessionDriver implements ChatAgentDriver {
     for (const requestId of Array.from(this.pendingRequests.keys())) {
       this.cancelRequest(requestId, reason)
     }
+  }
+
+  /**
+   * The auto-answer deadline (question-auto-answer D2): the wait is read
+   * once, here, when the question is asked. A deadline exists only when
+   * every question of the request marks a recommended option and the wait
+   * is positive (QA-P3) — the same `recommendedAnswers` derivation the
+   * shown payload reads.
+   */
+  private armQuestionAutoAnswer(pending: PendingRequest): void {
+    // No deadline after a teardown began (advisor C1 #3): markDead reuses
+    // this object, so a callback arriving after cancelAllRequests could
+    // otherwise arm a deadline whose timer answers post-kill.
+    if (this.killed || this.dead) return
+    const waitMs = this.options.getQuestionAutoAnswerMs?.() ?? 0
+    const answers = pending.questions ? recommendedAnswers(pending.questions) : null
+    // QA-P3: a deadline exists only for a full recommendation and a positive
+    // finite wait (NaN compares false against 0, so it is excluded too).
+    if (!answers || !Number.isFinite(waitMs) || waitMs <= 0) return
+    pending.autoAnswers = answers
+    pending.waitMs = waitMs
+    pending.autoAnswerAt = new Date(Date.parse(pending.at) + waitMs).toISOString()
+    pending.autoAnswerTimer = this.scheduler.schedule(waitMs, () => {
+      this.settleByAutoAnswer(pending)
+    })
+  }
+
+  /** Cancel a deadline's timer handle; every settlement path calls this first. */
+  private clearAutoAnswerTimer(pending: PendingRequest): void {
+    if (pending.autoAnswerTimer === undefined) return
+    this.scheduler.cancel(pending.autoAnswerTimer)
+    pending.autoAnswerTimer = undefined
+  }
+
+  /**
+   * The deadline's settlement (question-auto-answer D2/D3): the same
+   * validation and resolution a user answer takes, so first-answer-wins,
+   * status, and client removal behave identically. A stale callback — one
+   * that fires after any other settlement, a hold, or a teardown began —
+   * is inert: the guard runs before anything else and the deadline fields
+   * must still stand (advisor C1 #2; QA-P1/QA-P2).
+   */
+  private settleByAutoAnswer(pending: PendingRequest): void {
+    if (
+      pending.settled ||
+      pending.kind !== 'question' ||
+      !pending.questions ||
+      !pending.autoAnswers ||
+      !pending.autoAnswerAt ||
+      this.killed ||
+      this.dead
+    ) {
+      return
+    }
+    const validated = validateAnswers(pending.questions, pending.autoAnswers)
+    // Unreachable for a deadline (the labels came verbatim from the
+    // questions), but a refusal consumes nothing: the request stays pending.
+    if (!validated.ok) return
+    this.pendingRequests.delete(pending.requestId)
+    pending.settled = true
+    pending.autoAnswerTimer = undefined
+    pending.settle({
+      behavior: 'allow',
+      updatedInput: {
+        ...pending.input,
+        answers: validated.answers,
+        response: `No answer from the user within ${Math.round(pending.waitMs! / 60000)} minute${Math.round(pending.waitMs! / 60000) === 1 ? '' : 's'}; the recommended option was selected automatically.`,
+      },
+    })
+    this.emit({
+      type: 'request_resolved',
+      requestId: pending.requestId,
+      outcome: 'answered',
+      decidedBy: 'timeout',
+      answers: validated.answers,
+    })
+    this.refreshStatus()
   }
 
   private refreshStatus(): void {

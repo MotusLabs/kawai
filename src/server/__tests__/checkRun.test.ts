@@ -12,13 +12,13 @@ import {
   type CheckStepSpec,
   type SpawnRequest,
 } from '../../../scripts/lib/checkRun'
-import { computeContentKey } from '../../../scripts/lib/checkKey'
+import { computeContentKey } from '../checks/checkKey'
 import {
   readRecord,
   recordsDir,
   writeRecord,
   type CheckRecord,
-} from '../../../scripts/lib/checkRecords'
+} from '../checks/checkRecords'
 
 /** Record files in the store, or none when the store was never created — a
  * run that never passed leaves not even the directory behind. */

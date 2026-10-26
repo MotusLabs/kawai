@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import type { ClientMessage } from '@shared/types'
-import type { HumanTaskDetail, TaskResult, TeamTaskSummary } from '@shared/teamTasks'
+import type { HumanTaskDetail, ResultCheckFacts, TaskResult, TaskResultCheck, TeamTaskSummary } from '@shared/teamTasks'
 import TeamTaskDetail from '../components/team/TeamTaskDetail'
 import TeamTasksPanel from '../components/team/TeamTasksView'
 import { useTeamTaskStore } from '../stores/teamTaskStore'
@@ -173,3 +173,125 @@ test('the handoff form stays open over an earlier same-kind handoff and closes w
   rerender()
   expect(byTestId('task-handoff-form')).toHaveLength(0)
 })
+
+// Kawai's check of a result (independent-verification D12/D4): "Checked by
+// Kawai" carries each fact with its status beside the claimed test list,
+// a pending or unavailable check says so, and Recheck asks for a new check.
+type Check = TaskResultCheck
+
+const doneCheck = (extra: Partial<Check> = {}): Check => ({
+  id: 'check-1', teamId: 'team', taskId: 't1', resultId: 'r1', seq: 1, trigger: 'submit',
+  requestedBy: { kind: 'agent', sessionId: 'dev' }, status: 'done', facts: null, reason: null,
+  createdAt: '2026-10-24T00:00:00.000Z', finishedAt: '2026-10-24T00:00:05.000Z', ...extra,
+})
+
+const checkFacts = (): ResultCheckFacts => ({
+  version: 1,
+  commit: { given: 'abc123', sha: 'abc123', resolvedAtCheckTime: true, status: 'pass', note: null },
+  head: { sha: 'abc123', branch: 'feature', relation: 'same', ahead: 0, behind: 0, status: 'pass', note: null },
+  clean: { clean: true, paths: [], more: 0, status: 'pass', note: null },
+  recorded: { status: 'pass', recordBun: '1.4.3', recordAt: '2026-10-24T00:00:00.000Z', commitBun: '1.4.3', note: null },
+  base: { ref: 'refs/remotes/origin/HEAD', sha: 'base000', behind: 2, mergeClean: true, conflicts: [], moreConflicts: 0, status: 'pass', note: null },
+  branches: { compared: [], comparedCount: 1, skipped: 0, status: 'pass' },
+})
+
+test('the card shows the check as Checked by Kawai with each fact; the test list stays claimed', async () => {
+  await mount(detail({ results: [result('r1', { checks: { newest: doneCheck({ facts: checkFacts() }), earlier: 1 } })] }))
+  const card = one('task-result')
+  expect(textOf(card.findByProps({ 'data-testid': 'result-check' }))).toContain('Checked by Kawai')
+  expect(textOf(card.findByProps({ 'data-testid': 'result-check' }))).toContain('1 earlier check')
+  const facts = card.findAllByProps({ 'data-testid': 'result-check-fact' }).map(textOf)
+  expect(facts[0]).toContain('Commit abc123')
+  expect(facts[0]).toContain('pass')
+  expect(facts).toHaveLength(6)
+  expect(card.findAllByProps({ 'data-testid': 'result-check-pass' }).map(textOf)).toEqual(Array(6).fill('pass'))
+  expect(textOf(card)).toContain("outcomes are the submitter's claims, not verified evidence")
+})
+
+test('a conflicting base fact reads fail with its files; pending and unavailable checks say so', async () => {
+  const facts = checkFacts()
+  const failing = { ...facts, base: { ...facts.base, mergeClean: false, conflicts: ['src/export.ts'], status: 'fail' as const } }
+  await mount(detail({ results: [result('r1', { checks: { newest: doneCheck({ facts: failing }), earlier: 0 } })] }))
+  expect(textOf(one('result-check-fail'))).toBe('fail')
+  expect(textOf(one('result-check'))).toContain('conflicts: src/export.ts')
+  await mount(detail({ results: [result('r1', { checks: { newest: doneCheck({ status: 'pending' }), earlier: 0 } })] }))
+  expect(textOf(one('result-check-pending'))).toContain('Check running')
+  await mount(detail({ results: [result('r1', { checks: { newest: doneCheck({ status: 'unavailable', reason: 'git rev-parse did not answer' }), earlier: 0 } })] }))
+  expect(textOf(one('result-check-unavailable'))).toContain('did not answer')
+})
+
+test('Recheck sends team-task-recheck for the result and disables while disconnected; unchecked results say Not checked yet', async () => {
+  await mount(detail({ results: [result('r1', { checks: { newest: null, earlier: 0 } })] }))
+  expect(textOf(one('result-check'))).toContain('Checked by Kawai')
+  expect(textOf(one('result-check-pending'))).toBe('Not checked yet')
+  act(() => one('task-recheck').props.onClick())
+  expect(ofType('team-task-recheck')).toMatchObject([{ taskId: 't1', resultId: 'r1' }])
+  const { rerender } = await mount(detail({ results: [result('r1', { checks: { newest: null, earlier: 0 } })] }), false)
+  expect(one('task-recheck').props.disabled).toBe(true)
+  rerender(false)
+  // A result stored before the change carries no checks field at all.
+  await mount(detail())
+  expect(byTestId('result-check')).toHaveLength(0)
+})
+
+// The coverage map's reader view (independent-verification 3.3/D5/D6/D12).
+const map = [
+  { clause: 'A clean export downloads', tests: ['`src/export.test.ts` › downloads a csv', '`src/export.test.ts` › keeps the header'] },
+  { clause: 'Rows keep their order', tests: [] },
+]
+
+// @covers: task-results › Results carry a coverage map › The map is a claim
+test('the coverage map renders as the submitter\'s claim; only citation outcomes are checked by Kawai', async () => {
+  const facts = { ...checkFacts(), coverage: [['ran-passed', 'not-found'], []] as const }
+  await mount(detail({ results: [result('r1', {
+    coverage: map, checks: { newest: doneCheck({ facts: facts as unknown as ResultCheckFacts }), earlier: 0 },
+  })] }))
+  const view = one('result-coverage')
+  expect(textOf(view)).toContain("Coverage map — the submitter's claim")
+  expect(textOf(view)).not.toContain('checked by Kawai (claimed)')
+  const clauses = byTestId('result-coverage-clause')
+  expect(clauses.map(node => node.props['data-clause-status'])).toEqual(['partly-covered', 'declared-uncovered'])
+  expect(textOf(clauses[1]!)).toContain('No tests cited')
+  const citations = byTestId('result-coverage-citation').map(textOf)
+  expect(citations[0]).toContain('ran and passed (checked by Kawai)')
+  expect(citations[1]).toContain('not found at the commit (checked by Kawai)')
+  expect(textOf(clauses[0]!)).toContain('partly covered')
+})
+
+// @covers: task-results › Reviewers record their own coverage map first › Map withheld from the reviewer
+test('a withheld map names its clause count and how to unseal it; unmapped results render no coverage view', async () => {
+  await mount(detail({ results: [result('r1', { coverage: { withheld: true, clauses: 2 } })] }))
+  expect(textOf(one('result-coverage-withheld'))).toContain('withheld (2 clauses)')
+  expect(textOf(one('result-coverage-withheld'))).toContain('task_submit_coverage')
+  await mount(detail())
+  expect(byTestId('result-coverage')).toHaveLength(0)
+})
+
+// @covers: task-results › Reviewers record their own coverage map first › Map shown after recording
+test('reviewer maps render beside the submitter\'s with the comparison\'s differences; own maps carry no outcome chips', async () => {
+  const reviewerMap = [{ clause: 'A clean export downloads', tests: ['`src/export.test.ts` › `downloads a csv`'] }]
+  const comparison = {
+    onlySubmitter: [], onlyReviewer: ['Only the reviewer checks the header'],
+    differingCitations: [{ clause: 'A clean export downloads', onlySubmitter: ['src/export.test.ts › keeps the header'], onlyReviewer: [] }],
+    uncoveredDisputes: ['Rows keep their order'],
+  }
+  await mount(detail({ results: [result('r1', {
+    coverage: map, reviewerMaps: [{ authorSession: 'reviewer', createdAt: '2026-10-24T00:00:00.000Z', coverage: reviewerMap, comparison }],
+  })] }))
+  const view = one('result-coverage')
+  expect(textOf(one('result-reviewer-maps'))).toContain('Reviewer maps')
+  expect(textOf(one('result-reviewer-map'))).toContain('A clean export downloads: `src/export.test.ts` › `downloads a csv`')
+  expect(byTestId('result-reviewer-clause').map(textOf)[0]).not.toContain('checked by Kawai')
+  expect(textOf(one('result-coverage-comparison'))).toContain("Only the reviewer's map names: Only the reviewer checks the header")
+  expect(textOf(one('result-coverage-differing'))).toContain('only the submitter cites src/export.test.ts › keeps the header')
+  expect(textOf(view)).toContain('Called uncovered by one side, cited by the other: Rows keep their order')
+})
+
+// @covers: task-results › Results carry a coverage map › Record without a test list
+test('a check without stored outcomes leaves the citations unchipped and the clause status unknown', async () => {
+  await mount(detail({ results: [result('r1', { coverage: map, checks: { newest: doneCheck({ facts: checkFacts() }), earlier: 0 } })] }))
+  const clauses = byTestId('result-coverage-clause')
+  expect(clauses.map(node => node.props['data-clause-status'])).toEqual(['unknown', 'declared-uncovered'])
+  expect(byTestId('result-coverage-citation').map(textOf)[0]).not.toContain('checked by Kawai')
+})
+

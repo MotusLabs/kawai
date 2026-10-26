@@ -1,0 +1,13 @@
+{
+  "since": "2026-10-25",
+  "exempt": [
+    "revision-control",
+    "rename-agentboard-to-kawai",
+    "plan-workspace",
+    "process-observability",
+    "openrouter-provider",
+    "per-result-suite",
+    "dispatch-worker-choice",
+    "ci-fixture-specs"
+  ]
+}

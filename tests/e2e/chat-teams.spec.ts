@@ -12,7 +12,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { killChat } from './support/chatHeader'
-import { createChat as createResultsChat, createTask, openTeamView, openTasks, openTaskId, reopenTask, resultsTeam, say, seedResult, spawnedSession } from './support/taskResults'
+import { createChat as createResultsChat, createTask, openTeamView, openTasks, openTaskId, reopenTask, resultsTeam, say, seedCheckedResult, seedResult, spawnedSession } from './support/taskResults'
 
 test.skip(process.env.AGENTBOARD_CHAT_FIXTURE !== '1', 'Requires development chat fixture')
 
@@ -370,5 +370,39 @@ test('E10: a contributor result stays open; amendment flags it; children never c
     await reopenTask(page, 'Docs', root)
     await expect(detail.getByTestId('task-detail-status')).toHaveText('open')
     await page.screenshot({ path: info.outputPath('task-accepted.png') })
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+// Kawai's check of a result (independent-verification 2.5): the card shows
+// "Checked by Kawai" for a seeded result on a real commit, and **Recheck**
+// asks the running server's check service for a new check — its settled
+// facts arrive in the open detail without a reload.
+test('E11: a seeded result on a real commit shows Checked by Kawai; Recheck runs a new check', async ({ page }, info) => {
+  test.setTimeout(120_000)
+  const { root, worktree } = resultsTeam()
+  try {
+    await page.goto('/')
+    await createResultsChat(page, root, 'Check lead', 'leads')
+    await openTasks(page, root)
+    await createTask(page, { title: 'Checked export', direction: 'Ship a CSV export', worktree, assign: 'devs' })
+    const dev = await spawnedSession(page, worktree)
+    await expect(page.getByTestId('task-outstanding-assignment')).toContainText(/claimed|delivered|uncertain/, { timeout: 30_000 })
+    const taskId = await openTaskId(page)
+    const { sha } = seedCheckedResult(taskId, dev, worktree)
+    await reopenTask(page, taskId)
+    const detail = page.getByTestId('task-detail')
+    const card = detail.getByTestId('task-result')
+    const checked = card.getByTestId('result-check')
+    await expect(checked).toContainText('Checked by Kawai')
+    await expect(checked).toContainText(sha.slice(0, 12))
+    await expect(card.getByTestId('result-test')).toContainText('(claimed)')
+    await page.getByTestId('task-results').screenshot({ path: info.outputPath('task-check-section.png') })
+
+    // Recheck: a new check runs over the same real commit and settles beside
+    // the seeded one; the open detail carries it (no reload).
+    await card.getByTestId('task-recheck').click()
+    await expect(checked).toContainText('1 earlier check', { timeout: 30_000 })
+    await expect(checked).toContainText(sha.slice(0, 12))
+    await page.screenshot({ path: info.outputPath('task-rechecked.png') })
   } finally { rmSync(root, { recursive: true, force: true }) }
 })

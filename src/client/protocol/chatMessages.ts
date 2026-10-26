@@ -2,6 +2,7 @@
 // mirroring the server's additive chat message naming.
 import { useChatStore } from '../stores/chatStore'
 import { useChatDebugStore } from '../stores/chatDebugStore'
+import { consumeSendAnswer } from '../stores/pendingSendRecovery'
 import type { ServerMessage } from '@shared/types'
 import type { MessageRouterDeps } from './types'
 
@@ -26,5 +27,9 @@ export function handleChatMessage(message: ChatMessage, _deps: MessageRouterDeps
     case 'chat-task-output': chat.setTaskOutput(message); return
     case 'chat-model': chat.setModel(message.sessionId, message.model); return
     case 'chat-debug-frames': useChatDebugStore.getState().apply(message); return
+    // The sender-only acceptance answer (plan-workspace §6.3, B1): settles
+    // the pending contextual send at the connection consumer, never in a
+    // mounted surface.
+    case 'chat-send-result': consumeSendAnswer(message); return
   }
 }

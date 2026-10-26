@@ -18,6 +18,9 @@ import type { ImpactService } from '../strategy/ImpactService'
 import { carriedConditionsOf, type ValidationCapacityEvidence } from '../../shared/planValidation'
 import type { PlanStore } from './planStore'
 import { PlanService } from './PlanService'
+import { PlanWorkspaceStore } from './workspace/workspaceStore'
+import { PlanWorkspaceRefs } from './workspace/workspaceRefs'
+import { PlanWorkspaceContext } from './workspace/workspaceContext'
 import { OpenspecAdapter } from './validation/openspecAdapter'
 import { ValidationService } from './validation/ValidationService'
 import { ValidationStore } from './validation/validationStore'
@@ -25,7 +28,7 @@ import { ValidationDetailCache } from './validation/validationDetail'
 import { ExecutionStore } from './execution/executionStore'
 import { ExecutionService } from './execution/ExecutionService'
 import { ExecutionRevisionStore } from './revisionControl/executionRevisionStore'
-import { executionOwnership, type ExecutionOwnership } from './execution/executionOwnership'
+import { executionOwnership, ownershipRowReads, type ExecutionOwnership } from './execution/executionOwnership'
 import { executionViewReads, executionViews } from './execution/executionView'
 import { ExecutionExecutor } from './execution/executor'
 import { ExecutionRuntime, ExecutionWakes } from './execution/executionRuntime'
@@ -52,6 +55,12 @@ import { DecisionStore } from './decisions/decisionStore'
 import { HoldService } from './revisionControl/holdService'
 import { HoldStore } from './revisionControl/holdStore'
 import { PauseStore } from './revisionControl/pauseStore'
+import { PauseService } from './revisionControl/pauseService'
+import { restartReleaseSeams, reviewRestartSeam } from './revisionControl/pauseRestart'
+import { AssignmentStore } from '../team/assignmentStore'
+import { CheckpointStore } from './revisionControl/checkpointStore'
+import type { PauseTickDeps } from './revisionControl/pauseTick'
+import { CheckpointTool } from './revisionControl/checkpointTool'
 import type { ActiveHold } from '../../shared/planRevisionControl'
 import { readPlanSupervisionDetail, type SupervisionDetailReads } from './supervision/planSupervisionDetail'
 import type { SupervisionRuntime } from './supervision/supervisionRead'
@@ -80,6 +89,8 @@ export interface ExecutionTeamServices {
   supervision?: SupervisionRuntime
   /** Member release's readiness and release (the D11 release-before-review seam). */
   releases: MemberRelease
+  /** The pause tick's live holder facts (revision-control D8): state, request, busy, provider limit. */
+  pauseFacts: (sessionId: string) => import('./revisionControl/pauseTick').PauseHolderRuntimeFacts
   /** Staffing's in-flight spawn reservations: a member still starting holds the D11 release step. */
   pendingSpawns: (teamId: string) => Array<{ groupId: string; worktree: string }>
   records: () => Iterable<ChatSessionRecord>
@@ -109,7 +120,7 @@ export function composeExecutionCore(db: Database): ExecutionCore {
   }, messageId => {
     const row = db.prepare('SELECT from_kind FROM team_messages WHERE id = ?').get(messageId) as { from_kind?: string } | undefined
     return row?.from_kind === 'system' ? 'system' : row === undefined ? null : row.from_kind === 'human' ? 'human' : 'agent'
-  })
+  }, ownershipRowReads(db))
   return { executionStore, ownership, wakes: new ExecutionWakes(executionStore, ownership) }
 }
 
@@ -192,6 +203,12 @@ export function composePlanServices(options: PlanServicesOptions): {
   promotions: PromotionService
   /** The integration branches, candidates, promotions, and promotion effects; its writes re-push plan details (D13). */
   integrationStore: IntegrationStore
+  /** The workspace's bindings and command ledger (plan-workspace 1.2). */
+  workspaceStore: PlanWorkspaceStore
+  /** The workspace's document references and their keyed add/remove (plan-workspace 1.2). */
+  workspaceRefs: PlanWorkspaceRefs
+  /** The workspace's per-message context snapshots (plan-workspace 1.2); chat delivery is PR D. */
+  workspaceContext: PlanWorkspaceContext
   /** The decision service (plan-supervision D4–D7); null without team services. */
   decisions: DecisionService | null
   /** The owner's hold commands (revision-control 3.1): place, release (whole, by changes, narrowed), extend. */
@@ -200,6 +217,10 @@ export function composePlanServices(options: PlanServicesOptions): {
   monitor: SupervisionMonitor | null
   /** The supervision reads (plan-supervision D13); null without team services' supervision runtime. */
   supervisionReads: SupervisionDetailReads | null
+  /** The `task_checkpoint` tool (revision-control D7); also the executor's round-push → result-checkpoint recorder. */
+  checkpoints: CheckpointTool
+  /** The owner's pause commands (revision-control D6); the executor's owed-mail pass reads through it. Null without team services. */
+  pauses: PauseService | null
 } {
   const adapter = options.adapter ?? new OpenspecAdapter()
   const validationStore = new ValidationStore(options.db)
@@ -244,6 +265,8 @@ export function composePlanServices(options: PlanServicesOptions): {
   }
   // Set once the team services exist; the detail reads it at each push (plan-supervision D15/D16).
   let supervisionReads: SupervisionDetailReads | null = null
+  // The pause service (revision-control D6), built with the team services; null without them.
+  let composedPauses: PauseService | null = null
   const plans = new PlanService(options.plans, {
     getSession: options.getSession,
     strategies: options.strategies,
@@ -326,8 +349,59 @@ export function composePlanServices(options: PlanServicesOptions): {
     // revision-control 3.3: `no-hold` and the runner's held step read the same holds.
     holds: { active: holdsOf },
   })
+  // Checkpoints (revision-control D7): the tool the Pausing holder calls,
+  // and the recorder that counts a round's done push as the `result`
+  // checkpoint. The git reads are the tool's own; the results name the
+  // submitter a `result` checkpoint carries. The store is shared with the
+  // tick's pause pass, which reads each target's newest checkpoint.
+  const checkpointStore = new CheckpointStore(options.db)
+  const checkpoints = new CheckpointTool({
+    executions: executionStore, pauses: pauseStore, checkpoints: checkpointStore,
+    ...(team !== undefined ? {
+      resultOf: resultId => {
+        const result = team.results.tasks.store.results.get(resultId)
+        return result === null ? null : { sessionId: result.submittedBy.kind === 'agent' ? result.submittedBy.sessionId : null }
+      },
+    } : {}),
+  })
   if (team !== undefined) {
     const roundAdaptersUsed = fixture ? fixtureRoundAdapters() : roundAdapters
+    // The pause service (revision-control D6): the owner's command — and,
+    // for the tick (D8), the owed-mail pass over a spawn's or forward's
+    // claim, whose once-marker is the target's stored message_id.
+    const assignments = new AssignmentStore(options.db, team.mailbox)
+    const pauses = new PauseService({
+      pauses: pauseStore, holds: holdStore, plans: options.plans, planService: plans, executions: executionStore,
+      // The assignment reads (the outstanding instruction, the withdrawal's
+      // supersede) over the shared table; the service-owned instance keeps
+      // its claim copies current (supervisionRead builds its reader the
+      // same way).
+      assignments, mailbox: team.mailbox,
+      sessionExists: id => options.getSession(id) !== undefined,
+      sessionProfile: id => options.getSession(id)?.claudeProfileId ?? null,
+      // The resolve's task revisions, checkpoint reads, and inline fix
+      // dispatch (revision-control 4.4). L3 (A3.2): the resolve's
+      // pre-transaction head read is wired — origin's branch head through
+      // the same adapter the executor's landing reads; a failed read is
+      // refused `head-unreadable` inside the resolve (K7).
+      tasks: team.tasks, checkpoints: checkpointStore, assignmentService: team.assignments,
+      adaptHead: async (executionId, change) => {
+        const row = executionStore.change(executionId, change)
+        const teamId = executionStore.execution(executionId)?.teamId
+        const identity = teamId !== undefined ? team.identityOf(teamId) : undefined
+        if (row === null || row.branch === null || identity === undefined) return null
+        const head = await import('./landing/gitRemote').then(module => module.lsRemoteHead(row.worktree ?? identity.groupsRoot, `refs/heads/${row.branch}`))
+        if (!head.ok || head.sha === null) return { ok: false }
+        return { ok: true, startCommit: head.sha, artifacts: {} }
+      },
+      wake: teamId => runtime?.command(teamId),
+      // R2's release bookkeeping (rev4 §4): the team's MemberRelease behind
+      // the resolve's structural seams — a ready spawned holder is released
+      // after the resolve's commit, a busy one marked pending inside the
+      // transaction; unwired, the detail reads release 'never'.
+      ...restartReleaseSeams(team.releases, id => options.getSession(id)),
+    })
+    composedPauses = pauses
     const executor = new ExecutionExecutor({
       mechanisms,
       store: executionStore,
@@ -351,6 +425,32 @@ export function composePlanServices(options: PlanServicesOptions): {
       adapters: { provision: provisionAdapter(executionStore, undefined, mechanisms) },
       groupScoped: (teamId, groupId) => groupScopedOf(team, teamId, groupId),
       holds: { active: holdsOf, openTargets: openTargetsOf },
+      // LC1: the planner's owed review-restart stage dispatches through the
+      // pause side's stores — the newest restart decision names the pause
+      // whose recorded notes ride the instruction.
+      reviewRestart: reviewRestartSeam({
+        pauses: pauseStore, checkpoints: checkpointStore, executions: executionStore,
+        plans: options.plans, tasks: team.tasks, assignments: team.assignments,
+      }),
+      checkpoints,
+      // revision-control D8 (4.3): the tick's pause pass — the owed mail,
+      // then Paused recorded from stored rows and the live holder facts,
+      // and a settled pause closed.
+      pauses: {
+        pauses: pauseStore, checkpoints: checkpointStore, executions: executionStore, mailbox: team.mailbox,
+        deliverOwed: (teamId, groupsRoot, pauseId) => pauses.deliverOwed(teamId, groupsRoot, pauseId),
+        // F5: `starting` names an unclaimed spawn only — a forward successor
+        // that has not claimed reads as its owed mail.
+        assignmentMessageState: assignmentId => {
+          const row = assignments.byId(assignmentId)
+          return row?.messageId != null ? team.mailbox.get(row.messageId)?.state ?? null : null
+        },
+        readiness: sessionId => {
+          const answer = team.releases.readiness(sessionId)
+          return answer.ready ? { ready: true, reason: null } : { ready: false, reason: answer.reason }
+        },
+        factsOf: team.pauseFacts,
+      } satisfies PauseTickDeps,
       roundAdapters: roundAdaptersUsed,
       ...(fixture ? { landingAdapters: fixtureLandingAdapters(), tickMs: 1_000 } : {}),
       ...(options.executionGhOptions ? { ghOptions: options.executionGhOptions } : {}),
@@ -403,8 +503,15 @@ export function composePlanServices(options: PlanServicesOptions): {
   return {
     validation, validationStore, plans, validationDetail: new ValidationDetailCache(validation), adapter, executions, executionStore,
     runtime, decisions, holds, monitor, promotions: promotions.service, integrationStore,
+    // The workspace's bindings and command ledger over the same database (plan-workspace 1.2).
+    workspaceStore: new PlanWorkspaceStore(options.db),
+    // The workspace's document references and context snapshots (plan-workspace 1.2).
+    workspaceRefs: new PlanWorkspaceRefs(options.db),
+    workspaceContext: new PlanWorkspaceContext(options.db),
     // The supervision reads the workspace's plan attention gathers over (plan-supervision D13); null without team services.
     supervisionReads,
+    checkpoints,
+    pauses: composedPauses,
   }
 }
 

@@ -26,6 +26,8 @@ import { MailboxManagement } from './mailboxManagement'
 import { AssignmentStore } from './assignmentStore'
 import { AssignmentService } from './AssignmentService'
 import { TaskResultService } from './TaskResultService'
+import { ResultCheckService } from '../verification/resultCheckService'
+import { rawCoverage } from '../../shared/coverageMaps'
 import { buildTaskContext } from './taskContext'
 import { PlanStore } from '../plans/planStore'
 import { WorktreeStaffing, type SpawnRequest, type SpawnResult } from './staffing'
@@ -58,6 +60,8 @@ export class SessionMailbox {
   readonly assignments: AssignmentService
   /** Results, findings, acceptance, handoffs, and release-and-hand-off (task-results-handoffs). */
   readonly results: TaskResultService
+  /** Kawai's checks of submitted results (independent-verification D1). */
+  readonly resultChecks: ResultCheckService
   /** Durable plans (durable-plans): the one store tasks link against and PlanService writes through. */
   readonly plans: PlanStore
   readonly dispatcher: MailDispatcher
@@ -132,6 +136,8 @@ export class SessionMailbox {
     ownership: import('../plans/execution/executionOwnership').ExecutionOwnership
     /** A result or findings write landed (plan-execution D5); the composition's wake hub. Required (I1). */
     onTaskResultWrite: (taskId: string) => void
+    /** A result check settled (independent-verification D12): the readers' views refresh. */
+    onCheckSettled?: (teamId: string) => void
   }) {
     const store = new MailboxStore(db, {
       recipientExists: id => !!options.getRecord(id),
@@ -216,7 +222,27 @@ export class SessionMailbox {
     this.results = new TaskResultService(this.tasks, { getSession: options.getRecord, assignments: this.assignments,
       releases: this.releases, records: options.records, ...(options.homeDir ? { homeDir: options.homeDir } : {}),
       ownership: options.ownership,
-      onWrite: options.onTaskResultWrite })
+      onWrite: options.onTaskResultWrite,
+      // The check starts only after the result's transaction has committed,
+      // and never blocks the submitter (independent-verification D1).
+      onResult: (_result, teamId) => this.resultChecks.wake(teamId),
+      onRecheck: teamId => this.resultChecks.wake(teamId) })
+    this.resultChecks = new ResultCheckService({
+      store: this.tasks.store.checks,
+      sources: {
+        result: id => {
+          const row = this.tasks.store.results.get(id)
+          return row === null ? null : { commit: row.commit, worktree: row.worktree, coverage: rawCoverage(row.coverage) }
+        },
+        // A comparison reads only tasks still open for work; finished ones
+        // are landed or abandoned and their branches are not in the way.
+        openTasks: teamId => this.tasks.store.list(teamId)
+          .filter(task => task.status === 'open' || task.status === 'active' || task.status === 'blocked')
+          .map(task => ({ id: task.id, worktree: task.worktree, createdAt: task.createdAt })),
+        listedWorktrees: teamId => this.tasks.worktrees.list(teamId),
+      },
+      ...(options.onCheckSettled ? { onSettled: options.onCheckSettled } : {}),
+    })
     // Worktree scoping (member-release D5): an unscoped group's task mail goes
     // to any member and never spawns; a missing definition stays scoped.
     const targetWorktree = (message: TeamMessage): string | null => {
@@ -496,6 +522,9 @@ export class SessionMailbox {
     // A task close marks pending releases and dead-letters mail (D2): the
     // next cycle evaluates them.
     this.releaseTaskSubscription = this.tasks.store.subscribe(() => this.dispatcher.notify())
+    // Checks left pending by a restart (or never started) run now, in their
+    // own flights; the caller never awaits them (independent-verification D1).
+    this.resultChecks.start()
     this.dispatcher.release()
     this.dispatcher.notify()
     // Rules load once at start; afterwards only an explicit reload changes them.

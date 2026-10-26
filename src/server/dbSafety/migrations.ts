@@ -33,6 +33,8 @@ import { integrationMigration } from '../plans/landing/integration/integrationSc
 import { workerChoiceMigration } from '../team/workerChoiceMigration'
 import { planSupervisionMigration } from '../plans/decisions/decisionSchema'
 import { revisionControlMigration } from '../plans/revisionControl/revisionControlSchema'
+import { planWorkspaceMigration } from '../plans/workspace/workspaceSchema'
+import { resultChecksMigration } from '../verification/verificationSchema'
 import type { BackupFile } from './backupFiles'
 import type { BackupOutcome } from './backups'
 
@@ -91,6 +93,13 @@ export const MIGRATIONS: readonly Migration[] = [
   // dispatch-worker-choice D1: the sender's worker choice on group mail and
   // on dispatches. Additive, no backfill.
   workerChoiceMigration,
+  // plan-workspace 1.2: the repository's Architect/Lead bindings, document
+  // references, per-message context snapshots, and the keyed-command replay
+  // ledger. Additive, no backfill.
+  planWorkspaceMigration,
+  // independent-verification D4: result checks, coverage maps, and the
+  // results' coverage column. Additive, no backfill.
+  resultChecksMigration,
 ]
 
 export const RESTORE_DOC = 'docs/operations/database-backups.md'

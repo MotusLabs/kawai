@@ -195,6 +195,7 @@ describe("a credentialed provider's base URL is pinned on every launch", () => {
       { label: 'Bare', providerId: 'or2', env: {}, authTokenEnv: 'OR2_KEY' } satisfies CatalogProfile,
       { PATH: '/usr/bin' },
       { OR2_KEY: 'or-inference-sentinel' },
+      new Set(),
     )
     expect(launch.env?.ANTHROPIC_AUTH_TOKEN).toBe('or-inference-sentinel')
     const settings = settingsEnvOf(launch)
@@ -227,6 +228,7 @@ describe("a credentialed provider's base URL is pinned on every launch", () => {
       } satisfies CatalogProfile,
       { PATH: '/usr/bin' },
       { OR2_KEY: 'or-inference-sentinel' },
+      new Set(),
     )
     expect(launch.executable).toBe('/usr/local/bin/claude-wrap')
     expect(launch.env).not.toHaveProperty('ANTHROPIC_AUTH_TOKEN')
