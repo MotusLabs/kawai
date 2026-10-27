@@ -606,7 +606,7 @@ describe('LogPoller', () => {
 
     // Second poll - session already known, should skip enrichment
     // We verify this by checking that the response includes the entry
-    // but with logTokenCount = -1 (marker for skipped enrichment)
+    // but with known token evidence (marker for skipped enrichment)
     const stats2 = await poller.pollOnce()
     expect(stats2.newSessions).toBe(0)
 

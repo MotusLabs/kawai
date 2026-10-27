@@ -1,4 +1,5 @@
 import type { LogEntrySnapshot } from './logPollData'
+import { passesMatchTokenGate } from './logTokenEvidence'
 
 export interface SessionSnapshot {
   sessionId: string
@@ -76,8 +77,9 @@ export function getEntriesNeedingMatch(
     if (!entry.sessionId) continue
     // Codex exec sessions are headless by definition - never attempt window matching
     if (entry.isCodexExec) continue
-    // logTokenCount = -1 means enrichment was skipped (known session, already validated)
-    if (minTokens > 0 && entry.logTokenCount >= 0 && entry.logTokenCount < minTokens) continue
+    // Token rows G0–G6 (D3): known sessions pass as before; only complete
+    // evidence below a positive minimum, or no usable evidence, is skipped.
+    if (!passesMatchTokenGate(entry.tokenEvidence, minTokens)) continue
     const session =
       sessionsByLogPath.get(entry.logPath) ??
       sessionsById.get(entry.sessionId)

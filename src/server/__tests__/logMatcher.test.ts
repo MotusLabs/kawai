@@ -9,10 +9,10 @@ import {
   verifyWindowLogAssociationDetailedAsync,
 } from '../logmatch'
 import { hasMessageInValidUserContext } from '../logmatch/candidateSearch'
+import { readLogTokenEvidence } from '../logmatch/tokenReader'
 import {
   extractLastEntryTimestamp,
   extractLastUserMessageFromLog,
-  getLogTokenCount,
   iterateLogLinesBackward,
   normalizeText,
 } from '../logmatch/logText'
@@ -574,7 +574,7 @@ describe('logmatch', () => {
     await fs.rm(tempDir, { recursive: true, force: true })
   })
 
-  test('getLogTokenCount survives a single message line larger than the tail read window', async () => {
+  test('token evidence survives a single message line larger than the tail read window', async () => {
     // A 150KB+ pasted message followed by its item_completed echo: the 200KB
     // tail slice starts mid-way through the paste line, so the tail parse sees
     // only an unparseable fragment plus a non-message event.
@@ -598,11 +598,16 @@ describe('logmatch', () => {
       logPath,
       [JSON.stringify({ type: 'session_meta', payload: { id: 'x' } }), userLine, echoLine].join('\n')
     )
-    expect(getLogTokenCount(logPath)).toBeGreaterThan(0)
+    // Over 200 KiB: bounded windows give partial evidence; the paste line
+    // ends inside the head window, so it is counted (old count > 0).
+    const evidence = readLogTokenEvidence(logPath)
+    expect(evidence.kind).toBe('partial')
+    expect(evidence.kind === 'partial' ? evidence.count : 0).toBeGreaterThan(0)
 
     const emptyPath = path.join(tempDir, 'empty.jsonl')
     await fs.writeFile(emptyPath, JSON.stringify({ type: 'session_meta', payload: { id: 'y' } }))
-    expect(getLogTokenCount(emptyPath)).toBe(0)
+    const empty = readLogTokenEvidence(emptyPath)
+    expect(empty.kind === 'complete' ? empty.count : -1).toBe(0)
     await fs.rm(tempDir, { recursive: true, force: true })
   })
 

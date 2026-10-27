@@ -6,6 +6,7 @@ import {
   collectLogEntriesForPaths,
   collectLogEntryBatch,
   enrichLogEntry,
+  type LogEntrySnapshot,
 } from '../logPollData'
 
 let tempRoot: string
@@ -40,6 +41,12 @@ afterEach(async () => {
   else delete process.env.PI_HOME
   await fs.rm(tempRoot, { recursive: true, force: true })
 })
+
+
+function evidenceOf(entry: LogEntrySnapshot | undefined): { kind?: string; count?: number } {
+  const evidence = entry?.tokenEvidence
+  return { kind: evidence?.kind, count: evidence && 'count' in evidence ? evidence.count : undefined }
+}
 
 describe('collectLogEntryBatch', () => {
   test('sorts logs and enriches snapshots', async () => {
@@ -105,16 +112,19 @@ describe('collectLogEntryBatch', () => {
     expect(result.entries[0]?.logPath).toBe(claudeLog)
     expect(result.entries[1]?.logPath).toBe(codexLog)
     expect(result.entries[2]?.logPath).toBe(subagentLog)
-    expect(result.entries[0]?.logTokenCount).toBe(2)
-    expect(result.entries[1]?.logTokenCount).toBeGreaterThan(0)
-    expect(result.entries[2]?.logTokenCount).toBe(0)
+    // Small stable logs are wholly read: complete evidence (D3 C(n)).
+    expect(evidenceOf(result.entries[0])).toEqual({ kind: 'complete', count: 2 })
+    expect(evidenceOf(result.entries[1]).kind).toBe('complete')
+    expect(evidenceOf(result.entries[1]).count).toBeGreaterThan(0)
+    // A subagent is not counted (old bare 0): no usable observation, U.
+    expect(evidenceOf(result.entries[2])).toEqual({ kind: 'unavailable', count: undefined })
     expect(result.entries[2]?.isCodexSubagent).toBe(true)
     expect(result.entries[0]?.agentType).toBe('claude')
     expect(result.entries[1]?.agentType).toBe('codex')
     expect(result.entries[0]?.projectPath).toBe('/project/a')
   })
 
-  test('skips enrichment for known sessions and sets logTokenCount to -1', async () => {
+  test('skips enrichment for known sessions and tags their evidence known', async () => {
     const claudeLog = path.join(
       claudeDir,
       'projects',
@@ -136,9 +146,9 @@ describe('collectLogEntryBatch', () => {
     expect(result1.entries).toHaveLength(1)
     expect(result1.entries[0]?.sessionId).toBe('session-known-id')
     expect(result1.entries[0]?.projectPath).toBe('/project/known')
-    expect(result1.entries[0]?.logTokenCount).toBeGreaterThan(0)
+    expect(evidenceOf(result1.entries[0]).kind).toBe('complete')
 
-    const actualTokenCount = result1.entries[0]?.logTokenCount ?? 0
+    const actualTokenCount = evidenceOf(result1.entries[0]).count ?? 0
 
     // Second call with known session - should skip enrichment
     const result2 = collectLogEntryBatch(10, {
@@ -159,8 +169,8 @@ describe('collectLogEntryBatch', () => {
     expect(result2.entries[0]?.sessionId).toBe('session-known-id')
     expect(result2.entries[0]?.projectPath).toBe('/project/known')
     expect(result2.entries[0]?.agentType).toBe('claude')
-    // logTokenCount = -1 indicates enrichment was skipped
-    expect(result2.entries[0]?.logTokenCount).toBe(-1)
+    // Known evidence (K) replaces the old -1 sentinel: enrichment skipped
+    expect(result2.entries[0]?.tokenEvidence).toEqual({ kind: 'known' })
 
     // Verify that actual token count would have been positive
     expect(actualTokenCount).toBeGreaterThan(0)
@@ -242,7 +252,7 @@ describe('enrichLogEntry', () => {
     expect(entry.sessionId).toBe('known-session-id')
     expect(entry.projectPath).toBe('/project/known')
     expect(entry.agentType).toBe('claude')
-    expect(entry.logTokenCount).toBe(-1)
+    expect(entry.tokenEvidence).toEqual({ kind: 'known' })
   })
 
   test('backfills slug for known Claude sessions when DB slug is null', async () => {
@@ -286,7 +296,7 @@ describe('enrichLogEntry', () => {
     )
 
     expect(entry.slug).toBe('known-backfill-slug')
-    expect(entry.logTokenCount).toBe(-1)
+    expect(entry.tokenEvidence).toEqual({ kind: 'known' })
   })
 
   test('enriches unknown session metadata from the log file', async () => {
@@ -319,7 +329,8 @@ describe('enrichLogEntry', () => {
     expect(entry.agentType).toBe('claude')
     expect(entry.isCodexSubagent).toBe(false)
     expect(entry.isCodexExec).toBe(false)
-    expect(entry.logTokenCount).toBeGreaterThan(0)
+    expect(evidenceOf(entry).kind).toBe('complete')
+    expect(evidenceOf(entry).count).toBeGreaterThan(0)
   })
 
   test('detects codex subagent and exec sessions', async () => {

@@ -11,7 +11,12 @@ import {
   scanAllLogDirs,
 } from './logDiscovery'
 import { LogExclusion } from './logExclusion'
-import { getLogTokenCount } from './logmatch'
+import { readLogTokenEvidence } from './logmatch'
+import {
+  KNOWN_EVIDENCE,
+  UNAVAILABLE_EVIDENCE,
+  type TokenEvidence,
+} from './logTokenEvidence'
 
 export interface LogEntrySnapshot {
   logPath: string
@@ -24,7 +29,8 @@ export interface LogEntrySnapshot {
   agentType: AgentType | null
   isCodexSubagent: boolean
   isCodexExec: boolean
-  logTokenCount: number
+  /** What the bounded token read observed (D3); never a bare count. */
+  tokenEvidence: TokenEvidence
   lastUserMessage?: string
 }
 
@@ -67,8 +73,8 @@ export function enrichLogEntry(
 ): LogEntrySnapshot {
   const known = knownByPath.get(logPath)
   if (known) {
-    // Use cached metadata from DB, skip file content reads
-    // logTokenCount = -1 indicates enrichment was skipped (already validated)
+    // Use cached metadata from DB, skip file content reads: known evidence
+    // (K) marks the legitimately skipped enrichment.
     // For codex sessions, backfill isCodexExec if not yet set (cheap header check)
     const codexExec = known.agentType === 'codex' && !known.isCodexExec
       ? isCodexExec(logPath)
@@ -88,7 +94,7 @@ export function enrichLogEntry(
       agentType: known.agentType,
       isCodexSubagent: false,
       isCodexExec: codexExec,
-      logTokenCount: -1,
+      tokenEvidence: KNOWN_EVIDENCE,
     } satisfies LogEntrySnapshot
   }
 
@@ -100,7 +106,10 @@ export function enrichLogEntry(
   const codexSubagent = agentType === 'codex' ? isCodexSubagent(logPath) : false
   const codexExec = agentType === 'codex' ? isCodexExec(logPath) : false
   const shouldCountTokens = Boolean(sessionId) && !codexSubagent && Boolean(agentType)
-  const logTokenCount = shouldCountTokens ? getLogTokenCount(logPath) : 0
+  // Not counted (no id, no agent, a subagent): no usable token observation.
+  const tokenEvidence = shouldCountTokens
+    ? readLogTokenEvidence(logPath, { agentType })
+    : UNAVAILABLE_EVIDENCE
 
   return {
     logPath,
@@ -113,7 +122,7 @@ export function enrichLogEntry(
     agentType: agentType ?? null,
     isCodexSubagent: codexSubagent,
     isCodexExec: codexExec,
-    logTokenCount,
+    tokenEvidence,
   } satisfies LogEntrySnapshot
 }
 

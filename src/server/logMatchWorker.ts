@@ -14,9 +14,9 @@ import {
   DEFAULT_SCROLLBACK_LINES,
   createExactMatchProfiler,
   extractLastUserMessageFromLog,
-  getLogTokenCount,
   isToolNotificationText,
   matchWindowsToLogsByExactRgAsync,
+  readLogTokenEvidence,
 } from './logmatch'
 import { getEntriesNeedingMatch, shouldSkipMatching } from './logMatchGate'
 import {
@@ -24,6 +24,7 @@ import {
   collectLogEntryBatch,
   type LogEntrySnapshot,
 } from './logPollData'
+import { passesMatchTokenGate, UNAVAILABLE_EVIDENCE } from './logTokenEvidence'
 import type {
   LastMessageCandidate,
   MatchWorkerRequest,
@@ -284,15 +285,16 @@ function buildOrphanEntries(
         agentType: agentType ?? null,
         isCodexSubagent: false,
         isCodexExec: codexExec,
-        logTokenCount: 0,
+        tokenEvidence: UNAVAILABLE_EVIDENCE,
       }
       if (shouldSkipMatching(preEntry, skipPatterns)) {
         continue
       }
     }
 
-    const logTokenCount = getLogTokenCount(logPath)
-    if (minTokens > 0 && logTokenCount < minTokens) {
+    // A recorded orphan is re-read here, so its evidence is C/P/U, never K.
+    const tokenEvidence = readLogTokenEvidence(logPath, { agentType })
+    if (!passesMatchTokenGate(tokenEvidence, minTokens)) {
       continue
     }
 
@@ -307,7 +309,7 @@ function buildOrphanEntries(
       agentType: agentType ?? null,
       isCodexSubagent: false,
       isCodexExec: codexExec,
-      logTokenCount,
+      tokenEvidence,
     })
   }
 
@@ -353,7 +355,8 @@ function buildLastMessageEntries(
       agentType: resolvedAgentType,
       isCodexSubagent: codexSubagent,
       isCodexExec: codexExec,
-      logTokenCount: 0,
+      // Backfill reads only the last message: no token observation.
+      tokenEvidence: UNAVAILABLE_EVIDENCE,
     })
   }
 
