@@ -178,7 +178,7 @@ describe('registered names through the real manager wiring', () => {
       fs.rmSync(namesFile, { force: true })
       process.env.FAKE_RUN = String(run)
       await trigger()
-      await until(() => anyExits() >= run, 10_000)
+      await until(() => anyExits() >= run)
       return fs.readFileSync(namesFile, 'utf8').split('\n')
     }
 
