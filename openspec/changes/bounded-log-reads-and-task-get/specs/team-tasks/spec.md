@@ -11,8 +11,8 @@ The agent `task_get` tool SHALL return the newest 50 journal entries (or `journa
 - **AND** it reports totals 1,198, 149, and 60, all three truncated
 
 #### Scenario: Small task is whole
-- **WHEN** an agent calls `task_get` on a task with 3 journal entries of at most 2,000 bytes, no subtasks, and 1 message
-- **THEN** everything is returned whole and nothing is marked truncated or cut
+- **WHEN** an agent calls `task_get` on a task with 3 journal entries of at most 2,000 bytes that are valid UTF-8, no subtasks, and 1 message
+- **THEN** everything is returned whole and readable, and nothing is marked truncated or cut
 
 #### Scenario: Results and revisions stay whole
 - **WHEN** a task has more than 50 results or revisions, and a review handoff is outstanding
@@ -23,7 +23,7 @@ The agent `task_get` tool SHALL return the newest 50 journal entries (or `journa
 - **THEN** its detail carries the whole journal, every subtask, and every message
 
 ### Requirement: task_get journal previews are byte-bounded
-Each journal entry in `task_get` SHALL carry a preview of at most its first 2,000 stored UTF-8 bytes, projected by the query and trimmed to a whole character, with its total byte length, whether it was cut, and the byte offset to resume reading from. The marker SHALL be metadata, never appended to the text. A preview that is not valid UTF-8 SHALL carry null text and resume offset 0.
+Each journal entry in `task_get` SHALL carry a preview of at most its first 2,000 stored UTF-8 bytes, projected by the query and trimmed to a whole character, with its total byte length, whether it was cut, and the byte offset to resume reading from. The marker SHALL be metadata, never appended to the text. A preview that is not valid UTF-8, at any length, SHALL carry null text and resume offset 0; stored bytes are never rewritten.
 
 #### Scenario: Oversized entry
 - **WHEN** an entry holds 5,000 ASCII bytes
@@ -36,6 +36,11 @@ Each journal entry in `task_get` SHALL carry a preview of at most its first 2,00
 #### Scenario: Invalid bytes in the preview
 - **WHEN** the first 2,000 bytes are not valid UTF-8
 - **THEN** the preview text is null and the resume offset is 0
+
+#### Scenario: Short invalid historical entry
+- **WHEN** a task holds a one-byte entry `FF` beside a valid small entry
+- **THEN** the `FF` preview has null text, resume offset 0, and total 1, and is not cut
+- **AND** `task_journal_read` returns that byte exactly, and the valid sibling is returned whole
 
 ### Requirement: task_get pages the journal
 `task_get` SHALL accept an optional `journal_before`, an entry id of the task, and an optional integer `journal_limit` from 1 to 200 (default 50), returning the entries older than that entry by `(created_at, rowid)`, oldest first, with whether older entries remain and the next anchor. An id that is not an entry of the task SHALL be refused naming it; a limit out of range SHALL be refused.

@@ -11,10 +11,21 @@ Both costs grow with a log's size and a task's life.
 
 ## What Changes
 
-- **Excluded chat logs are dropped before their content is read.** The match worker drops a log whose file-name thread id, known session id, or candidate record id belongs to a chat before opening it, and one whose head session id does right after the existing head identity parse. This covers both collectors, orphan rematch, and last-message backfill. The newest-`maxLogs` selection still happens first.
+- **Excluded chat logs are dropped before their content is read.** The match worker checks identities in stages:
+  - the file-name thread id, then the stored record or session id, without opening the file;
+  - the head session id from the existing head identity parse, only when both missed.
+  - The first hit drops the log. Being known never skips the head check.
+  - This covers every candidate class (new, known, orphan, backfill) in both collectors and before final last-message reads.
+  - The newest-`maxLogs` selection still happens first.
 - **Token enrichment reads bounded windows.** It reads at most a 200 KiB head and a 200 KiB tail through one file descriptor, plus a one-byte lookbehind, never the whole file.
-- **Token evidence replaces the bare count.** Enrichment reports *positive*, *proven empty*, *incomplete*, or *unavailable*. Gates reject a log on token grounds only on complete evidence. An *incomplete* log (no message text in the windows of a larger file) stays eligible for the existing exact matching, so terminal sessions whose only message lies outside the windows are still matched. Only *proven empty* evidence is cached as empty.
-- **`task_get` bounds its growing lists in SQL.** The newest 50 journal entries (1–200 on request), the newest 100 subtasks, and the newest 50 messages, each with its total and truncation state. Each journal entry carries a preview of at most its first 2,000 stored UTF-8 bytes, projected in the query, with its total byte length and the offset to resume from.
+- **Token evidence replaces the bare count.** Enrichment reports:
+  - *known* (an existing validated session);
+  - *unavailable*;
+  - *complete* `C(n)`, an exact count over a stably and wholly read, wholly accounted input;
+  - *partial* `P(n)`, a lower bound.
+- **Gates.** Token gates reject only complete evidence below a positive minimum. Partial evidence of any count stays eligible for the existing exact matching, so terminal sessions whose only message lies outside the windows are still matched.
+- **Empty caches.** Both empty caches (the reader's `zeroTokenLogCache` and the poller's `emptyLogCache`) admit only `C(0)`, never a threshold rejection or a log without a session id. Each reuse is checked against the file's generation and evaluated under the current gate.
+- **`task_get` bounds its growing lists in SQL.** The newest 50 journal entries (1–200 on request), the newest 100 subtasks, and the newest 50 messages, each with its total and truncation state. Each journal entry carries a preview of at most its first 2,000 stored UTF-8 bytes, projected in the query, with its total byte length and the offset to resume from. A preview whose bytes are not valid UTF-8 (short historical entries included) carries no text and resumes at 0.
 - **New optional `task_get` arguments page the journal:** `journal_before` (an entry id) and `journal_limit` (1–200, default 50).
 - **New read-only tool `task_journal_read`** returns any journal entry losslessly by byte offset, in chunks of at most 8,192 stored bytes, as base64 plus the exact text when the chunk is valid UTF-8. It replaces the need for any database-copy workaround, and existing entries (including ones with NUL characters) are never rewritten.
 - **The tool descriptions, the system prompt's task note, and the delivered task-mail header** stop promising the full journal and name the paging and the reader.
@@ -35,7 +46,11 @@ None.
 
 ### Modified Capabilities
 
-- `terminal-streaming`: adds requirements that the match worker excludes chat transcripts before reading their content, reads bounded windows for token enrichment, and keeps logs with incomplete token evidence eligible for matching.
+- `terminal-streaming`: adds requirements covering four things:
+  - the match worker excludes chat transcripts in stages before reading their content;
+  - token enrichment reads bounded windows;
+  - token evidence distinguishes complete from partial observations;
+  - token gates and both empty caches act only on complete evidence.
 - `team-tasks`: adds requirements that `task_get` bounds its growing lists in SQL with byte-bounded journal previews and journal paging, that `task_journal_read` returns any entry losslessly, and that agents are told so.
 
 ## Impact
@@ -43,15 +58,18 @@ None.
 - **Log polling code (first production path):**
   - `src/server/logPollData.ts`: exclusion order in both collectors; token evidence on entries.
   - `src/server/logMatchWorker.ts`: the same exclusion before orphan rematch, last-message backfill, and last-message reads; orphan gate on evidence.
-  - `src/server/logmatch/logText.ts`: the bounded one-descriptor token reader and evidence classification; the proven-empty cache.
-  - `src/server/logMatchGate.ts`, `src/server/logPoller.ts`: gates and the insert-time empty cache consume evidence.
+  - `src/server/logmatch/logText.ts`: the bounded one-descriptor token reader and evidence classification; `zeroTokenLogCache` admits only `C(0)`.
+  - `src/server/logMatchGate.ts`, `src/server/logPoller.ts`: gates consume evidence. In the poller's `emptyLogCache`:
+    - the size-only precheck no longer skips unconditionally;
+    - the no-session-id branch no longer writes;
+    - the low-token branch admits only `C(0)`.
   - The matching tests.
 - **Task tool code (later revision):**
   - `src/server/team/taskStore.ts`, `src/server/team/mailboxStore.ts`: windowed, projected queries and counts.
   - `src/server/team/TaskService.ts`: the agent window and the entry reader.
   - `src/server/team/taskTools.ts`: schemas, descriptions, handlers, and the new tool name.
   - `src/shared/teamTasks.ts`: the agent detail and chunk types.
-  - `src/server/team/teamPrompt.ts`, `src/server/team/taskContext.ts`, and the task-tools bullet in `AGENTS.md`, in the Lead's integration order.
+  - `src/server/team/teamPrompt.ts`, `src/server/team/taskContext.ts`, and the task-tools facts in `docs/architecture/tasks.md` (moved there from `AGENTS.md` by the architecture split), in the Lead's integration order.
   - `task_get` and `task_journal_read` tests through both the Claude and the Codex tool adapters.
 - **Unchanged:**
   - The human UI's task detail.

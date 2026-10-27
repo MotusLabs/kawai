@@ -7,7 +7,17 @@ See proposal.md, Why. The relevant code at base `0bff6f6f`:
 - **Collectors.** `collectLogEntryBatch` and `collectLogEntriesForPaths` (`src/server/logPollData.ts`) call `enrichLogEntry` on every selected log and apply `isExcludedChatLog` to its result. The batch collector selects the newest `maxLogs` by mtime first.
 - **Other worker content paths.** `buildOrphanEntries` (`src/server/logMatchWorker.ts`) reads head helpers and calls `getLogTokenCount` on DB orphan candidates without any exclusion. `buildLastMessageEntries` adds backfill candidates after the collectors, and `attachLastUserMessage` then reads each entry's last messages. Neither checks exclusion, so a chat transcript once recorded as a session (a contaminated DB row) is read and can reappear in worker output.
 - **Token count.** For an unknown log, `getLogTokenCount` (`src/server/logmatch/logText.ts`) reads the whole file with `readFileSync`, slices the decoded string to 204,800 UTF-16 units and 2,000 lines without dropping the partial first line, and, when that tail holds no message text, scans the whole copy from the head. Its zero-token cache is keyed by path and size only.
-- **Gates.** `MIN_LOG_TOKENS_FOR_INSERT` is 1. Three gates reject a count below it: `getEntriesNeedingMatch` (`src/server/logMatchGate.ts`, where `-1` means "known session, enrichment skipped"), the orphan gate in `buildOrphanEntries`, and the insert gate in `logPoller.ts`, which also stores the log in `emptyLogCache`.
+- **Gates.** `MIN_LOG_TOKENS_FOR_INSERT` is 1. Three gates reject a count below it:
+  - `getEntriesNeedingMatch` (`src/server/logMatchGate.ts`, where `-1` means "known session, enrichment skipped");
+  - the orphan gate in `buildOrphanEntries`;
+  - the insert gate in `logPoller.ts`.
+
+  The worker gates take a `minTokens` that may be 0 (disabled).
+- **Poller `emptyLogCache`** (path → size), three sites in `logPoller.ts`:
+  - It is checked before the insert gate, and `cachedSize >= size` skips the log unconditionally (818–820).
+  - It is written for a log with no session id yet (833–836).
+  - It is written for every token rejection (907–909).
+- **Reader `zeroTokenLogCache`** in `logText.ts` (path → size) returns 0 for an equal size.
 - **Head identity reads.** `parseLogHeadEntries` (`src/server/logDiscovery.ts`) reads 64 KiB, and while the last line is truncated re-reads 256 KiB and then 1 MiB: at most offset 1 MiB, at most 1,344 KiB read per parse. `extractSessionId`, `extractProjectPath`, and `extractSlug` each parse again; `isCodexSubagent` and `isCodexExec` read 64 KiB each. All are bounded independent of file size.
 - **Exact matching.** `candidateSearch.ts` runs `rg` over candidate files and progressively expanded tails. It is not changed here.
 - **`readLogTail`** drops a complete first line when its offset lands exactly on a line start, and decodes the whole allocation after a short read.
@@ -34,25 +44,46 @@ See proposal.md, Why. The relevant code at base `0bff6f6f`:
 
 ## Decisions
 
-### D1 — One exclusion check before every worker content path
+### D1 — Staged exclusion before every worker content path
 
-A single function decides exclusion from identity facts, in this order:
-1. **File-name thread id** (`rollout-…-<uuid>.jsonl`). A hit drops the log with zero opens.
-2. **Known or candidate record id** (the known session's id, or an orphan/backfill record's `sessionId`). A hit drops the log with zero opens.
-3. **Head session id** from the existing `extractSessionId` parse (64 → 256 → 1,024 KiB expansion kept). A hit drops the log before any other helper or token read.
+**Invariant I-X:** no positively excluded identity survives any collector, worker, backfill, or content path. Being known is never an exclusion bypass.
 
-It runs:
-- in both collectors, after the batch collector's newest-`maxLogs` slice (excluded logs still take slots, as today);
-- in `buildOrphanEntries` before `isCodexSubagent` and the token read;
-- in `buildLastMessageEntries`, and again on the final entry list before `attachLastUserMessage`, so nothing excluded is read or returned.
+A single function decides exclusion from three identity observations, read in order and evaluated only until the first hit:
+- **F** — the file-name thread id (`rollout-…-<uuid>.jsonl`).
+- **R** — the stored record or session id: the known session's id, or an orphan or backfill record's `sessionId`.
+- **H** — the head session id from the existing `extractSessionId` parse, keeping the 64 → 256 → 1,024 KiB expansion.
 
-An absent or empty exclude set leaves every path as today. Unexcluded terminal logs keep their metadata and matching unchanged.
+"Hit" means a positively known member of the exclude set, never absence of evidence.
+
+| row | F | R | H | outcome |
+|-----|---|---|---|---------|
+| X0 | hit | not evaluated | not evaluated | drop; zero identity or content opens |
+| X1 | miss | hit | not evaluated | drop; zero identity or content opens |
+| X2 | miss | miss or absent | hit | drop after the bounded identity reads only; no token or last-message read; absent from entries, matches, and final attachment |
+| X3 | miss | miss or absent | resolved, no hit | not excluded by this rule; existing metadata, orphan, and matching eligibility apply |
+| X4 | miss | miss or absent | unresolved within the bounded head | no exclusion inferred; no identity is fabricated and no non-chat proof claimed; known stored metadata is kept; missing or unreadable keeps its existing nonthrowing path |
+
+Each row applies alike to every candidate class:
+- new and known logs in both collectors;
+- orphan records;
+- backfill records;
+- the final list before last-message reads.
+
+A known log whose stored id A is not excluded, while its head now names an excluded id B, is X2 for every class.
+
+The check runs:
+- in both collectors, after the batch collector's newest-`maxLogs` slice (excluded logs still take slots, as today), before any other helper or token read;
+- in `buildOrphanEntries`, before `isCodexSubagent` and the token read;
+- in `buildLastMessageEntries`;
+- again on the final entry list before `attachLastUserMessage`, so nothing excluded is read or returned.
+
+An absent or empty exclude set disables this filter, while existing metadata eligibility still applies. Unexcluded terminal logs keep their metadata and matching unchanged. Every identity in a file cannot be discovered beyond the bounded metadata head, and none is claimed to be.
 
 *Alternative considered:* recognize rollouts by path prefix (`~/.codex/sessions`). Rejected: terminal Codex sessions also write rollouts there.
 
 ### D2 — Bounded token reads through one descriptor
 
-The token reader opens one descriptor and `fstat`s it, recording the generation (device, inode, size, mtime). Then it reads, with `readSync` at explicit offsets:
+The token reader opens one descriptor and `fstat`s it, recording the generation (device, inode, size, mtime, and change time at the highest available precision). Then it reads, with `readSync` at explicit offsets:
 - **Head window:** bytes `[0, min(size, 200 KiB))`.
 - **Tail window:** bytes `[max(0, size − 200 KiB), size)`, plus one lookbehind byte at `start − 1` when `start > 0`, so a tail that starts exactly at a line start keeps its first line.
 - When the windows overlap or `size ≤ 200 KiB`, the overlapping bytes are read once.
@@ -61,24 +92,67 @@ It then `fstat`s again and closes the descriptor in `finally`. The aggregate rea
 
 Only complete lines are decoded and parsed: a line whose start and terminating newline both fall inside a window, or a final unterminated line at the file's end that parses as JSON. Splitting on `\n` is UTF-8 safe. The tail applies the existing 2,000-line limit.
 
-The reader honors the actual `bytesRead`. A short read, or a generation change between the two `fstat`s, makes the read incomplete. There is no finishing scan for a line that straddles a window.
+The reader honors the actual `bytesRead`. A short read, or a generation change between the two `fstat`s, makes the evidence `P(n)` (D3). There is no finishing scan for a line that straddles a window.
 
-### D3 — Token evidence and gates
+### D3 — Token evidence, gates, and empty caches
 
-The reader returns one of:
-- **`positive(n)`** — some complete line in a window has message text. `n` counts the tail's message text, or else the head's first message. It is a lower bound, not an exact whole-file count.
-- **`empty`** (proven empty) — no message text, the head window covered the whole file (`size ≤ 200 KiB`), the read was full, and the generation did not change.
-- **`incomplete`** — no message text was observed, but the windows did not cover the whole file, or the read was short, or the file changed.
-- **`unavailable`** — stat, open, or read failed (missing or unreadable). It never throws.
+**Invariants:**
+- **I-E:** a bounded observation is not a complete count unless its logical coverage and stable generation are proved. Incompleteness overrides a previously observed positive.
+- **I-C:** an empty cache stores only a complete, stable zero, never a threshold rejection or missing metadata. A cache hit is evidence evaluated under the current gate, not permission to skip.
 
-A known session keeps a separately named `known` evidence, replacing the `-1` sentinel, which is never used for an unknown log.
+**Evidence**, taken after exclusion on an eligible source:
+- **K** — the existing known-session evidence, tagged and semantically separate, replacing the `-1` sentinel. It is used only when new enrichment is legitimately skipped. No unknown log is tagged K. A DB orphan record whose path is re-enriched for tokens is not K merely because it is recorded.
+- **U** — missing, unreadable, or unusable source. It never throws.
+- **C(n)** — a complete, stable observation of the whole logical input for the selected agent, mode, and options, with an exact non-negative count `n`. All of the following must hold:
+  - the pre and post `fstat` generations agree;
+  - every requested byte is read;
+  - the windows cover the whole file without gap or duplicate;
+  - every relevant record is accounted for under the declared parser rules, with no discarded partial line or character and no early exit or count truncation (for example a first-message fallback or a hit line limit).
 
-The gates (`getEntriesNeedingMatch`, the orphan gate, and the insert gate) reject on token grounds only when the evidence is complete and below the minimum: `empty`, or a `positive(n)` from a wholly covered file with `n < minTokens`.
-- `incomplete` evidence stays eligible and reaches the existing exact matching. If that matching inserts it, the insert proceeds as for a positive log.
-- `unavailable` evidence is not inserted this poll, as today, and is not cached.
-- Only `empty` evidence enters the reader's cache or the poller's `emptyLogCache`. The cache key is device, inode, size, mtime, text mode, and read options, so a same-size edit, a replacement, or another mode re-reads.
+  Reading every byte alone does not certify C. A mode that cannot establish an exact whole-input count never produces C.
+- **P(n)** — an incomplete bounded observation. `n ≥ 0` is a lower bound only. It covers a gap between the windows, a short read, a shrink, growth or generation change, a cut giant line, a partial record, and an early exit.
 
-*Trade-off:* a large log with no message text in either window is now `incomplete` and stays eligible every poll. It costs one bounded read per poll plus an exact-matching attempt, and may now be inserted when `rg` matches it, where the old code rejected it. This is accepted in exchange for never losing a real terminal session to a bounded read.
+Priority:
+1. K, when new enrichment is legitimately skipped.
+2. Otherwise U for an unusable source.
+3. Otherwise P(n) when any completeness predicate fails.
+4. C(n) only when all of them hold.
+
+So a positive observed before a later short read or generation change is P(n), never C(n).
+
+**Token gate rows.** Existing metadata, orphan, window, skip-pattern, and exclusion prerequisites still apply independently. A passing token predicate is not a promise to insert an otherwise ineligible row.
+
+| row | evidence | minimum | token predicate | empty-cache write |
+|-----|----------|---------|-----------------|-------------------|
+| G0 | U | any | cannot create eligibility; existing unavailable path skips, no insert | none |
+| G1 | K | any | existing known behavior | none |
+| G2 | P(n) | any | not rejected on this count, whatever n; eligible for matching and poller insert; never marked validated | none |
+| G3 | C(n) | ≤ 0 | filter disabled: passes for n = 0 or positive | per admission rule |
+| G4 | C(n) | > 0, n ≥ minimum | passes | none |
+| G5 | C(0) | > 0 | rejected as proven empty | per admission rule |
+| G6 | C(n) | > 0, 0 < n < minimum | rejected as complete below threshold, never called empty | none |
+
+G6 is reachable at a generic minimum of 2 with `C(1)`. It is unreachable at the fixed production insert minimum of 1 with integral counts. If an implementation cannot produce C for an input, G2 applies.
+
+**Cache admission:** only `C(0)` with a valid, stable identity, generation, agent, mode, and options may be stored as empty. Admission does not depend on the threshold. K, U, P, and `C(n > 0)` are never admitted. So a cached true zero rejects at minimum 1 but passes the token predicate at minimum 0. A complete positive rejected at minimum 2 is not cached, and the same unchanged positive passes at minimum 1.
+
+**Cache reuse:**
+- Requires the same file identity and generation, plus the same agent, mode, and read options.
+- Generation evidence is device, inode, size, and mtime at the highest available stat precision, plus the change time, so a same-size rewrite, a replacement, or a restored mtime is detected.
+- Size alone, and `cachedSize >= size`, are never sufficient.
+- When the platform or input cannot establish generation validity, the entry is neither cached nor reused; a bounded re-read is the fallback.
+- Stat checks are evidence, not an atomic filesystem snapshot or a defense against undetectable ABA or TOCTOU changes.
+
+The worker carries the evidence kind and the generation facts across its boundary; the current snapshot's mtime, size, and bare count are not sufficient alone.
+
+**Source composition:**
+- `zeroTokenLogCache` (`logText.ts`) admits only `C(0)` under the reuse key above.
+- `logPoller.ts` 818–820: the unconditional size-cache `continue` is removed. After the mandatory exclusion and metadata prerequisites, a valid hit yields `C(0)` evidence for the current gate.
+- `logPoller.ts` 833–836: the no-session-id branch never writes the cache. A missing id is not a token-count proof; the log is skipped by metadata policy and reconsidered on later discovery.
+- `logPoller.ts` 907–909: the low-token branch admits only `C(0)`, not every token rejection.
+- Both worker gates (`getEntriesNeedingMatch` and the orphan gate in `buildOrphanEntries`) and the poller insert gate consume the evidence contract.
+
+*Trade-off:* a large log with no message text in either window is now `P(0)` and stays eligible every poll. It costs one bounded read per poll plus an exact-matching attempt, and may now be inserted when `rg` matches it, where the old code rejected it. This is accepted in exchange for never losing a real terminal session to a bounded read.
 
 *Alternative considered:* a bounded forward scan that finishes a straddling line up to 16 MiB. Rejected: a valid line over 16 MiB before a short user message still loses the session, and no finite exact-negative scan can tell two logs apart that differ only in an unread middle message.
 
@@ -101,6 +175,13 @@ Each list is returned oldest first. No full `detail()`, unlimited `journal()`, o
 - `resumeOffsetBytes` — the byte offset `task_journal_read` resumes from: `previewBytes`, or `0` when `text` is `null`.
 
 The marker is metadata beside the text, never appended to it.
+
+**Preview partition (I-P).** The readable-preview promise holds only when the established fatal UTF-8 round-trip succeeds. Raw bytes stay recoverable without mutation.
+- **T-small:** the raw length is ≤ 2,000 bytes and the complete projection decodes. The preview is whole and readable, not cut, and resumes at its exact byte length.
+- **T-invalid:** the projection fails to decode, at any length, including a one-byte historical `FF` entry. The preview has `text: null` and `resumeOffsetBytes: 0`; the raw byte length and `cut` stay honest. `task_journal_read` returns the bytes as authoritative base64. Such an entry is never "small whole".
+- **T-large-readable:** the raw length is over 2,000 bytes and the trimmed prefix decodes. The ≤ 2,000-byte prefix is trimmed to a valid boundary, and the resume offset is exact.
+
+This partition introduces no second decoder. Existing NUL, byte-order-mark, multi-byte, and historical rows are never rewritten or banned to satisfy a preview.
 
 **Bounds** carry `journal: { total, returned, olderRemaining, nextBefore }` and `{ total, returned, truncated }` for subtasks and messages.
 
@@ -151,7 +232,7 @@ The following are updated together with D4–D6, in the Lead's integration order
 - the `task_get` and new `task_journal_read` descriptions and registration (`TASK_TOOL_NAMES`, schemas, handlers — one table, so both runtimes get them);
 - the task note in `teamPrompt.ts`;
 - the delivered header line in `taskContext.ts` that says "task_get has the full journal";
-- the task-tools bullet in `AGENTS.md`;
+- the task-tools facts in `docs/architecture/tasks.md`, where the architecture split moved the former `AGENTS.md` bullet (no root `AGENTS.md` expansion);
 - enumeration tests over the tool names.
 
 The new name must compose with later tool-metrics normalization without an import cycle.
@@ -160,58 +241,83 @@ D1–D3 are the first production path and land first. D4–D7 follow under a lat
 
 ### Acceptance oracles
 
-**Exclusion (D1)**, through the real match-worker request handler, over temp logs, with an observer on every file-open and content-read API. *Path* is batch (`collectLogEntryBatch`), paths (`collectLogEntriesForPaths`), orphan, or backfill. *Opens* counts opens of that file.
+**WX — exclusion (D1)**, through the real match-worker request handler, over temp logs, with an observer on every file-open and content-read API.
 
-| id | path | file-name id excluded | known/record id excluded | head id excluded | opens | in output |
-|----|------|-----------------------|--------------------------|------------------|-------|-----------|
-| X1 | batch, paths | yes | * | * | 0 | no |
-| X2 | batch, paths (unknown) | no | — | yes | head identity parse only (offset ≤ 1 MiB) | no |
-| X3 | batch, paths (unknown, session id and agent type present, not subagent) | no | — | no | head parses + token windows | yes |
-| X4 | batch, paths (known) | no | no | * | no token read | yes, `known` evidence |
-| X5 | batch, paths (known) | yes | * | * | 0 | no |
-| X6 | batch, paths (known) | no | yes | * | 0 | no |
-| X7 | orphan | yes, or record id yes | | * | 0 | not in orphan entries or matches |
-| X8 | backfill | yes, or record id yes | | * | 0 | not in entries; no last-message read |
-| X9 | any | exclude set absent or empty | | | as today | as today |
-| X10 | batch, `maxLogs = k` with excluded logs among the newest k | | | | excluded take slots | unexcluded among newest k only |
-| X11 | batch, paths (unknown, no or malformed identity) | no | — | — | head parses only, no token read | yes, `sessionId` null |
-| X12 | orphan, backfill (not excluded) | no | no | no | as today | as today |
+Every row is run for each candidate class:
+- a new log in the batch collector (`collectLogEntryBatch`);
+- a new log in the paths collector (`collectLogEntriesForPaths`);
+- a known log in each collector;
+- an orphan record;
+- a backfill record.
 
-Unreachable: none. X5/X6 are the contaminated chat-row cases and must stay excluded.
+Each run asserts presence or absence in entries, orphan matches, and the final list read by `attachLastUserMessage`.
 
-**Token evidence (D2/D3)**, through the token reader with the all-API observer:
+| id | stage reached | opens of the file | content reads | in entries, matches, final attachment |
+|----|---------------|-------------------|---------------|----------------------------------------|
+| X0 | F hit | 0 | none | absent |
+| X1 | F miss, R hit | 0 | none | absent |
+| X2 | F miss, R miss or absent, H hit | identity parse only (offset ≤ 1 MiB) | no token or last-message read | absent |
+| X3 | F miss, R miss or absent, H resolved without hit | as today | as today | present per existing eligibility |
+| X4 | F miss, R miss or absent, H unresolved (missing or malformed identity) | identity parse only for a new log | as today | present per existing eligibility; no identity fabricated; known stored metadata kept |
 
-| id | file | stable full read | message text in a complete window line | evidence | cached empty |
-|----|------|------------------|----------------------------------------|----------|--------------|
-| E1 | ≤ 200 KiB | yes | yes | positive | no |
-| E2 | ≤ 200 KiB | yes | no | empty | yes |
-| E3 | > 200 KiB | yes | in tail | positive | no |
-| E4 | > 200 KiB | yes | head only | positive | no |
-| E5 | > 200 KiB | yes | no | incomplete | no |
-| E6 | * | no (short read or generation change) | no | incomplete | no |
-| E7 | missing or unreadable | — | — | unavailable | no |
-| E8 | cached empty, same device/inode/size/mtime/mode/options | — | — | empty with no content read; any key part differing re-reads | — |
-| E9 | tail start exactly at a line start | yes | only on that first tail line | positive | no |
+Named witness: a known log, and equally an orphan or backfill record, whose stored id A is not excluded while its head names an excluded id B is X2. No class returns it.
 
-**Gates (D3)**, through `getEntriesNeedingMatch`, the orphan gate, and the poller's insert gate:
+Controls:
+- An absent or empty exclude set changes nothing.
+- With `maxLogs = k` and excluded logs among the newest k, excluded logs take slots and only unexcluded logs among the newest k appear.
+- Unexcluded real Claude and Codex logs keep their metadata and matching.
 
-| id | evidence | outcome |
-|----|----------|---------|
-| G1 | positive, n ≥ minTokens | eligible |
-| G2 | empty, or positive below minTokens over a wholly covered file | rejected; insert gate caches empty |
-| G3 | incomplete | eligible; never cached |
-| G4 | unavailable | not inserted this poll; not cached |
-| G5 | known | as today |
+**WE — token evidence (D2/D3)**, through the token reader with the all-API observer and an independent generator ground truth:
+
+| id | input | evidence |
+|----|-------|----------|
+| E1 | ≤ 200 KiB, stable full read, every record parsed, message text present | C(n), n the exact count |
+| E2 | ≤ 200 KiB, stable full read, every record parsed, no message text | C(0) |
+| E3 | > 200 KiB, message text in the tail | P(n ≥ 1) |
+| E4 | > 200 KiB, message text in the head only | P(n ≥ 1) |
+| E5 | > 200 KiB, no message text in either window | P(0) |
+| E6 | short read or generation change, nothing observed | P(0) |
+| E7 | a positive observed, then a short read or generation change | P(n), never C(n) |
+| E8 | ≤ 200 KiB but a logical gap: the 2,000-line limit reached, an early exit, or an unparseable unterminated final line | P(n) |
+| E9 | tail starting exactly at a line start that holds the only message | that line counts; P(n ≥ 1) |
+| E10 | missing or unreadable | U |
+| E11 | known session, enrichment skipped | K, no content read |
+
+**WG — token gates (D3 rows G0–G6)**, through `getEntriesNeedingMatch`, the orphan gate, and the poller insert gate. Each row asserts the predicate and the state of both empty caches.
+
+| id | evidence, minimum | predicate | both caches afterwards |
+|----|-------------------|-----------|------------------------|
+| WG0 | U, any | no insert this poll | no entry |
+| WG1 | K, any | as today | no entry |
+| WG2 | P(0) and P(1), minimum 1 and 2 | eligible, reaches exact matching and insert | no entry |
+| WG3 | C(0) and C(1), minimum 0 | passes | C(0): admitted; C(1): no entry |
+| WG4 | C(1), minimum 1 | passes | no entry |
+| WG5 | C(0), minimum 1 | rejected as empty | admitted |
+| WG6 | C(1), minimum 2 (generic) | rejected below threshold | no entry; the same unchanged file then passes at minimum 1 |
+
+G6 has no production-minimum row: at the fixed insert minimum of 1 it is unreachable.
+
+**WC — cache composition**, through the real poller and reader. Each row asserts the cache state itself, independent of a helper's return value.
+
+| id | input | outcome |
+|----|-------|---------|
+| WC1 | a log with no session id yet and partial or non-empty content | no `emptyLogCache` write; after the id appears (appended content), the log is reconsidered |
+| WC2 | a cached C(0), then a same-size rewrite with the mtime restored | the change time differs; re-read, no reuse |
+| WC3 | a cached C(0), then a replacement at the same path | the identity differs; re-read |
+| WC4 | a cached C(0), read in another mode or with other options | not reused |
+| WC5 | a cached C(0) at minimum 0 | the token predicate passes; no unconditional skip |
+| WC6 | C(1) rejected at minimum 2, and any P(n) | neither cache holds the path |
+| WC7 | generation validity not establishable (test seam) | neither cached nor reused; bounded re-read |
 
 **Old-positive witnesses**, through the real worker and the poller, each generated with bounded writes:
 - **O1:** a > 200 KiB first user message and a > 200 KiB echo line. The old count is > 0. The log must stay eligible and be inserted on an exact match.
 - **O2:** small session metadata, a valid > 16 MiB non-message line, a short user message, then a 300 KiB non-message echo. The same must hold.
 
-**`task_get` (D4/D5)**, through both the Claude and the Codex adapters. *Returned* is oldest first.
+**`task_get` (D4/D5)**, through both the Claude and the Codex adapters. *Returned* is oldest first. T1 and T16 are the WP preview witnesses (T-small and T-invalid); T8 and T9 are T-large-readable.
 
 | id | input | outcome |
 |----|-------|---------|
-| T1 | 3 entries each ≤ 2,000 bytes, 0 subtasks, 1 message | all whole; nothing truncated or cut |
+| T1 | 3 entries each ≤ 2,000 bytes and valid UTF-8 (T-small), 0 subtasks, 1 message | all whole and readable; nothing truncated or cut |
 | T2 | 1,198 entries, defaults | newest 50; total 1,198; `olderRemaining`; `nextBefore` = oldest returned |
 | T3 | `journal_before` = entry k (k ≥ 100), limit 100 | entries k−100…k−1; `olderRemaining` = (k − 100 > 0) |
 | T4 | `journal_before` = entry 30, limit 100 | entries 0…29; `olderRemaining` false; `nextBefore` null |
@@ -220,12 +326,13 @@ Unreachable: none. X5/X6 are the contaminated chat-row cases and must stay exclu
 | T7 | unknown id | refused naming the id, in each adapter's envelope |
 | T8 | a 5,000-byte ASCII entry | 2,000-byte preview; `cut`; `totalBytes` 5,000; `resumeOffsetBytes` 2,000 |
 | T9 | a 4-byte character straddling byte 2,000 | preview ends before it; `resumeOffsetBytes` = `previewBytes` |
-| T10 | invalid UTF-8 within the first 2,000 bytes | `text` null; `resumeOffsetBytes` 0 |
+| T10 | invalid UTF-8 within the first 2,000 bytes of a longer entry (T-invalid) | `text` null; `resumeOffsetBytes` 0 |
 | T11 | 149 subtasks, 60 messages | newest 100 and 50; totals; truncated |
 | T12 | limit 1, limit 200, empty journal | exact windows; empty gives `[]`, total 0, no older |
 | T13 | entries sharing `created_at` | order by `rowid`; no duplicates across pages |
 | T14 | > 50 results and revisions; an outstanding review handoff | all whole; the seal projection unchanged |
 | T15 | the human detail of T2's task | the whole journal, subtasks, and messages |
+| T16 | a one-byte `FF` entry beside a valid small entry (T-invalid) | `FF`: `text` null, `resumeOffsetBytes` 0, `totalBytes` 1, not cut; `task_journal_read` returns its byte exactly; the valid sibling stays whole |
 
 **`task_journal_read` (D6)**, through both adapters:
 
@@ -251,7 +358,7 @@ Unreachable: none. X5/X6 are the contaminated chat-row cases and must stay exclu
     - no whole-file API is called;
     - the evidence equals a reference classification of the two windows;
     - the sparse pair yields equal reads and equal evidence.
-- **P2, eligibility preserved.** Over P1's cases, whenever the generator placed message text anywhere in the file, the evidence is `positive` or `incomplete`, never `empty`, and the gates keep the log eligible.
+- **P2, eligibility preserved.** Over P1's cases, whenever the generator placed message text anywhere in the file, the evidence is `C(n > 0)` or `P(n)`, never `C(0)`, and the gates at minimum 1 keep the log eligible.
 - **P3, lossless paging.** Seed `0x7461736b`, 200 cases. Journals of 0–600 entries, some sharing a `created_at`, paged with random limits from 1 to 200 until `olderRemaining` is false, yield every id exactly once in store order. Seam: an in-memory `schemaDb()`.
 - **P4, lossless entries.** Seed `0x6a726e6c`, 200 cases. Entries of 0–40,000 bytes with NUL, byte-order marks, emoji, CJK, and invalid bytes, read from random start offsets:
   - every call before the end returns 1–8,192 bytes;
@@ -259,9 +366,9 @@ Unreachable: none. X5/X6 are the contaminated chat-row cases and must stay exclu
   - every non-null `text` encodes to its chunk's bytes.
 
 **Planned mutants (at most five):**
-- **M1:** exclusion moved back after enrichment. X1, X2, and X6 read past the head.
+- **M1:** exclusion moved back after enrichment. X0 and X1 open the file, and X2 (including the known A / head B witness) reads tokens or appears in output.
 - **M2:** a whole-file read restored in the token reader. The P1 observer fails.
-- **M3:** `incomplete` classified or cached as `empty`. O1, O2, G3, and P2 fail.
+- **M3:** `P(n)` classified as `C(n)` or admitted to an empty cache. O1, O2, E7, WG2, WC6, and P2 fail.
 - **M4:** the `task_get` windows taken from a full `detail()`/`forTask()` load. The query observer sees an unlimited statement, or more rows than the limit plus one.
 - **M5:** the whole entry text projected and cut in JavaScript. The observer sees a journal text value over 2,000 bytes.
 
