@@ -1,13 +1,13 @@
 ## ADDED Requirements
 
 ### Requirement: Imported credentials live in the server-owned store
-The system SHALL store credential values in one user-level file
-(`~/.kawai/credentials.json`, mode 0600, never widened), holding secret
-sources (withheld from every launch under their own names; reachable only
-through a binding) and launch-env entries delivered to launches unchanged.
+Credential values SHALL be stored in one user-level file
+(`~/.kawai/credentials.json`, mode 0600, never widened) as versioned
+entries carrying a kind (secret-source, delivered only through a binding;
+or launch-env, delivered unchanged) and a value set, blank, or absent.
 Values SHALL NOT be stored in SQLite, repository files, or backups taken
-after the migration commit. An unreadable or malformed store SHALL be
-reported in the source listing and treated as absent.
+after the migration commit. An unreadable, unsafe, or malformed store is
+reported and reads as absent for resolution — lower sources compose.
 
 #### Scenario: Import writes only the store
 - **WHEN** an operator imports a value for a credential variable through Settings
@@ -15,7 +15,31 @@ reported in the source listing and treated as absent.
 
 #### Scenario: Corrupt store degrades visibly
 - **WHEN** the store file is malformed or unreadable
-- **THEN** the configuration-source listing reports it with the reason, launches compose credentials from the server environment alone, and nothing fails silently
+- **THEN** the configuration-source listing reports it with a fixed safe reason, launches compose credentials from the process environment and chat-env seed as if the store were absent, mutations refuse with the prior bytes standing until manual repair, and nothing fails silently
+
+#### Scenario: Invalid store is never salvaged
+- **WHEN** the document carries an unsupported version, an unknown kind, or an invalid variable name or entry shape
+- **THEN** the store reads as malformed — reported in the listing, resolution composing the lower sources — and mutations refuse; no salvage pass rewrites the prior bytes
+
+#### Scenario: Unsafe permissions refuse every access
+- **WHEN** the file carries group or other permission bits
+- **THEN** reads and mutations refuse with a fixed reason and the file is never chmodded; a 0400 file still reads, and an explicit save may replace it atomically with a fresh 0600 file
+
+#### Scenario: Gates precede any cached value
+- **WHEN** an entry is cached and the next access observes a symlink, a foreign owner, or an unsafe mode on the store path
+- **THEN** the access refuses and the cached entry is never served
+
+#### Scenario: Applied and durable report separately
+- **WHEN** the atomic rename commits but the directory fsync fails
+- **THEN** the save reports applied but not durable, the new content stands with no rollback or retry, and no caller — a Settings warning or the Settings-map migration — treats the outcome as durable
+
+#### Scenario: Secret-source writes retain the name first
+- **WHEN** an entry is set or reclassified as a secret source
+- **THEN** its name, never its value, is persisted to the retained-names registry before the write reports success, and a missing or failing registry collaborator refuses the write before the file changes
+
+#### Scenario: Blank is a stored state for both kinds
+- **WHEN** a blank value is stored for either kind
+- **THEN** it persists as blank, never as unset, and later resolution exports the variable empty over the lower sources
 
 ### Requirement: The credential UI is write-only
 Read surfaces SHALL show each named variable's kind, presence, and source,
@@ -31,6 +55,10 @@ secret source and launch-env entry SHALL be an explicit act.
 #### Scenario: Replace requires retyping
 - **WHEN** an operator replaces a stored value
 - **THEN** the input starts empty and the previous value is never rendered back
+
+#### Scenario: Errors carry fixed safe text only
+- **WHEN** any store read, mutation, or listing fails or reports a state
+- **THEN** its text is a fixed safe reason naming the path class and reason code, carrying no value, prefix, length, parser message, or cause chain, and an invalid raw input is never echoed back as a name
 
 ### Requirement: Credential resolution composes per variable
 The effective credential source SHALL compose per variable, last writer
