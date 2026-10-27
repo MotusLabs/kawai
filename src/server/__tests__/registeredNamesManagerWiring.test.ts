@@ -166,14 +166,19 @@ describe('registered names through the real manager wiring', () => {
      * respawns the same driver — never a fresh creation. A send into a child
      * whose exit has not settled yet would be eaten by the dead process, so
      * each spawn after the first waits for the previous child's settled
-     * exit (the driver announces it as an error event) before triggering. */
+     * exit (the driver announces it as an error event) before triggering.
+     * The names are read only once this child's own exit has settled: the
+     * fake writes them synchronously before its replay, and the write's
+     * open makes an empty file visible first, so the file existing is no
+     * sign the names are complete. */
     async function spawnChild(manager: ChatSessionManager, id: string, namesFile: string, run: number, trigger: () => Promise<unknown>): Promise<string[]> {
       const settledExits = () => codexEvents.filter(event => event.type === 'error' && event.message.includes('exited with code 0')).length
+      const anyExits = () => codexEvents.filter(event => event.type === 'error' && event.message.startsWith('The Codex app-server exited')).length
       await until(() => settledExits() >= run - 1, 10_000)
       fs.rmSync(namesFile, { force: true })
       process.env.FAKE_RUN = String(run)
       await trigger()
-      await until(() => fs.existsSync(namesFile))
+      await until(() => anyExits() >= run, 10_000)
       return fs.readFileSync(namesFile, 'utf8').split('\n')
     }
 
