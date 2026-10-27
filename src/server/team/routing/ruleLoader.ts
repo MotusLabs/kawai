@@ -8,6 +8,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { logger } from '../../logger'
 import { GROUP_ID_PATTERN } from '../groupCatalog'
 import { RuleHost } from './ruleHost'
 import { publishRuleTypes, RULE_TYPES_FILE } from './ruleTypes'
@@ -60,7 +61,12 @@ export class RuleRegistry {
 
   private async loadAll(): Promise<RuleLoadReport> {
     const dir = this.dir
-    publishRuleTypes(dir)
+    // The declaration file is an editor aid; failing to write it never blocks rules.
+    try {
+      publishRuleTypes(dir)
+    } catch (error) {
+      logger.warn('routing_rule_types_publish_failed', { dir, error: String(error) })
+    }
     const version = `${Date.now()}-${Math.random().toString(36).slice(2)}`
     const results: RuleLoadResult[] = []
     const next = new Map<string, RuleHost>()

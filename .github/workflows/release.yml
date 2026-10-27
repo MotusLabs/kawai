@@ -43,6 +43,7 @@ jobs:
             artifact="agentboard-${target#bun-}"
             echo "Building $target -> $artifact"
             bun build src/server/index.ts src/server/sessionRefreshWorker.ts src/server/logMatchWorker.ts \
+              src/server/team/routing/ruleWorker.ts \
               --define "process.env.KAWAI_BUILD_VERSION=\"$BUILD_VERSION\"" \
               --compile --target "$target" --outfile "$artifact"
             mkdir -p "package/$artifact/bin" "package/$artifact/dist"

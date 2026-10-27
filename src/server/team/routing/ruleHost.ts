@@ -19,7 +19,12 @@ export const RULE_LOAD_TIMEOUT_MS = 10_000
 /** Consecutive call timeouts before the serving Worker is restarted. */
 export const RESTART_AFTER_TIMEOUTS = 3
 
-const WORKER_URL = new URL('./ruleWorker.ts', import.meta.url).href
+// A compiled binary resolves Workers by entrypoint path from its root
+// (`src/server/`, the release build lists ruleWorker.ts as an entrypoint);
+// source runs resolve beside this file.
+const WORKER_URL = import.meta.url.includes('$bunfs')
+  ? './team/routing/ruleWorker.ts'
+  : new URL('./ruleWorker.ts', import.meta.url).href
 
 type Outbound =
   | { type: 'loaded'; env: string[]; timeoutMs: number | null; hasOnLimit: boolean }
