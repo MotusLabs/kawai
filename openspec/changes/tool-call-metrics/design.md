@@ -98,16 +98,16 @@ Drill-down lists the abandoned streaks plus the five longest recovered streaks. 
 
 | id | tool | output / context | class |
 |----|------|------------------|-------|
-| FC1 | * | `context.denied` | ? |
-| FC2 | * | starts `Input validation error:` | ? |
-| FC3 | * | starts `Invalid arguments for ` | ? |
-| FC4 | * | `<tool_use_error>Blocked:` | ? |
-| FC5 | * | `<tool_use_error>Unknown skill:`, `No such tool available`, `Tool references removed` | ? |
-| FC6 | * | other `<tool_use_error>` | ? |
-| FC7 | kt | any other failed text | ? |
-| FC8 | `Bash`/`Monitor` | any other failed text | ? |
-| FC9 | other | any other failed text | ? |
-| FC10 | * | success | ? |
+| FC1 | * | `context.denied` | `denied` |
+| FC2 | * | starts `Input validation error:` | `input-invalid` |
+| FC3 | * | starts `Invalid arguments for ` | `input-invalid` |
+| FC4 | * | `<tool_use_error>Blocked:` | `blocked` |
+| FC5 | * | `<tool_use_error>Unknown skill:`, `No such tool available`, `Tool references removed` | `unavailable` |
+| FC6 | * | other `<tool_use_error>` | `precondition` |
+| FC7 | kt | any other failed text | `refused` |
+| FC8 | `Bash`/`Monitor` | any other failed text | `command-failed` |
+| FC9 | other | any other failed text | `other` |
+| FC10 | * | success | none |
 
 Rows FC2 to FC5 are pinned by fixtures copied from real wire-log lines (one per row, secrets and paths replaced). Unreachable: a success with `context.denied`, because a denied call never runs.
 
@@ -115,12 +115,12 @@ Rows FC2 to FC5 are pinned by fixtures copied from real wire-log lines (one per 
 
 | id | raw | name |
 |----|-----|------|
-| TN1 | `Bash` | ? |
-| TN2 | `mcp__kawai-team__task_submit_result` (Claude) | ? |
-| TN3 | the same name from a Codex dynamic call | ? |
-| TN4 | `mcp__kawai-team__not_a_tool` | ? |
-| TN5 | `mcp__docs-search__query` | ? |
-| TN6 | `echo` (a collapsed Codex emission) | ? |
+| TN1 | `Bash` | `Bash` |
+| TN2 | `mcp__kawai-team__task_submit_result` (Claude) | `task_submit_result` |
+| TN3 | the same name from a Codex dynamic call | `task_submit_result` |
+| TN4 | `mcp__kawai-team__not_a_tool` | `mcp:other` |
+| TN5 | `mcp__docs-search__query` | `mcp:other` |
+| TN6 | `echo` (a collapsed Codex emission) | `other` |
 
 ### Streak table (ST)
 
@@ -128,15 +128,15 @@ The state is closed (∅) or open with length k. Events are failure of tool T (F
 
 | id | state | event | next | fact written |
 |----|-------|-------|------|--------------|
-| ST1 | ∅ | F | ? | ? |
-| ST2 | open k | F | ? | ? |
-| ST3 | open k | S | ? | ? |
-| ST4 | ∅ | S | ? | ? |
-| ST5 | * | O | ? | ? |
-| ST6 | open k | E | ? | ? |
-| ST7 | ∅ | E | ? | ? |
-| ST8 | open k (checkpointed) | R | ? | ? |
-| ST9 | ∅ | R | ? | ? |
+| ST1 | ∅ | F | open 1 | none |
+| ST2 | open k | F | open k+1 | none |
+| ST3 | open k | S | ∅ | `recovered`, k |
+| ST4 | ∅ | S | ∅ | none |
+| ST5 | * | O | unchanged | none |
+| ST6 | open k | E | ∅ | `abandoned`, k |
+| ST7 | ∅ | E | ∅ | none |
+| ST8 | open k (checkpointed) | R | ∅ | `unknown`, k |
+| ST9 | ∅ | R | ∅ | none |
 
 **Completeness:** every (state ∈ {∅, open}) × (event ∈ {F, S, O, E, R}) pair matches exactly one row. ST5 covers O for both states.
 
