@@ -151,6 +151,7 @@ describe('ChatSessionManager question auto-answer', () => {
     }
   }, 30_000)
 
+  // @covers: chat-sessions › Explicit recommendation wording identifies an option › Recommendation in an option description
   test('description-only recommendations time out with original labels and a hold prevents settlement (QA-R6)', async () => {
     const clock = new ManualClock()
     // Replace only the process-timer boundary; construction, setting getter,
@@ -315,6 +316,7 @@ describe('ChatSessionManager question auto-answer', () => {
     }
   }, 30_000)
 
+  // @covers: chat-sessions › Recommended answers are taken after a configurable wait › A Codex chat question waits for the user
   test('only the claude branch receives the getter; shared options never carry it (QA-U4)', () => {
     const managerSource = fs.readFileSync(
       path.join(import.meta.dir, '../chat/ChatSessionManager.ts'),
