@@ -17,8 +17,9 @@ as well as time, and a switch should send only what the client lacks.
 
 - **Size budget on the history window.** Attach and each load-earlier page
   stop at 500 events or 512 KiB of serialized history — the UTF-8 encoded
-  size of the delivered events array itself, counted separately from the
-  snapshot envelope — whichever comes first, inside the existing 24-hour
+  size of the events array actually delivered, workspace-context decoration
+  included, counted separately from the snapshot envelope — whichever comes
+  first, inside the existing 24-hour
   bound. History is delivered newest-first with whole-turn preference: the
   walk adds whole turn units while the complete selected suffix stays
   within both limits, and stops before the first older unit that would

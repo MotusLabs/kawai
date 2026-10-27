@@ -59,13 +59,20 @@
 delivered events-array serialization — each event's JSON plus the commas
 and brackets that join them — the measure the wire actually transmits,
 counted separately from the rest of the snapshot envelope, which the budget
-never counts. (UTF-16 code-unit lengths are not wire bytes: one CJK text
+never counts. The measured array is the one the manager actually returns:
+`getSnapshot` and `getHistoryPage` attach `workspaceContext` after
+windowing, so the pricing sees the same final projection it returns —
+decoration before selection, or an equivalent projection/size callback
+over the decorated events; no separate raw-only estimator exists, and
+metadata is never stripped or truncated to fit. Raw ids, cuts, resume and
+page metadata, and part integrity are unchanged.
+(UTF-16 code-unit lengths are not wire bytes: one CJK text
 event of 100 code units encodes to about 300 bytes.) Unless an example or
 W row expressly exercises byte overflow, its complete eligible input's
 UTF-8 serialized events array — commas and brackets included — fits the
 512 KiB budget, and count-specific outputs below (W2's 480, W3's exactly
 500, W16's 300, the 450+150→150 and 300+600→300 examples) hold under that
-premise. Byte-overflow rows (W6, W15) carry no such premise. Individually
+premise. Byte-overflow rows (W6, W15, W17) carry no such premise. Individually
 small raw events do not imply small parts: continuation can hold many
 deltas in one part, which is then the atomic-exception domain.
 
@@ -332,6 +339,7 @@ they cover. `*` means don't-care.
 | W14 | turn with no quiet point, 900 events | that turn whole (single part) |
 | W15 | many small CJK text events in independent quiet parts, each part within the byte budget, whose combined UTF-8 crosses 512 KiB while the count stays below 500 (individually small raw events alone do not establish this — part size decides) | the walk stops at the same precedence points on the byte measure — a unit stop once units are selected, else the part boundary before the byte limit; no single-part exception |
 | W16 | units already selected; the next older unit holds 600 events with quiet 10-event parts, over the remaining budget | the walk stops; that unit is left whole; its parts never fill the leftover space |
+| W17 | budgeted attach and `beforeId` page with valid persisted workspace contexts: three raw units of about 170 KiB each (about 510 KiB raw, under the byte budget), each decorated with about 64 KiB of workspace context; each decorated unit fits alone and the count stays below 500 | the newest two decorated units, intact with full metadata; the walk stops before the third; real raw `startId`, actual `hasOlder`; no atomic exception (raw-only pricing would deliver all three and is killed here; if decoration made the single newest part alone exceed the cap, the existing atomic exception applies unchanged) |
 
 Unreachable: a part with zero events (every part starts at an event), a
 `startId` inside a merged entry (W5 forbids the cut), a part holding a
@@ -419,7 +427,10 @@ progress (L3).
   an oversized newest unit walks that unit's quiet parts, with at most the
   single atomic newest part; the window stays within both limits unless
   that one atomic part stands, the encoded-byte measure counted over the
-  complete delivered suffix; and every delivered `tool_result` whose call
+  complete delivered suffix as actually projected — the workspaceContext
+  decoration included, never a raw-only estimate, with metadata-bearing
+  cases joining the same 500-case generator — and every delivered
+  `tool_result` whose call
   exists in history has that call in the window and vice versa; a call
   with no recorded result (cancelled or still unfinished) is valid
   history, kept as it stands and never fabricated a result. The generator
@@ -444,7 +455,16 @@ progress (L3).
 
 - **OW1.** A test runs `ChatConnections` over a real `ChatSessionManager`
   with a fixture transcript. A second attach with `held` receives a
-  `resume` snapshot. Mutant: the attach handler drops `held`.
+  `resume` snapshot. Mutant: the attach handler drops `held`. OW1 also
+  runs the production budget checks through the real manager: a snapshot
+  and a `getHistoryPage` over the W17 fixture with persisted workspace
+  contexts must return events whose `UTF-8(JSON.stringify(...))` is at
+  most 512 KiB, with the exact selected raw ids, full metadata, and the
+  actual `hasOlder` — held/resume and the plain reconnect lower-bound
+  controls unchanged. The planned counterfactual mutant moves the
+  workspaceContext attachment after raw-only pricing; these
+  response-byte and selection assertions must detect it, not the test
+  setup.
 - **OW2.** A real Bun server built by the production `socketHandlers` and
   `ConnectionHub` is reached by a raw TCP client that negotiates
   permessage-deflate. Two observation layers, per physical route (a

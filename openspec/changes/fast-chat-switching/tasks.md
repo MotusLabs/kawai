@@ -9,8 +9,8 @@
 
 - [ ] 2.1 Move the client's merge rule into `src/shared/chatTranscriptMerge.ts` as `continuesEntry(prev, next)`, and make `applyChatEvents` import it.
   - Verify: the existing `chatTranscript` merge tests pass unchanged. A W5 row through `historyWindow` fails when the server keeps a private copy of the rule (mutant: the server copy ignores `messageId`).
-- [ ] 2.2 Split units into parts at quiet points, and apply the 500-event / 512 KiB encoded-byte budget (UTF-8 length of the delivered events array, envelope excluded) in `historyWindow` for attach, `fromId`, `throughId`, and `beforeId`, as D1 describes: indivisible parts, whole turn units filled newest-first while the complete selected suffix fits both limits, the walk stopping before the first older unit that would overflow the remaining budget once any unit is selected, and only the oversized newest unit with empty selection walking its quiet parts newest-first under the single atomic newest-part exception; the boundary turn's remaining portion before `beforeId`'s part is the page's newest candidate unit.
-  - Verify: table W rows W1–W16 are committed verbatim as one table-driven test.
+- [ ] 2.2 Split units into parts at quiet points, and apply the 500-event / 512 KiB encoded-byte budget (UTF-8 length of the delivered events array, envelope excluded; measured on the projection actually returned — the events array after workspaceContext attachment — so the manager prices the same final projection it returns, never a raw-only estimator) in `historyWindow` and its pricing seam for attach, `fromId`, `throughId`, and `beforeId`, as D1 describes: indivisible parts, whole turn units filled newest-first while the complete selected suffix fits both limits, the walk stopping before the first older unit that would overflow the remaining budget once any unit is selected, and only the oversized newest unit with empty selection walking its quiet parts newest-first under the single atomic newest-part exception; the boundary turn's remaining portion before `beforeId`'s part is the page's newest candidate unit.
+  - Verify: table W rows W1–W17 are committed verbatim as one table-driven test.
     - W2 kills "budget ignored" and pins whole-unit delivery (480 events of the newest four turns, even with quiet 10-event parts in the fifth).
     - W3 and W14 kill "never split a unit" and "split anywhere" (W3 only with empty selection on the oversized newest unit).
     - W4 and W5 kill "open tool calls ignored" and "merge continuation ignored" (in the part walk, the overflowing part is left whole to older history, never an earlier cut across parts).
@@ -20,8 +20,9 @@
     - W12 and W13 kill "page unbudgeted" and "page may be empty".
     - W15 kills "code-unit length counted as wire bytes".
     - W16 kills "leftover space filled with pieces of an overflowing older unit".
+    - W17 kills raw-only measurement: with workspace-context decoration pushing a 510 KiB raw array past the cap, the newest two decorated units are delivered and the third is not.
 - [ ] 2.3 Add properties P1 and P3 (seeded LCG, seed `0x5eed`, 500 and 300 cases, no new dependency).
-  - Verify: P1 (budgeted modes only; the whole-unit precedence with the empty-selection part branch and its single atomic part; the encoded-byte measure over the complete delivered suffix; unmatched cancelled calls preserved as they stand, never fabricated results) kills the mutant that drops the pending-call check. P3 kills a page that starts at `beforeId`'s part instead of the part before it.
+  - Verify: P1 (budgeted modes only; the whole-unit precedence with the empty-selection part branch and its single atomic part; the encoded-byte measure over the complete delivered suffix as actually projected — the workspaceContext decoration included, never a raw-only estimate; unmatched cancelled calls preserved as they stand, never fabricated results) kills the mutant that drops the pending-call check. P3 kills a page that starts at `beforeId`'s part instead of the part before it.
 
 ## 3. Resume on reattach (D2)
 
@@ -42,8 +43,8 @@
   - Verify: a store test covers the A2/A3 re-attach. It kills the mutant that leaves the transcript stale.
 - [ ] 3.4 Add property P2 (seed `0x5eed`, 500 cases).
   - Verify: it kills the mutant that trims by entry id instead of `entryOrigin`, and the mutant that resumes over a replaced memo (an interior rewrite with surviving endpoints must take the full snapshot).
-- [ ] 3.5 Add production wiring test OW1 through `ChatConnections` and a real `ChatSessionManager` over a fixture transcript, including a plain reconnect `historyFrom` older than the budgeted window start.
-  - Verify: it kills the mutant where the attach handler drops `held` and the one that drops the epoch check (M1).
+- [ ] 3.5 Add production wiring test OW1 through `ChatConnections` and a real `ChatSessionManager` over a fixture transcript, including a plain reconnect `historyFrom` older than the budgeted window start. OW1 also runs the production budget checks through the real manager: a snapshot and a `getHistoryPage` over the W17 fixture with persisted workspace contexts must return events whose `UTF-8(JSON.stringify(...))` is at most 512 KiB, with the exact selected raw ids, full metadata, and the actual `hasOlder`.
+  - Verify: it kills the mutant where the attach handler drops `held` and the one that drops the epoch check (M1); the held/resume controls and the plain reconnect lower bound stay unchanged. The planned counterfactual mutant moves the workspaceContext attachment after raw-only pricing; the response-byte and selection assertions must detect it, not the test setup.
 - [ ] 3.6 Add a store test through the real `chatHistoryPages` prepend owner (`src/client/stores/chatHistoryPages.ts`): load a page whose first folded entry spans several raw events, then re-attach with `held` (the resume trims below the new start), then load the next page.
   - Verify: the sequence asserts the page's first raw anchor — not a merged entry id — carried as `historyStartId`/`held.startId`, the page's `rawOrder` and `entryOrigin` installed in the held transcript, `seen` covering the prepended ids, the held `historyEpoch` refreshed from the page reply, and the live `throughSequence` never advanced by a prepend, with no skipped or duplicated page history. It kills the mutant that discards the page's temporary transcript metadata and uses the fresh transcript's first entry id as the start.
 

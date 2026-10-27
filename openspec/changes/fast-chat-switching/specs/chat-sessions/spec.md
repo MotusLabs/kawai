@@ -72,7 +72,7 @@ Entries SHALL NOT be removed from a transcript while it is shown. A reconnect wh
 ## ADDED Requirements
 
 ### Requirement: The history window has a size budget
-Empty eligible history SHALL yield no events; otherwise at least one part SHALL be returned. Whole units SHALL fill newest-first within 500 events/512 KiB of serialized events-array UTF-8 (envelope excluded), stopping before older-unit overflow. Only an oversized newest unit SHALL fill by quiet parts newest-first under both caps; its oversized newest part SHALL stand alone. Cuts SHALL be at part boundaries; older units SHALL NOT partly fill leftover space. Widened anchors ignore caps.
+Empty eligible history SHALL yield no events; otherwise at least one part SHALL be returned. Whole units SHALL fill newest-first within 500 events/512 KiB of serialized delivered events-array UTF-8 (envelope excluded), stopping before older-unit overflow. Only an oversized newest unit SHALL fill by quiet parts newest-first under both caps; its oversized newest part SHALL stand alone. Cuts SHALL be at part boundaries; older units SHALL NOT partly fill leftover space. Widened anchors ignore caps.
 
 #### Scenario: A busy day opens on its newest turns
 - **WHEN** a client attaches to a chat whose last 24 hours hold 2,300 events across nine turns
@@ -97,6 +97,10 @@ Empty eligible history SHALL yield no events; otherwise at least one part SHALL 
 #### Scenario: Non-ASCII text crosses the byte budget without crossing the event count
 - **WHEN** the window's events are small CJK text events forming independent quiet parts, each part within the byte budget, whose combined UTF-8 encoded size crosses 512 KiB while their code-unit count stays far below it
 - **THEN** the walk stops before the unit or part whose addition would push the encoded size past 512 KiB, with no single-part exception
+
+#### Scenario: Workspace context counts toward the delivered budget
+- **WHEN** the window's raw events serialize to 510 KiB, within the budget, and their workspace-context decoration pushes the delivered array past 512 KiB
+- **THEN** the newest whole units whose decorated serialization fits are delivered with their full metadata and the rest is left to older history, and the delivered array's UTF-8 size is at most 512 KiB
 
 ### Requirement: Reopening a held chat transfers only what changed
 On reattach to a held transcript (same page load), the server SHALL send only the events after the newest held one plus the window's new start while the history generation matches the memo and the held range verifies, and a full snapshot otherwise. The generation SHALL change on population, replacement, release, replay, and restart, never on appends. The client SHALL fold the delta and trim below the new start, matching a full attach. Expansion SHALL NOT be inferred from the held marker alone.
