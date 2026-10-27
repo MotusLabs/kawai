@@ -99,8 +99,8 @@ Empty eligible history SHALL yield no events; otherwise at least one part SHALL 
 - **THEN** the walk stops before the unit or part whose addition would push the encoded size past 512 KiB, with no single-part exception
 
 #### Scenario: Workspace context counts toward the delivered budget
-- **WHEN** the window's raw events serialize to 510 KiB, within the budget, and their workspace-context decoration pushes the delivered array past 512 KiB
-- **THEN** the newest whole units whose decorated serialization fits are delivered with their full metadata and the rest is left to older history, and the delivered array's UTF-8 size is at most 512 KiB
+- **WHEN** a budgeted attach or beforeId page has three eligible units whose raw events total about 510 KiB and whose valid persisted workspace-context decoration makes the array exceed 512 KiB, each decorated unit individually fits the byte cap, and exactly the newest two fit together under both limits
+- **THEN** the newest two units are delivered intact with their full metadata, the third remains in older history, and the delivered events-array UTF-8 size is at most 512 KiB
 
 ### Requirement: Reopening a held chat transfers only what changed
 On reattach to a held transcript (same page load), the server SHALL send only the events after the newest held one plus the window's new start while the history generation matches the memo and the held range verifies, and a full snapshot otherwise. The generation SHALL change on population, replacement, release, replay, and restart, never on appends. The client SHALL fold the delta and trim below the new start, matching a full attach. Expansion SHALL NOT be inferred from the held marker alone.
