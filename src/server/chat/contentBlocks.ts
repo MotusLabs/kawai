@@ -7,8 +7,43 @@ import type { ChatQuestion, ChatQuestionAnswer } from '../../shared/chat'
 const ASK_USER_QUESTION_TOOL = 'AskUserQuestion'
 export { ASK_USER_QUESTION_TOOL }
 
-/** Claude Code's AskUserQuestion convention: the recommendation is the label suffix. */
-const RECOMMENDED_MARKER = /\(recommended\)\s*$/i
+// Bounded recommendation grammar (informal-question-recommendations D1). Match only
+// explicit annotations, never arbitrary occurrences of "recommend" in prose.
+// A dash-like suffix separator must start the field or follow whitespace — a
+// hyphen inside a word ("not-recommended") is prose, never an annotation (B1).
+const RECOMMENDATION_PHRASE = '(?:recommended|i recom{1,2}end this|my recommendation)'
+const WHOLE_RECOMMENDATION = new RegExp(String.raw`^[\p{P} ]*${RECOMMENDATION_PHRASE}[\p{P} ]*$`, 'u')
+const LEADING_RECOMMENDATION = new RegExp(String.raw`^[\p{P} ]*${RECOMMENDATION_PHRASE}[\p{Pe}\p{Pf}"' ]*[.!?:;,–—-] *\S`, 'u')
+const TRAILING_RECOMMENDATION = new RegExp(String.raw`(?:[(\[] *${RECOMMENDATION_PHRASE} *[)\]]|(?:(?:^|\s)[–—-]|:) *[\p{P} ]*${RECOMMENDATION_PHRASE})[\p{P} ]*$`, 'u')
+const NEGATED_RECOMMENDATION = /\b(?:(?:not|never|non)[\s–—-]+(?:recommended|my recommendation)|i (?:do not|don['’]t|never|would not|wouldn['’]t|cannot|can['’]t) recom{1,2}end this)\b/
+
+function recommendationText(value: unknown): string {
+  return typeof value === 'string'
+    ? value.toLowerCase().replace(/[*_`]/g, '').replace(/\s+/g, ' ').trim()
+    : ''
+}
+
+function hasRecommendation(text: string): boolean {
+  return WHOLE_RECOMMENDATION.test(text) ||
+    LEADING_RECOMMENDATION.test(text) ||
+    TRAILING_RECOMMENDATION.test(text)
+}
+
+function negatesRecommendation(text: string): boolean {
+  // Wrapping a negative marker in brackets does not turn it positive:
+  // "Not (Recommended)" must veto the trailing annotation too. A hyphen or
+  // dash joins "not"/"non" to the phrase just like a space (B1).
+  return NEGATED_RECOMMENDATION.test(text.replace(/[()[\]]/g, ' ').replace(/ +/g, ' '))
+}
+
+function isRecommended(option: ChatQuestion['options'][number]): boolean {
+  const label = recommendationText(option.label)
+  const description = recommendationText(option.description)
+  // A disclaimer wins over a positive annotation in either field.
+  return !negatesRecommendation(label) &&
+    !negatesRecommendation(description) &&
+    (hasRecommendation(label) || hasRecommendation(description))
+}
 
 /** Flatten a tool_result content value into display text. */
 export function toolResultText(content: unknown): string {
@@ -69,10 +104,10 @@ export function parseQuestions(
 
 /**
  * The recommended answers of a parsed AskUserQuestion request, or null when
- * any question lacks one (question-auto-answer D1): a deadline exists only
- * when every question marks an option whose label ends with `(Recommended)`
- * (case-insensitive, trailing whitespace allowed). Single-select takes the
- * first match, multi-select every match; labels are returned verbatim so
+ * any question lacks one (informal-question-recommendations D1): a deadline exists only
+ * when every question marks an option in its label or description using the
+ * bounded grammar above. Single-select takes the first match, multi-select
+ * every match; labels are returned verbatim so
  * `validateAnswers` accepts them.
  */
 export function recommendedAnswers(
@@ -81,7 +116,7 @@ export function recommendedAnswers(
   const answers: Record<string, ChatQuestionAnswer> = {}
   for (const question of questions) {
     const recommended = question.options
-      .filter((option) => RECOMMENDED_MARKER.test(option.label))
+      .filter(isRecommended)
       .map((option) => option.label)
     if (recommended.length === 0) return null
     answers[question.question] = question.multiSelect
