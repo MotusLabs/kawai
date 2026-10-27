@@ -111,7 +111,7 @@ function parseDocument(raw: string): Entries {
   if (doc.version !== 1) return malformed()
   const entries = doc.entries
   if (typeof entries !== 'object' || entries === null || Array.isArray(entries)) return malformed()
-  const out: Entries = {}
+  const out = Object.create(null) as Entries
   for (const [name, entry] of Object.entries(entries)) {
     if (!STORE_NAME.test(name)) return malformed()
     if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return malformed()
@@ -242,11 +242,9 @@ export class CredentialStore {
     this.retain = options.retainSecretNames
   }
 
-  /**
-   * Create a missing parent directory (0700, pinned past the umask) and
-   * fsync the nearest existing ancestor before claiming durable success
-   * below it. A stable symlinked parent (a HOME alias) is legitimate.
-   */
+  /** Create a missing parent (0700, pinned past the umask) and fsync the
+   * nearest existing ancestor. A stable symlinked parent (HOME alias) is
+   * legitimate. Every raw fs error here reports as write-failed. */
   private ensureParent(): Stats {
     const dir = path.dirname(this.storePath)
     try {
@@ -257,12 +255,17 @@ export class CredentialStore {
       if (err instanceof CredentialStoreError) throw err
       if (!isMissing(err)) throw new CredentialStoreError('write-failed')
     }
-    this.deps.mkdirSync(dir, { recursive: true, mode: 0o700 })
-    const dfd = this.deps.openSync(dir, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY)
     try {
-      this.deps.fchmodSync(dfd, 0o700)
-    } finally {
-      try { this.deps.closeSync(dfd) } catch { /* best effort */ }
+      this.deps.mkdirSync(dir, { recursive: true, mode: 0o700 })
+      const dfd = this.deps.openSync(dir, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY)
+      try {
+        this.deps.fchmodSync(dfd, 0o700)
+      } finally {
+        try { this.deps.closeSync(dfd) } catch { /* best effort */ }
+      }
+    } catch (err) {
+      if (err instanceof CredentialStoreError) throw err
+      throw new CredentialStoreError('write-failed')
     }
     let anc = path.dirname(dir)
     for (;;) {
@@ -278,16 +281,14 @@ export class CredentialStore {
     }
   }
 
-  /**
-   * One gated, stamp-checked load. Gates and identity always run; the
-   * mtime/size stamp only decides whether the file is re-read or a shared
-   * cache entry may be served.
-   */
+  /** One gated, stamp-checked load. Gates and identity always run; the
+   * mtime/size stamp only decides re-read versus a shared cache hit. */
   private load(): Loaded {
     let pst: Stats
     try {
       pst = this.deps.statSync(path.dirname(this.storePath))
-    } catch {
+    } catch (err) {
+      if (!isMissing(err)) return { state: 'failed', reason: 'unreadable' }
       return { state: 'missing' }
     }
     if (!pst.isDirectory()) return { state: 'failed', reason: 'unreadable' }
@@ -333,34 +334,28 @@ export class CredentialStore {
     if (loaded.state === 'ok') this.fillCache(loaded.entries)
   }
 
-  /**
-   * Serialized read-modify-write: acquire the shared queue first, THEN read
-   * the latest bytes. A refused load (malformed, unreadable, unsafe) leaves
-   * the prior bytes standing and refuses the mutation; a missing file
-   * starts from an empty document.
-   */
+  /** Serialized RMW: queue first, then fresh bytes. A refused load keeps the
+   * prior bytes and refuses; a missing file starts from an empty document. */
   private writeEntries(mutate: (entries: Entries) => void): CredentialSetOutcome {
     const loaded = this.load()
     let entries: Entries
-    if (loaded.state === 'ok') entries = { ...loaded.entries }
-    else if (loaded.state === 'missing') entries = {}
+    if (loaded.state === 'ok') entries = Object.assign(Object.create(null) as Entries, loaded.entries)
+    else if (loaded.state === 'missing') entries = Object.create(null) as Entries
     else throw new CredentialStoreError(loaded.reason)
     mutate(entries)
     return this.atomicWrite(entries)
   }
 
-  /**
-   * Temp O_EXCL|O_NOFOLLOW at 0600 (fchmod pins it past the umask) in the
-   * same directory, write, fsync, close, rename. The rename is the commit
-   * point: before it, a failure keeps the prior bytes and removes the
-   * temp; after it, a directory-fsync failure reports applied but not
-   * durable — new content stands, no rollback, no retry.
-   */
+  /** Temp O_EXCL|O_NOFOLLOW at 0600, write, fsync, close, rename = commit
+   * point. Before it a failure keeps prior bytes and removes the temp (each
+   * descriptor closed exactly once); after it a directory-fsync failure
+   * reports applied but not durable — no rollback, no retry. */
   private atomicWrite(entries: Entries): CredentialSetOutcome {
     const dir = path.dirname(this.storePath)
     const payload = Buffer.from(JSON.stringify({ version: 1, entries }), 'utf8')
     const tmp = path.join(dir, `.${path.basename(this.storePath)}.tmp-${process.pid}-${tmpSeq++}`)
     let fd: number
+    let closed = false
     try {
       fd = this.deps.openSync(
         tmp,
@@ -378,14 +373,15 @@ export class CredentialStore {
       this.deps.fchmodSync(fd, 0o600)
       this.deps.fsyncSync(fd)
       this.deps.closeSync(fd)
+      closed = true
     } catch {
-      this.discardTemp(fd, tmp)
+      this.discardTemp(fd, tmp, closed)
       throw new CredentialStoreError('write-failed')
     }
     try {
       this.deps.renameSync(tmp, this.storePath)
     } catch {
-      this.discardTemp(fd, tmp)
+      this.discardTemp(fd, tmp, closed)
       throw new CredentialStoreError('write-failed')
     }
     let durable = true
@@ -399,30 +395,30 @@ export class CredentialStore {
     return { applied: true, durable }
   }
 
-  private discardTemp(fd: number, tmp: string): void {
-    try { this.deps.closeSync(fd) } catch { /* already closed */ }
+  private discardTemp(fd: number, tmp: string, closed: boolean): void {
+    if (!closed) {
+      try { this.deps.closeSync(fd) } catch { /* already closed */ }
+    }
     try { this.deps.unlinkSync(tmp) } catch { /* nothing safe to report */ }
   }
 
-  /**
-   * Store a value: '' is blank (exported empty at launch), non-empty is
-   * set. Validation runs first — before queue and retain collaborator — so
-   * a refusal has had no side effect. Names are admitted per kind (legacy
-   * shape for every entry, catalog pattern additionally for a secret
-   * source, never silently uppercased). No entry-count or value-length cap
-   * exists here; the legacy validator's limits stay at the legacy input
-   * boundary.
-   */
+  /** Store a value: '' is blank, non-empty is set. Validation runs first —
+   * admission, kind, value, NUL, catalog shape, and collaborator presence —
+   * before queue, parent creation, and the file, so a refusal has had no
+   * side effect. Names per kind, never silently uppercased; no count/length
+   * caps here (legacy limits stay at the legacy input boundary). */
   async set(name: string, value: string, kind: CredentialKind): Promise<CredentialSetOutcome> {
     if (typeof name !== 'string' || !STORE_NAME.test(name)) throw new CredentialStoreError('invalid-name')
     if (!KINDS.includes(kind)) throw new CredentialStoreError('invalid-kind')
     if (typeof value !== 'string') throw new CredentialStoreError('invalid-value')
     if (value.includes('\0')) throw new CredentialStoreError('value-nul')
     if (kind === 'secret-source' && !CATALOG_NAME.test(name)) throw new CredentialStoreError('name-not-catalog')
+    if (kind === 'secret-source' && !this.retain) {
+      throw new CredentialStoreError('retain-collaborator-required')
+    }
     const owner = ownerFor(this.deps, this.ensureParent(), this.storePath)
     return enqueue(owner, async () => {
-      if (kind === 'secret-source') {
-        if (!this.retain) throw new CredentialStoreError('retain-collaborator-required')
+      if (kind === 'secret-source' && this.retain) {
         try {
           await this.retain.retainSecretName(name)
         } catch {
@@ -442,14 +438,14 @@ export class CredentialStore {
     return { ok: false, reason: loaded.state === 'missing' ? 'missing' : loaded.reason }
   }
 
-  /**
-   * Trusted internal read — the only surface returning a stored value. When
-   * the store is not readable the entry reads as absent and lower sources
-   * compose; status() carries the reason. An unset key is undefined.
-   */
+  /** Trusted internal read — the only value-returning surface. Own entries
+   * only (inherited names never resolve); absent or unreadable reads as
+   * absent with status() carrying the reason. */
   resolve(name: string): string | undefined {
     const loaded = this.load()
-    return loaded.state === 'ok' ? loaded.entries[name]?.value : undefined
+    return loaded.state === 'ok' && Object.hasOwn(loaded.entries, name)
+      ? loaded.entries[name].value
+      : undefined
   }
 
   /** Value-free metadata: name, kind, and set/blank per entry, plus status. */

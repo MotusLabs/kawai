@@ -424,3 +424,157 @@ describe('missing parents', () => {
     expect(store.resolve('a')).toBe('a')
   })
 })
+
+// CORE R3 corrections: own-entry preservation (B-1), fixed ensureParent boundary
+// (B-2), missing-not-unreadable parents (N-1), single descriptor close (N-2),
+// and refuse-before-parent-creation (N-3).
+describe('B-1 own-entry preservation (admit reserved names)', () => {
+  test('__proto__ set roundtrips through disk, list, resolve, and a fresh factory', async () => {
+    const store = createCredentialStore(sp())
+    expect(await store.set('__proto__', 'v1', 'launch-env')).toEqual({
+      applied: true,
+      durable: true,
+    })
+    const parsed = JSON.parse(realFs.readFileSync(sp(), 'utf8'))
+    expect(Object.keys(parsed.entries)).toContain('__proto__')
+    expect(parsed.entries['__proto__']).toEqual({ kind: 'launch-env', value: 'v1' })
+    expect(store.list().entries.map((entry) => entry.name)).toContain('__proto__')
+    expect(store.resolve('__proto__')).toBe('v1')
+    const fresh = createCredentialStore(sp())
+    expect(fresh.resolve('__proto__')).toBe('v1')
+    expect(fresh.list().entries.map((entry) => entry.name)).toContain('__proto__')
+  })
+
+  test('a stored own __proto__ survives an unrelated set', async () => {
+    const raw =
+      '{"version":1,"entries":{"__proto__":{"kind":"launch-env","value":"p"},"b":{"kind":"launch-env","value":"q"}}}'
+    realFs.writeFileSync(sp(), raw)
+    realFs.chmodSync(sp(), 0o600)
+    const store = createCredentialStore(sp())
+    expect(store.status()).toEqual({ ok: true })
+    expect(store.resolve('__proto__')).toBe('p')
+    expect((await store.set('c', 'r', 'launch-env')).applied).toBe(true)
+    const parsed = JSON.parse(realFs.readFileSync(sp(), 'utf8'))
+    expect(Object.keys(parsed.entries).sort()).toEqual(['__proto__', 'b', 'c'])
+    expect(parsed.entries['__proto__']).toEqual({ kind: 'launch-env', value: 'p' })
+    expect(store.resolve('__proto__')).toBe('p')
+    expect(store.list().entries.map((entry) => entry.name).sort()).toEqual([
+      '__proto__',
+      'b',
+      'c',
+    ])
+  })
+
+  test('constructor and toString control keys roundtrip as own entries', async () => {
+    const store = createCredentialStore(sp())
+    expect((await store.set('constructor', 'cv', 'launch-env')).applied).toBe(true)
+    expect((await store.set('toString', 'tv', 'launch-env')).applied).toBe(true)
+    const parsed = JSON.parse(realFs.readFileSync(sp(), 'utf8'))
+    expect(parsed.entries.constructor).toEqual({ kind: 'launch-env', value: 'cv' })
+    expect(parsed.entries.toString).toEqual({ kind: 'launch-env', value: 'tv' })
+    const fresh = createCredentialStore(sp())
+    expect(fresh.resolve('constructor')).toBe('cv')
+    expect(fresh.resolve('toString')).toBe('tv')
+  })
+
+  test('absent inherited names never resolve', async () => {
+    const store = createCredentialStore(sp())
+    expect((await store.set('a', '1', 'launch-env')).applied).toBe(true)
+    expect(store.resolve('toString')).toBeUndefined()
+    expect(store.resolve('constructor')).toBeUndefined()
+    expect(store.resolve('valueOf')).toBeUndefined()
+    expect(store.resolve('hasOwnProperty')).toBeUndefined()
+    expect(store.list().entries.map((entry) => entry.name)).toEqual(['a'])
+  })
+})
+
+describe('B-2 fixed error boundary at ensureParent', () => {
+  test('a parent that is a regular file refuses write-failed with no path leakage', async () => {
+    realFs.writeFileSync(path.join(root, 'blocker'), 'x')
+    const store = createCredentialStore(path.join(root, 'blocker', 'credentials.json'))
+    await expectCodeAsync(store.set('a', 'secret-value', 'launch-env'), 'write-failed')
+  })
+
+  test('a raw mkdir failure on an unwritable ancestor is wrapped as write-failed', async () => {
+    if (typeof process.geteuid === 'function' && process.geteuid() === 0) {
+      return // stated skip: root bypasses directory permissions
+    }
+    realFs.chmodSync(root, 0o500)
+    try {
+      const store = createCredentialStore(path.join(root, 'missing', 'credentials.json'))
+      try {
+        await store.set('a', 'v', 'launch-env')
+        throw new Error('expected a refusal')
+      } catch (err) {
+        expect(err).toBeInstanceOf(CredentialStoreError)
+        expect((err as CredentialStoreError).code).toBe('write-failed')
+        expect((err as CredentialStoreError).message).toBe('credential store: write-failed')
+        expect((err as CredentialStoreError).message).not.toContain(root)
+      }
+    } finally {
+      realFs.chmodSync(root, 0o700)
+    }
+  })
+})
+
+describe('N-1 missing is not unreadable', () => {
+  test('an unreadable parent reads unreadable and mutations refuse', async () => {
+    if (typeof process.geteuid === 'function' && process.geteuid() === 0) {
+      return // stated skip: root bypasses directory permissions
+    }
+    // The store path sits behind an unreadable ancestor so the parent stat
+    // itself fails with EACCES (this host stats a directly-0000 parent).
+    const sealed = path.join(root, 'sealed')
+    realFs.mkdirSync(sealed)
+    const store = createCredentialStore(path.join(sealed, 'sub', 'credentials.json'))
+    realFs.chmodSync(sealed, 0o000)
+    try {
+      expect(store.status()).toEqual({ ok: false, reason: 'unreadable' })
+      await expectCodeAsync(store.set('a', 'v', 'launch-env'), 'write-failed')
+      expect(realFs.existsSync(path.join(sealed, 'sub'))).toBe(false)
+    } finally {
+      realFs.chmodSync(sealed, 0o700)
+    }
+  })
+})
+
+describe('N-2 descriptor ownership', () => {
+  test('a rename failure closes the temp descriptor exactly once', async () => {
+    const raw = '{"version":1,"entries":{"old":{"kind":"launch-env","value":"o"}}}'
+    realFs.writeFileSync(sp(), raw)
+    realFs.chmodSync(sp(), 0o600)
+    const tempFds = new Set<number>()
+    const closesOfTemp: number[] = []
+    let renames = 0
+    const deps = {
+      openSync: (target: Parameters<typeof realFs.openSync>[0], flags: number, ...rest: unknown[]) => {
+        const fd = (realFs.openSync as (...args: unknown[]) => number)(target, flags, ...rest)
+        if (String(target).includes('.tmp-')) tempFds.add(fd)
+        return fd
+      },
+      closeSync: (fd: number) => {
+        if (tempFds.has(fd)) closesOfTemp.push(fd)
+        realFs.closeSync(fd)
+      },
+      renameSync: (from: Parameters<typeof realFs.renameSync>[0], to: Parameters<typeof realFs.renameSync>[1]) => {
+        renames += 1
+        if (renames === 1) throw new Error('injected rename failure')
+        return realFs.renameSync(from, to)
+      },
+    } as unknown as Partial<import('../chat/credentialStore').CredentialFsDeps>
+    const store = createCredentialStore(sp(), { deps })
+    await expectCodeAsync(store.set('a', 'v', 'launch-env'), 'write-failed')
+    expect(closesOfTemp.length).toBe(1)
+    expect(realFs.readFileSync(sp(), 'utf8')).toBe(raw)
+    expect(realFs.readdirSync(root).filter((name) => name.includes('.tmp-'))).toEqual([])
+  })
+})
+
+describe('N-3 refuse before parent creation', () => {
+  test('a missing collaborator with an absent parent leaves the parent absent', async () => {
+    const store = createCredentialStore(path.join(root, 'noretain', 'q', 'credentials.json'))
+    await expectCodeAsync(store.set('SECRET_X', 'v', 'secret-source'), 'retain-collaborator-required')
+    expect(realFs.existsSync(path.join(root, 'noretain'))).toBe(false)
+  })
+})
+
