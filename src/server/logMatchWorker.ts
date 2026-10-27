@@ -9,6 +9,7 @@ import {
   isCodexExec,
   isCodexSubagent,
 } from './logDiscovery'
+import { LogExclusion } from './logExclusion'
 import {
   DEFAULT_SCROLLBACK_LINES,
   createExactMatchProfiler,
@@ -52,7 +53,15 @@ export async function handleMatchWorkerRequest(
     const search = payload.search ?? {}
     const logDirs = payload.logDirs ?? getLogSearchDirs()
     const normalizedLogDirs = logDirs.map((logDir) => path.resolve(logDir))
-    const excludeSessionIds = new Set(payload.excludeSessionIds ?? [])
+    const orphanCandidates = payload.orphanCandidates ?? []
+    const lastMessageCandidates = payload.lastMessageCandidates ?? []
+    // Design D1: one staged verdict per path for the whole request, over
+    // every stored id the request carries for it — known, orphan, backfill.
+    const exclusion = new LogExclusion(payload.excludeSessionIds, [
+      ...(payload.knownSessions ?? []),
+      ...orphanCandidates,
+      ...lastMessageCandidates,
+    ])
     let entries: LogEntrySnapshot[]
     let scanMs = 0
     let sortMs = 0
@@ -72,12 +81,12 @@ export async function handleMatchWorkerRequest(
       entries = collectLogEntriesForPaths(
         validPaths,
         payload.knownSessions ?? [],
-        excludeSessionIds
+        exclusion
       )
     } else {
       const batch = collectLogEntryBatch(payload.maxLogsPerPoll, {
         knownSessions: payload.knownSessions,
-        excludeSessionIds,
+        excludeSessionIds: exclusion,
       })
       entries = batch.entries
       scanMs = batch.scanMs
@@ -148,12 +157,12 @@ export async function handleMatchWorkerRequest(
       })
     }
 
-    const orphanCandidates = payload.orphanCandidates ?? []
     if (payload.forceOrphanRematch && orphanCandidates.length > 0) {
       const skipPatterns = payload.skipMatchingPatterns ?? []
       orphanEntries = buildOrphanEntries(orphanCandidates, entries, {
         minTokens: payload.minTokensForMatch ?? 0,
         skipPatterns,
+        exclusion,
       })
       if (orphanEntries.length > 0) {
         const startupRgThreads = Math.max(
@@ -180,18 +189,21 @@ export async function handleMatchWorkerRequest(
       }
     }
 
-    const lastMessageCandidates = payload.lastMessageCandidates ?? []
     if (lastMessageCandidates.length > 0) {
       const lastMessageEntries = buildLastMessageEntries(
         lastMessageCandidates,
         entries,
-        orphanEntries
+        orphanEntries,
+        exclusion
       )
       if (lastMessageEntries.length > 0) {
         entries = [...entries, ...lastMessageEntries]
       }
     }
 
+    // Every path here already holds its verdict, so this reads nothing new.
+    entries = entries.filter((entry) => !exclusion.excludes(entry.logPath))
+    orphanEntries = orphanEntries.filter((entry) => !exclusion.excludes(entry.logPath))
     for (const entry of entries) {
       attachLastUserMessage(entry, sessionByLogPath)
     }
@@ -227,12 +239,13 @@ export async function handleMatchWorkerRequest(
 interface BuildOrphanEntriesOptions {
   minTokens: number
   skipPatterns: string[]
+  exclusion: LogExclusion
 }
 
 function buildOrphanEntries(
   candidates: OrphanCandidate[],
   _entries: LogEntrySnapshot[],
-  { minTokens, skipPatterns }: BuildOrphanEntriesOptions
+  { minTokens, skipPatterns, exclusion }: BuildOrphanEntriesOptions
 ): LogEntrySnapshot[] {
   // Note: We intentionally don't skip logs that are in `entries`.
   // For orphan rematch, we want to match ALL orphan candidates to windows,
@@ -243,6 +256,7 @@ function buildOrphanEntries(
   for (const record of candidates) {
     const logPath = record.logFilePath
     if (!logPath) continue
+    if (exclusion.excludes(logPath)) continue
 
     const agentType = record.agentType
     if (agentType === 'codex' && isCodexSubagent(logPath)) {
@@ -303,7 +317,8 @@ function buildOrphanEntries(
 function buildLastMessageEntries(
   candidates: LastMessageCandidate[],
   entries: LogEntrySnapshot[],
-  orphanEntries: LogEntrySnapshot[]
+  orphanEntries: LogEntrySnapshot[],
+  exclusion: LogExclusion
 ): LogEntrySnapshot[] {
   const existingLogPaths = new Set(
     [...entries, ...orphanEntries].map((entry) => entry.logPath)
@@ -313,6 +328,7 @@ function buildLastMessageEntries(
   for (const record of candidates) {
     const logPath = record.logFilePath
     if (!logPath || existingLogPaths.has(logPath)) continue
+    if (exclusion.excludes(logPath)) continue
 
     const resolvedAgentType =
       record.agentType ?? inferAgentTypeFromPath(logPath) ?? null

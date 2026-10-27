@@ -1,4 +1,3 @@
-import path from 'node:path'
 import { performance } from 'node:perf_hooks'
 import type { AgentType } from '../shared/types'
 import {
@@ -11,6 +10,7 @@ import {
   isCodexSubagent,
   scanAllLogDirs,
 } from './logDiscovery'
+import { LogExclusion } from './logExclusion'
 import { getLogTokenCount } from './logmatch'
 
 export interface LogEntrySnapshot {
@@ -49,9 +49,10 @@ export interface CollectLogEntryBatchOptions {
   knownSessions?: KnownSession[]
   /**
    * Chat-session SDK ids (design D6): their transcripts are not discovery
-   * material — one chat session, one UI entry.
+   * material — one chat session, one UI entry. A `LogExclusion` carries the
+   * request's one staged verdict per path (bounded-log-reads D1).
    */
-  excludeSessionIds?: Set<string>
+  excludeSessionIds?: Set<string> | LogExclusion
 }
 
 // Shared per-file enrichment used by full scans and pre-filtered path batches.
@@ -60,7 +61,9 @@ export function enrichLogEntry(
   mtime: number,
   birthtime: number,
   size: number,
-  knownByPath: Map<string, KnownSession>
+  knownByPath: Map<string, KnownSession>,
+  /** The head id stage H already parsed, so the head is not parsed twice. */
+  headSessionId?: string | null
 ): LogEntrySnapshot {
   const known = knownByPath.get(logPath)
   if (known) {
@@ -91,7 +94,7 @@ export function enrichLogEntry(
 
   // Unknown log - do full enrichment (read file contents)
   const agentType = inferAgentTypeFromPath(logPath)
-  const sessionId = extractSessionId(logPath)
+  const sessionId = headSessionId !== undefined ? headSessionId : extractSessionId(logPath)
   const projectPath = extractProjectPath(logPath)
   const slug = agentType === 'claude' ? extractSlug(logPath) : null
   const codexSubagent = agentType === 'codex' ? isCodexSubagent(logPath) : false
@@ -150,17 +153,22 @@ export function collectLogEntryBatch(
   const limited = timeEntries.slice(0, Math.max(1, maxLogs))
   const sortMs = performance.now() - sortStart
 
-  const entries = limited
-    .map((entry) =>
-      enrichLogEntry(
-        entry.logPath,
-        entry.mtime,
-        entry.birthtime,
-        entry.size,
-        knownByPath
-      )
-    )
-    .filter((entry) => !isExcludedChatLog(entry, excludeSessionIds))
+  // Excluded logs still take slots in the slice; the check runs before any
+  // other helper or token read.
+  const exclusion = toLogExclusion(excludeSessionIds, knownSessions)
+  const entries: LogEntrySnapshot[] = []
+  for (const entry of limited) {
+    const verdict = exclusion.check(entry.logPath)
+    if (verdict.excluded) continue
+    entries.push(enrichLogEntry(
+      entry.logPath,
+      entry.mtime,
+      entry.birthtime,
+      entry.size,
+      knownByPath,
+      verdict.headSessionId
+    ))
+  }
 
   return { entries, scanMs, sortMs }
 }
@@ -168,45 +176,37 @@ export function collectLogEntryBatch(
 export function collectLogEntriesForPaths(
   logPaths: string[],
   knownSessions: KnownSession[] = [],
-  excludeSessionIds?: Set<string>
+  excludeSessionIds?: Set<string> | LogExclusion
 ): LogEntrySnapshot[] {
   const knownByPath = new Map(
     knownSessions.map((session) => [session.logFilePath, session])
   )
+  const exclusion = toLogExclusion(excludeSessionIds, knownSessions)
   const entries: LogEntrySnapshot[] = []
 
   for (const logPath of new Set(logPaths)) {
     const times = getLogTimes(logPath)
     if (!times) continue
-    const entry = enrichLogEntry(
+    const verdict = exclusion.check(logPath)
+    if (verdict.excluded) continue
+    entries.push(enrichLogEntry(
       logPath,
       times.mtime.getTime(),
       times.birthtime.getTime(),
       times.size,
-      knownByPath
-    )
-    if (isExcludedChatLog(entry, excludeSessionIds)) continue
-    entries.push(entry)
+      knownByPath,
+      verdict.headSessionId
+    ))
   }
 
   return entries
 }
 
-/** A Codex rollout file name's thread id: `rollout-<time>-<thread uuid>.jsonl`. */
-const ROLLOUT_THREAD_ID = /^rollout-.+-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i
-
-/**
- * Design D6: chat transcripts are excluded from log discovery by SDK id. A
- * Codex chat's rollout (codex-chat-sessions D8) is excluded by its
- * session_meta id or by the thread id its file name carries — their
- * equality is unverified, so either one suffices.
- */
-function isExcludedChatLog(
-  entry: LogEntrySnapshot,
-  excludeSessionIds?: Set<string>
-): boolean {
-  if (!excludeSessionIds?.size) return false
-  if (entry.sessionId && excludeSessionIds.has(entry.sessionId)) return true
-  const threadId = ROLLOUT_THREAD_ID.exec(path.basename(entry.logPath))?.[1]
-  return Boolean(threadId && excludeSessionIds.has(threadId))
+function toLogExclusion(
+  excludeSessionIds: Set<string> | LogExclusion | undefined,
+  knownSessions: KnownSession[]
+): LogExclusion {
+  return excludeSessionIds instanceof LogExclusion
+    ? excludeSessionIds
+    : new LogExclusion(excludeSessionIds, knownSessions)
 }
