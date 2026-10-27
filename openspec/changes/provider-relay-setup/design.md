@@ -54,12 +54,31 @@ Root cause of the reported incidents, in code terms:
 launch, overriding lower sources, like a catalog env blank today; blank is
 valid for both kinds and never reads as unset), or the entry is absent
 (**unset** — lower sources show through; the UI's Clear removes the entry).
-`NAME` matches the catalog credential-name pattern `^[A-Z_][A-Z0-9_]*$`; the
-store keeps a local copy of that pattern with a catalog-equivalence test
-(the module-private regex is not exported, and no shared source changes
-here). Values persist byte-for-byte, without coercion. An unsupported
-`version`, an unknown `kind`, or an invalid name or entry shape is
-**malformed** — reported and refused, never salvaged into a default (below).
+Names are admitted per kind. A store NAME — so every migrated legacy
+Settings entry — keeps the legacy Settings name shape
+`^[A-Za-z_][A-Za-z0-9_]*$`: mixed case is valid, and legacy and seed
+names (`http_proxy` and its kind) are stored and delivered unchanged,
+never case-converted, renamed, or dropped. A `secret-source` entry
+additionally requires the catalog binding pattern `^[A-Z_][A-Z0-9_]*$`;
+reclassifying a launch-env entry whose name fails that pattern to a
+secret source refuses with a fixed reason before any file change or
+retained-name collaborator call — never silently uppercased. The store
+keeps local copies of both patterns with separated equivalence tests
+(the secret-source rule against the catalog pattern; the store-wide rule
+against the legacy `chatProviderEnv` validator — the module-private
+regex is not exported, and no shared source changes here). Values
+persist byte-for-byte, without coercion, and the store invents no new
+admission cap: no entry count, no value-length bound (no 32-entry or
+4096-character cap) — the legacy Settings validator's limits stand
+unchanged at the legacy input boundary, and the §2.2 migration imports
+every valid legacy entry even into a store already holding additional
+disjoint entries. A set or replace carrying a NUL character in the value
+refuses with a fixed reason before any side effect, for both kinds, and
+a reclassification refuses when its supplied or current candidate value
+carries one. An unsupported `version`, an unknown `kind`, an invalid
+name or entry shape for its kind, or a stored value carrying NUL is
+**malformed** — reported and refused, never salvaged into a default
+(below).
 The module (`src/server/chat/credentialStore.ts`) creates the file with mode
 0600, never widens permissions on an existing file, refuses symlinks, writes
 atomically (temp file `O_EXCL|O_NOFOLLOW` 0600 plus explicit fchmod, in the
@@ -893,8 +912,11 @@ assigns each to a task.
    cache invalidation and verified reload on applied-but-not-durable, fixed
    value-free error text (no parser message or cause chain), the required
    retain-name collaborator refusing secret-source mutations before any
-   file change, and the local name-pattern duplicate with its
-   catalog-equivalence test — plus the crash-safe migration per D1's
+   file change, the local name-pattern duplicates with their separated
+   equivalence tests (the secret-source catalog rule; the legacy
+   store-wide shape) and the NUL boundary (write refusal for both kinds,
+   a stored NUL reading malformed) — plus the crash-safe migration per
+   D1's
    table: the durable store-file write lands **before** the one SQLite
    transaction that deletes the map row and commits the stamp, and that
    transaction runs only on a durable acknowledgement (the file write is

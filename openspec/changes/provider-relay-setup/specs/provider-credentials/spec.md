@@ -3,9 +3,9 @@
 ### Requirement: Imported credentials live in the server-owned store
 Credential values SHALL be stored in one user-level file
 (`~/.kawai/credentials.json`, mode 0600, never widened) as versioned
-entries carrying a kind (secret-source, delivered only through a binding;
-or launch-env, delivered unchanged) and a value set, blank, or absent.
-Values SHALL NOT be stored in SQLite, repository files, or backups taken
+entries carrying a kind (secret-source, binding-delivered; or launch-env,
+delivered unchanged), a kind-compatible name, and a value set, blank, or
+absent. Values SHALL NOT be stored in SQLite, repository files, or backups taken
 after the migration commit. An unreadable, unsafe, or malformed store is
 reported and reads as absent for resolution — lower sources compose.
 
@@ -20,6 +20,18 @@ reported and reads as absent for resolution — lower sources compose.
 #### Scenario: Invalid store is never salvaged
 - **WHEN** the document carries an unsupported version, an unknown kind, or an invalid variable name or entry shape
 - **THEN** the store reads as malformed — reported in the listing, resolution composing the lower sources — and mutations refuse; no salvage pass rewrites the prior bytes
+
+#### Scenario: Legacy launch-env names are preserved
+- **WHEN** a launch-env entry is set, imported, or migrated under a valid mixed-case legacy name such as `http_proxy`
+- **THEN** the store keeps and delivers it under that name unchanged — never case-converted, renamed, or dropped — and no new entry-count or value-length cap rejects it
+
+#### Scenario: Secret sources require catalog-compatible names
+- **WHEN** an entry is set or reclassified as a secret source under a name outside the catalog binding pattern
+- **THEN** the write refuses with a fixed reason before any file change or registry call, and a stored secret-source name outside that pattern reads as malformed
+
+#### Scenario: NUL never enters or persists in the store
+- **WHEN** a set or reclassification supplies a value containing a NUL character
+- **THEN** the mutation refuses with a fixed reason before any side effect, for both kinds, and a stored value carrying NUL reads as malformed
 
 #### Scenario: Unsafe permissions refuse every access
 - **WHEN** the file carries group or other permission bits
