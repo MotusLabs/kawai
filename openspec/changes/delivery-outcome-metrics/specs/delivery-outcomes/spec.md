@@ -74,8 +74,12 @@ A commit SHALL land at the first first-parent commit Fk of the default branch wh
 - **THEN** F2's membership is unknown in both the current window and its baseline, it is excluded from both counts and recorded as incomplete evidence, and it is contained by T
 
 #### Scenario: Unmerged result
-- **WHEN** a result's commit exists only on its task branch
+- **WHEN** a result names a full id that exists only on its task branch, and a passing check of the same result names that id
 - **THEN** it counts as not landed
+
+#### Scenario: Unmerged result without a passing check
+- **WHEN** a result names a full id that exists only on its task branch, and its check is pending or absent
+- **THEN** the commit is unresolvable and excluded, never landed and never known not landed
 
 ### Requirement: Result commits are identified by full literal ids only
 Only a full literal object id of the repository's object format SHALL identify a result commit. A literal off the default branch's history SHALL be known, and not landed, only with a passing check of the same result naming that literal and id. Abbreviations, symbolic names, other lengths, and contradicted or unchecked off-history literals SHALL be unresolvable: never landed, never known not landed, and excluded with a count. No prefix search SHALL run.
@@ -89,11 +93,15 @@ Only a full literal object id of the repository's object format SHALL identify a
 - **THEN** the commit is known and not landed
 
 ### Requirement: Delivery facts state their freshness
-Facts SHALL be identified by repository, object format, head, and reader version, never fetch time. At every live return, cached or not, the state SHALL be projected from the live ref, first match: unavailable; behind (another head named); stale (`FETCH_HEAD` older than 24 hours or unknown); refresh-failed (the newest read of the named head failed); expired; else current. Every surface SHALL show it. A stored report SHALL keep its frozen state.
+Facts SHALL be identified by repository, object format, head, and reader version, never fetch time. At every live return, cached or not, state SHALL be projected from the live ref, first match: unavailable; behind (another head named); stale (`FETCH_HEAD` aged 24 hours or more, or unknown); refresh-failed (defensive only); expired; else current. A needed head's failed read SHALL be a stated reason, retried after backoff. Every surface SHALL show it. A stored report SHALL keep its frozen state.
 
 #### Scenario: Old fetch
 - **WHEN** the repository was last fetched 30 hours ago
 - **THEN** the delivery metrics show the stale marker with the fetch age
+
+#### Scenario: Exactly 24 hours
+- **WHEN** the last fetch reaches exactly 24 hours old with no other change
+- **THEN** the state becomes stale at that time without waiting for another event, and 1 ms earlier it read current
 
 #### Scenario: Fetch without new commits
 - **WHEN** a fetch updates `FETCH_HEAD` but the default branch did not move
@@ -104,8 +112,8 @@ Facts SHALL be identified by repository, object format, head, and reader version
 - **THEN** it reports behind and no rule fires
 
 #### Scenario: Failed refresh of the named head
-- **WHEN** the newest read of the head the ref names fails
-- **THEN** delivery reports refresh-failed with the reason and no rule fires
+- **WHEN** the head the ref names has no facts and its read fails
+- **THEN** delivery reports behind, or unavailable with no earlier facts, with the failed reason, no rule fires, and the read is retried after its backoff without another event
 
 ### Requirement: The delivery family reports landed outcomes per window
 The metric set SHALL include a `delivery` family over each window and its baseline:

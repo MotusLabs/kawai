@@ -26,12 +26,12 @@ While a degradation rule fires over current delivery facts, the attention queue 
 - **THEN** no `process-degradation` item is listed, and the Metrics tab shows the stale marker
 
 #### Scenario: Facts go stale while it holds
-- **WHEN** the rule is firing and the last fetch becomes older than 24 hours with no other change
+- **WHEN** the rule is firing and the last fetch reaches 24 hours old with no other change
 - **THEN** the item leaves the queue at that time without waiting for another event
 
 #### Scenario: Refresh fails while it holds
-- **WHEN** the rule is firing and the newest read of the head the ref names fails
-- **THEN** the item leaves the queue at the next snapshot
+- **WHEN** the rule is firing, the ref moves to B, and B's read fails
+- **THEN** the next snapshot lists no item, and the item returns only after B's retry succeeds and the rule fires over B
 
 #### Scenario: Ref moves while it holds
 - **WHEN** the rule is firing and the ref moves to a head whose facts are not yet read

@@ -83,30 +83,42 @@ Three kinds of state are kept apart. Identity never stands in for currentness.
 **G, an accepted facts generation (immutable).** Its identity is (team's repository, actual object format, H, `DELIVERY_READER_VERSION`). It holds read 1's graph and read 2's archives for H. The facts depend on H alone, so the fetch stamp is not part of it. `DeliveryFactsCache` (`delivery/factsCache.ts`) holds per team at most one accepted G, and consumers never see a half-built one.
 
 **S, the live ref state.** `refState(team)` re-reads S on every call by bounded, synchronous, process-free file reads in the common directory (D1's head resolution plus a stat of `FETCH_HEAD`). It holds:
-- `hNow`: a full id, or `unreadable` / `shallow` with the reason;
+- `hNow`: a full id, or `unreadable` / `shallow` with the reason. It is freshly resolved, never a cached pending fallback;
 - `fetchAt`: `FETCH_HEAD`'s mtime, or unknown;
-- `lastAttempt`: the head, outcome, reason, and time of the newest completed flight.
+- `lastAttempt`: the head, outcome, reason, and time of the most recent NONOBSOLETE completed attempt (Z3 or Z4). Its current relevance is still filtered by its target head.
 
 **M, a materialization (cached numbers).** These are a computed `ProcessMetrics`, trends points, or a monitor evaluation. M carries its provenance (G's identity, the end T, `materializedAt`, and its evidence, D3a) and its `maxAge`: 30 s for metrics reads, 5 min for trends, two timer intervals for the monitor. M holds no live header. Rule results inside M are a pure function of M's numbers and evidence.
 
-**Flights** (Table G):
-- `check(team)` reads S. When `hNow` names a head other than G's and no flight runs, it starts one flight for `hNow`. A flight for another head already running records the newest head as pending, and nothing else spawns.
-- On completion the ref is re-read. A flight whose head is no longer `hNow` is obsolete: it is discarded and the pending or current head is flown next. Only a completion matching `hNow` is accepted, as the new G.
-- A failed flight changes no G and records `lastAttempt` with its reason. Retries back off 30 s, 2 min, then 10 min, capped. Facts are never patched with partial results.
-- A same-head fetch changes only `fetchAt`: no flight, no new G, and nothing is invalidated.
-- `stop()` discards every later completion.
+**The recovery controller** (Tables Q, Z, and CT; the canonical model of Lead note-44b3a9d2).
+
+Invariant: one accepted immutable G, at most one flight, and all new flight decisions go through ONE reconcile function using a fresh ref read. A matching accepted G is reused, never re-read just because an obsolete flight completed or a fetch stamp changed. A transient failure of a NEEDED current head has an explicit retry path without an unrelated ref move or restart. Only a successful nonobsolete complete read publishes facts or clears that head's failure; failed/partial/obsolete reads never create a G.
+
+State: stopped flag; accepted G or none; flight {id, target} or none; retry record {head, failureCount, dueAt} or none; `lastAttempt` for the most recent NONOBSOLETE completed attempt. Backoff = 30 s, 120 s, 600 s capped; a failure for the same retry head increments its chain, a different failed head begins 1. A successful accepted attempt clears its retry. Keep no queue of stale pending heads; when an event needs dispatch, resolve the actual ref again. A backoff record for a head is irrelevant to another head and never blocks reuse of accepted matching facts. One owned retry wake re-enters reconcile with a fresh ref at due; a ref change or check may re-arm it for the actually needed target. `stop()` cancels owned timers and ignores all later completions.
+
+`check(team)`, the retry wake, and every completion's follow-up run the reconcile table Q (rows disjoint, first match). A completion is classified by the completion partition Z. Both tables are in the acceptance oracles.
+
+- A same-head fetch updates live `fetchAt` and re-arms the freshness wake only; it cannot mint facts or bypass these rows.
+- A user Metrics refresh may recompute M; it does not re-read immutable matching-H facts.
+- A `DELIVERY_READER_VERSION` change is a new identity and a cold controller, not a hidden same-identity revalidation.
+- Facts are never patched with partial results.
+
+**Reachability.** Q3 prevents starting a flight for an already accepted matching G, and G cannot change while a different sole flight runs. A flight starts only for an identity that differs from the accepted G. If its completion's target matches the current ref and fails (Z4), that target still differs from G. If the ref reverted to G, the completion is obsolete and discarded (Z2), and Q3 reuses G. If a target that failed earlier is later accepted, its accepting completion records success (Z3). Therefore, in valid controller states, a FAILED nonobsolete `lastAttempt` for the SAME identity as the accepted matching G is unreachable. Failures stay visible:
+- no G → `unavailable` plus the refresh-failed reason for the named head;
+- G at A, current ref B, and B failed → `behind` plus the refresh-failed reason until B succeeds.
+
+A failed B record does not poison a returned accepted A after the ref reverts.
 
 **The projection.** `view(M, G, S, now)` (`delivery/view.ts`, pure) runs on every live return: Metrics tab reads, `team_metrics`, trends, export scrapes, workspace snapshots, and the monitor's outcome. It runs on cache hits too, and for a chosen past end or a trend point alike. Its `state` is the first match:
 1. `unavailable` — no accepted G, `hNow` unreadable or shallow, or M was made under no G;
 2. `behind` — `hNow` ≠ the H of M's G, or M's G is no longer the accepted one;
-3. `stale` — `fetchAt` unknown, or `now − fetchAt > 24 h`;
-4. `refresh-failed` — `lastAttempt` is for `hNow` and failed;
+3. `stale` — `fetchAt` unknown, or `now − fetchAt ≥ 24 h` (inclusive boundary);
+4. `refresh-failed` — `lastAttempt` is for `hNow`, matches M's G, and failed. This is a pure defensive fail-closed branch for invalid or synthetic input only. It is unreachable from the controller (Reachability above), and no real-data promise depends on reaching it;
 5. `expired` — `now − M.materializedAt > M.maxAge`. The caller recomputes rather than serve it as current;
 6. `current`.
 
-Every applicable condition is also listed in `reasons`, so a behind, failing generation shows both. Only `current` makes rule results eligible, for an attention item, a rule gauge, or a trend mark. Every other state returns the numbers with the marker and every rule as "not current: <state>". Unknown is never current.
+Every applicable condition is also listed in `reasons`, so a behind generation whose needed head failed shows `behind` with the refresh-failed reason, and a cold failure shows `unavailable` with it. Only `current` makes rule results eligible, for an attention item, a rule gauge, or a trend mark. Every other state returns the numbers with the marker and every rule as "not current: <state>". Unknown is never current.
 
-The monitor schedules one evaluation at `fetchAt + 24 h` and re-arms it whenever `fetchAt` changes, so a same-head fetch moves the stale boundary.
+The monitor owns one freshness wake at `fetchAt + 24 h`, exactly the boundary at which `stale` becomes true. With an otherwise fresh M, 1 ms before it the view is current; at it, the view is stale and the removal is published; 1 ms after it, the view stays stale without another event. A later same-H fetch cancels and re-arms the owned wake. A stale old callback must re-read the actual `fetchAt` and its owner token, and never clears a fresh item. Unknown `fetchAt` is immediately stale. This is the freshness clock only; event membership (D3) stays half-open.
 
 A stored report snapshot is not a live return. It keeps whatever header it was frozen with and is never re-projected.
 
@@ -114,7 +126,7 @@ A stored report snapshot is not a live return. It keeps whatever header it was f
 
 This is new behavior, not a property of the base cache, which returns stored values directly.
 
-The cache is memory only. A restart starts cold (G2), and nothing is persisted or recovered.
+The cache is memory only. A restart starts cold (Q5 with no G), and nothing is persisted or recovered.
 
 Alternative considered: make `MetricsReader.read` async and run git inline. `WorkspaceRead.snapshot` and the attention fold are synchronous and push often, so every snapshot would wait on git. That was rejected.
 
@@ -264,9 +276,9 @@ The thresholds are constants. Moving one is a reviewed code change, never config
 - **Export disabled:** the same timer is armed only while the team has at least one subscriber. `WorkspaceConnections` open, close, and disconnect, and the metrics and trends subscriptions, report reference counts to the runtime. At zero subscribers the timer is cleared.
 - Re-evaluation also runs on a generation change and on a Metrics refresh.
 
-**Publication.** The monitor keeps, per team, one materialized outcome M: G's identity, the evaluation time, every rule's result, and an evidence fingerprint (rule results plus their evidence values). It calls `WorkspaceConnections.publish(teamId)` whenever the fingerprint changes or the projected state changes, not only when the fired ids change. It schedules one evaluation at `fetchAt + 24 h` and re-arms it whenever `fetchAt` moves (D2).
+**Publication.** The monitor keeps, per team, one materialized outcome M: G's identity, the evaluation time, every rule's result, and an evidence fingerprint (rule results plus their evidence values). It calls `WorkspaceConnections.publish(teamId)` whenever the fingerprint changes or the projected state changes, not only when the fired ids change. It owns the freshness wake at `fetchAt + 24 h`, cancelled and re-armed whenever `fetchAt` moves; an old callback re-checks the actual `fetchAt` and its owner token (D2).
 
-**Gating.** Every synchronous consumer reads the outcome through `delivery.outcome(team, now)`, which is `view(M, G, refState(team), now)`. Rule results are eligible only when that view is `current`. Otherwise it returns "not current: <state>" with every reason, which covers unavailable, behind, stale, refresh-failed, and expired (an outcome older than two intervals). So a stale, failing, obsolete, or aged outcome never keeps an item or a gauge alive.
+**Gating.** Every synchronous consumer reads the outcome through `delivery.outcome(team, now)`, which is `view(M, G, refState(team), now)`. Rule results are eligible only when that view is `current`. Otherwise it returns "not current: <state>" with every reason, which covers unavailable, behind, stale, expired (an outcome older than two intervals), and the defensive refresh-failed branch, with a needed head's failure stated as a reason. So a stale, failing, obsolete, or aged outcome never keeps an item or a gauge alive.
 
 `degradationItems` joins `ATTENTION_SOURCES` with kind `process-degradation`, owned by the human. It is fed by a new `AttentionInput.degradation`. Its link is `{ kind: 'metrics', id: '7d' }`, a new `AttentionLink` kind, which the client opens as `#/team/<key>/metrics/7d`.
 
@@ -304,7 +316,7 @@ A point's metric is marked **incomplete evidence** when its evidence is incomple
 
 **Protocol:**
 - `process-metrics-trends-open { teamPath, range }` → `process-metrics-trends { teamId, range, points, delivery, computedAt }`, and `process-metrics-trends-close`, all in `CHAT_CONNECTION_TYPES`.
-- The snapshot is re-sent on open, on refresh, on a generation change, and on a change of the projected state (behind, stale, refresh-failed, current).
+- The snapshot is re-sent on open, on refresh, on a generation change, and on a change of the projected state or its reasons (unavailable, behind, stale, expired, current, a failed-read reason).
 - `process-metrics-open` gains an optional `end` (ISO), so choosing a point opens exactly that window. The connection keeps the subscription's `end`: refreshes and generation re-sends read at that `end`, and a new `process-metrics-open` replaces it. Without `end`, a read is unchanged.
 
 **Client:** `MetricsTrends.tsx` draws SVG small multiples with no dependency. There is one chart per metric with its family heading, a band for `insufficient`, `partial`, and incomplete-evidence points, a mark for fired rules, and a `<table>` alternative per chart. `teamLocation.ts` parses `metrics/trends/<range>`; `trends` is not a window id, so the existing window parse keeps its meaning. The range and collapsed families are per-team `teamWorkspaceStore` state, as windows are today. The `dataviz` and `dev-browser` capabilities this view's verification names are prerequisites (D9).
@@ -396,24 +408,48 @@ UI verification names two capabilities that are not guaranteed to exist in an im
 | F8 | a named parent has no row (a dropped tail) | failed `history-incomplete` |
 | F9 | an archive `@<sha>` not on the chain, or a stray path | failed `archive-malformed` |
 
-**Table G: facts generations.** Seam: `DeliveryFactsCache` with a fake reader, ref, `FETCH_HEAD` mtime, and clock. G's identity is (repository, object format, H, reader version); the fetch time is never part of it. Axes: accepted generation (none | A at H_a), resolved ref (unreadable | H_a | H′ ≠ H_a), flight (none | running for H_f), backoff (inactive | active), event. Currentness is never decided here: it is the projection's (Table V).
+**Tables Q and Z: the recovery controller.** Seam: `DeliveryFactsCache` with a fake reader, ref, `FETCH_HEAD` mtime, clock, and flight ids. G's identity is (repository, object format, H, reader version); the fetch time is never part of it. These rows are the canonical model of D2 (Lead note-44b3a9d2), kept verbatim. Currentness is not decided here; it is the projection's (Table V).
 
-| id | accepted | ref | flight | backoff | event | → result |
-|----|----------|-----|--------|---------|-------|----------|
-| G1 | * | unreadable | * | * | check | no new flight; pending unchanged; A kept (the projection reads `unavailable`) |
-| G2 | none | H′ | none | inactive | check | one flight for H′ |
-| G3 | * | hex id = H_f | running | inactive | check | no second flight |
-| G4 | * | hex id ≠ H_f | running | inactive | check | pending := that id; no second flight |
-| G5 | A | H_a, `FETCH_HEAD` unchanged | none | * | check | A unchanged; no git |
-| G6 | A | H_a, `FETCH_HEAD` touched | none | * | check | `fetchAt` moves only: same G identity, no new generation, nothing invalidated, no git; the stale wake re-arms at the new `fetchAt` + 24 h |
-| G7 | A | H′ | none | inactive | check | A kept; one flight for H′ |
-| G8 | A or none | H′ | none | active | check | no flight before the retry time |
-| G9 | * | re-resolved = H_f | running | inactive | success | accepted as the new G; `lastAttempt` ok; listeners told |
-| G10 | * | re-resolved ≠ H_f (or unreadable) | running | inactive | success | discarded as obsolete; one flight for the re-resolved id, else the pending id, when either is a hex id |
-| G11 | A or none | * | running | inactive | failure | G unchanged; `lastAttempt` failed with its reason; backoff 30 s → 2 min → 10 min |
-| G12 | * | * | * | * | stop, then any completion | nothing accepted or published |
+*Table Q, RECONCILE* (rows disjoint, first match; every check, retry wake, and completion follow-up):
 
-Unreachable: "running" with backoff active (a flight only starts once the retry time has passed); a success at H_f with no flight (completions come only from flights). **Completeness claim:** every combination of the five axes matches exactly one row or one unreachable claim. The completeness test expands the axes over the table. The model-based test runs Table G as the reference model under seeded sequences of {move ref, touch `FETCH_HEAD`, check, complete ok, complete fail, advance clock, stop}, seed 0x6E4E, 300 sequences of 40 commands. After each command, every accepted generation's facts must equal the facts computed offline for its own H (no mixed heads), and no `FETCH_HEAD` touch alone changes G's identity.
+| id | condition | → result |
+|----|-----------|----------|
+| Q0 | stopped | no dispatch/publication |
+| Q1 | a flight exists | keep that one flight, dispatch nothing; ref state can still change the projection. No second flight or stale pending-id dispatch |
+| Q2 | idle and hNow unreadable/shallow/invalid | no flight; projection unavailable, preserve G |
+| Q3 | idle, valid hNow, accepted G identity matches repository/objectformat/H/readerVersion | reuse EXACT G, no git/no new generation, irrespective of retry record for some OTHER head |
+| Q4 | idle, valid hNow, G absent or different, retry.head == hNow and now < dueAt | preserve G, wait/own one due wake |
+| Q5 | all remaining idle valid cases | start exactly one flight for fresh hNow |
+
+*Table Z, COMPLETION* (Z0 first; for an owned flight, clear it once and freshly resolve hNow before classifying BOTH success and failure):
+
+| id | condition | → result |
+|----|-----------|----------|
+| Z0 | stopped, or callback id does not match the owned flight | ignore completely |
+| Z1 | invalid/unreadable hNow | discard completion as unusable/obsolete, preserve G, no pending-id fallback and no manufactured successful currentness. A later actual check can recover |
+| Z2 | valid hNow != flight.target | discard completion as obsolete, for BOTH outcomes; do not overwrite lastAttempt/retry with an irrelevant failure. Call reconcile on fresh state. If hNow matches accepted G, Q3 REUSES it; otherwise Q4/Q5 handle only the actual desired target |
+| Z3 | valid hNow == target and complete valid read SUCCESS | accept G for target, lastAttempt(target) = success, clear target retry, publish once; reconcile is now Q3 |
+| Z4 | valid hNow == target and read/timeout/validation FAILURE | preserve G, lastAttempt(target) = failed, set/update due backoff and own wake; next reconcile is Q4 then Q5 after due. No failure is turned into a successful result or silent error clear |
+
+Every read outcome of Table F that is not F1 is a FAILURE for Z4; a clipped successful stdout is never a Z3 success.
+
+**Unreachable claims:** a FAILED nonobsolete `lastAttempt` for the same identity as the accepted matching G (D2, Reachability); two flights at once (Q1); a flight started for an identity equal to the accepted G (Q3); a Z3–Z4 completion whose callback id is not the owned flight's (Z0). **Completeness claim:** the Q rows partition every controller state over the axes stopped (yes | no), flight (none | owned), hNow (invalid | valid = G's H | valid ≠ G's H, or no G), and retry (none | for hNow, before due | for hNow, at or after due | for another head); the Z rows partition every completion over stopped, callback ownership, fresh hNow (invalid | ≠ target | = target), and outcome (success | failure). The completeness test expands these axes over the tables and the unreachable claims.
+
+*Table CT, finite controller witnesses* (planned, unexecuted; rows keep the canonical ids T1–T7 and are cited as CT T1–CT T7, apart from Table T's tool rows):
+
+| id | sequence | → required |
+|----|----------|------------|
+| T1 | accepted A, ref A; check or same-H fetch | same G, no read (Q3); a same-H fetch moves only `fetchAt` and re-arms the freshness wake |
+| T2 | accepted A, ref B starts B (Q5); ref A while B runs (Q1); B succeeds, OR B fails | Z2 discards B for either outcome; reconcile Q3 reuses A; no flight for A; no failed `lastAttempt` for A |
+| T3 | cold, ref B; B fails | Z4: `unavailable` with the failed reason; no retry before due (Q4); the due wake re-checks ref B and retries B (Q5); success → G = B (Z3), retry cleared, a fresh eligible M |
+| T4 | accepted A, ref B; B fails | Z4: `behind` with the failed reason; the due wake retries the same B; success → G = B, current with a fresh M. No new external event or restart is required to clear the failure |
+| T5 | during B's backoff, ref A | Q3 reuses A without a read; if the ref returns to B before due, wait the remaining B backoff (Q4); after due, Q5 starts B. The retained B failure never poisons A |
+| T6 | obsolete B completes with actual ref C (≠ G) | Z2 → reconcile flies C only (Q4/Q5); with an unreadable ref, Z1: no cached pending-target spawn; with the ref restored to the matching A, Q3 reuses A. At most one active flight always |
+| T7 | stop while a flight runs | Q0/Z0: no late publication and no retry wake; an old callback id cannot clear or publish a different owned flight |
+
+Reusing A never makes an expired A materialization current: M's expiry and recomputation still apply (Table V). Accepting B never makes an old A materialization current: it reads `behind` until recomputed.
+
+The model-based test runs Tables Q and Z as the reference model under seeded sequences of {move ref, make ref unreadable, touch `FETCH_HEAD`, check, complete ok, complete fail, complete with a stale callback id, advance clock, fire the retry wake, stop}, seed 0x6E4E, 300 sequences of 40 commands. After each command: every accepted generation's facts equal the facts computed offline for its own H (no mixed heads); at most one flight exists; no `FETCH_HEAD` touch alone changes G's identity; and no failed `lastAttempt` matches the accepted G's identity.
 
 **Table V: return-time projection.** Seam: `view(M, G, S, now)` and every live surface over one materialization M (metrics read, `team_metrics`, trends, scrape, workspace snapshot, monitor outcome), each served from its cache. A row holds on a cache hit with no recomputation, and for a chosen end or trend point alike.
 
@@ -421,10 +457,13 @@ Unreachable: "running" with backoff active (a flight only starts once the retry 
 |----|------------------------------------------|----------------------------|
 | V1 | nothing changed, within `maxAge` | `current`; rule results eligible |
 | V2 | the ref moved A → B, no flight completed yet | `behind` (cache hit, no recomputation); every rule "not current: behind" |
-| V3 | `now` crosses `fetchAt` + 24 h, no other event | `stale`, at the scheduled wake without another event |
-| V4 | a same-head fetch moves `fetchAt` forward before the crossing | `current`; the wake re-arms; same G identity |
-| V5 | the newest flight for `hNow` = H_a failed | `refresh-failed` with its reason |
-| V6 | the ref moved and the flight for it failed | `behind`, with `refresh-failed` also in `reasons` |
+| V3a | `now` = `fetchAt` + 24 h − 1 ms, M otherwise fresh | `current` |
+| V3b | `now` = `fetchAt` + 24 h exactly, no other event | `stale` at the owned wake; the removal is published |
+| V3c | `now` = `fetchAt` + 24 h + 1 ms, no other event | still `stale` |
+| V4 | a same-head fetch moves `fetchAt` forward before the crossing | `current`; the owned wake is cancelled and re-armed; same G identity; an already queued old callback re-reads the actual `fetchAt` and its owner token and leaves the view current |
+| V5 | synthetic input only: `lastAttempt` failed for H_a while G is at H_a (unreachable from the controller, Tables Q and Z) | `refresh-failed`, fail-closed; the defensive branch, labeled as unreachable in production |
+| V6 | the ref moved to B and B's read failed (CT T4) | `behind`, with the refresh-failed reason also in `reasons`; `current` again only after B's retry succeeds and M is recomputed |
+| V6b | no G, ref B, and B's read failed (CT T3) | `unavailable`, with the refresh-failed reason |
 | V7 | the ref became unreadable or the repository shallow | `unavailable` |
 | V8 | a monitor outcome older than two intervals | `expired`; no item, every rule gauge 0 |
 | V9 | `fetchAt` unknown (no `FETCH_HEAD`) | `stale` |
@@ -451,7 +490,8 @@ Property: for every generated chain and every pair of adjacent intervals, no eve
 | L1 | C is the first-parent commit F₂ | * | position 2, `at` = ct(F₂) |
 | L2 | C reached only through F₂'s second parent | * | position 2 |
 | L3 | C reachable from F₁ (t 100) and from F₂ (t 90) | * | position 1, `at` 100, never 90 |
-| L4 | C not in H's graph | * | not landed |
+| L4 | a result names full literal D not in H's graph, with the strict same-result passing check of D1 (as L8b) | * | known, not landed |
+| L4b | the same D with only a pending check, or none | * | unresolvable: excluded from `landed_result_share`, never known-not-landed |
 | L5a | F₁ t 100, F₂ t 50 brings X through its second parent, F₃ t 200; X has U = [50, 100] | 40 | X not contained by T |
 | L5b | same | 75 | X's containment unknown at T: excluded from the share, counted in its coverage note |
 | L5c | same | 150 | X contained by T; its membership in [100, 150) is unknown (at 50 < 100), in [40, 150) it is in |
@@ -576,10 +616,10 @@ Property: for every generated chain and every pair of adjacent intervals, no eve
 | W1 | current, `delivery-drop` fires | one human item `process-degradation:delivery-drop` naming 6 vs 40 and both token totals |
 | W2 | next evaluation `holds-not` | item gone, counts drop by one, one publish |
 | W3 | same rule fires with new current values | one publish; same identity; the cause shows the new values |
-| W4 | fires, then 24 h pass since the fetch with no other event | the scheduled evaluation publishes; no item |
+| W4 | fires, then `now` reaches `fetchAt` + 24 h exactly with no other event | at 24 h − 1 ms the item is listed; at the owned wake the removal is published; at + 1 ms still no item |
 | W5 | `not-evaluable` | no item |
 | W6 | outcome of an older generation, or older than two intervals | no item |
-| W7 | fires, then the newest flight for the same head fails | no item while `refresh-failed`; the item returns on the next accepted, current evaluation |
+| W7 | fires, then the ref moves to B and B's read fails | no item (`behind` with the failed reason); after B's backoff the owned retry wake retries B, and the item returns only on a current evaluation over the accepted B |
 | W8 | fires, then the ref moves and the snapshot is served from cache with no evaluation | no item (`behind`), at the next snapshot without recomputation |
 | W9 | the production composition's coverage (`unknown`) with token rows present | no `delivery-drop` or `cost-per-change-rise` item (not-evaluable `evidence`) |
 
@@ -596,7 +636,7 @@ Property: for every generated chain and every pair of adjacent intervals, no eve
 | E7 | enabled | 90 landed changes | one histogram series per team alias; no change name in any label |
 | E8 | enabled | every workspace subscription closed or disconnected, then the rule's inputs change | the background pass updates the gauge within one interval |
 | E9 | enabled | outcome older than two intervals (timer stalled) | every rule gauge 0, `delivery_rules_current` 0 |
-| E10 | enabled | `delivery-drop` fired, then the ref moved (behind) or the newest flight for the head failed (refresh-failed), scraped before any evaluation | every rule gauge 0, `delivery_rules_current` 0, counters of the accepted generation unchanged |
+| E10 | enabled | `delivery-drop` fired, then the ref moved (behind), with or without B's read failing (the failed reason), scraped before any evaluation | every rule gauge 0, `delivery_rules_current` 0, counters of the accepted generation unchanged |
 | E11 | enabled | production coverage `unknown`, facts current, the in-flight inputs of `inflight-aging` met | `delivery_rules_current` 1; `degradation_rule_firing` 0 for `delivery-drop` and `cost-per-change-rise`, 1 for `inflight-aging` |
 
 **Table N: noninterference.** Seam: the production manager composition with a fixture team. The same dispatch, routing, staffing, execution-tick, and acceptance inputs are run under four delivery states: unavailable, current and `delivery-drop` firing, stale, and current with different landings.
@@ -638,9 +678,9 @@ Property: for every generated chain and every pair of adjacent intervals, no eve
   - Generator: random `MetricsInputs` spanning 13 weeks with random fixture facts, one generation.
   - Property: for every k, point k of `readTrends` equals `computeMetrics` at `end_k` over a load made for that end with the same generation, coverage, and `now`, projected compactly and through `view` at the same S. Values, `n`, baselines, flags, evidence, the projected state, and rule results all match.
   - Seed 0x7E4D, 100 cases.
-- **P5, generations never mix heads.** This is Table G's model-based test (seed 0x6E4E).
+- **P5, generations never mix heads.** This is the model-based test of Tables Q and Z (seed 0x6E4E).
 - **P6, no double count.** Over P1's generator, for random ends T and spans d, no landing is `in` both [T − 2d, T − d) and [T − d, T), and every landing `in` either is contained by T. Seed 0x1A1F, 500 cases.
-- **P7, the projection is the only currentness.** Over random sequences of Table G's commands, every live return's state equals `view(M, G, S, now)` recomputed from scratch at the same instant, including cache hits. Seed 0x51E3, 300 sequences.
+- **P7, the projection is the only currentness.** Over random sequences of P5's commands, every live return's state equals `view(M, G, S, now)` recomputed from scratch at the same instant, including cache hits. Seed 0x51E3, 300 sequences.
 
 **Production composition (M1).** One test builds the manager and `bootstrap`'s route registration as production does, with export enabled and no browser connection, and the production coverage input (`unknown`, D3b). It uses a temporary git repository (`cleanGitEnv`) whose origin carries 12 archives in the baseline week and 2 in the current week, token rows on every day, and three linked in-flight changes aged 80 h at T against three aged 36 h at the baseline's end. It asserts that the background pass alone makes a scrape show E11, that a workspace snapshot lists `process-degradation:inflight-aging` and no `delivery-drop` item, and that `team_metrics` reports `delivery-drop` not-evaluable `evidence`. There are four mutants: the source removed from `ATTENTION_SOURCES`; bootstrap not passing the runtime to the route; `enableExport` not called; and the composition passing `supported` coverage. Each fails the test.
 
