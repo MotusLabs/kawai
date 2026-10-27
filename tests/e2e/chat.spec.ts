@@ -91,7 +91,7 @@ test('approval, questions, streaming reconnect, two-client resolution, and stop'
 })
 
 test('debug view shows protocol frames live, pages older frames, and survives reload', async ({ page }, info) => {
-  test.setTimeout(60_000) // Seventy completed turns plus frame pagination.
+  test.setTimeout(120_000) // Seventy serial turns, pagination and reload need test-local headroom.
   await openFixture(page)
   const panel = page.getByTestId('chat-debug-panel')
   await expect(panel).toHaveCount(0)
