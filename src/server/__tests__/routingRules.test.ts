@@ -57,6 +57,14 @@ export default rule`)
     expect(await registry!.rule('devs')!.route(CTX)).toEqual({ type: 'pick', candidateId: 'member:a' })
   })
 
+  test('a types file that cannot be written never blocks the rules', async () => {
+    fs.mkdirSync(path.join(home, '.kawai', 'routing', 'kawai-routing.d.ts'))
+    write('devs.ts', `export default { route: (ctx: any) => ({ type: 'pick', candidateId: ctx.candidates[0].id }) }`)
+    const report = await open().reload()
+    expect(report.rules).toMatchObject([{ groupId: 'devs', ok: true }])
+    expect(await registry!.rule('devs')!.route(CTX)).toEqual({ type: 'pick', candidateId: 'member:a' })
+  })
+
   test('a syntax error, a missing route, and a bad file name are reported; nothing loads for them', async () => {
     write('broken.ts', 'export default { route( => }')
     write('noroute.ts', 'export default { env: [] }')
