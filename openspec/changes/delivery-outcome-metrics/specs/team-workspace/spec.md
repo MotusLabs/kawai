@@ -3,7 +3,7 @@
 ## ADDED Requirements
 
 ### Requirement: The attention queue lists process degradation
-While a degradation rule fires over current delivery facts, the attention queue SHALL list one human-required item with identity `process-degradation:<rule id>`, a cause naming the rule and its current and baseline values, impact "team delivery", next action Open metrics, and a link to the Metrics tab's 7d window. The item SHALL follow changed values while the rule holds, and SHALL disappear once it stops firing or its facts stop being current.
+While a degradation rule fires over current delivery facts, the attention queue SHALL list one human-required item with identity `process-degradation:<rule id>`, a cause naming the rule and its current and baseline values, impact "team delivery", next action Open metrics, and a link to the Metrics tab's 7d window. The item SHALL follow changed values while the rule holds, and SHALL disappear once it stops firing or the delivery state projected at the snapshot is not current.
 
 #### Scenario: Delivery drop raises one item
 - **WHEN** the delivery-drop rule fires
@@ -28,3 +28,11 @@ While a degradation rule fires over current delivery facts, the attention queue 
 #### Scenario: Facts go stale while it holds
 - **WHEN** the rule is firing and the last fetch becomes older than 24 hours with no other change
 - **THEN** the item leaves the queue at that time without waiting for another event
+
+#### Scenario: Refresh fails while it holds
+- **WHEN** the rule is firing and the newest read of the head the ref names fails
+- **THEN** the item leaves the queue at the next snapshot
+
+#### Scenario: Ref moves while it holds
+- **WHEN** the rule is firing and the ref moves to a head whose facts are not yet read
+- **THEN** the next snapshot lists no item, without waiting for an evaluation

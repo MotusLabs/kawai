@@ -33,7 +33,7 @@ Every delivery fact SHALL be derived from one resolved commit of the default bra
 - **THEN** delivery reads unavailable stating that history is incomplete
 
 ### Requirement: An integration is a first-parent commit of the default branch
-Each commit on the first-parent chain of the default branch SHALL count as one integration, ordered by its position on that chain, with its committer time as the time of the integration, whatever the merge method that produced it.
+Each commit on the first-parent chain of the default branch SHALL count as one integration, ordered by its position on that chain, with its position's landing interval as its time, whatever the merge method that produced it.
 
 #### Scenario: Merge and squash alike
 - **WHEN** one pull request lands as a merge commit and another as a squash commit
@@ -51,7 +51,7 @@ An OpenSpec change SHALL count as landed at the first first-parent commit of the
 - **THEN** it has not landed
 
 ### Requirement: A result commit lands at its first containing position
-A result's commit SHALL land at the first first-parent commit F of the default branch, in chain order, whose history contains it, with F's committer time as a proxy for its arrival. A commit the default branch does not contain SHALL be not landed. It SHALL be landed by a time T only when no position up to F has a committer time after T, unknown at T when F's time is at or before T but an earlier position's is later, and not landed by T otherwise.
+A commit SHALL land at the first first-parent commit Fk of the default branch whose history contains it, else not land. Its time SHALL be the interval [at, bound]: Fk's committer time, and the latest of F1…Fk's, a proxy only. It SHALL be contained by T when bound ≤ T, not when at > T, else unknown. It SHALL be in an interval [a, b) when a ≤ at and bound < b, out when bound < a or at ≥ b, else unknown. Every window count SHALL use membership.
 
 #### Scenario: Result merged through a pull request
 - **WHEN** a result names commit C and the merge commit M that brought C to master has committer time 10:00
@@ -63,14 +63,33 @@ A result's commit SHALL land at the first first-parent commit F of the default b
 
 #### Scenario: Backdated bridge
 - **WHEN** F1 has time 100, F2 has time 50 and first contains X, and F3 has time 200
-- **THEN** X is not landed by 40, unknown at 75, and landed by 150
+- **THEN** X is not contained by 40, unknown at 75, and contained by 150
+
+#### Scenario: Boundary at the window end
+- **WHEN** on a chain with increasing committer times an integration's time equals the end T of a 7d window
+- **THEN** it counts in the window ending T + 7 d, not in the window ending T, and is contained by T
+
+#### Scenario: Backdated straddle
+- **WHEN** F1 has time T − 7 d + 1 h and the next first-parent commit F2 is backdated to T − 21 d
+- **THEN** F2's membership is unknown in both the current window and its baseline, it is excluded from both counts and recorded as incomplete evidence, and it is contained by T
 
 #### Scenario: Unmerged result
 - **WHEN** a result's commit exists only on its task branch
 - **THEN** it counts as not landed
 
+### Requirement: Result commits are identified by full literal ids only
+Only a full literal object id of the repository's object format SHALL identify a result commit. A literal off the default branch's history SHALL be known, and not landed, only with a passing check of the same result naming that literal and id. Abbreviations, symbolic names, other lengths, and contradicted or unchecked off-history literals SHALL be unresolvable: never landed, never known not landed, and excluded with a count. No prefix search SHALL run.
+
+#### Scenario: Abbreviation stays unresolvable
+- **WHEN** a result names a 7-digit prefix that only one commit on the default branch matches, and a later check resolved it
+- **THEN** the result's commit is unresolvable and excluded, never landed
+
+#### Scenario: Off-history literal with a check
+- **WHEN** a result names a full id not on the default branch and its passing check names the same id
+- **THEN** the commit is known and not landed
+
 ### Requirement: Delivery facts state their freshness
-Delivery facts SHALL carry the default-branch head they were read from, the time of the read, and the last fetch time, which is the modification time of `FETCH_HEAD` in the git common directory, or unknown. Facts whose last fetch is older than 24 hours, or unknown, SHALL be marked stale, facts for a head the ref no longer names SHALL be marked behind, and every surface showing a delivery metric SHALL show the marker.
+Facts SHALL be identified by repository, object format, head, and reader version, never fetch time. At every live return, cached or not, the state SHALL be projected from the live ref, first match: unavailable; behind (another head named); stale (`FETCH_HEAD` older than 24 hours or unknown); refresh-failed (the newest read of the named head failed); expired; else current. Every surface SHALL show it. A stored report SHALL keep its frozen state.
 
 #### Scenario: Old fetch
 - **WHEN** the repository was last fetched 30 hours ago
@@ -78,7 +97,15 @@ Delivery facts SHALL carry the default-branch head they were read from, the time
 
 #### Scenario: Fetch without new commits
 - **WHEN** a fetch updates `FETCH_HEAD` but the default branch did not move
-- **THEN** the facts are fresh again without re-reading history
+- **THEN** the facts are current again without re-reading history, under the same identity
+
+#### Scenario: Cache hit after a ref move
+- **WHEN** the ref moves from A to B and a metrics read is served from its cache before any facts for B exist
+- **THEN** it reports behind and no rule fires
+
+#### Scenario: Failed refresh of the named head
+- **WHEN** the newest read of the head the ref names fails
+- **THEN** delivery reports refresh-failed with the reason and no rule fires
 
 ### Requirement: The delivery family reports landed outcomes per window
 The metric set SHALL include a `delivery` family over each window and its baseline:
@@ -86,7 +113,7 @@ The metric set SHALL include a `delivery` family over each window and its baseli
 - integrations;
 - tokens per landed change: the team's completed-turn tokens in the window divided by the changes landed in it, as a ratio whose `n` is the changes landed.
 
-Each value SHALL follow the existing sample, baseline, sufficiency, and partial rules. Landings unknown at the window's end SHALL be excluded and counted in a coverage note.
+Each value SHALL follow the existing sample, baseline, and sufficiency rules. A landing of unknown membership in an interval SHALL be excluded from that interval's count and SHALL make that side's evidence incomplete.
 
 #### Scenario: A busy week that lands little
 - **WHEN** the 7d window holds 7.1 B tokens and 6 landed changes, against 4.0 B tokens and 40 in the baseline
@@ -130,7 +157,7 @@ The delivery family SHALL report the share of changes landed in the window that 
 - **THEN** linked-change coverage reads 0.33 with `n` 6
 
 ### Requirement: In-flight changes report their age
-The delivery family SHALL report the p50 and p90 age of in-flight changes at the window's end. A change is in flight at T when it has not landed by T, its landing is not unknown at T, and a linked task was open, active, or blocked at T. Its age runs from the creation of its first linked task. The baseline SHALL be the same reading at the baseline window's end. Statuses inferred from backfilled records SHALL mark the value approximate.
+The delivery family SHALL report the p50 and p90 age of in-flight changes at the window's end. A change is in flight at T when it is known not contained by T (not landed, or landed after T) and a linked task was open, active, or blocked at T. Its age runs from the creation of its first linked task. The baseline SHALL be the same reading at the baseline window's end. Statuses inferred from backfilled records SHALL mark the value approximate.
 
 #### Scenario: Stuck change
 - **WHEN** a change's first task was created 9 days before the window's end and it has not landed
@@ -141,7 +168,7 @@ The delivery family SHALL report the p50 and p90 age of in-flight changes at the
 - **THEN** it counts as in flight in the baseline reading
 
 ### Requirement: Degradation rules are a fixed table
-Kawai SHALL evaluate a fixed table of degradation rules over the 7d window and its baseline. No surface, tool, or configuration SHALL change a rule. Each rule SHALL state the inputs it needs, and SHALL fire only when they are present, complete, and above its sample floors. A rule SHALL NOT fire while delivery facts are stale, behind, or unavailable. Rules SHALL be evaluated at read time, and their outcomes SHALL NOT be stored.
+Kawai SHALL evaluate a fixed table of degradation rules over the 7d window and its baseline by exact integer comparison. No surface, tool, or configuration SHALL change a rule. A rule SHALL fire only when the evidence of every count it reads is complete on both sides, including supplied source coverage, its sample floors are met, and the state projected at return is current. Outcomes SHALL be evaluated at read time and SHALL NOT be stored.
 
 #### Scenario: Delivery drop while busy
 - **WHEN** the 7d window lands 6 changes against a baseline of 40 and 59 integrations against 146, and tokens are not lower than in the baseline
@@ -152,7 +179,7 @@ Kawai SHALL evaluate a fixed table of degradation rules over the 7d window and i
 - **THEN** the delivery-drop rule does not fire
 
 #### Scenario: No usage recorded
-- **WHEN** changes landed fall from 40 to 6 and integrations fall, but neither window has any recorded turn usage
+- **WHEN** changes landed fall from 40 to 6 and integrations fall, coverage is supplied as supported, but neither window has any recorded turn usage
 - **THEN** no rule that compares tokens fires, and the rule states that baseline usage is missing
 
 #### Scenario: Cost rises while integrations hold
@@ -162,6 +189,21 @@ Kawai SHALL evaluate a fixed table of degradation rules over the 7d window and i
 #### Scenario: Stale facts
 - **WHEN** the delivery-drop condition holds but the last fetch is 30 hours old
 - **THEN** no rule fires and the stale state is reported instead
+
+#### Scenario: Unknown landings suppress alerts
+- **WHEN** 34 archives of the baseline week have unknown membership because of a backdated position
+- **THEN** every rule that reads changes landed is not evaluable, stating incomplete evidence
+
+#### Scenario: Drop subsumes cost
+- **WHEN** landings fall from 10 to 3, integrations from 10 to 7, and tokens from 100 to 90, with complete evidence
+- **THEN** only the delivery-drop rule fires
+
+### Requirement: Source coverage is a supplied input
+Whether a usage or limit source recorded continuously over a span SHALL come only from a supplied source-coverage input. Kawai SHALL NOT infer it from migration times, first rows, retention, or table presence. Until a producer supplies it, coverage SHALL read unknown, and every rule or trend mark that reads tokens or limits SHALL be not evaluable.
+
+#### Scenario: Coverage not established
+- **WHEN** every migration row exists and usage rows are recorded on every day, but no producer supplies coverage
+- **THEN** the delivery-drop and cost-per-change rules are not evaluable, stating that coverage is unknown
 
 ### Requirement: Delivery metrics are exported when the endpoint is enabled
 When the optional `/metrics` endpoint is enabled, it SHALL also export, per team alias:
@@ -180,7 +222,7 @@ A disabled endpoint SHALL export nothing.
 - **THEN** `kawai_degradation_rule_firing{rule="delivery-drop"}` reads 1 for its team alias, and reads 0 once it stops
 
 ### Requirement: An enabled export keeps delivery current without a viewer
-While the endpoint is enabled, Kawai SHALL refresh delivery facts and re-evaluate the rules for every registered team periodically, whether or not any browser, subscription, or tool reads them. A rule gauge SHALL read 1 only for a rule outcome evaluated recently over the current facts, and SHALL read 0 otherwise.
+While the endpoint is enabled, Kawai SHALL refresh delivery facts and re-evaluate the rules for every registered team periodically, whether or not any browser, subscription, or tool reads them. A rule gauge SHALL read 1 only while the outcome projected at the scrape is current and the rule fires, and SHALL read 0 otherwise.
 
 #### Scenario: Export-only restart
 - **WHEN** the server restarts with the endpoint enabled and no browser ever connects
@@ -189,6 +231,10 @@ While the endpoint is enabled, Kawai SHALL refresh delivery facts and re-evaluat
 #### Scenario: Viewer closes
 - **WHEN** the last workspace view of the team closes and a rule later stops holding
 - **THEN** the next refresh sets its gauge to 0
+
+#### Scenario: Ref moved since the evaluation
+- **WHEN** a rule fired and the ref moves before the next evaluation
+- **THEN** the next scrape reads its gauge 0 without running git
 
 ### Requirement: Exported delivery totals are recomputed, never accumulated
 Delivery counters and histograms SHALL be derived at each scrape from the current facts of the whole default-branch history and the team's task records. They SHALL survive restarts without stored state once facts are read again, and SHALL decrease only when that history is rewritten or task records are removed. A scrape SHALL NOT run git. It SHALL read the cached facts, and while none exist it SHALL export only an availability gauge of 0 for the team.

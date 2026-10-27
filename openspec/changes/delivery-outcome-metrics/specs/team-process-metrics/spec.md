@@ -3,7 +3,7 @@
 ## ADDED Requirements
 
 ### Requirement: Landed-result share measures delivery of done tasks
-Kawai SHALL report `landed_result_share`: of the tasks first done in the window that have a result, the share whose newest result's commit had landed on the default branch by the window's end. Results whose commit cannot be resolved, results whose landing is unknown at the window's end, and tasks without a result SHALL be excluded and counted in the metric's coverage note. While delivery facts are unavailable, the metric SHALL read as unavailable.
+Kawai SHALL report `landed_result_share`: of the tasks first done in the window that have a result, the share whose newest result's commit is contained by the window's end on the default branch. Unresolvable commits (anything but a known full literal id), commits whose containment at the end is unknown, and tasks without a result SHALL be excluded and counted in the coverage note. While delivery facts are unavailable, the metric SHALL read as unavailable.
 
 #### Scenario: Done but not merged
 - **WHEN** 10 tasks are first done in the window with results and 4 of those commits have landed by the window's end
@@ -14,8 +14,12 @@ Kawai SHALL report `landed_result_share`: of the tasks first done in the window 
 - **THEN** `landed_result_share` reads 1.0 and `accepted_result_share` still reads 0
 
 #### Scenario: Landing unknown at the end
-- **WHEN** one of 10 commits first landed at a backdated first-parent commit whose order against the window's end is unknown
+- **WHEN** one of 10 commits first landed at a first-parent position whose containment by the window's end is unknown
 - **THEN** `landed_result_share` has `n` 9, and its coverage note counts one unknown landing
+
+#### Scenario: Abbreviated commit
+- **WHEN** one of 10 results names a 7-digit commit prefix
+- **THEN** `landed_result_share` has `n` 9, and its coverage note counts one unresolvable commit
 
 ### Requirement: The agent tool offers drill-down for named metrics
 A `team_metrics` call naming one or more metric ids SHALL return those metrics with their drill lists and breakdowns, plus slice rows when a slice is asked. Each drill list SHALL be capped at 50 entries and state its total. An unknown metric id SHALL be refused, naming the known ids.
@@ -48,15 +52,19 @@ Kawai SHALL compute trends for a team over a range of 4, 8, or 12 weeks: one poi
 - **THEN** that point's values change on the next read, and the view states when and from which head it was recomputed
 
 ### Requirement: Trend points state incomplete inputs
-A metric at a trend point SHALL be marked partial, never shown smaller, when the records it reads for either its window or its baseline predate their retention or recording start: limit events, with their lookback, for limit tax, and completed-turn usage for token metrics. A point before the team's first recorded data SHALL read as no data.
+A metric at a trend point SHALL keep the legacy flags its 7d read computes, and SHALL separately be marked incomplete evidence when either side's evidence is incomplete: an unknown membership or containment, approximate history, or source coverage not supplied as supported over its required span. A rule mark SHALL need complete evidence and a current projected state. A point before the team's first recorded data SHALL read as no data.
 
-#### Scenario: Limit tax beyond retention
-- **WHEN** the 8-week trend includes a point ending 40 days ago
-- **THEN** that point's limit tax is marked partial
+#### Scenario: Limit tax beyond coverage
+- **WHEN** the 8-week trend includes a point ending 40 days ago and supplied coverage starts 30 days ago
+- **THEN** that point's limit tax is marked incomplete evidence, and its legacy flags are unchanged
 
 #### Scenario: Baseline beyond usage retention
 - **WHEN** the 12-week trend's oldest point has a window starting 84 days ago and a baseline starting 91 days ago
-- **THEN** that point's token metrics are marked partial
+- **THEN** that point's token metrics keep the partial flags the 7d read computes today
+
+#### Scenario: Coverage unknown
+- **WHEN** no producer supplies source coverage
+- **THEN** every token and limit metric at every point is marked incomplete evidence, and no token rule mark appears
 
 ### Requirement: A metrics read can end at a chosen time
 The Metrics tab SHALL accept a read ending at a chosen past time. Such a read SHALL equal that trend point, and every refresh or re-send of that view SHALL keep the chosen end until another is chosen. A read without one SHALL end now, as today.
@@ -66,7 +74,7 @@ The Metrics tab SHALL accept a read ending at a chosen past time. Such a read SH
 - **THEN** the refreshed read still ends 2026-10-20
 
 ### Requirement: The Metrics tab has a Trends view
-The Metrics tab SHALL offer a Trends view with a range choice of 4, 8, or 12 weeks. It SHALL show one chart per metric, grouped by family, with marks on points where a rule fired. It SHALL show the delivery stale marker, and an accessible table alternative listing every point's value and `n`. Choosing a point SHALL open the 7d window that point represents. The location SHALL name the view and range, and controls SHALL disable while disconnected.
+The Metrics tab SHALL offer a Trends view with a range choice of 4, 8, or 12 weeks. It SHALL show one chart per metric, grouped by family, with marks on points where a rule fired. It SHALL show the delivery state projected at return, and an accessible table alternative listing every point's value and `n`. Choosing a point SHALL open the 7d window that point represents. The location SHALL name the view and range, and controls SHALL disable while disconnected.
 
 #### Scenario: Open a point
 - **WHEN** the human chooses the point ending 2026-10-27 on the changes-landed chart
@@ -111,8 +119,8 @@ The `kawai-team` server SHALL offer `team_metrics`, taking a window, an optional
 - **THEN** every value, `n`, and baseline is identical
 
 #### Scenario: Flags survive compaction
-- **WHEN** a metric is partial, approximate, or unavailable
-- **THEN** the compact read carries the same flag and reason
+- **WHEN** a metric is partial, approximate, unavailable, or has incomplete evidence
+- **THEN** the compact read carries the same flag, reason, evidence, and projected delivery state
 
 #### Scenario: Unknown window
 - **WHEN** an agent calls `team_metrics` with window `30d`
