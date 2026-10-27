@@ -347,15 +347,16 @@ export class CredentialStore {
   }
 
   /** Temp O_EXCL|O_NOFOLLOW at 0600, write, fsync, close, rename = commit
-   * point. Before it a failure keeps prior bytes and removes the temp (each
-   * descriptor closed exactly once); after it a directory-fsync failure
-   * reports applied but not durable — no rollback, no retry. */
+   * point. Before it a failure keeps prior bytes and removes the temp (at
+   * most one close attempt per descriptor — ownership ends at the attempt,
+   * never retried); after it a directory-fsync failure reports applied but
+   * not durable — no rollback, no retry. */
   private atomicWrite(entries: Entries): CredentialSetOutcome {
     const dir = path.dirname(this.storePath)
     const payload = Buffer.from(JSON.stringify({ version: 1, entries }), 'utf8')
     const tmp = path.join(dir, `.${path.basename(this.storePath)}.tmp-${process.pid}-${tmpSeq++}`)
     let fd: number
-    let closed = false
+    let closeAttempted = false
     try {
       fd = this.deps.openSync(
         tmp,
@@ -372,16 +373,16 @@ export class CredentialStore {
       }
       this.deps.fchmodSync(fd, 0o600)
       this.deps.fsyncSync(fd)
+      closeAttempted = true
       this.deps.closeSync(fd)
-      closed = true
     } catch {
-      this.discardTemp(fd, tmp, closed)
+      this.discardTemp(fd, tmp, closeAttempted)
       throw new CredentialStoreError('write-failed')
     }
     try {
       this.deps.renameSync(tmp, this.storePath)
     } catch {
-      this.discardTemp(fd, tmp, closed)
+      this.discardTemp(fd, tmp, closeAttempted)
       throw new CredentialStoreError('write-failed')
     }
     let durable = true
@@ -395,9 +396,11 @@ export class CredentialStore {
     return { applied: true, durable }
   }
 
-  private discardTemp(fd: number, tmp: string, closed: boolean): void {
-    if (!closed) {
-      try { this.deps.closeSync(fd) } catch { /* already closed */ }
+  /** Cleanup from OWNED only: one close attempt if none was made (a throw
+   * leaves the OS fd state unknown — never retried), then always unlink. */
+  private discardTemp(fd: number, tmp: string, closeAttempted: boolean): void {
+    if (!closeAttempted) {
+      try { this.deps.closeSync(fd) } catch { /* attempt spent; fd number retired */ }
     }
     try { this.deps.unlinkSync(tmp) } catch { /* nothing safe to report */ }
   }

@@ -523,7 +523,8 @@ describe('N-1 missing is not unreadable', () => {
       return // stated skip: root bypasses directory permissions
     }
     // The store path sits behind an unreadable ancestor so the parent stat
-    // itself fails with EACCES (this host stats a directly-0000 parent).
+    // itself fails with EACCES. stat of a 0000 directory itself can succeed —
+    // search permission is required only on its ancestors.
     const sealed = path.join(root, 'sealed')
     realFs.mkdirSync(sealed)
     const store = createCredentialStore(path.join(sealed, 'sub', 'credentials.json'))
@@ -531,10 +532,11 @@ describe('N-1 missing is not unreadable', () => {
     try {
       expect(store.status()).toEqual({ ok: false, reason: 'unreadable' })
       await expectCodeAsync(store.set('a', 'v', 'launch-env'), 'write-failed')
-      expect(realFs.existsSync(path.join(sealed, 'sub'))).toBe(false)
     } finally {
       realFs.chmodSync(sealed, 0o700)
     }
+    // Visible again: the absence assertion now proves real absence.
+    expect(realFs.existsSync(path.join(sealed, 'sub'))).toBe(false)
   })
 })
 
@@ -565,6 +567,34 @@ describe('N-2 descriptor ownership', () => {
     const store = createCredentialStore(sp(), { deps })
     await expectCodeAsync(store.set('a', 'v', 'launch-env'), 'write-failed')
     expect(closesOfTemp.length).toBe(1)
+    expect(realFs.readFileSync(sp(), 'utf8')).toBe(raw)
+    expect(realFs.readdirSync(root).filter((name) => name.includes('.tmp-'))).toEqual([])
+  })
+
+  test('a throwing close was the one attempt: no second close reaches the OS', async () => {
+    const raw = '{"version":1,"entries":{"old":{"kind":"launch-env","value":"o"}}}'
+    realFs.writeFileSync(sp(), raw)
+    realFs.chmodSync(sp(), 0o600)
+    let tempFd = -1
+    let closeAttempts = 0
+    const deps = {
+      openSync: (target: Parameters<typeof realFs.openSync>[0], flags: number, ...rest: unknown[]) => {
+        const fd = (realFs.openSync as (...args: unknown[]) => number)(target, flags, ...rest)
+        if (String(target).includes('.tmp-')) tempFd = fd
+        return fd
+      },
+      closeSync: (fd: number) => {
+        if (fd === tempFd) {
+          closeAttempts += 1
+          realFs.closeSync(fd) // the real close happens, then the failure surfaces
+          throw new Error('injected close failure after real close')
+        }
+        realFs.closeSync(fd)
+      },
+    } as unknown as Partial<import('../chat/credentialStore').CredentialFsDeps>
+    const store = createCredentialStore(sp(), { deps })
+    await expectCodeAsync(store.set('a', 'v', 'launch-env'), 'write-failed')
+    expect(closeAttempts).toBe(1)
     expect(realFs.readFileSync(sp(), 'utf8')).toBe(raw)
     expect(realFs.readdirSync(root).filter((name) => name.includes('.tmp-'))).toEqual([])
   })
