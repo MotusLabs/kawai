@@ -29,7 +29,9 @@ question text, preview, or surrounding transcript):
   supported typo; arbitrary misspellings are not inferred.
 - A phrase qualifies when it occupies an entire field, is a leading marker
   followed by punctuation and explanation, or is a trailing annotation
-  separated from preceding option text by brackets or a dash/colon. Thus
+  separated from preceding option text by brackets or a dash/colon that starts
+  the field or follows whitespace, so a hyphen inside a word
+  (`Least-recommended`) is prose, never an annotation. Thus
   `A (Recommended)`, `A — My recommendation`, `[MY RECOMMENDATION]`, and a
   description `I recommend this. It is easier to maintain.` qualify.
   A bare word inside prose, such as `Uses the recommended settings`, or a
@@ -39,7 +41,9 @@ question text, preview, or surrounding transcript):
 - A field that negates or disclaims the recommendation does not supply a
   positive match: `Not recommended`, `I do not recommend this`,
   `I don't recommend this`, `I never recommend this`, and
-  `This is not my recommendation` are negative cases. If either field
+  `This is not my recommendation` are negative cases. A hyphen or dash joins
+  `not`/`non` to the phrase just like a space (`not-recommended`,
+  `non-recommended`). If either field
   explicitly negates a recommendation of this option, exclude that option
   even if its other field has a positive marker; do not resolve conflicting
   signals by field order. Implement this as bounded negative phrase rules,
@@ -111,6 +115,9 @@ for both displayed and submitted answers. Evidence map:
   explicit negative precedence, and independent negative fixtures.
 - [An unseen phrase remains unmatched] → keep the request waiting; expand the
   supported grammar through another explicit specification change.
+- [A hyphen inside a negation reads as an annotation separator] → dash-like
+  suffix separators require the field start or preceding whitespace, and
+  hyphen/dash-joined `not`/`non` phrases veto either field (B1 fixtures).
 
 ## Migration Plan
 

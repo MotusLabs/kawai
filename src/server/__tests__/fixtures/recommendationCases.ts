@@ -40,6 +40,15 @@ export const recommendationCases: Array<{ option: Option; matches: boolean }> = 
   { option: { label: 'Not recommended', description: 'My recommendation' }, matches: false },
   { option: { label: 'A (Recommended)', description: "I don’t recommend this" }, matches: false },
   { option: { label: 'A', description: 'Not recommended. My recommendation' }, matches: false },
+  // Review finding B1 (R2): a hyphen inside a word is never a dash
+  // separator, and hyphen/dash-joined not/non vetoes either field.
+  { option: { label: 'Skip tests (not-recommended)' }, matches: false },
+  { option: { label: 'Skip tests — not-recommended' }, matches: false },
+  { option: { label: 'Not-recommended' }, matches: false },
+  { option: { label: 'Non-recommended' }, matches: false },
+  { option: { label: 'Least-recommended' }, matches: false },
+  { option: { label: 'A (Recommended)', description: 'Not-recommended' }, matches: false },
+  { option: { label: 'A (Recommended)', description: 'Non-recommended' }, matches: false },
   { option: { label: 'Review my recommendation' }, matches: false },
   { option: { label: 'Uses the recommended settings' }, matches: false },
   { option: { label: 'A (Recommended) only in a different situation' }, matches: false },

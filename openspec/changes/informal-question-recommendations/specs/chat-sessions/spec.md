@@ -9,7 +9,7 @@ and punctuation. Negated or incidental mentions SHALL NOT qualify; explicit
 negation in either field SHALL exclude the option.
 
 #### Scenario: Supported marker positions
-- **WHEN** a supported phrase occupies an entire label or description, starts it followed by punctuation and explanation, or forms a trailing annotation separated from preceding text by brackets or a dash/colon
+- **WHEN** a supported phrase occupies an entire label or description, starts it followed by punctuation and explanation, or forms a trailing annotation separated from preceding text by brackets or a dash/colon at the field start or after whitespace
 - **THEN** it qualifies as a recommendation, including the existing trailing `(Recommended)` convention
 
 #### Scenario: Recommendation in an option description
@@ -21,7 +21,7 @@ negation in either field SHALL exclude the option.
 - **THEN** the option qualifies as recommended and can supply its question's automatic answer
 
 #### Scenario: Negated or conflicting recommendations do not qualify
-- **WHEN** an option's only signal is `Not recommended`, `I do not recommend this`, `I don't recommend this`, `I never recommend this`, or `This is not my recommendation`, or its label is `A (Recommended)` but its description is `Not recommended`
+- **WHEN** an option's only signal is `Not recommended`, `Not-recommended`, `Non-recommended`, `I do not recommend this`, `I don't recommend this`, `I never recommend this`, or `This is not my recommendation`, or its label is `A (Recommended)` but its description is `Not-recommended`, or a hyphen ends a word inside a phrase such as `Least-recommended`
 - **THEN** that option does not qualify and a question with no other qualifying option prevents a deadline for the entire request
 
 #### Scenario: Incidental mentions and unrelated fields do not qualify

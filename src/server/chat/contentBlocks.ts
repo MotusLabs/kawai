@@ -9,11 +9,13 @@ export { ASK_USER_QUESTION_TOOL }
 
 // Bounded recommendation grammar (informal-question-recommendations D1). Match only
 // explicit annotations, never arbitrary occurrences of "recommend" in prose.
+// A dash-like suffix separator must start the field or follow whitespace — a
+// hyphen inside a word ("not-recommended") is prose, never an annotation (B1).
 const RECOMMENDATION_PHRASE = '(?:recommended|i recom{1,2}end this|my recommendation)'
 const WHOLE_RECOMMENDATION = new RegExp(String.raw`^[\p{P} ]*${RECOMMENDATION_PHRASE}[\p{P} ]*$`, 'u')
 const LEADING_RECOMMENDATION = new RegExp(String.raw`^[\p{P} ]*${RECOMMENDATION_PHRASE}[\p{Pe}\p{Pf}"' ]*[.!?:;,–—-] *\S`, 'u')
-const TRAILING_RECOMMENDATION = new RegExp(String.raw`(?:[(\[] *${RECOMMENDATION_PHRASE} *[)\]]|[–—:-] *[\p{P} ]*${RECOMMENDATION_PHRASE})[\p{P} ]*$`, 'u')
-const NEGATED_RECOMMENDATION = /\b(?:(?:not|never) (?:recommended|my recommendation)|i (?:do not|don['’]t|never|would not|wouldn['’]t|cannot|can['’]t) recom{1,2}end this)\b/
+const TRAILING_RECOMMENDATION = new RegExp(String.raw`(?:[(\[] *${RECOMMENDATION_PHRASE} *[)\]]|(?:(?:^|\s)[–—-]|:) *[\p{P} ]*${RECOMMENDATION_PHRASE})[\p{P} ]*$`, 'u')
+const NEGATED_RECOMMENDATION = /\b(?:(?:not|never|non)[\s–—-]+(?:recommended|my recommendation)|i (?:do not|don['’]t|never|would not|wouldn['’]t|cannot|can['’]t) recom{1,2}end this)\b/
 
 function recommendationText(value: unknown): string {
   return typeof value === 'string'
@@ -29,7 +31,8 @@ function hasRecommendation(text: string): boolean {
 
 function negatesRecommendation(text: string): boolean {
   // Wrapping a negative marker in brackets does not turn it positive:
-  // "Not (Recommended)" must veto the trailing annotation too.
+  // "Not (Recommended)" must veto the trailing annotation too. A hyphen or
+  // dash joins "not"/"non" to the phrase just like a space (B1).
   return NEGATED_RECOMMENDATION.test(text.replace(/[()[\]]/g, ' ').replace(/ +/g, ' '))
 }
 

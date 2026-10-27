@@ -232,6 +232,89 @@ describe('ChatSessionManager question auto-answer', () => {
     }
   }, 30_000)
 
+  test('hyphenated negative-first options never win and an all-negative question never arms (B1)', async () => {
+    const clock = new ManualClock()
+    // Replace only the process-timer boundary, as in QA-R6: the manager,
+    // driver, parsing, detection, and settlement stay production code.
+    const schedule = spyOn(realTimerScheduler, 'schedule').mockImplementation(
+      (ms, fire) => clock.schedule(ms, fire))
+    const cancel = spyOn(realTimerScheduler, 'cancel').mockImplementation(
+      (handle) => clock.cancel(handle))
+    const handles: FakeHandle[] = []
+    const events: ChatEvent[] = []
+    let cleanup = () => {}
+    try {
+      const manager = await managedManager({
+        isDirectory: anyDirectory,
+        registry: new SessionRegistry(), db,
+        onEvent: (_sessionId, event) => events.push(event),
+        queryFactory: fakeQueryFactory(handles),
+        getQuestionAutoAnswerMinutes: () => 1,
+      })
+      const created = manager.createSession({ projectPath: '/tmp/proj' })
+      if (!created.ok) throw new Error(created.error)
+      const id = created.session.id
+      cleanup = () => { manager.kill(id) }
+      await manager.send(id, 'go')
+      await flush()
+      const ask = (label: string, options: Array<{ label: string }>) => handles.at(-1)!.options.canUseTool!(
+        'AskUserQuestion',
+        { questions: [{ question: label, header: label, options }] },
+        { signal: new AbortController().signal, toolUseID: label, requestId: label }
+      )
+      // A hyphenated negative first option must not supply the answer: the
+      // safe later recommendation wins and the timeout submits that label.
+      const automatic = ask('Flow?', [
+        { label: 'Force push (not-recommended)' },
+        { label: 'Open a PR (Recommended)' },
+      ])
+      await flush()
+      const requestId = pendingRequestId(events, 'Flow?')
+      const pending = manager.getPendingRequests(id).find((r) => r.requestId === requestId)
+      expect(pending?.kind === 'question' ? pending.autoAnswer?.answers : undefined).toEqual({
+        'Flow?': { options: ['Open a PR (Recommended)'] },
+      })
+      clock.advance(59_999)
+      expect(events.some((event) => event.type === 'request_resolved')).toBe(false)
+      clock.advance(1)
+      const result = await Promise.race([
+        automatic,
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 100)),
+      ])
+      expect(result).toMatchObject({ behavior: 'allow', updatedInput: {
+        answers: { 'Flow?': 'Open a PR (Recommended)' },
+        response: 'No answer from the user within 1 minute; the recommended option was selected automatically.',
+      } })
+      expect(events.find((event) => event.type === 'request_resolved')).toMatchObject({
+        requestId, outcome: 'answered', decidedBy: 'timeout',
+        answers: { 'Flow?': 'Open a PR (Recommended)' },
+      })
+      expect(manager.getPendingRequests(id)).toHaveLength(0)
+
+      // A question whose every option is a hyphenated negative arms no
+      // deadline: it waits for the user like any unmarked question.
+      const waited = ask('Cleanup?', [
+        { label: 'Skip tests (not-recommended)' },
+        { label: 'Non-recommended' },
+      ])
+      await flush()
+      const waitedId = pendingRequestId(events, 'Cleanup?')
+      expect(clock.pendingCount).toBe(0)
+      expect(stillPendingAfterHold(manager, id, 'Cleanup?')?.autoAnswer).toBeUndefined()
+      clock.advance(120_000)
+      await flush()
+      expect(events.filter((event) => event.type === 'request_resolved')).toHaveLength(1)
+      expect(manager.getPendingRequests(id)).toHaveLength(1)
+      expect(manager.answerQuestion(id, waitedId, { 'Cleanup?': { options: ['Non-recommended'] } })).toEqual({ ok: true })
+      await waited
+    } finally {
+      cleanup()
+      schedule.mockRestore()
+      cancel.mockRestore()
+      await flush()
+    }
+  }, 30_000)
+
   test('only the claude branch receives the getter; shared options never carry it (QA-U4)', () => {
     const managerSource = fs.readFileSync(
       path.join(import.meta.dir, '../chat/ChatSessionManager.ts'),

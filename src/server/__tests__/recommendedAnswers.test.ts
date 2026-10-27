@@ -102,6 +102,26 @@ describe('informal recommendation grammar (QA-R1–QA-R5)', () => {
     })
   })
 
+  test('hyphenated negatives never win over a safe later recommendation (B1)', () => {
+    const options = [
+      { label: 'Force push (not-recommended)' },
+      { label: 'Open a PR (Recommended)' },
+      { label: 'Skip tests — not-recommended' },
+    ]
+    expect(recommendedAnswers([question({ options })])).toEqual({
+      'Which library?': { options: ['Open a PR (Recommended)'] },
+    })
+    expect(recommendedAnswers([question({ options, multiSelect: true })])).toEqual({
+      'Which library?': { options: ['Open a PR (Recommended)'] },
+    })
+  })
+
+  test('a question whose options are all hyphenated negatives yields null (B1)', () => {
+    expect(recommendedAnswers([question({
+      options: [{ label: 'Not-recommended' }, { label: 'Non-recommended' }, { label: 'Least-recommended' }],
+    })])).toBeNull()
+  })
+
   test('one unmarked question prevents answers even when others have description markers', () => {
     expect(recommendedAnswers([
       question({ options: [{ label: 'A', description: 'I recommend this' }] }),
