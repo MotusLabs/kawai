@@ -1,4 +1,4 @@
-// @reads: docs/architecture.md
+// @reads: docs/architecture/mailbox.md
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { schemaDb } from './schemaDb'
@@ -205,7 +205,7 @@ describe('team_message_events', () => {
     const killed = walk(send({ toKind: 'session', toId: 'chat-gone' }))
     store.deadLetterDirectTo('chat-gone', 'killed-recipient'); walk(killed)
 
-    const documented = fs.readFileSync(path.join(import.meta.dir, '../../../docs/architecture.md'), 'utf8')
+    const documented = fs.readFileSync(path.join(import.meta.dir, '../../../docs/architecture/mailbox.md'), 'utf8')
       .split('\n').find(line => line.startsWith('- Every message state change is recorded'))!
     const kinds = new Set([...documented.matchAll(/`([a-z-]+)`/g)].map(match => match[1]!)
       .filter(name => name !== 'team_message_events' && name !== 'messageEvents.ts' && name !== 'MailboxStore' && name !== 'human' && name !== 'system'))

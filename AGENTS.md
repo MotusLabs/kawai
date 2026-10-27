@@ -72,7 +72,7 @@ build info under `node_modules/`, never committed).
 - Backend discovers windows, streams terminal output via WebSocket
 - Parses Claude/Codex JSONL logs from `~/.claude/projects/` and `~/.codex/sessions/` for status
 - Status: unknown -> working -> waiting (derived from log events)
-- Chat sessions (Claude Agent SDK and Codex app-server), notifications, teams and mailbox, tasks, strategy, plans and plan execution, outbound audit, process metrics, database safety, and the navigator/Team page UI are specified in `docs/architecture.md`, one bullet per subsystem. Before changing a subsystem, grep that file for its name (e.g. `grep -n '^- Plan execution' docs/architecture.md`) and read the matching bullet; never read the file whole.
+- Chat sessions (Claude Agent SDK and Codex app-server), teams and mailbox, routing and limits, tasks, strategy, plans (supervision, execution, workspace), outbound audit, process metrics, database safety, and the Team page are specified in `docs/architecture/`, one file per area (index: `docs/architecture/README.md`) and one bullet per subsystem. Before changing a subsystem, read its bullet: open the area's file or grep the directory (e.g. `grep -rn '^- Plan execution' docs/architecture/`).
 
 ## Structure
 
