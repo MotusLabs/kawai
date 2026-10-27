@@ -125,6 +125,7 @@ test('an unmarked question never gets a deadline (QA-8, QA-U1, QA-P3)', async ()
   harness.driver.kill()
 })
 
+// @covers: chat-sessions › Recommended answers are taken after a configurable wait › Question without a recommendation keeps waiting
 test('a partially recommended request never gets a deadline (spec: keeps waiting)', async () => {
   const clock = new ManualClock()
   const harness = createHarness({
@@ -158,6 +159,7 @@ test('a zero wait sets no deadline even for a full recommendation (QA-S2)', asyn
   harness.driver.kill()
 })
 
+// @covers: chat-sessions › Recommended answers are taken after a configurable wait › A Codex chat question waits for the user
 test('without the option the driver sets no deadline (QA-U4 driver half)', async () => {
   const clock = new ManualClock()
   const harness = createHarness({ timerScheduler: clock })
@@ -170,6 +172,7 @@ test('without the option the driver sets no deadline (QA-U4 driver half)', async
   harness.driver.kill()
 })
 
+// @covers: chat-sessions › Recommended answers are taken after a configurable wait › Multi-select takes every recommendation
 test('multi-select takes every recommended label into the deadline answers (spec: multi-select)', async () => {
   const clock = new ManualClock()
   const harness = createHarness({
@@ -210,6 +213,7 @@ test('the wait is read per question: a later question uses the new value and the
   harness.driver.kill()
 })
 
+// @covers: chat-sessions › Recommended answers are taken after a configurable wait › Unanswered question takes the recommendation
 test('the deadline answers with the recommendation, the D3 note, and timeout decided-by (QA-1)', async () => {
   const clock = new ManualClock()
   const harness = createHarness({
@@ -249,6 +253,44 @@ test('the deadline answers with the recommendation, the D3 note, and timeout dec
   }
 })
 
+// @covers: chat-sessions › Recommended answers are taken after a configurable wait › Applies under either approval policy
+test('a recommended question arms and settles under either approval policy (spec: approval policies)', async () => {
+  for (const policy of ['manual', 'auto'] as const) {
+    const clock = new ManualClock()
+    const harness = createHarness({
+      getApprovalPolicy: () => policy,
+      getQuestionAutoAnswerMs: () => WAIT_MS,
+      timerScheduler: clock,
+    })
+    harness.driver.send('ask')
+    const ask = askQuestionRaw(harness, [{ question: 'Deploy?', options: ['Yes (Recommended)', 'No'] }])
+    try {
+      await flush()
+      const request = questionRequests(harness.events).at(-1)!
+      // Either policy arms the deadline, with the original labels in its answers.
+      expect(request.autoAnswer).toBeDefined()
+      expect(clock.pendingCount).toBe(1)
+      expect(request.autoAnswer!.answers).toEqual({
+        'Deploy?': { options: ['Yes (Recommended)'] },
+      })
+      // The timed settlement submits that exact original label, once.
+      clock.advance(WAIT_MS)
+      const settled = await bounded(ask.promise)
+      expect(settled).toMatchObject({
+        behavior: 'allow',
+        updatedInput: { answers: { 'Deploy?': 'Yes (Recommended)' } },
+      })
+      const resolutions = harness.events.filter((event) => event.type === 'request_resolved')
+      expect(resolutions).toHaveLength(1)
+      expect(resolutions[0]).toMatchObject({ outcome: 'answered', decidedBy: 'timeout' })
+    } finally {
+      harness.driver.kill()
+      await bounded(ask.promise)
+    }
+  }
+})
+
+// @covers: chat-sessions › Recommended answers are taken after a configurable wait › User answers before the deadline
 test('a user answer before the deadline wins and no second settlement follows (QA-2, QA-15)', async () => {
   const clock = new ManualClock()
   const harness = createHarness({
@@ -294,6 +336,7 @@ test('a second user answer after the timeout is refused stale (QA-12)', async ()
   }
 })
 
+// @covers: chat-sessions › Recommended answers are taken after a configurable wait › Cancelled request is never auto-answered
 test('an abort before the deadline cancels and never auto-answers (QA-5, QA-20)', async () => {
   const clock = new ManualClock()
   const harness = createHarness({
