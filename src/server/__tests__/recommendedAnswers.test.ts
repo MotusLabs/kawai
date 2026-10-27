@@ -81,12 +81,17 @@ describe('recommendedAnswers', () => {
 
 describe('informal recommendation grammar (QA-R1–QA-R5)', () => {
   for (const { option, matches } of recommendationCases) {
+    // @covers: chat-sessions › Explicit recommendation wording identifies an option › Supported marker positions
+    // @covers: chat-sessions › Explicit recommendation wording identifies an option › Informal markers and the observed typo qualify
+    // @covers: chat-sessions › Explicit recommendation wording identifies an option › Negated or conflicting recommendations do not qualify
+    // @covers: chat-sessions › Explicit recommendation wording identifies an option › Incidental mentions and unrelated fields do not qualify
     test(JSON.stringify(option), () => {
       const answers = recommendedAnswers([question({ options: [option] })])
       expect(answers).toEqual(matches ? { 'Which library?': { options: [option.label] } } : null)
     })
   }
 
+  // @covers: chat-sessions › Explicit recommendation wording identifies an option › Mixed markers preserve selection order and labels
   test('mixed fields preserve input order, original labels, and one selection per option', () => {
     const options = [
       { label: 'Ignore me' },
@@ -129,6 +134,7 @@ describe('informal recommendation grammar (QA-R1–QA-R5)', () => {
     ])).toBeNull()
   })
 
+  // @covers: chat-sessions › Explicit recommendation wording identifies an option › Only option labels and descriptions supply a signal
   test('question text and non-string descriptions never supply a signal', () => {
     for (const description of [undefined, null, 42, {}, ['Recommended']]) {
       const questions = parseQuestions({ questions: [{
