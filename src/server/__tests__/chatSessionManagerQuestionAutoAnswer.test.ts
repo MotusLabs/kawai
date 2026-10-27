@@ -4,7 +4,9 @@
 // production composition hazard M1 names, which a hand-built driver cannot
 // kill. The codex branch never receives the getter (QA-U4).
 // @reads: src/server/chat/ChatSessionManager.ts, src/server/chat/provider/createChatDriver.ts
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
+import { realTimerScheduler } from '../chat/timerScheduler'
+import { ManualClock } from './fixtures/manualClock'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -145,6 +147,87 @@ describe('ChatSessionManager question auto-answer', () => {
       expect(events.some((event) => event.type === 'request_resolved')).toBe(false)
     } finally {
       manager.kill(id)
+      await flush()
+    }
+  }, 30_000)
+
+  test('description-only recommendations time out with original labels and a hold prevents settlement (QA-R6)', async () => {
+    const clock = new ManualClock()
+    // Replace only the process-timer boundary; construction, setting getter,
+    // parsing, recommendation detection, and settlement use production code.
+    const schedule = spyOn(realTimerScheduler, 'schedule').mockImplementation(
+      (ms, fire) => clock.schedule(ms, fire))
+    const cancel = spyOn(realTimerScheduler, 'cancel').mockImplementation(
+      (handle) => clock.cancel(handle))
+    const handles: FakeHandle[] = []
+    const events: ChatEvent[] = []
+    let cleanup = () => {}
+    try {
+      const manager = await managedManager({
+        isDirectory: anyDirectory,
+        registry: new SessionRegistry(), db,
+        onEvent: (_sessionId, event) => events.push(event),
+        queryFactory: fakeQueryFactory(handles),
+        getQuestionAutoAnswerMinutes: () => 1,
+      })
+      const created = manager.createSession({ projectPath: '/tmp/proj' })
+      if (!created.ok) throw new Error(created.error)
+      const id = created.session.id
+      cleanup = () => { manager.kill(id) }
+      await manager.send(id, 'go')
+      await flush()
+      const ask = (label: string) => handles.at(-1)!.options.canUseTool!(
+        'AskUserQuestion',
+        { questions: [{ question: label, header: label, options: [
+          { label: '  Blue  ', description: 'I recomend this' },
+          { label: 'Red' },
+        ] }] },
+        { signal: new AbortController().signal, toolUseID: label, requestId: label }
+      )
+      const automatic = ask('Color?')
+      await flush()
+      const requestId = pendingRequestId(events, 'Color?')
+      const pending = manager.getPendingRequests(id).find((r) => r.requestId === requestId)
+      expect(pending?.kind === 'question' ? pending.autoAnswer?.answers : undefined).toEqual({
+        'Color?': { options: ['  Blue  '] },
+      })
+      const request = events.find((event) => event.type === 'question_request')
+      expect(request?.type === 'question_request' ? request.autoAnswer : undefined).toEqual(
+        pending?.kind === 'question' ? pending.autoAnswer : undefined)
+      clock.advance(59_999)
+      expect(events.some((event) => event.type === 'request_resolved')).toBe(false)
+      clock.advance(1)
+      const result = await Promise.race([
+        automatic,
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 100)),
+      ])
+      expect(result).toMatchObject({ behavior: 'allow', updatedInput: {
+        answers: { 'Color?': '  Blue  ' },
+        response: 'No answer from the user within 1 minute; the recommended option was selected automatically.',
+      } })
+      expect(events.find((event) => event.type === 'request_resolved')).toMatchObject({
+        requestId, outcome: 'answered', decidedBy: 'timeout', answers: { 'Color?': '  Blue  ' },
+      })
+      expect(manager.getPendingRequests(id)).toHaveLength(0)
+
+      const heldAnswer = ask('Held color?')
+      await flush()
+      const heldId = pendingRequestId(events, 'Held color?')
+      expect(clock.pendingCount).toBe(1)
+      expect(manager.holdQuestion(id, heldId)).toEqual({ ok: true })
+      expect(clock.pendingCount).toBe(0)
+      expect(stillPendingAfterHold(manager, id, 'Held color?')?.autoAnswer).toBeUndefined()
+      clock.advance(120_000)
+      await flush()
+      expect(events.filter((event) => event.type === 'request_resolved')).toHaveLength(1)
+      expect(manager.getPendingRequests(id)).toHaveLength(1)
+      expect(events.find((event) => event.type === 'question_auto_answer_held')).toMatchObject({ requestId: heldId })
+      expect(manager.answerQuestion(id, heldId, { 'Held color?': { options: ['Red'] } })).toEqual({ ok: true })
+      await heldAnswer
+    } finally {
+      cleanup()
+      schedule.mockRestore()
+      cancel.mockRestore()
       await flush()
     }
   }, 30_000)

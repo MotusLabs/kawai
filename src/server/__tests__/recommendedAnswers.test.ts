@@ -1,9 +1,10 @@
-// recommendedAnswers (question-auto-answer D1): the one derivation of
+// recommendedAnswers (informal-question-recommendations D1): the one derivation of
 // "recommended" — a deadline exists only when every question marks an option
-// whose label ends with `(Recommended)`, case-insensitively.
+// with an explicit recommendation in its label or description (D1).
 import { describe, expect, test } from 'bun:test'
 import type { ChatQuestion } from '../../shared/chat'
-import { recommendedAnswers } from '../chat/contentBlocks'
+import { parseQuestions, recommendedAnswers } from '../chat/contentBlocks'
+import { recommendationCases } from './fixtures/recommendationCases'
 
 function question(overrides: Partial<ChatQuestion> = {}): ChatQuestion {
   return {
@@ -74,5 +75,47 @@ describe('recommendedAnswers', () => {
       question({ multiSelect: true, options: [{ label: 'only (recommended)' }] }),
     ])
     expect(answers).toEqual({ 'Which library?': { options: ['only (recommended)'] } })
+  })
+})
+
+
+describe('informal recommendation grammar (QA-R1–QA-R5)', () => {
+  for (const { option, matches } of recommendationCases) {
+    test(JSON.stringify(option), () => {
+      const answers = recommendedAnswers([question({ options: [option] })])
+      expect(answers).toEqual(matches ? { 'Which library?': { options: [option.label] } } : null)
+    })
+  }
+
+  test('mixed fields preserve input order, original labels, and one selection per option', () => {
+    const options = [
+      { label: 'Ignore me' },
+      { label: '  A  ', description: 'I recomend this' },
+      { label: 'B (Recommended)', description: 'My recommendation' },
+      { label: 'C — My recommendation' },
+    ]
+    expect(recommendedAnswers([question({ options })])).toEqual({
+      'Which library?': { options: ['  A  '] },
+    })
+    expect(recommendedAnswers([question({ options, multiSelect: true })])).toEqual({
+      'Which library?': { options: ['  A  ', 'B (Recommended)', 'C — My recommendation'] },
+    })
+  })
+
+  test('one unmarked question prevents answers even when others have description markers', () => {
+    expect(recommendedAnswers([
+      question({ options: [{ label: 'A', description: 'I recommend this' }] }),
+      question({ question: 'Another?', options: [{ label: 'B' }] }),
+    ])).toBeNull()
+  })
+
+  test('question text and non-string descriptions never supply a signal', () => {
+    for (const description of [undefined, null, 42, {}, ['Recommended']]) {
+      const questions = parseQuestions({ questions: [{
+        question: 'I recommend this', header: 'Recommended',
+        options: [{ label: 'A', description }],
+      }] })!
+      expect(recommendedAnswers(questions)).toBeNull()
+    }
   })
 })
