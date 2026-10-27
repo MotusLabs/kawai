@@ -9,7 +9,7 @@ const tool = (id: string, turnId: string): ChatEvent =>
   ({ id, sequence: 0, at: '', type: 'tool_call', turnId, toolCallId: id, tool: 'Read', input: {} })
 
 const layout = (events: ChatEvent[], options?: Parameters<typeof layoutRows>[1]) =>
-  layoutRows(toolEntries(events).filter(isVisibleEntry), { timeZone: 'UTC', ...options })
+  layoutRows(toolEntries(events), { timeZone: 'UTC', ...options })
 
 describe('transcript layout (chat-transcript-layout D1)', () => {
   test('turns, author changes, and same-author continuations around a tool', () => {
@@ -29,12 +29,42 @@ describe('transcript layout (chat-transcript-layout D1)', () => {
     expect(rows.map(row => row.turnStart)).toEqual([false, false, true])
   })
 
-  test('a triggered turn starts a turn; a user-started turn_started draws nothing', () => {
+  test('a task trigger starts a turn; a resumed trigger is hidden and user-started draws nothing', () => {
     const plain: ChatEvent = { id: 's', sequence: 0, at: '', type: 'turn_started', turnId: 't2' }
-    const triggered: ChatEvent = { ...plain, id: 'tr', turnId: 't3', trigger: { kind: 'resumed' } }
-    const entries = toolEntries([agent('a1', 't1'), plain, triggered, agent('a2', 't3')]).filter(isVisibleEntry)
-    expect(entries.map(entry => entry.event.id)).toEqual(['a1', 'tr', 'a2'])
-    expect(layoutRows(entries).map(row => [row.turnStart, row.authorStart])).toEqual([[false, true], [true, false], [false, true]])
+    const resumed: ChatEvent = { ...plain, id: 'tr', turnId: 't3', trigger: { kind: 'resumed' } }
+    const tasked: ChatEvent = { ...plain, id: 'tt', turnId: 't4', trigger: { kind: 'task', tasks: [{ taskId: 'b1', status: 'completed' }] } }
+    const entries = toolEntries([agent('a1', 't1'), plain, resumed, tasked, agent('a2', 't4')])
+    // Only the named task trigger draws; the resumed trigger is hidden.
+    expect(entries.filter(isVisibleEntry).map(entry => entry.event.id)).toEqual(['a1', 'tt', 'a2'])
+    expect(layoutRows(entries).map(row => [row.turnStart, row.authorStart])).toEqual([
+      [false, true],
+      [false, false],
+      [false, false],
+      [true, false],
+      [false, true],
+    ])
+  })
+
+  test('a hidden resumed trigger keeps its turn boundary on the following output row', () => {
+    const resumed: ChatEvent = { id: 'tr', sequence: 0, at: '', type: 'turn_started', turnId: 't2', trigger: { kind: 'resumed' } }
+    const rows = layout([user('u1', 't1'), resumed, agent('a1', 't2')])
+    // a1 shares the hidden trigger's turn id, so only the carried boundary
+    // separates it — the wide turn separation survives hiding the line.
+    expect(rows.map(row => [row.author, row.turnStart])).toEqual([
+      ['user', false],
+      [null, false],
+      ['agent', true],
+    ])
+  })
+
+  test('a hidden trigger between days neither adds nor suppresses a separator', () => {
+    const resumed: ChatEvent = { id: 'tr', sequence: 0, at: '2026-10-16T00:30:00Z', type: 'turn_started', turnId: 't2', trigger: { kind: 'resumed' } }
+    const rows = layout([
+      user('u1', 't1', '2026-10-15T10:00:00Z'),
+      resumed,
+      user('u2', 't2', '2026-10-16T09:00:00Z'),
+    ])
+    expect(rows.map(row => row.dayBreak)).toEqual([null, null, 'Friday, October 16, 2026'])
   })
 
   test('peers are distinct authors by sender', () => {

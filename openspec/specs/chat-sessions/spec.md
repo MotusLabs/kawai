@@ -1202,8 +1202,10 @@ session SHALL show its last known model until the agent reports one again.
 When the agent starts a turn without a user message, such as after a
 background task ends or a Monitor reports an event, the system SHALL show
 that turn in the transcript like any other: streamed output, tool
-activity, approvals, and a completion. The turn SHALL open with a line
-naming its trigger instead of a user message. The session SHALL report
+activity, approvals, and a completion. When the trigger names its cause,
+the turn SHALL open with a line naming that trigger instead of a user
+message; a trigger without a usable cause — an unknown cause or an empty
+task list — SHALL open with no trigger line. The session SHALL report
 `working` until the turn ends.
 
 #### Scenario: Background completion wakes the agent
@@ -1223,8 +1225,8 @@ naming its trigger instead of a user message. The session SHALL report
 - **THEN** the turn opens with the same trigger line, and no user message bubble with notification markup is shown
 
 #### Scenario: Trigger without a known cause
-- **WHEN** the agent starts a turn on its own and no task notification preceded it
-- **THEN** the turn opens with a generic trigger line saying the agent continued on its own
+- **WHEN** the agent starts a turn on its own with no usable trigger cause: no task notification preceded it, or the trigger's task list is empty
+- **THEN** no trigger line is shown; the turn opens directly with its own output, the turn's boundary and layout stay as before, and the session still reports `working`
 
 ### Requirement: Chat messages show authors and local timestamps
 Live and archived Chat messages SHALL display an author and local time beside each message, with full date, time, and timezone available on hover and to assistive technology. User, assistant, and peer identities SHALL remain distinguishable; peer authors SHALL retain their existing participant links. Missing or invalid historical times SHALL be omitted rather than replaced with the current time.
@@ -1303,7 +1305,7 @@ The redesigned transcript SHALL retain all previously displayed event informatio
 
 #### Scenario: Turn and request information
 - **WHEN** a Chat contains command output, notices, errors, autonomous-turn triggers, request decisions, interruptions, or completion summaries
-- **THEN** their existing information remains visible, including completion subtype, cost, and turn counts when supplied
+- **THEN** their existing information remains visible, including completion subtype, cost, and turn counts when supplied; a generic unknown-cause turn-trigger line is the one exception and stays hidden
 
 #### Scenario: Live interaction
 - **WHEN** an active Chat streams text or awaits an approval or answer
