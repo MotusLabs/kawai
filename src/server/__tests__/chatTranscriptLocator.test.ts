@@ -37,16 +37,20 @@ describe('indexTranscripts', () => {
     put('-a/one/subagents/agent-x.jsonl')
     put('-b/two.jsonl', 1_000)
     put('-c/two.jsonl', 2_000)
+    // `two` keeps its newer copy in -c and `four` in -b, so both walk orders count.
+    put('-b/four.jsonl', 2_000)
+    put('-c/four.jsonl', 1_000)
     put('-d/three.jsonl', 2_000)
     put('-e/three.jsonl', 2_000)
     put('-a/notes.txt')
     // Below the searched depth: neither reader sees it.
     put('-a/b/c/d/deep.jsonl')
     const index = await indexTranscripts()
-    for (const id of ['one', 'agent-x', 'two', 'three', 'deep', 'none']) {
+    for (const id of ['one', 'agent-x', 'two', 'four', 'three', 'deep', 'none']) {
       expect(index.get(`${id}.jsonl`) ?? null).toBe(findTranscriptPath(id))
     }
     expect(index.get('two.jsonl')).toEndWith(path.join('-c', 'two.jsonl'))
+    expect(index.get('four.jsonl')).toEndWith(path.join('-b', 'four.jsonl'))
     expect(index.has('notes.txt')).toBe(false)
   })
 

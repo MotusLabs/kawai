@@ -78,6 +78,17 @@ describe('scanTranscriptMeta', () => {
     expect((await scanTranscriptMeta(write(content))).cwd).toBe('/last')
   })
 
+  test('a title row that starts just before the chunk boundary', async () => {
+    // Pad the first line so the title row begins 10 bytes before 1 MiB: its
+    // head is carried across the next read into the reused buffer.
+    const head = user('/pad', {}, '')
+    const pad = (1 << 20) - 10 - (Buffer.byteLength(head) + 1)
+    const content = [user('/pad', {}, 'p'.repeat(pad)), aiTitle('straddling'), user('/tail', {}, 'q'.repeat(2 << 20))].join('\n')
+    expect(content.indexOf(aiTitle('straddling'))).toBe((1 << 20) - 10)
+    await expectParity(content)
+    expect((await scanTranscriptMeta(write(content))).title).toEqual({ title: 'straddling', source: 'auto' })
+  })
+
   test('a transcript holding neither field, an empty file, and multibyte text', async () => {
     await expectParity(JSON.stringify({ type: 'assistant', message: { content: [] } }))
     await expectParity('')
