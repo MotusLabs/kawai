@@ -264,15 +264,10 @@ export function parseTranscriptContent(
     ) {
       continue
     }
-    // Worktree tracking design D3: each record may carry the working
-    // directory at write time (attachment rows spell it
-    // snapshot.workingDirectory); the newest non-empty one wins. Parent
+    // Worktree tracking design D3: the newest non-empty one wins. Parent
     // parses already dropped sidechain records above; a worker-body parse
     // keeps them, and its caller simply ignores the captured cwd.
-    const snapshot = asRecord(asRecord(record.attachment)?.snapshot)
-    const lineCwd =
-      stringField(record, 'cwd') ??
-      stringField(snapshot, 'workingDirectory')
+    const lineCwd = recordCwd(record)
     if (lineCwd) cwd = lineCwd
     const type = record.type
     const lineUuid =
@@ -747,6 +742,17 @@ function apiErrorText(content: unknown): string {
     .join('\n')
     .trim()
   return text || 'The model request failed'
+}
+
+/**
+ * The working directory one parsed transcript record carries at write time
+ * (worktree tracking design D3; attachment rows spell it
+ * snapshot.workingDirectory), or null. Shared by the full parse and the
+ * streaming meta reader (`transcriptMeta.ts`) so both apply one rule.
+ */
+export function recordCwd(record: Record<string, unknown>): string | null {
+  const snapshot = asRecord(asRecord(record.attachment)?.snapshot)
+  return stringField(record, 'cwd') ?? stringField(snapshot, 'workingDirectory')
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

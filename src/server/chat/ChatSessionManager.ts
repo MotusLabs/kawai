@@ -151,13 +151,14 @@ import { OutboundStore } from '../outbound/store'
 import {
   findTranscriptPath,
   findTranscriptPathAsync,
-  readTranscriptMetaAsync,
   replayTranscriptFile,
   replayTranscriptFileAsync,
   type TranscriptReplay,
 } from './transcriptReplay'
 import { canRetryCodexMemo, replayCodexRollout, replayCodexRolloutAsync } from './codex/codexRollout'
 import { watchTranscriptTitle, type TranscriptTitleWatcher } from './transcriptTitleWatcher'
+import { scanTranscriptMeta } from './transcriptMeta'
+import { indexTranscripts, TranscriptPathCache } from './transcriptLocator'
 import { resolveTeam } from '../team/teamIdentity'
 import { validateWorkspaceSend } from './workspaceSendValidation'
 import type { WorkspaceMessageContext, WorkspaceMessageEnvelope } from '../../shared/planWorkspace'
@@ -578,6 +579,8 @@ export class ChatSessionManager {
    * chat transcript as an extra session during the restore window.
    */
   private readonly restoringSdkIds = new Set<string>()
+  /** Existing transcript per SDK id for the start blocker's check. */
+  private readonly transcriptPaths = new TranscriptPathCache()
   private isShutDown = false
 
   /**
@@ -2366,7 +2369,7 @@ export class ChatSessionManager {
       spawning &&
       !(codexRollout
         ? record.transcriptPath != null && existsSync(record.transcriptPath)
-        : findTranscriptPath(record.sdkSessionId))
+        : this.transcriptPaths.existing(record.sdkSessionId))
     ) {
       return (
         'Cannot resume this conversation: the agent transcript is missing. ' +
@@ -2495,18 +2498,66 @@ export class ChatSessionManager {
     for (const row of rows) {
       if (row.sdkSessionId) this.restoringSdkIds.add(row.sdkSessionId)
     }
+    // One walk of the projects tree names every transcript (instead of one
+    // walk per row). Archived rows register at once with their stored name
+    // and path; their title/cwd catch-up runs after whenRestored resolves,
+    // so hundreds of archived transcripts never hold up the live chats or
+    // the mailbox start.
+    // The index is built at the first row that has a transcript, so rows
+    // before it still register synchronously, as they always have.
+    let transcripts: Map<string, string> | null = null
+    const deferred: ChatSessionRecord[] = []
     try {
       for (const row of rows) {
         if (this.isShutDown) return
-        await this.restoreRow(row)
+        if (row.sdkSessionId && !transcripts) {
+          transcripts = await indexTranscripts()
+          if (this.isShutDown) return
+        }
+        if (row.archivedAt != null) deferred.push(row)
+        await this.restoreRow(row, transcripts ?? new Map(), row.archivedAt == null)
       }
     } finally {
       this.restoringSdkIds.clear()
     }
+    if (!transcripts) return
+    void this.catchUpArchived(deferred, transcripts).catch(error => {
+      logger.warn('chat_archived_catch_up_failed', {
+        message: error instanceof Error ? error.message : String(error),
+      })
+    })
+  }
+
+  /**
+   * The deferred title/cwd catch-up of archived rows, one transcript at a
+   * time. A row restored, killed, or otherwise changed since it registered
+   * is skipped: the live paths own it from then on.
+   */
+  private async catchUpArchived(
+    rows: ChatSessionRecord[],
+    transcripts: Map<string, string>
+  ): Promise<void> {
+    for (const row of rows) {
+      if (this.isShutDown) return
+      const registered = this.records.get(row.sessionId)
+      const filePath = row.sdkSessionId ? transcripts.get(`${row.sdkSessionId}.jsonl`) : undefined
+      if (!registered || !filePath) continue
+      const meta = await scanTranscriptMeta(filePath)
+      if (this.isShutDown) return
+      if (this.records.get(row.sessionId) !== registered) continue
+      if (meta.title) this.applyTranscriptTitle(row.sessionId, meta.title.title, meta.title.source)
+      if (meta.cwd && meta.cwd !== registered.projectPath) {
+        this.applyPatch(row.sessionId, { projectPath: meta.cwd })
+      }
+    }
   }
 
   /** Restore one persisted row (design D2): status, title/cwd catch-up, workers. */
-  private async restoreRow(row: ChatSessionRecord): Promise<void> {
+  private async restoreRow(
+    row: ChatSessionRecord,
+    transcripts: Map<string, string>,
+    catchUp: boolean
+  ): Promise<void> {
     let record = row
     // Pending requests and in-flight turns died with the old process; a
     // restored session is always idle.
@@ -2518,31 +2569,31 @@ export class ChatSessionManager {
     }
     // Title catch-up (chat-session-naming design D4): a session whose name
     // was never user-set adopts its transcript's latest title now, so the
-    // list is correct for sessions nobody opens. Nothing is persisted —
-    // the row re-derives on the next restart the same way.
+    // list is correct for sessions nobody opens. Nothing is persisted here —
+    // the row re-derives on the next restart the same way (the deferred
+    // archived pass adopts it through the live tail's persisted path).
     // Cwd catch-up (worktree tracking design D3): the transcript's last
     // cwd is where the conversation actually is — the agent may have
     // entered a worktree before the restart. Unlike the title this is
     // persisted, matching what the live CwdChanged firing would have
     // written, so the row and the registry agree from here on.
-    // One async discovery + one single-pass meta read per session
-    // (async-transcript-parsing design D1/D2) — no sync fs on the event
-    // loop at boot.
-    if (record.sdkSessionId) {
-      const filePath = await findTranscriptPathAsync(record.sdkSessionId)
-      const meta = filePath ? await readTranscriptMetaAsync(filePath) : null
+    // The path comes from the boot index and the meta from one streaming
+    // scan (async-transcript-parsing design D1/D2) — no sync fs on the
+    // event loop at boot. Archived rows catch up later (catchUpArchived).
+    const indexed = record.sdkSessionId ? transcripts.get(`${record.sdkSessionId}.jsonl`) : undefined
+    if (record.sdkSessionId && indexed) this.transcriptPaths.remember(record.sdkSessionId, indexed)
+    if (catchUp && indexed) {
+      const meta = await scanTranscriptMeta(indexed)
       // Shut down mid-read: the database may be closed already.
       if (this.isShutDown) return
-      if (meta) {
-        if ((record.nameSource ?? 'manual') !== 'manual' && meta.title) {
-          record = { ...record, name: meta.title.title, nameSource: meta.title.source }
-        }
-        if (meta.cwd && meta.cwd !== record.projectPath) {
-          record = { ...record, projectPath: meta.cwd }
-          this.options.db.updateChatSession(record.sessionId, {
-            projectPath: meta.cwd,
-          })
-        }
+      if ((record.nameSource ?? 'manual') !== 'manual' && meta.title) {
+        record = { ...record, name: meta.title.title, nameSource: meta.title.source }
+      }
+      if (meta.cwd && meta.cwd !== record.projectPath) {
+        record = { ...record, projectPath: meta.cwd }
+        this.options.db.updateChatSession(record.sessionId, {
+          projectPath: meta.cwd,
+        })
       }
     }
     // Worker-roster recovery (workers design D6): a sidecar row still
