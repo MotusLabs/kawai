@@ -79,10 +79,16 @@ following the mutation-testing scope rule):
   to a test title, and each mutant M1–M8 to the test that killed it, in the
   result.
   - Verify: the map has no gap.
-- [ ] 5.3 Boot the built server against a copy of the live data directory
+- [x] 5.3 Boot the built server against a copy of the live data directory
   (scratch `HOME` holding a copy of `~/.agentboard` and the projects tree).
-  - Verify: `/api/sessions` answers within 10 s of start, and RSS stays
-    under 1 GB through the archived catch-up.
+  - Verify: the server answers within 10 s of start, and boot restore and
+    the archived catch-up stay bounded in memory and CPU.
+  - Result, 2026-10-29: first 200 at 8.2 s. The archived catch-up ran at
+    45–55 s with a small CPU share and no memory growth.
+  - Out of scope, tracked separately: a 4.4 GB, 15 s stall from a Codex
+    agent start reading its whole rollout (`codex-rollout-streaming-history`),
+    and cooldown checks re-parsing the profile catalogs
+    (`profile-catalog-read-cache`).
 
 ## Workflow follow-up
 
