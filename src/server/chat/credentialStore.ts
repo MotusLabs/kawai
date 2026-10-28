@@ -407,7 +407,7 @@ export class CredentialStore {
     }
     const owner = ownerFor(this.deps, this.ensureParent(), this.storePath)
     return enqueue(owner, async () => {
-      const entries = this.freshEntries()
+      const entries = this.freshEntries(owner)
       const wasSecret = Object.hasOwn(entries, name) && entries[name].kind === 'secret-source'
       if (wasSecret || kind === 'secret-source') {
         if (!this.retain) throw new CredentialStoreError('retain-collaborator-required')
@@ -420,18 +420,20 @@ export class CredentialStore {
 
   /** Fresh document for a mutation: loadDocument directly inside the owner
    * queue — the same gates and O_NOFOLLOW identity as load(), never the
-   * stamp cache — refreshing that cache from what it read. Missing reads as
-   * empty; a failed read throws and the prior bytes stand. Returns a
-   * mutation copy, so the cached document is never mutated in place. */
-  private freshEntries(): Entries {
+   * stamp cache. The queue's own owner is passed in, so no extra lookup can
+   * fail and silently keep an older document: an ok read installs the cache
+   * from itself, and ANY non-ok result — missing included — clears that
+   * same owner's cache before empty is returned or the failure throws.
+   * Returns a mutation copy. */
+  private freshEntries(owner: FileOwner): Entries {
     const loaded = loadDocument(this.deps, this.storePath)
-    if (loaded.state !== 'ok') {
-      if (loaded.state !== 'missing') throw new CredentialStoreError(loaded.reason)
-      return Object.create(null) as Entries
+    if (loaded.state === 'ok') {
+      owner.cache = { stamp: loaded.stamp, dev: loaded.dev, ino: loaded.ino, entries: loaded.entries }
+      return Object.assign(Object.create(null) as Entries, loaded.entries)
     }
-    const owner = findOwner(this.deps, this.storePath)
-    if (owner) owner.cache = { stamp: loaded.stamp, dev: loaded.dev, ino: loaded.ino, entries: loaded.entries }
-    return Object.assign(Object.create(null) as Entries, loaded.entries)
+    owner.cache = null
+    if (loaded.state !== 'missing') throw new CredentialStoreError(loaded.reason)
+    return Object.create(null) as Entries
   }
 
   /** Status of the store as a whole — the reason the source listing reports. */
