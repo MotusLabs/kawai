@@ -2217,12 +2217,109 @@ describe('agent-started turn trigger lines (background tasks D5)', () => {
     renderer.unmount()
   })
 
-  test('a resumed trigger shows the generic continued line', () => {
+  // @covers: chat-sessions › Turns the agent starts on its own are shown › Trigger without a known cause
+  test('repeated resumed triggers draw no rows while every output still renders', () => {
     const renderer = TestRenderer.create(<ChatMessages events={[
-      { type: 'turn_started', id: 'ts', sequence: 0, at: 'now', turnId: 't1', trigger: { kind: 'resumed' } },
+      { type: 'turn_started', id: 'ts1', sequence: 0, at: 'now', turnId: 't1', trigger: { kind: 'resumed' } },
+      { type: 'assistant_text', id: 'a1', sequence: 1, at: 'now', turnId: 't1', messageId: 'm1', text: 'First resumed turn.' },
+      { type: 'turn_started', id: 'ts2', sequence: 2, at: 'now', turnId: 't2', trigger: { kind: 'resumed' } },
+      { type: 'assistant_text', id: 'a2', sequence: 3, at: 'now', turnId: 't2', messageId: 'm2', text: 'Second resumed turn.' },
     ]} />)
-    const trigger = renderer.root.findByProps({ 'data-testid': 'turn-trigger' })
-    expect(textOf(trigger.findByType('span'))).toBe('⟲ Continued on its own')
+    expect(renderer.root.findAllByProps({ 'data-testid': 'turn-trigger' })).toHaveLength(0)
+    expect(textOf(renderer.root)).not.toContain('Continued on its own')
+    expect(renderer.root.findAllByProps({ 'data-chat-role': 'assistant' })).toHaveLength(2)
+    renderer.unmount()
+  })
+
+  // @covers: chat-sessions › Turns the agent starts on its own are shown › Trigger without a known cause
+  test('an empty task-list trigger draws no row and no blank aside', () => {
+    const renderer = TestRenderer.create(<ChatMessages events={[
+      { type: 'turn_started', id: 'ts', sequence: 0, at: 'now', turnId: 't1', trigger: { kind: 'task', tasks: [] } },
+      { type: 'assistant_text', id: 'a1', sequence: 1, at: 'now', turnId: 't1', messageId: 'm', text: 'Done anyway.' },
+    ]} />)
+    expect(renderer.root.findAllByProps({ 'data-testid': 'turn-trigger' })).toHaveLength(0)
+    expect(renderer.root.findAllByProps({ 'data-chat-role': 'assistant' })).toHaveLength(1)
+    renderer.unmount()
+  })
+
+  // @covers: chat-sessions › Turns the agent starts on its own are shown › Trigger without a known cause
+  test('a transcript opening with a hidden marker renders its first row plain', () => {
+    const renderer = TestRenderer.create(<ChatMessages events={[
+      { type: 'turn_started', id: 'ts', sequence: 0, at: 'now', turnId: 't1' },
+      { type: 'user_message', id: 'u1', sequence: 1, at: 'now', turnId: 't1', text: 'hello' },
+      { type: 'user_message', id: 'u2', sequence: 2, at: 'now', turnId: 't2', text: 'again' },
+    ]} />)
+    const articles = renderer.root.findAllByType('article')
+    // The hidden leading marker must not give the first visible row turn
+    // spacing; a later real turn still separates.
+    expect(articles[0]!.props.className).toBe('chat-row')
+    expect(articles[1]!.props.className).toBe('chat-row chat-row-turn')
+    renderer.unmount()
+  })
+
+  // @covers: chat-sessions › Turns the agent starts on its own are shown › Trigger without a known cause
+  test('a leading resumed trigger leaves the first output row plain', () => {
+    const renderer = TestRenderer.create(<ChatMessages events={[
+      { type: 'turn_started', id: 'tr', sequence: 0, at: 'now', turnId: 't1', trigger: { kind: 'resumed' } },
+      { type: 'assistant_text', id: 'a1', sequence: 1, at: 'now', turnId: 't1', messageId: 'm', text: 'Continued on its own.' },
+    ]} />)
+    const articles = renderer.root.findAllByType('article')
+    expect(articles).toHaveLength(1)
+    expect(articles[0]!.props.className).toBe('chat-row')
+    renderer.unmount()
+  })
+
+  // @covers: chat-sessions › Turns the agent starts on its own are shown › Trigger without a known cause
+  test('several leading hidden markers still render the first row plain', () => {
+    const renderer = TestRenderer.create(<ChatMessages events={[
+      { type: 'turn_started', id: 'ts', sequence: 0, at: 'now', turnId: 't1' },
+      { type: 'turn_started', id: 'tr', sequence: 1, at: 'now', turnId: 't1', trigger: { kind: 'resumed' } },
+      { type: 'turn_started', id: 'te', sequence: 2, at: 'now', turnId: 't1', trigger: { kind: 'task', tasks: [] } },
+      { type: 'user_message', id: 'u1', sequence: 3, at: 'now', turnId: 't1', text: 'hello' },
+    ]} />)
+    expect(renderer.root.findAllByProps({ 'data-testid': 'turn-trigger' })).toHaveLength(0)
+    expect(renderer.root.findAllByType('article')[0]!.props.className).toBe('chat-row')
+    renderer.unmount()
+  })
+
+  test('the quoted generic phrase stays ordinary content inside real messages', () => {
+    const renderer = TestRenderer.create(<ChatMessages events={[
+      { type: 'user_message', id: 'u', sequence: 0, at: 'now', turnId: 't1', text: 'Stop showing "Continued on its own" after every turn.' },
+      { type: 'assistant_text', id: 'a', sequence: 1, at: 'now', turnId: 't1', messageId: 'm', text: 'Understood — "Continued on its own" was only a notice line.' },
+    ]} />)
+    // No filtering of message text: the literal appears in both rows.
+    expect(textOf(renderer.root).split('Continued on its own')).toHaveLength(3)
+    expect(renderer.root.findAllByProps({ 'data-testid': 'turn-trigger' })).toHaveLength(0)
+    renderer.unmount()
+  })
+
+  // @covers: chat-sessions › Turns the agent starts on its own are shown › Replayed history shows the trigger, not raw markup
+  // @covers: chat-sessions › Transcript layout preserves rich event information and controls › Turn and request information
+  test('replayed mixed turns keep their order and authors with a hidden resumed trigger', () => {
+    const renderer = TestRenderer.create(<ChatMessages events={[
+      { type: 'turn_started', id: 'ts1', sequence: 0, at: '2026-10-15T23:00:00Z', turnId: 't1', trigger: { kind: 'resumed' } },
+      { type: 'assistant_text', id: 'a1', sequence: 1, at: '2026-10-15T23:00:05Z', turnId: 't1', messageId: 'm1', text: 'night work' },
+      { type: 'user_message', id: 'u1', sequence: 2, at: '2026-10-16T08:00:00Z', turnId: 't2', text: 'morning question' },
+      { type: 'tool_call', id: 'c1', sequence: 3, at: '2026-10-16T08:00:10Z', turnId: 't2', toolCallId: 'call_1', tool: 'Read', input: {} },
+      { type: 'peer_message', id: 'p1', sequence: 4, at: '2026-10-16T08:00:20Z', turnId: 't2', messageId: 'p1',
+        senderSession: 's-9', senderGroup: 'reviewers', priority: 'normal', tags: [], originPath: '/repo',
+        threadId: 'th', body: 'peer note', possibleDuplicate: false },
+      { type: 'turn_started', id: 'ts2', sequence: 5, at: '2026-10-16T08:01:00Z', turnId: 't3', trigger: { kind: 'task', tasks: [{ taskId: 'b7', status: 'completed', summary: 'CI finished' }] } },
+      { type: 'assistant_text', id: 'a2', sequence: 6, at: '2026-10-16T08:01:10Z', turnId: 't3', messageId: 'm2', text: 'after CI' },
+    ]} />)
+    // The hidden resumed trigger leaves no row and no gap; the named task
+    // trigger still names its task, and every real row keeps its order.
+    expect(renderer.root.findAllByProps({ 'data-testid': 'turn-trigger' }).map(node => textOf(node)))
+      .toEqual(['⟲ CI finished'])
+    const anchors = renderer.root
+      .findAll(node => Boolean(node.props) && 'data-anchor-id' in node.props)
+      .map(node => node.props['data-anchor-id'])
+    expect(anchors.filter(id => ['a1', 'u1', 'tool:call_1', 'p1', 'a2'].includes(id)))
+      .toEqual(['a1', 'u1', 'tool:call_1', 'p1', 'a2'])
+    const text = textOf(renderer.root)
+    expect(text).toContain('You')
+    expect(text).toContain('Claude')
+    expect(text).toContain('Peer')
     renderer.unmount()
   })
 
