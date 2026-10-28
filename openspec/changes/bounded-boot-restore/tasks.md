@@ -73,9 +73,9 @@ following the mutation-testing scope rule):
 
 ## 5. Integration
 
-- [ ] 5.1 Run `bun run check` on the clean committed tree.
+- [x] 5.1 Run `bun run check` on the clean committed tree.
   - Verify: a recorded full pass for HEAD's tree.
-- [ ] 5.2 Map every oracle id (T1–T5, C1–C9, L1–L6, K1–K4, B1–B6, P1, P2)
+- [x] 5.2 Map every oracle id (T1–T5, C1–C9, L1–L6, K1–K4, B1–B6, P1, P2)
   to a test title, and each mutant M1–M8 to the test that killed it, in the
   result.
   - Verify: the map has no gap.
