@@ -2,6 +2,17 @@ import { describe, expect, test } from 'bun:test'
 import type { LogEntrySnapshot } from '../logPollData'
 import type { SessionSnapshot } from '../logMatchGate'
 import { getEntriesNeedingMatch, shouldRunMatching } from '../logMatchGate'
+import type { TokenEvidence } from '../logTokenEvidence'
+
+// Complete evidence: the old bare count of a wholly read log (D3 row C(n)).
+function complete(count: number): TokenEvidence {
+  return {
+    kind: 'complete',
+    count,
+    generation: { dev: '1', ino: '1', size: 1000, mtimeNs: '1', ctimeNs: '1' },
+    readKey: 'claude|assistant-user|w=204800|lines=2000',
+  }
+}
 
 function makeEntry(
   overrides: Partial<LogEntrySnapshot> = {}
@@ -17,7 +28,7 @@ function makeEntry(
     agentType: 'claude',
     isCodexSubagent: false,
     isCodexExec: false,
-    logTokenCount: 10,
+    tokenEvidence: complete(10),
     ...overrides,
   }
 }
@@ -26,7 +37,7 @@ describe('logMatchGate', () => {
   test('filters entries based on tokens, sessions, and activity', () => {
     const entries: LogEntrySnapshot[] = [
       makeEntry({ sessionId: null }),
-      makeEntry({ sessionId: 'session-low', logPath: 'log-low', logTokenCount: 2 }),
+      makeEntry({ sessionId: 'session-low', logPath: 'log-low', tokenEvidence: complete(2) }),
       makeEntry({ sessionId: 'session-missing', logPath: 'log-missing' }),
       makeEntry({
         sessionId: 'session-stale',

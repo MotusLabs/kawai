@@ -9,8 +9,8 @@ export {
 export {
   extractLastEntryTimestamp,
   extractLastUserMessageFromLog,
-  getLogTokenCount,
 } from './logText'
+export { readLogTokenEvidence } from './tokenReader'
 export { extractRecentUserMessagesFromTmux } from './promptExtract'
 export { isToolNotificationText, stripPastePlaceholders } from './promptExtract'
 export { isSameOrChildPath, matchWindowsToLogsByExactRgAsync } from './exactMatch'
