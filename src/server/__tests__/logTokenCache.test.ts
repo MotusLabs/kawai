@@ -29,14 +29,17 @@ const meta = (n: number) => `${JSON.stringify({ type: 'summary', sessionId: SESS
 /** Exactly matchable through a non-role field that counts no tokens. */
 const findable = (message: string) => `${JSON.stringify({ type: 'progress', content: message })}\n`
 
-/** Reads `logPath` under the observer; `reused` when no content was read. */
+/**
+ * Reads `logPath` under the observer; `reused` when no content was read by
+ * any API: no positioned read of it and no whole-file or streaming call.
+ */
 function probe(logPath: string, opts = {}, setup?: (o: FsObserver) => void) {
   const observer = new FsObserver().start()
   setup?.(observer)
   try {
     const evidence = readLogTokenEvidence(logPath, { agentType: 'claude', ...opts })
     const reads = observer.for(logPath).filter((op) => op.api === 'read')
-    return { evidence, reused: reads.length === 0, bytes: observer.bytesRead(logPath), wholeFile: observer.wholeFileCalls() }
+    return { evidence, reused: reads.length === 0 && observer.wholeFileCalls().length === 0, bytes: observer.bytesRead(logPath), wholeFile: observer.wholeFileCalls() }
   } finally {
     observer.stop()
   }

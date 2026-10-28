@@ -41,7 +41,8 @@ interface Line {
 const zeroTokenLogCache = new Map<string, string>()
 
 /**
- * Token evidence for `logPath`, never throwing. Reads at most
+ * Token evidence for `logPath`, never throwing (not even from closing the
+ * descriptor). Reads at most
  * 2 × window + 1 bytes (409,601 by default) through one descriptor with
  * explicit offsets; no whole-file read API on any branch.
  */
@@ -98,7 +99,13 @@ export function readLogTokenEvidence(
   } catch {
     return UNAVAILABLE_EVIDENCE
   } finally {
-    fs.closeSync(fd)
+    // One close attempt: a retry could close a reused descriptor number, and
+    // a cleanup failure must not replace the evidence already chosen.
+    try {
+      fs.closeSync(fd)
+    } catch {
+      // The descriptor's state is unknown; nothing safe remains to do.
+    }
   }
 }
 

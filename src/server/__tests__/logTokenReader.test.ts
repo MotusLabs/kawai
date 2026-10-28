@@ -2,7 +2,7 @@
 // the real token reader and enrichment, with the all-API observer. Expected
 // counts come from the generated layout (words per message line and line
 // offsets), never from the reader.
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import fs from 'node:fs'
 import path from 'node:path'
 import { enrichLogEntry, type KnownSession } from '../logPollData'
@@ -228,5 +228,62 @@ describe('WE: token evidence through the real reader', () => {
       expect(r.evidence.kind).toBe(kind)
       expectBoundedOps(r.observer, made.logPath, reads)
     }
+  })
+
+  test('a throwing close neither escapes nor replaces the evidence, and is attempted once', () => {
+    const { logPath } = log([userLine(words(4), META), assistantLine(words(2))])
+    const observed = read(logPath).evidence
+    expect(observed).toMatchObject({ kind: 'complete', count: 6 })
+    const realOpen = fs.openSync.bind(fs)
+    const realClose = fs.closeSync.bind(fs)
+    const realFstat = fs.fstatSync.bind(fs)
+    // Each descriptor the reader opens (fd numbers are reused, so tracked per
+    // open): every close attempt is counted, at most one reaches the OS, and
+    // every attempt then throws.
+    const opens: Array<{ fd: number; attempts: number; forwarded: boolean }> = []
+    let failStat = false
+    const spies = [
+      spyOn(fs, 'openSync').mockImplementation(((...args: unknown[]) => {
+        const fd = (realOpen as (...a: unknown[]) => number)(...args)
+        opens.push({ fd, attempts: 0, forwarded: false })
+        return fd
+      }) as typeof fs.openSync),
+      spyOn(fs, 'closeSync').mockImplementation(((fd: number) => {
+        const owner = opens.findLast((o) => o.fd === fd)
+        if (owner) owner.attempts++
+        if (owner && !owner.forwarded) {
+          owner.forwarded = true
+          realClose(fd)
+        }
+        throw new Error('EIO on close')
+      }) as typeof fs.closeSync),
+      spyOn(fs, 'fstatSync').mockImplementation(((...args: unknown[]) => {
+        if (failStat) throw new Error('EIO on fstat')
+        return (realFstat as (...a: unknown[]) => unknown)(...args)
+      }) as typeof fs.fstatSync),
+    ]
+    let succeeded: TokenEvidence | undefined
+    let failed: TokenEvidence | undefined
+    try {
+      // A successful observation keeps its evidence.
+      succeeded = readLogTokenEvidence(logPath, { agentType: 'claude' })
+      expect(opens.map((o) => o.attempts)).toEqual([1])
+      // An already-failed read keeps its unavailable evidence.
+      failStat = true
+      failed = readLogTokenEvidence(logPath, { agentType: 'claude' })
+      expect(opens.map((o) => o.attempts)).toEqual([1, 1])
+    } finally {
+      for (const spy of spies) spy.mockRestore()
+    }
+    expect(succeeded).toEqual(observed)
+    expect(failed).toEqual({ kind: 'unavailable' })
+    // One attempt per owned descriptor, each forwarded to the OS exactly once.
+    expect(opens.map(({ attempts, forwarded }) => ({ attempts, forwarded }))).toEqual([
+      { attempts: 1, forwarded: true }, { attempts: 1, forwarded: true },
+    ])
+    // The reader stays usable with the real close.
+    const later = read(logPath)
+    expect(later.evidence).toEqual(observed)
+    expect(later.observer.for(logPath).map((op) => op.api)).toEqual(['open', 'fstat', 'read', 'fstat', 'close'])
   })
 })
