@@ -105,7 +105,7 @@ The first ACTUAL call per turn and exact team tool owns the first-attempt marker
 - **THEN** the metric reads n=0 for that turn in the window, not missing history and not a success
 
 ### Requirement: Tool call metrics are exported behind an activation gate
-Kawai SHALL export the tool-call counter (tool, outcome, failure_class), streak counter (+ resolution), and streak-length histogram within the existing bounds (tool enum ≤96) and 250,000/10,000 budgets. One transaction SHALL check existing series plus all missing catch-alls and diagnostics, then reserve all with the `tool-export-v2` active marker or nothing. Later admission SHALL use actual remaining capacity, no fixed reserve. Totals survive detail pruning.
+Kawai SHALL export the tool-call counter, streak counter, and streak-length histogram within existing bounds (tool enum ≤96) and 250,000/10,000 budgets. One transaction SHALL check existing series plus missing catch-alls and diagnostics, then reserve all with the `tool-export-v2` active marker or nothing. Later admission uses remaining capacity; a new tool labelset needs verified active export. Admitted labelsets SHALL keep counting; status transactions and pruning change no total.
 
 #### Scenario: Many distinct foreign tools
 - **WHEN** agents in one turn call 500 differently named tools of foreign MCP servers
@@ -113,11 +113,15 @@ Kawai SHALL export the tool-call counter (tool, outcome, failure_class), streak 
 
 #### Scenario: Budget refusal stops all three families together
 - **WHEN** existing series 249,960 plus the missing catch-alls (11) and diagnostics (35) would exceed the series budget
-- **THEN** the checkpoint reads `budget-unavailable` with a reason and null `availableSince`, no reservation row is written, no new label of the three families is admitted while already-admitted totals keep incrementing, and every other family keeps its old values and behaviour
+- **THEN** the checkpoint reads `budget-unavailable` with a reason and null `availableSince`, no reservation row is written, no new label of the three families is admitted, the three families are suppressed on scrape, and every other family keeps its old values and behaviour
 
 #### Scenario: Paid reservations are not reserved again
 - **WHEN** activation succeeded at 249,986 series with every diagnostic admitted and a new histogram labelset costing 9 arrives
 - **THEN** it is admitted at 249,995, and a second activation inserts nothing and keeps `availableSince`
+
+#### Scenario: Admitted label keeps counting while unavailable
+- **WHEN** an admitted tool-call labelset reads 10, activation is refused, and then one eligible result for that labelset and one for a never-admitted labelset commit
+- **THEN** the refusal leaves 10, the admitted labelset reads 11, and the new labelset gets no row, alias, catch-all increment, or overflow count
 
 #### Scenario: Scrape after pruning
 - **WHEN** tool observations older than the detail horizon are pruned
@@ -128,8 +132,8 @@ Kawai SHALL export the tool-call counter (tool, outcome, failure_class), streak 
 - **THEN** the checkpoint records a new `availableSince` at that success, and the skipped interval is never backfilled, reset, or replayed
 
 #### Scenario: Suppressed families render nothing
-- **WHEN** the families are not active
-- **THEN** no sample, zero-filled family, or diagnostic family appears for them, and stored pre-refusal values stay suppressed rather than rendered as unadmitted
+- **WHEN** the export is not effectively active, including a stored `active` marker this process has not verified
+- **THEN** no sample, zero-filled family, or diagnostic family appears for the three families, and their stored values stay suppressed, not reset
 
 ### Requirement: Unresolved recovery fails closed
 On process start, each existing live-checkpoint row SHALL recover in its own transaction after its core identity and state are validated; a valid row recovers exactly once (as `unrecorded` when it holds no tool state), and a malformed, scope-mismatched, or state-unusable row SHALL stay byte-unchanged and block that session's further metric admission, counted only by the fixed `tool-recovery-quarantine` checkpoint — never deleted, rewritten, or auto-reset.

@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Tool metrics
-Kawai SHALL report, per window: failure rate by tool and class; the closed-cohort first-attempt success rate of exact `kawai-team` tools, eligible only when the turn's same-snapshot `turn_ended` fact shows coverage version 1 without taint (excluded turns read partial/unrecorded, never successes or zeros); abandoned streaks; and mean failures before recovery. They carry turn attribution and slice by group/profile. Every returned read SHALL carry current status, even from cached numerics.
+Kawai SHALL report per window: failure rate by tool/class; the closed-cohort first-attempt success rate of exact `kawai-team` tools, eligible only when the turn's same-snapshot `turn_ended` fact shows coverage version 1 without taint (excluded turns read partial/unrecorded, never successes or zeros); abandoned streaks; and mean failures before recovery. They carry turn attribution and slice by group/profile; every read and push SHALL carry current effective status, even with cached numbers.
 
 #### Scenario: Misleading schema shows up
 - **WHEN** in the window `task_submit_result` succeeded on 2 of 10 first attempts and every other `kawai-team` tool on all of them
@@ -18,6 +18,14 @@ Kawai SHALL report, per window: failure rate by tool and class; the closed-cohor
 #### Scenario: Status change reaches open views without a refresh
 - **WHEN** two teams have the Metrics tab open with cached numbers and the export status alone changes to `budget-unavailable`
 - **THEN** both views receive the new status without a report commit or manual refresh, their cached numbers unchanged
+
+#### Scenario: Failed status write shows unknown everywhere
+- **WHEN** views are open with cached numbers and a write of either status key fails while its stored value stays the same
+- **THEN** direct reads and the scrape show that status `unknown` at once, both views receive `unknown` after one delay, and a repeated failure sends nothing new
+
+#### Scenario: Recovered status is pushed
+- **WHEN** a later write or verification of that key succeeds with the stored value unchanged
+- **THEN** both views receive the restored status, while an unrelated rolled-back transaction sends nothing
 
 #### Scenario: Status visible while export is disabled
 - **WHEN** the export families are budget-unavailable
