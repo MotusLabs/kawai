@@ -7,13 +7,17 @@
 // provider limit (profile routing) carries its handoff package the same way,
 // below the task header. A revision notice (task-revision-publication D3)
 // adds `revisionNotice` to the metadata only — the revision it announces,
-// which may be older than the task header built at delivery.
+// which may be older than the task header built at delivery. New task mail
+// records `taskHeaderVersion` 2 (bounded-log-reads-and-task-get D7); an
+// envelope without it is the legacy generation 1, and the header is rebuilt
+// only with the recorded generation's renderer, so recorded task mail keeps
+// parsing and its absence round-trips.
 import type { ChatPeerMessage } from '../../shared/chat'
 import type { ChatPeerTaskContext, RevisionNotice } from '../../shared/teamTasks'
 import { TASK_STATUSES } from '../../shared/teamTasks'
 import { ENVELOPE_TAG } from './teamPrompt'
 import type { TeamMessage } from './mailboxStore'
-import { formatTaskHeader } from './taskContext'
+import { formatTaskHeader, TASK_HEADER_VERSION } from './taskContext'
 import { formatHandoffHeader, isHandoffPackage } from './routing/handoff'
 
 // Built from the same constant formatEnvelope writes, so the two cannot
@@ -33,7 +37,7 @@ export function messageEnvelope(message: TeamMessage, thread?: TeamMessage[], ta
     ...(message.attachThread && thread ? { thread: thread.filter(row => row.id !== message.id).map(row => ({
       messageId: row.id, senderSession: row.fromSession, senderKind: row.fromKind, body: row.body,
     })) } : {}),
-    ...(task ? { task } : {}),
+    ...(task ? { task, taskHeaderVersion: TASK_HEADER_VERSION } : {}),
     ...(message.handoff ? { handoff: message.handoff } : {}),
     ...(message.revisionNotice ? { revisionNotice: message.revisionNotice } : {}),
   }
@@ -41,7 +45,10 @@ export function messageEnvelope(message: TeamMessage, thread?: TeamMessage[], ta
 
 export function formatEnvelope(envelope: ChatPeerMessage): string {
   const { body, ...metadata } = envelope
-  const header = (envelope.task ? `${formatTaskHeader(envelope.task)}\n` : '') +
+  if (envelope.taskHeaderVersion !== undefined && !(envelope.task && isTaskHeaderVersion(envelope.taskHeaderVersion))) {
+    throw new Error(`Invalid task header version: ${String(envelope.taskHeaderVersion)}`)
+  }
+  const header = (envelope.task ? `${formatTaskHeader(envelope.task, envelope.taskHeaderVersion ?? 1)}\n` : '') +
     (envelope.handoff ? formatHandoffHeader(envelope.handoff) : '')
   return `<${ENVELOPE_TAG} metadata="${escapeAttribute(JSON.stringify(metadata))}">\n${envelope.possibleDuplicate ? `${DUPLICATE_NOTE}\n` : ''}${header}${body}\n</${ENVELOPE_TAG}>`
 }
@@ -65,6 +72,7 @@ export function parseEnvelope(text: string): ChatPeerMessage | null {
       (row.senderSession === null || typeof row.senderSession === 'string') &&
       (row.senderKind === undefined || row.senderKind === 'agent' || row.senderKind === 'human' || row.senderKind === 'system')))) return null
     if (meta.task !== undefined && !isTaskContext(meta.task)) return null
+    if (meta.taskHeaderVersion !== undefined && !(meta.task && isTaskHeaderVersion(meta.taskHeaderVersion))) return null
     if (meta.handoff !== undefined && !isHandoffPackage(meta.handoff)) return null
     if (meta.revisionNotice !== undefined && !isRevisionNotice(meta.revisionNotice)) return null
     let body = match[2]!
@@ -73,7 +81,7 @@ export function parseEnvelope(text: string): ChatPeerMessage | null {
       body = body.slice(DUPLICATE_NOTE.length + 1)
     }
     if (meta.task) {
-      const header = `${formatTaskHeader(meta.task)}\n`
+      const header = `${formatTaskHeader(meta.task, meta.taskHeaderVersion ?? 1)}\n`
       if (!body.startsWith(header)) return null
       body = body.slice(header.length)
     }
@@ -98,10 +106,16 @@ export function parseEnvelope(text: string): ChatPeerMessage | null {
         })),
       } : {}),
       ...(meta.task ? { task: meta.task } : {}),
+      ...(meta.taskHeaderVersion !== undefined ? { taskHeaderVersion: meta.taskHeaderVersion } : {}),
       ...(meta.handoff ? { handoff: meta.handoff } : {}),
       ...(meta.revisionNotice ? { revisionNotice: meta.revisionNotice } : {}),
     }
   } catch { return null }
+}
+
+/** A known task-header generation: the number 1 or 2, nothing else. */
+function isTaskHeaderVersion(value: unknown): value is 1 | 2 {
+  return value === 1 || value === 2
 }
 
 function isRevisionNotice(value: unknown): value is RevisionNotice {

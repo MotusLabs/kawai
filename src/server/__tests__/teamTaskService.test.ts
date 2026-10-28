@@ -314,7 +314,7 @@ describe('spawn-time registration', () => {
     const management = new MailboxManagement(mailbox.store, { getSession: id => records.get(id), tasks: service, homeDir: home })
     const server = await createMailboxServer(mailbox, 'lead', { tasks: service, management })
     const registered = Object.keys((server.instance as unknown as { _registeredTools: Record<string, unknown> })._registeredTools)
-    const expected = ['send_message', 'reply', 'schedule_message', 'list_groups', 'list_mailbox', 'cancel_message', 'discard_message', 'task_create', 'task_get', 'task_note', 'task_update_status', 'task_amend', 'task_list', 'task_acknowledge']
+    const expected = ['send_message', 'reply', 'schedule_message', 'list_groups', 'list_mailbox', 'cancel_message', 'discard_message', 'task_create', 'task_get', 'task_journal_read', 'task_note', 'task_update_status', 'task_amend', 'task_list', 'task_acknowledge']
     expect(registered.sort()).toEqual([...expected].sort())
     // Product strategy (product-strategy 3.2) rides the same allowed list —
     // read/propose only, no approve/publish/withdraw tool anywhere — and so

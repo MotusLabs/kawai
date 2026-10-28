@@ -1,7 +1,7 @@
 // The agent's bounded task detail at the store (bounded-log-reads-and-task-get
 // D4/D5, rows T1–T4, T7–T13, T15, T16, the store side of T5 and T6, and P3),
-// unwired: no tool reaches it yet, so the adapter envelopes of T5–T7 are
-// deferred to the registration commit. Ground truth comes from the insertion
+// and the known-invalid tails at a cut; the rows through both tool adapters
+// are in taskJournalTools.test.ts. Ground truth comes from the insertion
 // order and bytes, or from the unbounded loaders the human path keeps.
 import { beforeEach, describe, expect, test } from 'bun:test'
 import type { Database } from 'bun:sqlite'
@@ -198,6 +198,47 @@ describe('previews (T8–T10, T16, I-P)', () => {
     expect([...trimIncompleteTail(bytes('ab', [0xe2, 0x82, 0xac]))]).toEqual([0x61, 0x62, 0xe2, 0x82, 0xac])
     expect([...trimIncompleteTail(bytes([0xe2, 0x82]))]).toEqual([0xe2, 0x82])
     expect([...trimIncompleteTail(bytes('a', [0x80, 0x80, 0x80]))]).toEqual([0x61, 0x80, 0x80, 0x80])
+  })
+
+  // An invalid lead (FF, C0, C1, F5) or an impossible prefix (E0 80, ED A0,
+  // F0 80, F4 90) at a cut stays untrimmed, so the bytes do not decode: the
+  // preview is T-invalid and the reader returns the raw chunk. The valid
+  // incomplete prefixes beside them are trimmed to the character boundary.
+  const INVALID_TAILS = [[0xff], [0xc0], [0xc1], [0xf5], [0xe0, 0x80], [0xed, 0xa0], [0xf0, 0x80], [0xf4, 0x90]]
+  const VALID_TAILS = [[0xc2], [0xe0, 0xa0], [0xed, 0x9f], [0xf0, 0x90], [0xf4, 0x8f], [0xf4, 0x8f, 0xbf]]
+
+  // @covers: team-tasks › task_get journal previews are byte-bounded › Invalid bytes in the preview
+  test('a known-invalid tail at the 2,000-byte cut is not trimmed: null text and resume 0; valid prefixes are trimmed', () => {
+    const task = newTask()
+    const previewOf = (tail: number[]) => {
+      const id = rawNote(db, task.id, bytes('a'.repeat(JOURNAL_PREVIEW_BYTES - tail.length), tail, 'z'.repeat(100)), at(1))
+      return store.journalWindow.agentDetail(task.id).journal.find(entry => entry.id === id)!
+    }
+    for (const tail of INVALID_TAILS) {
+      expect(previewOf(tail)).toMatchObject({ text: null, previewBytes: 2000, totalBytes: 2100, cut: true, resumeOffsetBytes: 0 })
+    }
+    for (const tail of VALID_TAILS) {
+      const kept = 2000 - tail.length
+      expect(previewOf(tail)).toMatchObject({ text: 'a'.repeat(kept), previewBytes: kept, totalBytes: 2100, cut: true, resumeOffsetBytes: kept })
+    }
+  })
+
+  // @covers: team-tasks › task_journal_read returns any entry losslessly › Offset inside a character or invalid bytes
+  test('a known-invalid tail at the 8,192-byte chunk end is returned raw with null text; valid prefixes end the chunk before them', () => {
+    const task = newTask()
+    const chunkOf = (tail: number[]) => {
+      const stored = bytes('a'.repeat(8192 - tail.length), tail, 'z'.repeat(100))
+      return { stored, chunk: store.journalWindow.readEntry(task.id, rawNote(db, task.id, stored, at(1))) }
+    }
+    for (const tail of INVALID_TAILS) {
+      const { stored, chunk } = chunkOf(tail)
+      expect(chunk).toMatchObject({ text: null, returnedBytes: 8192, totalBytes: 8292, nextOffsetBytes: 8192 })
+      expect(Buffer.from(chunk.dataBase64, 'base64').equals(stored.subarray(0, 8192))).toBe(true)
+    }
+    for (const tail of VALID_TAILS) {
+      const kept = 8192 - tail.length
+      expect(chunkOf(tail).chunk).toMatchObject({ text: 'a'.repeat(kept), returnedBytes: kept, nextOffsetBytes: kept })
+    }
   })
 })
 

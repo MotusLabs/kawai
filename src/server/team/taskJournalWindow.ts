@@ -1,7 +1,6 @@
-// The agent's bounded task reads (bounded-log-reads-and-task-get D4–D6). Not
-// wired to a tool yet: `task_get` still serves `TaskStore.detail`, and the
-// bounded detail and the lossless entry reader are registered together later
-// (design D7, Sequencing), so a bounded `task_get` never ships alone.
+// The agent's bounded task reads (bounded-log-reads-and-task-get D4–D6),
+// served by the `task_get` and `task_journal_read` tools (taskTools), which
+// are registered together so a bounded `task_get` never ships alone.
 // - The detail reads its anchor, the journal, subtask, and message windows,
 //   and their counts in one synchronous read transaction, newest first by
 //   `(created_at, rowid)` with the limits in SQL, then returns each list
@@ -46,17 +45,32 @@ export function utf8Exact(bytes: Uint8Array): string | null {
   return Buffer.from(text, 'utf8').equals(bytes) ? text : null
 }
 
+/** The byte length of the scalar a valid UTF-8 lead byte begins, else 0 (C0, C1, F5–FF). */
+const scalarLength = (lead: number) =>
+  lead >= 0xc2 && lead <= 0xdf ? 2 : lead >= 0xe0 && lead <= 0xef ? 3 : lead >= 0xf0 && lead <= 0xf4 ? 4 : 0
+
+/** The second byte's valid range after a lead: E0, ED, F0, and F4 restrict it (no overlong, surrogate, or > U+10FFFF). */
+const secondByteRange = (lead: number): [number, number] =>
+  lead === 0xe0 ? [0xa0, 0xbf] : lead === 0xed ? [0x80, 0x9f] : lead === 0xf0 ? [0x90, 0xbf] : lead === 0xf4 ? [0x80, 0x8f] : [0x80, 0xbf]
+
 /**
- * `bytes` without a trailing lead sequence too short for its character (at
- * most three bytes dropped), never trimmed to empty. Applied only to a cut
- * that is not the end of the entry.
+ * `bytes` without a trailing suffix that is the valid start of a UTF-8
+ * scalar cut short (at most three bytes dropped), never trimmed to empty.
+ * An invalid lead or an impossible prefix stays, so the bytes do not decode
+ * and the caller keeps them raw. Applied only to a cut that is not the end
+ * of the entry.
  */
 export function trimIncompleteTail(bytes: Uint8Array): Uint8Array {
   for (let back = 1; back <= Math.min(3, bytes.length); back++) {
-    const byte = bytes[bytes.length - back]!
-    if ((byte & 0xc0) === 0x80) continue
-    const length = byte >= 0xf0 ? 4 : byte >= 0xe0 ? 3 : byte >= 0xc0 ? 2 : 1
-    return length > back && back < bytes.length ? bytes.subarray(0, bytes.length - back) : bytes
+    const lead = bytes[bytes.length - back]!
+    if ((lead & 0xc0) === 0x80) continue
+    if (scalarLength(lead) <= back || back === bytes.length) return bytes
+    if (back >= 2) {
+      const [low, high] = secondByteRange(lead)
+      const second = bytes[bytes.length - back + 1]!
+      if (second < low || second > high) return bytes
+    }
+    return bytes.subarray(0, bytes.length - back)
   }
   return bytes
 }

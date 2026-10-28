@@ -1,8 +1,8 @@
 // The lossless entry reader and the service rules of the bounded reads
-// (bounded-log-reads-and-task-get D4–D6), unwired: rows R1–R4 and R6–R10 at
-// the store and service, R5's store guard, T5 and T14 through the service
-// and the seal, and P4. The adapter envelopes (R5's schema, T5–T7, R6) are
-// deferred to the registration commit. Ground truth is the stored bytes.
+// (bounded-log-reads-and-task-get D4–D6): rows R1–R4 and R6–R10 at the store
+// and service, R5's store guard, T5 and T14 through the service and the
+// seal, and P4. The adapter envelopes (R5's schema, T5–T7, R6) are in
+// taskJournalTools.test.ts. Ground truth is the stored bytes.
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
 import type { Database } from 'bun:sqlite'

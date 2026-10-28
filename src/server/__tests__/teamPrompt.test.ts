@@ -58,15 +58,21 @@ describe('buildTeamPrompt', () => {
     }
   })
 
+  // @covers: team-tasks › Agents are told task_get is bounded › Prompt names the paging
   test('ordinary contributors and group-less sessions get the tools, journal role, and change authority but no creation right', () => {
     for (const prompt of [
       buildTeamPrompt({ outbound, sessionId: 'chat-5', group: devs, groups: [devs] }),
       buildTeamPrompt({ outbound, sessionId: 'chat-6', groups: [devs] }),
     ]) {
       expect(prompt).toContain('You cannot create tasks')
-      for (const name of ['task_get', 'task_list', 'task_note', 'task_update_status', 'task_amend', 'task_acknowledge']) {
+      for (const name of ['task_get', 'task_journal_read', 'task_list', 'task_note', 'task_update_status', 'task_amend', 'task_acknowledge']) {
         expect(prompt).toContain(`\`mcp__kawai-team__${name}\``)
       }
+      // bounded-log-reads-and-task-get D7: task_get is bounded, names its paging, and promises no full journal.
+      expect(prompt).toContain('the journal, subtasks, and messages as bounded windows of the newest entries with their totals, each journal entry a byte-bounded preview')
+      expect(prompt).toContain('Page older entries with `journal_before` (the returned `nextBefore`) and `journal_limit` (1–200).')
+      expect(prompt).toContain('`mcp__kawai-team__task_journal_read`: read any journal entry whole, in byte chunks from `offset_bytes`')
+      expect(prompt).not.toMatch(/whole journal|full journal/)
       expect(prompt).toContain('add a journal note or message the creator')
       expect(prompt).toContain("that change's proposal, design, and tasks are the authoritative direction")
       expect(prompt).toContain('`done` or `cancelled` (the creator only)')

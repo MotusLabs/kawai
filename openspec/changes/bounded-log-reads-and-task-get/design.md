@@ -216,7 +216,7 @@ Rules:
 - An offset beyond `total` is refused, naming the offset and the total.
 - An offset equal to `total` returns `{ returnedBytes: 0, dataBase64: '', text: '', nextOffsetBytes: null }`, which also covers an empty entry.
 - Otherwise:
-  - When the chunk is not the end of the entry, the reader trims at most three trailing bytes that begin an incomplete UTF-8 character.
+  - When the chunk is not the end of the entry, the reader trims at most three trailing bytes that are the valid start of a UTF-8 character cut short. An invalid lead byte (`C0`, `C1`, `F5`–`FF`) or an impossible prefix (`E0 80`, `ED A0`, `F0 80`, `F4 90`, and the like) is not trimmed, so such a chunk is returned whole with `text: null`. The 2,000-byte preview trims the same way, so such a preview is T-invalid.
   - If the remaining bytes decode as valid UTF-8 with a fatal decoder that keeps a byte-order mark, `text` is that string. The NUL character and a byte-order mark are kept, so the UTF-8 encoding of `text` equals the returned bytes.
   - Otherwise the untrimmed chunk is returned with `text: null`.
 - `dataBase64` is always authoritative.
