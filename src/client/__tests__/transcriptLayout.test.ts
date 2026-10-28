@@ -57,6 +57,42 @@ describe('transcript layout (chat-transcript-layout D1)', () => {
     ])
   })
 
+  // @covers: chat-sessions › Turns the agent starts on its own are shown › Trigger without a known cause
+  test('a leading hidden user-started marker leaves the first visible message plain', () => {
+    const plain: ChatEvent = { id: 's', sequence: 0, at: '', type: 'turn_started', turnId: 't1' }
+    const rows = layout([plain, user('u1', 't1'), user('u2', 't2')])
+    expect(rows.map(row => [row.author, row.turnStart, row.authorStart])).toEqual([
+      [null, false, false],
+      ['user', false, true],
+      ['user', true, true],
+    ])
+  })
+
+  // @covers: chat-sessions › Turns the agent starts on its own are shown › Trigger without a known cause
+  test('a leading hidden resumed trigger renders the first output plain', () => {
+    const resumed: ChatEvent = { id: 'tr', sequence: 0, at: '', type: 'turn_started', turnId: 't1', trigger: { kind: 'resumed' } }
+    const rows = layout([resumed, agent('a1', 't1'), user('u1', 't2')])
+    expect(rows.map(row => [row.author, row.turnStart, row.authorStart])).toEqual([
+      [null, false, false],
+      ['agent', false, true],
+      ['user', true, true],
+    ])
+  })
+
+  // @covers: chat-sessions › Turns the agent starts on its own are shown › Trigger without a known cause
+  test('several leading hidden markers still leave the first visible message plain', () => {
+    const plain: ChatEvent = { id: 's', sequence: 0, at: '', type: 'turn_started', turnId: 't1' }
+    const resumed: ChatEvent = { id: 'tr', sequence: 1, at: '', type: 'turn_started', turnId: 't1', trigger: { kind: 'resumed' } }
+    const empty: ChatEvent = { id: 'te', sequence: 2, at: '', type: 'turn_started', turnId: 't1', trigger: { kind: 'task', tasks: [] } }
+    const rows = layout([plain, resumed, empty, user('u1', 't1')])
+    expect(rows.map(row => [row.author, row.turnStart, row.authorStart])).toEqual([
+      [null, false, false],
+      [null, false, false],
+      [null, false, false],
+      ['user', false, true],
+    ])
+  })
+
   test('a hidden trigger between days neither adds nor suppresses a separator', () => {
     const resumed: ChatEvent = { id: 'tr', sequence: 0, at: '2026-10-16T00:30:00Z', type: 'turn_started', turnId: 't2', trigger: { kind: 'resumed' } }
     const rows = layout([

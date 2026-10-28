@@ -74,6 +74,9 @@ function ChatMessagesView({ events, projectPath, sessionId, sendMessage, connect
   const entries = useMemo(() => toolEntries(events), [events])
   const today = chatDayKey(new Date().toISOString())
   const layouts = useMemo(() => layoutRows(entries, { today }), [entries, today])
+  // Spacing's "first row" is the first *visible* entry: hidden markers before
+  // it must not give it top-of-transcript separation.
+  const firstVisibleIndex = useMemo(() => entries.findIndex(entry => isVisibleEntry(entry)), [entries])
   const hasVisibleRows = useMemo(() => entries.some(isVisibleEntry), [entries])
 
   /** A message row's author, body, and body surface; null for aside rows. */
@@ -147,7 +150,7 @@ function ChatMessagesView({ events, projectPath, sessionId, sendMessage, connect
     {entries.map(({ event, result }, index) => {
       if (!isVisibleEntry({ event })) return null
       const layout = layouts[index]!
-      const spacing = rowSpacing(index === 0, layout.turnStart, layout.authorStart)
+      const spacing = rowSpacing(index === firstVisibleIndex, layout.turnStart, layout.authorStart)
       const key = keyOf(event)
       const day = layout.dayBreak && <DaySeparator label={layout.dayBreak} />
       const row = message(event)

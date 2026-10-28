@@ -87,21 +87,25 @@ export function layoutRows(
   let previousTurn: string | null = null
   let runAuthor: string | null = null
   let previousDay: string | null = null
+  // Whether a visible row has been laid out yet: the transcript's first
+  // visible row is plain (no turn or author separation), whatever hidden
+  // entries precede it.
+  let seenVisible = false
   // A hidden trigger row still opens its turn: its wide separation carries
   // to the next visible row, so hiding the line never hides the boundary.
   let hiddenTurnStart = false
-  entries.forEach(({ event }, index) => {
-    // A user-started turn_started draws nothing and always has (it was
-    // filtered before layout): leave every layout input untouched.
+  entries.forEach(({ event }) => {
+    // A user-started turn_started draws nothing (quiet user turns): leave
+    // every layout input untouched.
     if (event.type === 'turn_started' && event.trigger === undefined) {
       layouts.push({ author: null, turnStart: false, authorStart: false, dayBreak: null })
       return
     }
     const author = authorOf(event)
     const turnId = turnIdOf(event)
-    const turnStart = index > 0 && (startsTurn(event) ||
+    const turnStart = seenVisible && (startsTurn(event) ||
       (turnId !== null && previousTurn !== null && turnId !== previousTurn))
-    if (turnStart || index === 0) runAuthor = null
+    if (turnStart || !seenVisible) runAuthor = null
     if (turnId !== null) previousTurn = turnId
     const authorStart = author !== null && author !== runAuthor
     if (author !== null) runAuthor = author
@@ -115,6 +119,7 @@ export function layoutRows(
     const visible = isVisibleEntry({ event })
     const rowTurnStart = visible && (turnStart || hiddenTurnStart)
     hiddenTurnStart = !visible && (turnStart || hiddenTurnStart)
+    if (visible) seenVisible = true
     layouts.push({ author, turnStart: rowTurnStart, authorStart, dayBreak })
   })
   return layouts
