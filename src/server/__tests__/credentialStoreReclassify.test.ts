@@ -116,8 +116,7 @@ describe('reclassify: value-preserving kind changes on the shared spine', () => 
     expect(reader.resolve('A')).toBe('xyz')
     const promoted = doc(`{"A":{"kind":"secret-source","value":""}}`)
     replaceInPlace(promoted)
-    // Stale-cache premise proven, not assumed: the same-stamp rewrite leaves
-    // the primed reader serving the old value over the promoted bytes.
+    // Stale-cache premise proven, not assumed: the primed reader serves the old value over promoted bytes.
     expect(reader.resolve('A')).toBe('xyz')
     const events: string[] = []
     const demoter = createCredentialStore(sp(), {
@@ -187,8 +186,7 @@ describe('reclassify: value-preserving kind changes on the shared spine', () => 
     expect(events).toEqual(['retain:A'])
     expect(realFs.readFileSync(sp(), 'utf8')).toBe(seeded)
     expect(realFs.readdirSync(root).filter((name) => name.includes('.tmp-'))).toEqual([])
-    // C3 oracle: the primed cache still reports the OLD kind — a failed
-    // mutation never leaks its in-memory entry change into the cache.
+    // C3 oracle: the primed cache still reports the OLD kind, never the failed mutation's.
     expect(reader.list().entries).toEqual([{ name: 'A', kind: 'launch-env', state: 'set' }])
     expect(reader.resolve('A')).toBe('va')
   })
@@ -338,6 +336,7 @@ describe('reclassify: value-preserving kind changes on the shared spine', () => 
     expect(thrown).toBeInstanceOf(CredentialStoreError)
     expect((thrown as CredentialStoreError).code).toBe('retain-collaborator-failed')
     expect((thrown as Error).message).toBe('credential store: retain-collaborator-failed')
+    expect((thrown as Error).cause).toBeUndefined()
     expect(counted.counts.renameSync).toBe(0)
     expect(realFs.readFileSync(sp(), 'utf8')).toBe(seeded)
   })
@@ -387,6 +386,8 @@ describe('reclassify: value-preserving kind changes on the shared spine', () => 
     const reader = createCredentialStore(realPath)
     expect(reader.list().entries.map((entry) => entry.name).sort()).toEqual(['A', 'a', 'b'])
     expect(reader.resolve('A')).toBe('vA')
+    // Final-kind oracle: a queued set writing stale entries would clobber the demotion's kind.
+    expect(reader.list().entries.find((entry) => entry.name === 'A')?.kind).toBe('launch-env')
   })
 
   test('malformed stores, including a stored NUL, refuse without retaining or cache leak', async () => {
