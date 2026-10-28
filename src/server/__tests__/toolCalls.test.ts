@@ -8,6 +8,7 @@ import {
   TEAM_TOOL_PREFIX,
   classifyToolResult,
   recognizeTool,
+  type BuiltInTool,
   type TeamCatalogue,
   type TrustedDenial,
 } from '../metrics/observations/toolCalls'
@@ -31,15 +32,47 @@ function failedResult(tool: string, output: string, trustedDenial: TrustedDenial
   return classifyToolResult({ failed: true, trustedDenial, tool: recognizeTool(tool, catalogue), output })
 }
 
+// The agreed closed vocabularies, written out here rather than read from the
+// helper, so a substituted, dropped, or duplicated name in either helper array
+// fails. Order is not part of the contract.
+const EXPECTED_BUILT_INS = [
+  'Agent', 'AskUserQuestion', 'Bash', 'Edit', 'EnterWorktree', 'ExitPlanMode', 'Glob', 'Grep',
+  'Monitor', 'MultiEdit', 'NotebookEdit', 'Read', 'Skill', 'Task', 'TaskCreate', 'TaskOutput',
+  'TaskStop', 'TaskUpdate', 'ToolSearch', 'WebFetch', 'WebSearch', 'Write',
+]
+const EXPECTED_PUBLIC_LABELS = [
+  'Agent', 'AskUserQuestion', 'Bash', 'Edit', 'ExitPlanMode', 'Glob', 'Grep', 'Monitor',
+  'MultiEdit', 'NotebookEdit', 'Read', 'Skill', 'Task', 'TaskOutput', 'ToolSearch', 'WebFetch',
+  'WebSearch', 'Write',
+]
+
+function expectExactVocabulary(actual: readonly string[], expected: readonly string[], size: number) {
+  expect(expected).toHaveLength(size)
+  expect(new Set(expected).size).toBe(size)
+  expect(actual).toHaveLength(size)
+  expect(new Set(actual).size).toBe(size)
+  expect([...actual].sort()).toStrictEqual([...expected].sort())
+}
+
 describe('recognition', () => {
   test('TN1: every supported built-in keeps its own name; Agent and Task stay distinct', () => {
     expect(recognizeTool('Bash', catalogue)).toStrictEqual({ kind: 'builtin', name: 'Bash' })
     expect(recognizeTool('Agent', catalogue)).toStrictEqual({ kind: 'builtin', name: 'Agent' })
     expect(recognizeTool('Task', catalogue)).toStrictEqual({ kind: 'builtin', name: 'Task' })
-    expect(BUILT_IN_TOOLS).toHaveLength(22)
-    for (const name of BUILT_IN_TOOLS) {
-      expect(recognizeTool(name, noMembers)).toStrictEqual({ kind: 'builtin', name })
+    expectExactVocabulary(BUILT_IN_TOOLS, EXPECTED_BUILT_INS, 22)
+    for (const name of EXPECTED_BUILT_INS) {
+      expect(recognizeTool(name, noMembers)).toStrictEqual({ kind: 'builtin', name: name as BuiltInTool })
     }
+  })
+
+  test('an unapproved CLI tool name is foreign, not a built-in', () => {
+    expect(recognizeTool('TodoWrite', noMembers)).toStrictEqual({ kind: 'foreign', label: 'other' })
+  })
+
+  test('the 18 public labels are exactly the agreed set, with no duplicates', () => {
+    expectExactVocabulary(PUBLIC_BUILT_IN_LABELS, EXPECTED_PUBLIC_LABELS, 18)
+    expect(EXPECTED_BUILT_INS.filter(name => !EXPECTED_PUBLIC_LABELS.includes(name)).sort())
+      .toStrictEqual(['EnterWorktree', 'TaskCreate', 'TaskStop', 'TaskUpdate'])
   })
 
   test('the four built-ins beyond the 18 public labels are built-in identities, not foreign', () => {
