@@ -391,8 +391,9 @@ export function resolveProfileCatalog(
 
 /**
  * Stamp of every catalog file the context reads: providers.json included.
- * Consumers that cache catalog reads (the provider lookup, the group
- * catalog, the outbound destinations) key their caches on it.
+ * Consumers that cache catalog reads (the group catalog, the outbound
+ * destinations) key their caches on it; the resolution memo keys on
+ * `catalogInputKey` instead.
  */
 export function profileCatalogStamp(ctx: ProfileCatalogContext = {}): string {
   return profileCatalogLevels(ctx).map(({ file }) => {
@@ -405,41 +406,6 @@ export function profileCatalogStamp(ctx: ProfileCatalogContext = {}): string {
   }).join('|')
 }
 
-const providerCache = new Map<string, Map<string, string>>()
-const PROVIDER_CACHE_LIMIT = 32
-
-/**
- * The provider owning `profileId` (D10), resolved from the catalog at the
- * context and cached per catalog stamp. A profile that is no longer in the
- * catalog stands in as its own provider, so a session launched before a
- * catalog edit keeps a stable cooldown and usage key.
- */
-export function providerOf(profileId: string, ctx: ProfileCatalogContext = {}): string {
-  const key = `${ctx.homeDir ?? process.env.HOME ?? os.homedir()}\n${ctx.projectPath ?? ''}\n${profileCatalogStamp(ctx)}`
-  let known = providerCache.get(key)
-  if (!known) {
-    if (providerCache.size >= PROVIDER_CACHE_LIMIT) providerCache.clear()
-    const resolved = resolveProfileCatalog(ctx)
-    known = new Map([...resolved.profiles].map(([id, profile]) => [id, profile.providerId]))
-    providerCache.set(key, known)
-  }
-  return known.get(profileId) ?? profileId
-}
-
-const labelCache = new Map<string, Map<string, string | null>>()
-
-/**
- * The provider's catalog label (providers-and-workers D14), resolved from the
- * catalog at the context and cached per catalog stamp like `providerOf`. A
- * provider the catalog no longer names has no label.
- */
-export function providerLabelOf(providerId: string, ctx: ProfileCatalogContext = {}): string | null {
-  const key = `${ctx.homeDir ?? process.env.HOME ?? os.homedir()}\n${ctx.projectPath ?? ''}\n${profileCatalogStamp(ctx)}`
-  let labels = labelCache.get(key)
-  if (!labels) {
-    if (labelCache.size >= PROVIDER_CACHE_LIMIT) labelCache.clear()
-    labels = new Map([...resolveProfileCatalog(ctx).providers].map(([id, provider]) => [id, provider.label]))
-    labelCache.set(key, labels)
-  }
-  return labels.get(providerId) ?? null
-}
+// The provider lookups resolve through the shared memo (catalog-resolution-cache
+// D2); they stay importable from here like the rest of the catalog surface.
+export { providerLabelOf, providerOf } from './catalogMemo'

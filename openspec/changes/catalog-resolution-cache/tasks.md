@@ -1,27 +1,31 @@
 # Tasks
 
-Mutants (one-line edits; at most five per round):
+Mutants (one-line edits; at most five per round). R3 first named "the input
+key omits tier". That mutant is equivalent: a level's tier, kind, and trust all
+follow from its file path (`2 + depth` for project files, which never coincide
+with the base files), so it survives every oracle. It was replaced by the
+CODEX_HOME omission, which changes Codex provider ids.
 
 | id | file | mutation |
 |---|---|---|
-| R1 | `profileCatalog.ts` | missing files stay in the input key |
-| R2 | `profileCatalog.ts` | the input key omits the stamp (mtime/size) |
-| R3 | `profileCatalog.ts` | the input key omits tier |
-| R4 | `profileCatalog.ts` | a hit does not refresh LRU recency |
+| R1 | `catalogMemo.ts` | missing files stay in the input key |
+| R2 | `catalogMemo.ts` | the input key omits the stamp (mtime/size) |
+| R3 | `catalogMemo.ts` | the input key omits CODEX_HOME |
+| R4 | `catalogMemo.ts` | a hit does not refresh LRU recency |
 | R5 | `limitSignals.ts` | the zone memo caches `true` for every input |
 
 ## 1. Shared resolution memo (D1, D2)
 
-- [ ] 1.1 Add `catalogInputKey` and `resolvedCatalog` with the LRU memo, and
+- [x] 1.1 Add `catalogInputKey` and `resolvedCatalog` with the LRU memo, and
   route `providerOf`, `providerLabelOf`, and `providerDefinitionOf` through
   it, removing the three path-keyed caches.
   - Verify: Tables K and E pass as table-driven tests titled by oracle id,
     counting resolutions through a seam on `resolveProfileCatalog`. R1, R2,
     R3, and R4 are each killed.
-- [ ] 1.2 Add property P1 (seed `0xca7a`, 40 sequences of 30 steps).
+- [x] 1.2 Add property P1 (seed `0xca7a`, 40 sequences of 30 steps).
   - Verify: it passes, and the existing profile-catalog, routing, and
-    cooldown suites pass unchanged. R2 and R3 are killed.
-- [ ] 1.3 Note the memo in the profile catalog bullet of
+    cooldown suites pass unchanged. R2 is killed.
+- [x] 1.3 Note the memo in the profile catalog bullet of
   `docs/architecture/`.
   - Verify: the bullet names the input key and states that edits apply at
     the next lookup.

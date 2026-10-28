@@ -40,8 +40,9 @@ None. This is a performance change with no spec-level behavior change
 
 ## Impact
 
-- `src/server/chat/profileCatalog.ts`: the resolution memo, `providerOf`,
-  `providerLabelOf`, and `profileCatalogStamp`.
+- `src/server/chat/catalogMemo.ts` (new): the resolution memo, `providerOf`,
+  and `providerLabelOf`, re-exported from `profileCatalog.ts`, whose
+  `profileCatalogStamp` stays for its other consumers.
 - `src/server/chat/ChatSessionManager.ts`: `providerDefinitionOf` uses the
   shared memo.
 - `src/server/chat/limitSignals.ts`: the memoized `isResetTimeZone`.
