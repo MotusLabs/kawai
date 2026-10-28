@@ -1,11 +1,14 @@
-// Boot restore catch-up (async-transcript-parsing D2, chat-session-naming
-// D4, worktree tracking D3): live rows adopt their transcript's title and
-// cwd before whenRestored resolves; archived rows register at once with
-// their stored name and adopt the same facts in the deferred pass after it;
-// a user-set name is never replaced; and the start blocker's transcript
-// check stops walking the projects tree once a path is known.
+// Boot restore catch-up (bounded-boot-restore D1/D3/D4, Table B;
+// chat-session-naming D4, worktree tracking D3): live rows adopt their
+// transcript's title and cwd before whenRestored resolves; archived rows
+// register at once with their stored name and adopt the same facts in the
+// deferred pass after it, unless the row changed meanwhile; a user-set name
+// is never replaced; rows without an indexed transcript keep their stored
+// values; and the start blocker's transcript check stops walking the
+// projects tree once a path is known.
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import fs from 'node:fs'
+import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import type { ChatNameSource } from '../../shared/types'
@@ -54,9 +57,27 @@ describe('boot restore catch-up', () => {
   const writeTranscript = (sdkSessionId: string, content: string) => {
     const dir = path.join(process.env.CLAUDE_CONFIG_DIR!, 'projects', '-tmp-proj')
     fs.mkdirSync(dir, { recursive: true })
-    fs.writeFileSync(path.join(dir, `${sdkSessionId}.jsonl`), content)
+    const file = path.join(dir, `${sdkSessionId}.jsonl`)
+    fs.writeFileSync(file, content)
+    return file
   }
-  const seed = (sdkSessionId: string, options: { archived?: boolean; nameSource?: ChatNameSource } = {}) => {
+  /** Holds every open of `file` until the returned release is called. */
+  const holdOpen = (file: string) => {
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const original = fsp.open.bind(fsp)
+    const opened: string[] = []
+    const spy = spyOn(fsp, 'open').mockImplementation((async (target: Parameters<typeof fsp.open>[0], ...rest: unknown[]) => {
+      opened.push(String(target))
+      if (String(target) === file) await gate
+      return (original as (...args: unknown[]) => ReturnType<typeof fsp.open>)(target, ...rest)
+    }) as typeof fsp.open)
+    holds.push(spy)
+    return { release, opened }
+  }
+  const holds: Array<{ mockRestore(): void }> = []
+  afterEach(() => { for (const spy of holds.splice(0)) spy.mockRestore() })
+  const seed = (sdkSessionId: string | null, options: { archived?: boolean; nameSource?: ChatNameSource } = {}) => {
     const sessionId = `chat-${crypto.randomUUID()}`
     const now = new Date().toISOString()
     db.insertChatSession({
@@ -72,7 +93,8 @@ describe('boot restore catch-up', () => {
     expect(check()).toBe(true)
   }
 
-  test('a live row adopts its title and cwd before whenRestored resolves', async () => {
+  // @covers: chat-sessions › Live chats adopt transcript facts before restore completes › A live chat shows its newest title and path at once
+  test('B1 a live row adopts its title and cwd before whenRestored resolves', async () => {
     writeTranscript('sdk-live', transcript('Live title', '/tmp/proj/wt'))
     const live = seed('sdk-live')
     const manager = createManager()
@@ -82,19 +104,27 @@ describe('boot restore catch-up', () => {
     expect(db.getChatSession(live)?.projectPath).toBe('/tmp/proj/wt')
   })
 
-  test('an archived row registers with its stored name and catches up after restore', async () => {
-    writeTranscript('sdk-arch', transcript('Archived title', '/tmp/proj/old-wt'))
+  // @covers: chat-sessions › Archived chats catch up on transcript facts after restore › An archived chat catches up after startup
+  // @covers: chat-sessions › The server stays responsive while persisted chats restore › A very large archived transcript does not stall startup
+  test('B2 an archived row registers with its stored name and catches up after restore', async () => {
+    const file = writeTranscript('sdk-arch', transcript('Archived title', '/tmp/proj/old-wt'))
     const archived = seed('sdk-arch', { archived: true })
+    // The archived scan is held: restore must complete without it.
+    const hold = holdOpen(file)
     const manager = createManager()
     await manager.whenRestored()
     expect(manager.has(archived)).toBe(true)
+    expect(registry.get(archived)?.name).toBe('stored')
+    expect(registry.get(archived)?.projectPath).toBe('/tmp/proj')
+    hold.release()
     await eventually(() => registry.get(archived)?.name === 'Archived title')
     expect(registry.get(archived)?.projectPath).toBe('/tmp/proj/old-wt')
     expect(db.getChatSession(archived)?.projectPath).toBe('/tmp/proj/old-wt')
     expect(db.getChatSession(archived)?.archivedAt).not.toBeNull()
   })
 
-  test('a user-set name survives both passes', async () => {
+  // @covers: chat-sessions › Archived chats catch up on transcript facts after restore › A user-set name survives the catch-up
+  test('B3 a user-set name survives both passes', async () => {
     writeTranscript('sdk-a', transcript('Generated', '/tmp/proj'))
     writeTranscript('sdk-b', transcript('Generated', '/tmp/proj/moved'))
     const live = seed('sdk-a', { nameSource: 'manual' })
@@ -106,7 +136,40 @@ describe('boot restore catch-up', () => {
     expect(registry.get(archived)?.name).toBe('stored')
   })
 
-  test('the start blocker checks a known transcript without another walk', async () => {
+  test('B4 an archived row changed before its catch-up keeps the change', async () => {
+    const file = writeTranscript('sdk-arch', transcript('Archived title', '/tmp/proj/old-wt'))
+    const changed = seed('sdk-arch', { archived: true })
+    const other = seed('sdk-next', { archived: true })
+    writeTranscript('sdk-next', transcript('Next title', '/tmp/proj/next'))
+    const hold = holdOpen(file)
+    const manager = createManager()
+    await manager.whenRestored()
+    expect(manager.rename(changed, 'renamed meanwhile').ok).toBe(true)
+    hold.release()
+    // The pass reaches the row after it, so it has passed the changed one.
+    await eventually(() => registry.get(other)?.name === 'Next title')
+    expect(registry.get(changed)?.name).toBe('renamed meanwhile')
+    expect(registry.get(changed)?.projectPath).toBe('/tmp/proj')
+    expect(db.getChatSession(changed)?.projectPath).toBe('/tmp/proj')
+  })
+
+  // @covers: chat-sessions › The server stays responsive while persisted chats restore › Every session is listed after restore
+  test('B6 rows without an SDK id or an indexed transcript keep their stored values', async () => {
+    writeTranscript('sdk-other', transcript('Unrelated', '/tmp/proj/other'))
+    const noSdk = seed(null)
+    const liveMissing = seed('sdk-missing')
+    const archivedMissing = seed('sdk-gone', { archived: true })
+    const manager = createManager()
+    await manager.whenRestored()
+    for (const id of [noSdk, liveMissing, archivedMissing]) {
+      expect(manager.has(id)).toBe(true)
+      expect(registry.get(id)?.name).toBe('stored')
+      expect(registry.get(id)?.projectPath).toBe('/tmp/proj')
+    }
+  })
+
+  // @covers: chat-sessions › Transcript-missing checks see the transcript's current presence › A deleted transcript is reported missing
+  test('B5 the start blocker checks a known transcript without another walk', async () => {
     writeTranscript('sdk-live', transcript('t', '/tmp/proj'))
     const live = seed('sdk-live')
     const manager = createManager()

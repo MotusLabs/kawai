@@ -46,17 +46,17 @@ following the mutation-testing scope rule):
   - Verify: `chatBootRestoreCatchUp.test.ts` passes (B1, B2, B3, B5), and so
     do `chatContextExhaustedFlag.test.ts` and `chatSessionTasks.test.ts`
     (synchronous registration).
-- [ ] 3.2 Add the B4 test: an archived row renamed or restored before its
+- [x] 3.2 Add the B4 test: an archived row renamed or restored before its
   catch-up keeps the change.
   - Verify: M6 is killed.
-- [ ] 3.3 Make B2's "listed at `whenRestored()` with the stored name"
+- [x] 3.3 Make B2's "listed at `whenRestored()` with the stored name"
   deterministic. Hold the archived scan behind a test seam, or assert that
   the archived transcript was not opened before `whenRestored()` resolved.
   - Verify: M3 is killed.
-- [ ] 3.4 Add B6: rows without an SDK id, or whose transcript is not
+- [x] 3.4 Add B6: rows without an SDK id, or whose transcript is not
   indexed, register with stored values.
   - Verify: the test passes and the new branches are covered.
-- [ ] 3.5 Annotate the tests with
+- [x] 3.5 Annotate the tests with
   `// @covers: chat-sessions › <requirement> › <scenario>` for every
   scenario in this change's delta spec.
   - Verify: `scripts/__tests__/specCoverageGuard.test.ts` passes.
@@ -66,7 +66,7 @@ following the mutation-testing scope rule):
 - [x] 4.1 Add the Boot restore bullet to `docs/architecture/chat.md`.
   - Verify: the bullet names `indexTranscripts`, `scanTranscriptMeta`, the
     deferred archived pass, and `TranscriptPathCache`.
-- [ ] 4.2 Point the bullet's change tag at `bounded-boot-restore`. It
+- [x] 4.2 Point the bullet's change tag at `bounded-boot-restore`. It
   currently cites async-transcript-parsing D2.
   - Verify: `grep -n 'bounded-boot-restore' docs/architecture/chat.md`
     matches.

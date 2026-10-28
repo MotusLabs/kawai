@@ -2578,7 +2578,7 @@ export class ChatSessionManager {
     // persisted, matching what the live CwdChanged firing would have
     // written, so the row and the registry agree from here on.
     // The path comes from the boot index and the meta from one streaming
-    // scan (async-transcript-parsing design D1/D2) — no sync fs on the
+    // scan (bounded-boot-restore design D1/D2) — no sync fs on the
     // event loop at boot. Archived rows catch up later (catchUpArchived).
     const indexed = record.sdkSessionId ? transcripts.get(`${record.sdkSessionId}.jsonl`) : undefined
     if (record.sdkSessionId && indexed) this.transcriptPaths.remember(record.sdkSessionId, indexed)
