@@ -109,23 +109,34 @@ export class FsObserver {
 /** A log part: literal text, or `fill` bytes of a repeated ASCII unit. */
 export type Part = string | { fill: number; char?: string }
 
-/** Writes `parts` through one descriptor in chunks of at most 1 MiB. */
+/** Writes `parts` through one descriptor in chunks of at most about 1 MiB. */
 export function writeChunked(logPath: string, parts: Part[], flag: 'w' | 'a' = 'w'): number {
   fs.mkdirSync(path.dirname(logPath), { recursive: true })
   const fd = raw.openSync(logPath, flag)
   let written = 0
+  let pending: string[] = []
+  let pendingBytes = 0
+  const flush = () => {
+    if (pending.length) written += raw.writeSync(fd, Buffer.from(pending.join(''), 'utf8'))
+    pending = []
+    pendingBytes = 0
+  }
   try {
     for (const part of parts) {
       if (typeof part === 'string') {
-        written += raw.writeSync(fd, Buffer.from(part, 'utf8'))
+        pending.push(part)
+        pendingBytes += part.length
+        if (pendingBytes >= 1024 * 1024) flush()
         continue
       }
+      flush()
       const unit = part.char ?? 'x'
       const chunk = Buffer.alloc(Math.min(part.fill, Math.floor((1024 * 1024) / unit.length) * unit.length), unit)
       for (let left = part.fill; left > 0; left -= chunk.length) {
         written += raw.writeSync(fd, left >= chunk.length ? chunk : chunk.subarray(0, left))
       }
     }
+    flush()
   } finally {
     raw.closeSync(fd)
   }
