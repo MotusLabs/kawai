@@ -7,7 +7,9 @@
 // carries a value, prefix, length, parser message, or cause.
 // The fixed error class and codes live in credentialStoreErrors.ts and the
 // strict document layer (parse + gated read) in credentialStoreDocument.ts;
-// this module re-exports both unchanged.
+// this module re-exports both unchanged. reclassify() changes an entry's
+// kind and always preserves its stored value byte-for-byte (blank included);
+// a kind plus a new value is set()'s job.
 
 import { constants as fsConstants } from 'node:fs'
 import type { Stats } from 'node:fs'
@@ -317,6 +319,40 @@ export class CredentialStore {
       if (!Object.hasOwn(entries, name)) return { applied: false, durable: false }
       await this.retainIfNeeded(entries, name, false)
       delete entries[name]
+      return this.atomicWrite(entries)
+    })
+  }
+
+  /** Reclassify an entry between kinds, always preserving its stored value
+   * byte-for-byte (blank included) — a kind plus a new value is set()'s job.
+   * Admission (name, kind, target-secret catalog pattern, target-secret
+   * collaborator presence) runs before any filesystem read; the parent lookup
+   * matches clear: an absent parent is a no-op, never created. The changed
+   * entry is a NEW object — freshEntries shares entry objects with the
+   * owner's cache, so an in-place kind edit would corrupt the cached kind
+   * when a write fails before the rename. */
+  async reclassify(name: string, kind: CredentialKind): Promise<CredentialSetOutcome> {
+    if (typeof name !== 'string' || !STORE_NAME.test(name)) throw new CredentialStoreError('invalid-name')
+    if (!KINDS.includes(kind)) throw new CredentialStoreError('invalid-kind')
+    if (kind === 'secret-source' && !CATALOG_NAME.test(name)) throw new CredentialStoreError('name-not-catalog')
+    if (kind === 'secret-source' && !this.retain) {
+      throw new CredentialStoreError('retain-collaborator-required')
+    }
+    let pst: Stats
+    try {
+      pst = this.deps.statSync(path.dirname(this.storePath))
+    } catch (err) {
+      if (isMissing(err)) return { applied: false, durable: false }
+      throw new CredentialStoreError('unreadable')
+    }
+    if (!pst.isDirectory()) throw new CredentialStoreError('unreadable')
+    const owner = ownerFor(this.deps, pst, this.storePath)
+    return this.mutate(owner, async (entries) => {
+      if (!Object.hasOwn(entries, name)) return { applied: false, durable: false }
+      const old = entries[name]
+      if (old.kind === kind) return { applied: false, durable: false }
+      await this.retainIfNeeded(entries, name, kind === 'secret-source')
+      entries[name] = { kind, value: old.value }
       return this.atomicWrite(entries)
     })
   }
