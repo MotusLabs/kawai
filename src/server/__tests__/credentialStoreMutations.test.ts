@@ -17,6 +17,7 @@ import {
   type CredentialStoreCode,
   type CredentialStoreOptions,
 } from '../chat/credentialStore'
+import { CredentialStoreError as DefiningCredentialStoreError } from '../chat/credentialStoreErrors'
 
 let root: string
 
@@ -219,8 +220,9 @@ describe('clear and the shared mutation spine', () => {
     writeRaw(doc(`{"A":{"kind":"secret-source","value":"vA"}}`))
     let readFault = false
     let readAttempts = 0
+    const events: string[] = []
     const faulted: CredentialStoreOptions = {
-      retainSecretNames: recorder([]),
+      retainSecretNames: recorder(events),
       deps: {
         readSync: (
           fd: number,
@@ -244,6 +246,9 @@ describe('clear and the shared mutation spine', () => {
       const clearer = createCredentialStore(sp(), faulted)
       await expectCodeAsync(clearer.clear('A'), 'unreadable')
       expect(readAttempts).toBeGreaterThan(0)
+      // The refusal happened inside the fresh read, before any retain step:
+      // no collaborator event while the fault remains held.
+      expect(events).toEqual([])
       expect(realFs.readFileSync(sp(), 'utf8')).toBe(doc(`{"A":{"kind":"secret-source","value":"vA"}}`))
     } finally {
       readFault = false
@@ -265,6 +270,10 @@ describe('clear and the shared mutation spine', () => {
     const seeded = doc(`{"A":{"kind":"launch-env","value":"xyz"}}`)
     writeRaw(seeded)
     const reader = createCredentialStore(sp())
+    // A no-op absent-name clear creates the path's canonical owner and
+    // installs its cache from a genuinely ok fresh read; without it resolve()
+    // would find no owner and never serve a stale cache.
+    expect(await reader.clear('zz')).toEqual({ applied: false, durable: false })
     expect(reader.resolve('A')).toBe('xyz')
     const observed = realFs.statSync(sp())
     // Equal-length in-place rewrite: launch-env 'xyz' -> secret-source ''.
@@ -280,6 +289,12 @@ describe('clear and the shared mutation spine', () => {
     const after = realFs.statSync(sp())
     expect(after.size).toBe(observed.size)
     expect(after.mtimeMs).toBe(observed.mtimeMs)
+    expect(after.dev).toBe(observed.dev)
+    expect(after.ino).toBe(observed.ino)
+    // Stale-cache precondition, proven not assumed: the reader still serves
+    // the primed old value through the cache hit, though the bytes now hold
+    // the promoted kind (a fresh read would return '').
+    expect(reader.resolve('A')).toBe('xyz')
     const events: string[] = []
     const clearer = createCredentialStore(sp(), {
       retainSecretNames: recorder(events),
@@ -299,6 +314,8 @@ describe('clear and the shared mutation spine', () => {
     const seeded = doc(`{"A":{"kind":"secret-source","value":""}}`)
     writeRaw(seeded)
     const reader = createCredentialStore(sp())
+    // Owner + cache primed via the same no-op absent-name clear as above.
+    expect(await reader.clear('zz')).toEqual({ applied: false, durable: false })
     expect(reader.resolve('A')).toBe('')
     const observed = realFs.statSync(sp())
     // Equal-length in-place rewrite: secret-source '' -> launch-env 'xyz'.
@@ -311,7 +328,15 @@ describe('clear and the shared mutation spine', () => {
       realFs.closeSync(fd)
     }
     realFs.utimesSync(sp(), new Date(T), new Date(T))
-    expect(realFs.statSync(sp()).mtimeMs).toBe(observed.mtimeMs)
+    const after = realFs.statSync(sp())
+    expect(after.size).toBe(observed.size)
+    expect(after.mtimeMs).toBe(observed.mtimeMs)
+    expect(after.dev).toBe(observed.dev)
+    expect(after.ino).toBe(observed.ino)
+    // Stale-cache precondition: the reader still serves the primed secret
+    // kind ('' value) through the cache hit, though the bytes now hold the
+    // demoted launch-env kind (a fresh read would return 'xyz').
+    expect(reader.resolve('A')).toBe('')
     const events: string[] = []
     const clearer = createCredentialStore(sp(), { retainSecretNames: recorder(events) })
     expect(await clearer.clear('A')).toEqual({ applied: true, durable: true })
@@ -428,6 +453,8 @@ describe('clear and the shared mutation spine', () => {
   })
 
   test('the extracted error keeps one class identity across the module boundary', async () => {
+    // The facade's export IS the defining binding — not a facade-local copy.
+    expect(CredentialStoreError).toBe(DefiningCredentialStoreError)
     const direct = new CredentialStoreError('invalid-name')
     expect(direct).toBeInstanceOf(CredentialStoreError)
     expect(direct.code).toBe('invalid-name')
