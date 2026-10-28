@@ -4,33 +4,33 @@ Groups 1–2 are the first production path. Groups 3–5 follow under a later ta
 
 ## 1. Exclude chat transcripts before content reads (D1)
 
-- [ ] 1.1 Add one shared staged exclusion check (D1 rows X0–X4):
+- [x] 1.1 Add one shared staged exclusion check (D1 rows X0–X4):
   - the file-name thread id F, then the stored record or session id R, both without opening the file;
   - then the head session id H from the existing `extractSessionId` parse, only when F and R missed.
   - Stop at the first hit. Known status never skips H. An unresolved H infers no exclusion and fabricates no identity. An absent or empty exclude set disables the filter.
   - Verify: unit rows X0–X4 and the empty set.
-- [ ] 1.2 Apply it in `collectLogEntryBatch` (after the newest-`maxLogs` slice) and `collectLogEntriesForPaths`, before `isCodexSubagent`, `isCodexExec`, `extractProjectPath`, `extractSlug`, and the token read.
+- [x] 1.2 Apply it in `collectLogEntryBatch` (after the newest-`maxLogs` slice) and `collectLogEntriesForPaths`, before `isCodexSubagent`, `isCodexExec`, `extractProjectPath`, `extractSlug`, and the token read.
   - Verify: the existing `logPollData` tests pass unchanged.
-- [ ] 1.3 Apply it in `buildOrphanEntries` before any helper or token read, in `buildLastMessageEntries`, and on the final entry list before `attachLastUserMessage`.
+- [x] 1.3 Apply it in `buildOrphanEntries` before any helper or token read, in `buildLastMessageEntries`, and on the final entry list before `attachLastUserMessage`.
   - A recorded orphan whose path is re-enriched is not K.
   - Verify: the existing `logMatchWorker` tests pass unchanged.
-- [ ] 1.4 Commit witness WX as a table-driven test through the real match-worker request handler over temp logs, with an observer on every file-open and content-read API.
+- [x] 1.4 Commit witness WX as a table-driven test through the real match-worker request handler over temp logs, with an observer on every file-open and content-read API.
   - It covers rows X0–X4 for every candidate class (new and known in both collectors, orphan, backfill), the known A / excluded head B witness, and the controls (no set, `maxLogs` order, unexcluded real logs).
   - Verify: every row holds, and the test kills mutant M1 (exclusion moved after enrichment).
 
 ## 2. Bounded token windows and evidence (D2–D3)
 
-- [ ] 2.1 Replace the token read in `src/server/logmatch/logText.ts` with the one-descriptor reader:
+- [x] 2.1 Replace the token read in `src/server/logmatch/logText.ts` with the one-descriptor reader:
   - head and tail windows of 200 KiB with the one-byte lookbehind, read once when they overlap;
   - `fstat` before and after; honor `bytesRead`; close in `finally`;
   - complete lines only; the 2,000-line tail limit; no whole-file API on any branch.
   - Verify: the existing `logText` tests pass or are updated row by row with the reason journaled.
-- [ ] 2.2 Return evidence K / U / C(n) / P(n) (D3), with K replacing `-1`.
+- [x] 2.2 Return evidence K / U / C(n) / P(n) (D3), with K replacing `-1`.
   - C(n) requires both stable physical coverage and complete logical accounting.
   - Any failed predicate gives P(n), including a positive observed before a short read or generation change.
   - Carry the evidence kind and generation facts through the worker output.
   - Verify: table WE (E1–E11) committed verbatim through the reader with the all-API observer and independent generator truth.
-- [ ] 2.3 Make the three gates consume evidence per rows G0–G6: `getEntriesNeedingMatch` (`logMatchGate.ts`), the orphan gate in `buildOrphanEntries`, and the insert gate in `logPoller.ts`.
+- [x] 2.3 Make the three gates consume evidence per rows G0–G6: `getEntriesNeedingMatch` (`logMatchGate.ts`), the orphan gate in `buildOrphanEntries`, and the insert gate in `logPoller.ts`.
   - Rework both empty caches to the D3 admission and reuse rules: `zeroTokenLogCache` in `logText.ts`, and in `logPoller.ts`:
     - remove the unconditional size-cache skip at 818–820;
     - stop the no-session-id write at 833–836;
@@ -38,7 +38,7 @@ Groups 1–2 are the first production path. Groups 3–5 follow under a later ta
   - Verify: tables WG (minimum 0, 1, and generic 2; G6 unreachable at production 1) and WC committed verbatim, asserting cache state directly.
 - [ ] 2.4 Add witnesses O1 and O2 through the real worker and the poller, generated with bounded writes.
   - Verify: both stay eligible and are inserted on an exact match; each fails under mutant M3 (`P(n)` treated as `C(n)` or cached).
-- [ ] 2.5 Add properties P1 (seed `0x6b617761`, 200 cases, including the sparse 1 MiB / 1 GiB pair) and P2 over the same cases.
+- [x] 2.5 Add properties P1 (seed `0x6b617761`, 200 cases, including the sparse 1 MiB / 1 GiB pair) and P2 over the same cases.
   - Verify: both pass, P1 kills mutant M2 (a whole-file read restored), and P2 kills M3.
 
 ## 3. Bounded `task_get` (D4–D5, later revision)
