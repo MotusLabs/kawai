@@ -189,6 +189,32 @@ for (const { runtime, call } of RUNTIMES) {
       expect((await call('dev', 'task_get', { task_id: empty.id })).value.bounds.journal).toEqual({ total: 0, returned: 0, olderRemaining: false, nextBefore: null })
     })
 
+    // @covers: team-tasks › task_get pages the journal › Reading older entries
+    test('T13: entries sharing created_at page in insertion order with no duplicates or gaps', async () => {
+      const task = await newTask()
+      // Runs of five entries share a created_at, so pages of four cut through ties;
+      // the expected order is the insertion (rowid) order rawNote recorded.
+      const written: string[] = []
+      db.transaction(() => { for (let i = 0; i < 23; i++) written.push(rawNote(db, task.id, `tie ${i}`, at(Math.floor(i / 5)))) })()
+      const paged: string[] = []
+      let before: string | null = null
+      for (let end = 23; end > 0; end -= 4) {
+        const start = Math.max(0, end - 4)
+        const { error, value }: { error: string | null; value: any } =
+          await call('dev', 'task_get', { task_id: task.id, journal_limit: 4, ...(before ? { journal_before: before } : {}) })
+        expect(error).toBeNull()
+        expect(ids(value.journal)).toEqual(written.slice(start, end))
+        expect(value.bounds.journal).toEqual({
+          total: 23, returned: end - start, olderRemaining: start > 0, nextBefore: start > 0 ? written[start] : null,
+        })
+        paged.unshift(...ids(value.journal))
+        before = value.bounds.journal.nextBefore
+      }
+      expect(before).toBeNull()
+      expect(paged).toEqual(written)
+      expect(new Set(paged).size).toBe(23)
+    })
+
     // @covers: team-tasks › task_get pages the journal › Unknown or foreign entry id
     // @covers: team-tasks › task_get pages the journal › Limit out of range
     test('T5–T7: a foreign or unknown anchor and an out-of-range limit are refused in the runtime\'s envelope', async () => {
