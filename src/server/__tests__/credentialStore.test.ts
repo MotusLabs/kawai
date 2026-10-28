@@ -15,6 +15,7 @@ import {
   createCredentialStore,
   CredentialStoreError,
   defaultCredentialStorePath,
+  type CredentialFsDeps,
   type CredentialKind,
   type CredentialStoreCode,
 } from '../chat/credentialStore'
@@ -411,6 +412,96 @@ describe('required retain-name collaborator for secret-source', () => {
     expect((await store.set('SECRET_C', 'v', 'secret-source')).applied).toBe(true)
     expect(sawAtRetain).toBe('absent')
     expect(store.resolve('SECRET_C')).toBe('v')
+  })
+})
+
+describe('fresh-load set spine (old-or-new secret retention)', () => {
+  // Equal byte length: kind grows by 3 ("launch-env" -> "secret-source"),
+  // value shrinks by 3 ("abcd" -> "a"), so an in-place rewrite preserves size.
+  const RAW_LAUNCH = doc('{"X":{"kind":"launch-env","value":"abcd"}}')
+  const RAW_SECRET = doc('{"X":{"kind":"secret-source","value":"a"}}')
+  const T = 1700000000000
+
+  function renameRecordingDeps(events: string[]): Partial<CredentialFsDeps> {
+    return {
+      renameSync: (
+        from: Parameters<typeof realFs.renameSync>[0],
+        to: Parameters<typeof realFs.renameSync>[1],
+      ) => {
+        events.push('rename')
+        return realFs.renameSync(from, to)
+      },
+    } as unknown as Partial<CredentialFsDeps>
+  }
+
+  /** Normalize mtime to a whole-ms instant, prime the cache with X as
+   * launch-env through list(), and return the stat the cache observed. */
+  function primeCacheWithLaunchX(store: ReturnType<typeof createCredentialStore>): realFs.Stats {
+    realFs.utimesSync(sp(), new Date(T), new Date(T))
+    expect(store.list().entries.map((entry) => entry.name)).toEqual(['X'])
+    return realFs.statSync(sp())
+  }
+
+  /** In-place same-length external rewrite of X to secret-source, mtime
+   * restored, then prove stamp (mtimeMs:size) and dev/ino are identical to
+   * the observed stat — the exact stale-cache precondition. */
+  function externalSecretRewrite(observed: realFs.Stats): void {
+    const fd = realFs.openSync(sp(), 'r+')
+    try {
+      realFs.writeSync(fd, Buffer.from(RAW_SECRET, 'utf8'), 0, RAW_SECRET.length, 0)
+    } finally {
+      realFs.closeSync(fd)
+    }
+    realFs.utimesSync(sp(), new Date(T), new Date(T))
+    const after = realFs.statSync(sp())
+    expect(RAW_SECRET.length).toBe(RAW_LAUNCH.length)
+    expect(after.size).toBe(observed.size)
+    expect(after.mtimeMs).toBe(observed.mtimeMs)
+    expect(after.dev).toBe(observed.dev)
+    expect(after.ino).toBe(observed.ino)
+  }
+
+  test('set to launch-env over a stamp-hidden secret retains before the rename', async () => {
+    const events: string[] = []
+    const store = createCredentialStore(sp(), {
+      retainSecretNames: {
+        retainSecretName: (name) => {
+          events.push(`retain:${name}`)
+        },
+      },
+      deps: renameRecordingDeps(events),
+    })
+    expect((await store.set('X', 'abcd', 'launch-env')).applied).toBe(true)
+    const observed = primeCacheWithLaunchX(store)
+    externalSecretRewrite(observed)
+    events.length = 0
+    expect((await store.set('X', 'next', 'launch-env')).applied).toBe(true)
+    expect(events).toEqual(['retain:X', 'rename'])
+    expect(JSON.parse(realFs.readFileSync(sp(), 'utf8')).entries.X.kind).toBe('launch-env')
+  })
+
+  test('the same hidden-secret set without a collaborator refuses with bytes standing', async () => {
+    const bootstrap = createCredentialStore(sp())
+    expect((await bootstrap.set('X', 'abcd', 'launch-env')).applied).toBe(true)
+    const store = createCredentialStore(sp())
+    const observed = primeCacheWithLaunchX(store)
+    externalSecretRewrite(observed)
+    await expectCodeAsync(store.set('X', 'next', 'launch-env'), 'retain-collaborator-required')
+    expect(realFs.readFileSync(sp(), 'utf8')).toBe(RAW_SECRET)
+  })
+
+  test('set to launch-env over a stored secret refuses without a collaborator', async () => {
+    writeRaw(sp(), RAW_SECRET)
+    const store = createCredentialStore(sp())
+    await expectCodeAsync(store.set('X', 'v', 'launch-env'), 'retain-collaborator-required')
+    expect(realFs.readFileSync(sp(), 'utf8')).toBe(RAW_SECRET)
+  })
+
+  test('launch-env over launch-env needs no retainer', async () => {
+    const store = createCredentialStore(sp())
+    expect((await store.set('b', '1', 'launch-env')).applied).toBe(true)
+    expect((await store.set('b', '2', 'launch-env')).applied).toBe(true)
+    expect(store.resolve('b')).toBe('2')
   })
 })
 

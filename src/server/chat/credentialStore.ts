@@ -53,8 +53,7 @@ export interface CredentialRetainCollaborator {
   retainSecretName: (name: string) => void | Promise<void>
 }
 
-/** Narrow fs seam for controlled test faults only; every default is the real
- * node:fs function, so a test never substitutes an alternate writer. */
+/** Narrow fs seam for controlled test faults only; every default is real node:fs. */
 export type CredentialFsDeps = Pick<
   typeof nodeFs,
   | 'lstatSync' | 'statSync' | 'openSync' | 'closeSync' | 'fstatSync' | 'readSync'
@@ -95,9 +94,8 @@ function gateStats(st: Stats): { ok: true } | { ok: false; reason: CredentialFai
   return { ok: true }
 }
 
-/** Strictly validate a v1 document: {version:1, entries:{NAME:{kind,value}}} —
- * anything else (bad shape, unknown kind, name invalid for its kind, NUL) is
- * malformed: reported and refused, never salvaged. */
+/** Strictly validate a v1 document {version:1, entries:{NAME:{kind,value}}};
+ * anything else (bad shape, unknown kind, bad name, NUL) is malformed. */
 function parseDocument(raw: string): Entries {
   let parsed: unknown
   try {
@@ -126,10 +124,9 @@ function parseDocument(raw: string): Entries {
   return out
 }
 
-/** One gated read: lstat gates, O_NOFOLLOW open, fstat identity matched to the
- * lstat, gates again on the opened file (chmod race), read, parse. The stamp
- * is the accepted mtime/size heuristic — a freshness hint, never a trust
- * proof; an edit keeping size+mtime can hide behind a hit (stated, not solved). */
+/** One gated read: lstat gates, O_NOFOLLOW open, fstat identity rematch,
+ * gates again (chmod race), read, parse. The stamp is the accepted mtime/size
+ * hint — never a trust proof; same-size+mtime edits can hide behind a hit. */
 function loadDocument(deps: CredentialFsDeps, storePath: string): Loaded {
   let st: Stats
   try {
@@ -242,9 +239,8 @@ export class CredentialStore {
     this.retain = options.retainSecretNames
   }
 
-  /** Create a missing parent (0700, pinned past the umask) and fsync the
-   * nearest existing ancestor. A stable symlinked parent (HOME alias) is
-   * legitimate. Every raw fs error here reports as write-failed. */
+  /** Create a missing parent (0700, umask-pinned), fsync the nearest existing
+   * ancestor; a stable symlinked parent is legitimate; errors report write-failed. */
   private ensureParent(): Stats {
     const dir = path.dirname(this.storePath)
     try {
@@ -281,8 +277,7 @@ export class CredentialStore {
     }
   }
 
-  /** One gated, stamp-checked load. Gates and identity always run; the
-   * mtime/size stamp only decides re-read versus a shared cache hit. */
+  /** One gated, stamp-checked load; the stamp only decides re-read vs cache hit. */
   private load(): Loaded {
     let pst: Stats
     try {
@@ -332,18 +327,6 @@ export class CredentialStore {
     if (owner) owner.cache = null
     const loaded = this.load()
     if (loaded.state === 'ok') this.fillCache(loaded.entries)
-  }
-
-  /** Serialized RMW: queue first, then fresh bytes. A refused load keeps the
-   * prior bytes and refuses; a missing file starts from an empty document. */
-  private writeEntries(mutate: (entries: Entries) => void): CredentialSetOutcome {
-    const loaded = this.load()
-    let entries: Entries
-    if (loaded.state === 'ok') entries = Object.assign(Object.create(null) as Entries, loaded.entries)
-    else if (loaded.state === 'missing') entries = Object.create(null) as Entries
-    else throw new CredentialStoreError(loaded.reason)
-    mutate(entries)
-    return this.atomicWrite(entries)
   }
 
   /** Temp O_EXCL|O_NOFOLLOW at 0600, write, fsync, close, rename = commit
@@ -405,11 +388,14 @@ export class CredentialStore {
     try { this.deps.unlinkSync(tmp) } catch { /* nothing safe to report */ }
   }
 
-  /** Store a value: '' is blank, non-empty is set. Validation runs first —
-   * admission, kind, value, NUL, catalog shape, and collaborator presence —
-   * before queue, parent creation, and the file, so a refusal has had no
-   * side effect. Names per kind, never silently uppercased; no count/length
-   * caps here (legacy limits stay at the legacy input boundary). */
+  /** Store a value: '' is blank, non-empty is set. Argument validation
+   * (admission, kind, value, NUL, catalog shape, collaborator presence for a
+   * secret-source target) runs before queue, parent, and file. The entry's
+   * CURRENT kind is read inside the queue from the fresh bytes (never the
+   * stamp cache): current or resulting secret-source needs the collaborator,
+   * else the mutation refuses leaving the prior bytes standing (a created
+   * parent stays, as accepted). Names per kind, never uppercased; no new
+   * count/length caps. */
   async set(name: string, value: string, kind: CredentialKind): Promise<CredentialSetOutcome> {
     if (typeof name !== 'string' || !STORE_NAME.test(name)) throw new CredentialStoreError('invalid-name')
     if (!KINDS.includes(kind)) throw new CredentialStoreError('invalid-kind')
@@ -421,17 +407,31 @@ export class CredentialStore {
     }
     const owner = ownerFor(this.deps, this.ensureParent(), this.storePath)
     return enqueue(owner, async () => {
-      if (kind === 'secret-source' && this.retain) {
-        try {
-          await this.retain.retainSecretName(name)
-        } catch {
-          throw new CredentialStoreError('retain-collaborator-failed')
-        }
+      const entries = this.freshEntries()
+      const wasSecret = Object.hasOwn(entries, name) && entries[name].kind === 'secret-source'
+      if (wasSecret || kind === 'secret-source') {
+        if (!this.retain) throw new CredentialStoreError('retain-collaborator-required')
+        try { await this.retain.retainSecretName(name) } catch { throw new CredentialStoreError('retain-collaborator-failed') }
       }
-      return this.writeEntries((entries) => {
-        entries[name] = { kind, value }
-      })
+      entries[name] = { kind, value }
+      return this.atomicWrite(entries)
     })
+  }
+
+  /** Fresh document for a mutation: loadDocument directly inside the owner
+   * queue — the same gates and O_NOFOLLOW identity as load(), never the
+   * stamp cache — refreshing that cache from what it read. Missing reads as
+   * empty; a failed read throws and the prior bytes stand. Returns a
+   * mutation copy, so the cached document is never mutated in place. */
+  private freshEntries(): Entries {
+    const loaded = loadDocument(this.deps, this.storePath)
+    if (loaded.state !== 'ok') {
+      if (loaded.state !== 'missing') throw new CredentialStoreError(loaded.reason)
+      return Object.create(null) as Entries
+    }
+    const owner = findOwner(this.deps, this.storePath)
+    if (owner) owner.cache = { stamp: loaded.stamp, dev: loaded.dev, ino: loaded.ino, entries: loaded.entries }
+    return Object.assign(Object.create(null) as Entries, loaded.entries)
   }
 
   /** Status of the store as a whole — the reason the source listing reports. */
