@@ -43,9 +43,17 @@ export function toolEntries(events: ChatEvent[]): TranscriptEntry[] {
   return entries
 }
 
-/** A row the transcript draws; a user-started `turn_started` draws nothing. */
+/**
+ * A row the transcript draws. A user-started `turn_started` draws nothing,
+ * and so does a trigger without a usable cause — the generic "continued on
+ * its own" line and an empty task list (quiet unknown turns, ui838). Hidden
+ * triggered rows stay in `layoutRows`' input so the turn they open keeps its
+ * boundary and separation on the next visible row.
+ */
 export function isVisibleEntry({ event }: TranscriptEntry): boolean {
-  return event.type !== 'turn_started' || event.trigger !== undefined
+  if (event.type !== 'turn_started') return true
+  if (event.trigger === undefined) return false
+  return event.trigger.kind === 'task' && event.trigger.tasks.length > 0
 }
 
 function authorOf(event: ChatEvent): string | null {
@@ -79,12 +87,25 @@ export function layoutRows(
   let previousTurn: string | null = null
   let runAuthor: string | null = null
   let previousDay: string | null = null
-  entries.forEach(({ event }, index) => {
+  // Whether a visible row has been laid out yet: the transcript's first
+  // visible row is plain (no turn or author separation), whatever hidden
+  // entries precede it.
+  let seenVisible = false
+  // A hidden trigger row still opens its turn: its wide separation carries
+  // to the next visible row, so hiding the line never hides the boundary.
+  let hiddenTurnStart = false
+  entries.forEach(({ event }) => {
+    // A user-started turn_started draws nothing (quiet user turns): leave
+    // every layout input untouched.
+    if (event.type === 'turn_started' && event.trigger === undefined) {
+      layouts.push({ author: null, turnStart: false, authorStart: false, dayBreak: null })
+      return
+    }
     const author = authorOf(event)
     const turnId = turnIdOf(event)
-    const turnStart = index > 0 && (startsTurn(event) ||
+    const turnStart = seenVisible && (startsTurn(event) ||
       (turnId !== null && previousTurn !== null && turnId !== previousTurn))
-    if (turnStart || index === 0) runAuthor = null
+    if (turnStart || !seenVisible) runAuthor = null
     if (turnId !== null) previousTurn = turnId
     const authorStart = author !== null && author !== runAuthor
     if (author !== null) runAuthor = author
@@ -95,7 +116,11 @@ export function layoutRows(
       if (differs) dayBreak = chatDayLabel(event.at, options.timeZone)
       previousDay = day
     }
-    layouts.push({ author, turnStart, authorStart, dayBreak })
+    const visible = isVisibleEntry({ event })
+    const rowTurnStart = visible && (turnStart || hiddenTurnStart)
+    hiddenTurnStart = !visible && (turnStart || hiddenTurnStart)
+    if (visible) seenVisible = true
+    layouts.push({ author, turnStart: rowTurnStart, authorStart, dayBreak })
   })
   return layouts
 }

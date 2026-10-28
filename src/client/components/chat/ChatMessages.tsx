@@ -69,9 +69,15 @@ function ChatMessagesView({ events, projectPath, sessionId, sendMessage, connect
     <ParticipantName sessionId={id} senderKind={senderKind} sessions={sessions} directory={directory}
       {...(onOpenParticipant ? { onOpen: onOpenParticipant } : {})} />
 
-  const entries = useMemo(() => toolEntries(events).filter(isVisibleEntry), [events])
+  // Layout sees every row (hidden turn triggers still open their turn's
+  // spacing, transcriptLayout D1); only visible rows draw.
+  const entries = useMemo(() => toolEntries(events), [events])
   const today = chatDayKey(new Date().toISOString())
   const layouts = useMemo(() => layoutRows(entries, { today }), [entries, today])
+  // Spacing's "first row" is the first *visible* entry: hidden markers before
+  // it must not give it top-of-transcript separation.
+  const firstVisibleIndex = useMemo(() => entries.findIndex(entry => isVisibleEntry(entry)), [entries])
+  const hasVisibleRows = useMemo(() => entries.some(isVisibleEntry), [entries])
 
   /** A message row's author, body, and body surface; null for aside rows. */
   const message = (event: ChatEvent): { author: ReactNode; role: 'user' | 'assistant' | 'peer'; body: ReactNode; bodyClassName?: string } | null => {
@@ -131,7 +137,7 @@ function ChatMessagesView({ events, projectPath, sessionId, sendMessage, connect
   }
 
   return <div className="chat-transcript" data-testid="chat-transcript">
-    {onLoadEarlier !== undefined && (historyHasOlder === true || entries.length > 0) && (
+    {onLoadEarlier !== undefined && (historyHasOlder === true || hasVisibleRows) && (
       <div className="flex justify-center py-1" data-testid="chat-history-top">
         {historyHasOlder === true
           ? <button type="button" data-testid="chat-load-earlier" className="btn btn-secondary text-chat-meta"
@@ -142,8 +148,9 @@ function ChatMessagesView({ events, projectPath, sessionId, sendMessage, connect
       </div>
     )}
     {entries.map(({ event, result }, index) => {
+      if (!isVisibleEntry({ event })) return null
       const layout = layouts[index]!
-      const spacing = rowSpacing(index === 0, layout.turnStart, layout.authorStart)
+      const spacing = rowSpacing(index === firstVisibleIndex, layout.turnStart, layout.authorStart)
       const key = keyOf(event)
       const day = layout.dayBreak && <DaySeparator label={layout.dayBreak} />
       const row = message(event)
@@ -205,14 +212,12 @@ function ChatMessagesView({ events, projectPath, sessionId, sendMessage, connect
         </div>
       case 'turn_started': {
         // Agent-started turn (background tasks D5): a muted trigger line in
-        // place of the user bubble — the task summaries that woke the agent,
-        // or a generic marker when the cause is unknown. User-started turns
-        // carry no trigger and render nothing.
-        if (!event.trigger) return null
-        const lines =
-          event.trigger.kind === 'task'
-            ? event.trigger.tasks.map(task => `⟲ ${task.summary ?? `Task ${task.taskId} ${task.status}`}`)
-            : ['⟲ Continued on its own']
+        // place of the user bubble, naming the task summaries that woke the
+        // agent. Unknown causes and empty task lists draw no line at all
+        // (quiet unknown turns) — visibility filters them before this case.
+        if (!event.trigger || event.trigger.kind !== 'task') return null
+        const lines = event.trigger.tasks.map(task => `⟲ ${task.summary ?? `Task ${task.taskId} ${task.status}`}`)
+        if (lines.length === 0) return null
         return <p key={event.id} data-testid="turn-trigger" className="text-chat-meta text-muted">
           {lines.map((line, index) => <span key={index} className="block">{line}</span>)}
         </p>
