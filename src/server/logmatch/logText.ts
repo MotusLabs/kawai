@@ -1,5 +1,6 @@
 // Agent JSONL log reading: tail and backward-line primitives, role-filtered
-// text extraction, token counts, and last-message/timestamp extraction.
+// text extraction, token counting, and last-message/timestamp extraction.
+// Bounded token evidence lives in tokenReader.ts.
 import fs from 'node:fs'
 import { normalizeAgentLogEntry } from '../../shared/eventTaxonomy'
 import { stripAnsi } from '../terminal/tmuxText'
@@ -9,7 +10,7 @@ import {
   isToolNotificationText,
 } from './promptExtract'
 
-type LogTextMode = 'all' | 'assistant' | 'user' | 'assistant-user'
+export type LogTextMode = 'all' | 'assistant' | 'user' | 'assistant-user'
 
 interface LogReadOptions {
   lineLimit: number
@@ -17,17 +18,11 @@ interface LogReadOptions {
   maxByteLimit?: number
 }
 
-interface LogTextOptionsInput {
-  mode?: LogTextMode
-  logRead?: Partial<LogReadOptions>
-}
-
 const DEFAULT_LOG_READ_OPTIONS: LogReadOptions = {
   lineLimit: 2000,
   byteLimit: 200 * 1024,
 }
 
-const DEFAULT_LOG_TEXT_MODE: LogTextMode = 'assistant-user'
 export const DEFAULT_LOG_TAIL_BYTES = 96 * 1024
 
 export function readLogTail(logPath: string, byteLimit = DEFAULT_LOG_TAIL_BYTES): string {
@@ -206,124 +201,13 @@ function resolveLogReadOptions(
   }
 }
 
-function readLogContent(
-  logPath: string,
-  { lineLimit, byteLimit }: LogReadOptions = DEFAULT_LOG_READ_OPTIONS
-): string {
-  try {
-    const buffer = fs.readFileSync(logPath)
-    return applyReadLimits(buffer.toString('utf8'), { lineLimit, byteLimit })
-  } catch {
-    return ''
-  }
-}
-
-function extractTextFromRaw(raw: string, mode: LogTextMode): string {
-  if (!raw || mode === 'all') {
-    return raw
-  }
-
-  const chunks: string[] = []
-  for (const line of raw.split('\n')) {
-    const trimmed = line.trim()
-    if (!trimmed) {
-      continue
-    }
-    let entry: unknown
-    try {
-      entry = JSON.parse(trimmed)
-    } catch {
-      continue
-    }
-    const extracted = extractTextFromEntry(entry, mode)
-    if (extracted.length > 0) {
-      chunks.push(...extracted)
-    }
-  }
-
-  return chunks.join('\n')
-}
-
-// Logs that yielded zero tokens, keyed by path -> byte length at that time.
-// Enrichment recounts every unknown log each poll, so without this a
-// message-free log would be fully re-parsed on every cycle.
-const zeroTokenLogCache = new Map<string, number>()
-
-export function getLogTokenCount(
-  logPath: string,
-  { mode = DEFAULT_LOG_TEXT_MODE, logRead }: LogTextOptionsInput = {}
-): number {
-  const resolvedRead = resolveLogReadOptions(logRead)
-  let fileSize: number | null = null
-  try {
-    fileSize = fs.statSync(logPath).size
-  } catch {
-    return 0
-  }
-  if (zeroTokenLogCache.get(logPath) === fileSize) {
-    return 0
-  }
-
-  // readLogContent reads the whole file regardless of limits, so read once
-  // and apply the tail limits to the in-memory copy.
-  const raw = readLogContent(logPath, { lineLimit: 0, byteLimit: 0 })
-  const tail = applyReadLimits(raw, resolvedRead)
-  const count = countTokens(extractTextFromRaw(tail, mode))
-  if (count > 0 || mode === 'all') return count
-  // The byte-limited tail can start mid-way through a single huge line
-  // (e.g. a 150KB pasted message), leaving only unparseable fragments and
-  // tool/echo events in the window. Callers only gate on "any message text
-  // at all", so confirm with a head-first scan before reporting empty.
-  const fromHead = findFirstMessageTokenCount(raw, mode)
-  if (fromHead === 0) {
-    zeroTokenLogCache.set(logPath, fileSize)
-  }
-  return fromHead
-}
-
-function applyReadLimits(
-  content: string,
-  { lineLimit, byteLimit }: LogReadOptions
-): string {
-  let result = content
-  if (byteLimit > 0 && result.length > byteLimit) {
-    result = result.slice(-byteLimit)
-  }
-  if (lineLimit > 0) {
-    const lines = result.split('\n')
-    if (lines.length > lineLimit) {
-      result = lines.slice(-lineLimit).join('\n')
-    }
-  }
-  return result
-}
-
-function findFirstMessageTokenCount(raw: string, mode: LogTextMode): number {
-  if (!raw) return 0
-  let start = 0
-  while (start < raw.length) {
-    const end = raw.indexOf('\n', start)
-    const line = (end === -1 ? raw.slice(start) : raw.slice(start, end)).trim()
-    start = end === -1 ? raw.length : end + 1
-    if (!line) continue
-    let entry: unknown
-    try {
-      entry = JSON.parse(line)
-    } catch {
-      continue
-    }
-    const tokens = countTokens(extractTextFromEntry(entry, mode).join('\n'))
-    if (tokens > 0) return tokens
-  }
-  return 0
-}
-function countTokens(text: string): number {
+export function countTokens(text: string): number {
   const normalized = normalizeText(text)
   if (!normalized) return 0
   return normalized.split(/\s+/).filter(Boolean).length
 }
 
-function extractTextFromEntry(entry: unknown, mode: LogTextMode): string[] {
+export function extractTextFromEntry(entry: unknown, mode: LogTextMode): string[] {
   const roleText = extractRoleTextFromEntry(entry)
   return roleText
     .filter(({ role }) => shouldIncludeRole(role, mode))
