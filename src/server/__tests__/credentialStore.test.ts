@@ -555,7 +555,11 @@ describe('N-2 descriptor ownership', () => {
         return fd
       },
       closeSync: (fd: number) => {
-        if (tempFds.has(fd)) closesOfTemp.push(fd)
+        if (tempFds.has(fd)) {
+          closesOfTemp.push(fd)
+          if (closesOfTemp.length === 1) realFs.closeSync(fd) // count repeats without a second OS close
+          return
+        }
         realFs.closeSync(fd)
       },
       renameSync: (from: Parameters<typeof realFs.renameSync>[0], to: Parameters<typeof realFs.renameSync>[1]) => {
@@ -586,7 +590,7 @@ describe('N-2 descriptor ownership', () => {
       closeSync: (fd: number) => {
         if (fd === tempFd) {
           closeAttempts += 1
-          realFs.closeSync(fd) // the real close happens, then the failure surfaces
+          if (closeAttempts === 1) realFs.closeSync(fd) // real close once, then the failure; repeats count only
           throw new Error('injected close failure after real close')
         }
         realFs.closeSync(fd)
