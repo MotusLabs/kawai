@@ -5,7 +5,7 @@ Make tool-call failures of managed chat agents observable by tool and by cause, 
 ## ADDED Requirements
 
 ### Requirement: Tool calls are admitted and identified within bounds
-Every admitted tool call of a managed chat SHALL carry a bounded identity: a CLI built-in or exact `kawai-team` member by its own name in both runtimes; any other distinct raw name in one of at most 96 opaque live slots, the 97th `unknown`; ambiguous shapes (`mcp__dynamic__…`, extra separators, collapsed agent tools) always `unknown`. Admission follows the live-driver producer contract and its fences; replayed history never enters. Inputs and outputs SHALL NOT be stored.
+Every admitted tool call SHALL carry a bounded identity: a CLI built-in or exact `kawai-team` member by name in both runtimes; ambiguous shapes (`mcp__dynamic__…`, extra separators, collapsed agent tools, empty, bare `echo`) `unknown`; any other distinct raw name one of at most 96 opaque live slots, the 97th `unknown`. Only slotted identities are reliable. Admission follows the live-driver contract and fences; replay never enters. Raw names, inputs, and outputs SHALL NOT be stored.
 
 #### Scenario: Same team tool in both runtimes
 - **WHEN** a Claude agent calls `mcp__kawai-team__task_submit_result` and a Codex agent calls `task_submit_result` in the `kawai-team` namespace
@@ -16,8 +16,12 @@ Every admitted tool call of a managed chat SHALL carry a bounded identity: a CLI
 - **THEN** the call is recorded under an opaque slot whose export label is `mcp:other`, and the server and tool names do not appear
 
 #### Scenario: Colliding namespace stays unknown
-- **WHEN** one call comes from the namespace-less Codex dynamic tool `echo` and another from a real MCP server named `dynamic` exposing `echo`
+- **WHEN** the Codex adapter reports `mcp__dynamic__echo` for a namespace-less dynamic call, and another call comes from a real MCP server named `dynamic` exposing `echo`
 - **THEN** both are recorded with `unknown` identity, both count in totals, and neither enters any failure streak
+
+#### Scenario: Bare echo stays unknown
+- **WHEN** two failed results arrive for a tool named exactly `echo`
+- **THEN** both count with label `other` and `unknown` identity, and no streak opens
 
 #### Scenario: Saturation stops measurement honestly
 - **WHEN** a 513th distinct call id appears in one turn
@@ -27,8 +31,8 @@ Every admitted tool call of a managed chat SHALL carry a bounded identity: a CLI
 - **WHEN** a `turn_started` for a turn with a retained 90-day closure is replayed
 - **THEN** the fence rejects it and no observation, fact, or total changes
 
-### Requirement: Failed tool results carry exactly one failure class
-A failed result SHALL be classified by one ordered, output-anchored pass: a trusted linked denial first, then the wrapper and tool prefixes (`input-invalid`, `unavailable`, `blocked`, `precondition`), exact-team refusals, shell and file-change phrases, `command-failed` for Bash and Monitor, else `other`. A success carries no class whatever its text says. The public label never overrides identity membership. Result text SHALL only be classified, never kept.
+### Requirement: Tool results are classified once
+A success SHALL count as a call with class `none` whatever its text or linked denial. A failure SHALL get one class by an ordered, anchored pass: trusted linked denial; wrapper and tool prefixes (`input-invalid`, `unavailable`, `blocked`, `precondition`); `Refused: ` from an exact team tool; Bash-only and Edit-only decline phrases; `command-failed` for Bash and Monitor; else `other`. The label never overrides identity membership. Result text SHALL only be classified, never kept.
 
 #### Scenario: Schema refusal
 - **WHEN** a tool result reads `Input validation error: Invalid arguments for tool task_submit_result: …`
@@ -43,8 +47,20 @@ A failed result SHALL be classified by one ordered, output-anchored pass: a trus
 - **THEN** the call is recorded `denied` from the trusted link, not from output text
 
 #### Scenario: Success is never reclassified
-- **WHEN** a result is a success but its text contains failure-like wording
-- **THEN** it is recorded as a success with no failure class and no failure export
+- **WHEN** a result is a success but its text contains failure-like wording and its approval was denied
+- **THEN** it is recorded and exported as a success with `failure_class` `none`, stores no failure class, and counts in the denominator
+
+#### Scenario: Successes count in the failure ratio
+- **WHEN** one tool has nine successful results and one failed result
+- **THEN** the tool-call counter totals 10 and the failure rate reads 10%
+
+#### Scenario: Decline phrases are tool-specific
+- **WHEN** a failed Monitor reads `The command was declined.` and a failed Write reads `The file change declined.`, with no linked denial
+- **THEN** they are classed `command-failed` and `other`, while the same phrases from Bash and Edit are `denied`
+
+#### Scenario: Generic team failure is not a refusal
+- **WHEN** a `kawai-team` tool fails with `Unknown team: t1`
+- **THEN** the call is recorded with class `other`
 
 #### Scenario: Unrecognized failure text
 - **WHEN** a failed result's text matches no known pattern
@@ -89,15 +105,19 @@ The first ACTUAL call per turn and exact team tool owns the first-attempt marker
 - **THEN** the metric reads n=0 for that turn in the window, not missing history and not a success
 
 ### Requirement: Tool call metrics are exported behind an activation gate
-When metrics export is enabled, Kawai SHALL export the tool-call counter (identity, outcome, failure_class), the streak counter (+ resolution), and the streak-length histogram within the existing label bounds (tool enum at most 96) and budgets, activating all three together behind the fixed `tool-export-v2` checkpoint (active/budget-unavailable/unknown, reason and availableSince). A refusal writes nothing unadmitted or partial; admitted totals survive detail pruning.
+Kawai SHALL export the tool-call counter (tool, outcome, failure_class), streak counter (+ resolution), and streak-length histogram within the existing bounds (tool enum ≤96) and 250,000/10,000 budgets. One transaction SHALL check existing series plus all missing catch-alls and diagnostics, then reserve all with the `tool-export-v2` active marker or nothing. Later admission SHALL use actual remaining capacity, no fixed reserve. Totals survive detail pruning.
 
 #### Scenario: Many distinct foreign tools
-- **WHEN** agents call 500 differently named tools of foreign MCP servers
-- **THEN** they are exported under the single tool label `mcp:other` with exact identities kept in detail
+- **WHEN** agents in one turn call 500 differently named tools of foreign MCP servers
+- **THEN** all count under the single tool label `mcp:other`, at most 96 keep distinct opaque identities, the rest are `unknown` with identity incomplete, and no raw name is stored
 
 #### Scenario: Budget refusal stops all three families together
-- **WHEN** the full reservation would exceed the series budget
-- **THEN** the checkpoint reads `budget-unavailable` with a reason and null `availableSince`, no partial reservation is written, and no new label of any of the three families is admitted while old admitted totals keep incrementing
+- **WHEN** existing series 249,960 plus the missing catch-alls (11) and diagnostics (35) would exceed the series budget
+- **THEN** the checkpoint reads `budget-unavailable` with a reason and null `availableSince`, no reservation row is written, no new label of the three families is admitted while already-admitted totals keep incrementing, and every other family keeps its old values and behaviour
+
+#### Scenario: Paid reservations are not reserved again
+- **WHEN** activation succeeded at 249,986 series with every diagnostic admitted and a new histogram labelset costing 9 arrives
+- **THEN** it is admitted at 249,995, and a second activation inserts nothing and keeps `availableSince`
 
 #### Scenario: Scrape after pruning
 - **WHEN** tool observations older than the detail horizon are pruned
@@ -128,4 +148,4 @@ On process start, each existing live-checkpoint row SHALL recover in its own tra
 
 #### Scenario: Count write failure leaves health unknown
 - **WHEN** the quarantine checkpoint write fails
-- **THEN** recovery health reads unknown (not zero), and the admission gate still holds for the quarantined session
+- **THEN** recovery health reads unknown (not zero and not the previously stored count), and the admission gate still holds for the quarantined session
