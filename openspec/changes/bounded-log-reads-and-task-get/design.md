@@ -152,7 +152,7 @@ The worker carries the evidence kind and the generation facts across its boundar
 - `logPoller.ts` 907–909: the low-token branch admits only `C(0)`, not every token rejection.
 - Both worker gates (`getEntriesNeedingMatch` and the orphan gate in `buildOrphanEntries`) and the poller insert gate consume the evidence contract.
 
-*Trade-off:* a large log with no message text in either window is now `P(0)` and stays eligible every poll. It costs one bounded read per poll plus an exact-matching attempt, and may now be inserted when `rg` matches it, where the old code rejected it. This is accepted in exchange for never losing a real terminal session to a bounded read.
+*Trade-off:* a large log with no message text in either window is now `P(0)` and stays eligible every poll. It costs one bounded read plus the unchanged matching attempt, and may now be inserted where the old token gate rejected it. An inserted record may have `currentWindow: null`; incomplete token evidence must not cause an empty rejection.
 
 *Alternative considered:* a bounded forward scan that finishes a straddling line up to 16 MiB. Rejected: a valid line over 16 MiB before a short user message still loses the session, and no finite exact-negative scan can tell two logs apart that differ only in an unread middle message.
 
@@ -310,7 +310,7 @@ G6 has no production-minimum row: at the fixed insert minimum of 1 it is unreach
 | WC7 | generation validity not establishable (test seam) | neither cached nor reused; bounded re-read |
 
 **Old-positive witnesses**, through the real worker and the poller, each generated with bounded writes:
-- **O1:** a > 200 KiB first user message and a > 200 KiB echo line. The old count is > 0. The log must stay eligible and be inserted on an exact match.
+- **O1:** a > 200 KiB first user message and a > 200 KiB echo line. The old count is > 0. Literal and short-trailer forms stay eligible, reach unchanged exact matching, insert, and remain in neither empty cache. Pin the existing outcomes: the literal form has `currentWindow: null`; the trailer form binds the expected window.
 - **O2:** small session metadata, a valid > 16 MiB non-message line, a short user message, then a 300 KiB non-message echo. The same must hold.
 
 **`task_get` (D4/D5)**, through both the Claude and the Codex adapters. *Returned* is oldest first. T1 and T16 are the WP preview witnesses (T-small and T-invalid); T8 and T9 are T-large-readable.
@@ -377,7 +377,7 @@ The query observer is a test-side wrapper over `prepare` that records each execu
 ## Risks / Trade-offs
 
 - **[Agents that relied on the full journal]** → Totals, `olderRemaining`, and the cut metadata make the gap visible. `task_journal_read` returns every byte, and the prompt, descriptions, and header name both.
-- **[Large message-free logs stay eligible]** → Accepted in D3. A bounded read and an exact-matching attempt per poll, and a possible insert on an exact match.
+- **[Large message-free logs stay eligible]** → Accepted in D3. A bounded token read and the unchanged matching and insertion paths per poll; window binding may remain unknown.
 - **[Native SQLite reads whole values]** → Accepted. Previews and chunks bound JavaScript hydration and the response, not SQLite's per-value work. A true per-entry native bound would need new storage, which is out of scope.
 - **[Whole sections can still be large]** → Accepted and stated: results, revisions, assignments, message bodies, and subtask summaries stay whole.
 - **[Concurrent journal appends while paging]** → `journal_before` anchors on an entry id, so new entries never shift an older page; they appear in a fresh newest window.

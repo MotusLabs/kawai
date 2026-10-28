@@ -64,11 +64,11 @@ Token gates SHALL reject only complete evidence below a positive minimum: a comp
 
 #### Scenario: Partial evidence stays eligible
 - **WHEN** a log's evidence is partial with any count and the minimum is 1 or 2
-- **THEN** it reaches exact matching and is inserted on an exact match, and neither empty cache holds it
+- **THEN** no token gate rejects it and neither empty cache holds it; existing matching and insertion eligibility is preserved, and window binding follows the unchanged matcher
 
 #### Scenario: Giant line before a short message
-- **WHEN** a log holds a valid line over 16 MiB with no message text, then a short user message, then a 300 KiB line with no message text
-- **THEN** it stays eligible and is inserted on an exact match
+- **WHEN** an otherwise eligible log holds a valid line over 16 MiB with no message text, then a short user message, then a 300 KiB line with no message text
+- **THEN** it reaches the unchanged matching and insertion paths without token rejection or an empty-cache entry; the literal form inserts with no bound window, and a short trailing line binds the expected window
 
 #### Scenario: Complete zero
 - **WHEN** a log's evidence is complete with count 0

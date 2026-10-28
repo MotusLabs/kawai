@@ -36,8 +36,8 @@ Groups 1–2 are the first production path. Groups 3–5 follow under a later ta
     - stop the no-session-id write at 833–836;
     - admit only `C(0)` at 907–909.
   - Verify: tables WG (minimum 0, 1, and generic 2; G6 unreachable at production 1) and WC committed verbatim, asserting cache state directly.
-- [ ] 2.4 Add witnesses O1 and O2 through the real worker and the poller, generated with bounded writes.
-  - Verify: both stay eligible and are inserted on an exact match; each fails under mutant M3 (`P(n)` treated as `C(n)` or cached).
+- [x] 2.4 Add witnesses O1 and O2 through the real worker and the poller, generated with bounded writes.
+  - Verify: literal forms stay eligible, reach unchanged matching, insert with a null window, and enter neither empty cache; short-trailer forms bind the expected window. Each fails under mutant M3 (`P(n)` treated as `C(n)` or cached).
 - [x] 2.5 Add properties P1 (seed `0x6b617761`, 200 cases, including the sparse 1 MiB / 1 GiB pair) and P2 over the same cases.
   - Verify: both pass, P1 kills mutant M2 (a whole-file read restored), and P2 kills M3.
 

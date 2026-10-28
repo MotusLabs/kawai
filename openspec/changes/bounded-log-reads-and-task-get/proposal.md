@@ -23,7 +23,7 @@ Both costs grow with a log's size and a task's life.
   - *unavailable*;
   - *complete* `C(n)`, an exact count over a stably and wholly read, wholly accounted input;
   - *partial* `P(n)`, a lower bound.
-- **Gates.** Token gates reject only complete evidence below a positive minimum. Partial evidence of any count stays eligible for the existing exact matching, so terminal sessions whose only message lies outside the windows are still matched.
+- **Gates.** Token gates reject only complete evidence below a positive minimum. Partial evidence stays eligible for the existing exact-matching and insertion paths and is never cached as empty. Window binding follows the unchanged matcher and may remain unknown.
 - **Empty caches.** Both empty caches (the reader's `zeroTokenLogCache` and the poller's `emptyLogCache`) admit only `C(0)`, never a threshold rejection or a log without a session id. Each reuse is checked against the file's generation and evaluated under the current gate.
 - **`task_get` bounds its growing lists in SQL.** The newest 50 journal entries (1–200 on request), the newest 100 subtasks, and the newest 50 messages, each with its total and truncation state. Each journal entry carries a preview of at most its first 2,000 stored UTF-8 bytes, projected in the query, with its total byte length and the offset to resume from. A preview whose bytes are not valid UTF-8 (short historical entries included) carries no text and resumes at 0.
 - **New optional `task_get` arguments page the journal:** `journal_before` (an entry id) and `journal_limit` (1–200, default 50).
