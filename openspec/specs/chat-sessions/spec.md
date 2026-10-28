@@ -1204,9 +1204,8 @@ background task ends or a Monitor reports an event, the system SHALL show
 that turn in the transcript like any other: streamed output, tool
 activity, approvals, and a completion. When the trigger names its cause,
 the turn SHALL open with a line naming that trigger instead of a user
-message; a trigger without a usable cause — an unknown cause or an empty
-task list — SHALL open with no trigger line. The session SHALL report
-`working` until the turn ends.
+message; a trigger without a usable cause SHALL open with no trigger
+line. The session SHALL report `working` until the turn ends.
 
 #### Scenario: Background completion wakes the agent
 - **WHEN** a background task ends while the chat is idle and the agent starts a turn in response
