@@ -45,9 +45,13 @@ reported and reads as absent for resolution — lower sources compose.
 - **WHEN** the atomic rename commits but the directory fsync fails
 - **THEN** the save reports applied but not durable, the new content stands with no rollback or retry, and no caller — a Settings warning or the Settings-map migration — treats the outcome as durable
 
-#### Scenario: Secret-source writes retain the name first
-- **WHEN** an entry is set or reclassified as a secret source
-- **THEN** its name, never its value, is persisted to the retained-names registry before the write reports success, and a missing or failing registry collaborator refuses the write before the file changes
+#### Scenario: Secret-source changes retain the name first
+- **WHEN** a set, clear, or reclassification changes an entry whose current or resulting kind is secret source
+- **THEN** its name, never its value, is persisted to the retained-names registry before the file changes, and a missing or failing registry collaborator refuses the mutation with the prior bytes standing
+
+#### Scenario: A change that changes nothing writes nothing
+- **WHEN** a valid clear names an absent entry, or a valid reclassification names an absent entry or one already of that kind
+- **THEN** the store reports neither applied nor durable, creates no file or directory, calls no registry collaborator, and leaves the prior bytes untouched; a malformed or unreadable store still refuses
 
 #### Scenario: Blank is a stored state for both kinds
 - **WHEN** a blank value is stored for either kind

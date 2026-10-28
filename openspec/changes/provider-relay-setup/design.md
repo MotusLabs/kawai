@@ -119,7 +119,8 @@ success is claimed.
 
 **Applied and durable are distinct outcomes.** The commit point is the
 rename. A failure before the rename leaves the previous file byte-for-byte
-untouched, removes the temp file, and reports *not applied*. A directory
+untouched, removes the temp file, and refuses with `write-failed` — not
+applied. A directory
 fsync that fails after a successful rename reports **applied, not durable**:
 the new content is visible and stands, durability is unconfirmed, and no
 rollback or retry runs — the cache invalidates and verified-reloads. Callers
@@ -127,7 +128,12 @@ get the typed outcome, and both consumers act on it: the future Settings
 warning surfaces the uncertainty, and the §2.2 migration deletes the
 Settings map and commits its stamp only after a durable acknowledgement.
 The blanket "a failed save leaves the previous file untouched" therefore
-holds before the rename only.
+holds before the rename only. A valid clear or reclassification that changes
+nothing — an absent entry over a missing or readable store, or a
+reclassification to the entry's current kind — reports
+`{applied:false, durable:false}`: no file, directory, or registry call;
+`durable` is meaningful only when `applied` is true, and callers branch on
+`applied` first.
 
 **Corruption fails closed.** A missing file is an empty store; the first
 save creates it 0600. An unreadable file, a failed trust gate, or a
@@ -177,10 +183,14 @@ is an explicit act). The old GET that served non-secret-named values
 verbatim is gone.
 
 **Retained names before secret-mutation success.** The store exposes one
-required narrow collaborator for secret-source mutations: a `set` or
-`reclassify` that produces a **secret-source** entry persists the entry's
-NAME (never its value) into the retained-names registry through the §2.3
-registry owner **before** the store reports success. A missing or throwing
+required narrow collaborator for secret-source mutations: a `set`,
+`clear`, or `reclassify` that changes an entry whose current or resulting
+kind is secret-source persists the entry's NAME (never its value) into the
+retained-names registry through the §2.3 registry owner **before** the store
+reports success. The current kind comes from the store bytes read inside the
+mutation queue (never the stamp cache); collaborator presence is checked
+before any state read when the resulting kind is secret-source, and after
+that read when only the current kind is. A missing or throwing
 collaborator refuses the mutation before the credential file changes; the
 core never defaults the collaborator to a silent no-op. Persisting the name
 before the file write is the conservative order — a later file-write failure
