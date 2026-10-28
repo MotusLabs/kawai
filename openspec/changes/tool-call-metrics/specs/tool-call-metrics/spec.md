@@ -1,62 +1,61 @@
 ## Purpose
 
-Make tool-call failures of managed chat agents observable by tool and by cause, so a tool whose schema, wording, or availability misleads agents shows up in metrics instead of only in transcripts.
+Make tool-call failures of managed chat agents observable by tool and by cause, so a tool whose schema, wording, or availability misleads agents shows up in metrics instead of only in transcripts — with bounded, honest accounting that never claims more than the recorded history proves.
 
 ## ADDED Requirements
 
-### Requirement: Tool calls are recorded with a bounded tool name
-Every tool call of a managed chat, Claude or Codex, SHALL be recorded with a bounded tool name:
-- a CLI built-in by its name;
-- a `kawai-team` tool by its own name in both runtimes;
-- any other MCP tool as `mcp:other`;
-- anything else as `other`.
-
-Tool inputs and outputs SHALL NOT be stored.
+### Requirement: Tool calls are admitted and identified within bounds
+Every admitted tool call of a managed chat SHALL carry a bounded identity: a CLI built-in or exact `kawai-team` member by its own name in both runtimes; any other distinct raw name in one of at most 96 opaque live slots, the 97th `unknown`; ambiguous shapes (`mcp__dynamic__…`, extra separators, collapsed agent tools) always `unknown`. Admission follows the live-driver producer contract and its fences; replayed history never enters. Inputs and outputs SHALL NOT be stored.
 
 #### Scenario: Same team tool in both runtimes
 - **WHEN** a Claude agent calls `mcp__kawai-team__task_submit_result` and a Codex agent calls `task_submit_result` in the `kawai-team` namespace
-- **THEN** both calls are recorded with tool name `task_submit_result`
+- **THEN** both calls are recorded with the identity and name `task_submit_result`
 
 #### Scenario: Foreign MCP tool
 - **WHEN** an agent calls a tool of an MCP server other than `kawai-team`
-- **THEN** the call is recorded as `mcp:other`, and the server and tool names do not appear
+- **THEN** the call is recorded under an opaque slot whose export label is `mcp:other`, and the server and tool names do not appear
 
-### Requirement: Failed tool results carry a failure class
-A failed tool result SHALL be recorded with exactly one failure class:
-- `input-invalid` for a runtime schema refusal;
-- `refused` for a `kawai-team` handler refusal;
-- `precondition` for a CLI tool-use check;
-- `blocked` for a harness block;
-- `unavailable` for an unknown tool;
-- `denied` for a denied approval;
-- `command-failed` for a shell or Monitor failure;
-- `other` otherwise.
+#### Scenario: Colliding namespace stays unknown
+- **WHEN** one call comes from the namespace-less Codex dynamic tool `echo` and another from a real MCP server named `dynamic` exposing `echo`
+- **THEN** both are recorded with `unknown` identity, both count in totals, and neither enters any failure streak
 
-The result text SHALL only be classified, never kept.
+#### Scenario: Saturation stops measurement honestly
+- **WHEN** a 513th distinct call id appears in one turn
+- **THEN** open streaks close `unknown` once, no further streak opens that turn, already-admitted calls still settle exactly once, and the saturation is disclosed rather than silently evicting state
+
+#### Scenario: Replayed history stays outside
+- **WHEN** a `turn_started` for a turn with a retained 90-day closure is replayed
+- **THEN** the fence rejects it and no observation, fact, or total changes
+
+### Requirement: Failed tool results carry exactly one failure class
+A failed result SHALL be classified by one ordered, output-anchored pass: a trusted linked denial first, then the wrapper and tool prefixes (`input-invalid`, `unavailable`, `blocked`, `precondition`), exact-team refusals, shell and file-change phrases, `command-failed` for Bash and Monitor, else `other`. A success carries no class whatever its text says. The public label never overrides identity membership. Result text SHALL only be classified, never kept.
 
 #### Scenario: Schema refusal
 - **WHEN** a tool result reads `Input validation error: Invalid arguments for tool task_submit_result: …`
 - **THEN** the call is recorded as failed with class `input-invalid`
 
 #### Scenario: Handler refusal
-- **WHEN** a `kawai-team` tool's handler refuses the call with its own message
+- **WHEN** a `kawai-team` tool's handler refuses the call with its own `Refused: …` message
 - **THEN** the call is recorded as failed with class `refused`
 
+#### Scenario: Trusted denial precedes text
+- **WHEN** the call's linked approval resolved `denied` and the failed result text matches no known phrase
+- **THEN** the call is recorded `denied` from the trusted link, not from output text
+
+#### Scenario: Success is never reclassified
+- **WHEN** a result is a success but its text contains failure-like wording
+- **THEN** it is recorded as a success with no failure class and no failure export
+
 #### Scenario: Unrecognized failure text
-- **WHEN** a failed result's text matches no known class
+- **WHEN** a failed result's text matches no known pattern
 - **THEN** the call is recorded with class `other`
 
-### Requirement: Failure streaks are recorded
-Consecutive failed results of one tool within one turn SHALL form a streak:
-- a success of that tool closes it as `recovered`;
-- the turn's end closes it as `abandoned`;
-- a restart that loses it closes it as `unknown`.
-
-Each closed streak SHALL be kept as a fact for 90 days with its tool, length, resolution, and first failed call. Calls to other tools SHALL NOT break a streak.
+### Requirement: Failure streaks close conservatively
+Consecutive failed results of one tool within one turn SHALL form a streak; a success of that tool closes it `recovered`, the turn end `abandoned`, a restart `unknown` (a lower bound). A quarantined orphan result or an advanced recorder-failure counter SHALL close open streaks `unknown` once and taint the turn, forbidding exact closure claims across the gap. Other tools do not break a streak. Each closed streak SHALL be a 90-day fact with tool, length, resolution, and opening failed call.
 
 #### Scenario: Recovered after probing
 - **WHEN** `task_submit_result` fails four times in a turn, with `task_get` calls between, and then succeeds
-- **THEN** one `recovered` streak of length 4 is recorded
+- **THEN** one `recovered` streak of length 4 is recorded with its opening failed call
 
 #### Scenario: Gave up
 - **WHEN** `task_submit_result` fails six times and the turn ends without a success
@@ -64,20 +63,69 @@ Each closed streak SHALL be kept as a fact for 90 days with its tool, length, re
 
 #### Scenario: Restart mid-streak
 - **WHEN** the server restarts while a streak is open
-- **THEN** the streak is closed as `unknown` with the failures observed before the restart
+- **THEN** the streak is closed `unknown` with the failures observed before the restart, as a lower bound
 
-### Requirement: Tool call metrics are exported
-When metrics export is enabled, Kawai SHALL export:
-- a tool-call counter by team, group, provider, model, tool, outcome, and failure class;
-- a streak counter by the same identity, tool, and resolution;
-- a histogram of streak lengths.
+#### Scenario: Recording gap taints the turn
+- **WHEN** a result's write rolls back and a later success commits, with unrelated health work succeeding in between
+- **THEN** the open streak closes `unknown` once before the later success, no `recovered` fact is written, and repeated checkpoints or turn ends cannot duplicate the closure
 
-All of them SHALL be subject to the existing label bounds. Exported totals SHALL survive detail pruning.
+#### Scenario: Orphan result taints first history
+- **WHEN** a result arrives whose call was never admitted and cannot be
+- **THEN** open streaks close `unknown` once, the turn is tainted for first-attempt purposes, and the orphan never becomes eligible
+
+### Requirement: First attempts are measured only for closed, untainted turns
+The first ACTUAL call per turn and exact team tool owns the first-attempt marker. A result is eligible only when its completion lies in the window and a valid same-snapshot `turn_ended` fact shows coverage version 1 without taint; unclosed, tainted, legacy, or missing-carrier turns are excluded (partial or unrecorded), never successes or zeros. Turn close SHALL persist coverage version and taint scalars on the 90-day `turn_ended` fact; a missing or invalid carrier is `unrecorded`.
+
+#### Scenario: First actual call wins regardless of result order
+- **WHEN** call c1 is made first, c2 second, and results arrive as c2-failed then c1-successful
+- **THEN** the first-attempt marker stays on c1 and the recovered streak's opening failure is c2
+
+#### Scenario: Orphan taint excludes an earlier first
+- **WHEN** c1 succeeded with its first-attempt marker, then a quarantined orphan result arrived, then the turn closed
+- **THEN** the first-attempt cohort for that turn is empty (n=0, partial), and no other result is promoted to first
+
+#### Scenario: Known first outside the window
+- **WHEN** a turn's first completion happened before the requested window
+- **THEN** the metric reads n=0 for that turn in the window, not missing history and not a success
+
+### Requirement: Tool call metrics are exported behind an activation gate
+When metrics export is enabled, Kawai SHALL export the tool-call counter (identity, outcome, failure_class), the streak counter (+ resolution), and the streak-length histogram within the existing label bounds (tool enum at most 96) and budgets, activating all three together behind the fixed `tool-export-v2` checkpoint (active/budget-unavailable/unknown, reason and availableSince). A refusal writes nothing unadmitted or partial; admitted totals survive detail pruning.
 
 #### Scenario: Many distinct foreign tools
 - **WHEN** agents call 500 differently named tools of foreign MCP servers
-- **THEN** they are exported under the single tool label `mcp:other`
+- **THEN** they are exported under the single tool label `mcp:other` with exact identities kept in detail
+
+#### Scenario: Budget refusal stops all three families together
+- **WHEN** the full reservation would exceed the series budget
+- **THEN** the checkpoint reads `budget-unavailable` with a reason and null `availableSince`, no partial reservation is written, and no new label of any of the three families is admitted while old admitted totals keep incrementing
 
 #### Scenario: Scrape after pruning
 - **WHEN** tool observations older than the detail horizon are pruned
 - **THEN** the exported tool-call and streak totals are unchanged
+
+#### Scenario: Reactivation starts a new boundary
+- **WHEN** export was budget-unavailable and a later activation succeeds
+- **THEN** the checkpoint records a new `availableSince` at that success, and the skipped interval is never backfilled, reset, or replayed
+
+#### Scenario: Suppressed families render nothing
+- **WHEN** the families are not active
+- **THEN** no sample, zero-filled family, or diagnostic family appears for them, and stored pre-refusal values stay suppressed rather than rendered as unadmitted
+
+### Requirement: Unresolved recovery fails closed
+On process start, each existing live-checkpoint row SHALL recover in its own transaction after its core identity and state are validated; a valid row recovers exactly once (as `unrecorded` when it holds no tool state), and a malformed, scope-mismatched, or state-unusable row SHALL stay byte-unchanged and block that session's further metric admission, counted only by the fixed `tool-recovery-quarantine` checkpoint — never deleted, rewritten, or auto-reset.
+
+#### Scenario: Valid row recovers once
+- **WHEN** a valid live row with an open streak is recovered twice
+- **THEN** exactly one unknown closure is recorded and the second recovery is a no-op
+
+#### Scenario: Malformed row quarantined and blocked
+- **WHEN** one session's live row is malformed and another session's valid row recovers
+- **THEN** the valid row recovers, the malformed row stays byte-unchanged, its session records no further tracker metrics, and the quarantine checkpoint counts it without any raw content
+
+#### Scenario: Quarantine persists across restart
+- **WHEN** the process restarts with a quarantined row still present
+- **THEN** the row is still quarantined and blocked, and resolution still requires an authorized recovery policy
+
+#### Scenario: Count write failure leaves health unknown
+- **WHEN** the quarantine checkpoint write fails
+- **THEN** recovery health reads unknown (not zero), and the admission gate still holds for the quarantined session
