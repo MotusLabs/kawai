@@ -32,7 +32,7 @@ CODEX_HOME omission, which changes Codex provider ids.
 
 ## 2. Zone validity (D3)
 
-- [ ] 2.1 Memoize `isResetTimeZone` per zone string, bounded at 256.
+- [x] 2.1 Memoize `isResetTimeZone` per zone string, bounded at 256.
   - Verify: property P2 (every supported zone, plus 50 malformed strings,
     seed `0x7e2a`) passes. R5 is killed.
 - [ ] 2.2 Re-profile the scratch boot against a copy of the live data.
