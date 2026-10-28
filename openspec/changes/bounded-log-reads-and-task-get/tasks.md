@@ -74,8 +74,8 @@ Groups 3–5 land in two steps (design D7, Sequencing): an unwired store and ser
 
 ## 5. Agent-facing surfaces (D7, later revision)
 
-- [ ] 5.1 Update the `task_get` description, the task note in `teamPrompt.ts`, the delivered header line in `taskContext.ts`, and the task-tools facts in `docs/architecture/tasks.md` (not root `AGENTS.md`) so none promises the full journal and each names `journal_before`, `journal_limit`, and `task_journal_read`.
-  - Verify: the prompt and header tests pass with the new text.
+- [ ] 5.1 Update the `task_get` description, the task note in `teamPrompt.ts`, the delivered header line in `taskContext.ts`, and the task-tools facts in `docs/architecture/tasks.md` (not root `AGENTS.md`) so none promises the full journal and each names `journal_before`, `journal_limit`, and `task_journal_read`. The task note also carries the catalogue-upgrade guidance (design D7): `task_get` is bounded on every call, and an agent without the reader stops before conclusions needing omitted entries or bytes and asks for a fresh Codex chat; the docs state the start-pinned Codex catalogue.
+  - Verify: the prompt and header tests pass with the new text, and row V8 through the real Codex start and resume.
 - [ ] 5.2 Update every enumeration test over the task tool names, and confirm the new name composes with tool-metrics normalization without an import cycle.
   - Verify: the enumeration tests pass.
 - [ ] 5.3 Version the delivered task header (design D7, C1): `taskHeaderVersion` in the envelope metadata (absent is the legacy generation 1, current is 2), the legacy renderer kept byte-exact, and `formatEnvelope`/`parseEnvelope` choosing the renderer by version. Lands with 5.1's header line.

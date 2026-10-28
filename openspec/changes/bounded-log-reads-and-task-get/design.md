@@ -246,6 +246,12 @@ The new name must compose with later tool-metrics normalization without an impor
 
 Newly delivered task envelopes select generation 2 only in the registration commit below.
 
+**Catalogue upgrade (caller policy A).** A Codex thread registers its tools at `thread/start`; `thread/resume` carries no `dynamicTools`, so a resumed thread keeps the catalogue it stored. Kawai's handlers are read per call, so every `task_get` from any caller gets the current bounded semantics, even where a stored description still says "the whole journal".
+- Complete bounded reads with the lossless reader are supported for callers offered the current catalogue: fresh Codex threads, every Claude MCP spawn, and resumed Codex threads that started with it.
+- A Codex thread started before the change can still read windows and previews, but has no `task_journal_read` and no advertised paging arguments. Journal-dependent conclusions that need omitted entries or bytes go to a fresh Codex chat. Bounds and continuations are authoritative, never a stale description or an unadvertised argument.
+- The team prompt's task note carries this rule to every agent, whatever its group (`TASK_JOURNAL_GUIDANCE`): `task_get` is bounded on every call; check the journal bounds and each preview's cut; without the reader, stop before such conclusions and ask for a fresh Codex chat; never read the journal around the task tools. Codex receives it as `developerInstructions` on both start and resume. It is an instruction, not runtime enforcement or a guarantee that a model complies.
+- Not done: no migration, archive, or recreation of existing chats; no `dynamicTools` on resume; no compatibility marker in the database; no shell, database, log, or REST fallback; no unbounded legacy `task_get`; no task-id change. Old genuine envelopes on the new binary still parse and settle (C1); an old-binary downgrade stays unsupported.
+
 **Sequencing.** D1–D3 are the first production path and land first. D4–D7 follow under a later task revision, in two steps:
 1. An unwired checkpoint: `taskJournalWindow.ts` (the window and anchor SQL, the entry reader, and the shared exact UTF-8 helper), `TaskStore.agentDetail`, `TaskService.agentGet` and `journalRead`, `mailboxStore.forTaskNewest`, the generic seal, and the shared types, with their store and service tests. No tool, prompt, header, or envelope changes; the live `task_get` is untouched. Legacy envelope fixtures (rows V1–V2) may be added here, but they do not fix C1.
 2. One atomic registration commit: the `task_get` arguments, `task_journal_read`, the D7 texts, header generation 2 with its parser, and rows V3–V7. A bounded `task_get` never ships without the lossless reader.
@@ -372,6 +378,12 @@ G6 has no production-minimum row: at the fixed insert minimum of 1 it is unreach
 | V6 | version 3, 1.5, `"2"`, or a version without a task | does not parse |
 | V7 | a tampered header, an ordinary tag mention; plan, execution, handoff, revision notice, possible duplicate | tampering and mentions do not parse; the other fields survive both generations |
 
+**Caller guidance (D7 catalogue upgrade)**, through the real `buildTeamPrompt`, and for V8 the real `ChatSessionManager` and `CodexSessionDriver` against the fake app-server. No app-server argument validation is simulated, and no real app-server, SDK, or model runs.
+
+| id | input | outcome |
+|----|-------|---------|
+| V8 | the team prompt for a member, a group-less session, a creator, and a group without the release right; a Codex chat started, then resumed by a restarted manager | each task note carries `TASK_JOURNAL_GUIDANCE` exactly once; `thread/start` registers the current table, with `task_get` advertising `journal_before` and `journal_limit` and `task_journal_read` present; `thread/resume` sends no `dynamicTools`; both send the manager's current team prompt, holding the guidance, as `developerInstructions` |
+
 **Properties:**
 - **P1, bounded token reads.**
   - Generator: seed `0x6b617761`, 200 cases. Valid JSONL is written in chunks (never a whole-file string), up to 64 MiB, with message lines at random offsets and separately generated giant lines. A sparse 1 MiB / 1 GiB pair with equal head and tail is also used, for size independence only.
@@ -412,3 +424,4 @@ The query observer is a test-side wrapper over `prepare` that records each execu
 - No schema migration. Deploy is the usual build swap.
 - Rollback restores whole reads. That is safe but reintroduces the memory risk.
 - After deploy, live Leads should start fresh Codex chats, so their oversized rollouts stop growing the attach and replay cost.
+- A Codex thread started before deploy keeps its old task tools after a resume (D7, catalogue upgrade): it reads bounded windows without `task_journal_read`. Work that needs omitted journal entries or bytes moves to a fresh Codex chat, as the team prompt tells it. Existing chats are not migrated or recreated.

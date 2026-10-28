@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { OutboundPromptFacts } from '../outbound/destinations'
 import type { GroupDefinition } from '../team/groupFile'
-import { buildTeamPrompt, SECURITY_NOTE_BODY } from '../team/teamPrompt'
+import { buildTeamPrompt, SECURITY_NOTE_BODY, TASK_JOURNAL_GUIDANCE } from '../team/teamPrompt'
 
 /** Empty outbound configuration: nothing configured beyond the defaults. */
 const outbound: OutboundPromptFacts = { internal: [], modelProviders: [] }
@@ -73,6 +73,7 @@ describe('buildTeamPrompt', () => {
       expect(prompt).toContain('Page older entries with `journal_before` (the returned `nextBefore`) and `journal_limit` (1–200).')
       expect(prompt).toContain('`mcp__kawai-team__task_journal_read`: read any journal entry whole, in byte chunks from `offset_bytes`')
       expect(prompt).not.toMatch(/whole journal|full journal/)
+      expect(prompt).toContain(TASK_JOURNAL_GUIDANCE)
       expect(prompt).toContain('add a journal note or message the creator')
       expect(prompt).toContain("that change's proposal, design, and tasks are the authoritative direction")
       expect(prompt).toContain('`done` or `cancelled` (the creator only)')
@@ -80,6 +81,27 @@ describe('buildTeamPrompt', () => {
       expect(prompt).toContain('or receive a revision notice (mail tagged `task-revision`), call `mcp__kawai-team__task_acknowledge` with the revision in the task header')
       expect(prompt).toContain('Delivery is not acknowledgement')
       expect(prompt).toContain('optional `rationale` saying why; `notify: true` also sends the assignment\'s claimed agent a revision notice')
+    }
+  })
+
+  // @covers: team-tasks › Agents without the journal reader are told to stop › Prompt tells every agent how to read without the reader
+  test('every agent, whatever its rights, is told the journal is bounded and to stop without the reader rather than bypass it', () => {
+    const creator: GroupDefinition = { ...devs, id: 'leads', canCreateTasks: true, canManageMailbox: true }
+    const noRelease: GroupDefinition = { ...devs, id: 'quiet', canReleaseMembers: false }
+    for (const prompt of [
+      buildTeamPrompt({ outbound, sessionId: 'chat-9', group: devs, groups: [devs] }),
+      buildTeamPrompt({ outbound, sessionId: 'chat-10', groups: [devs] }),
+      buildTeamPrompt({ outbound, sessionId: 'chat-11', group: creator, groups: [creator] }),
+      buildTeamPrompt({ outbound, sessionId: 'chat-12', group: noRelease, groups: [noRelease] }),
+    ]) {
+      // Inside the task note, once.
+      const tasks = prompt.slice(prompt.indexOf('# Team tasks'), prompt.indexOf('# Product strategy'))
+      expect(prompt.split(TASK_JOURNAL_GUIDANCE)).toHaveLength(2)
+      expect(tasks).toContain('`task_get` is bounded on every call, whatever a tool description says.')
+      expect(tasks).toContain('check its bounds: `bounds.journal.olderRemaining` and `nextBefore` for older entries, and each preview\'s `cut`, `resumeOffsetBytes`, and null `text` for omitted bytes.')
+      expect(tasks).toContain('If `mcp__kawai-team__task_journal_read` is not among your tools (a Codex thread started before it existed keeps its original tools)')
+      expect(tasks).toContain('stop before any conclusion that needs omitted entries or bytes: say so, and ask for the work to continue in a fresh Codex chat.')
+      expect(tasks).toContain('Never read the journal around the task tools — through the database, logs, the shell, or files.')
     }
   })
 })

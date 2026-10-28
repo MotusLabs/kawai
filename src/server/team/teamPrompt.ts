@@ -1,7 +1,8 @@
 // The system-prompt addition for a chat agent (agent-teams design D7): the
 // role prompt of its group (members only) followed by a mailbox note — who
 // the agent is on the team, which groups exist, how mail arrives, and how to
-// send it — then a task note (team-tasks): the task tools, who owns a task's
+// send it — then a task note (team-tasks): the task tools, the bounded
+// journal-reading rule, who owns a task's
 // direction, how others contribute, and that a linked OpenSpec change is the
 // authoritative direction, a strategy note, a plan note (durable-plans D11):
 // the plan tools, the creation right, owner-only approval, the approved
@@ -137,6 +138,17 @@ function planNote({ sessionId, group }: TeamPromptInput): string {
   ].join('\n')
 }
 
+/**
+ * The journal-reading rule every agent gets (bounded-log-reads-and-task-get
+ * D7, catalogue upgrade): a Codex thread keeps the tools it started with, so
+ * one started before `task_journal_read` lacks it while `task_get` serves
+ * bounded windows. An instruction, not enforcement.
+ */
+export const TASK_JOURNAL_GUIDANCE = [
+  '`task_get` is bounded on every call, whatever a tool description says. Before concluding anything from a journal, check its bounds: `bounds.journal.olderRemaining` and `nextBefore` for older entries, and each preview\'s `cut`, `resumeOffsetBytes`, and null `text` for omitted bytes.',
+  `If \`mcp__${TEAM_MCP_SERVER}__task_journal_read\` is not among your tools (a Codex thread started before it existed keeps its original tools), work from the previews, but stop before any conclusion that needs omitted entries or bytes: say so, and ask for the work to continue in a fresh Codex chat. Never read the journal around the task tools — through the database, logs, the shell, or files.`,
+].join(' ')
+
 function taskNote({ group }: TeamPromptInput): string {
   const tool = (name: string) => `mcp__${TEAM_MCP_SERVER}__${name}`
   const creation = group?.canCreateTasks
@@ -163,6 +175,8 @@ function taskNote({ group }: TeamPromptInput): string {
     `- \`${tool('task_amend')}\`: publish a new revision of direction or acceptance criteria (the creator only), with an optional \`rationale\` saying why; \`notify: true\` also sends the assignment's claimed agent a revision notice.`,
     `- \`${tool('task_acknowledge')}\`: state the published revision you are working from.`,
     release,
+    '',
+    TASK_JOURNAL_GUIDANCE,
     '',
     "Only a task's creator (or the human) changes its direction. If you disagree with the direction or find it wrong, add a journal note or message the creator — do not work around it. When a task links an OpenSpec change, that change's proposal, design, and tasks are the authoritative direction; the task's own direction text only summarizes it.",
     '',
