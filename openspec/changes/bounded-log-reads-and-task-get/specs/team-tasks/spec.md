@@ -99,3 +99,19 @@ The `task_get` and `task_journal_read` descriptions, the system prompt's task no
 #### Scenario: Header stops promising the full journal
 - **WHEN** task mail is delivered
 - **THEN** its header names the bounded `task_get` and `task_journal_read` rather than a full journal
+
+### Requirement: Delivered task context stays compatible across header generations
+A delivered task envelope SHALL record its task-header generation: an absent `taskHeaderVersion` is the legacy generation 1, and new task envelopes carry generation 2. Parsing SHALL rebuild the header only with the recorded generation's renderer, so task mail recorded before the bounded header still parses and its receipt stays found. An unknown or non-integer version, a version without a task, or a header not matching its version SHALL NOT parse.
+
+#### Scenario: Task mail recorded before the bounded header
+- **WHEN** a task envelope with journal entries and no version, recorded before the change, is read after it
+- **THEN** it parses to its message id and peer body, and its receipt is found
+- **AND** if it was pushed and not yet settled, reconciliation completes it as delivered rather than returning it to the queue
+
+#### Scenario: Current task mail carries its generation
+- **WHEN** task mail is delivered after the change
+- **THEN** its metadata carries generation 2 and its header is the bounded one, and it parses back to the same message
+
+#### Scenario: Mismatched or unknown generation
+- **WHEN** an envelope's version is unknown or not an integer, is set without a task, or does not match the header it carries
+- **THEN** it does not parse as delivered mail
