@@ -81,7 +81,7 @@ import { probeSdkAvailability } from './sdkAvailability'
 import { AccountNoticeStore, credentialsPathFor } from './accountNotices'
 import { UsageLimitStore } from './usageLimits'
 import { withTextReset } from './limitSignals'
-import { providerOf, resolveProfileCatalog } from './profileCatalog'
+import { providerOf } from './profileCatalog'
 import { resolvedCatalog } from './catalogMemo'
 import type { MergedProvider } from './catalogMerge'
 import { ensureCodexExecutable } from './codex/codexExecutable'
@@ -2998,7 +2998,7 @@ export class ChatSessionManager {
    */
   private runtimeFactsOf(profileId: string, projectPath: string): { runtime: ChatRuntime; codexHome: string | null } | null {
     const ctx = this.catalogCtx(projectPath)
-    const profile = resolveProfileCatalog(ctx).profiles.get(profileId)
+    const profile = resolvedCatalog(ctx).catalog.profiles.get(profileId)
     if (!profile) return null
     if (profile.runtime !== 'codex') return { runtime: 'claude', codexHome: null }
     return {
@@ -3235,7 +3235,7 @@ export class ChatSessionManager {
     // provider's `balanceKeyEnv` name (openrouter-provider D6) — the same
     // resolution the auth gate reads. Launch environments withhold
     // credential values, so it is never read from there.
-    const balanceKeyEnv = resolveProfileCatalog(this.catalogCtx(record.projectPath)).profiles.get(
+    const balanceKeyEnv = resolvedCatalog(this.catalogCtx(record.projectPath)).catalog.profiles.get(
       record.claudeProfileId ?? 'default'
     )?.balanceKeyEnv
     const balanceKey = balanceKeyEnv
