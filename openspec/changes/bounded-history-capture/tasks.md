@@ -127,20 +127,20 @@ Mutants (one-line edits; at most five per round):
     | S1 | `chatStartHistoryLoad.test.ts` › `S1 {send,start,prepare} reads the history once, asynchronously, before the driver starts` |
     | S2 | `chatStartHistoryLoad.test.ts` › `S2 {send,start,prepare} with the memo present reads nothing` |
     | S3 | `chatStartHistoryLoad.test.ts` › `S3 a send while prepare’s load is in flight shares it: one read, one driver, the history once` |
-    | S4 | `chatStartHistoryLoad.test.ts` › `S4 a kill during {send,start}’s load writes no memo and {send,start} reports the session gone` |
+    | S4 | `chatStartHistoryLoad.test.ts` › `S4 a kill during {send,start}’s load writes no memo and {send,start} reports the session gone`; prepare (4.1) › `S4 a kill during prepare’s load writes no memo, starts no driver, and the mail dies unpushed` |
     | S5 | `codexRolloutReplay.integration.test.ts` › `S5 a start with a retryable memo and no live events re-reads the rollout once, asynchronously` |
     | S6 | `codexRolloutReplay.integration.test.ts` › `a retryable memo and live events coexist while the rollout reads EISDIR — a mid-turn load keeps the memo` |
     | P1 | `streamedParseParity.test.ts` › `Claude transcripts: …` and `Codex rollouts: the streamed replay equals the string parse` |
     | P2 | `chatStartHistoryLoad.test.ts` › `P2 seeded concurrent starters never read a history file synchronously` |
     | H1 | S1 prepare, S3, P2 |
     | H2 | S1 send, S4 send |
-    | H3 | S4 send, S4 start |
+    | H3 | S4 send, S4 start, S4 prepare (4.1) |
     | H4 | `lineReader.test.ts` (chunk 1, 3, 7 cases), P1 |
     | H5 | P1 Codex case |
 
 ## 4. Review follow-up (findings `024f4995`)
 
-- [ ] 4.1 N1: add Table S row S4's prepare instance — mail delivery's
+- [x] 4.1 N1: add Table S row S4's prepare instance — mail delivery's
   prepare holds on the async load, the recipient is killed, the load is
   released.
   - Verify: through the real manager and mailbox, no memo is written, no
@@ -149,11 +149,19 @@ Mutants (one-line edits; at most five per round):
     fails when prepare stops awaiting the load, when the post-await kill
     check in `loadHistory` is dropped (H3), and when prepare stops reporting
     the missing driver.
-- [ ] 4.2 N2: state P1's committed seeds — `0xb0a7` for Claude and
+  - Result: `chatStartHistoryLoad.test.ts` › `S4 a kill during prepare’s
+    load writes no memo, starts no driver, and the mail dies unpushed`. It
+    passes on the unchanged implementation. Each one-line mutant fails it:
+    prepare not awaiting `loadHistory` (the mail is claimed while the load
+    is held), H3 on the Claude branch (the memo is written), and prepare
+    returning on a missing driver (no dispatch failure is reported).
+- [x] 4.2 N2: state P1's committed seeds — `0xb0a7` for Claude and
   `0xb0a7 ^ 0xc0de` for Codex, 50 cases each.
   - Verify: design.md and tasks.md name the seeds
     `streamedParseParity.test.ts` uses; the generators and case sequences
     are unchanged.
+  - Result: design.md P1 and task 2.2 now name both seeds;
+    `streamedParseParity.test.ts` is unchanged.
 
 ## Workflow follow-up
 
