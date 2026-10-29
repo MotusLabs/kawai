@@ -60,7 +60,8 @@ Mutants (one-line edits; at most five per round):
 - [x] 2.2 Split `parseTranscriptContent` and `parseCodexRollout` into line
   consumers with string wrappers, and route the async replays through
   `readLines`.
-  - Verify: property P1 (seed `0xb0a7`, 50 cases per runtime) passes, and
+  - Verify: property P1 (seeds `0xb0a7` for Claude and `0xb0a7 ^ 0xc0de`
+    for Codex, 50 cases each) passes, and
     the existing replay tests pass unchanged. H4 and H5 are killed.
   - Result: P1 in `streamedParseParity.test.ts` compares the async file
     replay with the sync string replay, and `readLines` at small chunk sizes
@@ -136,6 +137,23 @@ Mutants (one-line edits; at most five per round):
     | H3 | S4 send, S4 start |
     | H4 | `lineReader.test.ts` (chunk 1, 3, 7 cases), P1 |
     | H5 | P1 Codex case |
+
+## 4. Review follow-up (findings `024f4995`)
+
+- [ ] 4.1 N1: add Table S row S4's prepare instance — mail delivery's
+  prepare holds on the async load, the recipient is killed, the load is
+  released.
+  - Verify: through the real manager and mailbox, no memo is written, no
+    driver starts, the dispatcher reports `Recipient disappeared`, and the
+    mail is dead (`killed-recipient`), never claimed or pushed. The test
+    fails when prepare stops awaiting the load, when the post-await kill
+    check in `loadHistory` is dropped (H3), and when prepare stops reporting
+    the missing driver.
+- [ ] 4.2 N2: state P1's committed seeds — `0xb0a7` for Claude and
+  `0xb0a7 ^ 0xc0de` for Codex, 50 cases each.
+  - Verify: design.md and tasks.md name the seeds
+    `streamedParseParity.test.ts` uses; the generators and case sequences
+    are unchanged.
 
 ## Workflow follow-up
 

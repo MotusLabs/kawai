@@ -107,6 +107,10 @@ first; if it is not merged, extract the splitter here.
 | S5 | Codex, memo marked retryable, no live events | retryable | no | the memo is re-read once (today's D8/M3 rule) |
 | S6 | Codex, memo marked retryable, live events present | retryable | — | no re-read |
 
+For prepare, the not-found result is the mailbox dispatcher's
+`Recipient disappeared` failure: the kill dead-letters the queued mail, which
+is never claimed or pushed.
+
 Unreachable: memo absent while a driver is running. The memo is taken before
 every start, and only kill drops it, together with the driver.
 
@@ -120,7 +124,8 @@ checked for both runtimes.
   JSON, blank lines, `\r\n`, multibyte text, and lines longer than the chunk
   or ending within 10 bytes of a chunk boundary.
 - Seams: the real file system.
-- Seed `0xb0a7`, 50 cases per runtime.
+- Seeds: `0xb0a7` for Claude transcripts and `0xb0a7 ^ 0xc0de` for Codex
+  rollouts, 50 cases each.
 
 ### Property P2 — no synchronous read on start
 
