@@ -38,7 +38,7 @@ spawns a member).
   reviewer path in the protocol: a detached review worktree at the exact head,
   a review child you create whose acceptance is findings bound to that result,
   and one dispatch — group mail to the cross-model reviewers group
-  (`reviewers-mimo` for Claude-written work, `reviewers-claude` otherwise), or
+  (`reviewers-opus` for GPT-written work, `reviewers-sol` otherwise), or
   `task_handoff` with an explicit session only when an eligible reviewer
   session already exists. Inspect the standing handoff before any retry: a
   duplicate naming another recipient is not a reassignment. A fix produces a
