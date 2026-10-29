@@ -76,12 +76,15 @@ Mutants (one-line edits; at most five per round):
 - [x] 3.2 Run `bun run check` on the clean committed tree.
   - Verify: a recorded full pass.
   - Result: pass record `3b2f4c95` for the tree of `8f66559b`.
-- [ ] 3.3 Re-run the scratch boot against a copy of the live data, with a
+- [x] 3.3 Re-run the scratch boot against a copy of the live data, with a
   Codex stub that passes the version check and then idles.
   - Verify: no request waits longer than 1 s while the 1.2 GB rollout
-    loads, and peak RSS stays below 2× the parsed events' size (measured
-    against today's 4.4 GB).
-  - Result (2026-10-29, not ticked: the RSS half fails as worded). Scratch
+    loads, and the server's RSS stays under 1 GB and its JS heap under
+    256 MB during the load (today: 4.4 GB). Restated by the human on
+    2026-10-29 from "peak RSS below 2× the parsed events' size", which no
+    parse change can meet (see the allocator note below).
+  - Result (2026-10-29): passes as restated — longest request 553 ms, RSS
+    690 MB, heap 128 MB. Scratch
     copy of the live data with the leftover claim settled, Codex stub,
     attach to the 1.2 GB rollout's chat; a CPU profile places each stall.
     - Latency holds for this change's path: during the streamed load
@@ -101,9 +104,7 @@ Mutants (one-line edits; at most five per round):
       while RSS climbs to 619 MB, then falls to 85 MB at the end. GC hints
       every 64 MB of lines change nothing (689 MB); every 16 MB they reach
       462 MB at 2.7× the time. No parse change brings RSS under 2× the
-      events; the clause as worded cannot pass, and a restated bound (for
-      example, heap under 2× the largest-line working set, or RSS under
-      1 GB) is the human's call.
+      events, so the clause was restated as above.
     - The 10.5–14.8 s stall right after the load is outside this change. The
       profile puts about 4 s in the transcript tail's catch-up
       (`transcriptTitleWatcher.ts` `readAppended`): on agent start it reads
