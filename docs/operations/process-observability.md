@@ -35,14 +35,21 @@ unknown provider or account is **unknown**; profiles do not establish account
 sharing. Settings include available effort, configured context window and
 threshold provenance; unavailable driver/account version fields remain null.
 
-Live activity, tool and request intervals are independent observations. Tool
-intervals have their own references and can overlap: summed tool work is not
-elapsed task time. Approval/question waits are subtracted from tool execution
-and exclude activity phases, including overlapping request cards. Background
-shell/Monitor roster updates do not extend active work. A heartbeat saves live
-state every 30 seconds. Restart closes intervals at their last checkpoint as
-partial, then records an unknown gap through restart; it never infers work from
-old transcript text. A process exit or interruption retains available timing
+Activity phases (thinking, requesting, preparing a tool, running tools,
+responding, retrying; any other phase as other) are summed per turn and stored
+as seconds per phase on the turn's end observation; per-segment order is not
+kept. Each tool call and each approval or question is one observation, written
+when it completes or, still open, as partial with outcome unavailable when the
+turn closes; it carries its start time and duration. Tool intervals have their
+own references and can overlap: summed tool work is not elapsed task time.
+Approval/question waits are subtracted from tool execution and exclude activity
+phases, including overlapping request cards. A request resolution with no open
+approval or question (a tool granted by the auto policy) stores nothing and is
+counted as `unmatchedResolutions` on the turn end. Background shell/Monitor
+roster updates do not extend active work. A heartbeat saves live state every 30
+seconds. Restart closes the turn at its last checkpoint as partial, with the
+phase totals known then, and records an unknown gap through restart; it never
+infers work from old transcript text. A process exit or interruption retains available timing
 without inventing final token usage.
 
 Context readings coalesce to at most one ordinary sample per minute, with forced
@@ -68,17 +75,22 @@ accepted result does not enter this histogram.
 
 Fact observations (task, status, assignment, result, finding, acceptance, mail,
 limit, usage, turn end, gap, compaction, settings) and completed turn usage default
-to 90 days. Intra-turn interval detail (activity, tool, request, context samples,
-turn start and attribution) — most of the volume — is kept 14 days. Pruning
+to 90 days. Intra-turn interval detail (tool, request, context samples,
+turn start and attribution) — most of the volume — is kept 14 days. Older
+builds also stored per-segment activity rows and separate tool and request start
+rows; migration 21 removes them once, leaving totals unchanged. Pruning
 deletes at most 500 rows per pass. Hourly scans continue a backlog in later 30-second
 collection ticks (usage continues on later completed writes). Detailed observations
 age by recording time so newly reconciled historical facts remain inspectable.
 Source tasks/results/audits retain their own policies. Durable-source identities
 (source rows, completed usage, acceptances), cumulative totals, aliases and
 collection checkpoints outlive detail pruning; keys of live chat facts (events,
-segments, context and settings samples, compactions, gaps) are never replayed
-after their turn and leave with their detail rows, so the key ledger stays
-bounded. A source row whose fact fails validation is logged and skipped rather
+partial closures, context and settings samples, compactions, gaps) are never
+replayed after their turn, so they never enter the key ledger: the observation's
+own unique key deduplicates them and leaves with it. Each observation records
+its team once, on the row. The database runs in incremental auto-vacuum mode
+(converted once at startup), and each pruning pass releases the freed pages, so
+the file and its backups shrink. A source row whose fact fails validation is logged and skipped rather
 than stalling its source.
 Recording start, the conservative detail horizon (the 14-day interval cutoff:
 `observation_detail_retained_since_timestamp_seconds`, checkpoint
