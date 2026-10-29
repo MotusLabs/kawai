@@ -114,16 +114,27 @@ atomically with a fresh 0600 file, never chmod in place. A symlinked store
 path is refused on every access; the parent `~/.kawai` may legitimately be
 reached through a stable symlink (catalog-compatible HOME aliases are not
 silently rejected). When the store creates a missing `~/.kawai`, it is
-created 0700 and the directory's own parent is fsynced before any durable
-success is claimed.
+created 0700. Durability is never inferred from visibility: a chain that
+merely predates the write — created by a prior failed process and visible
+to this one — is still unconfirmed. Every renamed write confirms, in one
+pass, the store directory's real chain and every real ancestor through the
+filesystem root before any durable success is claimed. A path spelling that
+resolves to the same real directory may open successfully even when a
+component is replaced mid-write; the durable claim attaches to the chain
+confirmed at confirmation time, and no detection of such replacements is
+claimed. An operator-created symlink inside the chain is unconfirmed
+exactly because the store itself creates directories only — never because
+a symlink merely predates a write.
 
 **Applied and durable are distinct outcomes.** The commit point is the
 rename. A failure before the rename leaves the previous file byte-for-byte
 untouched, removes the temp file, and refuses with `write-failed` — not
-applied. A directory
-fsync that fails after a successful rename reports **applied, not durable**:
-the new content is visible and stands, durability is unconfirmed, and no
-rollback or retry runs — the cache invalidates and verified-reloads. Callers
+applied. After a successful rename, the store directory — resolved to its
+real path — and every real ancestor through the filesystem root is fsynced;
+the first required realpath, open, or fsync failure reports **applied, not
+durable**: the new content is visible and stands, durability is
+unconfirmed, no rollback or retry runs, and no ancestor is substituted for
+a failed required one — the cache invalidates and verified-reloads. Callers
 get the typed outcome, and both consumers act on it: the future Settings
 warning surfaces the uncertainty, and the §2.2 migration deletes the
 Settings map and commits its stamp only after a durable acknowledgement.
@@ -250,7 +261,16 @@ rename + fsync) **before** any SQLite write; (2) then — only after the store w
 transaction, the map row is deleted and the migration stamp is committed; an
 applied-but-not-durable store write leaves the map in place and the
 migration re-runs on the next start.
-The stamp's presence never re-runs the migration.
+The stamp's presence never re-runs the migration. On a filesystem that
+permanently refuses a required confirmation step (for example a directory
+fsync on a special filesystem), every store write reports applied but not
+durable forever — the map stays and the migration re-runs each start;
+re-running re-imports the same values (absorbed when equal), but a name the
+operator cleared from the store while the map stayed retained would be
+re-imported. Resolving that repeated-reimport and cleared-name risk — a
+reimport cap, an operator escape, or refusing migration on such
+filesystems — is §2.2 implementation scope at its own later gate; the
+store's contract does not change now.
 
 **Crash, collision, and restart table** (each row is the state a restart
 finds, and what it does):

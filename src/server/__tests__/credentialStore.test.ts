@@ -343,22 +343,17 @@ describe('failure boundaries around the commit point', () => {
   })
 
   test('post-rename directory-fsync failure: applied, not durable, no retry, verified reload', async () => {
-    const dirFds = new Set<number>()
     let dirFsyncAttempts = 0
-    const deps = {
-      openSync: (target: Parameters<typeof realFs.openSync>[0], flags: number, ...rest: unknown[]) => {
-        const fd = (realFs.openSync as (...args: unknown[]) => number)(target, flags, ...rest)
-        if (flags & realFs.constants.O_DIRECTORY) dirFds.add(fd)
-        return fd
-      },
-      fsyncSync: (fd: number) => {
-        if (dirFds.has(fd)) {
+    const deps: Partial<import('../chat/credentialStore').CredentialFsDeps> = {
+      // Identity by fstat at fsync time, never stored fd numbers.
+      fsyncSync: (fd) => {
+        if (realFs.fstatSync(fd).isDirectory()) {
           dirFsyncAttempts += 1
           throw new Error('injected directory fsync failure')
         }
         realFs.fsyncSync(fd)
       },
-    } as unknown as Partial<import('../chat/credentialStore').CredentialFsDeps>
+    }
     const store = createCredentialStore(sp(), { deps })
     const outcome = await store.set('x', 'vx', 'launch-env')
     expect(outcome).toEqual({ applied: true, durable: false })

@@ -45,7 +45,10 @@ export interface CredentialListingEntry { name: string; kind: CredentialKind; st
 export type CredentialStoreStatus = { ok: true } | { ok: false; reason: CredentialFailureReason }
 
 /// applied: the rename committed — new content stands, never retried.
-/// durable: the directory fsync confirmed the rename on disk.
+/// durable: the store directory's whole real ancestor chain through the
+/// filesystem root was confirmed after the rename — a required realpath,
+/// open, or fsync failure at any level reports not durable, never a
+/// substituted ancestor.
 export interface CredentialSetOutcome {
   applied: boolean
   durable: boolean
@@ -123,8 +126,11 @@ export class CredentialStore {
     this.retain = options.retainSecretNames
   }
 
-  /** Create a missing parent (0700, umask-pinned), fsync the nearest existing
-   * ancestor; a stable symlinked parent is legitimate; errors report write-failed. */
+  /** Create a missing parent (0700, umask-pinned); a stable symlinked parent
+   * is legitimate; errors report write-failed. Ancestor confirmation happens
+   * once per write in atomicWrite's real-chain walk — never here, so a chain
+   * merely visible to this process (created by a prior failed one) is never
+   * mistaken for durable. */
   private ensureParent(): Stats {
     const dir = path.dirname(this.storePath)
     try {
@@ -143,21 +149,10 @@ export class CredentialStore {
       } finally {
         try { this.deps.closeSync(dfd) } catch { /* best effort */ }
       }
+      return this.deps.statSync(dir)
     } catch (err) {
       if (err instanceof CredentialStoreError) throw err
       throw new CredentialStoreError('write-failed')
-    }
-    let anc = path.dirname(dir)
-    for (;;) {
-      try {
-        fsyncDir(this.deps, anc)
-        return this.deps.statSync(dir)
-      } catch (err) {
-        if (err instanceof CredentialStoreError) throw err
-        const parent = path.dirname(anc)
-        if (parent === anc) throw new CredentialStoreError('write-failed')
-        anc = parent
-      }
     }
   }
 
@@ -216,8 +211,10 @@ export class CredentialStore {
   /** Temp O_EXCL|O_NOFOLLOW at 0600, write, fsync, close, rename = commit
    * point. Before it a failure keeps prior bytes and removes the temp (at
    * most one close attempt per descriptor — ownership ends at the attempt,
-   * never retried); after it a directory-fsync failure reports applied but
-   * not durable — no rollback, no retry. */
+   * never retried); after it the real-chain confirmation — the store
+   * directory and every real ancestor through the filesystem root — fails
+   * at its first required target and reports applied but not durable, with
+   * no rollback, no retry, and no ancestor substituted. */
   private atomicWrite(entries: Entries): CredentialSetOutcome {
     const dir = path.dirname(this.storePath)
     const payload = Buffer.from(JSON.stringify({ version: 1, entries }), 'utf8')
@@ -254,7 +251,18 @@ export class CredentialStore {
     }
     let durable = true
     try {
-      fsyncDir(this.deps, dir)
+      // Confirm the whole real chain once per write: resolve the store
+      // directory to its real location, then fsync every real ancestor up
+      // to the root fixed point. The first required realpath, open, or fsync
+      // failure leaves the write applied but not durable — a merely visible
+      // or symlink-created chain is never reported as confirmed.
+      let t = this.deps.realpathSync(dir)
+      for (;;) {
+        fsyncDir(this.deps, t)
+        const parent = path.dirname(t)
+        if (parent === t) break
+        t = parent
+      }
     } catch {
       durable = false
     }

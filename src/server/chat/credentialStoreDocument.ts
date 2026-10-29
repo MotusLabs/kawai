@@ -15,8 +15,9 @@ export type CredentialKind = 'secret-source' | 'launch-env'
 /** Narrow fs seam for controlled test faults only; every default is real node:fs. */
 export type CredentialFsDeps = Pick<
   typeof nodeFs,
-  | 'lstatSync' | 'statSync' | 'openSync' | 'closeSync' | 'fstatSync' | 'readSync'
-  | 'writeSync' | 'fchmodSync' | 'fsyncSync' | 'renameSync' | 'unlinkSync' | 'mkdirSync'
+  | 'lstatSync' | 'statSync' | 'realpathSync' | 'openSync' | 'closeSync' | 'fstatSync'
+  | 'readSync' | 'writeSync' | 'fchmodSync' | 'fsyncSync' | 'renameSync' | 'unlinkSync'
+  | 'mkdirSync'
 >
 
 // Local duplicates of the pinned admission patterns (catalogParse.ts keeps the

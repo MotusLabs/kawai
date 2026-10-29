@@ -42,8 +42,8 @@ reported and reads as absent for resolution — lower sources compose.
 - **THEN** the access refuses and the cached entry is never served
 
 #### Scenario: Applied and durable report separately
-- **WHEN** the atomic rename commits but the directory fsync fails
-- **THEN** the save reports applied but not durable, the new content stands with no rollback or retry, and no caller — a Settings warning or the Settings-map migration — treats the outcome as durable
+- **WHEN** the atomic rename commits but a required confirmation step — the store directory's own or any real ancestor's realpath, open, or directory fsync — fails
+- **THEN** the save reports applied but not durable with no ancestor substituted, the new content stands with no rollback or retry, and no caller — a Settings warning or the Settings-map migration — treats the outcome as durable
 
 #### Scenario: Secret-source changes retain the name first
 - **WHEN** a set, clear, or reclassification changes an entry whose current or resulting kind is secret source
