@@ -86,9 +86,27 @@ function offsetMinutes(timeZone: string, at: number): number | null {
   }
 }
 
-/** Whether a profile's `limitResetTimeZone` is usable: an IANA zone or a fixed `±HH:MM` offset. */
-export function isResetTimeZone(timeZone: string): boolean {
+const ZONE_MEMO_LIMIT = 256
+const zoneValidity = new Map<string, boolean>()
+
+/** The unmemoized check `isResetTimeZone` caches; exported for its parity test. */
+export function checkResetTimeZone(timeZone: string): boolean {
   return offsetMinutes(timeZone, Date.now()) !== null
+}
+
+/**
+ * Whether a profile's `limitResetTimeZone` is usable: an IANA zone or a fixed
+ * `±HH:MM` offset. A zone name's validity does not change while the server
+ * runs, so the answer is memoized per string (catalog-resolution-cache D3),
+ * bounded by dropping the oldest entry; offsets stay computed per instant.
+ */
+export function isResetTimeZone(timeZone: string): boolean {
+  const known = zoneValidity.get(timeZone)
+  if (known !== undefined) return known
+  const valid = checkResetTimeZone(timeZone)
+  zoneValidity.set(timeZone, valid)
+  if (zoneValidity.size > ZONE_MEMO_LIMIT) zoneValidity.delete(zoneValidity.keys().next().value as string)
+  return valid
 }
 
 /**
