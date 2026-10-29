@@ -73,16 +73,60 @@ Mutants (one-line edits; at most five per round):
 
 - [x] 3.1 Annotate the tests with `@covers` for the three delta scenarios.
   - Verify: `specCoverageGuard.test.ts` passes.
-- [ ] 3.2 Run `bun run check` on the clean committed tree.
+- [x] 3.2 Run `bun run check` on the clean committed tree.
   - Verify: a recorded full pass.
+  - Result: pass record `3b2f4c95` for the tree of `8f66559b`.
 - [ ] 3.3 Re-run the scratch boot against a copy of the live data, with a
   Codex stub that passes the version check and then idles.
   - Verify: no request waits longer than 1 s while the 1.2 GB rollout
     loads, and peak RSS stays below 2× the parsed events' size (measured
     against today's 4.4 GB).
-- [ ] 3.4 Map every oracle id (S1–S6, P1, P2) to a test title and each
+  - Result (2026-10-29, not ticked: the RSS half fails as worded). Scratch
+    copy of the live data with the leftover claim settled, Codex stub,
+    attach to the 1.2 GB rollout's chat; a CPU profile places each stall.
+    - Latency holds for this change's path: during the streamed load
+      (profile window of `codexRollout` `line` frames) no health probe took
+      over 553 ms. The probes over 1 s before it are boot work (git and
+      `openspec list` spawns, session-directory upserts); a control run
+      attached to no chat shows them too.
+    - Memory: the parsed events retain 19 MB of heap (7,261 events). The
+      server's RSS rose from about 190 MB to about 690 MB during the load,
+      against 4.4 GB before. The 500 MB is transient garbage from the
+      rollout's 237 lines over 1 MiB (937 MB in all, the largest 12.5 MB),
+      each copied, decoded, and parsed whole; a standalone replay peaks at
+      596 MB and settles at 81 MB after GC. So the peak is far below the old
+      one but is not below 2× the retained events.
+    - The 10.5–14.8 s stall right after the load is outside this change. The
+      profile puts about 4 s in the transcript tail's catch-up
+      (`transcriptTitleWatcher.ts` `readAppended`): on agent start it reads
+      the whole 1.2 GB rollout into one buffer and string, splits it, and
+      runs `codexReceiptMessageId` on every line, which also takes the
+      server to 5.3 GB. The other ~11 s is uncached profile-catalog
+      resolution on the mailbox recipient sweep (`providerOf`,
+      `sessionCooldown`), which `catalog-resolution-cache` removes. The
+      control run with no attach stalls the same way (14.2 s, 5.6 GB) when
+      mail delivery starts the chat. The tail's catch-up and the receipt
+      reads go to the separate `bounded-receipt-reads` proposal.
+- [x] 3.4 Map every oracle id (S1–S6, P1, P2) to a test title and each
   mutant to its killing test.
   - Verify: the map has no gap.
+  - Result:
+
+    | id | test |
+    |---|---|
+    | S1 | `chatStartHistoryLoad.test.ts` › `S1 {send,start,prepare} reads the history once, asynchronously, before the driver starts` |
+    | S2 | `chatStartHistoryLoad.test.ts` › `S2 {send,start,prepare} with the memo present reads nothing` |
+    | S3 | `chatStartHistoryLoad.test.ts` › `S3 a send while prepare’s load is in flight shares it: one read, one driver, the history once` |
+    | S4 | `chatStartHistoryLoad.test.ts` › `S4 a kill during {send,start}’s load writes no memo and {send,start} reports the session gone` |
+    | S5 | `codexRolloutReplay.integration.test.ts` › `S5 a start with a retryable memo and no live events re-reads the rollout once, asynchronously` |
+    | S6 | `codexRolloutReplay.integration.test.ts` › `a retryable memo and live events coexist while the rollout reads EISDIR — a mid-turn load keeps the memo` |
+    | P1 | `streamedParseParity.test.ts` › `Claude transcripts: …` and `Codex rollouts: the streamed replay equals the string parse` |
+    | P2 | `chatStartHistoryLoad.test.ts` › `P2 seeded concurrent starters never read a history file synchronously` |
+    | H1 | S1 prepare, S3, P2 |
+    | H2 | S1 send, S4 send |
+    | H3 | S4 send, S4 start |
+    | H4 | `lineReader.test.ts` (chunk 1, 3, 7 cases), P1 |
+    | H5 | P1 Codex case |
 
 ## Workflow follow-up
 
