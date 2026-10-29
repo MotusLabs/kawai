@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { CatalogMemo, catalogInputKey, providerOf, resolvedCatalog, withCatalogSnapshot } from '../chat/catalogMemo'
+import { CatalogMemo, type CatalogEntry, catalogInputKey, providerOf, resolvedCatalog, withCatalogSnapshot } from '../chat/catalogMemo'
 import { resolveProfileCatalog, type ProfileCatalog, type ProfileCatalogContext } from '../chat/profileCatalog'
 
 let root: string
@@ -241,5 +241,107 @@ describe('Table N — synchronous snapshot', () => {
     fs.writeFileSync(file, JSON.stringify({ glm: { label: 'GLM 6', model: 'opus' } }))
     bump(file, 20)
     expect(resolvedCatalog(a()).catalog.profiles.get('glm')?.label).toBe('GLM 6')
+  })
+})
+
+// Both image-default paths, each varied alone (findings-f4b1ebad B4), in three
+// regimes: the default files exist with different content; they are missing
+// (both contexts fall back to the same embedded catalog, so only key
+// precision is observable); or user-level files replace them (the defaults
+// are never read, so again only precision is observable).
+describe('Table K/N — image-default paths', () => {
+  type Which = 'imageDefaultProvidersPath' | 'imageDefaultPath'
+  type Defaults = Pick<ProfileCatalogContext, Which>
+  /** A second shipped pair: one more provider, and another default label. */
+  const shippedB = (): Defaults => {
+    const dir = path.join(root, 'shipped-b')
+    return {
+      imageDefaultProvidersPath: write(dir, 'providers.json', { zai: { label: 'Z.AI', models: { 'glm-flash': {} } } }),
+      imageDefaultPath: write(dir, 'profiles.json', { default: { label: 'Shipped B' } }),
+    }
+  }
+  const missing = (dir: string): Defaults => ({
+    imageDefaultProvidersPath: path.join(root, dir, 'providers.json'),
+    imageDefaultPath: path.join(root, dir, 'profiles.json'),
+  })
+  /** Contexts A and B that differ only in `which`, under one regime. */
+  function regime(kind: 'present' | 'missing' | 'override', which: Which): { a: ProfileCatalogContext; b: ProfileCatalogContext } {
+    const base = kind === 'present' ? shipped : missing('none-a')
+    if (kind === 'override') {
+      write(home, 'providers.json', {})
+      write(home, 'profiles.json', { default: { label: 'User' } })
+    }
+    const other = kind === 'present' ? shippedB() : missing('none-b')
+    const project = path.join(root, 'work', 'a')
+    return { a: ctx(project, base), b: ctx(project, { ...base, [which]: other[which] }) }
+  }
+  /** What a catalog shows: every profile's label and provider, and the provider labels. */
+  const view = (catalog: ProfileCatalog) => ({
+    profiles: [...catalog.profiles].map(([id, profile]) => [id, profile.label, profile.providerId]),
+    providers: [...catalog.providers].map(([id, provider]) => [id, provider.label]),
+  })
+  /** readFileSync calls on either context's default files while `read` runs. */
+  function defaultReads(read: () => void, ...contexts: ProfileCatalogContext[]): number {
+    const files = new Set(contexts.flatMap(at => [at.imageDefaultProvidersPath, at.imageDefaultPath]))
+    const spy = spyOn(fs, 'readFileSync')
+    try {
+      read()
+      return spy.mock.calls.filter(call => files.has(String(call[0]))).length
+    } finally {
+      spy.mockRestore()
+    }
+  }
+  const PRESENT: Array<[string, Which, (catalog: ProfileCatalog) => unknown, unknown, unknown]> = [
+    ['K9a', 'imageDefaultProvidersPath', catalog => catalog.profiles.get('glm-flash')?.providerId, undefined, 'zai'],
+    ['K9b', 'imageDefaultPath', catalog => catalog.profiles.get('default')?.label, 'Default', 'Shipped B'],
+  ]
+
+  test.each(PRESENT)('%s: only %s differs, default present with different content: two keys, two resolutions, each its own value', (_id, which, read, inA, inB) => {
+    const { a, b } = regime('present', which)
+    const { memo, resolutions } = countingMemo()
+    expect(catalogInputKey(b)).not.toBe(catalogInputKey(a))
+    expect([read(memo.get(a).catalog), read(memo.get(b).catalog), read(memo.get(a).catalog)]).toEqual([inA, inB, inA])
+    expect(resolutions()).toBe(2)
+  })
+
+  test.each([
+    ['K11a', 'missing', 'imageDefaultProvidersPath'],
+    ['K11b', 'missing', 'imageDefaultPath'],
+    ['K11c', 'override', 'imageDefaultProvidersPath'],
+    ['K11d', 'override', 'imageDefaultPath'],
+  ] as const)('%s: regime %s, only %s differs: two keys and two resolutions of an equal catalog (precision)', (_id, kind, which) => {
+    const { a, b } = regime(kind, which)
+    const { memo, resolutions } = countingMemo()
+    expect(catalogInputKey(b)).not.toBe(catalogInputKey(a))
+    let first: CatalogEntry | undefined
+    let second: CatalogEntry | undefined
+    const reads = defaultReads(() => { first = memo.get(a); second = memo.get(b) }, a, b)
+    expect(resolutions()).toBe(2)
+    expect(second).not.toBe(first)
+    expect(view(second!.catalog)).toEqual(view(first!.catalog))
+    // A user-level pair means the defaults are never read; missing defaults
+    // are attempted and fall back to the embedded catalog.
+    expect(reads).toBe(kind === 'override' ? 0 : 4)
+    expect(first!.catalog.profiles.get('default')?.label).toBe(kind === 'override' ? 'User' : 'Default')
+  })
+
+  test.each([
+    ['N5a', 'present', 'imageDefaultProvidersPath'],
+    ['N5b', 'present', 'imageDefaultPath'],
+    ['N5c', 'missing', 'imageDefaultProvidersPath'],
+    ['N5d', 'missing', 'imageDefaultPath'],
+    ['N5e', 'override', 'imageDefaultProvidersPath'],
+    ['N5f', 'override', 'imageDefaultPath'],
+  ] as const)('%s: regime %s, only %s differs: a snapshot keeps A and B apart', (_id, kind, which) => {
+    const { a, b } = regime(kind, which)
+    const [ea, eb, again] = withCatalogSnapshot(() => [a, b, a].map(at => resolvedCatalog(at)))
+    expect(eb).not.toBe(ea!)
+    expect(again).toBe(ea!)
+    if (kind === 'present') {
+      const row = PRESENT.find(([, at]) => at === which)!
+      expect([ea, eb, again].map(entry => row[2](entry!.catalog))).toEqual([row[3], row[4], row[3]])
+    } else {
+      expect(view(eb!.catalog)).toEqual(view(ea!.catalog))
+    }
   })
 })
