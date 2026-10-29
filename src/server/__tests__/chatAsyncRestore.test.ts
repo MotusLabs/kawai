@@ -112,7 +112,8 @@ describe('async chat restore and history', () => {
     const a = seed('sdk-a')
     const manager = createManager()
     await manager.whenRestored()
-    const reads = spyOn(fsp, 'readFile')
+    // The replay streams the file (bounded-history-capture D2): one open is one read.
+    const reads = spyOn(fsp, 'open')
     try {
       await Promise.all([manager.loadHistory(a), manager.loadHistory(a)])
       await manager.loadHistory(a)
@@ -175,8 +176,13 @@ describe('async chat restore and history', () => {
       })
     // Client B attaches while deltas stream: one lands while its history load
     // is pending, one after the load but before the snapshot is assembled.
+    // Only the attach's own load races; the agent start behind it awaits
+    // loadHistory too (bounded-history-capture D1) and finds the memo.
     const load = manager.loadHistory.bind(manager)
+    let raced = false
     manager.loadHistory = async sessionId => {
+      if (raced) return load(sessionId)
+      raced = true
       const pending = load(sessionId)
       emit(1)
       await pending

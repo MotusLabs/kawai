@@ -3,10 +3,12 @@
 // holding the file or its parsed events in memory. `parseTranscriptContent`
 // decodes the whole file into one string and JSON-parses every line, which
 // for a several-hundred-megabyte transcript costs gigabytes and blocks the
-// event loop for minutes; this reader scans bytes chunk by chunk, decodes
+// event loop for minutes; this reader scans bytes chunk by chunk (the shared
+// `scanLines`), decodes
 // only title rows, and parses only the cwd candidates it needs — from the
 // newest back — so the result equals the full parse's `title` and `cwd`.
 import fsp from 'node:fs/promises'
+import { scanLines } from './lineReader'
 import {
   parseTranscriptTitleLine,
   recordCwd,
@@ -14,8 +16,6 @@ import {
   type TranscriptTitle,
 } from './transcriptReplay'
 
-const CHUNK_BYTES = 1 << 20
-const NEWLINE = 0x0a
 const TITLE_MARKERS = [Buffer.from('"ai-title"'), Buffer.from('"custom-title"')]
 // A record carrying a cwd spells one of these keys literally; any other
 // line cannot change the result, so it is never decoded or parsed.
@@ -53,27 +53,7 @@ export async function scanTranscriptMeta(filePath: string): Promise<TranscriptMe
       }
       if (holds(line, CWD_MARKERS)) candidates.push([start, start + line.length])
     }
-    const chunk = Buffer.allocUnsafe(CHUNK_BYTES)
-    let carry: Buffer = Buffer.alloc(0)
-    let carryStart = 0
-    let position = 0
-    for (;;) {
-      const { bytesRead } = await handle.read(chunk, 0, CHUNK_BYTES, position)
-      if (bytesRead === 0) break
-      const data = carry.length > 0
-        ? Buffer.concat([carry, chunk.subarray(0, bytesRead)])
-        : chunk.subarray(0, bytesRead)
-      let lineStart = 0
-      for (let nl = data.indexOf(NEWLINE); nl !== -1; nl = data.indexOf(NEWLINE, lineStart)) {
-        take(data.subarray(lineStart, nl), carryStart + lineStart)
-        lineStart = nl + 1
-      }
-      // Copy the partial line: `chunk` is reused by the next read.
-      carry = Buffer.from(data.subarray(lineStart))
-      carryStart += lineStart
-      position += bytesRead
-    }
-    if (carry.length > 0) take(carry, carryStart)
+    await scanLines(handle, take)
     return { title, cwd: await newestCwd(handle, candidates) }
   } catch {
     return EMPTY
