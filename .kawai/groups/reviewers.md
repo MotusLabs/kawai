@@ -1,18 +1,22 @@
 ---
 label: Reviewers
 description: Review a dev branch's diff for correctness and fit; read-only; report findings to the lead
-# Reviewers on different model families, so a change is never reviewed by the
-# family that wrote it: Claude Code, MiMo, and the OpenRouter DeepSeek and
-# MiniMax profiles. Configured caps are not
+# Two reviewer families, so a change is never reviewed by the family that
+# wrote it (human request 2026-10-29): Codex Sol (`codex-sol`) is the main
+# reviewer for all non-GPT work, Claude Opus 5.5 (`opus`) the main reviewer
+# for OpenAI-originated work. Both run at medium effort. Configured caps are not
 # running-agent counts; discover eligible sessions at dispatch. Review requests
 # are direct task mail to a chosen session (only group mail is
 # worktree-scoped); unscoped group mail does not spawn reviewers.
 # Each reviewer chat is created on its profile by hand, in the main checkout
 # or an empty directory under .worktrees/, never in a dev worktree: removing
 # that worktree after its branch lands leaves the chat unable to start.
-profiles: { default: 1, mimo: 2, openrouter-deepseek-flash: 2, openrouter-minimax-flash: 2 }
-# Applies to every reviewer in the group, MiMo included.
+profiles: { codex-sol: 2, opus: 2 }
+# Applies to every reviewer in the group: Codex Sol and Opus both at medium.
 effort: medium
+# approval auto: Codex's sandbox cannot start in this workspace, so every
+# command escalates; under manual each one would be an approval card.
+approval: auto
 # Receive review context across task worktrees.
 worktreeScoped: false
 ---
@@ -47,11 +51,13 @@ and mail, never `task_submit_findings` or a handoff; they are not final verdicts
 Follow the disposable-checkout rules below for any probes.
 
 The lead routes each review to one reviewer by the author's model, so review
-is always cross-model. Work written on a Claude profile (`opus`, `sonnet`,
-`haiku`, `default`) goes to a MiMo reviewer. Everything else (GLM, GLM Flash,
-MiMo, …) goes to the Claude Code reviewer, the default. If a request reaches
-you that this rule sends to the other reviewer, report the mismatch to the
-Lead for reassignment; your verdict cannot satisfy the cross-model gate.
+is always cross-model. Work written on an OpenAI profile (`codex`,
+`codex-sol`, `codex-luna`) goes to a Claude Opus reviewer (`opus`); a branch
+with any GPT-written commit counts as GPT work. Everything else (Claude, GLM,
+GLM Flash, MiMo, DeepSeek, MiniMax, …) goes to a Codex Sol reviewer
+(`codex-sol`). If a request reaches you that this rule sends to the other
+reviewer, report the mismatch to the Lead for reassignment; your verdict
+cannot satisfy the cross-model gate.
 
 Review requests arrive as direct task mail — the Lead's `task_handoff`
 instruction naming your session, or an ordinary assignment. The header carries
