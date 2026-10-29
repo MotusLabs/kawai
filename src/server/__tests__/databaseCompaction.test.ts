@@ -77,7 +77,8 @@ test('T4 C3: a failed conversion is logged, keeps contents and mode, never stops
   const raw = new Database(dbPath)
   raw.exec("INSERT INTO process_collection_checkpoints VALUES ('kept','1')")
   // A statement still in progress makes VACUUM fail, as a full disk would.
-  const reading = raw.prepare('SELECT * FROM process_collection_checkpoints').iterate()
+  const statement = raw.prepare('SELECT * FROM process_collection_checkpoints')
+  const reading = statement.iterate()
   reading.next()
   const warn = spyOn(logger, 'warn')
   let failures: unknown[][]
@@ -89,8 +90,9 @@ test('T4 C3: a failed conversion is logged, keeps contents and mode, never stops
   }
   expect(failures).toHaveLength(1)
   expect(failures[0]![1]).toEqual({ error: expect.stringContaining('VACUUM') })
-  reading.return?.()
-  raw.close()
+  // Finalize before closing: a live statement keeps the connection and its read lock open.
+  statement.finalize()
+  raw.close(true)
   const reopened = new Database(dbPath)
   expect(pragma(reopened, 'auto_vacuum')).toBe(0)
   expect(reopened.prepare("SELECT value FROM process_collection_checkpoints WHERE source='kept'").get()).toEqual({ value: '1' })
