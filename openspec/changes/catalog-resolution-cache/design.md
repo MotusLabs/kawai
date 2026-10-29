@@ -65,8 +65,18 @@ re-resolve once per edit.
   → label, and the merged definitions.
 - Eviction is LRU at 64 entries. A hit refreshes recency, so the hot set
   never thrashes.
-- The memo hands out the catalog object it holds. Consumers already treat
-  the result as read-only; a test pins that no consumer mutates it.
+- The memo hands out the catalog object it holds. Its projections are
+  `ReadonlyMap`s, but `entry.catalog` hands out mutable maps, so the guard is
+  behavioral: Table W's row W5 pins that no production consumer changes the
+  catalog it reads.
+- Routed read sites: `providerOf`, `providerLabelOf`,
+  `providerDefinitionOf`, `runtimeFactsOf` (the start guard), and the usage
+  pull's balance-key read. The launch resolution
+  (`launchFor` → `resolveClaudeProfile`) and the other direct resolvers stay
+  direct: they run once per spawn or command, not per sweep. The usage
+  cadence builds a launch environment on every tick, so each tick still
+  resolves the catalog once directly — a documented scope limit, not a
+  cached path (row W4).
 
 ### D3 — Memoized zone validity, a snapshot for repeated lookups
 
@@ -109,6 +119,13 @@ pass and needs explicit invalidation; the sweep is where the repeats are.
 | K6 | the user-level file appears (shipped defaults replaced) | no | 2 |
 | K7 | `HOME` or `CODEX_HOME` changes | no | 2 |
 | K8 | the same path, same files, no edit | yes | 1 |
+| K9a/K9b | only the image providers / profiles path differs; both default files exist with different content | no | 2, each with its own content |
+| K11a/K11b | only the image providers / profiles path differs; both default files are missing | no | 2, equal catalogs (precision only) |
+| K11c/K11d | only the image providers / profiles path differs; user-level files replace the defaults, which are never read | no | 2, equal catalogs (precision only) |
+
+While a default file exists, its level line already carries its path, so
+removing the path part from the key is equivalent for K9. Only K11 observes
+it (R15, R16). K10 is not used.
 
 ### Table E — eviction
 
@@ -125,6 +142,26 @@ pass and needs explicit invalidation; the sweep is where the repeats are.
 | N2 | lookups of two contexts reaching different files inside one snapshot | each sees its own catalog |
 | N3 | a file edited inside a snapshot, then a lookup after it | unseen inside, seen at the first lookup after |
 | N4 | a snapshot opened inside an open one | no new stats; the outer one ends the snapshot |
+| N5a/N5b | contexts A, B, A differing only in the image providers / profiles path, defaults present with different content | B is its own entry with its own content; the second A is A's entry |
+| N5c/N5d | the same, defaults missing | B is its own entry with an equal catalog |
+| N5e/N5f | the same, user-level files replacing the defaults | B is its own entry with an equal catalog |
+
+### Table W — production wiring
+
+A read site is counted by the reads of the project's own catalog file, one
+per resolution, after a fresh key. Each row also compares its value with an
+independent fresh resolution.
+
+| id | public call | result |
+|---|---|---|
+| W1 | the mailbox's recipient sweep (the closure it hands its dispatcher), twice | each catalog context's key is computed once per sweep, anchored to the level count |
+| W2 | `providerDefinitionOf`, 4 calls | reads `[1, 0, 0, 0]`; the definition equals a fresh resolution's |
+| W3 | `startBlockerFor` (`runtimeFactsOf`), 4 calls | reads `[1, 0, 0, 0]`; the runtime refusal names a fresh resolution's runtime |
+| W4 | the usage cadence (`providerUsageTarget`), 4 ticks | reads exactly `[2, 1, 1, 1]`: the direct launch resolution on every tick, plus the provider lookup that warms the memo before the balance-key read on the first. Every credits pull carries the value under a fresh resolution's balance-key name |
+| W5 | the sweep with a cooldown, `providerDefinitionOf` with `quotaReadingOf`, `startBlockerFor`, the usage cadence, `providerOf`, `providerLabelOf`, twice | the entry is the same object and deep-equals an alias-free baseline from its own resolution; the lazy projections equal the baseline's |
+
+A balance-key bypass (R13) would read `[3, 2, 2, 2]` in W4. That is a
+prediction: R13 is a structural twin of R11 and was not run.
 
 ### Property P1 — results unchanged
 
@@ -156,9 +193,14 @@ unmemoized check, on first and repeated calls.
 - [A filesystem whose mtime and size both survive an edit] → Same exposure
   as today's stamp key. Not widened.
 - [A consumer that mutates the shared catalog object would corrupt other
-  consumers' views] → The P1 test compares against a fresh resolution after
-  each lookup sequence, and the catalog's maps are passed out read-only
-  (`ReadonlyMap` in the types).
+  consumers' views] → Only the entry's projections are `ReadonlyMap`s;
+  `entry.catalog` and the definitions it holds are mutable objects. Row W5
+  runs every production consumer against one entry and checks it against an
+  alias-free baseline, and P1 compares with a fresh resolution after each
+  lookup sequence.
+- [The usage cadence still resolves the launch catalog directly on every
+  tick] → By design (D2): the launch resolution is outside the memo. W4 pins
+  the exact total, so a new uncached read on that path fails it.
 
 ## Migration Plan
 

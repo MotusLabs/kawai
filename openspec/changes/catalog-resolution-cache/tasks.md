@@ -54,15 +54,24 @@ CODEX_HOME omission, which changes Codex provider ids.
   it, and route `runtimeFactsOf` and the balance-key read through the shared
   memo.
   - Verify: Table N passes, one test per oracle id. R6, R7, R8, and R9 are
-    each killed.
+    each killed. The sweep's wrapper is verified through the production
+    composition by row W1 (4.1), which R10 fails.
 
 ## 3. Integration
 
-- [x] 3.1 Run `bun run check` on the clean committed tree.
-  - Verify: a recorded full pass. Done: pass record 576e34fc for the tree of 21192854.
-- [x] 3.2 Map every oracle id (K1–K8, E1–E2, N1–N4, P1, P2) to a test title and
-  each mutant to its killing test.
-  - Verify: the map has no gap.
+- [ ] 3.1 Run `bun run check` on the clean committed tree.
+  - Verify: a recorded full pass for the final head's tree, named in the
+    result (a tree cannot cite its own record).
+  - History: pass record 576e34fc was for the tree of 21192854, before the
+    master merge; the reviewed head's tree had record d271fd3e. Neither
+    applies to the review follow-up's trees, so 3.1 is reopened.
+- [ ] 3.2 Map every oracle id (K1–K11, E1–E2, N1–N5, W1–W5, P1, P2) to a test
+  title and each mutant and author control to its killing test.
+  - Verify: the map has no gap. Rows K1–K8, E1–E2, N1–N4, P1, P2 and R1–R9
+    are mapped in the earlier result; the new rows map to the tests of the
+    same id in `catalogMemo.test.ts`, `catalogMemoWiring.test.ts`, and
+    `sessionMailbox.test.ts` (W1). Author controls: R10 → W1; R11 → W2 and
+    W5; R14 → W2 and W5; R19 → W2 and W5.
 
 ## 4. Review follow-up (findings `f4b1ebad`, conditions C1–C6)
 
@@ -83,18 +92,22 @@ Structural twins, covered by their own value and count tests but not run as
 controls: R12 (`runtimeFactsOf` bypass) and R13 (balance-key bypass) twin
 R11; R15 and R17 (the providers path) twin R16 and R18.
 
-- [ ] 4.1 B1: row W1 — the real mailbox sweep, the closure the mailbox hands
+- [x] 4.1 B1: row W1 — the real mailbox sweep, the closure the mailbox hands
   its dispatcher, computes each catalog context's key once per sweep, and a
   second sweep computes it again.
   - Verify: the count equals one lookup per context outside any snapshot,
     anchored to the level count. R10 fails it.
-- [ ] 4.2 B3: rows W2–W4 — `providerDefinitionOf`, `startBlockerFor`
+- [x] 4.2 B3: rows W2–W4 — `providerDefinitionOf`, `startBlockerFor`
   (`runtimeFactsOf`), and the usage pull's balance key resolve through the
   memo.
-  - Verify: after a fresh key, four public calls read the project's catalog
-    file `[1, 0, 0, 0]` times, and each value equals an independent fresh
-    resolution. R11 fails W2.
-- [ ] 4.3 B2: row W5 — no production consumer changes the shared catalog.
+  - Verify: after a fresh key, four calls of W2 and W3 read the project's
+    catalog file `[1, 0, 0, 0]` times. Four usage cadence ticks (W4) read it
+    exactly `[2, 1, 1, 1]` times: the launch resolution stays direct (D2),
+    and the first tick's provider lookup warms the memo before the balance
+    key is read. Each value equals an independent fresh resolution, for W4
+    on every credits pull. R11 fails W2; a balance-key bypass (R13, not run)
+    would read `[3, 2, 2, 2]`.
+- [x] 4.3 B2: row W5 — no production consumer changes the shared catalog.
   - Verify: after the sweep (cooldown and label), `providerDefinitionOf` with
     `quotaReadingOf` on the returned object, `startBlockerFor`, the usage
     pull, and `providerOf`/`providerLabelOf`, the entry is the same object
@@ -105,7 +118,7 @@ R11; R15 and R17 (the providers path) twin R16 and R18.
   (key precision; the fallback results are equal), and user-level files
   present (defaults unread; precision only).
   - Verify: R16 fails K11, R18 fails N5.
-- [ ] 4.5 Add Table W and rows K9/K11/N5 to design.md, correct D2 and Risks,
+- [x] 4.5 Add Table W and rows K9/K11/N5 to design.md, correct D2 and Risks,
   and add the B1 and B4 entries to `docs/oracle-hazards.md`.
 - [ ] 4.6 Reopen 3.1 and extend the 3.2 map with the new rows and controls.
 

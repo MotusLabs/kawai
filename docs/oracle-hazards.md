@@ -36,6 +36,39 @@ or property that would have caught it, and the source finding.
   restart-superseded and the new claimant's pass (kills M1)").
 - **Source finding.** findings-6a6a844d.
 
+### A scope wrapper tested only by direct calls (findings-f4b1ebad B1)
+
+- **Hazard.** A wrapper that holds state still for one production read (a
+  snapshot around a sweep) is tested by calling the wrapper directly, and
+  nothing fails when the production read stops going through it. The same
+  holds for read sites routed through a shared cache: a count taken at the
+  cache never sees a caller that bypasses it.
+- **Oracle that catches it.** A row per wrapper and per routed read site
+  that drives the production composition and counts an observable effect
+  of each resolution (here, reads of one catalog file), anchored to a fixed
+  expected total; the control removes the wiring
+  (`src/server/__tests__/sessionMailbox.test.ts` › "W1: the mailbox
+  recipient sweep computes each catalog context's key once per sweep (kills
+  R10)"; `src/server/__tests__/catalogMemoWiring.test.ts`, rows W2–W5). A
+  path that stays uncached by design is counted in the exact total, never
+  subtracted as an observed baseline.
+- **Source finding.** findings-f4b1ebad B1–B3.
+
+## Cache keys
+
+### A key input no fixture varies (findings-f4b1ebad B4)
+
+- **Hazard.** A key part that only matters in some regimes — a default
+  path whose file may exist, be missing, or be replaced by a user-level file
+  — is held constant by every fixture, so deleting it from the key, or from
+  a second raw key such as a snapshot's, survives every test.
+- **Oracle that catches it.** One row per key input varied alone, in each
+  regime: present with different content (value), missing, and replaced
+  (key precision: distinct keys and resolutions of equal results), for every
+  key that includes it (`src/server/__tests__/catalogMemo.test.ts`, rows
+  K9a–K11d and N5a–N5f).
+- **Source finding.** findings-f4b1ebad B4.
+
 ## Command surfaces
 
 ### Refusals missing the success envelope
