@@ -46,7 +46,7 @@
 
 ## 5. Integration check
 
-- [ ] 5.1 Copy the live database to a scratch directory outside the repository, run `initDatabase` from this branch on the copy, and record:
+- [x] 5.1 Copy the live database to a scratch directory outside the repository, run `initDatabase` from this branch on the copy, and record:
   - the migration and compaction durations;
   - the file size and `dbstat` per table before and after;
   - that `process_export_totals` is identical.
