@@ -6,6 +6,8 @@
 // lookup, as the per-path stamp keys were. Eviction is least-recently-used at
 // a fixed bound, never a full clear, so a hot set of contexts never thrashes.
 // Entries hand out the catalog they hold: consumers read it, never mutate it.
+// A synchronous snapshot (D3) lets a read that looks up the same contexts many
+// times compute each context's key once.
 import fs from 'node:fs'
 import os from 'node:os'
 import type { MergedProvider } from './catalogMerge'
@@ -101,9 +103,43 @@ export class CatalogMemo {
 
 const shared = new CatalogMemo()
 
+/** Entries already looked up in the open snapshot, by raw context; null outside one. */
+let snapshot: Map<string, CatalogEntry> | null = null
+
+/**
+ * Run `read` with the catalog held still (catalog-resolution-cache D3): inside
+ * it, each distinct context computes its input key — the per-file stats —
+ * once, and repeats reuse that entry. For synchronous reads that look up the
+ * same few contexts many times, such as the mailbox's recipient views. The
+ * snapshot ends with `read`, so an edit applies at the next lookup after it;
+ * a nested call joins the open snapshot.
+ */
+export function withCatalogSnapshot<T>(read: () => T extends PromiseLike<unknown> ? never : T): T {
+  if (snapshot) return read()
+  snapshot = new Map()
+  try {
+    return read()
+  } finally {
+    snapshot = null
+  }
+}
+
 /** The memoized catalog entry for a context, shared by every consumer. */
 export function resolvedCatalog(ctx: ProfileCatalogContext = {}): CatalogEntry {
-  return shared.get(ctx)
+  if (!snapshot) return shared.get(ctx)
+  const raw = [
+    ctx.homeDir ?? process.env.HOME ?? os.homedir(),
+    ctx.serverCodexHome ?? process.env.CODEX_HOME ?? '',
+    ctx.imageDefaultProvidersPath ?? DEFAULT_PROVIDER_CATALOG_PATH,
+    ctx.imageDefaultPath ?? DEFAULT_PROFILE_CATALOG_PATH,
+    ctx.projectPath ?? '',
+  ].join('\0')
+  let entry = snapshot.get(raw)
+  if (!entry) {
+    entry = shared.get(ctx)
+    snapshot.set(raw, entry)
+  }
+  return entry
 }
 
 /**

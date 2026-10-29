@@ -1,11 +1,12 @@
 // The shared catalog resolution memo (catalog-resolution-cache D1–D2): Table K
-// (which lookups share a key) and Table E (LRU eviction) from the design, one
-// test per oracle id, counting resolutions through the memo's resolver seam.
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+// (which lookups share a key), Table E (LRU eviction), and Table N (the
+// synchronous snapshot) from the design, one test per oracle id, counting
+// resolutions through the memo's resolver seam and key work through statSync.
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { CatalogMemo, catalogInputKey } from '../chat/catalogMemo'
+import { CatalogMemo, catalogInputKey, providerOf, resolvedCatalog, withCatalogSnapshot } from '../chat/catalogMemo'
 import { resolveProfileCatalog, type ProfileCatalog, type ProfileCatalogContext } from '../chat/profileCatalog'
 
 let root: string
@@ -178,5 +179,67 @@ describe('Table E — eviction', () => {
     memo.get(keyed(1))
     expect(resolved.length).toBe(66)
     expect(resolved.at(-1)).toBe(path.join(root, 'h1'))
+  })
+})
+
+describe('Table N — synchronous snapshot', () => {
+  /** statSync calls made by `read`, which runs under a spy. */
+  function stats(read: () => void): number {
+    const spy = spyOn(fs, 'statSync')
+    try {
+      read()
+      return spy.mock.calls.length
+    } finally {
+      spy.mockRestore()
+    }
+  }
+  const a = () => ctx(path.join(root, 'work', 'a'))
+  const deep = () => ctx(path.join(root, 'work', 'a', 'deep'))
+
+  test('N1: repeated lookups of one context inside a snapshot compute its key once', () => {
+    const one = stats(() => providerOf('glm', a()))
+    expect(one).toBeGreaterThan(0)
+    expect(stats(() => withCatalogSnapshot(() => {
+      for (let i = 0; i < 50; i++) providerOf('glm', a())
+    }))).toBe(one)
+  })
+
+  test('N2: each distinct context inside a snapshot gets its own entry', () => {
+    write(path.join(root, 'work', 'a', 'deep'), 'profiles.json', { mimo: { label: 'MiMo' } })
+    const seen = withCatalogSnapshot(() => [a(), deep(), a()].map(at => resolvedCatalog(at).catalog.profiles.has('mimo')))
+    expect(seen).toEqual([false, true, false])
+  })
+
+  test('N3: an edit applies at the first lookup after the snapshot, never inside it', () => {
+    const file = path.join(root, 'work', '.kawai', 'profiles.json')
+    const inside = withCatalogSnapshot(() => {
+      const before = resolvedCatalog(a()).catalog.profiles.get('glm')?.label
+      fs.writeFileSync(file, JSON.stringify({ glm: { label: 'GLM 5', model: 'opus' } }))
+      bump(file, 10)
+      return [before, resolvedCatalog(a()).catalog.profiles.get('glm')?.label]
+    })
+    expect(inside).toEqual(['GLM', 'GLM'])
+    expect(resolvedCatalog(a()).catalog.profiles.get('glm')?.label).toBe('GLM 5')
+  })
+
+  test('N4: a nested snapshot joins the open one', () => {
+    // One spy for the whole read: Bun hands a nested spyOn the same mock.
+    const spy = spyOn(fs, 'statSync')
+    try {
+      withCatalogSnapshot(() => {
+        providerOf('glm', a())
+        const outer = spy.mock.calls.length
+        expect(outer).toBeGreaterThan(0)
+        withCatalogSnapshot(() => providerOf('glm', a()))
+        expect(spy.mock.calls.length).toBe(outer)
+      })
+    } finally {
+      spy.mockRestore()
+    }
+    // The outer snapshot is still the one that ends: a later edit is seen.
+    const file = path.join(root, 'work', '.kawai', 'profiles.json')
+    fs.writeFileSync(file, JSON.stringify({ glm: { label: 'GLM 6', model: 'opus' } }))
+    bump(file, 20)
+    expect(resolvedCatalog(a()).catalog.profiles.get('glm')?.label).toBe('GLM 6')
   })
 })
