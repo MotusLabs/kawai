@@ -1,9 +1,12 @@
 // Managed-turn measurements (process-observability D3/D4): one live turn per
 // chat session, folded from chat events and activity phases into turn,
-// attribution, tool, request, activity, context, compaction and settings
-// facts. The live state is saved after every step, so a restart closes each
-// open turn as `process-ended` and records the restart gap. No transcript
-// text, tool inputs or outputs are retained.
+// attribution, tool, request, context, compaction and settings facts. Phase
+// time accumulates on the live turn and lands as per-phase totals on its
+// `turn_ended` (compact-observation-detail D1); each tool call and request is
+// one row written at completion or turn close (D2); a resolution with no open
+// request is only counted (D3). The live state is saved after every step, so
+// a restart closes each open turn as `process-ended` and records the restart
+// gap. No transcript text, tool inputs or outputs are retained.
 import type { ChatActivity, ChatContextUsage, ChatEvent } from '../../../shared/chat'
 import { turnSucceeded } from '../../../shared/chat'
 import type { Measurement, ObservationIdentity, ObservationKind } from '../../../shared/processObservations'
@@ -26,6 +29,10 @@ interface LiveTurn {
   waitStarted: string | null
   sequence: number
   repinnable: boolean
+  /** Seconds per phase field; absent in turns persisted by an older build. */
+  phaseSeconds?: Record<string, number>
+  /** Request ids resolved with no open request, counted once each. */
+  unmatched?: string[]
   context?: ChatContextUsage | null
   contextSource?: string
 }
@@ -51,6 +58,17 @@ const SUPPORTED_EVENTS = [
 const CONTEXT_SAMPLE_MS = 60000
 
 const seconds = (a: string, b: string) => Math.max(0, (Date.parse(b) - Date.parse(a)) / 1000)
+
+/** `turn_ended` field per activity phase; an unknown phase lands in `otherPhaseSeconds`. */
+const PHASE_FIELDS: Record<string, string> = {
+  thinking: 'thinkingSeconds',
+  requesting: 'requestingSeconds',
+  preparing_tool: 'preparingToolSeconds',
+  running_tools: 'runningToolsSeconds',
+  responding: 'respondingSeconds',
+  retrying: 'retryingSeconds',
+}
+const OTHER_PHASE_FIELD = 'otherPhaseSeconds'
 
 function toolCategory(tool: string): string {
   if (tool === 'Bash' || tool === 'Monitor') return 'shell'
@@ -95,7 +113,7 @@ export class ChatObservationTracker {
     this.atomic(() => {
       const key = `chat:${sessionId}:${event.id}`
       const db = this.recorder.store.db
-      if (db.prepare('SELECT 1 FROM process_observation_keys WHERE source_key=?').get(key)) return
+      if (db.prepare('SELECT 1 FROM process_observations WHERE source_key=?').get(key)) return
       const at = event.at
       if (event.type === 'turn_started') {
         if (this.live.has(sessionId)) this.finish(sessionId, 'process-ended', at, true)
@@ -111,6 +129,8 @@ export class ChatObservationTracker {
           waitStarted: null,
           sequence: 0,
           repinnable: true,
+          phaseSeconds: {},
+          unmatched: [],
         })
         this.write(this.live.get(sessionId)!, key, 'turn_started', at, {})
         this.sampleContext(sessionId, this.contexts.get(sessionId) ?? null, true)
@@ -143,14 +163,6 @@ export class ChatObservationTracker {
           category: toolCategory(event.tool),
           waitBaseline: this.waitTime(turn, at),
         }
-        this.write(
-          turn,
-          key,
-          'tool',
-          at,
-          { category: toolCategory(event.tool), startedAt: at, durationSeconds: null, partial: false },
-          { toolCallId: event.toolCallId },
-        )
       } else if (event.type === 'tool_result') {
         const tool = turn.tools[event.toolCallId]
         this.write(
@@ -173,31 +185,30 @@ export class ChatObservationTracker {
         turn.repinnable = false
         if (Object.keys(turn.requests).length === 0) turn.waitStarted = at
         const category = event.type === 'approval_request' ? 'approval' : 'question'
-        turn.requests[event.requestId] = { at, category }
-        this.write(
-          turn,
-          key,
-          'request',
-          at,
-          { requestKind: category, startedAt: at, durationSeconds: null },
-          { requestId: event.requestId },
-        )
+        turn.requests[event.requestId] ??= { at, category }
       } else if (event.type === 'request_resolved') {
         const request = turn.requests[event.requestId]
-        this.write(
-          turn,
-          key,
-          'request',
-          at,
-          {
-            requestKind: request?.category ?? 'unknown',
-            startedAt: request?.at ?? null,
-            durationSeconds: request ? seconds(request.at, at) : null,
-            outcome: event.outcome,
-            partial: !request,
-          },
-          { requestId: event.requestId },
-        )
+        if (request) {
+          this.write(
+            turn,
+            key,
+            'request',
+            at,
+            {
+              requestKind: request.category,
+              startedAt: request.at,
+              durationSeconds: seconds(request.at, at),
+              outcome: event.outcome,
+              partial: false,
+            },
+            { requestId: event.requestId },
+          )
+        } else {
+          // No row carries this event's key, so a redelivery is recognized by its request id.
+          turn.unmatched ??= []
+          if (turn.unmatched.includes(event.requestId)) return
+          turn.unmatched.push(event.requestId)
+        }
         delete turn.requests[event.requestId]
         if (Object.keys(turn.requests).length === 0 && turn.waitStarted) {
           turn.waitSeconds += seconds(turn.waitStarted, at)
@@ -230,7 +241,7 @@ export class ChatObservationTracker {
     this.atomic(() => {
       const sourceKey = `compaction:${sessionId}:${sourceId ?? crypto.randomUUID()}`
       const known = this.recorder.store.db
-        .prepare('SELECT 1 FROM process_observation_keys WHERE source_key=?')
+        .prepare('SELECT 1 FROM process_observations WHERE source_key=?')
         .get(sourceKey)
       if (known) return
       this.sampleContext(sessionId, this.live.get(sessionId)?.context ?? null, true)
@@ -363,7 +374,7 @@ export class ChatObservationTracker {
   ): void {
     const turn = this.live.get(id)
     if (!turn) return
-    this.closePhase(turn, at, partial)
+    this.closePhase(turn, at)
     for (const [toolCallId, tool] of Object.entries(turn.tools)) {
       this.write(
         turn,
@@ -401,23 +412,29 @@ export class ChatObservationTracker {
       durationSeconds: seconds(turn.at, at),
       partial,
       usageAvailable,
+      ...this.phaseTotals(turn),
+      unmatchedResolutions: turn.unmatched?.length ?? 0,
     })
     this.live.delete(id)
     this.recorder.store.db.prepare('DELETE FROM process_live_observations WHERE session_id=?').run(id)
   }
 
-  private closePhase(turn: LiveTurn, at: string, partial = false): void {
+  private closePhase(turn: LiveTurn, at: string): void {
     if (turn.phase) {
-      this.write(turn, this.edgeKey(turn), 'activity', at, {
-        phase: turn.phase.category,
-        startedAt: turn.phase.at,
-        durationSeconds: seconds(turn.phase.at, at),
-        partial,
-      })
+      const field = PHASE_FIELDS[turn.phase.category] ?? OTHER_PHASE_FIELD
+      turn.phaseSeconds ??= {}
+      turn.phaseSeconds[field] = (turn.phaseSeconds[field] ?? 0) + seconds(turn.phase.at, at)
     }
     turn.phase = null
   }
 
+  /** Every phase field, zero when the turn never entered it. */
+  private phaseTotals(turn: LiveTurn): Measurement {
+    const fields = [...Object.values(PHASE_FIELDS), OTHER_PHASE_FIELD]
+    return Object.fromEntries(fields.map(field => [field, turn.phaseSeconds?.[field] ?? 0]))
+  }
+
+  /** Keys the partial row of a call or request still open at turn close. */
   private edgeKey(turn: LiveTurn): string {
     return `segment:${turn.scope.sessionId}:${turn.scope.turnId}:${++turn.sequence}`
   }

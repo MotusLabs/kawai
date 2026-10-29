@@ -3,7 +3,7 @@ import { Database } from 'bun:sqlite';
 import { schemaDb } from './schemaDb';
 import { ObservationStore } from '../metrics/observations/store';
 import { migrateSchema, MIGRATIONS } from '../dbSafety/migrations';
-import type { ProcessObservation } from '../../shared/processObservations';
+import { isDurableObservationKey, type ProcessObservation } from '../../shared/processObservations';
 const at = '2026-10-18T00:00:00.000Z';
 const fact = (sourceKey = 'turn:1'): ProcessObservation => ({ sourceKey, kind: 'turn_started', teamId: 'a', sessionId: 's', turnId: 't', observedAt: at, data: {} });
 test('upgrade from version 10 preserves existing rows and applies the observation schema once', () => {
@@ -17,12 +17,12 @@ test('upgrade from version 10 preserves existing rows and applies the observatio
   new ObservationStore(db).record(fact());
   db.close();
 });
-test('source replay, team isolation and shared-source access associations', () => {
+test('source replay and team isolation read the team from the observation row', () => {
   const db = schemaDb(), store = new ObservationStore(db);
-  store.record(fact(), ['shared']);
+  store.record(fact());
   expect(store.record({ ...fact(), teamId: 'b' })).toBeNull();
+  store.record({ ...fact('turn:2'), teamId: null });
   expect(store.forTeam('a')).toHaveLength(1);
-  expect(store.forTeam('shared')).toHaveLength(1);
   expect(store.forTeam('b')).toEqual([]);
   expect(store.forTeam('a')[0]).toMatchObject({ sourceKey: 'turn:1', version: 1, data: {} });
   db.close();
@@ -40,13 +40,13 @@ test('detail pruning retains source identity, checkpoints, live state and cumula
   const db = schemaDb();
   let now = Date.parse(at);
   const store = new ObservationStore(db, () => now);
-  store.record(fact());
+  store.record(fact('source:team_tasks:t1'));
   db.exec("INSERT INTO process_export_totals VALUES ('test','{}','count',1)");
   store.setCheckpoint('source', '12');
   now += 91 * 24 * 3600000;
   expect(store.prune()).toBe(1);
   expect(store.forTeam('a')).toEqual([]);
-  expect(store.record(fact())).toBeNull();
+  expect(store.record(fact('source:team_tasks:t1'))).toBeNull();
   expect(store.checkpoint('source')).toBe('12');
   expect(db.prepare('SELECT value FROM process_export_totals').get()).toEqual({ value: 1 });
   db.close();
@@ -58,20 +58,34 @@ test('raw payload copies and invalid measurements are refused before a write', (
   expect(store.forTeam('a')).toEqual([]);
   db.close();
 });
-test('pruning drops keys of live chat facts with their detail but keeps durable-source keys', () => {
-  const db = schemaDb();
-  let now = Date.parse(at);
-  const store = new ObservationStore(db, () => now);
-  store.record(fact('chat:s:evt-1'));
-  store.record(fact('segment:s:t:1'));
-  store.record(fact('source:team_tasks:t1'));
-  now += 91 * 24 * 3600000;
-  expect(store.prune()).toBe(3);
-  const keys = (db.prepare('SELECT source_key FROM process_observation_keys ORDER BY source_key').all() as { source_key: string }[]).map(row => row.source_key);
-  expect(keys).toEqual(['source:team_tasks:t1']);
-  expect(store.record(fact('source:team_tasks:t1'))).toBeNull();
-  db.close();
-});
+// compact-observation-detail T3: the ledger holds durable-source keys only.
+const ledger = (db: Database) => (db.prepare('SELECT source_key FROM process_observation_keys ORDER BY source_key').all() as { source_key: string }[]).map(row => row.source_key);
+const T3 = [
+  { id: 'K1', keys: ['usage:s:t', 'source:team_tasks:t1', 'acceptance:r1', 'first-acceptance:task'], durable: true },
+  { id: 'K2', keys: ['chat:s:evt-1', 'turn-end:s:t', 'context:s:u', 'settings:s:u', 'compaction:s:b', 'gap:u', 'restart-gap:s:t', 'turn:1'], durable: false },
+];
+for (const row of T3) {
+  for (const key of row.keys) {
+    // @covers: process-observations › Observation keys and team scope are stored once › Durable source after pruning
+    // @covers: process-observations › Observation keys and team scope are stored once › Duplicate chat event
+    test(`T3 ${row.id}: ${key} is deduplicated ${row.durable ? 'by the retained ledger' : 'by its row alone'}`, () => {
+      const db = schemaDb();
+      let now = Date.parse(at);
+      const store = new ObservationStore(db, () => now);
+      expect(isDurableObservationKey(key)).toBe(row.durable);
+      expect(store.record(fact(key))).not.toBeNull();
+      expect(ledger(db)).toEqual(row.durable ? [key] : []);
+      expect(store.record(fact(key))).toBeNull();
+      expect(db.prepare('SELECT count(*) AS n FROM process_observations').get()).toEqual({ n: 1 });
+      now += 91 * 24 * 3600000;
+      expect(store.prune()).toBe(1);
+      expect(ledger(db)).toEqual(row.durable ? [key] : []);
+      // A durable source is never recorded twice; a live-chat key is never replayed once pruned.
+      expect(store.record(fact(key)) === null).toBe(row.durable);
+      db.close();
+    });
+  }
+}
 test('interval detail prunes after 14 days while facts and usage keep 90 days', () => {
   const db = schemaDb();
   let now = Date.parse(at);

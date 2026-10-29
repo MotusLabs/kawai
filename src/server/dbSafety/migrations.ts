@@ -35,6 +35,7 @@ import { planSupervisionMigration } from '../plans/decisions/decisionSchema'
 import { revisionControlMigration } from '../plans/revisionControl/revisionControlSchema'
 import { planWorkspaceMigration } from '../plans/workspace/workspaceSchema'
 import { resultChecksMigration } from '../verification/verificationSchema'
+import { compactObservationDetailMigration } from '../metrics/observations/compactMigration'
 import type { BackupFile } from './backupFiles'
 import type { BackupOutcome } from './backups'
 
@@ -100,6 +101,10 @@ export const MIGRATIONS: readonly Migration[] = [
   // independent-verification D4: result checks, coverage maps, and the
   // results' coverage column. Additive, no backfill.
   resultChecksMigration,
+  // compact-observation-detail D6: drops per-segment activity, tool and
+  // request start rows, unmatched resolutions, the team association table,
+  // non-durable ledger keys, and two unread indexes.
+  compactObservationDetailMigration,
 ]
 
 export const RESTORE_DOC = 'docs/operations/database-backups.md'
