@@ -99,3 +99,32 @@ The `task_get` and `task_journal_read` descriptions, the system prompt's task no
 #### Scenario: Header stops promising the full journal
 - **WHEN** task mail is delivered
 - **THEN** its header names the bounded `task_get` and `task_journal_read` rather than a full journal
+
+### Requirement: Agents without the journal reader are told to stop
+The team prompt's task note SHALL tell every agent, whatever its group, that `task_get` is bounded on every call whatever a tool description says, to check the journal bounds and preview cuts, and, if `task_journal_read` is not among its tools, to stop before conclusions needing omitted entries or bytes and ask for a fresh Codex chat, never reading the journal another way. Codex SHALL get it on thread start and resume. This is guidance, not enforcement.
+
+#### Scenario: Prompt tells every agent how to read without the reader
+- **WHEN** an agent with any group, or none, starts with the team prompt
+- **THEN** its task note says `task_get` is bounded on every call and names the bounds to check
+- **AND** it says that without `task_journal_read` the agent stops before conclusions needing omitted entries or bytes and asks for a fresh Codex chat, and never reads the journal through the database, logs, the shell, or files
+
+#### Scenario: A Codex thread keeps its start tools and gets the current guidance
+- **WHEN** a Codex chat starts a thread and is later resumed by a restarted server
+- **THEN** the start registers the current task tools, including the paged `task_get` and `task_journal_read`
+- **AND** the resume registers no tools, and both pass the current team prompt with that guidance as developer instructions
+
+### Requirement: Delivered task context stays compatible across header generations
+A delivered task envelope SHALL record its task-header generation: an absent `taskHeaderVersion` is the legacy generation 1, and new task envelopes carry generation 2. Parsing SHALL rebuild the header only with the recorded generation's renderer, so task mail recorded before the bounded header still parses and its receipt stays found. An unknown or non-integer version, a version without a task, or a header not matching its version SHALL NOT parse.
+
+#### Scenario: Task mail recorded before the bounded header
+- **WHEN** a task envelope with journal entries and no version, recorded before the change, is read after it
+- **THEN** it parses to its message id and peer body, and its receipt is found
+- **AND** if it was pushed and not yet settled, reconciliation completes it as delivered rather than returning it to the queue
+
+#### Scenario: Current task mail carries its generation
+- **WHEN** task mail is delivered after the change
+- **THEN** its metadata carries generation 2 and its header is the bounded one, and it parses back to the same message
+
+#### Scenario: Mismatched or unknown generation
+- **WHEN** an envelope's version is unknown or not an integer, is set without a task, or does not match the header it carries
+- **THEN** it does not parse as delivered mail

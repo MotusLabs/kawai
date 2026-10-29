@@ -403,6 +403,13 @@ export class MailboxStore {
     return this.select('task_id = $taskId', { $taskId: taskId })
   }
 
+  /** The newest `limit` messages of a task in any state, oldest first (bounded-log-reads D4). */
+  forTaskNewest(taskId: string, limit: number): TeamMessage[] {
+    const rows = this.cachedStatement('SELECT * FROM team_messages WHERE task_id = $taskId ORDER BY created_at DESC, rowid DESC LIMIT $limit')
+      .all({ $taskId: taskId, $limit: limit }) as Record<string, unknown>[]
+    return rows.reverse().map(mapRow)
+  }
+
   /** Urgent direct mail held for a session's pending request. */
   awaitingRequestFor(sessionId: string): TeamMessage[] {
     return this.select(`state = 'awaiting-request' AND to_kind = 'session' AND to_id = $sessionId`, {
