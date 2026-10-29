@@ -16,7 +16,7 @@ import path from 'node:path'
 import type { ChatEvent } from '../../shared/chat'
 import { ChatSessionManager } from '../chat/ChatSessionManager'
 import { fixtureQueryFactory } from '../chat/developmentFixture'
-import { initDatabase, type SessionDatabase } from '../db'
+import { initDatabase } from '../db'
 import { logger } from '../logger'
 import { SessionRegistry } from '../SessionRegistry'
 import { resolveTeam } from '../team/teamIdentity'
@@ -45,35 +45,38 @@ function lcg(seed: number) {
   }
 }
 
-describe('agent starts await the async history load', () => {
-  let tempDir: string
-  let project: string
-  let db: SessionDatabase
-  let manager: ChatSessionManager | null
-  let spawns: number
-  const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
-  const restores: Array<{ mockRestore(): void }> = []
+const texts = (events: ChatEvent[]) => events.flatMap(event =>
+  event.type === 'user_message' ? [event.text] : event.type === 'peer_message' ? [event.body] : [])
 
-  beforeEach(() => {
-    tempDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-start-history-')))
-    project = path.join(tempDir, 'proj')
-    fs.mkdirSync(project)
-    process.env.CLAUDE_CONFIG_DIR = path.join(tempDir, 'claude')
-    db = initDatabase({ path: path.join(tempDir, 'test.db') })
-    spawns = 0
-    manager = null
-  })
-  afterEach(() => {
+/** One invocation owns its continuations until teardown has drained them. */
+function createOwner() {
+  const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
+  const tempDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-start-history-')))
+  const project = path.join(tempDir, 'proj')
+  const configDir = path.join(tempDir, 'claude')
+  fs.mkdirSync(project)
+  process.env.CLAUDE_CONFIG_DIR = configDir
+  const db = initDatabase({ path: ':memory:' })
+  let manager: ChatSessionManager | null = null
+  let spawns = 0
+  let cancelled = false
+  let concurrent = 0
+  const restores: Array<{ mockRestore(): void }> = []
+  const releases = new Set<() => void>()
+  const pending = new Set<Promise<unknown>>()
+
+  const track = <T>(operation: Promise<T>): Promise<T> => {
+    pending.add(operation)
+    const forget = () => { pending.delete(operation) }
+    void operation.then(forget, forget)
+    return operation
+  }
+  const restoreSpies = () => {
     for (const spy of restores.splice(0)) spy.mockRestore()
-    manager?.shutdown()
-    db.close()
-    if (originalConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
-    else process.env.CLAUDE_CONFIG_DIR = originalConfigDir
-    fs.rmSync(tempDir, { recursive: true, force: true })
-  })
+  }
 
   /** Built after seeding: the manager registers persisted rows when it starts. */
-  const boot = async () => {
+  const boot = () => track((async () => {
     const created = new ChatSessionManager({
       db, registry: new SessionRegistry(), onEvent: () => {}, profileCatalogHome: tempDir, authCheck: () => true,
       queryFactory: params => { spawns += 1; return fixtureQueryFactory(params) }, isDirectory: () => true,
@@ -81,12 +84,12 @@ describe('agent starts await the async history load', () => {
     manager = created
     await created.whenRestored()
     return created
-  }
+  })())
   const internals = () => manager as unknown as Internals
   /** An idle chat with an SDK id whose transcript holds one earlier exchange. */
   const seeded = () => {
     const sdkSessionId = crypto.randomUUID()
-    const dir = path.join(process.env.CLAUDE_CONFIG_DIR!, 'projects', 'proj')
+    const dir = path.join(configDir, 'projects', 'proj')
     fs.mkdirSync(dir, { recursive: true })
     const file = path.join(dir, `${sdkSessionId}.jsonl`)
     fs.writeFileSync(file, transcript())
@@ -100,8 +103,12 @@ describe('agent starts await the async history load', () => {
   }
   /** Counts async opens and sync whole-file reads of `file`; opens wait on the gate while held. */
   const watch = (file: string, options: { held?: boolean } = {}) => {
-    let release!: () => void
-    const gate = options.held ? new Promise<void>(resolve => { release = resolve }) : Promise.resolve()
+    let releaseGate: (() => void) | undefined
+    const gate = options.held ? new Promise<void>(resolve => { releaseGate = resolve }) : Promise.resolve()
+    const release = () => { releaseGate?.(); releases.delete(release) }
+    // A body resuming during cleanup must not introduce a new held gate.
+    if (options.held && !cancelled) releases.add(release)
+    else release()
     const counts = { opens: 0, syncReads: 0 }
     const open = fsp.open.bind(fsp)
     restores.push(spyOn(fsp, 'open').mockImplementation((async (target: Parameters<typeof fsp.open>[0], ...rest: unknown[]) => {
@@ -113,39 +120,69 @@ describe('agent starts await the async history load', () => {
       if (String(target) === file) counts.syncReads += 1
       return (readFileSync as (...args: unknown[]) => unknown)(target, ...rest)
     }) as typeof fs.readFileSync))
-    return { counts, release: () => release?.() }
+    return { counts, release }
   }
-  const eventually = async (check: () => boolean) => {
-    for (let i = 0; i < 300 && !check(); i += 1) await Bun.sleep(10)
-    expect(check()).toBe(true)
-  }
+  const eventually = (check: () => boolean) => track((async () => {
+    for (let i = 0; i < 300 && !cancelled && !check(); i += 1) await Bun.sleep(10)
+    if (!cancelled) expect(check()).toBe(true)
+  })())
   /** Direct human mail to the chat: delivery runs the mailbox's prepare. */
   /** Pushed into the driver: receipt needs a transcript row the fixture never writes. */
   const pushed = (id: string) => manager!.mailbox.store.get(id)?.pushedAt != null
-  const mail = async (sessionId: string, body: string) => {
+  const mail = (sessionId: string, body: string) => track((async () => {
     const team = await resolveTeam(project)
     return manager!.mailbox.send({ kind: 'human', team }, { to_kind: 'session', to_id: sessionId, body })
-  }
-  const texts = (events: ChatEvent[]) => events.flatMap(event =>
-    event.type === 'user_message' ? [event.text] : event.type === 'peer_message' ? [event.body] : [])
+  })())
 
   /** Other starters running beside this one in a P2 sequence. */
-  let concurrent = 0
   const starters: Record<string, (sessionId: string) => Promise<unknown>> = {
-    send: sessionId => manager!.send(sessionId, 'next question'),
-    start: sessionId => manager!.start(sessionId),
-    prepare: async sessionId => {
+    send: sessionId => track(manager!.send(sessionId, 'next question')),
+    start: sessionId => track(manager!.start(sessionId)),
+    prepare: sessionId => track((async () => {
       const sent = await mail(sessionId, 'mail body')
       await manager!.dispatcher.settled()
       // Alone, the mail is pushed; behind another starter's turn it waits,
       // but its pass (and so prepare) has run either way.
       if (concurrent === 0) await eventually(() => pushed(sent.id))
-    },
+    })()),
   }
 
-  for (const [name, run] of Object.entries(starters)) {
+  const cleanup = async () => {
+    cancelled = true
+    for (const release of releases) release()
+    // A rejected Promise.all may leave siblings that create more owned work.
+    while (pending.size > 0) await Promise.allSettled([...pending])
+    await manager?.dispatcher.settled()
+    concurrent = 0
+    manager?.shutdown()
+    restoreSpies()
+    db.close()
+    if (originalConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = originalConfigDir
+    fs.rmSync(tempDir, { recursive: true, force: true })
+  }
+  return {
+    boot, seeded, watch, eventually, mail, starters, internals, track, restores, restoreSpies, cleanup,
+    get spawns() { return spawns },
+    get cancelled() { return cancelled },
+    set concurrent(value: number) { concurrent = value },
+  }
+}
+
+describe('agent starts await the async history load', () => {
+  let owner: ReturnType<typeof createOwner>
+  beforeEach(() => { owner = createOwner() })
+  afterEach(() => owner.cleanup())
+  const owned = (body: (invocation: typeof owner) => Promise<void>) => () => {
+    const invocation = owner
+    return invocation.track(body(invocation))
+  }
+
+  for (const name of ['send', 'start', 'prepare']) {
     // @covers: chat-sessions › Agent starts load history without blocking the server › Mail delivery to a chat with a very large history
-    test(`S1 ${name} reads the history once, asynchronously, before the driver starts`, async () => {
+    test(`S1 ${name} reads the history once, asynchronously, before the driver starts`, owned(async invocation => {
+      const { seeded, boot, watch, eventually, internals, starters } = invocation
+      const run = starters[name]
       const { sessionId, file } = seeded()
       await boot()
       const reads = watch(file, { held: true })
@@ -158,27 +195,30 @@ describe('agent starts await the async history load', () => {
       await running
       expect(internals().drivers.has(sessionId)).toBe(true)
       expect(reads.counts).toEqual({ opens: 1, syncReads: 0 })
-    })
+    }))
 
-    test(`S2 ${name} with the memo present reads nothing`, async () => {
+    test(`S2 ${name} with the memo present reads nothing`, owned(async invocation => {
+      const { seeded, boot, watch, internals, starters, track } = invocation
+      const run = starters[name]
       const { sessionId, file } = seeded()
       const manager = await boot()
-      await manager.loadHistory(sessionId)
+      await track(manager.loadHistory(sessionId))
       const reads = watch(file)
       await run(sessionId)
       expect(internals().drivers.has(sessionId)).toBe(true)
       expect(reads.counts).toEqual({ opens: 0, syncReads: 0 })
-    })
+    }))
   }
 
   // @covers: chat-sessions › Agent starts load history without blocking the server › A message sent while the history is loading
-  test('S3 a send while prepare’s load is in flight shares it: one read, one driver, the history once', async () => {
+  test('S3 a send while prepare’s load is in flight shares it: one read, one driver, the history once', owned(async invocation => {
+    const { seeded, boot, watch, mail, eventually, track } = invocation
     const { sessionId, file } = seeded()
     const manager = await boot()
     const reads = watch(file, { held: true })
     const sent = await mail(sessionId, 'mail body')
     await eventually(() => reads.counts.opens === 1)
-    const sending = manager.send(sessionId, 'next question')
+    const sending = track(manager.send(sessionId, 'next question'))
     await Bun.sleep(30)
     reads.release()
     expect(await sending).toEqual({ ok: true })
@@ -187,18 +227,19 @@ describe('agent starts await the async history load', () => {
     await manager.dispatcher.settled()
     expect(manager.mailbox.store.get(sent.id)?.state).toBe('queued')
     expect(reads.counts).toEqual({ opens: 1, syncReads: 0 })
-    expect(spawns).toBe(1)
+    expect(invocation.spawns).toBe(1)
     const shown = texts(manager.getSnapshot(sessionId)!.events)
     expect(shown.filter(text => text === 'earlier question')).toHaveLength(1)
     expect(shown.indexOf('earlier question')).toBeLessThan(shown.indexOf('next question'))
-  })
+  }))
 
   for (const name of ['send', 'start'] as const) {
-    test(`S4 a kill during ${name}’s load writes no memo and ${name} reports the session gone`, async () => {
+    test(`S4 a kill during ${name}’s load writes no memo and ${name} reports the session gone`, owned(async invocation => {
+      const { seeded, boot, watch, eventually, internals, track } = invocation
       const { sessionId, file } = seeded()
       const manager = await boot()
       const reads = watch(file, { held: true })
-      const running = (name === 'send' ? manager.send(sessionId, 'next') : manager.start(sessionId)) as Promise<{ ok: boolean; error?: string }>
+      const running = track((name === 'send' ? manager.send(sessionId, 'next') : manager.start(sessionId)) as Promise<{ ok: boolean; error?: string }>)
       await eventually(() => reads.counts.opens === 1)
       expect(manager.kill(sessionId)).toBe(true)
       reads.release()
@@ -207,11 +248,12 @@ describe('agent starts await the async history load', () => {
       expect(result.error).toContain('Unknown chat session')
       expect(internals().snapshotHistory.has(sessionId)).toBe(false)
       expect(internals().drivers.has(sessionId)).toBe(false)
-      expect(spawns).toBe(0)
-    })
+      expect(invocation.spawns).toBe(0)
+    }))
   }
 
-  test('S4 a kill during prepare’s load writes no memo, starts no driver, and the mail dies unpushed', async () => {
+  test('S4 a kill during prepare’s load writes no memo, starts no driver, and the mail dies unpushed', owned(async invocation => {
+    const { seeded, boot, watch, mail, eventually, internals, restores } = invocation
     const { sessionId, file } = seeded()
     const manager = await boot()
     const warn = spyOn(logger, 'warn')
@@ -233,31 +275,37 @@ describe('agent starts await the async history load', () => {
     expect([row?.state, row?.reason, row?.claimedBy ?? null, row?.pushedAt ?? null]).toEqual(['dead', 'killed-recipient', null, null])
     expect(internals().snapshotHistory.has(sessionId)).toBe(false)
     expect(internals().drivers.has(sessionId)).toBe(false)
-    expect(spawns).toBe(0)
+    expect(invocation.spawns).toBe(0)
     expect(reads.counts).toEqual({ opens: 1, syncReads: 0 })
-  })
+  }))
 
   // @covers: chat-sessions › Agent starts load history without blocking the server › History is unchanged
-  test('P2 seeded concurrent starters never read a history file synchronously', async () => {
+  test('P2 seeded concurrent starters never read a history file synchronously', owned(async invocation => {
+    const { seeded, boot, watch, starters, restoreSpies } = invocation
     const chats = Array.from({ length: 30 }, () => seeded())
     const manager = await boot()
     const pick = lcg(0x57a7)
     const names = Object.keys(starters)
+    let completed = 0
     for (let sequence = 0; sequence < 30; sequence += 1) {
+      if (invocation.cancelled) break
       const { sessionId, file } = chats[sequence]
       const reads = watch(file)
       const order = Array.from({ length: 1 + pick(4) }, () => names[pick(names.length)])
-      concurrent = order.length - 1
+      invocation.concurrent = order.length - 1
       await Promise.all(order.map(name => starters[name](sessionId)))
-      concurrent = 0
+      invocation.concurrent = 0
       const context = `sequence ${sequence}: ${order.join(', ')}`
       expect([context, reads.counts]).toEqual([context, { opens: 1, syncReads: 0 }])
       expect([context, texts(manager.getSnapshot(sessionId)!.events).filter(t => t === 'earlier question').length]).toEqual([context, 1])
-      for (const spy of restores.splice(0)) spy.mockRestore()
+      completed += 1
+      restoreSpies()
     }
-  })
+    expect(completed).toBe(30)
+  }))
 
-  test('the synchronous guard logs when a caller skipped the await', async () => {
+  test('the synchronous guard logs when a caller skipped the await', owned(async invocation => {
+    const { seeded, boot, restores } = invocation
     const { sessionId } = seeded()
     const manager = await boot()
     const debug = spyOn(logger, 'debug')
@@ -266,5 +314,5 @@ describe('agent starts await the async history load', () => {
     expect(texts(manager.getSnapshot(sessionId)!.events)).toEqual(['earlier question'])
     const logged = debug.mock.calls.filter(call => call[0] === 'chat_history_sync_capture')
     expect(logged).toEqual([['chat_history_sync_capture', { sessionId, runtime: 'claude' }]])
-  })
+  }))
 })
