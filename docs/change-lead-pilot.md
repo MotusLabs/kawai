@@ -184,7 +184,7 @@ coordinator's agreement is not review evidence. Each submitted result gets
 2. **Review child.** The Change Lead creates a review child task for it, with
    acceptance = findings bound to the exact result id and commit.
 3. **Group dispatch to a cross-model reviewers group.** Group mail goes to
-   `reviewers-mimo` for Claude-written work, `reviewers-claude` otherwise, so
+   `reviewers-opus` for GPT-written work, `reviewers-sol` otherwise, so
    review is always cross-model; the lead role's routing rules apply. A
    session-targeted `task_handoff` (`target_kind: session`) is used only when
    an eligible reviewer session already exists.
@@ -477,8 +477,8 @@ change; the Team Lead records enrollment, baseline, window, and quota pool
 in the parent before the first dispatch.
 
 **Owner actions before activation.** Add the Section 4 exception paragraph,
-verbatim, to the user-level `~/.kawai/groups/reviewers-claude.md` and
-`~/.kawai/groups/reviewers-mimo.md`, so per-task reviewers report pilot
+verbatim, to the user-level `~/.kawai/groups/reviewers-sol.md` and
+`~/.kawai/groups/reviewers-opus.md`, so per-task reviewers report pilot
 findings to the named coordinator like repository roles do (I1). Role and
 doc changes reach agents only from the main checkout at each agent's next
 start; once this change lands, move any untracked owner copy of
