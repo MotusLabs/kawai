@@ -11,7 +11,9 @@
 //    version 1 `baseline`;
 // 5. apply each pending migration in order, each gated on its checked
 //    `pre-migration-<n>` backup, its `up(db)` and version row committed in
-//    one `BEGIN IMMEDIATE` transaction.
+//    one `BEGIN IMMEDIATE` transaction;
+// 6. then `initDatabase` compacts once into incremental auto_vacuum
+//    (`compaction.ts`), outside any transaction.
 // A later schema change is the next entry in MIGRATIONS (versions dense from
 // 2), never an edit to the baseline (E5).
 import type { Database } from 'bun:sqlite'

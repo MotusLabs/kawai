@@ -11,6 +11,7 @@ import { parseApprovalPolicy } from './chat/approvalPolicy'
 import { resolveProjectPath } from './paths'
 import { DatabaseBackups } from './dbSafety/backups'
 import { migrateSchema, type Migration } from './dbSafety/migrations'
+import { compactDatabase } from './dbSafety/compaction'
 
 export interface AgentSessionRecord {
   id: number
@@ -227,6 +228,8 @@ export function initDatabase(
     db.close()
     throw error
   }
+  // After the migrations, before serving: incremental auto_vacuum (never throws).
+  compactDatabase(db)
 
   const insertStmt = db.prepare(
     `INSERT INTO agent_sessions
