@@ -45,47 +45,47 @@ Groups 1–2 are the first production path. Groups 3–5 follow under a later ta
 
 Groups 3–5 land in two steps (design D7, Sequencing): an unwired store and service checkpoint (3.1–3.3, 3.6, 4.1, P4, and the store and service rows), then one atomic registration commit (3.4, 3.5, 4.2, 4.3's adapter rows, and group 5). No item is ticked for a partial API.
 
-- [ ] 3.1 Add `AgentTaskDetail`, the journal preview entry, and the bounds types to `src/shared/teamTasks.ts`.
+- [x] 3.1 Add `AgentTaskDetail`, the journal preview entry, and the bounds types to `src/shared/teamTasks.ts`.
   - Verify: `bun run typecheck`.
-- [ ] 3.2 Add the windowed queries to `TaskStore` and `mailboxStore`:
+- [x] 3.2 Add the windowed queries to `TaskStore` and `mailboxStore`:
   - journal rows with `length(CAST(text AS BLOB))` and `substr(CAST(text AS BLOB), 1, 2000)`, anchored on `(created_at, rowid)`;
   - newest subtasks and messages with `LIMIT`;
   - the three counts;
   - all in one synchronous read transaction.
   - Verify: store tests over `schemaDb()`, including entries that share a `created_at` and entries holding NUL.
-- [ ] 3.3 Add `TaskService.agentGet` with the optional agent window, returning `AgentTaskDetail` with the seal (generalized over any detail with results) applied after.
+- [x] 3.3 Add `TaskService.agentGet` with the optional agent window, returning `AgentTaskDetail` with the seal (generalized over any detail with results) applied after.
   - Leave `TaskService.get` and the human `team-task-detail` path on `humanDetail` unchanged.
   - Verify: T15 holds.
-- [ ] 3.4 Extend the `task_get` schema with `journal_before` and `journal_limit` (integer 1–200, default 50, one explicit range message) and the refusal `Unknown journal entry for this task: <id>`, routing it to `agentGet`.
+- [x] 3.4 Extend the `task_get` schema with `journal_before` and `journal_limit` (integer 1–200, default 50, one explicit range message) and the refusal `Unknown journal entry for this task: <id>`, routing it to `agentGet`.
   - Verify: the `taskTools` tests pass for both arguments.
-- [ ] 3.5 Commit table T1–T16 verbatim (including the WP preview rows T-small, T-invalid, and T-large-readable) as a table-driven test through both the Claude (`createMailboxServer`) and the Codex (`dispatchTeamToolCall`) adapters. Refusal rows assert each adapter's own envelope.
+- [x] 3.5 Commit table T1–T16 verbatim (including the WP preview rows T-small, T-invalid, and T-large-readable) as a table-driven test through both the Claude (`createMailboxServer`) and the Codex (`dispatchTeamToolCall`) adapters. Refusal rows assert each adapter's own envelope.
   - Verify: the test passes, and with the test-side query observer, scoped as in design M4 and M5, it kills mutants M4 (windows taken from a full load) and M5 (whole text cut in JavaScript).
-- [ ] 3.6 Add property P3 (seed `0x7461736b`, 200 cases).
+- [x] 3.6 Add property P3 (seed `0x7461736b`, 200 cases).
   - Verify: it passes and kills the mutant "tie-break on `rowid` dropped".
 
 ## 4. `task_journal_read` (D6, later revision)
 
-- [ ] 4.1 Add the entry reader to `TaskStore` and `TaskService` (ownership check, then the one `substr` statement), with the trimming and decoding rules of D6.
+- [x] 4.1 Add the entry reader to `TaskStore` and `TaskService` (ownership check, then the one `substr` statement), with the trimming and decoding rules of D6.
   - Verify: store and service tests for each D6 rule.
-- [ ] 4.2 Register `task_journal_read` in the shared tool table with its schema (`offset_bytes` a safe non-negative integer, default 0) and description.
+- [x] 4.2 Register `task_journal_read` in the shared tool table with its schema (`offset_bytes` a safe non-negative integer, default 0) and description.
   - Verify: both adapters list it.
-- [ ] 4.3 Commit table R1–R10 verbatim through both adapters, and add property P4 (seed `0x6a726e6c`, 200 cases).
+- [x] 4.3 Commit table R1–R10 verbatim through both adapters, and add property P4 (seed `0x6a726e6c`, 200 cases).
   - Verify: every row holds and the property passes.
 
 ## 5. Agent-facing surfaces (D7, later revision)
 
-- [ ] 5.1 Update the `task_get` description, the task note in `teamPrompt.ts`, the delivered header line in `taskContext.ts`, and the task-tools facts in `docs/architecture/tasks.md` (not root `AGENTS.md`) so none promises the full journal and each names `journal_before`, `journal_limit`, and `task_journal_read`. The task note also carries the catalogue-upgrade guidance (design D7): `task_get` is bounded on every call, and an agent without the reader stops before conclusions needing omitted entries or bytes and asks for a fresh Codex chat; the docs state the start-pinned Codex catalogue.
+- [x] 5.1 Update the `task_get` description, the task note in `teamPrompt.ts`, the delivered header line in `taskContext.ts`, and the task-tools facts in `docs/architecture/tasks.md` (not root `AGENTS.md`) so none promises the full journal and each names `journal_before`, `journal_limit`, and `task_journal_read`. The task note also carries the catalogue-upgrade guidance (design D7): `task_get` is bounded on every call, and an agent without the reader stops before conclusions needing omitted entries or bytes and asks for a fresh Codex chat; the docs state the start-pinned Codex catalogue.
   - Verify: the prompt and header tests pass with the new text, and row V8 through the real Codex start and resume.
-- [ ] 5.2 Update every enumeration test over the task tool names, and confirm the new name composes with tool-metrics normalization without an import cycle.
+- [x] 5.2 Update every enumeration test over the task tool names, and confirm the new name composes with tool-metrics normalization without an import cycle.
   - Verify: the enumeration tests pass.
-- [ ] 5.3 Version the delivered task header (design D7, C1): `taskHeaderVersion` in the envelope metadata (absent is the legacy generation 1, current is 2), the legacy renderer kept byte-exact, and `formatEnvelope`/`parseEnvelope` choosing the renderer by version. Lands with 5.1's header line.
+- [x] 5.3 Version the delivered task header (design D7, C1): `taskHeaderVersion` in the envelope metadata (absent is the legacy generation 1, current is 2), the legacy renderer kept byte-exact, and `formatEnvelope`/`parseEnvelope` choosing the renderer by version. Lands with 5.1's header line.
   - Verify: rows V1–V7 through `parseEnvelope`, both receipt extractors, transcript replay, and `reconcileMailbox`, with legacy fixtures as literal base `567ec21e` bytes.
 
 ## 6. Integration
 
-- [ ] 6.1 Run `bun run check` on the clean committed tree for each submitted result.
+- [x] 6.1 Run `bun run check` on the clean committed tree for each submitted result.
   - Verify: it records a pass.
-- [ ] 6.2 Produce the oracle map in each result: every in-scope row of WX, WE, WG, WC, O, T (including WP), R, and V, each of P1–P4, and each of M1–M5, with its test title and killed mutant. Rows belonging to a later revision are listed as deferred.
+- [x] 6.2 Produce the oracle map in each result: every in-scope row of WX, WE, WG, WC, O, T (including WP), R, and V, each of P1–P4, and each of M1–M5, with its test title and killed mutant. Rows belonging to a later revision are listed as deferred.
   - Verify: every id is mapped or deferred. No RSS or memory threshold is claimed.
 
 ## Workflow follow-up
