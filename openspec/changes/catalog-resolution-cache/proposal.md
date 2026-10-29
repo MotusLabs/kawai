@@ -24,6 +24,8 @@ every lookup resolves the whole catalog again.
 - Eviction is least-recently-used and bounded, never a full clear.
 - Time-zone validity (`isResetTimeZone`) is memoized per zone string: a zone
   name's validity does not change while the server runs.
+- The mailbox's recipient sweep runs in one synchronous catalog snapshot, so
+  each distinct context computes its key once per sweep.
 - No behavior changes. Catalog contents, errors, freshness after an edit,
   and every consumer's results stay the same.
 
@@ -46,4 +48,5 @@ None. This is a performance change with no spec-level behavior change
 - `src/server/chat/ChatSessionManager.ts`: `providerDefinitionOf` uses the
   shared memo.
 - `src/server/chat/limitSignals.ts`: the memoized `isResetTimeZone`.
+- `src/server/team/sessionMailbox.ts`: the recipient sweep's snapshot.
 - `docs/architecture/`: the profile catalog bullet notes the memo.

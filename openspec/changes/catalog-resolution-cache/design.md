@@ -68,18 +68,32 @@ re-resolve once per edit.
 - The memo hands out the catalog object it holds. Consumers already treat
   the result as read-only; a test pins that no consumer mutates it.
 
-### D3 — Memoized zone validity, measured stat cost
+### D3 — Memoized zone validity, a snapshot for repeated lookups
 
 - `isResetTimeZone` caches its answer per zone string in a `Map`, bounded at
   256 entries. Fixed offsets are parsed without `Intl`, as today.
   `offsetMinutes` itself stays per call, because the offset depends on the
   instant, so DST reset times keep their meaning.
-- After D1–D2, re-profile the scratch boot.
-  - If `profileCatalogStamp`/`profileCatalogLevels` stats still exceed 5% of
-    busy samples, memoize `projectCatalogFiles`' realpath per raw path for
-    one dispatch pass.
-  - Otherwise leave them as they are, and record the measurement in the
-    result.
+- After D1–D2, re-profile the scratch boot. The original plan was: if the
+  key's stats still exceed 5% of busy samples, memoize `projectCatalogFiles`'
+  realpath per raw path for one dispatch pass.
+- Measured on 2026-10-29, with Claude and Codex stubs that pass the version
+  check and then idle: after D1–D2 the key's stats were 7.40% of busy
+  samples. `statSync` on each level file, not realpath, made up most of it,
+  and 1,223 of the 1,374 catalog samples came from the mailbox's recipient
+  sweep. Every session's cooldown looks up its provider, roughly 14 stats per
+  lookup, and most sessions share a few contexts.
+- So instead of a realpath memo, `withCatalogSnapshot(read)` holds the catalog
+  still for one synchronous read. Inside it, each distinct raw context
+  computes its key once and repeats reuse the entry; a nested call joins the
+  open snapshot. The mailbox wraps its `recipients()` sweep in one. The
+  snapshot ends with the read, so an edit still applies at the next lookup
+  after it, and freshness outside a sweep is unchanged. A synchronous scope
+  cannot leak across awaits, and the parameter type refuses a promise.
+
+*Alternative:* a per-dispatch-pass key cache. Rejected: the pass awaits
+between its steps, so a cache living across it would delay edits by a whole
+pass and needs explicit invalidation; the sweep is where the repeats are.
 
 ## Acceptance oracles
 
@@ -102,6 +116,15 @@ re-resolve once per edit.
 |---|---|---|
 | E1 | 65 distinct keys, then the first | the first resolves again (evicted) |
 | E2 | 64 keys, touch the first, add one | the first stays; the second is evicted |
+
+### Table N — synchronous snapshot (`withCatalogSnapshot`)
+
+| id | sequence | result |
+|---|---|---|
+| N1 | 50 lookups of one context inside a snapshot | the key's stats run once (as many as one lookup outside) |
+| N2 | lookups of two contexts reaching different files inside one snapshot | each sees its own catalog |
+| N3 | a file edited inside a snapshot, then a lookup after it | unseen inside, seen at the first lookup after |
+| N4 | a snapshot opened inside an open one | no new stats; the outer one ends the snapshot |
 
 ### Property P1 — results unchanged
 
