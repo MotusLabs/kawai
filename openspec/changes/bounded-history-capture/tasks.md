@@ -96,6 +96,14 @@ Mutants (one-line edits; at most five per round):
       each copied, decoded, and parsed whole; a standalone replay peaks at
       596 MB and settles at 81 MB after GC. So the peak is far below the old
       one but is not below 2× the retained events.
+    - The gap is allocator retention, not live data. A trace of the
+      standalone replay every 100 MB read shows the JS heap at most 128 MB
+      while RSS climbs to 619 MB, then falls to 85 MB at the end. GC hints
+      every 64 MB of lines change nothing (689 MB); every 16 MB they reach
+      462 MB at 2.7× the time. No parse change brings RSS under 2× the
+      events; the clause as worded cannot pass, and a restated bound (for
+      example, heap under 2× the largest-line working set, or RSS under
+      1 GB) is the human's call.
     - The 10.5–14.8 s stall right after the load is outside this change. The
       profile puts about 4 s in the transcript tail's catch-up
       (`transcriptTitleWatcher.ts` `readAppended`): on agent start it reads
