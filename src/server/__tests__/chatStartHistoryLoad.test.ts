@@ -4,7 +4,8 @@
 // synchronous whole-file read — and start the driver only after it; a memo
 // already taken is not read again; a send racing prepare's load shares it,
 // so one driver starts and the earlier conversation shows once; a kill
-// during the load writes no memo and the starter reports the session gone.
+// during the load writes no memo and the starter reports the session gone —
+// for prepare, the real dispatcher logs its failure and the mail dies unpushed.
 // The synchronous guard left in getSnapshot logs when it reads the file.
 // S5–S6 (the Codex retry rule) live in codexStartHistoryLoad.integration.test.ts.
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
@@ -209,6 +210,32 @@ describe('agent starts await the async history load', () => {
       expect(spawns).toBe(0)
     })
   }
+
+  test('S4 a kill during prepare’s load writes no memo, starts no driver, and the mail dies unpushed', async () => {
+    const { sessionId, file } = seeded()
+    const manager = await boot()
+    const warn = spyOn(logger, 'warn')
+    restores.push(warn)
+    const reads = watch(file, { held: true })
+    const sent = await mail(sessionId, 'mail body')
+    // The dispatcher's pass is inside prepare, waiting on the held load.
+    await eventually(() => reads.counts.opens === 1)
+    expect(manager.mailbox.store.get(sent.id)?.state).toBe('queued')
+    expect(manager.kill(sessionId)).toBe(true)
+    reads.release()
+    await manager.dispatcher.settled()
+    // Prepare's own failure, reported by the real dispatcher: the recipient
+    // went away while its history loaded, so no driver was started for it.
+    const failures = warn.mock.calls.filter(call => call[0] === 'team_mailbox_dispatch_failed')
+      .map(call => String((call[1] as { error: unknown }).error))
+    expect(failures).toEqual(['Error: Recipient disappeared'])
+    const row = manager.mailbox.store.get(sent.id)
+    expect([row?.state, row?.reason, row?.claimedBy ?? null, row?.pushedAt ?? null]).toEqual(['dead', 'killed-recipient', null, null])
+    expect(internals().snapshotHistory.has(sessionId)).toBe(false)
+    expect(internals().drivers.has(sessionId)).toBe(false)
+    expect(spawns).toBe(0)
+    expect(reads.counts).toEqual({ opens: 1, syncReads: 0 })
+  })
 
   // @covers: chat-sessions › Agent starts load history without blocking the server › History is unchanged
   test('P2 seeded concurrent starters never read a history file synchronously', async () => {
