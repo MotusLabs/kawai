@@ -7,7 +7,7 @@
 // memoized permanently: the retry waits for a load where no live turn could
 // be duplicated (the memo is taken before a driver start, so live events must
 // stay ahead of the replay).
-import { afterEach, beforeEach, expect, test } from 'bun:test'
+import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -349,4 +349,42 @@ test('a load while a live turn runs keeps the memo — the replay never duplicat
   expect(userTexts(restored.events)).toEqual(['recent question', 'go again'])
   expect(restored.events.filter(e => e.type === 'user_message')).toHaveLength(2)
   expect(restored.events.some(e => e.type === 'notice')).toBe(false)
+})
+
+// bounded-history-capture Table S S5: a starter reaches the Codex retry rule
+// through the awaited load — a retryable notice memo with no live events is
+// re-read once, by the async replay alone (no synchronous read of the
+// rollout), before the respawned agent starts. S6, a retryable memo beside
+// live events, is the mid-turn load above: every starter now calls that load.
+test('S5 a start with a retryable memo and no live events re-reads the rollout once, asynchronously', async () => {
+  const script = new Script().boot('thread/start', 'gpt-test', rollout)
+  script.lines.push(...new Script().boot('thread/resume', 'gpt-test', rollout).lines)
+  const id = await startedSession([], script)
+  fs.writeFileSync(rollout, `${turn(NOW, 't2', 'recent question', 'recent answer').join('\n')}\n`)
+  manager!.shutdown()
+
+  fs.rmSync(rollout)
+  manager = createManager([], [])
+  await manager.whenRestored()
+  await manager.loadHistory(id)
+  expect(manager.getSnapshot(id)!.events.map(e => e.type)).toEqual(['notice'])
+
+  fs.writeFileSync(rollout, `${turn(NOW, 't2', 'recent question', 'recent answer').join('\n')}\n`)
+  const opens = spyOn(fs.promises, 'open')
+  const syncReads = spyOn(fs, 'readFileSync')
+  let rolloutOpens: number
+  let rolloutSyncReads: number
+  try {
+    process.env.FAKE_RUN = '2'
+    expect((await manager.start(id)).ok).toBe(true)
+    rolloutOpens = opens.mock.calls.filter(call => String(call[0]) === rollout).length
+    rolloutSyncReads = syncReads.mock.calls.filter(call => String(call[0]) === rollout).length
+  } finally {
+    opens.mockRestore()
+    syncReads.mockRestore()
+  }
+  expect([rolloutOpens, rolloutSyncReads]).toEqual([1, 0])
+  const snapshot = manager.getSnapshot(id)!
+  expect(snapshot.events.some(e => e.type === 'notice')).toBe(false)
+  expect(userTexts(snapshot.events)).toEqual(['recent question'])
 })

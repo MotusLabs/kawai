@@ -967,6 +967,10 @@ export class ChatSessionManager {
       this.retryableHistory.delete(sessionId)
     }
     const record = this.records.get(sessionId)!
+    // Every caller awaits loadHistory first, so reaching the file here means
+    // one skipped the await and read the history synchronously
+    // (bounded-history-capture D1): logged so the caller shows up.
+    logger.debug('chat_history_sync_capture', { sessionId, runtime: record.runtime ?? 'claude' })
     const replay = this.getHistory(sessionId)
     this.snapshotHistory.set(sessionId, replay?.events ?? [])
     if (record.runtime === 'codex' && replay && replay.status !== 'ok') this.retryableHistory.add(sessionId)
@@ -992,15 +996,17 @@ export class ChatSessionManager {
    * awaits, so a killed session's memo is never (re-)written.
    *
    * Memo audit (design D3/D4): the memo IS `snapshotHistory`, and it is not
-   * invalidated on turn completion. captureHistory runs before every driver
+   * invalidated on turn completion. The memo is taken before every driver
    * start (attach, send, start, mailbox prepare), so everything the agent
    * appends to the transcript afterwards is also in `liveEvents`; snapshots
    * are memo + live events, and re-reading the transcript at a turn boundary
    * would duplicate those turns. Only kill drops the memo (with the live
-   * events). A synchronous captureHistory that wins the race (a send landing
-   * while this load awaits IO) keeps its result; this load then discards its
-   * own. getHistory stays synchronous as that fallback for the callers that
-   * must capture before a driver starts without an await (D4).
+   * events). Every driver start — send, start, and the mailbox's prepare —
+   * awaits this load (bounded-history-capture D1); the synchronous
+   * captureHistory stays only as a guard in getSnapshot and getHistoryPage,
+   * whose callers await this load first, and logs a debug line if it ever
+   * reads the file. A capture that wins the race keeps its result; this
+   * load then discards its own.
    */
   async loadHistory(sessionId: string): Promise<void> {
     if (!this.records.has(sessionId)) return
@@ -1154,7 +1160,7 @@ export class ChatSessionManager {
       available: record => record.archivedAt == null && !this.startBlocker(record) && (options.isDirectory ?? isExistingDirectory)(record.projectPath),
       // The same refusal text `available` rejects on, read-only (team-waiting-reasons D2).
       startBlocker: record => this.startBlockerFor(record),
-      prepare: async id => { this.captureHistory(id); const driver = await this.ensureDriver(id); if (!driver) throw new Error('Recipient disappeared'); driver.start() },
+      prepare: async id => { await this.loadHistory(id); const driver = await this.ensureDriver(id); if (!driver) throw new Error('Recipient disappeared'); driver.start() },
       restore: id => { const result = this.restore(id); if (!result.ok) throw new Error(result.error) },
       watchReceipt: id => this.watchSessionTitle(id),
       archive: id => this.archive(id),
@@ -1918,8 +1924,10 @@ export class ChatSessionManager {
    */
   async send(sessionId: string, text: string, workspaceContext?: WorkspaceMessageEnvelope): Promise<ChatActionResult> {
     // Recovery can replace the record's path: finish it before checking the
-    // directory or resolving the launch configuration.
-    this.captureHistory(sessionId)
+    // directory or resolving the launch configuration. Awaited, never the
+    // synchronous capture: a large history must not block the server
+    // (bounded-history-capture D1).
+    await this.loadHistory(sessionId)
     const record = this.records.get(sessionId)
     if (!record) {
       return { ok: false, error: `Unknown chat session ${sessionId}` }
@@ -2025,7 +2033,7 @@ export class ChatSessionManager {
    */
   async start(sessionId: string): Promise<ChatActionResult> {
     // Direct starts need the same recovery ordering as attach and send.
-    this.captureHistory(sessionId)
+    await this.loadHistory(sessionId)
     const record = this.records.get(sessionId)
     if (!record) {
       return { ok: false, error: `Unknown chat session ${sessionId}` }
