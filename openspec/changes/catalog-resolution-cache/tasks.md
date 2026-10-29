@@ -58,9 +58,9 @@ CODEX_HOME omission, which changes Codex provider ids.
 
 ## 3. Integration
 
-- [ ] 3.1 Run `bun run check` on the clean committed tree.
-  - Verify: a recorded full pass.
-- [ ] 3.2 Map every oracle id (K1–K8, E1–E2, N1–N4, P1, P2) to a test title and
+- [x] 3.1 Run `bun run check` on the clean committed tree.
+  - Verify: a recorded full pass. Done: pass record 576e34fc for the tree of 21192854.
+- [x] 3.2 Map every oracle id (K1–K8, E1–E2, N1–N4, P1, P2) to a test title and
   each mutant to its killing test.
   - Verify: the map has no gap.
 
