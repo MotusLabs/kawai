@@ -64,6 +64,51 @@ CODEX_HOME omission, which changes Codex provider ids.
   each mutant to its killing test.
   - Verify: the map has no gap.
 
+## 4. Review follow-up (findings `f4b1ebad`, conditions C1–C6)
+
+Author controls (one-line edits to a disposable copy of the committed tree,
+run by the author; not the formal reviewer's mutants, which the reviewer
+chooses at the next review):
+
+| id | file | control |
+|---|---|---|
+| R10 | `sessionMailbox.ts` | the recipient sweep runs without `withCatalogSnapshot` |
+| R11 | `ChatSessionManager.ts` | `providerDefinitionOf` resolves directly, bypassing the memo |
+| R14 | `ChatSessionManager.ts` | `providerDefinitionOf` clears the shared definitions map |
+| R19 | `ChatSessionManager.ts` | `providerDefinitionOf` writes a nested field of the definition it returns |
+| R16 | `catalogMemo.ts` | the input key omits the image profiles path |
+| R18 | `catalogMemo.ts` | the snapshot's raw context omits the image profiles path |
+
+Structural twins, covered by their own value and count tests but not run as
+controls: R12 (`runtimeFactsOf` bypass) and R13 (balance-key bypass) twin
+R11; R15 and R17 (the providers path) twin R16 and R18.
+
+- [ ] 4.1 B1: row W1 — the real mailbox sweep, the closure the mailbox hands
+  its dispatcher, computes each catalog context's key once per sweep, and a
+  second sweep computes it again.
+  - Verify: the count equals one lookup per context outside any snapshot,
+    anchored to the level count. R10 fails it.
+- [ ] 4.2 B3: rows W2–W4 — `providerDefinitionOf`, `startBlockerFor`
+  (`runtimeFactsOf`), and the usage pull's balance key resolve through the
+  memo.
+  - Verify: after a fresh key, four public calls read the project's catalog
+    file `[1, 0, 0, 0]` times, and each value equals an independent fresh
+    resolution. R11 fails W2.
+- [ ] 4.3 B2: row W5 — no production consumer changes the shared catalog.
+  - Verify: after the sweep (cooldown and label), `providerDefinitionOf` with
+    `quotaReadingOf` on the returned object, `startBlockerFor`, the usage
+    pull, and `providerOf`/`providerLabelOf`, the entry is the same object
+    and equals an alias-free deep baseline from its own resolution, and the
+    lazy projections equal the baseline's. R14 and R19 fail it.
+- [ ] 4.4 B4: rows K9, K11, and N5 vary each image-default path alone, in
+  each regime: default present with different content, default missing
+  (key precision; the fallback results are equal), and user-level files
+  present (defaults unread; precision only).
+  - Verify: R16 fails K11, R18 fails N5.
+- [ ] 4.5 Add Table W and rows K9/K11/N5 to design.md, correct D2 and Risks,
+  and add the B1 and B4 entries to `docs/oracle-hazards.md`.
+- [ ] 4.6 Reopen 3.1 and extend the 3.2 map with the new rows and controls.
+
 ## Workflow follow-up
 
 - Independent of `bounded-boot-restore` and `bounded-history-capture`; it can
