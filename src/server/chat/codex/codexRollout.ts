@@ -21,6 +21,7 @@ import fs from 'node:fs'
 import type { ChatEvent } from '../../../shared/chat'
 import { parseEnvelope } from '../../team/envelope'
 import { historyUnavailable, type TranscriptReplay } from '../transcriptReplay'
+import { readLines } from '../lineReader'
 import type { CodexEventDraft } from './codexEvents'
 
 type Row = Record<string, unknown>
@@ -66,12 +67,22 @@ function outputText(value: unknown): { output: string; isError: boolean } {
 export const canRetryCodexMemo = (retryable: boolean, liveEvents: number): boolean =>
   retryable && liveEvents === 0
 
-export function parseCodexRollout(content: string): ChatEvent[] {
+/** A rollout parser fed one line at a time with its index; `finish` returns the events. */
+export interface RolloutParser {
+  line(line: string, index: number): void
+  finish(): ChatEvent[]
+}
+
+/**
+ * The stateful line consumer behind `parseCodexRollout` (bounded-history-capture
+ * D2). Row ids derive from the line's index among `content.split('\n')`, blank
+ * pieces counted, so a reader must pass that index for ids to stay stable.
+ */
+export function createRolloutParser(): RolloutParser {
   const events: ChatEvent[] = []
   let turnId: string | null = null
   let turnFailed = false
-  const lines = content.split('\n')
-  lines.forEach((line, index) => {
+  const take = (line: string, index: number): void => {
     if (!line.trim()) return
     let row: Row | null
     try { row = record(JSON.parse(line)) } catch { return }
@@ -128,8 +139,14 @@ export function parseCodexRollout(content: string): ChatEvent[] {
       const result = outputText(payload.output)
       push({ type: 'tool_result', turnId, toolCallId: str(payload.call_id) ?? rowId, output: result.output, ...(result.isError ? { isError: true } : {}) })
     }
-  })
-  return events
+  }
+  return { line: take, finish: () => events }
+}
+
+export function parseCodexRollout(content: string): ChatEvent[] {
+  const parser = createRolloutParser()
+  content.split('\n').forEach((line, index) => parser.line(line, index))
+  return parser.finish()
 }
 
 /**
@@ -148,11 +165,12 @@ export function replayCodexRollout(file: string | null | undefined): TranscriptR
   return { status: 'ok', events: parseCodexRollout(content), cwd: null }
 }
 
+/** The async replay streams the rollout through `readLines` (D2): no whole-file string. */
 export async function replayCodexRolloutAsync(file: string | null | undefined): Promise<TranscriptReplay> {
   if (!file) return historyUnavailable('missing')
-  let content: string
-  try { content = await fs.promises.readFile(file, 'utf8') } catch (error) {
+  const parser = createRolloutParser()
+  try { await readLines(file, parser.line) } catch (error) {
     return historyUnavailable((error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'unparseable')
   }
-  return { status: 'ok', events: parseCodexRollout(content), cwd: null }
+  return { status: 'ok', events: parser.finish(), cwd: null }
 }
