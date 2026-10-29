@@ -75,4 +75,5 @@ None.
   - The human UI's task detail.
   - Exact `rg` matching, last-message extraction windows, head identity expansion.
   - Codex history replay and mail-receipt reads of rollouts (event-driven, not periodic).
+- **Existing Codex chats:** a Codex thread keeps the tools it started with, since a resume registers none. A thread started before this change reads the bounded `task_get` without `task_journal_read`. The team prompt tells such an agent to stop before conclusions that need omitted journal entries or bytes and to ask for a fresh Codex chat. This is guidance, not enforcement; no chat is migrated or recreated.
 - **No schema migration and no new dependency.**

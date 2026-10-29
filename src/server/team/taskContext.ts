@@ -2,7 +2,11 @@
 // at delivery, never at send time, so the recipient sees the latest revision
 // and journal even when the task was amended while the mail waited. The
 // journal is bounded — the last five entries, each truncated — to keep peer
-// turns small; `task_get` returns the full record. A task linked to a plan
+// turns small; `task_get` pages the rest and `task_journal_read` returns any
+// entry whole. The header's journal line is versioned
+// (bounded-log-reads-and-task-get D7): generation 1 is the legacy wording,
+// kept byte-exact so recorded envelopes still parse, and generation 2 the
+// bounded one; every other line is shared. A task linked to a plan
 // change (durable-plans D9) adds `plan` with the plan's approved revision at
 // delivery; a task a running execution owns adds `execution` with the
 // revision it runs (plan-execution D7), which may differ from the approved
@@ -40,11 +44,22 @@ export function buildTaskContext(store: TaskStore, taskId: string | null, plans?
   }
 }
 
+export type TaskHeaderVersion = 1 | 2
+/** The generation new task envelopes carry. */
+export const TASK_HEADER_VERSION: TaskHeaderVersion = 2
+
+const JOURNAL_LINES: Record<TaskHeaderVersion, string> = {
+  1: 'Latest journal entries (task_get has the full journal):',
+  2: 'Latest journal entries (task_get pages the journal with journal_before and journal_limit; task_journal_read returns any entry whole):',
+}
+
 /**
- * The readable task header written above the body. Deterministic from the
- * context, so the parser can strip exactly this text back off.
+ * The readable task header of one generation, written above the body.
+ * Deterministic from the context and the version, so the parser can strip
+ * exactly this text back off.
  */
-export function formatTaskHeader(task: ChatPeerTaskContext): string {
+export function formatTaskHeader(task: ChatPeerTaskContext, version: TaskHeaderVersion = TASK_HEADER_VERSION): string {
+  if (!Object.hasOwn(JOURNAL_LINES, version)) throw new Error(`Unknown task header version: ${String(version)}`)
   const lines = [
     `[Task ${task.id}: ${task.title}] status ${task.status}, revision ${task.revision}`,
     ...(task.worktree ? [`Worktree: ${task.worktree}`] : []),
@@ -57,7 +72,7 @@ export function formatTaskHeader(task: ChatPeerTaskContext): string {
     task.direction,
     ...(task.acceptance ? ['Acceptance criteria:', task.acceptance] : []),
     ...(task.journal.length > 0
-      ? ['Latest journal entries (task_get has the full journal):', ...task.journal.map(entry => `- ${entry.createdAt} ${entry.author}: ${entry.text}`)]
+      ? [JOURNAL_LINES[version], ...task.journal.map(entry => `- ${entry.createdAt} ${entry.author}: ${entry.text}`)]
       : []),
     '[Message]',
   ]

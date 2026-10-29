@@ -251,7 +251,7 @@ export class TaskResultService {
    * check facts (the outcomes give the map's shape away). Unsealed, the
    * reading session's own comparison rides the result.
    */
-  applySeal(caller: TaskCaller, taskId: string, detail: TeamTaskDetail): TeamTaskDetail {
+  applySeal<T extends Pick<TeamTaskDetail, 'results'>>(caller: TaskCaller, taskId: string, detail: T): T {
     if (caller.kind !== 'agent' || detail.results === undefined) return detail
     return { ...detail, results: this.sealResults(caller.sessionId, taskId, detail.results) }
   }
