@@ -71,7 +71,8 @@ CODEX_HOME omission, which changes Codex provider ids.
     are mapped in the earlier result; the new rows map to the tests of the
     same id in `catalogMemo.test.ts`, `catalogMemoWiring.test.ts`, and
     `sessionMailbox.test.ts` (W1). Author controls: R10 → W1; R11 → W2 and
-    W5; R14 → W2 and W5; R19 → W2 and W5.
+    W5; R14 → W2 and W5; R19 → W2 and W5; R16 → K11b, K11d, N5d, N5f; R18 →
+    N5b, N5d, N5f. R12, R13, R15, and R17 are structural twins, not run.
 
 ## 4. Review follow-up (findings `f4b1ebad`, conditions C1–C6)
 
@@ -113,14 +114,14 @@ R11; R15 and R17 (the providers path) twin R16 and R18.
     pull, and `providerOf`/`providerLabelOf`, the entry is the same object
     and equals an alias-free deep baseline from its own resolution, and the
     lazy projections equal the baseline's. R14 and R19 fail it.
-- [ ] 4.4 B4: rows K9, K11, and N5 vary each image-default path alone, in
+- [x] 4.4 B4: rows K9, K11, and N5 vary each image-default path alone, in
   each regime: default present with different content, default missing
   (key precision; the fallback results are equal), and user-level files
   present (defaults unread; precision only).
   - Verify: R16 fails K11, R18 fails N5.
 - [x] 4.5 Add Table W and rows K9/K11/N5 to design.md, correct D2 and Risks,
   and add the B1 and B4 entries to `docs/oracle-hazards.md`.
-- [ ] 4.6 Reopen 3.1 and extend the 3.2 map with the new rows and controls.
+- [x] 4.6 Reopen 3.1 and extend the 3.2 map with the new rows and controls.
 
 ## Workflow follow-up
 
