@@ -11,6 +11,7 @@ import path from 'node:path'
 import type { ChatEvent, ChatTurnTriggerTask } from '../../shared/chat'
 import { validTime } from '../../shared/chatTime'
 import { getClaudeConfigDir } from '../logDiscovery'
+import { readLines } from './lineReader'
 import {
   ASK_USER_QUESTION_TOOL,
   parseQuestions,
@@ -211,17 +212,22 @@ export function parseTranscriptTitleLine(
   return { title: value.trim(), source: isAiTitle ? 'auto' : 'manual' }
 }
 
+/** A transcript parser fed one line at a time; `finish` returns the parse. */
+export interface TranscriptParser {
+  /** One piece of `content.split('\n')`, in order (blank pieces included). */
+  line(rawLine: string): void
+  finish(): ParsedTranscript
+}
+
 /**
- * Parse transcript JSONL content into read-only events. Tolerant: lines that
- * are not valid JSON and lines of an unknown kind are skipped. `unmatchedToolCallIds`
- * lists tool uses that never got a result — see `withCancelledRequests`.
- * `includeSidechain` keeps sidechain records (a subagent transcript file is
- * all sidechain) for the worker-body reader (workers design D5).
+ * The stateful line consumer behind `parseTranscriptContent`
+ * (bounded-history-capture D2): fed the same pieces in the same order, it
+ * gives the same parse, so a file can be replayed through `readLines`
+ * without ever holding its content.
  */
-export function parseTranscriptContent(
-  content: string,
+export function createTranscriptParser(
   options?: { includeSidechain?: boolean }
-): ParsedTranscript {
+): TranscriptParser {
   const events: ChatEvent[] = []
   const resultToolCallIds = new Set<string>()
   const unmatchedCandidates: string[] = []
@@ -231,10 +237,10 @@ export function parseTranscriptContent(
   let title: TranscriptTitle | null = null
   let cwd: string | null = null
 
-  for (const rawLine of content.split('\n')) {
+  const line = (rawLine: string): void => {
     lineIndex += 1
     const line = rawLine.trim()
-    if (!line) continue
+    if (!line) return
     const lineTitle = parseTranscriptTitleLine(line)
     if (lineTitle) {
       // Generated titles: the latest is current (D2). A user-set title is
@@ -242,37 +248,32 @@ export function parseTranscriptContent(
       if (lineTitle.source === 'manual' || title?.source !== 'manual') {
         title = lineTitle
       }
-      continue
+      return
     }
     let record: Record<string, unknown>
     try {
       const parsed: unknown = JSON.parse(line)
       if (!parsed || typeof parsed !== 'object') {
         invalidLines += 1
-        continue
+        return
       }
       record = parsed as Record<string, unknown>
     } catch {
       // Truncated last line or corruption: skip, the caller decides if the
       // file as a whole is unparseable.
       invalidLines += 1
-      continue
+      return
     }
     if (
       record.isMeta === true ||
       (record.isSidechain === true && options?.includeSidechain !== true)
     ) {
-      continue
+      return
     }
-    // Worktree tracking design D3: each record may carry the working
-    // directory at write time (attachment rows spell it
-    // snapshot.workingDirectory); the newest non-empty one wins. Parent
+    // Worktree tracking design D3: the newest non-empty one wins. Parent
     // parses already dropped sidechain records above; a worker-body parse
     // keeps them, and its caller simply ignores the captured cwd.
-    const snapshot = asRecord(asRecord(record.attachment)?.snapshot)
-    const lineCwd =
-      stringField(record, 'cwd') ??
-      stringField(snapshot, 'workingDirectory')
+    const lineCwd = recordCwd(record)
     if (lineCwd) cwd = lineCwd
     const type = record.type
     const lineUuid =
@@ -317,7 +318,7 @@ export function parseTranscriptContent(
         }
       }
       // Other system subtypes are informational; ignored.
-      continue
+      return
     }
     if (type === 'assistant' && record.isApiErrorMessage === true) {
       // An API-error reply (chat-context-exhaustion D2: e.g. the CLI's
@@ -330,7 +331,7 @@ export function parseTranscriptContent(
         type: 'error',
         message: apiErrorText(contentValue),
       })
-      continue
+      return
     }
     if (type === 'user' || type === 'assistant') {
       if (typeof contentValue === 'string') {
@@ -348,7 +349,7 @@ export function parseTranscriptContent(
               turnId: `hist-turn-${turnCounter}`,
               trigger: tasks.length > 0 ? { kind: 'task', tasks } : { kind: 'resumed' },
             })
-            continue
+            return
           }
           const typed = parseCommandMarkup(contentValue) ?? contentValue
           const peer = parseEnvelope(typed)
@@ -376,7 +377,7 @@ export function parseTranscriptContent(
             text: contentValue,
           })
         }
-        continue
+        return
       }
       const blocks = Array.isArray(contentValue) ? contentValue : []
       let blockIndex = 0
@@ -462,12 +463,12 @@ export function parseTranscriptContent(
         }
         // thinking and other block kinds are not surfaced in history.
       }
-      continue
+      return
     }
     // Unknown line types (mode, cost-state, file-history, ...) are ignored.
   }
 
-  return {
+  const finish = (): ParsedTranscript => ({
     events,
     unmatchedToolCallIds: unmatchedCandidates.filter(
       (id) => !resultToolCallIds.has(id)
@@ -475,7 +476,25 @@ export function parseTranscriptContent(
     invalidLines,
     title,
     cwd,
-  }
+  })
+
+  return { line, finish }
+}
+
+/**
+ * Parse transcript JSONL content into read-only events. Tolerant: lines that
+ * are not valid JSON and lines of an unknown kind are skipped. `unmatchedToolCallIds`
+ * lists tool uses that never got a result — see `withCancelledRequests`.
+ * `includeSidechain` keeps sidechain records (a subagent transcript file is
+ * all sidechain) for the worker-body reader (workers design D5).
+ */
+export function parseTranscriptContent(
+  content: string,
+  options?: { includeSidechain?: boolean }
+): ParsedTranscript {
+  const parser = createTranscriptParser(options)
+  for (const rawLine of content.split('\n')) parser.line(rawLine)
+  return parser.finish()
 }
 
 /**
@@ -680,14 +699,16 @@ export async function replayTranscriptFileAsync(
   options?: { excludeToolCallIds?: Set<string> }
 ): Promise<TranscriptReplay> {
   if (!filePath) return historyUnavailable('missing')
-  let content: string
+  // Streamed (bounded-history-capture D2): the file is fed through the line
+  // consumer chunk by chunk, so its content is never held whole.
+  const parser = createTranscriptParser()
   try {
-    content = await fsp.readFile(filePath, 'utf8')
+    await readLines(filePath, rawLine => parser.line(rawLine))
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code
     return historyUnavailable(code === 'ENOENT' ? 'missing' : 'unparseable')
   }
-  return replayContent(content, options)
+  return replayParsed(() => parser.finish(), options)
 }
 
 /** The parse shared by the sync and async file replays. */
@@ -695,8 +716,15 @@ function replayContent(
   content: string,
   options?: { excludeToolCallIds?: Set<string> }
 ): TranscriptReplay {
+  return replayParsed(() => parseTranscriptContent(content), options)
+}
+
+function replayParsed(
+  parse: () => ParsedTranscript,
+  options?: { excludeToolCallIds?: Set<string> }
+): TranscriptReplay {
   try {
-    const parsed = parseTranscriptContent(content)
+    const parsed = parse()
     // Content that produced no events at all but failed to parse is a parser
     // failure; an empty or bookkeeping-only file is simply an empty history.
     if (parsed.events.length === 0 && parsed.invalidLines > 0) {
@@ -747,6 +775,17 @@ function apiErrorText(content: unknown): string {
     .join('\n')
     .trim()
   return text || 'The model request failed'
+}
+
+/**
+ * The working directory one parsed transcript record carries at write time
+ * (worktree tracking design D3; attachment rows spell it
+ * snapshot.workingDirectory), or null. Shared by the full parse and the
+ * streaming meta reader (`transcriptMeta.ts`) so both apply one rule.
+ */
+export function recordCwd(record: Record<string, unknown>): string | null {
+  const snapshot = asRecord(asRecord(record.attachment)?.snapshot)
+  return stringField(record, 'cwd') ?? stringField(snapshot, 'workingDirectory')
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

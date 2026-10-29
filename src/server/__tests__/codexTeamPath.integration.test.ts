@@ -19,6 +19,7 @@ import { resetCodexExecutableCache } from '../chat/codex/codexExecutable'
 import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
 import { formatEnvelope, messageEnvelope } from '../team/envelope'
+import { TASK_JOURNAL_GUIDANCE } from '../team/teamPrompt'
 import { FAKE_CODEX, Script, THREAD_ID, until } from './codexDriverHarness'
 
 const ENV_KEYS = [
@@ -257,6 +258,55 @@ test('a resume that moves transcript_path re-arms the receipt tail — mail sett
 
   fs.writeFileSync(gate, '')
   await until(() => restartEvents.filter(event => event.type === 'turn_completed').length === 1)
+})
+
+// bounded-log-reads-and-task-get D7 catalogue upgrade, row V8: what Kawai
+// controls across a thread's life. The start registers the current table
+// (bounded task_get and task_journal_read); the resume of the same thread by
+// a restarted manager registers nothing — the thread keeps what it stored —
+// and both carry the current team prompt with its journal-reading rule.
+// @covers: team-tasks › Agents without the journal reader are told to stop › A Codex thread keeps its start tools and gets the current guidance
+test('a Codex thread registers the journal reader at start; its resume registers no tools and both carry the current journal guidance', async () => {
+  const wire: Wire = []
+  manager = createManager([], wire)
+  await manager.whenRestored()
+  const created = await manager.createAvailableSession({ projectPath: project, claudeProfileId: 'codex', name: 'Codex dev' })
+  if (!created.ok) throw new Error(created.error)
+  const id = created.session.id
+  const script = new Script().boot('thread/start', 'gpt-test', rollout)
+    .request('account/rateLimits/read', {})
+  const second = new Script().boot('thread/resume', 'gpt-test', rollout)
+    .request('account/rateLimits/read', {})
+  script.lines.push(...second.lines)
+  process.env.FAKE_TRANSCRIPT = script.write(tempDir)
+  expect((await manager.start(id)).ok).toBe(true)
+  await until(() => db.getChatSession(id)?.transcriptPath === rollout)
+  const prompt = manager.teams.promptFor(id, null)
+  expect(prompt).toContain(TASK_JOURNAL_GUIDANCE)
+
+  const [start] = outbound(wire).filter(message => message.method === 'thread/start')
+  expect(start.params.developerInstructions).toBe(prompt)
+  const tools = new Map<string, { inputSchema: { properties: Record<string, unknown> } }>(
+    start.params.dynamicTools[0].tools.map((tool: { name: string }) => [tool.name, tool]),
+  )
+  expect(Object.keys(tools.get('task_get')!.inputSchema.properties).sort()).toEqual(['journal_before', 'journal_limit', 'task_id'])
+  expect(Object.keys(tools.get('task_journal_read')!.inputSchema.properties).sort()).toEqual(['entry_id', 'offset_bytes', 'task_id'])
+  // The rollout Codex wrote, so the restarted manager may resume the thread.
+  fs.writeFileSync(rollout, `${JSON.stringify({ timestamp: '2026-10-20T00:00:00.000Z', type: 'session_meta', payload: { id: THREAD_ID } })}\n`)
+  manager.shutdown()
+
+  const restartWire: Wire = []
+  manager = createManager([], restartWire)
+  await manager.whenRestored()
+  process.env.FAKE_RUN = '2'
+  expect(await manager.start(id)).toEqual({ ok: true })
+  await until(() => outbound(restartWire).some(message => message.method === 'thread/resume'))
+  const [resume] = outbound(restartWire).filter(message => message.method === 'thread/resume')
+  expect(resume.params.threadId).toBe(THREAD_ID)
+  expect('dynamicTools' in resume.params).toBe(false)
+  expect(resume.params.developerInstructions).toBe(manager.teams.promptFor(id, null))
+  expect(resume.params.developerInstructions).toContain(TASK_JOURNAL_GUIDANCE)
+  expect(outbound(restartWire).some(message => message.method === 'thread/start')).toBe(false)
 })
 
 test('startup reconciliation settles a Codex chat\'s pushed mail from its rollouts with no agent running', async () => {

@@ -158,11 +158,11 @@ The worker carries the evidence kind and the generation facts across its boundar
 
 ### D4 — `task_get` bounds its growing lists in SQL
 
-`TaskService.get` gains an optional window `{ journalBefore?, journalLimit? }` for the agent path and returns `AgentTaskDetail`. One synchronous read transaction (no `await` inside) runs, in this order:
+The agent path gets its own service method (`TaskService.agentGet`) with an optional window `{ journalBefore?, journalLimit? }`, returning `AgentTaskDetail`; `TaskService.get` and the human path are unchanged. After the awaited caller and team checks, one synchronous read transaction (no `await` inside) runs, in this order:
 1. the anchor check (D5);
 2. **journal window:** `SELECT id, author_kind, author_session, created_at, rowid, length(CAST(text AS BLOB)) AS total_bytes, substr(CAST(text AS BLOB), 1, 2000) AS preview … ORDER BY created_at DESC, rowid DESC LIMIT n + 1`;
 3. **subtask window:** the newest 100 child rows by `(created_at, rowid)`, then their summaries;
-4. **message window:** the newest 50 task messages by `(created_at, rowid)` in `mailboxStore`;
+4. **message window:** the newest 50 task messages by `(created_at, rowid)` in `mailboxStore`, any state, as `forTask` selects them;
 5. `COUNT(*)` for each of the three lists.
 
 Each list is returned oldest first. No full `detail()`, unlimited `journal()`, or `forTask()` load runs on this path.
@@ -171,7 +171,7 @@ Each list is returned oldest first. No full `detail()`, unlimited `journal()`, o
 - `previewBytes` — the preview trimmed back to a complete UTF-8 character, so 1,997–2,000 bytes when cut;
 - `text` — the preview's text when it is valid UTF-8, else `null`;
 - `totalBytes`;
-- `cut`;
+- `cut` — `totalBytes > 2,000`;
 - `resumeOffsetBytes` — the byte offset `task_journal_read` resumes from: `previewBytes`, or `0` when `text` is `null`.
 
 The marker is metadata beside the text, never appended to it.
@@ -197,13 +197,13 @@ This partition introduces no second decoder. Existing NUL, byte-order-mark, mult
 
 The `task_get` Zod schema adds:
 - `journal_before`: a non-empty string, optional;
-- `journal_limit`: an integer from 1 to 200, optional, default 50.
+- `journal_limit`: an integer from 1 to 200, optional, default 50. One explicit message naming the range 1–200 covers its minimum, maximum, and integer failures, so both adapters' refusals name the range.
 
 The anchor must be an entry of this task (`SELECT created_at, rowid … WHERE id = ? AND task_id = ?`). Otherwise the call is refused with `Unknown journal entry for this task: <id>`.
 
 The window takes rows strictly older than the anchor: `created_at < a` or `created_at = a AND rowid < r`. `olderRemaining` is true when the `n + 1`-th row exists, and `nextBefore` is then the oldest returned id. `total` is the task's whole entry count.
 
-Paging from the newest window until `olderRemaining` is false returns every entry of a fixed journal exactly once. Entries appended between calls appear in a fresh newest window and are never promised to an older page.
+Paging from the newest window until `olderRemaining` is false returns every entry of a fixed journal exactly once, in `(created_at, rowid)` order. Nothing is promised for an entry appended between calls: one sorting after every returned entry appears in a fresh newest window, but one whose `created_at` falls inside an already-paged range (a backdated insert or a backward clock step) may appear in no window already taken.
 
 ### D6 — `task_journal_read`
 
@@ -216,7 +216,7 @@ Rules:
 - An offset beyond `total` is refused, naming the offset and the total.
 - An offset equal to `total` returns `{ returnedBytes: 0, dataBase64: '', text: '', nextOffsetBytes: null }`, which also covers an empty entry.
 - Otherwise:
-  - When the chunk is not the end of the entry, the reader trims at most three trailing bytes that begin an incomplete UTF-8 character.
+  - When the chunk is not the end of the entry, the reader trims at most three trailing bytes that are the valid start of a UTF-8 character cut short. An invalid lead byte (`C0`, `C1`, `F5`–`FF`) or an impossible prefix (`E0 80`, `ED A0`, `F0 80`, `F4 90`, and the like) is not trimmed, so such a chunk is returned whole with `text: null`. The 2,000-byte preview trims the same way, so such a preview is T-invalid.
   - If the remaining bytes decode as valid UTF-8 with a fatal decoder that keeps a byte-order mark, `text` is that string. The NUL character and a byte-order mark are kept, so the UTF-8 encoding of `text` equals the returned bytes.
   - Otherwise the untrimmed chunk is returned with `text: null`.
 - `dataBase64` is always authoritative.
@@ -237,7 +237,24 @@ The following are updated together with D4–D6, in the Lead's integration order
 
 The new name must compose with later tool-metrics normalization without an import cycle.
 
-D1–D3 are the first production path and land first. D4–D7 follow under a later task revision.
+**Task-header generations (C1).** `parseEnvelope` strips a task header by rebuilding it with `formatTaskHeader` and requiring an exact prefix, and the receipt extractors and transcript replay depend on that parse. Changing the journal line would make every task envelope recorded with a non-empty journal unparseable: replay would show it as raw user text, and `reconcileMailbox` would read its receipt as absent and requeue pushed, unreceipted mail. So the header is versioned:
+- The envelope metadata gains an additive `taskHeaderVersion`. Absent means the legacy generation 1; generation 2 is the bounded wording. Known values are 1 and 2.
+- The legacy renderer keeps the exact old journal literal and every other task-context line. Generation 2 differs only in a fixed journal line naming the bounded `task_get` and `task_journal_read`.
+- `formatEnvelope` and `parseEnvelope` pick the renderer from the recorded version, never by trying both or by pattern. A parsed legacy envelope keeps the version absent, so it round-trips unchanged.
+- An unknown or non-integer version, or a version on an envelope without a task, does not parse. Metadata, wrapper, handoff, duplicate, and thread checks are not weakened.
+- No database migration or transcript rewrite. Older binaries are not claimed to read generation 2 after a downgrade.
+
+Newly delivered task envelopes select generation 2 only in the registration commit below.
+
+**Catalogue upgrade (caller policy A).** A Codex thread registers its tools at `thread/start`; `thread/resume` carries no `dynamicTools`, so a resumed thread keeps the catalogue it stored. Kawai's handlers are read per call, so every `task_get` from any caller gets the current bounded semantics, even where a stored description still says "the whole journal".
+- Complete bounded reads with the lossless reader are supported for callers offered the current catalogue: fresh Codex threads, every Claude MCP spawn, and resumed Codex threads that started with it.
+- A Codex thread started before the change can still read windows and previews, but has no `task_journal_read` and no advertised paging arguments. Journal-dependent conclusions that need omitted entries or bytes go to a fresh Codex chat. Bounds and continuations are authoritative, never a stale description or an unadvertised argument.
+- The team prompt's task note carries this rule to every agent, whatever its group (`TASK_JOURNAL_GUIDANCE`): `task_get` is bounded on every call; check the journal bounds and each preview's cut; without the reader, stop before such conclusions and ask for a fresh Codex chat; never read the journal around the task tools. Codex receives it as `developerInstructions` on both start and resume. It is an instruction, not runtime enforcement or a guarantee that a model complies.
+- Not done: no migration, archive, or recreation of existing chats; no `dynamicTools` on resume; no compatibility marker in the database; no shell, database, log, or REST fallback; no unbounded legacy `task_get`; no task-id change. Old genuine envelopes on the new binary still parse and settle (C1); an old-binary downgrade stays unsupported.
+
+**Sequencing.** D1–D3 are the first production path and land first. D4–D7 follow under a later task revision, in two steps:
+1. An unwired checkpoint: `taskJournalWindow.ts` (the window and anchor SQL, the entry reader, and the shared exact UTF-8 helper), `TaskStore.agentDetail`, `TaskService.agentGet` and `journalRead`, `mailboxStore.forTaskNewest`, the generic seal, and the shared types, with their store and service tests. No tool, prompt, header, or envelope changes; the live `task_get` is untouched. Legacy envelope fixtures (rows V1–V2) may be added here, but they do not fix C1.
+2. One atomic registration commit: the `task_get` arguments, `task_journal_read`, the D7 texts, header generation 2 with its parser, and rows V3–V7. A bounded `task_get` never ships without the lossless reader.
 
 ### Acceptance oracles
 
@@ -349,6 +366,24 @@ G6 has no production-minimum row: at the fixed insert minimum of 1 it is unreach
 | R9 | invalid UTF-8, or an offset inside a character | `text` null; base64 of the raw bytes; ≥ 1 byte |
 | R10 | a caller from another team | refused as not found, as `task_get` |
 
+**Delivered task headers (D7 C1)**, through the real `parseEnvelope`, the Claude and Codex receipt extractors, transcript replay, and `reconcileMailbox`'s receipt path. Legacy fixtures are raw envelopes in the format of base `567ec21e`, frozen as literal bytes with independently written expected ids and bodies, never produced by a renderer under test. Synthetic data only.
+
+| id | input | outcome |
+|----|-------|---------|
+| V1 | a legacy task envelope with a non-empty journal, no version | parses; the body is the peer content; both receipt extractors find its id; replay yields a peer message, not raw user text; reconcile completes it as delivered and never requeues it |
+| V2 | legacy controls: an empty-journal task envelope, a no-task envelope | parse unchanged |
+| V3 | explicit version 1, and an absent version | the legacy renderer round-trips; absence stays absent |
+| V4 | a current task envelope | carries version 2 and the generation 2 header; round-trips |
+| V5 | version 2 metadata with the legacy header, or version 1 or absent with the generation 2 header | does not parse |
+| V6 | version 3, 1.5, `"2"`, or a version without a task | does not parse |
+| V7 | a tampered header, an ordinary tag mention; plan, execution, handoff, revision notice, possible duplicate | tampering and mentions do not parse; the other fields survive both generations |
+
+**Caller guidance (D7 catalogue upgrade)**, through the real `buildTeamPrompt`, and for V8 the real `ChatSessionManager` and `CodexSessionDriver` against the fake app-server. No app-server argument validation is simulated, and no real app-server, SDK, or model runs.
+
+| id | input | outcome |
+|----|-------|---------|
+| V8 | the team prompt for a member, a group-less session, a creator, and a group without the release right; a Codex chat started, then resumed by a restarted manager | each task note carries `TASK_JOURNAL_GUIDANCE` exactly once; `thread/start` registers the current table, with `task_get` advertising `journal_before` and `journal_limit` and `task_journal_read` present; `thread/resume` sends no `dynamicTools`; both send the manager's current team prompt, holding the guidance, as `developerInstructions` |
+
 **Properties:**
 - **P1, bounded token reads.**
   - Generator: seed `0x6b617761`, 200 cases. Valid JSONL is written in chunks (never a whole-file string), up to 64 MiB, with message lines at random offsets and separately generated giant lines. A sparse 1 MiB / 1 GiB pair with equal head and tail is also used, for size independence only.
@@ -369,10 +404,10 @@ G6 has no production-minimum row: at the fixed insert minimum of 1 it is unreach
 - **M1:** exclusion moved back after enrichment. X0 and X1 open the file, and X2 (including the known A / head B witness) reads tokens or appears in output.
 - **M2:** a whole-file read restored in the token reader. The P1 observer fails.
 - **M3:** `P(n)` classified as `C(n)` or admitted to an empty cache. O1, O2, E7, WG2, WC6, and P2 fail.
-- **M4:** the `task_get` windows taken from a full `detail()`/`forTask()` load. The query observer sees an unlimited statement, or more rows than the limit plus one.
-- **M5:** the whole entry text projected and cut in JavaScript. The observer sees a journal text value over 2,000 bytes.
+- **M4:** the `task_get` windows taken from a full `detail()`/`forTask()` load. The query observer sees one of the three list statements (journal, subtasks, messages) without its limit or returning more rows than the limit plus one, or an unlimited `journal()`, `detail()`, or `forTask()` load during the agent call. The participant summary query, contractually whole, and the human detail are outside its scope.
+- **M5:** the whole entry text projected and cut in JavaScript. The observer sees a journal-window preview column over 2,000 raw bytes, before any JavaScript trim. Results, revisions, and message bodies stay whole and are outside its scope.
 
-The query observer is a test-side wrapper over `prepare` that records each executed statement and the byte size of each returned column. It shows what reaches JavaScript, not native SQLite memory.
+The query observer is a test-side wrapper over `prepare` that records each executed statement, its returned rows before projection, and the byte size of each returned column. It shows what reaches JavaScript, not native SQLite memory.
 
 ## Risks / Trade-offs
 
@@ -380,7 +415,8 @@ The query observer is a test-side wrapper over `prepare` that records each execu
 - **[Large message-free logs stay eligible]** → Accepted in D3. A bounded token read and the unchanged matching and insertion paths per poll; window binding may remain unknown.
 - **[Native SQLite reads whole values]** → Accepted. Previews and chunks bound JavaScript hydration and the response, not SQLite's per-value work. A true per-entry native bound would need new storage, which is out of scope.
 - **[Whole sections can still be large]** → Accepted and stated: results, revisions, assignments, message bodies, and subtask summaries stay whole.
-- **[Concurrent journal appends while paging]** → `journal_before` anchors on an entry id, so new entries never shift an older page; they appear in a fresh newest window.
+- **[Concurrent journal appends while paging]** → `journal_before` anchors on an entry id, so new entries never shift an older page. An entry stamped after every returned one appears in a fresh newest window; a backdated one may appear in none (D5).
+- **[Envelopes recorded before the header change]** → The header is versioned (D7, C1); legacy envelopes keep parsing and their receipts stay found.
 - **[Existing huge rollouts still load on attach or replay]** → A non-goal here. Bounded by user action, not by a timer.
 
 ## Migration Plan
@@ -388,3 +424,4 @@ The query observer is a test-side wrapper over `prepare` that records each execu
 - No schema migration. Deploy is the usual build swap.
 - Rollback restores whole reads. That is safe but reintroduces the memory risk.
 - After deploy, live Leads should start fresh Codex chats, so their oversized rollouts stop growing the attach and replay cost.
+- A Codex thread started before deploy keeps its old task tools after a resume (D7, catalogue upgrade): it reads bounded windows without `task_journal_read`. Work that needs omitted journal entries or bytes moves to a fresh Codex chat, as the team prompt tells it. Existing chats are not migrated or recreated.

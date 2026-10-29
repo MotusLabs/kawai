@@ -32,6 +32,7 @@ import { TaskNotices } from './taskNotices'
 import { TaskResultStore } from './taskResultStore'
 import { ResultCheckStore } from '../verification/resultCheckStore'
 import { createPayloadDiff, publishPayloadDiff } from './taskPayloadDiff'
+import { TaskJournalWindow } from './taskJournalWindow'
 
 const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS team_tasks (
@@ -153,6 +154,8 @@ export class TaskStore {
   readonly results: TaskResultStore
   /** Result checks and coverage maps (independent-verification D4). */
   readonly checks: ResultCheckStore
+  /** The agent's bounded detail and lossless entry reads (bounded-log-reads D4–D6); no tool calls them yet. */
+  readonly journalWindow: TaskJournalWindow
 
   constructor(private readonly db: Database, private readonly mail?: MailboxStore, private readonly assignments?: AssignmentStore) {
     // A claim or release of a task's instruction mail changes what the task
@@ -166,6 +169,7 @@ export class TaskStore {
     this.notices = mail && assignments ? new TaskNotices(db, mail, assignments, this.acknowledgements) : null
     this.results = new TaskResultStore(db)
     this.checks = new ResultCheckStore(db)
+    this.journalWindow = new TaskJournalWindow(db, this, mail)
   }
 
   /** Every committed change, with the task as it is now. */
@@ -423,7 +427,8 @@ export class TaskStore {
     return this.mail?.forTask(id) ?? []
   }
 
-  private summary(task: TeamTask): TeamTaskSummary {
+  /** A task as listed: its participants, assignment, and outstanding result. */
+  summary(task: TeamTask): TeamTaskSummary {
     const ids = new Set<string>()
     if (task.creator.sessionId) ids.add(task.creator.sessionId)
     const rows = this.db.prepare(`

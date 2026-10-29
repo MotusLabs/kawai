@@ -399,6 +399,15 @@ export interface TeamTaskDetail {
   results?: TaskResult[]
 }
 
+/** The agent's bounded detail (bounded-log-reads-and-task-get D4): journal, subtask, and message windows, oldest first, with their bounds; other sections whole. */
+export interface AgentTaskDetail extends Omit<TeamTaskDetail, 'journal'> { journal: TaskJournalPreview[]; bounds: AgentTaskBounds }
+export interface AgentTaskBounds { journal: { total: number; returned: number; olderRemaining: boolean; nextBefore: string | null }; subtasks: TaskListBound; messages: TaskListBound }
+export interface TaskListBound { total: number; returned: number; truncated: boolean }
+/** A journal entry's preview (D4): at most 2,000 stored bytes; `text` is null when they are not valid UTF-8, and `resumeOffsetBytes` is then 0. */
+export interface TaskJournalPreview { id: string; author: JournalAuthor; createdAt: string; text: string | null; previewBytes: number; totalBytes: number; cut: boolean; resumeOffsetBytes: number }
+/** One lossless chunk of a journal entry (D6): at most 8,192 stored bytes; `dataBase64` is authoritative, `text` null when not valid UTF-8. */
+export interface TaskJournalChunk { entryId: string; offsetBytes: number; totalBytes: number; returnedBytes: number; dataBase64: string; text: string | null; nextOffsetBytes: number | null }
+
 /**
  * The detail the human's UI receives: the agent-visible detail plus the
  * human's draft (D1). Agent paths (`task_get`) return `TeamTaskDetail`, which

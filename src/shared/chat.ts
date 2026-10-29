@@ -174,6 +174,8 @@ export interface ChatPeerMessage {
   thread?: Array<{ messageId: string; senderSession: string | null; body: string; senderKind?: 'agent' | 'human' | 'system' }>
   /** The referenced team task as it was at delivery (team-tasks D3); absent = none. */
   task?: ChatPeerTaskContext
+  /** Task-header generation, only with `task` (bounded-log-reads-and-task-get D7): absent = legacy 1; new mail carries 2. */
+  taskHeaderVersion?: 1 | 2
   /** Work handed off after a provider limit (profile routing); absent = none. */
   handoff?: ChatHandoffPackage
   /**

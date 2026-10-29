@@ -151,13 +151,14 @@ import { OutboundStore } from '../outbound/store'
 import {
   findTranscriptPath,
   findTranscriptPathAsync,
-  readTranscriptMetaAsync,
   replayTranscriptFile,
   replayTranscriptFileAsync,
   type TranscriptReplay,
 } from './transcriptReplay'
 import { canRetryCodexMemo, replayCodexRollout, replayCodexRolloutAsync } from './codex/codexRollout'
 import { watchTranscriptTitle, type TranscriptTitleWatcher } from './transcriptTitleWatcher'
+import { scanTranscriptMeta } from './transcriptMeta'
+import { indexTranscripts, TranscriptPathCache } from './transcriptLocator'
 import { resolveTeam } from '../team/teamIdentity'
 import { validateWorkspaceSend } from './workspaceSendValidation'
 import type { WorkspaceMessageContext, WorkspaceMessageEnvelope } from '../../shared/planWorkspace'
@@ -578,6 +579,8 @@ export class ChatSessionManager {
    * chat transcript as an extra session during the restore window.
    */
   private readonly restoringSdkIds = new Set<string>()
+  /** Existing transcript per SDK id for the start blocker's check. */
+  private readonly transcriptPaths = new TranscriptPathCache()
   private isShutDown = false
 
   /**
@@ -964,6 +967,10 @@ export class ChatSessionManager {
       this.retryableHistory.delete(sessionId)
     }
     const record = this.records.get(sessionId)!
+    // Every caller awaits loadHistory first, so reaching the file here means
+    // one skipped the await and read the history synchronously
+    // (bounded-history-capture D1): logged so the caller shows up.
+    logger.debug('chat_history_sync_capture', { sessionId, runtime: record.runtime ?? 'claude' })
     const replay = this.getHistory(sessionId)
     this.snapshotHistory.set(sessionId, replay?.events ?? [])
     if (record.runtime === 'codex' && replay && replay.status !== 'ok') this.retryableHistory.add(sessionId)
@@ -989,15 +996,17 @@ export class ChatSessionManager {
    * awaits, so a killed session's memo is never (re-)written.
    *
    * Memo audit (design D3/D4): the memo IS `snapshotHistory`, and it is not
-   * invalidated on turn completion. captureHistory runs before every driver
+   * invalidated on turn completion. The memo is taken before every driver
    * start (attach, send, start, mailbox prepare), so everything the agent
    * appends to the transcript afterwards is also in `liveEvents`; snapshots
    * are memo + live events, and re-reading the transcript at a turn boundary
    * would duplicate those turns. Only kill drops the memo (with the live
-   * events). A synchronous captureHistory that wins the race (a send landing
-   * while this load awaits IO) keeps its result; this load then discards its
-   * own. getHistory stays synchronous as that fallback for the callers that
-   * must capture before a driver starts without an await (D4).
+   * events). Every driver start — send, start, and the mailbox's prepare —
+   * awaits this load (bounded-history-capture D1); the synchronous
+   * captureHistory stays only as a guard in getSnapshot and getHistoryPage,
+   * whose callers await this load first, and logs a debug line if it ever
+   * reads the file. A capture that wins the race keeps its result; this
+   * load then discards its own.
    */
   async loadHistory(sessionId: string): Promise<void> {
     if (!this.records.has(sessionId)) return
@@ -1151,7 +1160,7 @@ export class ChatSessionManager {
       available: record => record.archivedAt == null && !this.startBlocker(record) && (options.isDirectory ?? isExistingDirectory)(record.projectPath),
       // The same refusal text `available` rejects on, read-only (team-waiting-reasons D2).
       startBlocker: record => this.startBlockerFor(record),
-      prepare: async id => { this.captureHistory(id); const driver = await this.ensureDriver(id); if (!driver) throw new Error('Recipient disappeared'); driver.start() },
+      prepare: async id => { await this.loadHistory(id); const driver = await this.ensureDriver(id); if (!driver) throw new Error('Recipient disappeared'); driver.start() },
       restore: id => { const result = this.restore(id); if (!result.ok) throw new Error(result.error) },
       watchReceipt: id => this.watchSessionTitle(id),
       archive: id => this.archive(id),
@@ -1915,8 +1924,10 @@ export class ChatSessionManager {
    */
   async send(sessionId: string, text: string, workspaceContext?: WorkspaceMessageEnvelope): Promise<ChatActionResult> {
     // Recovery can replace the record's path: finish it before checking the
-    // directory or resolving the launch configuration.
-    this.captureHistory(sessionId)
+    // directory or resolving the launch configuration. Awaited, never the
+    // synchronous capture: a large history must not block the server
+    // (bounded-history-capture D1).
+    await this.loadHistory(sessionId)
     const record = this.records.get(sessionId)
     if (!record) {
       return { ok: false, error: `Unknown chat session ${sessionId}` }
@@ -2022,7 +2033,7 @@ export class ChatSessionManager {
    */
   async start(sessionId: string): Promise<ChatActionResult> {
     // Direct starts need the same recovery ordering as attach and send.
-    this.captureHistory(sessionId)
+    await this.loadHistory(sessionId)
     const record = this.records.get(sessionId)
     if (!record) {
       return { ok: false, error: `Unknown chat session ${sessionId}` }
@@ -2366,7 +2377,7 @@ export class ChatSessionManager {
       spawning &&
       !(codexRollout
         ? record.transcriptPath != null && existsSync(record.transcriptPath)
-        : findTranscriptPath(record.sdkSessionId))
+        : this.transcriptPaths.existing(record.sdkSessionId))
     ) {
       return (
         'Cannot resume this conversation: the agent transcript is missing. ' +
@@ -2495,18 +2506,66 @@ export class ChatSessionManager {
     for (const row of rows) {
       if (row.sdkSessionId) this.restoringSdkIds.add(row.sdkSessionId)
     }
+    // One walk of the projects tree names every transcript (instead of one
+    // walk per row). Archived rows register at once with their stored name
+    // and path; their title/cwd catch-up runs after whenRestored resolves,
+    // so hundreds of archived transcripts never hold up the live chats or
+    // the mailbox start.
+    // The index is built at the first row that has a transcript, so rows
+    // before it still register synchronously, as they always have.
+    let transcripts: Map<string, string> | null = null
+    const deferred: ChatSessionRecord[] = []
     try {
       for (const row of rows) {
         if (this.isShutDown) return
-        await this.restoreRow(row)
+        if (row.sdkSessionId && !transcripts) {
+          transcripts = await indexTranscripts()
+          if (this.isShutDown) return
+        }
+        if (row.archivedAt != null) deferred.push(row)
+        await this.restoreRow(row, transcripts ?? new Map(), row.archivedAt == null)
       }
     } finally {
       this.restoringSdkIds.clear()
     }
+    if (!transcripts) return
+    void this.catchUpArchived(deferred, transcripts).catch(error => {
+      logger.warn('chat_archived_catch_up_failed', {
+        message: error instanceof Error ? error.message : String(error),
+      })
+    })
+  }
+
+  /**
+   * The deferred title/cwd catch-up of archived rows, one transcript at a
+   * time. A row restored, killed, or otherwise changed since it registered
+   * is skipped: the live paths own it from then on.
+   */
+  private async catchUpArchived(
+    rows: ChatSessionRecord[],
+    transcripts: Map<string, string>
+  ): Promise<void> {
+    for (const row of rows) {
+      if (this.isShutDown) return
+      const registered = this.records.get(row.sessionId)
+      const filePath = row.sdkSessionId ? transcripts.get(`${row.sdkSessionId}.jsonl`) : undefined
+      if (!registered || !filePath) continue
+      const meta = await scanTranscriptMeta(filePath)
+      if (this.isShutDown) return
+      if (this.records.get(row.sessionId) !== registered) continue
+      if (meta.title) this.applyTranscriptTitle(row.sessionId, meta.title.title, meta.title.source)
+      if (meta.cwd && meta.cwd !== registered.projectPath) {
+        this.applyPatch(row.sessionId, { projectPath: meta.cwd })
+      }
+    }
   }
 
   /** Restore one persisted row (design D2): status, title/cwd catch-up, workers. */
-  private async restoreRow(row: ChatSessionRecord): Promise<void> {
+  private async restoreRow(
+    row: ChatSessionRecord,
+    transcripts: Map<string, string>,
+    catchUp: boolean
+  ): Promise<void> {
     let record = row
     // Pending requests and in-flight turns died with the old process; a
     // restored session is always idle.
@@ -2518,31 +2577,31 @@ export class ChatSessionManager {
     }
     // Title catch-up (chat-session-naming design D4): a session whose name
     // was never user-set adopts its transcript's latest title now, so the
-    // list is correct for sessions nobody opens. Nothing is persisted —
-    // the row re-derives on the next restart the same way.
+    // list is correct for sessions nobody opens. Nothing is persisted here —
+    // the row re-derives on the next restart the same way (the deferred
+    // archived pass adopts it through the live tail's persisted path).
     // Cwd catch-up (worktree tracking design D3): the transcript's last
     // cwd is where the conversation actually is — the agent may have
     // entered a worktree before the restart. Unlike the title this is
     // persisted, matching what the live CwdChanged firing would have
     // written, so the row and the registry agree from here on.
-    // One async discovery + one single-pass meta read per session
-    // (async-transcript-parsing design D1/D2) — no sync fs on the event
-    // loop at boot.
-    if (record.sdkSessionId) {
-      const filePath = await findTranscriptPathAsync(record.sdkSessionId)
-      const meta = filePath ? await readTranscriptMetaAsync(filePath) : null
+    // The path comes from the boot index and the meta from one streaming
+    // scan (bounded-boot-restore design D1/D2) — no sync fs on the
+    // event loop at boot. Archived rows catch up later (catchUpArchived).
+    const indexed = record.sdkSessionId ? transcripts.get(`${record.sdkSessionId}.jsonl`) : undefined
+    if (record.sdkSessionId && indexed) this.transcriptPaths.remember(record.sdkSessionId, indexed)
+    if (catchUp && indexed) {
+      const meta = await scanTranscriptMeta(indexed)
       // Shut down mid-read: the database may be closed already.
       if (this.isShutDown) return
-      if (meta) {
-        if ((record.nameSource ?? 'manual') !== 'manual' && meta.title) {
-          record = { ...record, name: meta.title.title, nameSource: meta.title.source }
-        }
-        if (meta.cwd && meta.cwd !== record.projectPath) {
-          record = { ...record, projectPath: meta.cwd }
-          this.options.db.updateChatSession(record.sessionId, {
-            projectPath: meta.cwd,
-          })
-        }
+      if ((record.nameSource ?? 'manual') !== 'manual' && meta.title) {
+        record = { ...record, name: meta.title.title, nameSource: meta.title.source }
+      }
+      if (meta.cwd && meta.cwd !== record.projectPath) {
+        record = { ...record, projectPath: meta.cwd }
+        this.options.db.updateChatSession(record.sessionId, {
+          projectPath: meta.cwd,
+        })
       }
     }
     // Worker-roster recovery (workers design D6): a sidecar row still
