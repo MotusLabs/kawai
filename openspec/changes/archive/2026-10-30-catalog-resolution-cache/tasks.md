@@ -66,7 +66,7 @@ CODEX_HOME omission, which changes Codex provider ids.
     master merge; the reviewed head's tree had record d271fd3e. Neither
     applies to the review follow-up's trees, so 3.1 is reopened.
   - Closed on Lead acceptance (notes d2230de0, da29c8ee): full check
-    3c1ad0da8643 passed for the accepted head. The combined closeout tree
+    3c1ad0da passed for the accepted head. The combined closeout tree
     of the boot-archive phase gets its own new recorded full pass, named in
     the archive result.
 - [x] 3.2 Map every oracle id (K1–K11, E1–E2, N1–N5, W1–W5, P1, P2) to a test
