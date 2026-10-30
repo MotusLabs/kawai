@@ -62,7 +62,7 @@ Task elapsed breakdowns SHALL use non-overlapping intervals with a declared attr
 - **THEN** it remains visible with its age and waits and is not treated as a zero-duration completion
 
 ### Requirement: Turn timing includes non-completing outcomes
-Kawai SHALL record available turn start/end times and activity intervals for completed, failed, interrupted and process-ended turns. Restart uncertainty SHALL be marked. Usage SHALL retain its provider-reported scope and completeness; missing usage on interrupted turns SHALL NOT be presented as zero measured consumption.
+Kawai SHALL record available turn start/end times and per-turn activity totals for completed, failed, interrupted and process-ended turns. Restart uncertainty SHALL be marked. Usage SHALL retain its provider-reported scope and completeness; missing usage on interrupted turns SHALL NOT be presented as zero measured consumption.
 
 #### Scenario: Interrupted turn
 - **WHEN** a managed turn is interrupted after running tools

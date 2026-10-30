@@ -11,6 +11,7 @@ import { parseApprovalPolicy } from './chat/approvalPolicy'
 import { resolveProjectPath } from './paths'
 import { DatabaseBackups } from './dbSafety/backups'
 import { migrateSchema, type Migration } from './dbSafety/migrations'
+import { compactDatabase, startIncremental } from './dbSafety/compaction'
 
 export interface AgentSessionRecord {
   id: number
@@ -220,6 +221,7 @@ export function initDatabase(
   // journal mode stays rollback — WAL would add -wal/-shm files beside the
   // DB and change copy/backup semantics.
   db.exec('PRAGMA busy_timeout = 5000')
+  startIncremental(db)
   const backups = dbPath === ':memory:' ? null : new DatabaseBackups({ db, dbPath })
   try {
     migrateSchema(db, dbPath, { backups, migrations: options.migrations, appVersion: options.appVersion })
@@ -227,6 +229,8 @@ export function initDatabase(
     db.close()
     throw error
   }
+  // After the migrations, before serving: incremental auto_vacuum (never throws).
+  compactDatabase(db)
 
   const insertStmt = db.prepare(
     `INSERT INTO agent_sessions

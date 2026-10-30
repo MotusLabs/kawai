@@ -1,8 +1,9 @@
 // The SDK-free process observation contract (process-observability D2): the
-// kinds of fact Kawai records, the scalar fields each kind may carry, and the
-// identity columns that attribute it. Raw conversation, tool, and provider
-// payloads never enter this model — `validateObservation` refuses any field a
-// kind does not declare, non-scalar values, invalid numbers, and long text.
+// kinds of fact Kawai records, the scalar fields each kind may carry, the
+// identity columns that attribute it, and the durable source-key prefixes.
+// Raw conversation, tool, and provider payloads never enter this model —
+// `validateObservation` refuses any field a kind does not declare, non-scalar
+// values, invalid numbers, and long text.
 export const OBSERVATION_VERSION = 1
 /** Fact observations (task, acceptance, usage, turn outcome, …) and completed usage. */
 export const OBSERVATION_RETENTION_MS = 90 * 24 * 60 * 60 * 1000
@@ -21,7 +22,20 @@ export const OBSERVATION_FIELDS = {
   usage: ['input', 'output', 'cacheRead', 'cacheCreation', 'steps', 'outcome', 'scope'],
   turn_started: [],
   turn_attribution: [],
-  turn_ended: ['outcome', 'durationSeconds', 'partial', 'usageAvailable'],
+  turn_ended: [
+    'outcome',
+    'durationSeconds',
+    'partial',
+    'usageAvailable',
+    'thinkingSeconds',
+    'requestingSeconds',
+    'preparingToolSeconds',
+    'runningToolsSeconds',
+    'respondingSeconds',
+    'retryingSeconds',
+    'otherPhaseSeconds',
+    'unmatchedResolutions',
+  ],
   activity: ['phase', 'startedAt', 'durationSeconds', 'partial'],
   tool: ['category', 'startedAt', 'durationSeconds', 'outcome', 'partial'],
   request: ['requestKind', 'startedAt', 'durationSeconds', 'outcome', 'partial'],
@@ -45,6 +59,17 @@ export const INTERVAL_OBSERVATION_KINDS: readonly ObservationKind[] = [
 export const FACT_OBSERVATION_KINDS: readonly ObservationKind[] = (
   Object.keys(OBSERVATION_FIELDS) as ObservationKind[]
 ).filter(kind => !INTERVAL_OBSERVATION_KINDS.includes(kind))
+/**
+ * Source-key prefixes whose ledger row outlives the observation (compact-observation-detail D4):
+ * their source rows are rescanned, so a pruned fact must never be recorded again. Every other key
+ * is unique per live event and deduplicated by the observation's own `source_key`.
+ */
+export const DURABLE_KEY_PREFIXES = ['usage:', 'source:', 'acceptance:', 'first-acceptance:'] as const
+
+export function isDurableObservationKey(sourceKey: string): boolean {
+  return DURABLE_KEY_PREFIXES.some(prefix => sourceKey.startsWith(prefix))
+}
+
 export type Measurement = Record<string, string | number | boolean | null>
 
 export interface ObservationIdentity {

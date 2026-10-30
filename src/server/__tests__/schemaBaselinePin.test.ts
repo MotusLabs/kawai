@@ -493,9 +493,26 @@ const migration20: SchemaShape['tables'] = {
   },
 }
 
+// Migration 21's delta (compact-observation-detail D5): migration 11's team
+// association table is dropped, and the unread `team_time` and `task` indexes
+// give way to `(team_id, seq)`.
+const { process_observation_teams: _teams, ...observationTables } = migration11 as SchemaShape['tables']
+const observations = observationTables.process_observations!
+const migration11And21: SchemaShape['tables'] = {
+  ...observationTables,
+  process_observations: {
+    ...observations,
+    indexes: [
+      { name: 'process_observations_kind', unique: 0, columns: ['kind', 'recorded_at'] },
+      { name: 'process_observations_team', unique: 0, columns: ['team_id', 'seq'] },
+      { name: 'process_observations_turn', unique: 0, columns: ['session_id', 'turn_id', 'seq'] },
+    ],
+  },
+}
+
 test('a fresh database opened by this build has the same shape plus each migration\'s delta and schema_migrations', () => {
   const session = initDatabase({ path: ':memory:' })
-  const added = { ...migration2, ...migration3, ...migration4, ...migration5, ...migration6, ...migration7, ...migration8, ...migration9, ...migration10, ...migration11, ...migration13, ...migration16, ...migration17, ...migration19, ...migration20 }
+  const added = { ...migration2, ...migration3, ...migration4, ...migration5, ...migration6, ...migration7, ...migration8, ...migration9, ...migration10, ...migration11And21, ...migration13, ...migration16, ...migration17, ...migration19, ...migration20 }
   expect(Object.keys(added).filter(table => table in expected.tables)).toEqual([])
   // Migration 20's: the submitter's nullable coverage map (independent-
   // verification D4), appended after the baseline columns.
