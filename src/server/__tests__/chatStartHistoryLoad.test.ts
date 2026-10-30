@@ -9,6 +9,7 @@
 // The synchronous guard left in getSnapshot logs when it reads the file.
 // S5–S6 (the Codex retry rule) live in codexStartHistoryLoad.integration.test.ts.
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import os from 'node:os'
@@ -16,6 +17,7 @@ import path from 'node:path'
 import type { ChatEvent } from '../../shared/chat'
 import { ChatSessionManager } from '../chat/ChatSessionManager'
 import { fixtureQueryFactory } from '../chat/developmentFixture'
+import { cleanGitEnv } from '../git/gitCommand'
 import { initDatabase } from '../db'
 import { logger } from '../logger'
 import { SessionRegistry } from '../SessionRegistry'
@@ -55,6 +57,10 @@ function createOwner() {
   const project = path.join(tempDir, 'proj')
   const configDir = path.join(tempDir, 'claude')
   fs.mkdirSync(project)
+  // A repository, so its team answer is cached: a plain directory's is not,
+  // and every mail and dispatcher pass would spawn git again.
+  const init = spawnSync('git', ['init', '-q', project], { env: cleanGitEnv() })
+  if (init.status !== 0) throw new Error(`git init failed: ${init.stderr}`)
   process.env.CLAUDE_CONFIG_DIR = configDir
   const db = initDatabase({ path: ':memory:' })
   let manager: ChatSessionManager | null = null
