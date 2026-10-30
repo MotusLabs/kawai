@@ -54,6 +54,21 @@ or property that would have caught it, and the source finding.
   subtracted as an observed baseline.
 - **Source finding.** findings-f4b1ebad B1–B3.
 
+### An idempotence oracle observing only the uniquely constrained row (findings-d2f9140b F1)
+
+- **Hazard.** A replay oracle checks only the row class a store constraint
+  makes unique, so a dedup-guard bypass that first closes or replaces the
+  surrounding live state still passes: `UNIQUE(source_key)` swallows the
+  redelivered row while the extra closure rows and the state reset go unseen.
+- **Oracle that catches it.** Snapshot every observation row and the persisted
+  live state around the redelivery and require both snapshots identical, then
+  close the original subject once and assert the closure's independently
+  derived totals and open-entry outcomes
+  (`src/server/__tests__/compactObservationTracker.test.ts` › "T1 E9: a
+  redelivered turn start stores nothing and writes no ledger key"); the
+  control bypasses the tracker's turn-start dedup guard only.
+- **Source finding.** findings-d2f9140b F1 (compact-observation-detail).
+
 ## Cache keys
 
 ### A key input no fixture varies (findings-f4b1ebad B4)

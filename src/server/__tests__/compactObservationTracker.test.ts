@@ -133,9 +133,40 @@ const T1: { id: string; title: string; run: (h: Harness) => void }[] = [
   {
     id: 'E9', title: 'a redelivered turn start stores nothing and writes no ledger key',
     run: h => {
+      // A populated turn: accumulated phase seconds, an open call, open requests.
+      h.activity('thinking', 1)
+      h.activity('thinking', 3)
+      h.emit({ type: 'tool_call', toolCallId: 'a', tool: 'Bash' }, 4)
+      h.emit({ type: 'approval_request', requestId: 'r1' }, 5)
+      h.emit({ type: 'question_request', requestId: 'r2' }, 6)
+      const snapshot = () => ({
+        rows: h.rows(),
+        keys: h.db.prepare('SELECT source_key FROM process_observation_keys ORDER BY source_key').all(),
+        liveRow: h.db.prepare('SELECT session_id,state FROM process_live_observations').all(),
+      })
+      const before = snapshot()
+      expect(before.rows.map(row => row.kind)).toEqual(['turn_started'])
       h.emit({ type: 'turn_started' }, 0, 'e-start')
+      expect(snapshot()).toEqual(before)
+      expect(h.rows('turn_ended')).toEqual([])
       expect(h.rows('turn_started')).toHaveLength(1)
       expect(h.db.prepare('SELECT count(*) AS n FROM process_observation_keys').get()).toEqual({ n: 0 })
+      // The original turn still closes exactly once, with its state intact.
+      h.emit({ type: 'turn_completed', subtype: 'success' }, 60)
+      expect(h.rows('turn_ended')).toHaveLength(1)
+      expect(h.rows('turn_ended')[0]!.data).toEqual({
+        outcome: 'success', durationSeconds: 60, partial: false, usageAvailable: false,
+        thinkingSeconds: 4, requestingSeconds: 0, preparingToolSeconds: 0, runningToolsSeconds: 0,
+        respondingSeconds: 0, retryingSeconds: 0, otherPhaseSeconds: 0, unmatchedResolutions: 0,
+      })
+      expect(h.rows('tool').map(row => row.data)).toEqual([
+        { category: 'shell', startedAt: iso(4), durationSeconds: 1, outcome: 'unavailable', partial: true },
+      ])
+      expect(h.rows('request').map(row => row.data)).toEqual([
+        { requestKind: 'approval', startedAt: iso(5), durationSeconds: 55, outcome: 'unavailable', partial: true },
+        { requestKind: 'question', startedAt: iso(6), durationSeconds: 54, outcome: 'unavailable', partial: true },
+      ])
+      expect(h.live()).toBeNull()
     },
   },
 ]
