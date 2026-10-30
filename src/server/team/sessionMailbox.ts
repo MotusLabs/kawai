@@ -45,6 +45,7 @@ import type { ChatUsageReport } from '../../shared/chat'
 import type { RouteDecisionLogEntry } from '../../shared/routing'
 import type { Database } from 'bun:sqlite'
 import { decisionReplyGuardOver } from '../plans/decisions/decisionReplyGuard'
+import { withCatalogSnapshot } from '../chat/catalogMemo'
 
 /** An identity of one claimed message, captured when a settle is attempted. */
 export interface ClaimRef {
@@ -313,10 +314,12 @@ export class SessionMailbox {
         return note !== null && (retry === null || note < retry) ? note : retry
       },
       afterPass: outcome => this.applyReasons(outcome),
-      recipients: () => [...options.records()].flatMap(record => {
+      // One catalog snapshot per recipient sweep: every session's cooldown
+      // looks up its provider, and most share a handful of contexts (D3).
+      recipients: () => withCatalogSnapshot(() => [...options.records()].flatMap(record => {
         const recipient = this.recipient(record.sessionId)
         return recipient ? [recipient] : []
-      }),
+      })),
       recipient: id => this.recipient(id),
       prepare: options.prepare,
       interrupt: async id => { await options.getDriver(id)?.interrupt() },
