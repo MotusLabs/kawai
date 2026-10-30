@@ -11,7 +11,9 @@
 //    version 1 `baseline`;
 // 5. apply each pending migration in order, each gated on its checked
 //    `pre-migration-<n>` backup, its `up(db)` and version row committed in
-//    one `BEGIN IMMEDIATE` transaction.
+//    one `BEGIN IMMEDIATE` transaction;
+// 6. then `initDatabase` compacts once into incremental auto_vacuum
+//    (`compaction.ts`), outside any transaction.
 // A later schema change is the next entry in MIGRATIONS (versions dense from
 // 2), never an edit to the baseline (E5).
 import type { Database } from 'bun:sqlite'
@@ -35,6 +37,7 @@ import { planSupervisionMigration } from '../plans/decisions/decisionSchema'
 import { revisionControlMigration } from '../plans/revisionControl/revisionControlSchema'
 import { planWorkspaceMigration } from '../plans/workspace/workspaceSchema'
 import { resultChecksMigration } from '../verification/verificationSchema'
+import { compactObservationDetailMigration } from '../metrics/observations/compactMigration'
 import type { BackupFile } from './backupFiles'
 import type { BackupOutcome } from './backups'
 
@@ -100,6 +103,10 @@ export const MIGRATIONS: readonly Migration[] = [
   // independent-verification D4: result checks, coverage maps, and the
   // results' coverage column. Additive, no backfill.
   resultChecksMigration,
+  // compact-observation-detail D6: drops per-segment activity, tool and
+  // request start rows, unmatched resolutions, the team association table,
+  // non-durable ledger keys, and two unread indexes.
+  compactObservationDetailMigration,
 ]
 
 export const RESTORE_DOC = 'docs/operations/database-backups.md'

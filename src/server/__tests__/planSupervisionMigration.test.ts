@@ -70,7 +70,10 @@ test('a database at version 15 with plan rows upgrades, twice, keeping every row
 
   for (let run = 0; run < 2; run++) initDatabase({ path: dbPath, migrations: MIGRATIONS }).close()
   const after = tables(dbPath)
-  for (const [table, rows] of Object.entries(before)) expect(after[table]).toEqual(rows)
+  // Migration 21 (compact-observation-detail) drops the observation team table.
+  for (const [table, rows] of Object.entries(before)) {
+    if (table !== 'process_observation_teams') expect(after[table]).toEqual(rows)
+  }
   // Later migrations (17 revision-control, 19 plan-workspace, 20 result-checks)
   // also land in this upgrade.
   expect(Object.keys(after).filter(table => !(table in before)).sort())

@@ -42,8 +42,8 @@ test('overlapping tools retain independent time while concurrent approval waits 
   h.emit({ type: 'tool_result', toolCallId: 'a' }, 10);
   h.emit({ type: 'tool_result', toolCallId: 'b' }, 12);
   h.emit({ type: 'turn_completed', subtype: 'success' }, 14);
-  expect(h.rows().filter(r => r.kind === 'tool' && r.data.durationSeconds !== null).map(r => r.data.durationSeconds)).toEqual([5, 6]);
-  expect(h.rows().find(r => r.kind === 'activity')?.data.durationSeconds).toBe(3);
+  expect(h.rows().filter(r => r.kind === 'tool').map(r => r.data.durationSeconds)).toEqual([5, 6]);
+  expect(h.rows().find(r => r.kind === 'turn_ended')?.data).toMatchObject({ thinkingSeconds: 3, requestingSeconds: 0, unmatchedResolutions: 0 });
   expect(observedToolTiming(h.rows())).toEqual({ sumSeconds: 11, unionSeconds: 7 });
   // No background task level-set is consumed; an idle task cannot extend the turn.
   expect(h.rows().filter(r => r.kind === 'turn_ended')).toHaveLength(1);
