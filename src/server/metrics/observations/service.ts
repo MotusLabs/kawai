@@ -3,7 +3,8 @@
 // reconciler, and the managed-chat tracker. Post-commit notifications within
 // 250 ms coalesce into one reconcile pass (an unref'd timer, cleared on
 // stop); a 30-second tick checkpoints live turns, reconciles, and prunes
-// detail in bounded batches. No network or model call is ever made here.
+// detail in bounded batches, returning the freed pages to the file. No
+// network or model call is ever made here.
 import type { Database } from 'bun:sqlite'
 import {
   SOURCE_NAMES,
@@ -16,6 +17,7 @@ import { ChatObservationTracker } from './chatTracker'
 import { ObservationReconciler } from './reconcile'
 import { ObservationRecorder } from './recorder'
 import { ObservationStore, PRUNE_BATCH } from './store'
+import { releaseFreePages } from '../../dbSafety/compaction'
 
 const TICK_MS = 30000
 const PRUNE_INTERVAL_MS = 3600000
@@ -94,6 +96,8 @@ export class ProcessObservationService {
       const previous = Number(this.store.checkpoint('last-prune') ?? 0)
       if (this.store.now() - previous < PRUNE_INTERVAL_MS) return
       const removed = this.store.prune()
+      // Return the freed pages to the file (compact-observation-detail D7).
+      releaseFreePages(this.store.db)
       // Drain a backlog in bounded later ticks, without a synchronous loop.
       if (removed < PRUNE_BATCH) this.store.setCheckpoint('last-prune', String(this.store.now()))
     })
