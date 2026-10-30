@@ -59,13 +59,17 @@ CODEX_HOME omission, which changes Codex provider ids.
 
 ## 3. Integration
 
-- [ ] 3.1 Run `bun run check` on the clean committed tree.
+- [x] 3.1 Run `bun run check` on the clean committed tree.
   - Verify: a recorded full pass for the final head's tree, named in the
     result (a tree cannot cite its own record).
   - History: pass record 576e34fc was for the tree of 21192854, before the
     master merge; the reviewed head's tree had record d271fd3e. Neither
     applies to the review follow-up's trees, so 3.1 is reopened.
-- [ ] 3.2 Map every oracle id (K1–K11, E1–E2, N1–N5, W1–W5, P1, P2) to a test
+  - Closed on Lead acceptance (notes d2230de0, da29c8ee): full check
+    3c1ad0da passed for the accepted head. The combined closeout tree
+    of the boot-archive phase gets its own new recorded full pass, named in
+    the archive result.
+- [x] 3.2 Map every oracle id (K1–K11, E1–E2, N1–N5, W1–W5, P1, P2) to a test
   title and each mutant and author control to its killing test.
   - Verify: the map has no gap. Rows K1–K8, E1–E2, N1–N4, P1, P2 and R1–R9
     are mapped in the earlier result; the new rows map to the tests of the
@@ -73,6 +77,11 @@ CODEX_HOME omission, which changes Codex provider ids.
     `sessionMailbox.test.ts` (W1). Author controls: R10 → W1; R11 → W2 and
     W5; R14 → W2 and W5; R19 → W2 and W5; R16 → K11b, K11d, N5d, N5f; R18 →
     N5b, N5d, N5f. R12, R13, R15, and R17 are structural twins, not run.
+  - Closed on Lead acceptance (notes d2230de0, da29c8ee): the full mapping
+    (33 oracles; K10 unused) was cross-verified fresh (Sol PASS 2220487d).
+    Limits stay honest: structural twins were not run; N5 is identity-first;
+    no kill is claimed beyond retained records; no old private profiling
+    was reverified.
 
 ## 4. Review follow-up (findings `f4b1ebad`, conditions C1–C6)
 
