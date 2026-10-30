@@ -13,6 +13,9 @@ import { SessionTeams } from '../team/sessionTeams'
 import { messageEnvelope, formatEnvelope } from '../team/envelope'
 import { mailboxHandlers } from '../team/mailboxTools'
 import { NULL_OWNERSHIP } from '../plans/execution/executionOwnership'
+import { profileCatalogLevels, providerOf } from '../chat/profileCatalog'
+import { catalogCtx } from '../team/cooldowns'
+import type { MailRecipient } from '../team/dispatcher'
 
 let dir: string
 let db: Database
@@ -149,4 +152,36 @@ test('a late durable receipt confirms held mail without another push', () => {
   expect(store.get(row.id)?.state).toBe('uncertain')
   expect(store.markDelivered(row.id)).toBe(true)
   expect(store.get(row.id)?.state).toBe('delivered')
+})
+
+// W1 (catalog-resolution-cache Table W, findings-f4b1ebad B1): the sweep the
+// mailbox hands its dispatcher (sessionMailbox.ts `recipients`) holds one
+// catalog snapshot, so each distinct context computes its input key once per
+// sweep — and a second sweep computes it again. The expected counts come from
+// one lookup per context outside any snapshot, anchored to the level count.
+// The records carry no group: the group catalog stats the same level files
+// for its own stamp (groupCatalog.ts), a separate cache once per sweep.
+test("W1: the mailbox recipient sweep computes each catalog context's key once per sweep (kills R10)", () => {
+  const sub = path.join(dir, 'sub')
+  fs.mkdirSync(path.join(sub, '.kawai'), { recursive: true })
+  fs.writeFileSync(path.join(sub, '.kawai/profiles.json'), JSON.stringify({ sub: { label: 'Sub' } }))
+  for (const record of records.values()) record.groupId = null
+  for (let i = 4; i < 8; i++) records.get(`dev-${i}`)!.projectPath = sub
+  const contexts = [catalogCtx(dir, dir), catalogCtx(dir, sub)]
+  const files = new Set(contexts.flatMap(ctx => profileCatalogLevels(ctx).map(level => level.file)))
+  const stats = (read: () => unknown): number => {
+    const spy = spyOn(fs, 'statSync')
+    try {
+      read()
+      return spy.mock.calls.filter(call => files.has(String(call[0]))).length
+    } finally { spy.mockRestore() }
+  }
+  const [kDir, kSub] = contexts.map(ctx => stats(() => providerOf('default', ctx)))
+  expect([kDir, kSub]).toEqual(contexts.map(ctx => profileCatalogLevels(ctx).length))
+  expect(kSub).toBeGreaterThan(kDir!)
+  const { recipients } = (runtime.dispatcher as unknown as { options: { recipients(): MailRecipient[] } }).options
+  let rows: MailRecipient[] = []
+  expect(stats(() => { rows = recipients() })).toBe(kDir! + kSub!)
+  expect(rows.map(row => row.sessionId).sort()).toEqual([...records.keys()].sort())
+  expect(stats(() => recipients())).toBe(kDir! + kSub!)
 })
