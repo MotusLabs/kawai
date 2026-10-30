@@ -186,14 +186,17 @@ same worktree at once; reuse a worktree only for follow-up work on its branch.
   `diff master...<branch>`, then dispatch the review with `task_handoff`
   (`target_kind: session`) to ONE reviewer chosen by the author's model, so
   review is always cross-model:
-  - Work written on a Claude profile (`opus`, `sonnet`, `haiku`, `default`)
-    goes to an eligible MiMo reviewer discovered in the current roster. Prefer
-    an available member or the shorter queue; if none is eligible, record the
-    wait rather than assuming staffing. If any commit under review came from
-    a Claude dev, it counts as Claude work.
-  - Everything else (`glm`, `glm-flash`, `mimo`, …) goes to the Claude Code
-    reviewer profile, the default; discover an eligible session rather than
-    assuming a particular member exists.
+  - Work written on an OpenAI profile (`codex`, `codex-sol`, `codex-luna`)
+    goes to an eligible Claude Opus reviewer (`opus`, medium effort)
+    discovered in the current roster. Prefer an available member or the
+    shorter queue; if none is eligible, record the wait rather than assuming
+    staffing. If any commit under review came from a GPT dev, it counts as
+    GPT work.
+  - Everything else (`opus`, `sonnet`, `haiku`, `default`, `glm`,
+    `glm-flash`, `mimo`, the OpenRouter profiles, …) goes to an eligible
+    Codex Sol reviewer (`codex-sol`, medium effort), the main reviewer;
+    discover an eligible session rather than assuming a particular member
+    exists.
   - The author's profile is on its session (`chat_sessions.profile_id`, or the
     navigator badge). Name the chosen reviewer's session as the handoff's
     `target`. Its instruction is ordinary direct task mail, so it reaches the
