@@ -3,9 +3,9 @@
 // the module's public API — no alternate writer. Controlled faults use the
 // factory's narrow deps seam (a directory fsync that fails once) or real
 // directory permissions (a 0500 parent, skipped under uid 0). The separated
-// name-pattern equivalence tables pin the store-wide rule against the legacy
-// chatProviderEnv grammar and the secret-source rule against the catalog
-// binding grammar.
+// grammar-equivalence tables live in credentialStoreAdmissionEquivalence.test.ts,
+// the trust-gate proofs in credentialStoreTrustGates.test.ts, and the
+// realpath-failure durability arm in credentialStoreDurability.test.ts.
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import * as realFs from 'node:fs'

@@ -331,3 +331,124 @@ describe('credential store durability: real-directory chain confirmation', () =>
     expect(rec.files).toBe(0)
   })
 })
+
+// The realpath step of the confirmation walk is required, not optional: the
+// walk RESOLVES the store directory to its real location first, and its
+// failure must report applied but not durable without any lexical ancestor
+// substituted and without any directory open or fsync standing in for the
+// unresolvable chain. The fault arms only after the real rename returns —
+// the sole reachable call site — so every counted open/fsync below is
+// strictly post-commit.
+describe('required realpath failure after the rename', () => {
+  /** Recorder seam: the rename really succeeds (counted once), then
+   * realpathSync records its argument and throws; opens classify into
+   * directory opens vs the store reload open only while renamed; directory
+   * fsyncs count only while renamed. Everything else stays real node:fs. */
+  const realpathFaultDeps = (storePath: string, fault: {
+    renamed: boolean
+    renameCount: number
+    realpathCalls: string[]
+    commitDirOpens: string[]
+    storeReloadOpens: number
+    commitDirFsyncs: number
+  }): Partial<CredentialFsDeps> =>
+    ({
+      renameSync: (from: unknown, to: unknown) => {
+        ;(realFs.renameSync as (...a: unknown[]) => void)(from, to)
+        fault.renamed = true
+        fault.renameCount += 1
+      },
+      realpathSync: (p: unknown) => {
+        if (fault.renamed) {
+          fault.realpathCalls.push(String(p))
+          throw new Error('injected realpath failure')
+        }
+        return (realFs.realpathSync as (...a: unknown[]) => unknown)(p)
+      },
+      openSync: (target: unknown, flags: number, ...rest: unknown[]) => {
+        const fd = (realFs.openSync as (...a: unknown[]) => number)(target, flags, ...rest)
+        if (fault.renamed) {
+          if (flags & realFs.constants.O_DIRECTORY) fault.commitDirOpens.push(String(target))
+          else if (String(target) === storePath) fault.storeReloadOpens += 1
+        }
+        return fd
+      },
+      fsyncSync: (fd: number) => {
+        if (fault.renamed && realFs.fstatSync(fd).isDirectory()) fault.commitDirFsyncs += 1
+        return realFs.fsyncSync(fd)
+      },
+    }) as unknown as Partial<CredentialFsDeps>
+
+  const newFault = () => ({
+    renamed: false,
+    renameCount: 0,
+    realpathCalls: [] as string[],
+    commitDirOpens: [] as string[],
+    storeReloadOpens: 0,
+    commitDirFsyncs: 0,
+  })
+
+  // @covers: provider-credentials › Imported credentials live in the server-owned store › Applied and durable report separately
+  test('a realpath failure after the rename reports applied, not durable, substituting no ancestor', async () => {
+    const dir = path.join(root, 'd')
+    realFs.mkdirSync(dir, 0o700)
+    const storePath = path.join(dir, 'credentials.json')
+    const fault = newFault()
+    const store = createCredentialStore(storePath, { deps: realpathFaultDeps(storePath, fault) })
+    expect(await store.set('x', 'vx', 'launch-env')).toEqual({ applied: true, durable: false })
+    // Exactly one rename; realpath was required of the store directory and
+    // nothing else; no directory open or fsync substituted the unresolved
+    // chain; the one post-rename store open is the verified reload.
+    expect(fault.renameCount).toBe(1)
+    expect(fault.realpathCalls).toEqual([dir])
+    expect(fault.commitDirOpens).toEqual([])
+    expect(fault.commitDirFsyncs).toBe(0)
+    expect(fault.storeReloadOpens).toBe(1)
+    // Asserted before any further public read: the new content stands, no
+    // temp remains.
+    const parsed = JSON.parse(realFs.readFileSync(storePath, 'utf8')) as {
+      entries: Record<string, { kind: string; value: string }>
+    }
+    expect(parsed.entries.x).toEqual({ kind: 'launch-env', value: 'vx' })
+    expect(realFs.readdirSync(dir)).toEqual(['credentials.json'])
+    const fresh = createCredentialStore(storePath)
+    expect(fresh.status()).toEqual({ ok: true })
+    expect(fresh.resolve('x')).toBe('vx')
+    expect(fresh.list().entries).toEqual([{ name: 'x', kind: 'launch-env', state: 'set' }])
+  })
+
+  // @covers: provider-credentials › Imported credentials live in the server-owned store › Applied and durable report separately
+  test('the same realpath fault through reclassify reports applied, not durable', async () => {
+    const dir = path.join(root, 'd2')
+    const storePath = path.join(dir, 'credentials.json')
+    // Seed with real deps, wholly outside the fault window; the pre-rename
+    // in-queue read of the reclassify then happens before `renamed` is true,
+    // so it is never counted as post-commit I/O.
+    await createCredentialStore(storePath).set('PLAIN', 'p', 'launch-env')
+    const retainCalls: string[] = []
+    const fault = newFault()
+    const store = createCredentialStore(storePath, {
+      retainSecretNames: { retainSecretName: (name: string) => { retainCalls.push(name) } },
+      deps: realpathFaultDeps(storePath, fault),
+    })
+    expect(await store.reclassify('PLAIN', 'secret-source')).toEqual({
+      applied: true,
+      durable: false,
+    })
+    expect(fault.renameCount).toBe(1)
+    expect(fault.realpathCalls).toEqual([dir])
+    expect(fault.commitDirOpens).toEqual([])
+    expect(fault.commitDirFsyncs).toBe(0)
+    expect(fault.storeReloadOpens).toBe(1)
+    expect(retainCalls).toEqual(['PLAIN'])
+    const parsed = JSON.parse(realFs.readFileSync(storePath, 'utf8')) as {
+      entries: Record<string, { kind: string; value: string }>
+    }
+    expect(parsed.entries.PLAIN).toEqual({ kind: 'secret-source', value: 'p' })
+    expect(realFs.readdirSync(dir)).toEqual(['credentials.json'])
+    const fresh = createCredentialStore(storePath)
+    expect(fresh.status()).toEqual({ ok: true })
+    expect(fresh.resolve('PLAIN')).toBe('p')
+    expect(fresh.list().entries).toEqual([{ name: 'PLAIN', kind: 'secret-source', state: 'set' }])
+  })
+})
