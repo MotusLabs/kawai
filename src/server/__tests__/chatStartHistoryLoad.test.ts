@@ -151,7 +151,7 @@ function createOwner() {
     cancelled = true
     for (const release of releases) release()
     // A rejected Promise.all may leave siblings that create more owned work.
-    while (pending.size > 0) await Promise.allSettled([...pending])
+    while (pending.size > 0) await Promise.allSettled(pending)
     await manager?.dispatcher.settled()
     concurrent = 0
     manager?.shutdown()
