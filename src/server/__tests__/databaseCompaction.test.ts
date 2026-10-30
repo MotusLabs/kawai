@@ -71,6 +71,18 @@ test('T4 C1: a database already in incremental mode is not compacted again', () 
   }
 })
 
+test('a new database file starts in incremental mode without a compaction pass', () => {
+  const info = spyOn(logger, 'info')
+  try {
+    const session = initDatabase({ path: dbPath })
+    expect(pragma(session.db, 'auto_vacuum')).toBe(2)
+    session.close()
+    expect(info.mock.calls.filter(([event]) => event === 'db_compacted')).toEqual([])
+  } finally {
+    info.mockRestore()
+  }
+})
+
 // @covers: database-safety › Pruned space returns to the file › Conversion fails
 test('T4 C3: a failed conversion is logged, keeps contents and mode, never stops the start, and is retried', () => {
   legacyFile(21, 0)

@@ -4,7 +4,8 @@
 // by pruning return to the file through `PRAGMA incremental_vacuum`, so the
 // file and its backups shrink. VACUUM cannot run inside a transaction, so this
 // is not a migration. A failure is logged and swallowed: SQLite leaves the
-// mode unchanged, the file stays usable, and the next start retries.
+// mode unchanged, the file stays usable, and the next start retries. A new,
+// empty file takes the mode before its first table, so it never needs VACUUM.
 import type { Database } from 'bun:sqlite'
 import { logger } from '../logger'
 
@@ -12,6 +13,11 @@ import { logger } from '../logger'
 const INCREMENTAL = 2
 
 const pragma = (db: Database, name: string) => Object.values(db.prepare(`PRAGMA ${name}`).get() as object)[0] as number
+
+/** Sets incremental mode on an empty file, where it takes effect without VACUUM. */
+export function startIncremental(db: Database): void {
+  if (pragma(db, 'page_count') === 0) db.exec('PRAGMA auto_vacuum = INCREMENTAL')
+}
 
 export function compactDatabase(db: Database): void {
   try {
