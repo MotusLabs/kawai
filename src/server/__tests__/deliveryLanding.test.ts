@@ -1,10 +1,14 @@
-// First1.1 observable checkpoint; full L/I/C and seeded property expansion
-// follows the named adviser checkpoint. No production Git reader is activated.
+// Pure landing oracles (delivery-outcome-metrics1.1). The original observable
+// checkpoint remains intact; no production Git reader is activated.
 import { expect, test } from 'bun:test'
 import {
   changeLandings, containedBy, intervalMembership, landingPositions, resolveResultCommit,
+  commitTimeMs,
 } from '../metrics/delivery/landing'
+import { DeliveryHistoryError } from '../metrics/delivery/types'
 import { FIXTURE_EPOCH, mergeArchiveFixture } from './fixtures/deliveryRepo'
+import { graphOf, id } from './fixtures/deliveryCases'
+import { TABLE_I, TABLE_L } from './fixtures/deliveryOracleRows'
 
 const context = { teamId: 'fixture-team', taskId: 'fixture-task', resultId: 'fixture-result' }
 const finish = '2026-10-03T00:00:00.000Z'
@@ -84,4 +88,108 @@ test('checkpoint: malformed archive input fails whole instead of returning parti
     }
     expect(changeLandings('', positions, 'sha1')).toEqual({ ok: true, changes: new Map() })
   } finally { fixture.repo.dispose() }
+})
+
+// @covers: delivery-outcomes › A result commit lands at its first containing position › First position, not earliest time
+test('Table L1-L3: first containing positions follow all parents, never the minimum time', () => {
+  const cases = {
+    L1: { graph: graphOf([[1, 100], [2, 200, 1]]), target: 2, expected: { position: 2, at: 200, bound: 200 } },
+    L2: { graph: graphOf([[1, 100], [2, 200, 1, 3], [3, 150, 1]]), target: 3, expected: { position: 2, at: 200, bound: 200 } },
+    L3: { graph: graphOf([[1, 100], [2, 90, 1]]), target: 1, expected: { position: 1, at: 100, bound: 100 } },
+  }
+  for (const row of TABLE_L.filter(row => row[0] === 'L1' || row[0] === 'L2' || row[0] === 'L3')) {
+    const { graph, target, expected } = cases[row[0] as keyof typeof cases]
+    expect(landingPositions(graph, id(2)).commits.get(id(target)), row.join(' | ')).toEqual(expected)
+  }
+})
+
+// @covers: delivery-outcomes › A result commit lands at its first containing position › Backdated bridge
+test('Table L5a-L5c: prefix bounds distinguish no, unknown, and yes without inventing membership', () => {
+  const graph = graphOf([[1, 100], [2, 50, 1, 4], [3, 200, 2], [4, 40, 1]])
+  const landing = landingPositions(graph, id(3)).commits.get(id(4))!
+  expect(landing).toEqual({ position: 2, at: 50, bound: 100 })
+  const outcomes = { L5a: 'no', L5b: 'unknown', L5c: 'yes' } as const
+  for (const row of TABLE_L.filter(row => row[0].startsWith('L5'))) {
+    expect(containedBy(landing, Number(row[2])), row.join(' | ')).toBe(outcomes[row[0] as keyof typeof outcomes])
+  }
+  expect(intervalMembership(landing, 100, 150)).toBe('unknown')
+  expect(intervalMembership(landing, 40, 150)).toBe('in')
+})
+
+test('Table L6 and L8a: old-dated bridges preserve later arrivals and direct graph identity', () => {
+  const graph = graphOf([[1, 1000], [2, 10, 1], [3, 1100, 2, 4], [4, 1050, 1]])
+  const positions = landingPositions(graph, id(3))
+  const expected = { position: 3, at: 1100, bound: 1100 }
+  for (const row of TABLE_L.filter(row => row[0] === 'L6' || row[0] === 'L8a')) {
+    expect(resolveResultCommit({ ...context, commitRef: id(4), objectFormat: 'sha1',
+      landings: positions.commits, checks: [] }), row.join(' | ')).toEqual({ kind: 'landed', sha: id(4), landing: expected })
+    expect(containedBy(expected, 1200)).toBe('yes')
+  }
+})
+
+// @covers: delivery-outcomes › A result commit lands at its first containing position › Boundary at the window end
+// @covers: delivery-outcomes › A result commit lands at its first containing position › Backdated straddle
+test('Table I1-I7: inclusive containment and half-open event membership', () => {
+  const hour = 3_600_000
+  const span = 7 * 24 * hour
+  const end = 100 * 24 * hour
+  const times = [
+    [end - span], [end], [end - 2 * span], [end - 2 * span - 1],
+    [end - span + hour, end - 3 * span], [end + hour, end - hour], [end + 1],
+  ]
+  for (const [index, row] of TABLE_I.entries()) {
+    const chain = times[index]!
+    const graph = graphOf(chain.map((at, i): [number, number, ...number[]] => i === 0 ? [i + 1, at] : [i + 1, at, i]))
+    const landing = landingPositions(graph, id(chain.length)).commits.get(id(chain.length))!
+    expect(intervalMembership(landing, end - span, end), row.join(' | ')).toBe(row[3])
+    expect(intervalMembership(landing, end - 2 * span, end - span), row.join(' | ')).toBe(row[4])
+    const containment = row[5].split(';')[0] as 'yes' | 'no' | 'unknown'
+    expect(containedBy(landing, end), row.join(' | ')).toBe(containment)
+    if (row[0] === 'I2') expect(intervalMembership(landing, end, end + span)).toBe('in')
+  }
+})
+
+// @covers: delivery-outcomes › A result commit lands at its first containing position › Backdated straddle
+test('I5: a contained backdated straddle has unknown membership in both adjacent windows', () => {
+  const hour = 3_600_000
+  const span = 7 * 24 * hour
+  const end = 100 * 24 * hour
+  const graph = graphOf([[1, end - span + hour], [2, end - 3 * span, 1]])
+  const landing = landingPositions(graph, id(2)).commits.get(id(2))!
+  expect(containedBy(landing, end)).toBe('yes')
+  expect(intervalMembership(landing, end - span, end)).toBe('unknown')
+  expect(intervalMembership(landing, end - 2 * span, end - span)).toBe('unknown')
+})
+
+test('invalid landing intervals and read ends fail closed as unknown', () => {
+  for (const interval of [{ position: 1, at: NaN, bound: 1 }, { position: 1, at: 2, bound: 1 },
+    { position: 1, at: 1, bound: Infinity }]) {
+    expect(containedBy(interval, 3)).toBe('unknown')
+    expect(intervalMembership(interval, 0, 3)).toBe('unknown')
+  }
+  const interval = { position: 1, at: 1, bound: 1 }
+  expect(containedBy(interval, NaN)).toBe('unknown')
+  for (const [from, end] of [[1, 1], [2, 1], [NaN, 2], [0, Infinity]]) {
+    expect(intervalMembership(interval, from!, end!)).toBe('unknown')
+  }
+})
+
+test('known pure history failures carry typed reasons, never arbitrary message classification', () => {
+  for (const [run, reason] of [
+    [() => commitTimeMs(0.5), 'history-malformed'],
+    [() => commitTimeMs(Number.MAX_SAFE_INTEGER), 'history-malformed'],
+    [() => landingPositions(graphOf([[1, 1, 1]]), id(1)), 'history-malformed'],
+    [() => landingPositions(graphOf([[1, 1, 2]]), id(1)), 'history-incomplete'],
+    [() => landingPositions(graphOf([[1, 1], [2, 2, 1, 3]]), id(2)), 'history-incomplete'],
+    [() => landingPositions(graphOf([[1, NaN]]), id(1)), 'history-malformed'],
+  ] as const) {
+    try { run(); throw new Error('expected a typed history failure') }
+    catch (error) {
+      expect(error).toBeInstanceOf(DeliveryHistoryError)
+      expect((error as DeliveryHistoryError).reason).toBe(reason)
+    }
+  }
+  expect(new Error('history-malformed')).not.toBeInstanceOf(DeliveryHistoryError)
+  expect(commitTimeMs(0)).toBe(0)
+  expect(commitTimeMs(-1)).toBe(-1000)
 })

@@ -2,6 +2,14 @@
 // milliseconds; positions are one-based on the oldest-first first-parent chain.
 export type ObjectFormat = 'sha1' | 'sha256'
 
+/** Only these known failures may be mapped to history validation reasons. */
+export class DeliveryHistoryError extends Error {
+  constructor(readonly reason: 'history-malformed' | 'history-incomplete') {
+    super(reason)
+    this.name = 'DeliveryHistoryError'
+  }
+}
+
 export interface HistoryCommit {
   readonly committedAt: number
   readonly parents: readonly string[]
