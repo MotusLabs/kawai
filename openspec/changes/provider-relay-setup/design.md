@@ -47,17 +47,122 @@ Root cause of the reported incidents, in code terms:
 ## D1 — Credential store: one user-level file; SQLite retires as a credential source
 
 **Choice.** Imported credential values live in `~/.kawai/credentials.json`
-(`HOME`-resolved like the catalogs): a JSON object mapping environment
-variable name → value, where per variable the value is a non-empty string
+(`HOME`-resolved like the catalogs): a versioned document
+`{"version": 1, "entries": {NAME: {"kind": "secret-source" | "launch-env",
+"value": string}}}`, one entry per variable. The value is a non-empty string
 (**set**), an empty string (**blank** — the variable is exported empty at
-launch, overriding lower sources, like a catalog env blank today), or absent
-(**unset** — lower sources show through; the UI's Clear removes the key).
+launch, overriding lower sources, like a catalog env blank today; blank is
+valid for both kinds and never reads as unset), or the entry is absent
+(**unset** — lower sources show through; the UI's Clear removes the entry).
+Names are admitted per kind. A store NAME — so every migrated legacy
+Settings entry — keeps the legacy Settings name shape
+`^[A-Za-z_][A-Za-z0-9_]*$`: mixed case is valid, and legacy and seed
+names (`http_proxy` and its kind) are stored and delivered unchanged,
+never case-converted, renamed, or dropped. A `secret-source` entry
+additionally requires the catalog binding pattern `^[A-Z_][A-Z0-9_]*$`;
+reclassifying a launch-env entry whose name fails that pattern to a
+secret source refuses with a fixed reason before any file change or
+retained-name collaborator call — never silently uppercased. The store
+keeps local copies of both patterns with separated equivalence tests
+(the secret-source rule against the catalog pattern; the store-wide rule
+against the legacy `chatProviderEnv` validator — the module-private
+regex is not exported, and no shared source changes here). Values
+persist byte-for-byte, without coercion, and the store invents no new
+admission cap: no entry count, no value-length bound (no 32-entry or
+4096-character cap) — the legacy Settings validator's limits stand
+unchanged at the legacy input boundary, and the §2.2 migration imports
+every valid legacy entry even into a store already holding additional
+disjoint entries. A set or replace carrying a NUL character in the value
+refuses with a fixed reason before any side effect, for both kinds, and
+a reclassification refuses when its supplied or current candidate value
+carries one. An unsupported `version`, an unknown `kind`, an invalid
+name or entry shape for its kind, or a stored value carrying NUL is
+**malformed** — reported and refused, never salvaged into a default
+(below).
 The module (`src/server/chat/credentialStore.ts`) creates the file with mode
-0600, refuses to widen permissions on an existing file, refuses symlinks,
-writes atomically (temp file in the same directory, fsync, rename), and
-caches by an mtime/size stamp (`profileCatalogStamp`'s pattern) so per-launch
-reads stay cheap. Concurrent saves serialize in-process; a failed save leaves
-the previous file untouched and is reported. **Threat boundary, stated
+0600, never widens permissions on an existing file, refuses symlinks, writes
+atomically (temp file `O_EXCL|O_NOFOLLOW` 0600 plus explicit fchmod, in the
+same directory, fsync, rename), and caches by an mtime/size stamp
+(`profileCatalogStamp`'s pattern) so per-launch reads stay cheap.
+
+**One owner per file; gates before cache.** One module-owned coordination
+owner per resolved file holds the parse cache AND the whole read-modify-write
+queue — every instance, every mutation (`set`, `clear`, `reclassify`), and
+the later §2.2 migration (no independent migration write path). The owner is
+keyed by the stable validated real parent identity (the resolved parent's
+device + inode plus the file name; the canonical path is retained), so
+stable parent symlink aliases converge on one owner; an implementation that
+can key only by canonical realpath must bound out bind aliases and return
+for disposition before claiming the all-in-process guarantee. Outside the
+guarantee, stated: external processes, aliases or parents that change after
+resolution, and same-user hostile tools. A mutation acquires the shared
+queue first and reads the latest bytes only after acquiring it. **Every
+access — a cache hit included — passes the security gates first**: `lstat`
+shows a regular non-symlink file owned by the effective uid with zero
+group/other mode bits; the read opens `O_NOFOLLOW` and its `fstat` identity
+matches the observed `lstat`; a failed gate never follows the target. Only
+behind the gates does the mtime/size stamp decide cache reuse (the absent
+state caches too). The stamp stays a cache heuristic, not a freshness proof:
+a same-mtime/size external content change is a stated limitation, and
+passing the gates certifies nothing about content.
+
+**Permissions.** A created store is owner read/write 0600 and is never
+widened. An existing file carrying any group or other access bit (0644 and
+alike) refuses reads and mutations, reported — never auto-chmodded; the
+operator repairs it. A 0400 file reads; an explicit save may replace it
+atomically with a fresh 0600 file, never chmod in place. A symlinked store
+path is refused on every access; the parent `~/.kawai` may legitimately be
+reached through a stable symlink (catalog-compatible HOME aliases are not
+silently rejected). When the store creates a missing `~/.kawai`, it is
+created 0700. Durability is never inferred from visibility: a chain that
+merely predates the write — created by a prior failed process and visible
+to this one — is still unconfirmed. Every renamed write confirms, in one
+pass, the store directory's real chain and every real ancestor through the
+filesystem root before any durable success is claimed. A path spelling that
+resolves to the same real directory may open successfully even when a
+component is replaced mid-write; the durable claim attaches to the chain
+confirmed at confirmation time, and no detection of such replacements is
+claimed. An operator-created symlink inside the chain is unconfirmed
+exactly because the store itself creates directories only — never because
+a symlink merely predates a write.
+
+**Applied and durable are distinct outcomes.** The commit point is the
+rename. A failure before the rename leaves the previous file byte-for-byte
+untouched, removes the temp file, and refuses with `write-failed` — not
+applied. After a successful rename, the store directory — resolved to its
+real path — and every real ancestor through the filesystem root is fsynced;
+the first required realpath, open, or fsync failure reports **applied, not
+durable**: the new content is visible and stands, durability is
+unconfirmed, no rollback or retry runs, and no ancestor is substituted for
+a failed required one — the cache invalidates and verified-reloads. Callers
+get the typed outcome, and both consumers act on it: the future Settings
+warning surfaces the uncertainty, and the §2.2 migration deletes the
+Settings map and commits its stamp only after a durable acknowledgement.
+The blanket "a failed save leaves the previous file untouched" therefore
+holds before the rename only. A valid clear or reclassification that changes
+nothing — an absent entry over a missing or readable store, or a
+reclassification to the entry's current kind — reports
+`{applied:false, durable:false}`: no file, directory, or registry call;
+`durable` is meaningful only when `applied` is true, and callers branch on
+`applied` first.
+
+**Corruption fails closed.** A missing file is an empty store; the first
+save creates it 0600. An unreadable file, a failed trust gate, or a
+malformed document is reported under one fixed safe reason in the source
+listing; resolution then composes as if the store were absent — the process
+environment and the `KAWAI_CHAT_ENV` seed still apply — and every mutation
+refuses while the prior bytes stand. Clear is not a corruption reset; no
+automatic backup, rename, or overwrite runs; v1 repair is manual, and the
+listing says so.
+
+**Fixed, value-free text.** Every error, outcome, and listing string is a
+fixed safe text naming the path class and a reason code — never a
+`JSON.parse` or fs message, never a cause chain, never a value, prefix, or
+length; an invalid raw input is never echoed back as a name. Metadata reads
+return name, kind, presence, and source only; the internal resolver consumes
+values without exposing them.
+
+**Threat boundary, stated
 honestly:** mode 0600 protects against other users on the host — it is not
 isolation from tools running as the same user, which can read the file.
 What keeps values from agents is that no launch receives a **secret
@@ -87,6 +192,23 @@ operator may reclassify an entry as a secret source in Settings. The
 Settings env editor writes the store (launch-env by default; reclassification
 is an explicit act). The old GET that served non-secret-named values
 verbatim is gone.
+
+**Retained names before secret-mutation success.** The store exposes one
+required narrow collaborator for secret-source mutations: a `set`,
+`clear`, or `reclassify` that changes an entry whose current or resulting
+kind is secret-source persists the entry's NAME (never its value) into the
+retained-names registry through the §2.3 registry owner **before** the store
+reports success. The current kind comes from the store bytes read inside the
+mutation queue (never the stamp cache); collaborator presence is checked
+before any state read when the resulting kind is secret-source, and after
+that read when only the current kind is. A missing or throwing
+collaborator refuses the mutation before the credential file changes; the
+core never defaults the collaborator to a silent no-op. Persisting the name
+before the file write is the conservative order — a later file-write failure
+leaves the name withheld with no stored value (over-withholding is safe).
+The production factory wires the real SQLite registry (§2.3 caller work);
+core tests use argument-checking memory collaborators, which prove the
+refusal order only — not the real registry, launch withholding, or P7.
 
 **Two compositions, stated apart.** *Resolution* — what the auth gate,
 injection, and provider usage pulls read for a variable: process env <
@@ -135,9 +257,20 @@ launch-env entry — an entry whose name the registry already holds (a
 catalog binding or a retained name) is imported **inert** per table W7,
 the collision listed in the source listing naming the variable and the
 supported credential setting — the store file is written durably (atomic
-rename + fsync) **before** any SQLite write; (2) then, in one SQLite
-transaction, the map row is deleted and the migration stamp is committed.
-The stamp's presence never re-runs the migration.
+rename + fsync) **before** any SQLite write; (2) then — only after the store write reported **durable** — in one SQLite
+transaction, the map row is deleted and the migration stamp is committed; an
+applied-but-not-durable store write leaves the map in place and the
+migration re-runs on the next start.
+The stamp's presence never re-runs the migration. On a filesystem that
+permanently refuses a required confirmation step (for example a directory
+fsync on a special filesystem), every store write reports applied but not
+durable forever — the map stays and the migration re-runs each start;
+re-running re-imports the same values (absorbed when equal), but a name the
+operator cleared from the store while the map stayed retained would be
+re-imported. Resolving that repeated-reimport and cleared-name risk — a
+reimport cap, an operator escape, or refusing migration on such
+filesystems — is §2.2 implementation scope at its own later gate; the
+store's contract does not change now.
 
 **Crash, collision, and restart table** (each row is the state a restart
 finds, and what it does):
@@ -148,9 +281,12 @@ finds, and what it does):
 | after the store write, before the SQLite transaction | moved entries present | map present, no stamp | re-run: a map entry whose store name already holds the **same** value is absorbed silently (idempotent); a **different** value is a collision — the store entry wins, and the skip is recorded in the source listing as "legacy Settings `<NAME>` not migrated: the store already holds `<NAME>`"; then the map row is deleted and the stamp commits |
 | after the SQLite transaction | moved entries present | map deleted, stamp set | never re-runs (stamp) |
 
-A restored pre-upgrade backup (map present, no stamp) re-runs the migration
+The table's rows are crash points; the applied-but-not-durable outcome above
+is not one of them — the SQLite step simply never runs on it. A restored
+pre-upgrade backup (map present, no stamp) re-runs the migration
 the same way; entries the later store already holds absorb or collide per
-the middle row. Concurrent store saves serialize in-process.
+the middle row. All store readers and writers share the one per-file
+coordination owner (above).
 
 **Backup honesty.** Every backup taken **before** the migration's SQLite
 commit may hold the old map values — including the upgrade's own startup
@@ -794,12 +930,28 @@ assigns each to a task.
    that the flag settings layer carries no token or header value. Recorded
    as an e2e assertion; until it runs, the design claims parity of
    mechanism, not measured exposure.
-2. **Credential-store IO** (D1): atomic write (temp + fsync + rename),
-   symlink refusal, permission pin, concurrent-save serialization, and the
-   crash-safe migration per D1's table — the durable store-file write lands
-   **before** the one SQLite transaction that deletes the map row and
-   commits the stamp (the file write is never transactional with SQLite);
-   a restored pre-upgrade backup re-runs it.
+2. **Credential-store IO** (D1): atomic write (temp `O_EXCL|O_NOFOLLOW`
+   0600 + fchmod + fsync + rename), symlink refusal, the permission
+   semantics (created 0600 never widened; 0400 readable and explicitly
+   replaceable at 0600; any group/other bit refuses reads and mutations,
+   never auto-chmodded), the security gates before every access including
+   cache hits (lstat regular file/EUID owner/zero group-other bits,
+   `O_NOFOLLOW` read with matched `fstat` identity), one module-owned
+   per-file coordination owner for the cache and the whole RMW queue across
+   every instance and the migration, applied/durable typed outcomes with
+   cache invalidation and verified reload on applied-but-not-durable, fixed
+   value-free error text (no parser message or cause chain), the required
+   retain-name collaborator refusing secret-source mutations before any
+   file change, the local name-pattern duplicates with their separated
+   equivalence tests (the secret-source catalog rule; the legacy
+   store-wide shape) and the NUL boundary (write refusal for both kinds,
+   a stored NUL reading malformed) — plus the crash-safe migration per
+   D1's
+   table: the durable store-file write lands **before** the one SQLite
+   transaction that deletes the map row and commits the stamp, and that
+   transaction runs only on a durable acknowledgement (the file write is
+   never transactional with SQLite); a restored pre-upgrade backup re-runs
+   it.
 3. **Connection-test lifecycle** (D8): end-to-end deadline, process-group
    kill and reap on every exit path, transcript-persistence disable,
    bounded output, and redaction-before-sink with split-chunk safety
@@ -1030,13 +1182,16 @@ serving a retained entry — S1/SR1.
   (mechanism parity with today's token path; measured exposure is the
   sentinel fixture's, D12). Redaction of exact values is tested with
   unshaped sentinels, split chunks, and overlapping values, not only the
-  shape patterns. Generator: seeded run over random secret shapes; seams:
+  shape patterns. Error and listing text is fixed and safe — parser
+  messages, fs errors, and cause chains never surface. Generator: seeded
+  run over random secret shapes; seams:
   the store module, the preview/listing projector, the classifier's
   redactor, the launch composer. Fixed seed, 200 cases, no new dependency.
 - **P2 — Write-only store UI.** After any import/replace/blank/clear
   sequence, every read surface returns presence, source, and name only —
-  never the value or a prefix, whatever the variable is named (the old
-  name-regex hole is closed). Generator: random operation sequences; seam:
+  never the value, a prefix, or its length, whatever the variable is named
+  (the old name-regex hole is closed). Generator: random operation
+  sequences; seam:
   the Settings/projector read paths.
 - **P3 — Mode regression (non-runtime).** (a) *Replace mode*: an upgrade
   changes nothing — a generated user catalog (complete copies, partial
