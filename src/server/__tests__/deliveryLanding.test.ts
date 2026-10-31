@@ -20,7 +20,6 @@ const check = (sha: string, seq = 1, id = 'fixture-check') => ({
 // @covers: delivery-outcomes › A result commit lands at its first containing position › Result merged through a pull request
 // @covers: delivery-outcomes › A result commit lands at its first containing position › Backdated bridge
 // @covers: delivery-outcomes › A change lands when its archive directory reaches the default branch › Archive merged
-// @covers: delivery-outcomes › A result commit lands at its first containing position › Boundary at the window end
 test('checkpoint: merge/archive/result composition preserves position and uncertainty', () => {
   const fixture = mergeArchiveFixture()
   try {
@@ -52,8 +51,6 @@ test('checkpoint: merge/archive/result composition preserves position and uncert
 
 // @covers: delivery-outcomes › Result commits are identified by full literal ids only › Off-history literal with a check
 // @covers: delivery-outcomes › A result commit lands at its first containing position › Unmerged result
-// @covers: delivery-outcomes › A result commit lands at its first containing position › Unmerged result without a passing check
-// @covers: delivery-outcomes › Result commits are identified by full literal ids only › Abbreviation stays unresolvable
 test('checkpoint: offgraph identity requires exact evidence and refuses contradictions', () => {
   const fixture = mergeArchiveFixture()
   try {
@@ -127,8 +124,6 @@ test('Table L6 and L8a: old-dated bridges preserve later arrivals and direct gra
   }
 })
 
-// @covers: delivery-outcomes › A result commit lands at its first containing position › Boundary at the window end
-// @covers: delivery-outcomes › A result commit lands at its first containing position › Backdated straddle
 test('Table I1-I7: inclusive containment and half-open event membership', () => {
   const hour = 3_600_000
   const span = 7 * 24 * hour
@@ -149,7 +144,6 @@ test('Table I1-I7: inclusive containment and half-open event membership', () => 
   }
 })
 
-// @covers: delivery-outcomes › A result commit lands at its first containing position › Backdated straddle
 test('I5: a contained backdated straddle has unknown membership in both adjacent windows', () => {
   const hour = 3_600_000
   const span = 7 * 24 * hour

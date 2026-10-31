@@ -16,7 +16,6 @@ const input = { ...RESULT_CONTEXT, commitRef: D, objectFormat: 'sha1' as const,
 const unknown = { kind: 'unresolvable', reason: 'no-corroboration' } as const
 
 // @covers: delivery-outcomes › A result commit lands at its first containing position › Unmerged result
-// @covers: delivery-outcomes › A result commit lands at its first containing position › Unmerged result without a passing check
 // @covers: delivery-outcomes › Result commits are identified by full literal ids only › Off-history literal with a check
 test('Table L4, L4b and L8b: an offgraph full literal needs a strict same-result passing check', () => {
   for (const row of TABLE_L.filter(row => ['L4', 'L4b', 'L8b'].includes(row[0]))) {
@@ -29,7 +28,6 @@ test('Table L4, L4b and L8b: an offgraph full literal needs a strict same-result
   expect(resolveResultCommit({ ...input, checks: [] })).toEqual(unknown)
 })
 
-// @covers: delivery-outcomes › Result commits are identified by full literal ids only › Abbreviation stays unresolvable
 test('Table L7 and L8e: abbreviations stay unresolvable even with a later prefix-given full-sha check', () => {
   const C = 'abcdef01' + '1'.repeat(32)
   const unmerged = 'abcdef0f' + '2'.repeat(32)

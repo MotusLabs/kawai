@@ -57,8 +57,6 @@ test('P1 seed 0xDE11: 500 DAGs match independent per-position ancestor closures'
   }
 })
 
-// @covers: delivery-outcomes › A result commit lands at its first containing position › Backdated straddle
-// @covers: delivery-outcomes › A result commit lands at its first containing position › Boundary at the window end
 test('P6 seed 0x1A1F: 500 DAGs cannot double-count adjacent intervals', () => {
   const random = mulberry32(0x1A1F)
   let inCount = 0
