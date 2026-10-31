@@ -1,3 +1,4 @@
+// @reads: openspec/changes/archive/**
 // Pure landing oracles (delivery-outcome-metrics1.1). The original observable
 // checkpoint remains intact; no production Git reader is activated.
 import { expect, test } from 'bun:test'

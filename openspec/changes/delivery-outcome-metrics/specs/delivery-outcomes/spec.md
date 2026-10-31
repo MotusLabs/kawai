@@ -17,6 +17,29 @@ Kawai SHALL read delivery facts for a team from the commit its `refs/remotes/ori
 - **WHEN** delivery facts are read
 - **THEN** no git command run for them contacts a remote or changes a ref
 
+### Requirement: Delivery source resolution is process-free and fail-closed
+The resolver SHALL use physical common/main roots, full ids and bounded nonlink metadata without a process. It SHALL validate bigint snapshots before/after reads and reject replaced roots. Loose refs win. Every packed lookup rereads raw bytes; reuse requires matching root/format/token and SHA256. Hash and parser use the same snapshot. Null tokens or changed bytes force parsing; errors invalidate. Unsupported config refuses. FETCH_HEAD has its own contract. P remains dormant.
+
+#### Scenario: Partial metadata refuses source resolution
+- **WHEN** local partialclone, true remote promisor, partialclonefilter or a pack promisor marker is present
+- **THEN** the source resolver returns `history-incomplete:partial` with no target
+
+#### Scenario: Graft metadata refuses source resolution
+- **WHEN** the common directory contains `info/grafts`
+- **THEN** the source resolver returns `history-incomplete:grafts` with no target
+
+#### Scenario: Unsupported ref storage refuses source resolution
+- **WHEN** local config names unsupported ref storage
+- **THEN** the source resolver returns `default-branch-unreadable` with no target
+
+#### Scenario: Internal metadata symlink refuses source resolution
+- **WHEN** a config, ref, packed-refs, shallow, info/grafts or objects/pack component inside the common directory is a symlink
+- **THEN** source resolution returns `default-branch-unreadable` with no target; symlinked host ancestors alone do not require refusal
+
+#### Scenario: Packed metadata collision still returns changed content
+- **WHEN** a same-size in-place packed-refs rewrite changes an id while all metadata token fields collide
+- **THEN** source resolution returns the newly read id, not the previous cached id; unchanged bytes may reuse parsing but are still read again
+
 ### Requirement: Delivery facts come from one head and complete history
 Every delivery fact SHALL be derived from one resolved commit of the default branch and its whole history, read in full. Facts SHALL be published only as a whole, for the commit the ref names when the read completes. A read that fails, times out, is cut short, or meets shallow or missing history SHALL publish nothing; the previous facts stay, marked as failing to refresh, or delivery reads unavailable with the reason.
 
@@ -91,6 +114,13 @@ Only a full literal object id of the repository's object format SHALL identify a
 #### Scenario: Off-history literal with a check
 - **WHEN** a result names a full id not on the default branch and its passing check names the same id
 - **THEN** the commit is known and not landed
+
+### Requirement: Delivery source timestamp provenance
+Source fetch evidence SHALL use only common-directory/main-worktree FETCH_HEAD mtime. Convert captured bigint mtimeNs by integer /1000000n before Number. Negative, missing-precision, unsafe or unavailable evidence SHALL be unknown. Floor finite nonnegative supplied now; future values SHALL be unknown without tolerance or clock fallback. A valid head survives unknown evidence. Linked-only/no-write-fetch-head fetches may leave the stamp stale. P does not activate freshness projection/runtime.
+
+#### Scenario: Unsafe FETCH_HEAD keeps the head
+- **WHEN** FETCH_HEAD is a symlink or not a regular file and the head otherwise resolves
+- **THEN** the source target is retained and its fetch timestamp is unknown with reason `unsafe`
 
 ### Requirement: Delivery facts state their freshness
 Facts SHALL be identified by repository, object format, head, and reader version, never fetch time. At every live return, cached or not, state SHALL be projected from the live ref, first match: unavailable; behind (another head named); stale (`FETCH_HEAD` aged 24 hours or more, or unknown); refresh-failed (defensive only); expired; else current. A needed head's failed read SHALL be a stated reason, retried after backoff. Every surface SHALL show it. A stored report SHALL keep its frozen state.

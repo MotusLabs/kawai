@@ -37,12 +37,13 @@ Export: `registerMetricsRoute(app, service, env)` (`src/server/metrics/export/ro
 
 ### D1 — Facts come from one pinned head, read whole
 
-**Head.** `DeliveryFactsReader` (`src/server/metrics/delivery/gitReader.ts`) resolves the head H without a process, reading text under the team's git common directory, as `repoFacts.ts` reads config:
-- `refs/remotes/origin/HEAD` holds either `ref: <name>` or a hex object id (40 or 64 digits).
-- A symbolic name is followed for at most 5 hops. Each hop reads the loose ref file first, then `packed-refs` (comment lines and `^` peel lines skipped). A loose ref wins over a packed one.
-- A missing `refs/remotes/origin/HEAD` gives `unavailable: no-default-branch`, whose text names `git remote set-head origin --auto`. A directory with no git common directory gives the same reason and spawns nothing.
-- Malformed content, a sixth hop, a loop, or a name found neither loose nor packed gives `unavailable: default-branch-unreadable`.
-- A `shallow` file in the common directory gives `unavailable: history-incomplete:shallow` without spawning git.
+**Head.** The dormant `DeliverySourceResolver.resolveHead(location, now)` resolves H without a process. Its explicit location names the common directory and main checkout; it does not invoke repository discovery. Canonicalize both paths anew per resolution, allowing symlinked host ancestors. Pin the physical common directory by an open descriptor; walk inner metadata using non-following directory/file opens. Relevant leaves must be regular files. Close all owned descriptors; unsafe/unreadable/changing metadata fails closed. Physical identity is location evidence, not liveness or currentness.
+- Origin HEAD contains a lowercase full literal id of the actual object format, or `ref: <name>`. Validate the entire ref name before joining paths. Follow at most five symbolic edges; reject loops, a sixth edge, malformed text or missing targets. Fresh loose refs win; only missing loose consults `packed-refs`, validating comments/peels and rows. Missing common directory or origin HEAD gives `no-default-branch` with `git remote set-head origin --auto` guidance; other unsafe/unreadable metadata gives `default-branch-unreadable`.
+- Ref text is capped at 4 KiB; config and packed text at 64 MiB bytes. Never accept a truncated prefix. Strict local config supports versions 0/1, absent format defaults to sha1, and explicit sha1/sha256 requires version 1. Includes, malformed/conflicting values, unsupported extensions or ref storage fail closed. Keys on section-header lines and `extensions.worktreeConfig` remain conservatively unsupported; no broader allowlist or 1.1 parser change is implied. Reuse the accepted pure object-format validator.
+- `shallow` gives `history-incomplete:shallow`; `info/grafts` gives `history-incomplete:grafts`. Any partialclone, true remote promisor, present remote partialclonefilter or regular `objects/pack/*.promisor` gives `history-incomplete:partial`, without process, repair or fetch.
+- Fresh snapshots require bigint dev/ino/size/mtimeNs/ctimeNs before consuming data AND after reading; missing precision refuses, never ms-only or undefined equality. Every packed lookup opens/validates and READS the complete bounded raw-byte snapshot, including parse-cache hits. Reuse requires physical repository/identity/format, trusted metadata token AND matching SHA256 of those bytes; hash and parser consume the SAME per-open snapshot, never two versions. Changed digest reparses even when all token fields collide; null token always reparses. Read/change/UTF8/parse/hash failures invalidate, never fall back. No timer/lease/generation or timestamp-distinction assumption: parsing can be saved, I/O repeats. Native capabilities and cost remain unmeasured; no RAM-bound claim.
+
+**Implementation boundary.** P contains only dormant process-free source helpers and supplied-text validation. F0 lifecycle source remains held on its paper corrections. Repository-gate implementation/tests, the reader, CP1 and task 1.2 completion remain held on D11 startup/on-taken/lifetime acceptance; an empty startup map is not recovery. No product caller, cache/controller or activation follows P. Actual 1.3/2.3 composition checkpoints remain mandatory.
 
 **Reads.** Every git call names the literal object id H, never a ref, so a fetch during a refresh cannot mix heads. Each runs at the main checkout through `runGitAsync` with `cleanGitEnv`, `git --no-replace-objects -c log.showSignature=false`, a 10 s timeout, and `maxOutputBytes = DELIVERY_READ_BOUND` (64 MiB). There are two reads:
 1. **Graph.** `git log --format=%H %ct %P H` loads H's whole history. There is no `--since` and no horizon: `--since` stops a walk at an old-dated commit and would hide newer ancestors behind it.
@@ -52,10 +53,10 @@ The lifetime integration count is the first-parent chain length derived from rea
 
 **Completeness (Table F).** A read is accepted only when:
 - it exits 0;
-- its stdout is shorter than `DELIVERY_READ_BOUND`, so a clipped output is never read as history;
-- every row parses;
-- read 1's first row is H, and every parent it names is itself a row. Truncation always drops some commit whose children remain, so this closure check detects any lost tail and any missing object;
-- every `@<sha>` of read 2 lies on read 1's first-parent chain, and every path matches the archive pattern.
+- UTF8 stdout byte length is below `DELIVERY_READ_BOUND` on both reads, so clipped output is never read as history; both future runner calls explicitly receive the bound, and post-buffer code-unit clipping is not a memory cap;
+- rows have canonical full ids and safe integer seconds converted once to milliseconds; unique rows/parents form a DAG wholly reachable from H;
+- read 1's first row is H, and every named parent has a row. Validate this before read 2; a missing parent is `history-incomplete`. Truncation always drops some commit whose children remain, so this closure check detects a lost tail or missing object;
+- read 2's canonical headers lie on the complete first-parent chain; every path matches the accepted single-directory archive grammar. Empty archive history is valid; malformed/nested/stray input fails the whole parse as `archive-malformed`. Reuse 1.1 landing/archive derivations.
 
 Any other outcome fails the refresh with a named reason. A non-zero exit, a null exit (timeout or kill), and a spawn failure are all failures; none means "not contained". A history past the bound is `history-exceeds-bound`, never a partial answer. Raising the bound is a reviewed constant change.
 
@@ -84,7 +85,7 @@ Three kinds of state are kept apart. Identity never stands in for currentness.
 
 **S, the live ref state.** `refState(team)` re-reads S on every call by bounded, synchronous, process-free file reads in the common directory (D1's head resolution plus a stat of `FETCH_HEAD`). It holds:
 - `hNow`: a full id, or `unreadable` / `shallow` with the reason. It is freshly resolved, never a cached pending fallback;
-- `fetchAt`: `FETCH_HEAD`'s mtime, or unknown;
+- `fetchAt`: ONLY common-directory/main-worktree `FETCH_HEAD` mtime, or unknown. Convert captured BEFORE bigint mtimeNs by integer division by 1000000n BEFORE Number, with no second double stat. Negative/missing precision or missing/nonregular/symlinked/unreadable evidence is unknown. Floor finite nonnegative supplied `now`; normalized future evidence is unknown, no tolerance or `Date.now` fallback. This is timestamp provenance, not repository-wide fetch success/coverage. Linked-only or `--no-write-fetch-head` fetches may leave it stale; timestamp failure does not discard valid H;
 - `lastAttempt`: the head, outcome, reason, and time of the most recent NONOBSOLETE completed attempt (Z3 or Z4). Its current relevance is still filtered by its target head.
 
 **M, a materialization (cached numbers).** These are a computed `ProcessMetrics`, trends points, or a monitor evaluation. M carries its provenance (G's identity, the end T, `materializedAt`, and its evidence, D3a) and its `maxAge`: 30 s for metrics reads, 5 min for trends, two timer intervals for the monitor. M holds no live header. Rule results inside M are a pure function of M's numbers and evidence.
@@ -391,8 +392,15 @@ UI verification names two capabilities that are not guaranteed to exist in an im
 | H4 | symbolic → packed only (with a `^` peel line after it) | H = the packed id, peel line ignored |
 | H5 | symbolic → loose and packed differ | H = the loose id |
 | H6 | the file holds a hex id | H = that id |
-| H7 | malformed text, a loop, a sixth hop, or a target found nowhere | unavailable `default-branch-unreadable` |
+| H7 | malformed text/config/format/version, unsafe ref/component, loop/sixth hop, unsupported interpretation or missing target | unavailable `default-branch-unreadable` |
 | H8 | `shallow` file present | unavailable `history-incomplete:shallow`, no process |
+| H9 | partialclone, true promisor, partialclonefilter or pack promisor marker | unavailable `history-incomplete:partial`, no process |
+| H10 | `info/grafts` file present | unavailable `history-incomplete:grafts`, no process |
+| H11 | unsupported ref storage | unavailable `default-branch-unreadable`, no process |
+
+P witnesses R1-R7: unchanged token AND byte digest parse once while freshly reading each lookup; atomic replacement and same-inode rewrite preserving mtime return the new H without a ctime-diff precondition; fresh loose overrides cached packed; missing/stat/read/parse/hash failure invalidates; untrusted token reparses; host symlink ancestors work and inner symlinks refuse. G5 models identical dev/ino/size/mtimeNs/ctimeNs across actual same-size A-to-B bytes: new H=B/parseCount2, following unchanged B skips parsing but READS again. Removing digest comparison must fail changed-H, not a hash-call counter. S1-S6 retain common-only/unknown/floor/future semantics. No native capability/runtime/liveness proof follows source definitions.
+
+SC/T correction witnesses: missing/invalid bigint comparison fields refuse before callback consumption or after reading; null cache-token injection on complete native snapshots reparses two unchanged lookups; a one-shot lookup error then SAME file/token reparses; a valid readSync append is refused by after-stat comparison; kernel observations of fixture-owned descriptors cover success/refusal/data error; physical common/main replacement after pinning refuses, and a fresh resolution sees the replacement. Timestamp boundary uses fixed nanoseconds just below the next millisecond, negative and missing precision cases. These tests are defined, not executed at the source checkpoint. The previous five proposed control sites are cache-null, error-invalidation, after-stat, file-close and root-current; G5 adds its own digest-comparison oracle. A later direction must publish the exact execution/control budget; none has run.
 
 **Table F: read completeness.** Seam: `DeliveryFactsReader.read(H)` with a stub runner that checks its arguments: the literal H, `--no-replace-objects`, `--no-renames`, no ref name, and no `fetch`, `push`, `update-ref`, or `remote`.
 

@@ -1,3 +1,4 @@
+// @reads: openspec/changes/archive/**
 // C1-C5 over real, owned Git history. C6 and production reader/argv behavior
 // belong to the separately held1.2 phase, not this pure parse checkpoint.
 import { expect, test } from 'bun:test'
