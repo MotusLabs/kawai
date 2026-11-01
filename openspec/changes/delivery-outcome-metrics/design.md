@@ -15,22 +15,22 @@ There is no git input and no push path to the attention queue. `WorkspaceRead.sn
 
 Git: `runGitAsync` (`src/server/git/gitCommand.ts`) is the read-only runner. It kills a call at its timeout and resolves it as a non-success with a null exit code, and it clips a successful stdout at `maxOutputBytes` (1 MiB by default) without saying so. Result checks already treat `refs/remotes/origin/HEAD` as the base "as last fetched".
 
-Export: `registerMetricsRoute(app, service, env)` (`src/server/metrics/export/route.ts`) constructs its own `MetricsSnapshot`. `bootstrap.ts` calls it with `chatSessionManager.observations`. `agent_tokens_total` carries the turn dimensions plus `kind`.
+Export: `registerMetricsRoute` and the Prometheus families are unchanged by this landing; delivery export is follow-up work (proposal › Follow-up).
 
 ## Goals / Non-Goals
 
 **Goals:**
-- Delivery facts become one derivation from one pinned head, consumed by metrics, rules, the tab, and the export alike (oracle hazard "several readers disagreeing on derived state").
+- Delivery facts become one derivation from one pinned head, consumed by the metrics read, the Metrics tab, `team_metrics`, and the attention queue alike (oracle hazard "several readers disagreeing on derived state").
 - Metric computation stays pure and synchronous. Git runs only in a refresh step outside the SQLite read.
 - A fact Kawai cannot establish reads unavailable or unknown, never 0, never landed.
 - Currentness is decided once, by the return-time projection over the live ref state (D2), on every live return including cache hits; identity never stands in for it.
-- Every rule reads complete evidence on both sides or does not evaluate (D4); existing metrics keep their legacy semantics (D3a).
-- Agent reads become small enough to use.
+- A delivery count that cannot be established is excluded and counted by reason, never hidden; existing metrics keep their legacy semantics (D3a).
+- Missing delivery evidence reaches the human through one attention item (D4).
 
 **Non-Goals:**
 - No delivery metric is sliceable. All are team-side.
 - No per-PR identity from GitHub. Integrations are first-parent commits, read without `gh`.
-- No claim about when an observer learned a fact. Committer time is a proxy for arrival, and a trend point is a recomputation (D6).
+- No claim about when an observer learned a fact. Committer time is a proxy for arrival.
 - No change to `process-observability`'s contracts, its acceptance cohorts, or its pending integrations (D8).
 
 ## Decisions
@@ -69,7 +69,7 @@ Any other outcome fails the refresh with a named reason. A non-zero exit, a null
   - an off-graph literal with no such check, or with a pending, unavailable, failed, malformed, partial, or other result's check;
   - a literal with two contradictory checks.
 
-  It is never counted as landed, never as known-not-landed, and is excluded from `landed_result_share` and counted in its coverage note.
+  It is never counted as landed, never as known-not-landed, and is excluded from `landed_result_share` and counted in its coverage counts.
 
 No prefix search, no read-time ref resolution, and no new checker run happen for a metric read. A metric read never treats a passing commit fact as an accepted result or passing tests.
 
@@ -88,7 +88,7 @@ Three kinds of state are kept apart. Identity never stands in for currentness.
 - `fetchAt`: ONLY common-directory/main-worktree `FETCH_HEAD` mtime, or unknown. Convert captured BEFORE bigint mtimeNs by integer division by 1000000n BEFORE Number, with no second double stat. Negative/missing precision or missing/nonregular/symlinked/unreadable evidence is unknown. Floor finite nonnegative supplied `now`; normalized future evidence is unknown, no tolerance or `Date.now` fallback. This is timestamp provenance, not repository-wide fetch success/coverage. Linked-only or `--no-write-fetch-head` fetches may leave it stale; timestamp failure does not discard valid H;
 - `lastAttempt`: the head, outcome, reason, and time of the most recent NONOBSOLETE completed attempt (Z3 or Z4). Its current relevance is still filtered by its target head.
 
-**M, a materialization (cached numbers).** These are a computed `ProcessMetrics`, trends points, or a monitor evaluation. M carries its provenance (G's identity, the end T, `materializedAt`, and its evidence, D3a) and its `maxAge`: 30 s for metrics reads, 5 min for trends, two timer intervals for the monitor. M holds no live header. Rule results inside M are a pure function of M's numbers and evidence.
+**M, a materialization (cached numbers).** This is a computed `ProcessMetrics`. M carries its provenance (G's identity, the end T, `materializedAt`, and its evidence, D3a) and its `maxAge`: 30 s for metrics reads. M holds no live header.
 
 **The recovery controller** (Tables Q, Z, and CT; the canonical model of Lead note-44b3a9d2).
 
@@ -109,7 +109,7 @@ State: stopped flag; accepted G or none; flight {id, target} or none; retry reco
 
 A failed B record does not poison a returned accepted A after the ref reverts.
 
-**The projection.** `view(M, G, S, now)` (`delivery/view.ts`, pure) runs on every live return: Metrics tab reads, `team_metrics`, trends, export scrapes, workspace snapshots, and the monitor's outcome. It runs on cache hits too, and for a chosen past end or a trend point alike. Its `state` is the first match:
+**The projection.** `view(M, G, S, now)` (`delivery/view.ts`, pure) runs on every live return: Metrics tab reads, `team_metrics`, and workspace snapshots, including the delivery-evidence item's predicate (D4). It runs on cache hits too. Its `state` is the first match:
 1. `unavailable` — no accepted G, `hNow` unreadable or shallow, or M was made under no G;
 2. `behind` — `hNow` ≠ the H of M's G, or M's G is no longer the accepted one;
 3. `stale` — `fetchAt` unknown, or `now − fetchAt ≥ 24 h` (inclusive boundary);
@@ -117,9 +117,9 @@ A failed B record does not poison a returned accepted A after the ref reverts.
 5. `expired` — `now − M.materializedAt > M.maxAge`. The caller recomputes rather than serve it as current;
 6. `current`.
 
-Every applicable condition is also listed in `reasons`, so a behind generation whose needed head failed shows `behind` with the refresh-failed reason, and a cold failure shows `unavailable` with it. Only `current` makes rule results eligible, for an attention item, a rule gauge, or a trend mark. Every other state returns the numbers with the marker and every rule as "not current: <state>". Unknown is never current.
+Every applicable condition is also listed in `reasons`, so a behind generation whose needed head failed shows `behind` with the refresh-failed reason, and a cold failure shows `unavailable` with it. Every state other than `current` returns the numbers with the marker and its reasons, and lists the delivery-evidence item (D4). Unknown is never current.
 
-The monitor owns one freshness wake at `fetchAt + 24 h`, exactly the boundary at which `stale` becomes true. With an otherwise fresh M, 1 ms before it the view is current; at it, the view is stale and the removal is published; 1 ms after it, the view stays stale without another event. A later same-H fetch cancels and re-arms the owned wake. A stale old callback must re-read the actual `fetchAt` and its owner token, and never clears a fresh item. Unknown `fetchAt` is immediately stale. This is the freshness clock only; event membership (D3) stays half-open.
+`DeliveryRuntime` (D4) owns one freshness wake at `fetchAt + 24 h`, exactly the boundary at which `stale` becomes true. With an otherwise fresh M, 1 ms before it the view is current; at it, the view is stale and the delivery-evidence item is published; 1 ms after it, the view stays stale without another event. A later same-H fetch cancels and re-arms the owned wake. A stale old callback must re-read the actual `fetchAt` and its owner token, and never acts for a superseded fetch. Unknown `fetchAt` is immediately stale. This is the freshness clock only; event membership (D3) stays half-open.
 
 A stored report snapshot is not a live return. It keeps whatever header it was frozen with and is never re-projected.
 
@@ -141,7 +141,7 @@ The landing's time is uncertain within **U = [at, bound]**, with `at ≤ bound` 
 
 Two questions are answered separately, for result commits, integrations (Fₖ itself), and change landings alike.
 
-**Contained by T** (inclusive, for result landings and in-flight status):
+**Contained by T** (inclusive, for result landings):
 - `bound ≤ T` → contained;
 - `at > T` → not contained;
 - otherwise unknown.
@@ -162,206 +162,60 @@ Witnesses, with t = at = bound for a monotonic chain (Table I):
 
 A backdated F₂ at T − 3d after F₁ at T − d + 1 h has U = [T − 3d, T − d + 1 h]. Its membership is unknown in both the current interval and the baseline, while its containment by T is known.
 
-An unknown is excluded from the count, which keeps the legacy-style value, and is recorded per side in the evidence (D3a). There it makes every rule that reads that count not-evaluable (D4).
+An unknown is excluded from the count, which keeps the legacy-style value, and is recorded per side in the evidence (D3a). There it makes that side's evidence incomplete.
 
 **Change landings** come from read 2. The directory `<date>-<name>` gives the name, and its first chain position (the oldest `@<sha>`) wins, with that position's `at` and `bound`.
 
-### D3a — Facts enter the metrics as an input, with complete linked history
+### D3a — Facts enter the metrics as an input
 
 `MetricsInputs` gains `delivery: DeliveryView | null`, where the view holds the accepted generation's landings and chain with its identity, and no live ref state (D2). `computeMetrics` stays pure and gains `deliveryObservations(ctx)` (`delivery/observations.ts`), which emits:
-- `changes_landed` and `integrations` (sum);
-- `tokens_per_landed_change` (ratio: `tokens_total` as numerator, changes landed as denominator, `n` = changes landed);
-- `change_cycle_time_p50/p90`, `tasks_per_landed_change` (mean), and `review_rounds_per_landed_change` (mean);
-- `landed_change_link_coverage`;
-- `inflight_change_age_p50/p90`;
+- `changes_landed` and `integrations` (sum), in the new `delivery` family;
 - `landed_result_share`, which is in the coverage family.
 
-**Linked history.** `loadMetricsInputs` gains one phase inside its existing read transaction. It loads every team task whose `openspec_change` or `plan_change` is set and that was created before the read's end, whatever its events, with all of its status events, its results with `commit_ref`, and its findings. `MetricTask` gains `openspecChange` and `planChange`, and `MetricResult` gains `commitRef`. This covers:
-- an old task with no event in either window whose change lands now;
-- a change landed today that was in flight at the baseline's end;
-- every end of a trend range.
+**Load.** `loadMetricsInputs` keeps its cohorts and its one read transaction. `MetricResult` gains `commitRef`, and the load also reads the `team_task_result_checks` rows that `resolveResultCommit` (D1) consumes for the results it already loads. No linked-task history phase is added in this landing; it belongs to the follow-up convergence work.
 
-These tasks feed only the delivery observations. The existing families keep their cohorts unchanged.
+**`landed_result_share`.** Its cohort is the tasks first done in the window. For each, it takes the newest result created before T. A task is **eligible** when that result's identity is known (D1) and its containment by T is known (D3); the share is the contained-by-T commits over the eligible tasks, and `n` is the eligible count. Every other cohort task is excluded and counted by reason in `coverage: { cohort, eligible, noResult, unresolvable, unknown }`, where `cohort = eligible + noResult + unresolvable + unknown` always. The counts travel beside the value, baseline, and legacy flags, so a high share cannot hide missing evidence.
 
-**Status at T** is the `to_status` of the task's latest status event at or before T, else `open` from its creation. A task created after T does not exist at T. A status that comes from a backfilled row (`from_status` null), or a T before the team's first recorded status event, makes the derived in-flight values approximate.
+**Unavailable.** When `delivery` is null or unavailable, every delivery metric and `landed_result_share` has `value: null`, `n: 0`, and a new optional `unavailable: string` on `MetricValue`, never 0.
 
-**Rules per metric:**
-- A change is **linked** to a landing when at least one task naming it was created before the landing's `at`.
-- Tasks per landed change counts those tasks.
-- Review rounds per landed change counts findings created before `at` on those tasks' results.
-- Cycle time runs from the first such task's creation to `at`.
-- A change is **in flight at T** when its landing is not contained by T and one of its tasks is open, active, or blocked at T. An unknown containment is excluded, not counted as in flight. Its age runs from its first task's creation.
-- `landed_result_share`, for the tasks first done in the window that have a result, takes each task's newest result created before T. The share counts the contained-by-T commits among those whose identity is known and whose containment at T is known. Unresolvable identities and unknown containment are excluded, and the coverage note counts them.
-
-**Unavailable.** When `delivery` is null or unavailable, every delivery metric has `value: null`, `n: 0`, and a new optional `unavailable: string` on `MetricValue`. `ProcessMetrics` gains `delivery: { head, objectFormat, readerVersion, readAt, materializedAt, unknownAtEnd, unresolvable }`, the identity and provenance only.
+**Cold coverage.** With no accepted G (a cold start, an unreadable or unknown object format, or no default branch), each side's coverage is still a full partition of its cohort, with explicit bucket precedence. `noResult` is counted first, from the existing SQLite cohort. Every remaining, result-bearing task is source-unclassifiable and counts as `unknown` until accepted facts exist. So each side reads `{ cohort: C, eligible: 0, noResult: N, unresolvable: 0, unknown: C − N }` with `n = eligible = 0`. Here `unresolvable: 0` is the precedence rule, since classification waits for a source; it is not a claim that the results' commit text is valid. With an accepted G, D1 resolution and D3 containment classify as above, and a retained G is projected by D2. This adds no load phase and no field. `ProcessMetrics` gains `delivery: { head, objectFormat, readerVersion, readAt, materializedAt, unknownAtEnd, unresolvable }`, the identity and provenance only.
 
 The live header `{ state, reasons, fetchedAt }` is added by the projection at return (D2). It is never stored in M, and a stored report keeps the header it was frozen with.
 
-**Legacy semantics are unchanged.** Every existing metric keeps its cohort, value, `n`, `baseline`, `insufficient`, `approximate`, and `partial`, including the existing `usageHorizon` (`max(end − 90 d, first team turn)`, `metricsQuery.ts`). The only exceptions are the two guard changes below. Table K8 holds byte for byte at `end = now`.
+**Legacy semantics are unchanged.** Every existing metric keeps its cohort, value, `n`, `baseline`, `insufficient`, `approximate`, and `partial`, including the existing `usageHorizon` (`max(end − 90 d, first team turn)`, `metricsQuery.ts`). The only exception is the guard change below. Table K8 holds byte for byte at `end = now`.
 
-**Evidence (additive).** Each delivery and token metric gains `evidence: { current, baseline }`, each side `{ complete: boolean | 'unknown', unknown: number, reasons: string[] }`. A side is incomplete when any input it uses has:
-- an event of unknown membership in that side's interval (archives, integrations);
-- an unknown containment at that side's end (in-flight sets);
-- an unresolvable result identity (`landed_result_share`);
-- approximate status history;
-- source coverage that is not established for that side's required span.
+**Evidence (additive, delivery metrics only).** Each delivery metric gains `evidence: { current, baseline }`, each side `{ complete: boolean | 'unknown', unknown: number, reasons: string[] }`. A side is incomplete when an event it counts has unknown membership in that side's interval (D3), or, for `landed_result_share`, when its cohort has an unresolvable identity or an unknown containment. Evidence never rewrites a legacy flag. No token or limit metric gains evidence here: their coverage needs the `SourceCoverage` input (D3b), which is follow-up work.
 
-The required span is derived per metric and per side for span d:
-- `tokens_total` and `tokens_per_landed_change`: [T − d, T) and [T − 2d, T − d);
-- `tokens_per_task`: each cohort task's lifetime from its `createdAt` to T;
-- `limit_tax_hours`: the side's interval extended back by the source's 24 h lookback.
+`METRIC_FAMILIES` gains `delivery`, listed first. The guard of `lead_time_p50/p90` changes to `landed_result_share`; `accepted_result_share` stays in the coverage family with an unchanged definition. No existing metric's definition changes.
 
-No universal 14-day horizon exists, and 1d and 3d reads need only their own spans.
+The determinism requirement now holds per (team, window, slice, end, G's identity), with the projection applied at the same S and `now`. The tab, `team_metrics`, and workspace snapshots read the same generation through the same reader, so they still agree.
 
-Evidence is what rules (D4) and trend marks consume. It never rewrites a legacy flag.
+### D3b — Source coverage is deferred
 
-### D3b — Source coverage is a producer-owned input, not yet available
+Whether a usage or limit source recorded continuously over a span is not established by any current producer. The original plan's `SourceCoverage` input, its producer contract (old task 0.1), and every token- or limit-dependent measure it gates (tokens per landed change, the token rules, token trend marks) are non-blocking follow-up work (proposal › Follow-up). Nothing in this landing reads or needs `SourceCoverage`, and it gates nothing here.
 
-Whether a usage or limit source recorded continuously over a required span is not established by any current producer.
-- `schema_migrations.applied_at` records when a migration ran, not coverage, restore gaps, or writer success.
-- `chat_turn_usage` has no row for missing usage.
-- `LimitEventStore` records and prunes events, not a covered interval.
-- `ObservationRecorder`'s recording start covers its own observations, not the legacy tables.
-- The first row, another stream's health, or a table's existence prove nothing either.
+### D4 — DeliveryRuntime and the delivery-evidence item
 
-So the consumer treats coverage as an **input** named `SourceCoverage`. `MetricsInputs.coverage` maps each source id to `{ status: 'supported' | 'unknown', intervals, gaps, throughAt, retentionFrom, provenance }`. `computeMetrics` reads it and nothing else for that question:
-- `supported` over the whole required span makes that part of a side complete;
-- anything else makes it `unknown`, and every dependent rule is not-evaluable.
+`DeliveryRuntime` (`src/server/metrics/delivery/runtime.ts`) is one per manager. It owns the facts cache (D2) and is the one lifecycle owner of delivery refresh:
+- `ChatSessionManager` starts it after boot, as it starts the supervision monitor, and stops it at shutdown. Stopping clears every timer and discards later completions (Q0, Z0).
+- `check(team)` runs on a Metrics tab or workspace open, on a Metrics refresh, on every `MetricsReader` read and workspace snapshot (synchronous: it only reconciles, D2), and on an unref'd 60 s timer armed only while the team has at least one subscriber. `WorkspaceConnections` open, close, and disconnect, and the metrics subscriptions, report reference counts to the runtime; at zero subscribers only that 60 s poll is cleared.
+- The owned retry wake (Q4, Z4) and the freshness wake (D2) do not depend on subscribers: a needed head that failed during a tool-only read, with no subscriber, is retried once at its due time and never earlier, and the freshness boundary still fires and re-arms (Table O). `stop()` clears every owned timer (poll, retry, and freshness) and ignores every later completion and callback.
+- It owns the freshness wake at `fetchAt + 24 h`, cancelled and re-armed whenever `fetchAt` moves; an old callback re-reads the actual `fetchAt` and its owner token and never acts on a superseded wake (D2). It publishes `WorkspaceConnections.publish(teamId)` on a generation change, at the wake, and whenever the item's fingerprint below changes.
+- `MetricsReader` reads take the accepted generation from it and pass every return through `view` at the live S.
 
-`retentionFrom` is an availability bound only, never a complete bit.
+**The item.** `deliveryEvidenceItems` joins `ATTENTION_SOURCES`, fed by a new `AttentionInput.deliveryEvidence`: for a team **expected to be Git-backed**, the runtime's projected 7d read at the snapshot time. Kind and identity `delivery-evidence`, owner the human, impact "team delivery", next action Open metrics, link `{ kind: 'metrics', id: '7d' }`, a new `AttentionLink` kind the client opens as `#/team/<key>/metrics/7d`. It is listed, first match:
+1. when the projected state is not `current`: cause the state with every reason and the fetch age, and no delivery value;
+2. when the state is `current` and the 7d `landed_result_share` coverage has `cohort > 0` and `noResult + unresolvable + unknown > 0`: cause the five coverage counts;
+3. otherwise not listed.
 
-**Unmet prerequisite (blocking).** No producer supplies `SourceCoverage` today, and this change does not build one: no ledger, migration, source hook, or backfill, and no change to `process-observability`. Until an approved, source-backed producer contract exists, the production composition passes `coverage` as unknown for every source. Every token- and limit-dependent rule is then not-evaluable on real data: `delivery-drop`, `cost-per-change-rise`, and the trend marks for token and limit metrics.
+Its fingerprint is (state, reasons, counts); a change publishes once and keeps the identity, so the client raises at most one toast per session. **Applicability.** A team is expected to be Git-backed when the manager's existing team repository binding names a git common directory, or when its Git source was positively identified earlier in the same manager lifetime. Expectation does not depend on the current resolution succeeding: when an expected team's common directory is missing or unreadable, its projection reads `unavailable` with that reason, and the same `delivery-evidence` item is listed. Positive plain, non-Git classification makes the item not applicable, with no item and delivery unavailable. Every other team follows the existing first-match listing: non-current or unknown facts list one source-cause item; current facts with cohort exclusions list one five-count coverage item; current facts AND (complete evidence OR an empty cohort) list no item. An indeterminate or failed classification is never coerced to not-applicable: the item is listed with availability unknown and no delivery value. Applicability uses the existing team binding and bounded team-owned source reads only: no new durable registry, store, migration, host scan, process, or liveness inference. The exact binding and shared types are coordinated before code.
 
-The consumer branch is fully specified and testable with fixture coverage. Real-data alert implementation is **not ready**.
+The item is data-quality evidence: it never names performance or spending and never drives work (D8).
 
-The producer contract that must be approved before it is ready names:
-- **Owners:** `TurnUsageTracker` / `ChatTurnUsageStore` for `chat_turn_usage`, `LimitEventStore` for `profile_limit_events`, and any further history source a rule turns out to need.
-- **Scope:** the exact accounting and version, and the team, profile, and provider scope the consumer may use.
-- **Coverage claims:** supported intervals as distinct from unknown spans and gaps, with a through-time watermark and the producer's provenance.
-- **Retention:** the effective retention or availability bound, separate from coverage.
-- **Semantics:** for writer failure, missing measurement, restart, and backup restore or reset. Absent continuity proof becomes unknown or a gap, never an earlier onset or "complete".
-- **Binding:** how the metrics read binds the coverage evidence and its provenance to its materialization and to each side's interval.
-
-Alternative rejected: derive a recording start from `schema_migrations.applied_at` and the retention history. It bounds availability at best, and it cannot see restores or failed writes.
-
-`METRIC_FAMILIES` gains `delivery`, listed first. The guard of `lead_time_p50/p90` changes to `landed_result_share`. `tokens_per_landed_change` is guarded by `reopen_rate`, so splitting a change to cut its cost shows up as rework. No existing metric's definition changes.
-
-The determinism requirement now holds per (team, window, slice, end, G's identity, coverage input), with the projection applied at the same S and `now`. Both surfaces read the same generation through the same reader, so they still agree.
-
-### D4 — Degradation rules are a constant table of total predicates
-
-`DEGRADATION_RULES` (`src/shared/degradationRules.ts`, pure) is evaluated by `evaluateDegradation(metrics7d)`. Each rule returns exactly one of:
-- `fires` with its evidence (current and baseline values);
-- `holds-not`;
-- `not-evaluable` with the first failing input condition.
-
-`evaluateDegradation` is pure over M's numbers and evidence. Whether a result is shown is the projection's decision (D2): only a `current` view makes `fires` eligible.
-
-Input conditions are checked in order, and the first failing one is the `not-evaluable` reason. **Evidence** comes first: the evidence (D3a) of every count the rule reads must be complete on both the current and the baseline side, which includes source coverage (D3b). This is conservative. No bound inference repairs an unknown, and a coverage note never does.
-
-A rule never reads a missing usage record as 0. Write lc/lb for current and baseline changes landed, ic/ib for integrations, tc/tb for tokens, and xc/xb for tasks per landed change. Every comparison is exact integer or rational cross-multiplication:
-
-| id | evidence complete on both sides for | then required, else `not-evaluable` | fires when |
-|----|-------------------------------------|-------------------------------------|------------|
-| `delivery-drop` | changes landed, integrations, `tokens_total` | lb ≥ 10; ib ≥ 1; tb > 0 | 5·lc ≤ 3·lb, and 10·ic ≤ 7·ib, and 5·tc ≥ 4·tb |
-| `cost-per-change-rise` | changes landed, `tokens_total` | lc ≥ 3; lb ≥ 10; tb > 0 | tc·lb ≥ 2·tb·lc, and `delivery-drop` is not `fires` (`holds-not` or `not-evaluable`) |
-| `convergence-drift` | linked landed changes, link coverage | linked ≥ 5 on both sides; coverage ≥ 0.5 on both sides | xc ≥ 2·xb |
-| `inflight-aging` | in-flight sets at both ends | n ≥ 3 on both sides; neither side approximate; baseline p90 > 0 | current p90 ≥ 72 h, and current p90 ≥ 2 × baseline p90 |
-
-The thresholds are constants. Moving one is a reviewed code change, never configuration, and never done to make a chosen historical window fire (D9).
-
-`DeliveryRuntime` (`src/server/metrics/delivery/runtime.ts`) is one per manager. It owns the facts cache and the `DegradationMonitor` (`delivery/degradationMonitor.ts`) and is the one lifecycle owner of delivery refresh:
-- The manager starts it after boot, as it starts the supervision monitor, and stops it at shutdown. Stopping clears every timer and discards later completions.
-- `bootstrap.ts` passes it to `registerMetricsRoute(app, observations, env, delivery)`. When the route reports itself enabled, bootstrap calls `delivery.enableExport()`.
-- **Export enabled:** an unref'd 60 s timer runs `check` for every registered team and re-evaluates the rules, independent of any browser, subscription, or tool call. Registered teams are the distinct team ids of `team_tasks` and of non-killed chat sessions, each resolved to its main checkout. The first pass runs at start.
-- **Export disabled:** the same timer is armed only while the team has at least one subscriber. `WorkspaceConnections` open, close, and disconnect, and the metrics and trends subscriptions, report reference counts to the runtime. At zero subscribers the timer is cleared.
-- Re-evaluation also runs on a generation change and on a Metrics refresh.
-
-**Publication.** The monitor keeps, per team, one materialized outcome M: G's identity, the evaluation time, every rule's result, and an evidence fingerprint (rule results plus their evidence values). It calls `WorkspaceConnections.publish(teamId)` whenever the fingerprint changes or the projected state changes, not only when the fired ids change. It owns the freshness wake at `fetchAt + 24 h`, cancelled and re-armed whenever `fetchAt` moves; an old callback re-checks the actual `fetchAt` and its owner token (D2).
-
-**Gating.** Every synchronous consumer reads the outcome through `delivery.outcome(team, now)`, which is `view(M, G, refState(team), now)`. Rule results are eligible only when that view is `current`. Otherwise it returns "not current: <state>" with every reason, which covers unavailable, behind, stale, expired (an outcome older than two intervals), and the defensive refresh-failed branch, with a needed head's failure stated as a reason. So a stale, failing, obsolete, or aged outcome never keeps an item or a gauge alive.
-
-`degradationItems` joins `ATTENTION_SOURCES` with kind `process-degradation`, owned by the human. It is fed by a new `AttentionInput.degradation`. Its link is `{ kind: 'metrics', id: '7d' }`, a new `AttentionLink` kind, which the client opens as `#/team/<key>/metrics/7d`.
-
-Alternative considered: store fired episodes for one toast per episode. The item identity `process-degradation:<rule>` already gives one toast per client session while the rule holds. Storing episodes would add a table and recovery-matrix rows for little gain, so it was rejected.
-
-### D5 — Compact reads are projections of the same computation
-
-`compactMetrics(metrics, { ids?, drillCap = 50 })` (`src/shared/processMetrics.ts`, pure) projects a `ProcessMetrics` value:
-- It drops `drill` and `breakdown` from every metric not in `ids`.
-- It keeps `slices` only when a slice was asked.
-- For the named metrics, it caps each drill list and adds `drillTotal: { tasks, messages }`.
-- It keeps every value, `n`, baseline, flag (`insufficient`, `partial`, `approximate`, `unavailable`, the guard), `evidence`, and the whole `delivery` header, including the projected live header of a live return.
-
-`team_metrics` gains `metrics?: string[]`. An unknown id throws, like an unknown window, so the refusal has the same tool-error shape. The tool reads the full value from `MetricsReader` and projects it, so the numbers cannot diverge from the tab. Its default becomes compact. Metric ids, values, and their meanings are unchanged, and the full form stays available per metric through `metrics`.
-
-`process_reports_list` maps each report to its record without `snapshot`. `process_report_get` gains `full?: boolean`; without it, the stored snapshot passes through `compactMetrics`.
-- Stored snapshots are never rewritten and never re-projected: a frozen report keeps the header and evidence it was submitted with.
-- Readers treat a missing metric id, or a missing `delivery` or `evidence` field, in an old snapshot as absent.
-
-### D6 — Trends recompute the 7d read at past ends
-
-`computeMetrics` gains an explicit `end` (today it reads `inputs.end`). `readTrends(team, range)` (`src/server/metrics/trends.ts`) works in four steps:
-1. It takes the current accepted generation once.
-2. It loads `MetricsInputs` once over `[now − (weeks + 1) × 7 d, now]` with that generation's view. `loadMetricsInputs` already takes `from`/`end`, and the extra week is the first point's baseline.
-3. For each point end `end_k = now − k × 7 d` (k = 0…weeks−1), it calls `computeMetrics(inputs, '7d', null, end_k)` and `evaluateDegradation` on the result.
-4. It projects every point through `compactMetrics`.
-
-Landings count at `end_k` by D3's membership and containment rules, with each point's own current and baseline intervals. A point is what today's records and today's generation say about that end. It is **not** what anyone could have read then: a late fetch, a history rewrite, a backdated commit, or a late result changes past points, and the view says "recomputed at <time> from <head>".
-
-A point's rule marks are M's results for that end. They are shown only while `view` of the whole trends read is `current` at return (D2). Freshness, staleness, and failure are today's.
-
-A point's metric is marked **incomplete evidence** when its evidence is incomplete on either side (D3a, D3b). That marker is separate from the legacy `partial`, which is unchanged.
-
-`TrendsReader` caches one read per (team, range, G's identity) for 5 minutes (`maxAge`), and a Metrics refresh drops it. Every hit is projected at return. A 12-week read is 12 computations over one load. Its time on a real database is Unknown. Task 9.2 measures it on the deterministic fixture only, and a slow result is fixed with a longer cache, never different semantics.
-
-**Protocol:**
-- `process-metrics-trends-open { teamPath, range }` → `process-metrics-trends { teamId, range, points, delivery, computedAt }`, and `process-metrics-trends-close`, all in `CHAT_CONNECTION_TYPES`.
-- The snapshot is re-sent on open, on refresh, on a generation change, and on a change of the projected state or its reasons (unavailable, behind, stale, expired, current, a failed-read reason).
-- `process-metrics-open` gains an optional `end` (ISO), so choosing a point opens exactly that window. The connection keeps the subscription's `end`: refreshes and generation re-sends read at that `end`, and a new `process-metrics-open` replaces it. Without `end`, a read is unchanged.
-
-**Client:** `MetricsTrends.tsx` draws SVG small multiples with no dependency. There is one chart per metric with its family heading, a band for `insufficient`, `partial`, and incomplete-evidence points, a mark for fired rules, and a `<table>` alternative per chart. `teamLocation.ts` parses `metrics/trends/<range>`; `trends` is not a window id, so the existing window parse keeps its meaning. The range and collapsed families are per-team `teamWorkspaceStore` state, as windows are today. The `dataviz` and `dev-browser` capabilities this view's verification names are prerequisites (D9).
-
-Alternative considered: store a daily snapshot and chart it. That adds a table, retention, and a second derivation that can drift from the live one (oracle hazard "several readers disagreeing"), so it was rejected. The stored snapshot would also only record what one server observed, which this view does not claim.
-
-### D7 — The Prometheus export reads the same generation, recomputing totals
-
-`registerMetricsRoute` gains an optional fourth parameter, the `DeliveryRuntime`, which it passes to `MetricsSnapshot` as a seam `{ view(teamId, now), outcome(teamId, now) }`. Both are D2 projections computed at the scrape. The seam is synchronous and never runs git. Inside the snapshot's existing read transaction, each registered team gets:
-
-| family | type | value |
-|--------|------|-------|
-| `delivery_facts_available` | gauge | 1 with an accepted generation, else 0 |
-| `delivery_integrations_total` | counter | the generation's first-parent chain length |
-| `delivery_changes_landed_total` | counter | the generation's change landings over full history |
-| `delivery_change_cycle_seconds` | histogram, `DURATION_BUCKETS` | each landed change with linked tasks, over full history |
-| `delivery_change_tasks` | histogram, buckets 1, 2, 5, 10, 20, 50, 100, +Inf | same cohort |
-| `delivery_change_review_rounds` | histogram, buckets 0, 1, 2, 5, 10, 20, 50, +Inf | same cohort |
-| `delivery_inflight_changes`, `delivery_inflight_oldest_age_seconds` | gauge | now |
-| `delivery_facts_stale`, `delivery_fetch_age_seconds` | gauge | S projected at the scrape |
-| `delivery_rules_current` | gauge | 1 when the projected `outcome` is `current`, else 0 |
-| `degradation_rule_firing` | gauge, label `rule` | 1 for a rule that `fires` in a projected-current outcome, else 0 |
-
-With no accepted generation, the team exports only `delivery_facts_available 0`. The linked-task histograms read team tasks and findings inside the snapshot's transaction.
-
-Labels are `team` (the existing persistent alias through `BoundedLabels`) and `rule`, whose values are enumerated from `DEGRADATION_RULES`. No change name, branch, commit, path, or task id is ever a label.
-
-Until a producer coverage contract exists (D3b), the token-dependent rule gauges read 0 on real data, because those rules are not-evaluable.
-
-The totals are recomputed from records that are never pruned: git history, and team tasks and findings, which have no pruning. So they need no `ExportAccumulator` row and survive restarts by construction, once the first post-restart generation is accepted. A history rewrite lowers them, and Prometheus treats that as a counter reset. The registry adds definitions only, so `DEFINITION_VERSION` stays 1, and no existing family changes.
-
-**The PromQL ratio is approximate.** `sum by (team) (increase(kawai_agent_tokens_total[7d])) / sum by (team) (increase(kawai_delivery_changes_landed_total[7d]))` sums every token kind and turn dimension per team. It divides increases as observed at scrape time:
-- tokens advance when turns are reconciled;
-- landings advance when a fetch is discovered, all at once after warm-up or after a late fetch;
-- a rewrite reads as a reset;
-- tokens have the observation coverage limits of `process-observability`.
-
-So it approximates, and does not equal, the read-time `tokens_per_landed_change`, which uses committer-time windows. Exact historical windows stay Kawai's own read.
-
-Alternative considered: accumulate through `ExportAccumulator` like turn tokens. Those totals are kept because their source rows are pruned. Delivery sources are not pruned, and accumulating would add a second truth that could diverge from git, so it was rejected.
-
+Alternative considered: keep the original plan's degradation rule table and monitor as the first landing's attention path. Their token rules wait on `SourceCoverage`, and the rest needs convergence history; both are follow-up, so the first product raises only the evidence it can establish.
 ### D8 — Delivery is evidence, never a decision input or acceptance
 
-Delivery facts, metrics, and rule results are outcome and guard evidence only:
+Delivery facts, metrics, and the delivery-evidence item are outcome and guard evidence only:
 - No dispatch, routing, staffing, execution, landing, or acceptance path reads them, directly or through another module.
 - Landing never accepts a result.
 - A landed commit is not a first durable acceptance fact for `process-observability`, whose acceptance cohorts and mechanisms stay as that change defines them.
@@ -374,11 +228,10 @@ Thresholds and behavior are validated only on sanitized deterministic fixtures:
 - a temporary git repository built with `cleanGitEnv`, with fixed committer times;
 - `metricsSeed.ts` rows with fixed UTC instants;
 - a declared schema version and fixed read ends (`2026-10-27T00:00:00Z` and the four weeks before it), passed as `now`, never taken from the clock;
-- an explicit synthetic `SourceCoverage` input per case: `supported` over the spans a case declares, and `unknown` or gapped where a case tests suppression. It is never derived from migration rows or the fixture database's timestamps.
 
-The calibration cases (Table CAL) are declared in the test before its thresholds are read, and they are separate from the spec scenarios, so neither is tuned to the other. No step copies or reads the live database, its WAL or journal, or a backup. Any check on real data needs a separate explicit authorization and would use the existing consistent, integrity-checked, private backup procedure (`docs/operations/database-backups.md`), with private rows, paths, and credentials kept out of journals and results. This design prescribes none. The original author's historical counts, latencies, and sizes stay Unknown until such a check runs.
+No step copies or reads the live database, its WAL or journal, or a backup. Any check on real data needs a separate explicit authorization and would use the existing consistent, integrity-checked, private backup procedure (`docs/operations/database-backups.md`), with private rows, paths, and credentials kept out of journals and results. This design prescribes none. The original author's historical counts, latencies, and sizes stay Unknown until such a check runs.
 
-UI verification names two capabilities that are not guaranteed to exist in an implementing session: the `dev-browser` skill (screenshots, per AGENTS.md) and the `dataviz` skill (chart conventions). Their availability is a prerequisite of tasks 2.4 and 7.2. When either is missing, the implementer stops that verification and asks the Lead for a separately reviewed alternative. Neither is installed, and their evidence is never substituted. Backend tasks do not depend on them.
+UI verification names one capability that is not guaranteed to exist in an implementing session: the `dev-browser` skill (screenshots, per AGENTS.md). Its availability is a prerequisite of task 2.4. When it is missing, the implementer stops that verification and asks the Lead for a separately reviewed alternative; its evidence is never substituted. Backend tasks do not depend on it.
 
 ### Acceptance oracles
 
@@ -443,7 +296,7 @@ Every read outcome of Table F that is not F1 is a FAILURE for Z4; a clipped succ
 
 **Unreachable claims:** a FAILED nonobsolete `lastAttempt` for the same identity as the accepted matching G (D2, Reachability); two flights at once (Q1); a flight started for an identity equal to the accepted G (Q3); a Z3–Z4 completion whose callback id is not the owned flight's (Z0). **Completeness claim:** the Q rows partition every controller state over the axes stopped (yes | no), flight (none | owned), hNow (invalid | valid = G's H | valid ≠ G's H, or no G), and retry (none | for hNow, before due | for hNow, at or after due | for another head); the Z rows partition every completion over stopped, callback ownership, fresh hNow (invalid | ≠ target | = target), and outcome (success | failure). The completeness test expands these axes over the tables and the unreachable claims.
 
-*Table CT, finite controller witnesses* (planned, unexecuted; rows keep the canonical ids T1–T7 and are cited as CT T1–CT T7, apart from Table T's tool rows):
+*Table CT, finite controller witnesses* (planned, unexecuted; rows keep the canonical ids T1–T7 and are cited as CT T1–CT T7):
 
 | id | sequence | → required |
 |----|----------|------------|
@@ -459,23 +312,33 @@ Reusing A never makes an expired A materialization current: M's expiry and recom
 
 The model-based test runs Tables Q and Z as the reference model under seeded sequences of {move ref, make ref unreadable, touch `FETCH_HEAD`, check, complete ok, complete fail, complete with a stale callback id, advance clock, fire the retry wake, stop}, seed 0x6E4E, 300 sequences of 40 commands. After each command: every accepted generation's facts equal the facts computed offline for its own H (no mixed heads); at most one flight exists; no `FETCH_HEAD` touch alone changes G's identity; and no failed `lastAttempt` matches the accepted G's identity.
 
-**Table V: return-time projection.** Seam: `view(M, G, S, now)` and every live surface over one materialization M (metrics read, `team_metrics`, trends, scrape, workspace snapshot, monitor outcome), each served from its cache. A row holds on a cache hit with no recomputation, and for a chosen end or trend point alike.
+**Table V: return-time projection.** Seam: `view(M, G, S, now)` and every live surface over one materialization M (metrics read, `team_metrics`, workspace snapshot), each served from its cache. A row holds on a cache hit with no recomputation.
 
 | id | after M was materialized under G at H_a | → state on the next return |
 |----|------------------------------------------|----------------------------|
-| V1 | nothing changed, within `maxAge` | `current`; rule results eligible |
-| V2 | the ref moved A → B, no flight completed yet | `behind` (cache hit, no recomputation); every rule "not current: behind" |
+| V1 | nothing changed, within `maxAge` | `current`; no delivery-evidence item for currentness |
+| V2 | the ref moved A → B, no flight completed yet | `behind` (cache hit, no recomputation); the delivery-evidence item lists `behind` |
 | V3a | `now` = `fetchAt` + 24 h − 1 ms, M otherwise fresh | `current` |
-| V3b | `now` = `fetchAt` + 24 h exactly, no other event | `stale` at the owned wake; the removal is published |
+| V3b | `now` = `fetchAt` + 24 h exactly, no other event | `stale` at the owned wake; the delivery-evidence item is published |
 | V3c | `now` = `fetchAt` + 24 h + 1 ms, no other event | still `stale` |
 | V4 | a same-head fetch moves `fetchAt` forward before the crossing | `current`; the owned wake is cancelled and re-armed; same G identity; an already queued old callback re-reads the actual `fetchAt` and its owner token and leaves the view current |
 | V5 | synthetic input only: `lastAttempt` failed for H_a while G is at H_a (unreachable from the controller, Tables Q and Z) | `refresh-failed`, fail-closed; the defensive branch, labeled as unreachable in production |
 | V6 | the ref moved to B and B's read failed (CT T4) | `behind`, with the refresh-failed reason also in `reasons`; `current` again only after B's retry succeeds and M is recomputed |
 | V6b | no G, ref B, and B's read failed (CT T3) | `unavailable`, with the refresh-failed reason |
 | V7 | the ref became unreadable or the repository shallow | `unavailable` |
-| V8 | a monitor outcome older than two intervals | `expired`; no item, every rule gauge 0 |
+| V8 | M older than its `maxAge` (30 s) | `expired`; the caller recomputes rather than serve it as current |
 | V9 | `fetchAt` unknown (no `FETCH_HEAD`) | `stale` |
 | V10 | a report frozen while V1 held, read after V2 | byte-equal to its stored snapshot: never re-projected |
+
+**Table O: runtime timer ownership.** Seam: `DeliveryRuntime` with fake timers, a fake reader, and subscriber counts from `WorkspaceConnections`. Backoff as in D2 (30 s first).
+
+| id | sequence | → required |
+|----|----------|------------|
+| O1 | one subscriber, then its last close or disconnect | only the 60 s poll is cleared; an armed retry wake and the freshness wake stay armed |
+| O2 | no subscriber; a `team_metrics` read finds the ref at B (cold or behind), and B's read fails at t₀ | Z4 arms one retry wake at t₀ + 30 s; no read at t₀ + 30 s − 1 ms; exactly one read at t₀ + 30 s; on success G = B, the retry is cleared, and the next read is current (CT T3, T4) |
+| O3 | no subscriber; `now` reaches `fetchAt` + 24 h | the freshness wake fires at exactly the boundary and the workspace is published (V3a–V3c); a later same-head fetch re-arms it (V4) |
+| O4 | a subscriber returns while a retry is pending | the poll is re-armed; still exactly one retry wake |
+| O5 | `stop()` with the poll, a retry, and the freshness wake armed and a flight running | every owned timer is cleared; the later completion and any old callback publish nothing (Q0, Z0) |
 
 **Table I: window membership.** Seam: `landingPositions` plus the containment and membership predicates (D3), span d, end T, current [T − d, T), baseline [T − 2d, T − d).
 
@@ -501,10 +364,10 @@ Property: for every generated chain and every pair of adjacent intervals, no eve
 | L4 | a result names full literal D not in H's graph, with the strict same-result passing check of D1 (as L8b) | * | known, not landed |
 | L4b | the same D with only a pending check, or none | * | unresolvable: excluded from `landed_result_share`, never known-not-landed |
 | L5a | F₁ t 100, F₂ t 50 brings X through its second parent, F₃ t 200; X has U = [50, 100] | 40 | X not contained by T |
-| L5b | same | 75 | X's containment unknown at T: excluded from the share, counted in its coverage note |
+| L5b | same | 75 | X's containment unknown at T: excluded from the share, counted in its coverage counts |
 | L5c | same | 150 | X contained by T; its membership in [100, 150) is unknown (at 50 < 100), in [40, 150) it is in |
 | L6 | F₁ t 1000, F₂ t 10 (old-dated), F₃ t 1100 brings X (ct 1050) through its second parent | 1200 | X landed at position 3, U = [1100, 1100] (no `--since` cut) |
-| L7 | `commit_ref` is a 7- or 12-digit abbreviation of a graph commit, including one a later check resolved to a full id; symbolic text (`HEAD`, a branch name); a 39- or 41-digit hex; a 64-digit literal in a sha1 repository | * | unresolvable: excluded from `landed_result_share`, counted in its coverage note, never landed or known-not-landed |
+| L7 | `commit_ref` is a 7- or 12-digit abbreviation of a graph commit, including one a later check resolved to a full id; symbolic text (`HEAD`, a branch name); a 39- or 41-digit hex; a 64-digit literal in a sha1 repository | * | unresolvable: excluded from `landed_result_share`, counted in its coverage counts, never landed or known-not-landed |
 | L8a | a full literal C in H's graph | * | known; C's landing by position |
 | L8b | a full literal D off H's graph with one same team/task/result check: `done`, version 1, `commit.status` `pass`, `commit.given` = D, `commit.sha` = D | * | known, not landed; evidence names the check's id, `seq`, `finished_at` |
 | L8c | D off-graph with no check, or a check that is pending, unavailable, failed, of another result, missing `commit.sha`, or with `given` ≠ the literal | * | unresolvable |
@@ -523,150 +386,44 @@ Property: for every generated chain and every pair of adjacent intervals, no eve
 | C5 | added, later deleted from master | landed at the arrival (history is not rewritten) |
 | C6 | archived by `git mv` from `changes/<name>/`, with `diff.renames=true` | landed at that position |
 
-**Table K: inputs at an end.** Seam: `loadMetricsInputs` plus `computeMetrics(…, end)` over `metricsSeed.ts` rows, fixture facts, and an explicit synthetic `SourceCoverage`, `now` fixed. "Legacy flags" means the flags the base code computes, unchanged.
+**Table K: inputs at an end.** Seam: `loadMetricsInputs` plus `computeMetrics(…, end)` over `metricsSeed.ts` rows and fixture facts, `now` fixed. "Legacy flags" means the flags the base code computes, unchanged.
 
 | id | records | → result |
 |----|---------|----------|
-| K1 | linked task created and done 30 days before both windows, no later event; its change lands in the window | counted in tasks per landed change and cycle time |
-| K2 | change landed at `now − 1 d`, its task active at `now − 7 d` | in flight at the baseline's end, with its age |
-| K3 | 12w trend, oldest point: window starts 84 d back, baseline 91 d back, coverage `supported` over both | legacy `partial` on cohort token metrics as the base computes it (`usageHorizon`); `tokens_total` evidence complete |
-| K4 | limit tax at an end whose baseline interval plus its 24 h lookback is not inside the coverage's supported intervals | legacy flags unchanged (limit tax has no `partial`); evidence incomplete on that side, reason `coverage` |
 | K5 | point before the team's first record | value null, `n` 0 (no data) |
-| K6 | the task's status at T comes from a backfilled row | in-flight age approximate; evidence incomplete |
-| K7 | linked task created after the landing | not counted (post-archive follow-up) |
-| K8 | read at `end = now` | every pre-existing metric's value, `n`, baseline, and legacy flags byte-identical to the base read; only the additive `evidence` and `delivery` fields are new |
-| K9 | every migration row present, usage rows on every day of both sides, coverage `unknown` | `tokens_total` value as the base computes it; evidence `unknown`, reason `coverage`; `delivery-drop` and `cost-per-change-rise` not-evaluable `evidence` |
-| K10 | 1d read, coverage `supported` over [T − 2 d, T) only | token evidence complete on both sides (no 14-day horizon) |
-| K11 | `tokens_per_task` cohort task created 20 d before T, coverage `supported` from T − 10 d | that side's evidence incomplete, reason `coverage` |
+| K8 | read at `end = now` | every pre-existing metric's value, `n`, baseline, and legacy flags byte-identical to the base read; only the additive `evidence`, `coverage`, and `delivery` fields and the new metrics are new |
 | K12 | an archive of unknown membership in the baseline (I5) | `changes_landed` baseline excludes it; baseline evidence incomplete with `unknown: 1` |
+| K13 | 30 tasks first done in the window: 20 without a result, 1 naming an abbreviation, 9 full literals of which 6 are contained by T | `landed_result_share` 6/9 with `n` 9; coverage `{ cohort 30, eligible 9, noResult 20, unresolvable 1, unknown 0 }`; evidence incomplete |
+| K14 | one cohort task's commit has unknown containment at T (L5b) | excluded from `n`, counted `unknown: 1`; `cohort = eligible + noResult + unresolvable + unknown` |
+| K15 | no accepted G (cold, or an unknown object format); current cohort 30 with 20 no result, baseline cohort 12 with 3 no result | `landed_result_share` value null, `n` 0, `unavailable` with the reason, never 0; current coverage exactly `{ cohort 30, eligible 0, noResult 20, unresolvable 0, unknown 10 }`, baseline exactly `{ cohort 12, eligible 0, noResult 3, unresolvable 0, unknown 9 }`; `cohort = eligible + noResult + unresolvable + unknown` and `n = eligible` on both sides; the tab and `team_metrics` return equal objects |
+| K16 | no result ever accepted, all eligible commits landed | `landed_result_share` 1.0; `accepted_result_share` 0 and in the coverage family; `lead_time_*`'s guard is `landed_result_share` |
+**Table W: attention.** Seam: the production `WorkspaceRead.snapshot` with the runtime's projected read, fake clock.
 
-**Table R: rules.** Seam: `evaluateDegradation` over M's numbers and evidence (pure). Currentness is not an input: a result is shown only through a `current` projection (Table V), so no row here reads freshness. The notation is D4's: lc/lb, ic/ib, tc/tb, xc/xb. "evidence" names the first side or count whose evidence is incomplete. Every row not shown for a rule is covered by its table's input conditions, which are checked in the order listed. The figures are synthetic arithmetic witnesses, not calibration.
+| id | state | → queue |
+|----|-------|---------|
+| W1 | current; 7d cohort 30 done, 9 eligible, 20 no result, 1 unresolvable, 0 unknown | one human item `delivery-evidence` stating those five counts, linked to `{ kind: 'metrics', id: '7d' }` |
+| W2 | next snapshot: every cohort task has a known landing state | item gone, counts drop by one, one publish |
+| W3 | still incomplete with new counts | one publish; same identity; the cause shows the new counts |
+| W4 | evidence complete, then `now` reaches `fetchAt` + 24 h exactly with no other event | at 24 h − 1 ms no item; at the owned wake the item is listed (stale, with the fetch age) and published; at + 1 ms still listed |
+| W5 | the ref moves to B and the snapshot is served from cache with no recomputation | the item is listed, cause `behind`, no delivery value |
+| W6 | the ref moves to B and B's read fails | listed, `behind` with the failed reason; after B's backoff the owned retry wake retries B, and with complete evidence over the accepted B the item clears |
+| W7 | positively classified plain directory team | no item; the Metrics tab shows delivery unavailable |
+| W8 | current, no task first done in the window | no item |
+| W9 | Git-backed, `refs/remotes/origin/HEAD` missing or the repository shallow | listed, `unavailable` with the reason |
+| W10 | current; 7d cohort 10, eligible 9, noResult 0, unresolvable 0, unknown 1 (a full literal whose containment at T is unknown, D3) | exactly one item, cause naming those five counts with `unknown` 1 |
+| W11 | after W10, the chain makes that containment known: eligible 10, unknown 0 | no item; one publish |
+| W12 | expected Git team whose common directory goes missing | the same `delivery-evidence` identity, `unavailable` with the reason, no delivery value |
+| W13 | expected Git team whose common directory or its metadata is unreadable | the same identity, `unavailable` with the unreadable reason |
+| W14 | after W12 or W13, the root is restored and the facts are current with complete evidence | the item clears under the same identity; with incomplete evidence it shows the counts under the same identity |
+| W15 | Git classification indeterminate (a classification error, not a positive plain result) | listed, availability unknown, no delivery value; never suppressed as not-applicable |
 
-*R-DD, `delivery-drop`:*
-
-| id | evidence | lb | ib | tb | lc/lb | ic/ib | tc/tb | → result |
-|----|----------|----|----|----|-------|-------|-------|----------|
-| DD1 | incomplete for changes landed, integrations, or `tokens_total` on either side (an unknown membership, coverage `unknown`, 34 archives of unknown membership) | * | * | * | * | * | * | not-evaluable `evidence` |
-| DD2 | complete | 9 | * | * | * | * | * | not-evaluable `floor` |
-| DD3 | complete | 10 | 0 | * | * | * | * | not-evaluable `no integration baseline` |
-| DD4 | complete | 40 | 146 | 0 | 6/40 | 59/146 | 0/0 | not-evaluable `no baseline usage` |
-| DD5 | complete | 10 | 10 | 100 | 6/10 | 7/10 | 80/100 | fires (all three boundaries met: 30 ≤ 30, 70 ≤ 70, 400 ≥ 400) |
-| DD6 | complete | 10 | 10 | 100 | 7/10 | 7/10 | 100/100 | holds-not (35 > 30) |
-| DD7 | complete | 10 | 10 | 100 | 6/10 | 8/10 | 100/100 | holds-not (80 > 70) |
-| DD8 | complete | 10 | 10 | 100 | 6/10 | 7/10 | 79/100 | holds-not (395 < 400) |
-| DD9 | complete | 10 | 10 | 100 | 6/10 | 7/10 | 0/100 (rows supported, none recorded) | holds-not |
-| DD10 | complete | 10 | 10 | 100 | 3/10 | 7/10 | 90/100 | fires |
-
-*R-CR, `cost-per-change-rise` (fires when tc·lb ≥ 2·tb·lc):*
-
-| id | evidence | lc | lb | tb | tc | ic/ib | `delivery-drop` | → result |
-|----|----------|----|----|----|----|-------|-----------------|----------|
-| CR1 | incomplete for changes landed or `tokens_total` on either side | * | * | * | * | * | * | not-evaluable `evidence` |
-| CR2 | complete | 2 | ≥ 10 | * | * | * | * | not-evaluable `floor` |
-| CR3 | complete | ≥ 3 | 9 | * | * | * | * | not-evaluable `floor` |
-| CR4 | complete | ≥ 3 | ≥ 10 | 0 | * | * | * | not-evaluable `no baseline usage` |
-| CR5 | complete | 3 | 10 | 100 | 60 | 8/10 | holds-not | fires (600 ≥ 600, cost exactly 2×) |
-| CR6 | complete | 3 | 10 | 100 | 90 | 8/10 | holds-not (80 > 70) | fires (integration-branch case: 900 ≥ 600) |
-| CR7 | complete | 3 | 10 | 100 | 90 | 7/0 | not-evaluable (ib = 0) | fires |
-| CR8 | complete | 3 | 10 | 100 | 90 | 7/10 | fires (DD10) | holds-not (subsumed) |
-| CR9 | complete | 3 | 10 | 100 | 59 | 8/10 | holds-not | holds-not (590 < 600) |
-
-*R-CD, `convergence-drift`:* base tasks per landed change ≥ 1 by construction (a linked change has a task), so a zero denominator is unreachable.
-
-| id | evidence | linked cur / base | coverage cur / base | xc / xb | → result |
-|----|----------|-------------------|---------------------|---------|----------|
-| CD1 | incomplete for linked landed changes or link coverage on either side | * | * | * | not-evaluable `evidence` |
-| CD2 | complete | 4 / ≥ 5 | * | * | not-evaluable `floor` |
-| CD3 | complete | ≥ 5 / 4 | * | * | not-evaluable `floor` |
-| CD4 | complete | ≥ 5 / ≥ 5 | 49/100 on either side | * | not-evaluable `coverage` |
-| CD5 | complete | 5 / 5 | 1/2 / 1/2 | 2 / 1 | fires (2 ≥ 2·1) |
-| CD6 | complete | 5 / 5 | 1/2 / 1/2 | 399/200 / 1 | holds-not (399 < 400) |
-
-*R-IA, `inflight-aging`:*
-
-| id | evidence | n cur / base | approximate | base p90 | cur p90 | → result |
-|----|----------|--------------|-------------|----------|---------|----------|
-| IA1 | incomplete for an in-flight set (an unknown containment at either end) | * | * | * | * | not-evaluable `evidence` |
-| IA2 | complete | 2 / ≥ 3, or ≥ 3 / 2 | * | * | * | not-evaluable `floor` |
-| IA3 | complete | ≥ 3 / ≥ 3 | either side | * | * | not-evaluable `approximate` |
-| IA4 | complete | ≥ 3 / ≥ 3 | no | 0 | * | not-evaluable `no baseline age` |
-| IA5 | complete | 3 / 3 | no | 36 h | 72 h | fires |
-| IA6 | complete | 3 / 3 | no | 30 h | 71 h | holds-not |
-| IA7 | complete | 3 / 3 | no | 38 h | 72 h | holds-not (ratio < 2) |
-
-**Table T: tool surface.** Every refusal uses the tool-error envelope that the existing unknown-window refusal uses (oracle hazard "refusals missing the success envelope").
-
-| id | call | → result |
-|----|------|----------|
-| T1 | `team_metrics {window:'7d'}` | compact, < 32 KB on the seeded 300-task fixture, values equal to the tab's |
-| T2 | `{window:'7d', metrics:['tasks_per_landed_change']}` | that metric carries ≤ 50 drill entries and `drillTotal`; the others are compact |
-| T3 | `{window:'7d', metrics:['velocity']}` | refused, naming the known ids |
-| T4 | `{window:'7d', slice:{kind:'group'}}` | slice rows present, no drill lists |
-| T5 | `process_reports_list` | no `snapshot` key on any report |
-| T6 | `process_report_get {full:true}` | snapshot byte-equal to the stored one |
-| T7 | compact read of a metric that is partial, approximate, or unavailable | the flag and `unavailable` reason present |
-
-**Table TR: trends surface.** Same envelope rule as Table T.
-
-| id | request | → result |
-|----|---------|----------|
-| TR1 | range `4w` | 4 points, newest ending at the read |
-| TR2 | range `6w` | refused, naming 4w, 8w, 12w, with the same error envelope as an unknown window |
-| TR3 | unknown `teamPath` | `unknown-team`, no data |
-| TR4 | point whose baseline interval plus its 24 h lookback is outside the supplied coverage | `limit_tax_hours` marked incomplete evidence at that point; its legacy flags unchanged; no rule mark that reads it |
-| TR5 | `process-metrics-open` with `end`, then a refresh | the window ending at `end` both times; values equal TR1's matching point |
-| TR6 | `process-metrics-open` without `end` | unchanged from today |
-
-**Table W: attention.** Seam: the production `WorkspaceRead.snapshot` with the runtime's `outcome`, fake clock.
-
-| id | outcome | → queue |
-|----|---------|---------|
-| W1 | current, `delivery-drop` fires | one human item `process-degradation:delivery-drop` naming 6 vs 40 and both token totals |
-| W2 | next evaluation `holds-not` | item gone, counts drop by one, one publish |
-| W3 | same rule fires with new current values | one publish; same identity; the cause shows the new values |
-| W4 | fires, then `now` reaches `fetchAt` + 24 h exactly with no other event | at 24 h − 1 ms the item is listed; at the owned wake the removal is published; at + 1 ms still no item |
-| W5 | `not-evaluable` | no item |
-| W6 | outcome of an older generation, or older than two intervals | no item |
-| W7 | fires, then the ref moves to B and B's read fails | no item (`behind` with the failed reason); after B's backoff the owned retry wake retries B, and the item returns only on a current evaluation over the accepted B |
-| W8 | fires, then the ref moves and the snapshot is served from cache with no evaluation | no item (`behind`), at the next snapshot without recomputation |
-| W9 | the production composition's coverage (`unknown`) with token rows present | no `delivery-drop` or `cost-per-change-rise` item (not-evaluable `evidence`) |
-
-**Table E: export.** Each row is a scrape through the production `registerMetricsRoute` against a fixture team. A spawn spy asserts that no scrape runs git.
-
-| id | endpoint | state | → delivery series |
-|----|----------|-------|-------------------|
-| E1 | disabled | * | none, and no delivery timer armed without a subscriber |
-| E2 | enabled | cold start, no generation yet, no browser or tool call | `delivery_facts_available` 0 only; the background pass starts at boot |
-| E3 | enabled | current, all rules `holds-not` | every family; `degradation_rule_firing` 0 per rule; `delivery_rules_current` 1 |
-| E4 | enabled | current, `delivery-drop` fires | its gauge 1, the others 0 |
-| E5 | enabled | stale | families, `delivery_facts_stale` 1, every rule gauge 0, `delivery_rules_current` 0 |
-| E6 | enabled | restart, then the first background generation is accepted, nothing landed | counters and histogram buckets equal before and after; between restart and acceptance, E2 |
-| E7 | enabled | 90 landed changes | one histogram series per team alias; no change name in any label |
-| E8 | enabled | every workspace subscription closed or disconnected, then the rule's inputs change | the background pass updates the gauge within one interval |
-| E9 | enabled | outcome older than two intervals (timer stalled) | every rule gauge 0, `delivery_rules_current` 0 |
-| E10 | enabled | `delivery-drop` fired, then the ref moved (behind), with or without B's read failing (the failed reason), scraped before any evaluation | every rule gauge 0, `delivery_rules_current` 0, counters of the accepted generation unchanged |
-| E11 | enabled | production coverage `unknown`, facts current, the in-flight inputs of `inflight-aging` met | `delivery_rules_current` 1; `degradation_rule_firing` 0 for `delivery-drop` and `cost-per-change-rise`, 1 for `inflight-aging` |
-
-**Table N: noninterference.** Seam: the production manager composition with a fixture team. The same dispatch, routing, staffing, execution-tick, and acceptance inputs are run under four delivery states: unavailable, current and `delivery-drop` firing, stale, and current with different landings.
+**Table N: noninterference.** Seam: the production manager composition with a fixture team. The same dispatch, routing, staffing, execution-tick, and acceptance inputs are run under four delivery states: unavailable, current with the delivery-evidence item listed, stale, and current with different landings.
 
 | id | check | → result |
 |----|-------|----------|
 | N1 | dispatcher pass, routing decision log, staffing preview, the execution fixture's tick effects, and Accept result outcomes under each state | identical across the four |
 | N2 | mutant: the dispatcher receives `MetricsReader` through an injected dependency and skips a dispatch when `delivery.state` is stale | N1 fails |
-| N3 | supplementary import guard: the outbound-isolation modules import nothing from `metrics/delivery/`, `degradationRules`, or `MetricsReader` | no offenders, file list non-empty |
-
-**Table CAL: calibration cases.** Seam: `readTrends` over the D9 fixture at fixed `now = 2026-10-27T00:00:00Z`, with synthetic `SourceCoverage` `supported` over every span unless a row says otherwise. The cases are declared before the thresholds are read. They are synthetic arithmetic over D4's predicates, not a calibration against real data.
-
-| id | fixture week (current vs baseline) | → rules at that point |
-|----|------------------------------------|-----------------------|
-| CAL1 | landings 6 vs 40, integrations 59 vs 146, tokens 7.1 B vs 4.0 B | `delivery-drop` only (`cost-per-change-rise` subsumed) |
-| CAL2 | landings 6 vs 40, integrations 59 vs 146, tokens 70 vs 100 (cost ratio 14/3) | `cost-per-change-rise` only (5·70 < 4·100) |
-| CAL3 | landings 6 vs 40, integrations 59 vs 146, tokens 20 vs 100 (cost ratio 4/3) | none |
-| CAL4 | landings 3 vs 10, integrations 7 vs 10, tokens 90 vs 100 | `delivery-drop` only (cost 3 subsumed) |
-| CAL5 | landings 3 vs 10, integrations 8 vs 10, tokens 90 vs 100 | `cost-per-change-rise` only |
-| CAL6 | landings 20 vs 20, integrations steady, tokens 220 vs 100 (cost 2.2×) | `cost-per-change-rise` only |
-| CAL7 | CAL1's figures with coverage `supported` but no usage rows in the baseline | no token rule fires (`not-evaluable` `no baseline usage`) |
-| CAL8 | CAL1's figures with coverage `unknown` | no token rule fires (`not-evaluable` `evidence`) |
+| N3 | supplementary import guard: the outbound-isolation modules import nothing from `metrics/delivery/` or `MetricsReader` | no offenders, file list non-empty |
 
 **Properties.** All use a seeded `mulberry32`, defined in the test file the way the existing property tests define it (for example `checkRecords.test.ts`), and no new dependency.
 
@@ -675,41 +432,46 @@ Property: for every generated chain and every pair of adjacent intervals, no eve
   - Seam: `landingPositions`.
   - Property: each commit's position is the smallest k whose ancestor closure of Fₖ contains it, its `at` is ct(Fₖ), and its `bound` is the maximum ct over F₁…Fₖ.
   - Seed 0xDE11, 500 cases.
-- **P2, the compact form is a projection.**
-  - Generator: random `MetricsInputs` built over the existing `metricsSeed.ts` helpers.
-  - Property: for every metric, `compactMetrics(m)` keeps `value`, `n`, `baseline`, every flag, `unavailable`, and `evidence` equal to `m`'s.
-  - Seed 0xC0DE, 300 cases.
-- **P3, the rules are monotone in delivery.**
-  - Holding the token and integration figures and the input conditions fixed, lowering the current changes landed never turns `delivery-drop` from `fires` to `holds-not`.
-  - Seed 0xD0D0, 500 cases.
-- **P4, a trend point is the read at its end.**
-  - Generator: random `MetricsInputs` spanning 13 weeks with random fixture facts, one generation.
-  - Property: for every k, point k of `readTrends` equals `computeMetrics` at `end_k` over a load made for that end with the same generation, coverage, and `now`, projected compactly and through `view` at the same S. Values, `n`, baselines, flags, evidence, the projected state, and rule results all match.
-  - Seed 0x7E4D, 100 cases.
 - **P5, generations never mix heads.** This is the model-based test of Tables Q and Z (seed 0x6E4E).
 - **P6, no double count.** Over P1's generator, for random ends T and spans d, no landing is `in` both [T − 2d, T − d) and [T − d, T), and every landing `in` either is contained by T. Seed 0x1A1F, 500 cases.
 - **P7, the projection is the only currentness.** Over random sequences of P5's commands, every live return's state equals `view(M, G, S, now)` recomputed from scratch at the same instant, including cache hits. Seed 0x51E3, 300 sequences.
 
-**Production composition (M1).** One test builds the manager and `bootstrap`'s route registration as production does, with export enabled and no browser connection, and the production coverage input (`unknown`, D3b). It uses a temporary git repository (`cleanGitEnv`) whose origin carries 12 archives in the baseline week and 2 in the current week, token rows on every day, and three linked in-flight changes aged 80 h at T against three aged 36 h at the baseline's end. It asserts that the background pass alone makes a scrape show E11, that a workspace snapshot lists `process-degradation:inflight-aging` and no `delivery-drop` item, and that `team_metrics` reports `delivery-drop` not-evaluable `evidence`. There are four mutants: the source removed from `ATTENTION_SOURCES`; bootstrap not passing the runtime to the route; `enableExport` not called; and the composition passing `supported` coverage. Each fails the test.
+**Production composition (M1).** One test builds `ChatSessionManager` as production does, with no browser connection, over a temporary git repository (`cleanGitEnv`) whose origin carries archives and the merged result commits of K13's cohort, and `metricsSeed.ts` rows for that cohort. It runs two branches through the real manager and `WorkspaceRead.snapshot`. The **unknown-only branch** comes first: a current, otherwise complete 7d cohort of 10 tasks whose results are full literals, 9 contained by T and 1 whose first containing position straddles T (unknown containment, D3). Its first assertion is that the snapshot lists exactly one `delivery-evidence` item whose cause states `{ cohort 10, eligible 9, noResult 0, unresolvable 0, unknown 1 }`. A separate recovery step then advances the fixture so that containment is known (eligible 10, unknown 0), and the next snapshot lists no item. The **missing-result branch** then uses K13's cohort. It asserts that the manager starts the runtime, that a workspace snapshot lists `delivery-evidence` with K13's five counts and the `metrics` 7d link, and that the Metrics tab read and `team_metrics` return the same G identity, projected state, `landed_result_share`, `n`, and coverage. A failure path removes `refs/remotes/origin/HEAD`: the next snapshot lists the item `unavailable` with the reason, and both reads show the share unavailable. There are three mutants: the source removed from `ATTENTION_SOURCES`; the manager not starting the runtime; and the predicate reading an unknown count as 0, which fails the unknown-only branch's first assertion, because no item is listed. Each fails the test.
+
+#### S1 acceptance oracles: dormant result-frame syntax
+
+**Boundary.** Internal `decodeGitResultFrame(bytes: Uint8Array): GitResultFrame | null` consumes ONE supplied complete view (offset/length respected). It is total, pure and stateless: invalid supplied-byte syntax returns plain null, never throws or coerces. Raw byteLength <=512 includes all whitespace, before fatal UTF-8 decoding; reject a leading EF BB BF without stripping it. Only JSON SP/TAB/LF/CR whitespace is allowed. No stream splitting or whole-stream/RAM bound is claimed.
+**Shape.** Accept one JSON object with exactly the decoded, unique top-level keys `type`, `code`, `signal`; type is `GIT_RESULT`. A numeric safe integer 0..255 with explicit null signal OR null code with a full ASCII signal-string match `SIG[A-Z0-9]+` is valid. No trailing line terminator is part of that signal language. Return plain data with that tuple. A bounded key-aware scan plus standard JSON grammar parse must respect strings, quotes, backslashes, Unicode escapes, nesting and key/value position; reviver-only duplicate detection is insufficient.
+**Scope.** No local codec imports; tests import only the actual decoder and `bun:test`. Syntax never proves HELLO/STARTED/once/order/CLOSING, provenance, ordinary return, cleanup or delivery facts. Future owner/Reader/native/app/public composition remain owed; these helper tests make no public-scenario `@covers` claim.
+
+| Oracle id | Supplied input / variants | Observable decoder result |
+| --- | --- | --- |
+| S1O01 | GIT_RESULT, code 0/1/128/255, explicit signal null | Equal numeric tuple; 128 is syntax-valid, owner classification deferred |
+| S1O02 | GIT_RESULT, code null, signal SIGTERM/SIGKILL/SIGUSR2 | Equal signal tuple |
+| S1O03 | Alternate key order, escaped valid keys/values, normal JSON whitespace; JSON-encoded NaN code + SIGTERM becomes null code | Equal valid tuple AFTER encoding |
+| S1O04 | BOTHSET code 0 + SIGTERM; BOTHNULL; each missing/extra/wrong key, wrong type/value; nonobject/nested wrong shape | null |
+| S1O05 | Code -1/256/fraction/string/unsafe; raw NaN/Infinity; overflowing JSON number | null |
+| S1O06 | Empty/lowercase/no-SIG signal, or signal with final LF/CR/U+2028/U+2029 | null |
+| S1O07 | Literal duplicate key or escaped-equal key (code vs \u0063ode), either order, equal or unequal values | null |
+| S1O08 | Malformed/truncated/overlong UTF-8, leading BOM, non-JSON whitespace | null |
+| S1O09 | Empty/whitespace-only/malformed JSON/trailing garbage/concatenated frames; property-like strings/escaped quotes/backslashes in wrong-shape values | null, no throw |
+| S1O10 | Valid frame padded with JSON whitespace to exactly512 raw bytes; same content padded to513 | Equal tuple at512; null at513 |
+| S1O11 | Valid frame in a Uint8Array subview with unrelated invalid prefix/suffix bytes in backing buffer | Equal tuple from view only |
+| S1O12 | Delete numeric-branch signal===null; input BOTHSET code0 + SIGTERM | S1O04 BOTHSET rejection is FIRST expected failing assertion; missing-signal is masked by the key guard |
+
+**S1P1 (S1-only generator; existing P1/P5/P6/P7 generator rules unchanged).** EXACT500 cases; seed0x6009; unsigned32 LCG `s=(Math.imul(s,1664525)+1013904223)>>>0`, advance once per case. Category is i%10, variant is floor(i/10), each category exactly50: 0 valid numeric (code=s&255), 1 valid signal (cycle TERM/KILL/USR2), 2 invalid code, 3 invalid BOTHNULL/BOTHSET tuple, 4 literal duplicate, 5 escaped-equal duplicate, 6 invalid UTF-8, 7 malformed JSON including raw NaN/Infinity, 8 missing/extra/wrong shape/type, 9 exactly513 raw bytes. Generate both valid branches and independently known POST-ENCODING expected data/null by construction, never by the decoder or a copy of its predicate. Vary invalid-code and shape categories across S1O04/O05, duplicate order/equality across O07, byte/grammar variants across O08/O09. Assert every category count=50 and both valid branches occur; valid cases round-trip, invalid bytes return null, repeat calls agree and none throws. JSON.stringify NaN/Infinity can create valid signal tuples: never assume an invalid pre-encoding object remains invalid bytes.
+**Causal and coverage checkpoint.** Every table row/variant and S1P1 calls the actual exported decoder. Preserve row IDs in executable table data/test names. S1O12 names a later separately authorized guard-removal run, not an executed mutant. This dormant module checkpoint does not satisfy the later S4 actual public runner composition or task1.2.
 
 ## Risks / Trade-offs
 
-- **[Archives are lumpy: a change lands its code across many PRs and archives once]** → `delivery-drop` also requires integrations to fall, and its baseline floor is 10. Integrations are reported beside changes landed.
-- **[Goodhart: changes get split to raise changes landed]** → tokens per landed change and the convergence metrics travel with it, its guard is reopen rate, and rules detect rather than target.
-- **[Committer time is not arrival time]** → landings are ordered by first-parent position, each carries its uncertainty interval [at, bound], membership is half-open and never inferred inside it, and the proxy's limits are stated. A backdated position reads unknown in the windows it straddles and suppresses the rules that read it.
-- **[No producer establishes source coverage]** → `SourceCoverage` is a consumer input (D3b) whose producer contract is an unmet, blocking prerequisite. Until it is approved, production passes `unknown`, so `delivery-drop`, `cost-per-change-rise`, and token or limit trend marks never fire on real data. That is the intended conservative outcome, stated in the tab and the export, not a defect to patch with migration timestamps.
-- **[Abbreviated result commits are excluded]** → only full literal ids of the repository's object format count (D1); an abbreviation stays unresolvable even when unique, and the share's coverage note counts it.
-- **[A team that never fetches is never alerted]** → the tab shows the stale marker with the fetch age, and rules are `not-evaluable` while stale. Kawai does not fetch: that is a write to the repository's refs, and agents fetch routinely.
+- **[Committer time is not arrival time]** → landings are ordered by first-parent position, each carries its uncertainty interval [at, bound], membership is half-open and never inferred inside it, and the proxy's limits are stated. A backdated position reads unknown in the windows it straddles and is counted as incomplete evidence.
+- **[Abbreviated result commits are excluded]** → only full literal ids of the repository's object format count (D1); an abbreviation stays unresolvable even when unique, and the share's coverage counts it.
+- **[Most done tasks may have no result]** → `landed_result_share` shows the done cohort and the no-result count beside `n`, and the delivery-evidence item names them, so a high share over few eligible tasks stays visible.
+- **[A team that never fetches is never current]** → the tab shows the stale marker with the fetch age, and the delivery-evidence item lists it. Kawai does not fetch: that is a write to the repository's refs, and agents fetch routinely.
 - **[Whole-history reads grow with the repository]** → the byte bound and closure check make an oversized or truncated history unavailable, never partial. The cost on a real repository is Unknown until measured under D9.
-- **[Linked-task coverage is partial]** → convergence carries its coverage metric, and `convergence-drift` requires coverage of at least 0.5 on both sides.
-- **[Rule thresholds are judgement]** → they are constants in one table, validated on the declared fixture cases (Table CAL). Moving one is a reviewed code change, never configuration, and never tuned to make a named historical window fire.
-- **[A 12-week trend repeats the computation 12 times]** → it runs over one load, is cached 5 minutes per (range, G's identity) and projected on every hit, and is never computed on a workspace push.
-- **[Past trend points change after the fact: a late fetch, result, rewrite, or reopened task]** → this is intended and stated: a point is today's read for that end (P4), not what was known then. The view says "recomputed at <time> from <head>".
-- **[The PromQL ratio drifts from the read-time ratio]** → it is documented as an observed-increase approximation (D7).
+- **[The first landing omits convergence, cost, rules, trends, and export]** → they are the non-blocking follow-up list; nothing here precludes them, and the facts generation and projection are the seams they will read.
 - **[Old report snapshots lack the delivery family and show lead time's new guard as absent]** → readers render absent, and the guard is read from definitions as today.
 
 ## Migration Plan
 
-There is no schema migration and no stored state.
-
-**Prerequisite.** Real-data alert implementation for the token- and limit-dependent rules waits on an approved producer coverage contract (D3b, task 0.1). Everything else, including those rules' consumer branch under fixture coverage, can be implemented first; in production those rules read not-evaluable until the contract lands. Deploying adds the family, the rules, the compact tool forms, the Trends view, and the export families. The export families and the background refresh appear only where `KAWAI_METRICS_ENABLED` is already set. Rolling back is a revert: no data was written that older code would misread. Reports frozen after the change carry the delivery family in their snapshot JSON, and older readers ignore unknown metric ids.
+There is no schema migration and no stored state. Deploying adds the delivery family, `landed_result_share` with its coverage, the guard change, and the `delivery-evidence` attention kind. Rolling back is a revert: no data was written that older code would misread. Reports frozen after the change carry the delivery family in their snapshot JSON, and older readers ignore unknown metric ids.

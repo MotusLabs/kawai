@@ -2,37 +2,49 @@
 
 ## ADDED Requirements
 
-### Requirement: The attention queue lists process degradation
-While a degradation rule fires over current delivery facts, the attention queue SHALL list one human-required item with identity `process-degradation:<rule id>`, a cause naming the rule and its current and baseline values, impact "team delivery", next action Open metrics, and a link to the Metrics tab's 7d window. The item SHALL follow changed values while the rule holds, and SHALL disappear once it stops firing or the delivery state projected at the snapshot is not current.
+### Requirement: The attention queue lists missing delivery evidence
+Positive non-Git teams SHALL be not applicable. Otherwise, one human-owned `delivery-evidence` item SHALL link to Metrics 7d. Non-current or unknown facts SHALL list it with source reasons; current cohort exclusions SHALL list total, eligible, missing, unresolvable and unknown counts. It SHALL be absent when facts are current AND (evidence is complete OR the cohort is empty). Indeterminate classification means unknown availability. Recovery keeps its identity; it never claims performance.
 
-#### Scenario: Delivery drop raises one item
-- **WHEN** the delivery-drop rule fires
-- **THEN** the queue lists one human-required item naming changes landed 6 against 40 and the token totals, whose action opens the Metrics tab on 7d
+#### Scenario: Facts not current
+- **WHEN** the team's repository was last fetched 30 hours ago
+- **THEN** the queue lists one human-owned `delivery-evidence` item stating stale with the fetch age, and no delivery value in its cause
 
-#### Scenario: Recovery clears the item
-- **WHEN** the next read finds the rule no longer holds
-- **THEN** the item leaves the queue and the counts drop by one
+#### Scenario: Missing results in the done cohort
+- **WHEN** facts are current and 30 tasks are first done in the 7d window, 20 without a result and 1 naming an abbreviation
+- **THEN** the item states 30 done, 9 eligible, 20 missing results, 1 unresolvable, and 0 unknown, and its action opens the Metrics tab on 7d
 
-#### Scenario: New values while it holds
-- **WHEN** the rule keeps firing and its current values change
-- **THEN** the item's cause shows the new values under the same identity
+#### Scenario: Unknown containment only
+- **WHEN** facts are current and 10 tasks are first done in the 7d window, all with full literal results, 9 contained by the window's end and 1 of unknown containment
+- **THEN** exactly one item is listed, stating 10 done, 9 eligible, 0 missing results, 0 unresolvable, and 1 unknown
 
-#### Scenario: One toast while it holds
-- **WHEN** the rule keeps firing across many workspace pushes and a reconnect
-- **THEN** the client raises at most one toast for that item identity in its session
+#### Scenario: Complete evidence clears the item
+- **WHEN** facts are current and every task first done in the 7d window has a known landing state
+- **THEN** no `delivery-evidence` item is listed, and the counts drop by one
 
-#### Scenario: Stale facts raise nothing
-- **WHEN** the repository was last fetched 30 hours ago
-- **THEN** no `process-degradation` item is listed, and the Metrics tab shows the stale marker
+#### Scenario: No done cohort
+- **WHEN** facts are current and no task was first done in the 7d window
+- **THEN** no `delivery-evidence` item is listed
 
-#### Scenario: Facts go stale while it holds
-- **WHEN** the rule is firing and the last fetch reaches 24 hours old with no other change
-- **THEN** the item leaves the queue at that time without waiting for another event
+#### Scenario: Plain directory team
+- **WHEN** a team's directory is positively identified as not a git repository
+- **THEN** no `delivery-evidence` item is listed, and the Metrics tab shows delivery unavailable
 
-#### Scenario: Refresh fails while it holds
-- **WHEN** the rule is firing, the ref moves to B, and B's read fails
-- **THEN** the next snapshot lists no item, and the item returns only after B's retry succeeds and the rule fires over B
+#### Scenario: Repository root lost
+- **WHEN** a team expected to be Git-backed loses its git common directory
+- **THEN** the `delivery-evidence` item is listed as unavailable with the reason, and no delivery value
 
-#### Scenario: Ref moves while it holds
-- **WHEN** the rule is firing and the ref moves to a head whose facts are not yet read
-- **THEN** the next snapshot lists no item, without waiting for an evaluation
+#### Scenario: Repository root unreadable
+- **WHEN** a team expected to be Git-backed has a common directory that cannot be read
+- **THEN** the same item is listed as unavailable with the unreadable reason, never suppressed as not applicable
+
+#### Scenario: Root recovers under one identity
+- **WHEN** the lost or unreadable root is restored and the facts are current with complete evidence
+- **THEN** the item that was listed under `delivery-evidence` clears, with no second identity raised
+
+#### Scenario: Cause changes under one identity
+- **WHEN** the item is listed for missing results and the facts then become stale
+- **THEN** the same identity shows the new cause, and the client raises at most one toast for it in its session
+
+#### Scenario: Facts go stale with no other event
+- **WHEN** evidence is complete, no item is listed, and the last fetch reaches exactly 24 hours old with no other change
+- **THEN** the item is listed at that time without waiting for another event, and 1 ms earlier it was not

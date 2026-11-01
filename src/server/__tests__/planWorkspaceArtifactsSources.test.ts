@@ -326,8 +326,17 @@ describe('nested monorepo archive (projectRoot mapping)', () => {
     // or the subscription never hears about future artifacts there (F4).
     current = projectRootAt('app2')
     writeNestedArchiveDir(current)
+    const expectedArchiveRoot = archiveRootAt(current)
+    const watchDirectory = fixture.host.watchDirectory
+    const registered = new Promise<void>(resolve => {
+      fixture.host.watchDirectory = (directory, onEvent) => {
+        const watcher = watchDirectory(directory, onEvent)
+        if (directory === expectedArchiveRoot) resolve()
+        return watcher
+      }
+    })
     fixture.reconcile()
-    await tick()
+    await registered
     expect(all('team-plan-workspace-artifacts')).toHaveLength(1)
     expect(fixture.watchers.has(archiveRootAt(current))).toBe(true)
     expect(fixture.watchers.has(archiveRootAt(projectRootAt('app')))).toBe(false)
