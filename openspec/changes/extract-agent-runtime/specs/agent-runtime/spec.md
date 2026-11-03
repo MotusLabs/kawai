@@ -67,6 +67,17 @@ An exit not requested by the caller SHALL invoke the process-end callback once f
 - **WHEN** the CLI process exits unexpectedly with a turn pending
 - **THEN** the caller receives one process-end notification and one failed terminal turn result
 
+### Requirement: Agent-started turns are reported
+When the runtime opens a turn without a submitted message, such as after a background task ends, an idle driver SHALL report one turn with the runtime's turn identity: a turn-start event carrying its trigger (the ending tasks' summaries when known), no user message, the active state, and exactly one terminal result through the turn-result callback. Input that arrives while a turn is active SHALL bind to that turn. Input before ready or after stop or exit SHALL open no turn.
+
+#### Scenario: Background completion wakes an idle driver
+- **WHEN** a background task ends while the driver is idle and the runtime starts a turn in response
+- **THEN** the caller receives one turn start naming the task, the turn's events, and one terminal result, and the driver returns to idle
+
+#### Scenario: No phantom or late agent-started turn
+- **WHEN** a driver attaches idle without a prompt, or turn-opening input arrives after stop
+- **THEN** no turn start, turn result or state change is reported
+
 ### Requirement: Requests can be answered immediately
 A question or approval request SHALL be registered before the request callback fires with its identity. The caller SHALL be able to answer or deny inside that callback. Only the first valid response SHALL apply. Headless handling SHALL NOT depend on a browser, UI deadline or recommended answer.
 

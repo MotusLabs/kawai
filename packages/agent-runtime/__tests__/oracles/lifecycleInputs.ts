@@ -5,10 +5,11 @@
 // operation sets expand to every member; `U01` is the one unreachable pair.
 
 export const STATES = ['unstarted', 'starting', 'idle', 'active', 'stopping', 'stopped', 'exited'] as const
-export const OPERATIONS = ['start', 'send', 'interrupt', 'stop', 'exit', 'ready', 'result'] as const
+export const OPERATIONS = ['start', 'send', 'interrupt', 'stop', 'exit', 'ready', 'result', 'native'] as const
 
 export type LifecycleState = (typeof STATES)[number]
-/** `stop` is kill or shutdown; `exit` an unrequested process end; `ready`/`result` runtime completions. */
+/** `stop` is kill or shutdown; `exit` an unrequested process end; `ready`/`result` runtime completions;
+ * `native` runtime input that opens a turn without `send` (Claude `init`, Codex `turn/started`). */
 export type LifecycleOperation = (typeof OPERATIONS)[number]
 
 export interface LifecycleRow {
@@ -40,10 +41,13 @@ export const LIFECYCLE_ROWS: readonly LifecycleRow[] = [
   { id: 'L18', states: ['unstarted', 'idle', 'active', 'stopping', 'stopped', 'exited'], operations: ['ready'] },
   { id: 'L19', states: ['active'], operations: ['result'] },
   { id: 'L20', states: ['unstarted', 'starting', 'idle', 'stopping', 'stopped', 'exited'], operations: ['result'] },
+  { id: 'L24', states: ['idle'], operations: ['native'] },
+  { id: 'L25', states: ['active'], operations: ['native'] },
+  { id: 'L26', states: ['unstarted', 'starting', 'stopping', 'stopped', 'exited'], operations: ['native'] },
   { id: 'U01', states: ['unstarted'], operations: ['exit'], unreachable: true },
 ]
 
-/** Explicit continuation rows, outside the 49-pair grid. */
+/** Explicit continuation rows, outside the 56-pair grid. */
 export const CONTINUATION_ROWS = [
   { id: 'L21', runtime: 'claude', state: 'active', continuation: 'queue' },
   { id: 'L22', runtime: 'codex', state: 'active', continuation: 'steer' },

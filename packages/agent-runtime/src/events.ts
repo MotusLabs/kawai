@@ -43,13 +43,24 @@ export type QuestionAnswers = Record<string, QuestionAnswer>
 
 export type RequestOutcome = 'allowed' | 'denied' | 'answered' | 'cancelled'
 
+/** One background task whose end woke the agent. */
+export interface TurnTriggerTask {
+  taskId: string
+  toolCallId?: string
+  status: string
+  summary?: string
+}
+
+/** Why an agent-started turn (no submitted message) began; absent on submitted turns. */
+export type TurnTrigger = { kind: 'task'; tasks: TurnTriggerTask[] } | { kind: 'resumed' }
+
 /** A pending approval or question, as passed to onRequest. */
 export type PendingRequest =
   | { kind: 'approval'; requestId: string; turnId: string; tool: string; input: JsonValue; at: string }
   | { kind: 'question'; requestId: string; turnId: string; questions: AgentQuestion[]; at: string }
 
 export type AgentEvent =
-  | (AgentTurnEventBase & { type: 'turn_started'; trigger?: { kind: 'task' | 'resumed' } })
+  | (AgentTurnEventBase & { type: 'turn_started'; trigger?: TurnTrigger })
   | (AgentTurnEventBase & { type: 'user_message'; text: string; messageUuid: string })
   | (AgentTurnEventBase & { type: 'command_output'; text: string })
   | (AgentTurnEventBase & { type: 'assistant_text'; messageId: string; text: string })

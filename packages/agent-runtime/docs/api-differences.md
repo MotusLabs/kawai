@@ -38,3 +38,8 @@ is the adapter's `onRequest` decision), `setProjectPath` and
 `setClaudeExecutablePath` (read through the `launch` callback on the next
 generation), `getSeenToolCallIds`, `getCommandState`, `getWorkers` and
 `getBackgroundTasks` (cached from events and roster callbacks).
+
+Agent-started turns (no `send`, e.g. after a background task ends) arrive as
+`turn_started` with a `TurnTrigger` — the same shape as Kawai's
+`ChatTurnTrigger` — and settle through `onTurnResult`, since no `TurnHandle`
+exists for them.

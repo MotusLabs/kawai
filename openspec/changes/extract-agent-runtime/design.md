@@ -196,7 +196,7 @@ All tests below are **planned/unrun**. Read `docs/oracle-hazards.md`: test produ
 
 ### Lifecycle decision table
 
-Axes: state = unstarted/starting/idle/active/stopping/stopped/exited; operation = start/send/interrupt/stop/exit/ready/result. Valid configuration, matching current generation/turn for ready/result unless explicitly stale; stop includes kill/shutdown. `*` means irrelevant to the row. Rows with state sets expand to each member.
+Axes: state = unstarted/starting/idle/active/stopping/stopped/exited; operation = start/send/interrupt/stop/exit/ready/result/native, where native is runtime input that opens a turn without `send` (Claude `init`, Codex `turn/started`), e.g. after a background task ends. Valid configuration, matching current generation/turn for ready/result/native unless explicitly stale; stop includes kill/shutdown. `*` means irrelevant to the row. Rows with state sets expand to each member.
 
 | ID | State | Operation | Observable result |
 | --- | --- | --- | --- |
@@ -220,8 +220,11 @@ Axes: state = unstarted/starting/idle/active/stopping/stopped/exited; operation 
 | L18 | unstarted, idle, active, stopping, stopped, exited | ready | Ignore stale completion; never reopen a stopped driver |
 | L19 | active | result | Matching turn resolves once; become idle |
 | L20 | unstarted, starting, idle, stopping, stopped, exited | result | Unmatched/late result does not create or complete a turn |
+| L24 | idle | native | One agent-started turn with the runtime's turn identity: `turn_started` with its trigger (task summaries, else resumed), no user message or handle; become active; its result reaches `onTurnResult` once (L19) |
+| L25 | active | native | Binds to the current turn; no second `turn_started` or turn |
+| L26 | unstarted, starting, stopping, stopped, exited | native | Stale/early input opens no turn, emits no turn event or result, never reopens a stopped driver |
 
-Unreachable U01: unstarted + exit; no process was created. Every one of the 49 state/operation pairs matches exactly one expanded row or U01. Invalid configurations are covered before this machine by P01-P04; stale identities are covered by R03/R07. Explicit continuation rows: L21 Claude queue => actual queued turn identity; L22 Codex steer => same active turn result; L23 unsupported mode => typed refusal.
+Unreachable U01: unstarted + exit; no process was created. Every one of the 56 state/operation pairs matches exactly one expanded row or U01. Invalid configurations are covered before this machine by P01-P04; stale identities are covered by R03/R07. Explicit continuation rows: L21 Claude queue => actual queued turn identity; L22 Codex steer => same active turn result; L23 unsupported mode => typed refusal.
 
 ### Environment, permission and seam table
 
@@ -302,11 +305,11 @@ Before implementation, commit an inputs-only oracle table and obtain the protoco
 
 ### Coverage and effectiveness map
 
-Planned package test files: `__tests__/lifecycle.test.ts` (L01-L23/I1-I2), `policy.test.ts` (P01-P16/I3-I4/I8), `requests.test.ts` (Q01-Q04/I5), `events.test.ts` (R03/R07/R11/I6), `usage.test.ts` (R01-R06/R08/I7), `auth.test.ts` (R02/R09), `resume.test.ts` (R10/I2), `distribution.test.ts` (D01-D05/D09/I9). The release/real-provider receipts cover D06-D08; Kawai integration tests/e2e cover K01-K02.
+Planned package test files: `__tests__/lifecycle.test.ts` (L01-L26/I1-I2), `policy.test.ts` (P01-P16/I3-I4/I8), `requests.test.ts` (Q01-Q04/I5), `events.test.ts` (R03/R07/R11/I6), `usage.test.ts` (R01-R06/R08/I7), `auth.test.ts` (R02/R09), `resume.test.ts` (R10/I2), `distribution.test.ts` (D01-D05/D09/I9). The release/real-provider receipts cover D06-D08; Kawai integration tests/e2e cover K01-K02.
 
-Requirement/scenario mapping: runtime headless => P09/D01; start/results => L01/L07/R01-R03/R08; interrupt => L09-L10; forced stop => L11-L16/I1; shutdown/resume/checkpoint => L02/R10/I2; unexpected exit => L14; requests => Q01-Q04; events => R07/I6; quotas/waits => R04-R06/R08; login/auth => R02/R09. Policy scenarios map in order to P01-P16 and Q04. Distribution scenarios map in order to D01/K01-K02/D02-D09.
+Requirement/scenario mapping: runtime headless => P09/D01; start/results => L01/L07/R01-R03/R08; interrupt => L09-L10; forced stop => L11-L16/I1; shutdown/resume/checkpoint => L02/R10/I2; unexpected exit => L14; agent-started turns => L24-L26 (stop during one => L11); requests => Q01-Q04; events => R07/I6; quotas/waits => R04-R06/R08; login/auth => R02/R09. Policy scenarios map in order to P01-P16 and Q04. Distribution scenarios map in order to D01/K01-K02/D02-D09.
 
-Required local controls: M-env merges ambient env; M-policy removes the deny hook or resume override; M-join substitutes iterator/kill acknowledgement for native exit; M-request emits before registration; M-bind accepts a stale UUID; M-count duplicates a call; M-wait ends from reset time; M-wire removes package/Kawai wiring; M-pack imports a Kawai module; M-release skips tag/version/check gate. Each must fail the corresponding oracle, not merely fail compilation. Use temporary test controls during future implementation and restore source; no campaign is run now.
+Required local controls: M-env merges ambient env; M-policy removes the deny hook or resume override; M-join substitutes iterator/kill acknowledgement for native exit; M-request emits before registration; M-bind accepts a stale UUID; M-count duplicates a call; M-wait ends from reset time; M-wire removes package/Kawai wiring; M-pack imports a Kawai module; M-native drops the production agent-started open (or opens one on idle attach/stale generation); M-release skips tag/version/check gate. Each must fail the corresponding oracle, not merely fail compilation. Use temporary test controls during future implementation and restore source; no campaign is run now.
 
 ## Risks / Trade-offs
 
