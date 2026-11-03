@@ -23,7 +23,7 @@ Discovery baseline: Kawai `origin/master` at `6ee6bea8`, Claude SDK `0.3.289`, C
 
 Read the existing `codex-chat-sessions` and `claude-session-profiles` requirements and scenarios. Their Kawai interactive policy, trusted catalog configuration, audit exemptions and persisted runtime identity remain binding. The new package's headless policy is an explicit alternative supplied by its host, not a change to Kawai's UI or catalog API.
 
-Concurrent tool-call-metrics work has an accepted proposal for an optional **JavaScript** settlement receipt and unchanged void stop APIs. Its driver edits must be reconciled at an explicit source checkpoint before extraction. Neither that proposal nor its scoped tests constitute native-exit evidence. Manager/mailbox settlement, normal observation finalizers and the existing History recovery witnesses belong to their current change.
+Concurrent tool-call-metrics work (task-51e4eae0) has an uncommitted, unreviewed optional **JavaScript** settlement receipt (`settled()`, Claude driver only) and keeps void stop APIs. It is not a prerequisite: the owner decided this change implements its own stop/join from master for both runtimes and imports none of that diff. Neither that work nor its scoped tests are native-exit evidence. Manager/mailbox settlement, observation finalizers and History recovery witnesses belong to that change.
 
 ## Goals / Non-Goals
 
@@ -170,11 +170,11 @@ Quota reports remain independent of turn state and do not create a synthetic tur
 
 Add `workspaces: ["packages/*"]` and an exact workspace dependency on the runtime. `provider/createChatDriver.ts` becomes the Kawai composition adapter. It builds explicit environment/profile policy, tools, prompt, wire/audit and opaque workspace pre-submit callbacks, then constructs the package driver. Manager database/history/mailbox behavior stays in Kawai.
 
-Retain only import re-exports and adapters at former in-tree paths, never copied driver logic or a feature flag selecting an old implementation. Manager callers must retain/observe returned promises; a void adapter must register them with its real owner, not fire-and-forget an awaitable stop. Reconcile the approved S1 receipt changes once, preserving their error ownership, then adapt them to the stronger external process API.
+Retain only import re-exports and adapters at former in-tree paths, never copied driver logic or a feature flag selecting an old implementation. Manager callers must retain/observe returned promises; a void adapter must register them with its real owner, not fire-and-forget an awaitable stop. If tool-call-metrics lands first, adapt its `settled()` receipt and error ownership onto the package's stop API once; if this change lands first, tool-call-metrics adapts to the package. Either way, one stop implementation remains.
 
 Keep Kawai's current manual/auto approval semantics, Codex on-request/user reviewer and sandbox roots, team-tool exemptions, mailbox message UUID receipts and context-before-enqueue behavior. Persisted runtime IDs/homes remain unchanged, so no database migration is proposed. Runtime wire/activity/background features needed by current Kawai must not disappear to shrink the library.
 
-Do not alter the metrics feature's seed, all300 History streams, all411 Links emits, faults, default timeouts/workers or source oracles. Retain recovery observations before normal cleanup; package adoption must not introduce a preserve-finalizer mode, restore a DB snapshot or delete data via manager.kill as a cleanup shortcut.
+If tool-call-metrics has landed before this change, do not alter its seed, all300 History streams, all411 Links emits, faults, default timeouts/workers or source oracles. Retain recovery observations before normal cleanup; package adoption must not introduce a preserve-finalizer mode, restore a DB snapshot or delete data via manager.kill as a cleanup shortcut.
 
 ### 8. Distribution, release and access
 
@@ -314,14 +314,14 @@ Required local controls: M-env merges ambient env; M-policy removes the deny hoo
 - Exact env enforcement may expose hidden SDK configuration assumptions -> test final spawn/probe map, hostile settings/homes and all respawns; surface a specific configuration error rather than inherit.
 - POSIX process groups do not contain independently detached workloads -> state receipt scope; require host containment for independently launched services; do not certify workspace reuse from leader exit alone.
 - Optional SDK peer/root overrides add install steps -> publish stub, copyable manifest recipe and clean-install gates; no install script rewriting consumer manifests.
-- Kawai callback/policy migration can regress mailbox receipts or metrics -> retain original production-composition tests and source ownership; reconcile S1 once before moving files.
+- Kawai callback/policy migration can regress mailbox receipts or metrics -> retain original production-composition tests and source ownership; resolve the driver stop-path conflict with tool-call-metrics once, in whichever change lands second.
 - A cached full check or fake provider is mistaken for native or registry proof -> distinct D06-D08 receipts and current clean committed-tree Kawai certificate.
 - A proxy offers no authenticated quota source -> unknown quota is documented, account identity is never guessed.
 
 ## Migration Plan
 
 1. Owner reviews this proposal; implementation requires a new apply request. Record one writer per branch/worktree and a named eligible cross-model design challenger. This proposal enrolls no coordinator pilot.
-2. At a safe checkpoint reconcile overlapping S1 and related provider/caller work under global shared-contract ownership; pin accepted base/head. Preserve current source/index and all existing holds until that disposition.
+2. Start from current `origin/master`; do not import the uncommitted tool-call-metrics S1 diff. Record the base. When either change lands, the other rebases and resolves the driver stop-path conflict once.
 3. Freeze API/inputs-only oracles, resolve the blind reading, implement and challenge the smallest owned-spawn/environment/permission path. If it cannot prove actual exit or deny tools, revise the mechanism before extraction.
 4. Extract pure types/helpers and each driver, then wire Kawai through adapters. Land no second implementation. Add package tests to root lint/typecheck/test/check coverage and content hashes.
 5. Produce/test the packed artifact and headless example. Run affected Kawai fixture e2e in a disposable checkout, isolated DB/home and spare port using the CI fixture environment; never invoke the live server teardown command.

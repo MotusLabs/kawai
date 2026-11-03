@@ -31,7 +31,7 @@ None. Existing Kawai chat, profile, approval, mailbox, audit and history require
 
 Implementation would add `packages/agent-runtime/`, retain `packages/claude-agent-sdk-no-cli/`, and change chat composition, shared runtime types, dependency/build configuration and package CI. It does not add an agent-host, Temporal workflow, credential store, database schema, listener or Kubernetes deployment.
 
-The source baseline is `origin/master` at `6ee6bea8`. Concurrent tool-call-metrics work touches the same driver contract: reconcile its accepted internal JavaScript settlement work before extraction; that work does not establish native process exit. Keep one writer per overlapping worktree.
+The source baseline is `origin/master` at `9e13f4d8`; the driver files the design cites are unchanged since `6ee6bea8`. Concurrent tool-call-metrics work (task-51e4eae0, uncommitted in its own worktree) adds an optional JavaScript-only `settled()` receipt to the Claude driver. This change does not depend on it. It builds its own stop/join and owned spawner for both runtimes from master and does not copy that diff. Whichever change lands second resolves the driver stop-path conflict; if tool-call-metrics lands second, its receipt becomes an adapter over the package's stop. Keep one writer per worktree.
 
 This change is a proposal only. Implementation, real-provider checks, publication and package-access configuration are not performed by this workflow. The first release is blocked until the specified environment, permission, process-exit, Kawai-regression and installation oracles pass.
 
