@@ -2,6 +2,8 @@
 // Never builds shell strings: every argument is a separate argv element, so
 // injection via branch names or paths is not possible.
 
+import type { OwnedGitContext, OwnedCleanupDetails } from './ownedGitCommand'
+
 export const GIT_TIMEOUT_MS = 10_000
 export const GIT_MAX_OUTPUT_BYTES = 1024 * 1024
 
@@ -39,11 +41,18 @@ export interface GitCommandOptions {
   env?: Record<string, string>
 }
 
+export interface AsyncGitCommandOptions extends GitCommandOptions {
+  ownedProcessGroup?: OwnedGitContext
+}
+
 export interface GitCommandResult {
   ok: boolean
   exitCode: number | null
   stdout: string
   stderr: string
+  failureOrigin?: 'spawn' | 'timeout' | 'capture'
+  cleanup?: 'proved' | 'unknown'
+  cleanupDetails?: OwnedCleanupDetails
 }
 
 /**
@@ -53,7 +62,8 @@ export interface GitCommandResult {
  * runs. A timeout kills the process; the killed exit resolves as a
  * non-success with exitCode null, matching the sync variant.
  */
-export async function runGitAsync(args: string[], options: GitCommandOptions = {}): Promise<GitCommandResult> {
+export async function runGitAsync(args: string[], options: AsyncGitCommandOptions = {}): Promise<GitCommandResult> {
+  if (options.ownedProcessGroup !== undefined) return options.ownedProcessGroup.run(args, options)
   const { cwd, timeoutMs = GIT_TIMEOUT_MS, maxOutputBytes = GIT_MAX_OUTPUT_BYTES, env } = options
   let proc: ReturnType<typeof Bun.spawn>
   try {

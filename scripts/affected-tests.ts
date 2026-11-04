@@ -84,6 +84,10 @@ export function isDocsOnlyCommit(staged: readonly string[]): boolean {
 // docs-only classification and before tier exclusion.
 export const ESCAPE_CLOSURE_FILES: ReadonlySet<string> = new Set([
   'src/server/git/gitCommand.ts',
+  'src/server/git/ownedGitCommand.ts',
+  'src/server/git/ownedGitProtocol.ts',
+  'src/server/git/ownedGitRecord.ts',
+  'src/server/git/ownedGitStartup.ts',
   // The check-record and content-key modules, which the check pipeline and
   // both hooks import from src/server/checks/ (independent-verification D3),
   // and the test-list module the check pipeline writes and the citation

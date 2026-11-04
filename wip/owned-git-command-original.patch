@@ -1,0 +1,893 @@
+diff --git a/openspec/changes/delivery-outcome-metrics/design.md b/openspec/changes/delivery-outcome-metrics/design.md
+index a08c6057..822c71e6 100644
+--- a/openspec/changes/delivery-outcome-metrics/design.md
++++ b/openspec/changes/delivery-outcome-metrics/design.md
+@@ -43,7 +43,7 @@ Export: `registerMetricsRoute` and the Prometheus families are unchanged by this
+ - `shallow` gives `history-incomplete:shallow`; `info/grafts` gives `history-incomplete:grafts`. Any partialclone, true remote promisor, present remote partialclonefilter or regular `objects/pack/*.promisor` gives `history-incomplete:partial`, without process, repair or fetch.
+ - Fresh snapshots require bigint dev/ino/size/mtimeNs/ctimeNs before consuming data AND after reading; missing precision refuses, never ms-only or undefined equality. Every packed lookup opens/validates and READS the complete bounded raw-byte snapshot, including parse-cache hits. Reuse requires physical repository/identity/format, trusted metadata token AND matching SHA256 of those bytes; hash and parser consume the SAME per-open snapshot, never two versions. Changed digest reparses even when all token fields collide; null token always reparses. Read/change/UTF8/parse/hash failures invalidate, never fall back. No timer/lease/generation or timestamp-distinction assumption: parsing can be saved, I/O repeats. Native capabilities and cost remain unmeasured; no RAM-bound claim.
+ 
+-**Implementation boundary.** P's dormant process-free helpers and supplied-text validation are committed; the existing `deliveryHead.test.ts` passed 26 tests on committed `5d9019f2`. S1's codec is committed. S2's per-operation anchor-bootstrap source, isolated bootstrap unit tests and small checkpoint commit are released only by the current task direction; all other runtime and activation holds remain. `prepareAnchorStartup()` constructs one `{argv,env,cwd,dispose}` handle immediately after root acquisition. Later setup failure attempts its disposal once: successful disposal rethrows the original setup error; double failure throws native `AggregateError` with those same setup/disposal errors in order, `cause` equal to the setup error, and an own readonly nonenumerable `startup` property holding that same handle. Pre-root failure carries no handle. The future context must adopt a failed-disposal handle into its existing operation record before returning failure and never spawn incomplete bootstrap data. Its physical root stays pending JOIN or failed disposal; retained logical evidence alone does not keep a disposed root. Remaining F0 runtime, repository-gate implementation/tests, the reader, CP1 and task 1.2 completion stay held on actual D11 startup/on-taken/lifetime acceptance; an empty startup map is not recovery. No product caller, cache/controller or activation follows this subset. Actual 1.3/2.3 composition checkpoints remain mandatory.
++**Implementation boundary.** P's dormant process-free helpers and supplied-text validation are committed; the existing `deliveryHead.test.ts` passed 26 tests on committed `5d9019f2`. S1's codec is committed. S2's per-operation anchor-bootstrap source, isolated bootstrap unit tests and small checkpoint commit are released only by the current task direction; all other runtime and activation holds remain. Current task direction may also release S4 cleanup-policy and public pre-spawn unit checks plus their small source checkpoint; only those tests may construct the per-operation context, and they never spawn the owned anchor or imply native success or application activation. `prepareAnchorStartup()` constructs one `{argv,env,cwd,dispose}` handle immediately after root acquisition. Later setup failure attempts its disposal once: successful disposal rethrows the original setup error; double failure throws native `AggregateError` with those same setup/disposal errors in order, `cause` equal to the setup error, and an own readonly nonenumerable `startup` property holding that same handle. Pre-root failure carries no handle. The future context must adopt a failed-disposal handle into its existing operation record before returning failure and never spawn incomplete bootstrap data. Its physical root stays pending JOIN or failed disposal; retained logical evidence alone does not keep a disposed root. Remaining F0 runtime, repository-gate implementation/tests, the reader, CP1 and task 1.2 completion stay held on actual D11 startup/on-taken/lifetime acceptance; an empty startup map is not recovery. No product caller, cache/controller or activation follows this subset. Actual 1.3/2.3 composition checkpoints remain mandatory.
+ 
+ **Reads.** Every git call names the literal object id H, never a ref, so a fetch during a refresh cannot mix heads. Each runs at the main checkout through `runGitAsync` with `cleanGitEnv`, `git --no-replace-objects -c log.showSignature=false`, a 10 s timeout, and `maxOutputBytes = DELIVERY_READ_BOUND` (64 MiB). There are two reads:
+ 1. **Graph.** `git log --format=%H %ct %P H` loads H's whole history. There is no `--since` and no horizon: `--since` stops a walk at an old-dated commit and would hide newer ancestors behind it.
+diff --git a/openspec/changes/delivery-outcome-metrics/tasks.md b/openspec/changes/delivery-outcome-metrics/tasks.md
+index ee492875..a788c1e7 100644
+--- a/openspec/changes/delivery-outcome-metrics/tasks.md
++++ b/openspec/changes/delivery-outcome-metrics/tasks.md
+@@ -11,7 +11,7 @@ The first landing is A (1.1–1.2: landing calculations and the bounded pinned-h
+   - the two reads of D1, pinned to the literal head, with `--no-replace-objects`, `--no-renames`, 10 s timeouts, and `DELIVERY_READ_BOUND` over `runGitAsync`;
+   - Table F completeness: supplied-text canonical graph/closure/DAG/first-parent validation before archive input, safe seconds-to-ms and integration count from read 1; strict archives reuse 1.1. Future reader byte bounds apply to both calls; P proves no runner/lifecycle behavior.
+ 
+-  P and the S1 codec are committed; the existing process-free `deliveryHead.test.ts` passed 26 tests on committed `5d9019f2`. S2's per-operation anchor-bootstrap source, isolated bootstrap unit tests and small checkpoint commit are released only by the current task direction; all other runtime and activation holds remain. Construct its sole `{argv,env,cwd,dispose}` handle immediately after root acquisition. Later setup failure attempts disposal once: success rethrows the original setup error; double failure throws native `AggregateError` retaining the same setup/disposal errors in order, `cause=setupError`, and own readonly nonenumerable `startup=SAME handle`. Pre-root failure has no handle. The future context adopts that failed-disposal handle into its existing operation record before failure return and never spawns incomplete bootstrap data. The physical root stays pending JOIN or failed removal, not merely retained logical evidence. Remaining F0 runtime, gate implementation/tests, reader/CP1 and 1.2 completion stay held on D11 startup AND on-taken liveness/reconciliation acceptance. Empty maps are not recovery. Actual 1.3/2.3 lifetime/wiring checkpoints precede activation. No context/admission/controller/product caller belongs to this subset.
++  P and the S1 codec are committed; the existing process-free `deliveryHead.test.ts` passed 26 tests on committed `5d9019f2`. S2's per-operation anchor-bootstrap source, isolated bootstrap unit tests and small checkpoint commit are released only by the current task direction; all other runtime and activation holds remain. Current task direction may also release S4 cleanup-policy and public pre-spawn unit checks plus their small source checkpoint; only those tests may construct the per-operation context, and they never spawn the owned anchor or imply native success or application activation. Construct its sole `{argv,env,cwd,dispose}` handle immediately after root acquisition. Later setup failure attempts disposal once: success rethrows the original setup error; double failure throws native `AggregateError` retaining the same setup/disposal errors in order, `cause=setupError`, and own readonly nonenumerable `startup=SAME handle`. Pre-root failure has no handle. The future context adopts that failed-disposal handle into its existing operation record before failure return and never spawns incomplete bootstrap data. The physical root stays pending JOIN or failed removal, not merely retained logical evidence. Remaining F0 runtime, gate implementation/tests, reader/CP1 and 1.2 completion stay held on D11 startup AND on-taken liveness/reconciliation acceptance. Empty maps are not recovery. Actual 1.3/2.3 lifetime/wiring checkpoints precede activation. No application context/admission/controller/product caller belongs to this subset.
+ 
+   P correction requires typed bigint fresh snapshots before/after (no missing-Ns fallback), null-token actual lookups distinct from missing capability, same-token error invalidation, valid mid-read change refusal, actual own-FD closure and common/main root replacement refusals. G5 equal-token/same-size byte rewrite MUST return fresh H and increment parse count; unchanged bytes still READ but reuse parsing. Correctness has no ctime-distinction precondition. Keep conservative header-line-key/worktreeConfig refusal and source-only status. Separate short source/timestamp requirements own local scenarios; unsafe FETCH_HEAD keeps H. No compiler/tests/controls ran in this source phase.
+ 
+diff --git a/src/server/__tests__/gitCommand.test.ts b/src/server/__tests__/gitCommand.test.ts
+index 38393bda..08c95603 100644
+--- a/src/server/__tests__/gitCommand.test.ts
++++ b/src/server/__tests__/gitCommand.test.ts
+@@ -3,11 +3,18 @@
+ // GIT_COMMON_DIR to hook scripts, so the pre-commit test gate (and any server
+ // started from a hook) would otherwise resolve every command against the
+ // hook's repository instead of the requested working directory.
+-import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
++import { afterAll, beforeAll, describe, expect, mock, spyOn, test } from 'bun:test'
+ import fs from 'node:fs'
+ import os from 'node:os'
+ import path from 'node:path'
++import * as bootstrapFs from 'node:fs'
++import * as bootstrapOs from 'node:os'
+ import { runGit, runGitAsync } from '../git/gitCommand'
++import { createOwnedGitContext } from '../git/ownedGitCommand'
++import { createRecord, lateAttempt, settleRecord } from '../git/ownedGitRecord'
++import type { OwnedRecord } from '../git/ownedGitRecord'
++import { decodeGitResultFrame } from '../git/ownedGitProtocol'
++import * as startupModule from '../git/ownedGitStartup'
+ 
+ let tempRoot: string
+ let repoA: string
+@@ -116,3 +123,301 @@ describe('runGit environment hygiene', () => {
+     expect(result.stdout.trim()).toBe(path.join(repoA, '.git'))
+   })
+ })
++
++
++// Supplied states below test policy only; no native custody or group-absence proof.
++function settledPolicyRecord(code: 0 | 128 = 0): OwnedRecord {
++  const record = createRecord(3)
++  record.invoked = true
++  record.pid = 41
++  record.joined = record.ownerExited = record.expectedExit = true
++  record.hello = record.started = record.runSent = record.closing = record.finalSent = true
++  record.statusTerminal = record.capturesStarted = record.physicalReady = true
++  record.terminal = [true, true]
++  record.eof = [true, true]
++  record.tuple = { type: 'GIT_RESULT', code, signal: null }
++  record.output = ['abcdef', 'uvwxyz']
++  return record
++}
++function suppliedAbsentGroup() {
++  return mock((pid: number) => {
++    expect(pid).toBe(41)
++    throw Object.assign(new Error('supplied policy ESRCH'), { code: 'ESRCH' })
++  })
++}
++const terminalSources: readonly ('owner' | 'stdout' | 'stderr' | 'status')[] = ['owner', 'stdout', 'stderr', 'status']
++
++test('owned policy preserves normal 0 and ordinary 128 with one supplied ESRCH', () => {
++  const codes: readonly (0 | 128)[] = [0, 128]
++  for (const code of codes) {
++    const record = settledPolicyRecord(code), query = suppliedAbsentGroup()
++    const result = settleRecord(record, query)
++    expect(result).toEqual({
++      ok: code === 0, exitCode: code, stdout: 'abc', stderr: 'uvw', cleanup: 'proved',
++      cleanupDetails: { outcome: 'complete', reason: null, ownerJoined: true, captures: 'complete', joinPending: false },
++    })
++    expect(Object.hasOwn(result, 'failureOrigin')).toBe(false)
++    expect(record.retired).toBe(true)
++    expect(record.queryUsed).toBe(true)
++    expect(query).toHaveBeenCalledTimes(1)
++  }
++})
++
++test('owned policy keeps observed timeout UNKNOWN despite Git 0 and resource retirement', () => {
++  const record = settledPolicyRecord(), query = suppliedAbsentGroup()
++  record.timeout = true
++  const result = settleRecord(record, query)
++  const expected = {
++    ok: true, exitCode: 0, stdout: 'abc', stderr: 'uvw', failureOrigin: 'timeout', cleanup: 'unknown',
++    cleanupDetails: { outcome: 'failed', reason: 'timeout', ownerJoined: true, captures: 'complete', joinPending: false },
++  }
++  expect(result).toEqual(expected)
++  expect(record.retired).toBe(true)
++  expect(Object.isFrozen(result)).toBe(true)
++  expect(Object.isFrozen(result.cleanupDetails)).toBe(true)
++  expect(Reflect.set(result, 'cleanup', 'proved')).toBe(false)
++  expect(Reflect.set(result.cleanupDetails, 'reason', null)).toBe(false)
++  for (const source of terminalSources) lateAttempt(record, source, query)
++  expect(query).toHaveBeenCalledTimes(1)
++  expect(record.result).toBe(result)
++  expect(result).toEqual(expected)
++})
++
++test('owned policy keeps signal UNKNOWN below independent own faults and rejects untrusted tuples', () => {
++  const examples: { capture: boolean; protocol: boolean; timeout: boolean; reason: string; origin?: 'capture' | 'timeout' }[] = [
++    { capture: false, protocol: false, timeout: false, reason: 'git-signal' },
++    { capture: true, protocol: false, timeout: false, reason: 'capture', origin: 'capture' },
++    { capture: false, protocol: true, timeout: false, reason: 'protocol' },
++    { capture: true, protocol: true, timeout: false, reason: 'capture', origin: 'capture' },
++    { capture: true, protocol: true, timeout: true, reason: 'timeout', origin: 'timeout' },
++  ]
++  for (const example of examples) {
++    const record = settledPolicyRecord(), query = suppliedAbsentGroup()
++    record.tuple = { type: 'GIT_RESULT', code: null, signal: 'SIGTERM' }
++    record.captureFault = example.capture
++    record.timeout = example.timeout
++    if (example.protocol) record.fault = 'protocol'
++    const result = settleRecord(record, query)
++    expect([result.ok, result.exitCode, result.cleanup]).toEqual([false, null, 'unknown'])
++    expect(result.cleanupDetails.reason).toBe(example.reason)
++    expect(result.failureOrigin).toBe(example.origin)
++    expect(record.retired).toBe(true)
++    expect(query).toHaveBeenCalledTimes(1)
++  }
++  for (const text of ['{"type":"GIT_RESULT","code":0}', '{"type":"GIT_RESULT","code":0,"signal":""}', '{"type":"GIT_RESULT","code":null,"signal":null}']) {
++    const record = settledPolicyRecord(), query = suppliedAbsentGroup()
++    const tuple = decodeGitResultFrame(Buffer.from(text))
++    expect(tuple).toBeNull()
++    record.tuple = tuple ?? undefined
++    const result = settleRecord(record, query)
++    expect([result.ok, result.exitCode, result.cleanup, result.cleanupDetails.reason]).toEqual([false, null, 'unknown', 'protocol'])
++  }
++})
++
++test('owned policy refuses incomplete custody and distinguishes never-started from uncertain spawn', () => {
++  const gaps: readonly ('join' | 'collectors' | 'disposal')[] = ['join', 'collectors', 'disposal']
++  for (const gap of gaps) {
++    const record = settledPolicyRecord(), query = suppliedAbsentGroup()
++    if (gap === 'join') { record.joined = false; record.graceExpired = true }
++    if (gap === 'collectors') { record.terminal = [true, false]; record.graceExpired = true }
++    if (gap === 'disposal') record.physicalReady = false
++    const result = settleRecord(record, query)
++    const reason = { join: 'join-grace', collectors: 'capture-grace', disposal: 'resource-disposal' }[gap]
++    expect(result.cleanup).toBe('unknown')
++    expect(result.cleanupDetails).toEqual({
++      outcome: 'failed', reason, ownerJoined: gap !== 'join',
++      captures: gap === 'collectors' ? 'pending' : 'complete', joinPending: gap === 'join',
++    })
++    expect(record.retired).toBe(false)
++    expect(query).toHaveBeenCalledTimes(0)
++  }
++  for (const invoked of [false, true]) {
++    const record = createRecord(3), query = suppliedAbsentGroup()
++    record.physicalReady = true
++    record.invoked = invoked
++    if (invoked) record.spawnFault = true
++    else record.local = 'executable'
++    const result = settleRecord(record, query)
++    expect(result.cleanup).toBe('unknown')
++    expect(result.cleanupDetails).toEqual({
++      outcome: 'failed', reason: invoked ? 'spawn' : 'executable',
++      ownerJoined: false, captures: 'not-started', joinPending: invoked,
++    })
++    expect(record.retired).toBe(!invoked)
++    expect(record.queryUsed).toBe(false)
++    expect(query).toHaveBeenCalledTimes(0)
++  }
++})
++
++test('owned policy retains a present group and never repeats its one observation', () => {
++  const record = settledPolicyRecord()
++  const query = mock((pid: number) => { expect(pid).toBe(41) })
++  const result = settleRecord(record, query), original = JSON.stringify(result)
++  expect([result.cleanup, result.cleanupDetails.reason, record.retired]).toEqual(['unknown', 'group-present', false])
++  for (const source of [...terminalSources, ...terminalSources]) lateAttempt(record, source, query)
++  expect(query).toHaveBeenCalledTimes(1)
++  expect(record.queryUsed).toBe(true)
++  expect(record.result).toBe(result)
++  expect(JSON.stringify(result)).toBe(original)
++})
++
++test('owned policy allows only a new late terminal source and preserves the P23 disposal limit', () => {
++  const record = settledPolicyRecord(), query = suppliedAbsentGroup()
++  record.joined = record.physicalReady = false
++  record.terminal = [false, false]
++  record.graceExpired = true
++  const result = settleRecord(record, query), original = JSON.stringify(result)
++  expect(result.cleanupDetails).toEqual({
++    outcome: 'failed', reason: 'join-grace', ownerJoined: false, captures: 'pending', joinPending: true,
++  })
++  expect(query).toHaveBeenCalledTimes(0)
++  record.joined = record.physicalReady = true
++  record.terminal = [true, true]
++  for (const source of terminalSources) lateAttempt(record, source, query)
++  expect(query).toHaveBeenCalledTimes(1)
++  expect(record.retired).toBe(true)
++  expect(JSON.stringify(result)).toBe(original)
++  const delayed = settledPolicyRecord(), neverQuery = suppliedAbsentGroup()
++  delayed.physicalReady = false
++  const frozen = settleRecord(delayed, neverQuery), before = JSON.stringify(frozen)
++  for (const source of terminalSources) lateAttempt(delayed, source, neverQuery)
++  delayed.physicalReady = true // Disposal alone is not a new terminal source.
++  for (const source of terminalSources) lateAttempt(delayed, source, neverQuery)
++  expect(neverQuery).toHaveBeenCalledTimes(0)
++  expect([delayed.retired, delayed.queryUsed]).toEqual([false, false])
++  expect(JSON.stringify(frozen)).toBe(before)
++})
++
++async function withOwnedPreSpawnRoot(run: (root: string, restore: (cleanup: () => void) => void) => Promise<void>): Promise<void> {
++  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'owned-git-public-test-')))
++  const identity = fs.lstatSync(root, { bigint: true }), environment = { ...process.env }
++  const cleanups: (() => void)[] = [], errors: unknown[] = []
++  try {
++    const spawn = spyOn(Bun, 'spawn').mockImplementation(() => { throw new Error('Unexpected owned spawn') })
++    cleanups.push(() => spawn.mockRestore())
++    const signal = spyOn(process, 'kill').mockImplementation(() => { throw new Error('Unexpected process query/signal') })
++    cleanups.push(() => signal.mockRestore())
++    await run(root, cleanup => cleanups.push(cleanup))
++    expect(spawn).toHaveBeenCalledTimes(0)
++    expect(signal).toHaveBeenCalledTimes(0)
++    expect(Object.keys(process.env).sort()).toEqual(Object.keys(environment).sort())
++    expect(Object.entries(environment).every(([key, value]) => process.env[key] === value)).toBe(true)
++  } catch (error) { errors.push(error) }
++  finally {
++    for (const cleanup of cleanups.reverse()) { try { cleanup() } catch (error) { errors.push(error) } }
++    for (const key of Object.keys(process.env)) if (!Object.hasOwn(environment, key)) delete process.env[key]
++    for (const [key, value] of Object.entries(environment)) {
++      if (value === undefined) delete process.env[key]
++      else process.env[key] = value
++    }
++    try {
++      const current = fs.lstatSync(root, { bigint: true })
++      if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== identity.dev || current.ino !== identity.ino) {
++        throw new Error('Refusing teardown of an unowned public-test root')
++      }
++      fs.rmSync(root, { recursive: true, force: false })
++    } catch (error) { errors.push(error) }
++  }
++  if (errors.length === 1) throw errors[0]
++  if (errors.length > 1) throw new AggregateError(errors, 'Public assertion or owned teardown failed', { cause: errors[0] })
++}
++
++test('owned public pre-spawn unavailable executable retires locally with frozen isolated snapshots', async () => {
++  await withOwnedPreSpawnRoot(async (root, restore) => {
++    const which = spyOn(Bun, 'which').mockReturnValue(null)
++    restore(() => which.mockRestore())
++    const context = createOwnedGitContext(), independent = createOwnedGitContext()
++    const before = context.retainedRecords
++    const result = await runGitAsync(['rev-parse', 'HEAD'], { cwd: root, ownedProcessGroup: context })
++    expect(which).toHaveBeenCalledTimes(1)
++    expect(which).toHaveBeenCalledWith('git', { cwd: root, PATH: process.env.PATH })
++    expect(result).toEqual({
++      ok: false, exitCode: null, stdout: '', stderr: '', cleanup: 'unknown',
++      cleanupDetails: { outcome: 'failed', reason: 'executable', ownerJoined: false, captures: 'not-started', joinPending: false },
++    })
++    const after = context.retainedRecords
++    expect(after).toEqual([])
++    expect(after).not.toBe(before)
++    expect(Object.isFrozen(after)).toBe(true)
++    expect(Reflect.set(after, '0', {})).toBe(false)
++    expect(independent.retainedRecords).toEqual([])
++    expect(independent.retainedRecords).not.toBe(after)
++  })
++})
++
++test('owned public pre-spawn adopts the actual S2 double-failure handle without spawning', async () => {
++  await withOwnedPreSpawnRoot(async (root, restore) => {
++    const temporary = spyOn(bootstrapOs, 'tmpdir').mockReturnValue(root)
++    restore(() => temporary.mockRestore())
++    const allocation = spyOn(bootstrapFs, 'mkdtempSync')
++    restore(() => allocation.mockRestore())
++    const setupError = new Error('injected bootstrap chmod failure'), disposalError = new Error('injected root removal failure')
++    const nativeChmod = fs.chmodSync, nativeRemove = fs.rmSync, nativePrepare = startupModule.prepareAnchorStartup
++    const setup = spyOn(bootstrapFs, 'chmodSync').mockImplementation((...args: Parameters<typeof fs.chmodSync>) => {
++      const acquired = allocation.mock.results[0]?.value
++      if (typeof acquired === 'string' && args[0] === acquired) {
++        expect(args).toEqual([acquired, 0o700])
++        throw setupError
++      }
++      return nativeChmod(...args)
++    })
++    restore(() => setup.mockRestore())
++    let removalFault = true, observed: unknown
++    const removal = spyOn(bootstrapFs, 'rmSync').mockImplementation((...args: Parameters<typeof fs.rmSync>) => {
++      const acquired = allocation.mock.results[0]?.value
++      if (typeof acquired === 'string' && args[0] === acquired) {
++        expect(args).toEqual([acquired, { recursive: true, force: false }])
++        if (removalFault) throw disposalError
++      }
++      return nativeRemove(...args)
++    })
++    restore(() => removal.mockRestore())
++    const prepare = spyOn(startupModule, 'prepareAnchorStartup').mockImplementation(() => {
++      try { return nativePrepare() } catch (error) { observed = error; throw error }
++    })
++    restore(() => prepare.mockRestore())
++    const context = createOwnedGitContext(), independent = createOwnedGitContext()
++    const result = await runGitAsync(['rev-parse', 'HEAD'], { cwd: root, ownedProcessGroup: context })
++    expect([result.ok, result.exitCode, result.cleanup, result.cleanupDetails?.reason]).toEqual([false, null, 'unknown', 'startup'])
++    expect(prepare).toHaveBeenCalledTimes(1)
++    expect(allocation).toHaveBeenCalledTimes(1)
++    expect(allocation).toHaveBeenCalledWith(path.join(root, 'kawai-owned-git-'))
++    expect(setup).toHaveBeenCalledTimes(1)
++    expect(removal).toHaveBeenCalledTimes(1)
++    if (!(observed instanceof AggregateError)) throw new Error('Expected the actual S2 AggregateError')
++    expect(observed.errors).toHaveLength(2)
++    expect(observed.errors[0]).toBe(setupError)
++    expect(observed.errors[1]).toBe(disposalError)
++    expect(observed.cause).toBe(setupError)
++    const descriptor = Object.getOwnPropertyDescriptor(observed, 'startup'), retained: unknown = descriptor?.value
++    expect([descriptor?.writable, descriptor?.enumerable, descriptor?.configurable]).toEqual([false, false, false])
++    if (!retained || typeof retained !== 'object' || !('cwd' in retained) || typeof retained.cwd !== 'string'
++      || !('dispose' in retained) || typeof retained.dispose !== 'function') throw new Error('Missing real startup handle')
++    const acquired = allocation.mock.results[0]?.value
++    if (typeof acquired !== 'string') throw new Error('Expected one string root from actual mkdtemp')
++    expect(retained.cwd).toBe(acquired)
++    expect(path.dirname(acquired)).toBe(root)
++    expect(fs.existsSync(acquired)).toBe(true)
++    const first = context.retainedRecords, second = context.retainedRecords
++    expect(first).toHaveLength(1)
++    expect(first[0]).toEqual({
++      phase: 'settled', pid: null, queryUsed: false, joined: false, rootPending: true,
++      cleanup: { outcome: 'failed', reason: 'startup', ownerJoined: false, captures: 'not-started', joinPending: false },
++    })
++    expect(first).not.toBe(second)
++    expect(first[0]).not.toBe(second[0])
++    expect(Object.isFrozen(first)).toBe(true)
++    expect(Object.isFrozen(first[0])).toBe(true)
++    expect(Object.isFrozen(first[0]?.cleanup)).toBe(true)
++    expect(independent.retainedRecords).toEqual([]) // Isolation, never recovery of the original.
++    const dispose = retained.dispose
++    removalFault = false
++    retained.dispose()
++    expect(retained.dispose).toBe(dispose)
++    expect(Object.getOwnPropertyDescriptor(observed, 'startup')?.value).toBe(retained)
++    expect(removal).toHaveBeenCalledTimes(2)
++    expect(fs.existsSync(acquired)).toBe(false) // Actual handle disposal, before fixture teardown.
++    expect(fs.readdirSync(root)).toEqual([])
++    expect(context.retainedRecords[0]?.rootPending).toBe(true) // No invented logical retirement.
++  })
++})
+diff --git a/src/server/git/gitCommand.ts b/src/server/git/gitCommand.ts
+index 04cafed9..fa6c9f31 100644
+--- a/src/server/git/gitCommand.ts
++++ b/src/server/git/gitCommand.ts
+@@ -2,6 +2,8 @@
+ // Never builds shell strings: every argument is a separate argv element, so
+ // injection via branch names or paths is not possible.
+ 
++import type { OwnedGitContext, OwnedCleanupDetails } from './ownedGitCommand'
++
+ export const GIT_TIMEOUT_MS = 10_000
+ export const GIT_MAX_OUTPUT_BYTES = 1024 * 1024
+ 
+@@ -39,11 +41,18 @@ export interface GitCommandOptions {
+   env?: Record<string, string>
+ }
+ 
++export interface AsyncGitCommandOptions extends GitCommandOptions {
++  ownedProcessGroup?: OwnedGitContext
++}
++
+ export interface GitCommandResult {
+   ok: boolean
+   exitCode: number | null
+   stdout: string
+   stderr: string
++  failureOrigin?: 'spawn' | 'timeout' | 'capture'
++  cleanup?: 'proved' | 'unknown'
++  cleanupDetails?: OwnedCleanupDetails
+ }
+ 
+ /**
+@@ -53,7 +62,8 @@ export interface GitCommandResult {
+  * runs. A timeout kills the process; the killed exit resolves as a
+  * non-success with exitCode null, matching the sync variant.
+  */
+-export async function runGitAsync(args: string[], options: GitCommandOptions = {}): Promise<GitCommandResult> {
++export async function runGitAsync(args: string[], options: AsyncGitCommandOptions = {}): Promise<GitCommandResult> {
++  if (options.ownedProcessGroup !== undefined) return options.ownedProcessGroup.run(args, options)
+   const { cwd, timeoutMs = GIT_TIMEOUT_MS, maxOutputBytes = GIT_MAX_OUTPUT_BYTES, env } = options
+   let proc: ReturnType<typeof Bun.spawn>
+   try {
+diff --git a/src/server/git/ownedGitCommand.ts b/src/server/git/ownedGitCommand.ts
+new file mode 100644
+index 00000000..40c4b7fb
+--- /dev/null
++++ b/src/server/git/ownedGitCommand.ts
+@@ -0,0 +1,335 @@
++// Dormant opt-in S4 owner. No application context, admission or recovery.
++import { closeSync } from 'node:fs';
++import { Socket } from 'node:net';
++import { isAbsolute, resolve } from 'node:path';
++import { Readable } from 'node:stream';
++import { cleanGitEnv, GIT_MAX_OUTPUT_BYTES, GIT_TIMEOUT_MS } from './gitCommand';
++import type { AsyncGitCommandOptions, GitCommandResult } from './gitCommand';
++import { decodeGitResultFrame } from './ownedGitProtocol';
++import { prepareAnchorStartup } from './ownedGitStartup';
++import { createRecord, lateAttempt, settleRecord } from './ownedGitRecord';
++import type { OwnedRecord, OwnedReason, OwnedCleanupDetails } from './ownedGitRecord';
++
++export type { OwnedCleanupDetails, OwnedReason };
++export interface OwnedGitContext {
++  run(args: string[], options: AsyncGitCommandOptions): Promise<GitCommandResult>;
++  readonly retainedRecords: readonly Readonly<{
++    phase: OwnedRecord['phase']; pid: number | null; queryUsed: boolean;
++    joined: boolean; rootPending: boolean; cleanup: Readonly<OwnedCleanupDetails> | null;
++  }>[];
++}
++class Context implements OwnedGitContext {
++  #records = new Set<OwnedRecord>();
++  get retainedRecords(): OwnedGitContext['retainedRecords'] {
++    return Object.freeze([...this.#records].map(r => Object.freeze({
++      phase: r.phase, pid: r.pid ?? null, queryUsed: r.queryUsed, joined: r.joined,
++      rootPending: !r.rootDisposed, cleanup: r.result ? Object.freeze({ ...r.result.cleanupDetails }) : null,
++    })));
++  }
++  async run(args: string[], options: AsyncGitCommandOptions): Promise<GitCommandResult> {
++    const r = createRecord(options.maxOutputBytes ?? GIT_MAX_OUTPUT_BYTES);
++    this.#records.add(r);
++    const query = (pid: number) => { process.kill(-pid, 0); };
++    let wake!: () => void;
++    const ready = new Promise<void>(resolve => { wake = resolve; });
++    let control: Socket | undefined;
++    const captureCloses: (() => void)[] = [];
++    let controlClose: (() => void) | undefined;
++    let controlClosed: Promise<void> | undefined;
++    let finalScheduled = false;
++    let graceStarted = false;
++    let finalAttempted = false;
++    let exitSeen!: Promise<void>;
++    let markExit!: () => void;
++    let settling = false;
++    const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
++    function timer(fn: () => void, ms: number): void {
++      const token = setTimeout(() => { r.timers.delete(token); if (!r.result) fn(); }, ms);
++      r.timers.add(token);
++    }
++    function fault(reason: 'handshake' | 'protocol' | 'owner-lost'): void {
++      r.fault ??= reason;
++      adverse();
++    }
++    function rootDisposal(): void {
++      if ((!r.invoked || r.joined) && r.root && !r.rootFailed) {
++        try { r.root.dispose(); r.root = undefined; r.rootDisposed = true; }
++        catch (error) { r.errors.push(error); r.rootFailed = true; r.disposalFault = true; }
++      }
++    }
++    function disposal(): void {
++      rootDisposal();
++      if (!r.invoked || r.joined) {
++        for (const fd of r.rawFds) {
++          r.rawFds.delete(fd);
++          try { closeSync(fd); } catch (error) {
++            r.errors.push(error); r.uncertainFd = true; r.uncertainFds.add(fd); r.disposalFault = true;
++          }
++        }
++      }
++      r.physicalReady = r.rootDisposed && !r.uncertainFd && r.rawFds.size === 0
++        && r.resources.every(resource => resource.closed) && r.actions === 0 && r.timers.size === 0
++        && (!r.invoked || r.statusTerminal);
++      if (r.physicalReady) { r.resources = []; r.waiters = []; r.handle = undefined; }
++    }
++    const terminal = (source: 'owner' | 'stdout' | 'stderr' | 'status') => {
++      disposal();
++      lateAttempt(r, source, query);
++      if (r.retired) this.#records.delete(r);
++      check();
++    };
++    function live(): boolean {
++      return !r.result && r.hello && !r.ownerExited && !r.joined && r.handle !== undefined
++        && r.handle.pid === r.pid && r.handle.exitCode === null && r.handle.signalCode === null
++        && control !== undefined && !control.destroyed && control.writable;
++    }
++    function write(frame: object, done: () => void): void {
++      if (!live() || !control) { fault(r.hello ? 'owner-lost' : 'handshake'); return; }
++      const bytes = Buffer.from(JSON.stringify(frame) + '\n');
++      if (bytes.length > 64 * 1024 * 1024) { fault('protocol'); return; }
++      r.actions++;
++      try {
++        control.write(bytes, error => {
++          r.actions--;
++          if (error) { r.errors.push(error); fault('protocol'); }
++          else if (!r.result) {
++            try { done(); } catch (failure) { r.errors.push(failure); fault('protocol'); }
++          }
++          disposal(); // Action completion alone never triggers a query.
++          check();
++        });
++      } catch (error) { r.actions--; r.errors.push(error); fault('protocol'); }
++    }
++    function release(): void {
++      if (r.result || finalScheduled || !live()) return;
++      finalScheduled = true;
++      r.phase = 'releasing';
++      write({ type: 'TERM' }, () => {
++        timer(() => {
++          if (!live()) { fault('owner-lost'); return; }
++          finalAttempted = true;
++          write({ type: 'FINAL' }, () => { r.finalSent = true; control?.end(); });
++        }, 200);
++      });
++    }
++    function cancelCaptures(): void {
++      for (const k of [0, 1] as const) {
++        if (!r.terminal[k] && !r.cancelled[k]) { r.cancelled[k] = true; captureCloses[k]?.(); }
++      }
++    }
++    function adverse(): void {
++      if (r.result) return;
++      release();
++      if (!graceStarted) {
++        graceStarted = true;
++        timer(() => {
++          r.graceExpired = true;
++          cancelCaptures();
++          for (const resource of r.resources) if (!resource.closed) resource.close();
++          wake();
++        }, 1000);
++      }
++    }
++    function check(): void {
++      if (r.result || settling) return;
++      if (r.timeout || r.spawnFault || r.captureFault || r.fault) adverse();
++      else if (r.tuple && r.terminal.every(Boolean)) release();
++      if (r.joined && r.terminal.every(Boolean) && r.statusTerminal && r.actions === 0
++        && r.resources.every(resource => resource.closed)) wake();
++    }
++    function wrap(fd: number, readable: boolean): { socket: Socket; closed: Promise<void>; close(): void } {
++      r.rawFds.delete(fd);
++      let socket: Socket;
++      try { socket = new Socket({ fd, readable, writable: !readable, allowHalfOpen: false }); }
++      catch (error) { r.uncertainFd = true; r.uncertainFds.add(fd); r.errors.push(error); throw error; }
++      let attempted = false;
++      const resource = {
++        closed: false,
++        close(): void {
++          if (attempted || resource.closed) return;
++          attempted = true;
++          try { socket.destroy(); }
++          catch (error) { r.errors.push(error); r.disposalFault = true; }
++        },
++      };
++      r.resources.push(resource);
++      const closed = new Promise<void>(resolve => {
++        socket.once('close', () => { resource.closed = true; resolve(); });
++      });
++      socket.on('error', () => {}); // Collector/control/status handlers preserve the actual failure.
++      return { socket, closed, close: resource.close };
++    }
++    function collect(k: 0 | 1, socket: Socket, closed: Promise<void>, close: () => void): void {
++      captureCloses[k] = close;
++      let eof = false;
++      socket.once('end', () => { eof = true; close(); });
++      const work = (async () => {
++        let text = '';
++        try { text = await new Response(Readable.toWeb(socket) as ReadableStream<Uint8Array>).text(); }
++        catch (error) {
++          r.errors.push(error);
++          if (!r.cancelled[k]) { r.captureFault = true; cancelCaptures(); adverse(); }
++        }
++        await closed;
++        return { text, eof };
++      })();
++      r.waiters.push(work);
++      void work.then(value => {
++        r.output[k] = value.text;
++        r.eof[k] = value.eof && !r.cancelled[k];
++        r.terminal[k] = true;
++        if (!value.eof && !r.cancelled[k]) { r.captureFault = true; cancelCaptures(); adverse(); }
++        terminal(k === 0 ? 'stdout' : 'stderr');
++      }, error => { r.errors.push(error); r.captureFault = true; r.terminal[k] = true; adverse(); terminal(k === 0 ? 'stdout' : 'stderr'); });
++    }
++    function meta(bytes: Buffer): Record<string, unknown> {
++      const text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
++      const value: unknown = JSON.parse(text);
++      if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid status');
++      const names = [...text.matchAll(/"(?:[^"\\]|\\.)*"\s*:/g)].map(match => JSON.parse(match[0].slice(0, -1).trim()));
++      if (names.length !== Object.keys(value).length || new Set(names).size !== names.length) throw new Error('Duplicate status key');
++      return value as Record<string, unknown>;
++    }
++    function exact(frame: Record<string, unknown>, fields: string[]): boolean {
++      return Object.keys(frame).length === fields.length && fields.every(key => Object.hasOwn(frame, key));
++    }
++    let executable = '', cwd = '';
++    let gitEnv: NodeJS.ProcessEnv = {};
++    function frame(bytes: Buffer): void {
++      if (r.result || r.fault) return;
++      const value = meta(bytes);
++      if (!r.hello) {
++        if (!exact(value, ['type', 'v', 'pid', 'pgrp', 'session']) || value.type !== 'HELLO' || value.v !== 1
++          || typeof value.pid !== 'number' || !Number.isSafeInteger(value.pid) || value.pid <= 1
++          || value.pid !== value.pgrp || value.pid !== value.session || value.pid !== r.handle?.pid || r.ownerExited) {
++          fault('handshake'); return;
++        }
++        r.pid = value.pid; r.hello = true; r.phase = 'owner-valid';
++        if (r.timeout || r.spawnFault || r.captureFault) { release(); return; }
++        r.runSent = true;
++        write({ type: 'RUN', executable, args, cwd, gitEnv }, () => {});
++      } else if (value.type === 'STARTED' && exact(value, ['type']) && r.runSent && !r.started && !r.tuple && !r.closing && !r.ownerExited) {
++        r.started = true; if (!finalScheduled) r.phase = 'running';
++      } else if (value.type === 'GIT_RESULT' && r.started && !r.tuple && !r.closing && !r.ownerExited) {
++        const tuple = decodeGitResultFrame(bytes);
++        if (!tuple) { fault('protocol'); return; }
++        r.tuple = tuple;
++      } else if (value.type === 'SPAWN_ERROR' && exact(value, ['type']) && r.runSent && !r.started && !r.spawnFault && !r.closing) {
++        r.spawnFault = true;
++      } else if (value.type === 'CLOSING' && exact(value, ['type']) && finalAttempted && !r.closing) {
++        r.closing = true;
++      } else { fault('protocol'); }
++      check();
++    }
++    function readStatus(socket: Socket, closed: Promise<void>, close: () => void): void {
++      const work = (async () => {
++        let pending = Buffer.alloc(0);
++        try {
++          for await (const data of socket) {
++            const chunk = Buffer.isBuffer(data) ? data : Buffer.from(data);
++            let offset = 0;
++            while (offset < chunk.length) {
++              const end = chunk.indexOf(10, offset);
++              const part = end < 0 ? chunk.subarray(offset) : chunk.subarray(offset, end);
++              if (pending.length + part.length + (end < 0 ? 0 : 1) > 512) throw new Error('Oversized status');
++              pending = Buffer.concat([pending, part]);
++              if (end < 0) break;
++              const bytes = pending; pending = Buffer.alloc(0); frame(bytes); offset = end + 1;
++            }
++          }
++          if (pending.length || !r.hello || (!r.tuple && !r.spawnFault) || !r.closing) fault(r.hello ? 'protocol' : 'handshake');
++        } catch (error) { r.errors.push(error); fault(r.hello ? 'protocol' : 'handshake'); }
++        close();
++        await closed;
++        controlClose?.(); // Status EOF ends control authority, even before JOIN.
++        if (controlClosed) await controlClosed;
++      })();
++      r.waiters.push(work);
++      void work.then(() => { r.statusTerminal = true; terminal('status'); },
++        error => { r.errors.push(error); r.statusTerminal = true; fault('protocol'); terminal('status'); });
++    }
++    function watchOwner(owner: NonNullable<OwnedRecord['handle']>): void {
++      if (r.handle && r.handle !== owner) {
++        r.spawnFault = true; r.uncertainFd = true;
++        r.rootFailed = true; // An inconsistent second owner cannot release root custody.
++        r.waiters.push(owner.exited.then(() => {}, error => { r.errors.push(error); }));
++        return;
++      }
++      r.handle = owner; r.capturesStarted = true;
++      if (r.joinWatching) return;
++      r.joinWatching = true;
++      const join = Promise.all([owner.exited, exitSeen]);
++      r.waiters.push(join);
++      void join.then(() => { r.joined = true; terminal('owner'); },
++        error => { r.errors.push(error); fault('owner-lost'); });
++    }
++    // Only this callback, not elapsed time or a missing code, creates T.
++    timer(() => { r.timeout = true; adverse(); }, timeoutMs);
++    try {
++      if (process.platform !== 'linux') { r.local = 'unsupported-platform'; throw new Error('Unsupported platform'); }
++      r.local = 'executable';
++      cwd = resolve(options.cwd ?? process.cwd());
++      gitEnv = { ...cleanGitEnv(), ...options.env };
++      const found = Bun.which('git', { cwd, ...(typeof gitEnv.PATH === 'string' ? { PATH: gitEnv.PATH } : {}) });
++      if (!found || !isAbsolute(found)) { r.local = 'executable'; throw new Error('No absolute Git executable'); }
++      executable = found;
++      r.local = 'startup';
++      const startup = prepareAnchorStartup();
++      r.root = startup; r.rootDisposed = false; r.local = undefined;
++      exitSeen = new Promise<void>(resolve => { markExit = resolve; });
++      r.invoked = true; r.phase = 'spawn-invoked';
++      const handle = Bun.spawn(startup.argv, {
++        cwd: startup.cwd, env: startup.env, detached: true,
++        stdio: ['ignore', 'ignore', 'ignore', 'socket-fd', 'socket-fd', 'socket-fd', 'socket-fd'],
++        onExit: (owner, _code, signal, error) => {
++          if (error) { r.errors.push(error); r.fault ??= 'protocol'; }
++          watchOwner(owner); r.ownerExited = true;
++          r.expectedExit = finalAttempted && (signal === 'SIGKILL' || signal === 9);
++          if (!r.expectedExit || !r.tuple) r.fault ??= r.hello ? 'owner-lost' : 'handshake';
++          markExit(); check();
++        },
++      });
++      watchOwner(handle);
++      const slots = handle.stdio; // Exactly one caller-ownership transfer.
++      for (const fd of slots.slice(3)) {
++        if (typeof fd === 'number' && Number.isSafeInteger(fd) && fd > 2) r.rawFds.add(fd);
++        else if (typeof fd === 'number') { r.uncertainFd = true; r.uncertainFds.add(fd); }
++      }
++      const fds = slots.slice(3, 7);
++      if (!Number.isSafeInteger(handle.pid) || handle.pid <= 1 || slots.length !== 7 || fds.length !== 4
++        || fds.some(fd => typeof fd !== 'number' || !Number.isSafeInteger(fd) || fd <= 2) || new Set(fds).size !== 4) {
++        r.spawnFault = true; throw new Error('Uncertain subprocess/fd layout');
++      }
++      const [outFd, errFd, controlFd, statusFd] = fds as [number, number, number, number];
++      const out = wrap(outFd, true), err = wrap(errFd, true), input = wrap(controlFd, false), output = wrap(statusFd, true);
++      control = input.socket; controlClosed = input.closed; controlClose = input.close;
++      control.on('error', () => fault('protocol'));
++      collect(0, out.socket, out.closed, out.close); collect(1, err.socket, err.closed, err.close);
++      readStatus(output.socket, output.closed, output.close);
++    } catch (error) {
++      r.errors.push(error);
++      if (!r.invoked) {
++        if (r.local === 'startup' && error instanceof AggregateError && Object.hasOwn(error, 'startup')) {
++          r.rootDisposed = false; r.rootFailed = true; r.disposalFault = true;
++          const descriptor = Object.getOwnPropertyDescriptor(error, 'startup');
++          const startup: unknown = descriptor?.value;
++          if (startup && typeof startup === 'object' && 'dispose' in startup && typeof startup.dispose === 'function'
++            && 'cwd' in startup && typeof startup.cwd === 'string') {
++            r.root = startup as NonNullable<OwnedRecord['root']>; r.rootDisposed = false; r.rootFailed = true; r.disposalFault = true;
++          }
++        }
++        wake();
++      } else { r.spawnFault = true; adverse(); }
++    }
++    await ready;
++    settling = true;
++    for (const token of r.timers) clearTimeout(token);
++    r.timers.clear();
++    disposal();
++    if (!r.local && !r.tuple && !r.spawnFault) r.fault ??= r.hello ? 'protocol' : 'handshake';
++    const result = settleRecord(r, query);
++    if (r.retired) this.#records.delete(r);
++    return result;
++  }
++}
++export function createOwnedGitContext(): OwnedGitContext { return new Context(); }
+diff --git a/src/server/git/ownedGitRecord.ts b/src/server/git/ownedGitRecord.ts
+new file mode 100644
+index 00000000..7b21379e
+--- /dev/null
++++ b/src/server/git/ownedGitRecord.ts
+@@ -0,0 +1,152 @@
++// Internal S4 custody/evidence policy; no admission or application lifetime.
++import type { GitResultFrame } from './ownedGitProtocol';
++
++export type OwnedReason =
++  | 'spawn' | 'timeout' | 'capture' | 'unsupported-platform' | 'startup' | 'executable'
++  | 'handshake' | 'protocol' | 'owner-lost' | 'group-present' | 'permission' | 'observation'
++  | 'join-grace' | 'capture-grace' | 'resource-disposal' | 'git-signal';
++export interface OwnedCleanupDetails {
++  outcome: 'complete' | 'failed';
++  reason: OwnedReason | null;
++  ownerJoined: boolean;
++  captures: 'not-started' | 'complete' | 'cancelled' | 'pending';
++  joinPending: boolean;
++}
++interface FrozenResult {
++  readonly ok: boolean;
++  readonly exitCode: number | null;
++  readonly stdout: string;
++  readonly stderr: string;
++  readonly failureOrigin?: 'spawn' | 'timeout' | 'capture';
++  readonly cleanup: 'proved' | 'unknown';
++  readonly cleanupDetails: Readonly<OwnedCleanupDetails>;
++}
++export interface OwnedRecord {
++  phase: 'pre-spawn' | 'spawn-invoked' | 'owner-valid' | 'running' | 'releasing' | 'settled';
++  invoked: boolean;
++  handle?: Pick<Bun.Subprocess, 'pid' | 'stdio' | 'exited' | 'exitCode' | 'signalCode'>;
++  pid?: number;
++  joined: boolean;
++  ownerExited: boolean;
++  joinWatching: boolean;
++  errors: unknown[];
++  expectedExit: boolean;
++  hello: boolean;
++  started: boolean;
++  runSent: boolean;
++  closing: boolean;
++  finalSent: boolean;
++  tuple?: GitResultFrame;
++  timeout: boolean;
++  spawnFault: boolean;
++  captureFault: boolean;
++  local?: OwnedReason;
++  fault?: 'handshake' | 'protocol' | 'owner-lost';
++  disposalFault: boolean;
++  graceExpired: boolean;
++  capturesStarted: boolean;
++  terminal: [boolean, boolean];
++  eof: [boolean, boolean];
++  cancelled: [boolean, boolean];
++  output: [string, string];
++  bound: number;
++  statusTerminal: boolean;
++  root?: { readonly cwd: string; dispose(): void };
++  rootDisposed: boolean;
++  rootFailed: boolean;
++  rawFds: Set<number>;
++  uncertainFd: boolean;
++  uncertainFds: Set<number>;
++  resources: { closed: boolean; close(): void }[];
++  waiters: Promise<unknown>[];
++  timers: Set<ReturnType<typeof setTimeout>>;
++  actions: number;
++  physicalReady: boolean;
++  queryUsed: boolean;
++  queryReason?: 'group-present' | 'permission' | 'observation';
++  retired: boolean;
++  events: Set<'owner' | 'stdout' | 'stderr' | 'status'>;
++  result?: FrozenResult;
++}
++export function createRecord(bound: number): OwnedRecord {
++  return {
++    phase: 'pre-spawn', invoked: false, joined: false, ownerExited: false, joinWatching: false, errors: [], expectedExit: false,
++    hello: false, started: false, runSent: false, closing: false, finalSent: false,
++    timeout: false, spawnFault: false, captureFault: false, disposalFault: false, graceExpired: false,
++    capturesStarted: false, terminal: [false, false], eof: [false, false],
++    cancelled: [false, false], output: ['', ''], bound, statusTerminal: false,
++    rootDisposed: true, rootFailed: false, rawFds: new Set(), uncertainFd: false, uncertainFds: new Set(),
++    resources: [], waiters: [], timers: new Set(), actions: 0, physicalReady: false,
++    queryUsed: false, retired: false, events: new Set(),
++  };
++}
++function captures(r: OwnedRecord): OwnedCleanupDetails['captures'] {
++  if (!r.capturesStarted) return 'not-started';
++  if (!r.terminal.every(Boolean)) return 'pending';
++  return r.eof.every(Boolean) && !r.cancelled.some(Boolean) && !r.captureFault ? 'complete' : 'cancelled';
++}
++function reason(r: OwnedRecord): OwnedReason | undefined {
++  if (r.timeout) return 'timeout';
++  if (r.spawnFault) return 'spawn';
++  if (r.local) return r.local;
++  if (r.captureFault) return 'capture';
++  if (r.fault) return r.fault;
++  if (r.graceExpired && !r.joined) return 'join-grace';
++  if (r.graceExpired && !r.terminal.every(Boolean)) return 'capture-grace';
++  if (r.disposalFault || !r.physicalReady) return 'resource-disposal';
++  if (r.tuple?.signal !== null && r.tuple !== undefined) return 'git-signal';
++  return r.queryReason;
++}
++function eligible(r: OwnedRecord): boolean {
++  return r.pid !== undefined && r.joined && r.terminal.every(Boolean) && r.physicalReady;
++}
++function observe(r: OwnedRecord, query: (pid: number) => void): void {
++  if (r.queryUsed || !eligible(r) || r.pid === undefined) return;
++  r.queryUsed = true;
++  try {
++    query(r.pid);
++    r.queryReason = 'group-present';
++  } catch (error) {
++    r.errors.push(error);
++    const code = error !== null && typeof error === 'object' && 'code' in error ? error.code : undefined;
++    if (code === 'ESRCH') r.retired = true;
++    else r.queryReason = code === 'EPERM' ? 'permission' : 'observation';
++  }
++}
++export function settleRecord(r: OwnedRecord, query: (pid: number) => void): FrozenResult {
++  const ordinary = r.tuple !== undefined && r.tuple.signal === null;
++  const normal = r.hello && r.started && r.closing && r.finalSent && r.expectedExit
++    && r.statusTerminal && captures(r) === 'complete' && ordinary && reason(r) === undefined;
++  if (!r.invoked) r.retired = r.physicalReady;
++  else observe(r, query); // Adverse observation retires resources only.
++  const proved = normal && r.retired;
++  const failureOrigin = r.timeout ? 'timeout' : r.spawnFault ? 'spawn' : r.captureFault ? 'capture' : undefined;
++  const clip = (text: string) => text.length > r.bound ? text.slice(0, r.bound) : text;
++  const details: OwnedCleanupDetails = {
++    outcome: proved ? 'complete' : 'failed',
++    reason: proved ? null : reason(r) ?? 'protocol',
++    ownerJoined: r.joined,
++    captures: captures(r),
++    joinPending: r.invoked && !r.joined,
++  };
++  r.phase = 'settled';
++  r.result = Object.freeze({
++    ok: r.tuple?.code === 0,
++    exitCode: r.tuple?.code ?? null,
++    stdout: r.captureFault ? '' : clip(r.output[0]),
++    stderr: r.captureFault ? '' : clip(r.output[1]),
++    ...(failureOrigin !== undefined ? { failureOrigin } : {}),
++    cleanup: proved ? 'proved' : 'unknown',
++    cleanupDetails: Object.freeze(details),
++  });
++  return r.result;
++}
++export function lateAttempt(
++  r: OwnedRecord, source: 'owner' | 'stdout' | 'stderr' | 'status', query: (pid: number) => void,
++): void {
++  if (r.events.has(source)) return;
++  r.events.add(source);
++  if (r.result) observe(r, query);
++  // Disposal/actions/timers never call this function. Once all terminal
++  // sources are spent, later disposal cannot manufacture a query trigger.
++}
