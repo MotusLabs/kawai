@@ -56,7 +56,7 @@ export class TaskListWindow {
       statuses.forEach((status, i) => { params[`$s${i}`] = status })
       const filter = `team_id = $team AND status IN (${marks})`
       const older = anchor ? 'AND (created_at < $at OR (created_at = $at AND rowid < $rowid))' : ''
-      const rows = this.db.prepare(`SELECT id, title, status, creator_kind, creator_session, parent_id, worktree,
+      const rows = this.db.prepare(`SELECT id, title, status, creator_kind, creator_session, owner_session, parent_id, worktree,
         openspec_change, plan_id, plan_change, revision, created_at, updated_at
         FROM team_tasks WHERE ${filter} ${older}
         ORDER BY created_at DESC, rowid DESC LIMIT $take`)
@@ -86,6 +86,7 @@ export class TaskListWindow {
       title: String(row.title),
       status: String(row.status) as TaskStatus,
       creator: partyFromRow(row.creator_kind, row.creator_session),
+      ownerSession: text(row.owner_session),
       parentId: text(row.parent_id),
       worktree: text(row.worktree),
       openspecChange: text(row.openspec_change),

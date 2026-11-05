@@ -157,6 +157,8 @@ export interface AgentTaskRow {
   title: string
   status: TaskStatus
   creator: TaskCreator
+  /** The session holding the task's agent rights (group-mail-task-affinity D7); null on human and Kawai tasks. */
+  ownerSession: string | null
   parentId: string | null
   worktree: string | null
   openspecChange: string | null

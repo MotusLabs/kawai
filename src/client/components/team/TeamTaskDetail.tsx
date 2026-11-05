@@ -150,7 +150,10 @@ export default function TeamTaskDetail({ teamPath, projectPath, view, sendMessag
   return <div data-testid="task-detail" data-task-id={task.id}>
     <button className="btn mb-3" onClick={back}>All tasks</button>
     <h4 className="font-medium">{task.title}</h4>
-    <p className="text-chat-meta text-secondary"><span data-testid="task-detail-status">{task.status}</span> · revision {task.revision} · created by <span data-testid="task-creator">{actorLabel(task.creator, sessions)}</span></p>
+    <p className="text-chat-meta text-secondary"><span data-testid="task-detail-status">{task.status}</span> · revision {task.revision} · created by <span data-testid="task-creator">{actorLabel(task.creator, sessions)}</span>
+      {/* The owner holds the agent rights once ownership moved (group-mail-task-affinity D7). */}
+      {task.ownerSession && task.ownerSession !== task.creator.sessionId
+        && <> · owned by <span data-testid="task-owner">{sessionLabel(task.ownerSession, sessions)}</span></>}</p>
     {task.parentId && <p className="text-chat-meta">Subtask of <button className="hover:underline" onClick={() => go(task.parentId!)}>
       {view.tasks.find(row => row.id === task.parentId)?.title ?? task.parentId}</button></p>}
     {task.worktree && <p className="break-all text-chat-meta">Worktree: {task.worktree}</p>}

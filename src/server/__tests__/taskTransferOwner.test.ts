@@ -252,3 +252,24 @@ test('P4: after every step each agent task has one owner, journaled, and a refus
   expect(moved).toBeGreaterThanOrEqual(50)
   expect(refusals).toBeGreaterThan(100)
 }, 20_000)
+
+describe('task reads name the owner (task 2.4)', () => {
+  // @covers: team-tasks › Task reads name the owner › task_get after a transfer
+  test('task_get\'s task section carries creator A and owner B; a human task carries a null owner', async () => {
+    const id = await create('lead-a')
+    await tool('lead-a')({ task_id: id, to_session: 'lead-b' })
+    const detail = await taskHandlers(service, 'dev').task_get({ task_id: id }) as { task: { creator: unknown; ownerSession: unknown } }
+    expect(detail.task).toMatchObject({ creator: { kind: 'agent', sessionId: 'lead-a' }, ownerSession: 'lead-b' })
+    const human = (await service.create({ kind: 'human', team }, { title: 'H', direction: 'go' })).id
+    const humanDetail = await taskHandlers(service, 'dev').task_get({ task_id: human }) as { task: { ownerSession: unknown } }
+    expect(humanDetail.task.ownerSession).toBeNull()
+  })
+
+  // @covers: team-tasks › task_list returns compact rows › Row names the owner
+  test('a task_list row carries creator A and owner B, not the creator read as owner', async () => {
+    const id = await create('lead-a')
+    await tool('lead-a')({ task_id: id, to_session: 'lead-b' })
+    const { tasks } = await taskHandlers(service, 'dev').task_list({ status: 'all' })
+    expect(tasks.find(row => row.id === id)).toMatchObject({ creator: { kind: 'agent', sessionId: 'lead-a' }, ownerSession: 'lead-b' })
+  })
+})
