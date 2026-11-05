@@ -20,6 +20,8 @@ releaseOnTaskClose: true                   # default; false keeps spawned member
 worktreeScoped: true                       # default; false takes task mail anywhere
 canReleaseMembers: true                    # default; false opts out of release_member
 canManageMailbox: true                     # default false
+affinity: task-owner                       # route group mail to its task's owner first
+affinityWait: 30                           # minutes a busy owner holds its mail; default 30
 ---
 ```
 
@@ -29,6 +31,17 @@ canManageMailbox: true                     # default false
   to the sum of the caps. A single `profile: glm` still works. Unknown profile
   ids are reported and ignored. kawai never spawns past a cap; the new-session
   dialog warns before you do.
+- `affinity: task-owner` sends group mail about a task to the task's owner
+  first. A message's affinity task is the `task_id` it was sent with, else
+  the sender's current task. Its owner counts only while it is a session of
+  this group, and is read again on every routing pass, so mail follows a
+  `task_transfer_owner`. An idle owner gets the message even when another
+  member has been idle longer or ranks earlier under `profile-order`. A busy
+  owner, or one awaiting an approval or answer, holds the message for up to
+  `affinityWait` minutes after it was sent (the `owner-busy` waiting reason),
+  then any member may take it. An owner that is gone, archived, parked,
+  context-exhausted, unavailable, cooling, or outside the message's filters
+  is never waited for. `affinityWait: 0` prefers an idle owner and never waits.
 - `workers` is the new name of `profiles`, and `modelEffort` of `profileEffort`.
   Both old keys keep working. When a file sets both spellings of one key, the
   new one wins and the group shows one warning per ignored old key; `profile`
@@ -105,7 +118,9 @@ files are never loaded. It default-exports `{ route, onLimit?, env?, timeoutMs? 
 
 - Rules run in a Worker with an empty environment plus only the variables
   listed in `env`. They see message metadata (priority, sender group, tags,
-  worktree, task id, worker choice), never the body.
+  worktree, task id, worker choice, and on an affinity group the resolved
+  `taskOwner`), never the body. A rule's pick or hold beats the owner
+  preference and the owner hold; `default` applies both.
 - `route(ctx)` gets the eligible candidates (idle members and spawn slots per
   allowed profile, already filtered by delivery, staffing, caps, and parking —
   cooling profiles are included with their effective `cooldownUntil`, so a

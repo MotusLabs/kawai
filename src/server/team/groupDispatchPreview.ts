@@ -8,6 +8,8 @@
 // when every chosen candidate cools, the preview says so and names the
 // cooldown end — it never refuses, and the instruction waits until then.
 // Without a choice it answers exactly what it answered before the choice.
+// On a group with `affinity`, the task's owner (group-mail-task-affinity D3)
+// is judged by the same check: an idle owner is listed first.
 import type { AssignmentTarget, TaskDispatchPreview } from '../../shared/teamTasks'
 import type { RouteCandidate } from '../../shared/routing'
 import type { MailRecipient } from './dispatcher'
@@ -42,6 +44,8 @@ export interface GroupPreviewInput {
   workerChoice: string | null
   /** The team's stored default approval policy, or null (team-approval-default D5). */
   teamDefault: ChatApprovalPolicy | null
+  /** The task's owner, a session of this group (group-mail-task-affinity D1); null = none. */
+  taskOwner?: string | null
   now: number
 }
 
@@ -68,6 +72,11 @@ export function previewGroupDispatch(input: GroupPreviewInput): TaskDispatchPrev
     staffing: { teamSpawned: facts.teamSpawned, teamCap, worktreeOccupants: [], worktreePending: facts.worktreeWriters, backoffRetryAt: null },
     providerOf: input.providerOf,
     workerChoice: choice,
+    // The owner's cooling decides its preference, as routing judges it (D3).
+    cooldowns: Object.fromEntries(input.members.map(member => [member.profileId, input.cooldownUntil(member.profileId)])),
+    now,
+    // The instruction would be a new message: its wait starts now.
+    taskOwner: input.taskOwner && group.affinity ? { sessionId: input.taskOwner, createdAt: now, waitMs: group.affinity.waitMs } : null,
   })
   const members = result.candidates.filter(candidate => candidate.kind === 'member')
   // The slots no filter or profile cap drops, in the group's order: the staffing facts alone may still block them.

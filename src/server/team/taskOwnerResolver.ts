@@ -15,12 +15,16 @@ export interface TaskOwnerSources {
 }
 
 export function taskOwnerResolver(sources: TaskOwnerSources): (message: TeamMessage) => string | null {
-  return message => {
-    if (message.toKind !== 'group' || !message.affinityTask) return null
-    const task = sources.tasks.get(message.affinityTask)
-    const owner = task && task.teamId === message.teamId ? task.ownerSession ?? null : null
-    if (!owner) return null
-    const record = sources.getRecord(owner)
-    return record && record.groupId === message.toId && sources.teamOf(owner) === message.teamId ? owner : null
-  }
+  return message => message.toKind === 'group' && message.affinityTask && message.toId
+    ? resolveTaskOwner(sources, { taskId: message.affinityTask, teamId: message.teamId, groupId: message.toId })
+    : null
+}
+
+/** A task's owner when it is a session of `groupId` in `teamId`; null otherwise (the preview's read too). */
+export function resolveTaskOwner(sources: TaskOwnerSources, target: { taskId: string; teamId: string; groupId: string }): string | null {
+  const task = sources.tasks.get(target.taskId)
+  const owner = task && task.teamId === target.teamId ? task.ownerSession ?? null : null
+  if (!owner) return null
+  const record = sources.getRecord(owner)
+  return record && record.groupId === target.groupId && sources.teamOf(owner) === target.teamId ? owner : null
 }
