@@ -446,7 +446,7 @@ describe('canManageMailbox', () => {
 })
 
 describe('the shipped lead group (group-mail-task-affinity D6)', () => {
-  test('.kawai/groups/lead.md opts into task-owner affinity with the default wait and parses without warnings', () => {
+  test('the shipped lead group file opts into task-owner affinity with the default wait and parses without warnings', () => {
     const text = fs.readFileSync(path.resolve(import.meta.dir, '../../../.kawai/groups/lead.md'), 'utf8')
     const parsed = parseGroupFile('lead', text)
     if (!parsed.ok) throw new Error(parsed.error)
