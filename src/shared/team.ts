@@ -111,6 +111,12 @@ export interface TeamMessage {
    * time; absent when the message has none.
    */
   workerChoice?: string | null
+  /**
+   * The task this group mail is about (group-mail-task-affinity D1), recorded
+   * at send for a group with `affinity: task-owner`; routing reads the task's
+   * current owner from it. Absent when the message has none.
+   */
+  affinityTask?: string | null
   /** A revision notice (task-revision-publication D3): the revision it announces; absent = not a notice. */
   revisionNotice?: RevisionNotice | null
 }

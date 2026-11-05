@@ -33,6 +33,7 @@ import { CREATE_PROCESS_REPORT_TABLES_SQL } from '../metrics/reportSchema'
 import { migrateProviderLimitWindow } from '../team/routing/limitEvents'
 import { integrationMigration } from '../plans/landing/integration/integrationSchema'
 import { workerChoiceMigration } from '../team/workerChoiceMigration'
+import { taskAffinityMigration } from '../team/taskAffinityMigration'
 import { planSupervisionMigration } from '../plans/decisions/decisionSchema'
 import { revisionControlMigration } from '../plans/revisionControl/revisionControlSchema'
 import { planWorkspaceMigration } from '../plans/workspace/workspaceSchema'
@@ -111,6 +112,9 @@ export const MIGRATIONS: readonly Migration[] = [
   // team-approval-default D3: one row per team for the spawned members'
   // default approval policy. Additive, no backfill: no row = not set.
   { version: 22, name: 'team-approval-defaults', up: db => db.exec(CREATE_TEAM_APPROVAL_DEFAULTS_SQL) },
+  // group-mail-task-affinity D1, D7: the affinity task on group mail and the
+  // task owner, backfilled from the creator for agent tasks.
+  taskAffinityMigration,
 ]
 
 export const RESTORE_DOC = 'docs/operations/database-backups.md'
