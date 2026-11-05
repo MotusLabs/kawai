@@ -373,6 +373,18 @@ export class TaskStore {
     return this.db.transaction(write)()
   }
 
+  /** Move ownership only while `from` still owns it (group-mail-task-affinity D7); false when it moved meanwhile. */
+  setOwner(id: string, from: string, to: string): boolean {
+    return this.db.prepare('UPDATE team_tasks SET owner_session = ? WHERE id = ? AND owner_session = ?').run(to, id, from).changes === 1
+  }
+
+  /** A session's open, active, and blocked tasks in its team, oldest first (D7's `from_session`). */
+  openTasksOwnedBy(teamId: string, owner: string): TeamTask[] {
+    const rows = this.db.prepare(`SELECT id FROM team_tasks WHERE team_id = ? AND owner_session = ?
+      AND status IN ('open', 'active', 'blocked') ORDER BY created_at, rowid`).all(teamId, owner) as Array<{ id: string }>
+    return rows.map(row => this.get(row.id)!)
+  }
+
   appendJournal(id: string, author: JournalAuthor, entry: string, now = nowIso()): TaskJournalEntry | null {
     if (!this.get(id)) return null
     const journalId = `note-${crypto.randomUUID()}`

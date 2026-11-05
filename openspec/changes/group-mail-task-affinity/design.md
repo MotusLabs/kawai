@@ -218,9 +218,15 @@ rights are unchanged.
   same transaction as the column write, so a crash never leaves one without
   the other.
 
-The liveness and group checks reuse the predicates routing uses
-(`memberStateCauses` and the session's group), so a takeover is allowed
-exactly when routing would no longer prefer the owner.
+The liveness check reads the owner's session record, the same facts that
+remove it from routing for good: no record (gone), `archivedAt`, or the
+context-exhausted flag (`departure()` in `taskOwnership.ts`). Routing's
+transient causes (busy, cooling, parked) never permit a takeover; the
+owner hold's bounded wait covers them. The group check compares the
+sessions' current groups; an owner with no record left is matched by the
+caller's right to own tasks (its group sets `canCreateTasks`). The column
+write is conditional on the owner still being the one checked, so two
+concurrent takers cannot both win.
 
 - **Rejected: taking over a live owner.** Two leads would race on one task;
   the live owner hands over instead.

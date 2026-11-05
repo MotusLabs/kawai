@@ -7,7 +7,9 @@
 // - amend direction/acceptance and revision notices: the task's owner or the
 //   human (the owner starts as the creating agent; group-mail-task-affinity D7);
 // - journal notes and active/blocked: any member of the team, and the human;
-// - done/cancelled: the owner; every status (including reopening): the human.
+// - done/cancelled: the owner; every status (including reopening): the human;
+// - transfer ownership (`ownership`, taskOwnership.ts): the owner, or its
+//   group once it is gone, archived, or context-exhausted.
 // References are validated before anything is written: parent tasks of the
 // same team, worktrees listed for the team's repository (stored as their
 // root), OpenSpec changes that exist, and a plan-change link to an open plan's
@@ -31,6 +33,7 @@ import { resolvePlanLink } from '../plans/planLink'
 import { NULL_OWNERSHIP, type ExecutionOwnership } from '../plans/execution/executionOwnership'
 import { executionOf, refuseSystem, type SystemCaller } from './systemCaller'
 import { originStatusRefusal, ownerLabel, statusRefusal, taskOwner } from './taskStatusRights'
+import { TaskOwnership } from './taskOwnership'
 export { statusRefusal } from './taskStatusRights'
 
 export interface TaskCreateInput {
@@ -126,7 +129,11 @@ export class TaskService {
     ownership?: ExecutionOwnership
   }) {
     this.worktrees = options.worktrees ?? new TeamWorktrees()
+    this.ownership = new TaskOwnership(this, options.getSession)
   }
+
+  /** `task_transfer_owner` (group-mail-task-affinity D7). */
+  readonly ownership: TaskOwnership
 
   async create(caller: TaskCaller, input: TaskCreateInput): Promise<TeamTask> {
     refuseSystem(caller, 'create-linked')
