@@ -20,6 +20,7 @@ import { MailboxStore } from './mailboxStore'
 import { MailDispatcher, type MailRecipient, type PassOutcome } from './dispatcher'
 import { reconcileMailbox, transcriptReceipt, type Receipt } from './receipt'
 import { TaskStore } from './taskStore'
+import { taskOwnerResolver } from './taskOwnerResolver'
 import { TaskService } from './TaskService'
 import { MemberRelease, type ArchiveResult } from './memberRelease'
 import { MailboxManagement } from './mailboxManagement'
@@ -330,6 +331,8 @@ export class SessionMailbox {
       },
       taskContext: taskId => buildTaskContext(taskStore, taskId, this.plans, options.ownership),
       targetWorktree,
+      // Each pass reads the affinity task's owner afresh (group-mail-task-affinity D1).
+      taskOwner: taskOwnerResolver({ tasks: taskStore, getRecord: options.getRecord, teamOf: id => options.teams.teamOf(id)?.teamId }),
       router: this.router,
       associateTask: (id, taskId) => options.associateTask?.(id, taskId),
       watchReceipt: mail => {

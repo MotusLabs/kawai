@@ -9,6 +9,11 @@
 // Waiting reasons (team-waiting-reasons D2): a `none` or `hold` carries a
 // diagnosis built from the same eligibility breakdown, live counts, spawn
 // facts, and cooldowns the decision used — never scraped from the log.
+// Task owner (group-mail-task-affinity D3): on a group with `affinity`, the
+// eligibility check judges the view's task owner. The rule decides first and
+// sees the owner; then a busy owner holds the message until its wait ends
+// (`owner-busy`), and otherwise the built-in strategy picks with the owner
+// preferred.
 import type { ChatUsageReport } from '../../../shared/chat'
 import type { ChatSessionRecord } from '../../db'
 import type {
@@ -109,9 +114,13 @@ export class ProfileRouter implements GroupRouter {
     // the group's model keys on each pass, so a group or catalog edit after
     // sending applies the way every other group edit does.
     const workerChoice = workerChoiceState(message.workerChoice, group, providerOf)
-    const { candidates, group: routeGroup, excluded } = evaluateEligibility({
+    // The owner counts only on a group that still routes by it (D1/D2).
+    const taskOwner = group.affinity && view.taskOwner ? view.taskOwner : null
+    const causes = new Map<string, MemberExclusion[]>()
+    for (const entry of view.memberCauses ?? view.exclusions ?? []) causes.set(entry.sessionId, [...(causes.get(entry.sessionId) ?? []), entry])
+    const { candidates, group: routeGroup, excluded, affinity } = evaluateEligibility({
       group,
-      members: members.map(member => memberState(member, eligible.get(member.sessionId))),
+      members: members.map(member => memberState(member, eligible.get(member.sessionId), causes.get(member.sessionId))),
       pendingSpawnProfiles: spawn?.pendingProfiles ?? [],
       spawnAllowed: spawn?.allowed ?? false,
       spawnCwd: spawn?.worktree ?? null,
@@ -128,7 +137,13 @@ export class ProfileRouter implements GroupRouter {
       })(),
       ...(this.options.allowedProfiles?.(message) ? { allowedProfiles: this.options.allowedProfiles(message)! } : {}),
       workerChoice,
+      // The owner's cooling decides affinity (D3); other cooling stays the strategy's.
+      cooldowns: this.memberCooldowns(members),
+      now,
+      taskOwner: taskOwner && group.affinity
+        ? { sessionId: taskOwner, createdAt: Date.parse(message.createdAt), waitMs: group.affinity.waitMs } : null,
     })
+    const ownerHold = affinity.kind === 'hold' ? ownerBusy(affinity.sessionId, affinity.until) : null
     if (candidates.length === 0) {
       this.holds.delete(message.id)
       // Members the dispatcher found eligible were dropped by the message's
@@ -139,6 +154,8 @@ export class ProfileRouter implements GroupRouter {
       const diagnosis = diagnoseNone(routeGroup, spawn, breakdown, workerChoice ? new Set(workerChoice.profiles) : null)
       // The choice names itself beside the capacity it waits on (D5).
       if (workerChoice) diagnosis.push({ kind: 'worker-choice', detail: workerChoice.selector })
+      // A busy owner within its wait still names itself, and its wait's end re-arms the pass (D5).
+      if (ownerHold && affinity.kind === 'hold') return { kind: 'hold', retryAt: affinity.until, diagnosis: [ownerHold, ...diagnosis] }
       return { kind: 'none', diagnosis }
     }
     const signature = candidates.map(candidate => candidate.id).sort().join(',')
@@ -162,7 +179,7 @@ export class ProfileRouter implements GroupRouter {
     const rule = view.attempt < 2 ? this.options.rules.rule(group.id) : undefined
     if (rule) {
       const ctx: RouteContext = {
-        now: new Date(now).toISOString(), group: routeGroup, message: routeMessage(message, worktree), candidates, profiles,
+        now: new Date(now).toISOString(), group: routeGroup, message: routeMessage(message, worktree, taskOwner), candidates, profiles,
         providers: providerStates,
       }
       try {
@@ -182,8 +199,13 @@ export class ProfileRouter implements GroupRouter {
         record('fallback', 'built-in', `rule failed: ${error instanceof Error ? error.message : String(error)}`)
       }
     }
+    if (!chosen && ownerHold && affinity.kind === 'hold') {
+      // After the rule, before the strategy (D3): the default path waits for a busy owner.
+      record('builtin', 'hold', `waiting for task owner ${affinity.sessionId}`)
+      return { kind: 'hold', retryAt: affinity.until, diagnosis: [ownerHold] }
+    }
     if (!chosen) {
-      chosen = builtinPick(group.strategy, candidates, order, cooling)
+      chosen = builtinPick(group.strategy, candidates, order, cooling, affinity.kind === 'prefer' ? affinity.sessionId : undefined)
       if (!chosen) {
         // Every candidate is cooling: try again when the first cooldown ends.
         const ends = candidates.map(candidate => Date.parse(profiles[candidate.profileId]?.cooldownUntil ?? ''))
@@ -212,6 +234,13 @@ export class ProfileRouter implements GroupRouter {
     if (chosen.kind === 'member') return { kind: 'member', sessionId: chosen.sessionId! }
     const assignment = await this.options.staffing.spawnFor(message, chosen.cwd, group, chosen.profileId)
     return assignment ? { kind: 'spawned', assignment } : { kind: 'none' }
+  }
+
+  /** Each live member's profile cooldown end in force now (the owner's cooling, D3). */
+  private memberCooldowns(members: GroupMemberRecord[]): Record<string, string | null> {
+    const cooldowns: Record<string, string | null> = {}
+    for (const { profileId } of members) cooldowns[profileId] ??= this.options.limits.cooldownFor(profileId, this.providerOf(profileId)).until
+    return cooldowns
   }
 
   private profileStates(group: GroupDefinition, candidates: RouteCandidate[], _now: number): Record<string, RouteProfileState> {
@@ -279,11 +308,17 @@ export function usageView(usage: ChatUsageReport | null): RouteUsage | null {
   } : null
 }
 
-function memberState(member: GroupMemberRecord, eligible: EligibleMember | undefined) {
+function memberState(member: GroupMemberRecord, eligible: EligibleMember | undefined, causes: MemberExclusion[] | undefined) {
   return {
     sessionId: member.sessionId, profileId: member.profileId, cwd: member.cwd, eligible: !!eligible,
     ...(eligible ? { idleForMs: eligible.idleForMs } : {}),
+    ...(!eligible && causes ? { causes } : {}),
   }
+}
+
+/** The owner hold's constraint (D5): the owner and when its wait ends. */
+function ownerBusy(sessionId: string, until: number): WaitingConstraint {
+  return { kind: 'owner-busy', sessionIds: [sessionId], retryAt: new Date(until).toISOString() }
 }
 
 /** The message filter that dropped each dispatcher-eligible member, from the eligibility check. */
@@ -374,11 +409,12 @@ function diagnoseNone(
   return constraints
 }
 
-function routeMessage(message: TeamMessage, worktree: string | null): RouteMessage {
+function routeMessage(message: TeamMessage, worktree: string | null, taskOwner: string | null): RouteMessage {
   return {
     id: message.id, priority: message.priority, senderGroup: message.fromGroup, tags: message.tags,
     worktree, taskId: message.taskId,
     ...(message.handoff ? { forwardedFromProfile: message.handoff.fromProfile } : {}),
     ...(message.workerChoice ? { worker: message.workerChoice } : {}),
+    ...(taskOwner ? { taskOwner } : {}),
   }
 }

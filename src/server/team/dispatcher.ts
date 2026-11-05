@@ -13,6 +13,10 @@
 // pick that went stale before the claim is routed again (attempt 1), then by
 // the built-in strategy (attempt 2). Without a router the longest-idle
 // eligible member takes the message.
+// Task owner (group-mail-task-affinity D1): each pass resolves a group
+// message's task owner afresh — its affinity task's current owner, kept only
+// when it is a session of the target group — once per message per pass, and
+// hands it to the router in the route view.
 // Waiting reasons (team-waiting-reasons D2): a cause reporter over the
 // shared recipient fields sits beneath the eligibility and claim predicates,
 // which keep their exact boolean shapes by rejecting different subsets of
@@ -24,7 +28,7 @@ import type { WaitingConstraint } from '../../shared/team'
 import type { TeamMessage } from './mailboxStore'
 import { MailboxStore } from './mailboxStore'
 import { messageEnvelope } from './envelope'
-import { memberExclusions, messageExclusions, type MemberExclusion, type MemberExclusionKind } from './memberCauses'
+import { memberExclusions, messageExclusions, messageMemberCauses, type MemberExclusion, type MemberExclusionKind } from './memberCauses'
 import { groupPathEligible } from './routing/workerEligibility'
 
 export interface MailRecipient {
@@ -75,6 +79,10 @@ export interface RouteView {
   attempt: number
   /** Why each live member of the group cannot take the message (D2). */
   exclusions?: MemberExclusion[]
+  /** The message's task owner resolved this pass (group-mail-task-affinity D1); null = none. */
+  taskOwner?: string | null
+  /** Every cause of each member in `exclusions`, cooling included (group-mail-task-affinity D3). */
+  memberCauses?: MemberExclusion[]
 }
 
 export type RouteResult =
@@ -110,6 +118,8 @@ export class MailDispatcher {
   private failedThisPass = new Set<string>()
   /** Router diagnoses collected this pass, per message (D2/D3). */
   private passDiagnoses = new Map<string, WaitingConstraint[]>()
+  /** Task owners resolved this pass, per message (group-mail-task-affinity D1). */
+  private ownersThisPass = new Map<string, string | null>()
   /** Agent-start failures with their error text, until the message leaves the queued surface (D2). */
   private readonly startFailures = new Map<string, { sessionId: string; error: string }>()
   private requested = false
@@ -134,6 +144,8 @@ export class MailDispatcher {
     associateTask?: (sessionId: string, taskId: string) => void
     /** Target worktree root of group mail under a worktree task; null = any member. */
     targetWorktree?: (message: TeamMessage) => string | null
+    /** The message's task owner now, a session of its target group; null = none (group-mail-task-affinity D1). */
+    taskOwner?: (message: TeamMessage) => string | null
     /** Decides who takes group mail (profile routing); default longest idle. */
     router?: GroupRouter
     /** A claim was won (profile routing records the claim commit). */
@@ -209,6 +221,7 @@ export class MailDispatcher {
     await this.options.beginCycle?.()
     this.failedThisPass.clear()
     this.passDiagnoses.clear()
+    this.ownersThisPass.clear()
     const recipients = this.options.recipients()
     const ids = new Set(recipients.map(row => row.sessionId))
     for (const id of this.idleSince.keys()) if (!ids.has(id)) this.idleSince.delete(id)
@@ -370,23 +383,44 @@ export class MailDispatcher {
    * the pass began.
    */
   private exclusionsFor(message: TeamMessage): MemberExclusion[] {
+    return messageExclusions(this.causesInput(message))
+  }
+
+  /** The member-cause inputs for one message this pass. */
+  private causesInput(message: TeamMessage) {
     const failure = this.startFailures.get(message.id)
-    return messageExclusions({
+    return {
       message,
       recipients: this.options.recipients(),
       eligibleIds: new Set(this.eligibleFor(message).map(row => row.sessionId)),
       targetWorktree: this.targetOf(message),
       startFailure: failure ?? null,
       now: this.now(),
-      startupFailed: sessionId => this.failedThisPass.has(sessionId),
-    })
+      startupFailed: (sessionId: string) => this.failedThisPass.has(sessionId),
+    }
+  }
+
+  /** The task owner and, with one, every member cause the owner hold judges (D1/D3). */
+  private ownerView(message: TeamMessage): Pick<RouteView, 'taskOwner' | 'memberCauses'> {
+    const taskOwner = this.ownerOf(message)
+    if (taskOwner === null) return { taskOwner }
+    return { taskOwner, memberCauses: [...messageMemberCauses(this.causesInput(message)).values()].flat() }
+  }
+
+  /** The message's task owner, resolved once per pass (D1). */
+  private ownerOf(message: TeamMessage): string | null {
+    if (!this.options.taskOwner) return null
+    if (!this.ownersThisPass.has(message.id)) this.ownersThisPass.set(message.id, this.options.taskOwner(message))
+    return this.ownersThisPass.get(message.id)!
   }
 
   private async routeOne(message: TeamMessage) {
     const router = this.options.router ?? longestIdle
     for (let attempt = 0; attempt <= 2; attempt++) {
       if (this.store.get(message.id)?.state !== 'queued') return
-      const result = await router.route(message, { eligible: this.eligibleFor(message), attempt, exclusions: this.exclusionsFor(message) })
+      const result = await router.route(message, {
+        eligible: this.eligibleFor(message), attempt, exclusions: this.exclusionsFor(message), ...this.ownerView(message),
+      })
       if (result.kind === 'hold') {
         this.holds.set(message.id, result.retryAt)
         this.passDiagnoses.set(message.id, result.diagnosis ?? [])

@@ -24,20 +24,23 @@ const KIND_ORDER: Record<WaitingConstraintKind, number> = {
   'team-spawn-cap': 3,
   'worktree-occupied': 4,
   'startup-failed': 5,
-  'no-eligible-member': 6,
-  'recipient-busy': 7,
-  'recipient-pending-request': 8,
-  'recipient-unavailable': 9,
-  'outside-role': 10,
-  'profile-cooling': 11,
-  'spawn-backoff': 12,
+  // The immediate blocker while the owner hold applies (group-mail-task-affinity
+  // D5), ahead of the members' own causes.
+  'owner-busy': 6,
+  'no-eligible-member': 7,
+  'recipient-busy': 8,
+  'recipient-pending-request': 9,
+  'recipient-unavailable': 10,
+  'outside-role': 11,
+  'profile-cooling': 12,
+  'spawn-backoff': 13,
   // A routing specific after the capacity constraints (dispatch-worker-choice
   // D5): a capped chosen worker's `profile-cap` stays the blocker, and a
   // cooling choice names itself ahead of the generic all-cooling hold.
-  'worker-choice': 13,
-  'routing-hold': 14,
-  'all-profiles-cooling': 15,
-  'starting-agent': 16,
+  'worker-choice': 14,
+  'routing-hold': 15,
+  'all-profiles-cooling': 16,
+  'starting-agent': 17,
 }
 
 /** Constraints in blocker-first order; the sort is stable within a kind. */

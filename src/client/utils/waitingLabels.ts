@@ -71,6 +71,8 @@ export function constraintLabel(constraint: WaitingConstraint, nameOf: (sessionI
         + (constraint.retryAt ? ` (cooling until ${new Date(constraint.retryAt).toLocaleTimeString()})` : '')
     case 'routing-hold':
       return `Routing hold${constraint.detail ? `: ${constraint.detail}` : ''}`
+    case 'owner-busy':
+      return `Waiting for task owner ${names.join(', ') || 'unknown'}${constraint.retryAt ? ` until ${new Date(constraint.retryAt).toLocaleTimeString()}` : ''}, then any member`
     case 'all-profiles-cooling':
       return constraint.credit
         ? `Every candidate profile is out of credit${constraint.retryAt ? `; retried by ${new Date(constraint.retryAt).toLocaleTimeString()} at the latest` : ''}`

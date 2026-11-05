@@ -273,6 +273,8 @@ export type WaitingConstraintKind =
   | 'worktree-occupied'
   | 'spawn-backoff'
   | 'routing-hold'
+  /** Group mail held for its busy task owner (group-mail-task-affinity D5): `sessionIds` is the owner, `retryAt` the wait's end. */
+  | 'owner-busy'
   | 'all-profiles-cooling'
   | 'group-missing'
   | 'starting-agent'
