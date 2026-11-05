@@ -2,8 +2,8 @@
 
 ## 1. Probe
 
-- [ ] 1.1 Probe Bun's per-message compression in a scratch script under `/tmp`. The probe is a real `Bun.serve` with `perMessageDeflate: true` and a raw TCP client that negotiates `permessage-deflate`. It records the RSV1 bit of frames sent with `compress` omitted, `true`, and `false`, and of frames sent to a client that did not negotiate. Record the result in the task journal and in `design.md` D3, replacing "Probe 1.1 confirms".
-  - Verify: the journal names the Bun version and all four observations; D3's text matches them.
+- [ ] 1.1 Probe Bun's per-message compression in a scratch script under `/tmp`. The probe is a real `Bun.serve` with `perMessageDeflate: true` and a raw TCP client that negotiates `permessage-deflate`. It records the RSV1 bit of frames sent with `compress` omitted, `true`, and `false`, and of frames sent to a client that did not negotiate. Record the result in the task journal and in `design.md` D3, replacing "Probe 1.1 confirms". In the same probe, with a 1 MiB `backpressureLimit`, a client that stops reading, and `closeOnBackpressureLimit` first `false` and then `true`, record each `ws.send` status, whether the message that crossed the limit is delivered once reading resumes, and whether and when the socket closes. Record these in D5b.
+  - Verify: the journal names the Bun version and all four compression observations plus both backpressure runs; D3's and D5b's text match them.
 
 ## 2. Window budget (D1)
 
@@ -14,7 +14,8 @@
     - W2 kills "budget ignored" and pins whole-unit delivery (480 events of the newest four turns, even with quiet 10-event parts in the fifth).
     - W3 and W14 kill "never split a unit" and "split anywhere" (W3 only with empty selection on the oversized newest unit).
     - W4 and W5 kill "open tool calls ignored" and "merge continuation ignored" (in the part walk, the overflowing part is left whole to older history, never an earlier cut across parts).
-    - W6 and W8 kill "empty window when oversized".
+    - W8 kills "empty window when oversized".
+    - W6 kills "a result priced at its raw size": with elision skipped before pricing, the 600 KiB result overflows and becomes the atomic part.
     - W7 kills "exclusive limit".
     - W10 and W11 kill "budget applied to widened windows".
     - W12 and W13 kill "page unbudgeted" and "page may be empty".
@@ -75,8 +76,27 @@
 - [ ] 5.3 Add production wiring test OW3 (fake clock, through `ChatConnections` and the manager), including the cancelled-attach case whose load populates the memo after the client detached.
   - Verify: it kills the mutant where `noteWatched` is never called and the one where population never arms the timer (M1).
 
-## 6. Close-out
+## 6. Connection liveness (D5)
 
-- [ ] 6.1 Update `AGENTS.md`'s chat-history-window bullet with the budget, resume, compression default, and release. Add a recovery-matrix row if review judges resume's fallback to be a recovery mechanism.
-- [ ] 6.2 Measure again on the busiest real chat: bytes on the wire and switch time, cold switch versus resumed switch. Report the numbers beside the proposal's figures.
-- [ ] 6.3 Run `bun run check` on the clean committed tree, and map each oracle id (W, R, A, C, L, P, OW) to its test title and killed mutant in the result.
+Section 6 may land first, after probe 1.1 and before sections 2–5. Its checkpoint needs nothing from them: elision runs in `getSnapshot` and `getHistoryPage` before today's window, and OW6 uses its section-6 frame bound. The checks that combine D5 with D1 — task 2.2's W6 row, P1's elision clause, and OW6's 600 KiB frame bound — are rerun when section 2 lands, and 7.3 maps them there. No timing claim in this section counts until its test has run.
+
+- [ ] 6.1 Add `elideToolOutput` and `TOOL_OUTPUT_MAX_BYTES` in `src/server/chat/toolOutputElision.ts`, measuring the output's serialized string value (UTF-8 of `JSON.stringify(output)`, quotes included, inclusive limit), with `totalBytes` the canonical UTF-8 length of the whole original output. Add `outputElided` to the `tool_result` event type in `src/shared/chat.ts`, and apply the function in `getSnapshot` and `getHistoryPage` (before D1's pricing once section 2 exists).
+  - Verify: table E rows E1–E8 are committed verbatim. E1 and E2 kill an exclusive limit and a limit on decoded bytes, E3 and E4 kill a cut that splits a character, E5 kills elision of other event types, E7 kills a measure that ignores escaping or splits an escape, and E8 kills a `totalBytes` taken from the serialized or preview length. After section 2, task 2.2's W6 row is green only with elision before pricing.
+- [ ] 6.2 Apply the same function once at the top of `ChatConnections.publish`, before batching, and cap each `chat-events` message at `CHAT_EVENTS_MAX_BYTES` (262,144 UTF-8 bytes of the whole message as sent) before both send sites, the batch-overflow send and `flush`, keeping the 128-event and turn-boundary splits and sending a lone oversized event by itself (D5e). Leave nested worker transcripts unelided.
+  - Verify: rows E6, E9, and E16–E18, and production wiring test OW4. E6 and OW4 kill "live route not elided" on both send sites, E9 kills "search reads the elided projection", E16 kills a batch measured without its envelope or capped on one send site only, and a split that loses, repeats, or reorders events, E17 kills a lone oversized event dropped or merged, and E18 kills a changed turn or 128-event boundary.
+- [ ] 6.3 Add `ChatSessionManager.getToolOutput` and the route `GET /api/chat/sessions/:sessionId/tool-output/:eventId` (`src/server/routes/chatToolOutput.ts`, mounted in `bootstrap.ts` beside `/api/chat/search`, before the static fallback; no change to the static middleware), as D5d describes: shared `loadHistory`, lookup again after the await, `404` cases, `text/plain; charset=utf-8`, `no-store`, and `Content-Length` from the bytes served. Check that the service worker does not cache it. Add no WebSocket message for it.
+  - Verify: rows E10–E12 through the real app and manager. E10 kills a JSON body, a missing `no-store`, a length not taken from the served bytes, and a body that differs from the canonical UTF-8 of the stored output; E11 kills a `200` with an empty body; E12 kills a lookup that skips replay or writes the projection back.
+- [ ] 6.4 Mark elided results in the tool result view. On expand, download the output with one `fetch` and its own `AbortController`, decode it with `TextDecoder('utf-8', { ignoreBOM: true })`, and adopt it only when the whole body has arrived, its length equals `totalBytes`, and the request is still current. Abort on collapse, re-expand, chat switch, detach, and unmount; keep the download across a WebSocket reconnect.
+  - Verify: rows E13–E15 as component and store tests over a fake `fetch`. E13 kills a decoder that strips a leading U+FEFF, a partial or short body adopted, and a `404` shown as a network error; E14 kills a late old body overwriting the current view and a state update after unmount; E15 kills a download cancelled or repeated by a WebSocket reconnect or a successful resume.
+- [ ] 6.5 Set `closeOnBackpressureLimit: true` and the named `backpressureLimit` constant in `socketHandlers.ts`. Read the `ws.send` status on every `ConnectionHub` and coalescer route, logging `ws_send_dropped` and closing the socket in the hub on `0`. Log `ws_backpressure_close`.
+  - Verify: table B rows B1–B5 and production wiring test OW5. B1 kills `closeOnBackpressureLimit` left `false` at the production options boundary; B3, over a fake socket, kills an ignored `0` status on any one route; OW5 kills removing both close mechanisms together (a sequence gap on an open socket).
+- [ ] 6.6 In `useWebSocket.ts`, let any inbound message on the current socket, parsed or not, clear a pending heartbeat pong timer and settle a pending resume verification. Leave both deadlines unchanged.
+  - Verify: table H rows H1–H8 over the production class with fake timers and a fake socket. H2 and H5 kill "only the matching pong counts", H1 and H6 kill "any timer cleared without an inbound message", H7 kills "noteInbound after parsing", and H8 kills "a replaced socket settles the current socket's timers".
+- [ ] 6.7 Add the browser-level regression OW6 (Playwright slow tier, the pacing proxy with its global 50,000 bytes/s budget, 2,500-byte slices every 50 ms round-robin over ready connections and a 1,000 ms injected round trip, `AGENTBOARD_WS_DEFLATE=false`, the pinned fixture, selection time, and resume phase, `bun run build` first).
+  - Verify: OW6 qualifies its fixture from the proxy's own ingress and egress record (rate, slice size, round-robin, 100 ms scheduler wait, 500 ms each way) and a test-owned echo calibration control (round trip within 1,200 ms), and reports a broken bound as a fixture gap with no product verdict; journal the calibration details chosen. Its product verdicts (stock pong deadlines, no timeout log, no replacement) are separate, and so are its payload assertions. The resume fires one second after the target output's first byte on whichever transport carries it. It fails, as a product failure, with elision disabled on the snapshot route, and with the 5f design (65,536-decoded-byte WebSocket chunks of the U+0001 output, one in flight) under the early resume.
+
+## 7. Close-out
+
+- [ ] 7.1 Update `AGENTS.md`'s chat-history-window bullet with the budget, resume, compression default, release, tool-output elision, and the backpressure and heartbeat rules. Add the `docs/recovery-matrix.md` row for the backpressure close (fault: a connection's outbound buffer fills; mechanism: close and client resync; tests B2 and OW5), as AGENTS.md requires for a new recovery mechanism, and a row for an interrupted full-output download (fault: a network error or short body; mechanism: preview kept with Retry; tests E13 and E14). Add a row for resume's full-snapshot fallback as well, citing R's fallback rows.
+- [ ] 7.2 Measure again on the busiest real chat, including the Global Lead chat from the 2026-11-05 incident: bytes on the wire and switch time, cold switch versus resumed switch. Report the numbers beside the proposal's figures.
+- [ ] 7.3 Run `bun run check` on the clean committed tree, and map each oracle id (W, R, A, C, L, E, B, H, P, OW) to its test title and killed mutant in the result.
