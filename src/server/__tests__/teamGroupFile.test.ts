@@ -1,4 +1,4 @@
-// @reads: docs/routing/README.md
+// @reads: docs/routing/README.md, .kawai/groups/lead.md
 import { describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -442,5 +442,18 @@ describe('canManageMailbox', () => {
     const parsed = parse('maybe')
     expect(parsed.ok && parsed.group).toMatchObject({ canManageMailbox: false, prompt: 'Lead.' })
     expect(parsed.ok && parsed.group.warnings).toEqual(['canManageMailbox must be true or false, got "maybe"; ignored'])
+  })
+})
+
+describe('the shipped lead group (group-mail-task-affinity D6)', () => {
+  test('.kawai/groups/lead.md opts into task-owner affinity with the default wait and parses without warnings', () => {
+    const text = fs.readFileSync(path.resolve(import.meta.dir, '../../../.kawai/groups/lead.md'), 'utf8')
+    const parsed = parseGroupFile('lead', text)
+    if (!parsed.ok) throw new Error(parsed.error)
+    expect(parsed.group.warnings).toEqual([])
+    expect(parsed.group.affinity).toEqual({ kind: 'task-owner', waitMs: 30 * 60_000 })
+    // The guidance names the transfer tool for both hand-over and takeover.
+    expect(parsed.group.prompt).toContain('task_transfer_owner` and `to_session`')
+    expect(parsed.group.prompt).toContain('task_transfer_owner` and\n  `from_session`')
   })
 })
