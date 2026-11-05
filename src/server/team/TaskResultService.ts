@@ -315,7 +315,7 @@ export class TaskResultService {
   }
 
   /**
-   * Accept a result (D5): the human, or the task's creator agent — the exact
+   * Accept a result (D5): the human, or the task's owner agent — the exact
    * closing rule TaskService.setStatus enforces, checked first, so a refusal
    * writes nothing. A result labeled Needs re-evaluation, or child tasks
    * still open, require a stated reason. Then the result's acceptance, the
