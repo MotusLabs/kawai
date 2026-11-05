@@ -204,3 +204,35 @@ or property that would have caught it, and the source finding.
   chunks of U+0001 text under the early resume (OW6).
 - **Source finding.** note-7bb8add0 F3 (fast-chat-switching D5 spec
   advisory, task-d86465fe R1); the escaping counterexample, note-60893e96.
+
+### A wiring mutant the framework absorbs (note-8716978d N1)
+
+- **Hazard.** An end-to-end oracle names a route-order mutant (the route
+  mounted after the static fallback) and expects a wrong reply, but the
+  static middleware calls `next()` when no file matches, so the route
+  still answers and the mutant survives; a test asserting the wrong reply
+  would fail on correct code.
+- **Oracle that catches it.** Mutate the wiring itself: the route not
+  mounted, or mounted at another path, so the real app's status, type,
+  and body observation fails; keep mounting order as a requirement
+  without claiming it as a mutant, and never change working middleware to
+  make a mutant harmful (fast-chat-switching design.md OW4).
+- **Source finding.** note-8716978d N1 (fast-chat-switching D5 spec
+  advisory, task-d86465fe R4).
+
+### A fixture gate that depends on the product (note-8716978d N2)
+
+- **Hazard.** A timing oracle treats an end-to-end product latency (the
+  app's own `pong` within 1,200 ms) as a fixture-validity bound and
+  withholds the product verdict when it breaks, so the required mutant,
+  whose failure is exactly that latency, is reported as a fixture gap and
+  never fails; a resume trigger tied to one transport's event never fires
+  for a mutant on the other transport.
+- **Oracle that catches it.** Qualify the fixture only from the proxy's
+  own ingress and egress record and a test-owned calibration control,
+  report fixture gaps and product failures as separate classes, and
+  trigger the resume from the target payload's first byte on whichever
+  transport carries it, ending the run on the mutant's timeout instead of
+  waiting for an absent event (fast-chat-switching design.md OW6).
+- **Source finding.** note-8716978d N2 (fast-chat-switching D5 spec
+  advisory, task-d86465fe R4).

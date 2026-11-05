@@ -738,8 +738,11 @@ canonical UTF-8 length of the whole original output.
   elision written back into `liveEvents` (the body is the preview and its
   length differs from `totalBytes`); a WebSocket tool-output transport
   reintroduced in any form (the no-output-frames assertion fails,
-  whatever the timing); the route mounted after the static fallback (the
-  reply is not `text/plain`).
+  whatever the timing); the route not mounted, or mounted at another path
+  (the `GET` gets no `200` with the E10 headers and body). Mounting before
+  the static fallback stays a requirement but is not a mutant: Hono's
+  `serveStatic` calls `next()` when no file matches, so a route mounted
+  after it still answers.
 - **OW5.** A real Bun server built by the production `socketHandlers`
   with the limit constant lowered, and a raw TCP client that stops reading
   (B2), then resumes. Expected: the socket is closed, and the messages the
@@ -760,17 +763,29 @@ canonical UTF-8 length of the whole original output.
     sends at most 2,500 bytes, taken round-robin from the connections
     that have bytes waiting (after the page's assets load, one WebSocket
     and at most one HTTP download). The proxy adds a fixed 1,000 ms round
-    trip (500 ms each way). It records every slice with its connection
-    and time. The server runs with `AGENTBOARD_WS_DEFLATE=false`, so wire
-    bytes equal the serialized message.
-  - *Measured bounds.* From the proxy's record, the test asserts that the
-    measured global rate is at most 60,000 bytes/s, that a ready WebSocket
-    never waited more than 100 ms for its next slice, and that each
-    verification `pong` reached the browser within 1,200 ms of its `ping`
-    leaving it. If the proxy cannot meet these bounds the test fails as an
-    oracle gap, naming the bound; it never passes or fails on the product
-    while a fixture bound is broken. Stock timers and workers are never
-    changed for the test.
+    trip (500 ms each way). It records every byte range at ingress and at
+    egress with its connection and time. The server runs with
+    `AGENTBOARD_WS_DEFLATE=false`, so wire bytes equal the serialized
+    message.
+  - *Fixture qualification,* independent of the product. From the proxy's
+    own ingress and egress record: the global egress rate is at most
+    60,000 bytes/s, no slice exceeds 2,500 bytes, slices go round-robin
+    only to connections with bytes waiting, a connection with bytes
+    waiting never waits more than 100 ms for its next slice, and each
+    direction's injected delay is 500 ms (±20 ms). A calibration control
+    runs through the same proxy and budget during every phase: a
+    test-owned echo server, not the app, answering a 16-byte probe every
+    250 ms on its own connection, whose round trip must stay within
+    1,200 ms. A broken qualification bound fails the run as a fixture gap,
+    naming the bound, and yields no product verdict. Stock timers and
+    workers are never changed for the test.
+  - *Product verdicts.* With the fixture qualified, the app's own timings
+    are product assertions, allowed to fail: each heartbeat and
+    verification `pong` meets its stock deadline (10 s and 1,500 ms), no
+    `ws_pong_timeout` or `ws_verify_timeout` is logged, and the socket is
+    not replaced. A pong queued behind the app's own payload on a qualified
+    link is a product failure, never a fixture gap. The test reports the
+    two classes separately.
   - *Fixture.* A chat whose stored history holds 10 turns, each one tool
     call and its result. The newest turn's output is 2,000,000 bytes of
     base64 text from a seeded LCG (seed `0x5eed`, incompressible in
@@ -792,13 +807,20 @@ canonical UTF-8 length of the whole original output.
   - *Liveness assertions:* the transcript renders, `ws_pong_timeout` is
     never logged, and the socket is not replaced during the 45 s.
   - *Expansion with resume.* After that, the second-newest result
-    (U+0001) is expanded. Its 2,000,000-byte body arrives over HTTP in
-    about 40 s. One second after the body's first byte passes the proxy,
-    the page is hidden and made visible again, which runs resume
-    verification. Expected: no `ws_verify_timeout` or `ws_pong_timeout`
-    is logged, the socket is not replaced, exactly one HTTP request was
-    made, and the full text shown equals the stored output. The test
-    observes until the body has fully arrived plus 5 s.
+    (U+0001) is expanded. The test names the target (session, event id)
+    and finds the first byte of its full output at the proxy's egress on
+    whichever transport carries it: the HTTP response body for this
+    design, or the first WebSocket frame carrying that output under the
+    WebSocket mutant below. It records that time and the connection, and
+    one second later hides the page and shows it again, which runs resume
+    verification; it never waits for an HTTP event that a transport does
+    not produce. Expected: the product verdicts above hold, exactly one
+    HTTP request was made, a WebSocket-only reconnect does not repeat it,
+    and the full text shown equals the stored output. The body arrives in
+    about 40 s; the test observes until it has fully arrived plus 5 s. A
+    verification timeout or socket replacement ends the run at once as a
+    product failure; the test then waits for no body and no rest of a
+    closed frame.
 
   Mutants: elision disabled on the snapshot route (D1 then delivers the
   newest 2 MB part whole, which outlasts the heartbeat deadline: the
@@ -806,8 +828,9 @@ canonical UTF-8 length of the whole original output.
   output fetched over the WebSocket in chunks of 65,536 decoded UTF-8
   bytes, one in flight. With the U+0001 output each such chunk is 393,216
   serialized bytes, about 7.9 s on the link; the resume falls one second
-  into a chunk, its verification `pong` waits behind the rest, and
-  `ws_verify_timeout` and a replaced socket are seen. Arbitrarily small
+  into a chunk, its verification `pong` waits behind the rest on a
+  qualified link, and `ws_verify_timeout` and a replaced socket are seen
+  as a product failure. Arbitrarily small
   serialized WebSocket chunks are a different design and not this mutant;
   OW4's no-output-frames assertion kills any WebSocket transport
   regardless of timing. D5c's wiring is killed at unit level instead: the
