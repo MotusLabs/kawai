@@ -18,15 +18,16 @@ import type { StaffingCapacity } from './staffing'
  * blocker is pinned to it by the snapshot derivation, not by this order.
  */
 const KIND_ORDER: Record<WaitingConstraintKind, number> = {
-  'group-missing': 0,
-  'group-cap': 1,
-  'profile-cap': 2,
-  'team-spawn-cap': 3,
-  'worktree-occupied': 4,
-  'startup-failed': 5,
-  // The immediate blocker while the owner hold applies (group-mail-task-affinity
-  // D5), ahead of the members' own causes.
-  'owner-busy': 6,
+  // While the owner hold applies it is the immediate blocker, even beside a
+  // capacity constraint (group-mail-task-affinity D5); a group without a
+  // definition has no affinity, so the two never meet.
+  'owner-busy': 0,
+  'group-missing': 1,
+  'group-cap': 2,
+  'profile-cap': 3,
+  'team-spawn-cap': 4,
+  'worktree-occupied': 5,
+  'startup-failed': 6,
   'no-eligible-member': 7,
   'recipient-busy': 8,
   'recipient-pending-request': 9,

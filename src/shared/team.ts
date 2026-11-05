@@ -301,7 +301,8 @@ export interface WaitingConstraint {
 
 /**
  * Why a message waits (D1): the immediate blocker plus every other constraint
- * that also applies, ordered deterministically — a missing group definition,
+ * that also applies, ordered deterministically — an owner hold
+ * (group-mail-task-affinity D5), a missing group definition,
  * then capacity (group, per-profile, team spawn, worktree occupancy), then
  * member facts, then spawn and routing specifics. A `spawning` row always
  * carries `starting-agent` as its blocker, its own reservation's capacity

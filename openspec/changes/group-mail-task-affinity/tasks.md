@@ -24,7 +24,7 @@
 
 ## 4. Waiting reason `owner-busy`
 
-- [ ] 4.1 Add the `owner-busy` constraint kind to `src/shared/team.ts`, compute it in `waitingReasons.ts` from the router diagnosis (D5), and add its label in `src/client/utils/waitingLabels.ts` (the owner's name and the retry time). Cover both team-waiting-reasons scenarios: one held for the owner, and one where the wait is over and every member is busy. Verify: `bun run test src/server/__tests__/teamWaitingReasons.integration.test.ts src/client/__tests__/waitingLabels.test.ts` passes. Mutants to kill: `owner-busy` still reported after the wait (the second scenario); the label without the retry time (the label assertion).
+- [x] 4.1 Add the `owner-busy` constraint kind to `src/shared/team.ts`, compute it in `waitingReasons.ts` from the router diagnosis (D5), and add its label in `src/client/utils/waitingLabels.ts` (the owner's name and the retry time). Cover both team-waiting-reasons scenarios: one held for the owner, and one where the wait is over and every member is busy. Verify: `bun run test src/server/__tests__/teamWaitingReasons.integration.test.ts src/client/__tests__/waitingLabels.test.ts` passes. Mutants to kill: `owner-busy` still reported after the wait (the second scenario); the label without the retry time (the label assertion).
 
 ## 5. Group-mail aging in the dispatcher
 

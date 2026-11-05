@@ -23,14 +23,15 @@ test('every constraint kind carries its fields', () => {
     { kind: 'worktree-occupied', counts: { live: 1, cap: 1 }, sessionIds: ['dev-1'], detail: '/repo/feat-x' },
     { kind: 'spawn-backoff', retryAt: '2026-10-13T12:00:30.000Z' },
     { kind: 'routing-hold', retryAt: '2026-10-13T12:10:00.000Z', detail: 'quota low' },
+    { kind: 'owner-busy', sessionIds: ['lead-a'], retryAt: '2026-10-13T12:30:00.000Z' },
     { kind: 'all-profiles-cooling', retryAt: '2026-10-13T13:00:00.000Z' },
     { kind: 'group-missing' },
     { kind: 'starting-agent', reservation: { group: 'devs', profile: 'glm', worktree: '/repo/feat-x', startedAt: '2026-10-13T11:59:00.000Z' } },
   ]
-  expect(new Set(constraints.map(constraint => constraint.kind)).size).toBe(15)
+  expect(new Set(constraints.map(constraint => constraint.kind)).size).toBe(16)
   const reason: WaitingReason = { blocker: constraints[0]!, others: constraints.slice(1) }
   expect(reason.blocker.kind).toBe('recipient-busy')
-  expect(reason.others).toHaveLength(14)
+  expect(reason.others).toHaveLength(15)
 })
 
 test('the snapshot accepts the new optional fields and stays compatible without them', () => {
@@ -85,6 +86,12 @@ test('constraint labels mention their counts, names, and details', () => {
   // The catalog label reads instead of the raw id when the snapshot carries one (O1).
   expect(constraintLabel({ kind: 'profile-cooling', providerLabel: 'Z.AI', detail: 'zai', retryAt: '2026-10-13T12:00:00.000Z' }))
     .toBe(`Recipient's provider Z.AI is cooling until ${coolingUntil}`)
+})
+
+test('owner-busy names the owner and the end of its wait (group-mail-task-affinity D5)', () => {
+  const end = new Date(Date.parse('2026-10-13T17:30:00.000Z')).toLocaleTimeString()
+  expect(constraintLabel({ kind: 'owner-busy', sessionIds: ['s-a'], retryAt: '2026-10-13T17:30:00.000Z' }, id => (id === 's-a' ? 'Lead A' : id)))
+    .toBe(`Waiting for task owner Lead A until ${end}, then any member`)
 })
 
 test('elapsed labels tick in minutes', () => {

@@ -275,6 +275,8 @@ export class SessionMailbox {
       excludedProfile: message => message.excludedProfile ?? undefined,
       allowedProfiles: message => message.allowedProfiles ?? null,
       ...(options.onRouteDecision ? { onDecision: options.onRouteDecision } : {}),
+      // The owner hold's wait reads the mailbox's clock too, so a test can hold it (production: wall clock).
+      ...(options.now ? { now: options.now } : {}),
     })
     this.outcomes = new LimitOutcomes(db, {
       store, limits: this.limits, rules: this.rules, homeDir: options.homeDir,
