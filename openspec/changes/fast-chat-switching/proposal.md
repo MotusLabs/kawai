@@ -78,7 +78,9 @@ the client cannot tell a slow download from a dead socket.
   whose output exceeds 65,536 encoded UTF-8 bytes carries only its first
   65,536 bytes, cut on a character boundary, plus `outputElided` with the
   full size. A new `chat-tool-output` request fetches the full output when
-  the user expands it. Stored history, search, and the agent keep the full
+  the user expands it, in chunks of at most 64 KiB requested one at a time,
+  so the fetch itself never outlasts the heartbeat. Nested worker
+  transcripts are not elided. Stored history, search, and the agent keep the full
   output. The window budget is priced on the elided events.
 - **Messages are never dropped silently.** The server sets
   `closeOnBackpressureLimit`: a connection whose outbound buffer reaches
@@ -131,7 +133,8 @@ None.
   `historyEpoch` marker. Older clients send no `held` and receive full
   snapshots; older servers ignore `held`. `tool_result` events gain an
   optional `outputElided` (`{ totalBytes }`), and a new `chat-tool-output`
-  request/reply pair returns one event's full output. An older client shows
+  request/reply pair returns one event's full output one chunk at a time
+  (`offset` in, `chunk`/`nextOffset`/`totalBytes` out). An older client shows
   the 64 KiB preview without the fetch.
 - Out of scope: tail-reading transcripts on first open after a restart
   (measured 0.1–0.2 s for most chats, 4.1 s for the 527 MB lead transcript;

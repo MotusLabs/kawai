@@ -78,21 +78,23 @@
 
 ## 6. Connection liveness (D5)
 
-- [ ] 6.1 Add `elideToolOutput` and `TOOL_OUTPUT_MAX_BYTES` in `src/server/chat/toolOutputElision.ts`, `outputElided` on the `tool_result` event type in `src/shared/chat.ts`, and apply the function in `getSnapshot` and `getHistoryPage` before D1's pricing.
-  - Verify: table E rows E1–E5 are committed verbatim. E1 kills an exclusive limit, E3 kills a byte-index cut that splits a character, and E5 kills elision of other event types. Task 2.2's W6 row is green only with elision before pricing.
-- [ ] 6.2 Apply the same function on the live `chat-events` fan-out in `ChatConnections`. Add the `chat-tool-output` request and reply (`src/shared/types.ts`, `CHAT_CONNECTION_TYPES`, the handler awaiting `loadHistory`).
-  - Verify: rows E6–E9 and production wiring test OW4. E6 and OW4 kill "live route not elided", E7 and OW4 kill "elision written back into stored history", E8 kills "unknown id answered with an empty output", and E9 kills "search reads the elided projection".
-- [ ] 6.3 Mark elided results in the tool result view, fetch the full output on expand, and keep the preview when the reply is `unavailable`.
-  - Verify: a component test shows the shortened marker and the full text after expand. It kills a view that renders the preview as if it were complete.
-- [ ] 6.4 Set `closeOnBackpressureLimit: true` and the named `backpressureLimit` constant in `socketHandlers.ts`. Read the `ws.send` status on every `ConnectionHub` and coalescer route, logging `ws_send_dropped` and closing on `0`. Log `ws_backpressure_close`.
-  - Verify: table B rows B1–B5 and production wiring test OW5. OW5 kills `closeOnBackpressureLimit` left `false`, and B3 kills an ignored `0` status on any one route.
-- [ ] 6.5 In `useWebSocket.ts`, let any completed inbound message clear a pending heartbeat pong timer and settle a pending resume verification.
-  - Verify: table H rows H1–H6 over the production class with fake timers and a fake socket. H2 and H5 kill "only the matching pong counts", and H1 and H6 kill "any timer cleared without an inbound message".
-- [ ] 6.6 Add the browser-level regression OW6 (Playwright, throttled link, `bun run build` first).
-  - Verify: OW6 passes, and fails with elision disabled on the snapshot route.
+Section 6 may land first, after probe 1.1 and before sections 2–5. Its checkpoint needs nothing from them: elision runs in `getSnapshot` and `getHistoryPage` before today's window, and OW6 uses its section-6 frame bound. The checks that combine D5 with D1 — task 2.2's W6 row, P1's elision clause, and OW6's 600 KiB frame bound — are rerun when section 2 lands, and 7.3 maps them there.
+
+- [ ] 6.1 Add `elideToolOutput` and `TOOL_OUTPUT_MAX_BYTES` in `src/server/chat/toolOutputElision.ts`, `outputElided` on the `tool_result` event type in `src/shared/chat.ts`, and apply the function in `getSnapshot` and `getHistoryPage` (before D1's pricing once section 2 exists).
+  - Verify: table E rows E1–E5 are committed verbatim. E1 kills an exclusive limit, E3 kills a byte-index cut that splits a character, and E5 kills elision of other event types. After section 2, task 2.2's W6 row is green only with elision before pricing.
+- [ ] 6.2 Apply the same function once at the top of `ChatConnections.publish`, before batching, so both live send sites (the batch-overflow send and `flush`) carry it. Add the chunked `chat-tool-output` request and reply (`offset` in; `chunk`, `offset`, `nextOffset`, `totalBytes` out; `src/shared/types.ts`, `CHAT_CONNECTION_TYPES`, the handler awaiting `loadHistory`). Leave nested worker transcripts unelided.
+  - Verify: rows E6–E11 and production wiring test OW4. E6 and OW4 kill "live route not elided" (on both send sites), E7 and OW4 kill "elision written back into stored history" and "the whole output in one reply", E8 kills "unknown id answered with an empty output", E9 kills "search reads the elided projection", and E10 and E11 kill a chunk cut that splits a character or accepts an offset inside one.
+- [ ] 6.3 Mark elided results in the tool result view. On expand, fetch the chunks one at a time with progress, replace the preview only after the last chunk, keep the preview and show "Full output unavailable" on `unavailable`, and abandon the fetch with a "Retry" action on socket close, collapse, chat switch, or detach.
+  - Verify: rows E12–E13 as component and store tests over a fake transport, plus a test that shows the shortened marker and then the full text. They kill a view that renders the preview as complete, a fetch that fires all chunks at once, one that keeps requesting after a close or collapse, and one that shows a partial text as full.
+- [ ] 6.4 Set `closeOnBackpressureLimit: true` and the named `backpressureLimit` constant in `socketHandlers.ts`. Read the `ws.send` status on every `ConnectionHub` and coalescer route, logging `ws_send_dropped` and closing the socket in the hub on `0`. Log `ws_backpressure_close`.
+  - Verify: table B rows B1–B5 and production wiring test OW5. B1 kills `closeOnBackpressureLimit` left `false` at the production options boundary; B3, over a fake socket, kills an ignored `0` status on any one route; OW5 kills removing both close mechanisms together (a sequence gap on an open socket).
+- [ ] 6.5 In `useWebSocket.ts`, let any inbound message on the current socket, parsed or not, clear a pending heartbeat pong timer and settle a pending resume verification.
+  - Verify: table H rows H1–H8 over the production class with fake timers and a fake socket. H2 and H5 kill "only the matching pong counts", H1 and H6 kill "any timer cleared without an inbound message", H7 kills "noteInbound after parsing", and H8 kills "a replaced socket settles the current socket's timers".
+- [ ] 6.6 Add the browser-level regression OW6 (Playwright slow tier, the pacing proxy, `AGENTBOARD_WS_DEFLATE=false`, the pinned fixture and timing, `bun run build` first).
+  - Verify: OW6 passes with its throttle-effectiveness assertion. Its payload assertions are separate from its liveness assertions. It fails with elision disabled on the snapshot route, and with the full output fetched in one reply.
 
 ## 7. Close-out
 
-- [ ] 7.1 Update `AGENTS.md`'s chat-history-window bullet with the budget, resume, compression default, release, tool-output elision, and the backpressure and heartbeat rules. Add a recovery-matrix row if review judges resume's fallback or the backpressure close to be a recovery mechanism.
+- [ ] 7.1 Update `AGENTS.md`'s chat-history-window bullet with the budget, resume, compression default, release, tool-output elision, and the backpressure and heartbeat rules. Add the `docs/recovery-matrix.md` row for the backpressure close (fault: a connection's outbound buffer fills; mechanism: close and client resync; tests B2 and OW5), as AGENTS.md requires for a new recovery mechanism. Add a row for resume's full-snapshot fallback as well, citing R's fallback rows.
 - [ ] 7.2 Measure again on the busiest real chat, including the Global Lead chat from the 2026-11-05 incident: bytes on the wire and switch time, cold switch versus resumed switch. Report the numbers beside the proposal's figures.
 - [ ] 7.3 Run `bun run check` on the clean committed tree, and map each oracle id (W, R, A, C, L, E, B, H, P, OW) to its test title and killed mutant in the result.

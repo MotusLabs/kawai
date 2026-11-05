@@ -357,17 +357,47 @@ route:
    sees the elided size.
 2. The live `chat-events` fan-out in `ChatConnections`, so a watching
    client gets what a later snapshot would show (one function, not a
-   second rule).
+   second rule). It is applied once at the top of `publish`, before
+   batching, so both of its send sites — the batch-overflow send in
+   `publish` and the scheduled `flush` — carry the elided event.
 
 The memo, `liveEvents`, the transcript files, search (`searchableEvents`),
 and the agent are untouched: elision is a delivery projection, never a
-change to stored history. A new `chat-tool-output { sessionId, eventId }`
-request awaits `loadHistory`, finds that `tool_result` in memo + live
-events, and replies `{ state: 'ok', output }` with the full stored output,
-or `{ state: 'unavailable' }` when no such event exists. It is modelled on
-`chat-task-output` and added to `CHAT_CONNECTION_TYPES`. The client's tool
-result view marks an elided output ("Output shortened — N KB total") and
-fetches the full text on expand. 64 KiB keeps a typical diff or log whole
+change to stored history. Nested worker transcripts (`chat-worker-transcript`,
+read through `chatWorkerTranscript.ts`) are a separate `ChatEvent[]` route
+whose ids are not in the parent's memo or live events; this change neither
+elides nor fetches them, which matches the proposal's scope (windowing
+nested worker transcripts is out of scope).
+
+The full output is fetched in bounded chunks, never in one reply, so the
+fetch itself can never outlast the heartbeat. A new
+`chat-tool-output { sessionId, eventId, offset }` request (`offset` an
+encoded-UTF-8 byte offset, `0` for the first chunk) awaits `loadHistory`,
+finds that `tool_result` in memo + live events, and replies
+`{ state: 'ok', chunk, offset, nextOffset, totalBytes }`: `chunk` is the
+longest run of at most `TOOL_OUTPUT_MAX_BYTES` encoded bytes starting at
+`offset` and ending on a character boundary (the same cut as the preview),
+and `nextOffset` is the byte offset after it, or `null` when the chunk
+reaches the end. It replies `{ state: 'unavailable' }` when no such event
+exists, and when `offset` is not a character boundary of the stored output
+or is past its end. Every reply is therefore at most 64 KiB plus its
+envelope, which arrives in about 1.3 s at 50 KB/s, well inside the 10 s
+deadline, and each reply counts as inbound life under D5c. The client
+requests the next chunk only after the previous one arrives (one request in
+flight per expansion), so no burst of chunks can fill the D5b buffer. The
+handler is modelled on `chat-task-output` and added to
+`CHAT_CONNECTION_TYPES`.
+
+The client's tool result view marks an elided output ("Output shortened —
+N KB total"). Expanding fetches the chunks in order and shows progress
+("Loading full output — k of N KB"); the full text replaces the preview
+only when the last chunk arrives, and the assembled bytes must total
+`totalBytes`, otherwise it is treated as unavailable. An `unavailable`
+reply keeps the preview and shows "Full output unavailable". A socket close
+during the fetch, or collapsing the result, switching chats, or detaching,
+abandons the fetch: no further chunk is requested, the partial text is
+discarded, and the preview stays with a "Retry" action that restarts from
+offset `0`. 64 KiB keeps a typical diff or log whole
 (the largest tool call input in the incident window was 27 KB) while
 capping the 2 MB `task_get` replies at about a thirtieth. Replayed rollout
 events are elided by the same rule; their stored output is whatever the
@@ -382,8 +412,11 @@ encoded length, and `getBufferedAmount()`. The close handler logs
 `ws_backpressure_close` when the close followed a limit hit. Probe 1.1
 records whether Bun 1.4.3 closes instead of dropping. If it still drops
 the message that crossed the limit, the hub closes the socket itself on a
-`0` status. Either way, no message is lost while the connection stays
-open. The client already reconnects and re-attaches after any close, so
+`0` status. The two mechanisms are independent and both ship: the option
+is the primary close, and the `0`-status close is the fallback for any
+message Bun drops without closing. Either way, no message is lost while
+the connection stays open. Probe 1.1 runs before section 6's tests are
+written, because B2's expected native behaviour depends on it. The client already reconnects and re-attaches after any close, so
 nothing on the client changes. After D5a and D1, reaching 16 MiB takes
 many messages queued on a stalled link, so the close is rare. When it
 happens, it replaces silent corruption with a visible resync.
@@ -402,7 +435,9 @@ heartbeat (`PONG_TIMEOUT_MS`) and resume-verification
 `pong`. One `noteInbound()` call at the top of `onmessage`, before
 parsing, clears a pending pong timer and settles a pending verification as
 the matching pong does today, including the early-heartbeat restart after
-verification. The intervals and deadlines are unchanged. A dead socket
+verification. Because it runs before parsing, a malformed payload counts
+too. It acts only for the current socket: a message delivered by a socket
+that has already been replaced never settles the current socket's timers. The intervals and deadlines are unchanged. A dead socket
 still delivers nothing and is still replaced. A healthy socket that is
 busy delivering a snapshot is kept, because the snapshot's arrival counts.
 This does not help while a single message is still arriving, since the
@@ -523,9 +558,13 @@ progress (L3).
 | E4 | `tool_result` over the limit whose first 65,536 bytes end on a 4-byte emoji boundary exactly | output is exactly 65,536 bytes |
 | E5 | any non-`tool_result` event with a 2 MB field (`tool_call` input, `assistant_text`) | unchanged, same object |
 | E6 | snapshot, page, and live `chat-events` carrying the same 2 MB result | identical elided event on all three routes |
-| E7 | `chat-tool-output` for an elided result's id | `ok` with the full stored output, byte-identical |
+| E7 | `chat-tool-output` chunks of a 2 MB elided result, from offset `0`, following `nextOffset` until `null` | every `chunk` ≤ 65,536 encoded bytes; each `offset` equals the previous `nextOffset`; the concatenation is byte-identical to the stored output and totals `totalBytes` |
 | E8 | `chat-tool-output` for an unknown id, or a non-`tool_result` id | `unavailable` |
 | E9 | search for text beyond the preview of an elided result | found (search reads stored history) |
+| E10 | `chat-tool-output` at an offset inside a multi-byte character, or past the end | `unavailable` |
+| E11 | stored output with a 3-byte character straddling a chunk's 65,536th byte | that chunk ends before the character; the next chunk starts with it; no U+FFFD in any chunk |
+| E12 | client expansion (`ChatToolResult` + store, fake transport): the second chunk's reply is `unavailable`; separately, the socket closes after the first chunk; separately, the result is collapsed after the first chunk | preview kept in every case; no request after the failure, close, or collapse; `unavailable` shows "Full output unavailable", close and collapse show "Retry"; Retry restarts at offset `0` |
+| E13 | client expansion with a fake transport that records requests | at most one `chat-tool-output` request in flight per expansion; the full text replaces the preview only after the `nextOffset: null` chunk |
 
 ### B — backpressure (`socketHandlers`, `ConnectionHub`)
 
@@ -533,7 +572,7 @@ progress (L3).
 |---|---|---|
 | B1 | production handler options | `closeOnBackpressureLimit: true`, `backpressureLimit` = the named 16 MiB constant |
 | B2 | test limit lowered; a stalled raw client; messages sent past the limit | the socket closes; `ws_backpressure_close` logged with the buffered amount; no message accepted after the limit is reported delivered |
-| B3 | `ws.send` returns `0` on any route | `ws_send_dropped` logged with type and encoded length; the socket is closed |
+| B3 | `ws.send` returns `0` on any route (a fake socket whose `send` returns `0` and stays open, independent of Bun's option) | `ws_send_dropped` logged with type and encoded length; the hub closes the socket itself |
 | B4 | buffer stays below the limit | every message delivered in order; socket open |
 | B5 | one socket closed at the limit | a second socket on the same server receives a broadcast sent afterwards |
 
@@ -547,6 +586,8 @@ progress (L3).
 | H4 | a `pong` with a stale `seq` arrives and nothing else | counts as an inbound message: timer cleared (any message proves life) |
 | H5 | resume verification; a `sessions` message arrives within `VERIFY_PONG_TIMEOUT_MS` | verified; early heartbeat started; no force reconnect |
 | H6 | resume verification; nothing arrives | force reconnect (unchanged) |
+| H7 | a malformed (non-JSON) payload arrives at 9 s; the pong never comes | counts as inbound: no reconnect at 10 s |
+| H8 | the socket was replaced; the old socket delivers a message while the new socket's ping is pending and nothing arrives on the new one | the new socket's timer is not cleared: it is destroyed at its deadline |
 
 ### Properties
 
@@ -628,23 +669,62 @@ progress (L3).
 - **OW4.** Through `ChatConnections` and a real manager whose driver
   emits a 2 MB `tool_result` live: the subscribed client receives the
   elided event over `chat-events`, a fresh attach receives the same
-  elided event in its snapshot, and `chat-tool-output` returns the full
-  2 MB. Mutants: elision applied only in `getSnapshot` (the live route
-  ships 2 MB), or elision written back into `liveEvents` (the fetch
-  returns the preview).
+  elided event in its snapshot (both live send sites are exercised: the
+  batch-overflow send in `publish` and the scheduled `flush`), and
+  following `chat-tool-output` chunks from offset `0`
+  reassembles the full 2 MB with every reply's `chunk` at most 65,536
+  encoded bytes. Mutants: elision applied only in `getSnapshot` (the live
+  route ships 2 MB); elision written back into `liveEvents` (the chunks
+  reassemble the preview); the handler replying with the whole output in
+  one chunk (the chunk bound fails).
 - **OW5.** A real Bun server built by the production `socketHandlers`
   with the limit constant lowered, and a raw TCP client that stops reading
-  (B2). Mutant: `closeOnBackpressureLimit` left `false`. The socket stays
-  open while later messages are dropped, which the test detects by
-  resuming reads and finding a sequence gap.
-- **OW6.** A browser-level check (Playwright, throttled to 50 KB/s via
-  CDP `Network.emulateNetworkConditions`) opens a chat whose stored
-  history holds 40 tool results of 2 MB each. The transcript renders,
-  `ws_pong_timeout` is never logged during the open, and the socket is
-  not replaced. Mutant: elision disabled on the snapshot route. The
-  roughly 80 MB snapshot cannot arrive within the heartbeat at that rate,
-  and the test sees the timeout and re-attach. D5c's wiring is killed at
-  unit level instead: the H rows drive the production `useWebSocket`
+  (B2), then resumes. Expected: the socket is closed, and the messages the
+  client read before the close carry contiguous sequence numbers (no gap).
+  Mutant: both close mechanisms removed — `closeOnBackpressureLimit` left
+  `false` and the hub's `0`-status close deleted — so the socket stays open
+  while messages are dropped, which the test detects as a sequence gap on
+  an open socket. Each mechanism alone is killed separately: the option by
+  B1 at the production options boundary, the `0`-status fallback by B3
+  over a fake socket. OW5 does not claim that removing only one of them
+  leaves the socket open, because the other still closes it.
+- **OW6.** A browser-level check (Playwright, slow e2e tier) with pinned
+  transfer conditions:
+  - *Link.* The browser reaches the e2e server through a pacing TCP
+    proxy in the test that forwards server-to-browser bytes at 50,000
+    bytes/s (5,000-byte slices every 100 ms) and records bytes and
+    times. The server runs with `AGENTBOARD_WS_DEFLATE=false`, so wire
+    bytes equal the serialized message. The test asserts the throttle was
+    effective: the proxy's measured rate over the snapshot's bytes is at
+    most 60,000 bytes/s.
+  - *Fixture.* A chat whose stored history holds 10 turns, each one tool
+    call and its result, every output 2,000,000 bytes of base64 text from
+    a seeded LCG (seed `0x5eed`, incompressible in practice). The newest
+    turn is therefore one atomic 2 MB call/result part.
+  - *Timing.* The chat is selected 1 s after the socket opens, so the
+    first heartbeat ping (20 s after open) and its deadline (30 s) fall
+    while an unbounded transfer of the newest part (about 40 s at the
+    pinned rate) would still be arriving. The test observes 45 s.
+  - *Payload assertions* (on received frames, separate from timing):
+    every delivered `tool_result` output is at most 65,536 encoded bytes
+    and carries `outputElided` with `totalBytes` 2,000,000; the snapshot
+    frame is at most 600 KiB once D1 has landed (at most 700 KiB at the
+    section-6 checkpoint, where today's 24 h window delivers all ten
+    elided turns, about 13 s at the pinned rate). Without D1 the mutant
+    ships about 20 MB instead of 2 MB; it is killed either way.
+  - *Liveness assertions:* the transcript renders, `ws_pong_timeout` is
+    never logged, and the socket is not replaced during the 45 s.
+  - *Expansion:* after that, the newest result is expanded over the same
+    link. Its about 2 MB arrives as about 31 chunks over about 40 s,
+    across at least one heartbeat. The full text shown equals the stored
+    output, `ws_pong_timeout` is never logged, and the socket is not
+    replaced.
+
+  Mutants: elision disabled on the snapshot route (D1 then delivers the
+  newest 2 MB part whole, which outlasts the deadline: the timeout and
+  re-attach are seen); the full output fetched in one reply (the 2 MB
+  reply outlasts the deadline during expansion). D5c's wiring is killed
+  at unit level instead: the H rows drive the production `useWebSocket`
   class over a fake socket, because a bounded snapshot arrives within the
   deadline with or without D5c.
 
@@ -683,6 +763,13 @@ progress (L3).
   outlast the 10 s deadline. Raising `PONG_TIMEOUT_MS` was rejected: it
   delays detection of truly dead sockets on every link to cover a case D1,
   D3, and D5a make unlikely.
+- **A full output expands slowly on a slow link.** Chunking keeps every
+  reply small, so expansion never costs the connection, but a 2 MB output
+  takes about 40 s at 50 KB/s and shows progress meanwhile. This is
+  accepted: one reply per output was the fault the chunking removes.
+- **Nested worker transcripts are not elided.** A worker transcript with a
+  huge tool output still ships whole when the user opens it. This is left
+  for the worker-transcript windowing that the proposal puts out of scope.
 
 ## Migration Plan
 

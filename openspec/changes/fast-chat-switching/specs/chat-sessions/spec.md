@@ -107,7 +107,7 @@ Empty eligible history SHALL yield no events; otherwise at least one part SHALL 
 - **THEN** the newest two units are delivered intact with their full metadata, the third remains in older history, and the delivered events-array UTF-8 size is at most 512 KiB
 
 ### Requirement: Large tool outputs are elided from delivered events
-Every tool result delivered to a client, in a snapshot, a history page, or live chat events, whose output exceeds 65,536 encoded UTF-8 bytes SHALL carry only its first 65,536 bytes, cut on a character boundary, with `outputElided` naming the full size. The client SHALL fetch the full output on request. Stored history, search, and the agent SHALL keep the full output.
+Every tool result delivered to a client, in a snapshot, a history page, or live chat events, whose output exceeds 65,536 encoded UTF-8 bytes SHALL carry only its first 65,536 bytes, cut on a character boundary, with `outputElided` naming the full size. The client SHALL fetch the full output on request, in chunks no larger than the preview. Stored history, search, and the agent SHALL keep the full output.
 
 #### Scenario: A large result opens as a preview
 - **WHEN** a client attaches to a chat whose window holds a tool result with 2 MB of output
@@ -115,7 +115,15 @@ Every tool result delivered to a client, in a snapshot, a history page, or live 
 
 #### Scenario: The full output on request
 - **WHEN** the user expands an elided tool result
-- **THEN** the client requests that event's output and shows the full text the agent received
+- **THEN** the client requests that event's output in chunks of at most 65,536 encoded bytes, one at a time, and shows the full text the agent received once the last chunk arrives
+
+#### Scenario: Expanding over a slow link keeps the connection
+- **WHEN** the user expands a 2 MB elided tool result over a 50 KB/s link and a heartbeat falls during the fetch
+- **THEN** the connection is kept and the full text is shown when the fetch completes
+
+#### Scenario: An interrupted fetch keeps the preview
+- **WHEN** the connection closes or the user collapses the result before the last chunk arrives
+- **THEN** no further chunk is requested, the preview stays as shown, and the user can retry the fetch
 
 #### Scenario: An output at the limit is delivered whole
 - **WHEN** a tool result's output is exactly 65,536 encoded UTF-8 bytes
