@@ -2,8 +2,8 @@
 
 ## 1. Probe
 
-- [ ] 1.1 Probe Bun's per-message compression in a scratch script under `/tmp`. The probe is a real `Bun.serve` with `perMessageDeflate: true` and a raw TCP client that negotiates `permessage-deflate`. It records the RSV1 bit of frames sent with `compress` omitted, `true`, and `false`, and of frames sent to a client that did not negotiate. Record the result in the task journal and in `design.md` D3, replacing "Probe 1.1 confirms".
-  - Verify: the journal names the Bun version and all four observations; D3's text matches them.
+- [ ] 1.1 Probe Bun's per-message compression in a scratch script under `/tmp`. The probe is a real `Bun.serve` with `perMessageDeflate: true` and a raw TCP client that negotiates `permessage-deflate`. It records the RSV1 bit of frames sent with `compress` omitted, `true`, and `false`, and of frames sent to a client that did not negotiate. Record the result in the task journal and in `design.md` D3, replacing "Probe 1.1 confirms". In the same probe, with a 1 MiB `backpressureLimit`, a client that stops reading, and `closeOnBackpressureLimit` first `false` and then `true`, record each `ws.send` status, whether the message that crossed the limit is delivered once reading resumes, and whether and when the socket closes. Record these in D5b.
+  - Verify: the journal names the Bun version and all four compression observations plus both backpressure runs; D3's and D5b's text match them.
 
 ## 2. Window budget (D1)
 
@@ -14,7 +14,8 @@
     - W2 kills "budget ignored" and pins whole-unit delivery (480 events of the newest four turns, even with quiet 10-event parts in the fifth).
     - W3 and W14 kill "never split a unit" and "split anywhere" (W3 only with empty selection on the oversized newest unit).
     - W4 and W5 kill "open tool calls ignored" and "merge continuation ignored" (in the part walk, the overflowing part is left whole to older history, never an earlier cut across parts).
-    - W6 and W8 kill "empty window when oversized".
+    - W8 kills "empty window when oversized".
+    - W6 kills "a result priced at its raw size": with elision skipped before pricing, the 600 KiB result overflows and becomes the atomic part.
     - W7 kills "exclusive limit".
     - W10 and W11 kill "budget applied to widened windows".
     - W12 and W13 kill "page unbudgeted" and "page may be empty".
@@ -75,8 +76,23 @@
 - [ ] 5.3 Add production wiring test OW3 (fake clock, through `ChatConnections` and the manager), including the cancelled-attach case whose load populates the memo after the client detached.
   - Verify: it kills the mutant where `noteWatched` is never called and the one where population never arms the timer (M1).
 
-## 6. Close-out
+## 6. Connection liveness (D5)
 
-- [ ] 6.1 Update `AGENTS.md`'s chat-history-window bullet with the budget, resume, compression default, and release. Add a recovery-matrix row if review judges resume's fallback to be a recovery mechanism.
-- [ ] 6.2 Measure again on the busiest real chat: bytes on the wire and switch time, cold switch versus resumed switch. Report the numbers beside the proposal's figures.
-- [ ] 6.3 Run `bun run check` on the clean committed tree, and map each oracle id (W, R, A, C, L, P, OW) to its test title and killed mutant in the result.
+- [ ] 6.1 Add `elideToolOutput` and `TOOL_OUTPUT_MAX_BYTES` in `src/server/chat/toolOutputElision.ts`, `outputElided` on the `tool_result` event type in `src/shared/chat.ts`, and apply the function in `getSnapshot` and `getHistoryPage` before D1's pricing.
+  - Verify: table E rows E1–E5 are committed verbatim. E1 kills an exclusive limit, E3 kills a byte-index cut that splits a character, and E5 kills elision of other event types. Task 2.2's W6 row is green only with elision before pricing.
+- [ ] 6.2 Apply the same function on the live `chat-events` fan-out in `ChatConnections`. Add the `chat-tool-output` request and reply (`src/shared/types.ts`, `CHAT_CONNECTION_TYPES`, the handler awaiting `loadHistory`).
+  - Verify: rows E6–E9 and production wiring test OW4. E6 and OW4 kill "live route not elided", E7 and OW4 kill "elision written back into stored history", E8 kills "unknown id answered with an empty output", and E9 kills "search reads the elided projection".
+- [ ] 6.3 Mark elided results in the tool result view, fetch the full output on expand, and keep the preview when the reply is `unavailable`.
+  - Verify: a component test shows the shortened marker and the full text after expand. It kills a view that renders the preview as if it were complete.
+- [ ] 6.4 Set `closeOnBackpressureLimit: true` and the named `backpressureLimit` constant in `socketHandlers.ts`. Read the `ws.send` status on every `ConnectionHub` and coalescer route, logging `ws_send_dropped` and closing on `0`. Log `ws_backpressure_close`.
+  - Verify: table B rows B1–B5 and production wiring test OW5. OW5 kills `closeOnBackpressureLimit` left `false`, and B3 kills an ignored `0` status on any one route.
+- [ ] 6.5 In `useWebSocket.ts`, let any completed inbound message clear a pending heartbeat pong timer and settle a pending resume verification.
+  - Verify: table H rows H1–H6 over the production class with fake timers and a fake socket. H2 and H5 kill "only the matching pong counts", and H1 and H6 kill "any timer cleared without an inbound message".
+- [ ] 6.6 Add the browser-level regression OW6 (Playwright, throttled link, `bun run build` first).
+  - Verify: OW6 passes, and fails with elision disabled on the snapshot route.
+
+## 7. Close-out
+
+- [ ] 7.1 Update `AGENTS.md`'s chat-history-window bullet with the budget, resume, compression default, release, tool-output elision, and the backpressure and heartbeat rules. Add a recovery-matrix row if review judges resume's fallback or the backpressure close to be a recovery mechanism.
+- [ ] 7.2 Measure again on the busiest real chat, including the Global Lead chat from the 2026-11-05 incident: bytes on the wire and switch time, cold switch versus resumed switch. Report the numbers beside the proposal's figures.
+- [ ] 7.3 Run `bun run check` on the clean committed tree, and map each oracle id (W, R, A, C, L, E, B, H, P, OW) to its test title and killed mutant in the result.

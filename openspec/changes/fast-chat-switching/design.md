@@ -27,6 +27,22 @@
   and 2.9 MB. Gzip brought it to 0.75 MB in 22 ms. The browser spent
   80–110 ms in React and 80–100 ms in layout on the server host. The warm
   server path took under 5 ms.
+- **Incident (2026-11-05).** Global Lead's attach snapshot was 70.9 MB of
+  6,722 events. Of that, 67.7 MB was `tool_result` output in `liveEvents`
+  (471 results since the 05:36Z restart, 57 of them over 100 KiB, the
+  largest 2.1 MB). The same day replayed from the rollout (1.86 GB file)
+  gives 1,484 events and 1.9 MB. The client's heartbeat
+  (`useWebSocket.ts`: ping every 20 s, `PONG_TIMEOUT_MS` 10 s) clears only
+  on the matching `pong`, so the socket was declared dead every 31–32 s and
+  the re-attach sent everything again. A loopback probe sent pings before,
+  during, and after an 82.7 MB snapshot: the first and last pongs arrived,
+  and the middle one never did.
+- **Bun backpressure.** `ServerWebSocket.send` returns `0` when it drops a
+  message, `-1` under backpressure, or the bytes sent
+  (`bun-types/serve.d.ts`, Bun 1.4.3). The default `backpressureLimit` is
+  16 MiB, and `closeOnBackpressureLimit` defaults to `false`. Every route
+  in `ConnectionHub` ignores the status, so a message sent while a socket
+  holds more than 16 MiB vanishes with the connection still open.
 
 ## Goals / Non-Goals
 
@@ -38,6 +54,8 @@
   echo latency.
 - Stop an archived chat from holding its replay in memory after nobody
   watches it.
+- Keep a live connection alive through a large transfer on a slow link,
+  and never lose a message silently.
 
 **Non-Goals:**
 
@@ -64,15 +82,20 @@ never counts. The measured array is the one the manager actually returns:
 windowing, so the pricing sees the same final projection it returns —
 decoration before selection, or an equivalent projection/size callback
 over the decorated events; no separate raw-only estimator exists, and
-metadata is never stripped or truncated to fit. Raw ids, cuts, resume and
-page metadata, and part integrity are unchanged.
+metadata is never stripped or truncated to fit. The projection also
+includes D5's tool-output elision, which applies to every delivered
+`tool_result` whatever the budget, so a result is priced at its elided
+size. Elision is part of what the manager returns, not a step taken to
+fit the budget. Raw ids, cuts, resume and page metadata, and part
+integrity are unchanged.
 (UTF-16 code-unit lengths are not wire bytes: one CJK text
 event of 100 code units encodes to about 300 bytes.) Unless an example or
 W row expressly exercises byte overflow, its complete eligible input's
 UTF-8 serialized events array — commas and brackets included — fits the
 512 KiB budget, and count-specific outputs below (W2's 480, W3's exactly
 500, W16's 300, the 450+150→150 and 300+600→300 examples) hold under that
-premise. Byte-overflow rows (W6, W15, W17) carry no such premise. Individually
+premise. Byte-overflow rows (W6, whose raw input overflows until D5a
+elides it; W15; W17) carry no such premise. Individually
 small raw events do not imply small parts: continuation can hold many
 deltas in one part, which is then the atomic-exception domain.
 
@@ -314,6 +337,78 @@ already reads an unloaded chat by transient replay (`searchableEvents`), so
 it keeps working. Codex chats replay from the rollout, and the same rule
 applies to them.
 
+### D5 — A large transfer never kills a live connection
+
+The 2026-11-05 incident (Context) needed three faults at once: one message
+too large for the link, a heartbeat that cannot see a message still
+arriving, and a server that drops messages behind a full buffer. Each
+gets its own rule, so that no one of them can recreate the loop alone.
+
+**D5a — Tool outputs are elided on delivery.** A pure
+`elideToolOutput(event)` (`src/server/chat/toolOutputElision.ts`) maps a
+`tool_result` whose `output` exceeds `TOOL_OUTPUT_MAX_BYTES = 65_536`
+encoded UTF-8 bytes to a copy whose output is the longest prefix of at
+most 65,536 bytes that ends on a character boundary, plus
+`outputElided: { totalBytes }`. Any other event, or an output within the
+limit, is returned unchanged (the same object). It runs on every delivery
+route:
+
+1. `getSnapshot` and `getHistoryPage`, before pricing (D1), so the budget
+   sees the elided size.
+2. The live `chat-events` fan-out in `ChatConnections`, so a watching
+   client gets what a later snapshot would show (one function, not a
+   second rule).
+
+The memo, `liveEvents`, the transcript files, search (`searchableEvents`),
+and the agent are untouched: elision is a delivery projection, never a
+change to stored history. A new `chat-tool-output { sessionId, eventId }`
+request awaits `loadHistory`, finds that `tool_result` in memo + live
+events, and replies `{ state: 'ok', output }` with the full stored output,
+or `{ state: 'unavailable' }` when no such event exists. It is modelled on
+`chat-task-output` and added to `CHAT_CONNECTION_TYPES`. The client's tool
+result view marks an elided output ("Output shortened — N KB total") and
+fetches the full text on expand. 64 KiB keeps a typical diff or log whole
+(the largest tool call input in the incident window was 27 KB) while
+capping the 2 MB `task_get` replies at about a thirtieth. Replayed rollout
+events are elided by the same rule; their stored output is whatever the
+replay produced.
+
+**D5b — A full buffer closes the connection.** `socketHandlers.ts` sets
+`closeOnBackpressureLimit: true` and keeps Bun's default
+`backpressureLimit` (16 MiB), named as a constant so the tests can lower
+it. `ConnectionHub.send`, `broadcast`, and the coalescer's sends read
+`ws.send`'s status. A `0` (dropped) logs `ws_send_dropped` with the type,
+encoded length, and `getBufferedAmount()`. The close handler logs
+`ws_backpressure_close` when the close followed a limit hit. Probe 1.1
+records whether Bun 1.4.3 closes instead of dropping. If it still drops
+the message that crossed the limit, the hub closes the socket itself on a
+`0` status. Either way, no message is lost while the connection stays
+open. The client already reconnects and re-attaches after any close, so
+nothing on the client changes. After D5a and D1, reaching 16 MiB takes
+many messages queued on a stalled link, so the close is rare. When it
+happens, it replaces silent corruption with a visible resync.
+
+*Alternative rejected:* a per-socket application queue in the hub,
+written into Bun only below a low-water mark and drained from the `drain`
+handler, with `pong` placed ahead of queued bulk messages. It bounds pong
+latency more tightly, but it adds a second buffer and ordering logic next
+to the coalescer's terminal-first rule ("Output ordering is preserved
+across message types"). D5c makes it unnecessary.
+
+**D5c — Any inbound message proves life.** In `useWebSocket.ts` the
+heartbeat (`PONG_TIMEOUT_MS`) and resume-verification
+(`VERIFY_PONG_TIMEOUT_MS`) deadlines are met by any message that
+`onmessage` completes after the ping was sent, not only the matching
+`pong`. One `noteInbound()` call at the top of `onmessage`, before
+parsing, clears a pending pong timer and settles a pending verification as
+the matching pong does today, including the early-heartbeat restart after
+verification. The intervals and deadlines are unchanged. A dead socket
+still delivers nothing and is still replaced. A healthy socket that is
+busy delivering a snapshot is kept, because the snapshot's arrival counts.
+This does not help while a single message is still arriving, since the
+browser only reports whole messages. D5a and D1 keep every message small
+enough to arrive well within 10 s on the measured link.
+
 ## Acceptance oracles
 
 All tables are committed verbatim as table-driven tests next to the code
@@ -326,9 +421,9 @@ they cover. `*` means don't-care.
 | W1 | 24 h holds 3 turns, 200 events, 100 KiB | all 3 turns, `hasOlder` per older units |
 | W2 | 24 h holds 9 turns, 2,300 events; newest 4 turns total 480 events | exactly the newest 4 turns; `hasOlder` true |
 | W3 | newest unit alone: 2,700 events with quiet points every 10 events, each part within the byte budget (C1 premise; selection empty) | exactly 500 events of its newest-first quiet parts; starts at a quiet point; `hasOlder` true |
-| W4 | in the oversized-newest-unit part walk, a newer part is already selected and the next older part holds a `tool_call` and its `tool_result` and would overflow | that older part is left to older history whole and the walk stops; the cut never separates the call from its result; both delivered or both absent (the oversized newest part itself is W6's atomic case, never excluded here) |
+| W4 | in the oversized-newest-unit part walk, a newer part is already selected and the next older part holds a `tool_call` and its `tool_result` and would overflow | that older part is left to older history whole and the walk stops; the cut never separates the call from its result; both delivered or both absent (the oversized newest part itself is W8's atomic case, never excluded here) |
 | W5 | in the part walk, a newer part is already selected and the next older part is one continuing assistant message that would overflow | that older part is left to older history whole and the walk stops; the cut never falls inside the message |
-| W6 | newest unit alone exceeds the budget; its newest part is a `tool_call` with a 600 KiB `tool_result` | that part alone, delivered whole (single atomic exception) |
+| W6 | newest unit alone exceeds the budget; its newest part is a `tool_call` with a 600 KiB `tool_result` | the result delivered elided to 65,536 output bytes (D5a) and priced at that size; the part fits, so the walk continues under both caps and the window stays within 512 KiB |
 | W7 | exactly 500 events, ≤ 512 KiB encoded | all delivered (limit inclusive) |
 | W8 | 501 events in one part, otherwise within bytes | that part whole (oversized single part) |
 | W9 | turn started 25 h before newest, fits budget | whole turn or none (existing rule unchanged) |
@@ -418,6 +513,41 @@ large (rows C7–C10).
 A driver on an archived chat exists only while archive's stop is in
 progress (L3).
 
+### E — tool-output elision (`elideToolOutput`, `chat-tool-output`)
+
+| # | Input | Expected |
+|---|---|---|
+| E1 | `tool_result`, output 65,536 encoded bytes | unchanged, same object, no `outputElided` |
+| E2 | `tool_result`, output 65,537 bytes of ASCII | output = first 65,536 bytes; `outputElided.totalBytes` = 65,537 |
+| E3 | `tool_result` over the limit; a 3-byte character occupies bytes 65,535–65,537 | output ends at byte 65,534 (before that character); decodes with no U+FFFD |
+| E4 | `tool_result` over the limit whose first 65,536 bytes end on a 4-byte emoji boundary exactly | output is exactly 65,536 bytes |
+| E5 | any non-`tool_result` event with a 2 MB field (`tool_call` input, `assistant_text`) | unchanged, same object |
+| E6 | snapshot, page, and live `chat-events` carrying the same 2 MB result | identical elided event on all three routes |
+| E7 | `chat-tool-output` for an elided result's id | `ok` with the full stored output, byte-identical |
+| E8 | `chat-tool-output` for an unknown id, or a non-`tool_result` id | `unavailable` |
+| E9 | search for text beyond the preview of an elided result | found (search reads stored history) |
+
+### B — backpressure (`socketHandlers`, `ConnectionHub`)
+
+| # | Buffered state | Expected |
+|---|---|---|
+| B1 | production handler options | `closeOnBackpressureLimit: true`, `backpressureLimit` = the named 16 MiB constant |
+| B2 | test limit lowered; a stalled raw client; messages sent past the limit | the socket closes; `ws_backpressure_close` logged with the buffered amount; no message accepted after the limit is reported delivered |
+| B3 | `ws.send` returns `0` on any route | `ws_send_dropped` logged with type and encoded length; the socket is closed |
+| B4 | buffer stays below the limit | every message delivered in order; socket open |
+| B5 | one socket closed at the limit | a second socket on the same server receives a broadcast sent afterwards |
+
+### H — heartbeat liveness (`useWebSocket`, fake timers)
+
+| # | After a ping | Expected |
+|---|---|---|
+| H1 | nothing arrives for `PONG_TIMEOUT_MS` | socket destroyed; reconnect scheduled (`ws_pong_timeout`) |
+| H2 | a non-`pong` message arrives at 9 s; the pong never comes | no reconnect at 10 s; the next heartbeat pings again |
+| H3 | the matching `pong` arrives | timer cleared (unchanged behaviour) |
+| H4 | a `pong` with a stale `seq` arrives and nothing else | counts as an inbound message: timer cleared (any message proves life) |
+| H5 | resume verification; a `sessions` message arrives within `VERIFY_PONG_TIMEOUT_MS` | verified; early heartbeat started; no force reconnect |
+| H6 | resume verification; nothing arrives | force reconnect (unchanged) |
+
 ### Properties
 
 - **P1 — budget and integrity (budgeted modes only).** For any generated
@@ -428,9 +558,11 @@ progress (L3).
   single atomic newest part; the window stays within both limits unless
   that one atomic part stands, the encoded-byte measure counted over the
   complete delivered suffix as actually projected — the workspaceContext
-  decoration included, never a raw-only estimate, with metadata-bearing
-  cases joining the same 500-case generator — and every delivered
-  `tool_result` whose call
+  decoration and D5a's elision included, never a raw-only estimate, with
+  metadata-bearing cases joining the same 500-case generator — every
+  delivered `tool_result` output is at most 65,536 encoded bytes, carrying
+  `outputElided` exactly when its stored output is longer, and every
+  delivered `tool_result` whose call
   exists in history has that call in the window and vice versa; a call
   with no recorded result (cancelled or still unfinished) is valid
   history, kept as it stands and never fabricated a result. The generator
@@ -493,6 +625,28 @@ progress (L3).
   fake clock releases it with no further subscriber change, observed the
   same way (memo gone, replay, new epoch). Mutant: the population path
   never arms the timer.
+- **OW4.** Through `ChatConnections` and a real manager whose driver
+  emits a 2 MB `tool_result` live: the subscribed client receives the
+  elided event over `chat-events`, a fresh attach receives the same
+  elided event in its snapshot, and `chat-tool-output` returns the full
+  2 MB. Mutants: elision applied only in `getSnapshot` (the live route
+  ships 2 MB), or elision written back into `liveEvents` (the fetch
+  returns the preview).
+- **OW5.** A real Bun server built by the production `socketHandlers`
+  with the limit constant lowered, and a raw TCP client that stops reading
+  (B2). Mutant: `closeOnBackpressureLimit` left `false`. The socket stays
+  open while later messages are dropped, which the test detects by
+  resuming reads and finding a sequence gap.
+- **OW6.** A browser-level check (Playwright, throttled to 50 KB/s via
+  CDP `Network.emulateNetworkConditions`) opens a chat whose stored
+  history holds 40 tool results of 2 MB each. The transcript renders,
+  `ws_pong_timeout` is never logged during the open, and the socket is
+  not replaced. Mutant: elision disabled on the snapshot route. The
+  roughly 80 MB snapshot cannot arrive within the heartbeat at that rate,
+  and the test sees the timeout and re-attach. D5c's wiring is killed at
+  unit level instead: the H rows drive the production `useWebSocket`
+  class over a fake socket, because a bounded snapshot arrives within the
+  deadline with or without D5c.
 
 ## Risks / Trade-offs
 
@@ -514,15 +668,33 @@ progress (L3).
   unreplayable entries was rejected, and no new durable storage is added.
 - **Rename coordination.** `rename-agentboard-to-kawai` renames the
   variable. Whichever change archives second rebases its delta.
+- **A copied or rendered result is the preview until expanded.** Copying
+  an elided tool result (copy-chat-message-markdown) copies the 64 KiB
+  preview plus its shortened marker, not the full output. Expanding first
+  fetches it. This is accepted: the full text is one click away, and
+  shipping it eagerly is the fault being fixed.
+- **A backpressure close drops in-flight terminal state.** A terminal
+  attached on the closed socket re-attaches through the normal reconnect
+  path. This is accepted: before D5b the same condition lost messages
+  silently, including terminal output.
+- **One message can still be slow.** D5c cannot see a message still
+  arriving. A snapshot near the 512 KiB budget on a link slower than about
+  50 KB/s uncompressed (about 13 KB/s with D3's compression) can still
+  outlast the 10 s deadline. Raising `PONG_TIMEOUT_MS` was rejected: it
+  delays detection of truly dead sockets on every link to cover a case D1,
+  D3, and D5a make unlikely.
 
 ## Migration Plan
 
 All additions are additive, and no schema or stored data changes. Mixed
 client and server versions fall back to full snapshots. The compression
 default changes for existing installs, and `AGENTBOARD_WS_DEFLATE=false`
-restores today's behaviour. Rollback means reverting the change.
+restores today's behaviour. `outputElided` and `chat-tool-output` are
+additive. An older client shows the elided preview without the fetch,
+and an older server never elides. Rollback means reverting the change.
 
 ## Open Questions
 
 None blocking. Probe 1.1 settles Bun's `compress` default before D3's
-tests are written.
+tests are written, and whether Bun closes or drops at
+`closeOnBackpressureLimit` before D5b's tests are written.

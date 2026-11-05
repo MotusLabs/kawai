@@ -13,6 +13,21 @@ warm switch: the history memo answers from memory, and JSON parsing and
 folding on the client take under 10 ms. The window must be bounded by size
 as well as time, and a switch should send only what the client lacks.
 
+On 2026-11-05 the cost became a failure. Opening the Global Lead chat (Codex)
+sent one 70.9 MB `chat-snapshot`. 67.7 MB of it was full tool output kept in
+memory since the server's restart, mostly repeated ~2 MB `task_get` results;
+a replay of the same day from the rollout file is about 2 MB. Over the
+owner's link (about 1 s round trip), the client's heartbeat expired after
+30 s (a ping 20 s after connecting, then 10 s for the pong). The client
+reconnected and re-attached, the server re-sent the whole snapshot, and the
+loop never ended. It hid a pending question card for two hours. A probe
+showed a second fault behind it: a `pong` sent while an 82.7 MB snapshot
+was queued never arrived, because Bun drops a send once a socket's buffer
+passes its 16 MiB backpressure limit and `ConnectionHub` ignores the drop.
+The window budget alone does not fix this: one oversized newest part still
+goes out whole, any later message on that socket can be lost silently, and
+the client cannot tell a slow download from a dead socket.
+
 ## What Changes
 
 - **Size budget on the history window.** Attach and each load-earlier page
@@ -58,6 +73,21 @@ as well as time, and a switch should send only what the client lacks.
   instead. The next open replays the transcript again. One archived lead
   transcript (527 MB) held about 1 GB of heap for the rest of the server's
   run.
+- **Large tool outputs are elided on the wire.** Every `tool_result`
+  delivered to a client (snapshot, history page, or live `chat-events`)
+  whose output exceeds 65,536 encoded UTF-8 bytes carries only its first
+  65,536 bytes, cut on a character boundary, plus `outputElided` with the
+  full size. A new `chat-tool-output` request fetches the full output when
+  the user expands it. Stored history, search, and the agent keep the full
+  output. The window budget is priced on the elided events.
+- **Messages are never dropped silently.** The server sets
+  `closeOnBackpressureLimit`: a connection whose outbound buffer reaches
+  Bun's limit is closed and the close is logged. The client reconnects and
+  resynchronises instead of silently missing messages.
+- **Any inbound message proves the connection alive.** After a heartbeat
+  or resume-verification ping, any message that arrives before the
+  deadline keeps the connection, not only the matching `pong`. The client
+  reconnects only when nothing arrives.
 
 ## Capabilities
 
@@ -70,10 +100,12 @@ None.
 - `chat-sessions`: the recent window and each page gain the size budget
   and the in-turn cut rule; a new requirement for resuming a held transcript
   on reopen; a new requirement for releasing an archived chat's loaded
-  history.
+  history; a new requirement eliding large tool outputs from delivered
+  events.
 - `terminal-streaming`: "WebSocket compression is opt-in" becomes compression
   of large non-terminal messages by default, with terminal output never
-  compressed.
+  compressed; new requirements that outbound messages are never dropped
+  silently and that any inbound message proves a connection alive.
 
 ## Impact
 
@@ -82,7 +114,13 @@ None.
   `ChatConnections.ts` (`chat-attach` resume fields), `ws/ConnectionHub.ts`
   and `ws/socketHandlers.ts` (per-message compression),
   `TerminalOutputCoalescer` sends, `config.ts` (`AGENTBOARD_WS_DEFLATE`
-  values).
+  values); `socketHandlers.ts` (`closeOnBackpressureLimit`, close
+  logging); a pure elision step applied to every delivered chat event
+  (`src/server/chat/toolOutputElision.ts`) and the `chat-tool-output`
+  handler in `ChatConnections.ts`.
+- Client: `hooks/useWebSocket.ts` (any inbound message satisfies the
+  heartbeat and resume-verification deadlines); the tool result view
+  fetches an elided output on expand.
 - Client: `stores/chatTranscript.ts` (entry origins for trimming),
   `stores/chatStore.ts` (resume snapshot), `stores/chatAttachment.ts`
   (attach fields), `stores/chatHistoryPages.ts` (a page prepend carries the
@@ -91,7 +129,10 @@ None.
   oldest held raw ids plus the server-issued history generation);
   `chat-snapshot` and `chat-history-page` replies gain an optional
   `historyEpoch` marker. Older clients send no `held` and receive full
-  snapshots; older servers ignore `held`.
+  snapshots; older servers ignore `held`. `tool_result` events gain an
+  optional `outputElided` (`{ totalBytes }`), and a new `chat-tool-output`
+  request/reply pair returns one event's full output. An older client shows
+  the 64 KiB preview without the fetch.
 - Out of scope: tail-reading transcripts on first open after a restart
   (measured 0.1–0.2 s for most chats, 4.1 s for the 527 MB lead transcript;
   the owner reports the delay on every switch), list virtualization, and
