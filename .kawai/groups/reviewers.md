@@ -14,9 +14,9 @@ description: Review a dev branch's diff for correctness and fit; read-only; repo
 profiles: { codex-sol: 2, opus: 2 }
 # Applies to every reviewer in the group: Codex Sol and Opus both at medium.
 effort: medium
-# approval auto: Codex's sandbox cannot start in this workspace, so every
-# command escalates; under manual each one would be an approval card.
-approval: auto
+# Codex's sandbox cannot start in this workspace, so every command escalates;
+# under manual each one would be an approval card. Set the team default to
+# auto on the Team page's Members tab: a group file cannot grant auto.
 # Receive review context across task worktrees.
 worktreeScoped: false
 ---

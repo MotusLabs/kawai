@@ -11,7 +11,6 @@ description: Small, well-specified tasks in their own worktree and branch; repor
 # share, and kawai tracks cooldowns per profile, not per account.
 profiles: { glm-flash: 3, codex-luna: 2, openrouter-deepseek-flash: 2, openrouter-minimax-flash: 2, haiku: 2 }
 strategy: profile-order
-approval: auto
 onLimit: { parkIfResetWithin: 3h, otherwise: forward, forwardTo: junior-devs }
 effort: high
 # Haiku runs at xhigh and Codex Luna at max (profileEffort is read); the
