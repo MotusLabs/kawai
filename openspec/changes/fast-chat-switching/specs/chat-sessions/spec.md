@@ -96,7 +96,7 @@ Empty eligible history SHALL yield no events; otherwise at least one part SHALL 
 
 #### Scenario: A large tool result is priced at its elided size
 - **WHEN** the newest unit alone exceeds the budget and its newest part holds a tool call whose tool result output is 600 KiB
-- **THEN** the result is delivered elided to 65,536 bytes of output, the part is priced at that elided size, and the window stays within 512 KiB
+- **THEN** the result is delivered elided so its serialized output is at most 65,536 bytes, the part is priced at that elided size, and the window stays within 512 KiB
 
 #### Scenario: Non-ASCII text crosses the byte budget without crossing the event count
 - **WHEN** the window's events are small CJK text events forming independent quiet parts, each part within the byte budget, whose combined UTF-8 encoded size crosses 512 KiB while their code-unit count stays far below it
@@ -107,30 +107,22 @@ Empty eligible history SHALL yield no events; otherwise at least one part SHALL 
 - **THEN** the newest two units are delivered intact with their full metadata, the third remains in older history, and the delivered events-array UTF-8 size is at most 512 KiB
 
 ### Requirement: Large tool outputs are elided from delivered events
-Every tool result delivered to a client, in a snapshot, a history page, or live chat events, whose output exceeds 65,536 encoded UTF-8 bytes SHALL carry only its first 65,536 bytes, cut on a character boundary, with `outputElided` naming the full size. The client SHALL fetch the full output on request, in chunks no larger than the preview. Stored history, search, and the agent SHALL keep the full output.
+Every tool result delivered to a client in a snapshot, a history page, or live chat events whose output, serialized as a JSON string with its quotes, exceeds 65,536 UTF-8 bytes SHALL carry the longest prefix within that size that ends on a character boundary, with `outputElided` giving the full output's UTF-8 size. The client SHALL fetch the full output over HTTP on request, never over the WebSocket. Stored history, search, and the agent SHALL keep the full output.
 
 #### Scenario: A large result opens as a preview
 - **WHEN** a client attaches to a chat whose window holds a tool result with 2 MB of output
-- **THEN** the snapshot carries the first 65,536 bytes of that output and `outputElided` with its full size, and the result view says the output is shortened
-
-#### Scenario: The full output on request
-- **WHEN** the user expands an elided tool result
-- **THEN** the client requests that event's output in chunks of at most 65,536 encoded bytes, one at a time, and shows the full text the agent received once the last chunk arrives
-
-#### Scenario: Expanding over a slow link keeps the connection
-- **WHEN** the user expands a 2 MB elided tool result over a 50 KB/s link and a heartbeat falls during the fetch
-- **THEN** the connection is kept and the full text is shown when the fetch completes
-
-#### Scenario: An interrupted fetch keeps the preview
-- **WHEN** the connection closes or the user collapses the result before the last chunk arrives
-- **THEN** no further chunk is requested, the preview stays as shown, and the user can retry the fetch
+- **THEN** the snapshot carries a preview of that output whose serialized value is at most 65,536 bytes and `outputElided` with its full size, and the result view says the output is shortened
 
 #### Scenario: An output at the limit is delivered whole
-- **WHEN** a tool result's output is exactly 65,536 encoded UTF-8 bytes
+- **WHEN** a tool result's output serializes to exactly 65,536 bytes, quotes included
 - **THEN** it is delivered whole with no `outputElided`
 
+#### Scenario: Escaped characters count as sent
+- **WHEN** a tool result's output is 2,000,000 control characters that JSON writes as six-byte escapes
+- **THEN** the preview is cut so that its serialized value, escapes included, is at most 65,536 bytes, and `outputElided` gives 2,000,000
+
 #### Scenario: Non-ASCII output is cut on a character boundary
-- **WHEN** a tool result's output exceeds the limit and a multi-byte character straddles the 65,536th byte
+- **WHEN** a tool result's output exceeds the limit and a multi-byte character straddles the limit
 - **THEN** the preview ends before that character, so it decodes without a replacement character
 
 #### Scenario: A live result is elided like history
@@ -141,9 +133,43 @@ Every tool result delivered to a client, in a snapshot, a history page, or live 
 - **WHEN** a user searches a chat for text that appears only beyond the preview of an elided result
 - **THEN** the search finds it, and revealing it shows the elided result
 
+### Requirement: The full tool output is served byte for byte
+The server SHALL serve a tool result's full output at `GET /api/chat/sessions/{sessionId}/tool-output/{eventId}` as `text/plain; charset=utf-8` with `no-store` and its exact UTF-8 length, and 404 when the chat holds no such tool result. The client SHALL keep the preview until the whole body arrives with the expected length, and SHALL discard a response for an expansion that was collapsed, replaced, or left.
+
+#### Scenario: The full output on request
+- **WHEN** the user expands an elided tool result
+- **THEN** the client downloads that output over HTTP and shows the full text the agent received, byte for byte, once the whole body has arrived
+
+#### Scenario: Text is preserved exactly
+- **WHEN** the stored output begins with a byte order mark and holds multi-byte and control characters
+- **THEN** the served body and the shown text keep every one of them, including the leading byte order mark
+
 #### Scenario: The full output is unavailable
 - **WHEN** a client requests the full output for an event id that is not a tool result in the chat's history, after the server has loaded that history
-- **THEN** the reply says the output is unavailable and the preview stays as shown
+- **THEN** the reply is 404, the view says the output is unavailable, and the preview stays as shown
+
+#### Scenario: A collapsed expansion is not adopted
+- **WHEN** the user collapses a result, switches chats, or leaves while its download is pending, and the download later completes
+- **THEN** the download is aborted or its body discarded, and the view keeps what it showed after the collapse or switch
+
+#### Scenario: A WebSocket reconnect does not restart the download
+- **WHEN** the WebSocket drops and reconnects while a download for the same chat and result is pending
+- **THEN** the download continues, no second request is made, and the full text is shown when it completes
+
+#### Scenario: Expanding keeps the WebSocket free
+- **WHEN** the user expands a 2 MB elided tool result
+- **THEN** no WebSocket message carries the full output
+
+### Requirement: Live chat event batches are bounded in size
+Each live chat events message SHALL be at most 262,144 UTF-8 bytes as sent, envelope included, except a single event that alone exceeds that size, which SHALL be sent alone. Splitting a batch SHALL deliver every event exactly once and in order, and SHALL keep the existing turn and 128-event boundaries.
+
+#### Scenario: A burst of large results is split
+- **WHEN** eight elided tool results arrive in one turn before a flush
+- **THEN** they are sent in messages each at most 262,144 bytes as sent, every event once and in order
+
+#### Scenario: A single oversized event is sent alone
+- **WHEN** a tool call event with a 2 MB input arrives between two small events
+- **THEN** it is sent as a message of its own, and the small events are delivered in order around it
 
 ### Requirement: Reopening a held chat transfers only what changed
 On reattach to a held transcript (same page load), the server SHALL send only the events after the newest held one plus the window's new start while the history generation matches the memo and the held range verifies, and a full snapshot otherwise. The generation SHALL change on population, replacement, release, replay, and restart, never on appends. The client SHALL fold the delta and trim below the new start, matching a full attach. Expansion SHALL NOT be inferred from the held marker alone.

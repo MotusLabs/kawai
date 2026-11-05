@@ -151,3 +151,56 @@ or property that would have caught it, and the source finding.
   `src/server/__tests__/registeredNamesRefusalWiring.test.ts`).
 - **Source finding.** The Lead's rev 5.1 conformance disposition
   (note-f6467fdb; correction B of provider-relay-setup).
+
+## Transport and liveness
+
+### A mutant masked by a required fallback (note-7bb8add0 F1)
+
+- **Hazard.** A wiring oracle names a single-flag mutant (Bun's
+  `closeOnBackpressureLimit` left `false`) while the same design requires
+  an independent fallback (the hub closes on a `0` send status) that
+  produces the same observable outcome, so the end-to-end test passes with
+  its mutant, or a test written to fail it rejects the required fallback.
+- **Oracle that catches it.** Each redundant mechanism is killed at its
+  own boundary, and the end-to-end oracle's mutant removes all of them
+  together: fast-chat-switching design.md B1 (the production options), B3
+  (a fake socket returning `0`), and OW5 (both removed: a sequence gap on
+  an open socket).
+- **Source finding.** note-7bb8add0 F1 (fast-chat-switching D5 spec
+  advisory, task-d86465fe R1).
+
+### A timing oracle with an unpinned fixture (note-7bb8add0 F2)
+
+- **Hazard.** A browser-level liveness oracle requires a mutant to time
+  out, but leaves payload entropy, part layout, compression, and the
+  effective link rate free, so a compressible or per-part fixture lets the
+  mutant's transfer finish before the heartbeat and the oracle is vacuous.
+- **Oracle that catches it.** Pin the transfer conditions and observe
+  them: a pacing proxy with a measured-rate assertion, compression off,
+  incompressible outputs in a pinned turn layout, and a selection time that
+  makes the mutant's transfer overlap the ping and outlast its deadline;
+  payload assertions are kept separate from timing assertions
+  (fast-chat-switching design.md OW6).
+- **Source finding.** note-7bb8add0 F2 (fast-chat-switching D5 spec
+  advisory, task-d86465fe R1).
+
+### An unbounded recovery reply under a whole-message heartbeat (note-7bb8add0 F3)
+
+- **Hazard.** A design bounds every pushed message to protect the
+  heartbeat, then adds an on-demand fetch over the same socket. The
+  browser reports only whole messages, so any reply larger than the link
+  carries within the deadline delays the pong and the healthy socket is
+  replaced. A bound counted in decoded bytes hides it: JSON escaping can
+  grow a 64 KiB chunk sixfold (U+0001 serializes as six bytes), and the
+  1.5 s resume check is stricter than the 10 s heartbeat. A
+  handler-level oracle never sees the transport.
+- **Oracle that catches it.** The large payload leaves the socket: the
+  full output comes from an HTTP route, the preview and each live batch
+  are capped on their serialized, as-sent size, and the cap's rows
+  include escape-heavy text (fast-chat-switching design.md D5a, D5d, D5e;
+  rows E7, E10, E15, E16). A transport oracle hides and shows the page
+  during the HTTP download on a throttled link with pinned pacing and
+  measured bounds, and kills the 5f design of 64 KiB decoded WebSocket
+  chunks of U+0001 text under the early resume (OW6).
+- **Source finding.** note-7bb8add0 F3 (fast-chat-switching D5 spec
+  advisory, task-d86465fe R1); the escaping counterexample, note-60893e96.

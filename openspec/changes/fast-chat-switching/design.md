@@ -54,8 +54,8 @@
   echo latency.
 - Stop an archived chat from holding its replay in memory after nobody
   watches it.
-- Keep a live connection alive through a large transfer on a slow link,
-  and never lose a message silently.
+- Keep large tool outputs from stalling a live connection on a slow link,
+  keep the full output one click away, and never lose a message silently.
 
 **Non-Goals:**
 
@@ -337,24 +337,34 @@ already reads an unloaded chat by transient replay (`searchableEvents`), so
 it keeps working. Codex chats replay from the rollout, and the same rule
 applies to them.
 
-### D5 — A large transfer never kills a live connection
+### D5 — Large tool outputs stop stalling a live connection
 
 The 2026-11-05 incident (Context) needed three faults at once: one message
 too large for the link, a heartbeat that cannot see a message still
 arriving, and a server that drops messages behind a full buffer. Each
-gets its own rule, so that no one of them can recreate the loop alone.
+gets its own rule, so that no one of them can recreate the loop alone. D5
+does not make every WebSocket message fast enough for every deadline on
+every link; the limits it leaves are listed under Risks.
 
-**D5a — Tool outputs are elided on delivery.** A pure
-`elideToolOutput(event)` (`src/server/chat/toolOutputElision.ts`) maps a
-`tool_result` whose `output` exceeds `TOOL_OUTPUT_MAX_BYTES = 65_536`
-encoded UTF-8 bytes to a copy whose output is the longest prefix of at
-most 65,536 bytes that ends on a character boundary, plus
-`outputElided: { totalBytes }`. Any other event, or an output within the
-limit, is returned unchanged (the same object). It runs on every delivery
-route:
+**D5a — Tool outputs are elided on delivery, measured as sent.** A pure
+`elideToolOutput(event)` (`src/server/chat/toolOutputElision.ts`) measures a
+`tool_result`'s output as it is sent: the UTF-8 length of
+`JSON.stringify(output)`, the quoted and escaped string value, quotes
+included. When that length exceeds `TOOL_OUTPUT_MAX_BYTES = 65_536` it
+returns a copy whose output is the longest prefix, ending on a character
+boundary, whose own serialized string value is at most 65,536 bytes
+(inclusive), plus `outputElided: { totalBytes }`. `totalBytes` is the UTF-8
+length of the whole original output before any projection (its canonical
+UTF-8 encoding, below), never the serialized length. `outputElided` is set
+exactly when the output changed. Any other event, or an output whose
+serialized value is within the limit, is returned unchanged (the same
+object), and the source object is never modified. So 65,534 ASCII
+characters (65,536 serialized bytes) pass whole, 65,535 are elided, and an
+output of control characters such as U+0001, which JSON writes as six bytes
+each, is cut at 10,922 characters. It runs on every delivery route:
 
 1. `getSnapshot` and `getHistoryPage`, before pricing (D1), so the budget
-   sees the elided size.
+   sees the decorated and elided projection actually returned.
 2. The live `chat-events` fan-out in `ChatConnections`, so a watching
    client gets what a later snapshot would show (one function, not a
    second rule). It is applied once at the top of `publish`, before
@@ -367,41 +377,11 @@ change to stored history. Nested worker transcripts (`chat-worker-transcript`,
 read through `chatWorkerTranscript.ts`) are a separate `ChatEvent[]` route
 whose ids are not in the parent's memo or live events; this change neither
 elides nor fetches them, which matches the proposal's scope (windowing
-nested worker transcripts is out of scope).
-
-The full output is fetched in bounded chunks, never in one reply, so the
-fetch itself can never outlast the heartbeat. A new
-`chat-tool-output { sessionId, eventId, offset }` request (`offset` an
-encoded-UTF-8 byte offset, `0` for the first chunk) awaits `loadHistory`,
-finds that `tool_result` in memo + live events, and replies
-`{ state: 'ok', chunk, offset, nextOffset, totalBytes }`: `chunk` is the
-longest run of at most `TOOL_OUTPUT_MAX_BYTES` encoded bytes starting at
-`offset` and ending on a character boundary (the same cut as the preview),
-and `nextOffset` is the byte offset after it, or `null` when the chunk
-reaches the end. It replies `{ state: 'unavailable' }` when no such event
-exists, and when `offset` is not a character boundary of the stored output
-or is past its end. Every reply is therefore at most 64 KiB plus its
-envelope, which arrives in about 1.3 s at 50 KB/s, well inside the 10 s
-deadline, and each reply counts as inbound life under D5c. The client
-requests the next chunk only after the previous one arrives (one request in
-flight per expansion), so no burst of chunks can fill the D5b buffer. The
-handler is modelled on `chat-task-output` and added to
-`CHAT_CONNECTION_TYPES`.
-
-The client's tool result view marks an elided output ("Output shortened —
-N KB total"). Expanding fetches the chunks in order and shows progress
-("Loading full output — k of N KB"); the full text replaces the preview
-only when the last chunk arrives, and the assembled bytes must total
-`totalBytes`, otherwise it is treated as unavailable. An `unavailable`
-reply keeps the preview and shows "Full output unavailable". A socket close
-during the fetch, or collapsing the result, switching chats, or detaching,
-abandons the fetch: no further chunk is requested, the partial text is
-discarded, and the preview stays with a "Retry" action that restarts from
-offset `0`. 64 KiB keeps a typical diff or log whole
-(the largest tool call input in the incident window was 27 KB) while
-capping the 2 MB `task_get` replies at about a thirtieth. Replayed rollout
-events are elided by the same rule; their stored output is whatever the
-replay produced.
+nested worker transcripts is out of scope). Replayed rollout events are
+elided by the same rule; their stored output is whatever the replay
+produced. 64 KiB keeps a typical diff or log whole (the largest tool call
+input in the incident window was 27 KB) while capping the 2 MB `task_get`
+replies at about a thirtieth.
 
 **D5b — A full buffer closes the connection.** `socketHandlers.ts` sets
 `closeOnBackpressureLimit: true` and keeps Bun's default
@@ -416,17 +396,18 @@ the message that crossed the limit, the hub closes the socket itself on a
 is the primary close, and the `0`-status close is the fallback for any
 message Bun drops without closing. Either way, no message is lost while
 the connection stays open. Probe 1.1 runs before section 6's tests are
-written, because B2's expected native behaviour depends on it. The client already reconnects and re-attaches after any close, so
-nothing on the client changes. After D5a and D1, reaching 16 MiB takes
-many messages queued on a stalled link, so the close is rare. When it
-happens, it replaces silent corruption with a visible resync.
+written, because B2's expected native behaviour depends on it. The client
+already reconnects and re-attaches after any close, so nothing on the
+client changes. After D5a, D5e, and D1, reaching 16 MiB takes many
+messages queued on a stalled link, so the close is rare. When it happens,
+it replaces silent corruption with a visible resync.
 
 *Alternative rejected:* a per-socket application queue in the hub,
 written into Bun only below a low-water mark and drained from the `drain`
 handler, with `pong` placed ahead of queued bulk messages. It bounds pong
 latency more tightly, but it adds a second buffer and ordering logic next
 to the coalescer's terminal-first rule ("Output ordering is preserved
-across message types"). D5c makes it unnecessary.
+across message types"). D5c covers the common case.
 
 **D5c — Any inbound message proves life.** In `useWebSocket.ts` the
 heartbeat (`PONG_TIMEOUT_MS`) and resume-verification
@@ -437,12 +418,80 @@ parsing, clears a pending pong timer and settles a pending verification as
 the matching pong does today, including the early-heartbeat restart after
 verification. Because it runs before parsing, a malformed payload counts
 too. It acts only for the current socket: a message delivered by a socket
-that has already been replaced never settles the current socket's timers. The intervals and deadlines are unchanged. A dead socket
-still delivers nothing and is still replaced. A healthy socket that is
-busy delivering a snapshot is kept, because the snapshot's arrival counts.
-This does not help while a single message is still arriving, since the
-browser only reports whole messages. D5a and D1 keep every message small
-enough to arrive well within 10 s on the measured link.
+that has already been replaced never settles the current socket's timers.
+The intervals and deadlines are unchanged. A dead socket still delivers
+nothing and is still replaced. A healthy socket that is busy delivering a
+snapshot is kept, because the snapshot's arrival counts. This does not
+help while a single message is still arriving, since the browser only
+reports whole messages: a message must arrive within the deadline on its
+own (Risks).
+
+**D5d — The full output comes over HTTP, not the WebSocket.** A new
+`GET /api/chat/sessions/:sessionId/tool-output/:eventId`
+(`src/server/routes/chatToolOutput.ts`) is mounted on the existing app in
+`bootstrap.ts` beside `/api/chat/search`, before the static fallback. Both
+ids are opaque, URL-encoded path segments, never file paths. It calls
+`ChatSessionManager.getToolOutput(sessionId, eventId)`, which awaits the
+manager's own `loadHistory` (a shared load: it accepts archived chats,
+never starts a driver, and keeps a killed chat's replay out of its memo),
+then looks the exact session and event up in memo plus live events again
+after the await. A released memo replays. An unknown session, an unknown
+id, a non-`tool_result` id, or a result missing after replay is `404`,
+never an empty success.
+
+A hit replies `200`, `Content-Type: text/plain; charset=utf-8`,
+`Cache-Control: no-store`, with the body the output's canonical UTF-8
+bytes and `Content-Length` computed from those same bytes. Canonical UTF-8
+is the standard encoding of the JavaScript string (`TextEncoder`), which
+writes a lone surrogate as U+FFFD. Valid text, including a leading BOM,
+multi-byte characters, and control characters, therefore round-trips
+byte for byte. An ill-formed string is served, counted in `totalBytes`, and
+compared in that same replaced form, and no identity of raw ill-formed
+code units is claimed. The route keeps the trust model of `/ws` and
+`/api/chat/search` — same origin, the same listener, no route auth — and
+adds no CORS, JSONP, proxying, or filesystem access. The service worker
+precaches only listed static assets and excludes `/api` from its
+navigation fallback (`vite.config.ts`). `no-store` keeps any cache from
+retaining a body, and a test checks the route through the real app.
+
+Because the download runs on its own HTTP request, the full output never
+enters the WebSocket's message stream, so no `pong` or other message ever
+waits behind it there. It still shares the link's bandwidth, and that
+sharing is not bounded (Risks). A 2 MB output takes about 40 s at
+50 KB/s in one request. There is no `chat-tool-output` WebSocket message,
+and nothing is added to `CHAT_CONNECTION_TYPES`.
+
+The client's tool result view marks an elided output ("Output shortened —
+N KB total"). Expanding starts one request with its own `AbortController`
+and shows that the full output is loading. The client reads the body as
+bytes and decodes it with `TextDecoder('utf-8', { ignoreBOM: true })`, so a
+leading U+FEFF is kept. It replaces the preview only when the whole body
+has arrived, its byte length equals `totalBytes`, and this request is
+still the current one for that expansion, session, and event. Collapse,
+re-expand, chat switch, detach, and unmount abort the request, and a late
+completion of an aborted or superseded request is discarded, never
+adopted. A `404` shows "Full output unavailable". A network error or a
+length mismatch keeps the preview with "Retry", which starts a new
+request. A WebSocket close and reconnect is not a detach (attachment holds
+survive socket drops, `chatAttachment.ts`), so a download in progress for
+the same session and event continues across it, and a successful resume
+neither restarts nor duplicates it. The manager's shared history load is
+never cancelled by a client abort, and an abort does not promise that the
+server stops work or closes the TCP connection.
+
+**D5e — Live batches are capped as sent.** `ChatConnections.publish`
+measures each pending `chat-events` batch as the UTF-8 length of the whole
+message as sent: `JSON.stringify({ type: 'chat-events', sessionId, events })`,
+envelope, session id, and separators included. Before an event joins a
+batch, `publish` sends the batch on its own if adding the event would take
+the message over `CHAT_EVENTS_MAX_BYTES = 262_144` (256 KiB). `flush` sends
+only batches built under that rule. The existing 128-event cap and the
+turn-boundary split keep their order and meaning; the byte cap only adds
+split points. Every event is sent exactly once, in order. A single event
+that is over the cap on its own is sent alone as a one-event batch. After
+D5a that can only be a non-`tool_result` event with a large field (E5),
+which is never elided. 256 KiB takes about 5.2 s at 50 KB/s, which meets
+the 10 s heartbeat but not the 1.5 s resume verification (Risks).
 
 ## Acceptance oracles
 
@@ -458,7 +507,7 @@ they cover. `*` means don't-care.
 | W3 | newest unit alone: 2,700 events with quiet points every 10 events, each part within the byte budget (C1 premise; selection empty) | exactly 500 events of its newest-first quiet parts; starts at a quiet point; `hasOlder` true |
 | W4 | in the oversized-newest-unit part walk, a newer part is already selected and the next older part holds a `tool_call` and its `tool_result` and would overflow | that older part is left to older history whole and the walk stops; the cut never separates the call from its result; both delivered or both absent (the oversized newest part itself is W8's atomic case, never excluded here) |
 | W5 | in the part walk, a newer part is already selected and the next older part is one continuing assistant message that would overflow | that older part is left to older history whole and the walk stops; the cut never falls inside the message |
-| W6 | newest unit alone exceeds the budget; its newest part is a `tool_call` with a 600 KiB `tool_result` | the result delivered elided to 65,536 output bytes (D5a) and priced at that size; the part fits, so the walk continues under both caps and the window stays within 512 KiB |
+| W6 | newest unit alone exceeds the budget; its newest part is a `tool_call` with a 600 KiB `tool_result` | the result delivered elided (D5a: its serialized output value at most 65,536 bytes) and priced at that elided, decorated size; the part fits, so the walk continues under both caps and the window stays within 512 KiB |
 | W7 | exactly 500 events, ≤ 512 KiB encoded | all delivered (limit inclusive) |
 | W8 | 501 events in one part, otherwise within bytes | that part whole (oversized single part) |
 | W9 | turn started 25 h before newest, fits budget | whole turn or none (existing rule unchanged) |
@@ -548,23 +597,32 @@ large (rows C7–C10).
 A driver on an archived chat exists only while archive's stop is in
 progress (L3).
 
-### E — tool-output elision (`elideToolOutput`, `chat-tool-output`)
+### E — tool-output elision, full-output route, live batches (`elideToolOutput`, `chatToolOutput` route, `publish`)
+
+Sizes are serialized string values (UTF-8 of `JSON.stringify(output)`,
+quotes included) unless a row says otherwise; `totalBytes` is always the
+canonical UTF-8 length of the whole original output.
 
 | # | Input | Expected |
 |---|---|---|
-| E1 | `tool_result`, output 65,536 encoded bytes | unchanged, same object, no `outputElided` |
-| E2 | `tool_result`, output 65,537 bytes of ASCII | output = first 65,536 bytes; `outputElided.totalBytes` = 65,537 |
-| E3 | `tool_result` over the limit; a 3-byte character occupies bytes 65,535–65,537 | output ends at byte 65,534 (before that character); decodes with no U+FFFD |
-| E4 | `tool_result` over the limit whose first 65,536 bytes end on a 4-byte emoji boundary exactly | output is exactly 65,536 bytes |
+| E1 | `tool_result`, output 65,534 ASCII characters (serialized 65,536) | unchanged, same object, no `outputElided` |
+| E2 | `tool_result`, output 65,535 ASCII characters (serialized 65,537) | output = first 65,534 characters; `outputElided.totalBytes` = 65,535; source object unchanged |
+| E3 | 65,533 × `a` then `€` (3 bytes) and more text | output = the 65,533 `a`s (serialized 65,535); decodes with no U+FFFD |
+| E4 | 65,530 × `a`, an emoji (4 bytes), then `b` | output ends with the emoji, serialized exactly 65,536 |
 | E5 | any non-`tool_result` event with a 2 MB field (`tool_call` input, `assistant_text`) | unchanged, same object |
 | E6 | snapshot, page, and live `chat-events` carrying the same 2 MB result | identical elided event on all three routes |
-| E7 | `chat-tool-output` chunks of a 2 MB elided result, from offset `0`, following `nextOffset` until `null` | every `chunk` ≤ 65,536 encoded bytes; each `offset` equals the previous `nextOffset`; the concatenation is byte-identical to the stored output and totals `totalBytes` |
-| E8 | `chat-tool-output` for an unknown id, or a non-`tool_result` id | `unavailable` |
+| E7 | escape-heavy outputs: 2,000,000 × U+0001; 40,000 × `"`; 40,000 × `\`; 40,000 × newline | U+0001 cut to 10,922 characters (serialized 65,534) with `totalBytes` 2,000,000; each two-byte-escape case cut to 32,767 characters (serialized 65,536); no escape sequence split |
+| E8 | output U+FEFF + 100,000 × `a`; separately, a lone surrogate U+D800 + 70,000 × `a` | `totalBytes` 100,003; `totalBytes` 70,003 (the surrogate counted as U+FFFD, 3 bytes) |
 | E9 | search for text beyond the preview of an elided result | found (search reads stored history) |
-| E10 | `chat-tool-output` at an offset inside a multi-byte character, or past the end | `unavailable` |
-| E11 | stored output with a 3-byte character straddling a chunk's 65,536th byte | that chunk ends before the character; the next chunk starts with it; no U+FFFD in any chunk |
-| E12 | client expansion (`ChatToolResult` + store, fake transport): the second chunk's reply is `unavailable`; separately, the socket closes after the first chunk; separately, the result is collapsed after the first chunk | preview kept in every case; no request after the failure, close, or collapse; `unavailable` shows "Full output unavailable", close and collapse show "Retry"; Retry restarts at offset `0` |
-| E13 | client expansion with a fake transport that records requests | at most one `chat-tool-output` request in flight per expansion; the full text replaces the preview only after the `nextOffset: null` chunk |
+| E10 | `GET` the route through the real app and manager for a 2 MB ASCII result, the E8 fixtures, a multi-byte and control-character fixture, and the E7 U+0001 fixture | `200`; `Content-Type: text/plain; charset=utf-8`; `Cache-Control: no-store`; `Content-Length` = body length = `totalBytes`; body byte-identical to the canonical UTF-8 of the stored output |
+| E11 | `GET` for an unknown session, an unknown event id, a non-`tool_result` id, and a result absent after replay | `404` in every case; never `200` with an empty body |
+| E12 | `GET` for a result of an archived chat whose memo was released | the history replays; `200` with the E10 body; afterwards memo, `liveEvents`, and the search result for that chat hold the full, unprojected output |
+| E13 | client expansion over a fake `fetch`: a body with a leading U+FEFF; a body one byte short of `totalBytes`; a `404`; a network error | first: full text shown with the U+FEFF kept; second and fourth: preview kept with "Retry"; third: preview kept with "Full output unavailable" |
+| E14 | collapse and re-expand while the first request is pending, and the first then completes; separately, chat switch, detach, and unmount while pending | the first request's signal is aborted and its late body is discarded; only the second request's body is adopted; switch, detach, and unmount abort with no later state update |
+| E15 | the WebSocket closes and reconnects, and a resume verification succeeds, while a download is pending for the same session and event | the same request continues; no second request is made; its body is adopted on completion |
+| E16 | eight `tool_result`s of 2,000,000 × U+0001 in one turn, published (a) within one flush tick and (b) after 125 small events, so the 128-event overflow send also fires | every `chat-events` message as sent (UTF-8 of the whole message JSON) is at most 262,144 bytes; every event is delivered exactly once, in order, across overflow and flush sends; each delivered result equals E7's elided event; the route still serves the full 2,000,000-byte body |
+| E17 | one `tool_call` event whose input is 2 MB, between two small events of the same turn | it is sent alone as a one-event batch; the neighbours are delivered in order before and after it |
+| E18 | events of two turns, and 130 small events of one turn, all under the byte cap | batches split at the turn boundary and at 128 events exactly as before D5e |
 
 ### B — backpressure (`socketHandlers`, `ConnectionHub`)
 
@@ -601,8 +659,10 @@ progress (L3).
   complete delivered suffix as actually projected — the workspaceContext
   decoration and D5a's elision included, never a raw-only estimate, with
   metadata-bearing cases joining the same 500-case generator — every
-  delivered `tool_result` output is at most 65,536 encoded bytes, carrying
-  `outputElided` exactly when its stored output is longer, and every
+  delivered `tool_result` output's serialized string value (quotes
+  included) is at most 65,536 bytes, carrying `outputElided` exactly when
+  the delivered output differs from the stored one, with `totalBytes` the
+  stored output's canonical UTF-8 length, and every
   delivered `tool_result` whose call
   exists in history has that call in the window and vice versa; a call
   with no recorded result (cancelled or still unfinished) is valid
@@ -666,17 +726,20 @@ progress (L3).
   fake clock releases it with no further subscriber change, observed the
   same way (memo gone, replay, new epoch). Mutant: the population path
   never arms the timer.
-- **OW4.** Through `ChatConnections` and a real manager whose driver
-  emits a 2 MB `tool_result` live: the subscribed client receives the
-  elided event over `chat-events`, a fresh attach receives the same
-  elided event in its snapshot (both live send sites are exercised: the
-  batch-overflow send in `publish` and the scheduled `flush`), and
-  following `chat-tool-output` chunks from offset `0`
-  reassembles the full 2 MB with every reply's `chunk` at most 65,536
-  encoded bytes. Mutants: elision applied only in `getSnapshot` (the live
-  route ships 2 MB); elision written back into `liveEvents` (the chunks
-  reassemble the preview); the handler replying with the whole output in
-  one chunk (the chunk bound fails).
+- **OW4.** Through the real app built by `bootstrap.ts` and `ChatConnections`
+  over a real manager whose driver emits a `tool_result` of 2,000,000 ×
+  U+0001 live: the subscribed client receives the elided event (E7) over
+  `chat-events` on both live send sites (the batch-overflow send in
+  `publish` and the scheduled `flush`); a fresh attach receives the same
+  elided event in its snapshot; and `GET` on the route returns the E10
+  headers and the full 2,000,000-byte body. No WebSocket message to any
+  client carries more of that output than the preview. Mutants: elision
+  applied only in `getSnapshot` (the live route ships the whole output);
+  elision written back into `liveEvents` (the body is the preview and its
+  length differs from `totalBytes`); a WebSocket tool-output transport
+  reintroduced in any form (the no-output-frames assertion fails,
+  whatever the timing); the route mounted after the static fallback (the
+  reply is not `text/plain`).
 - **OW5.** A real Bun server built by the production `socketHandlers`
   with the limit constant lowered, and a raw TCP client that stops reading
   (B2), then resumes. Expected: the socket is closed, and the messages the
@@ -688,45 +751,69 @@ progress (L3).
   B1 at the production options boundary, the `0`-status fallback by B3
   over a fake socket. OW5 does not claim that removing only one of them
   leaves the socket open, because the other still closes it.
-- **OW6.** A browser-level check (Playwright, slow e2e tier) with pinned
-  transfer conditions:
-  - *Link.* The browser reaches the e2e server through a pacing TCP
-    proxy in the test that forwards server-to-browser bytes at 50,000
-    bytes/s (5,000-byte slices every 100 ms) and records bytes and
-    times. The server runs with `AGENTBOARD_WS_DEFLATE=false`, so wire
-    bytes equal the serialized message. The test asserts the throttle was
-    effective: the proxy's measured rate over the snapshot's bytes is at
-    most 60,000 bytes/s.
+- **OW6.** A browser-level check (Playwright, slow e2e tier) through the
+  real app, its WebSocket, and its HTTP route, with pinned and measured
+  transfer conditions. Every timing claim here is planned, not yet run.
+  - *Link.* The browser reaches the e2e server through a pacing TCP proxy
+    in the test. Server-to-browser bytes share one global budget of
+    50,000 bytes/s across all ready connections: every 50 ms the proxy
+    sends at most 2,500 bytes, taken round-robin from the connections
+    that have bytes waiting (after the page's assets load, one WebSocket
+    and at most one HTTP download). The proxy adds a fixed 1,000 ms round
+    trip (500 ms each way). It records every slice with its connection
+    and time. The server runs with `AGENTBOARD_WS_DEFLATE=false`, so wire
+    bytes equal the serialized message.
+  - *Measured bounds.* From the proxy's record, the test asserts that the
+    measured global rate is at most 60,000 bytes/s, that a ready WebSocket
+    never waited more than 100 ms for its next slice, and that each
+    verification `pong` reached the browser within 1,200 ms of its `ping`
+    leaving it. If the proxy cannot meet these bounds the test fails as an
+    oracle gap, naming the bound; it never passes or fails on the product
+    while a fixture bound is broken. Stock timers and workers are never
+    changed for the test.
   - *Fixture.* A chat whose stored history holds 10 turns, each one tool
-    call and its result, every output 2,000,000 bytes of base64 text from
-    a seeded LCG (seed `0x5eed`, incompressible in practice). The newest
-    turn is therefore one atomic 2 MB call/result part.
-  - *Timing.* The chat is selected 1 s after the socket opens, so the
-    first heartbeat ping (20 s after open) and its deadline (30 s) fall
-    while an unbounded transfer of the newest part (about 40 s at the
-    pinned rate) would still be arriving. The test observes 45 s.
-  - *Payload assertions* (on received frames, separate from timing):
-    every delivered `tool_result` output is at most 65,536 encoded bytes
-    and carries `outputElided` with `totalBytes` 2,000,000; the snapshot
-    frame is at most 600 KiB once D1 has landed (at most 700 KiB at the
-    section-6 checkpoint, where today's 24 h window delivers all ten
-    elided turns, about 13 s at the pinned rate). Without D1 the mutant
-    ships about 20 MB instead of 2 MB; it is killed either way.
+    call and its result. The newest turn's output is 2,000,000 bytes of
+    base64 text from a seeded LCG (seed `0x5eed`, incompressible in
+    practice), so the newest turn is one atomic 2 MB call/result part.
+    The second-newest turn's output is 2,000,000 × U+0001. The other
+    eight are base64 like the newest.
+  - *Snapshot timing.* The chat is selected 1 s after the socket opens, so
+    the first heartbeat ping (20 s after open) and its deadline (30 s)
+    fall while an unbounded transfer of the newest part (about 40 s at
+    the pinned rate) would still be arriving. The test observes 45 s.
+  - *Payload assertions* (on received frames, separate from timing): every
+    delivered `tool_result` output's serialized value is at most 65,536
+    bytes and carries `outputElided` with `totalBytes` 2,000,000; the
+    snapshot frame is at most 600 KiB once D1 has landed (at most 700 KiB
+    at the section-6 checkpoint, where today's 24 h window delivers all
+    ten elided turns, about 13 s at the pinned rate). Without D1 the
+    snapshot mutant ships about 20 MB instead of 2 MB; it is killed either
+    way.
   - *Liveness assertions:* the transcript renders, `ws_pong_timeout` is
     never logged, and the socket is not replaced during the 45 s.
-  - *Expansion:* after that, the newest result is expanded over the same
-    link. Its about 2 MB arrives as about 31 chunks over about 40 s,
-    across at least one heartbeat. The full text shown equals the stored
-    output, `ws_pong_timeout` is never logged, and the socket is not
-    replaced.
+  - *Expansion with resume.* After that, the second-newest result
+    (U+0001) is expanded. Its 2,000,000-byte body arrives over HTTP in
+    about 40 s. One second after the body's first byte passes the proxy,
+    the page is hidden and made visible again, which runs resume
+    verification. Expected: no `ws_verify_timeout` or `ws_pong_timeout`
+    is logged, the socket is not replaced, exactly one HTTP request was
+    made, and the full text shown equals the stored output. The test
+    observes until the body has fully arrived plus 5 s.
 
   Mutants: elision disabled on the snapshot route (D1 then delivers the
-  newest 2 MB part whole, which outlasts the deadline: the timeout and
-  re-attach are seen); the full output fetched in one reply (the 2 MB
-  reply outlasts the deadline during expansion). D5c's wiring is killed
-  at unit level instead: the H rows drive the production `useWebSocket`
-  class over a fake socket, because a bounded snapshot arrives within the
-  deadline with or without D5c.
+  newest 2 MB part whole, which outlasts the heartbeat deadline: the
+  timeout and re-attach are seen); and the specific 5f design, the full
+  output fetched over the WebSocket in chunks of 65,536 decoded UTF-8
+  bytes, one in flight. With the U+0001 output each such chunk is 393,216
+  serialized bytes, about 7.9 s on the link; the resume falls one second
+  into a chunk, its verification `pong` waits behind the rest, and
+  `ws_verify_timeout` and a replaced socket are seen. Arbitrarily small
+  serialized WebSocket chunks are a different design and not this mutant;
+  OW4's no-output-frames assertion kills any WebSocket transport
+  regardless of timing. D5c's wiring is killed at unit level instead: the
+  H rows drive the production `useWebSocket` class over a fake socket,
+  because a bounded snapshot arrives within the deadline with or without
+  D5c.
 
 ## Risks / Trade-offs
 
@@ -763,10 +850,34 @@ progress (L3).
   outlast the 10 s deadline. Raising `PONG_TIMEOUT_MS` was rejected: it
   delays detection of truly dead sockets on every link to cover a case D1,
   D3, and D5a make unlikely.
-- **A full output expands slowly on a slow link.** Chunking keeps every
-  reply small, so expansion never costs the connection, but a 2 MB output
-  takes about 40 s at 50 KB/s and shows progress meanwhile. This is
-  accepted: one reply per output was the fault the chunking removes.
+- **Resume verification still fails behind a large message.** Resume
+  verification allows 1.5 s. With a 1 s round trip that leaves about
+  0.5 s, about 25 KB at 50 KB/s, so any WebSocket message larger than that
+  still arriving when the page becomes visible (a snapshot or page up to
+  512 KiB, a live batch up to 256 KiB, a lone E5 event) still causes a
+  reconnect, as it does before this change. D5 does not worsen it, and it
+  keeps both deadlines unchanged: falling back to the 10 s deadline after
+  a failed verification, or extending verification while a reply is
+  pending, would slow the detection of a socket that died during sleep,
+  and neither is chosen. The limit is tracked separately
+  (task-b9d8c232) for evidence from D5's first production path.
+- **The HTTP download shares the link.** D5d keeps the full output out of
+  the WebSocket's message stream, so no message waits behind it there. It
+  does not reserve bandwidth: on a slow or congested link, or a tunnel
+  that carries both connections, WebSocket messages can still be delayed
+  by the download's bytes in shared queues, and that delay is not
+  bounded here. OW6 measures it under a pinned fair proxy only.
+- **A lone large non-result event is sent whole.** Only `tool_result`
+  output is elided (E5). A single event with a very large tool call input
+  or text is sent alone as one message (D5e) and can still exceed either
+  deadline on a slow link. The largest tool call input in the incident
+  window was 27 KB.
+- **A full output expands slowly on a slow link.** A 2 MB output takes
+  about 40 s at 50 KB/s over HTTP. This is accepted: the preview stays
+  usable meanwhile, and the WebSocket keeps working.
+- **Ill-formed text is shown as replaced.** An output holding a lone
+  surrogate is served, counted, and shown with U+FFFD in its place
+  (canonical UTF-8); its raw ill-formed code units are not preserved.
 - **Nested worker transcripts are not elided.** A worker transcript with a
   huge tool output still ships whole when the user opens it. This is left
   for the worker-transcript windowing that the proposal puts out of scope.
@@ -776,7 +887,7 @@ progress (L3).
 All additions are additive, and no schema or stored data changes. Mixed
 client and server versions fall back to full snapshots. The compression
 default changes for existing installs, and `AGENTBOARD_WS_DEFLATE=false`
-restores today's behaviour. `outputElided` and `chat-tool-output` are
+restores today's behaviour. `outputElided` and the full-output route are
 additive. An older client shows the elided preview without the fetch,
 and an older server never elides. Rollback means reverting the change.
 

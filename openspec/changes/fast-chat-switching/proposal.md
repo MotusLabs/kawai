@@ -75,13 +75,20 @@ the client cannot tell a slow download from a dead socket.
   run.
 - **Large tool outputs are elided on the wire.** Every `tool_result`
   delivered to a client (snapshot, history page, or live `chat-events`)
-  whose output exceeds 65,536 encoded UTF-8 bytes carries only its first
-  65,536 bytes, cut on a character boundary, plus `outputElided` with the
-  full size. A new `chat-tool-output` request fetches the full output when
-  the user expands it, in chunks of at most 64 KiB requested one at a time,
-  so the fetch itself never outlasts the heartbeat. Nested worker
-  transcripts are not elided. Stored history, search, and the agent keep the full
-  output. The window budget is priced on the elided events.
+  whose output, serialized as a JSON string, exceeds 65,536 UTF-8 bytes
+  carries the longest prefix within that size, cut on a character
+  boundary, plus `outputElided` with the full output's UTF-8 size. Stored
+  history, search, and the agent keep the full output. The window budget
+  is priced on the elided events. Nested worker transcripts are not
+  elided.
+- **The full output comes over HTTP.** Expanding an elided result
+  downloads it from a new read-only route,
+  `GET /api/chat/sessions/:sessionId/tool-output/:eventId`, as plain UTF-8
+  text, byte for byte. The download never travels on the WebSocket, can
+  be cancelled, and survives a WebSocket reconnect.
+- **Live batches are capped as sent.** A live `chat-events` message is at
+  most 256 KiB as sent, except one event that alone is larger, which is
+  sent by itself.
 - **Messages are never dropped silently.** The server sets
   `closeOnBackpressureLimit`: a connection whose outbound buffer reaches
   Bun's limit is closed and the close is logged. The client reconnects and
@@ -102,8 +109,9 @@ None.
 - `chat-sessions`: the recent window and each page gain the size budget
   and the in-turn cut rule; a new requirement for resuming a held transcript
   on reopen; a new requirement for releasing an archived chat's loaded
-  history; a new requirement eliding large tool outputs from delivered
-  events.
+  history; new requirements eliding large tool outputs from delivered
+  events, serving the full output over HTTP, and bounding live event
+  batches.
 - `terminal-streaming`: "WebSocket compression is opt-in" becomes compression
   of large non-terminal messages by default, with terminal output never
   compressed; new requirements that outbound messages are never dropped
@@ -118,11 +126,13 @@ None.
   `TerminalOutputCoalescer` sends, `config.ts` (`AGENTBOARD_WS_DEFLATE`
   values); `socketHandlers.ts` (`closeOnBackpressureLimit`, close
   logging); a pure elision step applied to every delivered chat event
-  (`src/server/chat/toolOutputElision.ts`) and the `chat-tool-output`
-  handler in `ChatConnections.ts`.
+  (`src/server/chat/toolOutputElision.ts`), the live-batch byte cap in
+  `ChatConnections.ts`, the full-output route
+  (`src/server/routes/chatToolOutput.ts`, mounted in `bootstrap.ts`), and
+  `ChatSessionManager.getToolOutput`.
 - Client: `hooks/useWebSocket.ts` (any inbound message satisfies the
   heartbeat and resume-verification deadlines); the tool result view
-  fetches an elided output on expand.
+  downloads an elided output over HTTP on expand.
 - Client: `stores/chatTranscript.ts` (entry origins for trimming),
   `stores/chatStore.ts` (resume snapshot), `stores/chatAttachment.ts`
   (attach fields), `stores/chatHistoryPages.ts` (a page prepend carries the
@@ -132,9 +142,8 @@ None.
   `chat-snapshot` and `chat-history-page` replies gain an optional
   `historyEpoch` marker. Older clients send no `held` and receive full
   snapshots; older servers ignore `held`. `tool_result` events gain an
-  optional `outputElided` (`{ totalBytes }`), and a new `chat-tool-output`
-  request/reply pair returns one event's full output one chunk at a time
-  (`offset` in, `chunk`/`nextOffset`/`totalBytes` out). An older client shows
+  optional `outputElided` (`{ totalBytes }`), and the new HTTP route
+  returns one event's full output. An older client shows
   the 64 KiB preview without the fetch.
 - Out of scope: tail-reading transcripts on first open after a restart
   (measured 0.1–0.2 s for most chats, 4.1 s for the 527 MB lead transcript;
