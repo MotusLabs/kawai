@@ -344,9 +344,10 @@ Properties over transfers:
   (enqueued at every idle moment), one group message, and clock steps of 1–5
   minutes. Fixed seed 4242, 300 cases, through the production `MailDispatcher`
   plus `ProfileRouter` composition (hazard M1). The property: the group
-  message is claimed no later than the first idle moment at or after
-  `max(15 min, created + wait)` when the owner stays busy, or at the owner's
-  first idle moment within the wait.
+  message is claimed no later than the earlier of the owner's first idle
+  moment at or after 15 minutes and within the wait (then by the owner), and
+  any member's first idle moment at or after `max(15 min, created + wait)`.
+  Before 15 minutes an idle owner takes its waiting direct mail first (D4).
 - **P2, at most one claim.** Under the same generator, with replays and a
   restart between passes, no message is ever claimed by two sessions.
 - **P3, one derivation.** For random states (seed 1717, 500 cases), the
