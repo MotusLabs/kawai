@@ -226,6 +226,12 @@ exactly when routing would no longer prefer the owner.
   the live owner hands over instead.
 - **Rejected: a human-only reassign.** The incident's lead replacements
   happened while the human was away; a replacing lead must recover alone.
+- **Supersedes change-coordination's no-claim rule.** "Coordinator recovery
+  respects durable ownership" said a replacement never claims another
+  session's amend or close rights. This change keeps that for implicit
+  claims, but lets a recorded takeover from a departed owner grant them. The
+  human chose to include handover in this change, and without a takeover a
+  replaced lead's open tasks keep refusing every agent.
 - **Rejected: storing the owner on the message (an earlier draft of D1).**
   It cannot follow a transfer.
 

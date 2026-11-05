@@ -92,6 +92,10 @@ None.
   account.
 - `team-waiting-reasons`: a message held for a busy owner names that owner
   and the end of the wait.
+- `change-coordination`: a replacement coordinator may gain a departed
+  coordinator's amend and close rights, but only through a recorded
+  `task_transfer_owner` takeover; recovery otherwise still goes through the
+  owner or the human.
 
 ## Impact
 

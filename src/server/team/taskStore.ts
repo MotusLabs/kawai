@@ -441,6 +441,7 @@ export class TaskStore {
   summary(task: TeamTask): TeamTaskSummary {
     const ids = new Set<string>()
     if (task.creator.sessionId) ids.add(task.creator.sessionId)
+    if (task.ownerSession) ids.add(task.ownerSession)
     const rows = this.db.prepare(`
       SELECT session_id AS id FROM chat_sessions WHERE task_id = $id
       UNION SELECT from_session FROM team_messages WHERE task_id = $id AND from_session IS NOT NULL

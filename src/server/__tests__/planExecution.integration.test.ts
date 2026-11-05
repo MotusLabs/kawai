@@ -222,7 +222,7 @@ describe('the plan-execution manager bench', () => {
     })).rejects.toThrow('owned by a running execution')
     expect(manager.tasks.store.assignmentsOf(taskId)).toHaveLength(1)
     // An agent accept is refused by the creator rule: only Kawai created the task.
-    await expect(manager.results.accept({ kind: 'agent', sessionId: member }, taskId, resultId)).rejects.toThrow("Only the task's creator")
+    await expect(manager.results.accept({ kind: 'agent', sessionId: member }, taskId, resultId)).rejects.toThrow("Only the task's owner")
     expect(manager.tasks.store.get(taskId)?.status).not.toBe('done')
   }, 60_000)
 

@@ -369,7 +369,7 @@ describe('the composed execution stack (rev 3)', () => {
     })).rejects.toThrow('owned by a running execution')
     expect(tasks.store.assignmentsOf(taskId)).toHaveLength(assignmentsBefore)
     // An agent is refused by the creator rule: Kawai created the task.
-    await expect(results.accept(bench.agent('impl'), taskId, resultId)).rejects.toThrow("Only the task's creator")
+    await expect(results.accept(bench.agent('impl'), taskId, resultId)).rejects.toThrow("Only the task's owner")
     // The human accept closes the task (spec: Accepting by hand closes without landing).
     const accepted = await results.accept(bench.human, taskId, resultId)
     expect(accepted.task.status).toBe('done')
