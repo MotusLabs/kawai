@@ -211,6 +211,12 @@ export class TaskStore {
         input.parentId ?? null, input.worktree ?? null, input.openspecChange ?? null,
         input.planId ?? null, input.planChange ?? null, input.requestKey ?? null, now, now,
       )
+      // An agent's task starts owned by its creator (group-mail-task-affinity
+      // D7), written apart from the insert so a store on a database before
+      // migration 23 still creates human and Kawai tasks.
+      if (input.creator.kind === 'agent') {
+        this.db.prepare('UPDATE team_tasks SET owner_session = ? WHERE id = ?').run(input.creator.sessionId, id)
+      }
       this.insertRevision(id, 1, input.direction, input.acceptance ?? null, input.creator, now)
       within?.(this.get(id)!)
     })()
@@ -493,6 +499,7 @@ function mapTask(row: Record<string, unknown>): TeamTask {
     title: String(row.title),
     status: TASK_STATUSES.includes(status) ? status : 'open',
     creator: partyFromRow(row.creator_kind, row.creator_session),
+    ownerSession: text(row.owner_session),
     parentId: text(row.parent_id),
     worktree: text(row.worktree),
     openspecChange: text(row.openspec_change),
