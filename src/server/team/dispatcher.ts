@@ -3,7 +3,12 @@
 // its owner's startup recovery has run.
 // Idleness is checked again inside the atomic claim; SDK queues receive only
 // idle turns, except urgent direct mail after an acknowledged interrupt.
-// Order per pass: urgent direct, urgent group, normal direct, normal group.
+// Order per pass: urgent direct, urgent group, aged normal group, normal
+// direct, normal group (group-mail-task-affinity D4): normal group mail due
+// for at least GROUP_AGING_MS, measured from `deliver_at ?? created_at`, is
+// routed before normal direct mail, so an idle member chosen for it is
+// claimed before its own direct mail is offered and a steady direct stream
+// cannot starve the group.
 // Direct mail goes to its recipient; group mail is routed one message at a
 // time (profile-routing D5): the router sees the group's eligible members —
 // idle, available, request-free, not parked, and in the target worktree of
@@ -103,6 +108,9 @@ export interface PassOutcome {
 export interface GroupRouter {
   route(message: TeamMessage, view: RouteView): Promise<RouteResult>
 }
+
+/** Normal group mail due this long is routed before normal direct mail (D4). */
+export const GROUP_AGING_MS = 15 * 60_000
 
 const longestIdle: GroupRouter = {
   route: async (_message, view) => (view.eligible[0] ? { kind: 'member', sessionId: view.eligible[0].sessionId } : { kind: 'none' }),
@@ -251,10 +259,19 @@ export class MailDispatcher {
     const groupMail = this.store.dueGroupMail()
     const live = new Set(groupMail.map(message => message.id))
     for (const id of this.holds.keys()) if (!live.has(id)) this.holds.delete(id)
-    for (const priority of ['urgent', 'normal'] as const) {
+    const now = this.now()
+    const aged = (message: TeamMessage) => now - Date.parse(message.deliverAt ?? message.createdAt) >= GROUP_AGING_MS
+    const normal = groupMail.filter(message => message.priority === 'normal')
+    const steps: Array<() => Promise<void>> = [
+      () => this.directPass('urgent'),
+      () => this.groupPass(groupMail.filter(message => message.priority === 'urgent')),
+      () => this.groupPass(normal.filter(aged)),
+      () => this.directPass('normal'),
+      () => this.groupPass(normal.filter(message => !aged(message))),
+    ]
+    for (const step of steps) {
       if (this.closed) return
-      await this.directPass(priority)
-      await this.groupPass(groupMail.filter(message => message.priority === priority))
+      await step()
     }
     this.finishPass()
   }
