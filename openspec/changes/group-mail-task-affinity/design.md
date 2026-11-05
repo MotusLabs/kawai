@@ -24,6 +24,11 @@ See proposal.md, Why, for the incident. These code facts constrain the design:
   `chat_sessions.task_id`, set when task mail is pushed to it.
 - **Group frontmatter.** It is parsed in `src/server/team/groupFile.ts`, with
   strict per-key validation and warnings for bad values.
+- **Task rights.** `tasks.creator_kind` and `tasks.creator_session`
+  (`taskStore.ts`) decide who amends and sends revision notices
+  (`TaskService.ts`) and who closes (`taskStatusRights.ts`). A creator that is
+  archived or context-exhausted leaves its open tasks with no agent able to
+  amend or close them.
 - **Waiting-reason kinds.** They are listed in `src/shared/team.ts`
   (`WaitingConstraint`), rendered by `src/client/utils/waitingLabels.ts`, and
   computed in `waitingReasons.ts` and from router diagnoses.
@@ -32,18 +37,22 @@ See proposal.md, Why, for the incident. These code facts constrain the design:
 
 **Goals:**
 
-- A lead receives group mail about the tasks it created, and the other lead
-  takes it only when the owner is unavailable or has been busy past a bounded
-  wait.
+- A lead receives group mail about the tasks it owns, and another lead takes
+  it only when the owner is unavailable or has been busy past a bounded wait.
+  Nothing assumes a number of leads: with one lead affinity changes nothing,
+  and with several each owner is preferred.
+- A replacing lead can take over a departed lead's tasks, and a lead can hand
+  a task to another before leaving it.
 - No group's mail can be starved indefinitely by a stream of direct mail.
 - The router, the dispatch preview, `team_capacity`, and waiting reasons give
   one answer.
 
 **Non-Goals:**
 
-- **No ownership transfer tool.** The owner is the task's creator. An archived
-  or exhausted creator simply falls back. Rebalancing is a follow-up if
-  needed.
+- **No automatic reassignment.** Ownership moves only when an agent calls
+  `task_transfer_owner` (D7); nothing rebalances by load. Until a takeover,
+  a departed owner's mail falls back to the group's strategy.
+- **No ownership for human or Kawai tasks.** They keep today's rights.
 - **No affinity for direct mail, replies, or mail without a resolvable task**
   (human requests, Kawai plan mail).
 - **No change to urgent ordering**, to interrupts, or to the worktree
@@ -55,28 +64,34 @@ See proposal.md, Why, for the incident. These code facts constrain the design:
 
 ## Decisions
 
-### D1: The owner is recorded at send time, in its own column
+### D1: The task is recorded at send; its owner is resolved at route time
 
-At send time, `TeamMailbox.send` resolves the task: `input.task_id`, else the
-sender session's `chat_sessions.task_id`. When the target group sets
-`affinity: task-owner`, the task's `creator_session` is a session whose group
-is the target group, and the creator kind is `agent`, it stores that session
-in a new nullable column, `team_messages.task_owner`. That covers
-`messageSchema.ts`, `EnqueueInput.taskOwner`, and the `TeamMessage.taskOwner`
-field.
+At send time, `TeamMailbox.send` resolves the affinity task: `input.task_id`,
+else the sender session's `chat_sessions.task_id`. When the target group sets
+`affinity: task-owner` and a task resolves, it stores the task id in a new
+nullable column, `team_messages.affinity_task`. That covers
+`messageSchema.ts`, `EnqueueInput.affinityTask`, and the
+`TeamMessage.affinityTask` field.
+
+At each routing decision the dispatcher looks up the task's
+`owner_session` (D7) and passes it to the router as the message's task owner
+only when that session's group is the target group. The lookup is one
+indexed read per group message per pass, batched per pass by task id.
 
 - **Why a new column, not `task_id`.** Setting `task_id` would add a task
   section to the lead's envelope and run `associateTask`, re-pointing the
   lead's own current task to the dev's task. That is wrong for a lead.
-- **Why at send time, not at route time.** The sender's current task can
-  change after the message is sent, and the recorded value makes the decision
-  auditable in the Mailbox. Whether the owner is still a live member is
-  judged at route time (D3).
+- **Why the task at send time.** The sender's current task can change after
+  the message is sent, and the recorded value makes the decision auditable.
+- **Why the owner at route time.** Ownership can move while mail is queued
+  (D7). A stored owner would keep sending a departed lead's mail to the
+  fallback after a takeover; the resolved owner follows the transfer.
+  Whether the owner is a live member is judged at route time too (D3).
 - **Rejected:** inferring the task from the message body. It is unreliable,
   and rules never see bodies.
 - **Replies.** A reply already goes to its original sender, so replies need
-  no owner. A limit forward keeps `task_owner`, since it is the same message
-  and the same task.
+  no owner. A limit forward keeps `affinity_task`, since it is the same
+  message and the same task.
 
 ### D2: Opt-in per group: `affinity` and `affinityWait`
 
@@ -94,7 +109,7 @@ applies. `affinityWait: 0` means prefer the owner when it is idle, never wait.
 ### D3: One pure derivation decides prefer, hold, or fall back
 
 A new pure function, `ownerAffinity(state)`, sits beside
-`evaluateEligibility`. Its inputs are the recorded owner, the owner member's
+`evaluateEligibility`. Its inputs are the resolved task owner, the owner member's
 causes (from `memberStateCauses`, or absent when the owner is not a live
 group member), the filter reasons for the owner's profile, the message's
 creation time, `affinityWait`, and `now`. It returns one of:
@@ -118,7 +133,7 @@ One function means the readers cannot drift apart (oracle hazard "Several
 readers disagreeing on derived state").
 
 **Cooling.** A cooling owner gives `none`, not `hold`. A provider limit is
-exactly the case where the other lead should take over, and the lead group's
+exactly the case where another lead should take over, and the lead group's
 `onLimit: release` already expresses that intent.
 
 **Order.** The order inside `route()` is:
@@ -174,11 +189,45 @@ the constraint disappears.
 A short paragraph tells leads three things:
 
 - group mail about another lead's task reaches that lead, so do not relay it;
-- record coordination in the task journal;
-- send direct mail to the other lead only when it must act.
+- record coordination in the task journal, and send direct mail to another
+  lead only when it must act;
+- before leaving a task, hand it to another lead with `task_transfer_owner`;
+  a replacing lead takes over a departed lead's tasks with `from_session`.
 
 The human owns this file's guidance text, so the task that edits it asks for
 review.
+
+### D7: Tasks carry an owner that agents can transfer
+
+`tasks` gains a nullable `owner_session` column. An agent-created task
+starts with owner = creator; human and Kawai tasks have none. A migration
+backfills `owner_session = creator_session` for existing agent tasks. The
+creator stays as the author; every right the creator held as an agent
+(amend, revision notices, done/cancel) moves to the owner. Human and Kawai
+rights are unchanged.
+
+`task_transfer_owner { task_id | from_session, to_session?, reason? }`:
+
+- **Handover:** the owner moves its task to `to_session`, a live,
+  non-flagged session of the owner's group.
+- **Takeover:** a session of the owner's group takes a task for itself
+  (`to_session` absent or itself) when the owner is not a live session
+  (gone or archived) or is flagged context-exhausted. `from_session` takes
+  every open, active, and blocked task of that owner in one call.
+- Each move appends a journal entry `owner: A -> B by C (reason)` in the
+  same transaction as the column write, so a crash never leaves one without
+  the other.
+
+The liveness and group checks reuse the predicates routing uses
+(`memberStateCauses` and the session's group), so a takeover is allowed
+exactly when routing would no longer prefer the owner.
+
+- **Rejected: taking over a live owner.** Two leads would race on one task;
+  the live owner hands over instead.
+- **Rejected: a human-only reassign.** The incident's lead replacements
+  happened while the human was away; a replacing lead must recover alone.
+- **Rejected: storing the owner on the message (an earlier draft of D1).**
+  It cannot follow a transfer.
 
 ## Acceptance oracles
 
@@ -186,7 +235,7 @@ review.
 
 Axes:
 
-- the recorded owner;
+- the task owner, as resolved at route time;
 - the owner's live state: eligible, only busy or awaiting a card, other cause
   (parked, context-exhausted, unavailable, startup-failed, other worktree),
   cooling, filtered (outside the role, worker choice, excluded profile), or
@@ -195,7 +244,7 @@ Axes:
 - other candidates: whether any other candidate is eligible;
 - the rule's decision.
 
-| Id | Owner recorded | Owner state | Within wait | Other candidate | Rule | Result |
+| Id | Task owner | Owner state | Within wait | Other candidate | Rule | Result |
 |---|---|---|---|---|---|---|
 | A1 | no | * | * | yes | none/default | strategy pick (unchanged) |
 | A2 | yes | eligible | * | * | none/default | owner receives it |
@@ -212,7 +261,7 @@ Axes:
 
 Unreachable or excluded combinations:
 
-- **Owner recorded on a group without affinity:** D1 never records one.
+- **Task owner on a group without affinity:** D1 records no affinity task.
 - **Owner eligible with no candidates:** an eligible owner is a candidate.
 - **`affinityWait: 0`:** within the wait is always false, so A3 cannot occur
   and A4–A5 apply.
@@ -228,20 +277,53 @@ Unreachable or excluded combinations:
 | G5 | normal, due ≥ 15 min, owner hold active | normal | direct to the idle member; the group stays held |
 | G6 | normal, due ≥ 15 min, idle owner | normal, for the owner | group to the owner first |
 
-### Owner recording at send (D1)
+### Affinity task at send and owner at route (D1)
 
-| Id | `task_id` | Sender's current task | Group affinity | Creator | Recorded owner |
+| Id | `task_id` | Sender's current task | Group affinity | Task's owner at route | Affinity task / task owner |
 |---|---|---|---|---|---|
-| R1 | given | * | on | lead session of the target group | that creator |
-| R2 | absent | set | on | lead session of the target group | that creator |
-| R3 | absent | absent | on | * | none |
-| R4 | * | * | off | * | none |
-| R5 | resolved | * | on | human, Kawai, or a session of another group | none |
-| R6 | given | set, different | on | creators differ | the creator of `task_id` |
+| R1 | given | * | on | lead session of the target group | `task_id` / that owner |
+| R2 | absent | set | on | lead session of the target group | sender's task / that owner |
+| R3 | absent | absent | on | * | none / none |
+| R4 | * | * | off | * | none / none |
+| R5 | resolved | * | on | none (human or Kawai task) or a session of another group | the task / none |
+| R6 | given | set, different | on | owners differ | `task_id` / the owner of `task_id` |
+| R7 | resolved | * | on | moved from `A` to `B` after send | the task / `B` |
 
 Every row also checks that the message's `task_id` is exactly what the
 sender gave, and that the envelope carries no task section unless `task_id`
 was given.
+
+### Ownership transfer (D7)
+
+| Id | Caller | Selector | Owner's state | Target | Result |
+|---|---|---|---|---|---|
+| T1 | owner | `task_id` | live | live, unflagged, same group | moved; journaled by the owner |
+| T2 | owner | `task_id` | live | other group, archived, or flagged | refused naming the target |
+| T3 | same group | `task_id` | archived or gone | self (default) | moved; journaled |
+| T4 | same group | `task_id` | context-exhausted | self | moved; journaled |
+| T5 | same group | `task_id` | live, unflagged | self | refused naming the owner; suggests messaging it |
+| T6 | other group | * | * | * | refused |
+| T7 | same group | `from_session` | archived, gone, or flagged | self | every open, active, blocked task moved; done and cancelled kept; ids listed |
+| T8 | same group | `from_session` | live, unflagged | self | refused naming the owner |
+| T9 | * | `task_id` of a human or Kawai task | none | * | refused: no owner |
+| T10 | * | both or neither | * | * | refused |
+| T11 | non-owner taker | `task_id` | departed | someone else | refused: a takeover names only the caller |
+
+Rights after a move (one table-driven test):
+
+| Id | Actor | Amend / notices | Done / cancel |
+|---|---|---|---|
+| O1 | new owner | allowed | allowed |
+| O2 | former owner (still the creator) | refused naming the owner | refused naming the owner |
+| O3 | human | allowed | allowed |
+| O4 | Kawai, on its own task | as today | as today |
+
+Properties over transfers:
+
+- **P4, one owner.** Seeded sequences (seed 2718, 300 cases) of creates,
+  transfers, takeovers, archives, and flags: after every step, each
+  agent task has exactly one owner, the journal's last owner entry (or the
+  creator, with none) equals the column, and a refused call changes nothing.
 
 ### Properties
 
@@ -262,8 +344,13 @@ was given.
 ## Risks / Trade-offs
 
 - **[Imbalance: one lead owns the busy tasks]** → `affinityWait` bounds the
-  delay, so overflow goes to the other lead. Load share is visible per owner
-  in the Mailbox. A transfer tool is a follow-up if this is needed.
+  delay, so overflow goes to any free lead, and an owner can hand tasks over
+  with `task_transfer_owner`.
+- **[A departed lead's mail until a takeover]** → the owner is not a live
+  member, so A9 applies: mail routes by strategy with no wait. Only the
+  rights wait for a takeover.
+- **[Owner rights change who may close]** → for tasks never transferred the
+  owner is the creator, so nothing changes until someone transfers.
 - **[A wrong owner when a dev's current task is stale]** → the explicit
   `task_id` wins (R6). The worst case is a delay of at most `affinityWait`.
 - **[Aging reorders conversations]** → it applies only to group mail that has
@@ -274,13 +361,17 @@ was given.
   A rule that ignores it keeps today's behavior, minus the hold, which only
   the built-in default path applies.
 - **[Restart]** → holds are in memory and recomputed from `created_at` on the
-  first pass. `task_owner` persists with the row. No new exclusive slot or
-  recovery mechanism, so no recovery-matrix row.
+  first pass. `affinity_task` persists with the row, and the owner is read
+  from the task each pass. The transfer is one transaction. No new exclusive
+  slot or recovery mechanism, so no recovery-matrix row.
 
 ## Migration Plan
 
-- An additive nullable column, `task_owner`, added in `messageSchema.ts`.
+- An additive nullable column, `affinity_task`, added in `messageSchema.ts`.
   Existing rows stay null and route exactly as today.
+- An additive nullable column, `tasks.owner_session`, backfilled from
+  `creator_session` for agent tasks in the same migration, so existing tasks
+  keep their creator's rights.
 - Deploy and restart. The lead group takes effect when `lead.md` carries
   `affinity`, which a group reload or restart picks up.
 - **Rollback:** remove `affinity` from `lead.md` to disable affinity. Aging
@@ -288,5 +379,5 @@ was given.
 
 ## Open Questions
 
-- Should the Mailbox row show the recorded owner beside the recipient? This
+- Should the Mailbox row show the resolved task owner beside the recipient? This
   is display only and can follow without changing the specs.

@@ -27,21 +27,25 @@ Among messages eligible for an agent, the system SHALL deliver urgent messages b
 
 ## ADDED Requirements
 
-### Requirement: Group mail records its task owner
-When group mail is sent to a group with `affinity: task-owner`, the system SHALL record a task owner on the message. The task SHALL be the message's task, else the sending session's current task. Its owner SHALL be the task's creator when that creator is a session of the target group, else none. Recording the owner SHALL NOT set the message's task or change its envelope.
+### Requirement: Group mail records its affinity task
+When group mail is sent to a group with `affinity: task-owner`, the system SHALL record an affinity task on the message: the message's task, else the sending session's current task, else none. Recording it SHALL NOT set the message's task or change its envelope. Routing SHALL resolve the task's current owner from the affinity task each time it decides, so mail queued before an ownership transfer follows the new owner.
 
-#### Scenario: Owner from the sender's current task
-- **WHEN** a developer working on a task created by lead `A` sends a message to `lead` without `task_id`, and `lead` sets `affinity: task-owner`
-- **THEN** the message records `A` as its task owner, and carries no task section
+#### Scenario: Affinity task from the sender's current task
+- **WHEN** a developer working on task `T` sends a message to `lead` without `task_id`, and `lead` sets `affinity: task-owner`
+- **THEN** the message records `T` as its affinity task, and carries no task section
 
 #### Scenario: Explicit task wins
-- **WHEN** the same developer sends to `lead` with `task_id` naming a task created by lead `B`
-- **THEN** the message records `B` as its task owner
+- **WHEN** the same developer sends to `lead` with `task_id` naming task `U`
+- **THEN** the message records `U` as its affinity task
 
-#### Scenario: Creator outside the group
-- **WHEN** the resolved task was created by the human or by Kawai
-- **THEN** the message records no task owner
+#### Scenario: Sender without a task
+- **WHEN** a session with no current task sends to `lead` without `task_id`
+- **THEN** the message records no affinity task
 
 #### Scenario: Group without affinity
 - **WHEN** a message is sent to a group that does not set `affinity`
-- **THEN** the message records no task owner
+- **THEN** the message records no affinity task
+
+#### Scenario: Queued mail follows a transfer
+- **WHEN** a message with affinity task `T` is queued while lead `A` owns `T`, and ownership of `T` moves to lead `B` before it routes
+- **THEN** routing treats `B` as the message's task owner

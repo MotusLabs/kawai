@@ -3,10 +3,10 @@
 ## ADDED Requirements
 
 ### Requirement: Groups may route by task owner
-A group's frontmatter SHALL accept `affinity: task-owner` and `affinityWait` in whole minutes, defaulting to 30; other values SHALL be reported and ignored. When a message records a task owner who is an eligible candidate, the built-in strategy SHALL pick the owner before applying the group's `strategy`, even when the owner's profile ranks lower or another member has been idle longer.
+A group's frontmatter SHALL accept `affinity: task-owner` and `affinityWait` in whole minutes, defaulting to 30; other values SHALL be reported and ignored. A message's task owner SHALL be its affinity task's current owner at each routing decision, when that owner is a session of the target group. An eligible task owner SHALL be picked before the group's `strategy` applies, even when its profile ranks lower or another member has been idle longer.
 
 #### Scenario: Owner preferred over the longest-idle member
-- **WHEN** lead `B` has been idle for 10 minutes, lead `A` has just become idle, and a group message records `A` as its task owner
+- **WHEN** lead `B` has been idle for 10 minutes, lead `A` has just become idle, and a group message's affinity task is owned by `A`
 - **THEN** `A` receives the message
 
 #### Scenario: Owner preferred under profile order
@@ -17,8 +17,12 @@ A group's frontmatter SHALL accept `affinity: task-owner` and `affinityWait` in 
 - **WHEN** a group file sets `affinity: newest`
 - **THEN** the group reports the invalid value and routes without affinity
 
-#### Scenario: No owner recorded
-- **WHEN** a message to an affinity group records no task owner
+#### Scenario: Owner outside the group
+- **WHEN** a message's affinity task was created by the human, or is owned by a developer
+- **THEN** the message has no task owner and the group's `strategy` routes it
+
+#### Scenario: No task owner
+- **WHEN** a message to an affinity group has no affinity task, or its task has no owner or one outside the group
 - **THEN** the group's `strategy` routes it as before
 
 ### Requirement: A busy task owner holds its mail for a bounded wait
@@ -49,10 +53,10 @@ When a message's task owner is a live member excluded only because it is working
 - **THEN** the message waits as group mail with no eligible candidate does, and the owner receives it once idle
 
 ### Requirement: Rules see the task owner
-The route context given to routing rules SHALL include the message's recorded task owner as an additive metadata field, absent when the message has none. A rule's pick or hold SHALL take precedence over the owner preference and the owner hold. When the rule returns default, the built-in strategy SHALL apply both.
+The route context given to routing rules SHALL include the message's task owner, as resolved for that decision, as an additive metadata field, absent when the message has none. A rule's pick or hold SHALL take precedence over the owner preference and the owner hold. When the rule returns default, the built-in strategy SHALL apply both.
 
 #### Scenario: Rule reads the owner
-- **WHEN** a message that records owner `A` is routed through a group rule
+- **WHEN** a message whose task owner is `A` is routed through a group rule
 - **THEN** the rule's context shows `A` beside the message's other metadata
 
 #### Scenario: Rule overrides the owner
