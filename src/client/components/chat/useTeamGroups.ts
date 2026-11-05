@@ -2,7 +2,11 @@
 // new-session picker. Never blocking: a failed request or a malformed group
 // file becomes a warning and the picker still offers "No group". Each group
 // carries its allowed profiles with caps and live counts (profile routing),
-// so the dialog can warn before a session exceeds a cap.
+// so the dialog can warn before a session exceeds a cap. It also returns the
+// team's default approval policy for the path it answered
+// (unify-approval-defaults D2): null until that answer, a null policy when
+// the team has none or the lookup failed.
+import type { ChatApprovalPolicy } from '@shared/chat'
 import { useEffect, useState } from 'react'
 
 export interface TeamGroupProfile {
@@ -24,9 +28,16 @@ const isGroupProfile = (entry: unknown): entry is TeamGroupProfile => {
     (row.cap === undefined || typeof row.cap === 'number')
 }
 
-function parseGroups(data: unknown): { groups: TeamGroupOption[]; errors: string[] } {
-  const { groups, errors, warnings } = (typeof data === 'object' && data !== null ? data : {}) as {
-    groups?: unknown; errors?: unknown; warnings?: unknown
+/** The team default approval policy the lookup answered for one project path. */
+export interface TeamApprovalDefaultAnswer {
+  projectPath: string
+  /** null = the team has no default, or the lookup failed. */
+  policy: ChatApprovalPolicy | null
+}
+
+function parseGroups(data: unknown): { groups: TeamGroupOption[]; errors: string[]; approvalDefault: ChatApprovalPolicy | null } {
+  const { groups, errors, warnings, approvalDefault } = (typeof data === 'object' && data !== null ? data : {}) as {
+    groups?: unknown; errors?: unknown; warnings?: unknown; approvalDefault?: unknown
   }
   const valid = Array.isArray(groups)
     ? groups.filter((group): group is TeamGroupOption =>
@@ -38,7 +49,10 @@ function parseGroups(data: unknown): { groups: TeamGroupOption[]; errors: string
       }))
     : []
   const strings = (list: unknown) => Array.isArray(list) ? list.filter((item): item is string => typeof item === 'string') : []
-  return { groups: valid, errors: [...strings(errors), ...strings(warnings)] }
+  return {
+    groups: valid, errors: [...strings(errors), ...strings(warnings)],
+    approvalDefault: approvalDefault === 'auto' || approvalDefault === 'manual' ? approvalDefault : null,
+  }
 }
 
 /**
@@ -57,11 +71,13 @@ export function capWarning(group: TeamGroupOption | undefined, profileId: string
 export function useTeamGroups(enabled: boolean, projectPath?: string) {
   const [groups, setGroups] = useState<TeamGroupOption[]>([])
   const [warnings, setWarnings] = useState<string[]>([])
+  const [approvalDefault, setApprovalDefault] = useState<TeamApprovalDefaultAnswer | null>(null)
   useEffect(() => {
     const trimmed = projectPath?.trim()
     if (!enabled || !trimmed) {
       setGroups([])
       setWarnings([])
+      setApprovalDefault(null)
       return
     }
     const controller = new AbortController()
@@ -74,13 +90,15 @@ export function useTeamGroups(enabled: boolean, projectPath?: string) {
         if (controller.signal.aborted) return
         setGroups(data.groups)
         setWarnings(data.errors)
+        setApprovalDefault({ projectPath: trimmed, policy: data.approvalDefault })
       })
       .catch((cause: unknown) => {
         if (controller.signal.aborted) return
         setGroups([])
+        setApprovalDefault({ projectPath: trimmed, policy: null })
         setWarnings([cause instanceof Error ? cause.message : String(cause)])
       })
     return () => controller.abort()
   }, [enabled, projectPath])
-  return { groups, warnings }
+  return { groups, warnings, approvalDefault }
 }

@@ -1501,20 +1501,23 @@ describe('NewSessionModal provisional focus', () => {
   })
 })
 
-describe('NewSessionModal auto-approve tools', () => {
-  afterEach(() => {
-    useSettingsStore.setState({ defaultApprovalPolicy: 'manual' })
-  })
-
+describe('NewSessionModal auto-approve tools (unify-approval-defaults D2)', () => {
   /**
    * Open the dialog on its chat default with a resolved profile catalog, so
-   * the chat submit path can run (it refuses while the catalog loads).
+   * the chat submit path can run (it refuses while the catalog loads). The
+   * groups lookup answers each path's team default from `defaults`; a path
+   * missing there has no team default, and `failing` paths answer HTTP 500.
    */
-  async function chatDialog() {
+  async function chatDialog(defaults: Record<string, 'manual' | 'auto'> = {}, failing: string[] = []) {
     setupDom()
     const created: Array<{ path: string; approvalPolicy?: string }> = []
-    globalThis.fetch = (async () =>
-      Response.json({ profiles: [{ id: 'default', label: 'Default' }], errors: [] })) as unknown as typeof fetch
+    globalThis.fetch = (async (url: string) => {
+      const text = String(url)
+      if (!text.startsWith('/api/chat/groups')) return Response.json({ profiles: [{ id: 'default', label: 'Default' }], errors: [] })
+      const projectPath = new URL(text, 'http://x').searchParams.get('projectPath') ?? ''
+      if (failing.includes(projectPath)) return new Response('', { status: 500 })
+      return Response.json({ groups: [], errors: [], warnings: [], approvalDefault: defaults[projectPath] ?? null })
+    }) as unknown as typeof fetch
 
     let renderer!: TestRenderer.ReactTestRenderer
     await act(async () => {
@@ -1537,6 +1540,19 @@ describe('NewSessionModal auto-approve tools', () => {
       renderer,
       created,
       checkbox: () => renderer.root.findAllByProps({ 'data-testid': 'chat-auto-approve' }),
+      source: () => {
+        const node = renderer.root.findByProps({ 'data-testid': 'chat-auto-approve-source' })
+        return (node.children as unknown[]).join('')
+      },
+      toggle: (checked: boolean) => act(() => {
+        renderer.root.findAllByProps({ 'data-testid': 'chat-auto-approve' })[0]!.props.onChange({ target: { checked } })
+      }),
+      setPath: async (value: string) => {
+        await act(async () => {
+          renderer.root.findByProps({ 'aria-label': 'Project Path' }).props.onChange({ target: { value } })
+          await settle()
+        })
+      },
       submit: () => {
         act(() => {
           renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} })
@@ -1546,7 +1562,6 @@ describe('NewSessionModal auto-approve tools', () => {
   }
 
   test('the checkbox appears for chat and not for terminal', async () => {
-    useSettingsStore.setState({ defaultApprovalPolicy: 'manual' })
     const dialog = await chatDialog()
 
     // Chat is the dialog's default kind: the checkbox is present.
@@ -1564,11 +1579,13 @@ describe('NewSessionModal auto-approve tools', () => {
     })
   })
 
+  // Transitional (unify-approval-defaults): annotated until the change archives.
   // @covers: chat-sessions › Users configure the default approval policy for new chat sessions › Settings default seeds new chats
-  test('a default of auto pre-checks the box and submits auto', async () => {
-    useSettingsStore.setState({ defaultApprovalPolicy: 'auto' })
-    const dialog = await chatDialog()
+  // @covers: chat-sessions › New chats start from their team's default approval policy › Team default seeds new chats
+  test('an auto team default for the picked path pre-checks the box and submits auto', async () => {
+    const dialog = await chatDialog({ '/base': 'auto' })
     expect(dialog.checkbox()[0].props.checked).toBe(true)
+    expect(dialog.source()).toBe('Team default: auto.')
 
     dialog.submit()
     expect(dialog.created).toEqual([{ path: '/base', approvalPolicy: 'auto' }])
@@ -1578,13 +1595,12 @@ describe('NewSessionModal auto-approve tools', () => {
     })
   })
 
+  // Transitional (unify-approval-defaults): annotated until the change archives.
   // @covers: chat-sessions › Users configure the default approval policy for new chat sessions › Creation dialog overrides the default
-  test('unchecking an auto default creates a manual session', async () => {
-    useSettingsStore.setState({ defaultApprovalPolicy: 'auto' })
-    const dialog = await chatDialog()
-    act(() => {
-      dialog.checkbox()[0].props.onChange({ target: { checked: false } })
-    })
+  // @covers: chat-sessions › New chats start from their team's default approval policy › Creation dialog overrides the team default
+  test('unchecking an auto team default creates a manual session', async () => {
+    const dialog = await chatDialog({ '/base': 'auto' })
+    dialog.toggle(false)
     expect(dialog.checkbox()[0].props.checked).toBe(false)
 
     dialog.submit()
@@ -1595,10 +1611,10 @@ describe('NewSessionModal auto-approve tools', () => {
     })
   })
 
-  test('a default of manual leaves the box unchecked and submits manual', async () => {
-    useSettingsStore.setState({ defaultApprovalPolicy: 'manual' })
-    const dialog = await chatDialog()
+  test('a manual team default leaves the box unchecked and submits manual', async () => {
+    const dialog = await chatDialog({ '/base': 'manual' })
     expect(dialog.checkbox()[0].props.checked).toBe(false)
+    expect(dialog.source()).toBe('Team default: manual.')
 
     dialog.submit()
     expect(dialog.created).toEqual([{ path: '/base', approvalPolicy: 'manual' }])
@@ -1606,6 +1622,63 @@ describe('NewSessionModal auto-approve tools', () => {
     act(() => {
       dialog.renderer.unmount()
     })
+  })
+
+  // @covers: chat-sessions › New chats start from their team's default approval policy › A path without a team default seeds manual
+  test('a path whose team has no default, or whose lookup fails, seeds manual and says so', async () => {
+    const dialog = await chatDialog({}, ['/broken'])
+    expect(dialog.checkbox()[0].props.checked).toBe(false)
+    expect(dialog.source()).toBe('No team default applies: starts on manual.')
+
+    await dialog.setPath('/broken')
+    expect(dialog.checkbox()[0].props.checked).toBe(false)
+    expect(dialog.source()).toBe('No team default applies: starts on manual.')
+
+    act(() => {
+      dialog.renderer.unmount()
+    })
+  })
+
+  // @covers: chat-sessions › New chats start from their team's default approval policy › Changing the path re-seeds an untouched checkbox
+  test('an untouched box follows each path’s default; once toggled, a path change keeps the user’s choice', async () => {
+    const dialog = await chatDialog({ '/base': 'auto', '/team-auto': 'auto' })
+    expect(dialog.checkbox()[0].props.checked).toBe(true)
+
+    await dialog.setPath('/elsewhere')
+    expect(dialog.checkbox()[0].props.checked).toBe(false)
+    await dialog.setPath('/team-auto')
+    expect(dialog.checkbox()[0].props.checked).toBe(true)
+
+    dialog.toggle(false)
+    await dialog.setPath('/base')
+    expect(dialog.checkbox()[0].props.checked).toBe(false)
+    dialog.toggle(true)
+    await dialog.setPath('/elsewhere')
+    expect(dialog.checkbox()[0].props.checked).toBe(true)
+
+    dialog.submit()
+    expect(dialog.created).toEqual([{ path: '/elsewhere', approvalPolicy: 'auto' }])
+
+    act(() => {
+      dialog.renderer.unmount()
+    })
+  })
+
+  // @covers: chat-sessions › New chats start from their team's default approval policy › A browser's stored value is ignored
+  test('a browser-stored auto from an earlier Settings version does not check the box', async () => {
+    // What an old persisted key would put in the store if it survived rehydrate.
+    useSettingsStore.setState({ defaultApprovalPolicy: 'auto' } as never)
+    try {
+      const dialog = await chatDialog()
+      expect(dialog.checkbox()[0].props.checked).toBe(false)
+      dialog.submit()
+      expect(dialog.created).toEqual([{ path: '/base', approvalPolicy: 'manual' }])
+      act(() => {
+        dialog.renderer.unmount()
+      })
+    } finally {
+      useSettingsStore.setState({ defaultApprovalPolicy: undefined } as never)
+    }
   })
 })
 

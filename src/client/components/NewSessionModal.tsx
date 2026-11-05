@@ -160,15 +160,18 @@ export default function NewSessionModal({
   /** Seeded with the generic default; every open re-derives it (see `defaultKind`). */
   const [kind, setKind] = useState<'terminal' | 'chat'>(defaultKind())
   const [claudeProfileId, setClaudeProfileId] = useState('default')
-  // Auto-approve is seeded from the Settings default on every open (design
-  // D2): the checkbox is the deliberate per-session act.
-  const defaultApprovalPolicy = useSettingsStore((state) => state.defaultApprovalPolicy)
-  const [autoApprove, setAutoApprove] = useState(false)
+  // Auto-approve follows the team default of the picked path until the user
+  // toggles it (unify-approval-defaults D2): `autoApproveChoice` is null while
+  // untouched, reset on every open. Derived in render, so a late lookup can
+  // never overwrite a click, and a path whose answer is pending shows manual.
+  const [autoApproveChoice, setAutoApproveChoice] = useState<boolean | null>(null)
   // The catalog is resolved for the entered project path: a `.kawai`
   // directory in the project (or above it) extends the picker live.
   const catalog = useClaudeProfiles(isOpen && kind === 'chat', projectPath)
   // Team groups (agent-teams): the project's roles; "" = no group.
   const teamGroups = useTeamGroups(isOpen && kind === 'chat', projectPath)
+  const teamApproval = teamGroups.approvalDefault?.projectPath === projectPath.trim() ? teamGroups.approvalDefault : null
+  const autoApprove = autoApproveChoice ?? teamApproval?.policy === 'auto'
   const [groupId, setGroupId] = useState('')
   const [name, setName] = useState('')
   const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null)
@@ -235,7 +238,7 @@ export default function NewSessionModal({
       setStartWithTouched(false)
     } else {
       setKind(defaultKind(initialAutoStartChange))
-      setAutoApprove(defaultApprovalPolicy === 'auto')
+      setAutoApproveChoice(null)
       const basePath =
         initialPath?.trim() ||
         activeProjectPath?.trim() ||
@@ -585,10 +588,17 @@ export default function NewSessionModal({
                 aria-label="Auto-approve tools"
                 data-testid="chat-auto-approve"
                 checked={autoApprove}
-                onChange={(event) => setAutoApprove(event.target.checked)}
+                onChange={(event) => setAutoApproveChoice(event.target.checked)}
               />
               Auto-approve tools
             </label>
+            <p className="mt-1 text-[10px] text-secondary" data-testid="chat-auto-approve-source">
+              {teamApproval === null
+                ? 'Checking the team default…'
+                : teamApproval.policy === null
+                  ? 'No team default applies: starts on manual.'
+                  : `Team default: ${teamApproval.policy === 'auto' ? 'auto' : 'manual'}.`}
+            </p>
             <p className="mt-1 text-[10px] text-muted">
               Tools run without asking for this session. Change it anytime from the chat header.
             </p>

@@ -15,9 +15,9 @@
 
 ## 3. The New Session dialog seeds from the team default
 
-- [ ] 3.1 Add `approvalDefault` (`'manual' | 'auto' | null`) to the `GET /api/chat/groups` response in `createTeamGroupRoutes`: null for a path with no team or a team without a default. Extend `src/server/__tests__/teamGroupRoutes.test.ts` with all three values; verify that file passes.
-- [ ] 3.2 Return `approvalDefault` from `useTeamGroups` (null on fetch failure or a malformed value). In `NewSessionModal.tsx`, seed Auto-approve from it under an `autoApproveTouched` flag reset on open, and add the source caption (design D2). Rewrite the approval cases in `src/client/__tests__/newSessionModal.test.tsx` and annotate every `chat-sessions › New chats start from their team's default approval policy › …` dialog scenario (seed, override, no default, re-seed vs touched, stored browser value ignored); verify that file passes.
-- [ ] 3.3 Retarget the `@covers` in `src/server/__tests__/indexHandlers.test.ts` to "A create request without a policy stays manual", and cover "A team default change does not touch existing sessions" with a server test that sets the team default while a team chat exists and asserts the chat's stored policy is unchanged; verify both tests pass.
+- [x] 3.1 Add `approvalDefault` (`'manual' | 'auto' | null`) to the `GET /api/chat/groups` response in `createTeamGroupRoutes`: null for a path with no team or a team without a default. Extend `src/server/__tests__/teamGroupRoutes.test.ts` with all three values; verify that file passes.
+- [x] 3.2 Return `approvalDefault` from `useTeamGroups` (null on fetch failure or a malformed value). In `NewSessionModal.tsx`, seed Auto-approve from it under an `autoApproveTouched` flag reset on open, and add the source caption (design D2). Rewrite the approval cases in `src/client/__tests__/newSessionModal.test.tsx` and annotate every `chat-sessions › New chats start from their team's default approval policy › …` dialog scenario (seed, override, no default, re-seed vs touched, stored browser value ignored); verify that file passes.
+- [x] 3.3 Retarget the `@covers` in `src/server/__tests__/indexHandlers.test.ts` to "A create request without a policy stays manual", and cover "A team default change does not touch existing sessions" with a server test that sets the team default while a team chat exists and asserts the chat's stored policy is unchanged; verify both tests pass.
 
 ## 4. Remove the Settings control
 
