@@ -2,9 +2,9 @@
 
 ## 1. Tighten-only spawn resolution
 
-- [ ] 1.1 Change `resolveSpawnApproval` (`src/shared/spawnApproval.ts`) to the design D3 order (group `manual`, then team default, then built-in manual) and add `ignoredGroupAuto` to its result; rewrite `src/shared/__tests__/spawnApproval.test.ts` as a table test of all seven D3 rows plus the property "policy is auto only when the team default is auto" over every input combination; verify with `bun run test src/shared/__tests__/spawnApproval.test.ts`.
-- [ ] 1.2 Update staffing tests (`src/server/__tests__/teamStaffing.test.ts`): replace the "Explicit auto beats a manual default" case with the group-auto cases (manual default, no default, auto default). Retarget their `@covers` annotations to `team-worktree-staffing › A group's approval key can only tighten its spawned members' policy › …` and the spawn ones to `… › A member is spawned into an unstaffed worktree › …`, and annotate "A group file cannot raise the default". Verify with `bun run test src/server/__tests__/teamStaffing.test.ts src/server/__tests__/teamApprovalDefault.integration.test.ts src/server/__tests__/teamApprovalDefaults.test.ts`.
-- [ ] 1.3 Make the dispatch preview (`groupDispatchPreview.ts`) show the tighten-only policy and source for a group with `approval: auto`; add a case to `src/server/__tests__/taskDispatchPreview.test.ts` (team default manual, group auto → manual from the team default); verify that file passes.
+- [x] 1.1 Change `resolveSpawnApproval` (`src/shared/spawnApproval.ts`) to the design D3 order (group `manual`, then team default, then built-in manual) and add `ignoredGroupAuto` to its result; rewrite `src/shared/__tests__/spawnApproval.test.ts` as a table test of all seven D3 rows plus the property "policy is auto only when the team default is auto" over every input combination; verify with `bun run test src/shared/__tests__/spawnApproval.test.ts`.
+- [x] 1.2 Update staffing tests (`src/server/__tests__/teamStaffing.test.ts`): replace the "Explicit auto beats a manual default" case with the group-auto cases (manual default, no default, auto default). Retarget their `@covers` annotations to `team-worktree-staffing › A group's approval key can only tighten its spawned members' policy › …` and the spawn ones to `… › A member is spawned into an unstaffed worktree › …`, and annotate "A group file cannot raise the default". Verify with `bun run test src/server/__tests__/teamStaffing.test.ts src/server/__tests__/teamApprovalDefault.integration.test.ts src/server/__tests__/teamApprovalDefaults.test.ts`.
+- [x] 1.3 Make the dispatch preview (`groupDispatchPreview.ts`) show the tighten-only policy and source for a group with `approval: auto`; add a case to `src/server/__tests__/taskDispatchPreview.test.ts` (team default manual, group auto → manual from the team default); verify that file passes.
 
 ## 2. Group warning and the Members notice
 
@@ -28,11 +28,11 @@
 ## 5. Tracked group files and integration
 
 - [ ] 5.1 Remove `approval: auto` from `.kawai/groups/junior-devs.md`, `middle-devs.md`, `senior-devs.md`, and `reviewers.md`, and rewrite the `reviewers.md` comment to say Codex reviewers need the team default set to auto; leave untracked group files alone. Verify with `git grep -n "^approval: auto" -- .kawai/groups` printing nothing, and that the group-file tests reading `.kawai/` (if any, per their `@reads` headers) pass.
-- [ ] 5.2 Check that every scenario in this change's delta specs has a `@covers` annotation and that no annotation still names a removed requirement's scenario; verify with `grep -rn "Users configure the default approval policy\|A member is spawned when none is available" src scripts` printing nothing, and `bun run test scripts/__tests__/specCoverageGuard.test.ts` passing.
+- [ ] 5.2 Check that every scenario in this change's delta specs has a `@covers` annotation. The removed requirements' scenarios keep their transitional annotations, because the guard requires every scenario still in the main specs to stay covered until this change archives. Verify with `bun run test scripts/__tests__/specCoverageGuard.test.ts` passing and with each delta scenario name found by `grep -rn` under `src`.
 - [ ] 5.3 Walk through the UI with Playwright after `bun run build`. With team default auto, New Session for a path in the team shows Auto-approve checked with "Team default: auto". A teamless path shows it unchecked. Settings → Chat shows no approval control. The Members tab names a group with `approval: auto` until the default is set to auto. Record the screenshots in the result.
 - [ ] 5.4 Run `bun run check` on the clean committed tree and verify it records a pass.
 
 ## Workflow follow-up
 
 - Before deploying, the human sets the team default to auto on the Team page for every team whose groups relied on `approval: auto` (design Migration Plan).
-- Archive the change after review; at archive, confirm every ADDED or MODIFIED scenario left in the main specs has a covering annotation.
+- Archive the change after review. At archive, delete the transitional annotations naming "Users configure the default approval policy for new chat sessions" and "A member is spawned when none is available" (the guard fails until they are gone), and confirm every ADDED or MODIFIED scenario left in the main specs has a covering annotation.

@@ -47,6 +47,7 @@ beforeEach(() => {
   fs.writeFileSync(path.join(groups, 'pair.md'), '---\nprofiles: { sonnet: 2, glm-flash: 1 }\n---\nPaired')
   fs.writeFileSync(path.join(groups, 'strict.md'), '---\nprofiles: [sonnet]\napproval: manual\n---\nStrict')
   fs.writeFileSync(path.join(groups, 'solo.md'), '---\nprofiles: { sonnet: 1 }\nmax: 3\n---\nSolo')
+  fs.writeFileSync(path.join(groups, 'eager.md'), '---\nprofiles: [sonnet]\napproval: auto\n---\nEager')
   db = initDatabase({ path: path.join(dir, 'db.sqlite') })
   mail = new MailboxStore(db.db)
   const assignmentStore = new AssignmentStore(db.db, mail)
@@ -200,7 +201,7 @@ describe('with a worker the preview applies the choice through the eligibility c
   })
 })
 
-describe('the group preview shows the policy a spawn gets (team-approval-default O3, O6)', () => {
+describe('the group preview shows the policy a spawn gets (unify-approval-defaults D3)', () => {
   // @covers: task-assignment › Dispatch can be previewed before sending › Group preview shows the resolved policy and its source
   test('O3: no group key under an auto team default previews auto from the team default', async () => {
     staffing.approvalDefaults.set('team', 'auto')
@@ -213,5 +214,17 @@ describe('the group preview shows the policy a spawn gets (team-approval-default
     staffing.approvalDefaults.set('team', 'auto')
     const shown = await preview((await worktreeTask()).id, 'strict')
     expect({ approval: shown.approval, approvalSource: shown.approvalSource }).toEqual({ approval: 'manual', approvalSource: 'group' })
+  })
+
+  // unify-approval-defaults D3: a group key can only tighten.
+  test('a group asking for auto under a manual team default previews manual from the team default', async () => {
+    staffing.approvalDefaults.set('team', 'manual')
+    const shown = await preview((await worktreeTask()).id, 'eager')
+    expect({ approval: shown.approval, approvalSource: shown.approvalSource }).toEqual({ approval: 'manual', approvalSource: 'team' })
+  })
+
+  test('a group asking for auto with no team default previews the built-in manual', async () => {
+    const shown = await preview((await worktreeTask()).id, 'eager')
+    expect({ approval: shown.approval, approvalSource: shown.approvalSource }).toEqual({ approval: 'manual', approvalSource: 'built-in' })
   })
 })

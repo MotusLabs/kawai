@@ -20,7 +20,7 @@ import type { StaffingPreview } from './staffing'
 import type { ChatApprovalPolicy } from '../../shared/chat'
 import { resolveSpawnApproval } from '../../shared/spawnApproval'
 
-/** The shared resolution, as the preview's `approval` and `approvalSource`. */
+/** The shared tighten-only resolution, as the preview's `approval` and `approvalSource`. */
 function approvalOf(groupApproval: ChatApprovalPolicy | undefined, teamDefault: ChatApprovalPolicy | null) {
   const { policy, source } = resolveSpawnApproval(groupApproval, teamDefault)
   return { approval: policy, approvalSource: source }

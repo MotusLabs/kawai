@@ -127,7 +127,7 @@ beforeEach(() => {
   dir = fs.mkdtempSync(path.join(root, 'case-'))
   home = path.join(dir, 'home')
   fs.rmSync(path.join(repo, '.kawai'), { recursive: true, force: true })
-  writeGroup('devs', 'max: 3\nprofile: glm\napproval: auto')
+  writeGroup('devs', 'max: 3\nprofile: glm')
   writeGroup('qa', 'max: 2')
   db = initDatabase({ path: path.join(dir, 'db.sqlite') })
   store = new MailboxStore(db.db)
@@ -142,9 +142,14 @@ beforeEach(() => {
 afterEach(() => db.close())
 
 describe('spawning', () => {
+  // Transitional (unify-approval-defaults): the removed requirement's scenarios stay
+  // annotated until the change archives and drops them from the main spec.
   // @covers: team-worktree-staffing › A member is spawned when none is available › Spawn for an unstaffed worktree
   // @covers: team-worktree-staffing › A member is spawned when none is available › Group settings applied
+  // @covers: team-worktree-staffing › A member is spawned into an unstaffed worktree › Spawn for an unstaffed worktree
+  // @covers: team-worktree-staffing › A member is spawned into an unstaffed worktree › The group's profile is applied
   test('an unstaffed worktree gets a member with the group settings and the message reserved for it', async () => {
+    staffing.approvalDefaults.set(team.teamId, 'auto')
     const t = task(featX)
     const m = mail(t.id)
     const assignments = await pass()
@@ -177,26 +182,35 @@ describe('spawning', () => {
   })
 })
 
-describe('spawn approval resolution (team-approval-default O1–O9, L2)', () => {
-  type Row = [id: string, groupKey: 'manual' | 'auto' | null, teamDefault: 'manual' | 'auto' | null, policy: 'manual' | 'auto']
-  // | id | group key | team default | policy |
+describe('spawn approval resolution (unify-approval-defaults D3, L2)', () => {
+  type Row = [groupKey: 'manual' | 'auto' | null, teamDefault: 'manual' | 'auto' | null, policy: 'manual' | 'auto']
+  // | group key | team default | policy | — a group key can only tighten
   const TABLE: Row[] = [
-    ['O1', null, null, 'manual'],
-    ['O2', null, 'manual', 'manual'],
-    ['O3', null, 'auto', 'auto'],
-    ['O4', 'manual', null, 'manual'],
-    ['O5', 'manual', 'manual', 'manual'],
-    ['O6', 'manual', 'auto', 'manual'],
-    ['O7', 'auto', null, 'auto'],
-    ['O8', 'auto', 'manual', 'auto'],
-    ['O9', 'auto', 'auto', 'auto'],
+    [null, null, 'manual'],
+    [null, 'manual', 'manual'],
+    [null, 'auto', 'auto'],
+    ['manual', null, 'manual'],
+    ['manual', 'manual', 'manual'],
+    ['manual', 'auto', 'manual'],
+    ['auto', null, 'manual'],
+    ['auto', 'manual', 'manual'],
+    ['auto', 'auto', 'auto'],
   ]
-  for (const [id, groupKey, teamDefault, policy] of TABLE) {
+  for (const [groupKey, teamDefault, policy] of TABLE) {
+    // Transitional (unify-approval-defaults): the removed requirement's scenarios stay
+    // annotated until the change archives; "Explicit auto beats a manual default" is
+    // the group auto × team manual row, whose outcome this change reverses.
     // @covers: team-worktree-staffing › A member is spawned when none is available › Neither set keeps manual
     // @covers: team-worktree-staffing › A member is spawned when none is available › Team default applies to a group without the key
     // @covers: team-worktree-staffing › A member is spawned when none is available › Explicit manual beats an auto default
     // @covers: team-worktree-staffing › A member is spawned when none is available › Explicit auto beats a manual default
-    test(`${id}: group ${groupKey ?? 'absent'} × team ${teamDefault ?? 'none'} spawns ${policy}`, async () => {
+    // @covers: team-worktree-staffing › A group's approval key can only tighten its spawned members' policy › No key and no default keeps manual
+    // @covers: team-worktree-staffing › A group's approval key can only tighten its spawned members' policy › Team default applies to a group without the key
+    // @covers: team-worktree-staffing › A group's approval key can only tighten its spawned members' policy › A manual key beats an auto default
+    // @covers: team-worktree-staffing › A group's approval key can only tighten its spawned members' policy › Group auto does not beat a manual default
+    // @covers: team-worktree-staffing › A group's approval key can only tighten its spawned members' policy › Group auto with no team default keeps manual
+    // @covers: team-worktree-staffing › A group's approval key can only tighten its spawned members' policy › Group auto with an auto default spawns auto
+    test(`group ${groupKey ?? 'absent'} × team ${teamDefault ?? 'none'} spawns ${policy}`, async () => {
       writeGroup('devs', groupKey === null ? 'max: 1' : `max: 1\napproval: ${groupKey}`)
       if (teamDefault !== null) staffing.approvalDefaults.set(team.teamId, teamDefault)
       mail(task(featX).id)
@@ -205,6 +219,15 @@ describe('spawn approval resolution (team-approval-default O1–O9, L2)', () => 
       expect(spawned[0]!.approvalPolicy).toBe(policy)
     })
   }
+
+  // @covers: team-worktree-staffing › A team has a default approval policy for spawned members › A group file cannot raise the default
+  test('a group file asking for auto neither sets the team default nor spawns auto', async () => {
+    writeGroup('devs', 'max: 1\napproval: auto')
+    mail(task(featX).id)
+    await pass()
+    expect(staffing.approvalDefaults.get(team.teamId)).toBeNull()
+    expect(spawned[0]!.approvalPolicy).toBe('manual')
+  })
 
   // @covers: team-worktree-staffing › A team has a default approval policy for spawned members › Defaults are per team
   test('L2: another team’s default never reaches this team’s spawn', async () => {
