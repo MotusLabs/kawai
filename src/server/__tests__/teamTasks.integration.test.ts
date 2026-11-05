@@ -48,7 +48,7 @@ test('a lead’s worktree task spawns a member there, delivers current context o
   fs.mkdirSync(transcriptDir, { recursive: true })
   fs.mkdirSync(path.join(repo, '.kawai/groups'), { recursive: true })
   fs.writeFileSync(path.join(repo, '.kawai/groups/leads.md'), '---\ncanCreateTasks: true\n---\nCoordinate work')
-  fs.writeFileSync(path.join(repo, '.kawai/groups/devs.md'), '---\nmax: 1\nprofile: glm\napproval: auto\n---\nBuild features')
+  fs.writeFileSync(path.join(repo, '.kawai/groups/devs.md'), '---\nmax: 1\nprofile: glm\n---\nBuild features')
   fs.mkdirSync(path.join(root, '.kawai'), { recursive: true })
   fs.writeFileSync(path.join(root, '.kawai/profiles.json'), JSON.stringify({ glm: { label: 'GLM' } }))
   const worktreesBefore = git(['worktree', 'list', '--porcelain'], repo)
@@ -89,6 +89,8 @@ test('a lead’s worktree task spawns a member there, delivers current context o
     const lead = await manager.createAvailableSession({ projectPath: repo, groupId: 'leads' })
     if (!lead.ok) throw new Error(lead.error)
     await manager.start(lead.session.id)
+    // Auto comes only from the team default (unify-approval-defaults D3).
+    manager.setTeamApprovalDefault((await resolveTeam(repo)).teamId, 'auto')
     const leadTasks = taskHandlers(manager.tasks, lead.session.id)
     const task = await leadTasks.task_create({ title: 'Export', direction: 'CSV export', worktree: featX })
     await leadTasks.task_amend({ task_id: task.id, direction: 'CSV and JSON export', acceptance: 'Both formats download' })

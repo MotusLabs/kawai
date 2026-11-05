@@ -19,8 +19,12 @@
 // nested), as does `profileEffort`. Defaults are applied here so every reader
 // sees the same effective values. Bad `onLimit`, `effort`, and `profileEffort`
 // values are warnings (the defaults apply) rather than a rejected file, as the
-// profile-routing spec asks.
+// profile-routing spec asks. `approval` accepts manual or auto, but only
+// manual takes effect: auto is a warning (unify-approval-defaults D4).
 import type { ChatApprovalPolicy } from '../../shared/chat'
+
+/** The warning a group's `approval: auto` carries: auto comes only from the team default. */
+export const IGNORED_AUTO_WARNING = 'approval: auto has no effect; auto comes only from the team default (Team page → Members)'
 import { PROFILE_ID_PATTERN } from '../chat/profileCatalog'
 
 /** One allowed profile of a group, in preference order. */
@@ -81,8 +85,9 @@ export interface GroupDefinition {
   /** Built-in limit outcome policy. */
   onLimit: GroupLimitPolicy
   /**
-   * The `approval:` key, unset when the file has none (team-approval-default
-   * D1): spawns resolve it with the team default via `resolveSpawnApproval`.
+   * The `approval:` key, unset when the file has none: spawns resolve it with
+   * the team default via `resolveSpawnApproval`, where only `manual` decides
+   * (unify-approval-defaults D3) and `auto` is reported as ignored.
    */
   approval?: ChatApprovalPolicy
   /** Effort every member's agent launches with; unset = Claude Code settings decide. */
@@ -225,6 +230,9 @@ function parseTaskSettings(
       return { ok: false, error: `approval must be manual or auto, got "${approval}"` }
     }
     settings.approval = approval
+    // unify-approval-defaults D4: a group key can only tighten, so `auto`
+    // parses (the file stays valid) but grants nothing.
+    if (approval === 'auto') warnings.push(IGNORED_AUTO_WARNING)
   }
   const effort = fields.get('effort')?.trim()
   if (effort !== undefined) {
