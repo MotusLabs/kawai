@@ -21,9 +21,9 @@
 
 ## 4. Remove the Settings control
 
-- [ ] 4.1 Remove `defaultApprovalPolicy` and its setter from `settingsStore.ts`, including the persisted-shape sanitizer, so a stored value is dropped on rehydrate and never written back. Add a `src/client/__tests__/settingsStore.test.ts` case that rehydrates storage holding `defaultApprovalPolicy: 'auto'` and asserts the state and the next persisted write omit it; verify that file passes.
-- [ ] 4.2 Remove the Approval Policy control from `ChatSettings.tsx` and its draft state from `SettingsModal.tsx`, and add the one-line pointer to the Team page's Members tab. Update `src/client/__tests__/settingsModal.test.tsx` to assert no approval radio group and the pointer text, annotated "Settings has no approval control"; verify with that file and `bun run typecheck`.
-- [ ] 4.3 Update the approval-policy bullet in `docs/architecture/chat.md` (the default now comes from the team; Settings has none); verify with `grep -n "Settings" docs/architecture/chat.md` showing no reference to a Settings approval default.
+- [x] 4.1 Remove `defaultApprovalPolicy` and its setter from `settingsStore.ts`, including the persisted-shape sanitizer, so a stored value is dropped on rehydrate and never written back. Add a `src/client/__tests__/settingsStore.test.ts` case that rehydrates storage holding `defaultApprovalPolicy: 'auto'` and asserts the state and the next persisted write omit it; verify that file passes.
+- [x] 4.2 Remove the Approval Policy control from `ChatSettings.tsx` and its draft state from `SettingsModal.tsx`, and add the one-line pointer to the Team page's Members tab. Update `src/client/__tests__/settingsModal.test.tsx` to assert no approval radio group and the pointer text, annotated "Settings has no approval control"; verify with that file and `bun run typecheck`.
+- [x] 4.3 Update the approval-policy bullet in `docs/architecture/chat.md` (the default now comes from the team; Settings has none); verify with `grep -n "Settings" docs/architecture/chat.md` showing no reference to a Settings approval default.
 
 ## 5. Tracked group files and integration
 

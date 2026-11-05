@@ -1,10 +1,10 @@
-// ChatSettings.tsx - the Chat tab of the Settings modal: the default approval
-// policy for new chat sessions (segmented, design D7), the Claude provider
-// environment settings, the chat font size, and the server-persisted
-// question auto-answer wait. The drafts live in the modal shell and commit
-// on Save (design D5); the auto-answer wait saves itself.
+// ChatSettings.tsx - the Chat tab of the Settings modal: the Claude provider
+// environment settings, a pointer to the per-team default approval policy
+// (unify-approval-defaults D1: set on the Team page, not here), the chat font
+// size, and the server-persisted question auto-answer wait. The drafts live
+// in the modal shell and commit on Save (design D5); the auto-answer wait
+// saves itself.
 import type { Ref } from 'react'
-import type { ChatApprovalPolicy } from '@shared/types'
 import ChatProviderSettings, { type ChatProviderSettingsHandle } from '../ChatProviderSettings'
 import FontSizeStepper from '../FontSizeStepper'
 import QuestionAutoAnswerSetting from './QuestionAutoAnswerSetting'
@@ -16,23 +16,13 @@ import {
 export interface ChatSettingsProps {
   providerSettingsRef: Ref<ChatProviderSettingsHandle>
   onProviderBusyChange: (busy: boolean) => void
-  draftDefaultApprovalPolicy: ChatApprovalPolicy
-  onDraftDefaultApprovalPolicyChange: (policy: ChatApprovalPolicy) => void
   draftChatFontSize: number
   onDraftChatFontSizeChange: (size: number) => void
 }
 
-/** The two policies, in the order they appear in the segmented control. */
-const APPROVAL_POLICY_OPTIONS: Array<{ id: ChatApprovalPolicy; label: string }> = [
-  { id: 'manual', label: 'Manual' },
-  { id: 'auto', label: 'Auto-approve' },
-]
-
 export default function ChatSettings({
   providerSettingsRef,
   onProviderBusyChange,
-  draftDefaultApprovalPolicy,
-  onDraftDefaultApprovalPolicyChange,
   draftChatFontSize,
   onDraftChatFontSizeChange,
 }: ChatSettingsProps) {
@@ -44,54 +34,10 @@ export default function ChatSettings({
         <label className="mb-2 block text-xs text-secondary">
           New Chat Sessions
         </label>
-        <div className="flex items-center justify-between">
-          <div>
-            <div className="text-sm text-primary">Approval Policy</div>
-            <div className="text-[10px] text-muted" data-testid="default-approval-policy-hint">
-              Default for chats you create. Auto-approve lets tools run without asking.
-              Spawned team members use their group&apos;s <code>approval:</code> key, then the team default on the Team page.
-            </div>
-          </div>
-          <div
-            className="flex gap-1"
-            role="radiogroup"
-            aria-label="Default approval policy"
-            data-testid="default-approval-policy-select"
-          >
-            {APPROVAL_POLICY_OPTIONS.map((option, index) => {
-              const isActive = draftDefaultApprovalPolicy === option.id
-              return (
-                <button
-                  key={option.id}
-                  type="button"
-                  role="radio"
-                  aria-checked={isActive}
-                  tabIndex={isActive ? 0 : -1}
-                  onClick={() => onDraftDefaultApprovalPolicyChange(option.id)}
-                  onKeyDown={(e) => {
-                    let newIndex = index
-                    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
-                      e.preventDefault()
-                      newIndex = (index + 1) % APPROVAL_POLICY_OPTIONS.length
-                    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
-                      e.preventDefault()
-                      newIndex = (index - 1 + APPROVAL_POLICY_OPTIONS.length) % APPROVAL_POLICY_OPTIONS.length
-                    } else {
-                      return
-                    }
-                    const next = APPROVAL_POLICY_OPTIONS[newIndex]!
-                    onDraftDefaultApprovalPolicyChange(next.id)
-                    e.currentTarget.parentElement
-                      ?.querySelectorAll<HTMLButtonElement>('[role="radio"]')[newIndex]
-                      ?.focus()
-                  }}
-                  className={`btn text-xs px-3 focus:outline-none focus:ring-2 focus:ring-primary ${isActive ? 'btn-primary' : ''}`}
-                >
-                  {option.label}
-                </button>
-              )
-            })}
-          </div>
+        <div className="text-sm text-primary">Approval Policy</div>
+        <div className="text-[10px] text-muted" data-testid="default-approval-policy-hint">
+          The default approval policy is set per team on the Team page&apos;s Members tab. It seeds
+          Auto-approve when you create a chat in that team, and applies to the team&apos;s spawned members.
         </div>
       </div>
 

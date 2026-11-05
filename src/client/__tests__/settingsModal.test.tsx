@@ -56,7 +56,6 @@ beforeEach(() => {
     showProjectName: true,
     showLastUserMessage: true,
     showSessionIdPrefix: false,
-    defaultApprovalPolicy: 'manual',
     hostFilters: [],
   })
   useThemeStore.setState({ theme: 'dark' })
@@ -76,7 +75,6 @@ afterEach(() => {
     showProjectName: true,
     showLastUserMessage: true,
     showSessionIdPrefix: false,
-    defaultApprovalPolicy: 'manual',
     hostFilters: [],
   })
   useThemeStore.setState({ theme: 'dark' })
@@ -492,119 +490,22 @@ describe('SettingsModal', () => {
     await act(async () => { renderer.unmount() })
   })
 
-  test('approval policy commits on Save and reverts the other segment', async () => {
-    useSettingsStore.setState({ defaultApprovalPolicy: 'auto' })
-    let renderer!: TestRenderer.ReactTestRenderer
-    await act(async () => {
-      renderer = TestRenderer.create(<SettingsModal isOpen onClose={() => {}} />)
-    })
-
-    // The Sessions tab also has a "Manual" sort button, so scope to the
-    // approval section of the Chat tab.
-    const approvalButtons = () => {
-      const section = renderer.root.findByProps({ children: 'New Chat Sessions' }).parent
-      if (!section) throw new Error('Expected approval section')
-      return section.findAllByType('button')
-    }
-
-    expect(approvalButtons().map((button) => button.props.children)).toEqual(['Manual', 'Auto-approve'])
-    expect(approvalButtons()[1].props.className).toContain('btn-primary')
-
-    await act(async () => { approvalButtons()[0].props.onClick() })
-    expect(approvalButtons()[0].props.className).toContain('btn-primary')
-    expect(approvalButtons()[1].props.className).not.toContain('btn-primary')
-
-    await act(async () => {
-      await renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} })
-    })
-    expect(useSettingsStore.getState().defaultApprovalPolicy).toBe('manual')
-
-    await act(async () => { renderer.unmount() })
-  })
-
-  test('closing without saving discards the approval policy draft', async () => {
-    useSettingsStore.setState({ defaultApprovalPolicy: 'manual' })
-    const onClose = () => {}
-    let renderer!: TestRenderer.ReactTestRenderer
-    await act(async () => {
-      renderer = TestRenderer.create(<SettingsModal isOpen onClose={onClose} />)
-    })
-
-    const approvalButtons = () => {
-      const section = renderer.root.findByProps({ children: 'New Chat Sessions' }).parent
-      if (!section) throw new Error('Expected approval section')
-      return section.findAllByType('button')
-    }
-
-    await act(async () => { approvalButtons()[1].props.onClick() })
-
-    const cancel = renderer.root.findAllByType('button').find(b => b.props.children === 'Cancel' && b.props.className === 'btn')
-    if (!cancel) throw new Error('Expected cancel button')
-    await act(async () => { cancel.props.onClick() })
-    expect(useSettingsStore.getState().defaultApprovalPolicy).toBe('manual')
-
-    // Reopening starts from the stored default again, not the discarded draft.
-    await act(async () => { renderer.update(<SettingsModal isOpen={false} onClose={onClose} />) })
-    await act(async () => { renderer.update(<SettingsModal isOpen onClose={onClose} />) })
-    expect(approvalButtons()[1].props.className).not.toContain('btn-primary')
-    expect(approvalButtons()[0].props.className).toContain('btn-primary')
-    await act(async () => { renderer.unmount() })
-  })
-
+  // Transitional (unify-approval-defaults): annotated until the change archives.
   // @covers: chat-sessions › Users configure the default approval policy for new chat sessions › Settings names where spawned members get their policy
-  test('the approval policy hint scopes it to chats the user creates and names where spawned members get theirs', async () => {
+  // @covers: chat-sessions › New chats start from their team's default approval policy › Settings has no approval control
+  test('Settings has no approval control and points to the per-team default on the Team page', async () => {
     let renderer!: TestRenderer.ReactTestRenderer
     await act(async () => {
       renderer = TestRenderer.create(<SettingsModal isOpen onClose={() => {}} />)
     })
     const textOf = (node: TestRenderer.ReactTestInstance | string): string =>
       typeof node === 'string' ? node : node.children.map(textOf).join('')
+    expect(renderer.root.findAllByProps({ 'data-testid': 'default-approval-policy-select' })).toHaveLength(0)
+    expect(renderer.root.findAll(node => node.props.role === 'radiogroup' && node.props['aria-label'] === 'Default approval policy')).toHaveLength(0)
+    const section = renderer.root.findByProps({ children: 'New Chat Sessions' }).parent!
+    expect(section.findAllByType('button')).toHaveLength(0)
     const hint = textOf(renderer.root.findByProps({ 'data-testid': 'default-approval-policy-hint' }))
-    expect(hint).toContain('Default for chats you create.')
-    expect(hint).toContain("Spawned team members use their group's approval: key, then the team default on the Team page.")
-    expect(hint).not.toContain('Default for new chat sessions')
-    await act(async () => { renderer.unmount() })
-  })
-
-  test('approval policy radiogroup exposes checked state and arrow-key selection', async () => {
-    useSettingsStore.setState({ defaultApprovalPolicy: 'manual' })
-    let renderer!: TestRenderer.ReactTestRenderer
-    await act(async () => {
-      renderer = TestRenderer.create(<SettingsModal isOpen onClose={() => {}} />)
-    })
-
-    const group = renderer.root.findByProps({ 'data-testid': 'default-approval-policy-select' })
-    expect(group.props.role).toBe('radiogroup')
-    const segments = () => group.findAllByType('button')
-    expect(segments().map(button => button.props['aria-checked'])).toEqual([true, false])
-    expect(segments().map(button => button.props.tabIndex)).toEqual([0, -1])
-
-    const focused: number[] = []
-    const currentTarget = {
-      parentElement: {
-        querySelectorAll: () => [{ focus: () => focused.push(0) }, { focus: () => focused.push(1) }],
-      },
-    }
-    // Each segment's handler closes over its own index, and focus follows the
-    // selection — so the key lands on whichever segment is currently selected.
-    const key = (value: string) => {
-      const activeIndex = segments().findIndex(button => button.props.tabIndex === 0)
-      act(() => {
-        segments()[activeIndex]!.props.onKeyDown({ key: value, preventDefault: () => {}, currentTarget })
-      })
-    }
-
-    key('ArrowRight')
-    expect(segments().map(button => button.props['aria-checked'])).toEqual([false, true])
-    expect(segments().map(button => button.props.tabIndex)).toEqual([-1, 0])
-    expect(focused).toEqual([1])
-
-    // Wraps back around, and an unmatched key leaves the draft alone.
-    key('ArrowRight')
-    expect(segments().map(button => button.props['aria-checked'])).toEqual([true, false])
-    key('Enter')
-    expect(segments().map(button => button.props['aria-checked'])).toEqual([true, false])
-
+    expect(hint).toContain("The default approval policy is set per team on the Team page's Members tab.")
     await act(async () => { renderer.unmount() })
   })
 
