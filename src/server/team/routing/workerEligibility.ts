@@ -14,6 +14,10 @@
 // Cooling candidates stay candidates (a rule may take them; the built-in
 // strategy skips them), so cooling is reported beside them, never as an
 // exclusion — except the member cause direct mail rejects.
+// A message's task owner (group-mail-task-affinity D3) is judged here too:
+// `ownerAffinity` is the one derivation of prefer, hold, or none;
+// `evaluateEligibility` returns its answer as `affinity` and moves an owner
+// it prefers to the front of the candidates.
 import type { RouteCandidate, RouteGroup } from '../../../shared/routing'
 
 export type MemberExclusionKind =
@@ -106,6 +110,50 @@ export function groupPathEligible(member: MemberFacts, mail: MailFacts, options:
   return !memberStateCauses(member, mail, options).some(cause => cause.kind !== 'excluded-profile' && cause.kind !== 'profile-cooling')
 }
 
+/*
+ * Owner affinity (group-mail-task-affinity D3): what a message's task owner
+ * means for routing it. `prefer` — the owner is an eligible candidate on a
+ * profile not cooling; `hold(until)` — the owner is a live member excluded
+ * only because it is working or awaiting a card, no message filter drops its
+ * profile, and the wait (from the message's creation) has not run out;
+ * `none` — every other case (no owner, not a live member, parked,
+ * context-exhausted, unavailable, startup-failed, cooling, filtered, or the
+ * wait over), where the group's strategy routes as before.
+ */
+export interface OwnerAffinityInput {
+  /** The message's task owner as resolved this pass; null = none. */
+  owner: string | null
+  /** The owner as a live member of the target group; null = not one. */
+  member: { eligible: boolean; causes: readonly MemberExclusionKind[] } | null
+  /** A message filter (role, worker choice, excluded profile) drops the owner's profile. */
+  filtered: boolean
+  /** The owner's profile is cooling at `now`. */
+  cooling: boolean
+  /** The message's creation, epoch ms. */
+  createdAt: number
+  /** The group's `affinityWait`, ms. */
+  waitMs: number
+  /** Evaluation time, epoch ms; null = the wait counts as over. */
+  now: number | null
+}
+
+export type OwnerAffinity =
+  | { kind: 'prefer'; sessionId: string }
+  | { kind: 'hold'; sessionId: string; until: number }
+  | { kind: 'none' }
+
+const WAITABLE: ReadonlySet<MemberExclusionKind> = new Set(['busy', 'pending-card'])
+
+export function ownerAffinity(input: OwnerAffinityInput): OwnerAffinity {
+  const { owner, member } = input
+  if (owner === null || member === null || input.filtered || input.cooling) return { kind: 'none' }
+  if (member.eligible) return { kind: 'prefer', sessionId: owner }
+  const until = input.createdAt + input.waitMs
+  const waitable = member.causes.length > 0 && member.causes.every(cause => WAITABLE.has(cause))
+  if (waitable && input.now !== null && input.now < until) return { kind: 'hold', sessionId: owner, until }
+  return { kind: 'none' }
+}
+
 /** Profile spawned members get when the group lists none. */
 export const DEFAULT_PROFILE_ID = 'default'
 
@@ -171,6 +219,12 @@ export interface EligibilityState {
   cooldowns?: Readonly<Record<string, string | null>>
   /** Evaluation time, epoch ms. */
   now?: number
+  /**
+   * The message's task owner as resolved this pass, the message's creation
+   * (epoch ms), and the group's `affinityWait` (group-mail-task-affinity D3);
+   * null or absent = no owner.
+   */
+  taskOwner?: { sessionId: string; createdAt: number; waitMs: number } | null
 }
 
 /** One reason an alternative is excluded: a waiting-constraint kind or a member cause. */
@@ -196,6 +250,8 @@ export interface EligibilityResult {
   excluded: Array<{ alternative: EligibilityAlternative; reasons: EligibilityReason[] }>
   /** Candidates on a profile cooling at `now`, by candidate id: the cooldown end (ISO). */
   cooling: Record<string, string>
+  /** What the task owner means for this message (D3); `none` without one. */
+  affinity: OwnerAffinity
 }
 
 export function evaluateEligibility(state: EligibilityState): EligibilityResult {
@@ -273,10 +329,19 @@ export function evaluateEligibility(state: EligibilityState): EligibilityResult 
     }
   }
 
+  const coolingAt = (profileId: string): string | null => {
+    const until = state.cooldowns?.[profileId] ?? null
+    return until !== null && (state.now === undefined || Date.parse(until) > state.now) ? until : null
+  }
   const cooling: Record<string, string> = {}
   for (const candidate of candidates) {
-    const until = state.cooldowns?.[candidate.profileId] ?? null
-    if (until !== null && (state.now === undefined || Date.parse(until) > state.now)) cooling[candidate.id] = until
+    const until = coolingAt(candidate.profileId)
+    if (until !== null) cooling[candidate.id] = until
+  }
+  const affinity = taskOwnerAffinity(state, filterReasons, coolingAt)
+  if (affinity.kind === 'prefer') {
+    const index = candidates.findIndex(candidate => candidate.kind === 'member' && candidate.sessionId === affinity.sessionId)
+    if (index > 0) candidates.unshift(...candidates.splice(index, 1))
   }
   return {
     candidates,
@@ -292,7 +357,28 @@ export function evaluateEligibility(state: EligibilityState): EligibilityResult 
     },
     excluded,
     cooling,
+    affinity,
   }
+}
+
+/** The state's `ownerAffinity` input: the owner's member facts, filters, and cooling. */
+function taskOwnerAffinity(
+  state: EligibilityState, filterReasons: (profileId: string) => EligibilityReason[], coolingAt: (profileId: string) => string | null,
+): OwnerAffinity {
+  const owner = state.taskOwner ?? null
+  if (owner === null) return { kind: 'none' }
+  const member = state.members.find(entry => entry.sessionId === owner.sessionId) ?? null
+  // An ineligible member stating no causes reads as busy, as its exclusion does.
+  const causes = member === null || member.eligible ? [] : member.causes && member.causes.length > 0 ? member.causes.map(cause => cause.kind) : ['busy' as const]
+  return ownerAffinity({
+    owner: owner.sessionId,
+    member: member === null ? null : { eligible: member.eligible, causes },
+    filtered: member !== null && filterReasons(member.profileId).length > 0,
+    cooling: member !== null && coolingAt(member.profileId) !== null,
+    createdAt: owner.createdAt,
+    waitMs: owner.waitMs,
+    now: state.now ?? null,
+  })
 }
 
 /** Why no slot may spawn at all: the group's `max`, then the staffing facts behind `spawnAllowed`. */

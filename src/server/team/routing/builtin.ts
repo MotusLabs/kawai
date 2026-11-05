@@ -7,6 +7,9 @@
 // - `profile-order`: the member whose profile comes earliest in `profiles`
 //   (longest idle among equals; unlisted profiles last), else the earliest
 //   profile's spawn slot.
+// A preferred session (the message's task owner, group-mail-task-affinity
+// D3) is picked first under either strategy when it is a candidate not
+// cooling.
 import type { RouteCandidate } from '../../../shared/routing'
 import type { RoutingStrategy } from '../groupFile'
 
@@ -14,9 +17,13 @@ export function builtinPick(
   strategy: RoutingStrategy,
   all: readonly RouteCandidate[],
   profileOrder: readonly string[],
-  cooling: (profileId: string) => boolean = () => false
+  cooling: (profileId: string) => boolean = () => false,
+  preferSessionId?: string,
 ): RouteCandidate | null {
   const candidates = all.filter(candidate => !cooling(candidate.profileId))
+  const preferred = preferSessionId === undefined ? undefined
+    : candidates.find(candidate => candidate.kind === 'member' && candidate.sessionId === preferSessionId)
+  if (preferred) return preferred
   const rank = (candidate: RouteCandidate) => {
     const index = profileOrder.indexOf(candidate.profileId)
     return index < 0 ? profileOrder.length : index
