@@ -14,7 +14,10 @@
 // booleans, default true); durable plans add `canCreatePlans` (a strict
 // boolean like `canCreateTasks`, default false); process reports add
 // `canReportProcess` (strict, default false: members may submit process
-// reports and link proposals). `profiles` and `onLimit` take
+// reports and link proposals); group-mail-task-affinity adds `affinity`
+// (`task-owner` only) and `affinityWait` (whole minutes, default 30), kept
+// as one optional `affinity` object present only when it is on, and both
+// degrade to warnings. `profiles` and `onLimit` take
 // one single-line flow value (`[a, b]` or `{ k: v }`, scalars only — never
 // nested), as does `profileEffort`. Defaults are applied here so every reader
 // sees the same effective values. Bad `onLimit`, `effort`, and `profileEffort`
@@ -47,6 +50,15 @@ export type GroupEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 export const GROUP_EFFORTS: readonly GroupEffort[] = ['low', 'medium', 'high', 'xhigh', 'max']
 
 export const DEFAULT_PARK_IF_RESET_WITHIN_MS = 3 * 60 * 60 * 1000
+
+/** Group mail prefers its task's owner (group-mail-task-affinity D2). */
+export interface GroupAffinity {
+  kind: 'task-owner'
+  /** How long a busy owner holds its mail, from the message's creation. */
+  waitMs: number
+}
+
+export const DEFAULT_AFFINITY_WAIT_MS = 30 * 60_000
 
 export interface GroupDefinition {
   id: string
@@ -89,6 +101,8 @@ export interface GroupDefinition {
   effort?: GroupEffort
   /** Per-profile effort overriding `effort` for members on that profile; valid entries only. */
   profileEffort?: Record<string, GroupEffort>
+  /** Task-owner affinity (group-mail-task-affinity D2); unset = none. */
+  affinity?: GroupAffinity
   /** Problems that fell back to defaults instead of rejecting the file. */
   warnings: string[]
   /** The role prompt appended to members' system prompts. */
@@ -143,7 +157,8 @@ export function parseGroupFile(id: string, content: string): GroupFileParse {
 
 type TaskSettings = Pick<GroupDefinition,
   'canCreateTasks' | 'canCreatePlans' | 'canManageMailbox' | 'releaseOnTaskClose' | 'worktreeScoped' | 'canReleaseMembers'
-  | 'canReportProcess' | 'max' | 'maxFromCaps' | 'profiles' | 'strategy' | 'onLimit' | 'approval' | 'effort' | 'profileEffort' | 'warnings'>
+  | 'canReportProcess' | 'max' | 'maxFromCaps' | 'profiles' | 'strategy' | 'onLimit' | 'approval' | 'effort' | 'profileEffort'
+  | 'affinity' | 'warnings'>
 
 type Parsed<T> = { ok: true; value: T } | { ok: false; error: string }
 
@@ -242,7 +257,29 @@ function parseTaskSettings(
     const profileEffort = parseProfileEffort(fields.get('profileEffort'), settings.profiles, warnings)
     if (profileEffort) settings.profileEffort = profileEffort
   }
+  const affinity = parseAffinity(fields.get('affinity'), fields.get('affinityWait'), warnings)
+  if (affinity) settings.affinity = affinity
   return { ok: true, settings }
+}
+
+/** `affinity: task-owner` and `affinityWait: <minutes>`; every problem is a warning (D2). */
+function parseAffinity(rawKind: string | undefined, rawWait: string | undefined, warnings: string[]): GroupAffinity | undefined {
+  const kind = rawKind?.trim()
+  const wait = rawWait?.trim()
+  if (kind === undefined) {
+    if (wait !== undefined) warnings.push('affinityWait is ignored; affinity is not set')
+    return undefined
+  }
+  if (kind !== 'task-owner') {
+    warnings.push(`affinity must be task-owner, got "${kind}"; ignored`)
+    return undefined
+  }
+  let waitMs = DEFAULT_AFFINITY_WAIT_MS
+  if (wait !== undefined) {
+    if (/^(0|[1-9]\d*)$/.test(wait)) waitMs = Number(wait) * 60_000
+    else warnings.push(`affinityWait must be whole minutes, got "${wait}"; using 30`)
+  }
+  return { kind: 'task-owner', waitMs }
 }
 
 /**
