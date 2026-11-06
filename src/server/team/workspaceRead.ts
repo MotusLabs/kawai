@@ -42,6 +42,18 @@ function providerLabelOf(catalog: GroupCatalog, profileId: string): { id: string
 }
 
 /**
+ * The groups asking for `approval: auto` while the team default is not auto
+ * (unify-approval-defaults D4): the key grants nothing there, so the Members
+ * control names them. Sorted by group id; empty under an auto default.
+ */
+export function autoRequestedBy(catalog: GroupCatalog, teamDefault: ChatApprovalPolicy | null): string[] {
+  return [...catalog.groups.values()]
+    .filter(({ group }) => group.approval === 'auto' && teamDefault !== 'auto')
+    .map(({ group }) => group.id)
+    .sort()
+}
+
+/**
  * Members (task 2.2): one read-only row per group of the catalog — the role
  * description, never the prompt body (D7, Q3); every effective setting; each
  * layer's source file with the winner marked (2.1); and the live membership
@@ -312,6 +324,7 @@ export class WorkspaceRead {
     const records = manager.teamRecords(teamId)
     const directory = manager.directory.list(teamId)
     const approvalDefault = manager.teamApprovalDefault(teamId)
+    const catalog = manager.teams.catalogForTeam(team)
     const nameOf = (sessionId: string) =>
       records.find(record => record.sessionId === sessionId)?.name
       ?? directory.find(entry => entry.sessionId === sessionId)?.name
@@ -368,9 +381,10 @@ export class WorkspaceRead {
     return {
       tasks: taskRows({ summaries, waiting, attention, nameOf, revisionsOf, ownedByExecution }),
       attention,
-      members: memberRows(manager.teams.catalogForTeam(team), records, groupId =>
+      members: memberRows(catalog, records, groupId =>
         manager.groupProfileCounts(teamId, groupId), approvalDefault),
       approvalDefault,
+      autoRequestedBy: autoRequestedBy(catalog, approvalDefault),
       summary: morningSummary({
         now,
         sessions,

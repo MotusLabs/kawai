@@ -293,7 +293,8 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, subs
         members={workspaceData?.snapshot?.members ?? []} loaded={workspaceData?.snapshot != null}
         onOpenSession={openParticipantChat}
         teamControl={workspaceData?.snapshot != null && <TeamApprovalDefaultControl
-          teamPath={teamKey} value={workspaceData.snapshot.approvalDefault ?? null} connected={connected} sendMessage={sendMessage} />} />}
+          teamPath={teamKey} value={workspaceData.snapshot.approvalDefault ?? null}
+          autoRequestedBy={workspaceData.snapshot.autoRequestedBy ?? []} connected={connected} sendMessage={sendMessage} />} />}
       {tasksOpen && tasks && <TeamTasksView
         teamPath={teamKey} projectPath={teamKey} view={tasks} rows={workspaceData?.snapshot?.tasks} sendMessage={sendMessage} connected={connected}
         connectionEpoch={connectionEpoch}

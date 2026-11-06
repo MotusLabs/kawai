@@ -3,8 +3,6 @@
 import { useState, useEffect } from 'react'
 import { create } from 'zustand'
 import { persist, createJSONStorage } from 'zustand/middleware'
-import type { ChatApprovalPolicy } from '@shared/types'
-import { parseApprovalPolicy } from '@shared/chat'
 import { parseQuestionAutoAnswerMinutes } from '@shared/chatQuestionAutoAnswer'
 import { QUESTION_AUTO_ANSWER_DEFAULT_MINUTES } from '@shared/types'
 import { safeStorage } from '../utils/storage'
@@ -97,8 +95,6 @@ function sanitizeChatFontSize(value: unknown): number {
     : CHAT_FONT_SIZE_DEFAULT
 }
 
-// Anything that is not exactly 'auto' reads as 'manual', so a hand-edited or
-// corrupt persisted value can never silently auto-approve tools (design D1).
 interface SettingsState {
   defaultProjectDir: string
   setDefaultProjectDir: (dir: string) => void
@@ -120,9 +116,6 @@ interface SettingsState {
   setFontSize: (size: number) => void
   chatFontSize: number
   setChatFontSize: (size: number) => void
-  /** Starting approval policy for new chat sessions; 'manual' unless saved as 'auto'. */
-  defaultApprovalPolicy: ChatApprovalPolicy
-  setDefaultApprovalPolicy: (policy: ChatApprovalPolicy) => void
   /**
    * The server's question auto-answer wait in minutes (question-auto-answer
    * D5): a memory cache of `app_settings`, loaded from
@@ -208,9 +201,6 @@ export const useSettingsStore = create<SettingsState>()(
       setFontSize: (size) => set({ fontSize: Math.max(6, Math.min(24, size)) }),
       chatFontSize: CHAT_FONT_SIZE_DEFAULT,
       setChatFontSize: (size) => set({ chatFontSize: sanitizeChatFontSize(size) }),
-      defaultApprovalPolicy: 'manual',
-      setDefaultApprovalPolicy: (policy) =>
-        set({ defaultApprovalPolicy: parseApprovalPolicy(policy) }),
       questionAutoAnswerMinutes: QUESTION_AUTO_ANSWER_DEFAULT_MINUTES,
       setQuestionAutoAnswerMinutes: (minutes) => {
         // A bad wire value never enters the store (QA-S4): the validated
@@ -312,23 +302,23 @@ export const useSettingsStore = create<SettingsState>()(
         return persisted as SettingsState
       },
       // Same shallow merge as the default, plus re-clamping of the pane
-      // fractions and chat font size and re-sanitizing of the default
-      // approval policy: a hand-edited or corrupt persisted value must not
-      // produce an unusable layout or silently auto-approve tools, and state
-      // persisted before the keys existed keeps the defaults supplied by the
-      // spread below.
+      // fractions and chat font size: a hand-edited or corrupt persisted value
+      // must not produce an unusable layout, and state persisted before the
+      // keys existed keeps the defaults supplied by the spread below. The
+      // retired `defaultApprovalPolicy` (unify-approval-defaults D1: the team
+      // default replaced it) is dropped here, so it never re-enters the state
+      // or the next persisted write and is never carried over.
       merge: (persistedState, currentState) => {
-        const merged = {
+        const { defaultApprovalPolicy: _retired, ...merged } = {
           ...currentState,
           ...(persistedState as object),
-        } as SettingsState
+        } as SettingsState & { defaultApprovalPolicy?: unknown }
         return {
           ...merged,
           workspacePaneFraction: sanitizePaneFraction(merged.workspacePaneFraction),
           remotePaneFraction: sanitizePaneFraction(merged.remotePaneFraction),
           archivePaneFraction: sanitizePaneFraction(merged.archivePaneFraction),
           chatFontSize: sanitizeChatFontSize(merged.chatFontSize),
-          defaultApprovalPolicy: parseApprovalPolicy(merged.defaultApprovalPolicy),
         }
       },
       migrate: migratePersistedSettings,

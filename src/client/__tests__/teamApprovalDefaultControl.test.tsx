@@ -25,19 +25,23 @@ beforeEach(() => {
 })
 afterEach(() => useTeamWorkspaceDataStore.setState({ views: {}, approvalSaves: {} }))
 
-const mount = (value: 'manual' | 'auto' | null, connected = true) => {
+const mount = (value: 'manual' | 'auto' | null, connected = true, autoRequestedBy: string[] = []) => {
   let renderer!: TestRenderer.ReactTestRenderer
   act(() => {
-    renderer = TestRenderer.create(<TeamApprovalDefaultControl teamPath="/repo" value={value} connected={connected} sendMessage={message => sent.push(message)} />)
+    renderer = TestRenderer.create(<TeamApprovalDefaultControl teamPath="/repo" value={value} autoRequestedBy={autoRequestedBy} connected={connected} sendMessage={message => sent.push(message)} />)
   })
   return renderer
 }
 const button = (renderer: TestRenderer.ReactTestRenderer, policy: 'manual' | 'auto') => byId(renderer, `team-approval-default-${policy}`)[0]!
 
-test('an unset default says spawned members start on manual, and the hint names its scope', () => {
+test('an unset default says new chats and spawned members start on manual, and the hint names its scope', () => {
   const renderer = mount(null)
-  expect(textOf(byId(renderer, 'team-approval-default-value')[0]!)).toBe('Not set: spawned members start on manual.')
-  expect(textOf(byId(renderer, 'team-approval-default-hint')[0]!)).toContain('Applies to groups without an approval: key and only to members spawned from now on.')
+  expect(textOf(byId(renderer, 'team-approval-default-value')[0]!)).toBe('Not set: new chats and spawned members start on manual.')
+  const hint = textOf(byId(renderer, 'team-approval-default-hint')[0]!)
+  expect(hint).toContain('Seeds Auto-approve for chats you create in this team')
+  expect(hint).toContain('except groups that set approval: manual')
+  expect(hint).toContain('approval: auto has no effect')
+  expect(byId(renderer, 'team-approval-default-auto-requested')).toHaveLength(0)
   expect([button(renderer, 'manual').props['aria-pressed'], button(renderer, 'auto').props['aria-pressed']]).toEqual([false, false])
 })
 
@@ -137,4 +141,25 @@ test('the dispatch preview names the policy a spawn gets and its source; a sessi
   expect(textOf(byId(renderer, 'task-preview-approval')[0]!)).toBe('Approval: auto · team default')
   act(() => renderer.update(<TaskPreviewView preview={{ ...base, target: { kind: 'session', id: 'chat-1' }, approval: 'manual' }} />))
   expect(textOf(byId(renderer, 'task-preview-approval')[0]!)).toBe('Approval: manual')
+})
+
+// @covers: team-workspace › The Members tab sets the team's default approval policy › Groups asking for auto are named next to the control
+test('groups whose approval: auto has no effect are named next to the control', () => {
+  const renderer = mount(null, true, ['devs', 'reviewers'])
+  expect(textOf(byId(renderer, 'team-approval-default-auto-requested')[0]!)).toBe('devs, reviewers ask for auto; set the default to auto to grant it.')
+  const one = mount('manual', true, ['devs'])
+  expect(textOf(byId(one, 'team-approval-default-auto-requested')[0]!)).toBe('devs asks for auto; set the default to auto to grant it.')
+})
+
+// @covers: team-workspace › The Members tab sets the team's default approval policy › The notice clears once the default is auto
+test('the notice clears when the snapshot after an auto save lists no group', () => {
+  let renderer!: TestRenderer.ReactTestRenderer
+  const render = (value: 'manual' | 'auto' | null, requested: string[]) =>
+    <TeamApprovalDefaultControl teamPath="/repo" value={value} autoRequestedBy={requested} connected sendMessage={message => sent.push(message)} />
+  act(() => { renderer = TestRenderer.create(render(null, ['devs'])) })
+  act(() => button(renderer, 'auto').props.onClick())
+  expect(sent).toEqual([{ type: 'team-workspace-approval-default-set', teamPath: '/repo', policy: 'auto' }])
+  // The committed default re-pushes the snapshot: auto, and nobody asking.
+  act(() => renderer.update(render('auto', [])))
+  expect(byId(renderer, 'team-approval-default-auto-requested')).toHaveLength(0)
 })

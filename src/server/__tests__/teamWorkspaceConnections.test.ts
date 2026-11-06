@@ -364,7 +364,7 @@ describe('team default approval action (team-approval-default W1–W5)', () => {
 
 describe('publishes coalesce and share one read per team', () => {
   const emptySnapshot = (): TeamWorkspaceSnapshot => ({
-    tasks: [], attention: [], members: [], approvalDefault: null, directory: [],
+    tasks: [], attention: [], members: [], approvalDefault: null, autoRequestedBy: [], directory: [],
     summary: {
       since: '2026-10-13T00:00:00Z', completedResults: { items: [] }, capacityWaits: { items: [] },
       approvals: { items: [] }, uncertainDeliveries: { items: [] }, finishedTurnsWithoutResult: { items: [] }, outbound: { items: [] },

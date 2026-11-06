@@ -2,7 +2,7 @@
 import { describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import path from 'node:path'
-import { DEFAULT_PARK_IF_RESET_WITHIN_MS, parseDuration, parseGroupFile, type GroupDefinition, type GroupEffort } from '../team/groupFile'
+import { DEFAULT_PARK_IF_RESET_WITHIN_MS, parseDuration, IGNORED_AUTO_WARNING, parseGroupFile, type GroupDefinition, type GroupEffort } from '../team/groupFile'
 
 const ROUTING_DEFAULTS = {
   canCreatePlans: false,
@@ -130,8 +130,22 @@ describe('parseGroupFile', () => {
       const group = parsed.ok ? parsed.group : null
       expect(group?.approval).toBe(expected)
       expect(group !== null && 'approval' in group).toBe(expected !== undefined)
+      // unify-approval-defaults D4: only `auto` is reported as having no effect.
+      expect(group?.warnings.includes(IGNORED_AUTO_WARNING)).toBe(expected === 'auto')
     })
   }
+
+  // @covers: team-worktree-staffing › A group's approval key can only tighten its spawned members' policy › Group auto with no team default keeps manual
+  test('approval: auto still parses, with the constant ignored-auto warning', () => {
+    const parsed = parseGroupFile('devs', '---\napproval: auto\n---\nBuild.')
+    expect(parsed.ok && parsed.group.approval).toBe('auto')
+    expect(parsed.ok && parsed.group.warnings).toEqual([IGNORED_AUTO_WARNING])
+  })
+
+  test('approval: manual adds no warning', () => {
+    const parsed = parseGroupFile('devs', '---\napproval: manual\n---\nBuild.')
+    expect(parsed.ok && parsed.group.warnings).toEqual([])
+  })
 
   test('release settings read explicit opt-outs', () => {
     const parsed = parseGroupFile('qa', '---\nreleaseOnTaskClose: false\nworktreeScoped: false\ncanReleaseMembers: false\n---\nCheck.')
@@ -235,11 +249,11 @@ describe('parseGroupFile', () => {
 
   test('effort: an invalid level warns, stays unset, and the rest of the file applies', () => {
     for (const raw of ['extreme', 'auto', 'ultracode', 'MAX', '']) {
-      const parsed = parseGroupFile('devs', `---\nlabel: Developers\neffort: ${raw}\napproval: auto\n---\nBuild.`)
+      const parsed = parseGroupFile('devs', `---\nlabel: Developers\neffort: ${raw}\napproval: manual\n---\nBuild.`)
       expect(parsed.ok).toBe(true)
       if (!parsed.ok) return
       expect(parsed.group.effort).toBeUndefined()
-      expect(parsed.group).toMatchObject({ label: 'Developers', approval: 'auto', prompt: 'Build.' })
+      expect(parsed.group).toMatchObject({ label: 'Developers', approval: 'manual', prompt: 'Build.' })
       expect(parsed.group.warnings).toEqual([
         `effort must be low, medium, high, xhigh, max, got "${raw}"; ignored`,
       ])

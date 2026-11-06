@@ -318,8 +318,13 @@ export interface TeamWorkspaceSnapshot {
   tasks: TeamTaskRow[]
   attention: AttentionItem[]
   members: TeamMemberRow[]
-  /** The team's default approval policy for spawned members; null = not set (team-approval-default D4). */
+  /** The team's default approval policy: spawned members and chats the human creates; null = not set (unify-approval-defaults D1). */
   approvalDefault: 'manual' | 'auto' | null
+  /**
+   * Groups whose `approval: auto` has no effect because the team default is
+   * not auto (unify-approval-defaults D4); empty once the default is auto.
+   */
+  autoRequestedBy: string[]
   summary: MorningSummary
   /** Last known identity of killed sessions named by rows and items. */
   directory: SessionDirectoryEntry[]

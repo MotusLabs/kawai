@@ -506,36 +506,26 @@ describe('chat font size', () => {
   })
 })
 
-describe('default approval policy', () => {
-  beforeEach(() => {
-    useSettingsStore.setState({ defaultApprovalPolicy: 'manual' })
+describe('retired default approval policy (unify-approval-defaults D1)', () => {
+  test('the store has no approval default or setter', () => {
+    const state = useSettingsStore.getState() as unknown as Record<string, unknown>
+    expect('defaultApprovalPolicy' in state).toBe(false)
+    expect('setDefaultApprovalPolicy' in state).toBe(false)
   })
 
-  test('defaults to manual', () => {
-    expect(useSettingsStore.getState().defaultApprovalPolicy).toBe('manual')
-  })
-
-  test('a saved auto policy is persisted and read back on reload', async () => {
-    useSettingsStore.getState().setDefaultApprovalPolicy('auto')
-    expect(JSON.parse(storage.getItem('agentboard-settings') ?? '{}').state.defaultApprovalPolicy).toBe('auto')
+  // @covers: chat-sessions › New chats start from their team's default approval policy › A browser's stored value is ignored
+  test('a stored auto is dropped on rehydrate and never written back', async () => {
+    storage.setItem('agentboard-settings', JSON.stringify({ state: { defaultApprovalPolicy: 'auto', chatFontSize: 18 }, version: 7 }))
     await useSettingsStore.persist.rehydrate()
-    expect(useSettingsStore.getState().defaultApprovalPolicy).toBe('auto')
-  })
-
-  test('state persisted without the key rehydrates to manual', async () => {
-    storage.setItem('agentboard-settings', JSON.stringify({ state: { sessionSortMode: 'status' }, version: 7 }))
-    await useSettingsStore.persist.rehydrate()
-    expect(useSettingsStore.getState().defaultApprovalPolicy).toBe('manual')
-  })
-
-  test('hand-edited persisted values are sanitized to manual on rehydration', async () => {
-    storage.setItem('agentboard-settings', JSON.stringify({ state: { defaultApprovalPolicy: 'yolo' }, version: 7 }))
-    await useSettingsStore.persist.rehydrate()
-    expect(useSettingsStore.getState().defaultApprovalPolicy).toBe('manual')
-
-    storage.setItem('agentboard-settings', JSON.stringify({ state: { defaultApprovalPolicy: 'AUTO' }, version: 7 }))
-    await useSettingsStore.persist.rehydrate()
-    expect(useSettingsStore.getState().defaultApprovalPolicy).toBe('manual')
+    const state = useSettingsStore.getState() as unknown as Record<string, unknown>
+    expect('defaultApprovalPolicy' in state).toBe(false)
+    // The rest of the stored settings still applies.
+    expect(state.chatFontSize).toBe(18)
+    // The next persisted write omits the retired key.
+    useSettingsStore.getState().setChatFontSize(16)
+    const persisted = JSON.parse(storage.getItem('agentboard-settings') ?? '{}').state as Record<string, unknown>
+    expect('defaultApprovalPolicy' in persisted).toBe(false)
+    expect(persisted.chatFontSize).toBe(16)
   })
 })
 

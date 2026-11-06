@@ -7,7 +7,6 @@ description: Hard, cross-cutting, or risky tasks in their own worktree and branc
 # and the lead's dispatch enforce this.
 profiles: { opus: 2, codex-sol: 2 }
 strategy: profile-order
-approval: auto
 onLimit: { parkIfResetWithin: 3h, otherwise: forward, forwardTo: middle-devs }
 effort: medium
 profileEffort: { codex-sol: max }
