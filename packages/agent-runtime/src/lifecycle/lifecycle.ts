@@ -50,10 +50,21 @@ export class DriverLifecycle {
     return this.activeTurn
   }
 
+  /**
+   * A throwing onState never interrupts a transition (stop would otherwise
+   * abort before its teardown is installed); the throw is retained as an
+   * owned failure, so the stop result reports it.
+   */
   private setState(next: DriverState): void {
     if (next === this.current) return
     this.current = next
-    this.options.onState?.(next)
+    const onState = this.options.onState
+    if (!onState) return
+    try {
+      onState(next)
+    } catch (error) {
+      this.jobs.track('callback:onState', Promise.reject(error)).catch(() => {})
+    }
   }
 
   /**
@@ -224,6 +235,11 @@ export class DriverLifecycle {
     this.activeTurn = null
     this.queued = 0
     this.setState('stopped')
+    // The stopped notification runs after the join; a throw there is reported, not lost.
+    const late = await this.jobs.join()
+    if (late.length > failures.length) {
+      throw new AgentRuntimeError({ category: 'stop', message: 'stop completed but a state callback failed' }, late.slice(failures.length).map((f) => f.error))
+    }
     return { scope: 'agent-processes', mode, processes, js: 'settled' }
   }
 }

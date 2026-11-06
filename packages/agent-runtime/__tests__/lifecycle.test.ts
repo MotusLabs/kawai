@@ -333,6 +333,27 @@ describe('terminal stop and owned jobs (L11-L12, I1)', () => {
     expect(await rejection(f.lc.jobs.run('joiner', () => f.lc.jobs.join()))).toMatchObject({ category: 'internal' })
   })
 
+  test('a throwing onState never aborts stop; the failure is retained in the stop result', async () => {
+    for (const at of ['stopping', 'stopped'] as const) {
+      const sentinel = new Error(`onState threw at ${at}`)
+      const lc = new DriverLifecycle({
+        continuations: new Set(),
+        onState: (state) => {
+          if (state === at) throw sentinel
+        },
+      })
+      await lc.start(async () => {})
+      let tornDown = false
+      const stop = lc.stop('kill', async () => {
+        tornDown = true
+        return []
+      })
+      const error = await rejection(stop)
+      expect([at, error.category, error.causes.includes(sentinel), tornDown]).toEqual([at, 'stop', true, true])
+      expect(lc.jobs.size).toBe(0)
+    }
+  })
+
   // Control M-join: completing the generation at stdout EOF reports an exit while the process lives.
   test('a generation job completes at actual exit, not when stdout reaches EOF', async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), 'agent-runtime-gen-')))

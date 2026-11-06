@@ -61,7 +61,7 @@ function within<T>(promise: Promise<T>, ms = 8000): Promise<T> {
   return Promise.race([promise, new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`still pending after ${ms} ms`)), ms))])
 }
 
-function harness(options: { env?: Record<string, string>; executablePath?: string; onTurnResult?(s: ClaudeSession, r: TurnResult): void } = {}): Harness {
+function harness(options: { env?: Record<string, string>; executablePath?: string; onTurnResult?(s: ClaudeSession, r: TurnResult): void; onState?(state: string): void } = {}): Harness {
   const home = fakeClaudeHome()
   const events: AgentEvent[] = []
   const results: TurnResult[] = []
@@ -77,6 +77,7 @@ function harness(options: { env?: Record<string, string>; executablePath?: strin
         options.onTurnResult?.(s, r)
       },
       onProcessEnd: (r) => ends.push(r),
+      ...(options.onState ? { onState: options.onState } : {}),
     },
     wire: { record: (f) => frames.push(f) },
     terminate: { graceMs: 300, killMs: 3000 },
@@ -320,6 +321,24 @@ describe('claude session on the owned spawner', () => {
     const error = await rejection(within(h.s.kill()))
     expect(error.category).toBe('stop')
     expect(error.causes).toContain(thrown)
+    expect((await within(hung.result)).outcome).toBe('interrupted')
+    const pid = (h.s as unknown as { generations: Array<{ owned: { pid: number } }> }).generations[0]!.owned.pid
+    expect(alive(pid)).toBe(false)
+    expect(h.s.lifecycle.jobs.size).toBe(0)
+  })
+
+  test('L11/I1: an onState callback throwing at stopping still terminates, settles the turn and reports the failure', async () => {
+    const sentinel = new Error('onState threw at stopping')
+    const h = harness({
+      onState: (state) => {
+        if (state === 'stopping') throw sentinel
+      },
+    })
+    await h.s.start()
+    const hung = await h.s.send('hang')
+    const error = await rejection(within(h.s.kill()))
+    expect(error.category).toBe('stop')
+    expect(error.causes).toContain(sentinel)
     expect((await within(hung.result)).outcome).toBe('interrupted')
     const pid = (h.s as unknown as { generations: Array<{ owned: { pid: number } }> }).generations[0]!.owned.pid
     expect(alive(pid)).toBe(false)
