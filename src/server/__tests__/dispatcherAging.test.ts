@@ -133,6 +133,8 @@ describe('aged normal group mail is routed before normal direct mail (G1–G6)',
     // @covers: agent-mailbox › Delivery order › Aged group mail before direct mail
     // G3:
     // @covers: agent-mailbox › Delivery order › Urgent direct mail still first
+    // G4:
+    // @covers: agent-mailbox › Delivery order › Urgent group mail before normal direct mail
     test(`${row.id}: ${row.group.priority} group mail ${row.group.dueMin !== undefined ? `due ${row.group.dueMin} min` : `${row.group.ageMin} min old`}, ${row.direct} direct${row.owner ? `, ${row.owner}` : ''} → ${row.first} first`, async () => {
       // The idle member who would take the group message, and whose direct mail waits.
       const taker = row.owner === 'busy-a, idle b' ? 'b' : 'a'

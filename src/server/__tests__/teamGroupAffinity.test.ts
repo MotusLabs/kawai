@@ -28,6 +28,7 @@ describe('group affinity frontmatter', () => {
     expect(parse('affinity: task-owner\naffinityWait: 0').affinity).toEqual({ kind: 'task-owner', waitMs: 0 })
   })
 
+  // @covers: team-routing-rules › Groups may route by task owner › Invalid affinity value
   test('affinity: newest warns and leaves affinity off; the rest of the file applies', () => {
     const group = parse('affinity: newest\nmax: 2')
     expect(group.affinity).toBeUndefined()

@@ -87,7 +87,7 @@ Before final landing, the Change Lead SHALL present the assembled head, subtask 
 - **THEN** it records closure without claiming that status closure alone recorded acceptance of that result
 
 ### Requirement: Coordinator recovery respects durable ownership
-The protocol SHALL require a replacement or withdrawal record with outstanding assignments, mail and handoff references, branches, results, next actions, and creator-bound operations. A replacement SHALL NOT claim amendment or closing rights over another session's tasks. Recovery SHALL use the original creator when available or the human for those operations.
+The protocol SHALL require a replacement or withdrawal record with outstanding assignments, mail and handoff references, branches, results, next actions, and owner-bound operations. A replacement SHALL NOT amend or close another session's tasks without holding them. It SHALL gain them only through a recorded `task_transfer_owner` handover from the owner, or a takeover once the owner is gone, archived, or context-exhausted; otherwise recovery SHALL use the owner or the human.
 
 #### Scenario: Coordinator lost
 - **WHEN** the Change Lead becomes unavailable
@@ -95,7 +95,15 @@ The protocol SHALL require a replacement or withdrawal record with outstanding a
 
 #### Scenario: Coordinator replaced
 - **WHEN** a replacement session is named
-- **THEN** affected direction is updated by an authorized creator or the human and participants acknowledge it before following the new coordinator
+- **THEN** affected direction is updated by an authorized owner or the human and participants acknowledge it before following the new coordinator
+
+#### Scenario: Replacement takes over a departed coordinator's tasks
+- **WHEN** the original Change Lead is archived and a replacement of its group calls `task_transfer_owner` for its tasks
+- **THEN** the replacement owns them, each task's journal records the takeover, and only then may it amend or close them
+
+#### Scenario: No takeover from a live coordinator
+- **WHEN** a replacement tries to amend a task whose owner is still live
+- **THEN** the amendment is refused naming the owner
 
 ### Requirement: Pilot evaluation distinguishes quality speed and cost
 The pilot SHALL record baseline and candidate task identifiers, comparable scope/risk and model/resource conditions, elapsed time, clarification waits, correction rounds, integration defects, and available token/cost evidence. Failed and abandoned work SHALL be included. Unknown values and quota, suite, reviewer, or human waits SHALL be identified separately; one pilot SHALL NOT establish a general causal improvement.

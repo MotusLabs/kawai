@@ -39,6 +39,7 @@ afterEach(() => { session.close(); fs.rmSync(dir, { recursive: true, force: true
 const create = () => store.create({ teamId: team.teamId, title: 'Export', direction: 'Build the export', creator: { kind: 'human', sessionId: null } })
 const mailCount = () => (db.prepare('SELECT COUNT(*) AS n FROM team_messages').get() as { n: number }).n
 
+// @covers: team-tasks › Only the creator or the human amends direction › Human draft is not a revision
 test('a draft saved at revision 1 publishes nothing: no revision, no updated_at, no mail, no task change', async () => {
   const task = create()
   const changes: string[] = []

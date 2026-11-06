@@ -66,7 +66,7 @@ The route context given to routing rules SHALL include the message's task owner,
 ## MODIFIED Requirements
 
 ### Requirement: Eligibility is one reusable pure check
-Kawai SHALL decide which members and spawn slots may take group mail with one pure check over a stated routing state: workers, caps, choice, role list, members, task owner, cooldowns, staffing counts, and an evaluation time. It SHALL return eligible candidates in preference order, an eligible task owner first, with every excluded alternative's reasons as waiting-constraint kinds. Routing, waiting reasons, the dispatch preview, the capacity tool, and observers evaluating a past cutoff SHALL all use it, and it SHALL perform no I/O.
+Kawai SHALL decide which members and spawn slots may take group mail with one pure check over a stated state: workers, caps, choice, role list, members, task owner, cooldowns, staffing counts, and evaluation time. It SHALL return eligible candidates in preference order (an eligible owner first) and each excluded alternative's reasons as waiting-constraint kinds. Routing, waiting reasons, dispatch preview, the capacity tool, and past-cutoff observers SHALL all use it; it SHALL perform no I/O.
 
 #### Scenario: Exclusion reasons per alternative
 - **WHEN** a message chose `zai`, an idle `sonnet` member exists, and the `glm` worker is at its cap

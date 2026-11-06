@@ -141,6 +141,8 @@ describe('references', () => {
 })
 
 describe('permission matrix', () => {
+  // @covers: team-tasks › Only the creator or the human amends direction › Creator amends
+  // @covers: team-tasks › Only the creator or the human amends direction › Contributor cannot amend
   test('amend: creator and human only; contributors are pointed to a note or message', async () => {
     const task = await service.create(agent('lead'), { title: 'x', direction: 'v1' })
     await expect(service.amend(agent('dev'), task.id, { direction: 'hijack' })).rejects.toThrow(/task_note.*message the owner \(lead\)/)
@@ -159,6 +161,8 @@ describe('permission matrix', () => {
     await expect(service.amend(agent('lead'), task.id, { direction: 'v2' })).rejects.toThrow('message the human')
   })
 
+  // @covers: team-tasks › Task status and closing › Contributor reports blocked
+  // @covers: team-tasks › Task status and closing › Contributor cannot close
   test('notes and active/blocked are open to every member; done/cancelled to the creator', async () => {
     const task = await service.create(agent('lead'), { title: 'x', direction: 'y' })
     expect((await service.note(agent('dev'), task.id, 'Picked option B')).author).toEqual({ kind: 'agent', sessionId: 'dev' })
@@ -172,6 +176,7 @@ describe('permission matrix', () => {
     expect((await service.get(human(), task.id)).journal.map(entry => entry.text)).toEqual(['Picked option B', 'waiting on API'])
   })
 
+  // @covers: team-tasks › Task status and closing › Human reopens
   test('the human reopens, closes, and amends a task whose creator was killed', async () => {
     const task = await service.create(agent('lead'), { title: 'x', direction: 'y' })
     await service.setStatus(agent('lead'), task.id, 'done')

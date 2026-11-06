@@ -1,4 +1,4 @@
-// @reads: docs/routing/README.md, .kawai/groups/lead.md
+// @reads: docs/routing/README.md, .kawai/groups/lead.md, .kawai/groups/change-leads.md
 import { describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -455,5 +455,16 @@ describe('the shipped lead group (group-mail-task-affinity D6)', () => {
     // The guidance names the transfer tool for both hand-over and takeover.
     expect(parsed.group.prompt).toContain('task_transfer_owner` and `to_session`')
     expect(parsed.group.prompt).toContain('task_transfer_owner` and\n  `from_session`')
+  })
+})
+
+describe('the shipped change-leads group (change-coordination recovery)', () => {
+  // @covers: change-coordination › Coordinator recovery respects durable ownership › Coordinator lost
+  test('the Change Lead role tells participants to escalate once to lead and dispatch nothing while it is unavailable', () => {
+    const text = fs.readFileSync(path.resolve(import.meta.dir, '../../../.kawai/groups/change-leads.md'), 'utf8')
+    const parsed = parseGroupFile('change-leads', text)
+    if (!parsed.ok) throw new Error(parsed.error)
+    const recovery = parsed.group.prompt.split('## Recovery and withdrawal')[1]?.split('\n## ')[0] ?? ''
+    expect(recovery.replace(/\s+/g, ' ')).toContain('If you become unavailable, participants escalate once to `lead` and dispatch nothing')
   })
 })

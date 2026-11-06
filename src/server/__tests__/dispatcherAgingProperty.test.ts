@@ -160,6 +160,7 @@ async function runCase(random: () => number, chaos: boolean): Promise<CaseResult
 }
 
 describe('group-mail aging properties', () => {
+  // @covers: agent-mailbox › Delivery order › Group mail is not starved by a steady direct stream
   test('P1: seed 4242, 300 cases — a steady direct stream never starves the group message', async () => {
     const random = rng(4242)
     let byOwner = 0

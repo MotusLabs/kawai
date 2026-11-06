@@ -3,7 +3,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: Coordinator recovery respects durable ownership
-The protocol SHALL require a replacement or withdrawal record with outstanding assignments, mail and handoff references, branches, results, next actions, and owner-bound operations. A replacement SHALL NOT exercise amendment or closing rights over another session's tasks without holding them. It SHALL gain them only through a recorded `task_transfer_owner` handover from the owner, or a takeover once the owner is gone, archived, or context-exhausted; otherwise recovery SHALL use the owner or the human.
+The protocol SHALL require a replacement or withdrawal record with outstanding assignments, mail and handoff references, branches, results, next actions, and owner-bound operations. A replacement SHALL NOT amend or close another session's tasks without holding them. It SHALL gain them only through a recorded `task_transfer_owner` handover from the owner, or a takeover once the owner is gone, archived, or context-exhausted; otherwise recovery SHALL use the owner or the human.
 
 #### Scenario: Coordinator lost
 - **WHEN** the Change Lead becomes unavailable

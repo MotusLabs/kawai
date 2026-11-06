@@ -255,6 +255,7 @@ test('P4: after every step each agent task has one owner, journaled, and a refus
 
 describe('task reads name the owner (task 2.4)', () => {
   // @covers: team-tasks › Task reads name the owner › task_get after a transfer
+  // @covers: team-tasks › Tasks have an owner › Creator kept after transfer
   test('task_get\'s task section carries creator A and owner B; a human task carries a null owner', async () => {
     const id = await create('lead-a')
     await tool('lead-a')({ task_id: id, to_session: 'lead-b' })
@@ -271,5 +272,40 @@ describe('task reads name the owner (task 2.4)', () => {
     await tool('lead-a')({ task_id: id, to_session: 'lead-b' })
     const { tasks } = await taskHandlers(service, 'dev').task_list({ status: 'all' })
     expect(tasks.find(row => row.id === id)).toMatchObject({ creator: { kind: 'agent', sessionId: 'lead-a' }, ownerSession: 'lead-b' })
+  })
+})
+
+// change-coordination's recovery requirement (group-mail-task-affinity's
+// MODIFIED "Coordinator recovery respects durable ownership"), through the
+// same production TaskService: `lead-a` coordinates, `lead-b` replaces it,
+// and `dev` participates.
+describe('coordinator recovery respects durable ownership', () => {
+  // @covers: change-coordination › Coordinator recovery respects durable ownership › Coordinator replaced
+  test('a named replacement cannot amend the live coordinator\'s task; the human updates it and a participant acknowledges the new revision', async () => {
+    const id = await create('lead-a')
+    await expect(service.amend(agent('lead-b'), id, { direction: 'follow me' })).rejects.toThrow(/owner \(lead-a\)/)
+    expect((await service.amend({ kind: 'human', team }, id, { direction: 'lead-b coordinates now' })).revision).toBe(2)
+    expect(await taskHandlers(service, 'dev').task_acknowledge({ task_id: id, revision: 2 })).toMatchObject({ revision: 2, alreadyAcknowledged: false })
+    expect(service.store.acknowledgements.list(id)).toMatchObject([{ sessionId: 'dev', revision: 2 }])
+  })
+
+  // @covers: change-coordination › Coordinator recovery respects durable ownership › Replacement takes over a departed coordinator's tasks
+  test('after the coordinator is archived, the replacement takes its tasks over, the journal records it, and only then amends and closes', async () => {
+    const first = await create('lead-a')
+    const second = await create('lead-a')
+    archive('lead-a')
+    await refused(service.amend(agent('lead-b'), first, { direction: 'mine' }), /owner/, [first])
+    expect((await tool('lead-b')({ from_session: 'lead-a' })).taskIds.sort()).toEqual([first, second].sort())
+    expect(moves(first)).toEqual(['owner: lead-a -> lead-b by lead-b'])
+    expect((await service.amend(agent('lead-b'), first, { direction: 'mine' })).revision).toBe(2)
+    expect((await service.setStatus(agent('lead-b'), second, 'done')).status).toBe('done')
+  })
+
+  // @covers: change-coordination › Coordinator recovery respects durable ownership › No takeover from a live coordinator
+  test('a replacement amending a task of a live coordinator is refused naming the owner, and cannot take it over', async () => {
+    const id = await create('lead-a')
+    await refused(service.amend(agent('lead-b'), id, { direction: 'mine' }), /owner \(lead-a\)/, [id])
+    await refused(tool('lead-b')({ task_id: id }), 'Session lead-a owns this and is still live', [id])
+    expect(service.store.get(id)!.revision).toBe(1)
   })
 })
