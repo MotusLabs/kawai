@@ -67,3 +67,21 @@ The spawner passes the launch's `childEnv` exactly. It merges nothing from
 `SpawnOptions`. If the CLI needs a protocol variable (the SDK sets
 `CLAUDE_CODE_ENTRYPOINT` and `CLAUDE_AGENT_SDK_VERSION` and removes
 `NODE_OPTIONS`), the profile helper must put it in the returned map.
+
+## The Claude path
+
+The Claude session runs the SDK's `query()` on the owned spawner. Each
+generation's message loop is an owned job that finishes at the leader's
+actual exit, not at the end of the SDK iterator. `kill()` closes the input
+and terminates every owned generation at once. `shutdown()` closes the input
+and gives each leader the grace bound to exit on its own before terminating
+it. Both then join every owned job. A read failure after the stop has begun
+is the stop's own cancellation, not a stop failure.
+
+With SDK 0.3.289 a closed stdout does not end the iterator. The SDK waits
+for the spawned process to report an exit through its `exit` event and its
+exit-code getters, and the adapter reports those only from the leader's
+observed exit. A CLI that closes its stream and keeps running therefore
+stays active until it exits or is stopped. The session also waits for the
+actual exit itself, so a later SDK that ends at EOF cannot report an exit
+early.

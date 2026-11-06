@@ -78,7 +78,7 @@ export class OwnedJobs {
     if (this.insideJob()) {
       throw new AgentRuntimeError({ category: 'internal', message: 'an owned job cannot join its own registry' })
     }
-    while (this.live.size > 0) await Promise.all([...this.live])
+    while (this.live.size > 0) await Promise.all(this.live)
     return [...this.failures]
   }
 }

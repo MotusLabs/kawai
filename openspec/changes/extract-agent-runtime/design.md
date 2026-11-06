@@ -200,7 +200,7 @@ Axes: state = unstarted/starting/idle/active/stopping/stopped/exited; operation 
 
 | ID | State | Operation | Observable result |
 | --- | --- | --- | --- |
-| L01 | unstarted | start | One initialization, no prompt; `start()` resolves at L17 (idle) or rejects with the most specific category (configuration/dependency/authentication/resume, else transport) |
+| L01 | unstarted | start | One initialization, no prompt; `start()` resolves at L17 (idle) or rejects with the most specific category (configuration/dependency/authentication/resume, else transport); a rejected start restores the prior state (unstarted or exited) |
 | L02 | exited | start | Same saved conversation resumes; no implicit new conversation |
 | L03 | starting | start | Share the current initialization |
 | L04 | idle, active | start | Resolves at once as a no-op; no second process, no event, no state change |
