@@ -66,3 +66,33 @@ refuses rather than choosing between leaking it and breaking the profile.
 The Claude helpers also set `CLAUDE_CODE_ENTRYPOINT` and
 `CLAUDE_AGENT_SDK_VERSION`. The SDK normally adds these itself, but the
 owned spawner ignores the SDK's proposed environment.
+
+## Claude permissions
+
+`permissions` holds three separate settings: the permission `mode`,
+`disallowedTools`, and `enabledTools` (a list, or `'all'`). They are enforced
+by a deny-only `PreToolUse` policy hook that the runtime installs first on
+every session and every respawn:
+
+- A disallowed tool is denied in every mode, bypass included.
+- With an `enabledTools` list, every unlisted tool is denied without
+  prompting, custom and MCP tools included.
+- A permitted tool gets no decision from the hook, never `allow`. The CLI's
+  own permission checks still apply in the non-bypass modes.
+
+`allowedTools` and `canUseTool` are not used for enforcement. Hooks run
+before allow rules, and a deny from any hook wins, so neither, nor any
+observation hook of yours, can re-grant a denied tool. Entries must be exact
+tool names. A permission rule such as `Bash(git:*)` or a wildcard can't be
+enforced by name, so the session refuses to construct, with category
+`configuration`.
+
+`RESTRICTED_CLAUDE_PERMISSIONS` is the restricted v1 profile:
+`bypassPermissions`, the read set `Read`/`Glob`/`Grep`, and denials of
+`AskUserQuestion`, `Edit`, `Write`, `MultiEdit`, `NotebookEdit` and **Bash
+entirely**. v1 ships no Bash command parser or allow-list. Either Bash is
+denied entirely, or it is allowed with no command restrictions.
+
+Limitation: the hook-before-disallowed ordering and deny-wins resolution are
+tested against the fake CLI, which follows Anthropic's documented order. The
+real CLI is checked only at task 7.4, which needs a model turn.

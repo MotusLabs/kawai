@@ -11,19 +11,22 @@ import type { Options, Query, SDKMessage, SDKUserMessage } from '@anthropic-ai/c
 import type { InterruptReceipt, ProcessExitFact, ProcessExitReceipt, SubmitOptions, TurnHandle, TurnOutcome, TurnResult } from '../contract.js'
 import { AgentRuntimeError, type AgentErrorInfo } from '../errors.js'
 import { EventStream } from '../eventStream.js'
-import type { AgentCallbacks, LaunchInput, WireRecorder } from '../options.js'
+import type { AgentCallbacks, ClaudePermissions, LaunchInput, WireRecorder } from '../options.js'
 import { DriverLifecycle } from '../lifecycle/lifecycle.js'
 import { createOwnedClaudeSpawn } from '../process/claudeSpawn.js'
 import { resolveExecutable, resolveLaunch } from '../process/launch.js'
 import type { LeaderExit, OwnedProcess, TerminateOptions } from '../process/ownedProcess.js'
+import { composeClaudePermissions, withPermissions, type ClaudePermissionComposition } from './permissions.js'
 import { PromptQueue } from './promptQueue.js'
 
 export interface ClaudeSessionOptions {
   launch: LaunchInput
   callbacks: AgentCallbacks
   wire?: WireRecorder
-  /** SDK options supplied by the profile and permission layers (tasks 3.x). */
+  /** SDK options supplied by the profile layer (settings) and later tasks; policy fields are overridden. */
   sdkOptions?: Partial<Options>
+  /** Enforced on every generation by the PreToolUse policy (task 3.2). */
+  permissions?: ClaudePermissions
   /** Termination bounds for stop (defaults: the owned spawner's). */
   terminate?: TerminateOptions
 }
@@ -66,7 +69,11 @@ export class ClaudeSession {
   private open: Turn[] = []
   private readonly byUuid = new Map<string, Turn>()
 
+  /** Validated once at construction: an unenforceable restriction never starts. */
+  private readonly permissions: ClaudePermissionComposition | null
+
   constructor(private readonly options: ClaudeSessionOptions) {
+    this.permissions = options.permissions ? composeClaudePermissions(options.permissions) : null
     this.events = new EventStream((event) => this.notify('onEvent', () => options.callbacks.onEvent(event)))
     this.lifecycle = new DriverLifecycle({
       continuations: new Set(['queue']),
@@ -113,7 +120,7 @@ export class ClaudeSession {
       prompt: input,
       options: {
         settingSources: [],
-        ...this.options.sdkOptions,
+        ...(this.permissions ? withPermissions(this.options.sdkOptions ?? {}, this.permissions) : this.options.sdkOptions),
         cwd: launch.cwd,
         pathToClaudeCodeExecutable: executable,
         // Ignored by the owned spawner (I3); passed so the SDK computes nothing from process.env.

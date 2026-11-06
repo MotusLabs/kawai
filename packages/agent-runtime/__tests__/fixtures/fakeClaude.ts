@@ -9,7 +9,11 @@
 // answers with the whole initial environment (/proc/self/environ); `hang`
 // starts a turn that ends only on interrupt; `crash` exits 3 mid-turn;
 // `eof-alive` closes the protocol stream and keeps running; `ignore-term`
-// ignores SIGTERM and stdin EOF from then on (only SIGKILL ends it); anything else is echoed. Stdin EOF exits 0.
+// ignores SIGTERM and stdin EOF from then on (only SIGKILL ends it);
+// `tool <Name> [path]` attempts a tool call the way the documented CLI order
+// evaluates it: the registered PreToolUse hooks first (a deny wins), then
+// --disallowedTools; an executed tool leaves `executed-<Name>` in the cwd
+// (a Read reads [path] first). Anything else is echoed. Stdin EOF exits 0.
 // Every received frame, and first the process argv as {"argv": [...]},
 // is appended to $FAKE_CLAUDE_LOG when set.
 import fs from 'node:fs'
@@ -20,6 +24,52 @@ const log = process.env.FAKE_CLAUDE_LOG
 const write = (frame: Record<string, unknown>) => fs.writeSync(OUT, `${JSON.stringify(frame)}\n`)
 const usage = { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
 let running: string | null = null
+const argv = process.argv.slice(2)
+const flag = (name: string) => {
+  const at = argv.indexOf(name)
+  return at >= 0 ? argv[at + 1] : undefined
+}
+const disallowed = new Set((flag('--disallowedTools') ?? '').split(',').filter(Boolean))
+let preToolUse: Array<{ matcher?: string; hookCallbackIds: string[] }> = []
+const pending = new Map<string, (response: Record<string, unknown>) => void>()
+let nextRequest = 0
+
+function askHook(callbackId: string, input: Record<string, unknown>, toolUseId: string): Promise<Record<string, unknown>> {
+  const requestId = `fake-${++nextRequest}`
+  write({ type: 'control_request', request_id: requestId, request: { subtype: 'hook_callback', callback_id: callbackId, input, tool_use_id: toolUseId } })
+  return new Promise((resolve) => pending.set(requestId, resolve))
+}
+
+async function attemptTool(uuid: string, tool: string, target: string | undefined) {
+  const toolUseId = `toolu_${crypto.randomUUID()}`
+  const toolInput = target ? { file_path: target } : {}
+  write({
+    type: 'assistant', session_id: sessionId, uuid: crypto.randomUUID(), parent_tool_use_id: null,
+    message: { id: crypto.randomUUID(), role: 'assistant', model: 'fake-model', content: [{ type: 'tool_use', id: toolUseId, name: tool, input: toolInput }], usage },
+  })
+  let denial: string | null = null
+  const input = { hook_event_name: 'PreToolUse', session_id: sessionId, transcript_path: '', cwd: process.cwd(), tool_name: tool, tool_input: toolInput, tool_use_id: toolUseId }
+  for (const matcher of preToolUse) {
+    if (matcher.matcher && !new RegExp(`^(?:${matcher.matcher})$`).test(tool)) continue
+    for (const id of matcher.hookCallbackIds) {
+      const output = await askHook(id, input, toolUseId)
+      const specific = output.hookSpecificOutput as { permissionDecision?: string; permissionDecisionReason?: string } | undefined
+      if (specific?.permissionDecision === 'deny') denial ??= `hook: ${specific.permissionDecisionReason ?? 'denied'}`
+    }
+  }
+  if (denial === null && disallowed.has(tool)) denial = `disallowed: ${tool}`
+  let text: string
+  if (denial !== null) {
+    text = `denied ${tool} (${denial})`
+  } else {
+    const content = tool === 'Read' && target ? fs.readFileSync(target, 'utf8') : ''
+    fs.writeFileSync(`executed-${tool}`, '')
+    text = `executed ${tool}${content ? `: ${content}` : ''}`
+  }
+  write({ type: 'user', session_id: sessionId, uuid: crypto.randomUUID(), parent_tool_use_id: null, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseId, content: text, is_error: denial !== null }] } })
+  assistant(text)
+  result(uuid, 'success', text)
+}
 if (log) fs.appendFileSync(log, `${JSON.stringify({ argv: process.argv.slice(2) })}\n`)
 let holdOnEof = false
 
@@ -59,6 +109,9 @@ function onUser(frame: { uuid?: string; message?: { content?: unknown } }) {
       assistant(all)
       return result(uuid, 'success', all)
     }
+    case 'tool':
+      void attemptTool(uuid, rest[0] ?? '', rest[1])
+      return
     case 'hang':
       running = uuid
       return
@@ -85,6 +138,7 @@ function onControl(frame: { request_id: string; request: { subtype: string } }) 
     write({ type: 'control_response', response: { subtype: 'success', request_id: frame.request_id, response } })
   switch (frame.request.subtype) {
     case 'initialize':
+      preToolUse = ((frame.request as { hooks?: { PreToolUse?: typeof preToolUse } }).hooks?.PreToolUse) ?? []
       return respond({ commands: [], agents: [], models: [], account: {}, output_style: 'default', available_output_styles: [] })
     case 'interrupt': {
       const uuid = running
@@ -108,7 +162,11 @@ process.stdin.on('data', (chunk: Buffer) => {
     if (!line) continue
     if (log) fs.appendFileSync(log, `${line}\n`)
     const frame = JSON.parse(line)
-    if (frame.type === 'control_request') onControl(frame)
+    if (frame.type === 'control_response') {
+      const resolve = pending.get(frame.response.request_id)
+      pending.delete(frame.response.request_id)
+      resolve?.(frame.response.response ?? {})
+    } else if (frame.type === 'control_request') onControl(frame)
     else if (frame.type === 'user') onUser(frame)
   }
 })
