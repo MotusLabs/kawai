@@ -60,14 +60,15 @@ export interface ClaudePermissionComposition {
 }
 
 /**
- * Validate and compose one session's permissions. `sessionTools` names the
- * host tools bound to this session (task 3.4); they count as enabled.
+ * Validate and compose one session's permissions. An explicit enabled-tool
+ * list is exact: a bound host tool runs only when it is listed under its
+ * `mcp__<namespace>__<tool>` name. A host that exempts its own tools lists them.
  */
-export function composeClaudePermissions(permissions: ClaudePermissions, sessionTools: readonly string[] = []): ClaudePermissionComposition {
+export function composeClaudePermissions(permissions: ClaudePermissions): ClaudePermissionComposition {
   if (permissions === null || typeof permissions !== 'object') throw configurationError('permissions are required')
   if (!MODES.has(permissions.mode)) throw configurationError(`unknown permission mode ${JSON.stringify(permissions.mode)}`)
   const disallowed = new Set(toolNames('disallowedTools', permissions.disallowedTools))
-  const enabled = permissions.enabledTools === 'all' ? null : new Set([...toolNames('enabledTools', permissions.enabledTools), ...sessionTools])
+  const enabled = permissions.enabledTools === 'all' ? null : new Set(toolNames('enabledTools', permissions.enabledTools))
   const decide: ToolPolicy = (tool) => {
     if (disallowed.has(tool)) return `${tool} is disallowed for this session`
     if (enabled && !enabled.has(tool)) return `${tool} is not enabled for this session`

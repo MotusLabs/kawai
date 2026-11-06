@@ -18,7 +18,7 @@ import { DriverLifecycle, type Admission } from '../lifecycle/lifecycle.js'
 import { createOwnedClaudeSpawn } from '../process/claudeSpawn.js'
 import { resolveExecutable, resolveLaunch } from '../process/launch.js'
 import type { LeaderExit, OwnedProcess, TerminateOptions } from '../process/ownedProcess.js'
-import { bindToolSet, claudeToolName, type BoundToolSet } from '../tools/toolSet.js'
+import { bindToolSet, type BoundToolSet } from '../tools/toolSet.js'
 import { claudeIntegrationOptions, mergeHooks } from './integrations.js'
 import { composeClaudePermissions, withPermissions, type ClaudePermissionComposition } from './permissions.js'
 import { PromptQueue } from './promptQueue.js'
@@ -90,9 +90,8 @@ export class ClaudeSession {
 
   constructor(private readonly options: ClaudeSessionOptions) {
     this.tools = bindToolSet(options.tools)
-    // Bound host tools count as enabled for this session's restriction.
-    const sessionTools = this.tools ? this.tools.tools.map((tool) => claudeToolName(this.tools!.namespace, tool.name)) : []
-    this.permissions = options.permissions ? composeClaudePermissions(options.permissions, sessionTools) : null
+    // Only an omitted policy means none: any supplied value, null included, is validated.
+    this.permissions = options.permissions === undefined ? null : composeClaudePermissions(options.permissions)
     this.events = new EventStream((event) => this.notify('onEvent', () => options.callbacks.onEvent(event)))
     this.lifecycle = new DriverLifecycle({
       continuations: new Set(['queue']),

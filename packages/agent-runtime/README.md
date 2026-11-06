@@ -85,7 +85,8 @@ before allow rules, and a deny from any hook wins, so neither, nor any
 observation hook of yours, can re-grant a denied tool. Entries must be exact
 tool names. A permission rule such as `Bash(git:*)` or a wildcard can't be
 enforced by name, so the session refuses to construct, with category
-`configuration`.
+`configuration`. Omitting `permissions` means no policy. A supplied value
+that is not a valid policy, `null` included, is refused the same way.
 
 `RESTRICTED_CLAUDE_PERMISSIONS` is the restricted v1 profile:
 `bypassPermissions`, the read set `Read`/`Glob`/`Grep`, and denials of
@@ -148,8 +149,10 @@ records and observes nothing for it.
   a Zod object schema and a handler. An absent or empty set registers no
   tools.
   - Claude serves them from an in-process SDK MCP server as
-    `mcp__<namespace>__<tool>`, and a restricted session counts them as
-    enabled. Codex receives one `dynamicTools` namespace.
+    `mcp__<namespace>__<tool>`. An explicit `enabledTools` list is exact. A
+    bound tool runs only if that name is listed, so a host that exempts its
+    own tools adds them to the list itself. Codex receives one `dynamicTools`
+    namespace.
   - A handler runs only for this session's own thread, the bound namespace, a
     bound tool, and arguments that pass the full schema, refinements
     included. Any other call gets a `Refused: …` error result, and the

@@ -23,6 +23,11 @@ import { bindToolSet } from '../src/tools/toolSet.js'
 import { fakeClaudeHome } from './helpers/fakeClaudeHome.js'
 
 const SECRET = 'AR_SECRET_TOOL_INPUT_MARKER'
+/** The restricted profile with the host's own tools listed explicitly, as a host exempting them does. */
+const RESTRICTED_WITH_HOST = {
+  ...RESTRICTED_CLAUDE_PERMISSIONS,
+  enabledTools: [...(RESTRICTED_CLAUDE_PERMISSIONS.enabledTools as string[]), 'mcp__host__echo', 'mcp__host__strict', 'mcp__host__count', 'mcp__host__fail'],
+}
 
 function hostTools() {
   const calls: Array<{ input: unknown; context: ToolCallContext }> = []
@@ -158,7 +163,7 @@ describe('Claude host tools through the real SDK', () => {
 
   test('P10/P11: the bound tool runs once with its identity; schema, unknown and unlisted calls never reach a handler', async () => {
     const { set, calls } = hostTools()
-    const h = session({ tools: set, permissions: RESTRICTED_CLAUDE_PERMISSIONS })
+    const h = session({ tools: set, permissions: RESTRICTED_WITH_HOST })
     try {
       await h.s.start()
       expect(JSON.parse((await h.ask('mcp-list host'))!)).toEqual({ servers: ['host'], tools: ['echo', 'strict', 'count', 'fail'] })
@@ -183,6 +188,22 @@ describe('Claude host tools through the real SDK', () => {
       await h.s.start()
       expect(await h.ask('mcp host echo {"text":"again"}')).toBe('mcp ok: echoed again')
       expect(calls).toHaveLength(4)
+    } finally {
+      await h.s.kill()
+    }
+  })
+})
+
+describe('bound tools under an explicit enabled list', () => {
+  test('P05/P10: a bound host tool the restricted list does not name is denied without running its handler', async () => {
+    const { set, calls } = hostTools()
+    const h = session({ tools: set, permissions: RESTRICTED_CLAUDE_PERMISSIONS })
+    try {
+      await h.s.start()
+      // Registered (the server exists), yet not enabled.
+      expect(JSON.parse((await h.ask('mcp-list host'))!).servers).toEqual(['host'])
+      expect(await h.ask('mcp host echo {"text":"hi"}')).toStartWith('denied mcp__host__echo (hook: mcp__host__echo is not enabled')
+      expect(calls).toHaveLength(0)
     } finally {
       await h.s.kill()
     }
@@ -352,7 +373,7 @@ describe('tool observation', () => {
           },
         },
       }
-      const h = session({ tools: set, permissions: RESTRICTED_CLAUDE_PERMISSIONS, ...observe })
+      const h = session({ tools: set, permissions: RESTRICTED_WITH_HOST, ...observe })
       const answers: Array<string | null> = []
       await h.s.start()
       for (const line of script) answers.push(await h.ask(line))
@@ -375,7 +396,7 @@ describe('tool observation', () => {
 
   test('I8: over 128 seeded traces, observation hooks absent, present or throwing never change the policy decision', async () => {
     const sdk = await import('@anthropic-ai/claude-agent-sdk')
-    const policy = composeClaudePermissions(RESTRICTED_CLAUDE_PERMISSIONS, ['mcp__host__echo'])
+    const policy = composeClaudePermissions({ ...RESTRICTED_CLAUDE_PERMISSIONS, enabledTools: ['Read', 'Glob', 'Grep', 'mcp__host__echo'] })
     const tools = ['Read', 'Glob', 'Grep', 'Bash', 'Write', 'Edit', 'AskUserQuestion', 'mcp__host__echo', 'mcp__host__nope', 'WebFetch']
     let seed = 0xa608
     const next = () => (seed = (seed * 1103515245 + 12345) >>> 0)

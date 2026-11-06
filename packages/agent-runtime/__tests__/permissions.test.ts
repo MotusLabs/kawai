@@ -71,6 +71,18 @@ describe('Claude permission policy (pure)', () => {
     for (const permissions of bad) configurationFailure(() => composeClaudePermissions(permissions as ClaudePermissions))
     const home = fakeClaudeHome()
     configurationFailure(() => new ClaudeSession({ launch: home.launch(), callbacks: { onEvent: () => {} }, permissions: bad[1] as ClaudePermissions }))
+    // A supplied but empty policy is invalid, never "no policy": a caller's bypass must not survive it.
+    for (const supplied of [null, false, 0, '']) {
+      configurationFailure(
+        () =>
+          new ClaudeSession({
+            launch: home.launch(),
+            callbacks: { onEvent: () => {} },
+            permissions: supplied as never,
+            sdkOptions: { permissionMode: 'bypassPermissions', allowDangerouslySkipPermissions: true },
+          }),
+      )
+    }
     expect(home.argv()).toEqual([])
   })
 })
