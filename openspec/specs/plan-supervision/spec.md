@@ -79,6 +79,25 @@ Each stall episode SHALL send one message from Kawai to the plan's Lead role, ta
 - **WHEN** a change of a plan with no Lead role stalls
 - **THEN** no message is sent, and the attention queue shows the stall for the owner
 
+### Requirement: A stopped change alerts the Lead role once per stop
+While its execution runs, a change that stops SHALL send one message from Kawai to the plan's Lead role, tagged `plan-stop` and `stop:<reason>` and routed under that role's profiles. It SHALL name the change, the stop reason as a label with its detail, the rounds with their outcomes, the changes blocked by it, and that Retry is the owner's. A durable record SHALL keep each stop to one alert across restarts. Stops of a finished execution SHALL raise no alert. With no Lead role, the stop SHALL be an owner attention item only. Stop alerts SHALL not count as stall alerts in the team's summary.
+
+#### Scenario: One alert across a restart
+- **WHEN** a stop is alerted and the server restarts while the change stays stopped
+- **THEN** no second alert is sent for that stop
+
+#### Scenario: A new stop after Retry
+- **WHEN** the owner retries a stopped change and it stops again
+- **THEN** a second alert is sent for the new stop
+
+#### Scenario: The owner stops the execution
+- **WHEN** the owner stops an execution that has a stopped change not yet alerted
+- **THEN** no alert is sent for it, because Retry is no longer possible
+
+#### Scenario: No Lead role
+- **WHEN** a change of a plan with no Lead role stops
+- **THEN** no message is sent, and the attention queue shows the stop for the owner
+
 ### Requirement: The report says what stopped and why
 For each stopped change the plan SHALL show the stop reason as a label with its detail, the last round's evidence, every change blocked by it directly or through other changes, and the next action, Retry or Stop execution. While any change is unlanded the plan SHALL report partial delivery as "Landed N of M" with what blocks the rest, and SHALL never claim its success criteria are met.
 

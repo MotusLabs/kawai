@@ -21,6 +21,7 @@ import type { IntegrationStore } from '../landing/integration/integrationStore'
 import type { PlanStore } from '../planStore'
 import { readPlanSupervisionDetail, type SupervisionDetailReads } from './planSupervisionDetail'
 import { raiseStallAlerts } from './stallAlerts'
+import { raiseStopAlerts } from './stopAlerts'
 import { StallAlertStore } from './stallAlertStore'
 import { derivePlanSupervision } from './supervisionRead'
 import { SupervisionMonitor, type SupervisionMonitorDeps } from './SupervisionMonitor'
@@ -81,7 +82,11 @@ export function composeSupervisionMonitor(options: MonitorCompositionOptions): {
       .flatMap(execution => options.executions.changes(execution.id).map(row => ({ executionId: execution.id, change: row.change }))),
     plansOf: teamId => options.plans.openPlans(teamId).map(plan => plan.id),
     derive: (teamId, planId, now) => derivePlanSupervision(reads, teamId, planId, now),
-    raiseStalls: (teamId, planId, derived) => raiseStallAlerts({ db, mail: options.mailbox, alerts, plans: options.plans }, identity(teamId), planId, derived),
+    raiseStalls: (teamId, planId, derived) => {
+      const deps = { db, mail: options.mailbox, alerts, plans: options.plans }
+      return raiseStallAlerts(deps, identity(teamId), planId, derived)
+        + raiseStopAlerts({ ...deps, executions: options.executions }, identity(teamId), planId, derived)
+    },
     manageFixes: async teamId => {
       const team = identity(teamId)
       createCorrectionTasks({ db, decisions: options.decisions, tasks: options.tasks, assignments: options.assignments, plans: options.plans, promotions: options.integration }, team)

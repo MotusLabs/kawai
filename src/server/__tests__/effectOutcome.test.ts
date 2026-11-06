@@ -1,8 +1,8 @@
 // The D14 failure classification as a table over both adapters' error
 // shapes: a null exit without the typed marker (a timeout, a killed
 // process) is transient; a typed gh spawn failure is permanent with its
-// diagnostic retained; git network wording is transient while a rejected
-// push is permanent; 5xx, 429, and rate-limit 403s are transient while a
+// diagnostic retained; git network wording and a push the remote failed on
+// its own side are transient while a refused push is permanent; 5xx, 429, and rate-limit 403s are transient while a
 // refused merge's 403, a 422, and a plain 4xx are permanent.
 import { describe, expect, test } from 'bun:test'
 import { classifyEffectFailure } from '../plans/landing/effectOutcome'
@@ -34,6 +34,25 @@ describe('classifyEffectFailure', () => {
     expect(classifyEffectFailure(git('To origin.git\n ! [rejected]  aaa -> kawai/api (non-fast-forward)\nerror: failed to push some refs'))).toBe('permanent')
     expect(classifyEffectFailure(git("fatal: 'kawai/api' is not a valid branch name"))).toBe('permanent')
     expect(classifyEffectFailure(git('fatal: refusing to fetch into branch refs/heads/master'))).toBe('permanent')
+  })
+
+  test('a ref the remote failed to update is transient; a ref it refused is permanent', () => {
+    // GitHub's own failure, as a stopped change recorded it on 2026-11-05.
+    const commitRefs = [
+      'remote: fatal error in commit_refs',
+      'Encountered an error running "coder gitssh", see "coder gitssh --help" for more information',
+      'error: run ssh command: exit status 1',
+      'To github.com:MotusLabs/smartfactory.git',
+      ' ! [remote rejected] bbf9f4bba0a405c41e36c24182cc9ec56de5205f -> control-api (failure)',
+      "error: failed to push some refs to 'github.com:MotusLabs/smartfactory.git'",
+    ].join('\n')
+    expect(classifyEffectFailure(git(commitRefs, 1))).toBe('transient')
+    expect(classifyEffectFailure(git(' ! [remote rejected] aaa -> kawai/api (Internal Server Error)', 1))).toBe('transient')
+    expect(classifyEffectFailure(git(' ! [remote rejected] aaa -> kawai/api (protected branch hook declined)', 1))).toBe('permanent')
+    expect(classifyEffectFailure(git(' ! [remote rejected] aaa -> kawai/api (pre-receive hook declined)', 1))).toBe('permanent')
+    // The status of the rejected ref decides, not a word elsewhere in the output.
+    expect(classifyEffectFailure(git('remote: failure: secret detected\n ! [remote rejected] aaa -> kawai/api (pre-receive hook declined)', 1))).toBe('permanent')
+    expect(classifyEffectFailure(git(' ! [rejected] aaa -> kawai/api (non-fast-forward)\nerror: failure', 1))).toBe('permanent')
   })
 
   test('GitHub 5xx, 429, and rate limits are transient; other statuses are permanent', () => {

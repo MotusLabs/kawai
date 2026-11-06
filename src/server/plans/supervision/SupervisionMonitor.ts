@@ -7,7 +7,7 @@
 // correction task. Sweeps are single-flight per team: a notification during
 // a sweep runs one more after it. A failing sweep is logged and the next
 // trigger retries. Each sweep, per open plan: derives supervision over the
-// newest execution, raises new stall alerts, then completes fix and
+// newest execution, raises new stall and stop alerts, then completes fix and
 // correction tasks, then pushes the plan's detail when its derived view
 // changed. The monitor also owns D11's in-memory `waitEndedAt`: the last
 // time it saw a change in a named wait, set to the startup time for every
@@ -28,7 +28,7 @@ export interface SupervisionMonitorDeps {
   plansOf: (teamId: string) => string[]
   /** One plan's derivation, reading `waitEndedAt` from the monitor; null when the plan is gone. */
   derive: (teamId: string, planId: string, now: Date) => DerivedPlan | null
-  /** Raise each new stall episode's alert (D11); returns how many were raised. */
+  /** Raise each new stall episode's alert (D11) and each new stop's; returns how many were raised. */
   raiseStalls: (teamId: string, planId: string, derived: DerivedPlan) => number
   /** Create and complete the team's fix and correction tasks (D8). */
   manageFixes: (teamId: string) => Promise<void>
