@@ -181,6 +181,8 @@ export interface ClaudeDriverOptions extends BaseDriverOptions {
   permissions: ClaudePermissions
   /** Settings sources the CLI reads; headless default is none. */
   settingSources?: ReadonlyArray<'user' | 'project' | 'local'>
+  /** Non-secret flag-layer settings (`--settings`), e.g. a profile helper's `settings`. */
+  settings?: { env?: Readonly<Record<string, string>> }
   /** Quota pulls through the supplied home's login are off unless chosen (design §6). */
   quotaSource?: 'none' | 'host-login'
   auditHooks?: ClaudeAuditHooks

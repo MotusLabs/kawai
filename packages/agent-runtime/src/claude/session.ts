@@ -1,33 +1,51 @@
-// The first real Claude driver path (tasks 2.2/2.4): the pinned SDK's
-// query() running on the owned spawner, through the shared lifecycle core.
-// Every generation's message loop is an owned job that completes only at the
-// leader's actual exit; start resolves on the CLI's initialize response;
-// stop closes the input, terminates every owned generation and joins every
-// owned job before its receipt. Permissions (3.2) and host integrations
-// (3.4: tools, prompt append, pre-submit context, observation, audit) are
-// composed per generation. Requests, resume and the full event set arrive in
-// tasks 4-5. This module is the composition they extend, not the final public
-// driver.
-
-import type { Options, Query, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
-import type { InterruptReceipt, ProcessExitFact, ProcessExitReceipt, SubmitOptions, TurnHandle, TurnOutcome, TurnResult } from '../contract.js'
+// The Claude driver core (tasks 2.2/2.4, 4.1): the pinned SDK's query() on
+// the owned spawner, through the shared lifecycle core.
+//
+// - Generations. Each generation's message loop is an owned job that
+//   completes only at the leader's actual exit. start resolves on the CLI's
+//   initialize response. A respawn after an unexpected exit resumes the same
+//   conversation.
+// - Turn binding. Results and content frames bind to turns by the client UUID
+//   each prompt carries (the CLI turn binder), so a late, duplicate or
+//   previous-turn result never completes the turn opened since. A queued
+//   prompt that the CLI consumed into the active turn resolves with that
+//   turn's result. Otherwise it opens as the next turn with no idle state in
+//   between.
+// - Agent-started turns. An init that no submission opened starts an
+//   agent-started turn (L24), but only while idle.
+// - Composition. Permissions, host integrations, requests (canUseTool) and
+//   frame mapping are composed here. Stop closes the input and the requests,
+//   terminates every owned generation and joins every owned job before its
+//   receipt.
+import type { Options, Query, SDKMessage, SDKResultMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
+import type { AnswerOptions, AnswerOutcome, InterruptReceipt, ProcessExitFact, ProcessExitReceipt, ResumeCheckpoint, SubmitOptions, TaskOutput, TurnHandle, TurnOutcome } from '../contract.js'
 import { AgentRuntimeError, type AgentErrorInfo } from '../errors.js'
-import { EventStream } from '../eventStream.js'
-import type { AgentCallbacks, BeforeSubmit, ClaudeAuditHooks, ClaudePermissions, LaunchInput, ToolObservation, ToolSet, WireRecorder } from '../options.js'
-import { DriverLifecycle, type Admission } from '../lifecycle/lifecycle.js'
+import { EventStream, type EventBody } from '../eventStream.js'
+import type { PendingRequest, QuestionAnswers } from '../events.js'
+import type { AgentCallbacks, BeforeSubmit, ClaudeAuditHooks, ClaudePermissions, LaunchInput, Logger, ToolObservation, ToolSet, WireRecorder } from '../options.js'
+import { DriverLifecycle } from '../lifecycle/lifecycle.js'
 import { createOwnedClaudeSpawn } from '../process/claudeSpawn.js'
 import { resolveExecutable, resolveLaunch } from '../process/launch.js'
-import type { LeaderExit, OwnedProcess, TerminateOptions } from '../process/ownedProcess.js'
+import type { LeaderExit, TerminateOptions } from '../process/ownedProcess.js'
 import { bindToolSet, type BoundToolSet } from '../tools/toolSet.js'
+import type { RawChatCommand } from './commands.js'
+import { ClaudeFrames } from './frames.js'
 import { claudeIntegrationOptions, mergeHooks } from './integrations.js'
 import { composeClaudePermissions, withPermissions, type ClaudePermissionComposition } from './permissions.js'
-import { PromptQueue } from './promptQueue.js'
+import { interruptGeneration, loadSdk, newGeneration, readTaskOutput, stopQueryTask, terminateGenerations, type Generation } from './generations.js'
+import { ClaudeRequests } from './requests.js'
+import { CliTurnBinder } from './turnBinder.js'
+import { checkSubmission, newTurn, resultErrorText, resultUuids, turnResult, type Turn } from './turns.js'
+
+/** Test seam: a controlled query in place of the SDK's (design §5, runtime test seams). */
+export type ClaudeQueryFactory = (params: { prompt: AsyncIterable<SDKUserMessage>; options: Options }) => Query
 
 export interface ClaudeSessionOptions {
   launch: LaunchInput
   callbacks: AgentCallbacks
+  logger?: Logger
   wire?: WireRecorder
-  /** SDK options supplied by the profile layer (settings) and later tasks; policy fields are overridden. */
+  /** SDK options supplied by the driver and profile layers; policy fields are overridden. */
   sdkOptions?: Partial<Options>
   /** Enforced on every generation by the PreToolUse policy (task 3.2). */
   permissions?: ClaudePermissions
@@ -42,60 +60,61 @@ export interface ClaudeSessionOptions {
   onToolObservation?(observation: ToolObservation): void
   /** Detailed opt-in audit adapter. */
   auditHooks?: ClaudeAuditHooks
-}
-
-interface Turn {
-  turnId: string
-  messageUuid: string
-  text: string
-  settled: boolean
-  finalText: string | null
-  model: string | null
-  resolve(result: TurnResult): void
-  result: Promise<TurnResult>
-}
-
-interface Generation {
-  number: number
-  query: Query
-  input: PromptQueue<SDKUserMessage>
-  owned: OwnedProcess | null
-  /** Set by stop before it closes the input: read failures after this are the stop's own. */
-  stopRequested: boolean
-}
-
-type SdkModule = typeof import('@anthropic-ai/claude-agent-sdk')
-
-async function loadSdk(): Promise<SdkModule> {
-  try {
-    return await import('@anthropic-ai/claude-agent-sdk')
-  } catch (error) {
-    throw new AgentRuntimeError({ category: 'dependency', message: 'the optional peer @anthropic-ai/claude-agent-sdk is not installed' }, [error])
-  }
+  /** The conversation to resume on the first generation. */
+  resume?: ResumeCheckpoint
+  /** A request still pending after onRequest: denied at once (default) or kept. */
+  unansweredRequests?: 'deny' | 'wait'
+  queryFactory?: ClaudeQueryFactory
 }
 
 export class ClaudeSession {
+  readonly runtime = 'claude' as const
   readonly lifecycle: DriverLifecycle
   private readonly events: EventStream
   private readonly generations: Generation[] = []
   /** Open turns in FIFO order: the active turn first, then queued ones (L21). */
   private open: Turn[] = []
-  private readonly byUuid = new Map<string, Turn>()
+  private readonly binder: CliTurnBinder
+  private readonly requests: ClaudeRequests
+  private readonly frames: ClaudeFrames
 
   /** Validated once at construction: an unenforceable restriction never starts. */
   private readonly permissions: ClaudePermissionComposition | null
   private readonly tools: BoundToolSet | null
   /** The CLI's session id, from the latest system/init. */
-  private runtimeSessionId: string | null = null
+  private runtimeSessionId: string | null
+  private lastModel: string | null = null
 
   constructor(private readonly options: ClaudeSessionOptions) {
     this.tools = bindToolSet(options.tools)
     // Only an omitted policy means none: any supplied value, null included, is validated.
     this.permissions = options.permissions === undefined ? null : composeClaudePermissions(options.permissions)
-    this.events = new EventStream((event) => this.notify('onEvent', () => options.callbacks.onEvent(event)))
-    this.lifecycle = new DriverLifecycle({
-      continuations: new Set(['queue']),
-      ...(options.callbacks.onState ? { onState: options.callbacks.onState } : {}),
+    this.runtimeSessionId = options.resume?.runtimeSessionId ?? null
+    const { callbacks, logger } = options
+    this.events = new EventStream((event) => this.notify('onEvent', () => callbacks.onEvent(event)))
+    this.lifecycle = new DriverLifecycle({ continuations: new Set(['queue']), ...(callbacks.onState ? { onState: callbacks.onState } : {}) })
+    this.binder = new CliTurnBinder({
+      violation: (reason) => logger?.warn({ reason }, 'claude_cli_contract_violation'),
+      unknownUuid: (uuid) => logger?.warn({ uuid }, 'claude_unknown_result_uuid'),
+    })
+    this.requests = new ClaudeRequests({
+      emit: (body) => this.emit(body),
+      turnId: () => this.active()?.turnId ?? '',
+      ...(callbacks.onRequest ? { onRequest: callbacks.onRequest } : {}),
+      notify: (name, callback) => this.notify(name, callback),
+      unanswered: options.unansweredRequests ?? 'deny',
+    })
+    this.frames = new ClaudeFrames({
+      emit: (body) => this.emit(body),
+      frameTurnId: () => (this.binder.framesBelongToActive() ? (this.active()?.turnId ?? null) : null),
+      activeTurnId: () => this.active()?.turnId ?? null,
+      callbacks,
+      notify: (name, callback) => this.notify(name, callback),
+      compacted: (boundaryId, preTokens) => {
+        const onCompaction = callbacks.onCompaction
+        const turnId = this.active()?.turnId ?? null
+        if (onCompaction) this.notify('onCompaction', () => onCompaction({ boundaryId, turnId, preTokens }))
+      },
     })
   }
 
@@ -111,8 +130,20 @@ export class ClaudeSession {
     }
   }
 
+  private emit(body: EventBody): void {
+    this.events.emit(body)
+    if (body.type === 'turn_completed' || body.type === 'turn_interrupted') this.frames.turnEnded()
+    else if (body.type === 'request_resolved') this.frames.requestResolved()
+  }
+
   get state() {
     return this.lifecycle.state
+  }
+
+  /** The opened turn content binds to, if any. */
+  private active(): Turn | null {
+    const first = this.open[0]
+    return first?.opened ? first : null
   }
 
   start(): Promise<void> {
@@ -132,37 +163,45 @@ export class ClaudeSession {
     if (this.lifecycle.state === 'stopping' || this.lifecycle.state === 'stopped') {
       throw new AgentRuntimeError({ category: 'stopped', message: 'the driver was stopped while starting' })
     }
-    const input = new PromptQueue<SDKUserMessage>()
-    const generation: Generation = { number, query: null as unknown as Query, input, owned: null, stopRequested: false }
-    generation.query = sdk.query({
-      prompt: input,
-      options: {
-        settingSources: [],
-        ...this.composeSdkOptions(sdk),
-        cwd: launch.cwd,
-        pathToClaudeCodeExecutable: executable,
-        // Ignored by the owned spawner (I3); passed so the SDK computes nothing from process.env.
-        env: { ...launch.childEnv },
-        spawnClaudeCodeProcess: createOwnedClaudeSpawn({
-          launch,
-          generation: number,
-          ...(this.options.wire ? { recorder: this.options.wire } : {}),
-          onSpawn: (owned) => {
-            generation.owned = owned
-          },
-        }),
-      },
-    })
+    this.binder.reset()
+    const generation = newGeneration(number)
+    const composed = this.composeSdkOptions(sdk)
+    const options: Options = {
+      settingSources: [],
+      includePartialMessages: true,
+      ...composed,
+      // Requests ride canUseTool, which bypass mode never consults: leave it unset there.
+      ...(composed.permissionMode === 'bypassPermissions' ? {} : { canUseTool: this.requests.canUseTool }),
+      ...(this.runtimeSessionId ? { resume: this.runtimeSessionId } : {}),
+      cwd: launch.cwd,
+      pathToClaudeCodeExecutable: executable,
+      // Ignored by the owned spawner (I3); passed so the SDK computes nothing from process.env.
+      env: { ...launch.childEnv },
+      spawnClaudeCodeProcess: createOwnedClaudeSpawn({
+        launch,
+        generation: number,
+        ...(this.options.wire ? { recorder: this.options.wire } : {}),
+        onSpawn: (owned) => {
+          generation.owned = owned
+        },
+      }),
+    }
+    generation.query = this.options.queryFactory ? this.options.queryFactory({ prompt: generation.input, options }) : sdk.query({ prompt: generation.input, options })
     this.generations.push(generation)
+    this.frames.commands.beginLoading()
     void this.lifecycle.jobs.run(`generation:${number}`, () => this.consume(generation))
+    let initialized: Awaited<ReturnType<Query['initializationResult']>>
     try {
-      await generation.query.initializationResult()
+      initialized = await generation.query.initializationResult()
     } catch (error) {
-      // The generation's own job reports the exit; start reports why it failed.
+      // A spawn failure created no process: start fails and the prior state returns.
       const exit = generation.owned?.exited
       if (exit?.kind === 'spawn-failed') throw new AgentRuntimeError({ category: 'dependency', message: 'the Claude Code executable could not be started' }, [error])
+      // A process that exited while starting is classified first (L14: exited, one process end), then start rejects.
+      if (exit || generation.readEnded) await generation.ended
       throw new AgentRuntimeError({ category: 'transport', message: 'the Claude Code process did not initialize' }, [error])
     }
+    if (generation === this.current() && Array.isArray(initialized?.commands)) this.frames.commands.applyCommands(initialized.commands as RawChatCommand[])
   }
 
   /**
@@ -177,7 +216,7 @@ export class ClaudeSession {
       ...(this.options.systemPromptAppend ? { systemPromptAppend: this.options.systemPromptAppend } : {}),
       ...(this.options.onToolObservation ? { onToolObservation: this.options.onToolObservation } : {}),
       ...(this.options.auditHooks ? { auditHooks: this.options.auditHooks } : {}),
-      turnId: () => this.open[0]?.turnId ?? null,
+      turnId: () => this.active()?.turnId ?? null,
       sessionId: () => this.runtimeSessionId,
       observe: (name, callback) => this.notify(name, callback),
       run: (label, body) => this.runOwned(label, body),
@@ -192,7 +231,7 @@ export class ClaudeSession {
     return this.permissions ? withPermissions(composed, this.permissions) : composed
   }
 
-  /** Host work started by the CLI (tool calls): an owned job stop joins, refused once stop has begun. */
+  /** Host work started by the CLI or a provider control: an owned job stop joins, refused once stop has begun. */
   private runOwned<T>(label: string, body: () => Promise<T>): Promise<T> | null {
     const state = this.lifecycle.state
     if (state === 'stopping' || state === 'stopped') return null
@@ -207,51 +246,101 @@ export class ClaudeSession {
     } catch (error) {
       failure = error
     }
+    generation.readEnded = true
     const exit = generation.owned ? await generation.owned.leaderExit : null
-    this.generationEnded(generation, exit)
+    try {
+      this.generationEnded(generation, exit)
+    } finally {
+      generation.markEnded()
+    }
     // A read failure caused by our own stop, or already reported as the unexpected exit, is not a stop failure.
     if (failure !== null && !generation.stopRequested && this.lifecycle.state !== 'exited') throw failure
   }
 
   private generationEnded(generation: Generation, exit: LeaderExit | null): void {
+    // No process existed: the start failure reports it, not an exit (U01).
+    if (generation.owned?.exited?.kind === 'spawn-failed') return
     if (this.lifecycle.processExit(generation.number) !== 'unexpected') return
     const code = exit?.kind === 'exited' ? exit.code : null
     const signal = exit?.kind === 'exited' ? exit.signal : null
     const error: AgentErrorInfo = { category: 'transport', message: 'the agent process exited unexpectedly' }
+    this.binder.reset()
+    this.requests.cancelAll('process ended')
     this.events.emit({ type: 'error', error })
     for (const turn of this.takeOpen()) this.settle(turn, 'process-ended', error, 'process_ended')
+    this.frames.processEnded()
     const report = { generation: generation.number, code, signal, reason: exit?.kind === 'spawn-failed' ? 'spawn failed' : null }
     this.notify('onProcessEnd', () => this.options.callbacks.onProcessEnd?.(report))
   }
 
   private handle(generation: Generation, message: SDKMessage): void {
+    // A retired generation's frames never reach the current conversation.
     if (generation !== this.current()) return
-    if (message.type === 'system' && message.subtype === 'init') {
-      this.runtimeSessionId = message.session_id
-      return
+    switch (message.type) {
+      case 'system':
+        if (message.subtype === 'init') this.init(message)
+        else this.frames.system(message)
+        return
+      case 'assistant': {
+        const content = this.frames.assistant(message)
+        const turn = this.active()
+        if (!content || !turn) return
+        if (content.text) turn.finalText = content.text
+        turn.model = content.model ?? turn.model
+        return
+      }
+      case 'user':
+        this.frames.user(message)
+        return
+      case 'stream_event':
+        this.frames.partial(message)
+        return
+      case 'result':
+        this.result(message)
+        return
     }
-    if (message.type === 'assistant') {
-      const turn = this.open[0]
-      if (!turn) return
-      const text = message.message.content
-        .flatMap((block) => (block.type === 'text' ? [block.text] : []))
-        .join('')
-      if (text) turn.finalText = text
-      turn.model = message.message.model ?? turn.model
-      return
+  }
+
+  private init(message: Extract<SDKMessage, { type: 'system'; subtype: 'init' }>): void {
+    if (message.session_id) this.runtimeSessionId = message.session_id
+    if (typeof message.model === 'string' && message.model && message.model !== this.lastModel) {
+      const model = message.model
+      this.lastModel = model
+      const onModel = this.options.callbacks.onModel
+      if (onModel) this.notify('onModel', () => onModel(model))
     }
-    if (message.type === 'result') {
-      const uuid = (message as { user_message_uuid?: string }).user_message_uuid
-      const turn = uuid ? this.byUuid.get(uuid) : this.open[0]
-      if (!turn || turn.settled || turn !== this.open[0]) return
-      if (!this.lifecycle.result(turn.turnId)) return
-      this.open.shift()
-      const failed = message.subtype !== 'success' || message.is_error
-      const error: AgentErrorInfo | null = failed ? { category: 'provider', message: `the turn ended with ${message.subtype}` } : null
-      this.settle(turn, failed ? 'failed' : 'success', error, message.subtype)
-      const next = this.open[0]
-      if (next) this.openTurn(next)
+    this.frames.commands.applyTerminalCommands((message as { terminal_slash_commands?: string[] }).terminal_slash_commands)
+    // An init that no submission opened is an agent-started turn (L24); it
+    // opens only while idle (L25 binds, L26 ignores), and an init that opens
+    // an interrupted turn whose result is owed opens nothing.
+    if (this.binder.init() !== 'open') return
+    const turn = newTurn(crypto.randomUUID(), null, '')
+    if (this.lifecycle.native(turn.turnId) !== 'open') return
+    this.open.push(turn)
+    this.openTurn(turn, true)
+  }
+
+  private result(message: SDKResultMessage): void {
+    const uuids = resultUuids(message)
+    if (this.binder.result(uuids, message.queued_turn_count) === 'drop') return
+    const turn = this.active()
+    if (!turn || turn.settled) return
+    // Queued prompts the CLI consumed into this turn share its result.
+    const absorbed = this.open.filter((queued) => queued !== turn && !queued.opened && queued.messageUuid !== null && uuids.includes(queued.messageUuid))
+    for (const _ of absorbed) this.lifecycle.withdraw('queue')
+    if (!this.lifecycle.result(turn.turnId)) return
+    this.open = this.open.filter((t) => t !== turn && !absorbed.includes(t))
+    const failed = message.subtype !== 'success' || message.is_error
+    if (!failed && message.subtype === 'success') turn.finalText = message.result
+    const error: AgentErrorInfo | null = failed ? { category: 'provider', message: resultErrorText(message) } : null
+    const result = this.settle(turn, failed ? 'failed' : 'success', error, message.subtype, message)
+    for (const queued of absorbed) {
+      queued.settled = true
+      queued.resolve(result)
     }
+    if (failed) this.events.emit({ type: 'error', error: error! })
+    const next = this.open[0]
+    if (next) this.openTurn(next, false)
   }
 
   async send(text: string, submit: SubmitOptions = {}): Promise<TurnHandle> {
@@ -260,12 +349,8 @@ export class ClaudeSession {
     const turnId = crypto.randomUUID()
     // P12/P13: the host decides before anything is enqueued or emitted, and
     // an accepted submission keeps the identity the host recorded.
-    this.checkSubmission({ messageUuid, turnId, text, context: submit.context }, admission)
-    let resolve!: (result: TurnResult) => void
-    const result = new Promise<TurnResult>((r) => {
-      resolve = r
-    })
-    const turn: Turn = { turnId, messageUuid, text, settled: false, finalText: null, model: null, resolve, result }
+    checkSubmission(this.options.beforeSubmit, { messageUuid, turnId, text, context: submit.context }, () => this.lifecycle.withdraw(admission))
+    const turn = newTurn(turnId, messageUuid, text)
     const generation = this.current()!
     const pushed = generation.input.push({
       type: 'user',
@@ -276,31 +361,21 @@ export class ClaudeSession {
     } as SDKUserMessage)
     if (!pushed) throw new AgentRuntimeError({ category: 'stopped', message: 'the driver is stopped' })
     this.open.push(turn)
-    this.byUuid.set(messageUuid, turn)
-    if (admission === 'new-turn') this.openTurn(turn)
-    return { turnId: turn.turnId, messageUuid, result }
+    this.frames.sent(messageUuid, text)
+    if (admission === 'new-turn') this.openTurn(turn, false)
+    this.binder.promptSent(messageUuid, turnId)
+    return { turnId, messageUuid, result: turn.result }
   }
 
-  private checkSubmission(submission: Parameters<BeforeSubmit>[0], admission: Admission): void {
-    const beforeSubmit = this.options.beforeSubmit
-    if (!beforeSubmit) return
-    let decision: ReturnType<BeforeSubmit>
-    try {
-      decision = beforeSubmit(submission)
-    } catch (error) {
-      this.lifecycle.withdraw(admission)
-      throw new AgentRuntimeError({ category: 'context', message: 'the pre-submit context callback threw' }, [error])
-    }
-    if (decision?.accepted === true) return
-    this.lifecycle.withdraw(admission)
-    const reason = decision && decision.accepted === false ? decision.reason : 'no decision returned'
-    throw new AgentRuntimeError({ category: 'context', message: `the pre-submit context callback refused: ${reason}` })
-  }
-
-  private openTurn(turn: Turn): void {
-    this.lifecycle.beginTurn(turn.turnId)
-    this.events.emit({ type: 'turn_started', turnId: turn.turnId })
-    this.events.emit({ type: 'user_message', turnId: turn.turnId, text: turn.text, messageUuid: turn.messageUuid })
+  /** Emit turn_started (and the opening user message of a submitted turn). */
+  private openTurn(turn: Turn, agentStarted: boolean): void {
+    turn.opened = true
+    if (!agentStarted) this.lifecycle.beginTurn(turn.turnId)
+    this.binder.turnOpened(turn.turnId, agentStarted)
+    const trigger = agentStarted ? this.frames.takeTrigger() : null
+    this.frames.turnOpened()
+    this.emit({ type: 'turn_started', turnId: turn.turnId, ...(trigger ? { trigger } : {}) })
+    if (turn.messageUuid !== null) this.emit({ type: 'user_message', turnId: turn.turnId, text: turn.text, messageUuid: turn.messageUuid })
   }
 
   private takeOpen(): Turn[] {
@@ -309,27 +384,28 @@ export class ClaudeSession {
     return open
   }
 
-  private settle(turn: Turn, outcome: TurnOutcome, error: AgentErrorInfo | null, subtype: string): void {
-    if (turn.settled) return
+  private settle(turn: Turn, outcome: TurnOutcome, error: AgentErrorInfo | null, subtype: string, message?: SDKResultMessage) {
+    const result = turnResult(turn, outcome, error)
+    if (turn.settled) return result
     turn.settled = true
-    const result: TurnResult = {
-      turnId: turn.turnId,
-      messageUuid: turn.messageUuid,
-      outcome,
-      finalText: outcome === 'success' ? turn.finalText : null,
-      model: turn.model,
-      usage: null,
-      toolCallCount: 0,
-      compactionCount: 0,
-      error,
-    }
-    if (outcome === 'interrupted') this.events.emit({ type: 'turn_interrupted', turnId: turn.turnId })
+    if (outcome === 'interrupted') this.emit({ type: 'turn_interrupted', turnId: turn.turnId })
     else {
-      this.events.emit({
+      this.emit({
         type: 'turn_completed', turnId: turn.turnId, subtype, isError: outcome !== 'success', usage: null,
-        finalText: result.finalText, totalCostUsd: null, providerCostUsd: null, numTurns: null, terminalReason: null,
+        finalText: result.finalText, totalCostUsd: message?.total_cost_usd ?? null, providerCostUsd: null,
+        numTurns: message?.num_turns ?? null, terminalReason: message?.terminal_reason ?? null,
       })
     }
+    turn.resolve(result)
+    this.notify('onTurnResult', () => this.options.callbacks.onTurnResult?.(result))
+    return result
+  }
+
+  /** Settle a turn that never opened: its handle resolves, no turn event (L10/L11). */
+  private settleQueued(turn: Turn, error: AgentErrorInfo): void {
+    if (turn.settled) return
+    turn.settled = true
+    const result = turnResult(turn, 'interrupted', error)
     turn.resolve(result)
     this.notify('onTurnResult', () => this.options.callbacks.onTurnResult?.(result))
   }
@@ -337,22 +413,58 @@ export class ClaudeSession {
   /** L09/L10: settle the active and queued turns at once, then ask the CLI to stop the turn. */
   async interrupt(): Promise<InterruptReceipt> {
     const receipt = this.lifecycle.interrupt()
-    const error: AgentErrorInfo = { category: 'stopped', message: 'the turn was interrupted' }
-    const [active, ...queued] = this.takeOpen()
-    if (active) this.settle(active, 'interrupted', error, 'interrupted')
-    for (const turn of queued) {
-      // Queued turns never started: they settle without a second turn_interrupted.
-      turn.settled = true
-      const result: TurnResult = { turnId: turn.turnId, messageUuid: turn.messageUuid, outcome: 'interrupted', finalText: null, model: null, usage: null, toolCallCount: 0, compactionCount: 0, error }
-      turn.resolve(result)
-      this.notify('onTurnResult', () => this.options.callbacks.onTurnResult?.(result))
-    }
     const generation = this.current()
+    if (generation) this.binder.promptsWithdrawn(generation.input.clearPending().flatMap((m) => (m.uuid ? [m.uuid] : [])))
+    this.requests.cancelAll('interrupted')
+    const error: AgentErrorInfo = { category: 'stopped', message: 'the turn was interrupted' }
+    const turns = this.takeOpen()
+    const active = turns[0]?.opened ? turns[0] : undefined
+    if (active) {
+      this.binder.turnInterrupted(active.turnId)
+      this.settle(active, 'interrupted', error, 'interrupted')
+    }
+    for (const turn of turns) if (turn !== active) this.settleQueued(turn, error)
+    this.frames.interrupted()
     if (generation && active) {
-      const query = generation.query as Query & { interrupt(options?: { cancelQueued?: boolean }): Promise<unknown> }
-      void this.lifecycle.jobs.run(`interrupt:${generation.number}`, () => query.interrupt({ cancelQueued: true }), { expectedCancellation: () => true })
+      void this.lifecycle.jobs.run(
+        `interrupt:${generation.number}`,
+        async () => {
+          const cancelled = await interruptGeneration(generation)
+          // Cancelled prompts never run: an interrupted turn whose prompts were all cancelled owes no result.
+          if (generation === this.current()) this.binder.promptsWithdrawn(cancelled)
+        },
+        { expectedCancellation: () => true },
+      )
     }
     return receipt
+  }
+
+  resolveApproval(requestId: string, decision: 'allow' | 'deny', options?: AnswerOptions): AnswerOutcome {
+    return this.requests.resolveApproval(requestId, decision, options)
+  }
+
+  answerQuestion(requestId: string, answers: QuestionAnswers, options?: AnswerOptions): AnswerOutcome {
+    return this.requests.answerQuestion(requestId, answers, options)
+  }
+
+  pendingRequests(): PendingRequest[] {
+    return this.requests.list()
+  }
+
+  /** A background task's output tail through the CLI's get_task_output control; null when unavailable. */
+  async getTaskOutput(taskId: string): Promise<TaskOutput | null> {
+    const query = this.current()?.query
+    if (!query || this.lifecycle.state === 'exited') return null
+    const owned = this.runOwned(`task-output:${taskId}`, () => readTaskOutput(query, taskId))
+    return owned ? await owned : null
+  }
+
+  /** Stop one background task; false when refused, unknown or no live process. */
+  async stopTask(taskId: string): Promise<boolean> {
+    const query = this.current()?.query
+    if (!query || this.lifecycle.state === 'exited') return false
+    const owned = this.runOwned(`stop-task:${taskId}`, () => stopQueryTask(query, taskId))
+    return owned ? await owned : false
   }
 
   kill(): Promise<ProcessExitReceipt> {
@@ -363,40 +475,16 @@ export class ClaudeSession {
     return this.lifecycle.stop('shutdown', () => this.teardown('shutdown'))
   }
 
-  /** Close every input, settle open turns as stopped (L11), terminate every owned generation. */
+  /** Close every input and request, settle open turns as stopped (L11), terminate every owned generation. */
   private async teardown(mode: 'kill' | 'shutdown'): Promise<ProcessExitFact[]> {
     const error: AgentErrorInfo = { category: 'stopped', message: 'the driver was stopped' }
-    for (const turn of this.takeOpen()) this.settle(turn, 'interrupted', error, 'interrupted')
-    for (const generation of this.generations) {
-      generation.stopRequested = true
-      generation.input.end()
+    this.requests.close()
+    for (const turn of this.takeOpen()) {
+      if (turn.opened) this.settle(turn, 'interrupted', error, 'interrupted')
+      else this.settleQueued(turn, error)
     }
-    const bounds = this.options.terminate ?? {}
-    if (mode === 'shutdown') {
-      // Closed stdin is the graceful request; give each live leader the grace bound to exit.
-      const grace = bounds.graceMs ?? 2000
-      await Promise.all(this.generations.map((g) => (g.owned ? exitWithin(g.owned, grace) : undefined)))
-    }
-    const facts = await Promise.all(
-      this.generations.flatMap((g) => (g.owned ? [g.owned.terminate(bounds)] : [])),
-    )
-    for (const generation of this.generations) {
-      try {
-        generation.query.close()
-      } catch {
-        // The transport is already closed.
-      }
-    }
-    return facts.sort((a, b) => a.generation - b.generation)
-  }
-}
-
-/** Wait up to `ms` for the leader's exit; the timer never outlives it. */
-async function exitWithin(owned: OwnedProcess, ms: number): Promise<void> {
-  let timer: ReturnType<typeof setTimeout> | undefined
-  try {
-    await Promise.race([owned.leaderExit, new Promise<void>((resolve) => (timer = setTimeout(resolve, ms)))])
-  } finally {
-    clearTimeout(timer)
+    this.binder.reset()
+    this.frames.processEnded()
+    return terminateGenerations(this.generations, mode, this.options.terminate ?? {})
   }
 }

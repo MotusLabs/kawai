@@ -107,8 +107,8 @@ describe('claude session on the owned spawner', () => {
     const result = await handle.result
     expect(result).toMatchObject({ turnId: handle.turnId, messageUuid: handle.messageUuid, outcome: 'success', finalText: 'echo: hello', model: 'fake-model', error: null })
     expect(h.results).toEqual([result])
-    expect(h.events.map((e) => e.type)).toEqual(['turn_started', 'user_message', 'turn_completed'])
-    expect(h.events.map((e) => e.sequence)).toEqual([1, 2, 3])
+    expect(h.events.map((e) => e.type)).toEqual(['turn_started', 'user_message', 'assistant_text', 'turn_completed'])
+    expect(h.events.map((e) => e.sequence)).toEqual([1, 2, 3, 4])
     expect(h.s.state).toBe('idle')
   })
 

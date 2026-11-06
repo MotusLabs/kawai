@@ -19,6 +19,11 @@ export class PromptQueue<T> implements AsyncIterable<T> {
     return true
   }
 
+  /** Drop the items the SDK has not read yet, returning them (interrupt). */
+  clearPending(): T[] {
+    return this.items.splice(0)
+  }
+
   end(): void {
     this.closed = true
     this.signal()
