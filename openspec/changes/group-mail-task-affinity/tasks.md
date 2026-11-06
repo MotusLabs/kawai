@@ -34,7 +34,7 @@
 
 ## 6. Lead group opt-in
 
-- [ ] 6.1 Add `affinity: task-owner` to `.kawai/groups/lead.md`, and a short guidance paragraph per D6: do not relay another lead's task mail, record coordination in the task journal, send direct mail only when another lead must act, and hand a task over or take a departed lead's tasks with `task_transfer_owner`. Ask the human to review the guidance text before the result. Verify: a group file test that declares `// @reads: .kawai/groups/lead.md` parses the file with affinity enabled and no warnings, and `bun run test src/server/__tests__/teamGroupFile.test.ts` passes.
+- [x] 6.1 Add `affinity: task-owner` to `.kawai/groups/lead.md`, and a short guidance paragraph per D6: do not relay another lead's task mail, record coordination in the task journal, send direct mail only when another lead must act, and hand a task over or take a departed lead's tasks with `task_transfer_owner`. Ask the human to review the guidance text before the result. Verify: a group file test that declares `// @reads: .kawai/groups/lead.md` parses the file with affinity enabled and no warnings, and `bun run test src/server/__tests__/teamGroupFile.test.ts` passes.
 
 ## 7. Integration check
 
