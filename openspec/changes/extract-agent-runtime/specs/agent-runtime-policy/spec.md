@@ -29,7 +29,7 @@ The package SHALL provide pure helpers for constructing explicit Anthropic, prox
 - **THEN** each process receives only its explicitly selected credentials and homes, without cross-session mutation or fallback
 
 ### Requirement: Permission configuration is session-specific
-Each driver SHALL accept permission configuration independently of credentials and provider selection. Configuration SHALL be reapplied on resume and respawn. A restrictive configuration SHALL refuse to start if the installed runtime cannot enforce it; it SHALL NOT fall back to a more permissive mode.
+Each driver SHALL accept permission configuration independently of credentials and provider selection. Configuration SHALL be reapplied on resume and respawn, and settings persisted by the runtime or in its home SHALL NOT broaden it. A restrictive configuration SHALL refuse to start if the installed runtime cannot enforce it; it SHALL NOT fall back to a more permissive mode.
 
 #### Scenario: Different permissions on one provider
 - **WHEN** two sessions on the same provider use different permission configurations
@@ -69,7 +69,7 @@ Custom tools SHALL be supplied by the host with names, schemas and handlers. An 
 - **THEN** the handler does not run and the runtime receives a structured refusal
 
 ### Requirement: Host integrations are optional injected seams
-Logger, prompt append, workspace context, audit observation and wire recording SHALL enter only through host-provided options. Omitted optional integrations SHALL require no Kawai modules or stores. Context refusal SHALL occur before a user message is enqueued or a visible turn is opened.
+Logger, prompt append, workspace context, audit observation and wire recording SHALL enter only through host-provided options. Omitted optional integrations SHALL require no Kawai modules or stores. Context refusal SHALL occur before a user message is enqueued or a visible turn is opened. An accepted submission SHALL carry the message and turn identity the callback received.
 
 #### Scenario: No workspace context
 - **WHEN** a headless caller supplies only a prompt append and logger
@@ -78,6 +78,10 @@ Logger, prompt append, workspace context, audit observation and wire recording S
 #### Scenario: Context persistence refuses
 - **WHEN** the configured pre-submit context callback refuses a contextual message
 - **THEN** no runtime message is sent and no turn-start or user-message event is emitted for that submission
+
+#### Scenario: Context persistence accepts
+- **WHEN** the pre-submit context callback records a submission and accepts it
+- **THEN** the enqueued message, its user-message event and the returned handle carry the message UUID and turn identity the callback recorded
 
 ### Requirement: Observation does not grant permissions or leak inputs by default
 The default tool observer SHALL expose tool name, identity and lifecycle facts without arguments. Observer failure SHALL NOT authorize, block or duplicate a tool operation. Raw audit and wire payload access SHALL require explicit host opt-in. Logs and process receipts SHALL NOT contain launch credentials or the complete environment.
