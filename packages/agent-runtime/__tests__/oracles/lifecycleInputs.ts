@@ -2,7 +2,8 @@
 // task 1.3). Observable results are deliberately absent: a blind reader of
 // another model family derives them from the delta specs, and the resolved
 // results are added beside these rows after that reading. Rows with state or
-// operation sets expand to every member; `U01` is the one unreachable pair.
+// operation sets expand to every member; `U01`/`U02` are the unreachable
+// pairs: no process exists while unstarted and no state returns to it.
 
 export const STATES = ['unstarted', 'starting', 'idle', 'active', 'stopping', 'stopped', 'exited'] as const
 export const OPERATIONS = ['start', 'send', 'interrupt', 'stop', 'exit', 'ready', 'result', 'native'] as const
@@ -38,13 +39,14 @@ export const LIFECYCLE_ROWS: readonly LifecycleRow[] = [
   { id: 'L15', states: ['stopping'], operations: ['exit'] },
   { id: 'L16', states: ['stopped', 'exited'], operations: ['exit'] },
   { id: 'L17', states: ['starting'], operations: ['ready'] },
-  { id: 'L18', states: ['unstarted', 'idle', 'active', 'stopping', 'stopped', 'exited'], operations: ['ready'] },
+  { id: 'L18', states: ['idle', 'active', 'stopping', 'stopped', 'exited'], operations: ['ready'] },
   { id: 'L19', states: ['active'], operations: ['result'] },
-  { id: 'L20', states: ['unstarted', 'starting', 'idle', 'stopping', 'stopped', 'exited'], operations: ['result'] },
+  { id: 'L20', states: ['starting', 'idle', 'stopping', 'stopped', 'exited'], operations: ['result'] },
   { id: 'L24', states: ['idle'], operations: ['native'] },
   { id: 'L25', states: ['active'], operations: ['native'] },
-  { id: 'L26', states: ['unstarted', 'starting', 'stopping', 'stopped', 'exited'], operations: ['native'] },
+  { id: 'L26', states: ['starting', 'stopping', 'stopped', 'exited'], operations: ['native'] },
   { id: 'U01', states: ['unstarted'], operations: ['exit'], unreachable: true },
+  { id: 'U02', states: ['unstarted'], operations: ['ready', 'result', 'native'], unreachable: true },
 ]
 
 /** Explicit continuation rows, outside the 56-pair grid. */

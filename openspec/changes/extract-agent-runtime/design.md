@@ -200,31 +200,31 @@ Axes: state = unstarted/starting/idle/active/stopping/stopped/exited; operation 
 
 | ID | State | Operation | Observable result |
 | --- | --- | --- | --- |
-| L01 | unstarted | start | One initialization, no prompt |
+| L01 | unstarted | start | One initialization, no prompt; `start()` resolves at L17 (idle) or rejects with the most specific category (configuration/dependency/authentication/resume, else transport) |
 | L02 | exited | start | Same saved conversation resumes; no implicit new conversation |
 | L03 | starting | start | Share the current initialization |
-| L04 | idle, active | start | No second process |
+| L04 | idle, active | start | Resolves at once as a no-op; no second process, no event, no state change |
 | L05 | unstarted, exited | send | Typed not-ready refusal; no user event |
-| L06 | starting | send | Await initialization, then recheck admission; stop can refuse before enqueue |
+| L06 | starting | send | Await initialization, then recheck admission as if called then (L07/L08/L13); failed start rejects not-ready with the cause; stop or interrupt refuses before enqueue |
 | L07 | idle | send | One message/turn handle; active turn |
 | L08 | active | send | Default new-turn mode refuses busy without duplicate work |
 | L09 | unstarted, idle, exited | interrupt | No-active-turn receipt; no exit claim |
-| L10 | starting, active | interrupt | Cancel pending turn/request work; receipt makes no exit claim |
-| L11 | unstarted, starting, idle, active, exited | stop | Admission closes; one terminal stop promise; success only after owned exit/join |
+| L10 | starting, active | interrupt | Cancel pending requests; active: one `turn_interrupted`, no `turn_completed`, the turn and every queued submission settle at once as interrupted, become idle, the late runtime result is L20; starting: sends awaiting L06 reject not-ready (code `interrupted`); receipt `requested` when anything was cancelled, else `no-active-turn`, never an exit claim |
+| L11 | unstarted, starting, idle, active, exited | stop | Admission closes; one terminal stop promise; success only after owned exit/join; an active turn ends with `turn_interrupted` and outcome interrupted (category stopped); no `onProcessEnd` |
 | L12 | stopping, stopped | stop | Same terminal outcome; no new process or duplicate result |
 | L13 | stopping, stopped | start, send, interrupt | Typed stopped refusal |
-| L14 | starting, idle, active | exit | Once-only unexpected exit; fail affected turn, become exited |
+| L14 | starting, idle, active | exit | Once-only `onProcessEnd` and one `error` event (transport) per generation; an active turn ends with one `turn_completed` (isError, subtype `process_ended`) and outcome process-ended; a pending `start()` rejects (L01 categories); become exited |
 | L15 | stopping | exit | Continue stop join; no unexpected-exit callback |
 | L16 | stopped, exited | exit | Duplicate/retired notification has no duplicate outcome |
 | L17 | starting | ready | Become idle; waiting sends recheck admission |
-| L18 | unstarted, idle, active, stopping, stopped, exited | ready | Ignore stale completion; never reopen a stopped driver |
+| L18 | idle, active, stopping, stopped, exited | ready | Ignore stale completion; never reopen a stopped driver |
 | L19 | active | result | Matching turn resolves once; become idle |
-| L20 | unstarted, starting, idle, stopping, stopped, exited | result | Unmatched/late result does not create or complete a turn |
-| L24 | idle | native | One agent-started turn with the runtime's turn identity: `turn_started` with its trigger (task summaries, else resumed), no user message or handle; become active; its result reaches `onTurnResult` once (L19) |
+| L20 | starting, idle, stopping, stopped, exited | result | Unmatched/late result does not create or complete a turn |
+| L24 | idle | native | One agent-started turn with the runtime's turn identity: `turn_started` with its trigger (task summaries, else resumed), no user message or handle; become active; its result (`messageUuid` null) reaches `onTurnResult` once (L19) |
 | L25 | active | native | Binds to the current turn; no second `turn_started` or turn |
-| L26 | unstarted, starting, stopping, stopped, exited | native | Stale/early input opens no turn, emits no turn event or result, never reopens a stopped driver |
+| L26 | starting, stopping, stopped, exited | native | Stale/early input opens no turn, emits no turn event or result, never reopens a stopped driver |
 
-Unreachable U01: unstarted + exit; no process was created. Every one of the 56 state/operation pairs matches exactly one expanded row or U01. Invalid configurations are covered before this machine by P01-P04; stale identities are covered by R03/R07. Explicit continuation rows: L21 Claude queue => actual queued turn identity; L22 Codex steer => same active turn result; L23 unsupported mode => typed refusal.
+Unreachable U01: unstarted + exit; U02: unstarted + ready/result/native. No process was created, and no state returns to unstarted. Every one of the 56 state/operation pairs matches exactly one expanded row, U01 or U02. Invalid configurations are covered before this machine by P01-P04; stale identities are covered by R03/R07. Explicit continuation rows: L21 Claude queue => actual queued turn identity, FIFO, state stays active between turns (no idle in between); L22 Codex steer => same active turn result, `onTurnResult` once per turn, the result's `messageUuid` is the turn's opening message; L23 unsupported mode => typed refusal.
 
 ### Environment, permission and seam table
 
@@ -290,8 +290,8 @@ Use existing seeded-generator conventions, no new test framework. A deterministi
 | Property | Invariant and generator | Seams, fixed seed and count |
 | --- | --- | --- |
 | I1 | Stop receipt never precedes actual owned process exits/JS join; varied exit, pipe-close, control and late-child order | Owned spawn + real driver; 0xA601, 300 sequences of 1..60 operations |
-| I2 | A saved runtime ID resumes the same conversation; invalid/unsaved identity never silently creates one | Real query/client adapter + caller checkpoint store; 0xA602, 300 sequences, crash at each checkpoint/admission/result boundary |
-| I3 | Final process/probe env equals explicit approved map, parent and sibling maps unchanged | Poisoned ambient/env/home/settings combinations at actual spawn; 0xA603, 256 cases across all profile branches/respawns |
+| I2 | A saved runtime ID resumes the same conversation; invalid/unsaved identity never silently creates one. The driver resumes any caller-supplied identity the runtime accepts; a rejected checkpoint only withholds acknowledgement of dependent work | Real query/client adapter + caller checkpoint store; 0xA602, 300 sequences, crash at each checkpoint/admission/result boundary |
+| I3 | Final process/probe env equals the explicit map approved for that operation (the launch callback may return a new one per generation), parent and sibling maps unchanged | Poisoned ambient/env/home/settings combinations at actual spawn; 0xA603, 256 cases across all profile branches/respawns |
 | I4 | Denied/unlisted tool never executes or gains a permission from observation | Real provider policy wiring, tool/mode/resume matrix; 0xA604, 256 cases |
 | I5 | Each request settles once despite immediate answer/cancel/duplicate races | Real callback bridge and protocol client; 0xA605, 256 permutations |
 | I6 | Events serialize losslessly; IDs do not collide and stale generations cannot finish current turns | Production emitter/binder with duplicated/reordered source frames; 0xA606, 300 streams |
@@ -302,6 +302,12 @@ Use existing seeded-generator conventions, no new test framework. A deterministi
 For I1/I2/I6, expand the lifecycle axes to assert zero gaps/overlaps. Replay commands, supersede a process generation, and crash after native ID receipt, after checkpoint commit, after submission admission and after result emission. Prove old continuations cannot write after final disposal. Do not call a cancelled callback/body a join.
 
 Before implementation, commit an inputs-only oracle table and obtain the protocol's blind second reading from an eligible reviewer of another model family; resolve differences in the table. Then implement one real Claude/Codex process/permission boundary with its failure oracle before broad extraction. No advisor, implementation writer or native test is dispatched by this proposal.
+
+### Blind reading resolution (task 1.3)
+
+Reader: MiMo session `chat-4dd769ef`, a different model family from the Claude author, reading only the packet built from `57e6350f` (delta specs, inputs-only tables, contract types; checksums verified; no design). Its lifecycle and invariant outputs matched the design on every decided row. Its AMBIGUOUS marks were resolved in the table and contract, not left to implementation: start resolution and rejection category (L01/L14), repeated start (L04), sends and interrupt while starting (L06/L10), interrupted-turn events (L10), the outcome of a turn cut by stop (L11), the crash event pair (L14), queue order and state (L21), steer result count and identity (L22), the agent-started result identity (L24, a contract defect: `messageUuid` was non-null), resume after a rejected checkpoint (I2) and the per-operation map (I3). Its unreachability note moved unstarted + ready/result/native to U02.
+
+Risk: the reading certifies spec decidability, not behavior; a wrong resolution here propagates to every driver test. Invariants touched: I1-I4. Owner: the change author; the human owner reviews the change at acceptance. Checkpoint: the 2.4 advisory review of the first real process/permission path re-reads these rows against running code.
 
 ### Coverage and effectiveness map
 

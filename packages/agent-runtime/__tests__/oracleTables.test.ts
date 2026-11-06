@@ -1,5 +1,5 @@
 // Completeness of the committed oracle tables (task 1.3): the lifecycle table
-// covers each of the 56 state/operation pairs exactly once (counting U01),
+// covers each of the 56 state/operation pairs exactly once (counting U01/U02),
 // and removing or overlapping a row is caught.
 import { describe, expect, test } from 'bun:test'
 import { LIFECYCLE_ROWS, OPERATIONS, STATES, completenessErrors, expandPairs, type LifecycleRow } from './oracles/lifecycleInputs.js'
@@ -12,10 +12,10 @@ describe('lifecycle decision table', () => {
     expect(completenessErrors(LIFECYCLE_ROWS)).toEqual([])
   })
 
-  test('row ids are unique and U01 is the only unreachable row', () => {
+  test('row ids are unique and U01/U02 are the only unreachable rows', () => {
     const ids = LIFECYCLE_ROWS.map((row) => row.id)
     expect(new Set(ids).size).toBe(ids.length)
-    expect(LIFECYCLE_ROWS.filter((row) => row.unreachable).map((row) => row.id)).toEqual(['U01'])
+    expect(LIFECYCLE_ROWS.filter((row) => row.unreachable).map((row) => row.id)).toEqual(['U01', 'U02'])
   })
 
   test('control: removing any row leaves its pairs as gaps', () => {

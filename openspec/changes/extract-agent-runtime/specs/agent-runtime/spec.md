@@ -14,7 +14,7 @@ The runtime SHALL expose Claude and Codex drivers usable with injected dependenc
 - **THEN** it can start and run a turn without importing Kawai server modules or creating a network listener
 
 ### Requirement: Session start and turn results are distinct
-Starting a driver SHALL initialize a session without submitting a prompt. Each submitted turn SHALL have a correlated handle and exactly one terminal result with outcome, final text, model, available token usage, unique tool-call count and compaction count. Missing measurements SHALL be distinguishable from measured zero.
+Starting a driver SHALL initialize a session without submitting a prompt and complete once it is ready. A submission while starting SHALL wait for readiness, then be admitted or refused. Each submitted turn SHALL have a correlated handle and exactly one terminal result with outcome, final text, model, available token usage, unique tool-call count and compaction count. Missing measurements SHALL be distinguishable from measured zero.
 
 #### Scenario: Successful turn
 - **WHEN** a runtime finishes the submitted turn successfully
@@ -25,7 +25,7 @@ Starting a driver SHALL initialize a session without submitting a prompt. Each s
 - **THEN** its handle resolves once with the corresponding non-success outcome and available partial measurements
 
 ### Requirement: Cooperative interrupt is distinct from forced stop
-A cooperative interrupt SHALL cancel pending requests and request that the active turn stop while retaining its conversation. Its receipt SHALL NOT imply process exit. Callers SHALL have a separate forced-stop operation when they require proof that the agent process has ended.
+A cooperative interrupt SHALL cancel pending requests, settle the active turn and queued submissions as interrupted at once, and request that the turn stop while retaining its conversation. Its receipt SHALL NOT imply process exit. Callers SHALL have a separate forced-stop operation when they require proof that the agent process has ended.
 
 #### Scenario: Interrupt then continue
 - **WHEN** a caller cooperatively interrupts a turn and later submits another
@@ -68,7 +68,7 @@ An exit not requested by the caller SHALL invoke the process-end callback once f
 - **THEN** the caller receives one process-end notification and one failed terminal turn result
 
 ### Requirement: Agent-started turns are reported
-When the runtime opens a turn without a submitted message, such as after a background task ends, an idle driver SHALL report one turn with the runtime's turn identity: a turn-start event carrying its trigger (the ending tasks' summaries when known), no user message, the active state, and exactly one terminal result through the turn-result callback. Input that arrives while a turn is active SHALL bind to that turn. Input before ready or after stop or exit SHALL open no turn.
+When the runtime opens a turn without a submitted message, such as after a background task ends, an idle driver SHALL report one turn with the runtime's turn identity: a turn-start event carrying its trigger (the ending tasks' summaries), no user message, the active state, and exactly one terminal result, with no message identity, through the turn-result callback. Input that arrives while a turn is active SHALL bind to that turn. Input before ready or after stop or exit SHALL open no turn.
 
 #### Scenario: Background completion wakes an idle driver
 - **WHEN** a background task ends while the driver is idle and the runtime starts a turn in response
