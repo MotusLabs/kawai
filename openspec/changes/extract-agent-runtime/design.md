@@ -309,6 +309,29 @@ Reader: MiMo session `chat-4dd769ef`, a different model family from the Claude a
 
 Risk: the reading certifies spec decidability, not behavior; a wrong resolution here propagates to every driver test. Invariants touched: I1-I4. Owner: the change author; the human owner reviews the change at acceptance. Checkpoint: the 2.4 advisory review of the first real process/permission path re-reads these rows against running code.
 
+### Advisory checkpoint (task 2.4)
+
+Reviewer: Codex Sol (reviewers-sol), a static read of the production composition: `ClaudeSession` running SDK 0.3.289 `query()` on the owned spawner through the lifecycle core. Pinned at c8fd29a6. The fake CLI in `__tests__/fixtures/fakeClaude.ts` speaks the pinned stream-json protocol.
+
+Findings:
+- A stop while start was loading the SDK left a late process unterminated. Fixed in 92e7407e: initialization refuses after the import, because the SDK spawns synchronously inside `query()`.
+- A throwing host callback aborted teardown. Fixed in 92e7407e (event, turn-result and process-end callbacks) and e6e116f8 (`onState`, guarded in the lifecycle core with a second join after `stopped`).
+
+Each fix has a regression that hung or failed on the prior commit. The re-check at e6e116f8 reports no findings.
+
+Controls on the real path:
+- M-env and stop-without-join fail the suite.
+- An adapter that claims exit at stdout EOF fails the M-join test.
+- On SDK 0.3.289 the iterator ends only after the spawned process reports an exit, so a session-only EOF mutant is equivalent there. The generic M-join stays in `lifecycle.test.ts`.
+
+Missing evidence:
+- P06 has no evidence yet: no permission hook exists until task 3.2.
+- D08 needs a real supported CLI with credentials, which is task 7.4.
+- Codex has no composition until task 4.2.
+- Only Linux with Bun 1.4.3 was exercised.
+
+The mechanism stands; nothing was revised beyond the three fixes.
+
 ### Coverage and effectiveness map
 
 Planned package test files: `__tests__/lifecycle.test.ts` (L01-L26/I1-I2), `policy.test.ts` (P01-P16/I3-I4/I8), `requests.test.ts` (Q01-Q04/I5), `events.test.ts` (R03/R07/R11/I6), `usage.test.ts` (R01-R06/R08/I7), `auth.test.ts` (R02/R09), `resume.test.ts` (R10/I2), `distribution.test.ts` (D01-D05/D09/I9). The release/real-provider receipts cover D06-D08; Kawai integration tests/e2e cover K01-K02.
