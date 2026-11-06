@@ -21,7 +21,7 @@ const NETWORK_STDERR = /could not resolve host|connection timed out|connection r
  * `pre-receive hook declined`, `protected branch hook declined`) and repeating
  * it cannot help. Retrying is safe: the push adapter reads the branch first.
  */
-const REMOTE_REF_FAILURE = /\[remote rejected\][^\n]*\((?:failure|internal server error)\)/i
+const REMOTE_REF_FAILURE = /^\s*!\s+\[remote rejected\][^\n]* -> [^\n]+ \((?:failure|internal server error)\)\s*$/im
 
 /** GitHub rate-limit wording gh reports, primary or secondary, either as 403 or 429. */
 const RATE_LIMIT = /rate limit/i

@@ -86,6 +86,7 @@ describe('stop alerts', () => {
     monitor.stop()
   })
 
+  // @covers: plan-supervision › A stopped change alerts the Lead role once per stop › One alert across a restart
   test('sweeps and a restart while it stays stopped send nothing new', async () => {
     await stoppedPlan()
     const { monitor } = bench.compose()
@@ -103,6 +104,7 @@ describe('stop alerts', () => {
     restarted.stop()
   })
 
+  // @covers: plan-supervision › A stopped change alerts the Lead role once per stop › A new stop after Retry
   test('a Retry then a second stop sends a second alert', async () => {
     const { executionId } = await stoppedPlan()
     const { monitor } = bench.compose()
@@ -118,6 +120,7 @@ describe('stop alerts', () => {
     monitor.stop()
   })
 
+  // @covers: plan-supervision › A stopped change alerts the Lead role once per stop › The owner stops the execution
   test("a finished execution's stop raises nothing", async () => {
     const { planId, executionId } = await stoppedPlan()
     expect(bench.executions.finishExecution(executionId, 'stopped', 'superseded')).toBe(true)
@@ -132,6 +135,7 @@ describe('stop alerts', () => {
     monitor.stop()
   })
 
+  // @covers: plan-supervision › A stopped change alerts the Lead role once per stop › No Lead role
   test('with no Lead role a row with a null message is written and no mail is sent', async () => {
     await stoppedPlan(false)
     const { monitor } = bench.compose()

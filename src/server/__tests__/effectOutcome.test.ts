@@ -36,6 +36,7 @@ describe('classifyEffectFailure', () => {
     expect(classifyEffectFailure(git('fatal: refusing to fetch into branch refs/heads/master'))).toBe('permanent')
   })
 
+  // @covers: plan-landing › Every external step is a recorded effect › GitHub fails a ref update on its own side
   test('a ref the remote failed to update is transient; a ref it refused is permanent', () => {
     // GitHub's own failure, as a stopped change recorded it on 2026-11-05.
     const commitRefs = [
@@ -51,6 +52,8 @@ describe('classifyEffectFailure', () => {
     expect(classifyEffectFailure(git(' ! [remote rejected] aaa -> kawai/api (protected branch hook declined)', 1))).toBe('permanent')
     expect(classifyEffectFailure(git(' ! [remote rejected] aaa -> kawai/api (pre-receive hook declined)', 1))).toBe('permanent')
     // The status of the rejected ref decides, not a word elsewhere in the output.
+    expect(classifyEffectFailure(git(' ! [remote rejected] aaa -> topic/(failure) (pre-receive hook declined)', 1))).toBe('permanent')
+    expect(classifyEffectFailure(git('remote: diagnostic [remote rejected] aaa -> api (failure)\n ! [remote rejected] aaa -> api (pre-receive hook declined)', 1))).toBe('permanent')
     expect(classifyEffectFailure(git('remote: failure: secret detected\n ! [remote rejected] aaa -> kawai/api (pre-receive hook declined)', 1))).toBe('permanent')
     expect(classifyEffectFailure(git(' ! [rejected] aaa -> kawai/api (non-fast-forward)\nerror: failure', 1))).toBe('permanent')
   })
