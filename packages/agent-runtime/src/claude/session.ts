@@ -67,11 +67,23 @@ export class ClaudeSession {
   private readonly byUuid = new Map<string, Turn>()
 
   constructor(private readonly options: ClaudeSessionOptions) {
-    this.events = new EventStream((event) => options.callbacks.onEvent(event))
+    this.events = new EventStream((event) => this.notify('onEvent', () => options.callbacks.onEvent(event)))
     this.lifecycle = new DriverLifecycle({
       continuations: new Set(['queue']),
       ...(options.callbacks.onState ? { onState: options.callbacks.onState } : {}),
     })
+  }
+
+  /**
+   * Run a host callback. A throw never escapes into the message loop or
+   * teardown; it is retained as an owned failure, so stop reports it.
+   */
+  private notify(name: string, callback: () => void): void {
+    try {
+      callback()
+    } catch (error) {
+      this.lifecycle.jobs.track(`callback:${name}`, Promise.reject(error)).catch(() => {})
+    }
   }
 
   get state() {
@@ -90,6 +102,11 @@ export class ClaudeSession {
     const launch = resolveLaunch(this.options.launch)
     const executable = launch.executablePath ?? resolveExecutable(launch, 'claude')
     const { query } = await loadSdk()
+    // Stop may have begun while the SDK loaded. The SDK spawns synchronously
+    // inside query(), so refusing here leaves no process teardown could miss.
+    if (this.lifecycle.state === 'stopping' || this.lifecycle.state === 'stopped') {
+      throw new AgentRuntimeError({ category: 'stopped', message: 'the driver was stopped while starting' })
+    }
     const input = new PromptQueue<SDKUserMessage>()
     const generation: Generation = { number, query: null as unknown as Query, input, owned: null, stopRequested: false }
     generation.query = query({
@@ -144,7 +161,8 @@ export class ClaudeSession {
     const error: AgentErrorInfo = { category: 'transport', message: 'the agent process exited unexpectedly' }
     this.events.emit({ type: 'error', error })
     for (const turn of this.takeOpen()) this.settle(turn, 'process-ended', error, 'process_ended')
-    this.options.callbacks.onProcessEnd?.({ generation: generation.number, code, signal, reason: exit?.kind === 'spawn-failed' ? 'spawn failed' : null })
+    const report = { generation: generation.number, code, signal, reason: exit?.kind === 'spawn-failed' ? 'spawn failed' : null }
+    this.notify('onProcessEnd', () => this.options.callbacks.onProcessEnd?.(report))
   }
 
   private handle(generation: Generation, message: SDKMessage): void {
@@ -229,8 +247,8 @@ export class ClaudeSession {
         finalText: result.finalText, totalCostUsd: null, providerCostUsd: null, numTurns: null, terminalReason: null,
       })
     }
-    this.options.callbacks.onTurnResult?.(result)
     turn.resolve(result)
+    this.notify('onTurnResult', () => this.options.callbacks.onTurnResult?.(result))
   }
 
   /** L09/L10: settle the active and queued turns at once, then ask the CLI to stop the turn. */
@@ -243,8 +261,8 @@ export class ClaudeSession {
       // Queued turns never started: they settle without a second turn_interrupted.
       turn.settled = true
       const result: TurnResult = { turnId: turn.turnId, messageUuid: turn.messageUuid, outcome: 'interrupted', finalText: null, model: null, usage: null, toolCallCount: 0, compactionCount: 0, error }
-      this.options.callbacks.onTurnResult?.(result)
       turn.resolve(result)
+      this.notify('onTurnResult', () => this.options.callbacks.onTurnResult?.(result))
     }
     const generation = this.current()
     if (generation && active) {

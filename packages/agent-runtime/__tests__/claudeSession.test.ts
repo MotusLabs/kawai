@@ -56,6 +56,11 @@ interface Harness {
   spawned(): number[]
 }
 
+/** Settles within `ms`, else rejects: a hanging stop must fail the test, not stall the suite. */
+function within<T>(promise: Promise<T>, ms = 8000): Promise<T> {
+  return Promise.race([promise, new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`still pending after ${ms} ms`)), ms))])
+}
+
 function harness(options: { env?: Record<string, string>; executablePath?: string; onTurnResult?(s: ClaudeSession, r: TurnResult): void } = {}): Harness {
   const home = fakeClaudeHome()
   const events: AgentEvent[] = []
@@ -290,5 +295,34 @@ describe('claude session on the owned spawner', () => {
     const receipt = await h.s.kill()
     expect(receipt.processes[0]).toMatchObject({ state: 'exited' })
     expect(h.s.state).toBe('stopped')
+  })
+
+  test('L11/L13: kill while initialization is still loading the SDK spawns nothing and completes', async () => {
+    const h = harness()
+    const start = h.s.start()
+    start.catch(() => {})
+    const receipt = await within(h.s.kill())
+    expect((await rejection(start)).category).toBe('stopped')
+    expect(receipt.processes).toEqual([])
+    expect(h.spawned()).toEqual([])
+    expect(h.s.state).toBe('stopped')
+  })
+
+  test('L11/I1: a throwing turn-result callback during kill still terminates, settles the turn and reports the failure', async () => {
+    const thrown = new Error('callback failed')
+    const h = harness({
+      onTurnResult: () => {
+        throw thrown
+      },
+    })
+    await h.s.start()
+    const hung = await h.s.send('hang')
+    const error = await rejection(within(h.s.kill()))
+    expect(error.category).toBe('stop')
+    expect(error.causes).toContain(thrown)
+    expect((await within(hung.result)).outcome).toBe('interrupted')
+    const pid = (h.s as unknown as { generations: Array<{ owned: { pid: number } }> }).generations[0]!.owned.pid
+    expect(alive(pid)).toBe(false)
+    expect(h.s.lifecycle.jobs.size).toBe(0)
   })
 })
