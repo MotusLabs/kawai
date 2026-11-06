@@ -85,8 +85,9 @@ export class DriverLifecycle {
     const prior = this.current
     const generation = ++this.generationNumber
     this.setState('starting')
-    // A stop cancels initialization; that rejection is the stop's, not a failure.
-    const run = this.jobs.run(`initialize:${generation}`, () => initialize(generation), { expectedCancellation: () => true })
+    // Initialization is joined by stop, but its failure belongs to start's callers (it rejects
+    // the shared start promise), so a later stop does not report it again.
+    const run = this.jobs.run(`initialize:${generation}`, () => initialize(generation), { delivered: true })
     this.starting = run.then(
       () => {
         this.ready(generation)

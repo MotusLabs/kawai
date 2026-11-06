@@ -265,6 +265,8 @@ describe('terminal stop and owned jobs (L11-L12, I1)', () => {
     f.init.reject(new Error('auth refused'))
     expect((await rejection(f.starting!)).message).toBe('auth refused')
     expect(f.lc.state).toBe('unstarted')
+    // The failure was delivered to start's callers; a later stop does not report it again.
+    expect((await f.lc.stop('kill', async () => [])).js).toBe('settled')
   })
 
   test('jobs admitted during the join are joined before the receipt', async () => {

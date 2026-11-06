@@ -6,8 +6,8 @@ resumable sessions. Kawai and headless Bun daemons use the same
 implementation.
 
 **Status: unreleased, under construction.** The public contract is frozen
-(`src/contract.ts`, `src/options.ts`, `src/events.ts`); the drivers have not
-moved yet. See `docs/api-differences.md` for how the contract differs from
+(`src/contract.ts`, `src/options.ts`, `src/events.ts`). The Claude driver
+has moved (`./claude`); the Codex driver has not yet. See `docs/api-differences.md` for how the contract differs from
 Kawai's in-tree driver interface, and `examples/contract-consumer.ts` for a
 type-checked headless consumer.
 
@@ -136,9 +136,41 @@ Server requests are classified as follows:
 
 Nothing waits for a UI.
 
-The Claude and Codex permission helpers become public with their drivers
-(`./claude`, `./codex`, tasks 4.1 and 4.2). Task 4.2 also checks the Codex
-fields against app-server transcripts.
+The Claude permission helpers are public from `./claude` with the driver.
+The Codex helpers become public from `./codex` with its driver (task 4.2),
+which also checks their fields against app-server transcripts.
+
+## Claude driver (`@motuslabs/agent-runtime/claude`)
+
+`createClaudeDriver(options)` returns an inert driver. Call `start()` to
+spawn the CLI. The launch configuration, permissions and callbacks you pass
+are the only inputs. The driver reads no host settings files
+(`settingSources` defaults to none).
+
+- **Turns.** `send()` returns a handle bound to the UUID of the message it
+  sent. A result completes a turn only if it names one of that turn's
+  prompts. A result that names a previous turn's prompt, repeats an earlier
+  frame, or names an unknown UUID completes nothing.
+- **Queued messages.** `{ continuation: 'queue' }` queues a message behind
+  the active turn. If the CLI merges it into that turn, both handles get the
+  same result. If the CLI runs it next, it opens as its own turn, with no
+  idle state in between. Claude has no `steer` mode; asking for it is
+  refused with category `unsupported`.
+- **Agent-started turns.** The CLI can start a turn while the driver is
+  idle, for example when a background task finishes. That turn emits
+  `turn_started` with a trigger (the task summaries, else `resumed`), but no
+  `user_message` and no handle. Its result reaches `onTurnResult` with a
+  `messageUuid` of null. An init that arrives while starting, stopping or
+  after an exit opens nothing.
+- **Requests.** Approvals and `AskUserQuestion` questions are registered
+  before their events are emitted. `onRequest` may answer inline. A request
+  still pending when `onRequest` returns is denied by default (decided by
+  `policy`). With `unansweredRequests: 'wait'` it stays pending until
+  `resolveApproval` or `answerQuestion` is called. Interrupt, stop and
+  process exit cancel pending requests.
+- **Session signals.** Slash commands (`onCommandState`), worker and
+  background-task rosters, activity, compaction notices and model changes
+  are reported the same way Kawai's in-tree driver reports them.
 
 ## Host integrations
 
