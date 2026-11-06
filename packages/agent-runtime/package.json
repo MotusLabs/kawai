@@ -26,6 +26,10 @@
       "types": "./dist/events.d.ts",
       "import": "./dist/events.js"
     },
+    "./profiles": {
+      "types": "./dist/profiles/index.d.ts",
+      "import": "./dist/profiles/index.js"
+    },
     "./usage": {
       "types": "./dist/usage/index.d.ts",
       "import": "./dist/usage/index.js"

@@ -5,11 +5,13 @@
 // the real stdout pipe (fd 1 goes to /dev/null): a Bun process cannot close
 // its own fd 1 for the reader, and the `eof-alive` prompt needs exactly that.
 //
-// Prompts: `env <NAME...>` answers with those variables as JSON; `hang`
+// Prompts: `env <NAME...>` answers with those variables as JSON; `env-all`
+// answers with the whole initial environment (/proc/self/environ); `hang`
 // starts a turn that ends only on interrupt; `crash` exits 3 mid-turn;
 // `eof-alive` closes the protocol stream and keeps running; `ignore-term`
 // ignores SIGTERM and stdin EOF from then on (only SIGKILL ends it); anything else is echoed. Stdin EOF exits 0.
-// Every received frame is appended to $FAKE_CLAUDE_LOG when set.
+// Every received frame, and first the process argv as {"argv": [...]},
+// is appended to $FAKE_CLAUDE_LOG when set.
 import fs from 'node:fs'
 
 const OUT = 3
@@ -18,6 +20,7 @@ const log = process.env.FAKE_CLAUDE_LOG
 const write = (frame: Record<string, unknown>) => fs.writeSync(OUT, `${JSON.stringify(frame)}\n`)
 const usage = { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
 let running: string | null = null
+if (log) fs.appendFileSync(log, `${JSON.stringify({ argv: process.argv.slice(2) })}\n`)
 let holdOnEof = false
 
 function result(uuid: string, subtype: string, text: string | null, isError = false) {
@@ -47,6 +50,14 @@ function onUser(frame: { uuid?: string; message?: { content?: unknown } }) {
       const values = Object.fromEntries(rest.map((name) => [name, process.env[name] ?? null]))
       assistant(JSON.stringify(values))
       return result(uuid, 'success', JSON.stringify(values))
+    }
+    case 'env-all': {
+      // The kernel's record of this process's initial environment: Bun hides
+      // some variables (NODE_TLS_REJECT_UNAUTHORIZED) from process.env.
+      const entries = fs.readFileSync('/proc/self/environ', 'utf8').split('\0').filter(Boolean)
+      const all = JSON.stringify(Object.fromEntries(entries.map((e) => [e.slice(0, e.indexOf('=')), e.slice(e.indexOf('=') + 1)])))
+      assistant(all)
+      return result(uuid, 'success', all)
     }
     case 'hang':
       running = uuid

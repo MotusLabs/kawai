@@ -17,6 +17,12 @@ export interface FakeClaudeHome {
   launch(extraEnv?: Record<string, string>): LaunchConfiguration
   /** Frames the fake received on stdin, parsed. */
   received(): Array<Record<string, unknown>>
+  /** The argv of each process the fake started, in spawn order. */
+  argv(): string[][]
+}
+
+function lines(log: string): Array<Record<string, unknown>> {
+  return existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>) : []
 }
 
 export function fakeClaudeHome(): FakeClaudeHome {
@@ -37,9 +43,7 @@ export function fakeClaudeHome(): FakeClaudeHome {
       cacheDir: join(root, 'cache'),
       tempDir: join(root, 'tmp'),
     }),
-    received: () =>
-      existsSync(log)
-        ? readFileSync(log, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>)
-        : [],
+    received: () => lines(log).filter((entry) => !('argv' in entry)),
+    argv: () => lines(log).flatMap((entry) => ('argv' in entry ? [entry.argv as string[]] : [])),
   }
 }
