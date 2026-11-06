@@ -419,6 +419,7 @@ export function startServer(): void {
   app.route('/api/chat/profiles', createClaudeProfileRoutes())
   app.route('/api/chat/groups', createTeamGroupRoutes({
     groupProfileCounts: (teamId, groupId) => chatSessionManager.groupProfileCounts(teamId, groupId),
+    approvalDefault: teamId => chatSessionManager.teamApprovalDefault(teamId),
   }))
   app.route('/api/chat/search', createChatSearchRoutes({ source: chatSessionManager }))
   // The plan workspace's scoped asset route (plan-workspace 2.3): membership

@@ -33,8 +33,13 @@ function git(args: string[], cwd?: string) {
   return result.stdout
 }
 
+// Transitional (unify-approval-defaults): annotated until the change archives.
 // @covers: team-worktree-staffing › A member is spawned when none is available › Auto works with no browser connected
+// @covers: team-worktree-staffing › A group's approval key can only tighten its spawned members' policy › Auto from the team default needs no browser
 // @covers: team-worktree-staffing › A team has a default approval policy for spawned members › The default does not change existing chats
+// Transitional (unify-approval-defaults): removed requirement, still in the main specs until archive.
+// @covers: chat-sessions › Users configure the default approval policy for new chat sessions › The default does not touch existing sessions
+// @covers: chat-sessions › New chats start from their team's default approval policy › A team default change does not touch existing sessions
 test('with no browser connected, an auto team default spawns an auto member whose tools run without cards; existing chats keep their policy', async () => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-approval-default-')))
   const repo = path.join(root, 'repo')

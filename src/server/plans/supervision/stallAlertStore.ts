@@ -5,9 +5,14 @@
 // wrote the row; a second insert of an episode returns the existing one
 // instead. A null `messageId` records a stall of a plan without a Lead role,
 // for which no mail is sent. Reads are scoped by team; an episode key held by
-// another team's row is refused rather than returned.
+// another team's row is refused rather than returned. A stopped change's alert
+// (`stopAlerts`) keeps its one-per-stop record here under the kind `stopped`;
+// the summary's stall window leaves those out, since it counts stops itself.
 import type { Database } from 'bun:sqlite'
 import type { SupervisionStall } from '../../../shared/planSupervision'
+
+/** The kind a stopped change's alert is recorded under; never a stall. */
+export const STOP_ALERT_KIND = 'stopped'
 
 export interface StallAlert {
   id: string
@@ -15,7 +20,7 @@ export interface StallAlert {
   planId: string
   executionId: string
   change: string
-  kind: SupervisionStall['kind']
+  kind: SupervisionStall['kind'] | typeof STOP_ALERT_KIND
   episodeKey: string
   detail: Record<string, unknown>
   messageId: string | null
@@ -69,8 +74,9 @@ export class StallAlertStore {
     return (this.db.prepare('SELECT * FROM plan_stall_alerts WHERE team_id = ? AND plan_id = ? ORDER BY raised_at, rowid').all(teamId, planId) as Row[]).map(mapAlert)
   }
 
-  /** Alerts raised at or after `since` (the summary window, D13). */
-  raisedSince(teamId: string, since: string): StallAlert[] {
-    return (this.db.prepare('SELECT * FROM plan_stall_alerts WHERE team_id = ? AND raised_at >= ? ORDER BY raised_at, rowid').all(teamId, since) as Row[]).map(mapAlert)
+  /** Stall alerts raised at or after `since` (the summary window, D13). */
+  raisedSince(teamId: string, since: string): Array<StallAlert & { kind: SupervisionStall['kind'] }> {
+    return (this.db.prepare('SELECT * FROM plan_stall_alerts WHERE team_id = ? AND raised_at >= ? AND kind <> ? ORDER BY raised_at, rowid').all(teamId, since, STOP_ALERT_KIND) as Row[])
+      .map(mapAlert) as Array<StallAlert & { kind: SupervisionStall['kind'] }>
   }
 }

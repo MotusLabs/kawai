@@ -133,6 +133,7 @@ function planNote({ sessionId, group }: TeamPromptInput): string {
     `In the plan's Lead role, decide a card addressed to your group with \`${tool('decision_record')}\`, giving a choice (or \`option_index\`) and a rationale, and record your own calls the same way, without \`card_id\`. The first decision wins.`,
     'A reply to an open card\u2019s question is refused and nothing is sent: decide it with `decision_record` instead. Once the card is decided, replies pass.',
     'Stall alerts come from Kawai: when a change makes no progress past its deadline or repeats a failure, the plan\u2019s Lead role gets mail tagged `plan-stall`. Act on it — investigate, ask or decide, or message the responsible group — rather than replying to Kawai.',
+    'Stop alerts come from Kawai too: when a change of a running execution stops, the plan\u2019s Lead role gets mail tagged `plan-stop`, once per stop, naming the reason. Only the owner can Retry, so check the cause and, when it has passed, ask them with a decision card rather than replying to Kawai.',
     '`plan_get` also shows the plan\u2019s decision cards (history, fix status, commits since the decision), each change\u2019s supervision (outcome, cause, progress, stall) with the report, and its token usage.',
     'Only the owner answers a card addressed to the owner, overrides a decision (which creates a fix task for the Lead role), retries, or stops, from the Plans view. No agent can override, retry, or stop: no tool of yours does.',
   ].join('\n')

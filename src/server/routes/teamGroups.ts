@@ -4,8 +4,12 @@
 // `errors` and fallback warnings (unknown profiles, bad onLimit or effort) as
 // `warnings`. Role prompts stay server-side; the picker needs labels only,
 // plus each group's allowed profiles with their caps and live member counts
-// so the dialog can warn before exceeding a cap (profile routing).
+// so the dialog can warn before exceeding a cap (profile routing), and the
+// team's default approval policy (`approvalDefault`, null when never set or
+// with no project yet) that seeds the dialog's Auto-approve box
+// (unify-approval-defaults D2).
 import { Hono } from 'hono'
+import type { ChatApprovalPolicy } from '../../shared/chat'
 import { resolveProjectDirectory } from '../paths'
 import { loadTeamGroups } from '../team/teamGroups'
 
@@ -21,12 +25,14 @@ export function createTeamGroupRoutes(options: {
   homeDir?: string
   /** Live members of a team's group per profile. */
   groupProfileCounts?: (teamId: string, groupId: string) => Record<string, number>
+  /** The team's stored default approval policy; null = not set. */
+  approvalDefault?: (teamId: string) => ChatApprovalPolicy | null
 } = {}) {
   const routes = new Hono()
   routes.get('/', async c => {
     const project = resolveProjectDirectory(c.req.query('projectPath') ?? '')
     // No (or no existing) project yet: the dialog is still being filled in.
-    if (!project.ok) return c.json({ groups: [], errors: [], warnings: [] })
+    if (!project.ok) return c.json({ groups: [], errors: [], warnings: [], approvalDefault: null })
     const { team, catalog } = await loadTeamGroups(project.path, options.homeDir)
     const groups: TeamGroupSummary[] = [...catalog.groups.values()].map(({ group }) => {
       const live = options.groupProfileCounts?.(team.teamId, group.id) ?? {}
@@ -43,7 +49,10 @@ export function createTeamGroupRoutes(options: {
         }),
       }
     })
-    return c.json({ groups, errors: catalog.errors, warnings: catalog.warnings })
+    return c.json({
+      groups, errors: catalog.errors, warnings: catalog.warnings,
+      approvalDefault: options.approvalDefault?.(team.teamId) ?? null,
+    })
   })
   return routes
 }

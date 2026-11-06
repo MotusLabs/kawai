@@ -1,8 +1,9 @@
 // effectOutcome.ts - The D14 classification of a failed git or gh call:
-// transient (network errors, timeouts, 5xx responses, 429, and GitHub's
-// rate limits — retried with the 30s/2m/10m backoff, then effect-failed) or
-// permanent (a rejected push, a refused merge, every other 4xx, and a gh
-// spawn failure — failed at once). A call that succeeded never reaches
+// transient (network errors, timeouts, a push the remote failed on its own
+// side, 5xx responses, 429, and GitHub's rate limits — retried with the
+// 30s/2m/10m backoff, then effect-failed) or permanent (a refused push, a
+// refused merge, every other 4xx, and a gh spawn failure — failed at once).
+// A call that succeeded never reaches
 // here. The input is either adapter's error shape; the classifier is pure
 // so the runner, tests, and any inspector agree.
 import type { GithubError } from './github'
@@ -12,6 +13,15 @@ export type EffectFailureClass = 'transient' | 'permanent'
 
 /** Git's own wording for a network-level failure; anything else it exits non-zero for is a refusal. */
 const NETWORK_STDERR = /could not resolve host|connection timed out|connection refused|connection reset|network is unreachable|connection was closed|unexpected disconnect|timed out/i
+
+/**
+ * A ref the remote failed to update for no reason of the push's own: GitHub's
+ * `remote: fatal error in commit_refs` then `! [remote rejected] <sha> -> <ref>
+ * (failure)`. A refusal names its cause there instead (`non-fast-forward`,
+ * `pre-receive hook declined`, `protected branch hook declined`) and repeating
+ * it cannot help. Retrying is safe: the push adapter reads the branch first.
+ */
+const REMOTE_REF_FAILURE = /^\s*!\s+\[remote rejected\][^\n]* -> [^\n]+ \((?:failure|internal server error)\)\s*$/im
 
 /** GitHub rate-limit wording gh reports, primary or secondary, either as 403 or 429. */
 const RATE_LIMIT = /rate limit/i
@@ -30,5 +40,5 @@ export function classifyEffectFailure(error: GitRemoteError | GithubError): Effe
     if (RATE_LIMIT.test(error.message)) return 'transient'
     return 'permanent'
   }
-  return NETWORK_STDERR.test(error.stderr) ? 'transient' : 'permanent'
+  return NETWORK_STDERR.test(error.stderr) || REMOTE_REF_FAILURE.test(error.stderr) ? 'transient' : 'permanent'
 }

@@ -11,6 +11,7 @@ import type { GroupCatalog } from '../team/groupCatalog'
 import {
   WorkspaceRead,
   attentionItems,
+  autoRequestedBy,
   memberRows,
   taskRows,
   type AttentionInput,
@@ -168,6 +169,27 @@ describe('memberRows (2.2)', () => {
   test('O3 and O6: the team default fills a group without the key; an explicit manual key keeps its own', () => {
     expect(memberRows(withApproval(undefined), [], () => ({}), 'auto')[0]).toMatchObject({ approval: 'auto', approvalSource: 'team' })
     expect(memberRows(withApproval('manual'), [], () => ({}), 'auto')[0]).toMatchObject({ approval: 'manual', approvalSource: 'group' })
+  })
+
+  // unify-approval-defaults D3: a group key is the source only when it tightened.
+  // @covers: team-workspace › Members is a read-only inspection of group settings › An ignored auto key is a warning
+  test('a group asking for auto shows the built-in or team-default policy, never its own key', () => {
+    expect(memberRows(withApproval('auto'), [], () => ({}))[0]).toMatchObject({ approval: 'manual', approvalSource: 'built-in' })
+    expect(memberRows(withApproval('auto'), [], () => ({}), 'manual')[0]).toMatchObject({ approval: 'manual', approvalSource: 'team' })
+    expect(memberRows(withApproval('auto'), [], () => ({}), 'auto')[0]).toMatchObject({ approval: 'auto', approvalSource: 'team' })
+  })
+
+  // @covers: team-workspace › Members is a read-only inspection of group settings › A manual key is shown as the group's own policy
+  test('a manual key under an auto default shows manual from the group file', () => {
+    expect(memberRows(withApproval('manual'), [], () => ({}), 'auto')[0]).toMatchObject({ approval: 'manual', approvalSource: 'group' })
+  })
+
+  test('autoRequestedBy lists groups asking for auto only while the default is not auto', () => {
+    expect(autoRequestedBy(withApproval('auto'), null)).toEqual(['devs'])
+    expect(autoRequestedBy(withApproval('auto'), 'manual')).toEqual(['devs'])
+    expect(autoRequestedBy(withApproval('auto'), 'auto')).toEqual([])
+    expect(autoRequestedBy(withApproval('manual'), null)).toEqual([])
+    expect(autoRequestedBy(withApproval(undefined), null)).toEqual([])
   })
 
   test('a group row carries its settings, caps with live counts, warning, and both source files', () => {

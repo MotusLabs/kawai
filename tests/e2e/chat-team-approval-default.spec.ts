@@ -28,7 +28,7 @@ test('an auto team default reaches the other open view and the next spawned memb
     const other = await context.newPage()
     await other.goto('/')
     await openTab(other, team.root, 'members')
-    await expect(other.getByTestId('team-approval-default-value')).toHaveText('Not set: spawned members start on manual.')
+    await expect(other.getByTestId('team-approval-default-value')).toHaveText('Not set: new chats and spawned members start on manual.')
     await expect(devsApproval(other)).toHaveText('manual · built-in')
 
     await page.getByTestId('team-approval-default-auto').click()

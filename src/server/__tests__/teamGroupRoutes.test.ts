@@ -30,6 +30,7 @@ describe('team group routes', () => {
       ],
       errors: [],
       warnings: [],
+      approvalDefault: null,
     })
   })
 
@@ -72,8 +73,26 @@ describe('team group routes', () => {
     expect(body.errors[0]).toContain('broken.md')
   })
 
+  // unify-approval-defaults D2: the team default seeds the dialog's Auto-approve box.
+  test('names the team default approval policy of the resolved team: auto, manual, or null', async () => {
+    const asked: string[] = []
+    const stored = new Map<string, 'manual' | 'auto'>()
+    const routes = createTeamGroupRoutes({
+      homeDir: home,
+      approvalDefault: teamId => { asked.push(teamId); return stored.get(teamId) ?? null },
+    })
+    const read = async () => (await (await routes.request(`/?projectPath=${encodeURIComponent(project)}`)).json() as { approvalDefault: unknown }).approvalDefault
+    expect(await read()).toBeNull()
+    const teamId = asked[0]!
+    stored.set(teamId, 'auto')
+    expect(await read()).toBe('auto')
+    stored.set(teamId, 'manual')
+    expect(await read()).toBe('manual')
+    expect(new Set(asked)).toEqual(new Set([teamId]))
+  })
+
   test('a missing or nonexistent project yields no groups', async () => {
-    expect(await get('')).toEqual({ groups: [], errors: [], warnings: [] })
-    expect(await get(`?projectPath=${encodeURIComponent(path.join(root, 'nope'))}`)).toEqual({ groups: [], errors: [], warnings: [] })
+    expect(await get('')).toEqual({ groups: [], errors: [], warnings: [], approvalDefault: null })
+    expect(await get(`?projectPath=${encodeURIComponent(path.join(root, 'nope'))}`)).toEqual({ groups: [], errors: [], warnings: [], approvalDefault: null })
   })
 })
