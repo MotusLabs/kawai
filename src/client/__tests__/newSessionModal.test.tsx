@@ -1664,6 +1664,41 @@ describe('NewSessionModal auto-approve tools (unify-approval-defaults D2)', () =
     })
   })
 
+  // @covers: chat-sessions › New chats start from their team's default approval policy › Changing the path re-seeds an untouched checkbox
+  test('returning to a path while lookups are pending never reuses its old auto default', async () => {
+    const dialog = await chatDialog({ '/base': 'auto' })
+    expect(dialog.checkbox()[0].props.checked).toBe(true)
+    const pending: Array<(response: Response) => void> = []
+    const fetchProfiles = globalThis.fetch
+    globalThis.fetch = ((url: Parameters<typeof fetch>[0], options?: Parameters<typeof fetch>[1]) =>
+      String(url).startsWith('/api/chat/groups')
+        ? new Promise<Response>(resolve => pending.push(resolve))
+        : fetchProfiles(url, options)) as typeof fetch
+    try {
+      await dialog.setPath('/elsewhere')
+      expect(dialog.checkbox()[0].props.checked).toBe(false)
+      await dialog.setPath('/base')
+      expect(dialog.checkbox()[0].props.checked).toBe(false)
+      expect(dialog.source()).toBe('Checking the team default…')
+
+      // A cancelled lookup must not supply the returning path's answer.
+      await act(async () => {
+        pending[0]!(Response.json({ approvalDefault: 'auto' }))
+        await settle()
+      })
+      expect(dialog.checkbox()[0].props.checked).toBe(false)
+      await act(async () => {
+        pending[1]!(Response.json({ approvalDefault: 'manual' }))
+        await settle()
+      })
+      expect(dialog.source()).toBe('Team default: manual.')
+      dialog.submit()
+      expect(dialog.created).toEqual([{ path: '/base', approvalPolicy: 'manual' }])
+    } finally {
+      act(() => dialog.renderer.unmount())
+    }
+  })
+
   // @covers: chat-sessions › New chats start from their team's default approval policy › A browser's stored value is ignored
   test('a browser-stored auto from an earlier Settings version does not check the box', async () => {
     // What an old persisted key would put in the store if it survived rehydrate.

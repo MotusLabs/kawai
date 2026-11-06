@@ -537,7 +537,7 @@ export default function NewSessionModal({
       <form
         ref={formRef}
         onSubmit={handleSubmit}
-        className="w-full max-w-md border border-border bg-elevated p-6"
+        className="max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto border border-border bg-elevated p-6"
       >
         <h2 id="new-session-title" className="text-sm font-semibold uppercase tracking-wider text-primary text-balance">
           New Session

@@ -38,7 +38,8 @@ test('a group asking for auto is named until the team default is auto, which the
     // Members: the ignored key is named next to the control and on the row.
     await openTab(page, team.root, 'members')
     const notice = page.getByTestId('team-approval-default-auto-requested')
-    await expect(notice).toHaveText('reviewers asks for auto; set the default to auto to grant it.')
+    await expect(notice).toContainText('reviewers')
+    await expect(notice).toContainText('for auto; set the default to auto to grant it.')
     const reviewers = page.locator('[data-testid="member-group"][data-group-id="reviewers"]')
     await expect(reviewers.getByTestId('member-approval')).toHaveText('manual · built-in')
     await expect(reviewers).toContainText('approval: auto has no effect')

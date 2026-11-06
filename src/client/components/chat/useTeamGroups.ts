@@ -72,6 +72,15 @@ export function useTeamGroups(enabled: boolean, projectPath?: string) {
   const [groups, setGroups] = useState<TeamGroupOption[]>([])
   const [warnings, setWarnings] = useState<string[]>([])
   const [approvalDefault, setApprovalDefault] = useState<TeamApprovalDefaultAnswer | null>(null)
+  // Invalidate during render, before the next path becomes interactive. A
+  // path tag alone is insufficient for A → B → A while B is still pending:
+  // the last completed A answer belongs to an earlier lookup.
+  const lookupPath = enabled ? projectPath?.trim() || null : null
+  const [previousLookupPath, setPreviousLookupPath] = useState(lookupPath)
+  if (previousLookupPath !== lookupPath) {
+    setPreviousLookupPath(lookupPath)
+    setApprovalDefault(null)
+  }
   useEffect(() => {
     const trimmed = projectPath?.trim()
     if (!enabled || !trimmed) {

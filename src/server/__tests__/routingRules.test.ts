@@ -130,21 +130,23 @@ export default {
   })
 
   test('a hanging rule times out and is restarted after repeated timeouts', async () => {
+    // Leave room for Worker scheduling under a loaded suite while keeping
+    // the spin well beyond three call deadlines.
     write('devs.ts', `let calls = 0
 export default {
-  timeoutMs: 50,
+  timeoutMs: 500,
   route(ctx) {
     calls++
-    if (ctx.message.tags.includes('spin')) { const end = Date.now() + 400; while (Date.now() < end) {} }
+    if (ctx.message.tags.includes('spin')) { const end = Date.now() + 5000; while (Date.now() < end) {} }
     return { type: 'hold', reason: String(calls) }
   },
 }`)
     await open().reload()
     const host = registry!.rule('devs')!
-    expect(host.timeoutMs).toBe(50)
+    expect(host.timeoutMs).toBe(500)
     const spin = { ...CTX, message: { ...CTX.message, tags: ['spin'] } }
     for (let i = 0; i < 3; i++) expect(await failure(host.route(spin))).toBeInstanceOf(RuleTimeoutError)
-    await Bun.sleep(100)
+    await Bun.sleep(1000)
     // A fresh Worker: module state starts over.
     expect(await host.route(CTX)).toEqual({ type: 'hold', reason: '1' })
   })

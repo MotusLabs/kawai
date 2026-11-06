@@ -79,6 +79,9 @@ test('the four tabs each show their sections and the modal opens on Sessions', a
 })
 
 test('a chat created with Auto-approve unchecked starts manual', async ({ page }) => {
+  // The approval source and group warnings must leave Create reachable on
+  // a short viewport: the dialog scrolls within the window.
+  await page.setViewportSize({ width: 1280, height: 600 })
   await page.goto('/')
   await page.getByRole('button', { name: 'New session', exact: true }).first().click()
   const dialog = page.getByRole('dialog', { name: 'New Session' })
