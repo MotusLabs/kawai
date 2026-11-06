@@ -35,7 +35,7 @@ function stallLine(stall: SupervisionStall): string {
   return `Two consecutive rounds failed with the same signature: ${stall.signature}.`
 }
 
-function roundLines(input: SupervisionInput): string[] {
+export function roundLines(input: SupervisionInput): string[] {
   const rounds = input.rounds.slice().sort((a, b) => a.number - b.number)
   if (rounds.length === 0) return ['- none yet']
   return rounds.map(round => {
@@ -67,15 +67,19 @@ export function stallBody(plan: { id: string; title: string }, change: ChangeSup
   ].join('\n')
 }
 
+/** The plan's Lead group and its role: where Kawai's alerts go. No Lead, no mail. */
+export function planLead(content: PlanContent | undefined) {
+  const lead = content?.leadGroup ?? null
+  return { lead, role: lead ? content!.roles.find(entry => entry.group === lead) : undefined }
+}
+
 /** Raise the alert of each new stall episode in the derivation; returns how many were raised. */
 export function raiseStallAlerts(deps: StallAlertDeps, team: TeamIdentity, planId: string, derived: DerivedPlan): number {
   const executionId = derived.executionId
   if (executionId === null || derived.revision === null) return 0
   const plan = deps.plans.forTeam(team.teamId, planId)
   if (plan === null) return 0
-  const content: PlanContent | undefined = deps.plans.revision(planId, derived.revision)?.content
-  const lead = content?.leadGroup ?? null
-  const role = lead ? content!.roles.find(entry => entry.group === lead) : undefined
+  const { lead, role } = planLead(deps.plans.revision(planId, derived.revision)?.content)
   let raised = 0
   derived.changes.forEach((change, index) => {
     const stall = change.stall

@@ -156,6 +156,10 @@ Each worktree creation, push, pull request opening, rerun, branch update, merge,
 - **WHEN** a push fails because GitHub cannot be reached
 - **THEN** it is retried with backoff, and after the third failure the change stops as `effect-failed` with the error
 
+#### Scenario: GitHub fails a ref update on its own side
+- **WHEN** a push fails with `[remote rejected] ... (failure)` after `remote: fatal error in commit_refs`
+- **THEN** it is retried with backoff like an unreachable GitHub, while a push refused as non-fast-forward or by a hook fails at once
+
 #### Scenario: Effects are visible
 - **WHEN** the human expands a change's row in plan detail
 - **THEN** each of its effects shows with its step, command, outcome, and time
