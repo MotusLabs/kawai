@@ -38,7 +38,7 @@
 
 ## 7. Integration check
 
-- [ ] 7.1 On the clean committed tree, run `bun run check`. Then replay the incident on a copy of the live database with the built server: two lead sessions with direct mail queued for each other, plus the 13 queued dev and reviewer messages with their senders' tasks. Confirm that each message routes to its task's owner, or to another lead after `affinityWait`, and that none waits past the aging bound while a lead goes idle. Verify: `bun run check` passes, and the result records, per message, the resolved owner, the claimant, and the time it waited.
+- [x] 7.1 On the clean committed tree, run `bun run check`. Then replay the incident on a copy of the live database with the built server: two lead sessions with direct mail queued for each other, plus the 13 queued dev and reviewer messages with their senders' tasks. Confirm that each message routes to its task's owner, or to another lead after `affinityWait`, and that none waits past the aging bound while a lead goes idle. Verify: `bun run check` passes, and the result records, per message, the resolved owner, the claimant, and the time it waited.
 
 ## Workflow follow-up
 
