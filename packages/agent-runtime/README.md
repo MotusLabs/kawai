@@ -96,3 +96,45 @@ denied entirely, or it is allowed with no command restrictions.
 Limitation: the hook-before-disallowed ordering and deny-wins resolution are
 tested against the fake CLI, which follows Anthropic's documented order. The
 real CLI is checked only at task 7.4, which needs a model turn.
+
+## Codex permissions
+
+`CodexPermissions` gives the approval policy (`never` for headless use), the
+sandbox (`workspace-write`, `read-only` or `none`), network access, extra
+writable roots, and whether user input and elicitation are enabled. The same
+value is turned into exact protocol fields for `thread/start`,
+`thread/resume` and every `turn/start`:
+
+- **Approvals.** `approvalsReviewer` is always `user`.
+- **Caller fields.** Caller fields can't widen the policy. Policy fields win,
+  and a named `permissions` profile is dropped.
+- **Resume.** A resumed thread never inherits a broader stored policy.
+- **Sandbox `none`.** It maps to the protocol's `danger-full-access`. It is
+  never silently replaced by `workspace-write`.
+- **`workspace-write`.** It always sends its writable roots, even an empty
+  list, and its network flag. These replace any roots the stored thread
+  collected.
+- **Turns.** Each turn also carries the full `sandboxPolicy`, so read-only
+  network access is explicit.
+
+These combinations can't be enforced and are refused with category
+`configuration`:
+
+- writable roots outside `workspace-write`;
+- `none` with network access off;
+- an unknown policy value;
+- a relative root.
+
+Server requests are classified as follows:
+
+- disabled user input gets empty answers at once;
+- disabled elicitation is declined at once;
+- under `never`, any approval request that still arrives is declined;
+- tool calls go to the session's tools;
+- any other method gets a JSON-RPC error.
+
+Nothing waits for a UI.
+
+The Claude and Codex permission helpers become public with their drivers
+(`./claude`, `./codex`, tasks 4.1 and 4.2). Task 4.2 also checks the Codex
+fields against app-server transcripts.
