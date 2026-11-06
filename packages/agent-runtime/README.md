@@ -138,3 +138,41 @@ Nothing waits for a UI.
 The Claude and Codex permission helpers become public with their drivers
 (`./claude`, `./codex`, tasks 4.1 and 4.2). Task 4.2 also checks the Codex
 fields against app-server transcripts.
+
+## Host integrations
+
+Every integration is an option. Leave it out and the runtime registers,
+records and observes nothing for it.
+
+- **`tools`** is one namespace of host tools. Each has a name, a description,
+  a Zod object schema and a handler. An absent or empty set registers no
+  tools.
+  - Claude serves them from an in-process SDK MCP server as
+    `mcp__<namespace>__<tool>`, and a restricted session counts them as
+    enabled. Codex receives one `dynamicTools` namespace.
+  - A handler runs only for this session's own thread, the bound namespace, a
+    bound tool, and arguments that pass the full schema, refinements
+    included. Any other call gets a `Refused: …` error result, and the
+    handler never runs. A throwing handler becomes an error result.
+  - On Claude, `toolCallId` is the MCP request id, because the CLI does not
+    pass its `tool_use_id` to SDK servers.
+- **`systemPromptAppend`** appends to the claude_code preset prompt on Claude.
+  On Codex it goes into `developerInstructions` (task 4.2).
+- **`beforeSubmit`** runs synchronously inside `send()`, before anything is
+  enqueued or emitted. It receives the message UUID, turn id, text and the
+  opaque `context` the caller passed.
+  - A refusal or a throw rejects the send with category `context`. No user
+    message, `turn_started` or `user_message` event follows.
+  - An accepted submission keeps exactly the UUID and turn id that the
+    callback saw.
+- **`onToolObservation`** receives only the phase (`call` or `result`), the
+  tool name, the call id, the turn and the error flag. It never sees
+  arguments.
+- **`auditHooks`** is the opt-in detailed adapter. Its `preToolUse` does
+  receive the tool input.
+
+Observers never decide anything, and their hooks always answer with no
+decision. A throwing observer can't block, grant or repeat a tool call. Its
+error is kept and reported when the session stops.
+
+`wire` records raw protocol frames only when you supply it.

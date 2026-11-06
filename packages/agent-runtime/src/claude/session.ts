@@ -3,19 +3,23 @@
 // Every generation's message loop is an owned job that completes only at the
 // leader's actual exit; start resolves on the CLI's initialize response;
 // stop closes the input, terminates every owned generation and joins every
-// owned job before its receipt. Profiles, permissions, tools, requests,
-// resume and the full event set arrive in tasks 3-5; this module is the
-// composition they extend, not the final public driver.
+// owned job before its receipt. Permissions (3.2) and host integrations
+// (3.4: tools, prompt append, pre-submit context, observation, audit) are
+// composed per generation. Requests, resume and the full event set arrive in
+// tasks 4-5. This module is the composition they extend, not the final public
+// driver.
 
 import type { Options, Query, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { InterruptReceipt, ProcessExitFact, ProcessExitReceipt, SubmitOptions, TurnHandle, TurnOutcome, TurnResult } from '../contract.js'
 import { AgentRuntimeError, type AgentErrorInfo } from '../errors.js'
 import { EventStream } from '../eventStream.js'
-import type { AgentCallbacks, ClaudePermissions, LaunchInput, WireRecorder } from '../options.js'
-import { DriverLifecycle } from '../lifecycle/lifecycle.js'
+import type { AgentCallbacks, BeforeSubmit, ClaudeAuditHooks, ClaudePermissions, LaunchInput, ToolObservation, ToolSet, WireRecorder } from '../options.js'
+import { DriverLifecycle, type Admission } from '../lifecycle/lifecycle.js'
 import { createOwnedClaudeSpawn } from '../process/claudeSpawn.js'
 import { resolveExecutable, resolveLaunch } from '../process/launch.js'
 import type { LeaderExit, OwnedProcess, TerminateOptions } from '../process/ownedProcess.js'
+import { bindToolSet, claudeToolName, type BoundToolSet } from '../tools/toolSet.js'
+import { claudeIntegrationOptions, mergeHooks } from './integrations.js'
 import { composeClaudePermissions, withPermissions, type ClaudePermissionComposition } from './permissions.js'
 import { PromptQueue } from './promptQueue.js'
 
@@ -29,6 +33,15 @@ export interface ClaudeSessionOptions {
   permissions?: ClaudePermissions
   /** Termination bounds for stop (defaults: the owned spawner's). */
   terminate?: TerminateOptions
+  /** Host tools bound to this session (task 3.4); absent or empty registers none. */
+  tools?: ToolSet
+  systemPromptAppend?: string
+  /** Synchronous pre-submit decision; a refusal or throw precedes any enqueue or event (P12). */
+  beforeSubmit?: BeforeSubmit
+  /** Names-only tool observation (P14). */
+  onToolObservation?(observation: ToolObservation): void
+  /** Detailed opt-in audit adapter. */
+  auditHooks?: ClaudeAuditHooks
 }
 
 interface Turn {
@@ -71,9 +84,15 @@ export class ClaudeSession {
 
   /** Validated once at construction: an unenforceable restriction never starts. */
   private readonly permissions: ClaudePermissionComposition | null
+  private readonly tools: BoundToolSet | null
+  /** The CLI's session id, from the latest system/init. */
+  private runtimeSessionId: string | null = null
 
   constructor(private readonly options: ClaudeSessionOptions) {
-    this.permissions = options.permissions ? composeClaudePermissions(options.permissions) : null
+    this.tools = bindToolSet(options.tools)
+    // Bound host tools count as enabled for this session's restriction.
+    const sessionTools = this.tools ? this.tools.tools.map((tool) => claudeToolName(this.tools!.namespace, tool.name)) : []
+    this.permissions = options.permissions ? composeClaudePermissions(options.permissions, sessionTools) : null
     this.events = new EventStream((event) => this.notify('onEvent', () => options.callbacks.onEvent(event)))
     this.lifecycle = new DriverLifecycle({
       continuations: new Set(['queue']),
@@ -108,7 +127,7 @@ export class ClaudeSession {
   private async spawnGeneration(number: number): Promise<void> {
     const launch = resolveLaunch(this.options.launch)
     const executable = launch.executablePath ?? resolveExecutable(launch, 'claude')
-    const { query } = await loadSdk()
+    const sdk = await loadSdk()
     // Stop may have begun while the SDK loaded. The SDK spawns synchronously
     // inside query(), so refusing here leaves no process teardown could miss.
     if (this.lifecycle.state === 'stopping' || this.lifecycle.state === 'stopped') {
@@ -116,11 +135,11 @@ export class ClaudeSession {
     }
     const input = new PromptQueue<SDKUserMessage>()
     const generation: Generation = { number, query: null as unknown as Query, input, owned: null, stopRequested: false }
-    generation.query = query({
+    generation.query = sdk.query({
       prompt: input,
       options: {
         settingSources: [],
-        ...(this.permissions ? withPermissions(this.options.sdkOptions ?? {}, this.permissions) : this.options.sdkOptions),
+        ...this.composeSdkOptions(sdk),
         cwd: launch.cwd,
         pathToClaudeCodeExecutable: executable,
         // Ignored by the owned spawner (I3); passed so the SDK computes nothing from process.env.
@@ -145,6 +164,32 @@ export class ClaudeSession {
       if (exit?.kind === 'spawn-failed') throw new AgentRuntimeError({ category: 'dependency', message: 'the Claude Code executable could not be started' }, [error])
       throw new AgentRuntimeError({ category: 'transport', message: 'the Claude Code process did not initialize' }, [error])
     }
+  }
+
+  /**
+   * Caller SDK options, then this session's integrations (tool server, prompt
+   * append, observation hooks after the caller's), then the policy, which
+   * overrides policy fields and puts its deny hook first.
+   */
+  private composeSdkOptions(sdk: Parameters<typeof claudeIntegrationOptions>[0]): Partial<Options> {
+    const base = this.options.sdkOptions ?? {}
+    const integration = claudeIntegrationOptions(sdk, {
+      tools: this.tools,
+      ...(this.options.systemPromptAppend ? { systemPromptAppend: this.options.systemPromptAppend } : {}),
+      ...(this.options.onToolObservation ? { onToolObservation: this.options.onToolObservation } : {}),
+      ...(this.options.auditHooks ? { auditHooks: this.options.auditHooks } : {}),
+      turnId: () => this.open[0]?.turnId ?? null,
+      sessionId: () => this.runtimeSessionId,
+      observe: (name, callback) => this.notify(name, callback),
+    })
+    const hooks = mergeHooks(base.hooks, integration.hooks)
+    const composed: Partial<Options> = {
+      ...base,
+      ...(integration.mcpServers ? { mcpServers: { ...base.mcpServers, ...integration.mcpServers } } : {}),
+      ...(integration.systemPrompt ? { systemPrompt: integration.systemPrompt } : {}),
+      ...(Object.keys(hooks).length > 0 ? { hooks } : {}),
+    }
+    return this.permissions ? withPermissions(composed, this.permissions) : composed
   }
 
   /** The generation's owned job: read every message, then wait for the ACTUAL exit. */
@@ -174,6 +219,10 @@ export class ClaudeSession {
 
   private handle(generation: Generation, message: SDKMessage): void {
     if (generation !== this.current()) return
+    if (message.type === 'system' && message.subtype === 'init') {
+      this.runtimeSessionId = message.session_id
+      return
+    }
     if (message.type === 'assistant') {
       const turn = this.open[0]
       if (!turn) return
@@ -201,11 +250,15 @@ export class ClaudeSession {
   async send(text: string, submit: SubmitOptions = {}): Promise<TurnHandle> {
     const admission = await this.lifecycle.admitSend(submit.continuation)
     const messageUuid = submit.messageUuid ?? crypto.randomUUID()
+    const turnId = crypto.randomUUID()
+    // P12/P13: the host decides before anything is enqueued or emitted, and
+    // an accepted submission keeps the identity the host recorded.
+    this.checkSubmission({ messageUuid, turnId, text, context: submit.context }, admission)
     let resolve!: (result: TurnResult) => void
     const result = new Promise<TurnResult>((r) => {
       resolve = r
     })
-    const turn: Turn = { turnId: crypto.randomUUID(), messageUuid, text, settled: false, finalText: null, model: null, resolve, result }
+    const turn: Turn = { turnId, messageUuid, text, settled: false, finalText: null, model: null, resolve, result }
     const generation = this.current()!
     const pushed = generation.input.push({
       type: 'user',
@@ -219,6 +272,22 @@ export class ClaudeSession {
     this.byUuid.set(messageUuid, turn)
     if (admission === 'new-turn') this.openTurn(turn)
     return { turnId: turn.turnId, messageUuid, result }
+  }
+
+  private checkSubmission(submission: Parameters<BeforeSubmit>[0], admission: Admission): void {
+    const beforeSubmit = this.options.beforeSubmit
+    if (!beforeSubmit) return
+    let decision: ReturnType<BeforeSubmit>
+    try {
+      decision = beforeSubmit(submission)
+    } catch (error) {
+      this.lifecycle.withdraw(admission)
+      throw new AgentRuntimeError({ category: 'context', message: 'the pre-submit context callback threw' }, [error])
+    }
+    if (decision?.accepted === true) return
+    this.lifecycle.withdraw(admission)
+    const reason = decision && decision.accepted === false ? decision.reason : 'no decision returned'
+    throw new AgentRuntimeError({ category: 'context', message: `the pre-submit context callback refused: ${reason}` })
   }
 
   private openTurn(turn: Turn): void {

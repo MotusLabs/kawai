@@ -13,7 +13,10 @@
 // `tool <Name> [path]` attempts a tool call the way the documented CLI order
 // evaluates it: the registered PreToolUse hooks first (a deny wins), then
 // --disallowedTools; an executed tool leaves `executed-<Name>` in the cwd
-// (a Read reads [path] first). Anything else is echoed. Stdin EOF exits 0.
+// (a Read reads [path] first), then PostToolUse runs. `mcp <server> <tool>
+// <json>` calls an SDK MCP server tool the same way, via mcp_message control
+// requests (initialize once, then tools/call); `mcp-list <server>` answers
+// with its tools/list names. Anything else is echoed. Stdin EOF exits 0.
 // Every received frame, and first the process argv as {"argv": [...]},
 // is appended to $FAKE_CLAUDE_LOG when set.
 import fs from 'node:fs'
@@ -30,7 +33,11 @@ const flag = (name: string) => {
   return at >= 0 ? argv[at + 1] : undefined
 }
 const disallowed = new Set((flag('--disallowedTools') ?? '').split(',').filter(Boolean))
-let preToolUse: Array<{ matcher?: string; hookCallbackIds: string[] }> = []
+type Matcher = { matcher?: string; hookCallbackIds: string[] }
+let hooks: Record<string, Matcher[]> = {}
+let sdkServers: string[] = []
+const initializedServers = new Set<string>()
+let nextMcpId = 0
 const pending = new Map<string, (response: Record<string, unknown>) => void>()
 let nextRequest = 0
 
@@ -40,16 +47,11 @@ function askHook(callbackId: string, input: Record<string, unknown>, toolUseId: 
   return new Promise((resolve) => pending.set(requestId, resolve))
 }
 
-async function attemptTool(uuid: string, tool: string, target: string | undefined) {
-  const toolUseId = `toolu_${crypto.randomUUID()}`
-  const toolInput = target ? { file_path: target } : {}
-  write({
-    type: 'assistant', session_id: sessionId, uuid: crypto.randomUUID(), parent_tool_use_id: null,
-    message: { id: crypto.randomUUID(), role: 'assistant', model: 'fake-model', content: [{ type: 'tool_use', id: toolUseId, name: tool, input: toolInput }], usage },
-  })
+/** Run one event's matching hooks in order; the first deny reason, else null. */
+async function runHooks(event: string, tool: string, toolUseId: string, extra: Record<string, unknown>): Promise<string | null> {
   let denial: string | null = null
-  const input = { hook_event_name: 'PreToolUse', session_id: sessionId, transcript_path: '', cwd: process.cwd(), tool_name: tool, tool_input: toolInput, tool_use_id: toolUseId }
-  for (const matcher of preToolUse) {
+  const input = { hook_event_name: event, session_id: sessionId, transcript_path: '', cwd: process.cwd(), tool_name: tool, tool_use_id: toolUseId, ...extra }
+  for (const matcher of hooks[event] ?? []) {
     if (matcher.matcher && !new RegExp(`^(?:${matcher.matcher})$`).test(tool)) continue
     for (const id of matcher.hookCallbackIds) {
       const output = await askHook(id, input, toolUseId)
@@ -57,16 +59,73 @@ async function attemptTool(uuid: string, tool: string, target: string | undefine
       if (specific?.permissionDecision === 'deny') denial ??= `hook: ${specific.permissionDecisionReason ?? 'denied'}`
     }
   }
+  return denial
+}
+
+/** One tool attempt: PreToolUse hooks, then --disallowedTools, then `execute`, then PostToolUse(Failure). */
+async function toolTurn(uuid: string, tool: string, toolInput: Record<string, unknown>, execute: () => Promise<{ text: string; isError: boolean }>) {
+  const toolUseId = `toolu_${crypto.randomUUID()}`
+  write({
+    type: 'assistant', session_id: sessionId, uuid: crypto.randomUUID(), parent_tool_use_id: null,
+    message: { id: crypto.randomUUID(), role: 'assistant', model: 'fake-model', content: [{ type: 'tool_use', id: toolUseId, name: tool, input: toolInput }], usage },
+  })
+  let denial = await runHooks('PreToolUse', tool, toolUseId, { tool_input: toolInput })
   if (denial === null && disallowed.has(tool)) denial = `disallowed: ${tool}`
   let text: string
+  let isError = denial !== null
   if (denial !== null) {
     text = `denied ${tool} (${denial})`
   } else {
+    const outcome = await execute()
+    text = outcome.text
+    isError = outcome.isError
+    await runHooks(isError ? 'PostToolUseFailure' : 'PostToolUse', tool, toolUseId, { tool_input: toolInput, ...(isError ? { error: text } : { tool_response: text }) })
+  }
+  write({ type: 'user', session_id: sessionId, uuid: crypto.randomUUID(), parent_tool_use_id: null, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseId, content: text, is_error: isError }] } })
+  assistant(text)
+  result(uuid, 'success', text)
+}
+
+function attemptTool(uuid: string, tool: string, target: string | undefined) {
+  return toolTurn(uuid, tool, target ? { file_path: target } : {}, async () => {
     const content = tool === 'Read' && target ? fs.readFileSync(target, 'utf8') : ''
     fs.writeFileSync(`executed-${tool}`, '')
-    text = `executed ${tool}${content ? `: ${content}` : ''}`
+    return { text: `executed ${tool}${content ? `: ${content}` : ''}`, isError: false }
+  })
+}
+
+function mcpRequest(server: string, message: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const requestId = `fake-${++nextRequest}`
+  write({ type: 'control_request', request_id: requestId, request: { subtype: 'mcp_message', server_name: server, message } })
+  return new Promise((resolve) => pending.set(requestId, (response) => resolve((response.mcp_response ?? {}) as Record<string, unknown>)))
+}
+
+async function mcpCall(server: string, method: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
+  if (!initializedServers.has(server)) {
+    initializedServers.add(server)
+    await mcpRequest(server, { jsonrpc: '2.0', id: ++nextMcpId, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'fake-claude', version: '1' } } })
+    await mcpRequest(server, { jsonrpc: '2.0', method: 'notifications/initialized' })
   }
-  write({ type: 'user', session_id: sessionId, uuid: crypto.randomUUID(), parent_tool_use_id: null, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseId, content: text, is_error: denial !== null }] } })
+  return mcpRequest(server, { jsonrpc: '2.0', id: ++nextMcpId, method, params })
+}
+
+function attemptMcp(uuid: string, server: string, tool: string, json: string | undefined) {
+  const args = json ? (JSON.parse(json) as Record<string, unknown>) : {}
+  return toolTurn(uuid, `mcp__${server}__${tool}`, args, async () => {
+    if (!sdkServers.includes(server)) return { text: `no MCP server ${server}`, isError: true }
+    const response = await mcpCall(server, 'tools/call', { name: tool, arguments: args })
+    if (response.error) return { text: `mcp error: ${JSON.stringify(response.error)}`, isError: true }
+    const outcome = response.result as { content?: Array<{ text?: string }>; isError?: boolean }
+    const text = (outcome.content ?? []).map((item) => item.text ?? '').join('')
+    return { text: `${outcome.isError ? 'mcp error' : 'mcp ok'}: ${text}`, isError: outcome.isError === true }
+  })
+}
+
+async function listMcp(uuid: string, server: string) {
+  const names = sdkServers.includes(server)
+    ? ((await mcpCall(server, 'tools/list', {})).result as { tools: Array<{ name: string }> }).tools.map((tool) => tool.name)
+    : null
+  const text = JSON.stringify({ servers: sdkServers, tools: names })
   assistant(text)
   result(uuid, 'success', text)
 }
@@ -112,6 +171,12 @@ function onUser(frame: { uuid?: string; message?: { content?: unknown } }) {
     case 'tool':
       void attemptTool(uuid, rest[0] ?? '', rest[1])
       return
+    case 'mcp':
+      void attemptMcp(uuid, rest[0] ?? '', rest[1] ?? '', rest.slice(2).join(' ') || undefined)
+      return
+    case 'mcp-list':
+      void listMcp(uuid, rest[0] ?? '')
+      return
     case 'hang':
       running = uuid
       return
@@ -138,7 +203,8 @@ function onControl(frame: { request_id: string; request: { subtype: string } }) 
     write({ type: 'control_response', response: { subtype: 'success', request_id: frame.request_id, response } })
   switch (frame.request.subtype) {
     case 'initialize':
-      preToolUse = ((frame.request as { hooks?: { PreToolUse?: typeof preToolUse } }).hooks?.PreToolUse) ?? []
+      hooks = (frame.request as { hooks?: Record<string, Matcher[]> }).hooks ?? {}
+      sdkServers = (frame.request as { sdkMcpServers?: string[] }).sdkMcpServers ?? []
       return respond({ commands: [], agents: [], models: [], account: {}, output_style: 'default', available_output_styles: [] })
     case 'interrupt': {
       const uuid = running

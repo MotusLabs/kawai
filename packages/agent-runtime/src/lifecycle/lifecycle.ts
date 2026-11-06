@@ -145,6 +145,11 @@ export class DriverLifecycle {
     }
   }
 
+  /** Undo an admission whose submission was refused before anything was enqueued (P12). */
+  withdraw(admission: Admission): void {
+    if (admission === 'queue' && this.queued > 0) this.queued -= 1
+  }
+
   /** The admitted new turn (or the queued turn now opening) has its identity. */
   beginTurn(turnId: string): void {
     if (this.current !== 'idle' && this.current !== 'active') return
