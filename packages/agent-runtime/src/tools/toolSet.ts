@@ -30,6 +30,12 @@ export interface BoundToolSet {
   readonly tools: readonly ToolDefinition[]
   /** Refuses with a reason, or runs the handler once with the parsed input. */
   invoke(call: ToolInvocation): Promise<ToolCallResult>
+  /**
+   * For arguments the transport already parsed with this tool's own schema
+   * (the Claude SDK MCP server): same name checks, no second parse, so
+   * transforms apply once.
+   */
+  invokeParsed(call: ToolInvocation): Promise<ToolCallResult>
 }
 
 function configurationError(message: string): AgentRuntimeError {
@@ -60,22 +66,32 @@ export function bindToolSet(set: ToolSet | undefined): BoundToolSet | null {
   }
   const namespace = set.namespace
   const tools = Object.freeze([...byName.values()])
+  const resolve = (call: ToolInvocation): ToolDefinition | ToolCallResult => {
+    if (call.namespace !== namespace) return refusal(`this session serves only the ${namespace} namespace`)
+    return byName.get(call.tool) ?? refusal(`unknown ${namespace} tool ${JSON.stringify(call.tool)}`)
+  }
+  const execute = async (tool: ToolDefinition, input: unknown, call: ToolInvocation): Promise<ToolCallResult> => {
+    const context: ToolCallContext = { toolCallId: call.toolCallId, turnId: call.turnId, runtimeSessionId: call.runtimeSessionId }
+    try {
+      const result = await tool.handler(input, context)
+      return { content: String(result.content), ...(result.isError ? { isError: true } : {}) }
+    } catch (error) {
+      return { content: error instanceof Error ? error.message : String(error), isError: true }
+    }
+  }
   return {
     namespace,
     tools,
     async invoke(call) {
-      if (call.namespace !== namespace) return refusal(`this session serves only the ${namespace} namespace`)
-      const tool = byName.get(call.tool)
-      if (!tool) return refusal(`unknown ${namespace} tool ${JSON.stringify(call.tool)}`)
+      const tool = resolve(call)
+      if (!('handler' in tool)) return tool
       const parsed = tool.inputSchema.safeParse(call.arguments ?? {})
       if (!parsed.success) return refusal(`invalid arguments for ${tool.name}: ${z.prettifyError(parsed.error)}`)
-      const context: ToolCallContext = { toolCallId: call.toolCallId, turnId: call.turnId, runtimeSessionId: call.runtimeSessionId }
-      try {
-        const result = await tool.handler(parsed.data, context)
-        return { content: String(result.content), ...(result.isError ? { isError: true } : {}) }
-      } catch (error) {
-        return { content: error instanceof Error ? error.message : String(error), isError: true }
-      }
+      return execute(tool, parsed.data, call)
+    },
+    async invokeParsed(call) {
+      const tool = resolve(call)
+      return 'handler' in tool ? execute(tool, call.arguments, call) : tool
     },
   }
 }

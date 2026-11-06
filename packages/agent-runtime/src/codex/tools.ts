@@ -5,7 +5,10 @@
 // or names another thread, is refused before the set is consulted. Every
 // refusal and every handler failure answers `success: false` with text the
 // model reads, never a JSON-RPC error. An empty set sends no `dynamicTools`
-// at all. Wiring into the driver lands with task 4.2.
+// at all. Wiring into the driver lands with task 4.2. The driver must run
+// each dispatch as a session-owned job, so stop joins it, and refuse calls
+// once stop has begun, as the Claude session does. The JSON Schema the model
+// sees is the input side, so field transforms are allowed.
 import { z } from 'zod'
 import { refusal, type BoundToolSet } from '../tools/toolSet.js'
 import type { ToolCallResult } from '../options.js'
@@ -32,7 +35,7 @@ export function codexDynamicTools(tools: BoundToolSet | null): unknown[] | undef
       type: 'namespace',
       name: tools.namespace,
       description: `Host tools bound to this session (${tools.namespace}).`,
-      tools: tools.tools.map((tool) => ({ type: 'function', name: tool.name, description: tool.description, inputSchema: z.toJSONSchema(tool.inputSchema) })),
+      tools: tools.tools.map((tool) => ({ type: 'function', name: tool.name, description: tool.description, inputSchema: z.toJSONSchema(tool.inputSchema, { io: 'input' }) })),
     },
   ]
 }

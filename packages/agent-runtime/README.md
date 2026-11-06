@@ -154,6 +154,11 @@ records and observes nothing for it.
     bound tool, and arguments that pass the full schema, refinements
     included. Any other call gets a `Refused: …` error result, and the
     handler never runs. A throwing handler becomes an error result.
+  - Arguments are parsed exactly once, with the tool's own schema, so strict
+    keys hold and transforms run once. On Claude, the SDK MCP server receives
+    the full schema rather than its shape.
+  - Each call is an owned job: `kill()` and `shutdown()` wait for a running
+    handler. A call that arrives after stop has begun is refused.
   - On Claude, `toolCallId` is the MCP request id, because the CLI does not
     pass its `tool_use_id` to SDK servers.
 - **`systemPromptAppend`** appends to the claude_code preset prompt on Claude.

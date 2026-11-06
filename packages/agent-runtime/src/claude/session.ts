@@ -181,6 +181,7 @@ export class ClaudeSession {
       turnId: () => this.open[0]?.turnId ?? null,
       sessionId: () => this.runtimeSessionId,
       observe: (name, callback) => this.notify(name, callback),
+      run: (label, body) => this.runOwned(label, body),
     })
     const hooks = mergeHooks(base.hooks, integration.hooks)
     const composed: Partial<Options> = {
@@ -190,6 +191,13 @@ export class ClaudeSession {
       ...(Object.keys(hooks).length > 0 ? { hooks } : {}),
     }
     return this.permissions ? withPermissions(composed, this.permissions) : composed
+  }
+
+  /** Host work started by the CLI (tool calls): an owned job stop joins, refused once stop has begun. */
+  private runOwned<T>(label: string, body: () => Promise<T>): Promise<T> | null {
+    const state = this.lifecycle.state
+    if (state === 'stopping' || state === 'stopped') return null
+    return this.lifecycle.jobs.run(label, body)
   }
 
   /** The generation's owned job: read every message, then wait for the ACTUAL exit. */

@@ -3,9 +3,13 @@
 //
 // - tools: one in-process SDK MCP server named after the host namespace,
 //   created per generation (an SDK server instance connects to one query).
-//   Its handlers route through the bound set, so schema and name refusals
-//   never run a handler. The CLI does not pass its tool_use_id to SDK
-//   servers, so a handler's toolCallId is the MCP request id.
+//   The server gets each tool's own full schema, so the MCP layer parses the
+//   arguments exactly once with the host's semantics (strict keys,
+//   refinements, transforms). An invalid call never reaches the handler.
+//   Every call runs as a session-owned job through `run`, so stop joins it,
+//   and a call that arrives after stop has begun is refused. The CLI does
+//   not pass its tool_use_id to SDK servers, so a handler's toolCallId is
+//   the MCP request id.
 // - systemPromptAppend: the claude_code preset with the caller's append.
 // - onToolObservation: PreToolUse and PostToolUse(Failure) hooks that report
 //   only the tool name, call id and turn. They never see or forward
@@ -18,7 +22,7 @@
 import type { HookCallbackMatcher, HookEvent, HookInput, Options } from '@anthropic-ai/claude-agent-sdk'
 import type { JsonValue } from '../json.js'
 import type { ClaudeAuditHooks, ToolObservation } from '../options.js'
-import type { BoundToolSet } from '../tools/toolSet.js'
+import { refusal, type BoundToolSet } from '../tools/toolSet.js'
 
 type SdkModule = typeof import('@anthropic-ai/claude-agent-sdk')
 type Hooks = Partial<Record<HookEvent, HookCallbackMatcher[]>>
@@ -34,6 +38,8 @@ export interface ClaudeIntegrationInput {
   sessionId(): string | null
   /** Run an observational callback; a throw is retained and changes nothing. */
   observe(name: string, callback: () => void): void
+  /** Run one host-tool call as an owned job; null when the session no longer admits work. */
+  run<T>(label: string, body: () => Promise<T>): Promise<T> | null
 }
 
 export interface ClaudeIntegrationOptions {
@@ -82,17 +88,27 @@ function observationHooks(input: ClaudeIntegrationInput): Hooks {
 
 function toolServer(sdk: SdkModule, input: ClaudeIntegrationInput, tools: BoundToolSet): NonNullable<Options['mcpServers']> {
   const definitions = tools.tools.map((definition) =>
-    sdk.tool(definition.name, definition.description, (definition.inputSchema as unknown as { shape: Record<string, never> }).shape, async (args: unknown, extra: unknown) => {
+    // The full schema, not its shape: the SDK registers a non-shape schema
+    // unchanged, so the MCP server's single parse is the host's own.
+    ({
+      name: definition.name,
+      description: definition.description,
+      inputSchema: definition.inputSchema as never,
+      handler: async (args: unknown, extra: unknown) => {
       const requestId = (extra as { requestId?: unknown } | undefined)?.requestId
-      const result = await tools.invoke({
-        namespace: tools.namespace,
-        tool: definition.name,
-        arguments: args,
-        toolCallId: requestId === undefined ? '' : `mcp-request:${String(requestId)}`,
-        turnId: input.turnId(),
-        runtimeSessionId: input.sessionId(),
-      })
+      const call = () =>
+        tools.invokeParsed({
+          namespace: tools.namespace,
+          tool: definition.name,
+          arguments: args,
+          toolCallId: requestId === undefined ? '' : `mcp-request:${String(requestId)}`,
+          turnId: input.turnId(),
+          runtimeSessionId: input.sessionId(),
+        })
+      const owned = input.run(`tool:${definition.name}`, call)
+      const result = owned ? await owned : refusal('the session is stopping')
       return { content: [{ type: 'text' as const, text: result.content }], ...(result.isError ? { isError: true } : {}) }
+      },
     }),
   )
   return { [tools.namespace]: sdk.createSdkMcpServer({ name: tools.namespace, version: '1.0.0', tools: definitions }) }

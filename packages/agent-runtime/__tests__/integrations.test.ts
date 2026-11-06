@@ -40,6 +40,25 @@ function hostTools() {
         },
       },
       {
+        name: 'strict',
+        description: 'Strict object.',
+        inputSchema: z.strictObject({ text: z.string() }),
+        handler: async (input, context) => {
+          calls.push({ input, context })
+          return { content: `strict ${(input as { text: string }).text}` }
+        },
+      },
+      {
+        name: 'count',
+        description: 'Adds one to a numeric string.',
+        inputSchema: z.object({ n: z.string().transform((value) => Number(value)) }),
+        handler: async (input, context) => {
+          calls.push({ input, context })
+          const n = (input as { n: unknown }).n
+          return typeof n === 'number' ? { content: String(n + 1) } : { content: `not a number: ${typeof n}`, isError: true }
+        },
+      },
+      {
         name: 'fail',
         description: 'Always throws.',
         inputSchema: z.object({}),
@@ -111,8 +130,11 @@ describe('tool sets (pure)', () => {
     expect(calls).toHaveLength(0)
     expect(await dispatchCodexToolCall(tools, 'thread-a', call)).toEqual({ success: true, contentItems: [{ type: 'inputText', text: 'echoed hi' }] })
     expect(calls).toEqual([{ input: { text: 'hi' }, context: { toolCallId: 'call-1', turnId: 'turn-1', runtimeSessionId: 'thread-a' } }])
+    expect((await dispatchCodexToolCall(tools, 'thread-a', { ...call, tool: 'strict', arguments: { text: 'x', extra: 1 } })).success).toBe(false)
+    expect(await dispatchCodexToolCall(tools, 'thread-a', { ...call, tool: 'count', arguments: { n: '41' } })).toEqual({ success: true, contentItems: [{ type: 'inputText', text: '42' }] })
+    expect(calls).toHaveLength(2)
     expect(await dispatchCodexToolCall(tools, 'thread-a', { ...call, tool: 'fail', arguments: {} })).toEqual({ success: false, contentItems: [{ type: 'inputText', text: 'handler exploded' }] })
-    expect(codexDynamicTools(tools)).toMatchObject([{ type: 'namespace', name: 'host', tools: [{ type: 'function', name: 'echo' }, { type: 'function', name: 'fail' }] }])
+    expect(codexDynamicTools(tools)).toMatchObject([{ type: 'namespace', name: 'host', tools: [{ type: 'function', name: 'echo' }, { type: 'function', name: 'strict' }, { type: 'function', name: 'count' }, { type: 'function', name: 'fail' }] }])
   })
 })
 
@@ -139,26 +161,79 @@ describe('Claude host tools through the real SDK', () => {
     const h = session({ tools: set, permissions: RESTRICTED_CLAUDE_PERMISSIONS })
     try {
       await h.s.start()
-      expect(JSON.parse((await h.ask('mcp-list host'))!)).toEqual({ servers: ['host'], tools: ['echo', 'fail'] })
+      expect(JSON.parse((await h.ask('mcp-list host'))!)).toEqual({ servers: ['host'], tools: ['echo', 'strict', 'count', 'fail'] })
       const handle = await h.s.send('mcp host echo {"text":"hi"}')
       expect((await handle.result).finalText).toBe('mcp ok: echoed hi')
       expect(calls).toHaveLength(1)
       expect(calls[0]!.context).toMatchObject({ turnId: handle.turnId, runtimeSessionId: 'fake-session-0001' })
       expect(calls[0]!.context.toolCallId).toStartWith('mcp-request:')
       expect(await h.ask('mcp host echo {"text":""}')).toStartWith('mcp error')
-      expect(await h.ask('mcp host echo {"text":"forbidden"}')).toStartWith('mcp error: Refused: invalid arguments for echo')
+      expect(await h.ask('mcp host echo {"text":"forbidden"}')).toStartWith('mcp error: MCP error -32602: Input validation error')
+      // Strict keys survive to the host schema: the SDK must not strip the extra key first.
+      expect(await h.ask('mcp host strict {"text":"hi","extra":1}')).toStartWith('mcp error: MCP error -32602: Input validation error')
+      expect(await h.ask('mcp host strict {"text":"hi"}')).toBe('mcp ok: strict hi')
+      // A field transform applies exactly once.
+      expect(await h.ask('mcp host count {"n":"41"}')).toBe('mcp ok: 42')
       expect(await h.ask('mcp host nope {}')).toStartWith('denied mcp__host__nope (hook:')
       expect(await h.ask('mcp other echo {"text":"hi"}')).toStartWith('denied mcp__other__echo (hook:')
       expect(await h.ask('mcp host fail {}')).toBe('mcp error: handler exploded')
-      expect(calls).toHaveLength(1)
+      expect(calls).toHaveLength(3)
       // The respawned generation gets a fresh server bound to the same set.
       await (await h.s.send('crash')).result
       await h.s.start()
       expect(await h.ask('mcp host echo {"text":"again"}')).toBe('mcp ok: echoed again')
-      expect(calls).toHaveLength(2)
+      expect(calls).toHaveLength(4)
     } finally {
       await h.s.kill()
     }
+  })
+})
+
+describe('host tool ownership across stop', () => {
+  test('L11/I1: kill joins a handler still running and refuses calls admitted after stop began', async () => {
+    let entered!: () => void
+    const entry = new Promise<void>((resolve) => (entered = resolve))
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => (release = resolve))
+    const writes: string[] = []
+    let ran = 0
+    const set: ToolSet = {
+      namespace: 'host',
+      tools: [
+        {
+          name: 'hold',
+          description: 'Waits for the test, then writes.',
+          inputSchema: z.object({}),
+          handler: async () => {
+            ran += 1
+            entered()
+            await gate
+            writes.push('after release')
+            return { content: 'held' }
+          },
+        },
+      ],
+    }
+    const h = session({ tools: set })
+    await h.s.start()
+    void h.s.send('mcp host hold {}')
+    await entry
+    let killed = false
+    const kill = h.s.kill().then((receipt) => {
+      killed = true
+      return receipt
+    })
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    expect(killed).toBe(false)
+    expect(h.s.lifecycle.jobs.size).toBeGreaterThan(0)
+    // A call the CLI starts once stop has begun never reaches a handler.
+    const late = (h.s as unknown as { runOwned(label: string, body: () => Promise<unknown>): Promise<unknown> | null }).runOwned('tool:hold', async () => {
+      ran += 1
+    })
+    expect(late).toBeNull()
+    release()
+    await kill
+    expect([killed, writes, ran, h.s.lifecycle.jobs.size]).toEqual([true, ['after release'], 1, 0])
   })
 })
 
@@ -249,6 +324,7 @@ describe('tool observation', () => {
       turnId: () => null,
       sessionId: () => null,
       observe: (_name, callback) => callback(),
+      run: (_label, body) => body(),
     })
     const matchers = Object.values(options.hooks).flat() as HookCallbackMatcher[]
     expect(matchers).toHaveLength(3)
@@ -327,6 +403,7 @@ describe('tool observation', () => {
         auditHooks: { preToolUse: fail },
         turnId: () => null,
         sessionId: () => null,
+        run: (_label, body) => body(),
         observe: (_name, callback) => {
           try {
             callback()
