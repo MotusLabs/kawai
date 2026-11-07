@@ -472,6 +472,8 @@ export class ClaudeSession {
 
   /** Close every input and request, settle open turns as stopped (L11), terminate every owned generation. */
   private async teardown(mode: 'kill' | 'shutdown'): Promise<ProcessExitFact[]> {
+    // The lifecycle runs teardown once per stop; its token is minted before any callback below can run.
+    this.stopToken = { reason: 'the agent-runtime driver is stopping' }
     const error: AgentErrorInfo = { category: 'stopped', message: 'the driver was stopped' }
     this.requests.close()
     for (const turn of this.takeOpen()) {
@@ -480,7 +482,6 @@ export class ClaudeSession {
     }
     this.binder.reset()
     this.frames.processEnded()
-    this.stopToken = { reason: 'the agent-runtime driver is stopping' }
     return terminateGenerations(this.generations, mode, this.options.terminate ?? {}, this.stopToken)
   }
 }

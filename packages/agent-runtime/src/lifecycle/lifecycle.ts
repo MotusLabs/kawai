@@ -232,14 +232,20 @@ export class DriverLifecycle {
    * that starts no work, adds the native causes read from the joined
    * processes' frozen evidence; its own throw is one more cause. A stop
    * requested from inside an owned job still begins, but that caller is
-   * refused instead of joining itself.
+   * refused instead of joining itself. The transaction, with its first
+   * mode, is published before any callback can run (F1): the onState
+   * publication and the teardown's own turn settlement may reenter stop,
+   * and a reentered call shares this one outcome instead of starting a
+   * second teardown.
    */
   stop(mode: 'kill' | 'shutdown', teardown: () => Promise<ProcessExitFact[]>, account: () => unknown[] = () => []): Promise<ProcessExitReceipt> {
     if (!this.terminal) {
-      this.setState('stopping')
-      this.jobs.beginStop()
-      this.terminal = this.jobs.outside(() => this.runStop(mode, teardown, account))
+      let run!: (body: Promise<ProcessExitReceipt>) => void
+      this.terminal = new Promise<ProcessExitReceipt>((resolve) => (run = resolve))
       this.terminal.catch(() => {})
+      this.jobs.beginStop()
+      this.setState('stopping')
+      run(this.jobs.outside(() => this.runStop(mode, teardown, account)))
     }
     if (this.jobs.insideJob()) {
       return Promise.reject(new AgentRuntimeError({ category: 'internal', message: 'stop was requested from inside an owned job; it continues without this caller' }))

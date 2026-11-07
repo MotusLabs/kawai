@@ -22,6 +22,25 @@ or property that would have caught it, and the source finding.
   (revision-control design.md, P-I2).
 - **Source finding.** findings-60ea7371 (RC E).
 
+### F1 — a terminal stop reentered before it is published (L12/O2)
+
+- **Hazard.** A memoized terminal transaction is stored only after it fires
+  its own callbacks (the `stopping` state publication, the teardown's turn
+  settlement). A callback that calls kill or shutdown without awaiting it
+  starts a second teardown. That teardown mints its own cancellation token.
+  The first one's owned abort then reads as an independent failure, and the
+  callers get different outcomes and modes.
+- **Oracle that catches it.** The production session with the pinned SDK
+  and the fake CLI. An external kill while a turn hangs, with a nested kill
+  or shutdown from the interrupted turn result and from `onState('stopping')`,
+  with and without an active turn. Assert one teardown in the first mode,
+  one `stopped`, the same receipt or error object for every caller, and
+  causes equal to only the callbacks' own throws
+  (`packages/agent-runtime/__tests__/claudeReentrantStop.test.ts`). The
+  omission control publishes the transaction late. Minting the token
+  earlier on its own still leaves the duplicate teardown.
+- **Source finding.** Adviser note b1298cf0 (task 4.1 F1, L12/O2).
+
 ## Test seams
 
 ### M1 — an oracle behind a hand-built harness (findings-6a6a844d)
