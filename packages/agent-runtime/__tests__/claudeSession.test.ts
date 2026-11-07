@@ -10,6 +10,7 @@ import type { AgentEvent } from '../src/events.js'
 import type { ProcessEndReport, ProcessExitReceipt, TurnResult } from '../src/contract.js'
 import { AgentRuntimeError } from '../src/errors.js'
 import type { WireFrame } from '../src/options.js'
+import { NativeExitFailure } from '../src/process/nativeVerdict.js'
 import { fakeClaudeHome } from './helpers/fakeClaudeHome.js'
 
 const sessions: ClaudeSession[] = []
@@ -236,7 +237,8 @@ describe('claude session on the owned spawner', () => {
   test('L12/L13: concurrent stops share one receipt across a retired generation; later calls are refused', async () => {
     const h = harness()
     await h.s.start()
-    await (await h.s.send('crash')).result
+    // A CLI that ends on its own (exit 0): the generation retires without a read failure.
+    await (await h.s.send('quit')).result
     expect(h.s.state).toBe('exited')
     await h.s.start()
     expect(h.s.lifecycle.generation).toBe(2)
@@ -266,6 +268,13 @@ describe('claude session on the owned spawner', () => {
     expect((await (await h.s.send('again')).result).finalText).toBe('echo: again')
     await tick(50)
     expect(h.ends).toHaveLength(1)
+    // A3: the crashed generation's read failure is not the stop's cancellation, so the stop reports it,
+    // beside the native fact of that generation's exit (no exactly-one-cause claim).
+    const stop = await rejection(h.s.kill())
+    expect(stop.category).toBe('stop')
+    expect(stop.causes.map((c) => [(c as Error).message, (c as { errorClass?: string }).errorClass])).toContainEqual(['Claude Code process exited with code 3', 'process_exited_nonzero'])
+    const natives = stop.causes.filter((c): c is NativeExitFailure => c instanceof NativeExitFailure)
+    expect(natives.map((n) => ({ ...n.facts }))).toEqual([{ generation: 1, pid: expect.any(Number), code: 3, signal: null, observedBeforeStop: true }])
   })
 
   test('M-join: a CLI that closes its stream but keeps running is not reported as exited', async () => {

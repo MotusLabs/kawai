@@ -265,8 +265,54 @@ describe('terminal stop and owned jobs (L11-L12, I1)', () => {
     f.init.reject(new Error('auth refused'))
     expect((await rejection(f.starting!)).message).toBe('auth refused')
     expect(f.lc.state).toBe('unstarted')
-    // The failure was delivered to start's callers; a later stop does not report it again.
-    expect((await f.lc.stop('kill', async () => [])).js).toBe('settled')
+    // A rejected start promise is no proof anyone observed it: the later stop still reports the failure.
+    const stop = await rejection(f.lc.stop('kill', async () => []))
+    expect(stop.category).toBe('stop')
+    expect((stop.causes as Error[]).map((c) => c.message)).toEqual(['auth refused'])
+  })
+
+  test('an unobserved failed start is reported by the stop together with a teardown failure', async () => {
+    const lc = new DriverLifecycle({ continuations: new Set() })
+    const typed = new AgentRuntimeError({ category: 'transport', message: 'did not initialize' }, [new Error('pipe closed')])
+    void lc.start(async () => {
+      throw typed
+    })
+    await tick()
+    const error = await rejection(lc.stop('kill', async () => {
+      throw new Error('kill unsupported')
+    }))
+    expect(error.category).toBe('stop')
+    // Original and cleanup failures are both kept; the typed rejection keeps its underlying cause.
+    expect(error.causes.map((c) => (c as Error).message)).toEqual(['kill unsupported', 'did not initialize'])
+    expect((error.causes[1] as AgentRuntimeError).causes.map((c) => (c as Error).message)).toEqual(['pipe closed'])
+  })
+
+  test('only the cancellation the driver minted for this stop is excluded; any other start failure during stop is kept', async () => {
+    for (const minted of [true, false]) {
+      const lc = new DriverLifecycle({ continuations: new Set() })
+      const init = deferred()
+      const start = lc.start(() => init.promise)
+      start.catch(() => {})
+      const stop = lc.stop('kill', async () => {
+        const underlying = new Error('process killed')
+        // Same category and message either way: only lifecycle.cancelled() marks a stop's own cancellation.
+        init.reject(minted ? lc.cancelled('the driver was stopped while starting', [underlying]) : new AgentRuntimeError({ category: 'stopped', message: 'the driver was stopped while starting' }, [underlying]))
+        return []
+      })
+      expect((await rejection(start)).category).toBe('stopped')
+      if (minted) expect((await stop).js).toBe('settled')
+      else expect((await rejection(stop)).causes.map((c) => (c as Error).message)).toEqual(['the driver was stopped while starting'])
+    }
+  })
+
+  test('a minted cancellation is not excluded when it is not the stop that saw it (a failure before stop is kept)', async () => {
+    const lc = new DriverLifecycle({ continuations: new Set() })
+    const minted = lc.cancelled('cancelled early')
+    void lc.start(async () => {
+      throw minted
+    }).catch(() => {})
+    await tick()
+    expect((await rejection(lc.stop('kill', async () => []))).causes).toEqual([minted])
   })
 
   test('jobs admitted during the join are joined before the receipt', async () => {

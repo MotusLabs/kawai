@@ -184,7 +184,7 @@ describe('Claude host tools through the real SDK', () => {
       expect(await h.ask('mcp host fail {}')).toBe('mcp error: handler exploded')
       expect(calls).toHaveLength(3)
       // The respawned generation gets a fresh server bound to the same set.
-      await (await h.s.send('crash')).result
+      await (await h.s.send('quit')).result
       await h.s.start()
       expect(await h.ask('mcp host echo {"text":"again"}')).toBe('mcp ok: echoed again')
       expect(calls).toHaveLength(4)

@@ -8,8 +8,20 @@
 // Prompts: `env <NAME...>` answers with those variables as JSON; `env-all`
 // answers with the whole initial environment (/proc/self/environ); `hang`
 // starts a turn that ends only on interrupt; `crash` exits 3 mid-turn;
+// `quit` exits 0 mid-turn (the CLI ending on its own, no failure);
 // `eof-alive` closes the protocol stream and keeps running; `ignore-term`
 // ignores SIGTERM and stdin EOF from then on (only SIGKILL ends it);
+// `trap3` traps SIGTERM and exits 3 on it, ignoring stdin EOF;
+// `stderr-tail <dir>` starts a helper in its own session that shares this
+// stderr, writes the unterminated line `TAIL`, records its pid in
+// <dir>/tail-helper.pid and exits once <dir>/release exists (after 20 s at
+// most), so stderr's EOF comes after this process is gone; `pipes-hold <dir>
+// <mode>` records this process's fd 1/2/3 pipe identities in
+// <dir>/leader-fds.json and starts a helper in its own session that holds
+// this stderr and, in mode `protocol`, also the protocol pipe (fd 3); it
+// records its own fd 2/3 identities in <dir>/helper-fds.json, writes the line
+// `HELD`, records its pid in <dir>/hold-helper.pid and exits once
+// <dir>/release exists (after 20 s at most);
 // `tool <Name> [path]` attempts a tool call the way the documented CLI order
 // evaluates it: the registered PreToolUse hooks first (a deny wins), then
 // --disallowedTools; an executed tool leaves `executed-<Name>` in the cwd
@@ -19,9 +31,27 @@
 // with its tools/list names. Anything else is echoed. Stdin EOF exits 0.
 // Every received frame, and first the process argv as {"argv": [...]},
 // is appended to $FAKE_CLAUDE_LOG when set.
+import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 
 const OUT = 3
+/** The `stderr-tail` helper: holds the shared stderr until released (bounded). */
+const TAIL_HELPER = "const fs = require('node:fs'); process.stderr.write('TAIL'); const started = Date.now(); setInterval(() => { if (fs.existsSync(process.env.TAIL_RELEASE ?? '') || Date.now() - started > 20000) process.exit(0) }, 20)"
+/**
+ * The `pipes-hold` helper: records which pipes its fds 2 and 3 are, writes the
+ * terminated stderr line `HELD`, holds them until released (bounded), then
+ * tries one late stderr line `LATE` before exiting.
+ */
+const HOLD_HELPER = "const fs = require('node:fs'); const id = (fd) => { try { const s = fs.fstatSync(fd); return s.dev + ':' + s.ino } catch { return null } }; const dir = process.env.HOLD_DIR; fs.writeFileSync(dir + '/helper-fds.json', JSON.stringify({ fd2: id(2), fd3: id(3) })); fs.writeSync(2, 'HELD\\n'); const started = Date.now(); setInterval(() => { if (fs.existsSync(dir + '/release') || Date.now() - started > 20000) { try { fs.writeSync(2, 'LATE\\n') } catch {} process.exit(0) } }, 20)"
+/** A descriptor's pipe identity (dev:ino), or null when it is not open. */
+const fdId = (fd: number): string | null => {
+  try {
+    const stat = fs.fstatSync(fd)
+    return `${stat.dev}:${stat.ino}`
+  } catch {
+    return null
+  }
+}
 const sessionId = 'fake-session-0001'
 const log = process.env.FAKE_CLAUDE_LOG
 const write = (frame: Record<string, unknown>) => fs.writeSync(OUT, `${JSON.stringify(frame)}\n`)
@@ -182,10 +212,40 @@ function onUser(frame: { uuid?: string; message?: { content?: unknown } }) {
       return
     case 'crash':
       process.exit(3)
+    case 'quit':
+      process.exit(0)
     case 'eof-alive':
       fs.closeSync(OUT)
       setInterval(() => {}, 1000)
       return
+    case 'trap3':
+      process.on('SIGTERM', () => process.exit(3))
+      holdOnEof = true
+      setInterval(() => {}, 1000)
+      assistant('trapping SIGTERM')
+      return result(uuid, 'success', 'trapping SIGTERM')
+    case 'stderr-tail': {
+      const dir = rest[0] ?? '.'
+      const helper = spawn(process.execPath, ['-e', TAIL_HELPER], { detached: true, stdio: ['ignore', 'ignore', 'inherit'], env: { ...process.env, TAIL_RELEASE: `${dir}/release` } })
+      fs.writeFileSync(`${dir}/tail-helper.pid`, String(helper.pid))
+      helper.unref()
+      holdOnEof = true
+      setInterval(() => {}, 1000)
+      assistant('stderr tail pending')
+      return result(uuid, 'success', 'stderr tail pending')
+    }
+    case 'pipes-hold': {
+      const [dir = '.', mode = 'stderr'] = rest
+      const protocol = mode === 'protocol' ? 'inherit' : 'ignore'
+      fs.writeFileSync(`${dir}/leader-fds.json`, JSON.stringify({ fd1: fdId(1), fd2: fdId(2), fd3: fdId(OUT) }))
+      const helper = spawn(process.execPath, ['-e', HOLD_HELPER], { detached: true, stdio: ['ignore', 'ignore', 'inherit', protocol], env: { ...process.env, HOLD_DIR: dir } })
+      fs.writeFileSync(`${dir}/hold-helper.pid`, String(helper.pid))
+      helper.unref()
+      holdOnEof = true
+      setInterval(() => {}, 1000)
+      assistant('pipes held')
+      return result(uuid, 'success', 'pipes held')
+    }
     case 'ignore-term':
       process.on('SIGTERM', () => {})
       holdOnEof = true

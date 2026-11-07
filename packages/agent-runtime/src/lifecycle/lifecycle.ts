@@ -35,6 +35,8 @@ export class DriverLifecycle {
   /** Bumped by interrupt so sends waiting on initialization can tell (L10). */
   private interruptEpoch = 0
   private terminal: Promise<ProcessExitReceipt> | null = null
+  /** Errors minted by cancelled(): the only failures a stop may exclude. */
+  private readonly cancellations = new WeakSet<object>()
 
   constructor(private readonly options: LifecycleOptions) {}
 
@@ -85,9 +87,9 @@ export class DriverLifecycle {
     const prior = this.current
     const generation = ++this.generationNumber
     this.setState('starting')
-    // Initialization is joined by stop, but its failure belongs to start's callers (it rejects
-    // the shared start promise), so a later stop does not report it again.
-    const run = this.jobs.run(`initialize:${generation}`, () => initialize(generation), { delivered: true })
+    // Initialization is owned and joined. Its failure rejects start AND stays
+    // retained for stop, unless it is a cancellation the driver minted at its source.
+    const run = this.jobs.run(`initialize:${generation}`, () => initialize(generation), { expectedCancellation: (error) => this.isStopCancellation(error) })
     this.starting = run.then(
       () => {
         this.ready(generation)
@@ -101,6 +103,23 @@ export class DriverLifecycle {
     // The shared promise is observed by every caller; keep it from being an unhandled rejection.
     this.starting.catch(() => {})
     return this.starting
+  }
+
+  /**
+   * The error a driver mints at the source when the stop itself cancelled
+   * one of its owned operations: the driver's own refusal or cancel, never a
+   * wrapper around a provider's rejection. Only such an error is excluded
+   * from the stop's failures. A failure whose cause is unknown, even one
+   * that arrives after termination, stays a failure the stop reports.
+   */
+  cancelled(message: string, causes: unknown[] = []): AgentRuntimeError {
+    const error = refusal('stopped', message, undefined, causes)
+    this.cancellations.add(error)
+    return error
+  }
+
+  isStopCancellation(error: unknown): boolean {
+    return typeof error === 'object' && error !== null && this.cancellations.has(error)
   }
 
   /** L17/L18: only the current generation's readiness while starting opens the driver. */
@@ -209,14 +228,17 @@ export class DriverLifecycle {
   /**
    * L11/L12: the terminal stop. Admission closes synchronously; `teardown`
    * closes queues and streams and terminates every owned generation; then
-   * every owned job is joined. A stop requested from inside an owned job
-   * still begins, but that caller is refused instead of joining itself.
+   * every owned job is joined. Then `account`, a closed synchronous step
+   * that starts no work, adds the native causes read from the joined
+   * processes' frozen evidence; its own throw is one more cause. A stop
+   * requested from inside an owned job still begins, but that caller is
+   * refused instead of joining itself.
    */
-  stop(mode: 'kill' | 'shutdown', teardown: () => Promise<ProcessExitFact[]>): Promise<ProcessExitReceipt> {
+  stop(mode: 'kill' | 'shutdown', teardown: () => Promise<ProcessExitFact[]>, account: () => unknown[] = () => []): Promise<ProcessExitReceipt> {
     if (!this.terminal) {
       this.setState('stopping')
       this.jobs.beginStop()
-      this.terminal = this.jobs.outside(() => this.runStop(mode, teardown))
+      this.terminal = this.jobs.outside(() => this.runStop(mode, teardown, account))
       this.terminal.catch(() => {})
     }
     if (this.jobs.insideJob()) {
@@ -225,7 +247,7 @@ export class DriverLifecycle {
     return this.terminal
   }
 
-  private async runStop(mode: 'kill' | 'shutdown', teardown: () => Promise<ProcessExitFact[]>): Promise<ProcessExitReceipt> {
+  private async runStop(mode: 'kill' | 'shutdown', teardown: () => Promise<ProcessExitFact[]>, account: () => unknown[]): Promise<ProcessExitReceipt> {
     const causes: unknown[] = []
     let processes: ProcessExitFact[] = []
     try {
@@ -235,6 +257,11 @@ export class DriverLifecycle {
     }
     const failures = await this.jobs.join()
     causes.push(...failures.map((f) => f.error))
+    try {
+      causes.push(...account())
+    } catch (error) {
+      causes.push(error)
+    }
     if (causes.length > 0) {
       throw new AgentRuntimeError({ category: 'stop', message: `stop failed: ${causes.length} owned operation(s) failed` }, causes)
     }

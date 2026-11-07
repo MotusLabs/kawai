@@ -4,7 +4,15 @@
 // requests, events and the lifecycle are the production code. No process is
 // spawned, so these tests prove frame handling, not native exit (the fake CLI
 // tests cover that).
-import type { Options, Query, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
+//
+// Cancellation mirrors the pinned SDK (probed on the real one): once the
+// options' abortController aborts, a pending initialize rejects with the
+// SDK's AbortError ("Operation aborted"), the stream, when it ends, throws
+// that AbortError, and a pending control request (interrupt) rejects with it
+// as the cleanup cause. A close without an abort rejects pending requests
+// with the SDK's plain "Query closed before response received". Every other
+// failure is the test's own error.
+import { AbortError, type Options, type Query, type SDKMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { ClaudeQueryFactory } from '../../src/claude/session.js'
 
 export class ControlledQuery {
@@ -15,6 +23,15 @@ export class ControlledQuery {
   holdOnClose = false
   /** UUIDs the next interrupt acknowledgement reports as cancelled. */
   cancelOnInterrupt: string[] = []
+  /** When set, interrupt rejects with it (a genuine control failure). */
+  interruptFailure: unknown = null
+  /** When true, interrupt never answers until the query is aborted or closed. */
+  holdInterrupt = false
+  private readonly heldInterrupts: ((error: unknown) => void)[] = []
+  /** The SDK's cancellation, once the query's abortController aborted. */
+  private aborted: Error | null = null
+  /** An independent read failure the stream throws next. */
+  private readFailure: unknown = null
   /** The frame being handled right now (set just before it is yielded). */
   yielded: SDKMessage | null = null
   private readonly queue: SDKMessage[] = []
@@ -31,6 +48,17 @@ export class ControlledQuery {
       this.rejectInit = reject
     })
     this.init.catch(() => {})
+    const signal = options.abortController?.signal
+    const onAbort = () => {
+      this.aborted = new AbortError('Operation aborted')
+      for (const reject of this.heldInterrupts.splice(0)) reject(this.aborted)
+      if (!this.initSettled) {
+        this.initSettled = true
+        this.rejectInit(this.aborted)
+      }
+    }
+    if (signal?.aborted) onAbort()
+    else signal?.addEventListener('abort', onAbort, { once: true })
     void (async () => {
       for await (const message of prompt) this.prompts.push(message)
     })()
@@ -55,6 +83,23 @@ export class ControlledQuery {
     this.signal()
   }
 
+  /** Pending interrupts reject with `error` (an independent control failure). */
+  failHeldInterrupts(error: unknown): void {
+    for (const reject of this.heldInterrupts.splice(0)) reject(error)
+  }
+
+  /** The stream throws `error` (an independent read failure), whatever else is queued. */
+  failRead(error: unknown): void {
+    this.readFailure = error
+    this.signal()
+  }
+
+  /** initialize fails while the process and its stream stay live (frames can still arrive). */
+  failInit(error: unknown): void {
+    this.initSettled = true
+    this.rejectInit(error)
+  }
+
   /** The process ended: the stream finishes, and a pending initialize then fails. */
   exit(): void {
     if (this.ended) return
@@ -68,11 +113,14 @@ export class ControlledQuery {
 
   close(): void {
     this.closed = true
+    for (const reject of this.heldInterrupts.splice(0)) reject(new Error('Query closed before response received'))
     if (!this.holdOnClose) this.exit()
   }
 
   async interrupt(options?: unknown): Promise<{ cancelled: string[] }> {
     this.interrupts.push(options)
+    if (this.interruptFailure !== null) throw this.interruptFailure
+    if (this.holdInterrupt) return new Promise((_, reject) => this.heldInterrupts.push(reject))
     return { cancelled: this.cancelOnInterrupt.splice(0) }
   }
 
@@ -92,6 +140,7 @@ export class ControlledQuery {
 
   async *[Symbol.asyncIterator](): AsyncGenerator<SDKMessage> {
     while (true) {
+      if (this.readFailure !== null) throw this.readFailure
       const frame = this.queue.shift()
       if (frame) {
         this.yielded = frame
@@ -99,7 +148,10 @@ export class ControlledQuery {
         this.yielded = null
         continue
       }
-      if (this.ended) return
+      if (this.ended) {
+        if (this.aborted) throw this.aborted
+        return
+      }
       await new Promise<void>((resolve) => (this.wake = resolve))
     }
   }

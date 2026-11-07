@@ -88,7 +88,10 @@ describe('ChatSessionManager provider usage pull', () => {
     providerEnv: Record<string, string>,
     responses: Array<Response>,
     catalogHome?: string,
-    refreshMs = 50
+    // Non-cadence default, matching the sibling claim tests' policy: a
+    // cadence tick must not land inside a claim-count test under load; an
+    // explicit periodic-refresh test passes its own short interval.
+    refreshMs = 3_600_000
   ): Promise<ProviderHarness> {
     const fetchCalls: Array<{ url: string; auth?: string }> = []
     const canned = [...responses]

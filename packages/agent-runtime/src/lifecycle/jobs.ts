@@ -2,9 +2,12 @@
 // provider control, initialization, usage/context probe and tool-handler
 // promise a driver starts is tracked here, so stop can join all of it.
 // Jobs admitted while a join is running (late work started by work already
-// in flight) are joined too. Failures are kept, except the cancellations a
-// stop itself caused and failures already delivered to a caller. A job may not join the registry it runs in: that would
-// wait on itself forever, so it fails at once instead.
+// in flight) are joined too. Every failure is kept except a cancellation the
+// stop itself caused for that job (expectedCancellation, consulted only once
+// stop has begun). A rejection a caller may also see, such as start's, is
+// still kept: a returned promise is no proof that anyone observed it. A job
+// may not join the registry it runs in: that would wait on itself forever,
+// so it fails at once instead.
 
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { AgentRuntimeError } from '../errors.js'
@@ -15,10 +18,8 @@ export interface JobFailure {
 }
 
 export interface TrackOptions {
-  /** True for the rejection this stop's own cancellation is expected to cause. */
+  /** True only for the rejection this stop's own cancellation of this job caused. */
   expectedCancellation?(error: unknown): boolean
-  /** The job's rejection is already delivered to its caller (a start): it is joined but not retained. */
-  delivered?: boolean
 }
 
 export class OwnedJobs {
@@ -47,7 +48,6 @@ export class OwnedJobs {
     const settled = result.then(
       () => undefined,
       (error: unknown) => {
-        if (options.delivered) return
         if (this.stopping && options.expectedCancellation?.(error)) return
         this.failures.push({ label, error })
       },

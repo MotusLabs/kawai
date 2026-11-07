@@ -11,61 +11,42 @@
 //   prompt that the CLI consumed into the active turn resolves with that
 //   turn's result. Otherwise it opens as the next turn with no idle state in
 //   between.
+// - A result frame binds once per session: every frame id is kept for the
+//   session's life, and a frame without one is refused.
 // - Agent-started turns. An init that no submission opened starts an
 //   agent-started turn (L24), but only while idle.
 // - Composition. Permissions, host integrations, requests (canUseTool) and
-//   frame mapping are composed here. Stop closes the input and the requests,
-//   terminates every owned generation and joins every owned job before its
-//   receipt.
+//   frame mapping are composed here. A generation is registered before its
+//   query() call. The owned spawner reports each process before any recorder
+//   sees it, and creates none once stop has begun.
+// - Stop marks every owned process, aborts each query with its token, ends
+//   input, terminates every generation and joins every owned job. Only then
+//   does it account each generation from the native evidence its owner froze
+//   at exit: a pre-stop, nonzero, trapped or unsent-signal end fails the
+//   stop, nesting the token AbortErrors stored for it. Every other failure
+//   (init, read, control, callback, recorder, cleanup) fails it too, kept by
+//   identity.
 import type { Options, Query, SDKMessage, SDKResultMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
-import type { AnswerOptions, AnswerOutcome, InterruptReceipt, ProcessExitFact, ProcessExitReceipt, ResumeCheckpoint, SubmitOptions, TaskOutput, TurnHandle, TurnOutcome } from '../contract.js'
+import type { AnswerOptions, AnswerOutcome, InterruptReceipt, ProcessExitFact, ProcessExitReceipt, SubmitOptions, TaskOutput, TurnHandle, TurnOutcome } from '../contract.js'
 import { AgentRuntimeError, type AgentErrorInfo } from '../errors.js'
 import { EventStream, type EventBody } from '../eventStream.js'
 import type { PendingRequest, QuestionAnswers } from '../events.js'
-import type { AgentCallbacks, BeforeSubmit, ClaudeAuditHooks, ClaudePermissions, LaunchInput, Logger, ToolObservation, ToolSet, WireRecorder } from '../options.js'
 import { DriverLifecycle } from '../lifecycle/lifecycle.js'
-import { createOwnedClaudeSpawn } from '../process/claudeSpawn.js'
 import { resolveExecutable, resolveLaunch } from '../process/launch.js'
-import type { LeaderExit, TerminateOptions } from '../process/ownedProcess.js'
+import type { LeaderExit } from '../process/ownedProcess.js'
 import { bindToolSet, type BoundToolSet } from '../tools/toolSet.js'
 import type { RawChatCommand } from './commands.js'
 import { ClaudeFrames } from './frames.js'
 import { claudeIntegrationOptions, mergeHooks } from './integrations.js'
 import { composeClaudePermissions, withPermissions, type ClaudePermissionComposition } from './permissions.js'
-import { interruptGeneration, loadSdk, newGeneration, readTaskOutput, stopQueryTask, terminateGenerations, type Generation } from './generations.js'
+import { accountGenerations, cancelledByStop, interruptGeneration, linkedAbort, loadSdk, newGeneration, ownedSpawn, readTaskOutput, stopQueryTask, terminateGenerations, type Generation } from './generations.js'
 import { ClaudeRequests } from './requests.js'
+import { SeenResultFrames } from './resultFrames.js'
 import { CliTurnBinder } from './turnBinder.js'
 import { checkSubmission, newTurn, resultErrorText, resultUuids, turnResult, type Turn } from './turns.js'
 
-/** Test seam: a controlled query in place of the SDK's (design §5, runtime test seams). */
-export type ClaudeQueryFactory = (params: { prompt: AsyncIterable<SDKUserMessage>; options: Options }) => Query
-
-export interface ClaudeSessionOptions {
-  launch: LaunchInput
-  callbacks: AgentCallbacks
-  logger?: Logger
-  wire?: WireRecorder
-  /** SDK options supplied by the driver and profile layers; policy fields are overridden. */
-  sdkOptions?: Partial<Options>
-  /** Enforced on every generation by the PreToolUse policy (task 3.2). */
-  permissions?: ClaudePermissions
-  /** Termination bounds for stop (defaults: the owned spawner's). */
-  terminate?: TerminateOptions
-  /** Host tools bound to this session (task 3.4); absent or empty registers none. */
-  tools?: ToolSet
-  systemPromptAppend?: string
-  /** Synchronous pre-submit decision; a refusal or throw precedes any enqueue or event (P12). */
-  beforeSubmit?: BeforeSubmit
-  /** Names-only tool observation (P14). */
-  onToolObservation?(observation: ToolObservation): void
-  /** Detailed opt-in audit adapter. */
-  auditHooks?: ClaudeAuditHooks
-  /** The conversation to resume on the first generation. */
-  resume?: ResumeCheckpoint
-  /** A request still pending after onRequest: denied at once (default) or kept. */
-  unansweredRequests?: 'deny' | 'wait'
-  queryFactory?: ClaudeQueryFactory
-}
+import type { ClaudeSessionOptions } from './sessionOptions.js'
+export type { ClaudeQueryFactory, ClaudeSessionOptions } from './sessionOptions.js'
 
 export class ClaudeSession {
   readonly runtime = 'claude' as const
@@ -84,6 +65,9 @@ export class ClaudeSession {
   /** The CLI's session id, from the latest system/init. */
   private runtimeSessionId: string | null
   private lastModel: string | null = null
+  private readonly seenResults = new SeenResultFrames()
+  /** Minted when stop cancels the queries: the abort reason that marks its own cancellations. */
+  private stopToken: object | null = null
 
   constructor(private readonly options: ClaudeSessionOptions) {
     this.tools = bindToolSet(options.tools)
@@ -158,13 +142,10 @@ export class ClaudeSession {
     const launch = resolveLaunch(this.options.launch)
     const executable = launch.executablePath ?? resolveExecutable(launch, 'claude')
     const sdk = await loadSdk()
-    // Stop may have begun while the SDK loaded. The SDK spawns synchronously
-    // inside query(), so refusing here leaves no process teardown could miss.
-    if (this.lifecycle.state === 'stopping' || this.lifecycle.state === 'stopped') {
-      throw new AgentRuntimeError({ category: 'stopped', message: 'the driver was stopped while starting' })
-    }
+    // Stop may have begun while the SDK loaded: refuse before any query exists.
+    if (this.stopBegun()) throw this.lifecycle.cancelled('the driver was stopped while starting')
     this.binder.reset()
-    const generation = newGeneration(number)
+    const generation = newGeneration(number, sdk)
     const composed = this.composeSdkOptions(sdk)
     const options: Options = {
       settingSources: [],
@@ -173,35 +154,46 @@ export class ClaudeSession {
       // Requests ride canUseTool, which bypass mode never consults: leave it unset there.
       ...(composed.permissionMode === 'bypassPermissions' ? {} : { canUseTool: this.requests.canUseTool }),
       ...(this.runtimeSessionId ? { resume: this.runtimeSessionId } : {}),
+      // The query's cancel is the stop's; a caller's controller forwards into it with its own reason.
+      abortController: linkedAbort(generation.abort, composed.abortController),
       cwd: launch.cwd,
       pathToClaudeCodeExecutable: executable,
       // Ignored by the owned spawner (I3); passed so the SDK computes nothing from process.env.
       env: { ...launch.childEnv },
-      spawnClaudeCodeProcess: createOwnedClaudeSpawn({
-        launch,
-        generation: number,
-        ...(this.options.wire ? { recorder: this.options.wire } : {}),
-        onSpawn: (owned) => {
-          generation.owned = owned
-        },
-      }),
+      spawnClaudeCodeProcess: ownedSpawn(generation, launch, this.options.wire, () => this.stopBegun()),
     }
-    generation.query = this.options.queryFactory ? this.options.queryFactory({ prompt: generation.input, options }) : sdk.query({ prompt: generation.input, options })
+    // Registered before query(): the SDK spawns inside it, and a recorder may reenter stop there.
     this.generations.push(generation)
+    try {
+      generation.query = this.options.queryFactory ? this.options.queryFactory({ prompt: generation.input, options }) : sdk.query({ prompt: generation.input, options })
+    } catch (error) {
+      generation.retired = true
+      if (generation.spawn === 'refused') throw this.lifecycle.cancelled('the driver was stopped before its process was created', [error])
+      throw new AgentRuntimeError({ category: 'transport', message: 'the Claude Code query could not be created' }, [error])
+    }
     this.frames.commands.beginLoading()
     void this.lifecycle.jobs.run(`generation:${number}`, () => this.consume(generation))
     let initialized: Awaited<ReturnType<Query['initializationResult']>>
     try {
       initialized = await generation.query.initializationResult()
     } catch (error) {
+      // The SDK's rejection is never proof that the stop caused it: it stays a failure the stop reports.
+      generation.retired = true
       // A spawn failure created no process: start fails and the prior state returns.
       const exit = generation.owned?.exited
+      // Proven no launch: the owned spawner refused because stop had begun.
+      if (generation.spawn === 'refused') throw this.lifecycle.cancelled('the driver was stopped before its process was created', [error])
       if (exit?.kind === 'spawn-failed') throw new AgentRuntimeError({ category: 'dependency', message: 'the Claude Code executable could not be started' }, [error])
+      if (cancelledByStop(generation, this.stopToken, error)) throw this.lifecycle.cancelled('the driver was stopped while starting', [error])
       // A process that exited while starting is classified first (L14: exited, one process end), then start rejects.
       if (exit || generation.readEnded) await generation.ended
       throw new AgentRuntimeError({ category: 'transport', message: 'the Claude Code process did not initialize' }, [error])
     }
     if (generation === this.current() && Array.isArray(initialized?.commands)) this.frames.commands.applyCommands(initialized.commands as RawChatCommand[])
+  }
+
+  private stopBegun(): boolean {
+    return this.lifecycle.state === 'stopping' || this.lifecycle.state === 'stopped'
   }
 
   /**
@@ -253,8 +245,8 @@ export class ClaudeSession {
     } finally {
       generation.markEnded()
     }
-    // A read failure caused by our own stop, or already reported as the unexpected exit, is not a stop failure.
-    if (failure !== null && !generation.stopRequested && this.lifecycle.state !== 'exited') throw failure
+    // A read failure is kept unless it is exactly the stop's own cancellation of this query.
+    if (failure !== null && !cancelledByStop(generation, this.stopToken, failure)) throw failure
   }
 
   private generationEnded(generation: Generation, exit: LeaderExit | null): void {
@@ -274,8 +266,8 @@ export class ClaudeSession {
   }
 
   private handle(generation: Generation, message: SDKMessage): void {
-    // A retired generation's frames never reach the current conversation.
-    if (generation !== this.current()) return
+    // A superseded or failed generation's frames never reach the conversation.
+    if (generation.retired || generation !== this.current()) return
     switch (message.type) {
       case 'system':
         if (message.subtype === 'init') this.init(message)
@@ -321,6 +313,9 @@ export class ClaudeSession {
   }
 
   private result(message: SDKResultMessage): void {
+    const identity = this.seenResults.first(message.uuid)
+    if (identity === 'unidentified') this.options.logger?.warn({}, 'claude_result_without_frame_uuid')
+    if (identity !== 'first') return
     const uuids = resultUuids(message)
     if (this.binder.result(uuids, message.queued_turn_count) === 'drop') return
     const turn = this.active()
@@ -433,7 +428,7 @@ export class ClaudeSession {
           // Cancelled prompts never run: an interrupted turn whose prompts were all cancelled owes no result.
           if (generation === this.current()) this.binder.promptsWithdrawn(cancelled)
         },
-        { expectedCancellation: () => true },
+        { expectedCancellation: (error) => cancelledByStop(generation, this.stopToken, error) },
       )
     }
     return receipt
@@ -468,11 +463,11 @@ export class ClaudeSession {
   }
 
   kill(): Promise<ProcessExitReceipt> {
-    return this.lifecycle.stop('kill', () => this.teardown('kill'))
+    return this.lifecycle.stop('kill', () => this.teardown('kill'), () => accountGenerations(this.generations))
   }
 
   shutdown(): Promise<ProcessExitReceipt> {
-    return this.lifecycle.stop('shutdown', () => this.teardown('shutdown'))
+    return this.lifecycle.stop('shutdown', () => this.teardown('shutdown'), () => accountGenerations(this.generations))
   }
 
   /** Close every input and request, settle open turns as stopped (L11), terminate every owned generation. */
@@ -485,6 +480,7 @@ export class ClaudeSession {
     }
     this.binder.reset()
     this.frames.processEnded()
-    return terminateGenerations(this.generations, mode, this.options.terminate ?? {})
+    this.stopToken = { reason: 'the agent-runtime driver is stopping' }
+    return terminateGenerations(this.generations, mode, this.options.terminate ?? {}, this.stopToken)
   }
 }

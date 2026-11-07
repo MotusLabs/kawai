@@ -2,7 +2,9 @@
 // Owned spawner oracles on real child processes (task 2.1): the exact
 // environment and cwd (P02-P04/I3, control M-env), launch validation (P01),
 // actual-exit stop receipts (L11-L16/I1, control M-join), the never-started
-// fact, memoized terminate, the optional recorder, and the Claude SDK adapter.
+// fact, memoized terminate, the optional recorder, native evidence (A3:
+// ownership before publication, evidence frozen before settlement, recorder
+// throws kept), and the Claude SDK adapter.
 import { afterAll, describe, expect, test } from 'bun:test'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -180,6 +182,73 @@ describe('optional recorder', () => {
     expect(lines).toContain('in:echo:hello')
     expect(lines.at(-1)).toBe('lifecycle:{"event":"exit","code":7,"signal":null}')
     expect(frames.every((f) => f.generation === 1 && !f.text.includes('sk-never-recorded'))).toBe(true)
+  })
+})
+
+describe('native evidence (A3, R4 B1/B6)', () => {
+  const HANG = ['-e', "process.stdout.write('ready\\n'); setInterval(() => {}, 1000)"]
+
+  test('ownership precedes publication, and the evidence is frozen before the exit is recorded or settled', async () => {
+    const order: string[] = []
+    let owned!: OwnedProcess
+    let atExit: { evidence: OwnedProcess['evidence']; exited: OwnedProcess['exited'] } | null = null
+    const recorder = {
+      record(f: WireFrame) {
+        if (f.direction !== 'lifecycle') return
+        const event = (JSON.parse(f.text) as { event: string }).event
+        order.push(`record:${event}:${owned === undefined ? 'unowned' : 'owned'}`)
+        if (event === 'exit') atExit = { evidence: owned.evidence, exited: owned.exited }
+      },
+    }
+    spawnOwned({ command: BUN, args: HANG, launch: launch(), generation: 1, recorder, onCreated: (o) => {
+      owned = o
+      order.push('created')
+      spawned.push(o)
+    } })
+    expect(order).toEqual(['created', 'record:spawn:owned'])
+    expect(await firstLine(owned)).toBe('ready')
+    owned.markTermination()
+    const fact = await owned.terminate({ graceMs: 2000, killMs: 2000 })
+    expect(fact).toMatchObject({ state: 'exited', code: null, signal: 'SIGTERM', escalated: false, groupCleared: true })
+    const frozen = owned.evidence!
+    expect(frozen).toEqual({ exit: { kind: 'exited', code: null, signal: 'SIGTERM' }, marked: true, sentAfterMark: ['SIGTERM'], errors: [] })
+    expect([Object.isFrozen(frozen), Object.isFrozen(frozen.sentAfterMark), Object.isFrozen(frozen.errors)]).toEqual([true, true, true])
+    // The exit record saw the evidence and the settled exit already in place.
+    expect(atExit!.evidence).toBe(frozen)
+    expect(atExit!.exited).toEqual(frozen.exit)
+    // Later cleanup cannot rewrite it.
+    owned.signal('SIGKILL')
+    owned.markTermination()
+    expect(owned.evidence).toBe(frozen)
+    expect(frozen.sentAfterMark).toEqual(['SIGTERM'])
+    expect(owned.observerFailures).toEqual([])
+  })
+
+  test('an exit before any mark is frozen unmarked, with no sends', async () => {
+    const owned = run('printEnv.ts')
+    await owned.leaderExit
+    expect(owned.evidence).toEqual({ exit: { kind: 'exited', code: 0, signal: null }, marked: false, sentAfterMark: [], errors: [] })
+    owned.markTermination()
+    expect((await owned.terminate()).state).toBe('exited')
+    expect(owned.evidence!.marked).toBe(false)
+  })
+
+  test('a throwing recorder never skips settlement or group cleanup; every throw is kept by identity', async () => {
+    const thrown = new Error('recorder threw')
+    const owned = run('exitOnTerm.ts', [], undefined, {
+      record() {
+        throw thrown
+      },
+    })
+    expect(await firstLine(owned)).toBe('ready')
+    owned.markTermination()
+    const fact = await owned.terminate({ graceMs: 2000, killMs: 2000 })
+    expect(fact).toMatchObject({ state: 'exited', code: 7, signal: null, groupCleared: true })
+    expect(owned.evidence).toEqual({ exit: { kind: 'exited', code: 7, signal: null }, marked: true, sentAfterMark: ['SIGTERM'], errors: [] })
+    expect(alive(owned.pid!)).toBe(false)
+    // At least the spawn and exit records threw; each is the recorder's own error.
+    expect(owned.observerFailures.length).toBeGreaterThanOrEqual(2)
+    expect(owned.observerFailures.every((e) => e === thrown)).toBe(true)
   })
 })
 

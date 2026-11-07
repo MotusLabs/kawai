@@ -8,6 +8,17 @@
 // submission opened. Controls: M-native (dropping the agent-started open, or
 // opening one outside idle) fails L24/L26. The real-CLI rows live in
 // claudeSession.test.ts.
+//
+// Qualifications (correction A2):
+// - The unstarted rows here are virgin: no query exists yet.
+// - In stopped and exited, the query's stream has already ended, so the
+//   L16, L20 and L26 frames are never delivered. Those rows check only that
+//   nothing changes.
+// - Frames delivered from a live, retired generation (a failed initialize
+//   keeps its query), both while unstarted and under a successor's active
+//   turn, are in claudeGenerations.test.ts.
+// - L18 calls the lifecycle seam directly with the current generation.
+//   A stale initialize response cannot be produced through the query.
 import { describe, expect, test } from 'bun:test'
 import { AgentRuntimeError } from '../src/errors.js'
 import { driver, type Driver } from './helpers/claudeDriverHarness.js'
@@ -106,7 +117,7 @@ const CHECKS: Record<string, Check> = {
     f.q().ready()
     const handle = await send
     await tick()
-    expect(f.q().prompts.map((p) => p.uuid)).toEqual([handle.messageUuid])
+    expect(f.q().prompts.map((p): string | undefined => p.uuid)).toEqual([handle.messageUuid])
     expect(f.d.state).toBe('active')
   },
   L07: async (f) => {
@@ -179,7 +190,11 @@ const CHECKS: Record<string, Check> = {
     if (state === 'starting') while (f.queries.length === 0) await tick()
     f.q().exit()
     while (f.d.state !== 'exited') await tick()
-    if (state === 'starting') expect((await rejection(f.starting!)).category).toBe('transport')
+    let startFailure: unknown = null
+    if (state === 'starting') {
+      startFailure = await rejection(f.starting!)
+      expect((startFailure as AgentRuntimeError).category).toBe('transport')
+    }
     if (state === 'active') {
       const result = await f.handle!.result
       expect(result.outcome).toBe('process-ended')
@@ -190,6 +205,12 @@ const CHECKS: Record<string, Check> = {
     expect(f.ends).toHaveLength(1)
     expect(f.events.filter((e) => e.type === 'error').map((e) => e.type === 'error' && e.error.category)).toEqual(['transport'])
     expect(f.d.state).toBe('exited')
+    if (state === 'starting') {
+      // A3: the failed start is retained; the later stop reports that very error.
+      const stop = await rejection(f.d.kill())
+      expect([stop.category, stop.causes]).toEqual(['stop', [startFailure]])
+      stopChecked.add(f)
+    }
   },
   L15: async (f) => {
     f.q().exit()
@@ -275,6 +296,9 @@ const CHECKS: Record<string, Check> = {
   },
 }
 
+/** Fixtures whose check already ran (and asserted) the terminal stop. */
+const stopChecked = new WeakSet<object>()
+
 describe('Claude driver: lifecycle table (56 pairs)', () => {
   const rows = new Map(LIFECYCLE_ROWS.map((row) => [row.id, row]))
   for (const [pair, [rowId]] of expandPairs(LIFECYCLE_ROWS)) {
@@ -283,7 +307,7 @@ describe('Claude driver: lifecycle table (56 pairs)', () => {
     test(`claude ${rowId} ${state}+${operation}`, async () => {
       const f = await inState(state)
       await CHECKS[rowId!]!(f, state)
-      if (f.d.state !== 'stopped') {
+      if (f.d.state !== 'stopped' && !stopChecked.has(f)) {
         for (const q of f.queries) {
           q.holdOnClose = false
           if (q.closed) q.exit()

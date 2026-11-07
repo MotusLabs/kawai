@@ -2,11 +2,11 @@
 // The Claude driver's turn binding beyond the 56 pairs (task 4.1): queued
 // continuations (L21, L23), agent-started turns (L24 with M-native), results
 // that name a previous, duplicate or unknown prompt (R03, the M-bind
-// target), a headless driver with no host additions (P09), and I6 over
-// seeded streams of duplicated and reordered frames. Everything runs on the
-// production ClaudeSession; only the SDK's query() is controlled.
+// target), a repeated result frame (A1), and a headless driver with no host
+// additions (P09). I6 over seeded streams is in claudeTurnStreams.test.ts.
+// Everything runs on the production ClaudeSession; only the SDK's query() is
+// controlled.
 import { describe, expect, test } from 'bun:test'
-import type { TurnHandle, TurnResult } from '../src/contract.js'
 import { AgentRuntimeError } from '../src/errors.js'
 import type { AgentEvent } from '../src/events.js'
 import { driver, type Driver } from './helpers/claudeDriverHarness.js'
@@ -32,7 +32,7 @@ describe('Claude driver: continuations (L21, L23)', () => {
     const q = await f.d.send('more', { continuation: 'queue' })
     expect(q.turnId).not.toBe(a.turnId)
     await tick()
-    expect(f.q().prompts.map((p) => p.uuid)).toEqual([a.messageUuid, q.messageUuid])
+    expect(f.q().prompts.map((p): string | undefined => p.uuid)).toEqual([a.messageUuid, q.messageUuid])
     expect(started(f)).toHaveLength(1) // the queued turn has not opened
     f.q().push(frames.text('both'), frames.result([a.messageUuid, q.messageUuid], 'both'))
     const [ra, rq] = await Promise.all([a.result, q.result])
@@ -123,6 +123,103 @@ describe('Claude driver: result binding (R03, M-bind)', () => {
   })
 })
 
+const pendingAfter = (handle: { result: Promise<unknown> }) => Promise.race([handle.result.then(() => 'settled'), tick(10).then(() => 'pending')])
+
+describe('Claude driver: a result frame binds once (A1)', () => {
+  test('the same UUID-less result R that finished A cannot finish the later prompted B, on this or a new generation', async () => {
+    for (const respawn of [false, true]) {
+      const f = await idle()
+      const a = await f.d.send('A')
+      const r = frames.result([], 'A done') // out of contract: a prompted result without a uuid
+      f.q().push(r)
+      expect((await a.result).finalText).toBe('A done')
+      if (respawn) {
+        f.q().exit()
+        while (f.d.state !== 'exited') await tick()
+        const again = f.d.start()
+        while (f.queries.length < 2) await tick()
+        f.q().ready()
+        await again
+      }
+      const b = await f.d.send('B')
+      f.q().push(r)
+      await f.q().drain()
+      expect(await pendingAfter(b)).toBe('pending')
+      expect(f.results.map((x) => x.turnId)).toEqual([a.turnId])
+      f.q().push(frames.result([b.messageUuid], 'B done'))
+      expect(await b.result).toMatchObject({ turnId: b.turnId, finalText: 'B done' })
+      await f.d.kill()
+    }
+  })
+
+  test('the same UUID-less result R that finished agent-started N cannot finish the next agent-started turn', async () => {
+    const f = await idle()
+    const r = frames.result([], 'N done')
+    f.q().push(frames.init(), r)
+    await f.q().drain()
+    f.q().push(frames.init(), r)
+    await f.q().drain()
+    expect(started(f)).toHaveLength(2)
+    expect(f.results).toHaveLength(1)
+    expect(f.d.state).toBe('active')
+    // A fresh UUID-less result is the second turn's own.
+    f.q().push(frames.result([], 'N2 done'))
+    await f.q().drain()
+    expect(f.results.map((x) => [x.turnId, x.finalText])).toEqual([[started(f)[0]!.turnId, 'N done'], [started(f)[1]!.turnId, 'N2 done']])
+    await f.d.kill()
+  })
+
+  test('no window: after 1500 later results and an unknown-uuid flood, the replayed R still finishes neither a prompted nor a native B', async () => {
+    for (const successor of ['prompted', 'native'] as const) {
+      const f = await idle()
+      const r = frames.result([], 'first')
+      f.q().push(frames.init(), r)
+      await f.q().drain()
+      expect(f.results).toHaveLength(1)
+      // 750 more agent-started turns, each finished by its own fresh result, then 750 unknown-uuid frames.
+      for (let i = 0; i < 750; i++) f.q().push(frames.init(), frames.result([], `n${i}`))
+      for (let i = 0; i < 750; i++) f.q().push(frames.result([crypto.randomUUID()], `unknown${i}`))
+      await f.q().drain()
+      expect(f.results).toHaveLength(751)
+      const b = successor === 'prompted' ? await f.d.send('B') : null
+      if (!b) f.q().push(frames.init())
+      f.q().push(r)
+      await f.q().drain()
+      expect([f.results.length, f.d.state]).toEqual([751, 'active'])
+      if (b) expect(await pendingAfter(b)).toBe('pending')
+      await f.d.kill()
+    }
+  })
+
+  test('a result frame without its own uuid has no identity: it is refused and logged, never completing a turn', async () => {
+    const f = await idle()
+    const a = await f.d.send('A')
+    const anonymous = frames.result([a.messageUuid], 'anonymous') as unknown as Record<string, unknown>
+    delete anonymous.uuid
+    f.q().push(anonymous as never)
+    await f.q().drain()
+    expect(await pendingAfter(a)).toBe('pending')
+    expect(f.warnings.map(([message]) => message)).toContain('claude_result_without_frame_uuid')
+    f.q().push(frames.result([a.messageUuid], 'identified'))
+    expect((await a.result).finalText).toBe('identified')
+    await f.d.kill()
+  })
+
+  test('a different UUID-less frame still completes a prompted turn, and an unread prompt is still carried', async () => {
+    const f = await idle()
+    const a = await f.d.send('A')
+    f.q().push(frames.result([], 'startup failure'))
+    expect((await a.result).outcome).toBe('success')
+    // A's prompt was never named: the CLI still holds it, so the next turn takes it over.
+    const b = await f.d.send('B')
+    f.q().push(frames.result([a.messageUuid], 'ran A for B'))
+    await f.q().drain()
+    expect(await pendingAfter(b)).toBe('settled')
+    expect(await b.result).toMatchObject({ turnId: b.turnId, finalText: 'ran A for B' })
+    await f.d.kill()
+  })
+})
+
 describe('Claude driver: agent-started turns (L24, M-native)', () => {
   test('L24: an init while idle opens one turn with a task trigger and no user message; its result arrives once', async () => {
     const f = await idle()
@@ -163,119 +260,4 @@ describe('Claude driver: headless (P09)', () => {
     expect((await a.result).finalText).toBe('hello')
     await f.d.kill()
   })
-})
-
-// --- I6: seeded streams ---------------------------------------------------
-
-type Op = 'send' | 'queue' | 'result' | 'merged' | 'stale' | 'duplicate' | 'unknown' | 'init' | 'text' | 'task' | 'interrupt' | 'restart'
-const OPS: Op[] = ['send', 'send', 'queue', 'result', 'result', 'merged', 'stale', 'duplicate', 'unknown', 'init', 'text', 'task', 'interrupt', 'restart']
-
-interface Completion {
-  result: TurnResult
-  frame: unknown
-  query: number
-}
-
-async function stream(seed: number): Promise<string[]> {
-  let state = seed >>> 0
-  const next = (n: number) => {
-    state = (state * 1103515245 + 12345) >>> 0
-    return (state >>> 8) % n
-  }
-  const completions: Completion[] = []
-  const f: Driver = driver({ onTurnResult: (result) => completions.push({ result, frame: f.q().yielded, query: f.queries.length - 1 }) })
-  const start = f.d.start()
-  while (f.queries.length === 0) await tick()
-  f.q().ready()
-  await start
-  const handles: TurnHandle[] = []
-  const sent = new Map<string, number>() // prompt uuid -> query index it was sent on
-  const results: unknown[] = []
-  const pending = () => handles.filter((h) => !f.results.some((r) => r.turnId === h.turnId)).map((h) => h.messageUuid)
-  const length = 8 + next(25)
-  for (let i = 0; i < length; i++) {
-    const op = OPS[next(OPS.length)]!
-    const q = f.q()
-    const push = (frame: unknown) => {
-      results.push(frame)
-      q.push(frame as never)
-    }
-    try {
-      if (op === 'send' || op === 'queue') {
-        const handle = await f.d.send(`m${i}`, op === 'queue' ? { continuation: 'queue' } : {})
-        handles.push(handle)
-        sent.set(handle.messageUuid, f.queries.length - 1)
-      } else if (op === 'result' || op === 'merged') {
-        const live = pending()
-        push(frames.result(op === 'merged' ? live : live.slice(0, 1), `r${i}`, next(4) === 0 ? 'error_during_execution' : 'success'))
-      } else if (op === 'stale') {
-        const done = handles.filter((h) => !pending().includes(h.messageUuid))
-        if (done.length > 0) push(frames.result([done[next(done.length)]!.messageUuid]))
-      } else if (op === 'duplicate') {
-        const old = results.filter((r) => (r as { type: string }).type === 'result')
-        if (old.length > 0) q.push(old[next(old.length)] as never)
-      } else if (op === 'unknown') push(frames.result([crypto.randomUUID()]))
-      else if (op === 'init') push(frames.init(`sess-${seed}`))
-      else if (op === 'text') push(frames.text(`t${i}`))
-      else if (op === 'task') push(frames.taskNotification(`task-${i}`))
-      else if (op === 'interrupt') await f.d.interrupt()
-      else if (op === 'restart') {
-        q.exit()
-        while (f.d.state !== 'exited') await tick()
-        const again = f.d.start()
-        while (f.queries.at(-1) === q) await tick()
-        f.q().ready()
-        await again
-      }
-    } catch (error) {
-      if (!(error instanceof AgentRuntimeError) || !['busy', 'not-ready'].includes(error.category)) throw error
-    }
-    await f.q().drain()
-  }
-  await f.d.kill()
-  await Promise.all(handles.map((h) => h.result))
-
-  const violations: string[] = []
-  const ids = new Set<string>()
-  const lastSequence = new Map<string, number>()
-  for (const event of f.events) {
-    if (JSON.stringify(JSON.parse(JSON.stringify(event))) !== JSON.stringify(event)) violations.push(`not lossless: ${event.type}`)
-    if (ids.has(event.id)) violations.push(`duplicate id ${event.id}`)
-    ids.add(event.id)
-    const previous = lastSequence.get(event.streamId) ?? 0
-    if (event.sequence !== previous + 1) violations.push(`sequence ${previous} -> ${event.sequence}`)
-    lastSequence.set(event.streamId, event.sequence)
-  }
-  const turnIds = f.results.map((r) => r.turnId)
-  if (new Set(turnIds).size !== turnIds.length) violations.push('a turn had two results')
-  // A result frame completes a turn only through a prompt it names that was
-  // sent on the current generation and that no earlier completing frame named.
-  // A prompt no result named is still unread by the CLI and may legitimately
-  // complete a later turn (the binder carries it), so a turn's own UUID is
-  // not consumed by a completion that did not name it.
-  const consumed = new Set<string>()
-  for (const { result, frame, query } of completions) {
-    if (result.outcome !== 'success' && result.outcome !== 'failed') continue
-    const uuids = ((frame as { user_message_uuids?: string[] } | null)?.user_message_uuids ?? []) as string[]
-    if ((frame as { type?: string } | null)?.type !== 'result') violations.push(`completion outside a result frame`)
-    if (uuids.length > 0 && !uuids.some((uuid) => sent.get(uuid) === query && !consumed.has(uuid))) {
-      violations.push(`turn ${result.turnId} completed by a stale or foreign result`)
-    }
-    for (const uuid of uuids) consumed.add(uuid)
-  }
-  return violations
-}
-
-describe('Claude driver: I6 over seeded streams', () => {
-  // 0xA606, 300 streams, in six slices so each test stays within its timeout.
-  for (let slice = 0; slice < 6; slice++) {
-    test(`I6: events are lossless, unique and ordered, and no stale result finishes a turn (streams ${slice * 50}-${slice * 50 + 49})`, async () => {
-      const failures: string[] = []
-      for (let i = slice * 50; i < slice * 50 + 50; i++) {
-        const violations = await stream(0xa606 + i * 7919)
-        if (violations.length > 0) failures.push(`stream ${i}: ${violations.join('; ')}`)
-      }
-      expect(failures).toEqual([])
-    })
-  }
 })

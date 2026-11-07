@@ -5,6 +5,8 @@
 // variables (I3); a protocol variable the CLI needs must come through the
 // profile helper's returned map. The SDK's forwarded abort starts the owned
 // termination; the driver awaits the same memoized terminate() for its receipt.
+// The owner reaches onSpawn before the owned spawner's first recorder
+// publication, so a recorder that reenters stop finds the process owned.
 
 import { EventEmitter } from 'node:events'
 import type { SpawnedProcess, SpawnOptions } from '@anthropic-ai/claude-agent-sdk'
@@ -16,7 +18,7 @@ export interface OwnedClaudeSpawnOptions {
   launch: ResolvedLaunch
   generation: number
   recorder?: WireRecorder
-  /** Receives the owned process before the SDK sees it. */
+  /** Receives the owned process before the SDK or any recorder sees it. */
   onSpawn(owned: OwnedProcess): void
 }
 
@@ -64,8 +66,8 @@ export function createOwnedClaudeSpawn(options: OwnedClaudeSpawnOptions): (spawn
       launch: options.launch,
       generation: options.generation,
       ...(options.recorder ? { recorder: options.recorder } : {}),
+      onCreated: options.onSpawn,
     })
-    options.onSpawn(owned)
     spawnOptions.signal?.addEventListener('abort', () => void owned.terminate().catch(() => {}), { once: true })
     return toSpawnedProcess(owned)
   }
