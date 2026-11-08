@@ -489,10 +489,17 @@ export interface TeamTaskDetail {
   acknowledgements?: TaskAcknowledgement[]
   /** Results, outstanding first, then superseded ones newest first (task-results-handoffs D8). */
   results?: TaskResult[]
+  /** The findings ledger, derived now (review-findings-ledger D10): every row for the human's view; the agent's newest 100. */
+  findingsLedger?: LedgerRow[]
 }
 
 /** The agent's bounded detail (bounded-log-reads-and-task-get D4): journal, subtask, and message windows, oldest first, with their bounds; other sections whole. */
-export interface AgentTaskDetail extends Omit<TeamTaskDetail, 'journal'> { journal: TaskJournalPreview[]; bounds: AgentTaskBounds }
+export interface AgentTaskDetail extends Omit<TeamTaskDetail, 'journal'> {
+  journal: TaskJournalPreview[]
+  bounds: AgentTaskBounds
+  /** review-findings-ledger D10: whether ledger rows older than the newest 100 were left out. */
+  ledgerOlderRemaining?: boolean
+}
 export interface AgentTaskBounds { journal: { total: number; returned: number; olderRemaining: boolean; nextBefore: string | null }; subtasks: TaskListBound; messages: TaskListBound }
 export interface TaskListBound { total: number; returned: number; truncated: boolean }
 /** A journal entry's preview (D4): at most 2,000 stored bytes; `text` is null when they are not valid UTF-8, and `resumeOffsetBytes` is then 0. */
@@ -552,6 +559,8 @@ export interface ChatPeerTaskContext {
    * their old bytes.
    */
   contract?: { identity: string; contract: ImplementationContract | null }
+  /** The ledger's blocking and disputed ids (review-findings-ledger D10); absent while the task has no structured findings. */
+  findings?: { blocking: string[]; disputed: string[] }
 }
 
 /** An assignment's addressee: a group (its role) or one named session. */

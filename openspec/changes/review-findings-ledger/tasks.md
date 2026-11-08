@@ -135,7 +135,7 @@ covers a spec scenario carries its `// @covers:` annotation.
 
 ## 6. Reads and client
 
-- [ ] 6.1 Add the ledger to `task_get` (bounded to 100 rows), the
+- [x] 6.1 Add the ledger to `task_get` (bounded to 100 rows), the
   per-submission items, and the task header's findings line (D10). Verify:
   the "The ledger shows a finding's history" and "Text-only findings stay
   readable" scenarios pass, and the task_get bounds test covers

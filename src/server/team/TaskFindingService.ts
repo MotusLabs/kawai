@@ -53,7 +53,7 @@ export class TaskFindingService {
 
   /** The task's ledger, derived now (I2). */
   ledger(taskId: string): LedgerRow[] {
-    return foldLedger(this.store.findings.countedSubmissions(taskId), this.store.findings.events(taskId))
+    return this.store.ledger(taskId)
   }
 
   /** The effective verdict of one findings row (D5): stored for text rows, derived from the ledger for structured ones. */

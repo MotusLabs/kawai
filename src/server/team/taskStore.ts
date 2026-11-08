@@ -37,6 +37,7 @@ import { TaskListWindow } from './taskListWindow'
 import type { ImplementationContract } from '../../shared/implementationContract'
 import { contractColumns, contractFields, nextContract } from './taskContractRows'
 import { FindingStore } from './findingStore'
+import { foldLedger, type LedgerRow } from '../../shared/findingsLedger'
 
 const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS team_tasks (
@@ -268,7 +269,13 @@ export class TaskStore {
         checks: this.checks.viewForResult(result.id),
         reviewerMaps: this.results.reviewerMapsOf(result.id, rawCoverage(result.coverage)),
       })),
+      findingsLedger: this.ledger(id),
     }
+  }
+
+  /** The task's findings ledger, folded now (review-findings-ledger I2): the one derivation every reader uses. */
+  ledger(taskId: string): LedgerRow[] {
+    return foldLedger(this.findings.countedSubmissions(taskId), this.findings.events(taskId))
   }
 
   /** Every assignment of a task, oldest first; empty without an assignment store. */

@@ -6,7 +6,7 @@
 // today's text for a round decided on a text row before the upgrade.
 // `reviewAsk` is the review handoff's findings block: the contract
 // identity, the open findings to dispose of, and the structured form.
-import { blocking, foldLedger, type LedgerRow } from '../../../shared/findingsLedger'
+import { blocking, type LedgerRow } from '../../../shared/findingsLedger'
 import type { TaskStore } from '../../team/taskStore'
 
 export interface FixFindings {
@@ -22,7 +22,7 @@ export interface FixFindings {
 const SETTLED = new Set(['resolved', 'rejected', 'superseded'])
 
 export function ledgerOf(store: TaskStore, taskId: string): LedgerRow[] {
-  return foldLedger(store.findings.countedSubmissions(taskId), store.findings.events(taskId))
+  return store.ledger(taskId)
 }
 
 /** D7's shared builder: the fold now, plus the text of a text row the round names. */
