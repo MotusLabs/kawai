@@ -125,13 +125,16 @@ covers a spec scenario carries its `// @covers:` annotation.
   pass. Mutants to kill:
   - alerting on an unsupported P0;
   - sending twice on a replayed tick.
-- [ ] 5.5 Add properties P1, P3, and P4 (seed `0xF1ED6E5`, 300 cases)
+- [x] 5.5 Add properties P1, P3, and P4 (seed `0xF1ED6E5`, 300 cases)
   over seeded command sequences through the production services and the
   executor, with a crash at each transaction boundary. Verify: P1, P3, and
   P4 pass. Mutants to kill:
   - one reader re-deriving the state (P1);
   - a decision hook without its replay key (P3);
   - `upheld` restoring a non-blocking state (P4).
+  Done as 300 service-level sequences plus a 24-case executor sample
+  (one execution per case); see the two `*Properties.integration.test.ts`
+  headers.
 
 ## 6. Reads and client
 
