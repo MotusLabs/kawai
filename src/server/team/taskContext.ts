@@ -10,8 +10,13 @@
 // change (durable-plans D9) adds `plan` with the plan's approved revision at
 // delivery; a task a running execution owns adds `execution` with the
 // revision it runs (plan-execution D7), which may differ from the approved
-// one; an unowned task's context keeps exactly the old shape.
+// one; an unowned task's context keeps exactly the old shape. Every new
+// context carries the current revision's identity and contract
+// (implementation-contract D7): the header shows the identity and the
+// rendered clauses and globs, or says the task has no contract; a context
+// recorded before contracts has neither and formats as it did.
 import type { ChatPeerTaskContext } from '../../shared/teamTasks'
+import { renderContract } from '../../shared/implementationContract'
 import type { PlanStore } from '../plans/planStore'
 import { NULL_OWNERSHIP, type ExecutionOwnership } from '../plans/execution/executionOwnership'
 import type { TaskStore } from './taskStore'
@@ -41,7 +46,16 @@ export function buildTaskContext(store: TaskStore, taskId: string | null, plans?
     })),
     ...(plan && task.planChange ? { plan: { id: plan.id, title: plan.title, revision: plan.currentApprovedRevision, change: task.planChange } } : {}),
     ...(owned ? { execution: { id: owned.executionId, revision: owned.revision } } : {}),
+    ...(task.identity ? { contract: { identity: task.identity, contract: task.contract ?? null } } : {}),
   }
+}
+
+/** The header's contract lines: the identity, then the clauses and globs under their part headings. */
+function contractLines(context: NonNullable<ChatPeerTaskContext['contract']>): string[] {
+  if (!context.contract) return [`Contract: none — revision identity ${context.identity}; this task has no implementation contract.`]
+  // The rendered section without its `## Implementation contract` heading and blank line.
+  const parts = renderContract(context.contract).trimEnd().split('\n').slice(2)
+  return [`Implementation contract ${context.identity} (cite clauses as ${context.identity} › <id>):`, ...parts]
 }
 
 export type TaskHeaderVersion = 1 | 2
@@ -71,6 +85,7 @@ export function formatTaskHeader(task: ChatPeerTaskContext, version: TaskHeaderV
     'Direction:',
     task.direction,
     ...(task.acceptance ? ['Acceptance criteria:', task.acceptance] : []),
+    ...(task.contract ? contractLines(task.contract) : []),
     ...(task.journal.length > 0
       ? [JOURNAL_LINES[version], ...task.journal.map(entry => `- ${entry.createdAt} ${entry.author}: ${entry.text}`)]
       : []),

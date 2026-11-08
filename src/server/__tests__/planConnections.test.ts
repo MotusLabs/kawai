@@ -14,7 +14,7 @@ import { TaskService } from '../team/TaskService'
 import { TeamScopes } from '../team/teamScope'
 import type { SessionTeams } from '../team/sessionTeams'
 import type { ClientMessage, ServerMessage } from '../../shared/types'
-import { createPlanWorld, writeGroup, type PlanWorld } from './planHarness'
+import { createPlanWorld, writeContractDesign, writeGroup, type PlanWorld } from './planHarness'
 import { createImpactBench, type ImpactBench } from './impactHarness'
 import { composePlanServices } from '../plans/planComposition'
 import type { OpenspecAdapter } from '../plans/validation/openspecAdapter'
@@ -34,6 +34,7 @@ beforeAll(async () => {
   for (const change of ['api', 'ui']) {
     fs.mkdirSync(path.join(world.repo, 'openspec', 'changes', change, 'specs', 'chat'), { recursive: true })
     fs.writeFileSync(path.join(world.repo, 'openspec', 'changes', change, 'proposal.md'), `# ${change}\n`)
+    writeContractDesign(world.repo, change)
   }
   // The fixture plan's review group, so groups-known passes.
   writeGroup(world, 'reviewers', 'Review.')

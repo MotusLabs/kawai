@@ -1,6 +1,7 @@
 // SDK-free team task records (team-tasks design D1) shared by server and
 // client views. A task's direction and acceptance criteria live in numbered,
 // immutable revisions; `TeamTask` carries the latest one inline.
+import type { ImplementationContract } from './implementationContract'
 import type { ActingParty, TeamActor, TeamMessage } from './team'
 import type { CitationOutcome, CoverageMap, MapComparison, ReviewerCoverageMap, WithheldCoverage } from './coverageMaps'
 
@@ -51,6 +52,12 @@ export interface TeamTask {
   revision: number
   direction: string
   acceptance: string | null
+  /** The current revision's contract (implementation-contract D3); null without one. Always set by the store. */
+  contract?: ImplementationContract | null
+  /** That contract's sha256; null without one. */
+  contractHash?: string | null
+  /** `r<N>#<hash12>`: the contract's identity, else the revision's text identity (D2). */
+  identity?: string
   createdAt: string
   updatedAt: string
 }
@@ -66,6 +73,11 @@ export interface TaskRevision {
   rationale?: string | null
   /** Published with notices; null for rows published before notifications existed. */
   notify?: boolean | null
+  /** The revision's contract (implementation-contract D3); null without one. Always set by the store. */
+  contract?: ImplementationContract | null
+  contractHash?: string | null
+  /** `r<N>#<hash12>`: the contract's identity, else the revision's text identity (D2). */
+  identity?: string
 }
 
 /**
@@ -80,6 +92,8 @@ export interface TaskDraft {
   direction: string
   acceptance: string | null
   rationale: string | null
+  /** The draft's raw contract text, possibly unparsed (D3); null = the base revision's contract, unedited. */
+  contractText?: string | null
   updatedAt: string
 }
 
@@ -254,6 +268,24 @@ export interface TaskTestClaim {
 /** The status of one checked fact (independent-verification D2). */
 export type ResultFactStatus = 'pass' | 'warn' | 'fail' | 'unknown'
 
+/**
+ * The scope fact (implementation-contract D6): changed paths outside the
+ * scope of the pinned revision's contract. `warn` lists them; `no-contract`
+ * when that revision has none. Informational only: it never gates.
+ */
+export interface ResultScopeFact {
+  status: ResultFactStatus | 'no-contract'
+  /** Null when the fact could not judge (no contract, unknown). */
+  withinScope: boolean | null
+  /** The first paths outside scope, at most 20. */
+  outside: string[]
+  /** How many more paths are outside scope past the cap. */
+  more: number
+  /** The pinned revision's identity the paths were judged against. */
+  contractIdentity: string | null
+  note: string | null
+}
+
 /** How a result's commit relates to its worktree's HEAD (D2). */
 export type ResultHeadRelation = 'same' | 'ahead' | 'behind' | 'diverged'
 
@@ -329,6 +361,8 @@ export interface ResultCheckFacts {
     skipped: number
     status: ResultFactStatus
   }
+  /** Absent on facts written before contracts: readers show "not checked" (implementation-contract D6). */
+  scope?: ResultScopeFact
   /**
    * How the check resolved the result's coverage citations (independent-
    * verification D5): per clause, per citation, in the stored map's order —
@@ -496,6 +530,12 @@ export interface ChatPeerTaskContext {
   plan?: { id: string; title: string; revision: number | null; change: string }
   /** The running execution that owns the task, with the revision it runs (plan-execution D7); absent for an unowned task. */
   execution?: { id: string; revision: number }
+  /**
+   * The current revision's identity and contract (implementation-contract
+   * D7); absent from contexts recorded before contracts, whose headers keep
+   * their old bytes.
+   */
+  contract?: { identity: string; contract: ImplementationContract | null }
 }
 
 /** An assignment's addressee: a group (its role) or one named session. */

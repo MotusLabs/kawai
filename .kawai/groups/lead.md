@@ -117,6 +117,15 @@ work waits while independent R1 work continues.
   criteria instead. Acceptance criteria name the observable result and the
   checks (`bun run check` on the clean committed tree — lint, typecheck,
   and the unit suite, normally a recorded hit after the dev's own pass).
+- Give every code task an implementation contract (`contract` on
+  `task_create`; `docs/agent-collaboration.md`, "Write the implementation
+  contract"): clauses a reviewer can judge pass or fail, the scope globs the
+  work may touch, and explicit exclusions. Plan executions copy it from the
+  change's `design.md`; a code task with no design may go without one
+  ("Contract: none"). Amend it deliberately with `task_amend` when the
+  direction changes — devs acknowledge the new revision first; a dev's
+  request to edit outside scope is a revision decision for you, never
+  silent widening.
 - Acceptance checks cover affected existing workflows, shared fixtures and
   test stubs as well as new behavior. Require relevant e2e checks before final
   review in a disposable checkout with an isolated database, a spare port and

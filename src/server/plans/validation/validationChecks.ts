@@ -14,6 +14,7 @@ import type { ImpactGate } from '../../../shared/strategyImpact'
 import type { Finding, ValidationCapacityEvidence, ValidationChangeStatus, ValidationEvidence, ValidationRow } from '../../../shared/planValidation'
 import { deriveRelations, findingKey, overlapKey, relationFindings, type SpecTouch } from '../../../shared/planValidation'
 import type { AdapterProbe, ShowDeltasOutcome, ValidateOutcome } from './openspecAdapter'
+import { contractCheck } from './contractCheck'
 
 /** Where a change resolved (D3): its status, directory, root, and that root's `HEAD`. */
 export interface ResolvedChange {
@@ -34,6 +35,8 @@ export interface ValidationCheckContext {
   resolved: Readonly<Record<string, ResolvedChange>>
   /** CLI outcomes for the registered changes, from the file phase. */
   cli: Readonly<Record<string, { validate: ValidateOutcome; deltas: ShowDeltasOutcome }>>
+  /** Each registered change's design.md text, null when it has none (implementation-contract D5). */
+  designs: Readonly<Record<string, string | null>>
   /** The revision's impact gate (C-I1) — for a dry run, the gate of the pin submission would take. */
   gate: ImpactGate
   /** Other open plans' ids claiming this plan's branch and changes (D2). */
@@ -149,6 +152,7 @@ export const VALIDATION_CHECKS: readonly ValidationCheck[] = [
       })
     },
   },
+  contractCheck,
   {
     name: 'relations',
     row: 'scope',

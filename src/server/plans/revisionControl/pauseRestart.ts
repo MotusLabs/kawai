@@ -31,6 +31,7 @@ import type { PauseServiceDeps } from './pauseService'
 import type { PauseStore } from './pauseStore'
 import type { CheckpointStore } from './checkpointStore'
 import { recordResolution, supersedeHeldAssignment, type AdaptHeadFacts, type ResolveInput, ResolveRefusal } from './pauseResolve'
+import { instructionContract } from '../execution/instructions'
 
 /**
  * The production wiring of R2's release seams (planComposition): the team's
@@ -191,7 +192,7 @@ function restartAttempt(deps: PauseServiceDeps, caller: PlanCaller & { kind: 'hu
       dispatchRestartedAttemptWithin({
         team: caller.team, execution, changeRow: afterRow, entry, content,
         planTitle: deps.plans.get(pause.planId)?.title ?? pause.planId,
-        taskId: task.id, kind, attempt: { id: attempt.id, number: attempt.number, manifestHash },
+        taskId: task.id, contract: instructionContract(deps.tasks!.store.get(task.id)), kind, attempt: { id: attempt.id, number: attempt.number, manifestHash },
         manifest, startCommit, checkpoint: contained,
         executions: deps.executions, assignments: deps.assignmentService!,
       })

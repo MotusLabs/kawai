@@ -220,6 +220,29 @@ test('a conflicting base fact reads fail with its files; pending and unavailable
   expect(textOf(one('result-check-unavailable'))).toContain('did not answer')
 })
 
+// The scope fact (implementation-contract D6, task 6.2): within scope, the
+// paths outside it with the count, no contract, or not checked for facts
+// stored before contracts — an absent fact never reads as within scope.
+test('the scope fact reads within scope, the outside paths with the count, no contract, or not checked', async () => {
+  const withScope = (scope: ResultCheckFacts['scope']) =>
+    mount(detail({ results: [result('r1', { checks: { newest: doneCheck({ facts: { ...checkFacts(), ...(scope ? { scope } : {}) } }), earlier: 0 } })] }))
+  const scopeText = () => textOf(one('result-check-scope'))
+  const fact = { withinScope: true, outside: [], more: 0, contractIdentity: 'r2#0123456789ab', note: null }
+  await withScope({ ...fact, status: 'pass' })
+  expect(one('result-check-scope').props['data-scope']).toBe('pass')
+  expect(scopeText()).toBe('Contract scope (r2#0123456789ab): pass — within scope')
+  await withScope({ ...fact, status: 'warn', withinScope: false, outside: ['src/client/App.tsx', 'notes/a.md'], more: 5 })
+  expect(scopeText()).toBe('Contract scope (r2#0123456789ab): warn — outside scope: src/client/App.tsx, notes/a.md (+5 more)')
+  await withScope({ ...fact, status: 'no-contract', withinScope: null })
+  expect(scopeText()).toBe('Contract scope: no contract')
+  await withScope(undefined)
+  expect(one('result-check-scope').props['data-scope']).toBe('not-checked')
+  expect(scopeText()).toBe('Contract scope: not checked')
+  expect(scopeText()).not.toContain('within scope')
+  await withScope({ ...fact, status: 'unknown', withinScope: null, note: 'refs/remotes/origin/HEAD is unset; git remote set-head origin --auto fixes it' })
+  expect(scopeText()).toContain('unknown — refs/remotes/origin/HEAD is unset')
+})
+
 test('Recheck sends team-task-recheck for the result and disables while disconnected; unchecked results say Not checked yet', async () => {
   await mount(detail({ results: [result('r1', { checks: { newest: null, earlier: 0 } })] }))
   expect(textOf(one('result-check'))).toContain('Checked by Kawai')

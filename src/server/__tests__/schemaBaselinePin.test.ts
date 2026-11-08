@@ -529,6 +529,12 @@ test('a fresh database opened by this build has the same shape plus each migrati
   const withProfiles = { ...messages, columns: [...messages.columns, optional('allowed_profiles'), optional('worker_choice')] }
   const assignments = expected.tables.team_task_assignments!
   const withChoice = { ...assignments, columns: [...assignments.columns, optional('worker_choice')] }
+  // Migration 23's: a revision's contract and hash, and a draft's raw
+  // contract text (implementation-contract D3), all nullable.
+  const revisions = expected.tables.team_task_revisions!
+  const withContract = { ...revisions, columns: [...revisions.columns, optional('contract'), optional('contract_hash')] }
+  const drafts = expected.tables.team_task_drafts!
+  const withContractText = { ...drafts, columns: [...drafts.columns, optional('contract_text')] }
   // Migration 10's delta: the chat_sessions exhaustion flags; migration 11's
   // the process-observations tables (in `added` above); migration 12's: limit
   // events record their provider and window (providers-and-workers D7), both
@@ -555,7 +561,7 @@ test('a fresh database opened by this build has the same shape plus each migrati
     indexes: [{ name: 'profile_limit_events_at', unique: 0, columns: ['at'] }, ...limitEvents.indexes],
   }
   expect(schemaShape(session.db)).toEqual({
-    tables: { ...expected.tables, ...added, team_messages: withProfiles, team_task_assignments: withChoice, chat_sessions: withFlag, profile_limit_events: withLimitContext, team_task_results: withCoverage },
+    tables: { ...expected.tables, ...added, team_messages: withProfiles, team_task_assignments: withChoice, chat_sessions: withFlag, profile_limit_events: withLimitContext, team_task_results: withCoverage, team_task_revisions: withContract, team_task_drafts: withContractText },
   })
   const extra = session.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'").get()
   expect(extra).toEqual({ name: 'schema_migrations' })

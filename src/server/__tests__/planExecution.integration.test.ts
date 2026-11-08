@@ -22,6 +22,7 @@ import { taskHandlers } from '../team/taskTools'
 import { cleanGitEnv } from '../git/gitCommand'
 import { planInput } from '../../shared/__tests__/planFixtures'
 import { benchGhStub, benchOpenspecStub } from './planExecutionBenchStubs'
+import { writeContractDesign } from './planHarness'
 
 const FLOOR = { lint: ['ci'], typecheck: ['ci'], 'unit-tests': ['ci'], 'ci-e2e': ['e2e'] }
 const GITHUB_URL = 'https://github.com/acme/app.git'
@@ -75,6 +76,7 @@ beforeAll(async () => {
   for (const change of CHANGES) {
     fs.mkdirSync(path.join(repo, 'openspec', 'changes', change), { recursive: true })
     fs.writeFileSync(path.join(repo, 'openspec', 'changes', change, 'proposal.md'), `# ${change}\n`)
+    writeContractDesign(repo, change)
   }
   commitAll(repo, 'changes')
   git(['init', '-q', '--bare', '-b', 'master', origin])

@@ -5,6 +5,7 @@
 // can record it. Pure functions over their arguments — no SQL, no state.
 import type { TeamTask, TaskRevision } from '../../shared/teamTasks'
 import type { CreateTaskInput, PublishInput } from './taskStore'
+import { contractColumns } from './taskContractRows'
 
 /**
  * Which normalized create field differs between a stored task and a replayed
@@ -21,6 +22,7 @@ export function createPayloadDiff(existing: TeamTask, firstRevision: TaskRevisio
   if ((existing.openspecChange ?? null) !== (input.openspecChange ?? null)) return 'OpenSpec change'
   if ((existing.planId ?? null) !== (input.planId ?? null)) return 'plan'
   if ((existing.planChange ?? null) !== (input.planChange ?? null)) return 'plan change'
+  if ((firstRevision?.contractHash ?? null) !== contractColumns(input.contract ?? null).contract_hash) return 'contract'
   return null
 }
 
@@ -33,6 +35,7 @@ export function publishPayloadDiff(revision: TaskRevision, input: PublishInput):
   if (input.direction !== undefined && input.direction !== revision.direction) return 'direction'
   if (input.acceptance !== undefined && input.acceptance !== revision.acceptance) return 'acceptance'
   if ((input.rationale ?? null) !== (revision.rationale ?? null)) return 'rationale'
+  if (input.contract !== undefined && contractColumns(input.contract).contract_hash !== (revision.contractHash ?? null)) return 'contract'
   if (input.notify !== (revision.notify === true)) return 'notify'
   if (input.baseRevision !== undefined && input.baseRevision !== revision.revision - 1) return 'base revision'
   return null

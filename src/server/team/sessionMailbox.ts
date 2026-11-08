@@ -27,6 +27,7 @@ import { AssignmentStore } from './assignmentStore'
 import { AssignmentService } from './AssignmentService'
 import { TaskResultService } from './TaskResultService'
 import { ResultCheckService } from '../verification/resultCheckService'
+import { pinnedScope } from '../verification/scopeFact'
 import { rawCoverage } from '../../shared/coverageMaps'
 import { buildTaskContext } from './taskContext'
 import { PlanStore } from '../plans/planStore'
@@ -235,6 +236,7 @@ export class SessionMailbox {
           const row = this.tasks.store.results.get(id)
           return row === null ? null : { commit: row.commit, worktree: row.worktree, coverage: rawCoverage(row.coverage) }
         },
+        scopeOf: id => pinnedScope(this.tasks.store, id),
         // A comparison reads only tasks still open for work; finished ones
         // are landed or abandoned and their branches are not in the way.
         openTasks: teamId => this.tasks.store.list(teamId)
