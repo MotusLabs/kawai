@@ -9,7 +9,7 @@ covers a spec scenario carries its `// @covers:` annotation.
 
 ## 1. Shared contract model
 
-- [ ] 1.1 Add `src/shared/implementationContract.ts`:
+- [x] 1.1 Add `src/shared/implementationContract.ts`:
   - `ImplementationContract` and `Clause` types;
   - `locateContractSection` (fence-aware);
   - `parseContract`, returning problems with line numbers, the limits, and
@@ -26,7 +26,7 @@ covers a spec scenario carries its `// @covers:` annotation.
   - stopping at the first problem (G19);
   - an off-by-one limit (G14);
   - not ending the section at the next `## ` (G18).
-- [ ] 1.2 Add properties P1–P3 (seed `0x1C0A7AC7`, 500 cases) with a seeded
+- [x] 1.2 Add properties P1–P3 (seed `0x1C0A7AC7`, 500 cases) with a seeded
   generator of valid contracts and formatting variants. Verify: P1–P3 pass.
   Mutants to kill:
   - hashing the raw text instead of the normal form (P1);

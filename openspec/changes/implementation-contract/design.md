@@ -68,8 +68,14 @@ the task form's textarea. `src/shared/implementationContract.ts` exports:
 - `locateContractSection(markdown)`, which finds the section inside a
   whole `design.md`;
 - `renderContract(contract)`;
-- `contractHash(contract)`;
-- `contractIdentity(revision, hash)` and `textIdentity(revision, direction, acceptance)`.
+- `contractHashInput(contract)` and `textIdentityInput(direction, acceptance)`,
+  the canonical sha256 inputs;
+- `revisionIdentity(revision, hash)` and `clauseIdentity(identity, id)`.
+
+The sha256 itself lives on the server, in `src/server/team/contractHash.ts`
+(`contractHash`, `textHash`, `identityOf`), like `planHash.ts`: shared
+modules stay free of `node:crypto`, and the client never needs a hash, only
+the identities the server sends.
 
 The parser is line-based and pure, with no Markdown library (no new
 dependency):
