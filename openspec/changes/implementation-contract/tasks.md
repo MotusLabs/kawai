@@ -167,7 +167,7 @@ covers a spec scenario carries its `// @covers:` annotation.
 
 ## 8. Integration
 
-- [ ] 8.1 Run `bun run check` on the clean committed tree (V1). Confirm
+- [x] 8.1 Run `bun run check` on the clean committed tree (V1). Confirm
   that every ADDED or MODIFIED scenario has an `@covers` annotation (V3),
   and that the result's map ties each oracle id G1–G20, C1–C7, E1–E5,
   V1–V5, S1–S10, and P1–P4 to a test title and a killed mutant (V2).
