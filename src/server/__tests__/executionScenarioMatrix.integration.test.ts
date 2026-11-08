@@ -57,6 +57,7 @@ describe('direction changed while implementing (12.1)', () => {
 })
 
 describe('the review and extra checks (12.5)', () => {
+  // @covers: plan-execution › The review follows green CI › The review names what to check
   test('the review names the result, commit, PR, acceptance rules, and only the checks to attest; the verdict labels each', async () => {
     const executionId = await startedExecution(h, [{ change: 'rv-n', acceptance: ['Rows render in order'], extraChecks: [bundleSize, a11y] }], { acceptanceRules: ['No new dependency'] })
     await h.tick()

@@ -221,6 +221,7 @@ describe('review-p0 alerts (D10)', () => {
     expect(again).toBe(0)
     expect(leadMail()).toHaveLength(1)
   })
+  // @covers: plan-execution › An accepted P0 alerts the Lead role › An unsupported P0 does not alert
   test('an unsupported P0 (no evidence) sends no alert', async () => {
     const executionId = await startedExecution(h, [{ change: 'p0-bare' }], { roles: LEAD_ROLES.roles as never, leadGroup: 'leads' })
     await h.tick()
@@ -229,6 +230,7 @@ describe('review-p0 alerts (D10)', () => {
     await structured(executionId, 'p0-bare', [p0(executionId, 'p0-bare', { evidence: null }), finding(executionId, 'p0-bare', 'src/a.ts')])
     await h.tick()
     expect(newestRound(executionId, 'p0-bare').outcome).toBe('fail')
+    expect(ledger(executionId, 'p0-bare').map(entry => [entry.id, entry.level, entry.state])).toEqual([['F1', 'P0', 'unsupported'], ['F2', 'P1', 'accepted']])
     expect(leadMail()).toHaveLength(0)
   })
   test('without a Lead role the alert is a plan event the owner sees', async () => {
