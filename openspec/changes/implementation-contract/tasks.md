@@ -156,7 +156,7 @@ covers a spec scenario carries its `// @covers:` annotation.
   Verify: `openspec instructions design --change <any> --json` shows the
   new rule, and the section's example contract parses with
   `parseContract` (a test that reads the doc declares it with `@reads`).
-- [ ] 7.2 Update `.kawai/groups/lead.md`, `change-leads.md`, the dev role
+- [x] 7.2 Update `.kawai/groups/lead.md`, `change-leads.md`, the dev role
   files, and `reviewers.md` (plus `reviewers-glm.md` if it is committed by
   then) per D8, building on the human's committed edits and never
   overwriting uncommitted ones. Verify:

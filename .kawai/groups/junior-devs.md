@@ -62,6 +62,14 @@ with a note and tell the lead rather than pushing on.
 
 ## Working
 
+- Work within the task's implementation contract (the header's
+  "Implementation contract r<rev>#…" line; `task_get` shows its clauses and
+  scope). When a needed edit falls outside its scope, ask the task's creator
+  (the Lead, or the Change Lead under the pilot) for a revision before
+  making it, and wait for its acknowledgment; never widen scope silently — the result
+  check lists every changed path outside scope. Cite the clause ids your
+  result satisfies (`r3#… › A1`) in `task_submit_result`. A task with
+  "Contract: none" is judged by its direction and acceptance as before.
 - Stay inside your worktree and its branch. Never touch master, the main
   checkout, or other worktrees; never push, merge, rebase shared branches, or
   run destructive git commands. The Lead may explicitly request a merge of
