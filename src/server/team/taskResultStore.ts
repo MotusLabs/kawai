@@ -13,7 +13,8 @@ import type { ActingParty } from '../../shared/team'
 import { actorFromRow, partyFromRow } from './actorRow'
 import type { Database } from 'bun:sqlite'
 import { compareCoverageMaps, validateCoverageMap, type CoverageMap, type ReviewerCoverageMap } from '../../shared/coverageMaps'
-import type { TaskActor, TaskFindings, TaskResult, TaskTestClaim } from '../../shared/teamTasks'
+import type { LedgerItem, TaskActor, TaskFindings, TaskResult, TaskTestClaim } from '../../shared/teamTasks'
+import { mapItem } from './findingStore'
 
 export interface ResultInsert {
   teamId: string
@@ -148,7 +149,19 @@ export class TaskResultStore {
       findings: String(row.findings),
       author: actorOf(row.author_kind, row.author_session),
       createdAt: String(row.created_at),
+      // review-findings-ledger D3: absent columns (a database before migration 24) read as a text row.
+      structured: Number(row.structured ?? 0) === 1,
+      counted: Number(row.counted ?? 0) === 1 && row.replaced_by === null,
+      contractIdentity: text(row.contract_identity),
+      ledgerSeq: row.ledger_seq === null || row.ledger_seq === undefined ? null : Number(row.ledger_seq),
+      replacedBy: text(row.replaced_by),
+      items: Number(row.structured ?? 0) === 1 ? this.itemsOf(String(row.id)) : [],
     }))
+  }
+
+  private itemsOf(submissionId: string): LedgerItem[] {
+    return (this.db.prepare('SELECT * FROM team_task_finding_items WHERE submission_id = ? ORDER BY position')
+      .all(submissionId) as Record<string, unknown>[]).map(mapItem)
   }
 
   private outstandingId(taskId: string): string | null {

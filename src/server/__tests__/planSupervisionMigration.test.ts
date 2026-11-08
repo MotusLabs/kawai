@@ -56,6 +56,8 @@ test('a fresh database, opened twice, gains the four tables once', () => {
   expect(recorded.map(row => row.version)).toEqual(recorded.map((_, index) => index + 1))
 })
 
+const FINDING_TABLES = ['team_task_finding_cards', 'team_task_finding_events', 'team_task_finding_items']
+
 test('a database at version 15 with plan rows upgrades, twice, keeping every row', () => {
   const at15 = initDatabase({ path: dbPath, migrations: UP_TO_15 })
   at15.db.prepare(`INSERT INTO plan_change_landings (plan_id, change, execution_id, team_id, mechanism, head_sha, base_sha, merge_sha, landed_at, tree_verified)
@@ -75,9 +77,9 @@ test('a database at version 15 with plan rows upgrades, twice, keeping every row
     if (table !== 'process_observation_teams') expect(after[table]).toEqual(rows)
   }
   // Later migrations (17 revision-control, 19 plan-workspace, 20 result-checks,
-  // 22 team-approval-defaults) also land in this upgrade.
+  // 22 team-approval-defaults, 24 review-findings) also land in this upgrade.
   expect(Object.keys(after).filter(table => !(table in before)).sort())
-    .toEqual([...SUPERVISION_TABLES, ...REVISION_CONTROL_TABLES, ...PLAN_WORKSPACE_TABLES, ...VERIFICATION_TABLES, 'team_approval_defaults'].sort())
+    .toEqual([...SUPERVISION_TABLES, ...REVISION_CONTROL_TABLES, ...PLAN_WORKSPACE_TABLES, ...VERIFICATION_TABLES, 'team_approval_defaults', ...FINDING_TABLES].sort())
   expect(versions(dbPath).filter(row => row.version === 16)).toHaveLength(1)
 })
 

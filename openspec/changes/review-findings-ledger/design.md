@@ -103,6 +103,7 @@ The next free numbered migration (coordinate with in-flight migrations, as
 `lead.md` requires) adds:
 
 - `team_task_findings.structured INTEGER NOT NULL DEFAULT 0`,
+  `counted INTEGER NOT NULL DEFAULT 0` (D5's test, fixed at submission),
   `contract_identity TEXT`, `ledger_seq INTEGER`, `replaced_by TEXT`. A
   structured row's `findings` text holds the reviewer's optional notes, or
   a rendered summary (`3 findings: F1 accepted P1 …`). `verdict` holds the
@@ -122,7 +123,8 @@ The next free numbered migration (coordinate with in-flight migrations, as
   - `dispute:<submissionId>:<findingId>:<n>` for a dispute.
 - `team_task_finding_cards`: `(card_id PK, task_id, finding_id,
   dispute_event_id UNIQUE)`.
-- `plan_execution_rounds.regate_of TEXT UNIQUE` (D8).
+- `plan_execution_rounds.regate_of TEXT` with a partial unique index (D8;
+  SQLite cannot add a UNIQUE column).
 
 `ledger_seq` is allocated per task as `max+1` across both tables, inside
 the writing `BEGIN IMMEDIATE` transaction. Finding ids are allocated the

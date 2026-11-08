@@ -34,7 +34,7 @@ covers a spec scenario carries its `// @covers:` annotation.
 
 ## 2. Storage and submission
 
-- [ ] 2.1 Add the numbered migration (D3): the four `team_task_findings`
+- [x] 2.1 Add the numbered migration (D3): the four `team_task_findings`
   columns, the items, events, and cards tables, and
   `plan_execution_rounds.regate_of`. Test that migrating a database with
   old text rows keeps them byte-identical and reads them as unstructured.

@@ -2,6 +2,7 @@
 // client views. A task's direction and acceptance criteria live in numbered,
 // immutable revisions; `TeamTask` carries the latest one inline.
 import type { ImplementationContract } from './implementationContract'
+import type { LedgerItem, LedgerRow } from './findingsLedger'
 import type { ActingParty, TeamActor, TeamMessage } from './team'
 import type { CitationOutcome, CoverageMap, MapComparison, ReviewerCoverageMap, WithheldCoverage } from './coverageMaps'
 
@@ -398,6 +399,9 @@ export interface TaskResultChecks {
 }
 
 /** Review or QA findings, bound to the exact result examined (D4). */
+/** review-findings-ledger D3: one structured item, and one ledger row. */
+export type { LedgerItem, LedgerRow }
+
 export interface TaskFindings {
   id: string
   taskId: string
@@ -405,10 +409,22 @@ export interface TaskFindings {
   /** The handoff the findings answer, when there was one. */
   handoffId: string | null
   kind: 'review' | 'qa'
+  /** The verdict at submission: given for a text row, derived for a structured one (review-findings-ledger D5). */
   verdict: 'pass' | 'fail'
+  /** The reviewer's text: the whole finding for a text row, notes or a summary for a structured one. */
   findings: string
   author: TaskActor
   createdAt: string
+  /** review-findings-ledger D3: whether the row holds structured items; false for every row written before. */
+  structured: boolean
+  /** Whether the row counts for the ledger (D5); a replaced row no longer does. */
+  counted: boolean
+  contractIdentity: string | null
+  ledgerSeq: number | null
+  /** The counted submission on the same result that replaced this one. */
+  replacedBy: string | null
+  /** The structured items, in submission order; empty for a text row. */
+  items: LedgerItem[]
 }
 
 /**
