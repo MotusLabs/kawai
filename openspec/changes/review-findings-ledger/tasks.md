@@ -153,7 +153,7 @@ covers a spec scenario carries its `// @covers:` annotation.
 
 ## 7. Prompts and docs
 
-- [ ] 7.1 Update `reviewers*.md`, the dev role files, `lead.md`,
+- [x] 7.1 Update `reviewers*.md`, the dev role files, `lead.md`,
   `change-leads.md`, `docs/agent-collaboration.md` (the "Review protocol"
   section), `docs/oracle-hazards.md`, and the `docs/architecture/`
   team-tasks bullet (D11). Verify: the docs tests that read these files

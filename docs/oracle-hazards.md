@@ -3,7 +3,10 @@
 Hazards that acceptance oracles have caught or should have caught, organized
 by change class. Consult it while writing a design's "Acceptance oracles"
 subsection (docs/agent-collaboration.md, "Write acceptance as oracles"), and
-add an entry for every new blocking finding: the reviewer reports a defect
+add an entry for every new blocking finding. What blocks — the P0/P1/P2
+levels, the clause and evidence rules, dispositions, and disputes — is
+defined once in docs/agent-collaboration.md, "Review protocol"; this
+catalog never adds a blocking rule of its own. The reviewer reports a defect
 outside the tables as a proposed oracle amendment, the Lead decides, and the
 decision lands here. Each entry names the class, the hazard, the oracle row
 or property that would have caught it, and the source finding.

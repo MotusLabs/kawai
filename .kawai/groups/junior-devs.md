@@ -211,6 +211,12 @@ with a note and tell the lead rather than pushing on.
 - Report stalls and provider limits with errors, last progress, committed and
   uncommitted work, and next steps. Never start a second writer in the
   worktree.
+- Fix only the finding ids the fix instruction lists as blocking, minimally;
+  other findings in `task_get` (advisory, unsupported, out of contract) are
+  not required. Dispute a finding you can refute with `task_dispute_findings`
+  and counter-evidence (a test run, `file:line`, a counterexample) instead of
+  changing code for it; it waits for its decision (`docs/agent-collaboration.md`,
+  "Review protocol").
 - Read result-bound findings in full with `task_get`. If mail conflicts with
   the task revision or linked specs, ask the Lead to reconcile the direction
   before dependent work. Journal durable decisions and your next checkpoint.
