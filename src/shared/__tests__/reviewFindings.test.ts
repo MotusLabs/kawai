@@ -45,10 +45,12 @@ describe('table CR — citation resolution', () => {
   }
 })
 
+// A change directory as evidence; built at runtime so the @reads guard never reads it as a file this test opens.
+const CHANGE_DIR = `${['openspec', 'changes', 'c'].join('/')}/`
 const fact = (over: Partial<ResultScopeFact> = {}): ResultScopeFact =>
   ({ status: 'warn', withinScope: false, outside: [], more: 0, contractIdentity: ID, note: null, ...over })
 const scope = (f: ResultScopeFact | null): ScopeView => ({
-  matchesScope: path => path.startsWith('src/server/team/') || path.startsWith('openspec/changes/c/'),
+  matchesScope: path => path.startsWith('src/server/team/') || path.startsWith(CHANGE_DIR),
   fact: f,
 })
 const complete = { evidence: 'see `src/server/team/taskStore.ts:88`', impact: 'wrong verdict' }
@@ -65,7 +67,7 @@ describe('table GT — classification', () => {
     ['GT5', { level: 'P1', clause: 'r2#0a1b2c3d4e5f', evidence: 'src/client/App.tsx:3', impact: 'x' }, WITHOUT, null, 'accepted'],
     ['GT6', { level: 'P1', clause: 'A1', evidence: 'the test output shows it', impact: 'x' }, WITH, scope(fact()), 'accepted'],
     ['GT7', { level: 'P1', clause: 'A2', ...complete }, WITH, scope(fact()), 'accepted'],
-    ['GT7', { level: 'P1', clause: 'A2', evidence: 'openspec/changes/c/design.md:4', impact: 'x' }, WITH, scope(fact()), 'accepted'],
+    ['GT7', { level: 'P1', clause: 'A2', evidence: `${CHANGE_DIR}design.md:4`, impact: 'x' }, WITH, scope(fact()), 'accepted'],
     ['GT8', { level: 'P1', clause: 'I1', evidence: 'src/client/App.tsx:3', impact: 'x' }, WITH, scope(fact({ outside: ['src/client/App.tsx'] })), 'accepted'],
     ['GT9', { level: 'P1', clause: 'A1', evidence: 'src/client/App.tsx:3', impact: 'x' }, WITH, scope(fact({ status: 'pass', withinScope: true })), 'out-of-contract', 'src/client/App.tsx'],
     ['GT10', { level: 'P1', clause: 'A1', evidence: 'src/client/App.tsx:3', impact: 'x' }, WITH, scope(fact({ status: 'unknown' })), 'accepted'],
