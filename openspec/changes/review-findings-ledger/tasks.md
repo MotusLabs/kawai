@@ -95,7 +95,7 @@ covers a spec scenario carries its `// @covers:` annotation.
   fold's verdict. Verify: the "A rejected dispute clears fixes requested"
   scenario passes through `TaskService` reads and `teamTaskStage`. Mutant
   to kill: the summary reading the stored column.
-- [ ] 5.1 Make `decideVerdict` read `roundReview` from the fold. Refuse a
+- [x] 5.1 Make `decideVerdict` read `roundReview` from the fold. Refuse a
   text-only submission from the claimant on a plan task. Commit table RD
   through the executor tick. Verify: RD1–RD4 and the `plan-execution`
   scenarios for the review and the dispute hold pass. Mutants to kill:

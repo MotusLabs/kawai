@@ -262,7 +262,10 @@ identity, the blocking ids with their clauses, and the disposition rule.
 today; `pending-dispute` returns, leaving the round waiting; `pass` passes
 it. The executor already re-ticks on task writes (`onWrite`). Decision
 events call `onWrite`, so a waiting round re-decides when its last dispute
-is decided.
+is decided. While it waits, the change's supervision cause is the open
+dispute card, and its `decision-card` cause gains an optional `findingId`
+(read from `team_task_finding_cards`), rendered `Waiting on the dispute of
+F3 (decision card …, …)`.
 
 Re-gate is a new executor step, `regateRefuted`, keyed by
 `regate_of = <failed round id>`. Its guard needs every one of these:

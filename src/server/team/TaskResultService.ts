@@ -234,6 +234,11 @@ export class TaskResultService {
     const answers = handoff?.handoffKind && handoff.resultId === result.id && handoff.claimedBy === actor.sessionId
     const answersReview = !!answers && (handoff.handoffKind === 'review' || handoff.handoffKind === 'qa')
     const planTask = (task.planId ?? null) !== null
+    // review-findings-ledger D4 (spec plan-execution): the review handoff's
+    // claimant on a plan change's task answers with structured findings only.
+    if (!structured && planTask && answersReview) {
+      throw new Error('A plan change\'s review is submitted as structured findings: send items (each with level, clause, evidence, impact) and dispositions for the open findings, not text with a verdict. Nothing was written.')
+    }
     if (structured) {
       const outcome = this.findingsLedger.submit({
         teamId: team.teamId, task, result, author: actor, handoffId: answers ? handoff.id : null,

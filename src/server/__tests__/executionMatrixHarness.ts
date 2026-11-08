@@ -35,6 +35,7 @@ import type { CiCheck, MergeMethod } from '../../shared/planExecution'
 import type { PlanCheck } from '../../shared/plans'
 import { createPlanBench, createPlanWorld, writeGroup, type PlanBench, type PlanWorld } from './planHarness'
 import { neutralExecutorSeams } from './executorTestSeams'
+import { structuredReview } from './structuredReview'
 
 export const FLOOR = { lint: ['ci'], typecheck: ['ci'], 'unit-tests': ['ci'], 'ci-e2e': ['e2e'] }
 
@@ -324,7 +325,7 @@ export async function review(h: MatrixBench, executionId: string, change: string
   h.mail.claim(assignment.messageId!, reviewer)
   h.mail.markPushed(assignment.messageId!)
   h.mail.markDelivered(assignment.messageId!)
-  await h.results.submitFindings(h.bench.agent(reviewer), row.taskId!, { resultId: round.resultId, kind: 'review', verdict, findings })
+  await h.results.submitFindings(h.bench.agent(reviewer), row.taskId!, { resultId: round.resultId, kind: 'review', ...structuredReview(h.results, row.taskId!, verdict, findings) })
 }
 
 /** Provision, implement, push, CI, review pass — the change waits passed in gating. */

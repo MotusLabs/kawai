@@ -24,6 +24,7 @@ import type { AssignmentService } from '../../team/AssignmentService'
 import { dispatchFix, ensureFixAttempt } from './executionDispatch'
 import { refusable } from './stepRefusal'
 import type { EffectAdapter } from './effects'
+import { foldLedger, roundReview } from '../../../shared/findingsLedger'
 
 /** The gh/git surface the pipeline uses; injectable for tests. */
 export interface RoundAdapters {
@@ -403,15 +404,23 @@ async function decideVerdict(deps: RoundDeps, changeRow: { executionId: string; 
   const claimants = assignment?.claimedBy ? [assignment.claimedBy] : []
   const authors = deps.tasks.store.results.listByTask(change.taskId)
     .map(result => result.submittedBy.sessionId).filter((id): id is string => id !== null)
-  const findings = deps.tasks.store.results.findingsFor(round.resultId)
+  const rows = deps.tasks.store.results.findingsFor(round.resultId)
+  const findings = rows
     .map(row => ({ id: row.id, resultId: row.resultId, handoffId: row.handoffId, author: row.author.kind === 'agent' ? row.author.sessionId! : '', verdict: row.verdict, createdAt: row.createdAt }))
   const verdict = reviewVerdict(round, findings, claimants, authors)
   if (verdict.kind === 'pending') return
   if (verdict.kind === 'author-claimant') {
     return stopChange(deps, changeRow, 'review-unavailable', { message: `Session ${verdict.session} claimed the review of its own work.`, session: verdict.session })
   }
-  const counted = verdict.kind === 'pass' ? verdict.findingsId : verdict.kind === 'fail' ? verdict.findingsId : null
-  if (verdict.kind === 'fail') {
+  const counted = verdict.findingsId
+  // Table RD (review-findings-ledger D8): a structured review is judged by
+  // the ledger's fold now, so a dispute holds the round and its decision
+  // moves it; a text row (decided before the upgrade) keeps its verdict.
+  const outcome = rows.find(row => row.id === counted)?.structured
+    ? roundReview(foldLedger(deps.tasks.store.findings.countedSubmissions(change.taskId), deps.tasks.store.findings.events(change.taskId)))
+    : verdict.kind
+  if (outcome === 'pending-dispute') return
+  if (outcome === 'fail') {
     store.decideRound(round.id, 'fail', { verdictFindingsId: counted ?? undefined })
     return
   }

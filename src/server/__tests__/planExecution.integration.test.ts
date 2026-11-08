@@ -383,7 +383,7 @@ describe('the plan-execution manager bench', () => {
     await waitFor(() => manager.getSnapshot(reviewer)?.status === 'waiting', 'bench-k: reviewer idle')
     // The findings write alone wakes the executor (no tick, no timer): it lands.
     await taskHandlers(manager.tasks, reviewer, manager.results).task_submit_findings!({
-      task_id: taskId, result_id: resultId, kind: 'review', verdict: 'pass', findings: 'Looks right.',
+      task_id: taskId, result_id: resultId, kind: 'review', verdict: 'pass', items: [], findings: 'Looks right.',
     })
     await waitFor(() => changeRow(executionId, 'bench-k').state === 'landed', 'bench-k: landed', 20_000)
     const facts = executions().landings(planId)

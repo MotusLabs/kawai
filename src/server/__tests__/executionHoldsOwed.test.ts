@@ -30,6 +30,7 @@ import { HoldService } from '../plans/revisionControl/holdService'
 import { HoldStore } from '../plans/revisionControl/holdStore'
 import { createPlanBench, createPlanWorld, writeGroup, type PlanBench, type PlanWorld } from './planHarness'
 import { neutralExecutorSeams } from './executorTestSeams'
+import { structuredReview } from './structuredReview'
 
 let world: PlanWorld
 let bench: PlanBench
@@ -198,7 +199,7 @@ async function failReview(executionId: string, change: string, findings: string)
   mail.claim(review.messageId!, 'rev1')
   mail.markPushed(review.messageId!)
   mail.markDelivered(review.messageId!)
-  await results.submitFindings(bench.agent('rev1'), row.taskId!, { resultId: round.resultId, kind: 'review', verdict: 'fail', findings })
+  await results.submitFindings(bench.agent('rev1'), row.taskId!, { resultId: round.resultId, kind: 'review', ...structuredReview(results, row.taskId!, 'fail', findings) })
 }
 
 function placeHold(planId: string, changeNames: string[], commandId: string): { id: string } {

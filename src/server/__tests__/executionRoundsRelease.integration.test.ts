@@ -6,6 +6,7 @@
 // review on the next tick once it can be released. The return to the
 // implementer also releases ready reviewers, retrying refused archives and
 // rebuilding the cleanup from stored state after an executor restart.
+import { structuredReview } from './structuredReview'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import path from 'node:path'
 import type { ActiveHold } from '../../shared/planRevisionControl'
@@ -70,7 +71,7 @@ describe('a finished reviewer gives the worktree back', () => {
     return { executionId, change, round, released, holding, hold, archive, recording, createExecutor }
   }
   const fail = (change: { taskId: string | null }, round: { resultId: string }) =>
-    results.submitFindings(bench.agent('rev1'), change.taskId!, { resultId: round.resultId, kind: 'review', verdict: 'fail', findings: 'a real defect' })
+    results.submitFindings(bench.agent('rev1'), change.taskId!, { resultId: round.resultId, kind: 'review', ...structuredReview(results, change.taskId!, 'fail', 'a real defect') })
 
   // @covers: plan-execution › A worktree-scoped review group gets the worktree › A finished reviewer gives the worktree back
   test('a failed review releases the reviewer once it is ready, and only the reviewer', async () => {

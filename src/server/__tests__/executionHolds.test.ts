@@ -31,6 +31,7 @@ import { HoldService } from '../plans/revisionControl/holdService'
 import { HoldStore } from '../plans/revisionControl/holdStore'
 import { createPlanBench, createPlanWorld, writeGroup, type PlanBench, type PlanWorld } from './planHarness'
 import { neutralExecutorSeams } from './executorTestSeams'
+import { structuredReview } from './structuredReview'
 
 let world: PlanWorld
 let bench: PlanBench
@@ -276,7 +277,7 @@ describe('the hold gate at the executor (revision-control 3.2)', () => {
     deliverToReviewer(review.messageId!, 'rev1')
     const hold = placeHold(planId, 'changes', ['hold-b'], 'hold-fix-1')
     await executor.idle()
-    await results.submitFindings(bench.agent('rev1'), row.taskId!, { resultId: round.resultId, kind: 'review', verdict: 'fail', findings: 'the change is wrong' })
+    await results.submitFindings(bench.agent('rev1'), row.taskId!, { resultId: round.resultId, kind: 'review', ...structuredReview(results, row.taskId!, 'fail', 'the change is wrong') })
     executor.wake(world.team.teamId)
     await executor.idle()
 
@@ -414,7 +415,7 @@ describe('the hold gate at the landing slot (revision-control 3.3)', () => {
       const round = executions.rounds(executionId, name).at(-1)!
       const review = tasks.store.assignmentsOf(row.taskId!).find(entry => entry.id === round.reviewAssignmentId)!
       deliverToReviewer(review.messageId!, 'rev1')
-      await results.submitFindings(bench.agent('rev1'), row.taskId!, { resultId: round.resultId, kind: 'review', verdict: 'pass', findings: 'checked' })
+      await results.submitFindings(bench.agent('rev1'), row.taskId!, { resultId: round.resultId, kind: 'review', ...structuredReview(results, row.taskId!, 'pass', 'checked') })
     }
     // Both reviews pass; the landing-read latch is armed first, so the
     // wake decides the rounds and leaves hold-slot standing at the slot
