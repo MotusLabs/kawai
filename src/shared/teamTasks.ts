@@ -510,6 +510,12 @@ export interface ChatPeerTaskContext {
   plan?: { id: string; title: string; revision: number | null; change: string }
   /** The running execution that owns the task, with the revision it runs (plan-execution D7); absent for an unowned task. */
   execution?: { id: string; revision: number }
+  /**
+   * The current revision's identity and contract (implementation-contract
+   * D7); absent from contexts recorded before contracts, whose headers keep
+   * their old bytes.
+   */
+  contract?: { identity: string; contract: ImplementationContract | null }
 }
 
 /** An assignment's addressee: a group (its role) or one named session. */

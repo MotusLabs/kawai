@@ -56,10 +56,10 @@ covers a spec scenario carries its `// @covers:` annotation.
   - allowing a clear (C6);
   - writing a revision before parsing (C5);
   - leaving `contract_hash` out of the diff.
-- [ ] 2.3 Add property P4 (seeded amendment/publication sequences, real
+- [x] 2.3 Add property P4 (seeded amendment/publication sequences, real
   SQLite). Verify: P4 passes (I2). Mutant to kill: an UPDATE of an earlier
   revision's contract during carry-forward.
-- [ ] 2.4 Expose the contract in reads:
+- [x] 2.4 Expose the contract in reads:
   - `TaskRevision` and `TeamTask` gain `contract`, `contractHash`, and
     `identity`;
   - `task_get` returns them per revision;
@@ -73,7 +73,7 @@ covers a spec scenario carries its `// @covers:` annotation.
   "Malformed contract refused". Mutants to kill:
   - a header without clauses;
   - a legacy identity computed from direction only.
-- [ ] 2.5 Update the tasks bullet in `docs/architecture/` (contract,
+- [x] 2.5 Update the tasks bullet in `docs/architecture/` (contract,
   identity, carry-forward). Verify: the bullet names the columns and the
   carry-forward rule.
 
