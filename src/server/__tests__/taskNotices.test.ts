@@ -283,6 +283,7 @@ test('work forwarded after a provider limit must be re-acknowledged by its new h
 })
 
 // The revision-published fact (2.3, D8): the revision row is the contract.
+// @covers: task-revision-publication › Publication records one immutable revision per intent › Revision increments once
 test('one revision-published fact per publication: replays, retries, drafts, and acknowledgements add none', async () => {
   const { task, instructionId } = assignedTask()
   deliver(instructionId, 'dev', 1)

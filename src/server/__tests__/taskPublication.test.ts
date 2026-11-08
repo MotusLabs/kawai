@@ -84,6 +84,7 @@ test('fromDraft is not payload identity: a same-key replay differing only in it 
   expect(changes).toEqual([2])
 })
 
+// @covers: task-revision-publication › Publication records one immutable revision per intent › Stale draft is refused
 test('a stale base is refused naming the newer revision; nothing is published and the draft remains', async () => {
   const task = create()
   await service.saveDraft(human, task.id, { direction: 'draft text', rationale: 'r' })
@@ -106,6 +107,7 @@ test('two publishes from the same base: exactly one succeeds, the other is stale
   expect(revisionRows(task.id)).toBe(2)
 })
 
+// @covers: task-revision-publication › Publication records one immutable revision per intent › Concurrent same-key publishes
 test('concurrent same-key publishes: the unique key arbitrates, both return the one revision', async () => {
   const task = create()
   const [left, right] = await Promise.all([publish(task.id), publish(task.id)])
@@ -145,6 +147,7 @@ test('the unique key rejects a second same-key insert, which resolves as the rep
   expect(changes).toEqual([])
 })
 
+// @covers: task-revision-publication › Publication records one immutable revision per intent › Rationale is kept with the revision
 test('a human publication keeps its rationale and author, and drops the draft only when it came from it', async () => {
   const task = create()
   await service.saveDraft(human, task.id, { direction: 'v2', rationale: 'Scope changed' })

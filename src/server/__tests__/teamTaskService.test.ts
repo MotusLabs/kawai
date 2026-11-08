@@ -278,6 +278,8 @@ describe('task_acknowledge (task-revision-publication 4.2, D6)', () => {
 })
 
 describe('task_amend publishes with rationale and notify (task-revision-publication 4.4, D7)', () => {
+  // @covers: task-revision-publication › Agent creators publish without drafts › Lead publishes and notifies
+  // @covers: task-revision-publication › Agent creators publish without drafts › Non-creator still refused
   test('the creating lead publishes and notifies: the claimed developer gets one notice from the lead', async () => {
     const { AssignmentStore } = await import('../team/assignmentStore')
     const mail = new MailboxStore(db)

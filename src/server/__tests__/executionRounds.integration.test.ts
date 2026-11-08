@@ -219,6 +219,33 @@ describe('the round pipeline (§12)', () => {
     expect(executions.attempts(executionId, 'rev-a').at(-1)!.kind).toBe('fix')
   })
 
+  // @covers: plan-execution › Artifact edits never change an execution task's contract › Human publishes a new contract
+  test('a new revision replacing the contract carries it and returns the change for re-evaluation like any revision', async () => {
+    const executionId = await approvedExecution('rev-c')
+    await implementStage(executionId, 'rev-c', 'x')
+    ghStub.pulls = '[]'
+    passCi()
+    executor.wake(world.team.teamId)
+    await executor.idle()
+    const change = executions.change(executionId, 'rev-c')!
+    expect(change.state).toBe('gating')
+
+    const contract = ['## Implementation contract', '### Acceptance', '- A1: Works another way', '### Invariants', '### Scope', '- `src/**`',
+      '### Verification', '- V1: check passes', '### Excluded', '- X1: The client'].join('\n')
+    await tasks.amend(bench.human, change.taskId!, { contract, rationale: 'contract replaced' })
+    executor.wake(world.team.teamId)
+    await executor.idle()
+
+    const task = tasks.store.get(change.taskId!)!
+    expect(task.revision).toBe(2)
+    expect(task.contract!.excluded.map(clause => clause.id)).toEqual(['X1'])
+    expect(executions.rounds(executionId, 'rev-c').map(round => round.outcome)).toEqual(['superseded'])
+    expect(executions.change(executionId, 'rev-c')!.state).toBe('implementing')
+    const fixMail = mail.get(tasks.store.assignmentsOf(change.taskId!).at(-1)!.messageId!)!
+    expect(fixMail.body).toContain('revision 2')
+    expect(executions.attempts(executionId, 'rev-c').at(-1)!.kind).toBe('fix')
+  })
+
   test('a failed round keeps its fix under a later revision: no stop, no new assignment, the round stays fail (H2)', async () => {
     const executionId = await approvedExecution('rev-e')
     await implementStage(executionId, 'rev-e', 'x')
