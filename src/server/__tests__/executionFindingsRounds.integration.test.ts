@@ -142,3 +142,48 @@ describe('the claimant answers in structured form', () => {
     expect(newestRound(executionId, 'rd-text').outcome).toBeNull()
   })
 })
+
+describe('what the fix and verify handoffs say (D7)', () => {
+  const handoffs = (executionId: string, change: string, kind: string) =>
+    h.tasks.store.assignmentsOf(row(executionId, change).taskId!).filter(entry => entry.handoffKind === kind)
+  // @covers: plan-execution › A failed round returns the change for fixes › Only blocking findings are listed
+  test('the executor\'s fix handoff lists F1 with clause, evidence, and repro; counts F2 and F3; lists neither', async () => {
+    const executionId = await startedExecution(h, [{ change: 'fx-one' }])
+    await h.tick()
+    await submitWork(h, executionId, 'fx-one', 'src/fx-one.ts', 'x\n')
+    await h.tick()
+    const identity = h.tasks.store.get(row(executionId, 'fx-one').taskId!)!.identity!
+    await structured(executionId, 'fx-one', [
+      { ...finding(executionId, 'fx-one', 'src/a.ts'), reproduction: 'bun test a.test.ts' },
+      { level: 'P2', clause: identity, evidence: 'src/style.ts:4 naming', impact: 'style' },
+      { level: 'P1', clause: 'A1', evidence: 'src/x.ts:2', impact: 'cites a clause the revision lacks' },
+    ])
+    await h.tick()
+    const fix = handoffs(executionId, 'fx-one', 'fix').at(-1)!.instruction
+    expect(fix).toContain(`F1 (P1, ${identity}): src/a.ts:1 is wrong — repro: bun test a.test.ts`)
+    expect(fix).toContain('2 other findings are (advisory, unsupported, out of contract) in task_get')
+    expect(fix).toContain('task_dispute_findings')
+    expect(fix).not.toContain('F2 (')
+    expect(fix).not.toContain('F3 (')
+  })
+  // @covers: plan-execution › The review follows green CI › A verify review lists the open findings
+  test('a fix round\'s review handoff names the open findings with their clauses and asks for a disposition of each', async () => {
+    const executionId = await startedExecution(h, [{ change: 'fx-verify' }])
+    await h.tick()
+    await submitWork(h, executionId, 'fx-verify', 'src/fx-verify.ts', 'x\n')
+    await h.tick()
+    expect(handoffs(executionId, 'fx-verify', 'review')[0]!.instruction).toContain('Submit structured findings with task_submit_findings')
+    await structured(executionId, 'fx-verify', ['src/a.ts', 'src/b.ts', 'src/c.ts'].map(file => finding(executionId, 'fx-verify', file)))
+    await h.tick()
+    const taskId = row(executionId, 'fx-verify').taskId!
+    const identity = h.tasks.store.get(taskId)!.identity!
+    await h.results.disputeFindings(h.bench.agent('dev'), taskId, [{ id: 'F1', counterEvidence: 'a.ts:1 is intended' }])
+    await submitWork(h, executionId, 'fx-verify', 'src/fx-verify.ts', 'y\n')
+    await h.tick()
+    const verify = handoffs(executionId, 'fx-verify', 'review').at(-1)!.instruction
+    expect(verify).toContain(`Judge it under contract identity ${identity}`)
+    expect(verify).toContain(`- F2 (P1, ${identity})\n- F3 (P1, ${identity})`)
+    expect(verify).toContain('give each a disposition')
+    expect(verify).not.toContain('- F1 (')
+  })
+})

@@ -25,6 +25,7 @@ import { dispatchFix, ensureFixAttempt } from './executionDispatch'
 import { refusable } from './stepRefusal'
 import type { EffectAdapter } from './effects'
 import { foldLedger, roundReview } from '../../../shared/findingsLedger'
+import { fixFindings, reviewAsk } from './fixFindings'
 
 /** The gh/git surface the pipeline uses; injectable for tests. */
 export interface RoundAdapters {
@@ -194,7 +195,7 @@ export async function dispatchRevisionAttempt(deps: RoundDeps, changeRow: { exec
     { team: deps.team, executions: store, plans: deps.plans, tasks: deps.tasks, assignments: deps.assignments, results: deps.results },
     {
       executionId: changeRow.executionId, change: changeRow.change, group,
-      failingChecks: [], findingsIds: [], findingsTexts: texts,
+      failingChecks: [], findingsIds: [], findings: fixFindings(deps.tasks.store, task.id, null, texts),
       continueFrom: round.commitSha, fixRounds: change.fixRounds,
     },
   )
@@ -203,7 +204,7 @@ export async function dispatchRevisionAttempt(deps: RoundDeps, changeRow: { exec
     { team: deps.team, executions: store, plans: deps.plans, tasks: deps.tasks, assignments: deps.assignments, results: deps.results },
     {
       executionId: changeRow.executionId, change: changeRow.change, group,
-      failingChecks: [], findingsIds: [], findingsTexts: texts,
+      failingChecks: [], findingsIds: [], findings: fixFindings(deps.tasks.store, task.id, null, texts),
       continueFrom: round.commitSha, fixRounds: change.fixRounds,
     },
     attempt,
@@ -469,7 +470,7 @@ function reviewInstruction(deps: RoundDeps, change: string, round: RoundRow, ext
     `CI: ${checks || 'none reported'}`,
     acceptance.length > 0 ? `Acceptance rules:\n${acceptance.map(rule => `- ${rule}`).join('\n')}` : null,
     extraLines !== '' ? `Extra checks to attest:\n${extraLines}` : null,
-    `Submit your verdict with task_submit_findings on task ${changeRow.taskId} for result ${round.resultId}: pass or fail, with what you checked.`,
+    ...reviewAsk(deps.tasks.store, changeRow.taskId!, round.resultId),
     'You are the independent reviewer: if you authored one of this change\'s results, do not review it — say so in a message to the Lead group instead.',
   ].filter(line => line !== null).join('\n\n') + `\n\nExecution ${execution.id} of plan ${execution.planId} at revision ${execution.revision}.`
 }

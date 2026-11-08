@@ -63,21 +63,27 @@ export function implementInstruction(input: ImplementInstructionInput): string {
 
 export interface FixInstructionInput extends ImplementInstructionInput {
   failingChecks: Array<{ name: string; conclusion: string; link: string | null }>
-  findings: string[]
+  /** review-findings-ledger D7: the blocking findings rendered as lines, the others' count, and today's texts. */
+  findings: { blocking: ReadonlyArray<{ id: string }>; blockingText: string; others: number; legacyTexts: string[] }
   fixRounds: number
   continueFrom: string
 }
 
-/** D12's fix instruction: the failing checks, the findings, the count, and the commit to continue from. */
+/** D12's fix instruction: the failing checks, the blocking findings, the count, and the commit to continue from. */
 export function fixInstruction(input: FixInstructionInput): string {
   const checks = input.failingChecks.map(check => `- ${check.name}: ${check.conclusion}${check.link ? ` (${check.link})` : ''}`).join('\n')
-  const findings = input.findings.length > 0 ? input.findings.join('\n---\n') : ''
+  const legacy = input.findings.legacyTexts.length > 0 ? input.findings.legacyTexts.join('\n---\n') : ''
+  const { others } = input.findings
+  const blockingCount = input.findings.blocking.length
   return [
     implementInstruction(input),
     '',
     `This is fix round ${input.fixRounds + 1} of 3. Fix the failures below and submit a new result.`,
     `Failing checks:\n${checks || '- none reported'}`,
-    findings !== '' ? `Review findings:\n${findings.slice(0, LIST_CHARS)}${findings.length > LIST_CHARS ? '\n…(cut — task_get has the rest)' : ''}` : null,
+    blockingCount > 0 ? `Blocking findings to fix (task_get has each in full):\n${input.findings.blockingText}` : null,
+    others > 0 ? `${others} other finding${others === 1 ? ' is' : 's are'} (advisory, unsupported, out of contract) in task_get; ${others === 1 ? 'it is' : 'they are'} not required.` : null,
+    blockingCount > 0 ? 'Fix only the listed ids with minimal changes. If you can refute one with evidence, dispute it with task_dispute_findings instead of changing code.' : null,
+    legacy !== '' ? `Review findings:\n${legacy.slice(0, LIST_CHARS)}${legacy.length > LIST_CHARS ? '\n…(cut — task_get has the rest)' : ''}` : null,
     `Continue from commit ${input.continueFrom}.`,
   ].filter(line => line !== null).join('\n')
 }

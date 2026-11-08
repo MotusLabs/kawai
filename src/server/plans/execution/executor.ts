@@ -9,6 +9,7 @@
 // execution a 60-second timer keeps the loop alive for CI polling, backoffs,
 // and timeouts. Everything a tick reads is stored, so a restart resumes
 // from the rows alone.
+import { fixFindings } from './fixFindings'
 import type { TeamIdentity } from '../../team/teamIdentity'
 import type { ChatSessionRecord } from '../../db'
 import type { TaskService } from '../../team/TaskService'
@@ -440,7 +441,7 @@ export class ExecutionExecutor {
       executionId: fix.executionId, change: fix.change, group,
       failingChecks: failing,
       findingsIds: findings.map(entry => entry.id),
-      findingsTexts: findings.map(entry => entry.findings),
+      findings: fixFindings(this.deps.tasks.store, row.taskId!, round),
       continueFrom: round.commitSha,
       fixRounds: outcome.count,
     }

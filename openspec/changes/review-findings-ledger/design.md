@@ -238,7 +238,9 @@ plan tasks, whose card is the only path.
 ### D7 — Instructions
 
 `fixInstruction` takes
-`findings: { blocking: LedgerRow[], others: number, legacyTexts: string[] }`.
+`findings: { blocking: LedgerRow[], blockingText: string, others: number, legacyTexts: string[] }`,
+with `blockingText` the rendered lines (the evidence and reproduction
+come from each finding's newest item).
 Each blocking row renders as
 `F3 (P1, r2#… › A1): <evidence> — repro: <reproduction>`, with evidence
 and reproduction each cut at 600 characters and the block cut at 4,000
@@ -251,8 +253,10 @@ evidence, dispute it with task_dispute_findings instead of changing code.`
 before the upgrade.
 
 The three callers get one shared builder,
-`fixFindings(deps, round) → FixInstructionInput['findings']`, which reads
-the fold. The manifest keeps `findingsIds` as the counted submission id.
+`fixFindings(store, taskId, round, notes) → FixInstructionInput['findings']`
+(`fixFindings.ts`), which reads the fold; Kawai's own notes (a republish, a
+failed update) ride `legacyTexts`. The pause adapt dispatch lists the open
+findings beside its republish note too. The manifest keeps `findingsIds` as the counted submission id.
 The review handoff text (executionRounds.ts:463) gains the contract
 identity, the blocking ids with their clauses, and the disposition rule.
 

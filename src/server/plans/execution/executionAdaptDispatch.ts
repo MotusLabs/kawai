@@ -14,6 +14,7 @@ import type { ExecutionRow, ChangeRow } from './executionRows'
 import type { ExecutionStore } from './executionStore'
 import type { PlanChange, PlanContent } from '../../../shared/plans'
 import { fixInstruction } from './instructions'
+import type { FixFindings } from './fixFindings'
 import { effectiveExtraChecks } from '../../../shared/planExecutionGates'
 
 /** The integration branch an execution lands on (D12), named in its instructions; null under direct landing. Same rule as executionDispatch's private copy. */
@@ -37,6 +38,8 @@ export interface AdaptedFixDispatchInput {
   taskId: string
   attempt: { id: string; number: number; manifestHash: string }
   startCommit: string
+  /** The task's open findings now (review-findings-ledger D7), listed beside the republish note. */
+  openFindings?: Pick<FixFindings, 'blocking' | 'blockingText' | 'others'>
   taskRevision: number
   rationale: string | null
   executions: Pick<ExecutionStore, 'setAttemptAssignment'>
@@ -70,9 +73,10 @@ export function dispatchAdaptedFixWithin(input: AdaptedFixDispatchInput): string
     manifestHash: input.attempt.manifestHash,
     integrationBranch: integrationBranchOf(input.execution),
     failingChecks: [],
-    findings: [
-      `The task's direction was republished as revision ${input.taskRevision}${input.rationale ? ` (${input.rationale})` : ''}. Re-apply your work on top of the new direction.`,
-    ],
+    findings: {
+      ...(input.openFindings ?? { blocking: [], blockingText: '', others: 0 }),
+      legacyTexts: [`The task's direction was republished as revision ${input.taskRevision}${input.rationale ? ` (${input.rationale})` : ''}. Re-apply your work on top of the new direction.`],
+    },
     fixRounds: changeRow.fixRounds,
     continueFrom: input.startCommit,
   })

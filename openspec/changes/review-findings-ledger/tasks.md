@@ -101,7 +101,7 @@ covers a spec scenario carries its `// @covers:` annotation.
   scenarios for the review and the dispute hold pass. Mutants to kill:
   - reading the row's verdict column instead of the fold (RD2);
   - failing the round on a pending dispute (RD2).
-- [ ] 5.2 Add `fixFindings` and the new `fixInstruction` rendering (D7)
+- [x] 5.2 Add `fixFindings` and the new `fixInstruction` rendering (D7)
   for all three callers (the executor fixes step, `dispatchOwedFix`, and
   the republish path). Add the review handoff text with the blocking ids.
   Verify: the "Only blocking findings are listed" and "A verify review

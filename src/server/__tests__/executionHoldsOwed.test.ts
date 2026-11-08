@@ -307,6 +307,44 @@ describe('owed fix dispatches under holds (revision-control 3.2, review B1)', ()
   })
 })
 
+// review-findings-ledger D7 through dispatchOwedFix: the owed re-send rebuilds
+// the findings from the fold at send time, listing only the blocking ones.
+describe('the owed fix lists only blocking findings (review-findings-ledger 5.2)', () => {
+  // @covers: plan-execution › A failed round returns the change for fixes › Only blocking findings are listed
+  test('a review failed under a hold: the release sends F1 with clause, evidence, and repro, and counts the other two', async () => {
+    const name = 'owed-findings'
+    const { executionId, planId } = await approvedExecution([name])
+    const first = await implementStage(executionId, name, 'v1\n')
+    const taskId = first.taskId!
+    ghStub.pulls = '[]'
+    passCi()
+    executor.wake(world.team.teamId)
+    await executor.idle()
+    const hold = placeHold(planId, [name], 'owed-findings-1')
+    await executor.idle()
+    const round = executions.rounds(executionId, name).at(-1)!
+    const review = tasks.store.assignmentsOf(taskId).find(entry => entry.id === round.reviewAssignmentId)!
+    mail.claim(review.messageId!, 'rev1')
+    mail.markPushed(review.messageId!)
+    mail.markDelivered(review.messageId!)
+    const identity = tasks.store.get(taskId)!.identity!
+    await results.submitFindings(bench.agent('rev1'), taskId, { resultId: round.resultId, kind: 'review', items: [
+      { level: 'P1', clause: identity, evidence: 'src/owed.ts:3 drops rows', impact: 'data loss', reproduction: 'bun test owed' },
+      { level: 'P2', clause: identity, evidence: 'src/owed.ts:9', impact: 'naming' },
+      { level: 'P1', clause: 'A1', evidence: 'src/owed.ts:5', impact: 'no such clause' },
+    ] })
+    executor.wake(world.team.teamId)
+    await executor.idle()
+    releaseHold(planId, hold.id)
+    await executor.idle()
+    const instruction = tasks.store.assignmentsOf(taskId).at(-1)!.instruction
+    expect(instruction).toContain(`F1 (P1, ${identity}): src/owed.ts:3 drops rows — repro: bun test owed`)
+    expect(instruction).toContain('2 other findings are (advisory, unsupported, out of contract) in task_get')
+    expect(instruction).not.toContain('F2 (')
+    expect(instruction).not.toContain('F3 (')
+  })
+})
+
 // Redispatch's order and the refused fix (revision-control PR E, A3, H″ O2):
 // an owed newest row is inert under the Retry stage — the owed step is its
 // one writer; a linked row whose chain the pause stop-branch superseded
