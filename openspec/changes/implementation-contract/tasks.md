@@ -91,7 +91,7 @@ covers a spec scenario carries its `// @covers:` annotation.
   Verify: component tests for the "Revision history shows contracts" and
   "Draft contract survives restart unparsed" scenarios. Mutant to kill:
   Publish enabled with problems.
-- [ ] 3.2 Verify in a real browser with Playwright (after `bun run build`):
+- [x] 3.2 Verify in a real browser with Playwright (after `bun run build`):
   create a task with a contract, edit it in a draft, see a live problem,
   fix it, publish, and see both revisions' identities in the history (V4).
   Commit the spec under `e2e/`.
