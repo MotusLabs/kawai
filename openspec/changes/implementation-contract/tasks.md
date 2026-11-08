@@ -98,7 +98,7 @@ covers a spec scenario carries its `// @covers:` annotation.
 
 ## 4. Execution snapshot
 
-- [ ] 4.1 In `executionDispatch.ts`, before `tasks.create`, read
+- [x] 4.1 In `executionDispatch.ts`, before `tasks.create`, read
   `openspec/changes/<change>/design.md` at `baselineCommit` with `git show`
   through the existing git seam, then locate and parse the section. Pass
   the contract to create, or journal the reason per table E1–E5. Name the

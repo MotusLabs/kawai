@@ -17,7 +17,7 @@ import type { ExecutionRow, ChangeRow } from './executionRows'
 import type { ExecutionStore } from './executionStore'
 import type { PlanChange, PlanContent } from '../../../shared/plans'
 import type { AttemptKind, AttemptManifest } from '../../../shared/planExecution'
-import { implementInstruction } from './instructions'
+import { implementInstruction, type ImplementInstructionInput } from './instructions'
 import { effectiveExtraChecks } from '../../../shared/planExecutionGates'
 
 /** The integration branch an execution lands on (D12), named in its instructions; null under direct landing. Same rule as executionDispatch's private copy. */
@@ -46,6 +46,8 @@ export interface RestartedAttemptDispatchInput {
   content: PlanContent
   planTitle: string
   taskId: string
+  /** The task's contract facts for the instruction (implementation-contract D4). */
+  contract?: ImplementInstructionInput['contract']
   kind: AttemptKind
   attempt: { id: string; number: number; manifestHash: string }
   /** The row's own manifest: its answers and update facts ride the per-kind lines. */
@@ -85,6 +87,7 @@ export function dispatchRestartedAttemptWithin(input: RestartedAttemptDispatchIn
       taskId: input.taskId,
       manifestHash: input.attempt.manifestHash,
       integrationBranch: integrationBranchOf(input.execution),
+      ...(input.contract ? { contract: input.contract } : {}),
     }),
     '',
     `Kawai restarted this work (attempt ${input.attempt.number}): the paused attempt's row was superseded and its holder stepped away from it. ${restartParagraph(input.checkpoint, input.startCommit)}`,

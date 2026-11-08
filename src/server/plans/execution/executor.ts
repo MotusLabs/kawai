@@ -81,6 +81,8 @@ export interface ExecutorDeps {
   tickMs?: number
   /** Test seam: passed to every gh call (a stub gh on a private PATH). */
   ghOptions?: GhCommandOptions
+  /** Test seam: the contract snapshot's `git show` (implementation-contract D4, E5); defaults to the real git. */
+  showFile?: import('./contractSnapshot').ShowFile
   /** Test seam: the inspectors' reads; defaults to the real git/gh (startupReads). */
   reads?: InspectorReads
   /** Test seam: the clock. */
