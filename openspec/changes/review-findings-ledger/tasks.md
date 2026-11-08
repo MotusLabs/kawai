@@ -140,7 +140,7 @@ covers a spec scenario carries its `// @covers:` annotation.
   the "The ledger shows a finding's history" and "Text-only findings stay
   readable" scenarios pass, and the task_get bounds test covers
   `ledgerOlderRemaining`.
-- [ ] 6.2 Add the Team page task detail's Findings section and the result
+- [x] 6.2 Add the Team page task detail's Findings section and the result
   card's per-item classes, with Uphold/Reject for a non-plan task's
   creator or the human. Add client tests for the rendering, including
   unstructured rows. Verify: the client tests pass, `bun run build`
