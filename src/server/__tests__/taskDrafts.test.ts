@@ -39,6 +39,7 @@ afterEach(() => { session.close(); fs.rmSync(dir, { recursive: true, force: true
 const create = () => store.create({ teamId: team.teamId, title: 'Export', direction: 'Build the export', creator: { kind: 'human', sessionId: null } })
 const mailCount = () => (db.prepare('SELECT COUNT(*) AS n FROM team_messages').get() as { n: number }).n
 
+// @covers: task-revision-publication › A draft never publishes › Saving a draft publishes nothing
 test('a draft saved at revision 1 publishes nothing: no revision, no updated_at, no mail, no task change', async () => {
   const task = create()
   const changes: string[] = []
@@ -56,6 +57,7 @@ test('a draft saved at revision 1 publishes nothing: no revision, no updated_at,
   expect(store.humanDetail(task.id)?.draft).toMatchObject({ direction: DRAFT_TEXT })
 })
 
+// @covers: task-revision-publication › A draft never publishes › Agents do not see drafts
 test('agent paths never carry the draft: the task_get detail and the delivered task context', async () => {
   const task = create()
   await service.saveDraft(human, task.id, { direction: DRAFT_TEXT })
@@ -66,6 +68,7 @@ test('agent paths never carry the draft: the task_get detail and the delivered t
   expect(buildTaskContext(store, task.id)?.direction).toBe('Build the export')
 })
 
+// @covers: task-revision-publication › A draft never publishes › Draft survives restart
 test('a draft survives a reopen with its base revision and rationale', async () => {
   const task = create()
   await service.saveDraft(human, task.id, { direction: DRAFT_TEXT, acceptance: 'A file downloads', rationale: 'Customer asked' })

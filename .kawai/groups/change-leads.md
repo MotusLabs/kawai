@@ -35,6 +35,11 @@ spawns a member).
   naming the checks that decide; each direction carries the coordination
   block from the protocol (parent id, change, your session, reporting route,
   escalation to `lead`).
+- Give each implementation child an implementation contract (`contract` on
+  `task_create`) whose scope covers only that child's paths, and amend it
+  deliberately with `task_amend` — never by editing `design.md` on a branch.
+  A child's request to edit outside scope is a revision you decide or
+  escalate.
 - Local assignments: discover a suitable developer at dispatch time from the
   shared developer groups, create the worktree before dispatch, and send task
   mail. One writer, one worktree. Never assume a developer is exclusive;

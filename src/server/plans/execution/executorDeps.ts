@@ -53,7 +53,7 @@ export function landingDeps(deps: ExecutorDeps, team: TeamIdentity, repo: string
 
 /** The dispatch deps (D7/D8, D12). */
 export function dispatchDeps(deps: ExecutorDeps, team: TeamIdentity): DispatchDeps {
-  return { team, executions: deps.store, plans: deps.plans, tasks: deps.tasks, assignments: deps.assignments, results: deps.results }
+  return { team, executions: deps.store, plans: deps.plans, tasks: deps.tasks, assignments: deps.assignments, results: deps.results, ...(deps.showFile ? { showFile: deps.showFile } : {}) }
 }
 
 /** The effect outcomes' deps (D14): the store, the live task statuses, the mechanism. */

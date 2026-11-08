@@ -34,6 +34,8 @@ import { ResultCheckStore } from '../verification/resultCheckStore'
 import { createPayloadDiff, publishPayloadDiff } from './taskPayloadDiff'
 import { TaskJournalWindow } from './taskJournalWindow'
 import { TaskListWindow } from './taskListWindow'
+import type { ImplementationContract } from '../../shared/implementationContract'
+import { contractColumns, contractFields, nextContract } from './taskContractRows'
 
 const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS team_tasks (
@@ -107,6 +109,8 @@ export interface CreateTaskInput {
   /** The plan-change link (durable-plans D9), validated by the caller; fixed at creation. */
   planId?: string | null
   planChange?: string | null
+  /** Revision 1's contract (implementation-contract D3), already parsed by the caller; null or omitted = none. */
+  contract?: ImplementationContract | null
   /**
    * The client's request identity for this create (task-assignment D4): a
    * replay under the same key and payload returns the prior task instead of
@@ -123,6 +127,8 @@ export interface PublishInput {
   direction?: string
   acceptance?: string | null
   rationale?: string | null
+  /** Omitted carries the current contract; a contract replaces it; null clears it (refused once one was carried, C6). */
+  contract?: ImplementationContract | null
   /** The revision the draft was based on; a newer current revision refuses it as stale. */
   baseRevision?: number
   /** The client command key: a replay with the same payload returns the prior revision. */
@@ -211,7 +217,7 @@ export class TaskStore {
         input.parentId ?? null, input.worktree ?? null, input.openspecChange ?? null,
         input.planId ?? null, input.planChange ?? null, input.requestKey ?? null, now, now,
       )
-      this.insertRevision(id, 1, input.direction, input.acceptance ?? null, input.creator, now)
+      this.insertRevision(id, 1, input.direction, input.acceptance ?? null, input.contract ?? null, input.creator, now)
       within?.(this.get(id)!)
     })()
     return this.changed(id)
@@ -224,7 +230,7 @@ export class TaskStore {
   }
 
   get(id: string): TeamTask | null {
-    const row = this.db.prepare(`SELECT t.*, r.direction, r.acceptance, p.title AS plan_title FROM team_tasks t
+    const row = this.db.prepare(`SELECT t.*, r.direction, r.acceptance, r.contract, r.contract_hash, p.title AS plan_title FROM team_tasks t
       JOIN team_task_revisions r ON r.task_id = t.id AND r.revision = t.revision
       LEFT JOIN plans p ON p.id = t.plan_id WHERE t.id = ?`).get(id)
     return row ? mapTask(row as Record<string, unknown>) : null
@@ -282,6 +288,7 @@ export class TaskStore {
         createdAt: String(row.created_at),
         rationale: text(row.rationale),
         notify: row.notify === null || row.notify === undefined ? null : Number(row.notify) === 1,
+        ...contractFields(row, Number(row.revision), String(row.direction), text(row.acceptance)),
       }))
   }
 
@@ -325,13 +332,15 @@ export class TaskStore {
           throw new Error(`Stale: revision ${current.revision} was published since revision ${input.baseRevision}; nothing was published. Rebase the draft onto revision ${current.revision}.`)
         }
         const next = current.revision + 1
+        const columns = contractColumns(nextContract(current.contract ?? null, input.contract))
         this.db.prepare('UPDATE team_tasks SET revision = ?, updated_at = ? WHERE id = ?').run(next, now, id)
         this.db.prepare(`INSERT INTO team_task_revisions
-          (task_id, revision, direction, acceptance, author_kind, author_session, created_at, rationale, request_key, notify)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+          (task_id, revision, direction, acceptance, author_kind, author_session, created_at, rationale, request_key, notify, contract, contract_hash)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
           id, next, input.direction ?? current.direction,
           input.acceptance === undefined ? current.acceptance : input.acceptance,
           author.kind, author.sessionId, now, input.rationale ?? null, input.requestKey ?? null, input.notify ? 1 : 0,
+          columns.contract, columns.contract_hash,
         )
         if (input.discardDraft) this.drafts.discard(id, false)
         const revision = this.revisions(id).at(-1)!
@@ -415,13 +424,14 @@ export class TaskStore {
     if (this.get(id)) this.changed(id)
   }
 
-  private insertRevision(id: string, revision: number, direction: string, acceptance: string | null, author: TaskCreator, now: string) {
-    this.db.prepare(`INSERT INTO team_task_revisions (task_id, revision, direction, acceptance, author_kind, author_session, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)`).run(id, revision, direction, acceptance, author.kind, author.sessionId, now)
+  private insertRevision(id: string, revision: number, direction: string, acceptance: string | null, contract: ImplementationContract | null, author: TaskCreator, now: string) {
+    const columns = contractColumns(contract)
+    this.db.prepare(`INSERT INTO team_task_revisions (task_id, revision, direction, acceptance, author_kind, author_session, created_at, contract, contract_hash)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(id, revision, direction, acceptance, author.kind, author.sessionId, now, columns.contract, columns.contract_hash)
   }
 
   private selectTasks(where: string, param: string): TeamTask[] {
-    return (this.db.prepare(`SELECT t.*, r.direction, r.acceptance, p.title AS plan_title FROM team_tasks t
+    return (this.db.prepare(`SELECT t.*, r.direction, r.acceptance, r.contract, r.contract_hash, p.title AS plan_title FROM team_tasks t
       JOIN team_task_revisions r ON r.task_id = t.id AND r.revision = t.revision
       LEFT JOIN plans p ON p.id = t.plan_id
       WHERE ${where} ORDER BY t.created_at, t.rowid`).all(param) as Record<string, unknown>[]).map(mapTask)
@@ -502,6 +512,7 @@ function mapTask(row: Record<string, unknown>): TeamTask {
     revision: Number(row.revision),
     direction: String(row.direction),
     acceptance: text(row.acceptance),
+    ...contractFields(row, Number(row.revision), String(row.direction), text(row.acceptance)),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   }

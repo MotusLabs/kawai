@@ -296,6 +296,58 @@ ran 1 failed review over 5 results; its baseline RC D (task-707555cd) ran 2
 failed reviews over 10 results. Both samples are n=1, so the comparison is
 undetermined.
 
+## Write the implementation contract
+
+A code task carries an implementation contract: the clauses its result is
+judged against, published as part of a task revision. The developer, the
+reviewer, and the human all cite the same identity — `r3#9f2c4ab1e07d`,
+the revision and the first 12 hex digits of the contract hash — and its
+clause ids, so a finding names what it holds the result to
+(`r3#9f2c4ab1e07d › I2`) instead of re-deriving intent from prose.
+
+Whoever owns the work's direction writes the contract: the architect in the
+change's `design.md`, the Lead or the Change Lead on the task. A plan
+execution copies the section from `design.md` at the execution's baseline
+commit into the task's first revision; the `implementation-contract`
+validation check refuses a plan whose change has no section, or one that
+does not parse.
+
+The section is five headings in this order, each part a list of bullets:
+
+```markdown
+## Implementation contract
+### Acceptance
+- A1: `bun run export` writes one CSV row per open task, header first.
+### Invariants
+- I1: The export never writes a file outside the run's output directory.
+### Scope
+- `src/server/export/**`
+- `src/shared/exportRows.ts`
+### Verification
+- V1: `src/server/__tests__/export.test.ts` passes, covering A1 and I1.
+### Excluded
+- X1: No client button; the Team page export arrives separately.
+```
+
+- **Clauses a reviewer can judge pass or fail.** Name an observable
+  result: an output, a refusal, a file, a count. "Writes one CSV row per
+  open task" can be checked; "handles exports well" cannot. Invariants say
+  what must never happen; each gets an id a finding can cite.
+- **Scope lists what may change, not what will.** One glob per bullet,
+  relative to the repository root; `*` stays within one directory and `**`
+  crosses them. The linked change's own directory is always in scope. The
+  result check lists every changed path outside it — informational, never a
+  gate — so a needed edit outside scope is a reason to ask for a revision,
+  not to widen it silently.
+- **Exclusions are explicit.** Work left for later, or for another task,
+  is an `X` clause; a reviewer's request covered by one, or by nothing in
+  the contract, does not block.
+- **Changes go through a published revision.** Amend the task's contract
+  with `task_amend` (or publish it from the Team page); the revision bumps
+  and the identity changes with it. Editing `design.md` on a change branch
+  never changes a running task's contract, and once a revision carried a
+  contract it cannot be removed, only replaced.
+
 ## Roll out and evaluate
 
 New agent starts load the revised group instructions. Running agents retain

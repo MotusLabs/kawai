@@ -61,6 +61,7 @@ function fixtureManager(root: string, events: Map<string, ChatEvent[]>) {
   })
 }
 
+// @covers: task-revision-publication › Publication records one immutable revision per intent › Revision increments once
 test('E09: draft, publish and notify a busy developer, delayed acknowledgement, retry, and reassignment', async () => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-e09-')))
   const repo = path.join(root, 'repo')

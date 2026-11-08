@@ -10,6 +10,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { MailboxStore } from '../team/mailboxStore'
 import { TaskStore } from '../team/taskStore'
+import { identityOf } from '../team/contractHash'
 
 let dir: string
 let dbPath: string
@@ -46,6 +47,8 @@ test('a pre-existing database gains the columns and tables; old revisions read w
   expect(tasks.revisions('task-old')).toEqual([{
     revision: 1, direction: 'Build it', acceptance: null, author: { kind: 'human', sessionId: null },
     createdAt: '2026-01-01T00:00:00.000Z', rationale: null, notify: null,
+    // Contract columns (implementation-contract 2.1, I4): null, no backfill; a text identity on read.
+    contract: null, contractHash: null, identity: identityOf({ revision: 1, direction: 'Build it', acceptance: null, contractHash: null }),
   }])
   const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map(row => row.name)
   expect(tables).toEqual(expect.arrayContaining(['team_task_drafts', 'team_task_notifications', 'team_task_acknowledgements']))
@@ -79,4 +82,18 @@ test('a notice mail row keeps its revision_notice across a reopen; other rows re
   expect(again.mail.get(sent.id)?.revisionNotice).toEqual(notice)
   expect(again.mail.get(plain.id)?.revisionNotice).toBeNull()
   again.db.close()
+})
+
+test('the contract migration adds nullable contract, contract_hash, and contract_text columns', () => {
+  legacyDatabase()
+  const { db } = open()
+  const columns = (table: string) => db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string; notnull: number; type: string }>
+  const pick = (table: string, names: string[]) => columns(table).filter(column => names.includes(column.name)).map(({ name, notnull, type }) => ({ name, notnull, type }))
+  expect(pick('team_task_revisions', ['contract', 'contract_hash'])).toEqual([
+    { name: 'contract', notnull: 0, type: 'TEXT' }, { name: 'contract_hash', notnull: 0, type: 'TEXT' },
+  ])
+  expect(pick('team_task_drafts', ['contract_text'])).toEqual([{ name: 'contract_text', notnull: 0, type: 'TEXT' }])
+  // The legacy row is unchanged: no backfill (I4).
+  expect(db.prepare("SELECT contract, contract_hash FROM team_task_revisions WHERE task_id = 'task-old'").get()).toEqual({ contract: null, contract_hash: null })
+  db.close()
 })

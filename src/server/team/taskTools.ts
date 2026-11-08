@@ -24,7 +24,7 @@ const listLimit = `limit must be an integer from 1 to ${TASK_LIST_LIMIT_MAX}`
 const offsetBytes = 'offset_bytes must be a safe non-negative integer'
 export const taskSchemas = {
   task_create: z.object({
-    title: z.string().min(1), direction: z.string().min(1), acceptance: z.string().optional(),
+    title: z.string().min(1), direction: z.string().min(1), acceptance: z.string().optional(), contract: z.string().optional(),
     parent_id: z.string().optional(), worktree: z.string().optional(), openspec_change: z.string().optional(),
     plan_id: z.string().optional(), plan_change: z.string().optional(),
   }),
@@ -41,7 +41,7 @@ export const taskSchemas = {
   task_note: z.object({ ...taskId, text: z.string().min(1) }),
   task_update_status: z.object({ ...taskId, status, note: z.string().optional() }),
   task_amend: z.object({
-    ...taskId, direction: z.string().optional(), acceptance: z.string().optional(),
+    ...taskId, direction: z.string().optional(), acceptance: z.string().optional(), contract: z.string().optional(),
     rationale: z.string().optional(), notify: z.boolean().optional(),
   }),
   task_list: z.object({
@@ -78,12 +78,12 @@ export const taskSchemas = {
 }
 
 export const taskDescriptions: Record<(typeof TASK_TOOL_NAMES)[number], string> = {
-  task_create: 'Create a team task (only if your group may create tasks). Optional parent_id, worktree (a worktree root of this repository), and openspec_change; plan_id with plan_change links the task to a change of an open plan\'s approved revision (both or neither; fixed afterwards). You become its creator.',
-  task_get: 'Read a task: current direction and acceptance, every revision, assignment, and result whole; the journal, subtasks, and messages as bounded windows, oldest first, each with its total — the newest 50 journal entries (journal_limit 1–200), 100 subtasks, and 50 messages. A journal entry is a preview of at most 2,000 stored bytes with totalBytes, cut, and resumeOffsetBytes (text null when not valid UTF-8). Page older entries with journal_before set to bounds.journal.nextBefore; read any entry whole with task_journal_read.',
+  task_create: 'Create a team task (only if your group may create tasks). Optional parent_id, worktree (a worktree root of this repository), and openspec_change; plan_id with plan_change links the task to a change of an open plan\'s approved revision (both or neither; fixed afterwards). Optional contract: an implementation contract in Markdown — a `## Implementation contract` heading, then `### Acceptance`, `### Invariants`, `### Scope`, `### Verification`, `### Excluded` in that order, clauses as `- A1: text` (I, V, X likewise), Scope as one glob per bullet; Acceptance, Scope, and Verification need at least one entry. A contract that does not parse refuses the creation with every problem and its line. You become its creator.',
+  task_get: 'Read a task: current direction and acceptance, every revision with its contract identity (r<revision>#<hash>) and contract (null when it has none), assignment, and result whole; the journal, subtasks, and messages as bounded windows, oldest first, each with its total — the newest 50 journal entries (journal_limit 1–200), 100 subtasks, and 50 messages. A journal entry is a preview of at most 2,000 stored bytes with totalBytes, cut, and resumeOffsetBytes (text null when not valid UTF-8). Page older entries with journal_before set to bounds.journal.nextBefore; read any entry whole with task_journal_read.',
   task_journal_read: 'Read one journal entry of a task losslessly (entry_id from task_get): up to 8,192 stored bytes from offset_bytes (default 0; a preview\'s resumeOffsetBytes continues it) as dataBase64, which is authoritative, with their text when valid UTF-8 (else null), the entry\'s totalBytes, and nextOffsetBytes (null at the end). Read-only.',
   task_note: "Append a note to a task's journal (decisions, findings, progress). Notes are permanent.",
   task_update_status: 'Set a task to active or blocked (any member); done or cancelled (its creator only). Optional note is journaled.',
-  task_amend: "Publish a new revision of a task's direction or acceptance criteria (its creator only). Optional rationale says why; notify: true also sends the assignment's claimed agent a revision notice.",
+  task_amend: "Publish a new revision of a task's direction, acceptance criteria, or contract (its creator only). Optional contract (the task_create grammar) replaces the current one; omitted or blank carries it forward unchanged, and a contract can never be removed. A contract that does not parse refuses the amendment with every problem and publishes nothing. Optional rationale says why; notify: true also sends the assignment's claimed agent a revision notice.",
   task_list: `List this team's tasks as compact rows (no direction or acceptance — use task_get), newest first. Without status, only open, active, and blocked tasks; status takes one status or "all". At most limit rows (1–${TASK_LIST_LIMIT_MAX}, default 50); page older with before set to bounds.nextBefore. bounds.total counts every match; statuses names the filter applied.`,
   task_acknowledge: 'State the published task revision you are now working from (the revision in the task header). Call it when you start or take over work on a task, and after a revision notice.',
   task_submit_result: 'Submit a result for a task: a summary, a commit and/or diff reference (at least one), the tests you ran with their outcomes, and known limitations. Your test outcomes are shown as claimed, not verified. Supersedes the task\'s previous result; does not close the task.',
@@ -119,8 +119,8 @@ export function taskHandlers(tasks: TaskService, sessionId: string, results?: Ta
       return tasks.setStatus(caller, task_id, next, note)
     },
     task_amend: async (input: unknown) => {
-      const { task_id, direction, acceptance, rationale, notify } = taskSchemas.task_amend.parse(input)
-      return tasks.amend(caller, task_id, { direction, acceptance, rationale, notify })
+      const { task_id, direction, acceptance, contract, rationale, notify } = taskSchemas.task_amend.parse(input)
+      return tasks.amend(caller, task_id, { direction, acceptance, contract, rationale, notify })
     },
     task_acknowledge: async (input: unknown) => {
       const { task_id, revision } = taskSchemas.task_acknowledge.parse(input)

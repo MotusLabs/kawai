@@ -125,7 +125,7 @@ For a scheduled change, the execution SHALL create the worktree `.worktrees/<cha
 - **THEN** that change reuses its worktree and branch at their current head, and its first attempt's manifest records that head as its starting commit
 
 ### Requirement: Kawai creates and dispatches one task per change
-After provisioning, the execution SHALL create one task for the change. Its creator SHALL be Kawai. The task SHALL be linked to the plan change, target the worktree, name the OpenSpec change, and carry the change's guidance and acceptance rules. Kawai SHALL then dispatch it to the change's implementing group. The instruction SHALL name the change, branch, and plan revision, ask for a committed result through the result tool, and say that Kawai pushes.
+After provisioning, Kawai SHALL create one task for the change, linked to the plan change, in its worktree, naming the OpenSpec change, with its guidance and acceptance rules, and with revision 1 carrying the contract from its `design.md` at the baseline commit (none, journaled, if missing or unparseable). Kawai SHALL dispatch it to the implementing group, naming the change, branch, plan revision, and contract identity, asking for a committed result via the result tool, and saying Kawai pushes.
 
 #### Scenario: The implementer receives Kawai's instruction
 - **WHEN** a change is provisioned
@@ -134,6 +134,14 @@ After provisioning, the execution SHALL create one task for the change. Its crea
 #### Scenario: A later execution creates fresh tasks
 - **WHEN** the owner starts a new execution after stopping one
 - **THEN** each unlanded change gets a new task created by Kawai, and the stopped execution's cancelled tasks stay as they were
+
+#### Scenario: The task carries the design's contract
+- **WHEN** a change whose `design.md` at the baseline commit has a well-formed Implementation contract section is provisioned
+- **THEN** its task's revision 1 carries that contract, and the instruction names its identity `r1#<hash>`
+
+#### Scenario: A change without a contract section
+- **WHEN** a change whose `design.md` at the baseline commit has no Implementation contract section is provisioned
+- **THEN** its task is created and dispatched without a contract, and the task journal says the section was missing
 
 ### Requirement: A failed instruction stops the change
 When an instruction Kawai dispatched for a change fails (its mail dead-lettered, cancelled, or discarded), or a service refuses to dispatch it, the change SHALL stop as `instruction-failed`, naming the instruction or stage and the reason. Kawai SHALL NOT dispatch a replacement on its own. An instruction Kawai itself superseded with a later stage SHALL NOT count as failed.
@@ -464,3 +472,14 @@ Each team's `planExecution` settings SHALL live only in the user-level `~/.kawai
 #### Scenario: A malformed value falls back to its default
 - **WHEN** the team's `maxParallelChanges` is the string `"three"`
 - **THEN** the problem is logged and the next Start records the default limit of 3
+
+### Requirement: Artifact edits never change an execution task's contract
+After its task is created, a change's contract SHALL change only when the human publishes a new task revision. Edits to the change's artifacts on its branch, on the base branch, or in any worktree SHALL NOT change the task's contract or its identity.
+
+#### Scenario: Design edited on the change branch
+- **WHEN** the implementer commits an edit to the Implementation contract section of the change's `design.md`
+- **THEN** the task's contract and identity are unchanged
+
+#### Scenario: Human publishes a new contract
+- **WHEN** the human publishes a new revision of a running change's task with a replaced contract
+- **THEN** the new revision carries that contract, and the change is returned for re-evaluation as for any new task revision

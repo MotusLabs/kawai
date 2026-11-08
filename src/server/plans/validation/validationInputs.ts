@@ -62,11 +62,13 @@ export const hashValidationInputs = (inputs: ValidationInputs): string => sha256
 const MAX_DIGEST_BYTES = 4 * 1024 * 1024
 
 /**
- * A file's sha256 under one policy everywhere: regular files only — a
+ * A spec artifact's bytes under one policy everywhere: regular files only — a
  * symlink is skipped, never followed — read via lstat's own size, capped at
- * `MAX_DIGEST_BYTES`; null when absent or unreadable.
+ * `MAX_DIGEST_BYTES`; null when absent or unreadable. The digests hash these
+ * bytes and the checks read these bytes (the contract check's design.md), so
+ * a check never judges content its input hash did not cover.
  */
-function hashFile(file: string): string | null {
+export function readArtifact(file: string): Buffer | null {
   try {
     const stat = fs.lstatSync(file)
     if (!stat.isFile()) return null
@@ -75,13 +77,19 @@ function hashFile(file: string): string | null {
     try {
       const buffer = Buffer.alloc(length)
       const bytes = fs.readSync(fd, buffer, 0, length, 0)
-      return sha256(buffer.subarray(0, bytes))
+      return buffer.subarray(0, bytes)
     } finally {
       fs.closeSync(fd)
     }
   } catch {
     return null
   }
+}
+
+/** A file's sha256 under `readArtifact`'s policy; null when it reads nothing. */
+function hashFile(file: string): string | null {
+  const bytes = readArtifact(file)
+  return bytes === null ? null : sha256(bytes)
 }
 
 /** Whether a change directory exists in this root (a proposal makes it a change); a symlinked proposal does not. */
