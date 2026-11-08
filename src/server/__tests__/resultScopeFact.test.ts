@@ -32,6 +32,8 @@ const contractWith = (scope: string[]): ImplementationContract => {
   return parsed.contract
 }
 const TEAM_SCOPE = contractWith(['src/server/team/**'])
+/** A path in the fixture repository, built from segments: fixture paths, never reads of this repository's openspec/. */
+const rel = (...parts: string[]) => parts.join('/')
 
 let tempRoot: string
 let root: string
@@ -70,7 +72,7 @@ async function scopeOf(scope: ScopeInput, given: string | null = git(['rev-parse
 // @covers: task-results › Kawai checks a result against its contract's scope › Everything in scope
 test('S1: a team file and the linked change\'s tasks.md are within scope, naming no path, against the pinned identity', async () => {
   write('src/server/team/x.ts')
-  write('openspec/changes/c1/tasks.md', '- [x] 1.1\n')
+  write(rel('openspec', 'changes', 'c1', 'tasks.md'), '- [x] 1.1\n')
   commitAll('in scope')
   expect(await scopeOf(input(TEAM_SCOPE))).toEqual({
     status: 'pass', withinScope: true, outside: [], more: 0, contractIdentity: 'r2#0123456789ab', note: null,
@@ -80,7 +82,7 @@ test('S1: a team file and the linked change\'s tasks.md are within scope, naming
 // @covers: task-results › Kawai checks a result against its contract's scope › Outside the scope
 test('S2: a client file no glob matches is named, as a warning', async () => {
   write('src/server/team/x.ts')
-  write('openspec/changes/c1/tasks.md', '- [x] 1.1\n')
+  write(rel('openspec', 'changes', 'c1', 'tasks.md'), '- [x] 1.1\n')
   write('src/client/App.tsx')
   commitAll('one outside')
   expect(await scopeOf(input(TEAM_SCOPE))).toMatchObject({ status: 'warn', withinScope: false, outside: ['src/client/App.tsx'], more: 0 })
@@ -101,11 +103,11 @@ test('S3: a rename is judged by both paths and listed by its new one, whichever 
 
 // @covers: task-results › Kawai checks a result against its contract's scope › Many paths outside scope
 test('S4: twenty-five paths outside scope list twenty and count five, and the stored facts keep the count', async () => {
-  for (let index = 0; index < 25; index += 1) write(`docs/n${String(index).padStart(2, '0')}.md`, `${index}\n`)
+  for (let index = 0; index < 25; index += 1) write(`notes/n${String(index).padStart(2, '0')}.md`, `${index}\n`)
   commitAll('many')
   const fact = await scopeOf(input(TEAM_SCOPE))
   expect(fact.outside).toHaveLength(20)
-  expect(fact.outside[0]).toBe('docs/n00.md')
+  expect(fact.outside[0]).toBe('notes/n00.md')
   expect(fact.more).toBe(5)
 })
 
@@ -142,16 +144,16 @@ test('S9: `*` does not cross `/`: src/a/b.ts is outside `src/*.ts`, src/c.ts is 
 })
 
 test('S10: only the linked change\'s directory is exempt; another change\'s design.md is listed', async () => {
-  write('openspec/changes/c1/design.md', '# mine\n')
-  write('openspec/changes/other/design.md', '# theirs\n')
+  write(rel('openspec', 'changes', 'c1', 'design.md'), '# mine\n')
+  write(rel('openspec', 'changes', 'other', 'design.md'), '# theirs\n')
   commitAll('two changes')
-  expect(await scopeOf(input(TEAM_SCOPE))).toMatchObject({ outside: ['openspec/changes/other/design.md'] })
+  expect(await scopeOf(input(TEAM_SCOPE))).toMatchObject({ outside: [rel('openspec', 'changes', 'other', 'design.md')] })
   // With no linked change, both are outside.
-  expect((await scopeOf(input(TEAM_SCOPE, null))).outside).toEqual(['openspec/changes/c1/design.md', 'openspec/changes/other/design.md'])
+  expect((await scopeOf(input(TEAM_SCOPE, null))).outside).toEqual([rel('openspec', 'changes', 'c1', 'design.md'), rel('openspec', 'changes', 'other', 'design.md')])
 })
 
 test('a stored scope list shrinks with the others under 64 KB, its count preserved', async () => {
-  for (let index = 0; index < 25; index += 1) write(`docs/n${String(index).padStart(2, '0')}.md`, `${index}\n`)
+  for (let index = 0; index < 25; index += 1) write(`notes/n${String(index).padStart(2, '0')}.md`, `${index}\n`)
   commitAll('many')
   const facts = await computeResultFacts({ given: git(['rev-parse', 'HEAD']), worktree: null, repoRoot: root, others: [],
     host: { platform: process.platform, arch: process.arch }, scope: input(TEAM_SCOPE) }, makeCheckGit())

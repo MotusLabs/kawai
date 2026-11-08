@@ -144,7 +144,7 @@ covers a spec scenario carries its `// @covers:` annotation.
 
 ## 7. Prompts, docs, and the design rule
 
-- [ ] 7.1 Add the section "Write the implementation contract" to
+- [x] 7.1 Add the section "Write the implementation contract" to
   `docs/agent-collaboration.md`, covering:
   - who writes it;
   - clauses a reviewer can judge pass or fail, with examples;
