@@ -186,6 +186,10 @@ export class TaskConnections {
           await this.manager.results.recheck(caller, message.taskId, message.resultId)
           task = tasks.store.get(message.taskId) ?? undefined
           break
+        case 'team-task-decide-dispute':
+          await this.manager.results.decideDispute(caller, message.taskId, { findingId: message.findingId, decision: message.decision, rationale: message.rationale })
+          task = tasks.store.get(message.taskId) ?? undefined
+          break
         case 'team-task-notify': {
           const outcome = await tasks.notify(caller, message.taskId, message.revision, message.requestKey)
           result({ task: outcome.task, replay: outcome.replay })

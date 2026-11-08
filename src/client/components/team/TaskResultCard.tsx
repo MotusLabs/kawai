@@ -4,6 +4,9 @@
 // the pinned revision and submitter, the Needs re-evaluation badge, the
 // acceptance, and the findings bound to this result with kind, verdict, and
 // author. Superseded results render the same way, beneath the outstanding one.
+// A structured submission (review-findings-ledger D10) lists each item's
+// class or disposition and says when it is not counted; a text row keeps its
+// text rendering.
 // Kawai's own check of the result (independent-verification D12) renders as
 // "Checked by Kawai": each fact with its status, or why the check could not
 // run — informational, never a gate. The scope fact (implementation-
@@ -11,7 +14,7 @@
 // on facts stored before contracts — not checked.
 import type { ReactNode } from 'react'
 import type { Session } from '@shared/types'
-import type { ResultFactStatus, ResultScopeFact, TaskResult, TaskResultCheck } from '@shared/teamTasks'
+import type { LedgerItem, ResultFactStatus, ResultScopeFact, TaskResult, TaskResultCheck } from '@shared/teamTasks'
 import { actorLabel } from './teamTaskLabels'
 import CoverageMapView from './CoverageMapView'
 
@@ -82,6 +85,18 @@ function CheckView({ check }: { check: TaskResultCheck }) {
   </div>
 }
 
+/** A structured submission's items (review-findings-ledger D10): each finding's class, or its disposition. */
+function FindingItems({ items }: { items: LedgerItem[] }) {
+  if (items.length === 0) return <p className="text-secondary" data-testid="result-finding-no-items">No findings</p>
+  return <ul>{items.map(item => <li key={`${item.itemKind}:${item.findingId}`} data-testid="result-finding-item" data-finding-id={item.findingId}
+    data-class={item.class ?? item.disposition ?? ''}>
+    {item.findingId} · {item.level} · {item.itemKind === 'finding' ? (item.class ?? 'unclassified').replace(/-/g, ' ') : `disposition: ${item.disposition}`}
+    {item.clause && <span className="text-secondary"> · {item.clause}</span>}
+    {item.reason && <span className="text-secondary"> — {item.reason}</span>}
+    {item.evidence && <span className="block whitespace-pre-wrap break-all text-secondary">{item.evidence}</span>}
+  </li>)}</ul>
+}
+
 export default function TaskResultCard({ result, sessions, children }: {
   result: TaskResult
   sessions: Session[]
@@ -124,10 +139,15 @@ export default function TaskResultCard({ result, sessions, children }: {
     <div className="mt-1 text-chat-meta" data-testid="result-findings">
       {result.findings.length === 0
         ? <p className="text-secondary">No findings on this result</p>
-        : result.findings.map(findings => <p key={findings.id} data-testid="result-finding" className="border-l-2 border-border pl-2">
-          {findings.kind === 'qa' ? 'QA' : 'Review'} · {findings.verdict} · {actorLabel(findings.author, sessions)} · {new Date(findings.createdAt).toLocaleString()}
-          <span className="block whitespace-pre-wrap">{findings.findings}</span>
-        </p>)}
+        : result.findings.map(findings => <div key={findings.id} data-testid="result-finding" data-structured={findings.structured === true}
+          data-counted={findings.counted !== false} className="border-l-2 border-border pl-2">
+          <p>{findings.kind === 'qa' ? 'QA' : 'Review'} · {findings.verdict} · {actorLabel(findings.author, sessions)} · {new Date(findings.createdAt).toLocaleString()}
+            {findings.structured && findings.counted === false && <span className="text-secondary" data-testid="result-finding-not-counted">
+              {' '}· not counted{findings.replacedBy ? ` (replaced by ${findings.replacedBy})` : ''}</span>}
+          </p>
+          {findings.findings && <span className="block whitespace-pre-wrap">{findings.findings}</span>}
+          {findings.structured && <FindingItems items={findings.items} />}
+        </div>)}
     </div>
     {children}
   </article>

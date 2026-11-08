@@ -813,6 +813,9 @@ export type ClientMessage =
   // Request a new check of one result (independent-verification D4); a
   // request while a check is pending returns that pending check.
   | { type: 'team-task-recheck'; teamPath: string; requestId: string; taskId: string; resultId: string }
+  // Decide one disputed finding of a non-plan task (review-findings-ledger
+  // D5): uphold or reject with a rationale, by the task's creator or the human.
+  | { type: 'team-task-decide-dispute'; teamPath: string; requestId: string; taskId: string; findingId: string; decision: 'uphold' | 'reject'; rationale: string }
   // Request review / Request QA / Return for fixes (D3): a handoff of one
   // result to a role, idempotent under the client's request key.
   | {
