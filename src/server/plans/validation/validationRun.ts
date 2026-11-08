@@ -4,7 +4,6 @@
 // the report's parts for the record phase. The service owns scope, single
 // flight, the transaction, and the push; nothing here reads the validation
 // tables.
-import fs from 'node:fs'
 import path from 'node:path'
 import type { PlanContent, PlanLifecycle, PlanRevisionStatus, PlanStrategyPin } from '../../../shared/plans'
 import type { ImpactGate } from '../../../shared/strategyImpact'
@@ -21,7 +20,7 @@ import type {
 } from '../../../shared/planValidation'
 import { deriveRelations, validationReadiness, VALIDATION_CHECKS_VERSION } from '../../../shared/planValidation'
 import { computeClaims, deltaTouches, runValidationChecks, type ResolvedChange, type ValidationCheckContext } from './validationChecks'
-import { hashValidationInputs, readValidationFileInputs, type ValidationFileInputs } from './validationInputs'
+import { hashValidationInputs, readArtifact, readValidationFileInputs, type ValidationFileInputs } from './validationInputs'
 import type { OpenspecAdapter, ShowDeltasOutcome, ValidateOutcome } from './openspecAdapter'
 
 /** Another plan as the record phase reads it for claims (D2). */
@@ -64,7 +63,7 @@ export async function runFilePhase(options: {
     const located = file.evidence.changes[change.change] ?? { root: null, dir: null, head: null }
     resolved[change.change] = { change: change.change, status: change.status, dir: located.dir, root: located.root, head: located.head }
     if (change.status !== 'registered' || !located.root) return
-    designs[change.change] = located.dir ? await readDesign(path.join(located.dir, 'design.md')) : null
+    designs[change.change] = located.dir ? readDesign(path.join(located.dir, 'design.md')) : null
     const [validate, deltas] = await Promise.all([
       options.adapter.validate(located.root, change.change),
       options.adapter.showDeltas(located.root, change.change),
@@ -77,9 +76,13 @@ export async function runFilePhase(options: {
   return { file, cli, designs, resolved, capacity }
 }
 
-/** A change's design.md, or null when it is missing or unreadable. */
-async function readDesign(file: string): Promise<string | null> {
-  try { return await fs.promises.readFile(file, 'utf8') } catch { return null }
+/**
+ * A change's design.md under the digests' own policy (`readArtifact`): a
+ * regular file only, capped as the hash is; null when missing, unreadable, or
+ * a symlink, which the input hash skips too.
+ */
+function readDesign(file: string): string | null {
+  return readArtifact(file)?.toString('utf8') ?? null
 }
 
 /**
