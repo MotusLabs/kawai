@@ -137,7 +137,7 @@ covers a spec scenario carries its `// @covers:` annotation.
   - using the task's current revision (S8);
   - exempting every `openspec/changes/**` path (S10);
   - `**` semantics for `*` (S9).
-- [ ] 6.2 Show the scope fact on `TaskResultCard.tsx` ("within scope", the
+- [x] 6.2 Show the scope fact on `TaskResultCard.tsx` ("within scope", the
   listed paths with the count, "no contract", or "not checked" for older
   facts). Verify: a component test over those four states. Mutant to kill:
   treating an absent `scope` as within scope.

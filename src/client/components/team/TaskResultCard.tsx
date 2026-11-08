@@ -6,10 +6,12 @@
 // author. Superseded results render the same way, beneath the outstanding one.
 // Kawai's own check of the result (independent-verification D12) renders as
 // "Checked by Kawai": each fact with its status, or why the check could not
-// run — informational, never a gate.
+// run — informational, never a gate. The scope fact (implementation-
+// contract D6) reads within scope, the paths outside it, no contract, or —
+// on facts stored before contracts — not checked.
 import type { ReactNode } from 'react'
 import type { Session } from '@shared/types'
-import type { ResultFactStatus, TaskResult, TaskResultCheck } from '@shared/teamTasks'
+import type { ResultFactStatus, ResultScopeFact, TaskResult, TaskResultCheck } from '@shared/teamTasks'
 import { actorLabel } from './teamTaskLabels'
 import CoverageMapView from './CoverageMapView'
 
@@ -20,6 +22,25 @@ function statusLine(label: string, status: ResultFactStatus, detail?: string | n
     {label}: <span data-testid={`result-check-${status}`}>{STATUS_LABEL[status]}</span>
     {detail ? <span className="text-secondary"> — {detail}</span> : null}
   </p>
+}
+
+/**
+ * The scope fact (implementation-contract D6): within scope, the paths
+ * outside it with the count past the cap, no contract, or — on facts
+ * written before contracts — not checked. Never read absent as within scope.
+ */
+function scopeLine(scope: ResultScopeFact | undefined) {
+  if (scope === undefined) {
+    return <p data-testid="result-check-scope" data-scope="not-checked">Contract scope: not checked</p>
+  }
+  if (scope.status === 'no-contract') {
+    return <p data-testid="result-check-scope" data-scope="no-contract">Contract scope: no contract</p>
+  }
+  const label = `Contract scope${scope.contractIdentity ? ` (${scope.contractIdentity})` : ''}`
+  const detail = scope.status === 'pass' ? 'within scope'
+    : scope.outside.length > 0 ? `outside scope: ${scope.outside.join(', ')}${scope.more > 0 ? ` (+${scope.more} more)` : ''}`
+    : scope.note
+  return <div data-testid="result-check-scope" data-scope={scope.status}>{statusLine(label, scope.status, detail)}</div>
 }
 
 /** One stored check: what it found, or why it could not run (D2/D12). */
@@ -57,6 +78,7 @@ function CheckView({ check }: { check: TaskResultCheck }) {
         {entry.overlap.length > 0 && <span> — both change: {entry.overlap.join(', ')}{entry.moreOverlap > 0 ? ` (+${entry.moreOverlap} more)` : ''}</span>}
       </p>
     )))}
+    {scopeLine(facts.scope)}
   </div>
 }
 
