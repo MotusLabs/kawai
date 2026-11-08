@@ -470,12 +470,11 @@ export class TaskStore {
    */
   derived(taskId: string): Pick<TeamTaskSummary, 'assignment' | 'outstandingResult'> {
     const result = this.results.outstanding(taskId)
-    const findings = result ? this.results.findingsFor(result.id) : []
     return {
       assignment: this.assignments ? outstandingOf(this.assignments.listByTask(taskId)) : null,
       outstandingResult: result ? {
         id: result.id, needsReevaluation: result.needsReevaluation, accepted: result.acceptedAt !== null,
-        reviewVerdict: findings.at(-1)?.verdict ?? null,
+        reviewVerdict: this.results.reviewVerdict(taskId, result.id),
       } : null,
     }
   }

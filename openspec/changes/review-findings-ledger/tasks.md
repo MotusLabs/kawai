@@ -90,7 +90,7 @@ covers a spec scenario carries its `// @covers:` annotation.
 
 ## 5. Plan execution
 
-- [ ] 5.0 Add `effectiveVerdict` and use it in `taskStore.ts`'s task
+- [x] 5.0 Add `effectiveVerdict` and use it in `taskStore.ts`'s task
   summary, so the stage, workspace, attention, and Plans readers see the
   fold's verdict. Verify: the "A rejected dispute clears fixes requested"
   scenario passes through `TaskService` reads and `teamTaskStage`. Mutant

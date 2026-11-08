@@ -14,7 +14,8 @@ import { actorFromRow, partyFromRow } from './actorRow'
 import type { Database } from 'bun:sqlite'
 import { compareCoverageMaps, validateCoverageMap, type CoverageMap, type ReviewerCoverageMap } from '../../shared/coverageMaps'
 import type { LedgerItem, TaskActor, TaskFindings, TaskResult, TaskTestClaim } from '../../shared/teamTasks'
-import { mapItem } from './findingStore'
+import { FindingStore, mapItem } from './findingStore'
+import { effectiveVerdict, foldLedger } from '../../shared/findingsLedger'
 
 export interface ResultInsert {
   teamId: string
@@ -135,6 +136,12 @@ export class TaskResultStore {
   submittedBy(taskId: string, sessionId: string): boolean {
     return this.db.prepare('SELECT 1 FROM team_task_results WHERE task_id = ? AND submitted_by_kind = ? AND submitted_by_session = ? LIMIT 1')
       .get(taskId, 'agent', sessionId) !== null
+  }
+
+  /** A result's effective review verdict (review-findings-ledger D5): the one every reader shows. */
+  reviewVerdict(taskId: string, resultId: string): 'pass' | 'fail' | null {
+    const ledger = new FindingStore(this.db)
+    return effectiveVerdict(this.findingsFor(resultId), () => foldLedger(ledger.countedSubmissions(taskId), ledger.events(taskId)))
   }
 
   findingsFor(resultId: string): TaskFindings[] {

@@ -170,6 +170,22 @@ export const blocking = (rows: readonly LedgerRow[]): LedgerRow[] => rows.filter
 export const pendingDisputes = (rows: readonly LedgerRow[]): LedgerRow[] => rows.filter(row => row.state === 'disputed')
 export const deriveVerdict = (rows: readonly LedgerRow[]): 'pass' | 'fail' => (blocking(rows).length > 0 ? 'fail' : 'pass')
 
+/** The fields of a findings row the effective verdict reads. */
+export interface VerdictRow { structured: boolean; counted: boolean; replacedBy: string | null; verdict: 'pass' | 'fail' }
+
+/**
+ * The effective review verdict of a result's findings rows (D5), for every
+ * reader: the newest row the ledger stands on — a text row, or a counted
+ * structured row not replaced — decides; a text row by its stored verdict,
+ * a structured one by the ledger's fold now, so a later dispute decision or
+ * re-map reaches every reader. Null when no row counts.
+ */
+export function effectiveVerdict(rows: readonly VerdictRow[], ledger: () => readonly LedgerRow[]): 'pass' | 'fail' | null {
+  const last = rows.filter(row => !row.structured || (row.counted && row.replacedBy === null)).at(-1)
+  if (!last) return null
+  return last.structured ? deriveVerdict(ledger()) : last.verdict
+}
+
 /** Table RD's review part: a pending dispute holds a round nothing else fails. */
 export function roundReview(rows: readonly LedgerRow[]): 'fail' | 'pending-dispute' | 'pass' {
   if (blocking(rows).length > 0) return 'fail'

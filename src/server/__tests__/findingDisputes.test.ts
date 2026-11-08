@@ -11,6 +11,7 @@ import { taskHandlers } from '../team/taskTools'
 import { connectFindingCards } from '../plans/decisions/findingCards'
 import { createPlanWorld, type PlanWorld } from './planHarness'
 import { createDecisionBench, type DecisionBench } from './decisionHarness'
+import { teamTaskStage } from '../../shared/teamTaskStage'
 
 let world: PlanWorld
 let bench: DecisionBench
@@ -115,6 +116,21 @@ describe('manual decisions', () => {
     expect(bench.tasks.journal(taskId).at(-1)).toMatchObject({ author: { kind: 'agent', sessionId: 'lead' }, text: 'Rejected the dispute of F1: the test proves it' })
   })
   // @covers: review-findings › A dispute's decision upholds or rejects the finding › Only the creator decides a manual dispute
+  // @covers: review-findings › The verdict is derived from the ledger › A rejected dispute clears fixes requested
+  test('a rejected dispute turns every reader\'s verdict to pass; the stored submission is unchanged', async () => {
+    const { taskId } = await reviewed(null)
+    const read = async () => (await bench.taskService.get({ kind: 'agent', sessionId: 'lead' }, taskId)).task
+    const before = await read()
+    expect(before.outstandingResult?.reviewVerdict).toBe('fail')
+    expect(teamTaskStage(before, before.assignment, before.outstandingResult)).toBe('fixes-requested')
+    await tools('dev').task_dispute_findings({ task_id: taskId, disputes: [{ id: 'F1', counter_evidence: 'x' }] })
+    await tools('lead').task_decide_dispute({ task_id: taskId, finding_id: 'F1', decision: 'reject', rationale: 'r' })
+    const after = await read()
+    expect(after.outstandingResult?.reviewVerdict).toBe('pass')
+    expect(teamTaskStage(after, after.assignment, after.outstandingResult)).toBe('awaiting-acceptance')
+    expect(bench.tasks.list(world.team.teamId).find(task => task.id === taskId)?.outstandingResult?.reviewVerdict).toBe('pass')
+    expect(bench.tasks.results.listByTask(taskId).flatMap(result => result.findings).map(row => row.verdict)).toEqual(['fail'])
+  })
   test('a session that is not the creator cannot decide, and the finding stays disputed', async () => {
     const { taskId } = await reviewed(null)
     await tools('dev').task_dispute_findings({ task_id: taskId, disputes: [{ id: 'F1', counter_evidence: 'x' }] })
