@@ -183,7 +183,8 @@ export function roundReview(rows: readonly LedgerRow[]): 'fail' | 'pending-dispu
  */
 export function decisionApplies(row: LedgerRow, disputeEventId: string, cardId: string): boolean {
   const index = row.transitions.findIndex(t => t.source === 'event' && t.sourceId === disputeEventId)
-  if (index < 0 || row.state === 'superseded') return false
+  // A re-map (remapped or superseded) after the dispute is an event of no card, so it fails the test below (DD5).
+  if (index < 0) return false
   return row.transitions.slice(index + 1).every(t => t.source === 'event' && t.cardId === cardId && (t.kind === 'upheld' || t.kind === 'rejected' || t.kind === 'ignored'))
 }
 

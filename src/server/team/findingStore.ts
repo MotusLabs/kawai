@@ -163,6 +163,13 @@ export class FindingStore {
       .map(row => ({ cardId: String(row.card_id), taskId: String(row.task_id), findingId: String(row.finding_id), disputeEventId: String(row.dispute_event_id) }))
   }
 
+  /** The newest evidence a finding was raised with (the dispute card's context). */
+  evidenceOf(taskId: string, findingId: string): string | null {
+    const row = this.db.prepare(`SELECT evidence FROM team_task_finding_items WHERE task_id = ? AND finding_id = ? AND item_kind = 'finding'
+      ORDER BY created_at DESC, rowid DESC LIMIT 1`).get(taskId, findingId) as { evidence: string | null } | null
+    return row?.evidence ?? null
+  }
+
   /** Counted submissions on one result (the replace and finality checks). */
   countedOn(resultId: string): Array<{ id: string; ledgerSeq: number; items: LedgerItem[] }> {
     return (this.db.prepare(`SELECT id, ledger_seq FROM team_task_findings WHERE result_id = ? AND structured = 1 AND counted = 1 AND replaced_by IS NULL ORDER BY ledger_seq`)

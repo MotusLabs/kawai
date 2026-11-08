@@ -12,7 +12,7 @@ import { JOURNAL_LIMIT_MAX, TaskJournalReads } from './taskJournalWindow'
 import { TASK_LIST_LIMIT_MAX, TASK_LIST_STATUSES } from './taskListWindow'
 
 export const TASK_TOOL_NAMES = ['task_create', 'task_get', 'task_journal_read', 'task_note', 'task_update_status', 'task_amend', 'task_list', 'task_acknowledge',
-  'task_submit_result', 'task_submit_coverage', 'task_submit_findings', 'task_handoff', 'task_check_result'] as const
+  'task_submit_result', 'task_submit_coverage', 'task_submit_findings', 'task_dispute_findings', 'task_decide_dispute', 'task_handoff', 'task_check_result'] as const
 
 const status = z.enum(TASK_STATUSES as [TaskStatus, ...TaskStatus[]])
 const taskId = { task_id: z.string().min(1) }
@@ -76,6 +76,13 @@ export const taskSchemas = {
       evidence: z.string().optional(),
     })).optional(),
   }),
+  // review-findings-ledger D6: the author's dispute, and the non-plan decision.
+  task_dispute_findings: z.object({
+    ...taskId, disputes: z.array(z.object({ id: z.string().regex(/^F[1-9]\d*$/, { error: 'a finding id is F<n>' }), counter_evidence: z.string() })).min(1),
+  }),
+  task_decide_dispute: z.object({
+    ...taskId, finding_id: z.string().regex(/^F[1-9]\d*$/, { error: 'a finding id is F<n>' }), decision: z.enum(['uphold', 'reject']), rationale: z.string(),
+  }),
   task_handoff: z.object({
     ...taskId, kind: z.enum(['review', 'qa', 'fix']), result_id: z.string().min(1), target: z.string().min(1),
     // Explicit recipient kind (session-targeted-task-handoffs D1): omitted
@@ -101,6 +108,8 @@ export const taskDescriptions: Record<(typeof TASK_TOOL_NAMES)[number], string> 
   task_submit_coverage: 'Record your own coverage map for a result (result_id from task_get): the same clause/citation map a submission carries. While you hold a task\'s outstanding review handoff and have recorded no map for its result, the submitter\'s maps stay withheld from you — recording yours unseals them. Maps are append-only; your newest map for a result counts.',
   task_submit_findings: 'Report review or QA findings on one exact result (result_id from task_get), kind review|qa. Structured (required for a plan change\'s review): items, each with level P0 (security, data corruption, severe correctness) | P1 (a reproducible requirement violation, a significant regression) | P2 (advisory, never blocks), the clause it violates (A1, or r<N>#<hash> › A1; on a task without a contract, its revision identity), evidence (file:line, test output, or a counterexample), impact, and an optional reproduction; and dispositions resolved | still-open | regressed (the latter two with evidence) for every blocking finding listed in task_get. The verdict is derived (fail exactly when a P0/P1 is accepted and open); the reply lists each item\'s class. Text form: findings and verdict pass|fail. Findings stay bound to that result — a newer result inherits nothing.',
   task_handoff: 'Hand a result off (kind review, qa, or fix — return for fixes; the result_id, instructions, and an optional expected_response) to a recipient: target_kind "group" (the default when omitted, even for a session-shaped id) with target: <group id>, or target_kind "session" with target: <session id> to dispatch ordinary direct task mail to that exact session — no other member is chosen. While an equivalent handoff (same task, result, kind) is outstanding, this returns it instead of dispatching again; if the standing handoff names another recipient, the notice says so and nothing is reassigned. Optional worker (group targets only) limits who may take it to one provider (e.g. claude) or one model (provider/model, or a bare model key) of the group\'s workers, as on send_message; a handoff naming another worker is another handoff.',
+  task_dispute_findings: 'Dispute blocking findings of a task whose result you submitted, instead of changing code for a finding you can refute: each with its id (F<n> from task_get) and counter-evidence (a test run, file:line, a counterexample), at most 10 per call. A disputed finding waits for a decision: a decision card for the plan\'s Lead role (or the owner) on a plan change\'s task, else the task creator decides with task_decide_dispute. A finding is disputed at most once in each state it enters.',
+  task_decide_dispute: 'Decide a dispute of a finding on a task you created that is not a plan change\'s task (those are decided on their decision cards): uphold (the finding blocks again) or reject (it never blocks), with a rationale that is journaled.',
   task_check_result: 'Ask Kawai to check a result again (result_id from task_get): the commit, its worktree state, the recorded full-check pass, and merges against the base and other open tasks\' branches. The check never gates anything; it runs in the background and the newest check rides task_get. A request while a check is pending returns that pending check.',
 }
 
@@ -155,6 +164,14 @@ export function taskHandlers(tasks: TaskService, sessionId: string, results?: Ta
           ...(items !== undefined ? { items } : {}),
           ...(dispositions !== undefined ? { dispositions } : {}),
         })
+      },
+      task_dispute_findings: async (input: unknown) => {
+        const { task_id, disputes } = taskSchemas.task_dispute_findings.parse(input)
+        return results.disputeFindings(caller, task_id, disputes.map(entry => ({ id: entry.id, counterEvidence: entry.counter_evidence })))
+      },
+      task_decide_dispute: async (input: unknown) => {
+        const { task_id, finding_id, decision, rationale } = taskSchemas.task_decide_dispute.parse(input)
+        return results.decideDispute(caller, task_id, { findingId: finding_id, decision, rationale })
       },
       task_handoff: async (input: unknown) => {
         const { task_id, kind, result_id, target_kind, target, instructions, expected_response, worker } = taskSchemas.task_handoff.parse(input)

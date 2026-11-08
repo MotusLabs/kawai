@@ -10,6 +10,7 @@ import type { CitationContext, ScopeView } from '../../shared/reviewFindings'
 import type { ResultScopeFact, TaskActor, TaskFindings, TaskResult, TeamTask } from '../../shared/teamTasks'
 import { inScope } from '../verification/scopeFact'
 import type { TaskStore } from './taskStore'
+import { FindingDisputes } from './findingDisputes'
 
 export interface StructuredSubmission {
   kind: TaskFindings['kind']
@@ -33,6 +34,8 @@ export interface FindingServiceOptions {
   scopeFact?: (resultId: string) => ResultScopeFact | null
   /** Whether a plan round with this result is decided (D5's third finality rule). */
   roundDecided?: (resultId: string) => boolean
+  /** A ledger write landed (a dispute or a decision): the composition wakes the owner's executor. */
+  onWrite?: (taskId: string) => void
 }
 
 /** The pinned revision a result is judged against. */
@@ -42,7 +45,11 @@ export function pinnedContext(store: TaskStore, task: TeamTask, result: TaskResu
 }
 
 export class TaskFindingService {
-  constructor(private readonly store: TaskStore, private readonly options: FindingServiceOptions = {}) {}
+  /** Disputes and their decisions (D6); the composition sets its card and mail ports. */
+  readonly disputes: FindingDisputes
+  constructor(private readonly store: TaskStore, private readonly options: FindingServiceOptions = {}) {
+    this.disputes = new FindingDisputes(store, taskId => this.ledger(taskId), (taskId, findingId) => store.findings.evidenceOf(taskId, findingId), options.onWrite)
+  }
 
   /** The task's ledger, derived now (I2). */
   ledger(taskId: string): LedgerRow[] {

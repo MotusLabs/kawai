@@ -146,6 +146,7 @@ export class TaskResultService {
     this.findingService ??= new TaskFindingService(this.store, {
       scopeFact: resultId => this.store.checks.viewForResult(resultId).newest?.facts?.scope ?? null,
       roundDecided: resultId => this.options.roundDecided?.(resultId) ?? false,
+      onWrite: taskId => this.options.onWrite?.(taskId),
     })
     return this.findingService
   }
@@ -252,6 +253,30 @@ export class TaskResultService {
     this.store.appendJournal(taskId, actor, `${input.kind === 'qa' ? 'QA' : 'Review'} findings on result ${result.id}: ${input.verdict}`)
     this.options.onWrite?.(taskId)
     return stored
+  }
+
+  /**
+   * Dispute blocking findings with counter-evidence (review-findings-ledger
+   * D6, table DS): a result's author only, through the revision-control D9
+   * ownership check (B1), so the holder a Restart replaced is refused.
+   */
+  async disputeFindings(caller: TaskCaller, taskId: string, disputes: Array<{ id: string; counterEvidence: string }>): Promise<{ disputed: Array<{ id: string; cardId: string | null }> }> {
+    refuseSystem(caller, 'submit')
+    const { team, actor } = await this.tasks.context(caller)
+    if (actor.kind !== 'agent') throw new Error('Findings are disputed by the result\'s author, with task_dispute_findings')
+    const task = this.tasks.sameTeamTask(team, taskId)
+    const refusal = await (this.options.ownership ?? NULL_OWNERSHIP).checkResult(taskId, { commit: null, submitter: actor.sessionId, kind: 'findings' })
+    if (refusal !== null) throw new Error(refusal)
+    return this.findingsLedger.disputes.dispute({ teamId: team.teamId, task, actor, disputes })
+  }
+
+  /** The non-plan dispute decision (D6): the task's creator or the human, with a rationale. */
+  async decideDispute(caller: TaskCaller, taskId: string, input: { findingId: string; decision: 'uphold' | 'reject'; rationale: string }) {
+    refuseSystem(caller, 'submit')
+    const { team, actor } = await this.tasks.context(caller)
+    if (actor.kind === 'system') throw new Error('Kawai does not decide disputes')
+    const task = this.tasks.sameTeamTask(team, taskId)
+    return this.findingsLedger.disputes.decide({ task, actor, ...input })
   }
 
   /**

@@ -58,13 +58,13 @@ covers a spec scenario carries its `// @covers:` annotation.
 
 ## 3. Disputes and decisions
 
-- [ ] 3.1 Add `task_dispute_findings` and `task_decide_dispute` (D6) with
+- [x] 3.1 Add `task_dispute_findings` and `task_decide_dispute` (D6) with
   the ownership check. Commit table DS. Verify: DS1–DS7 pass. Mutants to
   kill:
   - omitting the ownership check (DS6, hazard B1);
   - allowing a second dispute in the same state entry (DS2);
   - an off-by-one on the limit of 10 (DS7).
-- [ ] 3.2 Create one card per disputed finding through `DecisionService`'s
+- [x] 3.2 Create one card per disputed finding through `DecisionService`'s
   internal ask path, in the dispute's transaction, and add the post-commit
   decision hook, `applyCardDecision`, and its startup replay. Commit table
   DD through the real `DecisionService` (Lead decision and owner
@@ -76,7 +76,7 @@ covers a spec scenario carries its `// @covers:` annotation.
   - applying a decision to a superseded finding (DD5);
   - applying an override after a later review disposed of it (DD7);
   - dropping the `source_key` (DD6).
-- [ ] 3.3 Add the recovery-matrix row for the decision-hook replay, citing
+- [x] 3.3 Add the recovery-matrix row for the decision-hook replay, citing
   its test. Verify: `recoveryMatrix.test.ts` passes.
 
 ## 4. Re-map on publication

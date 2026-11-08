@@ -143,5 +143,6 @@ export async function overrideAsOwner(service: DecisionService, caller: Decision
   if (!written) throw new DecisionRefusal('state', `The reopen of plan ${plan.id} replayed without writing the override; nothing was written.`)
   const { decision, fixTaskId } = written as { decision: PlanDecision; fixTaskId: string }
   service.deps.onChange?.(plan.id)
+  service.decided(card, decision)
   return { card, decision, replayed: false, message: null, fixTaskId }
 }
