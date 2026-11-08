@@ -761,6 +761,8 @@ export type ClientMessage =
       title: string
       direction: string
       acceptance?: string
+      /** Contract text (implementation-contract D3); blank or omitted = none. */
+      contract?: string
       parentId?: string
       worktree?: string
       openspecChange?: string
@@ -783,6 +785,8 @@ export type ClientMessage =
       direction?: string
       acceptance?: string
       rationale?: string
+      /** Raw contract text, saved unparsed. */
+      contract?: string
     }
   | {
       type: 'team-task-publish'
@@ -794,6 +798,8 @@ export type ClientMessage =
       requestKey: string
       direction: string
       acceptance?: string
+      /** Contract text: omitted carries the current contract; blank clears it (refused once one was carried). */
+      contract?: string
       rationale: string
       notify: boolean
       /** Published from the human's saved draft, which is discarded with it. */

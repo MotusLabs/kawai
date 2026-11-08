@@ -13,6 +13,7 @@ import { MailboxStore } from '../team/mailboxStore'
 import { TaskStore } from '../team/taskStore'
 import type { EnqueueInput } from '../team/enqueueInput'
 import { schemaDb } from './schemaDb'
+import { applyTaskContractSchema } from '../team/taskContractSchema'
 
 const TEAM = '/repo/.git'
 
@@ -98,6 +99,8 @@ describe('team_task_assignments.worker_choice', () => {
     // A database before the worker-choice migration has no column, so the
     // choice's write fails; the store's own transaction takes the row back.
     const session = initDatabase({ path: ':memory:', migrations: MIGRATIONS.filter(migration => migration.version < WORKER_CHOICE_MIGRATION_VERSION) })
+    // The task store writes the contract columns (migration 23); only the choice column is missing here.
+    applyTaskContractSchema(session.db)
     const mail = new MailboxStore(session.db)
     const old = new AssignmentStore(session.db, mail)
     const oldTask = new TaskStore(session.db, mail, old).create({ teamId: TEAM, title: 'T', direction: 'go', creator: { kind: 'human', sessionId: null } }).id

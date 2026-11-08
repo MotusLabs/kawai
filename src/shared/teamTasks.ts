@@ -1,6 +1,7 @@
 // SDK-free team task records (team-tasks design D1) shared by server and
 // client views. A task's direction and acceptance criteria live in numbered,
 // immutable revisions; `TeamTask` carries the latest one inline.
+import type { ImplementationContract } from './implementationContract'
 import type { ActingParty, TeamActor, TeamMessage } from './team'
 import type { CitationOutcome, CoverageMap, MapComparison, ReviewerCoverageMap, WithheldCoverage } from './coverageMaps'
 
@@ -51,6 +52,12 @@ export interface TeamTask {
   revision: number
   direction: string
   acceptance: string | null
+  /** The current revision's contract (implementation-contract D3); null without one. Always set by the store. */
+  contract?: ImplementationContract | null
+  /** That contract's sha256; null without one. */
+  contractHash?: string | null
+  /** `r<N>#<hash12>`: the contract's identity, else the revision's text identity (D2). */
+  identity?: string
   createdAt: string
   updatedAt: string
 }
@@ -66,6 +73,11 @@ export interface TaskRevision {
   rationale?: string | null
   /** Published with notices; null for rows published before notifications existed. */
   notify?: boolean | null
+  /** The revision's contract (implementation-contract D3); null without one. Always set by the store. */
+  contract?: ImplementationContract | null
+  contractHash?: string | null
+  /** `r<N>#<hash12>`: the contract's identity, else the revision's text identity (D2). */
+  identity?: string
 }
 
 /**
@@ -80,6 +92,8 @@ export interface TaskDraft {
   direction: string
   acceptance: string | null
   rationale: string | null
+  /** The draft's raw contract text, possibly unparsed (D3); null = the base revision's contract, unedited. */
+  contractText?: string | null
   updatedAt: string
 }
 

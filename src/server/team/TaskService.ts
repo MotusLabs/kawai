@@ -30,12 +30,15 @@ import { resolvePlanLink } from '../plans/planLink'
 import { NULL_OWNERSHIP, type ExecutionOwnership } from '../plans/execution/executionOwnership'
 import { executionOf, refuseSystem, type SystemCaller } from './systemCaller'
 import { originStatusRefusal, statusRefusal } from './taskStatusRights'
+import { contractInput } from './taskContractRows'
 export { statusRefusal } from './taskStatusRights'
 
 export interface TaskCreateInput {
   title: string
   direction: string
   acceptance?: string | null
+  /** Revision 1's contract text (implementation-contract D3); blank or omitted = none. */
+  contract?: string | null
   parent_id?: string | null
   worktree?: string | null
   openspec_change?: string | null
@@ -49,6 +52,12 @@ export interface TaskCreateInput {
 export interface TaskAmendInput {
   direction?: string
   acceptance?: string | null
+  /**
+   * Contract text (implementation-contract D3, C1–C7): omitted carries the
+   * current contract; an agent's blank text is omitted; the human's blank
+   * text clears it, refused once a revision carried one.
+   */
+  contract?: string | null
   /** Why (task-revision-publication D2); required by the human form, optional for agents. */
   rationale?: string | null
   /** Publish and notify (D3): direct notices to the outstanding assignment's claimant. */
@@ -85,6 +94,8 @@ export interface TaskDraftInput {
   direction: string
   acceptance?: string | null
   rationale?: string | null
+  /** Raw contract text, kept unparsed so a half-edited draft survives restart. */
+  contract?: string | null
 }
 
 /**
@@ -147,6 +158,7 @@ export class TaskService {
       if (!target.ok) throw new Error(target.error)
       worktree = target.root
     }
+    const contract = contractInput(input.contract, false) ?? null
     const openspecChange = input.openspec_change ? this.validateChange(team, input.openspec_change, worktree) : null
     const ownership = this.options.ownership ?? NULL_OWNERSHIP
     let linkRevision: number | null | undefined
@@ -173,7 +185,7 @@ export class TaskService {
     }
     const link = resolvePlanLink(this.options.plans, team.teamId, input.plan_id, input.plan_change, linkRevision)
     return this.store.create({
-      teamId: team.teamId, title, direction, acceptance: emptyToNull(input.acceptance), creator: actor,
+      teamId: team.teamId, title, direction, acceptance: emptyToNull(input.acceptance), contract, creator: actor,
       parentId: input.parent_id || null, worktree, openspecChange,
       ...(link ? { planId: link.planId, planChange: link.planChange } : {}),
       ...(input.requestKey ? { requestKey: input.requestKey } : {}),
@@ -225,8 +237,12 @@ export class TaskService {
     if (actor.kind === 'agent' && task.creator.sessionId !== actor.sessionId) {
       throw new Error(`Only the task's creator or the human can amend its direction. Add a journal note with task_note, or message the creator${task.creator.sessionId ? ` (${task.creator.sessionId})` : ' (the human)'} instead.`)
     }
-    if (input.direction === undefined && input.acceptance === undefined) throw new Error('Nothing to amend: give a direction or acceptance criteria')
     if (input.direction !== undefined && !input.direction.trim()) throw new Error('A task needs a direction')
+    // Parsed before anything is written (C5); only the human's blank text clears (C6, C7).
+    const contract = contractInput(input.contract, actor.kind === 'human')
+    if (input.direction === undefined && input.acceptance === undefined && contract === undefined) {
+      throw new Error('Nothing to amend: give a direction, acceptance criteria, or a contract')
+    }
     // Refused before anything is written, as notify() refuses: never a notify revision without its notices.
     if (input.notify && !this.store.notices) throw new Error('Revision notices are not available')
     const sender = this.noticeSender(team, actor)
@@ -235,6 +251,7 @@ export class TaskService {
     const outcome = this.store.publish(taskId, {
       ...(input.direction !== undefined ? { direction: input.direction.trim() } : {}),
       ...(input.acceptance !== undefined ? { acceptance: emptyToNull(input.acceptance) } : {}),
+      ...(contract !== undefined ? { contract } : {}),
       rationale: emptyToNull(input.rationale),
       ...(input.baseRevision !== undefined ? { baseRevision: input.baseRevision } : {}),
       ...(input.requestKey?.trim() ? { requestKey: input.requestKey.trim() } : {}),
@@ -345,6 +362,7 @@ export class TaskService {
     }
     return this.store.drafts.save(taskId, {
       baseRevision, direction, acceptance: emptyToNull(input.acceptance), rationale: emptyToNull(input.rationale),
+      contractText: input.contract ?? null,
     })
   }
 

@@ -24,7 +24,7 @@ const listLimit = `limit must be an integer from 1 to ${TASK_LIST_LIMIT_MAX}`
 const offsetBytes = 'offset_bytes must be a safe non-negative integer'
 export const taskSchemas = {
   task_create: z.object({
-    title: z.string().min(1), direction: z.string().min(1), acceptance: z.string().optional(),
+    title: z.string().min(1), direction: z.string().min(1), acceptance: z.string().optional(), contract: z.string().optional(),
     parent_id: z.string().optional(), worktree: z.string().optional(), openspec_change: z.string().optional(),
     plan_id: z.string().optional(), plan_change: z.string().optional(),
   }),
@@ -41,7 +41,7 @@ export const taskSchemas = {
   task_note: z.object({ ...taskId, text: z.string().min(1) }),
   task_update_status: z.object({ ...taskId, status, note: z.string().optional() }),
   task_amend: z.object({
-    ...taskId, direction: z.string().optional(), acceptance: z.string().optional(),
+    ...taskId, direction: z.string().optional(), acceptance: z.string().optional(), contract: z.string().optional(),
     rationale: z.string().optional(), notify: z.boolean().optional(),
   }),
   task_list: z.object({
@@ -119,8 +119,8 @@ export function taskHandlers(tasks: TaskService, sessionId: string, results?: Ta
       return tasks.setStatus(caller, task_id, next, note)
     },
     task_amend: async (input: unknown) => {
-      const { task_id, direction, acceptance, rationale, notify } = taskSchemas.task_amend.parse(input)
-      return tasks.amend(caller, task_id, { direction, acceptance, rationale, notify })
+      const { task_id, direction, acceptance, contract, rationale, notify } = taskSchemas.task_amend.parse(input)
+      return tasks.amend(caller, task_id, { direction, acceptance, contract, rationale, notify })
     },
     task_acknowledge: async (input: unknown) => {
       const { task_id, revision } = taskSchemas.task_acknowledge.parse(input)

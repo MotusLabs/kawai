@@ -36,13 +36,13 @@ covers a spec scenario carries its `// @covers:` annotation.
 
 ## 2. Storage and task service
 
-- [ ] 2.1 Add the numbered migration: `team_task_revisions.contract`,
+- [x] 2.1 Add the numbered migration: `team_task_revisions.contract`,
   `contract_hash`, and `team_task_drafts.contract_text`, all nullable.
   Take the next free version and coordinate it through the Lead.
   Extend the schema tests (`taskRevisionSchema.test.ts`) so that a legacy
   database opens with existing rows unchanged. Verify: the migration test
   passes on a pre-migration fixture (I4). Mutant to kill: a NOT NULL column.
-- [ ] 2.2 Resolve contracts in `TaskService` and the store, per table C1–C7:
+- [x] 2.2 Resolve contracts in `TaskService` and the store, per table C1–C7:
   - create and `task_amend` take an optional contract string;
   - an empty string counts as omitted;
   - human drafts keep `contract_text`, and publication parses it;
