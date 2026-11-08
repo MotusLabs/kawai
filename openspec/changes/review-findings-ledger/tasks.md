@@ -9,7 +9,7 @@ covers a spec scenario carries its `// @covers:` annotation.
 
 ## 1. Shared model
 
-- [ ] 1.1 Add `src/shared/reviewFindings.ts` (D2): the types,
+- [x] 1.1 Add `src/shared/reviewFindings.ts` (D2): the types,
   `parseLocus`, `classifyFinding` with an injected `matchesScope`,
   `foldLedger`, `blocking`, `pendingDisputes`, `deriveVerdict`, and
   `roundReview`. Commit table GT as
@@ -22,7 +22,9 @@ covers a spec scenario carries its `// @covers:` annotation.
   - treating an unknown scope fact as outside (GT10);
   - ignoring the fact's `outside` list (GT8);
   - accepting a stale identity (CR4).
-- [ ] 1.2 Commit tables VD and RO as fold-level tests in the same file.
+- [x] 1.2 Commit tables VD and RO as fold-level tests in the same file.
+  (The fold, the verdicts, and `planSubmission` live in
+  `src/shared/findingsLedger.ts`, beside the gate, to keep both files small.)
   Verify: VD1–VD10 and RO1–RO10 pass. Mutants to kill:
   - not requiring evidence on still-open (VD6);
   - letting a disputed finding block (VD8);
