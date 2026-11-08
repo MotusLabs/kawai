@@ -26,6 +26,9 @@ import { refusable } from './stepRefusal'
 import type { EffectAdapter } from './effects'
 import { blocking, foldLedger, roundReview } from '../../../shared/findingsLedger'
 import { fixFindings, reviewAsk } from './fixFindings'
+import { raiseReviewP0Alerts } from '../supervision/reviewAlerts'
+import type { MailboxStore } from '../../team/mailboxStore'
+import type { Database } from 'bun:sqlite'
 
 /** The gh/git surface the pipeline uses; injectable for tests. */
 export interface RoundAdapters {
@@ -77,6 +80,10 @@ export interface RoundDeps {
   gate?: (change: string) => boolean
   /** The owed review-restart stage's dispatch (revision-control 4.5 LC1), wired by the composition from the pause side's stores. */
   reviewRestart?: ReviewRestartSeam
+  /** The team's mailbox: review-p0 alerts (review-findings-ledger D10); none without it. */
+  mail?: Pick<MailboxStore, 'enqueue'>
+  /** The database the alerts and the plan events are written to. */
+  db?: Database
 }
 
 /**
@@ -423,6 +430,13 @@ async function decideVerdict(deps: RoundDeps, changeRow: { executionId: string; 
   const outcome = ledger !== null ? roundReview(ledger) : verdict.kind
   if (outcome === 'pending-dispute') return
   if (outcome === 'fail') {
+    // D10: accepted P0s alert the Lead role first; the alert's row is its
+    // replay key, so a tick that re-decides after a crash sends nothing new.
+    const submission = ledger !== null ? rows.find(row => row.id === counted) : undefined
+    if (submission && deps.mail && deps.db) {
+      raiseReviewP0Alerts({ db: deps.db, mail: deps.mail, plans: deps.plans, executions: store }, deps.team,
+        { executionId: changeRow.executionId, change: changeRow.change, taskId: change.taskId }, round, submission.items)
+    }
     // The failed round's blocking set, recorded now so the re-gate never
     // re-derives it from a later fold (D8).
     store.decideRound(round.id, 'fail', { verdictFindingsId: counted ?? undefined, ...(ledger !== null ? { blockingIds: blocking(ledger).map(row => row.id) } : {}) })

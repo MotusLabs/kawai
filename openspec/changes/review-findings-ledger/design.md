@@ -315,9 +315,12 @@ is reachable only in the pure model; the table keeps it for completeness.
 
 - **`review-p0` alerts.** `decideVerdict`, when it fails a round with
   accepted P0 items in the counted submission, sends one message per
-  finding through the plan-stop alert path (`supervision/stopAlerts.ts`,
-  keyed `review-p0:<roundId>:<findingId>`). With no Lead role it records a
-  plan event instead.
+  finding to the Lead role through the plan-stop alert pattern
+  (`supervision/reviewAlerts.ts`): a `plan_stall_alerts` row of kind
+  `review-p0` with episode key `<roundId>:<findingId>` commits with the
+  mail, before the round is decided, so a replay sends nothing. The stall
+  window leaves the kind out. With no Lead role it records a plan event
+  (kind `review-p0`) instead.
 - **Reads.** `task_get` gains `findingsLedger: LedgerRow[]` (bounded to
   100 rows, newest first, with `ledgerOlderRemaining`) and
   per-submission `items` with class and counted flag. The delivered task

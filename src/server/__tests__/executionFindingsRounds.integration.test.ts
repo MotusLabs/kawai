@@ -14,6 +14,8 @@ import { readPlanSupervision } from '../plans/supervision/supervisionRead'
 import { causeLabel } from '../../shared/planSupervision'
 import { TeamMailbox } from '../team/TeamMailbox'
 import type { SubmittedDisposition, SubmittedFinding } from '../../shared/findingsLedger'
+import { LEAD_ROLES } from './decisionHarness'
+import { REVIEW_P0_TAG, raiseReviewP0Alerts } from '../plans/supervision/reviewAlerts'
 import { createMatrixBench, createMatrixWorld, removeMatrixWorld, startedExecution, submitWork, type MatrixBench, type MatrixWorld } from './executionMatrixHarness'
 
 let matrix: MatrixWorld
@@ -185,5 +187,61 @@ describe('what the fix and verify handoffs say (D7)', () => {
     expect(verify).toContain(`- F2 (P1, ${identity})\n- F3 (P1, ${identity})`)
     expect(verify).toContain('give each a disposition')
     expect(verify).not.toContain('- F1 (')
+  })
+})
+
+describe('review-p0 alerts (D10)', () => {
+  const p0 = (executionId: string, change: string, extra: Partial<SubmittedFinding> = {}): SubmittedFinding =>
+    ({ ...finding(executionId, change, 'src/auth.ts'), level: 'P0', evidence: 'src/auth.ts:7 skips the token check', ...extra })
+  const leadMail = () => (h.bench.db.db.prepare("SELECT body, tags FROM team_messages WHERE to_id = 'leads'").all() as Array<{ body: string; tags: string }>)
+    .filter(message => (JSON.parse(message.tags) as string[]).includes(REVIEW_P0_TAG))
+  // @covers: plan-execution › An accepted P0 alerts the Lead role › A security finding alerts the Lead
+  test('an accepted P0 sends the Lead one review-p0 message naming the change, F1, its clause, and its evidence; the fix goes out', async () => {
+    const executionId = await startedExecution(h, [{ change: 'p0-lead' }], { roles: LEAD_ROLES.roles as never, leadGroup: 'leads' })
+    await h.tick()
+    await submitWork(h, executionId, 'p0-lead', 'src/p0-lead.ts', 'x\n')
+    await h.tick()
+    await structured(executionId, 'p0-lead', [p0(executionId, 'p0-lead')])
+    await h.tick()
+    await h.tick()
+    const mail = leadMail()
+    expect(mail).toHaveLength(1)
+    const identity = h.tasks.store.get(row(executionId, 'p0-lead').taskId!)!.identity!
+    expect(mail[0]!.body).toContain('change p0-lead')
+    expect(mail[0]!.body).toContain('accepted F1 at P0')
+    expect(mail[0]!.body).toContain(`Clause: ${identity}`)
+    expect(mail[0]!.body).toContain('src/auth.ts:7 skips the token check')
+    expect(newestRound(executionId, 'p0-lead').outcome).toBe('fail')
+    expect(h.tasks.store.assignmentsOf(row(executionId, 'p0-lead').taskId!).some(entry => entry.handoffKind === 'fix')).toBe(true)
+    // A replayed decision (a crash before the round's decide) sends nothing new.
+    const round = newestRound(executionId, 'p0-lead')
+    const items = h.tasks.store.results.findingsFor(round.resultId).find(entry => entry.id === round.verdictFindingsId)!.items
+    const again = raiseReviewP0Alerts({ db: h.bench.db.db, mail: h.mail, plans: h.bench.plans, executions: h.executions }, matrix.world.team,
+      { executionId, change: 'p0-lead', taskId: row(executionId, 'p0-lead').taskId! }, round, items)
+    expect(again).toBe(0)
+    expect(leadMail()).toHaveLength(1)
+  })
+  test('an unsupported P0 (no evidence) sends no alert', async () => {
+    const executionId = await startedExecution(h, [{ change: 'p0-bare' }], { roles: LEAD_ROLES.roles as never, leadGroup: 'leads' })
+    await h.tick()
+    await submitWork(h, executionId, 'p0-bare', 'src/p0-bare.ts', 'x\n')
+    await h.tick()
+    await structured(executionId, 'p0-bare', [p0(executionId, 'p0-bare', { evidence: null }), finding(executionId, 'p0-bare', 'src/a.ts')])
+    await h.tick()
+    expect(newestRound(executionId, 'p0-bare').outcome).toBe('fail')
+    expect(leadMail()).toHaveLength(0)
+  })
+  test('without a Lead role the alert is a plan event the owner sees', async () => {
+    const executionId = await startedExecution(h, [{ change: 'p0-owner' }])
+    await h.tick()
+    await submitWork(h, executionId, 'p0-owner', 'src/p0-owner.ts', 'x\n')
+    await h.tick()
+    await structured(executionId, 'p0-owner', [p0(executionId, 'p0-owner')])
+    await h.tick()
+    const planId = h.executions.execution(executionId)!.planId
+    const events = h.bench.plans.events(planId).filter(event => event.kind === 'review-p0')
+    expect(events).toHaveLength(1)
+    expect(events[0]!.reason).toContain('accepted F1 at P0')
+    expect(leadMail()).toHaveLength(0)
   })
 })

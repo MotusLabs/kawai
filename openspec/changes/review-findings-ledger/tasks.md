@@ -120,7 +120,7 @@ covers a spec scenario carries its `// @covers:` annotation.
   - re-gating a CI-failed round (RG4);
   - re-gating with a newer result (RG3);
   - dropping the UNIQUE constraint (RG6).
-- [ ] 5.4 Send `review-p0` alerts through the stop-alert path (D10),
+- [x] 5.4 Send `review-p0` alerts through the stop-alert path (D10),
   keyed per round and finding. Verify: the "accepted P0 alerts" scenarios
   pass. Mutants to kill:
   - alerting on an unsupported P0;
