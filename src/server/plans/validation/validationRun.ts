@@ -4,6 +4,8 @@
 // the report's parts for the record phase. The service owns scope, single
 // flight, the transaction, and the push; nothing here reads the validation
 // tables.
+import fs from 'node:fs'
+import path from 'node:path'
 import type { PlanContent, PlanLifecycle, PlanRevisionStatus, PlanStrategyPin } from '../../../shared/plans'
 import type { ImpactGate } from '../../../shared/strategyImpact'
 import type {
@@ -29,6 +31,8 @@ export type ClaimedPlan = { planId: string; lifecycle: PlanLifecycle; revisions:
 export interface ValidationFilePhase {
   file: ValidationFileInputs
   cli: Record<string, { validate: ValidateOutcome; deltas: ShowDeltasOutcome }>
+  /** Each registered change's design.md text, null when absent (implementation-contract D5). */
+  designs: Record<string, string | null>
   resolved: Record<string, ResolvedChange>
   capacity: ValidationCapacityEvidence[]
 }
@@ -54,11 +58,13 @@ export async function runFilePhase(options: {
     ...(options.homeDir ? { homeDir: options.homeDir } : {}),
   })
   const cli: ValidationFilePhase['cli'] = {}
+  const designs: ValidationFilePhase['designs'] = {}
   const resolved: Record<string, ResolvedChange> = {}
   await Promise.all(file.changes.map(async change => {
     const located = file.evidence.changes[change.change] ?? { root: null, dir: null, head: null }
     resolved[change.change] = { change: change.change, status: change.status, dir: located.dir, root: located.root, head: located.head }
     if (change.status !== 'registered' || !located.root) return
+    designs[change.change] = located.dir ? await readDesign(path.join(located.dir, 'design.md')) : null
     const [validate, deltas] = await Promise.all([
       options.adapter.validate(located.root, change.change),
       options.adapter.showDeltas(located.root, change.change),
@@ -68,7 +74,12 @@ export async function runFilePhase(options: {
   const capacity = (await Promise.all([...new Set(options.content.roles.map(role => role.group))]
     .map(async group => await options.capacity(group))))
     .filter((entry): entry is ValidationCapacityEvidence => entry !== null)
-  return { file, cli, resolved, capacity }
+  return { file, cli, designs, resolved, capacity }
+}
+
+/** A change's design.md, or null when it is missing or unreadable. */
+async function readDesign(file: string): Promise<string | null> {
+  try { return await fs.promises.readFile(file, 'utf8') } catch { return null }
 }
 
 /**
@@ -134,6 +145,7 @@ export function buildRecordPhase(parts: {
     adapter: { tool: 'openspec', version: parts.file.file.adapter.version, capabilities: parts.file.file.adapter.capabilities, ok: parts.file.file.probe.ok, error: parts.file.file.probe.error },
     resolved: parts.file.resolved,
     cli: parts.file.cli,
+    designs: parts.file.designs,
     gate: parts.gate,
     claims,
     groups: parts.file.file.catalogs.groups,

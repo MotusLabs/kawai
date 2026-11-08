@@ -63,6 +63,8 @@ test('E1: a well-formed section at the baseline becomes revision 1\'s contract, 
 })
 
 // @covers: plan-execution › Kawai creates and dispatches one task per change › A change without a contract section
+// The execution is inserted directly, as one started before the upgrade, never validated by the new check:
+// @covers: plan-validation › Reports from earlier checks are out of date › A running execution is unaffected
 test('E2: a design.md without the section creates and dispatches the task without a contract and journals the missing section', async () => {
   writeDesign('cs-e2', '# Design\n\nNo contract here.\n')
   const executionId = await startedExecution(h, [{ change: 'cs-e2' }])

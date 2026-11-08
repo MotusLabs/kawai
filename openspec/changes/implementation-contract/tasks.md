@@ -113,7 +113,7 @@ covers a spec scenario carries its `// @covers:` annotation.
 
 ## 5. Plan validation
 
-- [ ] 5.1 Add the `implementation-contract` check to `VALIDATION_CHECKS`
+- [x] 5.1 Add the `implementation-contract` check to `VALIDATION_CHECKS`
   (row `intent`, skipping changes that are not registered), and raise
   `VALIDATION_CHECKS_VERSION` to 2. Commit V1–V5. Verify: V1–V5 and the
   plan-validation scenarios, including "A running execution is
@@ -121,7 +121,7 @@ covers a spec scenario carries its `// @covers:` annotation.
   - checking unregistered changes (V4);
   - not bumping the version (V5);
   - stopping at the first problem (V3).
-- [ ] 5.2 Update the plan validation bullet in `docs/architecture/` and the
+- [x] 5.2 Update the plan validation bullet in `docs/architecture/` and the
   Plans view's check label, if the row lists checks by name. Verify: the
   label renders in the existing validation section test.
 

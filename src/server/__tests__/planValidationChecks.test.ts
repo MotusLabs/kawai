@@ -23,6 +23,9 @@ const gate = (state: 'current' | 'continue' | 'decision-required' | 'adapt' | 'r
 })
 
 const content = (raw: Record<string, unknown>): PlanContent => normalizePlanContent(raw)
+/** A design.md with a well-formed Implementation contract section (implementation-contract D5). */
+const DESIGN = ['# Design', '## Implementation contract', '### Acceptance', '- A1: Works', '### Invariants', '### Scope', '- `src/**`',
+  '### Verification', '- V1: check passes', '### Excluded'].join('\n')
 
 const ctx = (overrides: Partial<ValidationCheckContext> = {}): ValidationCheckContext => ({
   content: content({ goal: 'g', changes: [{ change: 'alpha', group: 'middle-devs' }, { change: 'beta' }], roles: [{ group: 'middle-devs', profiles: ['default'] }] }),
@@ -30,6 +33,7 @@ const ctx = (overrides: Partial<ValidationCheckContext> = {}): ValidationCheckCo
   adapter: probe(),
   resolved: { alpha: registered('alpha'), beta: registered('beta') },
   cli: { alpha: { validate: valid(), deltas: deltas() }, beta: { validate: valid(), deltas: deltas() } },
+  designs: { alpha: DESIGN, beta: DESIGN },
   gate: gate('current'),
   claims: { branch: [], changes: {} },
   groups: new Map([['middle-devs', { profiles: ['default'] }]]),
@@ -251,7 +255,7 @@ describe('capacity', () => {
 
 test('the checks run in the D3 order', () => {
   expect(VALIDATION_CHECKS.map(check => check.name)).toEqual([
-    'adapter-available', 'change-registered', 'openspec-valid', 'relations', 'change-claimed-elsewhere',
+    'adapter-available', 'change-registered', 'openspec-valid', 'implementation-contract', 'relations', 'change-claimed-elsewhere',
     'strategy-impact', 'groups-known', 'profiles-known', 'branch-free', 'capacity',
   ])
 })
