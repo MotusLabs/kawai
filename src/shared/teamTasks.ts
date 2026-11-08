@@ -268,6 +268,24 @@ export interface TaskTestClaim {
 /** The status of one checked fact (independent-verification D2). */
 export type ResultFactStatus = 'pass' | 'warn' | 'fail' | 'unknown'
 
+/**
+ * The scope fact (implementation-contract D6): changed paths outside the
+ * scope of the pinned revision's contract. `warn` lists them; `no-contract`
+ * when that revision has none. Informational only: it never gates.
+ */
+export interface ResultScopeFact {
+  status: ResultFactStatus | 'no-contract'
+  /** Null when the fact could not judge (no contract, unknown). */
+  withinScope: boolean | null
+  /** The first paths outside scope, at most 20. */
+  outside: string[]
+  /** How many more paths are outside scope past the cap. */
+  more: number
+  /** The pinned revision's identity the paths were judged against. */
+  contractIdentity: string | null
+  note: string | null
+}
+
 /** How a result's commit relates to its worktree's HEAD (D2). */
 export type ResultHeadRelation = 'same' | 'ahead' | 'behind' | 'diverged'
 
@@ -343,6 +361,8 @@ export interface ResultCheckFacts {
     skipped: number
     status: ResultFactStatus
   }
+  /** Absent on facts written before contracts: readers show "not checked" (implementation-contract D6). */
+  scope?: ResultScopeFact
   /**
    * How the check resolved the result's coverage citations (independent-
    * verification D5): per clause, per citation, in the stored map's order —

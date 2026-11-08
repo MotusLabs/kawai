@@ -127,7 +127,7 @@ covers a spec scenario carries its `// @covers:` annotation.
 
 ## 6. Scope fact
 
-- [ ] 6.1 Add `scope?` to `ResultCheckFacts` (still `version: 1`) and
+- [x] 6.1 Add `scope?` to `ResultCheckFacts` (still `version: 1`) and
   compute it in `resultChecks.ts` per D6: the pinned revision's contract,
   the merge base, `diff --name-status -z -M`, `Bun.Glob`, the
   linked-change exemption, and the 20-path cap. Commit S1–S10 against a

@@ -16,6 +16,7 @@ import { readTreeTestList } from './treeTestList'
 import type { ResultCheckStore } from './resultCheckStore'
 import type { CoverageMap } from '../../shared/coverageMaps'
 import type { TaskResultCheck } from '../../shared/teamTasks'
+import type { ScopeInput } from './scopeFact'
 
 /** What the service reads about results and tasks, prepared by the
  * composition (sessionMailbox): the store rows name ids; the facts' inputs
@@ -23,6 +24,8 @@ import type { TaskResultCheck } from '../../shared/teamTasks'
 export interface ResultCheckSources {
   /** The result to check: its commit text, pinned worktree, and coverage map. */
   result: (id: string) => { commit: string | null; worktree: string | null; coverage: CoverageMap | null } | null
+  /** The contract of the revision a result is pinned to, with the task's linked change (implementation-contract D6); null when unknown. */
+  scopeOf?: (resultId: string) => ScopeInput | null
   /** Every open, active, or blocked task of the team, with creation times. */
   openTasks: (teamId: string) => Array<{ id: string; worktree: string | null; createdAt: string }>
   /** The team's listed worktree roots (task worktrees are validated against these). */
@@ -147,10 +150,12 @@ export class ResultCheckService {
       .filter(task => task.id !== check.taskId && task.worktree !== null && listed.has(task.worktree))
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
       .map(task => ({ taskId: task.id, worktree: task.worktree as string }))
+    const scope = this.options.sources.scopeOf?.(check.resultId) ?? null
     return {
       given: result.commit,
       worktree: result.worktree,
       coverage: result.coverage,
+      ...(scope ? { scope } : {}),
       repoRoot,
       others,
       host: { platform: process.platform, arch: process.arch },

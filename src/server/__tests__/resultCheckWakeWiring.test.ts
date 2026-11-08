@@ -3,7 +3,8 @@
 // to its ResultCheckService (sessionMailbox.ts), so a submitted result's
 // pending row runs with no manual wake — deleting the post-commit
 // `onResult?.(...)` leaves the row pending and fails here. The recheck wake
-// rides the same composition. A real git repository is the team, so the
+// rides the same composition, and so does the scope fact's pinned contract
+// (implementation-contract D6). A real git repository is the team, so the
 // check runs its real git path end to end.
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
@@ -75,4 +76,26 @@ test('the composition wakes the check service: a submitted result settles with n
   await runtime.resultChecks.quiesce()
   expect(runtime.tasks.store.checks.get(rechecked.id)).toMatchObject({ status: 'done', trigger: 'recheck' })
   expect(runtime.tasks.store.checks.allForResult(result.id)).toHaveLength(2)
+})
+
+// The composition's scopeOf (implementation-contract D6): the submitted
+// result's check judges the pinned revision's contract against the real
+// commit — removing the `scopeOf` source leaves no scope fact and fails here.
+test('the composition carries the pinned contract into the check: a path outside scope is listed', async () => {
+  const base = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8', env: cleanGitEnv() }).stdout.trim()
+  git(['update-ref', 'refs/remotes/origin/HEAD', base])
+  fs.mkdirSync(path.join(dir, 'src/client'), { recursive: true })
+  fs.writeFileSync(path.join(dir, 'src/client/App.tsx'), 'export {}\n')
+  git(['add', 'src/client/App.tsx'])
+  git(['-c', 'user.email=t@e', '-c', 'user.name=T', 'commit', '-q', '-m', 'outside'])
+  const commit = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8', env: cleanGitEnv() }).stdout.trim()
+  const contract = ['## Implementation contract', '### Acceptance', '- A1: Works', '### Invariants', '### Scope', '- `src/server/**`',
+    '### Verification', '- V1: check passes', '### Excluded'].join('\n')
+  const task = await runtime.tasks.create(agent('lead'), { title: 'Scoped', direction: 'v1', contract })
+  const result = await runtime.results.submit(agent('dev'), task.id, { summary: 'CSV export', commit })
+  await runtime.resultChecks.quiesce()
+  const [stored] = runtime.tasks.store.checks.allForResult(result.id)
+  expect(stored?.facts?.scope).toEqual({
+    status: 'warn' as const, withinScope: false, outside: ['src/client/App.tsx'], more: 0, contractIdentity: task.identity!, note: null,
+  })
 })

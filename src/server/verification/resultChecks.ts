@@ -18,6 +18,7 @@ import { testTitles } from '../checks/testTitles'
 import { parseCitation, type CitationOutcome, type CoverageMap } from '../../shared/coverageMaps'
 import type { ResultCheckFacts, ResultHeadRelation } from '../../shared/teamTasks'
 import { MAX_LISTED_PATHS } from './serializeFacts'
+import { readScope, scopeWithoutCommit, type ScopeInput } from './scopeFact'
 
 /** The whole-check budget (D1): a check that exceeds it is unavailable. */
 export const RESULT_CHECK_BUDGET_MS = 120_000
@@ -97,6 +98,8 @@ export interface ResultCheckInput {
    */
   testList?: TreeTestList
   baseRef?: string
+  /** The pinned revision's contract for the scope fact (implementation-contract D6); absent, no scope fact. */
+  scope?: ScopeInput
 }
 
 const trimmed = (result: GitCommandResult): string => result.stdout.trim()
@@ -436,6 +439,7 @@ export async function computeResultFacts(input: ResultCheckInput, git: CheckGit)
         conflicts: [], moreConflicts: 0, status: 'unknown', note,
       },
       branches: { compared: [], comparedCount: 0, skipped: 0, status: 'unknown' },
+      ...(input.scope ? { scope: scopeWithoutCommit(input.scope, note) } : {}),
       // There is no commit to resolve at (D5): every cited test reads
       // unresolved, whatever the map says. Declared-uncovered clauses carry
       // an empty outcome list, so the join still reads them by row 1.
@@ -458,6 +462,7 @@ export async function computeResultFacts(input: ResultCheckInput, git: CheckGit)
     recorded: await readRecorded(git, input.repoRoot, commit.sha, commit.tree, input.host),
     base,
     branches,
+    ...(input.scope ? { scope: await readScope(git, input.repoRoot, commit.sha, baseRef, input.scope) } : {}),
     // One tree-reader call per check: the lookup is built once from the
     // tree's newest usable list and answers every citation (D7, task 4.3).
     ...(input.coverage
