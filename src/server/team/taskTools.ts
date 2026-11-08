@@ -62,8 +62,19 @@ export const taskSchemas = {
   task_submit_coverage: z.object({
     ...taskId, result_id: z.string().min(1), coverage: z.unknown(),
   }),
+  // review-findings-ledger D4: text with a verdict, or structured items and
+  // dispositions with a derived (optional, checked) verdict.
   task_submit_findings: z.object({
-    ...taskId, result_id: z.string().min(1), kind: z.enum(['review', 'qa']), verdict: z.enum(['pass', 'fail']), findings: z.string().min(1),
+    ...taskId, result_id: z.string().min(1), kind: z.enum(['review', 'qa']), verdict: z.enum(['pass', 'fail']).optional(),
+    findings: z.string().optional(),
+    items: z.array(z.object({
+      id: z.string().regex(/^F[1-9]\d*$/, { error: 'a finding id is F<n>' }).optional(), level: z.enum(['P0', 'P1', 'P2']),
+      clause: z.string().optional(), evidence: z.string().optional(), impact: z.string().optional(), reproduction: z.string().optional(),
+    })).optional(),
+    dispositions: z.array(z.object({
+      id: z.string().regex(/^F[1-9]\d*$/, { error: 'a finding id is F<n>' }), disposition: z.enum(['resolved', 'still-open', 'regressed']),
+      evidence: z.string().optional(),
+    })).optional(),
   }),
   task_handoff: z.object({
     ...taskId, kind: z.enum(['review', 'qa', 'fix']), result_id: z.string().min(1), target: z.string().min(1),
@@ -88,7 +99,7 @@ export const taskDescriptions: Record<(typeof TASK_TOOL_NAMES)[number], string> 
   task_acknowledge: 'State the published task revision you are now working from (the revision in the task header). Call it when you start or take over work on a task, and after a revision notice.',
   task_submit_result: 'Submit a result for a task: a summary, a commit and/or diff reference (at least one), the tests you ran with their outcomes, and known limitations. Your test outcomes are shown as claimed, not verified. Supersedes the task\'s previous result; does not close the task.',
   task_submit_coverage: 'Record your own coverage map for a result (result_id from task_get): the same clause/citation map a submission carries. While you hold a task\'s outstanding review handoff and have recorded no map for its result, the submitter\'s maps stay withheld from you — recording yours unseals them. Maps are append-only; your newest map for a result counts.',
-  task_submit_findings: 'Report review or QA findings on one exact result (result_id from task_get): kind review|qa, verdict pass|fail, and the findings. They stay bound to that result — a newer result inherits nothing.',
+  task_submit_findings: 'Report review or QA findings on one exact result (result_id from task_get), kind review|qa. Structured (required for a plan change\'s review): items, each with level P0 (security, data corruption, severe correctness) | P1 (a reproducible requirement violation, a significant regression) | P2 (advisory, never blocks), the clause it violates (A1, or r<N>#<hash> › A1; on a task without a contract, its revision identity), evidence (file:line, test output, or a counterexample), impact, and an optional reproduction; and dispositions resolved | still-open | regressed (the latter two with evidence) for every blocking finding listed in task_get. The verdict is derived (fail exactly when a P0/P1 is accepted and open); the reply lists each item\'s class. Text form: findings and verdict pass|fail. Findings stay bound to that result — a newer result inherits nothing.',
   task_handoff: 'Hand a result off (kind review, qa, or fix — return for fixes; the result_id, instructions, and an optional expected_response) to a recipient: target_kind "group" (the default when omitted, even for a session-shaped id) with target: <group id>, or target_kind "session" with target: <session id> to dispatch ordinary direct task mail to that exact session — no other member is chosen. While an equivalent handoff (same task, result, kind) is outstanding, this returns it instead of dispatching again; if the standing handoff names another recipient, the notice says so and nothing is reassigned. Optional worker (group targets only) limits who may take it to one provider (e.g. claude) or one model (provider/model, or a bare model key) of the group\'s workers, as on send_message; a handoff naming another worker is another handoff.',
   task_check_result: 'Ask Kawai to check a result again (result_id from task_get): the commit, its worktree state, the recorded full-check pass, and merges against the base and other open tasks\' branches. The check never gates anything; it runs in the background and the newest check rides task_get. A request while a check is pending returns that pending check.',
 }
@@ -137,8 +148,13 @@ export function taskHandlers(tasks: TaskService, sessionId: string, results?: Ta
         return results.submitCoverage(caller, task_id, { resultId: result_id, coverage })
       },
       task_submit_findings: async (input: unknown) => {
-        const { task_id, result_id, kind, verdict, findings } = taskSchemas.task_submit_findings.parse(input)
-        return results.submitFindings(caller, task_id, { resultId: result_id, kind, verdict, findings })
+        const { task_id, result_id, kind, verdict, findings, items, dispositions } = taskSchemas.task_submit_findings.parse(input)
+        return results.submitFindings(caller, task_id, {
+          resultId: result_id, kind, findings,
+          ...(verdict !== undefined ? { verdict } : {}),
+          ...(items !== undefined ? { items } : {}),
+          ...(dispositions !== undefined ? { dispositions } : {}),
+        })
       },
       task_handoff: async (input: unknown) => {
         const { task_id, kind, result_id, target_kind, target, instructions, expected_response, worker } = taskSchemas.task_handoff.parse(input)

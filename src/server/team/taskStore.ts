@@ -36,6 +36,7 @@ import { TaskJournalWindow } from './taskJournalWindow'
 import { TaskListWindow } from './taskListWindow'
 import type { ImplementationContract } from '../../shared/implementationContract'
 import { contractColumns, contractFields, nextContract } from './taskContractRows'
+import { FindingStore } from './findingStore'
 
 const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS team_tasks (
@@ -161,6 +162,8 @@ export class TaskStore {
   readonly results: TaskResultStore
   /** Result checks and coverage maps (independent-verification D4). */
   readonly checks: ResultCheckStore
+  /** Structured findings, ledger events, and dispute cards (review-findings-ledger D3). */
+  readonly findings: FindingStore
   /** The agent's bounded detail and lossless entry reads (bounded-log-reads D4–D6); no tool calls them yet. */
   readonly journalWindow: TaskJournalWindow
   /** The agent's bounded, compact task list (bounded-task-list D3). */
@@ -178,6 +181,7 @@ export class TaskStore {
     this.notices = mail && assignments ? new TaskNotices(db, mail, assignments, this.acknowledgements) : null
     this.results = new TaskResultStore(db)
     this.checks = new ResultCheckStore(db)
+    this.findings = new FindingStore(db)
     this.journalWindow = new TaskJournalWindow(db, this, mail)
     this.listWindow = new TaskListWindow(db, this)
   }
@@ -227,6 +231,11 @@ export class TaskStore {
   byRequestKey(teamId: string, requestKey: string): TeamTask | null {
     const row = this.db.prepare('SELECT id FROM team_tasks WHERE team_id = ? AND request_key = ?').get(teamId, requestKey)
     return row ? this.get(String((row as Record<string, unknown>).id)) : null
+  }
+
+  /** Run `fn` in one immediate transaction (review-findings-ledger D3: dense ledger_seq and finding ids). */
+  immediate<T>(fn: () => T): T {
+    return this.db.transaction(fn).immediate()
   }
 
   get(id: string): TeamTask | null {

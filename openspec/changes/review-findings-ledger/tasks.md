@@ -40,7 +40,7 @@ covers a spec scenario carries its `// @covers:` annotation.
   old text rows keeps them byte-identical and reads them as unstructured.
   Verify: the migration test passes, and the migrations snapshot test is
   updated.
-- [ ] 2.2 Add `src/server/team/findingStore.ts` and
+- [x] 2.2 Add `src/server/team/findingStore.ts` and
   `TaskFindingService.submit` (D4, D5). Wire it from
   `TaskResultService.submitFindings`, and extend the `task_submit_findings`
   schema for both runtimes. Commit the bounds, finality, and counting
@@ -52,7 +52,7 @@ covers a spec scenario carries its `// @covers:` annotation.
   - counting a non-claimant row on a plan task;
   - writing items before a verdict mismatch is refused (I3);
   - an off-by-one on the blocking cap of 50, or dropping it.
-- [ ] 2.3 Add property P2 (seed `0xF1ED6E5`, 300 cases) over seeded
+- [x] 2.3 Add property P2 (seed `0xF1ED6E5`, 300 cases) over seeded
   submission sequences. Verify: P2 passes. Mutant to kill: reuse of a
   replaced submission's ids.
 
