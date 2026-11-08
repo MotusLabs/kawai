@@ -40,14 +40,18 @@ computed over this change's ledger).
 
   Only accepted findings can fail a round.
 - **The rebut action.** The developer can dispute accepted findings with
-  counter-evidence, as a new tool or a field of `task_submit_result`. A
-  disputed finding goes to the plan's Lead role, or to the task creator
-  for manual work, as a decision card (`decision_ask`). The decision
-  upholds the finding (back to `accepted`) or rejects it. The change waits
-  instead of spending a fix round on it.
-- **P0 escalation.** An accepted P0 also opens a Lead card immediately,
-  while the fix proceeds. This is a proposed default, still to be
-  confirmed with the owner.
+  counter-evidence with a new tool, `task_dispute_findings`. On a plan
+  task a disputed finding becomes a decision card for the plan's Lead role
+  (else the owner). On a manual task the creator or the human decides it
+  with `task_decide_dispute`. The decision upholds the finding (back to its
+  state before the dispute) or rejects it. The change waits instead of
+  spending a fix round on it. When every blocking finding of a round that
+  failed on review alone is rejected, Kawai re-gates that round's result
+  without a new commit.
+- **P0 escalation.** An accepted P0 also sends the Lead role one
+  `review-p0` message while the fix proceeds. It is a message, not a card,
+  because there is nothing to decide. This is a proposed default, still to
+  be confirmed with the owner.
 - **A findings ledger per task.** It holds one row per finding id, with its
   level, clause, state (`accepted`, `unsupported`, `advisory`,
   `out-of-contract`, `disputed`, `rejected`, `resolved`, `still-open`,
@@ -88,9 +92,10 @@ computed over this change's ledger).
 - `plan-execution`: "A failed round returns the change for fixes" now
   means a round with at least one accepted P0/P1 finding, and the fix
   instruction carries only the open accepted findings. A disputed finding
-  holds the change until its card is decided.
-- `plan-decisions`: rebuttal and P0 cards are new card kinds raised by
-  Kawai on the developer's or reviewer's behalf.
+  holds the round until its card is decided, rejected disputes re-gate a
+  failed round's result, and an accepted P0 alerts the Lead role.
+- `plan-decisions`: dispute cards are a new card kind, raised by Kawai on
+  the disputing developer's behalf.
 
 ## Impact
 
@@ -98,7 +103,8 @@ computed over this change's ledger).
   task, result, and finding id. Existing `team_task_findings` rows stay as
   text-only findings with no ledger rows.
 - **Server:** `TaskResultService.submitFindings`, the task tools, a new
-  ledger store and gate (`src/server/team/` or `src/server/review/`), and
+  ledger store and gate (`src/server/team/`, with the pure model in
+  `src/shared/reviewFindings.ts`), and
   `executionRounds.ts`/`executionDispatch.ts`/`instructions.ts` for the
   derived verdict and the filtered fix instruction. The decision-card
   composition (`src/server/plans/decisions/`) also changes.
@@ -107,14 +113,13 @@ computed over this change's ledger).
 - **Prompts and docs:** `.kawai/groups/reviewers*.md`, the dev role files,
   `lead.md`, `change-leads.md`, `docs/agent-collaboration.md`, and
   `docs/oracle-hazards.md` (the blocking rules move into the protocol).
-- **Metrics:** `delivery-outcome-metrics` counts review rounds from
-  findings rows and gains per-finding counts.
+- **Metrics:** `delivery-outcome-metrics` keeps counting review rounds
+  from findings rows, which stay one per submission. Per-finding counts
+  are left to `review-convergence`.
 - **Depends on:** `implementation-contract` (clause identities, scope,
   `X*`) and `revision-control` (the fix-attempt path).
-- **Open questions to settle in design:**
-  - whether the rebuttal is a separate tool or a result field;
-  - the exact locus rule for "same clause, same locus" reopen detection;
-  - whether an unsupported P0 (a claimed security bug without evidence)
-    still alerts the Lead.
+- **Settled in design (D1):** the rebuttal is a separate tool; the locus
+  is the clause plus the path of the evidence's first `file:line`; an
+  unsupported P0 sends no alert.
 - **Out of scope:** convergence signals, DIAGNOSE, and the fix-round
   backstop (`review-convergence`).
