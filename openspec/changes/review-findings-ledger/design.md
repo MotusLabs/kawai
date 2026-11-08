@@ -293,10 +293,12 @@ startup, and a crash after the insert finds the row (matrix row).
 ### D9 — Re-map on publication
 
 In the publication transaction (`TaskService`), when the new revision's
-identity differs from the previous one's, Kawai writes `remapped` or
+identity hash (the part after `#`; the `r<N>` prefix moves on every
+publication) differs from the previous one's, Kawai writes `remapped` or
 `superseded` for each blocking or disputed finding (table RM) under
 `revision:` keys. It journals one line per finding. A replayed publication
-writes nothing new.
+writes nothing new. A contract is never removed once published, so RM5
+is reachable only in the pure model; the table keeps it for completeness.
 
 ### D10 — Alerts, reads, and client
 

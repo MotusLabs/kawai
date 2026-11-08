@@ -186,3 +186,55 @@ test('P2 finding ids are unique, increasing, and never reused', async () => {
     expect(stored.map(entry => entry.finding_id).sort()).toEqual([...allocated].sort())
   }
 }, 60_000)
+
+// Re-map on publication (D9, table RM) through task_amend and the human path.
+const CONTRACT_A1 = CONTRACT.replace('- A2: Pins revisions\n', '').replace('- A1: Lists tasks', '- A1: Lists every task')
+async function twoOpen() {
+  const { task, result } = await manualTask()
+  await handlers('reviewer').task_submit_findings({ task_id: task.id, result_id: result.id, kind: 'review',
+    items: [p1('A1', 'src/server/team/a.ts'), p1('A2', 'src/server/team/b.ts')] })
+  return task
+}
+const ledgerOf = (taskId: string) => results.findingsLedger.ledger(taskId).map(entry => [entry.id, entry.state, entry.clause])
+
+test('RM1/RM2 task_amend with a new contract re-maps A1 by id and supersedes A2, journaling each, once', async () => {
+  const task = await twoOpen()
+  const amended = await handlers('lead').task_amend({ task_id: task.id, contract: CONTRACT_A1 })
+  const identity = tasks.store.revisions(task.id).at(-1)!.identity!
+  expect(identity).not.toBe(task.identity)
+  expect(ledgerOf(task.id)).toEqual([['F1', 'accepted', `${identity} › A1`], ['F2', 'superseded', `${task.identity} › A2`]])
+  const journal = tasks.store.journal(task.id).map(entry => entry.text)
+  expect(journal.filter(text => text.startsWith('Re-mapped F1') || text.startsWith('Superseded F2'))).toHaveLength(2)
+  expect(amended).toBeDefined()
+  const { remapFindings } = await import('../team/findingRemap')
+  expect(remapFindings(tasks.store, task.id, tasks.store.revisions(task.id).at(-1)!)).toBe(0)
+  expect(tasks.store.findings.events(task.id)).toHaveLength(2)
+})
+
+test('RM6 an amendment that keeps the contract writes no event', async () => {
+  const task = await twoOpen()
+  await handlers('lead').task_amend({ task_id: task.id, direction: 'v2' })
+  expect(tasks.store.findings.events(task.id)).toEqual([])
+  expect(ledgerOf(task.id).map(entry => entry[1])).toEqual(['accepted', 'accepted'])
+})
+
+test('RM2 through the human path: a replacement contract supersedes both; a replayed publication writes nothing new', async () => {
+  const task = await twoOpen()
+  const human: TaskCaller = { kind: 'human', team }
+  const other = CONTRACT.replace('- A1: Lists tasks\n- A2: Pins revisions', '- A3: Exports rows')
+  await tasks.publish(human, task.id, { contract: other, requestKey: 'replace-1' })
+  expect(ledgerOf(task.id).map(entry => entry[1])).toEqual(['superseded', 'superseded'])
+  const replay = await tasks.publish(human, task.id, { contract: other, requestKey: 'replace-1' })
+  expect(replay.replay).toBe(true)
+  expect(tasks.store.findings.events(task.id)).toHaveLength(2)
+  expect(results.findingsLedger.effectiveVerdict(submitted(task.id).at(-1)!)).toBe('pass')
+})
+
+test('RM3 a revision citation on a task without a contract re-maps to the new text identity', async () => {
+  const task = await tasks.create(agent('lead'), { title: 'Plain', direction: 'v1' })
+  const result = await results.submit(agent('dev'), task.id, { summary: 'r1', commit: 'abc' })
+  await handlers('reviewer').task_submit_findings({ task_id: task.id, result_id: result.id, kind: 'review', items: [p1(task.identity!, 'src/a.ts')] })
+  await handlers('lead').task_amend({ task_id: task.id, direction: 'v2' })
+  const identity = tasks.store.revisions(task.id).at(-1)!.identity!
+  expect(ledgerOf(task.id)).toEqual([['F1', 'accepted', identity]])
+})

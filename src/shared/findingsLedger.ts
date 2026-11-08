@@ -5,7 +5,8 @@
 // (`deriveVerdict`, `roundReview`) and `planSubmission`, which turns one
 // structured submission into stored items under tables VD and RO.
 import type { CitationContext, Disposition, FindingClass, FindingLevel, FindingState, ScopeView } from './reviewFindings'
-import { FINDING_LIMITS, classifyFinding, isBlocking, parseLocus, resolveCitation } from './reviewFindings'
+import { FINDING_LIMITS, classifyFinding, contractHas, isBlocking, parseLocus, resolveCitation } from './reviewFindings'
+import { clauseIdentity, type ImplementationContract } from './implementationContract'
 
 /** One stored item of a submission: a new or re-raised finding, or a disposition. */
 export interface LedgerItem {
@@ -306,4 +307,34 @@ export function planSubmission(input: {
     return { ok: false, problems: [`a task holds at most ${L.blocking} blocking findings; this submission would leave ${blocking(after).length}`] }
   }
   return { ok: true, items, verdict: deriveVerdict(after), after, nextNumber: next }
+}
+
+export interface RemapEvent { findingId: string; kind: 'remapped' | 'superseded'; clause: string | null }
+
+/** The hash part of `r<N>#<hash12>`: the revision number moves on every publication, the hash only when the text or contract does. */
+const identityHash = (identity: string): string => identity.slice(identity.indexOf('#') + 1)
+
+/**
+ * Table RM (D9): the events a publication writes. Nothing when the identity's
+ * hash is unchanged (RM6) or for a finding neither blocking nor disputed
+ * (RM7). A clause citation moves by its clause id, never by its text, to a
+ * contract that still has that id (RM1, RM2, RM5); a revision citation moves
+ * only to a revision without a contract (RM3, RM4).
+ */
+export function remapOnPublication(rows: readonly LedgerRow[], previousIdentity: string, next: { identity: string; contract: ImplementationContract | null }): RemapEvent[] {
+  if (identityHash(previousIdentity) === identityHash(next.identity)) return []
+  const events: RemapEvent[] = []
+  for (const row of rows) {
+    if (!isBlocking(row.level, row.state) && row.state !== 'disputed') continue
+    if (row.clauseId !== null) {
+      events.push(next.contract !== null && contractHas(next.contract, row.clauseId)
+        ? { findingId: row.id, kind: 'remapped', clause: clauseIdentity(next.identity, row.clauseId) }
+        : { findingId: row.id, kind: 'superseded', clause: null })
+    } else {
+      events.push(row.clause !== null && next.contract === null
+        ? { findingId: row.id, kind: 'remapped', clause: next.identity }
+        : { findingId: row.id, kind: 'superseded', clause: null })
+    }
+  }
+  return events
 }

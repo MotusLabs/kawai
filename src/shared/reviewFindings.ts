@@ -53,7 +53,7 @@ export type ResolvedCitation =
 const IDENTITY = /^r[1-9]\d*#[0-9a-f]{12}$/
 const CLAUSE_ID = /^[AIVX][1-9]\d*$/
 
-function contractHas(contract: ImplementationContract, id: string): boolean {
+export function contractHas(contract: ImplementationContract, id: string): boolean {
   return [contract.acceptance, contract.invariants, contract.verification, contract.excluded]
     .some(part => part.some(clause => clause.id === id))
 }

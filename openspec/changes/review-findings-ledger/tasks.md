@@ -81,7 +81,7 @@ covers a spec scenario carries its `// @covers:` annotation.
 
 ## 4. Re-map on publication
 
-- [ ] 4.1 Write re-map events in `TaskService`'s publication transaction
+- [x] 4.1 Write re-map events in `TaskService`'s publication transaction
   (D9). Commit table RM through `task_amend` and the human publication
   path. Verify: RM1–RM7 pass. Mutants to kill:
   - re-mapping by clause text instead of id (RM1, RM2);
