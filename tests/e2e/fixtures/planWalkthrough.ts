@@ -68,9 +68,10 @@ export function serveDeltas(deltas: Record<string, readonly StubTouch[]>): void 
 
 /**
  * A git repository whose OpenSpec root registers each named change (a
- * proposal and a chat spec file), plus the team's group files, so a plan
- * naming the changes validates as registered. Returns nothing; callers pass
- * the root as the chat's project path.
+ * proposal, a chat spec file, and a design.md with an implementation
+ * contract), plus the team's group files, so a plan naming the changes
+ * validates as registered and Ready. Returns nothing; callers pass the root
+ * as the chat's project path.
  */
 export function initPlanRepository(root: string, changes: readonly string[], groups: Record<string, string>): void {
   execFileSync('git', ['init', '-q', root])
@@ -78,6 +79,9 @@ export function initPlanRepository(root: string, changes: readonly string[], gro
     mkdirSync(join(root, 'openspec', 'changes', change, 'specs', 'chat'), { recursive: true })
     writeFileSync(join(root, 'openspec', 'changes', change, 'proposal.md'), `# ${change}\n`)
     writeFileSync(join(root, 'openspec', 'changes', change, 'specs', 'chat', 'spec.md'), '## ADDED Requirements\n### Requirement: Presence\n')
+    // The implementation-contract validation check requires a parseable section.
+    writeFileSync(join(root, 'openspec', 'changes', change, 'design.md'), ['## Implementation contract', '### Acceptance', `- A1: ${change} works`,
+      '### Invariants', '### Scope', '- `src/**`', '### Verification', '- V1: check passes', '### Excluded'].join('\n') + '\n')
   }
   mkdirSync(join(root, '.kawai', 'groups'), { recursive: true })
   for (const [id, body] of Object.entries(groups)) {
