@@ -39,7 +39,7 @@ export class CheckUnavailable extends Error {}
  * answers — any exit code — resolves normally, since exit codes carry facts
  * (a merge conflict is exit 1).
  */
-export type CheckGit = (args: string[], opts?: { cwd?: string }) => Promise<GitCommandResult>
+export type CheckGit = (args: string[], opts?: { cwd?: string; maxOutputBytes?: number }) => Promise<GitCommandResult>
 
 /**
  * The production runner: runGitAsync under a budget measured from the first

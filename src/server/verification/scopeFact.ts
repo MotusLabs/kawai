@@ -6,7 +6,9 @@
 // linked change's own directory count as in scope; at most 20 are listed
 // and the rest counted. Read-only git at the main checkout, sharing the
 // check's budget: a non-answering call throws through `CheckGit` and makes
-// the whole check unavailable. The fact never gates anything (I3).
+// the whole check unavailable. The runner truncates output silently at its
+// read limit, so a diff that reaches it reads unknown — paths past the cut
+// were never judged. The fact never gates anything (I3).
 import type { ImplementationContract } from '../../shared/implementationContract'
 import type { ResultScopeFact } from '../../shared/teamTasks'
 import type { CheckGit } from './resultChecks'
@@ -34,6 +36,12 @@ export function pinnedScope(store: PinnedScopeReads, resultId: string): ScopeInp
   if (task === null || pinned === undefined || !pinned.identity) return null
   return { identity: pinned.identity, contract: pinned.contract ?? null, linkedChange: task.openspecChange }
 }
+
+/** The scope diff's read limit: past it the output is cut and the fact reads unknown. */
+export const SCOPE_DIFF_MAX_BYTES = 16 * 1024 * 1024
+
+const MIB = 1024 * 1024
+const limitLabel = (bytes: number) => (bytes % MIB === 0 ? `${bytes / MIB} MiB` : `${bytes}-byte`)
 
 const unknown = (identity: string, note: string): ResultScopeFact =>
   ({ status: 'unknown', withinScope: null, outside: [], more: 0, contractIdentity: identity, note })
@@ -72,14 +80,19 @@ export function parseNameStatus(output: string): string[][] {
   return entries
 }
 
-export async function readScope(git: CheckGit, repoRoot: string, sha: string, baseRef: string, input: ScopeInput): Promise<ResultScopeFact> {
+export async function readScope(
+  git: CheckGit, repoRoot: string, sha: string, baseRef: string, input: ScopeInput, maxBytes = SCOPE_DIFF_MAX_BYTES,
+): Promise<ResultScopeFact> {
   if (input.contract === null) return noContract(input)
   const base = await git(['rev-parse', '--verify', `${baseRef}^{commit}`], { cwd: repoRoot })
   if (!base.ok) return unknown(input.identity, `${baseRef} is unset; git remote set-head origin --auto fixes it`)
   const mergeBase = await git(['merge-base', base.stdout.trim(), sha], { cwd: repoRoot })
   if (!mergeBase.ok) return unknown(input.identity, `no merge base between ${baseRef} and the commit`)
-  const diff = await git(['diff', '--name-status', '-z', '-M', mergeBase.stdout.trim(), sha], { cwd: repoRoot })
+  const diff = await git(['diff', '--name-status', '-z', '-M', mergeBase.stdout.trim(), sha], { cwd: repoRoot, maxOutputBytes: maxBytes })
   if (!diff.ok) return unknown(input.identity, 'the changed paths could not be read')
+  // The runner cuts output at the limit without saying so: output that
+  // reaches it may hide paths, which must never read as within scope.
+  if (diff.stdout.length >= maxBytes) return unknown(input.identity, `the changed paths exceed the ${limitLabel(maxBytes)} read limit; scope not judged`)
   const globs = input.contract.scope.map(pattern => new Bun.Glob(pattern))
   const outside: string[] = []
   for (const paths of parseNameStatus(diff.stdout)) {

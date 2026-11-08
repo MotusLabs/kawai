@@ -12,7 +12,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { runGit } from '../git/gitCommand'
 import { computeResultFacts, makeCheckGit, type ResultCheckInput } from '../verification/resultChecks'
-import type { ScopeInput } from '../verification/scopeFact'
+import { readScope, type ScopeInput } from '../verification/scopeFact'
 import { serializeFacts } from '../verification/serializeFacts'
 import { parseContract, type ImplementationContract } from '../../shared/implementationContract'
 import type { ResultScopeFact } from '../../shared/teamTasks'
@@ -164,4 +164,19 @@ test('a stored scope list shrinks with the others under 64 KB, its count preserv
   const stored = (JSON.parse(json) as typeof facts).scope!
   expect(stored.outside.length).toBeLessThan(20)
   expect(stored.outside.length + stored.more).toBe(25)
+})
+
+// A diff whose output reaches the cap was truncated by the runner: the paths
+// past the cut were never read, so the fact cannot say within scope.
+test('a diff that reaches the output cap reads unknown, never within scope, even when the outside path sorts last', async () => {
+  for (let index = 0; index < 20; index += 1) write(`src/server/team/f${String(index).padStart(2, '0')}.ts`, `${index}\n`)
+  write('zz/outside.ts', 'x\n')
+  const sha = commitAll('many in scope, one outside, last')
+  const git = makeCheckGit()
+  const full = await readScope(git, root, sha, 'refs/remotes/origin/HEAD', input(TEAM_SCOPE))
+  expect(full).toMatchObject({ status: 'warn', outside: ['zz/outside.ts'] })
+  // A cap that cuts the output before zz/outside.ts: the runner truncates silently.
+  const capped = await readScope(git, root, sha, 'refs/remotes/origin/HEAD', input(TEAM_SCOPE), 200)
+  expect(capped).toMatchObject({ status: 'unknown', withinScope: null, outside: [], more: 0 })
+  expect(capped.note).toBe('the changed paths exceed the 200-byte read limit; scope not judged')
 })
