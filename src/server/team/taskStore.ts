@@ -380,6 +380,11 @@ export class TaskStore {
     return { replay: true, task: this.get(id)!, revision }
   }
 
+  /** Supersede one assignment by `by` (review-findings-ledger D8: a re-gate answers the fix handoff); false when already superseded. */
+  supersedeAssignment(id: string, by: string): boolean {
+    return this.assignments?.supersede(id, by) ?? false
+  }
+
   /** Run writes as one transaction (nested store transactions become savepoints). */
   atomically<T>(write: () => T): T {
     return this.db.transaction(write)()

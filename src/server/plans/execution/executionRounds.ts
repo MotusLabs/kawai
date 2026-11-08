@@ -24,7 +24,7 @@ import type { AssignmentService } from '../../team/AssignmentService'
 import { dispatchFix, ensureFixAttempt } from './executionDispatch'
 import { refusable } from './stepRefusal'
 import type { EffectAdapter } from './effects'
-import { foldLedger, roundReview } from '../../../shared/findingsLedger'
+import { blocking, foldLedger, roundReview } from '../../../shared/findingsLedger'
 import { fixFindings, reviewAsk } from './fixFindings'
 
 /** The gh/git surface the pipeline uses; injectable for tests. */
@@ -417,12 +417,15 @@ async function decideVerdict(deps: RoundDeps, changeRow: { executionId: string; 
   // Table RD (review-findings-ledger D8): a structured review is judged by
   // the ledger's fold now, so a dispute holds the round and its decision
   // moves it; a text row (decided before the upgrade) keeps its verdict.
-  const outcome = rows.find(row => row.id === counted)?.structured
-    ? roundReview(foldLedger(deps.tasks.store.findings.countedSubmissions(change.taskId), deps.tasks.store.findings.events(change.taskId)))
-    : verdict.kind
+  const ledger = rows.find(row => row.id === counted)?.structured
+    ? foldLedger(deps.tasks.store.findings.countedSubmissions(change.taskId), deps.tasks.store.findings.events(change.taskId))
+    : null
+  const outcome = ledger !== null ? roundReview(ledger) : verdict.kind
   if (outcome === 'pending-dispute') return
   if (outcome === 'fail') {
-    store.decideRound(round.id, 'fail', { verdictFindingsId: counted ?? undefined })
+    // The failed round's blocking set, recorded now so the re-gate never
+    // re-derives it from a later fold (D8).
+    store.decideRound(round.id, 'fail', { verdictFindingsId: counted ?? undefined, ...(ledger !== null ? { blockingIds: blocking(ledger).map(row => row.id) } : {}) })
     return
   }
   // Pass: the extra checks CI decides must be green; the attested ones ride

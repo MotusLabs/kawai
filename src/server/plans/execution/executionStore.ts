@@ -457,8 +457,29 @@ export class ExecutionStore extends ExecutionEffectStore {
   }
 
   /** Decide the round (D11/D12): outcome, verdict findings, extra checks, time. */
-  decideRound(id: string, outcome: 'pass' | 'fail', detail: { verdictFindingsId?: string; extra?: RoundRow['extra'] } = {}): void {
-    this.db.prepare(`UPDATE plan_execution_rounds SET outcome = ?, verdict_findings_id = ?, extra_json = ?, decided_at = ? WHERE id = ?`)
-      .run(outcome, detail.verdictFindingsId ?? null, detail.extra ? JSON.stringify(detail.extra) : null, this.iso(), id)
+  decideRound(id: string, outcome: 'pass' | 'fail', detail: { verdictFindingsId?: string; extra?: RoundRow['extra']; blockingIds?: string[] } = {}): void {
+    this.db.prepare(`UPDATE plan_execution_rounds SET outcome = ?, verdict_findings_id = ?, extra_json = ?, blocking_ids = ?, decided_at = ? WHERE id = ?`)
+      .run(outcome, detail.verdictFindingsId ?? null, detail.extra ? JSON.stringify(detail.extra) : null,
+        detail.blockingIds ? JSON.stringify(detail.blockingIds) : null, this.iso(), id)
+  }
+
+  /**
+   * review-findings-ledger D8's re-gate: a passing round of the failed
+   * round's result, commit, CI, review, and verdict, answering `attemptId`.
+   * `regate_of` is UNIQUE: a second insert for the same failed round throws
+   * and writes nothing, so the step runs at most once.
+   */
+  insertRegateRound(source: RoundRow, attemptId: string): RoundRow {
+    const id = `round-${crypto.randomUUID()}`
+    const at = this.iso()
+    const number = (this.rounds(source.executionId, source.change).at(-1)?.number ?? 0) + 1
+    this.db.prepare(`INSERT INTO plan_execution_rounds (id, execution_id, change, attempt_id, number, result_id, commit_sha, fix_round,
+      pushed_at, ci_window_from, ci_json, review_assignment_id, verdict_findings_id, extra_json, outcome, decided_at, regate_of)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, 'pass', ?, ?)`).run(
+      id, source.executionId, source.change, attemptId, number, source.resultId, source.commitSha, source.pushedAt, source.ciWindowFrom,
+      source.ci ? JSON.stringify(source.ci) : null, source.reviewAssignmentId, source.verdictFindingsId,
+      source.extra ? JSON.stringify(source.extra) : null, at, source.id,
+    )
+    return this.round(id)!
   }
 }

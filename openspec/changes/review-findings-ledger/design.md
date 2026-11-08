@@ -125,6 +125,8 @@ The next free numbered migration (coordinate with in-flight migrations, as
   dispute_event_id UNIQUE)`.
 - `plan_execution_rounds.regate_of TEXT` with a partial unique index (D8;
   SQLite cannot add a UNIQUE column).
+- `plan_execution_rounds.blocking_ids TEXT` (D8): the JSON list of finding
+  ids a round failed on, null for a CI failure or a text verdict.
 
 `ledger_seq` is allocated per task as `max+1` across both tables, inside
 the writing `BEGIN IMMEDIATE` transaction. Finding ids are allocated the
@@ -287,8 +289,10 @@ Re-gate is a new executor step, `regateRefuted`, keyed by
 - the fix attempt is outstanding.
 
 The round's blocking set is recorded when it fails: `decideVerdict`
-stores the blocking ids in the round's `extra_json` (`blockingIds`), so
-the guard never re-derives them from a later fold.
+stores the blocking ids in the round's `blocking_ids` column (`extra_json`
+already holds the extra checks), so the guard never re-derives them from
+a later fold. The step runs at the start of each executor pass, before
+planning, for every owned, unheld `implementing` change.
 
 The step inserts a round with the same `result_id`, `commit_sha`, CI
 rows, `review_assignment_id`, and `verdict_findings_id`, and decides it

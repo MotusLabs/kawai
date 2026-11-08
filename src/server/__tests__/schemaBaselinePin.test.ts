@@ -519,7 +519,7 @@ const migration22: SchemaShape['tables'] = {
 // Migration 24's delta (review-findings-ledger D3): finding items, ledger
 // events, and dispute cards; UNIQUE keys are autoindexes the shape skips.
 // It also adds five columns to team_task_findings and the uniquely indexed
-// `regate_of` to plan_execution_rounds, applied in the test below.
+// `regate_of` and `blocking_ids` to plan_execution_rounds, applied in the test below.
 const migration24: SchemaShape['tables'] = {
   team_task_finding_items: {
     columns: [
@@ -594,7 +594,7 @@ test('a fresh database opened by this build has the same shape plus each migrati
   const flag = (name: string) => ({ name, type: 'INTEGER', notnull: 1, dflt_value: '0', pk: 0 })
   const withLedger = { ...findings, columns: [...findings.columns, flag('structured'), flag('counted'), optional('contract_identity'), optionalInteger('ledger_seq'), optional('replaced_by')] }
   const rounds = migration8.plan_execution_rounds!
-  const withRegate = { columns: [...rounds.columns, optional('regate_of')], indexes: [...rounds.indexes, { name: 'plan_execution_rounds_regate', unique: 1, columns: ['regate_of'] }] }
+  const withRegate = { columns: [...rounds.columns, optional('regate_of'), optional('blocking_ids')], indexes: [...rounds.indexes, { name: 'plan_execution_rounds_regate', unique: 1, columns: ['regate_of'] }] }
   expect(schemaShape(session.db)).toEqual({
     tables: { ...expected.tables, ...added, team_messages: withProfiles, team_task_assignments: withChoice, chat_sessions: withFlag, profile_limit_events: withLimitContext, team_task_results: withCoverage, team_task_revisions: withContract, team_task_drafts: withContractText, team_task_findings: withLedger, plan_execution_rounds: withRegate },
   })

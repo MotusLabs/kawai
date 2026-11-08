@@ -110,9 +110,9 @@ covers a spec scenario carries its `// @covers:` annotation.
   - listing advisory items;
   - a caller still passing raw texts;
   - losing the `legacyTexts` fallback for a pre-upgrade round.
-- [ ] 5.3 Add the `regateRefuted` step (D8) keyed by `regate_of`. Commit
+- [x] 5.3 Add the `regateRefuted` step (D8) keyed by `regate_of`. Commit
   table RG and a crash-at-each-boundary test. Add its recovery-matrix row.
-  Store the failed round's `blockingIds` in `decideVerdict`. Verify:
+  Store the failed round's `blockingIds` (column `blocking_ids`) in `decideVerdict`. Verify:
   RG1–RG10, the "Rejected disputes re-gate" scenarios, and
   `recoveryMatrix.test.ts` pass. Mutants to kill:
   - re-gating when a blocker was superseded rather than rejected (RG8);

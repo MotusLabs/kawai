@@ -7,7 +7,8 @@
 // re-maps, and supersessions, each Kawai-written one under a UNIQUE
 // `source_key` so a replay writes nothing twice (I5). Cards link a dispute to
 // its decision card. Rounds gain `regate_of`, unique, so a refuted round is
-// re-gated at most once (D8).
+// re-gated at most once, and `blocking_ids`, the findings a failed round
+// failed on (D8).
 import type { Database } from 'bun:sqlite'
 import type { Migration } from '../dbSafety/migrations'
 
@@ -88,6 +89,7 @@ export function applyReviewFindingsSchema(db: Database): void {
   db.exec(CREATE_FINDING_TABLES_SQL)
   if (tableExists(db, 'plan_execution_rounds')) {
     if (!columnsOf(db, 'plan_execution_rounds').has('regate_of')) db.exec('ALTER TABLE plan_execution_rounds ADD COLUMN regate_of TEXT')
+    if (!columnsOf(db, 'plan_execution_rounds').has('blocking_ids')) db.exec('ALTER TABLE plan_execution_rounds ADD COLUMN blocking_ids TEXT')
     db.exec('CREATE UNIQUE INDEX IF NOT EXISTS plan_execution_rounds_regate ON plan_execution_rounds (regate_of) WHERE regate_of IS NOT NULL')
   }
 }
