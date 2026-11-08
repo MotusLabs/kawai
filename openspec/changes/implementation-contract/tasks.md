@@ -79,7 +79,7 @@ covers a spec scenario carries its `// @covers:` annotation.
 
 ## 3. Client
 
-- [ ] 3.1 Change the task UI:
+- [x] 3.1 Change the task UI:
   - `TaskDirectionEditor.tsx`: a contract textarea, pre-filled with
     `renderContract` of the base revision, that shows live `parseContract`
     problems and disables Publish while any remain;
