@@ -34,7 +34,7 @@ When a round fails and no diagnosis opens on it, Kawai SHALL dispatch a fix atte
 
 ### Requirement: Retry runs again the stage the change stopped in
 Retry SHALL run the stage of the change's stop reason:
-- `diagnosis-escalated`, and `round-limit` for a change stopped before the backstop existed: a fix attempt, with a new fix-round count;
+- `diagnosis-escalated`, and a `round-limit` from before the backstop: a fix attempt, with a new fix-round count;
 - `instruction-failed` and `task-closed`: that stage's instruction;
 - `review-unavailable`: the review handoff;
 - `name-taken`: the name check, then provisioning;

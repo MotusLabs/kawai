@@ -36,7 +36,7 @@ A change whose two latest consecutive failed rounds have the same failure signat
 - **THEN** no repeating-failure stall is raised
 
 ### Requirement: A stall alerts the Lead role once per episode
-Each stall episode SHALL send one message from Kawai to the plan's Lead role, tagged `plan-stall` and routed under that role's profiles. It SHALL name the change, stage, holder, last progress and activity, rounds with their outcomes, failing checks, and suggested actions. A `convergence` episode's message SHALL be its diagnosis card's question, tagged `plan-stall` too, and no second message SHALL be sent for it. A durable record SHALL keep each episode to one alert across restarts. With no Lead role, the stall SHALL be an owner attention item only.
+Each stall episode SHALL send one message from Kawai to the plan's Lead role, tagged `plan-stall` and routed under that role's profiles. It SHALL name the change, stage, holder, last progress and activity, rounds and failing checks, and next actions. A `convergence` episode's one message SHALL be its diagnosis card's question, also tagged `plan-stall`. A durable record SHALL keep one alert per episode across restarts. With no Lead role, the stall SHALL be an owner attention item only.
 
 #### Scenario: One alert across a restart
 - **WHEN** a stall is alerted and the server restarts while it lasts
@@ -55,7 +55,7 @@ Each stall episode SHALL send one message from Kawai to the plan's Lead role, ta
 - **THEN** the Lead role receives one message from Kawai, tagged `plan-stall`, carrying the diagnosis card's question and options, and the stall sweep sends nothing more for it
 
 ### Requirement: Plan stops, stalls, and conditions need attention
-The team attention queue SHALL hold one item for each stopped change, owned by the human with **Retry or stop execution**; for each stall, owned by the plan's Lead role, else the human; for each acceptance condition holding a change, owned by the human; and for a plan's newest failed promotion while no later one has started and no correction task for it is open, owned by the human with **Promote again**. A `convergence` stall SHALL be its card's item while the card is open, and after `Amend the contract` an item owned by the human with **Publish a task revision**. Each item SHALL link to its plan and change and clear when its cause clears.
+The attention queue SHALL hold a human-owned item per stopped change (**Retry or stop execution**), per acceptance condition holding a change, and for a plan's newest failed promotion with none later and no correction open (**Promote again**); and one per stall, owned by the Lead role, else the human. A `convergence` stall SHALL be its open card's item, then after `Amend the contract` the human's **Publish a task revision**. Items SHALL link to their plan and change and clear with their cause.
 
 #### Scenario: A stop needs the owner
 - **WHEN** change `api` stops as `ci-timeout`
