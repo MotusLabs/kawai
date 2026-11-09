@@ -77,6 +77,12 @@ export class DiagnosisStore {
       .all(executionId, change) as Row[]).map(mapDiagnosis)
   }
 
+  /** The diagnosis a card was raised for. */
+  forCard(cardId: string): DiagnosisRow | null {
+    const row = this.db.prepare('SELECT * FROM plan_execution_diagnoses WHERE card_id = ?').get(cardId) as Row | null
+    return row ? mapDiagnosis(row) : null
+  }
+
   /** The change's open diagnosis, if any. */
   open(executionId: string, change: string): DiagnosisRow | null {
     return this.ofChange(executionId, change).find(entry => entry.closedAt === null) ?? null

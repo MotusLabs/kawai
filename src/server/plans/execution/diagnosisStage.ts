@@ -27,6 +27,8 @@ export interface DiagnosisStageDeps {
   fix: FixStepDeps
   round: RoundDeps
   decisions: Pick<DecisionStore, 'decisionsOfCard'>
+  /** A test seam: runs inside the closing transaction, before the close (a crash there rolls the close and the transition back). */
+  beforeClose?: () => void
 }
 
 /** What the stage does for an open diagnosis now (the DX row's verdict, before any write). */
@@ -72,6 +74,7 @@ export async function applyDiagnosisStage(deps: DiagnosisStageDeps, row: ChangeR
   })
   if (step.kind === 'wait') return
   const close = (outcome: DiagnosisRow['outcome'], decisionId: string | null, line: string) => () => {
+    deps.beforeClose?.()
     if (!diagnoses.close(diagnosis.id, { reason: outcome === null ? 'revision' : 'decision', outcome, decisionId })) {
       throw new Error(`diagnosis ${diagnosis.id} was closed meanwhile`)
     }

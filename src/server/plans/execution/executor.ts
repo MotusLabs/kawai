@@ -96,6 +96,8 @@ export interface ExecutorDeps {
   regateAfterInsert?: () => void
   /** Test seam: runs inside the diagnosis open transaction after the card insert (review-convergence 4.2's crash test). */
   diagnosisAfterCardInsert?: () => void
+  /** Test seam: runs inside a diagnosis outcome's closing transaction, after its dispatch (review-convergence 5.2). */
+  diagnosisBeforeClose?: () => void
   /** The promotion runner (integration-candidates D10): its startup, a pass per tick, and whether its timer stays armed. */
   promotions?: { startup(): void; pass(teamId: string): Promise<void>; active(teamId: string): boolean }
   /** The hold gate's reads (revision-control 3.2): the plan's active holds and open pause targets. */
@@ -437,7 +439,10 @@ export class ExecutionExecutor {
   }
 
   private diagnosisStageDeps(team: TeamIdentity, gate?: (change: string) => boolean): DiagnosisStageDeps {
-    return { team, fix: this.fixStepDeps(team), round: this.roundDeps(team, gate), decisions: new DecisionStore(this.deps.store.db) }
+    return {
+      team, fix: this.fixStepDeps(team), round: this.roundDeps(team, gate), decisions: new DecisionStore(this.deps.store.db),
+      ...(this.deps.diagnosisBeforeClose ? { beforeClose: this.deps.diagnosisBeforeClose } : {}),
+    }
   }
 
   private diagnosisDeps(team: TeamIdentity): DiagnosisDeps {

@@ -24,7 +24,7 @@
 
 ## 2. Backstop setting (decision 3)
 
-- [ ] 2.1 Parse `planExecution.maxFailedFixRounds` in `teamCaps.ts` (2–20,
+- [x] 2.1 Parse `planExecution.maxFailedFixRounds` in `teamCaps.ts` (2–20,
   default 5, malformed values logged), record it at Start as
   `max_failed_fix_rounds` (migration default 5), and pass it to
   `fixRoundOutcome(count, round, limit)`, which returns `{ count, backstop }`.
@@ -35,7 +35,7 @@
   - A7 kills "keep the limit at 3";
   - A7 kills "read the setting at tick time instead of Start" (a change of
     `teams.json` mid-run must not move a running execution's limit).
-- [ ] 2.2 Make Retry run a fix attempt for `diagnosis-escalated`, keeping
+- [x] 2.2 Make Retry run a fix attempt for `diagnosis-escalated`, keeping
   `round-limit` for stopped rows, and add the `diagnosis-escalated` stop
   reason and its label. Verify "Retry after an escalated diagnosis" and
   "Retry after the round limit": A8 kills "count continues across Retry".
@@ -59,7 +59,7 @@
 
 ## 4. Opening a diagnosis (decisions 4, 5 intro)
 
-- [ ] 4.1 Add the `plan_execution_diagnoses` table, the `diagnosing` step,
+- [x] 4.1 Add the `plan_execution_diagnoses` table, the `diagnosing` step,
   and the open step in `applyFix`, in one transaction: the row, the card,
   the stall-alert row, the transition, and the journal entry. In the
   planner, emit `diagnosis` instead of `fixes` for `gating`/`diagnosing`.
@@ -68,7 +68,7 @@
   - DO4 kills "signals only, no backstop for CI-only rounds";
   - DO6 kills "drop `UNIQUE(round_id)`";
   - DO7 kills "ignore the anchor".
-- [ ] 4.2 Add a recovery-matrix row for "a crash inside the diagnosis open
+- [x] 4.2 Add a recovery-matrix row for "a crash inside the diagnosis open
   step" citing a test that throws after the card insert and asserts that
   nothing is stored and that the next tick opens exactly one. Verify that
   `recoveryMatrix.test.ts` passes, and that the test kills "commit the card
@@ -76,10 +76,10 @@
 
 ## 5. Applying outcomes (decisions 5, 7)
 
-- [ ] 5.1 Implement the `diagnosis` stage and the five outcomes:
+- [x] 5.1 Implement the `diagnosis` stage and the five outcomes:
   - `group_override` on change rows, read by every fix or update dispatch
     and by Retry;
-  - `insertRegateRound(failed, null)`;
+  - `insertRegateRound(failed, failed.attemptId)` (the failed round's own attempt);
   - ledger `rejected` events that carry the card and decision ids;
   - the previous implementer's release after `Reassign`.
 
@@ -95,7 +95,7 @@
   - DX9 kills "override only this fix's group" (the next attempt must go
     to `g` too);
   - one DX3 run with the planner's `diagnosis` stage unwired kills M1.
-- [ ] 5.2 Add the crash rows for DX3, DX5, and DX9 (a throw after the
+- [x] 5.2 Add the crash rows for DX3, DX5, and DX9 (a throw after the
   dispatch, before the close), snapshotting every round, attempt, mail,
   ledger event, and diagnosis row around the replay. Add recovery-matrix
   rows for "a decision committed but its outcome not applied" and "an
@@ -103,7 +103,7 @@
   - kills "close before dispatch";
   - kills "unkeyed fix dispatch";
   - `recoveryMatrix.test.ts` passes.
-- [ ] 5.3 Journal an override or decision after the close, and dispatch
+- [x] 5.3 Journal an override or decision after the close, and dispatch
   nothing. Verify "An override after a fix round went out": I5 kills
   "apply the newest decision whatever `closed_at` says".
 

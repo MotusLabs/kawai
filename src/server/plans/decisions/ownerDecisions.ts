@@ -15,6 +15,7 @@ import { DecisionConflict } from './decisionStore'
 import { answerBody, DecisionRefusal, payloadDiff, rationaleOf, resolveChoice } from './decisionInputs'
 import { teamPlan } from './decisionScope'
 import { prepareOverrideFix } from './fixTasks'
+import { journalLateDiagnosisDecision } from './diagnosisCards'
 import type { DecisionCaller, DecisionOutcome, DecisionService } from './DecisionService'
 
 export interface OwnerAnswerInput { planId: string; cardId: string; choice?: string | null; optionIndex?: number | null; rationale?: string | null; commandId: string }
@@ -121,6 +122,7 @@ export async function overrideAsOwner(service: DecisionService, caller: Decision
       id, cardId: card.id, planId: plan.id, teamId: team.teamId, seq: current.seq + 1, kind: 'override', choice, optionIndex, rationale,
       decidedBy: HUMAN, affected: current.affected, commandId, payload,
     })
+    journalLateDiagnosisDecision(service.deps, card, decision)
     return { decision, fixTaskId: fix.commit().taskId }
   })
   let written: { decision: PlanDecision; fixTaskId: string } | null = null

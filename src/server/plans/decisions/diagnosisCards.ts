@@ -6,7 +6,7 @@
 // else the owner with no mail. The options are closed: `resolveChoice`
 // refuses free text on a `diagnosis` card, and its decision sends no answer
 // mail — the outcome is the reply. `diagnosisOutcome` reads a choice back.
-import type { DecisionCard } from '../../../shared/planDecisions'
+import type { DecisionCard, PlanDecision } from '../../../shared/planDecisions'
 import { signalFindings, signalLine, type DiagnosisSignal } from '../../../shared/reviewConvergence'
 import type { LedgerRow } from '../../../shared/findingsLedger'
 import type { MailboxStore } from '../../team/mailboxStore'
@@ -14,6 +14,9 @@ import type { TeamIdentity } from '../../team/teamIdentity'
 import type { PlanStore } from '../planStore'
 import { planLead, STALL_TAG } from '../supervision/stallAlerts'
 import type { DecisionStore } from './decisionStore'
+import type { TaskStore } from '../../team/taskStore'
+import { DiagnosisStore } from '../execution/diagnosisStore'
+import { SYSTEM_ACTOR } from '../../../shared/team'
 import { CONTEXT_MAX, OPTIONS_MAX, QUESTION_MAX } from './decisionInputs'
 
 export const FIX_ROUND = 'Fix round'
@@ -132,4 +135,19 @@ export function raiseDiagnosisCard(deps: DiagnosisCardDeps, input: {
     question: input.question, options: input.options, context: input.context, askedBy: { ...DIAGNOSIS_ASKER },
     addressedTo: lead === null ? 'owner' : 'lead', addressedGroup: lead, messageId: message?.id ?? null,
   })
+}
+
+/**
+ * A decision on a diagnosis card whose diagnosis already closed (review-
+ * convergence 5.3, invariant I5): the stage never applies it, so the task
+ * journals it — inside the decision's own transaction — and nothing is
+ * dispatched. An override still creates its forward-fix task as for any card.
+ */
+export function journalLateDiagnosisDecision(deps: { decisions: Pick<DecisionStore, 'db'>; taskStore: Pick<TaskStore, 'appendJournal'> }, card: DecisionCard, decision: PlanDecision): boolean {
+  if (card.kind !== 'diagnosis' || card.taskId === null) return false
+  const diagnosis = new DiagnosisStore(deps.decisions.db).forCard(card.id)
+  if (diagnosis === null || diagnosis.closedAt === null) return false
+  deps.taskStore.appendJournal(card.taskId, SYSTEM_ACTOR,
+    `Decision ${decision.id} on card ${card.id} (${decision.choice}) came after diagnosis ${diagnosis.id} closed (${diagnosis.outcome ?? diagnosis.closeReason}); Kawai applies nothing for it`)
+  return true
 }

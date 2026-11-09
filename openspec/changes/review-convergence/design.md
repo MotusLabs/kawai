@@ -221,7 +221,7 @@ finding instead. So S5 alone, whose findings never block, offers no
 | Outcome | Writes (one transaction unless noted) | Closes |
 |---|---|---|
 | `Fix round` | Fix input as in `applyFix`, plus `diagnosis: { rationale }` in the handoff. Ensure and dispatch, then transition to `implementing` with `fixRounds: 0`. | yes |
-| `Reject F…` | `rejected` ledger events, carrying the card and decision ids, for each named finding still blocking. Then: if `roundReview(fold) = 'pass'`, a re-gate round for the failed round's result (`insertRegateRound(failed, null)`) and a transition to `gating` passed with `fixRounds: 0`; else the fix dispatch, as for `Fix round`, listing what still blocks or awaits a dispute. | yes |
+| `Reject F…` | `rejected` ledger events, carrying the card and decision ids, for each named finding still blocking. Then: if `roundReview(fold) = 'pass'`, a re-gate round for the failed round's result (`insertRegateRound(failed, failed.attemptId)`: `attempt_id` is NOT NULL, and no fix attempt was sent, so the round answers the failed round's own attempt) and a transition to `gating` passed with `fixRounds: 0`; else the fix dispatch, as for `Fix round`, listing what still blocks or awaits a dispute. | yes |
 | `Amend the contract` | `outcome = 'amend'`, `decision_id`, and a journal entry. | no; case 1 of decision 5 closes it |
 | `Reassign to <g>` | `group_override = g` on the change row; the fix dispatch to `g`; a tick step releases the previous implementer once ready (as `releaseFinishedReviewers` does). | yes |
 | `Escalate` | Stop as `diagnosis-escalated`, with the detail `{ signals, rationale }`. | yes |

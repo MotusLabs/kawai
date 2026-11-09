@@ -281,7 +281,7 @@ export function createMatrixBench(matrix: MatrixWorld): MatrixBench {
 }
 
 /** One approved plan of the given changes and its running execution (not yet ticked). */
-export async function startedExecution(h: MatrixBench, changes: Array<{ change: string; dependsOn?: string[]; acceptance?: string[]; extraChecks?: PlanCheck[]; reviewGroup?: string }>, options: { mergeMethod?: MergeMethod; maxParallel?: number; acceptanceRules?: string[]; extraChecks?: PlanCheck[]; roles?: Array<{ group: string; profiles: string[] }>; reviewGroup?: string; leadGroup?: string } = {}): Promise<string> {
+export async function startedExecution(h: MatrixBench, changes: Array<{ change: string; dependsOn?: string[]; acceptance?: string[]; extraChecks?: PlanCheck[]; reviewGroup?: string; group?: string }>, options: { mergeMethod?: MergeMethod; maxParallel?: number; acceptanceRules?: string[]; extraChecks?: PlanCheck[]; roles?: Array<{ group: string; profiles: string[] }>; reviewGroup?: string; leadGroup?: string } = {}): Promise<string> {
   const { world } = h.matrix
   // Earlier tests may have moved origin's base: catch up first.
   git(['pull', '-q', '--ff-only', 'origin', 'master'], world.repo)
@@ -292,7 +292,7 @@ export async function startedExecution(h: MatrixBench, changes: Array<{ change: 
   commitAll(world.repo, `changes ${changes.map(entry => entry.change).join(' ')}`)
   git(['push', '-q', 'origin', 'master'], world.repo)
   const { planId, revision, hash } = await h.bench.draftInReview({
-    changes: changes.map(entry => ({ change: entry.change, dependsOn: entry.dependsOn ?? [], group: 'middle-devs', acceptance: entry.acceptance ?? [], extraChecks: entry.extraChecks ?? [], guidance: '', ...(entry.reviewGroup ? { reviewGroup: entry.reviewGroup } : {}) })),
+    changes: changes.map(entry => ({ change: entry.change, dependsOn: entry.dependsOn ?? [], group: entry.group ?? 'middle-devs', acceptance: entry.acceptance ?? [], extraChecks: entry.extraChecks ?? [], guidance: '', ...(entry.reviewGroup ? { reviewGroup: entry.reviewGroup } : {}) })),
     reviewGroup: options.reviewGroup ?? 'reviewers',
     ...(options.acceptanceRules ? { acceptanceRules: options.acceptanceRules } : {}),
     ...(options.extraChecks ? { extraChecks: options.extraChecks } : {}),
