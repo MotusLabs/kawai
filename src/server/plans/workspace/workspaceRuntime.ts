@@ -67,7 +67,7 @@ function linkedTaskInputs(
       result: result === null ? null : {
         submitter: result.submittedBy.sessionId ?? '',
         accepted: result.acceptedAt !== null,
-        reviewVerdict: result.acceptedAt === null ? (results.findingsFor(result.id).at(-1)?.verdict ?? null) : null,
+        reviewVerdict: result.acceptedAt === null ? results.reviewVerdict(task.id, result.id) : null,
       },
       priorClaimants: rows
         .filter(row => row !== outstanding && row.claimedBy !== null && (row.supersededBy !== null || row.state === 'failed'))

@@ -29,6 +29,7 @@ import TaskDirectionEditor, { type TaskActFn } from './TaskDirectionEditor'
 import TaskPublications from './TaskPublications'
 import TaskContractView from './TaskContractView'
 import TaskResultsSection from './TaskResultsSection'
+import TaskFindingsSection from './TaskFindingsSection'
 import TaskReleaseDialog from './TaskReleaseDialog'
 import { TaskWorkerPicker } from './TaskWorkerPicker'
 
@@ -237,6 +238,9 @@ export default function TeamTaskDetail({ teamPath, projectPath, view, sendMessag
 
     <Section teamPath={teamPath} name="Results">
       <TaskResultsSection detail={detail} groups={groups} sessions={sessions} connected={connected} disabled={disabled} act={act} host={{ teamPath, sendMessage }} />
+    </Section>
+    <Section teamPath={teamPath} name="Findings">
+      <TaskFindingsSection detail={detail} disabled={disabled} act={act} />
     </Section>
     <Section teamPath={teamPath} name="Release">
       <TaskReleaseDialog detail={detail} groups={groups} sessions={sessions} connected={connected} disabled={disabled} act={act} host={{ teamPath, sendMessage }} />

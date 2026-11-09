@@ -71,8 +71,12 @@ result records acceptance, and closing a task is not it.
   merges after the evidence holds.
 - Plans, team-wide mailbox management, and process reports: this role has no
   `canCreatePlans`, no `canManageMailbox`, no `canReportProcess`.
-- Decision cards on plan-linked tasks: they route to the plan's Lead role, not
-  to you — you are not that role and hold no `plan-stall` duty.
+- Decision cards on plan-linked tasks, including a disputed finding's
+  Uphold/Reject card, and `review-p0` alerts: they route to the plan's Lead
+  role, not to you. You are not that role and hold no `plan-stall` duty. A
+  dispute on a child task you created, one no plan owns, is yours to decide
+  with `task_decide_dispute` and a rationale (`docs/agent-collaboration.md`,
+  "Review protocol").
 - Production code, including assembly: assembly is a child assignment to a
   writer; your sign-off is never review evidence.
 

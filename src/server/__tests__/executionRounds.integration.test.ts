@@ -7,6 +7,7 @@
 // supersedes the open round; a closed pull request stops as pr-closed; a
 // failing CI asks for the round's one rerun; an author claiming the review
 // stops it as review-unavailable.
+import { structuredReview } from './structuredReview'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -40,7 +41,7 @@ describe('the round pipeline (§12)', () => {
     // An independent reviewer claims and passes it.
     const assignment = tasks.store.assignmentsOf(change.taskId!).find(a => a.id === round.reviewAssignmentId)!
     deliverToReviewer(assignment.messageId!, 'rev1')
-    await results.submitFindings(bench.agent('rev1'), change.taskId!, { resultId: round.resultId, kind: 'review', verdict: 'pass', findings: 'clean' })
+    await results.submitFindings(bench.agent('rev1'), change.taskId!, { resultId: round.resultId, kind: 'review', ...structuredReview(results, change.taskId!, 'pass', 'clean') })
     executor.wake(world.team.teamId)
     await executor.idle()
 
@@ -128,7 +129,7 @@ describe('the round pipeline (§12)', () => {
       { id: 't', name: 'ci', source: 'actions', conclusion: 'success', link: 'l', runId: 11, startedAt: '2026-10-17T00:00:00.000Z', completedAt: '2026-10-17T00:01:00.000Z' },
       { id: 'e', name: 'e2e', source: 'status', conclusion: 'failure', link: null, startedAt: null, completedAt: null },
     ])
-    await results.submitFindings(bench.agent('rev1'), change.taskId!, { resultId: round.resultId, kind: 'review', verdict: 'fail', findings: 'the e2e test fails on the settings page' })
+    await results.submitFindings(bench.agent('rev1'), change.taskId!, { resultId: round.resultId, kind: 'review', ...structuredReview(results, change.taskId!, 'fail', 'the e2e test fails on the settings page') })
     executor.wake(world.team.teamId)
     await executor.idle()
 

@@ -208,7 +208,7 @@ async function implementAndPass(executionId: string, change: string): Promise<st
   const reviewer = manager.mailbox.store.get(review()!.messageId!)!.claimedBy!
   await waitFor(() => manager.getSnapshot(reviewer)?.status === 'waiting', `${change}: reviewer idle`)
   await taskHandlers(manager.tasks, reviewer, manager.results).task_submit_findings!({
-    task_id: row.taskId!, result_id: result.id, kind: 'review', verdict: 'pass', findings: 'Looks right.',
+    task_id: row.taskId!, result_id: result.id, kind: 'review', verdict: 'pass', items: [], findings: 'Looks right.',
   })
   return commit
 }

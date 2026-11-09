@@ -75,8 +75,11 @@ describe('the strategy impact tools', () => {
     for (const forbidden of STRATEGY_FORBIDDEN_TOOL_NAMES) expect(registered).not.toContain(forbidden)
     expect(STRATEGY_FORBIDDEN_TOOL_NAMES).toEqual(expect.arrayContaining(['strategy_impact_decide', 'strategy_impact_record']))
     // decision_record records the Lead's decision on a plan's decision card
-    // (plan-supervision D5), not an impact decision; it is the one exemption.
-    for (const name of TEAM_ALLOWED_TOOLS.filter(name => name !== 'mcp__kawai-team__decision_record')) expect(name).not.toMatch(/decide|approve|publish|withdraw|delete|record/)
+    // (plan-supervision D5), and task_decide_dispute a task creator's decision
+    // on a finding dispute of its own non-plan task (review-findings-ledger
+    // D6); neither is an impact or strategy decision. They are the exemptions.
+    const exempt = ['mcp__kawai-team__decision_record', 'mcp__kawai-team__task_decide_dispute']
+    for (const name of TEAM_ALLOWED_TOOLS.filter(name => !exempt.includes(name))) expect(name).not.toMatch(/decide|approve|publish|withdraw|delete|record/)
     for (const name of IMPACT_TOOL_NAMES) expect(TEAM_ALLOWED_TOOLS).toContain(`mcp__kawai-team__${name}`)
   })
 })

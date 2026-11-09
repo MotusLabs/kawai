@@ -12,7 +12,7 @@ import { JOURNAL_LIMIT_MAX, TaskJournalReads } from './taskJournalWindow'
 import { TASK_LIST_LIMIT_MAX, TASK_LIST_STATUSES } from './taskListWindow'
 
 export const TASK_TOOL_NAMES = ['task_create', 'task_get', 'task_journal_read', 'task_note', 'task_update_status', 'task_amend', 'task_list', 'task_acknowledge',
-  'task_submit_result', 'task_submit_coverage', 'task_submit_findings', 'task_handoff', 'task_check_result'] as const
+  'task_submit_result', 'task_submit_coverage', 'task_submit_findings', 'task_dispute_findings', 'task_decide_dispute', 'task_handoff', 'task_check_result'] as const
 
 const status = z.enum(TASK_STATUSES as [TaskStatus, ...TaskStatus[]])
 const taskId = { task_id: z.string().min(1) }
@@ -62,8 +62,26 @@ export const taskSchemas = {
   task_submit_coverage: z.object({
     ...taskId, result_id: z.string().min(1), coverage: z.unknown(),
   }),
+  // review-findings-ledger D4: text with a verdict, or structured items and
+  // dispositions with a derived (optional, checked) verdict.
   task_submit_findings: z.object({
-    ...taskId, result_id: z.string().min(1), kind: z.enum(['review', 'qa']), verdict: z.enum(['pass', 'fail']), findings: z.string().min(1),
+    ...taskId, result_id: z.string().min(1), kind: z.enum(['review', 'qa']), verdict: z.enum(['pass', 'fail']).optional(),
+    findings: z.string().optional(),
+    items: z.array(z.object({
+      id: z.string().regex(/^F[1-9]\d*$/, { error: 'a finding id is F<n>' }).optional(), level: z.enum(['P0', 'P1', 'P2']),
+      clause: z.string().optional(), evidence: z.string().optional(), impact: z.string().optional(), reproduction: z.string().optional(),
+    })).optional(),
+    dispositions: z.array(z.object({
+      id: z.string().regex(/^F[1-9]\d*$/, { error: 'a finding id is F<n>' }), disposition: z.enum(['resolved', 'still-open', 'regressed']),
+      evidence: z.string().optional(),
+    })).optional(),
+  }),
+  // review-findings-ledger D6: the author's dispute, and the non-plan decision.
+  task_dispute_findings: z.object({
+    ...taskId, disputes: z.array(z.object({ id: z.string().regex(/^F[1-9]\d*$/, { error: 'a finding id is F<n>' }), counter_evidence: z.string() })).min(1),
+  }),
+  task_decide_dispute: z.object({
+    ...taskId, finding_id: z.string().regex(/^F[1-9]\d*$/, { error: 'a finding id is F<n>' }), decision: z.enum(['uphold', 'reject']), rationale: z.string(),
   }),
   task_handoff: z.object({
     ...taskId, kind: z.enum(['review', 'qa', 'fix']), result_id: z.string().min(1), target: z.string().min(1),
@@ -79,7 +97,7 @@ export const taskSchemas = {
 
 export const taskDescriptions: Record<(typeof TASK_TOOL_NAMES)[number], string> = {
   task_create: 'Create a team task (only if your group may create tasks). Optional parent_id, worktree (a worktree root of this repository), and openspec_change; plan_id with plan_change links the task to a change of an open plan\'s approved revision (both or neither; fixed afterwards). Optional contract: an implementation contract in Markdown — a `## Implementation contract` heading, then `### Acceptance`, `### Invariants`, `### Scope`, `### Verification`, `### Excluded` in that order, clauses as `- A1: text` (I, V, X likewise), Scope as one glob per bullet; Acceptance, Scope, and Verification need at least one entry. A contract that does not parse refuses the creation with every problem and its line. You become its creator.',
-  task_get: 'Read a task: current direction and acceptance, every revision with its contract identity (r<revision>#<hash>) and contract (null when it has none), assignment, and result whole; the journal, subtasks, and messages as bounded windows, oldest first, each with its total — the newest 50 journal entries (journal_limit 1–200), 100 subtasks, and 50 messages. A journal entry is a preview of at most 2,000 stored bytes with totalBytes, cut, and resumeOffsetBytes (text null when not valid UTF-8). Page older entries with journal_before set to bounds.journal.nextBefore; read any entry whole with task_journal_read.',
+  task_get: 'Read a task: current direction and acceptance, every revision with its contract identity (r<revision>#<hash>) and contract (null when it has none), assignment, and result whole; the journal, subtasks, and messages as bounded windows, oldest first, each with its total — the newest 50 journal entries (journal_limit 1–200), 100 subtasks, and 50 messages. A journal entry is a preview of at most 2,000 stored bytes with totalBytes, cut, and resumeOffsetBytes (text null when not valid UTF-8). Page older entries with journal_before set to bounds.journal.nextBefore; read any entry whole with task_journal_read. findingsLedger lists the newest 100 findings (F<n>), newest first, each with level, clause, state, and transitions (ledgerOlderRemaining when more exist); each result\'s findings rows carry their items, class, and whether they counted.',
   task_journal_read: 'Read one journal entry of a task losslessly (entry_id from task_get): up to 8,192 stored bytes from offset_bytes (default 0; a preview\'s resumeOffsetBytes continues it) as dataBase64, which is authoritative, with their text when valid UTF-8 (else null), the entry\'s totalBytes, and nextOffsetBytes (null at the end). Read-only.',
   task_note: "Append a note to a task's journal (decisions, findings, progress). Notes are permanent.",
   task_update_status: 'Set a task to active or blocked (any member); done or cancelled (its creator only). Optional note is journaled.',
@@ -88,8 +106,10 @@ export const taskDescriptions: Record<(typeof TASK_TOOL_NAMES)[number], string> 
   task_acknowledge: 'State the published task revision you are now working from (the revision in the task header). Call it when you start or take over work on a task, and after a revision notice.',
   task_submit_result: 'Submit a result for a task: a summary, a commit and/or diff reference (at least one), the tests you ran with their outcomes, and known limitations. Your test outcomes are shown as claimed, not verified. Supersedes the task\'s previous result; does not close the task.',
   task_submit_coverage: 'Record your own coverage map for a result (result_id from task_get): the same clause/citation map a submission carries. While you hold a task\'s outstanding review handoff and have recorded no map for its result, the submitter\'s maps stay withheld from you — recording yours unseals them. Maps are append-only; your newest map for a result counts.',
-  task_submit_findings: 'Report review or QA findings on one exact result (result_id from task_get): kind review|qa, verdict pass|fail, and the findings. They stay bound to that result — a newer result inherits nothing.',
+  task_submit_findings: 'Report review or QA findings on one exact result (result_id from task_get), kind review|qa. Structured (required for a plan change\'s review): items, each with level P0 (security, data corruption, severe correctness) | P1 (a reproducible requirement violation, a significant regression) | P2 (advisory, never blocks), the clause it violates (A1, or r<N>#<hash> › A1; on a task without a contract, its revision identity), evidence (file:line, test output, or a counterexample), impact, and an optional reproduction; and dispositions resolved | still-open | regressed (the latter two with evidence) for every blocking finding listed in task_get. The verdict is derived (fail exactly when a P0/P1 is accepted and open); the reply lists each item\'s class. Text form: findings and verdict pass|fail. Findings stay bound to that result — a newer result inherits nothing.',
   task_handoff: 'Hand a result off (kind review, qa, or fix — return for fixes; the result_id, instructions, and an optional expected_response) to a recipient: target_kind "group" (the default when omitted, even for a session-shaped id) with target: <group id>, or target_kind "session" with target: <session id> to dispatch ordinary direct task mail to that exact session — no other member is chosen. While an equivalent handoff (same task, result, kind) is outstanding, this returns it instead of dispatching again; if the standing handoff names another recipient, the notice says so and nothing is reassigned. Optional worker (group targets only) limits who may take it to one provider (e.g. claude) or one model (provider/model, or a bare model key) of the group\'s workers, as on send_message; a handoff naming another worker is another handoff.',
+  task_dispute_findings: 'Dispute blocking findings of a task whose result you submitted, instead of changing code for a finding you can refute: each with its id (F<n> from task_get) and counter-evidence (a test run, file:line, a counterexample), at most 10 per call. A disputed finding waits for a decision: a decision card for the plan\'s Lead role (or the owner) on a plan change\'s task, else the task creator decides with task_decide_dispute. A finding is disputed at most once in each state it enters.',
+  task_decide_dispute: 'Decide a dispute of a finding on a task you created that is not a plan change\'s task (those are decided on their decision cards): uphold (the finding blocks again) or reject (it never blocks), with a rationale that is journaled.',
   task_check_result: 'Ask Kawai to check a result again (result_id from task_get): the commit, its worktree state, the recorded full-check pass, and merges against the base and other open tasks\' branches. The check never gates anything; it runs in the background and the newest check rides task_get. A request while a check is pending returns that pending check.',
 }
 
@@ -137,8 +157,21 @@ export function taskHandlers(tasks: TaskService, sessionId: string, results?: Ta
         return results.submitCoverage(caller, task_id, { resultId: result_id, coverage })
       },
       task_submit_findings: async (input: unknown) => {
-        const { task_id, result_id, kind, verdict, findings } = taskSchemas.task_submit_findings.parse(input)
-        return results.submitFindings(caller, task_id, { resultId: result_id, kind, verdict, findings })
+        const { task_id, result_id, kind, verdict, findings, items, dispositions } = taskSchemas.task_submit_findings.parse(input)
+        return results.submitFindings(caller, task_id, {
+          resultId: result_id, kind, findings,
+          ...(verdict !== undefined ? { verdict } : {}),
+          ...(items !== undefined ? { items } : {}),
+          ...(dispositions !== undefined ? { dispositions } : {}),
+        })
+      },
+      task_dispute_findings: async (input: unknown) => {
+        const { task_id, disputes } = taskSchemas.task_dispute_findings.parse(input)
+        return results.disputeFindings(caller, task_id, disputes.map(entry => ({ id: entry.id, counterEvidence: entry.counter_evidence })))
+      },
+      task_decide_dispute: async (input: unknown) => {
+        const { task_id, finding_id, decision, rationale } = taskSchemas.task_decide_dispute.parse(input)
+        return results.decideDispute(caller, task_id, { findingId: finding_id, decision, rationale })
       },
       task_handoff: async (input: unknown) => {
         const { task_id, kind, result_id, target_kind, target, instructions, expected_response, worker } = taskSchemas.task_handoff.parse(input)

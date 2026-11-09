@@ -20,7 +20,7 @@ import type { TeamIdentity } from '../../team/teamIdentity'
 import { loadTeamGroups } from '../../team/teamGroups'
 import { DecisionConflict, type DecisionStore } from './decisionStore'
 import { answerBody, askInput, deciderName, DecisionRefusal, questionBody, rationaleOf, resolveChoice } from './decisionInputs'
-import { cardScope, leadOf, teamPlan } from './decisionScope'
+import { cardScope, leadOf, taskScope, teamPlan } from './decisionScope'
 import { QUESTION_TAG } from './decisionReplyGuard'
 import { answerAsOwner, overrideAsOwner, type OwnerAnswerInput, type OwnerOverrideInput } from './ownerDecisions'
 
@@ -56,8 +56,56 @@ export interface DecisionOutcome { card: DecisionCard; decision: PlanDecision; r
 
 export const ASK_GUIDANCE = 'The answer arrives as mail in this thread. Continue other work or end your turn; do not wait in a loop.'
 
+/** A committed decision or override (review-findings-ledger D6); listeners run after the commit and must not throw. */
+export type DecisionListener = (card: DecisionCard, decision: PlanDecision) => void
+
 export class DecisionService {
+  private readonly listeners = new Set<DecisionListener>()
   constructor(readonly deps: DecisionServiceDeps) {}
+
+  /** Hear every committed decision and override; returns the unsubscribe. */
+  onDecided(listener: DecisionListener): () => void {
+    this.listeners.add(listener)
+    return () => this.listeners.delete(listener)
+  }
+
+  /** Tell the listeners about a committed decision; a failing listener is the startup replay's to repair. */
+  decided(card: DecisionCard, decision: PlanDecision): void {
+    for (const listener of this.listeners) {
+      try { listener(card, decision) } catch { /* repaired by the listener's startup replay */ }
+    }
+  }
+
+  /**
+   * A card Kawai raises on a session's behalf about a plan change's task
+   * (review-findings-ledger D6): scoped to that task, routed like the
+   * session's own questions, and committed in one transaction with
+   * `within`, so the dispute and its card stand or fall together.
+   */
+  async askForTask(input: { sessionId: string; task: { id: string; teamId: string; planId?: string | null; planChange?: string | null }; question: string; options: string[]; context: string | null }, within: (card: DecisionCard) => void): Promise<DecisionCard> {
+    const fields = askInput({ question: input.question, options: input.options, context: input.context })
+    const { session, team, party } = await this.agent(input.sessionId)
+    const scope = taskScope(this.deps, team.teamId, input.task)
+    const lead = leadOf(this.deps.plans, scope.plan.id)
+    const toLead = lead !== null && session.groupId !== lead
+    const draft: DecisionCard = {
+      id: `card-${crypto.randomUUID()}`, teamId: team.teamId, planId: scope.plan.id, revision: scope.revision, change: scope.change, taskId: scope.taskId,
+      question: fields.question, options: fields.options, context: fields.context, askedBy: { session: session.sessionId, group: party.group, profile: party.profile },
+      addressedTo: toLead ? 'lead' : 'owner', addressedGroup: toLead ? lead : null, messageId: null, createdAt: '',
+    }
+    const prepared = toLead
+      ? await this.deps.mailbox.prepareSend({ kind: 'agent', sessionId: session.sessionId }, { to_kind: 'group', to_id: lead, body: questionBody(draft, scope.plan.title), tags: [QUESTION_TAG] })
+      : null
+    const { card, message } = this.deps.decisions.atomically(() => {
+      const message = prepared?.commit() ?? null
+      const card = this.deps.decisions.insertCard({ ...draft, messageId: message?.id ?? null })
+      within(card)
+      return { card, message }
+    })
+    if (message && prepared) await prepared.after(message)
+    this.deps.onChange?.(card.planId)
+    return card
+  }
 
   /** The asking session and its team; an unknown session is refused. */
   private async agent(sessionId: string) {
@@ -147,6 +195,7 @@ export class DecisionService {
     })
     const published = message && prepared ? await prepared.after(message) : null
     this.deps.onChange?.(card.planId)
+    this.decided(card, decision)
     return { card, decision, replayed: false, message: published }
   }
 

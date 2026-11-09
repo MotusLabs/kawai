@@ -2,6 +2,7 @@
 // client views. A task's direction and acceptance criteria live in numbered,
 // immutable revisions; `TeamTask` carries the latest one inline.
 import type { ImplementationContract } from './implementationContract'
+import type { LedgerItem, LedgerRow } from './findingsLedger'
 import type { ActingParty, TeamActor, TeamMessage } from './team'
 import type { CitationOutcome, CoverageMap, MapComparison, ReviewerCoverageMap, WithheldCoverage } from './coverageMaps'
 
@@ -398,6 +399,9 @@ export interface TaskResultChecks {
 }
 
 /** Review or QA findings, bound to the exact result examined (D4). */
+/** review-findings-ledger D3: one structured item, and one ledger row. */
+export type { LedgerItem, LedgerRow }
+
 export interface TaskFindings {
   id: string
   taskId: string
@@ -405,10 +409,22 @@ export interface TaskFindings {
   /** The handoff the findings answer, when there was one. */
   handoffId: string | null
   kind: 'review' | 'qa'
+  /** The verdict at submission: given for a text row, derived for a structured one (review-findings-ledger D5). */
   verdict: 'pass' | 'fail'
+  /** The reviewer's text: the whole finding for a text row, notes or a summary for a structured one. */
   findings: string
   author: TaskActor
   createdAt: string
+  /** review-findings-ledger D3: whether the row holds structured items; false for every row written before. */
+  structured: boolean
+  /** Whether the row counts for the ledger (D5); a replaced row no longer does. */
+  counted: boolean
+  contractIdentity: string | null
+  ledgerSeq: number | null
+  /** The counted submission on the same result that replaced this one. */
+  replacedBy: string | null
+  /** The structured items, in submission order; empty for a text row. */
+  items: LedgerItem[]
 }
 
 /**
@@ -473,10 +489,17 @@ export interface TeamTaskDetail {
   acknowledgements?: TaskAcknowledgement[]
   /** Results, outstanding first, then superseded ones newest first (task-results-handoffs D8). */
   results?: TaskResult[]
+  /** The findings ledger, derived now (review-findings-ledger D10): every row for the human's view; the agent's newest 100. */
+  findingsLedger?: LedgerRow[]
 }
 
 /** The agent's bounded detail (bounded-log-reads-and-task-get D4): journal, subtask, and message windows, oldest first, with their bounds; other sections whole. */
-export interface AgentTaskDetail extends Omit<TeamTaskDetail, 'journal'> { journal: TaskJournalPreview[]; bounds: AgentTaskBounds }
+export interface AgentTaskDetail extends Omit<TeamTaskDetail, 'journal'> {
+  journal: TaskJournalPreview[]
+  bounds: AgentTaskBounds
+  /** review-findings-ledger D10: whether ledger rows older than the newest 100 were left out. */
+  ledgerOlderRemaining?: boolean
+}
 export interface AgentTaskBounds { journal: { total: number; returned: number; olderRemaining: boolean; nextBefore: string | null }; subtasks: TaskListBound; messages: TaskListBound }
 export interface TaskListBound { total: number; returned: number; truncated: boolean }
 /** A journal entry's preview (D4): at most 2,000 stored bytes; `text` is null when they are not valid UTF-8, and `resumeOffsetBytes` is then 0. */
@@ -536,6 +559,8 @@ export interface ChatPeerTaskContext {
    * their old bytes.
    */
   contract?: { identity: string; contract: ImplementationContract | null }
+  /** The ledger's blocking and disputed ids (review-findings-ledger D10); absent while the task has no structured findings. */
+  findings?: { blocking: string[]; disputed: string[] }
 }
 
 /** An assignment's addressee: a group (its role) or one named session. */

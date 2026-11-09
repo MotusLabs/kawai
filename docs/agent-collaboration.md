@@ -223,6 +223,65 @@ is advisory; it does not dispatch a second stage or replace the formal review.
 If no suitable fresh assessor is available, record that limitation and the
 Lead's next step; do not claim that two independent reviews occurred.
 
+## Review protocol
+
+A formal review is a list of findings on one exact result, submitted with
+`task_submit_findings` as structured `items`. Kawai classifies each item,
+derives the verdict, and keeps one findings ledger per task. `task_get`
+shows the ledger, and the Team page's task detail shows it too. A plan
+change's review is refused in the old text form. On other tasks the text
+form still works, but it never enters the ledger.
+
+- **Levels.**
+  - P0: security, data corruption, or severe correctness.
+  - P1: a reproducible requirement violation or a significant regression.
+  - P2: advisory. **P2 never blocks.**
+- **Clause rule.** A P0 or P1 cites the clause it violates. Write
+  `<identity> › <clause id>` or a bare `A1`. On a task without a contract,
+  cite the revision identity alone. A finding with no citation, a stale
+  identity, an unknown clause, or an `X*` clause is out of contract and
+  never blocks. Report requests for work outside the contract as
+  follow-ups, not findings.
+- **Evidence rule.** A P0 or P1 needs evidence (a `file:line`, test output,
+  or a counterexample) and an impact. A reproduction is optional. Without
+  evidence and an impact the finding is unsupported and never blocks.
+- **Verdict.** A round fails exactly when an accepted P0 or P1 is open
+  (accepted, still open, or reopened). Nobody states the verdict; the
+  submit reply lists each item's class. Read it.
+- **Verify rounds.** On a newer result, give a disposition for every
+  blocking finding `task_get` lists: `resolved`, `still-open`, or
+  `regressed` (the last two with evidence). A new finding with the same
+  clause and file as a resolved one reopens it. While a finding still
+  blocks, raising it again is refused: give its disposition instead.
+- **One counted review per result.** On a plan change, the review that
+  counts is the one answering the review handoff as its claimant. On other
+  tasks, any structured review counts. A corrected review replaces the
+  first until the review becomes final, which happens when one of its
+  findings is disputed, a newer result's review counts, or its round is
+  decided.
+- **Fixing.** The fix instruction lists only the blocking finding ids.
+  Fix those, minimally, and nothing else. Other findings in `task_get` are
+  not required.
+- **Disputes.** A developer who can refute a finding disputes it with
+  `task_dispute_findings`, giving counter-evidence, instead of changing
+  code. A finding can be disputed once in each state it enters. On a plan
+  change, each dispute raises a decision card for the plan's Lead role (or
+  the owner). On other tasks, the task's creator or the human decides with
+  `task_decide_dispute` and a rationale. Upholding restores the finding's
+  state before the dispute. Rejecting makes it `rejected`, which never
+  blocks. A pending dispute holds the round. A failed round whose blockers
+  are all rejected passes on its result again, with no new commit.
+- **Revisions.** Publishing a revision with a new contract re-maps each
+  open finding by its clause id. A finding with no clause left to cite is
+  superseded and no longer blocks.
+- **P0 alerts.** An accepted P0 on a plan change sends the Lead role a
+  `review-p0` message. The round fails and the fix goes out as usual.
+
+When the work carries acceptance oracles (see the next section), they
+decide the level. A missing, unfaithful, or vacuous oracle test, a
+counterexample to a stated property, and a security or data-loss bug with a
+reproducer are P0 or P1. Any other substantive finding is P2.
+
 ## Write acceptance as oracles
 
 Risky work is accepted against oracles written before any of it is coded: a
@@ -273,11 +332,11 @@ a hand-built harness is not coverage — at least one oracle test per guarded
 seam runs through the production composition, and its mutant removes the
 wiring.
 
-The reviewer's verdict rule lives in `.kawai/groups/reviewers.md`: for work
-whose acceptance has oracles, a finding blocks only when it shows a missing,
-unfaithful or vacuous oracle test, a counterexample to a stated property, or
-a security or data-loss bug with a reproducer; from round 2, only
-regressions, unfixed findings, and new counterexamples with reproducers
+What blocks is decided by the levels in "Review protocol" above. For work
+whose acceptance has oracles, only a missing, unfaithful, or vacuous oracle
+test, a counterexample to a stated property, or a security or data-loss bug
+with a reproducer is P0 or P1. From round 2, only regressions (`regressed`),
+unfixed findings (`still-open`), and new counterexamples with reproducers
 block.
 
 Amendments go through the table, not around it: a defect that is neither in

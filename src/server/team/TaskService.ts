@@ -28,6 +28,7 @@ import { TeamWorktrees } from './worktreeRoots'
 import type { PlanStore } from '../plans/planStore'
 import { resolvePlanLink } from '../plans/planLink'
 import { NULL_OWNERSHIP, type ExecutionOwnership } from '../plans/execution/executionOwnership'
+import { remapFindings } from './findingRemap'
 import { executionOf, refuseSystem, type SystemCaller } from './systemCaller'
 import { originStatusRefusal, statusRefusal } from './taskStatusRights'
 import { contractInput } from './taskContractRows'
@@ -258,14 +259,16 @@ export class TaskService {
       notify: input.notify === true,
       // Only the publication that came from the draft discards it (D2).
       discardDraft: actor.kind === 'human' && input.fromDraft === true,
-      // Publish and notify (D3): the notices commit or roll back with the revision.
-      ...(input.notify && this.store.notices ? {
-        within: (revision, current) => {
-          sent = this.store.notices!.write(current, revision, {
+      // Publish, re-map open findings (review-findings-ledger D9), and notify
+      // (D3): the events and notices commit or roll back with the revision.
+      within: (revision, current) => {
+        remapFindings(this.store, taskId, revision)
+        if (input.notify && this.store.notices) {
+          sent = this.store.notices.write(current, revision, {
             sender, requestKey: requestKey ?? `publish-r${revision.revision}`, sessionExists: id => !!this.options.getSession(id),
           })
-        },
-      } : {}),
+        }
+      },
     }, actor)
     if (!outcome) throw new Error(`Task not found in this team: ${taskId}`)
     if (!outcome.replay) this.announce(outcome)

@@ -20,6 +20,8 @@ import { statusRefusal, type TaskCaller, type TaskService } from './TaskService'
 import { refuseSystem } from './systemCaller'
 import type { TeamIdentity } from './teamIdentity'
 import { worktreeRootOf } from './worktreeRoots'
+import type { SubmittedDisposition, SubmittedFinding } from '../../shared/findingsLedger'
+import { TaskFindingService, type StructuredOutcome } from './TaskFindingService'
 
 export interface ResultSubmission {
   summary: string
@@ -34,9 +36,17 @@ export interface ResultSubmission {
 export interface FindingsSubmission {
   resultId: string
   kind: TaskFindings['kind']
-  verdict: TaskFindings['verdict']
-  findings: string
+  /** Required for a text submission; optional for a structured one, whose verdict is derived (review-findings-ledger D4). */
+  verdict?: TaskFindings['verdict']
+  /** The whole finding for a text submission; notes for a structured one. */
+  findings?: string
+  /** Structured findings and dispositions; either present makes the submission structured. */
+  items?: SubmittedFinding[]
+  dispositions?: SubmittedDisposition[]
 }
+
+/** The stored row, and for a structured submission what the gate decided (spec: the reply lists every item). */
+export type FindingsOutcome = TaskFindings & { gate?: Omit<StructuredOutcome, 'findings'> }
 
 const blankToNull = (value: string | null | undefined) => (value?.trim() ? value.trim() : null)
 
@@ -128,6 +138,16 @@ export class TaskResultService {
 
   private get store() { return this.tasks.store }
 
+  private findingService: TaskFindingService | null = null
+  /** The structured findings path (review-findings-ledger D4); built on first use over the task store. */
+  get findingsLedger(): TaskFindingService {
+    this.findingService ??= new TaskFindingService(this.store, {
+      scopeFact: resultId => this.store.checks.viewForResult(resultId).newest?.facts?.scope ?? null,
+      onWrite: taskId => this.options.onWrite?.(taskId),
+    })
+    return this.findingService
+  }
+
   /** Whether a running execution owns the task (plan-execution D7): Kawai accepts it when the change lands. */
   ownedByExecution(taskId: string): boolean {
     return (this.options.ownership ?? NULL_OWNERSHIP).ownerOfTask(taskId) !== null
@@ -190,15 +210,17 @@ export class TaskResultService {
    * submitter is visible. Answering the caller's outstanding handoff for that
    * result records its id (the attempt's identity).
    */
-  async submitFindings(caller: TaskCaller, taskId: string, input: FindingsSubmission): Promise<TaskFindings> {
+  async submitFindings(caller: TaskCaller, taskId: string, input: FindingsSubmission): Promise<FindingsOutcome> {
     refuseSystem(caller, 'submit')
     const { team, actor } = await this.tasks.context(caller)
     if (actor.kind !== 'agent') throw new Error('Findings are submitted by the reviewing agent, with task_submit_findings')
-    this.tasks.sameTeamTask(team, taskId)
+    const task = this.tasks.sameTeamTask(team, taskId)
     const result = this.store.results.get(input.resultId)
     if (!result || result.taskId !== taskId) throw new Error(`Result ${input.resultId} is not a result of task ${taskId}`)
-    const findings = input.findings.trim()
-    if (!findings) throw new Error('Findings need text')
+    const structured = input.items !== undefined || input.dispositions !== undefined
+    const findings = input.findings?.trim() ?? ''
+    if (!structured && !findings) throw new Error('Findings need text, or structured items and dispositions')
+    if (!structured && input.verdict === undefined) throw new Error('A text submission needs a verdict (pass or fail)')
     // revision-control D9 (ruling L6): the old holder of a Restarted change
     // is refused findings like its result, judged from the rows, before
     // anything is written. Findings carry no commit and every stage accepted
@@ -207,13 +229,56 @@ export class TaskResultService {
     if (refusal !== null) throw new Error(refusal)
     const handoff = this.store.outstandingAssignment(taskId)
     const answers = handoff?.handoffKind && handoff.resultId === result.id && handoff.claimedBy === actor.sessionId
+    const answersReview = !!answers && (handoff.handoffKind === 'review' || handoff.handoffKind === 'qa')
+    const planTask = (task.planId ?? null) !== null
+    // review-findings-ledger D4 (spec plan-execution): the review handoff's
+    // claimant on a plan change's task answers with structured findings only.
+    if (!structured && planTask && answersReview) {
+      throw new Error('A plan change\'s review is submitted as structured findings: send items (each with level, clause, evidence, impact) and dispositions for the open findings, not text with a verdict. Nothing was written.')
+    }
+    if (structured) {
+      const outcome = this.findingsLedger.submit({
+        teamId: team.teamId, task, result, author: actor, handoffId: answers ? handoff.id : null,
+        // D5: a plan change's ledger counts only its review handoff's claimant.
+        counted: planTask ? answersReview : true,
+        submission: { kind: input.kind, verdict: input.verdict, notes: input.findings ?? null, findings: input.items ?? [], dispositions: input.dispositions ?? [] },
+      })
+      this.store.appendJournal(taskId, actor, `${input.kind === 'qa' ? 'QA' : 'Review'} findings on result ${result.id}: ${outcome.verdict} (${outcome.items.length} item${outcome.items.length === 1 ? '' : 's'}${outcome.counted ? '' : ', not counted'})`)
+      this.options.onWrite?.(taskId)
+      const { findings: stored, ...gate } = outcome
+      return { ...stored, gate }
+    }
     const stored = this.store.results.insertFindings({
       teamId: team.teamId, taskId, resultId: result.id, handoffId: answers ? handoff.id : null,
-      kind: input.kind, verdict: input.verdict, findings, author: actor,
+      kind: input.kind, verdict: input.verdict!, findings, author: actor,
     })
     this.store.appendJournal(taskId, actor, `${input.kind === 'qa' ? 'QA' : 'Review'} findings on result ${result.id}: ${input.verdict}`)
     this.options.onWrite?.(taskId)
     return stored
+  }
+
+  /**
+   * Dispute blocking findings with counter-evidence (review-findings-ledger
+   * D6, table DS): a result's author only, through the revision-control D9
+   * ownership check (B1), so the holder a Restart replaced is refused.
+   */
+  async disputeFindings(caller: TaskCaller, taskId: string, disputes: Array<{ id: string; counterEvidence: string }>): Promise<{ disputed: Array<{ id: string; cardId: string | null }> }> {
+    refuseSystem(caller, 'submit')
+    const { team, actor } = await this.tasks.context(caller)
+    if (actor.kind !== 'agent') throw new Error('Findings are disputed by the result\'s author, with task_dispute_findings')
+    const task = this.tasks.sameTeamTask(team, taskId)
+    const refusal = await (this.options.ownership ?? NULL_OWNERSHIP).checkResult(taskId, { commit: null, submitter: actor.sessionId, kind: 'findings' })
+    if (refusal !== null) throw new Error(refusal)
+    return this.findingsLedger.disputes.dispute({ teamId: team.teamId, task, actor, disputes })
+  }
+
+  /** The non-plan dispute decision (D6): the task's creator or the human, with a rationale. */
+  async decideDispute(caller: TaskCaller, taskId: string, input: { findingId: string; decision: 'uphold' | 'reject'; rationale: string }) {
+    refuseSystem(caller, 'submit')
+    const { team, actor } = await this.tasks.context(caller)
+    if (actor.kind === 'system') throw new Error('Kawai does not decide disputes')
+    const task = this.tasks.sameTeamTask(team, taskId)
+    return this.findingsLedger.disputes.decide({ task, actor, ...input })
   }
 
   /**

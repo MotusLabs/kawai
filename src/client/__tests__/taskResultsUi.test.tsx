@@ -56,7 +56,8 @@ test('results show claimed outcomes, the re-evaluation badge, and supersession; 
     result('r2', { supersedesResultId: 'r1' }),
     result('r1', { supersededBy: 'r2', needsReevaluation: true, taskRevision: 1,
       findings: [{ id: 'f1', taskId: 't1', resultId: 'r1', handoffId: null, kind: 'review', verdict: 'fail', findings: 'Header missing',
-        author: { kind: 'agent', sessionId: 'reviewer' }, createdAt: '2026-10-14T01:00:00.000Z' }] }),
+        author: { kind: 'agent', sessionId: 'reviewer' }, createdAt: '2026-10-14T01:00:00.000Z',
+        structured: false, counted: false, contractIdentity: null, ledgerSeq: null, replacedBy: null, items: [] }] }),
   ] }))
   const cards = byTestId('task-result')
   expect(cards.map(card => [card.props['data-result-id'], card.props['data-outstanding']])).toEqual([['r2', true], ['r1', false]])

@@ -36,6 +36,8 @@ import { TaskJournalWindow } from './taskJournalWindow'
 import { TaskListWindow } from './taskListWindow'
 import type { ImplementationContract } from '../../shared/implementationContract'
 import { contractColumns, contractFields, nextContract } from './taskContractRows'
+import { FindingStore } from './findingStore'
+import { foldLedger, type LedgerRow } from '../../shared/findingsLedger'
 
 const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS team_tasks (
@@ -161,6 +163,8 @@ export class TaskStore {
   readonly results: TaskResultStore
   /** Result checks and coverage maps (independent-verification D4). */
   readonly checks: ResultCheckStore
+  /** Structured findings, ledger events, and dispute cards (review-findings-ledger D3). */
+  readonly findings: FindingStore
   /** The agent's bounded detail and lossless entry reads (bounded-log-reads D4–D6); no tool calls them yet. */
   readonly journalWindow: TaskJournalWindow
   /** The agent's bounded, compact task list (bounded-task-list D3). */
@@ -178,6 +182,7 @@ export class TaskStore {
     this.notices = mail && assignments ? new TaskNotices(db, mail, assignments, this.acknowledgements) : null
     this.results = new TaskResultStore(db)
     this.checks = new ResultCheckStore(db)
+    this.findings = new FindingStore(db)
     this.journalWindow = new TaskJournalWindow(db, this, mail)
     this.listWindow = new TaskListWindow(db, this)
   }
@@ -229,6 +234,11 @@ export class TaskStore {
     return row ? this.get(String((row as Record<string, unknown>).id)) : null
   }
 
+  /** Run `fn` in one immediate transaction (review-findings-ledger D3: dense ledger_seq and finding ids). */
+  immediate<T>(fn: () => T): T {
+    return this.db.transaction(fn).immediate()
+  }
+
   get(id: string): TeamTask | null {
     const row = this.db.prepare(`SELECT t.*, r.direction, r.acceptance, r.contract, r.contract_hash, p.title AS plan_title FROM team_tasks t
       JOIN team_task_revisions r ON r.task_id = t.id AND r.revision = t.revision
@@ -259,7 +269,13 @@ export class TaskStore {
         checks: this.checks.viewForResult(result.id),
         reviewerMaps: this.results.reviewerMapsOf(result.id, rawCoverage(result.coverage)),
       })),
+      findingsLedger: this.ledger(id),
     }
+  }
+
+  /** The task's findings ledger, folded now (review-findings-ledger I2): the one derivation every reader uses. */
+  ledger(taskId: string): LedgerRow[] {
+    return foldLedger(this.findings.countedSubmissions(taskId), this.findings.events(taskId))
   }
 
   /** Every assignment of a task, oldest first; empty without an assignment store. */
@@ -371,6 +387,11 @@ export class TaskStore {
     return { replay: true, task: this.get(id)!, revision }
   }
 
+  /** Supersede one assignment by `by` (review-findings-ledger D8: a re-gate answers the fix handoff); false when already superseded. */
+  supersedeAssignment(id: string, by: string): boolean {
+    return this.assignments?.supersede(id, by) ?? false
+  }
+
   /** Run writes as one transaction (nested store transactions become savepoints). */
   atomically<T>(write: () => T): T {
     return this.db.transaction(write)()
@@ -461,12 +482,11 @@ export class TaskStore {
    */
   derived(taskId: string): Pick<TeamTaskSummary, 'assignment' | 'outstandingResult'> {
     const result = this.results.outstanding(taskId)
-    const findings = result ? this.results.findingsFor(result.id) : []
     return {
       assignment: this.assignments ? outstandingOf(this.assignments.listByTask(taskId)) : null,
       outstandingResult: result ? {
         id: result.id, needsReevaluation: result.needsReevaluation, accepted: result.acceptedAt !== null,
-        reviewVerdict: findings.at(-1)?.verdict ?? null,
+        reviewVerdict: this.results.reviewVerdict(taskId, result.id),
       } : null,
     }
   }

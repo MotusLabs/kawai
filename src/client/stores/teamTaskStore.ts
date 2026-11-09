@@ -16,7 +16,7 @@ import type { SessionDirectoryEntry } from '@shared/team'
 import type { HumanTaskDetail, TaskDispatchPreview, TaskTargetOptions, TeamTaskSummary } from '@shared/teamTasks'
 import type { TeamCapacityAnswer } from '@shared/teamCapacity'
 
-export type TaskAction = 'create' | 'create-assign' | 'assign' | 'draft' | 'publish' | 'notify' | 'note' | 'status' | 'handoff' | 'accept' | 'release' | 'recheck'
+export type TaskAction = 'create' | 'create-assign' | 'assign' | 'draft' | 'publish' | 'notify' | 'note' | 'status' | 'handoff' | 'accept' | 'release' | 'recheck' | 'decide-dispute'
 
 /** An armed publish or notify command: its key and the payload it names. */
 export interface ArmedCommand {

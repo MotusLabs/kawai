@@ -108,6 +108,8 @@ describe('CI through the stub (12.3)', () => {
     expect(view(executionId, 'ci-a').latestRound!.ci).toMatchObject({ state: 'pass', flaky: ['ci'] })
   })
 
+  // @covers: plan-execution › A failed round returns the change for fixes › Failed CI skips the review
+  // @covers: plan-execution › A failed round returns the change for fixes › The fix instruction carries the failure
   test('a failure after the rerun fails the round; a non-rerunnable failure fails at once', async () => {
     const executionId = await startedExecution(h, [{ change: 'ci-b' }])
     await h.tick()
@@ -125,6 +127,13 @@ describe('CI through the stub (12.3)', () => {
     expect(failed.reviewAssignmentId).toBeNull()
     // The failed implement round dispatches a fix attempt (it never counts).
     expect(h.executions.change(executionId, 'ci-b')).toMatchObject({ state: 'implementing', fixRounds: 0 })
+    // No review handoff for that result; the fix goes to the implementing group, naming the check, its link, and the commit.
+    const handoffs = h.tasks.store.assignmentsOf(h.executions.change(executionId, 'ci-b')!.taskId!)
+    expect(handoffs.filter(entry => entry.handoffKind === 'review')).toHaveLength(0)
+    const fixHandoff = handoffs.filter(entry => entry.handoffKind === 'fix').at(-1)!
+    expect([fixHandoff.targetKind, fixHandoff.targetId]).toEqual(['group', 'middle-devs'])
+    expect(fixHandoff.instruction).toContain('- ci: failure (https://example.internal/runs/41)')
+    expect(fixHandoff.instruction).toContain(`Continue from commit ${commit}.`)
     const fix = await submitWork(h, executionId, 'ci-b', 'src/c.ts', 'd\n')
     h.gh.checks.set(fix, [run('ci', 'success', 42, '2026-10-17T00:00:00.000Z', '2026-10-17T00:01:00.000Z'), e2e('failure')])
     await h.tick()

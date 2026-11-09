@@ -42,6 +42,7 @@
 // the transaction throw (§2) — PlanRefusal for the K-level reasons, the
 // ResolveRefusal codes below — so a refused command writes nothing, not
 // even the event.
+import { fixFindings } from '../execution/fixFindings'
 import { createHash } from 'node:crypto'
 import { PlanRefusal } from '../planCommands'
 import type { ExecutionEventOutcome, PlanCaller } from '../PlanService'
@@ -467,7 +468,7 @@ function adaptAttempt(deps: PauseServiceDeps, caller: PlanCaller & { kind: 'huma
         team: caller.team, execution, changeRow: afterRow, entry, content: revision.content,
         planTitle: deps.plans.get(pause.planId)?.title ?? pause.planId,
         taskId: task.id, attempt: { id: attempt.id, number: attempt.number, manifestHash },
-        startCommit, taskRevision, rationale,
+        startCommit, taskRevision, rationale, openFindings: fixFindings(deps.tasks!.store, task.id, null),
         executions: deps.executions, assignments: deps.assignmentService,
       })
     }

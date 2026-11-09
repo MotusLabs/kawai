@@ -68,7 +68,7 @@ handoff with a notice and no new dispatch.
 - **THEN** that assignment is superseded through task-assignment's stop branch with a journal line naming the handoff kind, its instruction is cancelled only while queued or awaiting a request, and no reassignment note is sent
 
 ### Requirement: Findings are bound to the result examined
-Any team member SHALL submit review or QA findings with `task_submit_findings`, naming the exact result examined and a verdict. Findings SHALL apply only to the result they name: a newer result or commit SHALL NOT inherit them. When a newer result supersedes an earlier one, the earlier result and its findings SHALL remain readable with their binding unchanged.
+Any team member SHALL submit review or QA findings with `task_submit_findings`, naming the exact result examined, as structured findings with a derived verdict or as text with a verdict. Findings SHALL apply only to the result they name: a newer result or commit SHALL NOT inherit them. When a newer result supersedes an earlier one, the earlier result and its findings SHALL remain readable with their binding unchanged.
 
 #### Scenario: Findings name the examined result
 - **WHEN** a reviewer submits findings for a result
@@ -77,6 +77,14 @@ Any team member SHALL submit review or QA findings with `task_submit_findings`, 
 #### Scenario: A newer commit inherits no approval
 - **WHEN** the developer submits a new result after findings were reported on the earlier one
 - **THEN** the earlier findings do not approve or transfer to the new result
+
+#### Scenario: Structured findings carry a derived verdict
+- **WHEN** a reviewer submits structured findings without a verdict
+- **THEN** they attach to the result with the verdict the ledger derives, and each finding with its id and class
+
+#### Scenario: Text findings outside plan execution
+- **WHEN** a reviewer submits text with a `fail` verdict on a task that is not a plan change's task
+- **THEN** they attach to the result as unstructured findings with that verdict
 
 ### Requirement: Accepting a result closes it under existing rights
 **Accept result** SHALL be available only to the human or the task's creator, and SHALL close the task as done only under the existing closing rights; a refusal SHALL write nothing. Before closure the UI SHALL show the task's acceptance criteria and any child tasks not done or cancelled. Accepting a result labeled Needs re-evaluation, or closing despite open child work, SHALL require a stated reason that is journaled. A parent SHALL never auto-close when its children finish.

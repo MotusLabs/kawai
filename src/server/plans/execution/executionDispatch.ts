@@ -20,6 +20,7 @@ import type { AttemptRow, RoundRow } from './executionRows'
 import type { ExecutionStore } from './executionStore'
 import type { PlanStore } from '../planStore'
 import { fixInstruction, implementInstruction, instructionContract, updateInstruction } from './instructions'
+import { fixFindings, type FixFindings } from './fixFindings'
 import { refusable } from './stepRefusal'
 import { effectiveExtraChecks } from '../../../shared/planExecutionGates'
 import { renderContract } from '../../../shared/implementationContract'
@@ -151,7 +152,8 @@ export interface FixAttemptInput {
   group: string
   failingChecks: Array<{ name: string; conclusion: string; link: string | null }>
   findingsIds: string[]
-  findingsTexts: string[]
+  /** review-findings-ledger D7: built by fixFindings from the fold. */
+  findings: FixFindings
   continueFrom: string
   fixRounds: number
   /** When set, the attempt is an update attempt (revision-control PR E, A1): its manifest records the failed branch update. */
@@ -269,7 +271,7 @@ export async function dispatchFix(deps: DispatchDeps, input: FixAttemptInput, at
     integrationBranch: integrationBranchOf(execution),
     contract: instructionContract(deps.tasks.store.get(taskId)),
     failingChecks: input.failingChecks,
-    findings: input.findingsTexts,
+    findings: input.findings,
     fixRounds: input.fixRounds,
     continueFrom: input.continueFrom,
   })
@@ -308,7 +310,7 @@ export async function dispatchUpdateAttempt(deps: DispatchDeps, input: {
   const roleProfiles = revision?.content.roles.find(role => role.group === group)?.profiles ?? []
   const attempt = await ensureFixAttempt(deps, {
     executionId: input.executionId, change: input.change, group,
-    failingChecks: [], findingsIds: [], findingsTexts: [],
+    failingChecks: [], findingsIds: [], findings: { blocking: [], blockingText: '', others: 0, legacyTexts: [] },
     continueFrom: input.round.commitSha, fixRounds: changeRow.fixRounds,
     update: input.update,
   })
@@ -400,27 +402,28 @@ async function dispatchOwedFix(deps: DispatchDeps, input: { executionId: string;
     : null
   let failingChecks: FixAttemptInput['failingChecks'] = []
   let findingsIds: string[] = []
-  let findingsTexts: string[] = []
-  // The texts are rebuilt at send time from the round the attempt answers —
-  // the manifest keeps only ids. A superseded round's owed fix names the
-  // task's CURRENT revision (a second republish after the attempt was minted
-  // is still the round's answer), a failed round its failing checks and the
-  // verdict's findings.
+  let notes: string[] = []
+  // The findings are rebuilt at send time from the ledger and the round the
+  // attempt answers — the manifest keeps only ids (review-findings-ledger
+  // D7). A superseded round's owed fix names the task's CURRENT revision (a
+  // second republish after the attempt was minted is still the round's
+  // answer), a failed round its failing checks and the verdict's findings.
   if (round?.outcome === 'superseded') {
     const task = changeRow.taskId === null ? null : deps.tasks.store.get(changeRow.taskId)
     const rationale = task === null || task === undefined ? null : deps.tasks.store.revisions(task.id).at(-1)?.rationale ?? null
-    findingsTexts = [`The task's direction was republished as revision ${task?.revision ?? 1}${rationale ? ` (${rationale})` : ''}. Re-apply your work on top of the new direction.`]
+    notes = [`The task's direction was republished as revision ${task?.revision ?? 1}${rationale ? ` (${rationale})` : ''}. Re-apply your work on top of the new direction.`]
   } else if (round !== null && round.outcome === 'fail') {
     failingChecks = (round.ci ?? []).filter(check => check.conclusion.toLowerCase() === 'failure')
       .map(check => ({ name: check.name, conclusion: check.conclusion, link: check.link }))
     const all = changeRow.taskId === null ? [] : deps.tasks.store.results.findingsFor(round.resultId)
-    const findings = round.verdictFindingsId !== null ? all.filter(entry => entry.id === round.verdictFindingsId) : all
-    findingsIds = findings.map(row => row.id)
-    findingsTexts = findings.map(row => row.findings)
+    findingsIds = (round.verdictFindingsId !== null ? all.filter(entry => entry.id === round.verdictFindingsId) : all).map(row => row.id)
   }
+  const findings = changeRow.taskId === null
+    ? { blocking: [], blockingText: '', others: 0, legacyTexts: notes }
+    : fixFindings(deps.tasks.store, changeRow.taskId, round?.outcome === 'fail' ? round : null, notes)
   await dispatchFix(deps, {
     executionId: input.executionId, change: input.change, group: input.group,
-    failingChecks, findingsIds, findingsTexts,
+    failingChecks, findingsIds, findings,
     continueFrom: round?.commitSha ?? changeRow.baselineCommit ?? '',
     fixRounds: changeRow.fixRounds,
   }, { id: newest.id, number: newest.number, manifestHash: newest.manifestHash })

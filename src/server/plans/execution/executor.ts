@@ -9,6 +9,8 @@
 // execution a 60-second timer keeps the loop alive for CI polling, backoffs,
 // and timeouts. Everything a tick reads is stored, so a restart resumes
 // from the rows alone.
+import { fixFindings } from './fixFindings'
+import { regateOwned } from './regateRefuted'
 import type { TeamIdentity } from '../../team/teamIdentity'
 import type { ChatSessionRecord } from '../../db'
 import type { TaskService } from '../../team/TaskService'
@@ -87,6 +89,8 @@ export interface ExecutorDeps {
   reads?: InspectorReads
   /** Test seam: the clock. */
   now?: () => Date
+  /** Test seam: runs inside the re-gate's transaction after its insert (review-findings-ledger D8's crash test). */
+  regateAfterInsert?: () => void
   /** The promotion runner (integration-candidates D10): its startup, a pass per tick, and whether its timer stays armed. */
   promotions?: { startup(): void; pass(teamId: string): Promise<void>; active(teamId: string): boolean }
   /** The hold gate's reads (revision-control 3.2): the plan's active holds and open pause targets. */
@@ -206,6 +210,9 @@ export class ExecutionExecutor {
         planId => this.deps.holds?.active(teamId, planId) ?? [],
         planId => this.deps.holds?.openTargets(teamId, planId) ?? [])
       if (snapshot.executions.length === 0) return
+      // review-findings-ledger D8: a refuted review re-gates before anything plans; the change moved, so plan again.
+      if (regateOwned({ team, executions: this.deps.store, tasks: this.deps.tasks.store, mail: this.deps.mailbox, now: () => this.deps.now?.() ?? new Date(), afterInsert: this.deps.regateAfterInsert },
+        this.deps.store.ownedChanges(teamId), change => this.gateOf(snapshot, change.executionId)(change.change))) continue
       // Not a planned step: it writes no execution state, and a reviewer still
       // busy now is retried by a later tick. A held change keeps its members.
       for (const change of this.deps.store.ownedChanges(teamId)) {
@@ -440,7 +447,7 @@ export class ExecutionExecutor {
       executionId: fix.executionId, change: fix.change, group,
       failingChecks: failing,
       findingsIds: findings.map(entry => entry.id),
-      findingsTexts: findings.map(entry => entry.findings),
+      findings: fixFindings(this.deps.tasks.store, row.taskId!, round),
       continueFrom: round.commitSha,
       fixRounds: outcome.count,
     }
