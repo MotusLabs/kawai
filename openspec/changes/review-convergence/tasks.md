@@ -2,7 +2,7 @@
 
 ## 1. Signals (design decisions 1–2)
 
-- [ ] 1.1 Add `src/shared/reviewConvergence.ts`:
+- [x] 1.1 Add `src/shared/reviewConvergence.ts`:
   - `reviewSnapshots(submissions, events)` with `raised`, `resolved`,
     `outOfContract`, `reopened`, and `openAfter` per counted review;
   - `convergenceWindow(snapshots, anchor)`;
