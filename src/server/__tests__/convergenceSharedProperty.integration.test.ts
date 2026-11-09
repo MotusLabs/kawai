@@ -90,4 +90,5 @@ test('P4: the view\'s counts and the executor\'s signals equal the shared module
   }
   // The generator reaches every signal, passes, refusals, anchored and trimmed windows.
   for (const key of ['S1', 'S2', 'S3', 'S4', 'S5', 'pass', 'fail', 'anchored', 'window-trimmed']) expect({ key, reached: (reached.get(key) ?? 0) > 0 }).toEqual({ key, reached: true })
-})
+// 300 cases write a few thousand ledger rows: about 30 s alone, longer under the full suite's load.
+}, 240_000)

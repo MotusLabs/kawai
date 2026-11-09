@@ -134,4 +134,5 @@ test('P2: no signal decides a finding; only a recorded diagnosis decision writes
   for (const key of ['noticed', 'reviewed', 'diagnosis-reject', 'dispute-reject', 'dispute-uphold', 'states-differ-by-diagnosis']) {
     expect({ key, reached: (reached.get(key) ?? 0) > 0 }).toEqual({ key, reached: true })
   }
-})
+// 300 cases write a few thousand ledger rows: about 30 s alone, longer under the full suite's load.
+}, 240_000)
