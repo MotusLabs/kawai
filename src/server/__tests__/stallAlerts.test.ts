@@ -113,6 +113,7 @@ describe('raising an alert', () => {
 })
 
 describe('episodes', () => {
+  // @covers: plan-supervision › A stall alerts the Lead role once per episode › One alert across a restart
   test('a restart during a stall sends nothing new', async () => {
     await idleStall()
     const first = bench.compose().monitor
@@ -148,6 +149,7 @@ describe('episodes', () => {
     monitor.stop()
   })
 
+  // @covers: plan-supervision › A stall alerts the Lead role once per episode › A new episode after progress
   test('new progress then a new stall sends a second alert', async () => {
     const { taskId } = await idleStall()
     const { monitor } = bench.compose()

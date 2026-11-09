@@ -80,6 +80,7 @@ describe('outcome precedence', () => {
     expect(changeSupervision(input({ state: null }), NOW).outcome).toBe('not-started')
   })
 
+  // @covers: plan-supervision › Repeating failures stall › The same check fails twice
   test('a repeating failure reads stalled during the fix round CI wait, the wait also applying', () => {
     const view = changeSupervision(input({ ...stalled, state: 'gating', step: 'awaiting-ci', rounds: [...stalled.rounds, round(4, { ci: [check('unit', 'in_progress')] })] }), NOW)
     expect(view.outcome).toBe('stalled')
@@ -110,6 +111,7 @@ describe('failingChecks', () => {
 describe('repeating-failure', () => {
   const view = (rounds: SupervisionRound[]) => changeSupervision(input({ state: 'implementing', attempt: { kind: 'fix', status: 'out' }, rounds }), NOW)
 
+  // @covers: plan-supervision › Repeating failures stall › Different failures
   test('different failures raise none', () => {
     expect(view([failed(2, [check('lint', 'failure')]), failed(3, [check('unit', 'failure')])]).stall).toBeNull()
   })

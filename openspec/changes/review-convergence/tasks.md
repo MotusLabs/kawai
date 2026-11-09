@@ -188,7 +188,7 @@
 
 ## 11. Integration
 
-- [ ] 11.1 Add `@covers` annotations for every ADDED and MODIFIED scenario
+- [x] 11.1 Add `@covers` annotations for every ADDED and MODIFIED scenario
   of the four delta specs. Check that no test cites the removed
   requirement. Map each oracle id (SG, WN, DO, DX, P1–P4) to its test title
   and killed mutant in the result. Run `openspec validate

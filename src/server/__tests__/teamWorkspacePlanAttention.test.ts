@@ -101,6 +101,7 @@ const items = (facts: PlanAttentionFact[]): AttentionItem[] =>
 const byKind = (items: AttentionItem[], kind: string) => items.filter(item => item.kind === kind)
 
 describe('plan-stop (D13)', () => {
+  // @covers: plan-supervision › Plan stops, stalls, and conditions need attention › A stop needs the owner
   test('a stopped change is the human\'s item, naming the reason, linked to its plan and change', () => {
     const [item] = items([fact({ changes: [stopped()] })]).filter(item => item.kind === 'plan-stop')
     expect(item).toMatchObject({
@@ -113,6 +114,7 @@ describe('plan-stop (D13)', () => {
     expect(item!.link).toEqual({ kind: 'plan', id: 'plan-1', planId: 'plan-1', change: 'api' })
   })
 
+  // @covers: plan-supervision › Plan stops, stalls, and conditions need attention › Retry clears the item
   test('retrying or landing the change clears the item (the outcome is no longer stopped)', () => {
     expect(byKind(items([fact({ changes: [stopped()] })]), 'plan-stop')).toHaveLength(1)
     expect(byKind(items([fact({
@@ -179,6 +181,7 @@ describe('plan-stall: convergence', () => {
 })
 
 describe('decision-question (D13)', () => {
+  // @covers: plan-supervision › A stall alerts the Lead role once per episode › No Lead role
   test('an owner-addressed card is the human\'s item, linked to the card', () => {
     const [item] = byKind(items([fact({ openCards: [card()] })]), 'decision-question')
     expect(item).toMatchObject({

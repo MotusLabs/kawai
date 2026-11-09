@@ -111,6 +111,7 @@ const exhaustUnknown = async (executionId: string, change: string, effectId: str
 }
 
 describe('merge × Retry, decided by the real GitHub truth (table rows 1–10)', () => {
+  // @covers: plan-execution › Retry runs again the stage the change stopped in › Retry after an unknown outcome
   test('a pull request merged on GitHub lands through the re-opened row; no adapter runs (rows 1–3)', async () => {
     for (const method of ['merge', 'squash', 'rebase'] as const) {
       const executionId = await startedExecution(h, [{ change: `tb-${method}` }])

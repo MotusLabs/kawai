@@ -158,6 +158,21 @@ describe('TeamCaps', () => {
       expect(await new TeamCaps({ homeDir: home }).planExecution(teamId)).toMatchObject({ maxFailedFixRounds: 20 })
     })
 
+    // @covers: plan-execution › Execution settings are user-level › A malformed value falls back to its default
+    test('a maxParallelChanges of "three" is logged and the default limit of 3 applies', async () => {
+      const errors = await readErrors({ planExecution: { floorChecks: floor, maxParallelChanges: 'three' } })
+      expect(await new TeamCaps({ homeDir: home }).planExecution(teamId)).toMatchObject({ floorChecks: floor, maxParallelChanges: 3 })
+      expect(errors.some(e => e.includes('maxParallelChanges must be a positive integer'))).toBe(true)
+    })
+
+    // @covers: plan-execution › Execution settings are user-level › Missing end-to-end mapping
+    test('a floor map without ci-e2e is logged naming it, and leaves no floor map (Start then refuses as landing-ready)', async () => {
+      const { 'ci-e2e': _e2e, ...partial } = floor
+      const errors = await readErrors({ planExecution: { floorChecks: partial } })
+      expect(await new TeamCaps({ homeDir: home }).planExecution(teamId)).toMatchObject({ floorChecks: null })
+      expect(errors.some(e => e.includes('ci-e2e'))).toBe(true)
+    })
+
     test('an unknown floor-check key refuses the map', async () => {
       const errors = await readErrors({ planExecution: { floorChecks: { ...floor, review: ['review'] } } })
       const caps = new TeamCaps({ homeDir: home })
