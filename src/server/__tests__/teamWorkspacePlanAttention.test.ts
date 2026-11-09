@@ -144,6 +144,40 @@ describe('plan-stall (D13)', () => {
   })
 })
 
+// review-convergence decision 8: a convergence stall is its card's item, then the owner's revision.
+describe('plan-stall: convergence', () => {
+  const converging = (awaitingRevision: number | null, amendRationale: string | null = null): PlanChangeFact =>
+    change({
+      amendRationale,
+      supervision: supervision({
+        change: 'api', outcome: 'stalled', stage: 'kawai',
+        cause: { kind: 'stall', stall: 'convergence', signals: ['S4'] },
+        stall: { kind: 'convergence', episodeKey: 'diagnosis-1', signals: [{ kind: 'S4', counts: [2, 2, 2] }], cardId: 'card-d', awaitingRevision },
+      }),
+    })
+  const diagnosisCard = card({ id: 'card-d', kind: 'diagnosis', addressedTo: 'lead', addressedGroup: 'lead', question: 'Kawai: change api needs a diagnosis' })
+
+  test('while the card is open, the card is the only item (kills "a stall item beside the card item")', () => {
+    const all = items([fact({ changes: [converging(null)], openCards: [diagnosisCard] })])
+    expect(byKind(all, 'plan-stall')).toEqual([])
+    expect(byKind(all, 'decision-question').map(item => item.id)).toEqual(['decision-question:card-d'])
+  })
+
+  // @covers: plan-supervision › Plan stops, stalls, and conditions need attention › The amended contract needs the owner
+  test('after Amend, the human publishes a task revision, with the rationale and a link to the task', () => {
+    const all = items([fact({ changes: [converging(3, 'the contract asks for two things at once')] })])
+    expect(byKind(all, 'decision-question')).toEqual([])
+    const [item, ...rest] = byKind(all, 'plan-stall')
+    expect(rest).toEqual([])
+    expect(item).toMatchObject({
+      id: 'plan-stall:exec-1:api:diagnosis-1:amend',
+      owner: { kind: 'human' }, nextAction: 'Publish a task revision', requiresHuman: true,
+      cause: 'Change api of plan "Wave D" waits for an amended contract (revision 3): the contract asks for two things at once',
+    })
+    expect(item!.link).toEqual({ kind: 'task', id: 'task-api' })
+  })
+})
+
 describe('decision-question (D13)', () => {
   test('an owner-addressed card is the human\'s item, linked to the card', () => {
     const [item] = byKind(items([fact({ openCards: [card()] })]), 'decision-question')

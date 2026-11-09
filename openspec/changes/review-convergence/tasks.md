@@ -109,7 +109,7 @@
 
 ## 6. Supervision and attention (decision 8)
 
-- [ ] 6.1 Add the following:
+- [x] 6.1 Add the following:
   - `structuredReview` on `SupervisionRound` and its use in
     `failureSignature`;
   - `diagnosis` on `SupervisionInput`;
@@ -121,7 +121,7 @@
   amended contract", and "Two failed structured reviews":
   - A5 kills "keep `review:fail` for structured rounds";
   - A5 kills "convergence after repeating-failure".
-- [ ] 6.2 Make the stall-alert sweep find the convergence episode written at
+- [x] 6.2 Make the stall-alert sweep find the convergence episode written at
   open and send nothing, and make `planAttention.ts` emit the card's item
   only, then **Publish a task revision** after `amend`. Verify "A diagnosis
   sends one message" and "The amended contract needs the owner":

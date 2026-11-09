@@ -13,6 +13,9 @@ import { decisionReplyGuard } from '../plans/decisions/decisionReplyGuard'
 import { roundSignals } from '../plans/execution/diagnosisOpen'
 import { DiagnosisStore } from '../plans/execution/diagnosisStore'
 import { TeamMailbox } from '../team/TeamMailbox'
+import { derivePlanSupervision } from '../plans/supervision/supervisionRead'
+import { raiseStallAlerts } from '../plans/supervision/stallAlerts'
+import { StallAlertStore } from '../plans/supervision/stallAlertStore'
 import { decideDiagnosis, openDiagnosis } from './diagnosisTestKit'
 import {
   createMatrixBench, createMatrixWorld, greenChecks, removeMatrixWorld, shapedReview, startedExecution, submitWork,
@@ -99,6 +102,7 @@ async function stagnating(change: string, raise = ['one thing is wrong'], extra:
 
 describe('table DO — opening a diagnosis at the fix step', () => {
   // @covers: review-convergence › A signal or the backstop opens a diagnosis instead of a fix round › A signal replaces the fix round
+  // @covers: plan-supervision › A stall alerts the Lead role once per episode › A diagnosis sends one message
   // @covers: plan-execution › A failed round returns the change for fixes › A diagnosis holds the fix
   test('DO1 a signal on the newest review opens one diagnosis naming it, with its card and the Lead mail, and no fix', async () => {
     const executionId = await stagnating('do-1')
@@ -114,6 +118,14 @@ describe('table DO — opening a diagnosis at the fix step', () => {
     expect(card.options).toEqual(['Fix round', 'Reject F1', 'Amend the contract', 'Escalate'])
     expect(h.mail.get(card.messageId!)).toMatchObject({ toKind: 'group', toId: 'leads', tags: ['decision-question', 'plan-stall', 'stall:convergence'] })
     expect(journalOf(executionId, 'do-1').some(text => text.includes(`opened diagnosis ${diagnosis!.id}`))).toBe(true)
+    // The stall sweep reads convergence and finds the episode written at open: it sends nothing more.
+    const planId = h.executions.execution(executionId)!.planId
+    const reads = { db: h.bench.db.db, mail: h.mail, executions: h.executions, plans: h.bench.plans, decisions: cards(), conditionsOf: () => [], runtime: { holder: () => null, blocker: () => null } }
+    const derived = derivePlanSupervision(reads, teamId(), planId, new Date(h.clock.now))!
+    expect(derived.changes[0]!.stall).toMatchObject({ kind: 'convergence', episodeKey: diagnosis!.id })
+    const before = messageCount()
+    expect(raiseStallAlerts({ db: h.bench.db.db, mail: h.mail, alerts: new StallAlertStore(h.bench.db.db), plans: h.bench.plans }, matrix.world.team, planId, derived)).toBe(0)
+    expect(messageCount()).toBe(before)
   })
 
   // @covers: review-convergence › A signal or the backstop opens a diagnosis instead of a fix round › One diagnosis across a restart

@@ -58,7 +58,7 @@ const DEBOUNCE_MS = 1_000
 const waitKey = (executionId: string, change: string) => `${executionId}\u0000${change}`
 
 /** A cause or an also-applying entry that is one of D10's named waits. */
-const NAMED_WAITS = new Set(['dependency', 'parallel-limit', 'effect', 'uncertain-delivery', 'staffing', 'parked', 'request', 'decision-card', 'ci', 'member-release', 'condition', 'landing-slot'])
+const NAMED_WAITS = new Set(['dependency', 'parallel-limit', 'effect', 'uncertain-delivery', 'staffing', 'parked', 'request', 'decision-card', 'ci', 'member-release', 'condition', 'landing-slot', 'contract-revision'])
 export const inNamedWait = (change: ChangeSupervision): boolean => NAMED_WAITS.has(change.cause.kind) || change.alsoApplying.length > 0
 
 export class SupervisionMonitor {
