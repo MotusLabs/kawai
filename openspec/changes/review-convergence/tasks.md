@@ -142,7 +142,7 @@
 
 ## 8. Manual-task notice (decision 10)
 
-- [ ] 8.1 Add `team_task_convergence_notices` and the notice in
+- [x] 8.1 Add `team_task_convergence_notices` and the notice in
   `TaskFindingService` after a counted review on an unowned task: one
   transaction for the row, the journal entry, and the mail to a session
   creator. Verify "A manual task churns":

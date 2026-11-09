@@ -4,13 +4,16 @@
 // TaskResultService keeps the caller, team, result, and ownership refusals
 // and hands a structured submission here. The ledger itself is never stored:
 // `ledger(taskId)` folds the counted submissions and events on every read,
-// the one derivation every reader uses (I2).
+// the one derivation every reader uses (I2). After a counted review commits
+// on a task no execution owns, `noticeConvergence` journals and mails a
+// churn notice (review-convergence decision 10).
 import { blocking, deriveVerdict, foldLedger, planSubmission, type LedgerRow, type SubmittedDisposition, type SubmittedFinding } from '../../shared/findingsLedger'
 import type { CitationContext, ScopeView } from '../../shared/reviewFindings'
 import type { ResultScopeFact, TaskActor, TaskFindings, TaskResult, TeamTask } from '../../shared/teamTasks'
 import { inScope } from '../verification/scopeFact'
 import type { TaskStore } from './taskStore'
 import { FindingDisputes } from './findingDisputes'
+import { noticeConvergence } from './convergenceNotice'
 
 export interface StructuredSubmission {
   kind: TaskFindings['kind']
@@ -34,6 +37,8 @@ export interface FindingServiceOptions {
   scopeFact?: (resultId: string) => ResultScopeFact | null
   /** A ledger write landed (a dispute or a decision): the composition wakes the owner's executor. */
   onWrite?: (taskId: string) => void
+  /** Whether a running execution owns the task (plan-execution D7); an owned task's review goes to the diagnosis instead of the notice. */
+  ownedByExecution?: (taskId: string) => boolean
 }
 
 /** The pinned revision a result is judged against. */
@@ -86,6 +91,16 @@ export class TaskFindingService {
     }
     if (findings.roundDecided(resultId)) return 'its round is decided'
     return null
+  }
+
+  /**
+   * Decision 10: after a counted review `submissionId` committed (and was
+   * journaled), notice a task no execution owns when a convergence signal
+   * fires; an owned task's failed round opens a diagnosis instead.
+   */
+  noticeAfterReview(input: { teamId: string; originPath: string; task: TeamTask; submissionId: string; counted: boolean }) {
+    if (!input.counted || (this.options.ownedByExecution?.(input.task.id) ?? false)) return null
+    return noticeConvergence(this.store, input)
   }
 
   /** Plan and write one structured submission (D4), or throw naming every problem with nothing written. */

@@ -120,6 +120,9 @@ describe('table DO — opening a diagnosis at the fix step', () => {
     expect(card.options).toEqual(['Fix round', 'Reject F1', 'Amend the contract', 'Escalate'])
     expect(h.mail.get(card.messageId!)).toMatchObject({ toKind: 'group', toId: 'leads', tags: ['decision-question', 'plan-stall', 'stall:convergence'] })
     expect(journalOf(executionId, 'do-1').some(text => text.includes(`opened diagnosis ${diagnosis!.id}`))).toBe(true)
+    // A10: an owned task's churn goes to the diagnosis, never the manual-task notice.
+    expect(h.bench.db.db.prepare('SELECT COUNT(*) AS n FROM team_task_convergence_notices').get()).toEqual({ n: 0 })
+    expect(journalOf(executionId, 'do-1').some(text => text.startsWith('Convergence notice'))).toBe(false)
     // The stall sweep reads convergence and finds the episode written at open: it sends nothing more.
     const planId = h.executions.execution(executionId)!.planId
     const reads = { db: h.bench.db.db, mail: h.mail, executions: h.executions, plans: h.bench.plans, decisions: cards(), conditionsOf: () => [], runtime: { holder: () => null, blocker: () => null } }

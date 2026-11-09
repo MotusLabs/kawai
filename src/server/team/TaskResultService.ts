@@ -144,6 +144,7 @@ export class TaskResultService {
     this.findingService ??= new TaskFindingService(this.store, {
       scopeFact: resultId => this.store.checks.viewForResult(resultId).newest?.facts?.scope ?? null,
       onWrite: taskId => this.options.onWrite?.(taskId),
+      ownedByExecution: taskId => this.ownedByExecution(taskId),
     })
     return this.findingService
   }
@@ -244,6 +245,7 @@ export class TaskResultService {
         submission: { kind: input.kind, verdict: input.verdict, notes: input.findings ?? null, findings: input.items ?? [], dispositions: input.dispositions ?? [] },
       })
       this.store.appendJournal(taskId, actor, `${input.kind === 'qa' ? 'QA' : 'Review'} findings on result ${result.id}: ${outcome.verdict} (${outcome.items.length} item${outcome.items.length === 1 ? '' : 's'}${outcome.counted ? '' : ', not counted'})`)
+      this.findingsLedger.noticeAfterReview({ teamId: team.teamId, originPath: team.groupsRoot, task, submissionId: outcome.findings.id, counted: outcome.counted })
       this.options.onWrite?.(taskId)
       const { findings: stored, ...gate } = outcome
       return { ...stored, gate }
