@@ -186,6 +186,16 @@ describe('beforeSubmit after admission (B01-B04)', () => {
     expect(prompts(f)).toEqual([])
     await f.d.kill()
   })
+
+  test('acceptance is one synchronous step after beforeSubmit: an interrupt in the next microtask finds A accepted, never a cancelled send enqueued', async () => {
+    let receipt: Promise<InterruptReceipt> | null = null
+    const f = await withBeforeSubmit((d) => queueMicrotask(() => (receipt = d.d.interrupt())))
+    const handle = await f.d.send('a')
+    expect(await assigned(receipt)).toEqual(REQUESTED)
+    expect(await handle.result).toMatchObject({ turnId: handle.turnId, outcome: 'interrupted' })
+    expect(userMessages(f)).toEqual([handle.messageUuid])
+    await f.d.kill()
+  })
 })
 
 describe('publications of an accepted send (P01, P02) and of turn settlement', () => {
