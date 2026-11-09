@@ -285,6 +285,12 @@ export interface ExecutionChangeView {
   latestRound: RoundView | null
   landing: LandingFactView | null
   effects: EffectView[]
+  /**
+   * review-convergence decision 9: the open P0/P1 count after each review of
+   * the current window, and an open diagnosis's signal labels (null when
+   * none is open); null when the task has no counted structured review.
+   */
+  convergence?: { counts: number[]; signals: string[] | null; cardId: string | null } | null
 }
 
 export interface PlanExecutionView {
@@ -300,6 +306,8 @@ export interface PlanExecutionView {
   floor: { version: number; map: FloorMap }
   maxParallel: number
   mergeMethod: MergeMethod
+  /** The backstop recorded at Start (review-convergence decision 3). */
+  maxFailedFixRounds?: number
   state: ExecutionState
   outcome: ExecutionOutcome | null
   /** The human's Stop reason. */

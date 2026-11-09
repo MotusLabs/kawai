@@ -6,7 +6,9 @@
 // target), and the change's effects, expandable. Its id is where a `plan`
 // attention link with that change scrolls to and focuses (plan-supervision
 // D15). A stopped change of a running execution offers the owner's Retry
-// (plan-execution D12).
+// (plan-execution D12). The convergence line (review-convergence decision 9)
+// reads the open P0/P1 count after each review of the window, and an open
+// diagnosis's signals with a link to its card.
 import { useEffect, useRef, useState } from 'react'
 import type { SendClientMessage } from '@shared/types'
 import type { ExecutionChangeView, PlanExecutionView } from '@shared/planExecution'
@@ -59,9 +61,16 @@ export default function PlanExecutionChangeRow({ teamPath, connected, onSend, ro
       <span className="font-medium">{row.change}</span>
       {' · '}{CHANGE_STATE_LABELS[row.state]}
       {row.step !== null ? ` (${CHANGE_STEP_LABELS[row.step]})` : ''}
-      {row.fixRounds > 0 ? ` · fix rounds ${row.fixRounds}/3` : ''}
+      {row.fixRounds > 0 ? ` · fix rounds ${row.fixRounds}/${execution.maxFailedFixRounds ?? 5}` : ''}
       {row.stopReason !== null ? ` · stopped: ${row.stopReason}` : ''}
     </p>
+    {row.convergence != null && row.convergence.counts.length > 0 && <p className="text-chat-meta" data-testid="plan-execution-convergence">
+      {`Open P0/P1 by review: ${row.convergence.counts.join(' → ')}`}
+      {row.convergence.signals !== null && <span data-testid="plan-execution-convergence-signals">
+        {` · diagnosis: ${row.convergence.signals.join(', ')}`}
+        {row.convergence.cardId !== null && <> · <a className="link" href={`#decision-card-${row.convergence.cardId}`}>card</a></>}
+      </span>}
+    </p>}
     {waiting !== null && <p className="text-chat-meta text-secondary" data-testid="plan-execution-waiting">{waiting}</p>}
     <p className="text-chat-meta">
       {row.taskId !== null

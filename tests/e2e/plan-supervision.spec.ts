@@ -3,9 +3,11 @@
 // plan-execution.spec.ts drives: the implementer asks a decision card
 // through `decision_ask`, the Lead answers through `decision_record` (the
 // agent tool path against the same database), the human overrides it in the
-// Plans view — creating the fix task and its attention item — and two
-// consecutive failing reviews stall the change as a repeating failure in
-// the report with its plan-stall attention item. Local execution requires
+// Plans view — creating the fix task and its attention item — and three
+// failing structured reviews whose open count stays flat (S4) open a
+// diagnosis instead of a fourth fix: the report reads the convergence stall,
+// the Kawai-asked card shows its options, and the change row reads the open
+// count by review (review-convergence 7.2). Local execution requires
 // the fixture webServer (AGENTBOARD_CHAT_FIXTURE=1); CI runs it — never run
 // test:e2e against a live kawai server.
 import { expect, test } from '@playwright/test'
@@ -104,7 +106,7 @@ function taskHolder(root: string): string {
   return holder
 }
 
-test('supervision walkthrough: a Lead-answered card, the owner override, and a repeating-failure stall', async ({ page }, info) => {
+test('supervision walkthrough: a Lead-answered card, the owner override, and a convergence diagnosis', async ({ page }, info) => {
   test.setTimeout(300_000)
   const root = mkdtempSync(join(tmpdir(), 'kawai-supervision-run-'))
   const origin = `${root}-origin.git`
@@ -187,18 +189,33 @@ test('supervision walkthrough: a Lead-answered card, the owner override, and a r
     await expect(queue.locator('[data-kind="plan-fix"]')).toBeVisible({ timeout: 30_000 })
     await expect(panel.getByTestId('plan-decision-history')).toContainText('superseded')
 
-    // Round 2 fails its review the same way: two consecutive review:fail
-    // rounds stall the change as a repeating failure, the monitor raises
-    // the alert, and the report and the attention queue show it.
-    writeFileSync(join(worktree, 'src', 'walk-two.ts'), 'export const walkthroughTwo = 2\n')
-    git(['add', '-A'], worktree)
-    git(['-c', 'user.email=t@e', '-c', 'user.name=T', 'commit', '-q', '-m', 'extend walk-api'], worktree)
-    git(['push', '-q', 'origin', 'HEAD:refs/heads/walk-api'], worktree)
-    submitRound(root, 'result', implementer, reviewer)
-    submitRound(root, 'findings', implementer, reviewer, { verdict: 'fail' })
-    await expect(panel.getByTestId('plan-supervision-stall-walk-api')).toContainText('Stalled: repeating failure', { timeout: 90_000 })
-    await expect(panel.getByTestId('plan-supervision-stall-walk-api')).toContainText('review:fail')
-    await expect(queue.locator('[data-kind="plan-stall"]')).toBeVisible({ timeout: 30_000 })
+    // Rounds 2 and 3 fail their reviews the same way, keeping F1 open: two
+    // failed structured reviews never repeat (no review:fail), and the third
+    // flat count fires S4, so Kawai opens a diagnosis instead of the fix.
+    // Each round waits for the previous failure's fix to go out (the row
+    // reads Implementing with that review counted), so the result answers
+    // the fix attempt.
+    for (const [counts, file, line] of [['1', 'walk-two.ts', 'export const walkthroughTwo = 2\n'], ['1 → 1', 'walk-three.ts', 'export const walkthroughThree = 3\n']] as const) {
+      const row = panel.getByTestId('plan-execution-change').filter({ hasText: 'walk-api' })
+      await expect(row).toContainText('walk-api · Implementing', { timeout: 60_000 })
+      await expect(row.getByTestId('plan-execution-convergence')).toContainText(`Open P0/P1 by review: ${counts}`, { timeout: 60_000 })
+      writeFileSync(join(worktree, 'src', file), line)
+      git(['add', '-A'], worktree)
+      git(['-c', 'user.email=t@e', '-c', 'user.name=T', 'commit', '-q', '-m', `extend walk-api (${file})`], worktree)
+      git(['push', '-q', 'origin', 'HEAD:refs/heads/walk-api'], worktree)
+      submitRound(root, 'result', implementer, reviewer)
+      submitRound(root, 'findings', implementer, reviewer, { verdict: 'fail' })
+    }
+    await expect(panel.getByTestId('plan-supervision-stall-walk-api')).toContainText('Stalled: convergence — S4 stagnation', { timeout: 90_000 })
+    await expect(panel.getByTestId('plan-supervision-cause-walk-api')).toContainText('Stalled: convergence (S4)')
+    const diagnosis = panel.getByTestId('plan-decision-card').filter({ hasText: 'needs a diagnosis' })
+    await expect(diagnosis).toBeVisible({ timeout: 20_000 })
+    for (const option of ['Fix round', 'Reject F1', 'Amend the contract', 'Escalate']) await expect(diagnosis).toContainText(option)
+    await expect(panel.getByTestId('plan-execution-convergence')).toContainText('Open P0/P1 by review: 1 → 1 → 1')
+    await expect(panel.getByTestId('plan-execution-convergence-signals')).toContainText('S4 stagnation')
+    // The card is the stall's one attention item, owned by the Lead role.
+    await expect(queue.locator('[data-kind="decision-question"]').filter({ hasText: 'needs a diagnosis' })).toBeVisible({ timeout: 30_000 })
+    await expect(queue.locator('[data-kind="plan-stall"]')).toHaveCount(0)
     await page.screenshot({ path: info.outputPath('supervision-stall.png') })
   } finally { rmSync(root, { recursive: true, force: true }); rmSync(origin, { recursive: true, force: true }) }
 })

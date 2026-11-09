@@ -69,6 +69,18 @@ describe('PlanExecutionSection', () => {
     expect(tree).toContain('Running')
   })
 
+  // @covers: plan-supervision › The Plans view shows each change's open count by review › A converging change
+  test('the convergence line reads the counts by review; an open diagnosis adds its signals and a card link', () => {
+    render(section([changeRow({ convergence: { counts: [5, 3, 1], signals: null, cardId: null } })]))
+    expect(text()).toContain('Open P0/P1 by review: 5 → 3 → 1')
+    expect(text()).not.toContain('diagnosis:')
+    render(section([changeRow({ state: 'gating', step: 'diagnosing', convergence: { counts: [2, 2, 2], signals: ['S4 stagnation'], cardId: 'card-d' } })]))
+    expect(text()).toContain(' · diagnosis: S4 stagnation')
+    expect(text()).toContain('#decision-card-card-d')
+    render(section([changeRow({ convergence: null })]))
+    expect(text()).not.toContain('Open P0/P1')
+  })
+
   test('a flaky check and the attested and CI-verified extra checks are labeled; an unverified tree flags the landing', () => {
     render(section([
       changeRow({

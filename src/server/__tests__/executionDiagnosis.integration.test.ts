@@ -11,6 +11,7 @@ import { DecisionService } from '../plans/decisions/DecisionService'
 import { DecisionStore } from '../plans/decisions/decisionStore'
 import { decisionReplyGuard } from '../plans/decisions/decisionReplyGuard'
 import { roundSignals } from '../plans/execution/diagnosisOpen'
+import { changeConvergence } from '../plans/execution/executionView'
 import { DiagnosisStore } from '../plans/execution/diagnosisStore'
 import { TeamMailbox } from '../team/TeamMailbox'
 import { derivePlanSupervision } from '../plans/supervision/supervisionRead'
@@ -112,6 +113,7 @@ describe('table DO — opening a diagnosis at the fix step', () => {
     const [diagnosis, ...more] = diagnoses(executionId, 'do-1')
     expect(more).toEqual([])
     expect(diagnosis!.signals).toEqual([{ kind: 'S4', counts: [1, 1, 1] }])
+    expect(changeConvergence(h.bench.db.db, executionId, 'do-1', row(executionId, 'do-1').taskId)).toEqual({ counts: [1, 1, 1], signals: ['S4 stagnation'], cardId: diagnosis!.cardId })
     expect(diagnosis!.roundId).toBe(h.executions.rounds(executionId, 'do-1').at(-1)!.id)
     const card = cards().card(teamId(), diagnosis!.cardId)!
     expect(card).toMatchObject({ kind: 'diagnosis', addressedTo: 'lead', addressedGroup: 'leads', askedBy: { session: 'kawai' } })
@@ -185,6 +187,8 @@ describe('table DO — opening a diagnosis at the fix step', () => {
     expect(store.anchor(executionId, 'do-7')).toBe(diagnosis.reviewSubmissionId)
     const diagnosed = h.executions.round(diagnosis.roundId)!
     expect(roundSignals({ tasks: h.tasks.store }, store, row(executionId, 'do-7'), diagnosed).signals).toEqual([])
+    // The view reads the same window (kills "count every review instead of the window"): before the anchor, 1, 1, 1; after it, none.
+    expect(changeConvergence(h.bench.db.db, executionId, 'do-7', row(executionId, 'do-7').taskId)).toEqual({ counts: [], signals: null, cardId: null })
     const fixes = fixHandoffs(executionId, 'do-7').length
     await failedCi(executionId, 'do-7')
     expect(diagnoses(executionId, 'do-7')).toHaveLength(1)
