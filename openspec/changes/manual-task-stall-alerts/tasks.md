@@ -95,11 +95,11 @@
 
 ## 5. Docs (design Implementation contract A4)
 
-- [ ] 5.1 Add a "Task stall notices" bullet to `docs/architecture/tasks.md`.
+- [x] 5.1 Add a "Task stall notices" bullet to `docs/architecture/tasks.md`.
   Add the notice and its options to "Keep advisory checkpoints separate from
   final review" in `docs/agent-collaboration.md`. Verify that
   `reviewProtocolDocs.test.ts` and `contractDocs.test.ts` still pass.
-- [ ] 5.2 Add a `docs/recovery-matrix.md` row: "The server stops between a
+- [x] 5.2 Add a `docs/recovery-matrix.md` row: "The server stops between a
   task message's commit and the stall evaluation". Its mechanism is that the
   next counted message re-evaluates from the original anchor, and the
   `(task_id, anchor_at)` key guards a re-handed episode. Cite the 4.3 test. Verify that `recoveryMatrix.test.ts` passes.

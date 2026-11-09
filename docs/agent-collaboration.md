@@ -224,6 +224,14 @@ is advisory; it does not dispatch a second stage or replace the formal review.
 If no suitable fresh assessor is available, record that limitation and the
 Lead's next step; do not claim that two independent reviews occurred.
 
+Kawai watches the budget on manually managed tasks. When a task no execution
+owns gathers 10 messages from agents or the human, and 3 hours pass, with
+no new revision, result, or counted review, Kawai journals a stall notice
+and sends the task's creator one message tagged `task-stall`. The notice
+is advisory: nothing waits on it. The creator then chooses one of: submit a
+complete result for formal review, journal the specific risk that another
+advisory round targets, narrow the task, or escalate.
+
 ## Review protocol
 
 A formal review is a list of findings on one exact result, submitted with
