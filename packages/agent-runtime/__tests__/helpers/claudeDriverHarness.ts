@@ -2,7 +2,7 @@
 // driver, the queries it created, and everything its callbacks reported.
 import type { Options } from '@anthropic-ai/claude-agent-sdk'
 import { ClaudeSession } from '../../src/claude/session.js'
-import type { DriverState, ProcessEndReport, TurnHandle, TurnResult } from '../../src/contract.js'
+import type { DriverState, ProcessEndReport, ResumeCheckpoint, TurnHandle, TurnResult } from '../../src/contract.js'
 import type { AgentEvent } from '../../src/events.js'
 import { controlledQueries, type ControlledQuery } from './controlledQuery.js'
 import { fakeClaudeHome } from './fakeClaudeHome.js'
@@ -25,6 +25,7 @@ export interface Driver {
 export interface DriverHooks {
   onTurnResult?(result: TurnResult): void
   onState?(state: DriverState): void
+  onCheckpoint?(checkpoint: ResumeCheckpoint): void | Promise<void>
   sdkOptions?: Partial<Options>
 }
 
@@ -44,6 +45,7 @@ export function driver(hooks: DriverHooks = {}): Driver {
         results.push(r)
       },
       onProcessEnd: (r) => ends.push(r),
+      ...(hooks.onCheckpoint ? { onCheckpoint: hooks.onCheckpoint } : {}),
       onState: (s) => {
         states.push(s)
         hooks.onState?.(s)

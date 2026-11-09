@@ -52,6 +52,11 @@ export class DriverLifecycle {
     return this.activeTurn
   }
 
+  /** Changes on every interrupt that cancelled something; waiters compare it (L10). */
+  get interruptions(): number {
+    return this.interruptEpoch
+  }
+
   /**
    * A throwing onState never interrupts a transition (stop would otherwise
    * abort before its teardown is installed); the throw is retained as an
@@ -146,7 +151,8 @@ export class DriverLifecycle {
     return this.admitNow(continuation)
   }
 
-  private admitNow(continuation: ContinuationMode): Admission {
+  /** Decide admission from the current state, synchronously (the commit point after any wait). */
+  admitNow(continuation: ContinuationMode = 'new-turn'): Admission {
     switch (this.current) {
       case 'unstarted':
       case 'exited':

@@ -15,6 +15,7 @@
 //   session's life, and a frame without one is refused.
 // - Agent-started turns. An init that no submission opened starts an
 //   agent-started turn (L24), but only while idle.
+// - Checkpoints. A new session id is persisted before later sends are acknowledged (lifecycle/checkpoints.ts).
 // - Composition. Permissions, host integrations, requests (canUseTool) and
 //   frame mapping are composed here. A generation is registered before its
 //   query() call. The owned spawner reports each process before any recorder
@@ -27,11 +28,12 @@
 //   (init, read, control, callback, recorder, cleanup) fails it too, kept by
 //   identity.
 import type { Options, Query, SDKMessage, SDKResultMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
-import type { AnswerOptions, AnswerOutcome, InterruptReceipt, ProcessExitFact, ProcessExitReceipt, SubmitOptions, TaskOutput, TurnHandle, TurnOutcome } from '../contract.js'
+import type { AnswerOptions, AnswerOutcome, InterruptReceipt, ProcessExitFact, ProcessExitReceipt, ResumeCheckpoint, SubmitOptions, TaskOutput, TurnHandle, TurnOutcome } from '../contract.js'
 import { AgentRuntimeError, type AgentErrorInfo } from '../errors.js'
 import { EventStream, type EventBody } from '../eventStream.js'
 import type { PendingRequest, QuestionAnswers } from '../events.js'
-import { DriverLifecycle } from '../lifecycle/lifecycle.js'
+import { CHECKPOINT_FAILED, CheckpointGate } from '../lifecycle/checkpoints.js'
+import { DriverLifecycle, type Admission } from '../lifecycle/lifecycle.js'
 import { resolveExecutable, resolveLaunch } from '../process/launch.js'
 import type { LeaderExit } from '../process/ownedProcess.js'
 import { bindToolSet, type BoundToolSet } from '../tools/toolSet.js'
@@ -44,7 +46,6 @@ import { ClaudeRequests } from './requests.js'
 import { SeenResultFrames } from './resultFrames.js'
 import { CliTurnBinder } from './turnBinder.js'
 import { checkSubmission, newTurn, resultErrorText, resultUuids, turnResult, type Turn } from './turns.js'
-
 import type { ClaudeSessionOptions } from './sessionOptions.js'
 export type { ClaudeQueryFactory, ClaudeSessionOptions } from './sessionOptions.js'
 
@@ -58,6 +59,7 @@ export class ClaudeSession {
   private readonly binder: CliTurnBinder
   private readonly requests: ClaudeRequests
   private readonly frames: ClaudeFrames
+  private readonly checkpoints: CheckpointGate
 
   /** Validated once at construction: an unenforceable restriction never starts. */
   private readonly permissions: ClaudePermissionComposition | null
@@ -77,6 +79,9 @@ export class ClaudeSession {
     const { callbacks, logger } = options
     this.events = new EventStream((event) => this.notify('onEvent', () => callbacks.onEvent(event)))
     this.lifecycle = new DriverLifecycle({ continuations: new Set(['queue']), ...(callbacks.onState ? { onState: callbacks.onState } : {}) })
+    const persist = callbacks.onCheckpoint && ((checkpoint: ResumeCheckpoint) => callbacks.onCheckpoint!(checkpoint))
+    const failed = () => { this.events.emit({ type: 'error', error: CHECKPOINT_FAILED }); void this.shutdown().catch(() => {}) }
+    this.checkpoints = new CheckpointGate({ lifecycle: this.lifecycle, persist, failed }, this.runtimeSessionId)
     this.binder = new CliTurnBinder({
       violation: (reason) => logger?.warn({ reason }, 'claude_cli_contract_violation'),
       unknownUuid: (uuid) => logger?.warn({ uuid }, 'claude_unknown_result_uuid'),
@@ -294,7 +299,10 @@ export class ClaudeSession {
   }
 
   private init(message: Extract<SDKMessage, { type: 'system'; subtype: 'init' }>): void {
-    if (message.session_id) this.runtimeSessionId = message.session_id
+    if (message.session_id) {
+      this.runtimeSessionId = message.session_id
+      this.checkpoints.report({ runtime: 'claude', runtimeSessionId: message.session_id })
+    }
     if (typeof message.model === 'string' && message.model && message.model !== this.lastModel) {
       const model = message.model
       this.lastModel = model
@@ -338,8 +346,12 @@ export class ClaudeSession {
     if (next) this.openTurn(next, false)
   }
 
-  async send(text: string, submit: SubmitOptions = {}): Promise<TurnHandle> {
-    const admission = await this.lifecycle.admitSend(submit.continuation)
+  /** R10/I2: acknowledged only once any pending identity persistence succeeded; `accept` commits synchronously. */
+  send(text: string, submit: SubmitOptions = {}): Promise<TurnHandle> {
+    return this.checkpoints.admit(submit.continuation, (admission) => this.accept(text, submit, admission))
+  }
+
+  private accept(text: string, submit: SubmitOptions, admission: Admission): TurnHandle {
     const messageUuid = submit.messageUuid ?? crypto.randomUUID()
     const turnId = crypto.randomUUID()
     // P12/P13: the host decides before anything is enqueued or emitted, and
