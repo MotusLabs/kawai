@@ -1,7 +1,8 @@
 // Completeness of the interrupt-versus-waiting-sends table (task 4.4 Claude
 // checkpoint unit, R3 A4): the waiter rows cover each of the 28 state/kind
 // pairs exactly once, the receipt rows each state once per waiter presence,
-// and removing or overlapping a row is caught. Inputs only: no outputs yet.
+// and removing or overlapping a row is caught; the supplement adds the
+// admission wait reason and conditional traces. Inputs only: no outputs yet.
 import { describe, expect, test } from 'bun:test'
 import {
   AFTER_INTERRUPT_ROWS,
@@ -14,6 +15,7 @@ import {
   waiterCompletenessErrors,
   type WaiterRow,
 } from './oracles/interruptWaitersInputs.js'
+import { ADMISSION_ROWS, CONDITIONAL_ROWS, admissionCompletenessErrors } from './oracles/interruptWaitersSupplement.js'
 
 describe('interrupt versus waiting sends: inputs table', () => {
   test('expands to exactly the 28 state/kind pairs, each covered once', () => {
@@ -49,5 +51,22 @@ describe('interrupt versus waiting sends: inputs table', () => {
       'gap: idle+at least one',
       'gap: exited+at least one',
     ])
+  })
+})
+
+describe('interrupt versus waiting sends: inputs supplement', () => {
+  test('the admission wait reason covers each state once', () => {
+    expect(admissionCompletenessErrors(ADMISSION_ROWS)).toEqual([])
+  })
+
+  test('supplement ids are unique and disjoint from the first table', () => {
+    const ids = [...ADMISSION_ROWS, ...CONDITIONAL_ROWS].map((row) => row.id)
+    const first = new Set([...WAITER_ROWS, ...WAITER_RECEIPT_ROWS, ...AFTER_INTERRUPT_ROWS].map((row) => row.id))
+    expect(new Set(ids).size).toBe(ids.length)
+    expect(ids.filter((id) => first.has(id))).toEqual([])
+  })
+
+  test('control: a dropped admission row is reported', () => {
+    expect(admissionCompletenessErrors(ADMISSION_ROWS.filter((row) => row.id !== 'X03'))).toEqual(['gap: exited+admission'])
   })
 })
