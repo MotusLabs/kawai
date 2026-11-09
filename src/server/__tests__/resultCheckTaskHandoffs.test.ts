@@ -3,6 +3,8 @@
 // the service settles it afterwards outside every gate — a failing check
 // never blocks a handoff, findings, or acceptance (I4) — and the tool's
 // recheck records beside the earlier checks without starting a second.
+// The scope fact judges the pinned revision's contract (implementation-
+// contract S8) and, naming paths outside scope, gates nothing (I3).
 // Split from taskHandoffs.test.ts (review findings-66e79a5b B1) with the
 // same repository scaffolding.
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
@@ -25,6 +27,7 @@ import { TeamWorktrees } from '../team/worktreeRoots'
 import { clearTeamCache, resolveTeam, type TeamIdentity } from '../team/teamIdentity'
 import { rawCoverage } from '../../shared/coverageMaps'
 import { ResultCheckService } from '../verification/resultCheckService'
+import { pinnedScope } from '../verification/scopeFact'
 
 function git(args: string[], cwd?: string) {
   const result = spawnSync('git', args, { cwd, encoding: 'utf8', env: cleanGitEnv() })
@@ -158,6 +161,47 @@ describe('result checks over a submitted result', () => {
     await results.accept(human(), task.id, result.id)
     expect(tasks.store.get(task.id)?.status).toBe('done')
     expect(tasks.store.results.get(result.id)!.acceptedAt).not.toBeNull()
+  })
+
+  /** A contract text whose Scope is the given globs. */
+  const contractText = (scope: string[]) => ['## Implementation contract', '### Acceptance', '- A1: Exports a CSV', '### Invariants',
+    '### Scope', ...scope.map(glob => `- \`${glob}\``), '### Verification', '- V1: the export test passes', '### Excluded'].join('\n')
+
+  // @covers: task-results › Kawai checks a result against its contract's scope › The pinned revision's contract counts
+  test('S8: a result pinned to revision 2 is judged against r2\'s narrow scope after revision 3 widened it, through the service', async () => {
+    const task = await tasks.create(agent('lead'), { title: 'Scoped', direction: 'v1', contract: contractText(['src/server/team/**']) })
+    await tasks.amend(agent('lead'), task.id, { direction: 'v2' })
+    const result = await results.submit(agent('dev'), task.id, submission)
+    const widened = await tasks.amend(agent('lead'), task.id, { contract: contractText(['src/**']) })
+    expect(widened.revision).toBe(3)
+    const [, r2] = tasks.store.revisions(task.id)
+    const pinned = pinnedScope(tasks.store, result.id)
+    expect(pinned).toEqual({ identity: r2!.identity!, contract: r2!.contract ?? null, linkedChange: null })
+    expect(pinned!.contract!.scope).toEqual(['src/server/team/**'])
+    // The service carries it into the check: the pinned identity, unknown here because 'abc123' is no commit.
+    const service = new ResultCheckService({ store: tasks.store.checks, sources: { ...checkSources(), scopeOf: id => pinnedScope(tasks.store, id) } })
+    service.wake(team.teamId)
+    await service.quiesce()
+    const [check] = tasks.store.checks.allForResult(result.id)
+    expect(check?.facts?.scope).toMatchObject({ status: 'unknown', contractIdentity: r2!.identity })
+  })
+
+  // @covers: task-results › The scope fact says when it cannot judge › Outside scope does not gate
+  test('a scope fact naming paths outside scope never gates findings, handoff, or acceptance (I3)', async () => {
+    const task = await tasks.create(agent('lead'), { title: 'Out of scope', direction: 'v1', contract: contractText(['src/server/team/**']) })
+    const result = await results.submit(agent('dev'), task.id, submission)
+    const pendingRow = tasks.store.checks.pendingForResult(result.id)!
+    const facts = JSON.parse(cleanFacts()) as Record<string, unknown>
+    facts.scope = { status: 'warn', withinScope: false, outside: ['src/client/App.tsx'], more: 0, contractIdentity: task.identity!, note: null }
+    expect(tasks.store.checks.settle(pendingRow.id, 'done', JSON.stringify(facts), null)).toBe(true)
+    expect(tasks.store.checks.get(pendingRow.id)?.facts?.scope?.outside).toEqual(['src/client/App.tsx'])
+    const findings = await results.submitFindings(agent('reviewer'), task.id,
+      { kind: 'review', resultId: result.id, verdict: 'pass', findings: 'ok' })
+    expect(findings.verdict).toBe('pass')
+    const handed = await results.handoff(human(), task.id, review(result.id))
+    expect(handed.assignment).toMatchObject({ handoffKind: 'review', state: 'queued' })
+    await results.accept(human(), task.id, result.id)
+    expect(tasks.store.get(task.id)?.status).toBe('done')
   })
 
   // @covers: task-results › Results can be rechecked › Recheck after the base moved

@@ -223,6 +223,65 @@ is advisory; it does not dispatch a second stage or replace the formal review.
 If no suitable fresh assessor is available, record that limitation and the
 Lead's next step; do not claim that two independent reviews occurred.
 
+## Review protocol
+
+A formal review is a list of findings on one exact result, submitted with
+`task_submit_findings` as structured `items`. Kawai classifies each item,
+derives the verdict, and keeps one findings ledger per task. `task_get`
+shows the ledger, and the Team page's task detail shows it too. A plan
+change's review is refused in the old text form. On other tasks the text
+form still works, but it never enters the ledger.
+
+- **Levels.**
+  - P0: security, data corruption, or severe correctness.
+  - P1: a reproducible requirement violation or a significant regression.
+  - P2: advisory. **P2 never blocks.**
+- **Clause rule.** A P0 or P1 cites the clause it violates. Write
+  `<identity> › <clause id>` or a bare `A1`. On a task without a contract,
+  cite the revision identity alone. A finding with no citation, a stale
+  identity, an unknown clause, or an `X*` clause is out of contract and
+  never blocks. Report requests for work outside the contract as
+  follow-ups, not findings.
+- **Evidence rule.** A P0 or P1 needs evidence (a `file:line`, test output,
+  or a counterexample) and an impact. A reproduction is optional. Without
+  evidence and an impact the finding is unsupported and never blocks.
+- **Verdict.** A round fails exactly when an accepted P0 or P1 is open
+  (accepted, still open, or reopened). Nobody states the verdict; the
+  submit reply lists each item's class. Read it.
+- **Verify rounds.** On a newer result, give a disposition for every
+  blocking finding `task_get` lists: `resolved`, `still-open`, or
+  `regressed` (the last two with evidence). A new finding with the same
+  clause and file as a resolved one reopens it. While a finding still
+  blocks, raising it again is refused: give its disposition instead.
+- **One counted review per result.** On a plan change, the review that
+  counts is the one answering the review handoff as its claimant. On other
+  tasks, any structured review counts. A corrected review replaces the
+  first until the review becomes final, which happens when one of its
+  findings is disputed, a newer result's review counts, or its round is
+  decided.
+- **Fixing.** The fix instruction lists only the blocking finding ids.
+  Fix those, minimally, and nothing else. Other findings in `task_get` are
+  not required.
+- **Disputes.** A developer who can refute a finding disputes it with
+  `task_dispute_findings`, giving counter-evidence, instead of changing
+  code. A finding can be disputed once in each state it enters. On a plan
+  change, each dispute raises a decision card for the plan's Lead role (or
+  the owner). On other tasks, the task's creator or the human decides with
+  `task_decide_dispute` and a rationale. Upholding restores the finding's
+  state before the dispute. Rejecting makes it `rejected`, which never
+  blocks. A pending dispute holds the round. A failed round whose blockers
+  are all rejected passes on its result again, with no new commit.
+- **Revisions.** Publishing a revision with a new contract re-maps each
+  open finding by its clause id. A finding with no clause left to cite is
+  superseded and no longer blocks.
+- **P0 alerts.** An accepted P0 on a plan change sends the Lead role a
+  `review-p0` message. The round fails and the fix goes out as usual.
+
+When the work carries acceptance oracles (see the next section), they
+decide the level. A missing, unfaithful, or vacuous oracle test, a
+counterexample to a stated property, and a security or data-loss bug with a
+reproducer are P0 or P1. Any other substantive finding is P2.
+
 ## Write acceptance as oracles
 
 Risky work is accepted against oracles written before any of it is coded: a
@@ -273,11 +332,11 @@ a hand-built harness is not coverage — at least one oracle test per guarded
 seam runs through the production composition, and its mutant removes the
 wiring.
 
-The reviewer's verdict rule lives in `.kawai/groups/reviewers.md`: for work
-whose acceptance has oracles, a finding blocks only when it shows a missing,
-unfaithful or vacuous oracle test, a counterexample to a stated property, or
-a security or data-loss bug with a reproducer; from round 2, only
-regressions, unfixed findings, and new counterexamples with reproducers
+What blocks is decided by the levels in "Review protocol" above. For work
+whose acceptance has oracles, only a missing, unfaithful, or vacuous oracle
+test, a counterexample to a stated property, or a security or data-loss bug
+with a reproducer is P0 or P1. From round 2, only regressions (`regressed`),
+unfixed findings (`still-open`), and new counterexamples with reproducers
 block.
 
 Amendments go through the table, not around it: a defect that is neither in
@@ -295,6 +354,58 @@ fix iterations, with reopen rate as the guard metric. Pilot evidence: RC E
 ran 1 failed review over 5 results; its baseline RC D (task-707555cd) ran 2
 failed reviews over 10 results. Both samples are n=1, so the comparison is
 undetermined.
+
+## Write the implementation contract
+
+A code task carries an implementation contract: the clauses its result is
+judged against, published as part of a task revision. The developer, the
+reviewer, and the human all cite the same identity — `r3#9f2c4ab1e07d`,
+the revision and the first 12 hex digits of the contract hash — and its
+clause ids, so a finding names what it holds the result to
+(`r3#9f2c4ab1e07d › I2`) instead of re-deriving intent from prose.
+
+Whoever owns the work's direction writes the contract: the architect in the
+change's `design.md`, the Lead or the Change Lead on the task. A plan
+execution copies the section from `design.md` at the execution's baseline
+commit into the task's first revision; the `implementation-contract`
+validation check refuses a plan whose change has no section, or one that
+does not parse.
+
+The section is five headings in this order, each part a list of bullets:
+
+```markdown
+## Implementation contract
+### Acceptance
+- A1: `bun run export` writes one CSV row per open task, header first.
+### Invariants
+- I1: The export never writes a file outside the run's output directory.
+### Scope
+- `src/server/export/**`
+- `src/shared/exportRows.ts`
+### Verification
+- V1: `src/server/__tests__/export.test.ts` passes, covering A1 and I1.
+### Excluded
+- X1: No client button; the Team page export arrives separately.
+```
+
+- **Clauses a reviewer can judge pass or fail.** Name an observable
+  result: an output, a refusal, a file, a count. "Writes one CSV row per
+  open task" can be checked; "handles exports well" cannot. Invariants say
+  what must never happen; each gets an id a finding can cite.
+- **Scope lists what may change, not what will.** One glob per bullet,
+  relative to the repository root; `*` stays within one directory and `**`
+  crosses them. The linked change's own directory is always in scope. The
+  result check lists every changed path outside it — informational, never a
+  gate — so a needed edit outside scope is a reason to ask for a revision,
+  not to widen it silently.
+- **Exclusions are explicit.** Work left for later, or for another task,
+  is an `X` clause; a reviewer's request covered by one, or by nothing in
+  the contract, does not block.
+- **Changes go through a published revision.** Amend the task's contract
+  with `task_amend` (or publish it from the Team page); the revision bumps
+  and the identity changes with it. Editing `design.md` on a change branch
+  never changes a running task's contract, and once a revision carried a
+  contract it cannot be removed, only replaced.
 
 ## Roll out and evaluate
 

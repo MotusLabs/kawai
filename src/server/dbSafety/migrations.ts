@@ -38,6 +38,8 @@ import { revisionControlMigration } from '../plans/revisionControl/revisionContr
 import { planWorkspaceMigration } from '../plans/workspace/workspaceSchema'
 import { resultChecksMigration } from '../verification/verificationSchema'
 import { compactObservationDetailMigration } from '../metrics/observations/compactMigration'
+import { taskContractMigration } from '../team/taskContractSchema'
+import { reviewFindingsMigration } from '../team/findingSchema'
 import { CREATE_TEAM_APPROVAL_DEFAULTS_SQL } from '../team/teamApprovalDefaults'
 import type { BackupFile } from './backupFiles'
 import type { BackupOutcome } from './backups'
@@ -111,6 +113,13 @@ export const MIGRATIONS: readonly Migration[] = [
   // team-approval-default D3: one row per team for the spawned members'
   // default approval policy. Additive, no backfill: no row = not set.
   { version: 22, name: 'team-approval-defaults', up: db => db.exec(CREATE_TEAM_APPROVAL_DEFAULTS_SQL) },
+  // implementation-contract D3: revisions' contract and hash, drafts' raw
+  // contract text. Additive and nullable, no backfill.
+  taskContractMigration,
+  // review-findings-ledger D3: structured findings' columns, their items,
+  // events, and dispute cards, and rounds' unique regate_of. Additive, no
+  // backfill.
+  reviewFindingsMigration,
 ]
 
 export const RESTORE_DOC = 'docs/operations/database-backups.md'

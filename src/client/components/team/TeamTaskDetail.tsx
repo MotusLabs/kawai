@@ -1,5 +1,6 @@
 // One task in full (team-tasks 7.2, task-assignment 5.4): current direction
-// and acceptance with the revision history behind it, the append-only
+// and acceptance, the current implementation contract (TaskContractView),
+// and the revision history behind it with each revision's contract, the append-only
 // journal, subtasks, and the task's messages, plus the human's controls —
 // a direction draft published as a new revision (TaskDirectionEditor), the
 // results with acceptance and handoffs (TaskResultsSection), release-and-
@@ -26,7 +27,9 @@ import { assignmentLabel } from './assignmentLabel'
 import { actorLabel, journalAuthorLabel, sessionLabel } from './teamTaskLabels'
 import TaskDirectionEditor, { type TaskActFn } from './TaskDirectionEditor'
 import TaskPublications from './TaskPublications'
+import TaskContractView from './TaskContractView'
 import TaskResultsSection from './TaskResultsSection'
+import TaskFindingsSection from './TaskFindingsSection'
 import TaskReleaseDialog from './TaskReleaseDialog'
 import { TaskWorkerPicker } from './TaskWorkerPicker'
 
@@ -217,6 +220,10 @@ export default function TeamTaskDetail({ teamPath, projectPath, view, sendMessag
       <p className="mt-1 whitespace-pre-wrap text-chat-body" data-testid="task-acceptance">{task.acceptance}</p>
     </Section>}
 
+    <Section teamPath={teamPath} name="Implementation contract">
+      <div className="mt-1"><TaskContractView identity={task.identity} contract={task.contract} testId="task-current-contract" /></div>
+    </Section>
+
     <Section teamPath={teamPath} name="Revision history">
       <div className="mt-1 text-chat-meta" data-testid="task-revisions">
         {detail.revisions.map(revision => <div key={revision.revision} data-revision={revision.revision} className="mt-2 border-l-2 border-border pl-2">
@@ -224,6 +231,7 @@ export default function TeamTaskDetail({ teamPath, projectPath, view, sendMessag
           {revision.rationale && <p className="italic" data-testid="revision-rationale">Rationale: {revision.rationale}</p>}
           <p className="whitespace-pre-wrap">{revision.direction}</p>
           {revision.acceptance && <p className="whitespace-pre-wrap text-secondary">Acceptance: {revision.acceptance}</p>}
+          <TaskContractView identity={revision.identity} contract={revision.contract} testId="revision-contract" />
         </div>)}
       </div>
     </Section>
@@ -231,12 +239,16 @@ export default function TeamTaskDetail({ teamPath, projectPath, view, sendMessag
     <Section teamPath={teamPath} name="Results">
       <TaskResultsSection detail={detail} groups={groups} sessions={sessions} connected={connected} disabled={disabled} act={act} host={{ teamPath, sendMessage }} />
     </Section>
+    <Section teamPath={teamPath} name="Findings">
+      <TaskFindingsSection detail={detail} disabled={disabled} act={act} />
+    </Section>
     <Section teamPath={teamPath} name="Release">
       <TaskReleaseDialog detail={detail} groups={groups} sessions={sessions} connected={connected} disabled={disabled} act={act} host={{ teamPath, sendMessage }} />
     </Section>
 
     <Section teamPath={teamPath} name="Publications">
       <TaskPublications task={task} publications={detail.publications ?? []} acknowledgements={detail.acknowledgements ?? []}
+        identities={Object.fromEntries(detail.revisions.map(revision => [revision.revision, revision.identity ?? '']))}
         sessions={sessions} disabled={disabled} act={act} onOpenMailbox={onOpenMailbox} />
     </Section>
 

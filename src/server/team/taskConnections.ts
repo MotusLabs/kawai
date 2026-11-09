@@ -131,6 +131,7 @@ export class TaskConnections {
         case 'team-task-create':
           task = await tasks.create(caller, {
             title: message.title, direction: message.direction, acceptance: message.acceptance ?? null,
+            ...(message.contract !== undefined ? { contract: message.contract } : {}),
             parent_id: message.parentId || null, worktree: message.worktree || null, openspec_change: message.openspecChange || null,
             plan_id: message.planId || null, plan_change: message.planChange || null,
             ...(message.requestKey ? { requestKey: message.requestKey } : {}),
@@ -141,6 +142,7 @@ export class TaskConnections {
           if (message.action === 'save') {
             await tasks.saveDraft(caller, message.taskId, {
               direction: message.direction ?? '', acceptance: message.acceptance ?? null, rationale: message.rationale ?? null,
+              ...(message.contract !== undefined ? { contract: message.contract } : {}),
               ...(message.baseRevision !== undefined ? { baseRevision: message.baseRevision } : {}),
             })
           } else if (message.action === 'rebase') await tasks.rebaseDraft(caller, message.taskId)
@@ -152,6 +154,7 @@ export class TaskConnections {
           if (!message.rationale.trim()) throw new Error('A publication needs a rationale')
           const outcome = await tasks.publish(caller, message.taskId, {
             direction: message.direction, acceptance: message.acceptance ?? null, rationale: message.rationale,
+            ...(message.contract !== undefined ? { contract: message.contract } : {}),
             baseRevision: message.baseRevision, requestKey: message.requestKey, notify: message.notify,
             ...(message.fromDraft ? { fromDraft: true } : {}),
           })
@@ -181,6 +184,10 @@ export class TaskConnections {
           break
         case 'team-task-recheck':
           await this.manager.results.recheck(caller, message.taskId, message.resultId)
+          task = tasks.store.get(message.taskId) ?? undefined
+          break
+        case 'team-task-decide-dispute':
+          await this.manager.results.decideDispute(caller, message.taskId, { findingId: message.findingId, decision: message.decision, rationale: message.rationale })
           task = tasks.store.get(message.taskId) ?? undefined
           break
         case 'team-task-notify': {

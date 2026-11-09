@@ -17,6 +17,7 @@ import { changeSupervision, type ChangeSupervision, type HolderFacts, type Super
 import { AssignmentStore, outstandingOf } from '../../team/assignmentStore'
 import type { MailboxStore } from '../../team/mailboxStore'
 import { TaskResultStore } from '../../team/taskResultStore'
+import { FindingStore } from '../../team/findingStore'
 import type { DecisionStore } from '../decisions/decisionStore'
 import type { ExecutionRow, RoundRow } from '../execution/executionRows'
 import type { ExecutionStore } from '../execution/executionStore'
@@ -98,6 +99,7 @@ function readInputs(reads: SupervisionReads, teamId: string, planId: string): Pl
     return { executionId: null, revision: revision.revision, inputs }
   }
   const assignments = new AssignmentStore(reads.db, reads.mail)
+  const disputeCards = new FindingStore(reads.db)
   const results = new TaskResultStore(reads.db)
   const rows = new Map(reads.executions.changes(execution.id).map(row => [row.change, row]))
   const effects = reads.executions.effectsOf(execution.id)
@@ -161,7 +163,11 @@ function readInputs(reads: SupervisionReads, teamId: string, planId: string): Pl
           holder: holderId ? reads.runtime.holder(holderId, row.taskId) : null,
         },
         openCards: row.taskId === null ? [] : cards.filter(card => card.taskId === row.taskId && !decided(card.id))
-          .map(card => ({ cardId: card.id, addressedTo: card.addressedTo, addressedGroup: card.addressedGroup })),
+          .map(card => {
+            // A dispute card names its finding (review-findings-ledger D8); other cards keep their shape.
+            const findingId = disputeCards.cardLink(card.id)?.findingId
+            return { cardId: card.id, addressedTo: card.addressedTo, addressedGroup: card.addressedGroup, ...(findingId ? { findingId } : {}) }
+          }),
         conditions,
         memberRelease: row.step === 'releasing' && row.stopDetail?.session
           ? { member: row.stopDetail.session, reason: row.stopDetail.message ?? 'a member is not ready to release' } : null,

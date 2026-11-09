@@ -30,6 +30,7 @@ import { PlanService } from '../plans/PlanService'
 import { StrategyStore } from '../strategy/strategyStore'
 import { createPlanBench, createPlanWorld, writeGroup, type PlanBench, type PlanWorld } from './planHarness'
 import { neutralExecutorSeams } from './executorTestSeams'
+import { structuredReview } from './structuredReview'
 
 const FLOOR = { lint: ['ci'], typecheck: ['ci'], 'unit-tests': ['ci'], 'ci-e2e': ['e2e'] }
 
@@ -101,7 +102,7 @@ async function reviewPass(executionId: string, change: string): Promise<void> {
   const round = executions.rounds(executionId, change).at(-1)!
   const assignment = tasks.store.assignmentsOf(row.taskId!).find(entry => entry.id === round.reviewAssignmentId)!
   deliver(assignment.messageId!, 'rev1')
-  await results.submitFindings(bench.agent('rev1'), row.taskId!, { resultId: round.resultId, kind: 'review', verdict: 'pass', findings: 'clean' })
+  await results.submitFindings(bench.agent('rev1'), row.taskId!, { resultId: round.resultId, kind: 'review', ...structuredReview(results, row.taskId!, 'pass', 'clean') })
 }
 
 /** A failing review (the fix round's source). */
@@ -110,7 +111,7 @@ async function reviewFail(executionId: string, change: string, text: string): Pr
   const round = executions.rounds(executionId, change).at(-1)!
   const assignment = tasks.store.assignmentsOf(row.taskId!).find(entry => entry.id === round.reviewAssignmentId)!
   deliver(assignment.messageId!, 'rev1')
-  await results.submitFindings(bench.agent('rev1'), row.taskId!, { resultId: round.resultId, kind: 'review', verdict: 'fail', findings: text })
+  await results.submitFindings(bench.agent('rev1'), row.taskId!, { resultId: round.resultId, kind: 'review', ...structuredReview(results, row.taskId!, 'fail', text) })
 }
 
 beforeAll(async () => {

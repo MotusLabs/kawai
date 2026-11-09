@@ -10,6 +10,7 @@
 // key (D4). The ROUND RULE's supersede is conditional here, as in Continue:
 // the newest passable round only when it pins an older revision than the
 // task's newest (R5/R8/R22r no drop; R19r/R20r/R23r supersede).
+import { reviewAsk } from '../execution/fixFindings'
 import { createHash } from 'node:crypto'
 import { PlanRefusal } from '../planCommands'
 import type { PlanCaller } from '../PlanService'
@@ -31,6 +32,7 @@ import type { PauseServiceDeps } from './pauseService'
 import type { PauseStore } from './pauseStore'
 import type { CheckpointStore } from './checkpointStore'
 import { recordResolution, supersedeHeldAssignment, type AdaptHeadFacts, type ResolveInput, ResolveRefusal } from './pauseResolve'
+import { instructionContract } from '../execution/instructions'
 
 /**
  * The production wiring of R2's release seams (planComposition): the team's
@@ -191,7 +193,7 @@ function restartAttempt(deps: PauseServiceDeps, caller: PlanCaller & { kind: 'hu
       dispatchRestartedAttemptWithin({
         team: caller.team, execution, changeRow: afterRow, entry, content,
         planTitle: deps.plans.get(pause.planId)?.title ?? pause.planId,
-        taskId: task.id, kind, attempt: { id: attempt.id, number: attempt.number, manifestHash },
+        taskId: task.id, contract: instructionContract(deps.tasks!.store.get(task.id)), kind, attempt: { id: attempt.id, number: attempt.number, manifestHash },
         manifest, startCommit, checkpoint: contained,
         executions: deps.executions, assignments: deps.assignmentService!,
       })
@@ -254,6 +256,7 @@ function restartReview(deps: PauseServiceDeps, caller: PlanCaller & { kind: 'hum
     change: target.change, round: newestRound, taskId: task.id, execution,
     prUrl: changeRow?.prUrl ?? null, notesId: notes?.kind === 'notes' ? notes.id : null,
     acceptance: [...entry?.acceptance ?? [], ...revision.content.acceptanceRules],
+    ask: reviewAsk(deps.tasks!.store, task.id, newestRound.resultId),
   }), null)
   // The execution-origin caller is minted in the execution module (D2's
   // boundary); the pause side composes only the instruction and the key.
@@ -282,6 +285,8 @@ function reviewRestartInstruction(input: {
   prUrl: string | null
   notesId: string | null
   acceptance: string[]
+  /** The findings block (review-findings-ledger D7): contract identity, open findings, the structured form. */
+  ask: string[]
 }): string {
   const checks = (input.round.ci ?? []).map(check => `${check.name}: ${check.conclusion}`).join(', ')
   return [
@@ -291,7 +296,7 @@ function reviewRestartInstruction(input: {
     `CI: ${checks || 'none reported'}`,
     input.notesId !== null ? `The paused reviewer's recorded notes are checkpoint ${input.notesId}.` : null,
     input.acceptance.length > 0 ? `Acceptance rules:\n${input.acceptance.map(rule => `- ${rule}`).join('\n')}` : null,
-    `Submit your verdict with task_submit_findings on task ${input.taskId} for result ${input.round.resultId}: pass or fail, with what you checked.`,
+    ...input.ask,
     'You are the independent reviewer: if you authored one of this change\'s results, do not review it — say so in a message to the Lead group instead.',
   ].filter(line => line !== null).join('\n\n') + `\n\nExecution ${input.execution.id} of plan ${input.execution.planId} at revision ${input.execution.revision}.`
 }
@@ -332,6 +337,7 @@ export function reviewRestartSeam(input: {
       change: changeRow.change, round, taskId: changeRow.taskId, execution,
       prUrl: row?.prUrl ?? null, notesId: notes?.kind === 'notes' ? notes.id : null,
       acceptance: [...entry?.acceptance ?? [], ...revision.content.acceptanceRules],
+      ask: reviewAsk(input.tasks.store, changeRow.taskId, round.resultId),
     }), null)
     return dispatchRestartedReviewWithin({
       team, execution, reviewGroup, taskId: changeRow.taskId, instruction,

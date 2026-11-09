@@ -26,7 +26,8 @@ export type SupervisionWait =
   | { kind: 'staffing'; blocker: string | null }
   | { kind: 'parked'; session: string | null; profile: string | null; until: string | null; cooling: boolean }
   | { kind: 'request'; session: string; request: 'approval' | 'question' }
-  | { kind: 'decision-card'; cardId: string; addressedTo: 'lead' | 'owner'; addressedGroup: string | null }
+  /** `findingId` names the finding a dispute card decides (review-findings-ledger D8: the round waits on it). */
+  | { kind: 'decision-card'; cardId: string; addressedTo: 'lead' | 'owner'; addressedGroup: string | null; findingId?: string | null }
   | { kind: 'ci'; pending: string[] }
   | { kind: 'member-release'; member: string; reason: string }
   | { kind: 'condition'; conditions: string[] }
@@ -104,7 +105,7 @@ export interface SupervisionInput {
   /** The current stage's instruction: its mail state, delivery, mailbox blocker, and holder. */
   instruction: { messageId: string | null; state: string; deliveredAt: string | null; blocker: string | null; holder: HolderFacts | null } | null
   /** Open cards asked from the change's task. */
-  openCards: Array<{ cardId: string; addressedTo: 'lead' | 'owner'; addressedGroup: string | null }>
+  openCards: Array<{ cardId: string; addressedTo: 'lead' | 'owner'; addressedGroup: string | null; findingId?: string | null }>
   /** Unresolved carried conditions holding the change (V2). */
   conditions: string[]
   memberRelease: { member: string; reason: string } | null
@@ -337,7 +338,10 @@ export function causeLabel(cause: SupervisionCause | { kind: string }): string {
     case 'staffing': return known.blocker ? `Waiting for staffing: ${known.blocker}` : 'Waiting for staffing'
     case 'parked': return `${known.cooling ? 'Profile cooling' : 'Holder parked'}${known.until ? ` until ${known.until}` : ''}`
     case 'request': return `Waiting on ${known.session}'s pending ${known.request}`
-    case 'decision-card': return `Waiting on decision card ${known.cardId} (${known.addressedTo === 'lead' ? known.addressedGroup ?? 'lead' : 'the owner'})`
+    case 'decision-card': {
+      const to = known.addressedTo === 'lead' ? known.addressedGroup ?? 'lead' : 'the owner'
+      return known.findingId ? `Waiting on the dispute of ${known.findingId} (decision card ${known.cardId}, ${to})` : `Waiting on decision card ${known.cardId} (${to})`
+    }
     case 'ci': return known.pending.length > 0 ? `Waiting for CI: ${list(known.pending)}` : 'Waiting for CI checks to appear'
     case 'member-release': return `Waiting for ${known.member} to be released: ${known.reason}`
     case 'condition': return `Waiting for acceptance conditions: ${list(known.conditions)}`

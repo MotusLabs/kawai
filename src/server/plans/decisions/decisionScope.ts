@@ -56,6 +56,13 @@ function refuseOtherPlan(own: string, taskId: string, planId: string | undefined
   }
 }
 
+/** A plan change task's own scope (review-findings-ledger D6): a dispute card belongs to the disputed task, not the asker's. */
+export function taskScope(deps: ScopeDeps, teamId: string, task: { id: string; teamId: string; planId?: string | null; planChange?: string | null }): CardScope {
+  if (task.teamId !== teamId || !task.planId) throw new DecisionRefusal('forbidden', NEEDS_PLAN_WORK)
+  const plan = teamPlan(deps.plans, teamId, task.planId)
+  return { plan, revision: executionRevision(deps.db, task.id) ?? plan.currentApprovedRevision, change: task.planChange ?? null, taskId: task.id }
+}
+
 export function cardScope(deps: ScopeDeps, teamId: string, session: ChatSessionRecord, planId: string | undefined): CardScope {
   const task = session.taskId ? deps.taskStore.get(session.taskId) : null
   if (task && task.teamId === teamId) {

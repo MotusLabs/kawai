@@ -56,7 +56,8 @@ test('results show claimed outcomes, the re-evaluation badge, and supersession; 
     result('r2', { supersedesResultId: 'r1' }),
     result('r1', { supersededBy: 'r2', needsReevaluation: true, taskRevision: 1,
       findings: [{ id: 'f1', taskId: 't1', resultId: 'r1', handoffId: null, kind: 'review', verdict: 'fail', findings: 'Header missing',
-        author: { kind: 'agent', sessionId: 'reviewer' }, createdAt: '2026-10-14T01:00:00.000Z' }] }),
+        author: { kind: 'agent', sessionId: 'reviewer' }, createdAt: '2026-10-14T01:00:00.000Z',
+        structured: false, counted: false, contractIdentity: null, ledgerSeq: null, replacedBy: null, items: [] }] }),
   ] }))
   const cards = byTestId('task-result')
   expect(cards.map(card => [card.props['data-result-id'], card.props['data-outstanding']])).toEqual([['r2', true], ['r1', false]])
@@ -218,6 +219,29 @@ test('a conflicting base fact reads fail with its files; pending and unavailable
   expect(textOf(one('result-check-pending'))).toContain('Check running')
   await mount(detail({ results: [result('r1', { checks: { newest: doneCheck({ status: 'unavailable', reason: 'git rev-parse did not answer' }), earlier: 0 } })] }))
   expect(textOf(one('result-check-unavailable'))).toContain('did not answer')
+})
+
+// The scope fact (implementation-contract D6, task 6.2): within scope, the
+// paths outside it with the count, no contract, or not checked for facts
+// stored before contracts — an absent fact never reads as within scope.
+test('the scope fact reads within scope, the outside paths with the count, no contract, or not checked', async () => {
+  const withScope = (scope: ResultCheckFacts['scope']) =>
+    mount(detail({ results: [result('r1', { checks: { newest: doneCheck({ facts: { ...checkFacts(), ...(scope ? { scope } : {}) } }), earlier: 0 } })] }))
+  const scopeText = () => textOf(one('result-check-scope'))
+  const fact = { withinScope: true, outside: [], more: 0, contractIdentity: 'r2#0123456789ab', note: null }
+  await withScope({ ...fact, status: 'pass' })
+  expect(one('result-check-scope').props['data-scope']).toBe('pass')
+  expect(scopeText()).toBe('Contract scope (r2#0123456789ab): pass — within scope')
+  await withScope({ ...fact, status: 'warn', withinScope: false, outside: ['src/client/App.tsx', 'notes/a.md'], more: 5 })
+  expect(scopeText()).toBe('Contract scope (r2#0123456789ab): warn — outside scope: src/client/App.tsx, notes/a.md (+5 more)')
+  await withScope({ ...fact, status: 'no-contract', withinScope: null })
+  expect(scopeText()).toBe('Contract scope: no contract')
+  await withScope(undefined)
+  expect(one('result-check-scope').props['data-scope']).toBe('not-checked')
+  expect(scopeText()).toBe('Contract scope: not checked')
+  expect(scopeText()).not.toContain('within scope')
+  await withScope({ ...fact, status: 'unknown', withinScope: null, note: 'refs/remotes/origin/HEAD is unset; git remote set-head origin --auto fixes it' })
+  expect(scopeText()).toContain('unknown — refs/remotes/origin/HEAD is unset')
 })
 
 test('Recheck sends team-task-recheck for the result and disables while disconnected; unchecked results say Not checked yet', async () => {

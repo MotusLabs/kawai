@@ -68,7 +68,7 @@ handoff with a notice and no new dispatch.
 - **THEN** that assignment is superseded through task-assignment's stop branch with a journal line naming the handoff kind, its instruction is cancelled only while queued or awaiting a request, and no reassignment note is sent
 
 ### Requirement: Findings are bound to the result examined
-Any team member SHALL submit review or QA findings with `task_submit_findings`, naming the exact result examined and a verdict. Findings SHALL apply only to the result they name: a newer result or commit SHALL NOT inherit them. When a newer result supersedes an earlier one, the earlier result and its findings SHALL remain readable with their binding unchanged.
+Any team member SHALL submit review or QA findings with `task_submit_findings`, naming the exact result examined, as structured findings with a derived verdict or as text with a verdict. Findings SHALL apply only to the result they name: a newer result or commit SHALL NOT inherit them. When a newer result supersedes an earlier one, the earlier result and its findings SHALL remain readable with their binding unchanged.
 
 #### Scenario: Findings name the examined result
 - **WHEN** a reviewer submits findings for a result
@@ -77,6 +77,14 @@ Any team member SHALL submit review or QA findings with `task_submit_findings`, 
 #### Scenario: A newer commit inherits no approval
 - **WHEN** the developer submits a new result after findings were reported on the earlier one
 - **THEN** the earlier findings do not approve or transfer to the new result
+
+#### Scenario: Structured findings carry a derived verdict
+- **WHEN** a reviewer submits structured findings without a verdict
+- **THEN** they attach to the result with the verdict the ledger derives, and each finding with its id and class
+
+#### Scenario: Text findings outside plan execution
+- **WHEN** a reviewer submits text with a `fail` verdict on a task that is not a plan change's task
+- **THEN** they attach to the result as unstructured findings with that verdict
 
 ### Requirement: Accepting a result closes it under existing rights
 **Accept result** SHALL be available only to the human or the task's creator, and SHALL close the task as done only under the existing closing rights; a refusal SHALL write nothing. Before closure the UI SHALL show the task's acceptance criteria and any child tasks not done or cancelled. Accepting a result labeled Needs re-evaluation, or closing despite open child work, SHALL require a stated reason that is journaled. A parent SHALL never auto-close when its children finish.
@@ -482,3 +490,37 @@ Task detail SHALL show each result's checks, newest first, and its maps. The tas
 #### Scenario: Worker on a session target
 - **WHEN** a handoff targets a session and names a worker
 - **THEN** it is refused stating that a worker choice applies only to group targets
+
+### Requirement: Kawai checks a result against its contract's scope
+Kawai's result check SHALL compare the files the result's commit changes since its merge base with origin's default branch against the scope globs of the contract of the revision the result is pinned to. It SHALL name each path no glob matches, judging a rename by both its old and new paths. Paths under the linked change's own directory SHALL count as in scope. It SHALL name at most 20 paths and count the rest.
+
+#### Scenario: Everything in scope
+- **WHEN** a result pinned to a revision with scope `src/server/team/**` changes only `src/server/team/taskStore.ts` and the linked change's `tasks.md`
+- **THEN** the check says the result is within scope and names no path
+
+#### Scenario: Outside the scope
+- **WHEN** the same result also changes `src/client/App.tsx`
+- **THEN** the check names `src/client/App.tsx` as outside scope
+
+#### Scenario: Rename out of scope
+- **WHEN** the result moves `src/server/team/a.ts` to `src/shared/a.ts`
+- **THEN** the check names `src/shared/a.ts` as outside scope
+
+#### Scenario: Many paths outside scope
+- **WHEN** the result changes 25 files that no glob matches
+- **THEN** the check names 20 of them and counts the 5 it did not name
+
+#### Scenario: The pinned revision's contract counts
+- **WHEN** a result pinned to revision 2 is checked after revision 3 widened the scope
+- **THEN** the check judges the paths against revision 2's scope
+
+### Requirement: The scope fact says when it cannot judge
+The scope fact SHALL read "no contract" when the pinned revision has none, and unknown, with its reason, when the commit does not resolve or the base ref is unset. Like every result check, it SHALL NOT block, gate, or change acceptance, handoffs, findings, or task status.
+
+#### Scenario: Task without a contract
+- **WHEN** a result of a task whose pinned revision has no contract is checked
+- **THEN** the scope fact reads "no contract" and names no path
+
+#### Scenario: Outside scope does not gate
+- **WHEN** a result's scope fact names paths outside scope
+- **THEN** the result can still be handed off, reviewed, and accepted under the existing rules

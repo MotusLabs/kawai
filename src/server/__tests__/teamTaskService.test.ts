@@ -278,6 +278,8 @@ describe('task_acknowledge (task-revision-publication 4.2, D6)', () => {
 })
 
 describe('task_amend publishes with rationale and notify (task-revision-publication 4.4, D7)', () => {
+  // @covers: task-revision-publication › Agent creators publish without drafts › Lead publishes and notifies
+  // @covers: task-revision-publication › Agent creators publish without drafts › Non-creator still refused
   test('the creating lead publishes and notifies: the claimed developer gets one notice from the lead', async () => {
     const { AssignmentStore } = await import('../team/assignmentStore')
     const mail = new MailboxStore(db)
@@ -327,7 +329,7 @@ describe('spawn-time registration', () => {
     // impact tools (strategy-revision-impact D10; read and propose, no decide), and the
     // read-only metrics tool (team-process-metrics D5), and the report tools
     // (team-process-metrics D6; no decide/apply/withdraw/relink/unlink).
-    const resultTools = ['task_submit_result', 'task_submit_coverage', 'task_submit_findings', 'task_handoff', 'task_check_result']
+    const resultTools = ['task_submit_result', 'task_submit_coverage', 'task_submit_findings', 'task_dispute_findings', 'task_decide_dispute', 'task_handoff', 'task_check_result']
     const planTools = ['plan_list', 'plan_get', 'plan_create', 'plan_save_draft', 'plan_submit_for_review']
     // Validation tools (plan-validation D10; validate, read, assess — no decide or approve).
     const validationTools = ['plan_validate', 'plan_validation_get', 'plan_assess']

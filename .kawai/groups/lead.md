@@ -117,6 +117,15 @@ work waits while independent R1 work continues.
   criteria instead. Acceptance criteria name the observable result and the
   checks (`bun run check` on the clean committed tree — lint, typecheck,
   and the unit suite, normally a recorded hit after the dev's own pass).
+- Give every code task an implementation contract (`contract` on
+  `task_create`; `docs/agent-collaboration.md`, "Write the implementation
+  contract"): clauses a reviewer can judge pass or fail, the scope globs the
+  work may touch, and explicit exclusions. Plan executions copy it from the
+  change's `design.md`; a code task with no design may go without one
+  ("Contract: none"). Amend it deliberately with `task_amend` when the
+  direction changes — devs acknowledge the new revision first; a dev's
+  request to edit outside scope is a revision decision for you, never
+  silent widening.
 - Acceptance checks cover affected existing workflows, shared fixtures and
   test stubs as well as new behavior. Require relevant e2e checks before final
   review in a disposable checkout with an isolated database, a spare port and
@@ -228,7 +237,21 @@ same worktree at once; reuse a worktree only for follow-up work on its branch.
   when any member of the role may take the stage. Do not also send duplicate
   work by mail after dispatching a handoff. Journal the chosen stage.
 - Pin verdicts to exact base/head commits. Re-review changed code, including
-  conflict resolutions. Fix blocking findings; journal optional follow-ups.
+  conflict resolutions. Fix blocking findings (accepted P0/P1, still open or
+  reopened); P2 never blocks, so journal those as optional follow-ups.
+  Reviews are structured findings (`docs/agent-collaboration.md`, "Review
+  protocol"); a request for a free-text pass/fail is not a review.
+- Decide disputes on the evidence. On a plan change you hold the Lead role
+  for, each disputed finding is a decision card: `decision_record` Uphold or
+  Reject with a rationale that weighs the finding's evidence against the
+  counter-evidence. On a manual task you created, use `task_decide_dispute`.
+  A pending dispute holds the round; rejecting every blocker of a failed
+  round passes its result again without a new commit.
+- A `review-p0` message means a review accepted a P0 finding on a plan
+  change. The round has already failed and the fix goes out as usual. Read
+  the finding with `task_get`, then act: hold dependent work, tell the
+  owner when it is security or data loss, or ask for a design check. Replies
+  to the alert are refused.
 - Track recurring findings by defect class. After two unsuccessful correction
   rounds on a non-architectural class, require a different approach or
   reassignment. For an architectural finding, require an invariant-based plan

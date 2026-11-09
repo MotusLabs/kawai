@@ -87,6 +87,8 @@ describe('task ids on mail', () => {
 })
 
 describe('delivery-time context', () => {
+  // @covers: team-tasks › Delivered task messages carry the task context › Task header on delivery
+  // @covers: team-tasks › Delivered task messages carry the task context › Linked change is authoritative
   test('amendments and notes made after enqueue appear at delivery', async () => {
     const task = tasks.create({ teamId, title: 'Export', direction: 'CSV', acceptance: 'File downloads', creator: { kind: 'agent', sessionId: 'lead' }, openspecChange: 'add-export', worktree: '/repo-feature' })
     const mail = await mailboxHandlers(mailbox, 'lead').send_message({ to_kind: 'group', to_id: 'devs', body: 'Build it', task_id: task.id })

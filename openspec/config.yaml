@@ -50,6 +50,15 @@ rules:
       under seeded command sequences with replays, supersessions, and a crash
       at each transaction boundary.
     - Consult docs/oracle-hazards.md before finalizing the tables.
+    - Give every design the required Implementation contract section, with the
+      heading `## Implementation contract`, then the parts `### Acceptance`
+      (A1, A2, ...), `### Invariants` (I1, ...), `### Scope` (one
+      repository-relative glob per bullet, at least one), `### Verification`
+      (V1, ...), and `### Excluded` (X1, ...), in that order; Acceptance and
+      Verification are never empty. Write clauses a reviewer can judge pass
+      or fail, as docs/agent-collaboration.md describes under "Write the
+      implementation contract"; plan validation refuses a change without a
+      parseable section.
   tasks:
     - Make every Verify bullet cite its oracle ids and name the mutant each
       must kill.

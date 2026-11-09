@@ -516,9 +516,38 @@ const migration22: SchemaShape['tables'] = {
   team_approval_defaults: { columns: [column('team_id', 0, 1), column('policy'), column('updated_at')], indexes: [] },
 }
 
+// Migration 24's delta (review-findings-ledger D3): finding items, ledger
+// events, and dispute cards; UNIQUE keys are autoindexes the shape skips.
+// It also adds five columns to team_task_findings and the uniquely indexed
+// `regate_of` and `blocking_ids` to plan_execution_rounds, applied in the test below.
+const migration24: SchemaShape['tables'] = {
+  team_task_finding_items: {
+    columns: [
+      id, ...['submission_id', 'task_id', 'finding_id', 'item_kind', 'level'].map(name => column(name)),
+      ...['clause', 'clause_id', 'evidence', 'impact', 'reproduction'].map(optional),
+      { name: 'locus', type: 'TEXT', notnull: 1, dflt_value: "''", pk: 0 },
+      ...['class', 'reason', 'disposition'].map(optional), counter('regressed', '0'), integer('position'), column('created_at'),
+    ],
+    indexes: [{ name: 'team_task_finding_items_task', unique: 0, columns: ['task_id', 'finding_id'] }],
+  },
+  team_task_finding_events: {
+    columns: [
+      id, column('task_id'), column('finding_id'), integer('ledger_seq'), column('kind'),
+      ...['result_id', 'card_id', 'decision_id'].map(optional), optionalInteger('revision'),
+      ...['contract_identity', 'clause'].map(optional), column('actor_kind'), ...['actor_session', 'text', 'source_key'].map(optional),
+      column('created_at'),
+    ],
+    indexes: [{ name: 'team_task_finding_events_task', unique: 0, columns: ['task_id', 'ledger_seq'] }],
+  },
+  team_task_finding_cards: {
+    columns: [column('card_id', 0, 1), column('task_id'), column('finding_id'), column('dispute_event_id')],
+    indexes: [],
+  },
+}
+
 test('a fresh database opened by this build has the same shape plus each migration\'s delta and schema_migrations', () => {
   const session = initDatabase({ path: ':memory:' })
-  const added = { ...migration2, ...migration3, ...migration4, ...migration5, ...migration6, ...migration7, ...migration8, ...migration9, ...migration10, ...migration11And21, ...migration13, ...migration16, ...migration17, ...migration19, ...migration20, ...migration22 }
+  const added = { ...migration2, ...migration3, ...migration4, ...migration5, ...migration6, ...migration7, ...migration8, ...migration9, ...migration10, ...migration11And21, ...migration13, ...migration16, ...migration17, ...migration19, ...migration20, ...migration22, ...migration24 }
   expect(Object.keys(added).filter(table => table in expected.tables)).toEqual([])
   // Migration 20's: the submitter's nullable coverage map (independent-
   // verification D4), appended after the baseline columns.
@@ -529,6 +558,12 @@ test('a fresh database opened by this build has the same shape plus each migrati
   const withProfiles = { ...messages, columns: [...messages.columns, optional('allowed_profiles'), optional('worker_choice')] }
   const assignments = expected.tables.team_task_assignments!
   const withChoice = { ...assignments, columns: [...assignments.columns, optional('worker_choice')] }
+  // Migration 23's: a revision's contract and hash, and a draft's raw
+  // contract text (implementation-contract D3), all nullable.
+  const revisions = expected.tables.team_task_revisions!
+  const withContract = { ...revisions, columns: [...revisions.columns, optional('contract'), optional('contract_hash')] }
+  const drafts = expected.tables.team_task_drafts!
+  const withContractText = { ...drafts, columns: [...drafts.columns, optional('contract_text')] }
   // Migration 10's delta: the chat_sessions exhaustion flags; migration 11's
   // the process-observations tables (in `added` above); migration 12's: limit
   // events record their provider and window (providers-and-workers D7), both
@@ -554,8 +589,14 @@ test('a fresh database opened by this build has the same shape plus each migrati
     columns: [...limitEvents.columns, optional('provider_id'), optional('limit_window')],
     indexes: [{ name: 'profile_limit_events_at', unique: 0, columns: ['at'] }, ...limitEvents.indexes],
   }
+  // Migration 24's: structured findings' columns and the rounds' regate_of.
+  const findings = expected.tables.team_task_findings!
+  const flag = (name: string) => ({ name, type: 'INTEGER', notnull: 1, dflt_value: '0', pk: 0 })
+  const withLedger = { ...findings, columns: [...findings.columns, flag('structured'), flag('counted'), optional('contract_identity'), optionalInteger('ledger_seq'), optional('replaced_by')] }
+  const rounds = migration8.plan_execution_rounds!
+  const withRegate = { columns: [...rounds.columns, optional('regate_of'), optional('blocking_ids')], indexes: [...rounds.indexes, { name: 'plan_execution_rounds_regate', unique: 1, columns: ['regate_of'] }] }
   expect(schemaShape(session.db)).toEqual({
-    tables: { ...expected.tables, ...added, team_messages: withProfiles, team_task_assignments: withChoice, chat_sessions: withFlag, profile_limit_events: withLimitContext, team_task_results: withCoverage },
+    tables: { ...expected.tables, ...added, team_messages: withProfiles, team_task_assignments: withChoice, chat_sessions: withFlag, profile_limit_events: withLimitContext, team_task_results: withCoverage, team_task_revisions: withContract, team_task_drafts: withContractText, team_task_findings: withLedger, plan_execution_rounds: withRegate },
   })
   const extra = session.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'").get()
   expect(extra).toEqual({ name: 'schema_migrations' })

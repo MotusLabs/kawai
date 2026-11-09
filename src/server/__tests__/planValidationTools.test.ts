@@ -7,7 +7,7 @@
 import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import path from 'node:path'
-import { createPlanBench, createPlanWorld, type PlanBench, type PlanWorld } from './planHarness'
+import { createPlanBench, createPlanWorld, writeContractDesign, type PlanBench, type PlanWorld } from './planHarness'
 import { ImpactService } from '../strategy/ImpactService'
 import { ImpactStore } from '../strategy/impactStore'
 import { MailboxStore } from '../team/mailboxStore'
@@ -22,6 +22,7 @@ beforeAll(async () => {
   for (const change of ['api', 'ui']) {
     fs.mkdirSync(path.join(world.repo, 'openspec', 'changes', change, 'specs', 'chat'), { recursive: true })
     fs.writeFileSync(path.join(world.repo, 'openspec', 'changes', change, 'proposal.md'), `# ${change}\n`)
+    writeContractDesign(world.repo, change)
   }
   fs.writeFileSync(path.join(world.repo, '.kawai', 'groups', 'reviewers.md'), 'Review.')
 })

@@ -68,9 +68,10 @@ export function serveDeltas(deltas: Record<string, readonly StubTouch[]>): void 
 
 /**
  * A git repository whose OpenSpec root registers each named change (a
- * proposal and a chat spec file), plus the team's group files, so a plan
- * naming the changes validates as registered. Returns nothing; callers pass
- * the root as the chat's project path.
+ * proposal, a chat spec file, and a design.md with an implementation
+ * contract), plus the team's group files, so a plan naming the changes
+ * validates as registered and Ready. Returns nothing; callers pass the root
+ * as the chat's project path.
  */
 export function initPlanRepository(root: string, changes: readonly string[], groups: Record<string, string>): void {
   execFileSync('git', ['init', '-q', root])
@@ -78,6 +79,9 @@ export function initPlanRepository(root: string, changes: readonly string[], gro
     mkdirSync(join(root, 'openspec', 'changes', change, 'specs', 'chat'), { recursive: true })
     writeFileSync(join(root, 'openspec', 'changes', change, 'proposal.md'), `# ${change}\n`)
     writeFileSync(join(root, 'openspec', 'changes', change, 'specs', 'chat', 'spec.md'), '## ADDED Requirements\n### Requirement: Presence\n')
+    // The implementation-contract validation check requires a parseable section.
+    writeFileSync(join(root, 'openspec', 'changes', change, 'design.md'), ['## Implementation contract', '### Acceptance', `- A1: ${change} works`,
+      '### Invariants', '### Scope', '- `src/**`', '### Verification', '- V1: check passes', '### Excluded'].join('\n') + '\n')
   }
   mkdirSync(join(root, '.kawai', 'groups'), { recursive: true })
   for (const [id, body] of Object.entries(groups)) {
@@ -218,14 +222,22 @@ export function submitRound(root: string, mode: 'result' | 'findings', implement
         const result = db.prepare('SELECT id FROM team_task_results WHERE task_id = ? ORDER BY rowid DESC').get(taskId);
         if (!result) throw new Error('no result yet');
         const asReviewer = taskHandlers(tasks, claimant, results);
-        const findings = verdict === 'fail'
-          ? 'Fail: the review found the walkthrough change incomplete.'
-          : 'Clean: the walkthrough change is sound.';
-        // Not retried: submitFindings makes three autocommits (the findings
-        // INSERT, then the journal note's INSERT and UPDATE), so a BUSY after
-        // the first would duplicate them on a re-run; its statements start
-        // from TRANS_NONE and take the busy handler.
-        await asReviewer.task_submit_findings({ task_id: taskId, result_id: result.id, kind: 'review', verdict, findings });
+        // A plan change's review is structured (review-findings-ledger D5):
+        // the verdict is derived. A fail keeps every open finding still open
+        // (a repeated failing round must dispose of them), or raises one P1
+        // citing the contract's A1 (or the revision without a contract) with
+        // in-scope evidence; a pass resolves whatever is open.
+        const open = results.findingsLedger.ledger(taskId).filter(row => row.level !== 'P2' && ['accepted', 'still-open', 'reopened'].includes(row.state));
+        const contract = taskStore.revisions(taskId).at(-1).contract;
+        const items = verdict === 'fail' && open.length === 0
+          ? [{ level: 'P1', clause: contract ? 'A1' : taskStore.get(taskId).identity, evidence: 'src/walk-api.ts:1 skips the walkthrough case', impact: 'the change is incomplete' }]
+          : [];
+        const dispositions = open.map(row => verdict === 'fail'
+          ? { id: row.id, disposition: 'still-open', evidence: 'src/walk-api.ts:1 still skips it' }
+          : { id: row.id, disposition: 'resolved' });
+        // Not retried: the submission commits once, in an immediate
+        // transaction that waits on the busy handler.
+        await asReviewer.task_submit_findings({ task_id: taskId, result_id: result.id, kind: 'review', items, dispositions, findings: verdict === 'fail' ? 'The walkthrough change is incomplete.' : 'The walkthrough change is sound.' });
         console.log('FINDINGS:ok:' + claimant);
       }
       sessions.close();

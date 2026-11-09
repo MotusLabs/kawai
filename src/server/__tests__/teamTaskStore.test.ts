@@ -10,6 +10,7 @@ import path from 'node:path'
 import { initDatabase, type ChatSessionRecord, type SessionDatabase } from '../db'
 import { MailboxStore } from '../team/mailboxStore'
 import { TaskStore } from '../team/taskStore'
+import { identityOf } from '../team/contractHash'
 import type { TaskActor } from '../../shared/teamTasks'
 
 const TEAM = '/repo/.git'
@@ -58,7 +59,8 @@ describe('TaskStore', () => {
     })
     expect(task.id.startsWith('task-')).toBe(true)
     expect(tasks.revisions(task.id)).toEqual([
-      { revision: 1, direction: 'CSV export of reports', acceptance: 'Downloads a file', author: agent('chat-lead'), createdAt: task.createdAt, rationale: null, notify: null },
+      { revision: 1, direction: 'CSV export of reports', acceptance: 'Downloads a file', author: agent('chat-lead'), createdAt: task.createdAt, rationale: null, notify: null,
+        contract: null, contractHash: null, identity: identityOf({ revision: 1, direction: 'CSV export of reports', acceptance: 'Downloads a file', contractHash: null }) },
     ])
   })
 

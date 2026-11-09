@@ -194,13 +194,16 @@ describe('provisioning (§11.3)', () => {
     expect(executions.change(executionId, 'taken-b')).toMatchObject({ state: 'stopped', stopReason: 'name-taken' })
   })
 
+  // @covers: plan-execution › Kawai creates and dispatches one task per change › A later execution creates fresh tasks
   test('a later execution of the same plan reuses the worktree and branch', async () => {
     const plan = await approvedPlan(['reuse-a'])
     const first = startExecution(plan, ['reuse-a'])
     executor.wake(world.team.teamId)
     await executor.idle()
     expect(executions.change(first, 'reuse-a')!.state).toBe('implementing')
+    const firstTask = executions.change(first, 'reuse-a')!.taskId!
     executions.finishExecution(first, 'stopped', 'test')
+    const firstStatus = tasks.store.get(firstTask)!.status
     const second = startExecution(plan, ['reuse-a'])
     executor.wake(world.team.teamId)
     await executor.idle()
@@ -210,10 +213,15 @@ describe('provisioning (§11.3)', () => {
     // One worktree on disk, on the same branch, still at the base.
     expect(git(['worktree', 'list', '--porcelain'], main()).split('\n').filter((line: string) => line.includes('.worktrees/reuse-a'))).toHaveLength(1)
     expect(executions.attempts(second, 'reuse-a')).toHaveLength(1)
+    // A fresh task created by Kawai; the stopped execution's task stays as it was.
+    expect(row.taskId).not.toBe(firstTask)
+    expect(tasks.store.get(row.taskId!)!.creator).toEqual({ kind: 'system', sessionId: null })
+    expect(tasks.store.get(firstTask)!.status).toBe(firstStatus)
   })
 })
 
 describe('Kawai\'s task and dispatch (§11.4)', () => {
+  // @covers: plan-execution › Kawai creates and dispatches one task per change › The implementer receives Kawai's instruction
   test('task fields, link, dispatcher, allowed_profiles, and a replayed step yields one instruction', async () => {
     const plan = await approvedPlan(['task-a'])
     const planId = plan.planId

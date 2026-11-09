@@ -120,6 +120,9 @@ export interface RoundRow {
   extra: Array<{ name: string; description: string; command: string | null; by: 'ci' | 'reviewer'; outcome: string | null }> | null
   outcome: 'pass' | 'fail' | 'superseded' | null
   decidedAt: string | null
+  /** review-findings-ledger D8: the failed round this one re-gated, and the finding ids a failed round failed on (null before the upgrade or for CI). */
+  regateOf: string | null
+  blockingIds: string[] | null
 }
 
 /** One recorded external step (D14): written before it runs, inspected before it repeats. */
@@ -254,6 +257,8 @@ export function mapRound(row: Row): RoundRow {
     extra: json<RoundRow['extra']>(row.extra_json),
     outcome: text(row.outcome) as RoundRow['outcome'],
     decidedAt: text(row.decided_at),
+    regateOf: text(row.regate_of),
+    blockingIds: json<string[]>(row.blocking_ids),
   }
 }
 

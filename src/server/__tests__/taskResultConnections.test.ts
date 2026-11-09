@@ -1,7 +1,8 @@
 // Task-result human actions over the chat connection (task-results-handoffs
 // 3.3/5.2/6.2): accept-result, handoff, and release, each answered by
 // team-task-result with refusals inline, every one refused across teams,
-// and the task detail carrying results to subscribers.
+// the task detail carrying results to subscribers, and the Findings
+// section's dispute decision (review-findings-ledger D10).
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -212,4 +213,23 @@ test('recheck on another team\'s task is refused and writes nothing', async () =
   await send({ type: 'team-task-recheck', teamPath: '/repo', requestId: 'x', taskId: foreign.id, resultId: result.id })
   expect(last('team-task-result')!.error).toBeTruthy()
   expect(tasks.store.checks.allForResult(result.id)).toHaveLength(0)
+})
+
+// The Findings section's decision (review-findings-ledger D10): the human
+// upholds or rejects a disputed finding of a non-plan task over the
+// connection; a refusal (no rationale) comes back inline and writes nothing.
+test('decide-dispute rejects a disputed finding for the human; a missing rationale is refused inline', async () => {
+  const task = await tasks.create(human(), { title: 'Export', direction: 'v1' })
+  const result = resultFor(task.id)
+  results.findingsLedger.submit({
+    teamId: 'team', task: tasks.store.get(task.id)!, result, author: { kind: 'agent', sessionId: 'rev' }, handoffId: null, counted: true,
+    submission: { kind: 'review', findings: [{ level: 'P1', clause: tasks.store.get(task.id)!.identity, evidence: 'src/a.ts:1', impact: 'x' }] as never, dispositions: [] },
+  })
+  await results.findingsLedger.disputes.dispute({ teamId: 'team', task: tasks.store.get(task.id)!, actor: { kind: 'agent', sessionId: 'dev' }, disputes: [{ id: 'F1', counterEvidence: 'intended' }] })
+  await send({ type: 'team-task-decide-dispute', teamPath: '/repo', requestId: 'd0', taskId: task.id, findingId: 'F1', decision: 'reject', rationale: '' })
+  expect(last('team-task-result')!.error).toBeTruthy()
+  expect(tasks.store.ledger(task.id)[0]!.state).toBe('disputed')
+  await send({ type: 'team-task-decide-dispute', teamPath: '/repo', requestId: 'd1', taskId: task.id, findingId: 'F1', decision: 'reject', rationale: 'intended behaviour' })
+  expect(last('team-task-result')).toMatchObject({ requestId: 'd1', task: { id: task.id } })
+  expect(tasks.store.ledger(task.id)[0]!.state).toBe('rejected')
 })

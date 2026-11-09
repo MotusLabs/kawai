@@ -761,6 +761,8 @@ export type ClientMessage =
       title: string
       direction: string
       acceptance?: string
+      /** Contract text (implementation-contract D3); blank or omitted = none. */
+      contract?: string
       parentId?: string
       worktree?: string
       openspecChange?: string
@@ -783,6 +785,8 @@ export type ClientMessage =
       direction?: string
       acceptance?: string
       rationale?: string
+      /** Raw contract text, saved unparsed. */
+      contract?: string
     }
   | {
       type: 'team-task-publish'
@@ -794,6 +798,8 @@ export type ClientMessage =
       requestKey: string
       direction: string
       acceptance?: string
+      /** Contract text: omitted carries the current contract; blank clears it (refused once one was carried). */
+      contract?: string
       rationale: string
       notify: boolean
       /** Published from the human's saved draft, which is discarded with it. */
@@ -807,6 +813,9 @@ export type ClientMessage =
   // Request a new check of one result (independent-verification D4); a
   // request while a check is pending returns that pending check.
   | { type: 'team-task-recheck'; teamPath: string; requestId: string; taskId: string; resultId: string }
+  // Decide one disputed finding of a non-plan task (review-findings-ledger
+  // D5): uphold or reject with a rationale, by the task's creator or the human.
+  | { type: 'team-task-decide-dispute'; teamPath: string; requestId: string; taskId: string; findingId: string; decision: 'uphold' | 'reject'; rationale: string }
   // Request review / Request QA / Return for fixes (D3): a handoff of one
   // result to a role, idempotent under the client's request key.
   | {

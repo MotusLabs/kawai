@@ -24,6 +24,8 @@ export const JOURNAL_CHUNK_BYTES = 8192
 export const JOURNAL_LIMIT_DEFAULT = 50
 export const JOURNAL_LIMIT_MAX = 200
 export const SUBTASK_WINDOW = 100
+/** The agent task_get ledger window (review-findings-ledger D10): the newest rows. */
+export const LEDGER_WINDOW = 100
 export const MESSAGE_WINDOW = 50
 
 export interface JournalWindowRequest {
@@ -122,6 +124,8 @@ export class TaskJournalWindow {
       const subtasks = subtaskIds.reverse().map(row => this.store.summary(this.store.get(row.id)!))
       const messageTotal = this.mail ? counts.messages! : 0
       const revisions = this.store.revisions(taskId)
+      // review-findings-ledger D10: the newest 100 rows, newest raised first.
+      const ledger = this.store.ledger(taskId).reverse()
       return {
         task: this.store.summary(task),
         revisions,
@@ -137,6 +141,8 @@ export class TaskJournalWindow {
           checks: this.store.checks.viewForResult(result.id),
           reviewerMaps: this.store.results.reviewerMapsOf(result.id, rawCoverage(result.coverage)),
         })),
+        findingsLedger: ledger.slice(0, LEDGER_WINDOW),
+        ledgerOlderRemaining: ledger.length > LEDGER_WINDOW,
         bounds: {
           journal: { total: counts.journal!, returned: journal.length, olderRemaining, nextBefore: olderRemaining ? journal[0]!.id : null },
           subtasks: { total: counts.subtasks!, returned: subtasks.length, truncated: counts.subtasks! > subtasks.length },

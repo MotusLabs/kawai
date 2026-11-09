@@ -231,7 +231,7 @@ test('the Strategy tab mounts the strategy view and routes its sub-views through
 test('the Tasks tab mounts the view, follows the URL selection, and notices a missing task', () => {
   useSessionStore.setState({ sessions: [chatAt('/repo'), chatAt('/repo')], hasLoaded: true })
   const workspace = { open: true, loading: false, tasks: [], selectedTaskId: null, detail: null, directory: [],
-    pending: {}, error: null, draft: { title: '', direction: '', acceptance: '', parentId: '', worktree: '', openspecChange: '', targetKind: '', targetId: '', instruction: '' },
+    pending: {}, error: null, draft: { title: '', direction: '', acceptance: '', contract: '', parentId: '', worktree: '', openspecChange: '', targetKind: '', targetId: '', instruction: '' },
     flow: null, preview: null, previewPending: {}, targets: null, targetsLoading: false, commands: {}, commandRequests: {} } as unknown as Record<string, unknown>
   act(() => { useTeamTaskStore.setState({ views: { '/repo': workspace as never } }) })
   const taskSummary = {
@@ -260,7 +260,7 @@ test('the selected task survives a visit to another tab; the browser Back to a l
     openspecChange: null, revision: 1, direction: 'Build it', acceptance: null, createdAt: '2026-10-11T00:00:00.000Z',
     updatedAt: '2026-10-11T00:00:00.000Z', participants: [], assignment: null,
   }], selectedTaskId: 't-1', detail: null, directory: [], pending: {}, error: null,
-    draft: { title: '', direction: '', acceptance: '', parentId: '', worktree: '', openspecChange: '', targetKind: '', targetId: '', instruction: '' },
+    draft: { title: '', direction: '', acceptance: '', contract: '', parentId: '', worktree: '', openspecChange: '', targetKind: '', targetId: '', instruction: '' },
     flow: null, preview: null, previewPending: {}, targets: null, targetsLoading: false, commands: {}, commandRequests: {} }
   act(() => { useTeamTaskStore.setState({ views: { '/repo': view as never } }) })
   act(() => { useTeamLocationStore.getState().navigate({ teamKey: '/repo', tab: 'tasks', id: 't-1' }) })
@@ -286,7 +286,7 @@ test('returning to a Tasks page with a held selection never clears it, under Str
     openspecChange: null, revision: 1, direction: 'Build it', acceptance: null, createdAt: '2026-10-11T00:00:00.000Z',
     updatedAt: '2026-10-11T00:00:00.000Z', participants: [], assignment: null,
   }], selectedTaskId: 't-1', detail: null, directory: [], pending: {}, error: null,
-    draft: { title: '', direction: '', acceptance: '', parentId: '', worktree: '', openspecChange: '', targetKind: '', targetId: '', instruction: '' },
+    draft: { title: '', direction: '', acceptance: '', contract: '', parentId: '', worktree: '', openspecChange: '', targetKind: '', targetId: '', instruction: '' },
     flow: null, preview: null, previewPending: {}, targets: null, targetsLoading: false, commands: {}, commandRequests: {} }
   act(() => { useTeamTaskStore.setState({ views: { '/repo': view as never } }) })
   // The Team entry reopens the page on the tab with no id in the URL.
@@ -312,7 +312,7 @@ test('the entry selection replay keeps a restored selection the stale closure ca
     openspecChange: null, revision: 1, direction: 'Build it', acceptance: null, createdAt: '2026-10-11T00:00:00.000Z',
     updatedAt: '2026-10-11T00:00:00.000Z', participants: [], assignment: null,
   }], selectedTaskId: 't-1', detail: null, directory: [], pending: {}, error: null,
-    draft: { title: '', direction: '', acceptance: '', parentId: '', worktree: '', openspecChange: '', targetKind: '', targetId: '', instruction: '' },
+    draft: { title: '', direction: '', acceptance: '', contract: '', parentId: '', worktree: '', openspecChange: '', targetKind: '', targetId: '', instruction: '' },
     flow: null, preview: null, previewPending: {}, targets: null, targetsLoading: false, commands: {}, commandRequests: {} }
   act(() => { useTeamTaskStore.setState({ views: { '/repo': view as never } }) })
   act(() => { useTeamLocationStore.getState().navigate({ teamKey: '/repo', tab: 'tasks', id: 't-1' }, { replace: true }) })

@@ -1,8 +1,8 @@
 // serializeFacts.ts - The result-check facts as stored (independent-
 // verification D2): versioned JSON of at most 64 KB. Oversized lists
 // shrink progressively, their true totals preserved — every `more` count
-// absorbs what its list gave up, and the compared list trades length for
-// the skipped count. Split from resultChecks.ts (file-size cap, K7); the
+// absorbs what its list gave up (the scope fact's outside paths too), and
+// the compared list trades length for the skipped count. Split from resultChecks.ts (file-size cap, K7); the
 // facts' computation stays there.
 
 import type { ResultCheckFacts } from '../../shared/teamTasks'
@@ -28,9 +28,14 @@ export function serializeFacts(facts: ResultCheckFacts): string {
     })()
     const baseConflicts = shrink(facts.base.conflicts, facts.base.moreConflicts, keep)
     const comparedCount = Math.max(1, Math.min(facts.branches.compared.length, keep))
+    const scope = facts.scope === undefined ? undefined : (() => {
+      const shrunk = shrink(facts.scope.outside, facts.scope.more, keep)
+      return { ...facts.scope, outside: shrunk.names, more: shrunk.more }
+    })()
     const clamped: ResultCheckFacts = {
       ...facts,
       clean,
+      ...(scope ? { scope } : {}),
       base: { ...facts.base, conflicts: baseConflicts.names, moreConflicts: baseConflicts.more },
       branches: {
         ...facts.branches,
@@ -55,6 +60,7 @@ export function serializeFacts(facts: ResultCheckFacts): string {
     ...facts,
     coverage: undefined,
     clean: facts.clean === null ? null : { ...facts.clean, paths: [], more: facts.clean.paths.length + facts.clean.more },
+    ...(facts.scope ? { scope: { ...facts.scope, outside: [], more: facts.scope.outside.length + facts.scope.more } } : {}),
     base: { ...facts.base, conflicts: [], moreConflicts: facts.base.conflicts.length + facts.base.moreConflicts },
     branches: { ...facts.branches, compared: [], skipped: facts.branches.skipped + facts.branches.comparedCount },
   })
