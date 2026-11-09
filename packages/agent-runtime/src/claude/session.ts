@@ -4,7 +4,9 @@
 // - Generations. Each generation's message loop is an owned job that
 //   completes only at the leader's actual exit. start resolves on the CLI's
 //   initialize response. A respawn after an unexpected exit resumes the same
-//   conversation.
+//   conversation. A generation's resume target is fixed before its query;
+//   when the CLI refuses it (its startup-failure frame or stderr, before
+//   initialize), start rejects with category `resume`, never a fresh one.
 // - Turn binding. Results and content frames bind to turns by the client UUID
 //   each prompt carries (the CLI turn binder), so a late, duplicate or
 //   previous-turn result never completes the turn opened since. A queued
@@ -44,7 +46,7 @@ import type { RawChatCommand } from './commands.js'
 import { ClaudeFrames } from './frames.js'
 import { claudeIntegrationOptions, mergeHooks } from './integrations.js'
 import { composeClaudePermissions, withPermissions, type ClaudePermissionComposition } from './permissions.js'
-import { accountGenerations, cancelledByStop, interruptGeneration, linkedAbort, loadSdk, newGeneration, ownedSpawn, readTaskOutput, stopQueryTask, terminateGenerations, type Generation } from './generations.js'
+import { accountGenerations, cancelledByStop, interruptGeneration, linkedAbort, loadSdk, newGeneration, ownedSpawn, readTaskOutput, refusedResume, stopQueryTask, terminateGenerations, type Generation } from './generations.js'
 import { ClaudeRequests } from './requests.js'
 import { SeenResultFrames } from './resultFrames.js'
 import { CliTurnBinder } from './turnBinder.js'
@@ -153,7 +155,8 @@ export class ClaudeSession {
     // Stop may have begun while the SDK loaded: refuse before any query exists.
     if (this.stopBegun()) throw this.lifecycle.cancelled('the driver was stopped while starting')
     this.binder.reset()
-    const generation = newGeneration(number, sdk)
+    // The conversation this generation resumes is fixed before its query exists.
+    const generation = newGeneration(number, sdk, this.runtimeSessionId)
     const composed = this.composeSdkOptions(sdk)
     const options: Options = {
       settingSources: [],
@@ -161,7 +164,7 @@ export class ClaudeSession {
       ...composed,
       // Requests ride canUseTool, which bypass mode never consults: leave it unset there.
       ...(composed.permissionMode === 'bypassPermissions' ? {} : { canUseTool: this.requests.canUseTool }),
-      ...(this.runtimeSessionId ? { resume: this.runtimeSessionId } : {}),
+      ...(generation.resumeTarget ? { resume: generation.resumeTarget } : {}),
       // The query's cancel is the stop's; a caller's controller forwards into it with its own reason.
       abortController: linkedAbort(generation.abort, composed.abortController),
       cwd: launch.cwd,
@@ -195,8 +198,11 @@ export class ClaudeSession {
       if (cancelledByStop(generation, this.stopToken, error)) throw this.lifecycle.cancelled('the driver was stopped while starting', [error])
       // A process that exited while starting is classified first (L14: exited, one process end), then start rejects.
       if (exit || generation.readEnded) await generation.ended
+      // R10: the CLI refused the resume target before answering initialize; nothing fresh was started.
+      if (refusedResume(generation)) throw new AgentRuntimeError({ category: 'resume', message: 'the runtime refused the resume target or its transcript is unavailable' }, [error])
       throw new AgentRuntimeError({ category: 'transport', message: 'the Claude Code process did not initialize' }, [error])
     }
+    generation.initialized = true
     if (generation === this.current() && Array.isArray(initialized?.commands)) this.frames.commands.applyCommands(initialized.commands as RawChatCommand[])
   }
 
@@ -276,6 +282,12 @@ export class ClaudeSession {
   private handle(generation: Generation, message: SDKMessage): void {
     // A superseded or failed generation's frames never reach the conversation.
     if (generation.retired || generation !== this.current()) return
+    // No turn exists before initialize: a result then is the CLI's startup failure, kept for start's classification.
+    if (!generation.initialized && message.type === 'result') {
+      const errors = (message as { errors?: unknown }).errors
+      if (Array.isArray(errors)) generation.startupErrors.push(...errors.filter((e): e is string => typeof e === 'string'))
+      return
+    }
     switch (message.type) {
       case 'system':
         if (message.subtype === 'init') this.init(message)

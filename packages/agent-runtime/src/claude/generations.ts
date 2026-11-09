@@ -44,15 +44,38 @@ export interface Generation {
   abortError: SdkModule['AbortError']
   /** The message stream ended (the process exited or the transport closed). */
   readEnded: boolean
+  /** The conversation this generation was launched to resume, captured before its query; null for a fresh one. */
+  resumeTarget: string | null
+  /** Its initialize response arrived. */
+  initialized: boolean
+  /** The error texts of result frames read before initialize: the CLI's startup-failure frames. */
+  startupErrors: string[]
   /** Settles once the generation's end has been classified. */
   ended: Promise<void>
   markEnded(): void
 }
 
-export function newGeneration(number: number, sdk: SdkModule): Generation {
+export function newGeneration(number: number, sdk: SdkModule, resumeTarget: string | null): Generation {
   let markEnded!: () => void
   const ended = new Promise<void>((resolve) => (markEnded = resolve))
-  return { number, query: null as unknown as Query, input: new PromptQueue<SDKUserMessage>(), owned: null, spawn: 'pending', projections: [], retired: false, abort: new AbortController(), abortError: sdk.AbortError, readEnded: false, ended, markEnded }
+  return {
+    number, query: null as unknown as Query, input: new PromptQueue<SDKUserMessage>(), owned: null, spawn: 'pending', projections: [], retired: false,
+    abort: new AbortController(), abortError: sdk.AbortError, readEnded: false, resumeTarget, initialized: false, startupErrors: [], ended, markEnded,
+  }
+}
+
+/**
+ * The pinned CLI's refusals of a resume target (2.1.289, headless): written
+ * to stderr and in its startup-failure frame before it exits 1, ahead of the
+ * stdin loop that answers initialize.
+ */
+const RESUME_REFUSALS = ['No conversation found with session ID:', '--resume requires a valid session ID', 'Failed to resume session']
+
+/** Whether a generation launched to resume ended before initialize with the CLI's resume refusal. */
+export function refusedResume(generation: Generation): boolean {
+  if (generation.resumeTarget === null) return false
+  const texts = [...generation.startupErrors, generation.owned?.stderrTail() ?? '']
+  return texts.some((text) => RESUME_REFUSALS.some((refusal) => text.includes(refusal)))
 }
 
 /**

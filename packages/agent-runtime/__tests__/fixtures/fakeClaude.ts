@@ -36,6 +36,21 @@
 // exits 0.
 // Every received frame, and first the process argv as {"argv": [...]},
 // is appended to $FAKE_CLAUDE_LOG when set.
+//
+// Sessions (FAKE_CLAUDE_SESSIONS=1): conversations persist as transcripts
+// under $HOME/.fake-claude/sessions/<id>.jsonl, one line per user prompt,
+// written on the first prompt. A fresh launch gets a new random id.
+// `--resume=<id>` follows the pinned CLI 2.1.289's headless order (its
+// transcript loader runs before the stdin loop that answers initialize):
+// - with that transcript, the session keeps the id and its history;
+// - without one, it writes the CLI's refusal line to stderr, then the
+//   CLI's startup-failure frame (a result error_during_execution, no turns,
+//   errors [the line]), and exits 1 without reading stdin or answering
+//   initialize.
+// FAKE_CLAUDE_RESUME=fresh is a nonconforming CLI that silently starts a
+// new session instead. `history` answers with the prompts the conversation
+// held before it, as JSON. Without FAKE_CLAUDE_SESSIONS the id is fixed and
+// --resume is ignored.
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 
@@ -57,7 +72,6 @@ const fdId = (fd: number): string | null => {
     return null
   }
 }
-const sessionId = 'fake-session-0001'
 const log = process.env.FAKE_CLAUDE_LOG
 const write = (frame: Record<string, unknown>) => fs.writeSync(OUT, `${JSON.stringify(frame)}\n`)
 const usage = { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
@@ -65,7 +79,37 @@ let running: string | null = null
 const argv = process.argv.slice(2)
 const flag = (name: string) => {
   const at = argv.indexOf(name)
-  return at >= 0 ? argv[at + 1] : undefined
+  if (at >= 0) return argv[at + 1]
+  return argv.find((arg) => arg.startsWith(`${name}=`))?.slice(name.length + 1)
+}
+
+const sessions = process.env.FAKE_CLAUDE_SESSIONS === '1' && process.env.HOME ? `${process.env.HOME}/.fake-claude/sessions` : null
+const transcriptOf = (id: string) => `${sessions}/${id}.jsonl`
+let sessionId = sessions ? crypto.randomUUID() : 'fake-session-0001'
+/** The prompts this conversation held before the current one. */
+let history: string[] = []
+const resumeTarget = sessions ? flag('--resume') : undefined
+if (resumeTarget !== undefined) {
+  if (fs.existsSync(transcriptOf(resumeTarget))) {
+    sessionId = resumeTarget
+    history = fs.readFileSync(transcriptOf(resumeTarget), 'utf8').split('\n').filter(Boolean).map((line) => (JSON.parse(line) as { text: string }).text)
+  } else if (process.env.FAKE_CLAUDE_RESUME !== 'fresh') {
+    if (log) fs.appendFileSync(log, `${JSON.stringify({ argv })}\n`)
+    const line = `No conversation found with session ID: ${resumeTarget}`
+    fs.writeSync(2, `${line}\n`)
+    write({
+      type: 'result', subtype: 'error_during_execution', duration_ms: 0, duration_api_ms: 0, is_error: true, num_turns: 0, stop_reason: null,
+      session_id: sessionId, total_cost_usd: 0, usage, modelUsage: {}, permission_denials: [], uuid: crypto.randomUUID(), errors: [line], result_index: 0,
+    })
+    process.exit(1)
+  }
+}
+
+/** Record a prompt in the conversation's transcript (created by the first one). */
+function remember(text: string) {
+  if (!sessions) return
+  fs.mkdirSync(sessions, { recursive: true })
+  fs.appendFileSync(transcriptOf(sessionId), `${JSON.stringify({ text })}\n`)
 }
 const disallowed = new Set((flag('--disallowedTools') ?? '').split(',').filter(Boolean))
 type Matcher = { matcher?: string; hookCallbackIds: string[] }
@@ -201,8 +245,16 @@ function onUser(frame: { uuid?: string; message?: { content?: unknown } }) {
   const text = typeof content === 'string' ? content
     : Array.isArray(content) ? content.map((c: { text?: string }) => c.text ?? '').join('') : ''
   write({ type: 'system', subtype: 'init', session_id: sessionId, model: 'fake-model', cwd: process.cwd(), tools: [], uuid: crypto.randomUUID() })
+  const before = history
+  history = [...history, text]
+  remember(text)
   const [command, ...rest] = text.trim().split(/\s+/)
   switch (command) {
+    case 'history': {
+      const held = JSON.stringify(before)
+      assistant(held)
+      return result(uuid, 'success', held)
+    }
     case 'env': {
       const values = Object.fromEntries(rest.map((name) => [name, process.env[name] ?? null]))
       assistant(JSON.stringify(values))
