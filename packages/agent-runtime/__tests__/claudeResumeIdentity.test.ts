@@ -10,13 +10,14 @@
 // succession).
 import { describe, expect, test } from 'bun:test'
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
+import type { AgentErrorInfo } from '../src/errors.js'
 import { exitProcess, idle, persistence, rejection, stopError, tick } from './helpers/checkpointHarness.js'
 import type { Driver } from './helpers/claudeDriverHarness.js'
 import { frames } from './helpers/controlledQuery.js'
 
 const types = (f: Driver) => f.events.map((e) => e.type)
 const errors = (f: Driver) => f.events.flatMap((e) => (e.type === 'error' ? [e.error.category] : []))
-const RESUME_FAILED = { category: 'resume', message: 'the runtime did not resume the supplied conversation' }
+const RESUME_FAILED: AgentErrorInfo = { category: 'resume', message: 'the runtime did not resume the supplied conversation' }
 
 async function stopped(f: Driver): Promise<void> {
   while (f.d.state !== 'stopped' && f.d.state !== 'stopping') await tick()
@@ -43,7 +44,7 @@ describe('Claude resume identity (G1)', () => {
     f.q().push(frames.text('fresh text'), frames.result([t0.messageUuid], 'fresh done'), frames.init('sess-fresh'))
     await f.q().drain()
     expect(f.results).toHaveLength(2)
-    expect(types(f).slice(before)).toEqual(types(f).slice(before).filter((t) => t === 'state_changed'))
+    expect(types(f).slice(before)).toEqual([])
     expect(errors(f)).toEqual(['resume'])
     // Sticky: a later send is refused with the resume failure.
     expect(await rejection(f.d.send('third'))).toMatchObject(RESUME_FAILED)
