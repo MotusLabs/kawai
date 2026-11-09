@@ -32,10 +32,10 @@
 
 ## 3. Notice module and wiring (design D2, D4)
 
-- [ ] 3.1 Add `MailboxStore.subscribeEnqueued(listener)`, called only from
+- [x] 3.1 Add `MailboxStore.subscribeEnqueued(listener)`, called only from
   `enqueue`, and test in `src/server/__tests__/mailboxStoreEnqueued.test.ts`
   that it fires once per enqueue and never for claim, push, or delivery.
-- [ ] 3.2 Add `src/server/team/taskStallNotices.ts`. It subscribes to
+- [x] 3.2 Add `src/server/team/taskStallNotices.ts`. It subscribes to
   `subscribeEnqueued` and keeps per-task candidate message ids. It flushes
   once via `setImmediate`, evaluating each candidate task in its own
   `store.immediate` transaction: the trigger check (a durable, counted
@@ -57,12 +57,12 @@
   - EF4 (not due, through the composition) kills "emit when not due";
   - a separate composition replay (duplicate flushes after a notice) adds
     nothing, and claims no mutant.
-- [ ] 3.3 Wire the module in `src/server/team/sessionMailbox.ts`, with
+- [x] 3.3 Wire the module in `src/server/team/sessionMailbox.ts`, with
   `ownedByExecution` from `TaskResultService`, and unsubscribe on shutdown.
   Add test A2 through the production `SessionMailbox`: ten counted messages
   past 3 h on an agent-created task produce one row, one journal entry, and
   one `task-stall` message. Verify it kills "subscription removed".
-- [ ] 3.4 Add `@covers` annotations for "The notice is journaled and sent to
+- [x] 3.4 Add `@covers` annotations for "The notice is journaled and sent to
   a session creator" and the trigger scenarios above the tests from
   3.2–3.3. Verify the coverage guard
   passes.
@@ -76,11 +76,11 @@
   model replays `stallOf`. Verify that both properties hold, and that a
   mutant dropping the primary key's `anchor_at` (one notice per task ever)
   fails P1 against the model.
-- [ ] 4.2 Add the restart scenario: a notice is written, then a new
+- [x] 4.2 Add the restart scenario: a notice is written, then a new
   `SessionMailbox` is built over the same database, and one more counted
   message produces no notice. Keep it as the post-notice restart dedupe
   test. Verify that it passes.
-- [ ] 4.3 Add the dropped-flush recovery test (contract A5). Commit a
+- [x] 4.3 Add the dropped-flush recovery test (contract A5). Commit a
   threshold-crossing counted message with the pending flush suppressed
   (dispose the module before `setImmediate` runs). Rebuild `SessionMailbox`
   over the same database and assert zero notice rows, journal entries, and
@@ -88,8 +88,9 @@
   one row, journal entry, and creator message whose `anchor_at` and
   `anchor_kind` are the original progress anchor. Then replay a flush and
   assert the effects are unchanged. Verify that it kills "recovery keyed on
-  the notice anchor" and "skip the trigger check on the recovering
-  message". Add `@covers` for the episode scenarios, and verify the coverage
+  the notice anchor" (the row anchored at the notice time). The recovering
+  message passes the trigger check, so "skip the trigger check" is TR2's
+  mutant, not this test's. Add `@covers` for the episode scenarios, and verify the coverage
   guard passes.
 
 ## 5. Docs (design Implementation contract A4)

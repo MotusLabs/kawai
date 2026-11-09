@@ -25,6 +25,7 @@ import { MemberRelease, type ArchiveResult } from './memberRelease'
 import { MailboxManagement } from './mailboxManagement'
 import { AssignmentStore } from './assignmentStore'
 import { AssignmentService } from './AssignmentService'
+import { TaskStallNotices } from './taskStallNotices'
 import { TaskResultService } from './TaskResultService'
 import { ResultCheckService } from '../verification/resultCheckService'
 import { pinnedScope } from '../verification/scopeFact'
@@ -64,6 +65,8 @@ export class SessionMailbox {
   readonly results: TaskResultService
   /** Kawai's checks of submitted results (independent-verification D1). */
   readonly resultChecks: ResultCheckService
+  /** Advisory stall notices for tasks no execution owns (manual-task-stall-alerts D2). */
+  readonly stallNotices: TaskStallNotices
   /** Durable plans (durable-plans): the one store tasks link against and PlanService writes through. */
   readonly plans: PlanStore
   readonly dispatcher: MailDispatcher
@@ -229,6 +232,13 @@ export class SessionMailbox {
       // and never blocks the submitter (independent-verification D1).
       onResult: (_result, teamId) => this.resultChecks.wake(teamId),
       onRecheck: teamId => this.resultChecks.wake(teamId) })
+    // Evaluated after each committed enqueue on a task, in its own transaction;
+    // it never blocks the send and never changes the task (I1).
+    this.stallNotices = new TaskStallNotices(taskStore, store, {
+      ownedByExecution: taskId => this.results.ownedByExecution(taskId),
+      ...(options.now ? { now: options.now } : {}),
+      onError: options.onError,
+    })
     this.resultChecks = new ResultCheckService({
       store: this.tasks.store.checks,
       sources: {
@@ -594,5 +604,5 @@ export class SessionMailbox {
     this.releases.markLateSpawn(id, taskId)
   }
 
-  close() { this.dispatcher.close(); this.releases.close(); this.releaseSubscription?.(); this.releaseLimitSubscription?.(); this.releaseTaskSubscription?.(); this.rules.close() }
+  close() { this.stallNotices.close(); this.dispatcher.close(); this.releases.close(); this.releaseSubscription?.(); this.releaseLimitSubscription?.(); this.releaseTaskSubscription?.(); this.rules.close() }
 }
