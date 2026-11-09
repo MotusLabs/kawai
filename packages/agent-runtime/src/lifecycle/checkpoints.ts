@@ -162,7 +162,8 @@ export class CheckpointGate {
           throw new AgentRuntimeError({ category: 'not-ready', message: 'the driver failed to start' }, [error])
         }
       } else {
-        await null
+        // The admission yield: an interrupt in the same tick still finds this send waiting (X01).
+        await Promise.resolve()
       }
       if (!(this.clear(waiter) ?? (await this.released(waiter)))) return
       lifecycle.withdraw(lifecycle.admitNow(continuation))

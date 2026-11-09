@@ -31,7 +31,7 @@
 //   (init, read, control, callback, recorder, cleanup) fails it too, kept by
 //   identity.
 import type { Options, Query, SDKMessage, SDKResultMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
-import type { AnswerOptions, AnswerOutcome, InterruptReceipt, ProcessExitFact, ProcessExitReceipt, ResumeCheckpoint, SubmitOptions, TaskOutput, TurnHandle, TurnOutcome } from '../contract.js'
+import type { AnswerOptions, AnswerOutcome, InterruptReceipt, ProcessExitFact, ProcessExitReceipt, ResumeCheckpoint, SubmitOptions, TaskOutput, TurnHandle } from '../contract.js'
 import { AgentRuntimeError, type AgentErrorInfo } from '../errors.js'
 import { EventStream, type EventBody } from '../eventStream.js'
 import type { PendingRequest, QuestionAnswers } from '../events.js'
