@@ -9,9 +9,11 @@
 //   stays a refusal (L08). An undecided send is a waiter: it waits for a
 //   start in progress and for every pending persistence, then runs the
 //   host's beforeSubmit, then revalidates (cancellation, sticky failure,
-//   pending persistence, admission) and commits in one synchronous step, so
-//   released waiters commit one at a time in FIFO order (L21) and nothing
-//   holds a queue admission across a callback.
+//   pending persistence, admission) and commits in one synchronous step.
+//   Only the oldest undecided waiter goes on to beforeSubmit and commit, so
+//   waiters commit one at a time in call order (L21), even against a send
+//   made just as an older one was released; nothing holds a queue admission
+//   across a callback.
 // - Interrupt (L10, R3 A4). cancelWaiting() decides every waiter that exists
 //   when the interrupt is entered, before any callback runs: each is refused
 //   not-ready/interrupted at once, without waiting for the start or the
@@ -52,6 +54,12 @@ interface Waiter {
   reject(error: unknown): void
 }
 
+function signal(): { promise: Promise<void>; resolve(): void } {
+  let resolve!: () => void
+  const promise = new Promise<void>((r) => (resolve = r))
+  return { promise, resolve }
+}
+
 interface Failure {
   error: unknown
   /** The stop had already begun when the persistence rejected. */
@@ -65,6 +73,8 @@ export class CheckpointGate {
   private readonly callback = new AsyncLocalStorage<true>()
   /** Undecided sends, in call order. */
   private readonly waiters = new Set<Waiter>()
+  /** Resolved, and replaced, whenever a waiter is decided: the next oldest may go on. */
+  private advanced = signal()
 
   constructor(private readonly host: CheckpointHost, resumed: string | null) {
     this.reported = resumed
@@ -137,6 +147,7 @@ export class CheckpointGate {
     const cancelled = Array.from(this.waiters)
     this.waiters.clear()
     for (const waiter of cancelled) waiter.decided = true
+    if (cancelled.length > 0) this.advance()
     for (const waiter of cancelled) waiter.reject(new AgentRuntimeError({ category: 'not-ready', code: 'interrupted', message: 'interrupted before the send was acknowledged' }))
     return cancelled.length
   }
@@ -145,7 +156,19 @@ export class CheckpointGate {
     if (waiter.decided) return false
     waiter.decided = true
     this.waiters.delete(waiter)
+    this.advance()
     return true
+  }
+
+  private advance(): void {
+    const advanced = this.advanced
+    this.advanced = signal()
+    advanced.resolve()
+  }
+
+  /** The oldest undecided send, which alone may go on to beforeSubmit and commit. */
+  private oldest(): Waiter | undefined {
+    return this.waiters.values().next().value
   }
 
   private async hold<P, T>(waiter: Waiter, continuation: ContinuationMode | undefined, steps: AdmitSteps<P, T>): Promise<void> {
@@ -188,22 +211,25 @@ export class CheckpointGate {
 
   /**
    * Synchronously: false when the send was decided (an interrupt), true
-   * when nothing is pending, null when a persistence is pending; throws the
-   * sticky refusal.
+   * when nothing is pending and no older send is undecided, null when it
+   * must wait; throws the sticky refusal.
    */
   private clear(waiter: Waiter): boolean | null {
     if (waiter.decided) return false
     const failure = this.refusal()
     if (failure) throw failure
-    return this.pending ? null : true
+    return this.pending || this.oldest() !== waiter ? null : true
   }
 
-  /** Wait until no persistence is pending (a waiter released by one waits again for the next). */
+  /**
+   * Wait until no persistence is pending and every older send is decided
+   * (a waiter released by one persistence waits again for the next).
+   */
   private async released(waiter: Waiter): Promise<boolean> {
     for (;;) {
-      while (this.pending && !waiter.decided) await this.pending.catch(() => {})
       const clear = this.clear(waiter)
       if (clear !== null) return clear
+      await (this.pending ? this.pending.catch(() => {}) : this.advanced.promise)
     }
   }
 
