@@ -8,7 +8,9 @@
 // projections. The stop's account weighs them against the generation's
 // frozen native evidence.
 // The task controls and interrupt go through the SDK's runtime methods. Some
-// of those are undeclared or take undeclared options in 0.3.289.
+// of those are undeclared or take undeclared options in 0.3.289. It also
+// builds a generation's query options and classifies a failed start,
+// including the CLI's refusal of a resume target (task 4.4, R10).
 import type { Query, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { ProcessExitFact, TaskOutput } from '../contract.js'
 import { AgentRuntimeError } from '../errors.js'
@@ -74,10 +76,39 @@ export function newGeneration(number: number, sdk: SdkModule, resumeTarget: stri
 const RESUME_REFUSALS = ['No conversation found with session ID:', '--resume requires a valid session ID', 'Failed to resume session']
 
 /** Whether a generation launched to resume ended before initialize with the CLI's resume refusal. */
-export function refusedResume(generation: Generation): boolean {
+function refusedResume(generation: Generation): boolean {
   if (generation.resumeTarget === null) return false
   const texts = [...generation.startupErrors, generation.owned?.stderrTail() ?? '']
   return texts.some((text) => RESUME_REFUSALS.some((refusal) => text.includes(refusal)))
+}
+
+/** No turn exists before initialize: a result frame then is the CLI's startup failure, kept for start's classification. */
+export function keepStartupFailure(generation: Generation, message: { type: string }): boolean {
+  if (generation.initialized || message.type !== 'result') return false
+  const errors = (message as { errors?: unknown }).errors
+  if (Array.isArray(errors)) generation.startupErrors.push(...errors.filter((e): e is string => typeof e === 'string'))
+  return true
+}
+
+/**
+ * The error start rejects with when the generation's initialize failed. The
+ * SDK's rejection is never proof that the stop caused it: it stays a failure
+ * the stop reports. A proven no-launch (the spawner refused once stop had
+ * begun) and the stop's own cancellation are cancellations; a spawn failure
+ * is a dependency failure. A process that exited while starting is
+ * classified first (L14: exited, one process end); then a resumed launch the
+ * CLI refused fails with `resume` (R10: nothing fresh was started), and
+ * anything else with `transport`.
+ */
+export async function startFailure(generation: Generation, stopToken: object | null, error: unknown, cancelled: (message: string, causes: unknown[]) => AgentRuntimeError): Promise<AgentRuntimeError> {
+  generation.retired = true
+  const exit = generation.owned?.exited
+  if (generation.spawn === 'refused') return cancelled('the driver was stopped before its process was created', [error])
+  if (exit?.kind === 'spawn-failed') return new AgentRuntimeError({ category: 'dependency', message: 'the Claude Code executable could not be started' }, [error])
+  if (cancelledByStop(generation, stopToken, error)) return cancelled('the driver was stopped while starting', [error])
+  if (exit || generation.readEnded) await generation.ended
+  if (refusedResume(generation)) return new AgentRuntimeError({ category: 'resume', message: 'the runtime refused the resume target or its transcript is unavailable' }, [error])
+  return new AgentRuntimeError({ category: 'transport', message: 'the Claude Code process did not initialize' }, [error])
 }
 
 /**
@@ -167,6 +198,29 @@ export async function terminateGenerations(generations: readonly Generation[], m
     }
   }
   return facts.sort((a, b) => a.generation - b.generation)
+}
+
+/**
+ * One generation's query options over the composed SDK options. Requests
+ * ride canUseTool, which bypass mode never consults, so it is unset there.
+ * The resume target is the one fixed on the generation. The query's cancel
+ * is the stop's; a caller's controller forwards into it with its own reason.
+ * The env is ignored by the owned spawner (I3) and passed so the SDK
+ * computes nothing from process.env.
+ */
+export function generationOptions(generation: Generation, composed: Partial<Options>, launch: ResolvedLaunch, executable: string, canUseTool: NonNullable<Options['canUseTool']>, spawn: NonNullable<Options['spawnClaudeCodeProcess']>): Options {
+  return {
+    settingSources: [],
+    includePartialMessages: true,
+    ...composed,
+    ...(composed.permissionMode === 'bypassPermissions' ? {} : { canUseTool }),
+    ...(generation.resumeTarget ? { resume: generation.resumeTarget } : {}),
+    abortController: linkedAbort(generation.abort, composed.abortController),
+    cwd: launch.cwd,
+    pathToClaudeCodeExecutable: executable,
+    env: { ...launch.childEnv },
+    spawnClaudeCodeProcess: spawn,
+  }
 }
 
 /**

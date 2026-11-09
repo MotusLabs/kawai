@@ -19,10 +19,16 @@
 //
 // Observers run through `observe`, which retains a throw as a diagnostic and
 // never lets it change the hook's answer.
+//
+// composeSessionSdkOptions layers a generation's SDK options: the caller's,
+// then these integrations (observation hooks after the caller's), then the
+// permission policy, which overrides policy fields and puts its deny hook
+// first.
 import type { HookCallbackMatcher, HookEvent, HookInput, Options } from '@anthropic-ai/claude-agent-sdk'
 import type { JsonValue } from '../json.js'
 import type { ClaudeAuditHooks, ToolObservation } from '../options.js'
 import { refusal, type BoundToolSet } from '../tools/toolSet.js'
+import { withPermissions, type ClaudePermissionComposition } from './permissions.js'
 
 type SdkModule = typeof import('@anthropic-ai/claude-agent-sdk')
 type Hooks = Partial<Record<HookEvent, HookCallbackMatcher[]>>
@@ -130,4 +136,17 @@ export function mergeHooks(first: Hooks | undefined, second: Hooks | undefined):
     merged[event] = [...(merged[event] ?? []), ...matchers]
   }
   return merged
+}
+
+/** Caller SDK options, then this session's integrations, then the policy (see the header). */
+export function composeSessionSdkOptions(sdk: SdkModule, base: Partial<Options>, permissions: ClaudePermissionComposition | null, input: ClaudeIntegrationInput): Partial<Options> {
+  const integration = claudeIntegrationOptions(sdk, input)
+  const hooks = mergeHooks(base.hooks, integration.hooks)
+  const composed: Partial<Options> = {
+    ...base,
+    ...(integration.mcpServers ? { mcpServers: { ...base.mcpServers, ...integration.mcpServers } } : {}),
+    ...(integration.systemPrompt ? { systemPrompt: integration.systemPrompt } : {}),
+    ...(Object.keys(hooks).length > 0 ? { hooks } : {}),
+  }
+  return permissions ? withPermissions(composed, permissions) : composed
 }

@@ -4,9 +4,8 @@
 // - Generations. Each generation's message loop is an owned job that
 //   completes only at the leader's actual exit. start resolves on the CLI's
 //   initialize response. A respawn after an unexpected exit resumes the same
-//   conversation. A generation's resume target is fixed before its query;
-//   when the CLI refuses it (its startup-failure frame or stderr, before
-//   initialize), start rejects with category `resume`, never a fresh one.
+//   conversation. A generation's resume target is fixed before its query; a
+//   CLI refusal of it fails start with category `resume` (generations.ts).
 //   A resumed generation whose first init names another conversation is
 //   refused before anything adopts it (G1): its turns fail with category
 //   `resume`, later sends are refused, and the driver disposes itself.
@@ -47,9 +46,9 @@ import type { LeaderExit } from '../process/ownedProcess.js'
 import { bindToolSet, type BoundToolSet } from '../tools/toolSet.js'
 import type { RawChatCommand } from './commands.js'
 import { ClaudeFrames } from './frames.js'
-import { claudeIntegrationOptions, mergeHooks } from './integrations.js'
-import { composeClaudePermissions, withPermissions, type ClaudePermissionComposition } from './permissions.js'
-import { accountGenerations, cancelledByStop, interruptGeneration, linkedAbort, loadSdk, newGeneration, ownedSpawn, readTaskOutput, refusedResume, stopQueryTask, terminateGenerations, type Generation } from './generations.js'
+import { composeSessionSdkOptions } from './integrations.js'
+import { composeClaudePermissions, type ClaudePermissionComposition } from './permissions.js'
+import { accountGenerations, cancelledByStop, generationOptions, interruptGeneration, keepStartupFailure, loadSdk, newGeneration, ownedSpawn, readTaskOutput, startFailure, stopQueryTask, terminateGenerations, type Generation, type SdkModule } from './generations.js'
 import { ClaudeRequests } from './requests.js'
 import { SeenResultFrames } from './resultFrames.js'
 import { CliTurnBinder } from './turnBinder.js'
@@ -162,22 +161,8 @@ export class ClaudeSession {
     this.binder.reset()
     // The conversation this generation resumes is fixed before its query exists.
     const generation = newGeneration(number, sdk, this.runtimeSessionId)
-    const composed = this.composeSdkOptions(sdk)
-    const options: Options = {
-      settingSources: [],
-      includePartialMessages: true,
-      ...composed,
-      // Requests ride canUseTool, which bypass mode never consults: leave it unset there.
-      ...(composed.permissionMode === 'bypassPermissions' ? {} : { canUseTool: this.requests.canUseTool }),
-      ...(generation.resumeTarget ? { resume: generation.resumeTarget } : {}),
-      // The query's cancel is the stop's; a caller's controller forwards into it with its own reason.
-      abortController: linkedAbort(generation.abort, composed.abortController),
-      cwd: launch.cwd,
-      pathToClaudeCodeExecutable: executable,
-      // Ignored by the owned spawner (I3); passed so the SDK computes nothing from process.env.
-      env: { ...launch.childEnv },
-      spawnClaudeCodeProcess: ownedSpawn(generation, launch, this.options.wire, () => this.stopBegun()),
-    }
+    const spawn = ownedSpawn(generation, launch, this.options.wire, () => this.stopBegun())
+    const options = generationOptions(generation, this.composeSdkOptions(sdk), launch, executable, this.requests.canUseTool, spawn)
     // Registered before query(): the SDK spawns inside it, and a recorder may reenter stop there.
     this.generations.push(generation)
     try {
@@ -193,19 +178,7 @@ export class ClaudeSession {
     try {
       initialized = await generation.query.initializationResult()
     } catch (error) {
-      // The SDK's rejection is never proof that the stop caused it: it stays a failure the stop reports.
-      generation.retired = true
-      // A spawn failure created no process: start fails and the prior state returns.
-      const exit = generation.owned?.exited
-      // Proven no launch: the owned spawner refused because stop had begun.
-      if (generation.spawn === 'refused') throw this.lifecycle.cancelled('the driver was stopped before its process was created', [error])
-      if (exit?.kind === 'spawn-failed') throw new AgentRuntimeError({ category: 'dependency', message: 'the Claude Code executable could not be started' }, [error])
-      if (cancelledByStop(generation, this.stopToken, error)) throw this.lifecycle.cancelled('the driver was stopped while starting', [error])
-      // A process that exited while starting is classified first (L14: exited, one process end), then start rejects.
-      if (exit || generation.readEnded) await generation.ended
-      // R10: the CLI refused the resume target before answering initialize; nothing fresh was started.
-      if (refusedResume(generation)) throw new AgentRuntimeError({ category: 'resume', message: 'the runtime refused the resume target or its transcript is unavailable' }, [error])
-      throw new AgentRuntimeError({ category: 'transport', message: 'the Claude Code process did not initialize' }, [error])
+      throw await startFailure(generation, this.stopToken, error, (message, causes) => this.lifecycle.cancelled(message, causes))
     }
     generation.initialized = true
     if (generation === this.current() && Array.isArray(initialized?.commands)) this.frames.commands.applyCommands(initialized.commands as RawChatCommand[])
@@ -215,14 +188,9 @@ export class ClaudeSession {
     return this.lifecycle.state === 'stopping' || this.lifecycle.state === 'stopped'
   }
 
-  /**
-   * Caller SDK options, then this session's integrations (tool server, prompt
-   * append, observation hooks after the caller's), then the policy, which
-   * overrides policy fields and puts its deny hook first.
-   */
-  private composeSdkOptions(sdk: Parameters<typeof claudeIntegrationOptions>[0]): Partial<Options> {
-    const base = this.options.sdkOptions ?? {}
-    const integration = claudeIntegrationOptions(sdk, {
+  /** The SDK options of every generation (integrations.ts, composeSessionSdkOptions). */
+  private composeSdkOptions(sdk: SdkModule): Partial<Options> {
+    return composeSessionSdkOptions(sdk, this.options.sdkOptions ?? {}, this.permissions, {
       tools: this.tools,
       ...(this.options.systemPromptAppend ? { systemPromptAppend: this.options.systemPromptAppend } : {}),
       ...(this.options.onToolObservation ? { onToolObservation: this.options.onToolObservation } : {}),
@@ -232,14 +200,6 @@ export class ClaudeSession {
       observe: (name, callback) => this.notify(name, callback),
       run: (label, body) => this.runOwned(label, body),
     })
-    const hooks = mergeHooks(base.hooks, integration.hooks)
-    const composed: Partial<Options> = {
-      ...base,
-      ...(integration.mcpServers ? { mcpServers: { ...base.mcpServers, ...integration.mcpServers } } : {}),
-      ...(integration.systemPrompt ? { systemPrompt: integration.systemPrompt } : {}),
-      ...(Object.keys(hooks).length > 0 ? { hooks } : {}),
-    }
-    return this.permissions ? withPermissions(composed, this.permissions) : composed
   }
 
   /** Host work started by the CLI or a provider control: an owned job stop joins, refused once stop has begun. */
@@ -287,12 +247,7 @@ export class ClaudeSession {
   private handle(generation: Generation, message: SDKMessage): void {
     // A superseded or failed generation's frames never reach the conversation.
     if (generation.retired || generation !== this.current()) return
-    // No turn exists before initialize: a result then is the CLI's startup failure, kept for start's classification.
-    if (!generation.initialized && message.type === 'result') {
-      const errors = (message as { errors?: unknown }).errors
-      if (Array.isArray(errors)) generation.startupErrors.push(...errors.filter((e): e is string => typeof e === 'string'))
-      return
-    }
+    if (keepStartupFailure(generation, message)) return
     switch (message.type) {
       case 'system':
         if (message.subtype === 'init') this.init(generation, message)
