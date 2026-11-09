@@ -69,7 +69,7 @@
 
 ## 4. Episodes and properties (spec "Each episode sends at most one notice")
 
-- [ ] 4.1 Add `src/server/__tests__/taskStallProperties.test.ts` with P1 and
+- [x] 4.1 Add `src/server/__tests__/taskStallProperties.test.ts` with P1 and
   P2: seed `0x57A11`, 300 cases. The sequences mix mail (some inside a
   rolled-back outer transaction), revisions, results, counted reviews, clock
   advances, duplicate listener calls, and a dropped flush. The reference
