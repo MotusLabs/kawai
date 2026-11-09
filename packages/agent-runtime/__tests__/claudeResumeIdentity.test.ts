@@ -12,6 +12,7 @@ import { describe, expect, test } from 'bun:test'
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { AgentErrorInfo } from '../src/errors.js'
 import { exitProcess, idle, persistence, rejection, stopError, tick } from './helpers/checkpointHarness.js'
+import type { AgentEvent } from '../src/events.js'
 import type { Driver } from './helpers/claudeDriverHarness.js'
 import { frames } from './helpers/controlledQuery.js'
 
@@ -122,5 +123,64 @@ describe('Claude resume identity (G1)', () => {
     expect(p.calls.map((c) => c.checkpoint.runtimeSessionId)).toEqual(['sess-new'])
     p.calls[0]!.resolve()
     await f.d.kill()
+  })
+
+  // F1 (findings-6e7c50c8): the refusal's results are decided before any callback runs, so a stop or
+  // interrupt reentered from a callback cannot overwrite them, and a queued turn that never opened gets
+  // no completion event.
+  const TRIGGERS = ['request_resolved', 'error', 'turn_completed', 'onTurnResult'] as const
+  const ACTIONS = ['interrupt', 'shutdown', 'kill'] as const
+  for (const trigger of TRIGGERS) {
+    for (const action of ACTIONS) {
+      test(`F1: ${action}() reentered from ${trigger} during the refusal leaves both turns failed with resume, each settled once`, async () => {
+        let f!: Driver
+        let reentered: Promise<unknown> | null = null
+        const reenter = () => {
+          if (reentered === null) reentered = (f.d[action]() as Promise<unknown>).catch((e: unknown) => e)
+        }
+        const onEvent = (e: AgentEvent) => {
+          if (e.type === trigger || (trigger === 'error' && e.type === 'error' && e.error.category === 'resume')) reenter()
+        }
+        // 'wait': the request stays pending until the refusal cancels it (the default denies it at once).
+        f = await idle({ unansweredRequests: 'wait', ...(trigger === 'onTurnResult' ? { onTurnResult: reenter } : { onEvent }) })
+        const t0 = await f.d.send('first')
+        const queued = await f.d.send('second', { continuation: 'queue' })
+        // A pending request, so the refusal's request cancellation publishes a callback too.
+        const canUseTool = f.q().options.canUseTool!
+        const asked = canUseTool('Bash', { command: 'ls' }, { signal: new AbortController().signal, suggestions: [], toolUseID: 'toolu_1' } as never)
+        await tick()
+        expect([f.d.pendingRequests().length, reentered]).toEqual([1, null])
+        f.q().push(frames.init('sess-fresh'), frames.result([t0.messageUuid], 'fresh answer'))
+        const results = await Promise.all([t0.result, queued.result])
+        expect(results.map((r) => [r.outcome, r.error])).toEqual([['failed', RESUME_FAILED], ['failed', RESUME_FAILED]])
+        expect(reentered).not.toBeNull()
+        await reentered
+        await asked
+        // onTurnResult ran once per handle, with the decided result.
+        expect(f.results.map((r) => [r.turnId, r.outcome, r.error?.category])).toEqual([[t0.turnId, 'failed', 'resume'], [queued.turnId, 'failed', 'resume']])
+        const ids = (type: string) => f.events.flatMap((e) => (e.type === type ? [(e as { turnId: string }).turnId] : []))
+        expect([ids('turn_started'), ids('turn_completed'), ids('turn_interrupted')]).toEqual([[t0.turnId], [t0.turnId], []])
+        expect(errors(f)).toEqual(['resume'])
+        expect(await rejection(f.d.send('third'))).toMatchObject(RESUME_FAILED)
+        const stop = await stopError(f.d.kill())
+        expect(stop?.category).toBe('stop')
+        expect(stop?.causes.some((c) => (c as { category?: string }).category === 'resume')).toBe(true)
+      })
+    }
+  }
+
+  test('F1: a queued turn that never opened resolves with the resume failure and publishes no turn event', async () => {
+    const f = await idle({})
+    const t0 = await f.d.send('first')
+    const queued = await f.d.send('queued', { continuation: 'queue' })
+    f.q().push(frames.init('sess-fresh'))
+    const results = await Promise.all([t0.result, queued.result])
+    expect(results.map((r) => [r.turnId, r.outcome, r.error])).toEqual([[t0.turnId, 'failed', RESUME_FAILED], [queued.turnId, 'failed', RESUME_FAILED]])
+    await stopError(f.d.kill())
+    const ids = (type: string) => f.events.flatMap((e) => (e.type === type ? [(e as { turnId: string }).turnId] : []))
+    expect(ids('turn_started')).toEqual([t0.turnId])
+    expect(ids('turn_completed')).toEqual([t0.turnId])
+    expect(ids('turn_interrupted')).toEqual([])
+    expect(f.events.filter((e) => 'turnId' in e && (e as { turnId: string }).turnId === queued.turnId)).toEqual([])
   })
 })

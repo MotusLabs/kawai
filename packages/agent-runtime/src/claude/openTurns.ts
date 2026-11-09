@@ -73,6 +73,31 @@ export class OpenTurns {
     this.resolve(turn, turnResult(turn, 'interrupted', error))
   }
 
+  /**
+   * Decide every taken turn's terminal result now, with no callback, and
+   * return the step that publishes them. Each turn is marked settled before
+   * anything is published, so a stop or interrupt reentered from a later
+   * callback cannot settle it again. Publishing emits turn_completed only
+   * for turns that opened, then resolves every handle once.
+   */
+  decide(turns: readonly Turn[], outcome: Exclude<TurnOutcome, 'success' | 'interrupted'>, error: AgentErrorInfo, subtype: string): () => void {
+    const decided = turns.filter((turn) => !turn.settled).map((turn) => {
+      turn.settled = true
+      return { turn, result: turnResult(turn, outcome, error) }
+    })
+    return () => {
+      for (const { turn, result } of decided) {
+        if (turn.opened) {
+          this.host.emit({
+            type: 'turn_completed', turnId: turn.turnId, subtype, isError: true, usage: null, finalText: result.finalText,
+            totalCostUsd: null, providerCostUsd: null, numTurns: null, terminalReason: null,
+          })
+        }
+        this.resolve(turn, result)
+      }
+    }
+  }
+
   /** Settle every taken turn as interrupted: opened ones with an event, queued ones without. */
   settleAll(turns: readonly Turn[], error: AgentErrorInfo): void {
     for (const turn of turns) {

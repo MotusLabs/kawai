@@ -86,6 +86,27 @@ or property that would have caught it, and the source finding.
   (`resume.test.ts`). The omission control disables the identity check.
 - **Source finding.** Lead binding note 60bfe634 (task 8eb64074, G1).
 
+### T1 — a terminal decision published before it is owned (findings-6e7c50c8 F1)
+
+- **Hazard.** A refusal publishes its callbacks (request cancellations, the
+  error event) and only afterwards takes and settles the turns it ends. A
+  stop or interrupt reentered from one of those callbacks takes the
+  still-open turns first and overwrites the refusal's results
+  (interrupted/stopped instead of failed/resume). Settling every taken turn
+  through the opened-turn path also gives a queued turn that never opened a
+  phantom `turn_completed`.
+- **Oracle that catches it.** Decide before publishing: every affected
+  turn's result is fixed, with no callback, before the first callback runs.
+  Rows on the production session
+  (`packages/agent-runtime/__tests__/claudeResumeIdentity.test.ts`):
+  interrupt, shutdown or kill reentered from each publication of the
+  refusal (`request_resolved` of a pending request, `error`,
+  `turn_completed`, `onTurnResult`). Each row asserts both handles failed
+  with resume, one `onTurnResult` each, and turn events only for the opened
+  turn. Plus an unopened-queue ledger row. Run against the uncorrected
+  sources, every one of these rows fails.
+- **Source finding.** findings-6e7c50c8 F1 (task 8eb64074, P1 A3).
+
 ## Test seams
 
 ### M1 — an oracle behind a hand-built harness (findings-6a6a844d)

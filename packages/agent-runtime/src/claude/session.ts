@@ -304,11 +304,14 @@ export class ClaudeSession {
 
   /**
    * G1/R10: the runtime answered a resume with another conversation (or
-   * none). Nothing of it is adopted: the generation retires (its later
-   * frames are dropped), every open turn and request settles once as a
-   * resume failure, later sends are refused with it, and the driver disposes
-   * itself from outside the consuming job. The failure stays owned, so the
-   * stop reports it.
+   * none). Nothing of it is adopted. First, with no callback: the generation
+   * retires (its later frames are dropped), later sends are refused with the
+   * failure, which stays owned so the stop reports it, and every open turn's
+   * result is decided as a resume failure. Only then is anything published:
+   * request cancellations, the error event, the opened turns' completions
+   * and each handle once. A stop or interrupt reentered from those callbacks
+   * finds no open turn. The driver then disposes itself from outside the
+   * consuming job.
    */
   private refuseSubstitution(generation: Generation): void {
     generation.retired = true
@@ -316,11 +319,10 @@ export class ClaudeSession {
     this.resumeFailure = error
     this.lifecycle.jobs.track(`resume:${generation.number}`, Promise.reject(new AgentRuntimeError({ ...error }))).catch(() => {})
     this.binder.reset()
+    const publish = this.open.decide(this.open.take(), 'failed', error, 'resume_refused')
     this.requests.cancelAll('resume refused')
     this.events.emit({ type: 'error', error })
-    this.lifecycle.holdState(() => {
-      for (const turn of this.open.take()) this.open.settle(turn, 'failed', error, 'resume_refused')
-    })
+    this.lifecycle.holdState(publish)
     this.lifecycle.jobs.outside(() => void this.shutdown().catch(() => {}))
   }
 

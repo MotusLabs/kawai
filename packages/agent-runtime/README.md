@@ -216,9 +216,11 @@ are the only inputs. The driver reads no host settings files
   - If a runtime answers a resume with another conversation (or none) at its
     first init, the driver adopts nothing of it: no checkpoint, model or turn
     effect. Its open turns fail with category `resume`, later sends are
-    refused with `resume`, and the driver shuts itself down. After the first
-    init named the target, a later new id is the runtime's own and is
-    checkpointed as usual.
+    refused with `resume`, and the driver shuts itself down. Those results
+    are fixed before any callback runs, so a stop or interrupt called from a
+    callback cannot change them. A queued turn that never opened gets its
+    result but no turn event. After the first init named the target, a
+    later new id is the runtime's own and is checkpointed as usual.
   - Verified with a fake CLI that follows 2.1.289's startup order (read from
     its source) across two host processes. This is not acceptance against
     the real CLI or a provider.
