@@ -162,6 +162,30 @@ are the only inputs. The driver reads no host settings files
   `user_message` and no handle. Its result reaches `onTurnResult` with a
   `messageUuid` of null. An init that arrives while starting, stopping or
   after an exit opens nothing.
+- **Checkpoints.** The CLI reports its session id in the init of a turn,
+  not at `start()`. When that id is new, the driver calls
+  `onCheckpoint({ runtime: 'claude', runtimeSessionId })` once. The id you
+  passed as `resume` counts as already saved. Claude reports no transcript
+  path, so `transcriptPath` is absent. The turn that revealed the id is
+  already acknowledged and is not held. Every later `send()` resolves only
+  after the persistence settled.
+  - A refusal that applies when you call (`busy`, `unsupported`,
+    `stopped`) is still immediate.
+  - Sends released together still open turns one at a time, in FIFO order.
+  - An interrupt any time after the call refuses the send with category
+    `not-ready`, code `interrupted`.
+  - Two new ids persist one at a time, and a waiting send waits for both.
+  - If `onCheckpoint` rejects or throws, the driver emits an `error` event
+    with category `checkpoint` and shuts itself down. It never starts a
+    fresh conversation. Waiting and later sends are refused with category
+    `checkpoint`, carrying the raw cause. The stop's error lists the cause
+    too. If the stop had already begun, the sends are refused as `stopped`.
+  - A stop waits for a persistence in progress.
+  - Calling `send()` from inside `onCheckpoint` would wait on itself, so it
+    is refused at once with category `internal`. `kill()` or `shutdown()`
+    from inside starts the stop, but that call is refused with `internal`.
+    Call it again from outside to wait for the stop.
+  - A first launch that crashes before reporting an id is not recoverable.
 - **Requests.** Approvals and `AskUserQuestion` questions are registered
   before their events are emitted. `onRequest` may answer inline. A request
   still pending when `onRequest` returns is denied by default (decided by
