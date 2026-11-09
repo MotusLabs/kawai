@@ -159,7 +159,7 @@
   - P1 kills "drop the closed guard";
   - P2 kills "a signal writes `rejected` without a decision";
   - P3 kills "dispatch the fix and open the diagnosis".
-- [ ] 9.2 Add P4 (seed `0x5161A1`, 300 ledgers): `executionView`'s counts
+- [x] 9.2 Add P4 (seed `0x5161A1`, 300 ledgers): `executionView`'s counts
   and the executor's signals equal the shared module's on the same input.
   Verify that I3 kills "the view re-derives `openAfter` from round
   `blockingIds`".
