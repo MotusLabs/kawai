@@ -196,6 +196,32 @@ are the only inputs. The driver reads no host settings files
     from inside starts the stop, but that call is refused with `internal`.
     Call it again from outside to wait for the stop.
   - A first launch that crashes before reporting an id is not recoverable.
+- **Resume.** To continue a saved conversation in a new driver, also in
+  another host process, pass `resume: { runtime: 'claude', runtimeSessionId }`
+  and the same retained homes (the launch's `homeDir` and child `HOME`, where
+  the CLI keeps its transcripts). Any id the runtime accepts works, including
+  one you hold yourself and your store failed to save. Every generation
+  launches with `--resume=<id>` of the id the CLI reported last, so after an
+  unexpected exit `start()` continues the same conversation, with the launch
+  that generation reads and the same policy. The driver keeps no transcript
+  catalog of its own and reports no transcript path.
+  - The pinned CLI (2.1.289) checks the target before it answers initialize.
+    If it refuses (no transcript under the homes, an invalid id), it exits,
+    and `start()` rejects with category `resume`. No prompt is sent, no
+    checkpoint is offered and no fresh conversation is started. The stop's
+    error then lists the SDK's read error, the start failure and the
+    process's exit. Only a resumed launch whose startup-failure frame or
+    stderr carries the CLI's refusal is `resume`; any other early exit is
+    `transport`.
+  - If a runtime answers a resume with another conversation (or none) at its
+    first init, the driver adopts nothing of it: no checkpoint, model or turn
+    effect. Its open turns fail with category `resume`, later sends are
+    refused with `resume`, and the driver shuts itself down. After the first
+    init named the target, a later new id is the runtime's own and is
+    checkpointed as usual.
+  - Verified with a fake CLI that follows 2.1.289's startup order (read from
+    its source) across two host processes. This is not acceptance against
+    the real CLI or a provider.
 - **State publication.** `onState` reports a state after the step that
   entered it: `active` after the opening turn's `turn_started` and
   `user_message`, `idle` after the `turn_completed` or `turn_interrupted`

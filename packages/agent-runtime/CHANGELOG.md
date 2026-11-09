@@ -15,6 +15,13 @@ documented API takes a new major version, even after 0.x.
   refuses them, is reported and stops the driver. An interrupt refuses
   every send still waiting, also while idle, at once. The Codex driver's
   checkpoints are not implemented yet.
+- Claude driver resume: a saved `resume` id continues the same conversation
+  in a new driver or host process with the retained homes, and a respawn
+  after an unexpected exit resumes the id reported last. A target the CLI
+  refuses fails `start()` with category `resume` before any prompt, with no
+  fresh conversation. A runtime that substitutes another conversation at the
+  first init is refused the same way, and nothing of it is adopted. The
+  Codex driver's resume is not implemented yet.
 - Claude driver requests: each request is registered, with its abort
   listener, before its event and `onRequest` can answer it inline. The first
   terminal action wins; later, invalid and wrong-kind answers are refused.

@@ -68,6 +68,24 @@ or property that would have caught it, and the source finding.
 - **Source finding.** Fresh advisory note 107f4892 (child task 26d717ca);
   lead decision R3 A4 on task 97d6bb7b.
 
+### S1 — a resume answered with another conversation (R10/I2)
+
+- **Hazard.** A resume is checked only where the runtime refuses it. A
+  runtime that answers the resume with a fresh conversation instead (or
+  with no identity) then has its first init adopted as an ordinary identity
+  change. The new id is checkpointed, the turn succeeds in a conversation
+  the caller never saved, and later sends are acknowledged against it. A
+  start-time refusal check alone never sees this, because start succeeds.
+- **Oracle that catches it.** Identity before effects: the first init of a
+  resumed generation must name its target before any checkpoint, model,
+  binding or turn effect. Rows on the production session over a controlled
+  query (`packages/agent-runtime/__tests__/claudeResumeIdentity.test.ts`):
+  the substituting runtime also answers the turn, so a missing guard shows
+  as a success, not a hang. A real-SDK row with a nonconforming fake CLI
+  (`claudeResume.test.ts`), and I2's seeded schedules in `substitute` mode
+  (`resume.test.ts`). The omission control disables the identity check.
+- **Source finding.** Lead binding note 60bfe634 (task 8eb64074, G1).
+
 ## Test seams
 
 ### M1 — an oracle behind a hand-built harness (findings-6a6a844d)
