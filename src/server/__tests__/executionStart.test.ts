@@ -35,6 +35,8 @@ const commitAll = (cwd: string, message: string) => {
 }
 
 let root: string
+/** The team's backstop setting for the next Start; undefined leaves it out (hand-built settings read the default). */
+let backstop: number | undefined
 let main: string
 let db: Database
 let plansStore: PlanStore
@@ -123,7 +125,7 @@ esac
       standing: () => ({ state: 'current', report: { id: 'rep-1', inputHash: 'ih-1', readiness: { carriedConditions: [] } } }) as never,
     },
     impact: { gate: () => null },
-    settings: { planExecution: async () => ({ floorChecks: FLOOR, maxParallelChanges: 3, mergeMethod: 'merge' }) },
+    settings: { planExecution: async () => ({ floorChecks: FLOOR, maxParallelChanges: 3, mergeMethod: 'merge', ...(backstop !== undefined ? { maxFailedFixRounds: backstop } : {}) }) },
     getSession: () => null,
     landingModes: () => new Set(['direct']),
     promotions: { runningPromotion: () => null },
@@ -215,6 +217,25 @@ describe('ExecutionService.start', () => {
     const mail = db.prepare('SELECT COUNT(*) AS n FROM team_messages').get() as { n: number }
     expect(tasks.n).toBe(0)
     expect(mail.n).toBe(0)
+  })
+  test('Start records the backstop on the execution; a later settings change leaves a running execution alone (review-convergence decision 3)', async () => {
+    backstop = 7
+    try {
+      const target = approvedPlan(['backstop-set'])
+      const started = await start(target.planId, target.hash, 'cmd-backstop')
+      expect(started.ok).toBe(true)
+      if (!started.ok) return
+      expect(started.execution.maxFailedFixRounds).toBe(7)
+      backstop = 3
+      expect(executions.execution(started.execution.id)!.maxFailedFixRounds).toBe(7)
+    } finally { backstop = undefined }
+  })
+
+  test('hand-built settings without the backstop record the default of 5', async () => {
+    const target = approvedPlan(['backstop-default'])
+    const started = await start(target.planId, target.hash, 'cmd-backstop-default')
+    if (!started.ok) throw new Error(JSON.stringify(started))
+    expect(started.execution.maxFailedFixRounds).toBe(5)
   })
 })
 

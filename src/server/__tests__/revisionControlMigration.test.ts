@@ -72,11 +72,14 @@ test('a database at version 16 with execution rows backfills seq 1, twice, keepi
   const after = tables(dbPath)
   // Migration 21 (compact-observation-detail) drops the observation team table.
   for (const [table, rows] of Object.entries(before)) {
-    if (table !== 'process_observation_teams') expect(after[table]).toEqual(rows)
+    if (table === 'process_observation_teams') continue
+    // Migration 25 (review-convergence) records the default backstop on existing executions.
+    const expected = table === 'plan_executions' ? rows.map(row => ({ ...(row as Record<string, unknown>), max_failed_fix_rounds: 5 })) : rows
+    expect(after[table]).toEqual(expected)
   }
-  // Later migrations (19 plan-workspace, 20 result-checks, 22 team-approval-defaults, 24 review-findings) also land in this upgrade.
+  // Later migrations (19 plan-workspace, 20 result-checks, 22 team-approval-defaults, 24 review-findings, 25 review-convergence) also land in this upgrade.
   expect(Object.keys(after).filter(table => !(table in before)).sort())
-    .toEqual([...REVISION_CONTROL_TABLES, ...PLAN_WORKSPACE_TABLES, ...VERIFICATION_TABLES, 'team_approval_defaults', 'team_task_finding_cards', 'team_task_finding_events', 'team_task_finding_items'].sort())
+    .toEqual([...REVISION_CONTROL_TABLES, ...PLAN_WORKSPACE_TABLES, ...VERIFICATION_TABLES, 'team_approval_defaults', 'team_task_finding_cards', 'team_task_finding_events', 'team_task_finding_items', 'plan_execution_diagnoses', 'team_task_convergence_notices'].sort())
   expect(versions(dbPath).filter(row => row.version === 17)).toHaveLength(1)
   // The backfill: each execution's row, once, as seq 1.
   expect(after.plan_execution_revisions).toEqual([

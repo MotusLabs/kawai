@@ -15,6 +15,7 @@ import { effectiveExtraChecks, evaluateCi, reviewVerdict, splitExtraChecks } fro
 import type { CiCheck, StopDetail, StopReason } from '../../../shared/planExecution'
 import type { PlanCheck } from '../../../shared/plans'
 import type { RoundRow } from './executionRows'
+import type { ChangePatch } from './executionPatch'
 import type { ExecutionStore } from './executionStore'
 import type { PlanStore } from '../planStore'
 import { lsRemoteHead, pushToRemote } from '../landing/gitRemote'
@@ -177,18 +178,24 @@ export function revisionPending(deps: Pick<RoundDeps, 'tasks'>, taskId: string |
  * names the base head and the conflicting files too, so one attempt answers
  * both and no update attempt follows. False when no revision is pending.
  */
-export async function dispatchRevisionAttempt(deps: RoundDeps, changeRow: { executionId: string; change: string; taskId: string | null }, round: RoundRow, update?: { base: string; files: string[] }): Promise<boolean> {
+export async function dispatchRevisionAttempt(deps: RoundDeps, changeRow: { executionId: string; change: string; taskId: string | null }, round: RoundRow, update?: { base: string; files: string[] }, close?: { patch: ChangePatch; within: () => void }): Promise<boolean> {
   const store = deps.executions
   if (!revisionPending(deps, changeRow.taskId, round)) return false
   const task = deps.tasks.store.get(changeRow.taskId!)!
   const change = store.change(changeRow.executionId, changeRow.change)
   const execution = store.execution(changeRow.executionId)
   if (change === null || execution === null) return false
-  store.supersedeRound(round.id)
-  // A7: the superseded round's live round-effect rows never run after it.
-  store.cancelLiveRoundEffects(changeRow.executionId, round.id)
-  store.transition(changeRow.executionId, changeRow.change, change, { state: 'implementing', step: null })
-  const group = deps.plans.revision(execution.planId, execution.revision)?.content.changes.find(entry => entry.change === changeRow.change)?.group
+  // A diagnosis closed by the revision (review-convergence DX1) closes in
+  // the same transaction, with its patch (the count back at 0).
+  store.db.transaction(() => {
+    store.supersedeRound(round.id)
+    // A7: the superseded round's live round-effect rows never run after it.
+    store.cancelLiveRoundEffects(changeRow.executionId, round.id)
+    store.transition(changeRow.executionId, changeRow.change, change, { state: 'implementing', step: null, ...close?.patch })
+    close?.within()
+  })()
+  const fixRounds = close?.patch.fixRounds ?? change.fixRounds
+  const group = change.groupOverride ?? deps.plans.revision(execution.planId, execution.revision)?.content.changes.find(entry => entry.change === changeRow.change)?.group
   if (group === null || group === undefined) return true
   const revisionRow = deps.tasks.store.revisions(task.id).at(-1)
   const texts = [`The task's direction was republished as revision ${task.revision}${revisionRow?.rationale ? ` (${revisionRow.rationale})` : ''}. Re-apply your work on top of the new direction.`]
@@ -203,7 +210,7 @@ export async function dispatchRevisionAttempt(deps: RoundDeps, changeRow: { exec
     {
       executionId: changeRow.executionId, change: changeRow.change, group,
       failingChecks: [], findingsIds: [], findings: fixFindings(deps.tasks.store, task.id, null, texts),
-      continueFrom: round.commitSha, fixRounds: change.fixRounds,
+      continueFrom: round.commitSha, fixRounds,
     },
   )
   if (attempt === null || deps.gate?.(changeRow.change) === true) return true
@@ -212,7 +219,7 @@ export async function dispatchRevisionAttempt(deps: RoundDeps, changeRow: { exec
     {
       executionId: changeRow.executionId, change: changeRow.change, group,
       failingChecks: [], findingsIds: [], findings: fixFindings(deps.tasks.store, task.id, null, texts),
-      continueFrom: round.commitSha, fixRounds: change.fixRounds,
+      continueFrom: round.commitSha, fixRounds,
     },
     attempt,
   )

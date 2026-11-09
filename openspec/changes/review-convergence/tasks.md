@@ -18,7 +18,7 @@
   - SG12/SG13 kill "one review suffices";
   - WN3 kills "filter by hash instead of the trailing run";
   - WN6 kills "compare the whole identity instead of its hash".
-- [ ] 1.2 Add `@covers` annotations for each `review-convergence` signal and
+- [x] 1.2 Add `@covers` annotations for each `review-convergence` signal and
   window scenario above the tests from 1.1, and verify that
   `specCoverageGuard.test.ts` passes.
 
@@ -42,7 +42,7 @@
 
 ## 3. The Kawai-asked diagnosis card (decision 6)
 
-- [ ] 3.1 Add `kind` to cards (default `'question'`) and
+- [x] 3.1 Add `kind` to cards (default `'question'`) and
   `DecisionService.raiseDiagnosis(input, within)`. It asks as Kawai, is
   addressed to the Lead role else the owner, and sends a system mail tagged
   `decision-question`, `plan-stall`, and `stall:convergence` as the card's
@@ -52,7 +52,7 @@
   - kills "skip the Reject cap of ten";
   - kills "route like `askForTask`" (a Lead-group exemption would send it
     to the owner).
-- [ ] 3.2 Make `resolveChoice` refuse free text on `kind = 'diagnosis'` for
+- [x] 3.2 Make `resolveChoice` refuse free text on `kind = 'diagnosis'` for
   `record`, the owner's answer, and the owner's override, and make `record`
   send no answer mail for it. Verify "A free-text choice is refused" for
   all three callers: A4 kills "check only the agent path".

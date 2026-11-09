@@ -57,6 +57,8 @@ function cardOf(service: DecisionService, teamId: string, planId: string, cardId
 async function answerMail(service: DecisionService, caller: DecisionCaller & { kind: 'human' }, card: DecisionCard, body: string): Promise<PreparedMail | null> {
   const task = card.taskId ? { task_id: card.taskId } : {}
   const tags = ['decision-answer']
+  // A diagnosis card's outcome is its reply (review-convergence decision 6).
+  if (card.kind === 'diagnosis') return null
   if (card.messageId) return service.deps.mailbox.prepareReply(caller, { message_id: card.messageId, body, tags, ...task }, { answer: true })
   const asker = service.deps.getSession(card.askedBy.session)
   if (asker && !asker.contextExhausted) return service.deps.mailbox.prepareSend(caller, { to_kind: 'session', to_id: asker.sessionId, body, tags, ...task })
@@ -75,7 +77,7 @@ export async function answerAsOwner(service: DecisionService, caller: DecisionCa
   const prior = replay(service, team.teamId, plan.id, commandId, payload, ANSWER_FIELDS)
   if (prior) return prior
   const card = cardOf(service, team.teamId, plan.id, input.cardId)
-  const { choice, optionIndex } = resolveChoice(card.options, { choice: input.choice, option_index: input.optionIndex })
+  const { choice, optionIndex } = resolveChoice(card.options, { choice: input.choice, option_index: input.optionIndex }, card.kind === 'diagnosis')
   const rationale = rationaleOf(input.rationale, false)
   const first = decisions.decisionsOfCard(team.teamId, card.id)[0]
   if (first) service.refuseDecided(card, first)
@@ -110,7 +112,7 @@ export async function overrideAsOwner(service: DecisionService, caller: Decision
     throw new DecisionRefusal('stale', `Card ${card.id}'s current decision is ${current.id} (${current.choice}), not ${input.expectedDecisionId}; reopen the card to read it, then override that one.`)
   }
   const rationale = rationaleOf(input.rationale, true)!
-  const { choice, optionIndex } = resolveChoice(card.options, { choice: input.choice, option_index: input.optionIndex })
+  const { choice, optionIndex } = resolveChoice(card.options, { choice: input.choice, option_index: input.optionIndex }, card.kind === 'diagnosis')
   if (plan.lifecycle === 'cancelled') throw new DecisionRefusal('state', `Plan ${plan.id} is cancelled: reopen the plan first.`)
   const id = `decision-${crypto.randomUUID()}`
   const fix = await prepareOverrideFix(service.deps, { team, plan, approved: plans.approvedRevision(plan.id), card, superseded: current, override: { id, choice, rationale } })

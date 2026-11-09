@@ -16,6 +16,7 @@ import { causeLabel, SUPERVISION_OUTCOMES, type SupervisionOutcome } from '@shar
 import type { PlanSupervisionView } from '@shared/planReport'
 import { useTickingClock } from '../chat/chatElapsed'
 import { sessionLabel } from '../chat/strategyLabels'
+import { SIGNAL_LABELS } from '@shared/reviewConvergence'
 
 const OUTCOME_LABELS: Record<SupervisionOutcome, string> = {
   landed: 'Landed', running: 'Running', waiting: 'Waiting', stalled: 'Stalled',
@@ -111,7 +112,9 @@ function ChangeSupervisionRow({ row, now, sessions }: { row: ChangeSupervision; 
     {row.stall && <p className="text-chat-meta text-chat-danger" data-testid={`plan-supervision-stall-${row.change}`}>
       {row.stall.kind === 'no-progress'
         ? `Stalled: no progress — deadline ${new Date(row.stall.deadlineAt).toLocaleTimeString()}${row.stall.idle ? ', holder idle' : ''}`
-        : `Stalled: repeating failure — ${row.stall.signature}`}
+        : row.stall.kind === 'convergence'
+          ? `Stalled: convergence — ${row.stall.signals.map(signal => SIGNAL_LABELS[signal.kind]).join(', ')}${row.stall.awaitingRevision !== null ? ` · waiting for task revision ${row.stall.awaitingRevision}` : ''}`
+          : `Stalled: repeating failure — ${row.stall.signature}`}
     </p>}
     {row.landing && <p className="text-chat-meta text-secondary">
       landed{row.landing.treeVerified ? '' : ' — tree not verified'}

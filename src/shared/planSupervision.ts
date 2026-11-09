@@ -13,6 +13,7 @@
 import type { CandidateState } from './planIntegration'
 import { agentHeldStage, type AttemptKind, type AttemptStatus, type ChangeState, type ChangeStep, type CiCheck, type RoundOutcome, type StopDetail } from './planExecution'
 import { ciClass, flakyChecks, runsByName } from './planExecutionGates'
+import type { DiagnosisSignal } from './reviewConvergence'
 
 export type SupervisionOutcome = 'landed' | 'running' | 'waiting' | 'stalled' | 'stopped' | 'cancelled' | 'not-started'
 export const SUPERVISION_OUTCOMES: readonly SupervisionOutcome[] = ['landed', 'running', 'waiting', 'stalled', 'stopped', 'cancelled', 'not-started']
@@ -39,6 +40,8 @@ export type SupervisionStage = AttemptKind | 'review' | 'kawai'
 export type SupervisionStall =
   | { kind: 'no-progress'; episodeKey: string; anchorAt: string; deadlineAt: string; idle: boolean }
   | { kind: 'repeating-failure'; episodeKey: string; signature: string; rounds: [string, string] }
+  /** An open diagnosis (review-convergence decision 8): its id is the episode; `awaitingRevision` is the task revision the owner is asked to publish after Amend. */
+  | { kind: 'convergence'; episodeKey: string; signals: DiagnosisSignal[]; cardId: string; awaitingRevision: number | null }
 
 /** Append-only (D10): the immediate cause of a change's outcome. */
 export type SupervisionCause =
@@ -315,6 +318,7 @@ export const SUPERVISION_STOP_LABELS: Record<string, string> = {
   'ci-timeout': 'CI did not finish in time',
   'pr-closed': 'Pull request closed',
   'integration-rewritten': 'Integration branch rewritten',
+  'diagnosis-escalated': 'Escalated after a diagnosis',
 }
 
 export const stopReasonLabel = (reason: string): string => (Object.hasOwn(SUPERVISION_STOP_LABELS, reason) ? SUPERVISION_STOP_LABELS[reason]! : reason)

@@ -117,17 +117,17 @@ describe('TeamCaps', () => {
         teams: { [repo]: { planExecution: { maxParallelChanges: 2, mergeMethod: 'rebase' } } },
       })
       const caps = new TeamCaps({ homeDir: home })
-      expect(await caps.planExecution(teamId)).toEqual({ floorChecks: floor, maxParallelChanges: 2, mergeMethod: 'rebase' })
-      expect(await caps.planExecution(path.join(other, '.git'))).toEqual({ floorChecks: floor, maxParallelChanges: 5, mergeMethod: 'squash' })
+      expect(await caps.planExecution(teamId)).toEqual({ floorChecks: floor, maxParallelChanges: 2, mergeMethod: 'rebase', maxFailedFixRounds: 5 })
+      expect(await caps.planExecution(path.join(other, '.git'))).toEqual({ floorChecks: floor, maxParallelChanges: 5, mergeMethod: 'squash', maxFailedFixRounds: 5 })
     })
 
     test('no file, and a file without planExecution: no floor map, and the built-in defaults', async () => {
       const caps = new TeamCaps({ homeDir: home })
-      expect(await caps.planExecution(teamId)).toEqual({ floorChecks: null, maxParallelChanges: 3, mergeMethod: 'merge' })
+      expect(await caps.planExecution(teamId)).toEqual({ floorChecks: null, maxParallelChanges: 3, mergeMethod: 'merge', maxFailedFixRounds: 5 })
       writeCaps({ maxSpawnedSessions: 7, teams: { [repo]: { maxSpawnedSessions: 2 } } })
       const errors: string[] = []
       const reloaded = new TeamCaps({ homeDir: home, onErrors: e => errors.push(...e) })
-      expect(await reloaded.planExecution(teamId)).toEqual({ floorChecks: null, maxParallelChanges: 3, mergeMethod: 'merge' })
+      expect(await reloaded.planExecution(teamId)).toEqual({ floorChecks: null, maxParallelChanges: 3, mergeMethod: 'merge', maxFailedFixRounds: 5 })
       expect(errors).toEqual([])
     })
 
@@ -138,10 +138,24 @@ describe('TeamCaps', () => {
       })
       const errors: string[] = []
       const caps = new TeamCaps({ homeDir: home, onErrors: e => errors.push(...e) })
-      expect(await caps.planExecution(teamId)).toEqual({ floorChecks: floor, maxParallelChanges: 5, mergeMethod: 'merge' })
+      expect(await caps.planExecution(teamId)).toEqual({ floorChecks: floor, maxParallelChanges: 5, mergeMethod: 'merge', maxFailedFixRounds: 5 })
       expect(errors.some(e => e.includes('typecheck must be a non-empty list'))).toBe(true)
       expect(errors.some(e => e.includes('maxParallelChanges must be a positive integer'))).toBe(true)
       expect(errors.some(e => e.includes('mergeMethod must be one of'))).toBe(true)
+    })
+
+    // @covers: plan-execution › Execution settings are user-level › An out-of-range backstop falls back
+    test('the backstop: 2 to 20, the team over the top level, and an out-of-range value logged and defaulted to 5', async () => {
+      writeCaps({ planExecution: { floorChecks: floor, maxFailedFixRounds: 8 }, teams: { [repo]: { planExecution: { maxFailedFixRounds: 2 } } } })
+      expect(await new TeamCaps({ homeDir: home }).planExecution(teamId)).toMatchObject({ maxFailedFixRounds: 2 })
+      expect(await new TeamCaps({ homeDir: home }).planExecution(path.join(other, '.git'))).toMatchObject({ maxFailedFixRounds: 8 })
+      for (const bad of [1, 21, 4.5, '5', null]) {
+        const errors = await readErrors({ planExecution: { floorChecks: floor, maxFailedFixRounds: bad } })
+        expect(await new TeamCaps({ homeDir: home }).planExecution(teamId)).toMatchObject({ maxFailedFixRounds: 5 })
+        expect(errors.some(e => e.includes('maxFailedFixRounds must be an integer from 2 to 20; using 5'))).toBe(true)
+      }
+      writeCaps({ planExecution: { floorChecks: floor, maxFailedFixRounds: 20 } })
+      expect(await new TeamCaps({ homeDir: home }).planExecution(teamId)).toMatchObject({ maxFailedFixRounds: 20 })
     })
 
     test('an unknown floor-check key refuses the map', async () => {

@@ -54,6 +54,8 @@ export type ChangeStep =
   | 'merging'
   /** Retry of a failed or closed stage: the stage's instruction is sent again (D12). */
   | 'redispatch'
+  /** A failed round opened a diagnosis instead of a fix (review-convergence decision 4): the card's decision moves it. */
+  | 'diagnosing'
 
 /** Why a change stopped (X8, append-only). */
 export type StopReason =
@@ -68,9 +70,12 @@ export type StopReason =
   | 'ci-timeout'
   | 'pr-closed'
   | 'integration-rewritten'
+  /** review-convergence: the diagnosis card was decided with Escalate. `round-limit` is written no more; older rows keep it. */
+  | 'diagnosis-escalated'
 export const STOP_REASONS: readonly StopReason[] = [
   'round-limit', 'name-taken', 'instruction-failed', 'task-closed', 'review-unavailable',
   'effect-failed', 'effect-unknown', 'ci-missing', 'ci-timeout', 'pr-closed', 'integration-rewritten',
+  'diagnosis-escalated',
 ]
 
 /** What a stop names: every field optional, each reason filling its own. */
@@ -87,6 +92,9 @@ export interface StopDetail {
   /** A refused step (I2): the stage whose service call refused, and the refusal text. */
   stage?: string
   refusal?: string
+  /** An escalated diagnosis (review-convergence): its signals and the decision's rationale. */
+  signals?: import('./reviewConvergence').DiagnosisSignal[]
+  rationale?: string
   /** The state the change was in when it stopped; Retry resumes it (D12). */
   resumeState?: ChangeState
 }

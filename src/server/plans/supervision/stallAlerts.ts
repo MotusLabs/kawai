@@ -16,6 +16,7 @@ import type { TeamIdentity } from '../../team/teamIdentity'
 import type { PlanStore } from '../planStore'
 import type { DerivedPlan } from './SupervisionMonitor'
 import type { StallAlertStore } from './stallAlertStore'
+import { signalLine } from '../../../shared/reviewConvergence'
 
 export interface StallAlertDeps {
   db: Database
@@ -29,6 +30,7 @@ export const STALL_TAG = 'plan-stall'
 const STAGE_LABELS: Record<string, string> = { implement: 'implement attempt', fix: 'fix attempt', update: 'update attempt', review: 'review', kawai: "Kawai's step" }
 
 function stallLine(stall: SupervisionStall): string {
+  if (stall.kind === 'convergence') return `A diagnosis is open: ${stall.signals.map(signalLine).join('; ')}.`
   if (stall.kind === 'no-progress') {
     return `No progress since ${stall.anchorAt}; the deadline passed at ${stall.deadlineAt}${stall.idle ? ' while the holder sat idle' : ''}.`
   }

@@ -26,9 +26,17 @@ export interface DecisionParty {
   profile: string | null
 }
 
+/**
+ * A card's kind: an agent's `question`, or Kawai's `diagnosis` of a change's
+ * review rounds (review-convergence decision 6), which takes only its own
+ * options and sends no answer mail — its outcome is the reply.
+ */
+export type CardKind = 'question' | 'diagnosis'
+
 /** One `plan_decision_cards` row (D3). */
 export interface DecisionCard {
   id: string
+  kind: CardKind
   teamId: string
   planId: string
   /** The revision the asker works from; null for a Lead card naming the plan. */

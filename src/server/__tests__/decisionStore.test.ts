@@ -32,7 +32,7 @@ function conflict(fn: () => unknown): DecisionConflict {
 describe('cards', () => {
   test('insert and read back, by id, by question message, and per plan', () => {
     const inserted = store.insertCard(card())
-    expect(inserted).toEqual({ ...card(), id: 'card-1', createdAt: '2026-10-19T00:00:00.000Z' })
+    expect(inserted).toEqual({ ...card(), id: 'card-1', kind: 'question', createdAt: '2026-10-19T00:00:00.000Z' })
     expect(store.cardByMessage('t', 'msg-1')).toEqual(inserted)
     expect(store.cardsOfPlan('t', 'p').map(found => found.id)).toEqual(['card-1'])
   })

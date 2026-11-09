@@ -40,6 +40,7 @@ import { resultChecksMigration } from '../verification/verificationSchema'
 import { compactObservationDetailMigration } from '../metrics/observations/compactMigration'
 import { taskContractMigration } from '../team/taskContractSchema'
 import { reviewFindingsMigration } from '../team/findingSchema'
+import { reviewConvergenceMigration } from '../plans/execution/convergenceSchema'
 import { CREATE_TEAM_APPROVAL_DEFAULTS_SQL } from '../team/teamApprovalDefaults'
 import type { BackupFile } from './backupFiles'
 import type { BackupOutcome } from './backups'
@@ -120,6 +121,10 @@ export const MIGRATIONS: readonly Migration[] = [
   // events, and dispute cards, and rounds' unique regate_of. Additive, no
   // backfill.
   reviewFindingsMigration,
+  // review-convergence: the backstop recorded at Start, Reassign's group
+  // override, card kinds, diagnoses, and manual-task notices. Additive, no
+  // backfill.
+  reviewConvergenceMigration,
 ]
 
 export const RESTORE_DOC = 'docs/operations/database-backups.md'

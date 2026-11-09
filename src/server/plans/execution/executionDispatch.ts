@@ -156,6 +156,8 @@ export interface FixAttemptInput {
   findings: FixFindings
   continueFrom: string
   fixRounds: number
+  /** A diagnosis outcome's rationale, which the fix handoff carries (review-convergence decision 7). */
+  diagnosis?: string | null
   /** When set, the attempt is an update attempt (revision-control PR E, A1): its manifest records the failed branch update. */
   update?: { base: string; files: string[] }
 }
@@ -273,6 +275,8 @@ export async function dispatchFix(deps: DispatchDeps, input: FixAttemptInput, at
     failingChecks: input.failingChecks,
     findings: input.findings,
     fixRounds: input.fixRounds,
+    fixRoundLimit: execution.maxFailedFixRounds,
+    diagnosis: input.diagnosis ?? null,
     continueFrom: input.continueFrom,
   })
   // A fix is a handoff (D7): it supersedes the outstanding review through
@@ -305,7 +309,7 @@ export async function dispatchUpdateAttempt(deps: DispatchDeps, input: {
   const changeRow = deps.executions.change(input.executionId, input.change)
   if (changeRow === null || changeRow.worktree === null || changeRow.branch === null || changeRow.baselineCommit === null || changeRow.taskId === null) return
   const revision = deps.plans.revision(execution.planId, execution.revision)
-  const group = revision?.content.changes.find(entry => entry.change === input.change)?.group ?? null
+  const group = changeRow.groupOverride ?? revision?.content.changes.find(entry => entry.change === input.change)?.group ?? null
   if (group === null) return
   const roleProfiles = revision?.content.roles.find(role => role.group === group)?.profiles ?? []
   const attempt = await ensureFixAttempt(deps, {
@@ -443,7 +447,7 @@ async function dispatchOwedFix(deps: DispatchDeps, input: { executionId: string;
  * with no linked row dispatches its implement attempt (a no-op behind H4's
  * guard when rows exist). The step clears once the decision is applied.
  */
-export async function redispatchStage(deps: DispatchDeps, row: { executionId: string; change: string; taskId: string | null; generation: number }): Promise<void> {
+export async function redispatchStage(deps: DispatchDeps, row: { executionId: string; change: string; taskId: string | null; generation: number; groupOverride: string | null }): Promise<void> {
   const execution = deps.executions.execution(row.executionId)
   if (execution === null) return
   const revision = deps.plans.revision(execution.planId, execution.revision)
@@ -489,7 +493,7 @@ export async function redispatchStage(deps: DispatchDeps, row: { executionId: st
         }))
       }
     } else {
-      const group = revision?.content.changes.find(entry => entry.change === row.change)?.group ?? null
+      const group = row.groupOverride ?? revision?.content.changes.find(entry => entry.change === row.change)?.group ?? null
       if (group !== null) await dispatchImplementAttempt(deps, { executionId: row.executionId, change: row.change, group })
     }
   }

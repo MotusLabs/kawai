@@ -70,7 +70,7 @@ const conditioned = (where: 'cause' | 'also'): PlanChangeFact => {
 }
 
 const card = (overrides: Partial<DecisionCard> = {}): DecisionCard => ({
-  id: 'card-1', teamId: 'team', planId: 'plan-1', revision: 2, change: 'api', taskId: 'task-api',
+  id: 'card-1', kind: 'question', teamId: 'team', planId: 'plan-1', revision: 2, change: 'api', taskId: 'task-api',
   question: 'Which schema?', options: ['A', 'B'], context: null,
   askedBy: { session: 'chat-dev', group: 'middle-devs', profile: 'glm' },
   addressedTo: 'owner', addressedGroup: null, messageId: null, createdAt: '2026-10-20T09:00:00.000Z',

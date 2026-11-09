@@ -6,7 +6,8 @@
 //   { "maxSpawnedSessions": 5,
 //     "planExecution": { "floorChecks": { "lint": ["ci"], "typecheck": ["ci"], "unit-tests": ["ci"], "ci-e2e": ["e2e"] } },
 //     "teams": { "/home/coder/kawai": { "maxSpawnedSessions": 8,
-//                "planExecution": { "floorChecks": { ... }, "maxParallelChanges": 3, "mergeMethod": "merge" } } } }
+//                "planExecution": { "floorChecks": { ... }, "maxParallelChanges": 3, "mergeMethod": "merge",
+//                                   "maxFailedFixRounds": 5 } } } }
 //
 // `teams` keys may name the main checkout or any of its worktrees; each is
 // resolved to its team id (common git dir) at load. The file is read at
@@ -21,6 +22,7 @@ import os from 'node:os'
 import path from 'node:path'
 import type { CiFloorCheck, FloorMap, MergeMethod } from '../../shared/planExecution'
 import { CI_FLOOR_CHECKS, MERGE_METHODS } from '../../shared/planExecution'
+import { DEFAULT_MAX_FAILED_FIX_ROUNDS, MAX_FAILED_FIX_ROUNDS_RANGE } from '../../shared/planExecutionProgress'
 import { resolveTeam } from './teamIdentity'
 
 export const DEFAULT_MAX_SPAWNED_SESSIONS = 5
@@ -32,6 +34,7 @@ interface ExecutionEntry {
   floorChecks: FloorMap | null
   maxParallelChanges: number | null
   mergeMethod: MergeMethod | null
+  maxFailedFixRounds: number | null
 }
 
 /** D16's settings for one team: the configured floor map or null (no default), with defaulted parallelism and merge method. */
@@ -39,6 +42,8 @@ export interface PlanExecutionSettings {
   floorChecks: FloorMap | null
   maxParallelChanges: number
   mergeMethod: MergeMethod
+  /** The backstop (review-convergence decision 3); always set here, optional for hand-built settings, which read the default. */
+  maxFailedFixRounds?: number
 }
 
 interface LoadedCaps {
@@ -52,17 +57,23 @@ const isPositiveInteger = (value: unknown): value is number =>
 
 /** Read one `planExecution` object (D16); every malformed value is reported and left unset. */
 function readExecution(value: unknown, where: string, errors: string[], file: string): ExecutionEntry {
-  const entry: ExecutionEntry = { floorChecks: null, maxParallelChanges: null, mergeMethod: null }
+  const entry: ExecutionEntry = { floorChecks: null, maxParallelChanges: null, mergeMethod: null, maxFailedFixRounds: null }
   if (value === undefined || value === null) return entry
   if (typeof value !== 'object' || Array.isArray(value)) {
     errors.push(`${file}: ${where} must be an object`)
     return entry
   }
-  const root = value as { floorChecks?: unknown; maxParallelChanges?: unknown; mergeMethod?: unknown }
+  const root = value as { floorChecks?: unknown; maxParallelChanges?: unknown; mergeMethod?: unknown; maxFailedFixRounds?: unknown }
   if (root.floorChecks !== undefined) entry.floorChecks = readFloorMap(root.floorChecks, `${where}.floorChecks`, errors, file)
   if (root.maxParallelChanges !== undefined) {
     if (isPositiveInteger(root.maxParallelChanges)) entry.maxParallelChanges = root.maxParallelChanges
     else errors.push(`${file}: ${where}.maxParallelChanges must be a positive integer; using ${DEFAULT_MAX_PARALLEL_CHANGES}`)
+  }
+  if (root.maxFailedFixRounds !== undefined) {
+    const { min, max } = MAX_FAILED_FIX_ROUNDS_RANGE
+    const value = root.maxFailedFixRounds
+    if (typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max) entry.maxFailedFixRounds = value
+    else errors.push(`${file}: ${where}.maxFailedFixRounds must be an integer from ${min} to ${max}; using ${DEFAULT_MAX_FAILED_FIX_ROUNDS}`)
   }
   if (root.mergeMethod !== undefined) {
     if (typeof root.mergeMethod === 'string' && MERGE_METHODS.includes(root.mergeMethod as MergeMethod)) {
@@ -130,6 +141,7 @@ export class TeamCaps {
       floorChecks: team?.floorChecks ?? global.floorChecks,
       maxParallelChanges: team?.maxParallelChanges ?? global.maxParallelChanges ?? DEFAULT_MAX_PARALLEL_CHANGES,
       mergeMethod: team?.mergeMethod ?? global.mergeMethod ?? DEFAULT_MERGE_METHOD,
+      maxFailedFixRounds: team?.maxFailedFixRounds ?? global.maxFailedFixRounds ?? DEFAULT_MAX_FAILED_FIX_ROUNDS,
     }
   }
 
@@ -154,7 +166,7 @@ export class TeamCaps {
     const caps: LoadedCaps = {
       global: DEFAULT_MAX_SPAWNED_SESSIONS,
       perTeam: new Map(),
-      execution: { global: { floorChecks: null, maxParallelChanges: null, mergeMethod: null }, perTeam: new Map() },
+      execution: { global: { floorChecks: null, maxParallelChanges: null, mergeMethod: null, maxFailedFixRounds: null }, perTeam: new Map() },
     }
     if (stamp === 'missing') return caps
     const errors: string[] = []

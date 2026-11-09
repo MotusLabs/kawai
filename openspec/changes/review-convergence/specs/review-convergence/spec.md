@@ -8,7 +8,7 @@ outcomes, and the notice for manual tasks.
 ## ADDED Requirements
 
 ### Requirement: Signals read the counted reviews of the current window
-Kawai SHALL compute the convergence signals over a task's counted reviews, in ledger order, judging each from the ledger as it read right after that review. The window SHALL hold only the reviews under the current contract identity's hash that came after the review of the newest closed diagnosis, or for a task no execution owns, of its newest notice. The open blocking count SHALL be the number of P0/P1 findings in a blocking state.
+Kawai SHALL compute the signals over a task's counted reviews, in ledger order, judging each from the ledger right after it. The window SHALL hold only the reviews under the current contract identity's hash that came after the newest earlier review leaving no blocking finding open, and after the review of the newest closed diagnosis (for a task no execution owns, of its newest notice). The open blocking count SHALL be the number of P0/P1 findings in a blocking state.
 
 #### Scenario: A new contract restarts the window
 - **WHEN** reviews R1 and R2 ran under contract hash H1, the owner publishes a revision with a new contract hash H2, and review R3 runs under H2
@@ -17,6 +17,10 @@ Kawai SHALL compute the convergence signals over a task's counted reviews, in le
 #### Scenario: A closed diagnosis restarts the window
 - **WHEN** a diagnosis opened on review R4 was decided with Fix round, and review R5 follows
 - **THEN** the window holds only R5
+
+#### Scenario: A passing review restarts the window
+- **WHEN** review R2 left no blocking finding open, and review R3 raises a new P1 finding
+- **THEN** the window holds only R3, and S3 does not fire
 
 #### Scenario: A rewording keeps the window
 - **WHEN** the owner publishes a revision whose identity hash is unchanged between R2 and R3
@@ -49,11 +53,15 @@ The signal S2 (moving clause) SHALL fire when, in each of the last two reviews o
 - **THEN** S2 does not fire
 
 ### Requirement: S3 fires when new defects keep pace with fixes
-The signal S3 (churn) SHALL fire when, over the last two reviews of the window together, the blocking findings raised (new, or reopened) are at least one and at least as many as the findings given `resolved`. It SHALL name the raised findings.
+The signal S3 (churn) SHALL fire when the newest review of the window raised a blocking finding (new, or reopened) and, over the last two reviews together, the blocking findings raised are at least as many as the findings given `resolved`. It SHALL name the raised findings.
 
 #### Scenario: Churn fires
 - **WHEN** review R2 resolves F1 and F2 and raises F3, and review R3 resolves F3 and raises F4 and F5
 - **THEN** S3 fires on R3: three raised, three resolved
+
+#### Scenario: A finding left open does not fire
+- **WHEN** review R1 raises F1, and review R2 gives F1 `still-open` and raises nothing
+- **THEN** S3 does not fire on R2
 
 #### Scenario: Converging work does not fire
 - **WHEN** review R2 resolves F1 and F2 and raises F3, and review R3 resolves F3 and raises nothing

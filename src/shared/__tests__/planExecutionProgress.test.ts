@@ -12,35 +12,37 @@ import {
 } from '../planExecution'
 import { executionProgress, fixRoundOutcome, stopLabel, waitingLabel, type CountedRound } from '../planExecutionProgress'
 
-const fold = (rounds: CountedRound[], start = 0) => rounds.reduce(
-  (acc, round) => (acc.stop ? acc : fixRoundOutcome(acc.count, round)),
-  { count: start, stop: false },
+const fold = (rounds: CountedRound[], start = 0, limit = 5) => rounds.reduce(
+  (acc, round) => (acc.backstop ? acc : fixRoundOutcome(acc.count, round, limit)),
+  { count: start, backstop: false },
 )
 const failFix: CountedRound = { fixRound: true, outcome: 'fail' }
 
 describe('fixRoundOutcome', () => {
   test('the implementation round does not count', () => {
-    expect(fold([{ fixRound: false, outcome: 'fail' }])).toEqual({ count: 0, stop: false })
+    expect(fold([{ fixRound: false, outcome: 'fail' }])).toEqual({ count: 0, backstop: false })
   })
 
-  test('three failed fix rounds stop', () => {
-    expect(fold([{ fixRound: false, outcome: 'fail' }, failFix, failFix])).toEqual({ count: 2, stop: false })
-    expect(fold([{ fixRound: false, outcome: 'fail' }, failFix, failFix, failFix])).toEqual({ count: 3, stop: true })
+  test('the backstop is reached at the limit, not before', () => {
+    const impl: CountedRound = { fixRound: false, outcome: 'fail' }
+    expect(fold([impl, failFix, failFix, failFix, failFix])).toEqual({ count: 4, backstop: false })
+    expect(fold([impl, failFix, failFix, failFix, failFix, failFix])).toEqual({ count: 5, backstop: true })
+    expect(fold([impl, failFix, failFix], 0, 2)).toEqual({ count: 2, backstop: true })
   })
 
   test('a pass resets the count', () => {
-    expect(fold([failFix, failFix, { fixRound: true, outcome: 'pass' }, failFix])).toEqual({ count: 1, stop: false })
+    expect(fold([failFix, failFix, { fixRound: true, outcome: 'pass' }, failFix])).toEqual({ count: 1, backstop: false })
   })
 
   test('a carried round counts as the round it carries', () => {
     // A carried round copies its source's fix_round flag.
-    expect(fold([failFix, { fixRound: true, outcome: 'fail' }])).toEqual({ count: 2, stop: false })
-    expect(fold([{ fixRound: false, outcome: 'fail' }])).toEqual({ count: 0, stop: false })
+    expect(fold([failFix, { fixRound: true, outcome: 'fail' }])).toEqual({ count: 2, backstop: false })
+    expect(fold([{ fixRound: false, outcome: 'fail' }])).toEqual({ count: 0, backstop: false })
   })
 
   test('superseded rounds and CI stops never count', () => {
     expect(fold([failFix, { fixRound: true, outcome: 'superseded' }, { fixRound: true, outcome: 'fail', ciStop: true }]))
-      .toEqual({ count: 1, stop: false })
+      .toEqual({ count: 1, backstop: false })
   })
 })
 

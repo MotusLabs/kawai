@@ -76,12 +76,16 @@ export function reviewSnapshots(submissions: readonly LedgerSubmission[], events
   return snapshots
 }
 
-/** Table WN: the trailing run under the newest contract hash, strictly after the anchor review. */
+/**
+ * Table WN: the trailing run under the newest contract hash, strictly after
+ * the anchor review and after the newest earlier review that left no
+ * blocking finding open (a pass restarts the window, WN7).
+ */
 export function convergenceWindow(snapshots: readonly ReviewSnapshot[], anchorSubmissionId: string | null): ReviewSnapshot[] {
   const newest = snapshots.at(-1)
   if (!newest) return []
   let start = snapshots.length - 1
-  while (start > 0 && snapshots[start - 1]!.contractHash === newest.contractHash) start--
+  while (start > 0 && snapshots[start - 1]!.contractHash === newest.contractHash && snapshots[start - 1]!.openAfter > 0) start--
   const anchor = anchorSubmissionId === null ? -1 : snapshots.findIndex(snapshot => snapshot.submissionId === anchorSubmissionId)
   return snapshots.slice(Math.max(start, anchor + 1))
 }
@@ -117,7 +121,8 @@ export function convergenceSignals(window: readonly ReviewSnapshot[], rows: read
   }
   const raised = previous.raised.length + last.raised.length
   const resolved = previous.resolved.length + last.resolved.length
-  if (raised >= 1 && raised >= resolved) {
+  // The newest review itself must raise: one that only keeps findings open is a flat count, S4's to judge.
+  if (last.raised.length >= 1 && raised >= resolved) {
     signals.push({ kind: 'S3', findings: sortedIds([...previous.raised, ...last.raised].map(item => item.id)), raised, resolved })
   }
   if (window.length >= 3) {

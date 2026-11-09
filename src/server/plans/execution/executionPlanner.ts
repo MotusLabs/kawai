@@ -41,7 +41,7 @@ export interface PlannedDispatch {
 export interface PlannedStage {
   executionId: string
   change: string
-  kind: 'result' | 'push' | 'open-pr' | 'ci' | 'review' | 'review-restart' | 'verdict' | 'revision' | 'landing' | 'post-ci' | 'redispatch' | 'landing-outcome'
+  kind: 'result' | 'push' | 'open-pr' | 'ci' | 'review' | 'review-restart' | 'verdict' | 'revision' | 'landing' | 'post-ci' | 'redispatch' | 'landing-outcome' | 'diagnosis'
   roundId: string | null
   resultId: string | null
   /** A `landing-outcome` stage's settled merge or update-branch effect. */
@@ -152,6 +152,13 @@ export function planSteps(snapshot: ExecutionSnapshot, _now: string): PlanSteps 
       // withholds the dispatch; the step stays due for the release.
       if (change.step === 'redispatch') {
         if (!held) steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'redispatch', roundId: null, resultId: null })
+        continue
+      }
+      // review-convergence decision 5: a diagnosing change is the diagnosis
+      // stage's alone — no fix, no new round of a later result — until its
+      // diagnosis closes, which leaves the step in the same transaction.
+      if (change.state === 'gating' && change.step === 'diagnosing') {
+        steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'diagnosis', roundId: change.round?.id ?? null, resultId: null })
         continue
       }
       // The implement dispatch (H4): only a change without any attempt row —

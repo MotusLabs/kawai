@@ -32,7 +32,7 @@ function withResult() {
 }
 const base = {
   planTitle: 'P', revision: 1, change: 'c', worktree: '/w', branch: 'b', baseline: 'b0', head: 'h0', acceptance: [], extraChecks: [], guidance: '',
-  taskId: 't', manifestHash: 'm', integrationBranch: null, failingChecks: [], fixRounds: 0, continueFrom: 'h0',
+  taskId: 't', manifestHash: 'm', integrationBranch: null, failingChecks: [], fixRounds: 0, fixRoundLimit: 5, continueFrom: 'h0',
 }
 
 test('a round decided on a pre-upgrade text row keeps its text under Review findings', () => {

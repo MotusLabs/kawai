@@ -22,6 +22,7 @@ import {
 } from './executionRows'
 import { ExecutionConflict, mapConstraint, patchAssignments, type ChangeGuard, type ChangePatch, type NewExecution } from './executionPatch'
 import { ExecutionEffectStore } from './executionEffectStore'
+import { DEFAULT_MAX_FAILED_FIX_ROUNDS } from '../../../shared/planExecutionProgress'
 
 // The write vocabulary lives in `executionPatch.ts` and the effect rows in
 // `executionEffectStore.ts` (the base class), so this file stays under 500
@@ -71,10 +72,10 @@ export class ExecutionStore extends ExecutionEffectStore {
     try {
       this.db.transaction(() => {
         this.db.prepare(`INSERT INTO plan_executions (id, team_id, plan_id, revision, content_hash, report_id, input_hash, landing_mode,
-          base_branch, base_commit, floor_json, max_parallel, merge_method, state, started_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?)`).run(
+          base_branch, base_commit, floor_json, max_parallel, merge_method, max_failed_fix_rounds, state, started_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?)`).run(
           id, input.teamId, input.planId, input.revision, input.contentHash, input.reportId, input.inputHash, input.landingMode,
-          input.baseBranch, input.baseCommit, JSON.stringify(input.floor), input.maxParallel, input.mergeMethod, at,
+          input.baseBranch, input.baseCommit, JSON.stringify(input.floor), input.maxParallel, input.mergeMethod, input.maxFailedFixRounds ?? DEFAULT_MAX_FAILED_FIX_ROUNDS, at,
         )
         const change = this.db.prepare(`INSERT INTO plan_execution_changes (execution_id, change, team_id, position, state, owns, updated_at)
           VALUES (?, ?, ?, ?, ?, ?, ?)`)

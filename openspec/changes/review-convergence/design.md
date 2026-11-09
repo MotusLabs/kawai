@@ -76,14 +76,18 @@ See proposal.md, "Why". The parts this design builds on, as shipped:
   Events after a review count toward the next review.
 - `convergenceWindow(snapshots, anchorSubmissionId)` gives the trailing run
   of snapshots whose `contractHash` equals the newest's, strictly after the
-  anchor. The anchor is the review of the newest closed diagnosis (or, for a
+  anchor and strictly after the newest earlier snapshot with `openAfter`
+  0 (a passing review restarts the window, as a pass resets the fix
+  count). The anchor is the review of the newest closed diagnosis (or, for a
   manual task, of the newest notice).
 - `convergenceSignals(window, rows)` gives `Signal[]`, in the order S1 to S5.
   Each signal carries its evidence: finding ids, the clause for S2, and the
   counts for S4.
 
 S1 counts a row's `reopened` transitions up to the newest review: at least
-two, with one of them made by the newest review. S2 keys on `clauseId`
+two, with one of them made by the newest review. S3 needs the newest review
+itself to raise a blocking finding: a review that only keeps findings open
+is a flat count, which S4 judges over three reviews. S2 keys on `clauseId`
 only, so revision citations (a null `clauseId`) never count.
 
 Alternative: compute the signals in SQL over the submission tables. That
@@ -181,8 +185,10 @@ replays the same key. Under a hold, the dispatch is owed exactly as
 
 ### 6. Kawai asks the card
 
-`DecisionService.raiseDiagnosis(input, within)` builds the card. Its
-fields:
+`raiseDiagnosisCard` (`src/server/plans/decisions/diagnosisCards.ts`)
+builds the card inside the executor's open transaction, through
+`DecisionStore` and the mail store. `DecisionService` is not used: it is
+composed after the executor and its writes are async. Its fields:
 
 - `kind: 'diagnosis'` (new column on cards, default `'question'`);
 - `askedBy: { session: 'kawai', group: null, profile: null }`;
@@ -198,13 +204,17 @@ reply guard refuses replies while the card is open.
 
 For `kind = 'diagnosis'`, two rules change:
 
-- `resolveChoice` refuses free text, for the Lead's record and for the
-  owner's answer and override alike;
+- `resolveChoice` refuses free text that is not exactly one of the
+  options, for the Lead's record and for the owner's answer and override
+  alike;
 - `record` sends no answer mail, because the outcome is the reply.
 
 Options are built in the order of the spec "A diagnosis card offers the
 outcomes that apply". The `Reject` option lists the blocking findings
-named in the signals' evidence, sorted by number, at most ten.
+named in the signals' evidence, sorted by number, at most ten. When the
+signals name no finding at all (S4, the backstop), it lists every blocking
+finding instead. So S5 alone, whose findings never block, offers no
+`Reject`.
 
 ### 7. Outcomes
 
@@ -298,9 +308,10 @@ the window's, newest last; `*` means any value).
 | SG3 | ≥2 | both of the last two: clause C resolved one finding and raised another blocking one | S2 |
 | SG4 | ≥2 | as SG3 but on different clauses | — |
 | SG5 | ≥2 | as SG3 but the findings cite the revision (`clauseId` null) | — |
-| SG6 | ≥2 | raised over the last two ≥ resolved, and raised ≥ 1 | S3 |
+| SG6 | ≥2 | the newest raised ≥ 1, and raised over the last two ≥ resolved | S3 |
 | SG7 | ≥2 | raised < resolved | — |
 | SG8 | ≥2 | raised = resolved = 0 | — |
+| SG8a | ≥2 | the previous raised ≥ 1, the newest raised none (findings left `still-open`) | — |
 | SG9 | ≥3 | openAfter non-decreasing over the last three, newest > 0 | S4 |
 | SG10 | ≥3 | openAfter falls at least once among the last three | — |
 | SG11 | ≥3 | non-decreasing and newest = 0 | — (unreachable when the round failed; kept for the manual notice) |
@@ -319,6 +330,7 @@ the window's, newest last; `*` means any value).
 | WN4 | H1 H1 H1 | the second | the third |
 | WN5 | H1 H1 H1 | the third | empty |
 | WN6 | r3#A, then r4#A (renumbered, same hash) | none | both |
+| WN7 | H1 H1 H1, the second leaving `openAfter` 0 | none | the third |
 
 **Table DO — opening a diagnosis at the fix step** (`applyFix`, per failed
 round).

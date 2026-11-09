@@ -34,9 +34,10 @@ const kinds = (submissions: LedgerSubmission[]) => signalsOf(submissions).map(si
  * | SG3 | ≥2 | both of the last two: clause C resolved one finding and raised another blocking one | S2 |
  * | SG4 | ≥2 | as SG3 but on different clauses | — |
  * | SG5 | ≥2 | as SG3 but the findings cite the revision (`clauseId` null) | — |
- * | SG6 | ≥2 | raised over the last two ≥ resolved, and raised ≥ 1 | S3 |
+ * | SG6 | ≥2 | the newest raised ≥ 1, and raised over the last two ≥ resolved | S3 |
  * | SG7 | ≥2 | raised < resolved | — |
  * | SG8 | ≥2 | raised = resolved = 0 | — |
+ * | SG8a | ≥2 | the previous raised ≥ 1, the newest raised none (findings left `still-open`) | — |
  * | SG9 | ≥3 | openAfter non-decreasing over the last three, newest > 0 | S4 |
  * | SG10 | ≥3 | openAfter falls at least once among the last three | — |
  * | SG11 | ≥3 | non-decreasing and newest = 0 | — (unreachable when the round failed; kept for the manual notice) |
@@ -72,7 +73,7 @@ describe('table SG — signals over a window', () => {
     expect(kinds(subs)).not.toContain('S2')
   })
   // @covers: review-convergence › S3 fires when new defects keep pace with fixes › Churn fires
-  test('SG6 raised at least resolved, and at least one, fires S3', () => {
+  test('SG6 the newest raises, and raised is at least resolved, fires S3', () => {
     const subs = reviews([finding('F1', 'A1'), finding('F2', 'A1')], [disposition('F1', 'A1'), disposition('F2', 'A1'), finding('F3', 'A2')],
       [disposition('F3', 'A2'), finding('F4', 'A3'), finding('F5', 'A4')])
     expect(signalsOf(subs).find(signal => signal.kind === 'S3')).toEqual({ kind: 'S3', findings: ['F3', 'F4', 'F5'], raised: 3, resolved: 3 })
@@ -85,6 +86,11 @@ describe('table SG — signals over a window', () => {
   test('SG8 nothing raised and nothing resolved does not fire S3', () => {
     const subs = reviews([finding('F1', 'A1')], [disposition('F1', 'A1', 'still-open')], [disposition('F1', 'A1', 'still-open')])
     expect(kinds(subs)).not.toContain('S3')
+  })
+  // @covers: review-convergence › S3 fires when new defects keep pace with fixes › A finding left open does not fire
+  test('SG8a a finding left still-open after the review that raised it does not fire S3', () => {
+    const subs = reviews([finding('F1', 'A1')], [disposition('F1', 'A1', 'still-open')])
+    expect(kinds(subs)).toEqual([])
   })
   // @covers: review-convergence › S4 fires when the open count stops falling › A flat count fires
   test('SG9 a non-decreasing open count above zero over three reviews fires S4', () => {
@@ -105,7 +111,8 @@ describe('table SG — signals over a window', () => {
   })
   // @covers: review-convergence › S5 fires on repeated out-of-contract findings › Two reviews push outside the contract
   test('SG12 out-of-contract findings in each of the last two reviews fire S5', () => {
-    const subs = reviews([finding('F1', 'A1')], [disposition('F1', 'A1'), finding('F3', null, 'out-of-contract')], [finding('F6', null, 'out-of-contract')])
+    // F2 stays open, so no review in between passes (a pass would restart the window).
+    const subs = reviews([finding('F1', 'A1'), finding('F2', 'A1')], [disposition('F1', 'A1'), finding('F3', null, 'out-of-contract')], [finding('F6', null, 'out-of-contract')])
     expect(signalsOf(subs).find(signal => signal.kind === 'S5')).toEqual({ kind: 'S5', findings: ['F3', 'F6'] })
   })
   // @covers: review-convergence › S5 fires on repeated out-of-contract findings › One review does not fire
@@ -124,7 +131,7 @@ describe('table SG — signals over a window', () => {
   })
 })
 
-const snap = (id: string, hash: string): ReviewSnapshot => ({ submissionId: id, ledgerSeq: Number(id.slice(1)), contractHash: hash, raised: [], resolved: [], outOfContract: [], reopened: [], openAfter: 0 })
+const snap = (id: string, hash: string): ReviewSnapshot => ({ submissionId: id, ledgerSeq: Number(id.slice(1)), contractHash: hash, raised: [], resolved: [], outOfContract: [], reopened: [], openAfter: 1 })
 const ids = (window: ReviewSnapshot[]) => window.map(entry => entry.submissionId)
 
 /**
@@ -138,6 +145,7 @@ const ids = (window: ReviewSnapshot[]) => window.map(entry => entry.submissionId
  * | WN4 | H1 H1 H1 | the second | the third |
  * | WN5 | H1 H1 H1 | the third | empty |
  * | WN6 | r3#A, then r4#A (renumbered, same hash) | none | both |
+ * | WN7 | H1 H1 H1, the second leaving `openAfter` 0 | none | the third |
  */
 describe('table WN — the window', () => {
   test('WN1 one hash and no anchor keeps every review', () => {
@@ -167,6 +175,13 @@ describe('table WN — the window', () => {
     subs[0]!.contractIdentity = 'r3#aaaaaaaaaaaa'
     subs[1]!.contractIdentity = 'r4#aaaaaaaaaaaa'
     expect(convergenceWindow(reviewSnapshots(subs, []), null).map(entry => entry.submissionId)).toEqual(['sub-1', 'sub-2'])
+  })
+  // @covers: review-convergence › Signals read the counted reviews of the current window › A passing review restarts the window
+  test('WN7 a review leaving nothing open restarts the window: a new finding after a pass is not churn', () => {
+    expect(ids(convergenceWindow([snap('s1', 'a'), { ...snap('s2', 'a'), openAfter: 0 }, snap('s3', 'a')], null))).toEqual(['s3'])
+    const subs = reviews([finding('F1', 'A1')], [disposition('F1', 'A1')], [finding('F2', 'A1')])
+    expect(convergenceOf(subs, [], null).window.map(entry => entry.submissionId)).toEqual(['sub-3'])
+    expect(kinds(subs)).toEqual([])
   })
 })
 
