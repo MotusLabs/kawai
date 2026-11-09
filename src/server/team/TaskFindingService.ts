@@ -32,8 +32,6 @@ export interface StructuredOutcome {
 export interface FindingServiceOptions {
   /** The newest scope fact of a result (implementation-contract D6); null when none is recorded yet. */
   scopeFact?: (resultId: string) => ResultScopeFact | null
-  /** Whether a plan round with this result is decided (D5's third finality rule). */
-  roundDecided?: (resultId: string) => boolean
   /** A ledger write landed (a dispute or a decision): the composition wakes the owner's executor. */
   onWrite?: (taskId: string) => void
 }
@@ -86,7 +84,7 @@ export class TaskFindingService {
       const event = findings.events(taskId).find(entry => entry.ledgerSeq > existing.ledgerSeq && ids.has(entry.findingId))
       if (event) return `${event.findingId} was ${event.kind} after that review`
     }
-    if (this.options.roundDecided?.(resultId)) return 'its round is decided'
+    if (findings.roundDecided(resultId)) return 'its round is decided'
     return null
   }
 

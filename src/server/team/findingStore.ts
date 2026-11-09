@@ -66,6 +66,16 @@ export function mapItem(row: Record<string, unknown>): LedgerItem {
 export class FindingStore {
   constructor(private readonly db: Database) {}
 
+  /**
+   * Whether a plan round on this result was decided pass or fail (D5's
+   * finality), read from the persisted rounds — a database without plan
+   * executions has none. A superseded round was never decided on its review.
+   */
+  roundDecided(resultId: string): boolean {
+    if (this.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'plan_execution_rounds'").get() === null) return false
+    return this.db.prepare("SELECT 1 FROM plan_execution_rounds WHERE result_id = ? AND outcome IN ('pass', 'fail') LIMIT 1").get(resultId) !== null
+  }
+
   /** The task's next ledger position: one past the highest across submissions and events. */
   nextSeq(taskId: string): number {
     const row = this.db.prepare(`SELECT max(seq) AS seq FROM (

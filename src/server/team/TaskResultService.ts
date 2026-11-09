@@ -126,8 +126,6 @@ export class TaskResultService {
     onResult?: (result: TaskResult, teamId: string) => void
     /** A recheck was requested (independent-verification D4): the composition wakes the check service. */
     onRecheck?: (teamId: string) => void
-    /** Whether a plan round on this result is decided (review-findings-ledger D5); the composition reads the executions. */
-    roundDecided?: (resultId: string) => boolean
   }) {
     this.release = options.releases && options.records
       ? new TaskRelease(this, {
@@ -145,7 +143,6 @@ export class TaskResultService {
   get findingsLedger(): TaskFindingService {
     this.findingService ??= new TaskFindingService(this.store, {
       scopeFact: resultId => this.store.checks.viewForResult(resultId).newest?.facts?.scope ?? null,
-      roundDecided: resultId => this.options.roundDecided?.(resultId) ?? false,
       onWrite: taskId => this.options.onWrite?.(taskId),
     })
     return this.findingService

@@ -92,6 +92,26 @@ describe('table RD — the round reads the fold', () => {
     await h.tick()
     expect(newestRound(executionId, 'rd-three').outcome).toBe('pass')
   })
+  // Finality (D5) reads the persisted rounds: once the executor decides the
+  // round, its claimant cannot replace the counted review.
+  test('a decided round makes its review final: a replacement with a blocking finding is refused and the round stays passed', async () => {
+    const executionId = await startedExecution(h, [{ change: 'rd-final' }])
+    await h.tick()
+    await submitWork(h, executionId, 'rd-final', 'src/rd-final.ts', 'x\n')
+    await h.tick()
+    await structured(executionId, 'rd-final', [])
+    await h.tick()
+    const round = newestRound(executionId, 'rd-final')
+    expect(round.outcome).toBe('pass')
+    const taskId = row(executionId, 'rd-final').taskId!
+    let refusal = ''
+    try {
+      await h.results.submitFindings(h.bench.agent('rev1'), taskId, { resultId: round.resultId, kind: 'review', items: [finding(executionId, 'rd-final', 'src/a.ts')] })
+    } catch (error) { refusal = (error as Error).message }
+    expect(refusal).toContain('its round is decided')
+    expect(ledger(executionId, 'rd-final')).toEqual([])
+    expect(h.tasks.store.results.reviewVerdict(taskId, round.resultId)).toBe('pass')
+  })
   // @covers: plan-execution › An undecided dispute holds the round › The round waits for a dispute
   test('RD2 nothing blocking but F3 disputed: the round waits and the change names the dispute of F3', async () => {
     const { executionId } = await heldOnDispute('rd-two')
