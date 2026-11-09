@@ -5,6 +5,7 @@
 // receives plus the ordered request and request_resolved events.
 import { describe, expect, test } from 'bun:test'
 import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk'
+import { AgentRuntimeError } from '../src/errors.js'
 import type { AgentEvent, PendingRequest } from '../src/events.js'
 import { driver, type Driver, type DriverHooks } from './helpers/claudeDriverHarness.js'
 
@@ -203,5 +204,150 @@ describe('Claude requests: headless defaults (Q04)', () => {
     expect([settled, waiting.d.pendingRequests().length]).toEqual([false, 1])
     waiting.d.resolveApproval(waiting.d.pendingRequests()[0]!.requestId, 'allow')
     expect(await answer).toEqual({ behavior: 'allow', updatedInput: COMMAND })
+  })
+})
+
+describe('Claude requests: interrupt, stop and process end (Q03)', () => {
+  const cancelledBy = (reason: string): PermissionResult => ({ behavior: 'deny', message: `The request was cancelled (${reason})`, interrupt: true })
+
+  test('Q03: interrupt cancels a pending request once and a later answer is refused', async () => {
+    const f = await idle({ unansweredRequests: 'wait' })
+    const result = ask(f, 'AskUserQuestion', QUESTION)
+    const id = f.d.pendingRequests()[0]!.requestId
+    await f.d.interrupt()
+    expect(f.d.answerQuestion(id, { 'Which colour?': { options: ['Red'] } })).toMatchObject({ ok: false, reason: 'not-pending' })
+    expect(await result).toEqual(cancelledBy('interrupted'))
+    expect(trail(f)).toEqual([`question_request:${id}`, `resolved:${id}:cancelled:-`])
+  })
+
+  test('Q03: an interrupt inside onRequest wins over the default denial', async () => {
+    let id = ''
+    const f = await idle({
+      onRequest: (request) => {
+        id = request.requestId
+        void f.d.interrupt()
+      },
+    })
+    expect(await ask(f, 'Bash', COMMAND)).toEqual(cancelledBy('interrupted'))
+    expect(trail(f)).toEqual([`approval_request:${id}`, `resolved:${id}:cancelled:-`])
+  })
+
+  // @covers: agent-runtime › Requests can be answered immediately › Response races stop
+  test('Q03: stop settles a pending request once; later answers report stopped and later requests publish nothing', async () => {
+    const f = await idle({ unansweredRequests: 'wait' })
+    const result = ask(f, 'Bash', COMMAND)
+    const id = f.d.pendingRequests()[0]!.requestId
+    const stop = f.d.kill()
+    expect(f.d.resolveApproval(id, 'allow')).toMatchObject({ ok: false, reason: 'stopped' })
+    expect(await result).toEqual(cancelledBy('stopped'))
+    const before = f.events.length
+    expect(await ask(f, 'Bash', COMMAND)).toEqual({ behavior: 'deny', message: 'The session is stopping', interrupt: true })
+    expect(f.events.length).toBe(before)
+    expect(await stop).toMatchObject({ scope: 'agent-processes', mode: 'kill', js: 'settled' })
+    expect(trail(f)).toEqual([`approval_request:${id}`, `resolved:${id}:cancelled:-`])
+  })
+
+  // @covers: agent-runtime › Requests can be answered immediately › Response races stop
+  test('Q03: an answer given before stop is kept and stop settles nothing more', async () => {
+    let id = ''
+    const f = await idle({
+      unansweredRequests: 'wait',
+      onRequest: (request) => {
+        id = request.requestId
+        f.d.resolveApproval(id, 'deny')
+      },
+    })
+    const result = ask(f, 'Bash', COMMAND)
+    await f.d.kill()
+    expect(await result).toEqual({ behavior: 'deny', message: 'The tool use was denied' })
+    expect(trail(f)).toEqual([`approval_request:${id}`, `resolved:${id}:denied:caller`])
+  })
+
+  test('Q03: a stop requested inside onRequest cancels the request and completes without joining the callback', async () => {
+    let stop: Promise<unknown> | null = null
+    const f = await idle({ onRequest: () => void (stop = f.d.kill()) })
+    expect(await ask(f, 'Bash', COMMAND)).toEqual(cancelledBy('stopped'))
+    expect(await stop).toMatchObject({ mode: 'kill', js: 'settled' })
+    expect(trail(f).at(-1)).toMatch(/:cancelled:-$/)
+  })
+
+  test('Q03: an unexpected process end cancels a pending request', async () => {
+    const f = await idle({ unansweredRequests: 'wait' })
+    const result = ask(f, 'Bash', COMMAND)
+    f.q().exit()
+    expect(await result).toEqual(cancelledBy('process ended'))
+    expect(f.d.pendingRequests()).toEqual([])
+  })
+})
+
+describe('Claude requests: refusals and reentrant observation (Q03)', () => {
+  test('Q03: invalid, wrong-kind, unknown and stale answers are refused without settling; the first valid answer wins', async () => {
+    const f = await idle({ unansweredRequests: 'wait' })
+    const first = ask(f, 'Bash', COMMAND)
+    const stale = f.d.pendingRequests()[0]!.requestId
+    f.d.resolveApproval(stale, 'allow')
+    await first
+    const result = ask(f, 'AskUserQuestion', QUESTION)
+    const id = f.d.pendingRequests()[0]!.requestId
+    const refused = [
+      f.d.answerQuestion(id, { 'Which colour?': { options: ['Green'] } }),
+      f.d.answerQuestion(id, { 'Another question?': { text: 'x' } }),
+      f.d.resolveApproval(id, 'allow'),
+      f.d.answerQuestion('req-unknown', { 'Which colour?': { options: ['Red'] } }),
+      f.d.answerQuestion(stale, { 'Which colour?': { options: ['Red'] } }),
+    ].map((o) => (o.ok ? 'ok' : o.reason))
+    expect(refused).toEqual(['invalid', 'invalid', 'invalid', 'not-pending', 'not-pending'])
+    expect(f.d.pendingRequests().map((r) => r.requestId)).toEqual([id])
+    expect(f.d.answerQuestion(id, { 'Which colour?': { text: 'Teal' } })).toEqual({ ok: true })
+    expect(f.d.answerQuestion(id, { 'Which colour?': { options: ['Red'] } })).toMatchObject({ ok: false, reason: 'not-pending' })
+    expect(await result).toEqual({ behavior: 'allow', updatedInput: { ...QUESTION, answers: { 'Which colour?': 'Teal' }, response: 'Teal' } })
+    expect(trail(f).filter((t) => t.includes(id))).toEqual([`question_request:${id}`, `resolved:${id}:answered:caller`])
+  })
+
+  test('Q03: onRequest still sees a request its event already answered, and neither its answer nor the default overrides it', async () => {
+    const seen: string[] = []
+    const f = await idle({
+      onEvent: (e) => {
+        if (e.type === 'approval_request') f.d.resolveApproval(e.requestId, 'allow', { decidedBy: 'rules' })
+      },
+      onRequest: (request) => {
+        const o = f.d.resolveApproval(request.requestId, 'deny')
+        seen.push(o.ok ? 'ok' : o.reason)
+      },
+    })
+    expect(await ask(f, 'Bash', COMMAND)).toEqual({ behavior: 'allow', updatedInput: COMMAND })
+    const id = f.events.find(isRequest)!.requestId
+    expect(seen).toEqual(['not-pending'])
+    expect(trail(f)).toEqual([`approval_request:${id}`, `resolved:${id}:allowed:rules`])
+  })
+
+  test('a settled request removes the abort listener it added', async () => {
+    const controller = new AbortController()
+    const added: unknown[] = []
+    const removed: unknown[] = []
+    const signal = controller.signal
+    const add = signal.addEventListener.bind(signal)
+    const remove = signal.removeEventListener.bind(signal)
+    signal.addEventListener = ((type: string, listener: EventListener, options?: AddEventListenerOptions) => (added.push(listener), add(type, listener, options))) as typeof signal.addEventListener
+    signal.removeEventListener = ((type: string, listener: EventListener) => (removed.push(listener), remove(type, listener))) as typeof signal.removeEventListener
+    const f = await idle({ onRequest: (request) => f.d.resolveApproval(request.requestId, 'allow') })
+    await ask(f, 'Bash', COMMAND, signal)
+    expect(added).toHaveLength(1)
+    expect(removed).toEqual(added)
+  })
+})
+
+describe('Claude requests: a throwing handler (Q04)', () => {
+  test('Q04: a throwing onRequest denies by default and its raw error is retained as the later stop cause', async () => {
+    const thrown = new Error('host bug')
+    const f = await idle({ onRequest: () => { throw thrown } })
+    expect(await ask(f, 'Bash', COMMAND)).toEqual({ behavior: 'deny', message: 'No answer was given; the request is denied' })
+    let failure: unknown = null
+    try {
+      await f.d.kill()
+    } catch (error) {
+      failure = error
+    }
+    expect([(failure as AgentRuntimeError | null)?.category, (failure as AgentRuntimeError | null)?.causes]).toEqual(['stop', [thrown]])
   })
 })
