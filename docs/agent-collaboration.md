@@ -188,8 +188,9 @@ regressed and new findings. If the first correction still violates the same
 invariant, reopen the design with the Lead before another patch; consider a
 read-only senior assessment or an explicit takeover. Keep one writer.
 
-For other defect classes, retain escalation after two unsuccessful correction
-rounds. Environmental failures and clarified acceptance criteria should be
+For other defect classes, the convergence signals and the backstop decide
+when a change needs a diagnosis instead of another fix (see "Convergence" in
+"Review protocol"). Environmental failures and clarified acceptance criteria should be
 recorded separately from code defects. Pause only affected work, keep other
 authorized work moving and do not infer permission to stop an execution.
 
@@ -276,6 +277,36 @@ form still works, but it never enters the ledger.
   superseded and no longer blocks.
 - **P0 alerts.** An accepted P0 on a plan change sends the Lead role a
   `review-p0` message. The round fails and the fix goes out as usual.
+- **Convergence.** Kawai reads the reviews of the current window (the
+  reviews under the current contract hash since the last pass and the last
+  closed diagnosis) for five signals:
+  - S1, oscillation: a finding reopened a second time;
+  - S2, moving clause: two reviews in a row each resolve a finding on a
+    clause and raise another on it;
+  - S3, churn: the newest review raises, and raised keeps pace with
+    resolved over the last two;
+  - S4, stagnation: the open P0/P1 count does not fall over three reviews;
+  - S5, scope pressure: two reviews in a row raise out-of-contract findings.
+
+  When a plan change's round fails and a signal fires on its review, or the
+  failed fix rounds reach the team's backstop (`maxFailedFixRounds`, 5 by
+  default), Kawai sends no fix. It opens a diagnosis and asks the plan's
+  Lead role (else the owner) a card in its own name. A signal never decides
+  a finding. Decide with `decision_record`, giving `option_index` and a
+  rationale; the card takes only its options, and the outcome is the reply:
+  - **Fix round**: the next fix is likely to converge. The fix carries your
+    rationale, and the count starts again.
+  - **Reject F…**: the named blockers are wrong. They read rejected; if
+    nothing else blocks, the result passes with no new commit.
+  - **Amend the contract**: the contract asks for the wrong thing or too
+    much. Kawai waits for the owner to publish a task revision, then sends
+    the fix naming it. You cannot publish it.
+  - **Reassign to <group>**: the group cannot finish it. The fix and every
+    later one go to the other group.
+  - **Escalate**: the change stops for the owner, who may Retry it.
+
+  On a task no execution owns, the same signals journal a notice and mail
+  its creator once per counted review; apply the same judgment.
 
 When the work carries acceptance oracles (see the next section), they
 decide the level. A missing, unfaithful, or vacuous oracle test, a

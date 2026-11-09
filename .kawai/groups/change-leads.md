@@ -77,6 +77,11 @@ result records acceptance, and closing a task is not it.
   dispute on a child task you created, one no plan owns, is yours to decide
   with `task_decide_dispute` and a rationale (`docs/agent-collaboration.md`,
   "Review protocol").
+- A diagnosis card on a plan change goes to the plan's Lead role too. On a
+  child task you created, a convergence notice (signals S1–S5) comes to you
+  instead: judge it by the playbook ("Convergence" in "Review protocol") —
+  another fix round, rejecting the findings, `Amend the contract`, another
+  writer, or escalation to the Team Lead.
 - Production code, including assembly: assembly is a child assignment to a
   writer; your sign-off is never review evidence.
 

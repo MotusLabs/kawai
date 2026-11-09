@@ -4,7 +4,10 @@
 // levels, the clause and evidence rules, and dispositions; developers fix only
 // the listed ids and dispute with evidence; the Lead and Change Leads know
 // dispute cards and `review-p0`; the collaboration doc defines the protocol
-// once, and the hazard catalog and architecture point at it.
+// once, and the hazard catalog and architecture point at it. The
+// convergence playbook (review-convergence decision 11, task 10.1) replaces
+// the two-correction-rounds rule: it lives once, in the protocol section, and
+// the Lead and Change Lead prompts point at it.
 import { expect, test } from 'bun:test'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -52,4 +55,31 @@ test('the collaboration doc defines the protocol once; the hazard catalog and th
   for (const phrase of ['P0', 'P1', 'P2 never blocks', 'task_dispute_findings', 'task_decide_dispute', 'review-p0']) expect(section).toContain(phrase)
   expect(read('docs/oracle-hazards.md')).toContain('"Review protocol"')
   expect(read('docs/architecture/tasks.md')).toMatch(/^- Review findings ledger \(review-findings-ledger; protocol in `docs\/agent-collaboration.md`, "Review protocol"\)/m)
+})
+
+// The playbook's own lines: a copy anywhere else is a second definition.
+const PLAYBOOK = ['S4, stagnation: the open P0/P1 count does not fall over three reviews', '**Amend the contract**: the contract asks for the wrong thing']
+
+test('no role file keeps the two-correction-rounds rule', () => {
+  for (const file of roleFiles()) {
+    const text = read(file).replace(/\s+/g, ' ')
+    expect({ file, hits: text.match(/two unsuccessful correction rounds|two correction rounds|two-unsuccessful-correction-round/gi) ?? [] }).toEqual({ file, hits: [] })
+  }
+})
+
+test('the convergence playbook appears once, in the protocol section', () => {
+  const doc = read('docs/agent-collaboration.md')
+  const section = doc.slice(doc.indexOf('## Review protocol'), doc.indexOf('## Write acceptance as oracles'))
+  for (const line of PLAYBOOK) {
+    expect(section).toContain(line)
+    const copies = [...roleFiles(), 'docs/agent-collaboration.md'].map(file => ({ file, count: read(file).split(line).length - 1 })).filter(entry => entry.count > 0)
+    expect(copies).toEqual([{ file: 'docs/agent-collaboration.md', count: 1 }])
+  }
+})
+
+test('the Lead and Change Lead prompts point at the playbook with Amend the contract and the signals', () => {
+  for (const name of ['lead', 'change-leads']) {
+    const text = read(`${GROUPS}/${name}.md`).replace(/\s+/g, ' ')
+    for (const phrase of ['`Amend the contract`', 'S1–S5', '"Convergence"', 'Review protocol']) expect({ name, phrase, found: text.includes(phrase) }).toEqual({ name, phrase, found: true })
+  }
 })

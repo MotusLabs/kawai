@@ -131,11 +131,11 @@
 
 ## 7. Plans view (decision 9)
 
-- [ ] 7.1 Add `convergence` to `ExecutionChangeView` from the shared module,
+- [x] 7.1 Add `convergence` to `ExecutionChangeView` from the shared module,
   and render the count line and the signals in `PlanExecutionChangeRow.tsx`.
   Verify "A converging change" with a client test: A9 kills "count every
   review instead of the window".
-- [ ] 7.2 Add a Playwright spec. In the fixture plan, failed structured
+- [x] 7.2 Add a Playwright spec. In the fixture plan, failed structured
   reviews open a diagnosis, and the spec sees the convergence stall, the
   card with its options, and the count line. Run `bun run build`, then the
   spec. Verify V5: kills "row renders nothing for an open diagnosis".
@@ -166,7 +166,7 @@
 
 ## 10. Prompts and docs (decision 11)
 
-- [ ] 10.1 Make the following edits:
+- [x] 10.1 Make the following edits:
   - in `lead.md`, replace the two-correction-rounds bullet with a pointer
     to the playbook and the diagnosis card's tools;
   - give `change-leads.md` the same pointer;
