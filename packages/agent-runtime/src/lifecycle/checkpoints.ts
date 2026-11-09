@@ -4,15 +4,19 @@
 //   caller's onCheckpoint as an owned job (stop joins it). Reports run one at
 //   a time in arrival order, and a synchronous throw counts as a rejection.
 //   The identity the caller supplied as `resume` counts as already reported.
-// - Gate. A send admitted while a persistence is pending is not acknowledged
-//   until it settles. The admission is decided at call time, so a refusal
-//   (busy, unsupported, stopped) stays a refusal (L08). It is withdrawn while
-//   waiting and decided again synchronously afterwards, so released waiters
-//   commit one at a time in FIFO order (L21). A waiter released by one
-//   persistence waits again if another became pending meanwhile. An
-//   interrupt any time after the call refuses the send as interrupted (L10):
-//   the boundary is read before the first yield, and a cancelled admission
-//   is not withdrawn twice.
+// - Gate. A send is decided at call time where it can be: a refusal (busy,
+//   unsupported, not-ready, stopped) is settled before the first yield and
+//   stays a refusal (L08). An undecided send is a waiter: it waits for a
+//   start in progress and for every pending persistence, then runs the
+//   host's beforeSubmit, then revalidates (cancellation, sticky failure,
+//   pending persistence, admission) and commits in one synchronous step, so
+//   released waiters commit one at a time in FIFO order (L21) and nothing
+//   holds a queue admission across a callback.
+// - Interrupt (L10, R3 A4). cancelWaiting() decides every waiter that exists
+//   when the interrupt is entered, before any callback runs: each is refused
+//   not-ready/interrupted at once, without waiting for the start or the
+//   persistence, which stay owned work the stop joins. A send made from a
+//   callback the interrupt triggers is new work.
 // - Rejection is sticky: every waiting and later send is refused with
 //   category `checkpoint`, unless the stop had already begun when it
 //   rejected, in which case the sends are refused as stopped. The raw
@@ -36,6 +40,18 @@ export interface CheckpointHost {
   failed(error: unknown): void
 }
 
+/** The two steps of an accepted send: the host's check, then the synchronous commit. */
+export interface AdmitSteps<P, T> {
+  prepare(): P
+  commit(admission: Admission, prepared: P): T
+}
+
+interface Waiter {
+  decided: boolean
+  resolve(value: unknown): void
+  reject(error: unknown): void
+}
+
 interface Failure {
   error: unknown
   /** The stop had already begun when the persistence rejected. */
@@ -47,6 +63,8 @@ export class CheckpointGate {
   private pending: Promise<void> | null = null
   private failure: Failure | null = null
   private readonly callback = new AsyncLocalStorage<true>()
+  /** Undecided sends, in call order. */
+  private readonly waiters = new Set<Waiter>()
 
   constructor(private readonly host: CheckpointHost, resumed: string | null) {
     this.reported = resumed
@@ -82,38 +100,109 @@ export class CheckpointGate {
   }
 
   /**
-   * Admit a send (lifecycle.admitSend), hold it until no persistence is
-   * pending, then run `commit` with the final admission in the same
-   * synchronous step that decided it: returning the admission across an
-   * await would let another released waiter decide from the same state.
+   * Admit a send. `prepare` (the host's beforeSubmit) runs once the send no
+   * longer waits; `commit` runs in the same synchronous step that decided
+   * the final admission and must enqueue first, so a throw from it means
+   * nothing was accepted. The promise settles with the commit's value, or
+   * with the refusal that decided the send.
    */
-  async admit<T>(continuation: ContinuationMode | undefined, commit: (admission: Admission) => T): Promise<T> {
+  admit<P, T>(continuation: ContinuationMode | undefined, steps: AdmitSteps<P, T>): Promise<T> {
     if (this.callback.getStore()) {
-      throw new AgentRuntimeError({ category: 'internal', message: 'send() inside onCheckpoint would wait for its own persistence' })
+      return Promise.reject(new AgentRuntimeError({ category: 'internal', message: 'send() inside onCheckpoint would wait for its own persistence' }))
     }
     const refused = this.refusal()
-    if (refused) throw refused
+    if (refused) return Promise.reject(refused)
     const lifecycle = this.host.lifecycle
-    // L10: the cancellation boundary is read before the first yield and never re-read.
-    const epoch = lifecycle.interruptions
-    let admission: Admission | null = await lifecycle.admitSend(continuation)
+    if (lifecycle.state !== 'starting') {
+      // Decided now when it is a refusal; otherwise only the kind is known, and nothing is held.
+      try {
+        lifecycle.withdraw(lifecycle.admitNow(continuation))
+      } catch (error) {
+        return Promise.reject(error)
+      }
+    }
+    return new Promise<T>((resolve, reject) => {
+      const waiter: Waiter = { decided: false, resolve: resolve as (value: unknown) => void, reject }
+      this.waiters.add(waiter)
+      void this.hold(waiter, continuation, steps)
+    })
+  }
+
+  /**
+   * L10/R3 A4: refuse every waiter as interrupted, at once. Returns how many
+   * were cancelled. Every one is decided before the caller runs anything
+   * else, so no callback can accept or re-cancel it.
+   */
+  cancelWaiting(): number {
+    const cancelled = Array.from(this.waiters)
+    this.waiters.clear()
+    for (const waiter of cancelled) waiter.decided = true
+    for (const waiter of cancelled) waiter.reject(new AgentRuntimeError({ category: 'not-ready', code: 'interrupted', message: 'interrupted before the send was acknowledged' }))
+    return cancelled.length
+  }
+
+  private decide(waiter: Waiter): boolean {
+    if (waiter.decided) return false
+    waiter.decided = true
+    this.waiters.delete(waiter)
+    return true
+  }
+
+  private async hold<P, T>(waiter: Waiter, continuation: ContinuationMode | undefined, steps: AdmitSteps<P, T>): Promise<void> {
+    const lifecycle = this.host.lifecycle
+    try {
+      const starting = lifecycle.initialization
+      if (starting) {
+        try {
+          await starting
+        } catch (error) {
+          if (waiter.decided) return
+          const now = lifecycle.state
+          if (now === 'stopping' || now === 'stopped') throw new AgentRuntimeError({ category: 'stopped', message: 'the driver is stopped' })
+          throw new AgentRuntimeError({ category: 'not-ready', message: 'the driver failed to start' }, [error])
+        }
+      } else {
+        await null
+      }
+      if (!(this.clear(waiter) ?? (await this.released(waiter)))) return
+      lifecycle.withdraw(lifecycle.admitNow(continuation))
+      const prepared = steps.prepare()
+      // beforeSubmit may have interrupted, stopped or sent: decide again from now, without a yield unless a persistence is pending.
+      if (!(this.clear(waiter) ?? (await this.released(waiter)))) return
+      const admission = lifecycle.admitNow(continuation)
+      this.decide(waiter)
+      let value: T
+      try {
+        value = steps.commit(admission, prepared)
+      } catch (error) {
+        lifecycle.withdraw(admission)
+        waiter.reject(error)
+        return
+      }
+      waiter.resolve(value)
+    } catch (error) {
+      if (this.decide(waiter)) waiter.reject(error)
+    }
+  }
+
+  /**
+   * Synchronously: false when the send was decided (an interrupt), true
+   * when nothing is pending, null when a persistence is pending; throws the
+   * sticky refusal.
+   */
+  private clear(waiter: Waiter): boolean | null {
+    if (waiter.decided) return false
+    const failure = this.refusal()
+    if (failure) throw failure
+    return this.pending ? null : true
+  }
+
+  /** Wait until no persistence is pending (a waiter released by one waits again for the next). */
+  private async released(waiter: Waiter): Promise<boolean> {
     for (;;) {
-      const cancelled = epoch !== lifecycle.interruptions
-      const failure = this.refusal()
-      if (admission !== null) {
-        if (!cancelled && !failure && !this.pending) return commit(admission)
-        // Release the held admission, unless the interrupt already discounted it:
-        // withdrawing it again would alter newer work's queue accounting.
-        if (!cancelled) lifecycle.withdraw(admission)
-        admission = null
-      }
-      if (failure) throw failure
-      if (cancelled) throw new AgentRuntimeError({ category: 'not-ready', code: 'interrupted', message: 'interrupted before the send was acknowledged' })
-      if (this.pending) {
-        while (this.pending) await this.pending.catch(() => {})
-        continue
-      }
-      admission = lifecycle.admitNow(continuation)
+      while (this.pending && !waiter.decided) await this.pending.catch(() => {})
+      const clear = this.clear(waiter)
+      if (clear !== null) return clear
     }
   }
 

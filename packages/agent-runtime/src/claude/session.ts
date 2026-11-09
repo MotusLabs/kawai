@@ -15,7 +15,10 @@
 //   session's life, and a frame without one is refused.
 // - Agent-started turns. An init that no submission opened starts an
 //   agent-started turn (L24), but only while idle.
-// - Checkpoints. A new session id is persisted before later sends are acknowledged (lifecycle/checkpoints.ts).
+// - Checkpoints. A new session id is persisted before later sends are
+//   acknowledged, and an interrupt refuses every send still waiting
+//   (lifecycle/checkpoints.ts). State publications are held while a turn
+//   opens or settles, so a callback never reenters a half-finished step.
 // - Composition. Permissions, host integrations, requests (canUseTool) and
 //   frame mapping are composed here. A generation is registered before its
 //   query() call. The owned spawner reports each process before any recorder
@@ -45,7 +48,8 @@ import { accountGenerations, cancelledByStop, interruptGeneration, linkedAbort, 
 import { ClaudeRequests } from './requests.js'
 import { SeenResultFrames } from './resultFrames.js'
 import { CliTurnBinder } from './turnBinder.js'
-import { checkSubmission, newTurn, resultErrorText, resultUuids, turnResult, type Turn } from './turns.js'
+import { OpenTurns } from './openTurns.js'
+import { checkSubmission, newTurn, resultErrorText, resultUuids, type Turn } from './turns.js'
 import type { ClaudeSessionOptions } from './sessionOptions.js'
 export type { ClaudeQueryFactory, ClaudeSessionOptions } from './sessionOptions.js'
 
@@ -55,7 +59,7 @@ export class ClaudeSession {
   private readonly events: EventStream
   private readonly generations: Generation[] = []
   /** Open turns in FIFO order: the active turn first, then queued ones (L21). */
-  private open: Turn[] = []
+  private readonly open: OpenTurns
   private readonly binder: CliTurnBinder
   private readonly requests: ClaudeRequests
   private readonly frames: ClaudeFrames
@@ -78,6 +82,7 @@ export class ClaudeSession {
     this.runtimeSessionId = options.resume?.runtimeSessionId ?? null
     const { callbacks, logger } = options
     this.events = new EventStream((event) => this.notify('onEvent', () => callbacks.onEvent(event)))
+    this.open = new OpenTurns({ emit: (body) => this.emit(body), notify: (name, callback) => this.notify(name, callback), onTurnResult: callbacks.onTurnResult })
     this.lifecycle = new DriverLifecycle({ continuations: new Set(['queue']), ...(callbacks.onState ? { onState: callbacks.onState } : {}) })
     const persist = callbacks.onCheckpoint && ((checkpoint: ResumeCheckpoint) => callbacks.onCheckpoint!(checkpoint))
     const failed = () => { this.events.emit({ type: 'error', error: CHECKPOINT_FAILED }); void this.shutdown().catch(() => {}) }
@@ -129,10 +134,8 @@ export class ClaudeSession {
     return this.lifecycle.state
   }
 
-  /** The opened turn content binds to, if any. */
   private active(): Turn | null {
-    const first = this.open[0]
-    return first?.opened ? first : null
+    return this.open.active()
   }
 
   start(): Promise<void> {
@@ -264,7 +267,7 @@ export class ClaudeSession {
     this.binder.reset()
     this.requests.cancelAll('process ended')
     this.events.emit({ type: 'error', error })
-    for (const turn of this.takeOpen()) this.settle(turn, 'process-ended', error, 'process_ended')
+    for (const turn of this.open.take()) this.open.settle(turn, 'process-ended', error, 'process_ended')
     this.frames.processEnded()
     const report = { generation: generation.number, code, signal, reason: exit?.kind === 'spawn-failed' ? 'spawn failed' : null }
     this.notify('onProcessEnd', () => this.options.callbacks.onProcessEnd?.(report))
@@ -315,12 +318,18 @@ export class ClaudeSession {
     // an interrupted turn whose result is owed opens nothing.
     if (this.binder.init() !== 'open') return
     const turn = newTurn(crypto.randomUUID(), null, '')
-    if (this.lifecycle.native(turn.turnId) !== 'open') return
-    this.open.push(turn)
-    this.openTurn(turn, true)
+    this.lifecycle.holdState(() => {
+      if (this.lifecycle.native(turn.turnId) !== 'open') return
+      this.open.push(turn)
+      this.openTurn(turn, true)
+    })
   }
 
   private result(message: SDKResultMessage): void {
+    this.lifecycle.holdState(() => this.settleResult(message))
+  }
+
+  private settleResult(message: SDKResultMessage): void {
     const identity = this.seenResults.first(message.uuid)
     if (identity === 'unidentified') this.options.logger?.warn({}, 'claude_result_without_frame_uuid')
     if (identity !== 'first') return
@@ -329,49 +338,59 @@ export class ClaudeSession {
     const turn = this.active()
     if (!turn || turn.settled) return
     // Queued prompts the CLI consumed into this turn share its result.
-    const absorbed = this.open.filter((queued) => queued !== turn && !queued.opened && queued.messageUuid !== null && uuids.includes(queued.messageUuid))
+    const absorbed = this.open.queuedWith(uuids, turn)
     for (const _ of absorbed) this.lifecycle.withdraw('queue')
     if (!this.lifecycle.result(turn.turnId)) return
-    this.open = this.open.filter((t) => t !== turn && !absorbed.includes(t))
+    this.open.remove([turn, ...absorbed])
     const failed = message.subtype !== 'success' || message.is_error
     if (!failed && message.subtype === 'success') turn.finalText = message.result
     const error: AgentErrorInfo | null = failed ? { category: 'provider', message: resultErrorText(message) } : null
-    const result = this.settle(turn, failed ? 'failed' : 'success', error, message.subtype, message)
+    const result = this.open.settle(turn, failed ? 'failed' : 'success', error, message.subtype, message)
     for (const queued of absorbed) {
       queued.settled = true
       queued.resolve(result)
     }
     if (failed) this.events.emit({ type: 'error', error: error! })
-    const next = this.open[0]
+    const next = this.open.next()
     if (next) this.openTurn(next, false)
   }
 
-  /** R10/I2: acknowledged only once any pending identity persistence succeeded; `accept` commits synchronously. */
+  /** R10/I2: acknowledged only once any pending identity persistence succeeded (the gate, lifecycle/checkpoints.ts). */
   send(text: string, submit: SubmitOptions = {}): Promise<TurnHandle> {
-    return this.checkpoints.admit(submit.continuation, (admission) => this.accept(text, submit, admission))
+    return this.checkpoints.admit(submit.continuation, {
+      // P12/P13: the host decides before anything is enqueued or emitted, and
+      // an accepted submission keeps the identity the host recorded.
+      prepare: () => {
+        const messageUuid = submit.messageUuid ?? crypto.randomUUID()
+        const turnId = crypto.randomUUID()
+        checkSubmission(this.options.beforeSubmit, { messageUuid, turnId, text, context: submit.context })
+        return newTurn(turnId, messageUuid, text)
+      },
+      commit: (admission, turn) => this.accept(turn, admission),
+    })
   }
 
-  private accept(text: string, submit: SubmitOptions, admission: Admission): TurnHandle {
-    const messageUuid = submit.messageUuid ?? crypto.randomUUID()
-    const turnId = crypto.randomUUID()
-    // P12/P13: the host decides before anything is enqueued or emitted, and
-    // an accepted submission keeps the identity the host recorded.
-    checkSubmission(this.options.beforeSubmit, { messageUuid, turnId, text, context: submit.context }, () => this.lifecycle.withdraw(admission))
-    const turn = newTurn(turnId, messageUuid, text)
-    const generation = this.current()!
-    const pushed = generation.input.push({
+  /**
+   * Acceptance is the enqueue: it comes first, and a refused enqueue
+   * accepts nothing. The prompt is the turn's before any publication, so an
+   * interrupt from a callback during turn_started or user_message finds the
+   * turn holding it and owes its result once.
+   */
+  private accept(turn: Turn, admission: Admission): TurnHandle {
+    const messageUuid = turn.messageUuid!
+    const pushed = this.current()!.input.push({
       type: 'user',
-      message: { role: 'user', content: text },
+      message: { role: 'user', content: turn.text },
       parent_tool_use_id: null,
       uuid: messageUuid,
       session_id: '',
     } as SDKUserMessage)
     if (!pushed) throw new AgentRuntimeError({ category: 'stopped', message: 'the driver is stopped' })
     this.open.push(turn)
-    this.frames.sent(messageUuid, text)
-    if (admission === 'new-turn') this.openTurn(turn, false)
-    this.binder.promptSent(messageUuid, turnId)
-    return { turnId, messageUuid, result: turn.result }
+    this.frames.sent(messageUuid, turn.text)
+    this.binder.promptSent(messageUuid, turn.turnId)
+    if (admission === 'new-turn') this.lifecycle.holdState(() => this.openTurn(turn, false))
+    return { turnId: turn.turnId, messageUuid, result: turn.result }
   }
 
   /** Emit turn_started (and the opening user message of a submitted turn). */
@@ -385,52 +404,29 @@ export class ClaudeSession {
     if (turn.messageUuid !== null) this.emit({ type: 'user_message', turnId: turn.turnId, text: turn.text, messageUuid: turn.messageUuid })
   }
 
-  private takeOpen(): Turn[] {
-    const open = this.open
-    this.open = []
-    return open
-  }
-
-  private settle(turn: Turn, outcome: TurnOutcome, error: AgentErrorInfo | null, subtype: string, message?: SDKResultMessage) {
-    const result = turnResult(turn, outcome, error)
-    if (turn.settled) return result
-    turn.settled = true
-    if (outcome === 'interrupted') this.emit({ type: 'turn_interrupted', turnId: turn.turnId })
-    else {
-      this.emit({
-        type: 'turn_completed', turnId: turn.turnId, subtype, isError: outcome !== 'success', usage: null,
-        finalText: result.finalText, totalCostUsd: message?.total_cost_usd ?? null, providerCostUsd: null,
-        numTurns: message?.num_turns ?? null, terminalReason: message?.terminal_reason ?? null,
-      })
-    }
-    turn.resolve(result)
-    this.notify('onTurnResult', () => this.options.callbacks.onTurnResult?.(result))
-    return result
-  }
-
-  /** Settle a turn that never opened: its handle resolves, no turn event (L10/L11). */
-  private settleQueued(turn: Turn, error: AgentErrorInfo): void {
-    if (turn.settled) return
-    turn.settled = true
-    const result = turnResult(turn, 'interrupted', error)
-    turn.resolve(result)
-    this.notify('onTurnResult', () => this.options.callbacks.onTurnResult?.(result))
-  }
-
-  /** L09/L10: settle the active and queued turns at once, then ask the CLI to stop the turn. */
+  /**
+   * L09/L10/L13, R3 A4: refuse every waiting send first (before any
+   * callback), then settle the active and queued turns at once with state
+   * publications held, then ask the CLI to stop the turn. Cancelling a
+   * waiting send makes the receipt requested even with no active turn.
+   */
   async interrupt(): Promise<InterruptReceipt> {
+    if (this.stopBegun()) throw new AgentRuntimeError({ category: 'stopped', message: 'the driver is stopped' })
+    const cancelled = this.checkpoints.cancelWaiting()
+    const receipt = this.lifecycle.holdState(() => this.interruptTurns())
+    return cancelled > 0 ? { outcome: 'requested', processExit: false } : receipt
+  }
+
+  private interruptTurns(): InterruptReceipt {
     const receipt = this.lifecycle.interrupt()
     const generation = this.current()
     if (generation) this.binder.promptsWithdrawn(generation.input.clearPending().flatMap((m) => (m.uuid ? [m.uuid] : [])))
     this.requests.cancelAll('interrupted')
     const error: AgentErrorInfo = { category: 'stopped', message: 'the turn was interrupted' }
-    const turns = this.takeOpen()
+    const turns = this.open.take()
     const active = turns[0]?.opened ? turns[0] : undefined
-    if (active) {
-      this.binder.turnInterrupted(active.turnId)
-      this.settle(active, 'interrupted', error, 'interrupted')
-    }
-    for (const turn of turns) if (turn !== active) this.settleQueued(turn, error)
+    if (active) this.binder.turnInterrupted(active.turnId)
+    this.open.settleAll(turns, error)
     this.frames.interrupted()
     if (generation && active) {
       void this.lifecycle.jobs.run(
@@ -488,10 +484,7 @@ export class ClaudeSession {
     this.stopToken = { reason: 'the agent-runtime driver is stopping' }
     const error: AgentErrorInfo = { category: 'stopped', message: 'the driver was stopped' }
     this.requests.close()
-    for (const turn of this.takeOpen()) {
-      if (turn.opened) this.settle(turn, 'interrupted', error, 'interrupted')
-      else this.settleQueued(turn, error)
-    }
+    this.open.settleAll(this.open.take(), error)
     this.binder.reset()
     this.frames.processEnded()
     return terminateGenerations(this.generations, mode, this.options.terminate ?? {}, this.stopToken)

@@ -66,17 +66,15 @@ export function resultErrorText(message: SDKResultMessage): string {
  * withdraws the admission and rejects with category `context` before
  * anything is enqueued or emitted.
  */
-export function checkSubmission(beforeSubmit: BeforeSubmit | undefined, submission: SubmitContext, withdraw: () => void): void {
+export function checkSubmission(beforeSubmit: BeforeSubmit | undefined, submission: SubmitContext): void {
   if (!beforeSubmit) return
   let decision: ReturnType<BeforeSubmit>
   try {
     decision = beforeSubmit(submission)
   } catch (error) {
-    withdraw()
     throw new AgentRuntimeError({ category: 'context', message: 'the pre-submit context callback threw' }, [error])
   }
   if (decision?.accepted === true) return
-  withdraw()
   const reason = decision && decision.accepted === false ? decision.reason : 'no decision returned'
   throw new AgentRuntimeError({ category: 'context', message: `the pre-submit context callback refused: ${reason}` })
 }

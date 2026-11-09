@@ -28,6 +28,9 @@ function refusal(category: 'not-ready' | 'busy' | 'stopped' | 'unsupported', mes
 export class DriverLifecycle {
   readonly jobs = new OwnedJobs()
   private current: DriverState = 'unstarted'
+  /** The state last given to onState; publications are deferred while `holds` > 0. */
+  private published: DriverState = 'unstarted'
+  private holds = 0
   private generationNumber = 0
   private starting: Promise<void> | null = null
   private activeTurn: string | null = null
@@ -52,9 +55,33 @@ export class DriverLifecycle {
     return this.activeTurn
   }
 
-  /** Changes on every interrupt that cancelled something; waiters compare it (L10). */
-  get interruptions(): number {
-    return this.interruptEpoch
+  /** The pending initialization while starting, else null (a send waits on it, L06). */
+  get initialization(): Promise<void> | null {
+    return this.current === 'starting' ? this.starting : null
+  }
+
+  /**
+   * Run `body` with non-terminal onState publications deferred: the state
+   * changes at once, and the state at the end is published once if it
+   * differs from the last one published. A driver holds publications while
+   * it settles or opens a turn, so a host callback never observes, or
+   * reenters, a half-finished step. A state entered and left inside the hold
+   * is not published. stopping and stopped are published at once.
+   */
+  holdState<T>(body: () => T): T {
+    this.holds += 1
+    try {
+      return body()
+    } finally {
+      this.holds -= 1
+      if (this.holds === 0) this.publish()
+    }
+  }
+
+  private setState(next: DriverState): void {
+    if (next === this.current) return
+    this.current = next
+    if (this.holds === 0 || next === 'stopping' || next === 'stopped') this.publish()
   }
 
   /**
@@ -62,9 +89,10 @@ export class DriverLifecycle {
    * abort before its teardown is installed); the throw is retained as an
    * owned failure, so the stop result reports it.
    */
-  private setState(next: DriverState): void {
-    if (next === this.current) return
-    this.current = next
+  private publish(): void {
+    const next = this.current
+    if (next === this.published) return
+    this.published = next
     const onState = this.options.onState
     if (!onState) return
     try {
