@@ -106,7 +106,7 @@
 
 ## 6. Integration
 
-- [ ] 6.1 Run `bun run check` on the clean committed tree and record the
+- [x] 6.1 Run `bun run check` on the clean committed tree and record the
   pass in the result, with each SN, AN, TR, and EF id mapped to its test title
   and killed mutant.
 
