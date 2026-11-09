@@ -186,6 +186,48 @@ describe('Claude checkpoints: admission while persisting (L08, L21, L10)', () =>
     expect(f.q().prompts).toHaveLength(1)
     await f.d.kill()
   })
+
+  test('L10: an interrupt in the same tick as a queued send refuses it, and later work keeps its own accounting', async () => {
+    const { f, p, t0 } = await persisting()
+    const next = f.d.send('later', { continuation: 'queue' })
+    void f.d.interrupt() // no tick: the send has yielded once but not yet resumed
+    p.calls[0]!.resolve()
+    const refused = await outcome(next)
+    expect(refused).toBeInstanceOf(AgentRuntimeError)
+    expect((refused as AgentRuntimeError).category).toBe('not-ready')
+    expect((refused as AgentRuntimeError).code).toBe('interrupted')
+    expect(prompts(f)).toEqual([t0.messageUuid])
+    expect(startedTurns(f)).toHaveLength(1)
+    expect(f.d.state).toBe('idle')
+    // A new turn and a queued send after it still correlate, in order, and the driver ends idle.
+    const b = await f.d.send('b')
+    const c = await f.d.send('c', { continuation: 'queue' })
+    await tick()
+    expect(prompts(f)).toEqual([t0.messageUuid, b.messageUuid, c.messageUuid])
+    f.q().push(frames.result([t0.messageUuid], 'late'), frames.init('sess-new'), frames.result([b.messageUuid], 'rb'))
+    expect(await b.result).toMatchObject({ turnId: b.turnId, finalText: 'rb' })
+    await f.q().drain()
+    expect(f.d.lifecycle.activeTurnId).toBe(c.turnId)
+    f.q().push(frames.result([c.messageUuid], 'rc'))
+    expect(await c.result).toMatchObject({ turnId: c.turnId, finalText: 'rc' })
+    expect(f.d.state).toBe('idle')
+    await f.d.kill()
+  })
+
+  test('L10 without onCheckpoint: a queued send interrupted before it resumed is refused, not enqueued', async () => {
+    const f = await idle({})
+    const t0 = await f.d.send('first')
+    f.q().push(frames.init('sess-new'))
+    await f.q().drain()
+    const next = f.d.send('later', { continuation: 'queue' })
+    void f.d.interrupt()
+    const refused = await outcome(next)
+    expect(refused).toBeInstanceOf(AgentRuntimeError)
+    expect((refused as AgentRuntimeError).code).toBe('interrupted')
+    expect(prompts(f)).toEqual([t0.messageUuid])
+    expect(f.d.state).toBe('idle')
+    await f.d.kill()
+  })
 })
 
 describe('Claude checkpoints: rejection and stop (A2)', () => {

@@ -9,7 +9,10 @@
 //   (busy, unsupported, stopped) stays a refusal (L08). It is withdrawn while
 //   waiting and decided again synchronously afterwards, so released waiters
 //   commit one at a time in FIFO order (L21). A waiter released by one
-//   persistence waits again if another became pending meanwhile.
+//   persistence waits again if another became pending meanwhile. An
+//   interrupt any time after the call refuses the send as interrupted (L10):
+//   the boundary is read before the first yield, and a cancelled admission
+//   is not withdrawn twice.
 // - Rejection is sticky: every waiting and later send is refused with
 //   category `checkpoint`, unless the stop had already begun when it
 //   rejected, in which case the sends are refused as stopped. The raw
@@ -88,26 +91,35 @@ export class CheckpointGate {
     if (this.callback.getStore()) {
       throw new AgentRuntimeError({ category: 'internal', message: 'send() inside onCheckpoint would wait for its own persistence' })
     }
-    this.refuseIfFailed()
+    const refused = this.refusal()
+    if (refused) throw refused
     const lifecycle = this.host.lifecycle
-    let admission = await lifecycle.admitSend(continuation)
-    while (this.pending) {
-      lifecycle.withdraw(admission)
-      const epoch = lifecycle.interruptions
-      while (this.pending) await this.pending.catch(() => {})
-      this.refuseIfFailed()
-      if (epoch !== lifecycle.interruptions) {
-        throw new AgentRuntimeError({ category: 'not-ready', code: 'interrupted', message: 'interrupted while the checkpoint was being persisted' })
+    // L10: the cancellation boundary is read before the first yield and never re-read.
+    const epoch = lifecycle.interruptions
+    let admission: Admission | null = await lifecycle.admitSend(continuation)
+    for (;;) {
+      const cancelled = epoch !== lifecycle.interruptions
+      const failure = this.refusal()
+      if (admission !== null) {
+        if (!cancelled && !failure && !this.pending) return commit(admission)
+        // Release the held admission, unless the interrupt already discounted it:
+        // withdrawing it again would alter newer work's queue accounting.
+        if (!cancelled) lifecycle.withdraw(admission)
+        admission = null
+      }
+      if (failure) throw failure
+      if (cancelled) throw new AgentRuntimeError({ category: 'not-ready', code: 'interrupted', message: 'interrupted before the send was acknowledged' })
+      if (this.pending) {
+        while (this.pending) await this.pending.catch(() => {})
+        continue
       }
       admission = lifecycle.admitNow(continuation)
     }
-    return commit(admission)
   }
 
-  private refuseIfFailed(): void {
+  /** The sticky refusal after a persistence rejected outside a stop. */
+  private refusal(): AgentRuntimeError | null {
     const failure = this.failure
-    if (failure && !failure.duringStop) {
-      throw new AgentRuntimeError({ ...CHECKPOINT_FAILED }, [failure.error])
-    }
+    return failure && !failure.duringStop ? new AgentRuntimeError({ ...CHECKPOINT_FAILED }, [failure.error]) : null
   }
 }
