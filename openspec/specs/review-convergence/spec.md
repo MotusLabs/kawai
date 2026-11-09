@@ -119,12 +119,20 @@ When the diagnosis card is decided with `Fix round`, Kawai SHALL dispatch the fa
 - **WHEN** the Lead decides a diagnosis with `Fix round` and the rationale "the count fell from 5 to 3; continue"
 - **THEN** the implementing group receives the fix handoff listing the blocking findings and that rationale, and the backstop count reads zero
 
+#### Scenario: A held fix keeps its diagnosis after restart
+- **WHEN** a diagnosis decision defers its fix handoff behind a hold and Kawai restarts before the hold is released
+- **THEN** releasing the hold dispatches the fix once with the applied decision's rationale, even if the owner overrode the closed diagnosis afterward
+
 ### Requirement: Reject rejects the named findings
-When the diagnosis card is decided with its `Reject` option, every finding that option names SHALL read rejected by that decision. If no finding then blocks and none is disputed, Kawai SHALL gate the failed round's result again as a passing round, keeping its CI and review. Otherwise Kawai SHALL dispatch a fix for the findings that still block or await a dispute decision. Either way the diagnosis SHALL close.
+When the diagnosis card is decided with its `Reject` option, every finding that option names SHALL read rejected by that decision. If the round failed on a structured review, its CI passes, no finding then blocks, and none is disputed, Kawai SHALL gate the failed round's result again as a passing round, keeping its CI and review. Rejecting findings SHALL NOT override failed CI or substitute for a missing structured review. Otherwise Kawai SHALL dispatch a fix for the failed checks and findings that still block or await a dispute decision. Either way the diagnosis SHALL close.
 
 #### Scenario: Rejecting every blocker passes the result
 - **WHEN** a round failed on F3 and F4, and the diagnosis is decided with `Reject F3, F4`
 - **THEN** F3 and F4 read rejected, a new round for the same result passes on its kept CI and review, and no fix handoff is dispatched
+
+#### Scenario: Rejecting old findings preserves a CI-only failure
+- **WHEN** a round fails CI before review, reaches the backstop, and the diagnosis rejects every finding left open by earlier reviews
+- **THEN** those findings read rejected, the round still reads failed, and Kawai dispatches a fix naming the failed checks without creating a passing round
 
 #### Scenario: Rejecting some blockers fixes the rest
 - **WHEN** a round failed on F3, F4, and F7, and the decision is `Reject F3, F4`

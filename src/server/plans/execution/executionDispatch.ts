@@ -15,6 +15,7 @@ import type { AssignmentService } from '../../team/AssignmentService'
 import type { TaskResultService } from '../../team/TaskResultService'
 import { runGitAsync } from '../../git/gitCommand'
 import { manifestHashInput, type AttemptManifest } from '../../../shared/planExecution'
+import { dispatchOwedFix } from './owedFix'
 import { attemptStatus } from './attemptStatus'
 import type { AttemptRow, RoundRow } from './executionRows'
 import type { ExecutionStore } from './executionStore'
@@ -395,42 +396,6 @@ async function dispatchOwedUpdate(deps: DispatchDeps, input: { executionId: stri
     executionId: input.executionId, change: input.change, round,
     update: newest.manifest.update ?? { base: '', files: [] },
   })
-}
-
-/** The fix attempt's re-send, texts rebuilt at send time from the round the attempt answers — the manifest keeps only ids. */
-async function dispatchOwedFix(deps: DispatchDeps, input: { executionId: string; change: string; group: string }, newest: AttemptRow): Promise<void> {
-  const changeRow = deps.executions.change(input.executionId, input.change)
-  if (changeRow === null) return
-  const round = newest.manifest.answers !== undefined
-    ? deps.executions.round(newest.manifest.answers.roundId) ?? null
-    : null
-  let failingChecks: FixAttemptInput['failingChecks'] = []
-  let findingsIds: string[] = []
-  let notes: string[] = []
-  // The findings are rebuilt at send time from the ledger and the round the
-  // attempt answers — the manifest keeps only ids (review-findings-ledger
-  // D7). A superseded round's owed fix names the task's CURRENT revision (a
-  // second republish after the attempt was minted is still the round's
-  // answer), a failed round its failing checks and the verdict's findings.
-  if (round?.outcome === 'superseded') {
-    const task = changeRow.taskId === null ? null : deps.tasks.store.get(changeRow.taskId)
-    const rationale = task === null || task === undefined ? null : deps.tasks.store.revisions(task.id).at(-1)?.rationale ?? null
-    notes = [`The task's direction was republished as revision ${task?.revision ?? 1}${rationale ? ` (${rationale})` : ''}. Re-apply your work on top of the new direction.`]
-  } else if (round !== null && round.outcome === 'fail') {
-    failingChecks = (round.ci ?? []).filter(check => check.conclusion.toLowerCase() === 'failure')
-      .map(check => ({ name: check.name, conclusion: check.conclusion, link: check.link }))
-    const all = changeRow.taskId === null ? [] : deps.tasks.store.results.findingsFor(round.resultId)
-    findingsIds = (round.verdictFindingsId !== null ? all.filter(entry => entry.id === round.verdictFindingsId) : all).map(row => row.id)
-  }
-  const findings = changeRow.taskId === null
-    ? { blocking: [], blockingText: '', others: 0, legacyTexts: notes }
-    : fixFindings(deps.tasks.store, changeRow.taskId, round?.outcome === 'fail' ? round : null, notes)
-  await dispatchFix(deps, {
-    executionId: input.executionId, change: input.change, group: input.group,
-    failingChecks, findingsIds, findings,
-    continueFrom: round?.commitSha ?? changeRow.baselineCommit ?? '',
-    fixRounds: changeRow.fixRounds,
-  }, { id: newest.id, number: newest.number, manifestHash: newest.manifestHash })
 }
 
 /**

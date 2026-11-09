@@ -19,6 +19,10 @@ import { DiagnosisStore } from '../execution/diagnosisStore'
 import { SYSTEM_ACTOR } from '../../../shared/team'
 import { CONTEXT_MAX, OPTIONS_MAX, QUESTION_MAX } from './decisionInputs'
 
+/** The applied decision's instruction text, shared by immediate and deferred fixes. */
+export const diagnosisRationale = (decision: PlanDecision): string =>
+  `Diagnosis decision (${decision.choice})${decision.rationale ? `: ${decision.rationale}` : ''}`
+
 export const FIX_ROUND = 'Fix round'
 export const AMEND_CONTRACT = 'Amend the contract'
 export const ESCALATE = 'Escalate'

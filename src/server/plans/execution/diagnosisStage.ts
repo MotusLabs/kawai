@@ -10,13 +10,14 @@
 // re-runs the stage, which replays the same attempt key (I2). Rejections are
 // keyed per decision and finding, so a replay writes none twice.
 import { foldLedger, roundReview } from '../../../shared/findingsLedger'
+import { evaluateCi } from '../../../shared/planExecutionGates'
 import { signalLine } from '../../../shared/reviewConvergence'
 import { isBlocking } from '../../../shared/reviewFindings'
 import { SYSTEM_ACTOR } from '../../../shared/team'
 import type { PlanDecision } from '../../../shared/planDecisions'
 import type { TeamIdentity } from '../../team/teamIdentity'
 import type { DecisionStore } from '../decisions/decisionStore'
-import { diagnosisOutcome, type DiagnosisOutcome } from '../decisions/diagnosisCards'
+import { diagnosisOutcome, diagnosisRationale, type DiagnosisOutcome } from '../decisions/diagnosisCards'
 import { DiagnosisStore, type DiagnosisRow } from './diagnosisStore'
 import { dispatchRevisionAttempt, type RoundDeps } from './executionRounds'
 import type { ChangeRow, RoundRow } from './executionRows'
@@ -53,9 +54,6 @@ export function diagnosisStep(input: {
   return { kind: 'apply', decision: newest, outcome }
 }
 
-const rationaleOf = (decision: PlanDecision): string =>
-  `Diagnosis decision (${decision.choice})${decision.rationale ? `: ${decision.rationale}` : ''}`
-
 /** Run the stage for one change. */
 export async function applyDiagnosisStage(deps: DiagnosisStageDeps, row: ChangeRow, gate?: (change: string) => boolean): Promise<void> {
   const executions = deps.fix.store
@@ -88,7 +86,7 @@ export async function applyDiagnosisStage(deps: DiagnosisStageDeps, row: ChangeR
     return
   }
   const { decision, outcome } = step
-  const rationale = rationaleOf(decision)
+  const rationale = diagnosisRationale(decision)
   if (outcome.kind === 'amend') {
     tasks.atomically(() => {
       if (!diagnoses.markAmend(diagnosis.id, decision.id)) return
@@ -109,7 +107,12 @@ export async function applyDiagnosisStage(deps: DiagnosisStageDeps, row: ChangeR
   }
   if (outcome.kind === 'reject') {
     const passes = rejectFindings(deps, taskId, diagnosis, decision, outcome.ids)
-    if (passes) {
+    // Reject changes findings, never the CI verdict or a missing review.
+    const execution = executions.execution(row.executionId)
+    const ciPasses = execution !== null && evaluateCi(round.ci ?? [], execution.floor.map, {
+      windowFrom: round.ciWindowFrom ?? round.pushedAt ?? deps.round.now(), now: deps.round.now(), rerun: null,
+    }).kind === 'pass'
+    if (passes && round.blockingIds !== null && ciPasses) {
       regatePassed(deps, row, round, close('reject', decision.id, `Diagnosis ${diagnosis.id}: decision ${decision.id} rejected ${outcome.ids.join(', ')}; nothing blocks, so result ${round.resultId} passes again`))
       return
     }
