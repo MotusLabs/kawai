@@ -129,3 +129,22 @@ test('an unstructured row keeps its text and verdict, with no items and no ledge
   expect(row.findAllByProps({ 'data-testid': 'result-finding-not-counted' })).toHaveLength(0)
   expect(byTestId('finding-row')).toHaveLength(0)
 })
+
+test('a rejection that clears the last blocker reads pass now on the outstanding result; the stored fail reads at submission', async () => {
+  await mount(detail({
+    task: task({ outstandingResult: { id: 'r1', needsReevaluation: false, accepted: false, reviewVerdict: 'pass' } }),
+    findingsLedger: [ledgerRow('F1', 'rejected')],
+    results: [result({ findings: [findings('s1', { verdict: 'fail', items: [item('F1')] })] })],
+  }))
+  expect(textOf(byTestId('result-review-verdict')[0]!)).toBe('Review verdict now: pass')
+  expect(textOf(byTestId('result-finding-verdict')[0]!)).toBe('fail at submission')
+})
+
+test('a superseded result shows no current verdict, and a text row keeps its plain verdict', async () => {
+  await mount(detail({
+    task: task({ outstandingResult: { id: 'r2', needsReevaluation: false, accepted: false, reviewVerdict: null } }),
+    results: [result({ id: 'r2', findings: [] }), result({ supersededBy: 'r2', findings: [findings('t1f', { structured: false, counted: false, findings: 'drops rows' })] })],
+  }))
+  expect(byTestId('result-review-verdict')).toHaveLength(0)
+  expect(textOf(byTestId('result-finding-verdict')[0]!)).toBe('fail')
+})

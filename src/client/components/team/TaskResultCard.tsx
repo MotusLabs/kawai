@@ -5,8 +5,9 @@
 // acceptance, and the findings bound to this result with kind, verdict, and
 // author. Superseded results render the same way, beneath the outstanding one.
 // A structured submission (review-findings-ledger D10) lists each item's
-// class or disposition and says when it is not counted; a text row keeps its
-// text rendering.
+// class or disposition and says when it is not counted; its stored verdict
+// reads "at submission", and the outstanding result shows the verdict the
+// ledger derives now. A text row keeps its text rendering.
 // Kawai's own check of the result (independent-verification D12) renders as
 // "Checked by Kawai": each fact with its status, or why the check could not
 // run — informational, never a gate. The scope fact (implementation-
@@ -97,9 +98,15 @@ function FindingItems({ items }: { items: LedgerItem[] }) {
   </li>)}</ul>
 }
 
-export default function TaskResultCard({ result, sessions, children }: {
+export default function TaskResultCard({ result, sessions, reviewVerdict, children }: {
   result: TaskResult
   sessions: Session[]
+  /**
+   * The outstanding result's effective review verdict (review-findings-ledger
+   * D5), from the task summary: the ledger's fold now, so a rejected dispute
+   * can turn a stored fail into pass. Undefined on any other result.
+   */
+  reviewVerdict?: 'pass' | 'fail' | null
   /** The result's actions (accept, handoffs), rendered under its evidence. */
   children?: ReactNode
 }) {
@@ -137,11 +144,12 @@ export default function TaskResultCard({ result, sessions, children }: {
       {result.checks.newest !== null && <CheckView check={result.checks.newest} />}
     </div>}
     <div className="mt-1 text-chat-meta" data-testid="result-findings">
+      {reviewVerdict && <p className="font-medium" data-testid="result-review-verdict">Review verdict now: {reviewVerdict}</p>}
       {result.findings.length === 0
         ? <p className="text-secondary">No findings on this result</p>
         : result.findings.map(findings => <div key={findings.id} data-testid="result-finding" data-structured={findings.structured === true}
           data-counted={findings.counted !== false} className="border-l-2 border-border pl-2">
-          <p>{findings.kind === 'qa' ? 'QA' : 'Review'} · {findings.verdict} · {actorLabel(findings.author, sessions)} · {new Date(findings.createdAt).toLocaleString()}
+          <p>{findings.kind === 'qa' ? 'QA' : 'Review'} · <span data-testid="result-finding-verdict">{findings.structured ? `${findings.verdict} at submission` : findings.verdict}</span> · {actorLabel(findings.author, sessions)} · {new Date(findings.createdAt).toLocaleString()}
             {findings.structured && findings.counted === false && <span className="text-secondary" data-testid="result-finding-not-counted">
               {' '}· not counted{findings.replacedBy ? ` (replaced by ${findings.replacedBy})` : ''}</span>}
           </p>
