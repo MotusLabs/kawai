@@ -15,7 +15,7 @@ import { join } from 'node:path'
 import { AppServerRpcError } from '../src/codex/appServerTransport.js'
 import type { WireFrame } from '../src/options.js'
 import type { LeaderExit } from '../src/process/ownedProcess.js'
-import { alive, fake, rejection, settled, stopAll } from './helpers/appServerHarness.js'
+import { alive, fake, rejection, settled, stopAll, until } from './helpers/appServerHarness.js'
 
 afterEach(stopAll)
 afterAll(stopAll)
@@ -72,7 +72,7 @@ describe('correlation and settle-once (A2)', () => {
     expect(f.transport.counters).toEqual({ stray: 0, malformed: 0, droppedReplies: 0 })
   })
 
-  test('malformed, stray, null-id and string-id lines settle no other request; the real reply still does', async () => {
+  test('malformed, stray, null-id result, string-id and non-object params lines settle no other request; the real reply still does', async () => {
     const f = fake({ requestTimeoutMs: 0 })
     f.transport.start()
     const held = [f.transport.request('never'), f.transport.request('never')]
@@ -80,8 +80,27 @@ describe('correlation and settle-once (A2)', () => {
     expect(await settled(Promise.race(held), 50)).toBe(false)
     expect(f.transport.pendingCount).toBe(2)
     // Per held id: a string id and an unknown id (stray) and a reply with neither result nor error (malformed);
-    // plus the null-id error (stray), 'not json', '[1,2]' and a numeric method (malformed).
-    expect(f.transport.counters).toEqual({ stray: 5, malformed: 5, droppedReplies: 0 })
+    // plus a null-id result (stray), and 'not json', '[1,2]', 'null', a numeric method, array notification
+    // params and a server request with string params (malformed).
+    expect(f.transport.counters).toEqual({ stray: 5, malformed: 8, droppedReplies: 0 })
+    // The server request with invalid params is answered, never dispatched.
+    await Bun.sleep(20)
+    expect(f.received().filter((line) => line.id === 77)).toEqual([{ jsonrpc: '2.0', id: 77, error: { code: -32602, message: 'invalid params for approval' } }])
+  })
+
+  test('an error with id null fails every pending request once with the raw error, as the committed client does', async () => {
+    const f = fake({ requestTimeoutMs: 5000 })
+    f.transport.start()
+    const clearSpy = spyOn(globalThis, 'clearTimeout')
+    const outcomes = await Promise.all([f.transport.request('never'), f.transport.request('never'), f.transport.request('uncorrelated')].map(rejection))
+    const cleared = clearSpy.mock.calls.length
+    clearSpy.mockRestore()
+    expect(outcomes.map((e) => [e instanceof AppServerRpcError, e.uncorrelated, e.id, e.method, e.error])).toEqual(
+      [1, 2, 3].map((id) => [true, true, id, id === 3 ? 'uncorrelated' : 'never', { code: -32700, message: 'parse error' }]),
+    )
+    expect(cleared).toBeGreaterThanOrEqual(3)
+    expect(f.transport.pendingCount).toBe(0)
+    expect(await f.transport.request('echo', { value: 'after' })).toBe('after')
   })
 
   test('a duplicate reply and a reply after the deadline settle nothing; timers are cleared at settlement', async () => {
@@ -105,9 +124,8 @@ describe('correlation and settle-once (A2)', () => {
     const timedOut = await rejection(g.transport.request('late', { ms: 120 }))
     expect([timedOut.category, timedOut.message]).toEqual(['transport', 'app-server request 1 (late) had no reply within 40 ms'])
     expect(g.transport.pendingCount).toBe(0)
-    expect(await g.transport.request('echo', { value: 'after' })).toBe('after')
-    await Bun.sleep(120)
-    expect(g.transport.counters.stray).toBe(2)
+    // Both late replies (first and duplicate) arrive after the deadline and settle nothing.
+    await until(() => g.transport.counters.stray === 2)
   })
 
   test('an error reply rejects with the raw error object (I1)', async () => {
@@ -138,11 +156,12 @@ describe('notifications and server requests', () => {
   })
 
   test('a handler value, undefined, throw and absent handler each become the reply with the request id', async () => {
+    const refused = new Error('handler refused')
     const answers: Record<string, () => unknown> = {
       value: () => ({ decision: 'accept' }),
       none: () => undefined,
       throws: () => {
-        throw new Error('handler refused')
+        throw refused
       },
     }
     const f = fake({ onServerRequest: async (method) => answers[method]!() })
@@ -151,6 +170,10 @@ describe('notifications and server requests', () => {
     expect(await ask('value', 'srv-1')).toEqual({ jsonrpc: '2.0', id: 'srv-1', result: { decision: 'accept' } })
     expect(await ask('none', 7)).toEqual({ jsonrpc: '2.0', id: 7, result: {} })
     expect(await ask('throws', 8)).toEqual({ jsonrpc: '2.0', id: 8, error: { code: -32603, message: 'handler refused' } })
+    expect(await ask('value', 0)).toEqual({ jsonrpc: '2.0', id: 0, result: { decision: 'accept' } })
+    // The error reply answered the server; the throw itself is kept by identity.
+    const stop = await rejection(f.transport.stop())
+    expect([stop.category, stop.causes]).toEqual(['stop', [refused]])
     const bare = fake()
     bare.transport.start()
     expect(await bare.transport.request('ask', { method: 'x', id: 9 })).toEqual({

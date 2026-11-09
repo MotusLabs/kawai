@@ -7,8 +7,10 @@
 //   never                 -> no reply
 //   notify {count}        -> `count` notifications `tick {n}`, then { sent }
 //   ask {method, params, id} -> a server request with that id; replies with the client's reply
-//   garbage               -> malformed, stray, null-id and string-id lines naming
-//                            the pending `never` request ids, then { ok }
+//   garbage               -> malformed, stray and string-id lines naming the pending
+//                            `never` ids, a null-id result, non-object params, then { ok }
+//   uncorrelated          -> an error with id null (no reply of its own)
+//   askThenNotify {id}    -> one write: a server request, then a notification
 //   late {ms}             -> replies twice, the first after ms
 //   exit {code, stderr}   -> writes stderr and exits (pending requests stay unanswered)
 //   helper {file}         -> starts helper.ts in this process group holding stdout; { helper }
@@ -55,10 +57,19 @@ function handle(message: Record<string, any>) {
         send({ jsonrpc: '2.0', id: other + 1000, result: 'unknown-id' })
         send({ jsonrpc: '2.0', id: other })
       }
-      send({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'parse error' } })
+      send({ jsonrpc: '2.0', id: null, result: 'null-id' })
+      process.stdout.write('null\n')
       send({ jsonrpc: '2.0', method: 42 })
+      send({ jsonrpc: '2.0', method: 'tick', params: [1] })
+      send({ jsonrpc: '2.0', id: 77, method: 'approval', params: 'bad' })
       return reply(id, { ok: true })
     }
+    case 'uncorrelated':
+      return send({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'parse error' } })
+    case 'askThenNotify':
+      return void process.stdout.write(
+        `${JSON.stringify({ jsonrpc: '2.0', id: params.id, method: 'approval', params: {} })}\n${JSON.stringify({ jsonrpc: '2.0', method: 'tick', params: { n: 0 } })}\n`,
+      )
     case 'late':
       return void setTimeout(() => {
         reply(id, 'first')
@@ -93,3 +104,5 @@ process.stdin.on('data', (chunk: Buffer) => {
   }
 })
 process.stdout.on('error', () => {})
+// Stays alive after stdin EOF (stop closes stdin first): only a signal or `exit` ends it.
+setInterval(() => {}, 1 << 30)

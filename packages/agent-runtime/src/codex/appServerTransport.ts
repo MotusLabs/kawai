@@ -10,19 +10,25 @@
 // before its first recorder publication, and each request's pending entry
 // (with its deadline timer) exists before its line is written. A reply settles
 // only the entry its id names, once: the entry is removed before it settles
-// and its timer cleared. Wrong, late, duplicate, malformed and uncorrelated
-// (id null) lines settle nothing and are only counted.
+// and its timer cleared. Wrong, late, duplicate and malformed lines settle
+// nothing and are only counted. As in the committed client, an error with id
+// null names no request and fails every request pending at that moment.
+// A server request's handler runs only once its owned job is tracked; its
+// throw becomes the error reply and also stays owned evidence.
 //
-// Stop is one shared terminal operation: it closes admission and writes,
-// rejects every pending request once, aborts handler signals, awaits the owned
-// terminate() (the leader's actual exit and an empty process group, never a
-// signal acknowledgement, EOF or a drain bound), ends the reader, and joins
-// every owned job (the reader generation and each server-request handler).
-// A handler's reply after stop began is dropped, never written. A stop called
-// from inside a handler is refused `internal` while the terminal operation it
-// started continues for the external owner. Native, job and observer failures
-// reject the stop (`stop`) with every cause kept by identity. There is no
-// thread, resume or fallback logic here: the driver owns those.
+// Stop is one shared terminal operation: it closes admission and writes (stdin
+// first, so a recorder stopping from a write's own 'out' frame leaves that line
+// unsent), rejects every pending request once, aborts handler signals, awaits
+// the owned terminate() (the leader's actual exit and an empty process group,
+// never a signal acknowledgement, EOF or a drain bound), ends the reader, and
+// joins every owned job (the reader generation and each server-request
+// handler). A handler's reply after stop began is dropped, never written. A
+// stop called from inside a handler is refused `internal` while the terminal
+// operation it started continues for the external owner. Native, job, handler
+// and observer failures reject the stop (`stop`) with every cause kept by
+// identity; a handler rejecting with its aborted signal's reason is the stop's
+// own cancellation. There is no thread, resume or fallback logic here: the
+// driver owns those.
 
 import { AgentRuntimeError } from '../errors.js'
 import type { ProcessExitFact } from '../contract.js'
@@ -69,23 +75,29 @@ export interface AppServerTransportOptions {
   terminate?: TerminateOptions
 }
 
-/** A JSON-RPC error reply; `error` is the raw value the server sent. */
+/**
+ * A JSON-RPC error reply; `error` is the raw value the server sent. With
+ * `uncorrelated`, the server's error named no request (id null) and failed
+ * every request pending at that moment, this one (`id`) among them.
+ */
 export class AppServerRpcError extends Error {
   constructor(
     readonly method: string,
     readonly id: number,
     readonly error: unknown,
+    readonly uncorrelated = false,
   ) {
     const text = typeof error === 'object' && error !== null && typeof (error as { message?: unknown }).message === 'string'
-    super(`app-server request ${id} (${method}) failed${text ? `: ${(error as { message: string }).message}` : ''}`)
+    const what = uncorrelated ? 'failed on an uncorrelated server error' : 'failed'
+    super(`app-server request ${id} (${method}) ${what}${text ? `: ${(error as { message: string }).message}` : ''}`)
     this.name = 'AppServerRpcError'
   }
 }
 
 export interface TransportCounters {
-  /** Responses naming no pending request (unknown, late, duplicate, non-numeric or null id). */
+  /** Responses naming no pending request (unknown, late, duplicate, non-numeric id; null id without error). */
   stray: number
-  /** Lines that are not a JSON-RPC object this transport can route. */
+  /** Lines that are not a JSON-RPC object this transport can route (non-object params included). */
   malformed: number
   /** Server-request replies dropped because stop had begun. */
   droppedReplies: number
@@ -281,18 +293,35 @@ export class AppServerTransport {
       this.counters.malformed++
       return
     }
-    const params = isObject(message.params) ? (message.params as JsonObject) : {}
     const id = message.id
-    if (id === undefined) return this.observe(() => this.options.onNotification?.(method, params))
-    if (typeof id !== 'number' && typeof id !== 'string') {
+    if (id !== undefined && typeof id !== 'number' && typeof id !== 'string') {
       this.counters.malformed++
       return
     }
+    // Params are an object when present; anything else is never dispatched.
+    if (message.params !== undefined && !isObject(message.params)) {
+      this.counters.malformed++
+      if (id !== undefined && !this.write({ jsonrpc: '2.0', id, error: { code: -32602, message: `invalid params for ${method}` } })) this.counters.droppedReplies++
+      return
+    }
+    const params = (message.params ?? {}) as JsonObject
+    if (id === undefined) return this.observe(() => this.options.onNotification?.(method, params))
     this.serve(id, method, params)
   }
 
   private settle(message: Message): void {
     const id = message.id
+    // An error naming no request (a parse-level failure) breaks the transport:
+    // every request pending now fails with it, as the committed client does.
+    if (id === null && message.error !== undefined) {
+      const entries = [...this.pending]
+      this.pending.clear()
+      for (const [pendingId, entry] of entries) {
+        if (entry.timer) clearTimeout(entry.timer)
+        entry.reject(new AppServerRpcError(entry.method, pendingId, message.error, true))
+      }
+      return
+    }
     const entry = typeof id === 'number' ? this.pending.get(id) : undefined
     if (entry === undefined || typeof id !== 'number') {
       this.counters.stray++
@@ -313,19 +342,32 @@ export class AppServerTransport {
     const handler = this.options.onServerRequest
     const signal = this.handlers.signal
     const body = async (): Promise<void> => {
+      // OwnedJobs.run invokes the body before it tracks the job: host code
+      // runs only after this turn, once the job is tracked, and not at all
+      // once stop has begun.
+      await Promise.resolve()
+      if (this.closing) {
+        this.counters.droppedReplies++
+        return
+      }
       let reply: Message
+      let failure: { error: unknown } | null = null
       if (!handler) {
         reply = { error: { code: -32601, message: `no handler for server request ${method}` } }
       } else {
         try {
           reply = { result: (await handler(method, params, signal)) ?? {} }
         } catch (error) {
+          failure = { error }
           reply = { error: { code: -32603, message: error instanceof Error ? error.message : String(error) } }
         }
       }
       if (!this.write({ jsonrpc: '2.0', id, ...reply })) this.counters.droppedReplies++
+      // The error reply answers the server; the throw itself stays owned evidence.
+      if (failure) throw failure.error
     }
-    void this.jobs.outside(() => this.jobs.run(`server-request:${method}`, body)).catch(() => {})
+    const expectedCancellation = (error: unknown) => signal.aborted && error === signal.reason
+    void this.jobs.outside(() => this.jobs.run(`server-request:${method}`, body, { expectedCancellation })).catch(() => {})
   }
 
   private endError(): AgentRuntimeError {
@@ -396,6 +438,9 @@ export class AppServerTransport {
   private async terminate(): Promise<ProcessExitFact> {
     this.closing = true
     this.open = false
+    // Writes close first: a recorder that stops the transport from inside a
+    // write's own 'out' frame leaves that line unsent.
+    this.owned?.stdin.destroy()
     this.jobs.beginStop()
     this.rejectPending(new AgentRuntimeError({ category: 'stopped', message: 'the app-server transport is stopping' }))
     this.handlers.abort()

@@ -77,6 +77,88 @@ describe('terminal stop (A3)', () => {
     expect(f.received().filter((line) => line.id === 'srv-held')).toEqual([])
   })
 
+  test('a held handler released with a raw error after stop writes nothing and fails the stop with that error', async () => {
+    const raw = new Error('handler body failed late')
+    let release!: () => void
+    let entered = false
+    const f = fake({
+      requestTimeoutMs: 0,
+      onServerRequest: () =>
+        new Promise((_resolve, reject) => {
+          entered = true
+          release = () => reject(raw)
+        }),
+    })
+    f.transport.start()
+    void f.transport.request('ask', { method: 'tool', id: 'srv-raw' }).catch(() => {})
+    await until(() => entered)
+    const stop = rejection(f.transport.stop())
+    expect(await settled(stop, 150)).toBe(false)
+    release()
+    const error = await stop
+    expect([error.category, error.causes]).toEqual(['stop', [raw]])
+    expect(f.transport.counters.droppedReplies).toBe(1)
+    expect(f.received().filter((line) => line.id === 'srv-raw')).toEqual([])
+  })
+
+  test("a handler rejecting with its aborted signal's reason is the stop's own cancellation", async () => {
+    let entered = false
+    const f = fake({
+      requestTimeoutMs: 0,
+      onServerRequest: (_method, _params, signal) =>
+        new Promise((_resolve, reject) => {
+          entered = true
+          signal.addEventListener('abort', () => reject(signal.reason))
+        }),
+    })
+    f.transport.start()
+    void f.transport.request('ask', { method: 'tool', id: 'srv-abort' }).catch(() => {})
+    await until(() => entered)
+    expect((await f.transport.stop()).state).toBe('exited')
+  })
+
+  test('a server request whose job is admitted just before stop never reaches host code and is joined', async () => {
+    let invoked = 0
+    let stop: Promise<ProcessExitFact> | null = null
+    const f = fake({
+      requestTimeoutMs: 0,
+      onServerRequest: () => {
+        invoked++
+        return {}
+      },
+      // The notification on the same chunk stops the transport before the handler's turn.
+      onNotification: () => {
+        stop ??= f.transport.stop()
+      },
+    })
+    f.transport.start()
+    void f.transport.request('askThenNotify', { id: 'srv-admitted' }).catch(() => {})
+    await until(() => stop !== null)
+    expect((await stop!).state).toBe('exited')
+    expect([invoked, f.transport.counters.droppedReplies]).toEqual([0, 1])
+    expect(f.received().filter((line) => line.id === 'srv-admitted')).toEqual([])
+  })
+
+  test("a recorder stopping the transport from a request's own 'out' frame leaves that line unsent", async () => {
+    let transport!: AppServerTransport
+    let stop: Promise<ProcessExitFact> | null = null
+    const f = fake({
+      wire: {
+        record: (frame) => {
+          if (frame.direction === 'out' && frame.text.includes('"stopHere"')) stop ??= transport.stop()
+        },
+      },
+    })
+    transport = f.transport
+    transport.start()
+    expect(await transport.request('echo', { value: 'before' })).toBe('before')
+    const request = rejection(transport.request('echo', { value: 'stopHere' }))
+    expect(stop).not.toBeNull()
+    expect((await request).category).toBe('stopped')
+    expect((await stop!).state).toBe('exited')
+    expect(f.received().map((line) => line.params?.value)).toEqual(['before'])
+  })
+
   test('stop joins the whole native group: a helper holding stdout is cleared before the receipt', async () => {
     const tick = join(mkdtempSync(join(tmpdir(), 'agent-runtime-codex-tick-')), 'ticks')
     const f = fake()
