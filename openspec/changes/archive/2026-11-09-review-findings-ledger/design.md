@@ -227,8 +227,10 @@ dispute event, not on whether the finding still reads `disputed`:
   override of it (DD3, DD4): the finding moves to `upheld` or `rejected`
   again, under `decision:<id>`.
 - It is `ignored` when anything else has touched the finding since the
-  dispute: a re-map (`remapped` or `superseded`), a disposition in a later
-  review, or a newer dispute with its own card (DD5, DD7). The decision
+  dispute: a supersession, a disposition in a later review, or a newer
+  dispute with its own card (DD5, DD7). A `remapped` event moves only the
+  citation and keeps the finding disputed, so it never blocks a decision
+  (amended after review: otherwise the dispute could never settle). The decision
   stays on the card, and the owner's override still creates its
   forward-fix task as for any card.
 
@@ -440,12 +442,12 @@ Decisions:
 | DD2 | Reject | disputed by this card | rejected | rejected |
 | DD3 | owner override Reject→Uphold | rejected by this card's decision | upheld | the state before the dispute |
 | DD4 | owner override Uphold→Reject | blocking again by this card's decision | rejected | rejected |
-| DD5 | any | superseded or remapped after the dispute | ignored | unchanged |
+| DD5 | any | superseded after the dispute (a `remapped` event does not count) | ignored | unchanged |
 | DD6 | replay of the same decision id | * | none (source_key) | unchanged |
 | DD7 | owner override | a later review disposed of it, or a newer dispute has its own card | ignored | unchanged; the forward-fix task carries the override |
 
 "By this card" means every event on the finding since the card's dispute
-event came from this card. That is the hook's one test, so DD3 and DD4
+event came from this card, or was a `remapped` event. That is the hook's one test, so DD3 and DD4
 apply and DD5 and DD7 do not.
 
 ### Round review — table RD (`roundReview` and `decideVerdict`)

@@ -215,6 +215,16 @@ describe('table DD — card decisions', () => {
     expect(state(taskId)).toBe('superseded')
     expect(bench.tasks.journal(taskId).at(-1)!.text).toContain('left F1 unchanged')
   })
+  test('DD5 a re-map keeps the dispute: a revision published after it moves the citation, and the card\'s Reject still applies', async () => {
+    const planId = await bench.approvedPlan()
+    const { taskId } = await reviewed(planId)
+    await tools('dev').task_dispute_findings({ task_id: taskId, disputes: [{ id: 'F1', counter_evidence: 'x' }] })
+    await bench.taskService.amend(human(), taskId, { direction: 'Build it, revised' })
+    expect(results.findingsLedger.ledger(taskId)[0]!.transitions.map(entry => entry.kind)).toEqual(['accepted', 'disputed', 'remapped'])
+    expect(state(taskId)).toBe('disputed')
+    await bench.decide.record(lead, { plan_id: planId, card_id: cardOf(taskId).card_id, choice: 'Reject F1', rationale: 'refuted' })
+    expect(state(taskId)).toBe('rejected')
+  })
   test('DD6 a decision applies once: a replay and the startup pass write nothing new, and a lost event is repaired once', async () => {
     const planId = await bench.approvedPlan()
     const { taskId } = await reviewed(planId)

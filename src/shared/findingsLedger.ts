@@ -195,14 +195,15 @@ export function roundReview(rows: readonly LedgerRow[]): 'fail' | 'pending-dispu
 /**
  * D6: whether a decision on the card of dispute `disputeEventId` applies —
  * every transition since that dispute came from the same card (its earlier
- * decisions). A re-map, a later disposition, or a newer dispute makes it
- * `ignored` (DD5, DD7).
+ * decisions) or was a `remapped` event, which moves only the citation and
+ * keeps the finding disputed. A supersession, a later disposition, or a
+ * newer dispute makes it `ignored` (DD5, DD7).
  */
 export function decisionApplies(row: LedgerRow, disputeEventId: string, cardId: string): boolean {
   const index = row.transitions.findIndex(t => t.source === 'event' && t.sourceId === disputeEventId)
-  // A re-map (remapped or superseded) after the dispute is an event of no card, so it fails the test below (DD5).
   if (index < 0) return false
-  return row.transitions.slice(index + 1).every(t => t.source === 'event' && t.cardId === cardId && (t.kind === 'upheld' || t.kind === 'rejected' || t.kind === 'ignored'))
+  return row.transitions.slice(index + 1).every(t => (t.source === 'event' && t.kind === 'remapped')
+    || (t.source === 'event' && t.cardId === cardId && (t.kind === 'upheld' || t.kind === 'rejected' || t.kind === 'ignored')))
 }
 
 /** DS1–DS4: whether a finding can be disputed now, else why not. */
