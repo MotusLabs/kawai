@@ -170,10 +170,20 @@ are the only inputs. The driver reads no host settings files
   already acknowledged and is not held. Every later `send()` resolves only
   after the persistence settled.
   - A refusal that applies when you call (`busy`, `unsupported`,
-    `stopped`) is still immediate.
+    `not-ready`, `stopped`) is still immediate.
   - Sends released together still open turns one at a time, in FIFO order.
-  - An interrupt any time after the call refuses the send with category
-    `not-ready`, code `interrupted`.
+  - `beforeSubmit` runs once the send stops waiting. The send is accepted
+    only if, when it returns, nothing interrupted or stopped the driver
+    meanwhile and the send is still admissible.
+  - `interrupt()` refuses every send still waiting, at once, with category
+    `not-ready`, code `interrupted`. A send waits for a persistence, for a
+    start in progress, or for one yield after the call. This holds while
+    idle too, for example for a send made after the previous turn
+    finished. The interrupt does not wait for the persistence, which keeps
+    running; a stop waits for it. The receipt is `requested` when a
+    waiting send was refused. Idle with nothing waiting stays
+    `no-active-turn`. A send made after the interrupt, even from a callback
+    the interrupt triggers, is new work and waits as usual.
   - Two new ids persist one at a time, and a waiting send waits for both.
   - If `onCheckpoint` rejects or throws, the driver emits an `error` event
     with category `checkpoint` and shuts itself down. It never starts a
@@ -186,6 +196,11 @@ are the only inputs. The driver reads no host settings files
     from inside starts the stop, but that call is refused with `internal`.
     Call it again from outside to wait for the stop.
   - A first launch that crashes before reporting an id is not recoverable.
+- **State publication.** `onState` reports a state after the step that
+  entered it: `active` after the opening turn's `turn_started` and
+  `user_message`, `idle` after the `turn_completed` or `turn_interrupted`
+  that ended the turn. A state entered and left inside one step is not
+  reported. `stopping` and `stopped` are reported at once.
 - **Requests.** Approvals and `AskUserQuestion` questions are registered
   before their events are emitted. `onRequest` may answer inline. A request
   still pending when `onRequest` returns is denied by default (decided by

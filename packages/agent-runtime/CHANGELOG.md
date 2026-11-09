@@ -12,7 +12,8 @@ documented API takes a new major version, even after 0.x.
   `AgentRuntimeError`.
 - Claude driver checkpoints: `onCheckpoint` gets each new session id, and
   sends after it are acknowledged only once it persisted. A rejection
-  refuses them, is reported and stops the driver. The Codex driver's
+  refuses them, is reported and stops the driver. An interrupt refuses
+  every send still waiting, also while idle, at once. The Codex driver's
   checkpoints are not implemented yet.
 - Not yet released: the Claude and Codex drivers, profile helpers and usage
   parsers arrive in later entries before 0.1.0 is published.

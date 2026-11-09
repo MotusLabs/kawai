@@ -44,6 +44,8 @@ Agent-started turns (no `send`, e.g. after a background task ends) arrive as
 `ChatTurnTrigger` — and settle through `onTurnResult`, since no `TurnHandle`
 exists for them.
 Their `TurnResult.messageUuid` is null. Interrupt settles the active turn and
-any queued submissions at once (one `turn_interrupted`, as Kawai does today);
+any queued submissions at once (one `turn_interrupted`, as Kawai does today),
+and on Claude refuses every send not yet acknowledged (`not-ready`,
+`interrupted`; receipt `requested`), also while idle;
 an unexpected exit ends the active turn with one failed `turn_completed` and
 one `error` event on both runtimes (Kawai's Claude driver emits only the error).
