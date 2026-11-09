@@ -233,7 +233,8 @@ Describe architectural findings as invariant, reproduction, affected paths,
 correction mechanism and required regression evidence. Recommend a structural
 plan immediately; if its first correction still breaks the invariant, reopen
 the design with the Lead before another patch. For other defect classes,
-retain the two-unsuccessful-correction-round escalation. Respect execution
+Kawai's convergence signals decide when a change needs a diagnosis instead
+of another fix ("Convergence" in "Review protocol"). Respect execution
 ownership and continue independent review while dependent work waits.
 The level keeps blocking findings distinct from substantive P2 findings;
 if the criterion itself is wrong, explain why and ask for an explicit revision.

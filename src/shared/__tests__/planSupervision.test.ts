@@ -31,7 +31,7 @@ function holder(extra: Partial<HolderFacts> = {}): HolderFacts {
 function round(number: number, extra: Partial<SupervisionRound> = {}): SupervisionRound {
   return {
     id: `round-${number}`, number, outcome: null, decidedAt: null, carriedFrom: null, ci: null,
-    ciPassedAt: null, verdict: null, verdictAt: null, findingsSummary: null, ...extra,
+    ciPassedAt: null, verdict: null, verdictAt: null, findingsSummary: null, structuredReview: false, ...extra,
   }
 }
 
@@ -40,7 +40,7 @@ function input(extra: Partial<SupervisionInput> = {}): SupervisionInput {
     change: 'api', dependsOn: [], state: 'implementing', step: null, stopReason: null, stopDetail: null,
     landing: null, dependencies: [], parallelLimit: 3, attempt: { kind: 'implement', status: 'out' }, rounds: [], effects: [],
     instruction: { messageId: 'msg-1', state: 'delivered', deliveredAt: ago(30), blocker: null, holder: holder() },
-    openCards: [], conditions: [], memberRelease: null, slotHolder: null, candidates: [], results: [], waitEndedAt: null,
+    openCards: [], conditions: [], memberRelease: null, slotHolder: null, candidates: [], results: [], waitEndedAt: null, diagnosis: null,
     ...extra,
   }
 }
@@ -80,6 +80,7 @@ describe('outcome precedence', () => {
     expect(changeSupervision(input({ state: null }), NOW).outcome).toBe('not-started')
   })
 
+  // @covers: plan-supervision › Repeating failures stall › The same check fails twice
   test('a repeating failure reads stalled during the fix round CI wait, the wait also applying', () => {
     const view = changeSupervision(input({ ...stalled, state: 'gating', step: 'awaiting-ci', rounds: [...stalled.rounds, round(4, { ci: [check('unit', 'in_progress')] })] }), NOW)
     expect(view.outcome).toBe('stalled')
@@ -90,9 +91,9 @@ describe('outcome precedence', () => {
 
 describe('failureSignature', () => {
   test('sorted failing checks then review:fail; flaky checks excluded', () => {
-    expect(failureSignature({ ci: [check('unit', 'failure'), check('lint', 'failure'), check('e2e', 'success')], verdict: 'fail' })).toBe('lint,unit,review:fail')
-    expect(failureSignature({ ci: [check('e2e', 'failure', ago(90)), check('e2e', 'success', ago(80)), check('unit', 'failure')], verdict: null })).toBe('unit')
-    expect(failureSignature({ ci: [check('unit', 'success')], verdict: 'fail' })).toBe('review:fail')
+    expect(failureSignature({ ci: [check('unit', 'failure'), check('lint', 'failure'), check('e2e', 'success')], verdict: 'fail', structuredReview: false })).toBe('lint,unit,review:fail')
+    expect(failureSignature({ ci: [check('e2e', 'failure', ago(90)), check('e2e', 'success', ago(80)), check('unit', 'failure')], verdict: null, structuredReview: false })).toBe('unit')
+    expect(failureSignature({ ci: [check('unit', 'success')], verdict: 'fail', structuredReview: false })).toBe('review:fail')
   })
 })
 
@@ -110,6 +111,7 @@ describe('failingChecks', () => {
 describe('repeating-failure', () => {
   const view = (rounds: SupervisionRound[]) => changeSupervision(input({ state: 'implementing', attempt: { kind: 'fix', status: 'out' }, rounds }), NOW)
 
+  // @covers: plan-supervision › Repeating failures stall › Different failures
   test('different failures raise none', () => {
     expect(view([failed(2, [check('lint', 'failure')]), failed(3, [check('unit', 'failure')])]).stall).toBeNull()
   })
@@ -285,5 +287,53 @@ describe('labels', () => {
     expect(stopReasonLabel('quota-exceeded')).toBe('quota-exceeded')
     expect(stopReasonLabel('round-limit')).toBe('Failed 3 fix rounds')
     expect(causeLabel({ kind: 'stopped', reason: 'quota-exceeded', detail: null })).toBe('Stopped: quota-exceeded')
+  })
+})
+
+// review-convergence decision 8: an open diagnosis is the change's stall, ahead of every other.
+describe('the convergence stall', () => {
+  const signals = [{ kind: 'S3' as const, findings: ['F3', 'F4'], raised: 2, resolved: 1 }, { kind: 'S4' as const, counts: [2, 2, 2] }]
+  const diagnosing = (awaitingRevision: number | null, extra: Partial<SupervisionInput> = {}) => input({
+    state: 'gating', step: 'diagnosing', attempt: { kind: 'fix', status: 'answered' }, instruction: null,
+    openCards: awaitingRevision === null ? [{ cardId: 'card-d', addressedTo: 'lead', addressedGroup: 'leads' }] : [],
+    diagnosis: { id: 'diagnosis-1', signals, cardId: 'card-d', taskId: 'task-api', awaitingRevision },
+    ...extra,
+  })
+
+  // @covers: plan-supervision › An open diagnosis reads stalled on convergence › A diagnosis names its signals
+  test('a diagnosis names its signals with their evidence, the card wait also applying', () => {
+    const view = changeSupervision(diagnosing(null), NOW)
+    expect(view.outcome).toBe('stalled')
+    expect(view.stall).toEqual({ kind: 'convergence', episodeKey: 'diagnosis-1', signals, cardId: 'card-d', awaitingRevision: null })
+    expect(causeLabel(view.cause)).toBe('Stalled: convergence (S3, S4)')
+    expect(view.alsoApplying).toEqual([{ kind: 'decision-card', cardId: 'card-d', addressedTo: 'lead', addressedGroup: 'leads' }])
+  })
+
+  // @covers: plan-supervision › An open diagnosis reads stalled on convergence › Waiting for the amended contract
+  test('after Amend it still reads convergence, and its wait names the task revision to publish', () => {
+    const view = changeSupervision(diagnosing(3), NOW)
+    expect(view.cause).toMatchObject({ kind: 'stall', stall: 'convergence' })
+    expect(view.alsoApplying).toEqual([{ kind: 'contract-revision', taskId: 'task-api', revision: 3 }])
+    expect(causeLabel(view.alsoApplying[0]!)).toBe('Waiting for the owner to publish revision 3 of task task-api')
+  })
+
+  test('convergence comes before a repeating failure (kills "convergence after repeating-failure")', () => {
+    const view = changeSupervision(diagnosing(null, { rounds: [failed(2, [check('unit', 'failure')]), failed(3, [check('unit', 'failure')])] }), NOW)
+    expect(view.stall?.kind).toBe('convergence')
+  })
+
+  test('a diagnosis no longer holding the change (closed, or the step left) is no stall', () => {
+    expect(changeSupervision(diagnosing(null, { step: null }), NOW).stall?.kind).not.toBe('convergence')
+  })
+
+  // @covers: plan-supervision › Repeating failures stall › Two failed structured reviews
+  test('two failed structured reviews with green CI never repeat (kills "keep review:fail for structured rounds")', () => {
+    const structured = (number: number) => failed(number, [check('unit', 'success')], { verdict: 'fail', structuredReview: true })
+    const view = changeSupervision(input({ state: 'implementing', rounds: [structured(2), structured(3)] }), NOW)
+    expect(view.stall).toBeNull()
+    expect(failureSignature({ ci: [check('unit', 'success')], verdict: 'fail', structuredReview: true })).toBe('')
+    // Text reviews still repeat.
+    const text = (number: number) => failed(number, [check('unit', 'success')], { verdict: 'fail' })
+    expect(changeSupervision(input({ rounds: [text(2), text(3)] }), NOW).stall?.kind).toBe('repeating-failure')
   })
 })

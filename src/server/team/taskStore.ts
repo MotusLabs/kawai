@@ -170,7 +170,7 @@ export class TaskStore {
   /** The agent's bounded, compact task list (bounded-task-list D3). */
   readonly listWindow: TaskListWindow
 
-  constructor(private readonly db: Database, private readonly mail?: MailboxStore, private readonly assignments?: AssignmentStore) {
+  constructor(readonly db: Database, readonly mail?: MailboxStore, private readonly assignments?: AssignmentStore) {
     // A claim or release of a task's instruction mail changes what the task
     // views show (the assignment's holder); announce the task so the plan
     // views of an owned change re-push (plan-execution D17).

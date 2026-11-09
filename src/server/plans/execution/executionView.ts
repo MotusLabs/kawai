@@ -2,8 +2,12 @@
 // `PlanExecutionView` the Plans view and `plan_get` show, projected from the
 // store rows — per change the state, waiting reason, PR, counts, latest
 // round with its CI (flaky names marked) and verdict, the landing fact, and
-// the expandable effects. Pure reads; no policy.
-import type { PlanExecutionView, RoundCiView, WaitingReason } from '../../../shared/planExecution'
+// the expandable effects, and the convergence counts by review (review-
+// convergence decision 9). Pure reads; no policy.
+import type { ExecutionChangeView, PlanExecutionView, RoundCiView, WaitingReason } from '../../../shared/planExecution'
+import { convergenceOf, SIGNAL_LABELS } from '../../../shared/reviewConvergence'
+import { FindingStore } from '../../team/findingStore'
+import { DiagnosisStore } from './diagnosisStore'
 import { flakyChecks } from '../../../shared/planExecutionGates'
 import type { TaskFindings } from '../../../shared/teamTasks'
 import type { Database } from 'bun:sqlite'
@@ -16,6 +20,20 @@ import type { ExecutionStore } from './executionStore'
 export interface ExecutionViewReads {
   dependsOn: (planId: string, revision: number, change: string) => string[]
   findings: (resultId: string) => TaskFindings[]
+  /** review-convergence decision 9: the change's window counts and its open diagnosis's signals. */
+  convergence?: (executionId: string, change: string, taskId: string | null) => ExecutionChangeView['convergence']
+}
+
+/** The shared module's window over the task's counted reviews, anchored as the executor anchors it (P4). */
+export function changeConvergence(db: Database, executionId: string, change: string, taskId: string | null): ExecutionChangeView['convergence'] {
+  if (taskId === null) return null
+  const findings = new FindingStore(db)
+  const submissions = findings.countedSubmissions(taskId)
+  if (submissions.length === 0) return null
+  const diagnoses = new DiagnosisStore(db)
+  const { counts } = convergenceOf(submissions, findings.events(taskId), diagnoses.anchor(executionId, change))
+  const open = diagnoses.open(executionId, change)
+  return { counts, signals: open === null ? null : open.signals.map(signal => SIGNAL_LABELS[signal.kind]), cardId: open?.cardId ?? null }
 }
 
 /** The production reads: the plan store's revision content and the team's findings rows. */
@@ -24,6 +42,7 @@ export function executionViewReads(plans: Pick<PlanStore, 'revision'>, db: Datab
   return {
     dependsOn: (planId, revision, change) => plans.revision(planId, revision)?.content.changes.find(entry => entry.change === change)?.dependsOn ?? [],
     findings: resultId => results.findingsFor(resultId),
+    convergence: (executionId, change, taskId) => changeConvergence(db, executionId, change, taskId),
   }
 }
 
@@ -91,6 +110,7 @@ export function executionViews(store: ExecutionStore, planId: string, reads: Exe
     floor: execution.floor,
     maxParallel: execution.maxParallel,
     mergeMethod: execution.mergeMethod,
+    maxFailedFixRounds: execution.maxFailedFixRounds,
     state: execution.state,
     outcome: execution.outcome,
     stopReason: execution.stopReason,
@@ -143,6 +163,7 @@ export function executionViews(store: ExecutionStore, planId: string, reads: Exe
           id: effect.id, kind: effect.kind, state: effect.state, tries: effect.tries,
           error: effect.error, createdAt: effect.createdAt, finishedAt: effect.finishedAt,
         })),
+        convergence: reads.convergence?.(execution.id, row.change, row.taskId) ?? null,
       }
     }),
   }))

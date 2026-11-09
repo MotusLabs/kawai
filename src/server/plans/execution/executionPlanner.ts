@@ -41,7 +41,7 @@ export interface PlannedDispatch {
 export interface PlannedStage {
   executionId: string
   change: string
-  kind: 'result' | 'push' | 'open-pr' | 'ci' | 'review' | 'review-restart' | 'verdict' | 'revision' | 'landing' | 'post-ci' | 'redispatch' | 'landing-outcome'
+  kind: 'result' | 'push' | 'open-pr' | 'ci' | 'review' | 'review-restart' | 'verdict' | 'revision' | 'landing' | 'post-ci' | 'redispatch' | 'landing-outcome' | 'diagnosis'
   roundId: string | null
   resultId: string | null
   /** A `landing-outcome` stage's settled merge or update-branch effect. */
@@ -245,6 +245,13 @@ export function planSteps(snapshot: ExecutionSnapshot, _now: string): PlanSteps 
           guard: { state: change.state, generation: change.generation },
           patch: { state: 'stopped', stopReason: 'task-closed', step: null, stopDetail: { message: `The task was ${change.task.status} by hand.`, resumeState: change.state, ...(change.taskId !== null ? { taskId: change.taskId } : {}) } },
         })
+        continue
+      }
+      // review-convergence decision 5: a diagnosing change is the diagnosis
+      // stage's alone — no fix, no new round of a later result — until its
+      // diagnosis closes, which leaves the step in the same transaction.
+      if (change.state === 'gating' && change.step === 'diagnosing') {
+        steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'diagnosis', roundId: change.round?.id ?? null, resultId: null })
         continue
       }
       // A stage instruction that failed stops the change (D12): its

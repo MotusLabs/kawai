@@ -15,6 +15,7 @@ import {
   approvedExecution, bench, closeExecutor, commitAll, deliverToReviewer, executor, executions, ghStub, git,
   implementStage, mail, origin, passCi, results, setupBench, setupWorld, tasks, teardownWorld, world,
 } from './executionRoundsFixture'
+import { openDiagnosis } from './diagnosisTestKit'
 
 beforeAll(setupWorld)
 afterAll(teardownWorld)
@@ -142,17 +143,18 @@ describe('the round pipeline (§12)', () => {
     expect(fixAttempt.manifest.answers?.findingsIds).toHaveLength(1)
     const fixAssignment = tasks.store.assignmentsOf(change.taskId!).at(-1)!
     const fixMail = mail.get(fixAssignment.messageId!)!
-    expect(fixMail.body).toContain('fix round 1 of 3')
+    expect(fixMail.body).toContain('fix round 1 of 5')
     expect(fixMail.body).toContain('the e2e test fails on the settings page')
     expect(fixMail.body).toContain(round.commitSha)
   })
 
-  test('the third failed fix round stops the change as round-limit', async () => {
+  // @covers: plan-execution › Failed fix rounds count toward the backstop › The fifth failed fix round opens a diagnosis
+  test('the fifth failed fix round opens a backstop diagnosis instead of a sixth fix', async () => {
     const executionId = await approvedExecution('fix-b')
     await implementStage(executionId, 'fix-b', 'x')
     const row = executions.change(executionId, 'fix-b')!
-    // Two failed fix rounds already counted: the next failure is the third.
-    executions.transition(executionId, 'fix-b', row, { fixRounds: 2 })
+    // Four failed fix rounds already counted: the next failure is the fifth.
+    executions.transition(executionId, 'fix-b', row, { fixRounds: 4 })
     ghStub.pulls = '[]'
     ghStub.checkRuns = '[]'
     ghStub.statuses = JSON.stringify([{ name: 'e2e', source: 'status', conclusion: 'failure', link: null, startedAt: null, completedAt: null }])
@@ -168,9 +170,15 @@ describe('the round pipeline (§12)', () => {
     await results.submit(bench.agent('dev'), change.taskId!, { summary: 'fixed', commit: git(['rev-parse', 'HEAD'], worktree).trim() })
     executor.wake(world.team.teamId)
     await executor.idle()
-    const stopped = executions.change(executionId, 'fix-b')!
-    expect(stopped).toMatchObject({ state: 'stopped', stopReason: 'round-limit' })
-    expect(stopped.stopDetail?.checks).toContain('e2e')
+    const attempts = executions.attempts(executionId, 'fix-b').length
+    expect(executions.change(executionId, 'fix-b')).toMatchObject({ state: 'gating', step: 'diagnosing', fixRounds: 4 })
+    const diagnosis = openDiagnosis(bench.db.db, executionId, 'fix-b')!
+    expect(diagnosis.signals).toEqual([{ kind: 'backstop', count: 5, limit: 5 }])
+    expect(diagnosis.roundId).toBe(executions.rounds(executionId, 'fix-b').at(-1)!.id)
+    // No sixth fix until the card is decided.
+    executor.wake(world.team.teamId)
+    await executor.idle()
+    expect(executions.attempts(executionId, 'fix-b')).toHaveLength(attempts)
   })
 
   test('a failed instruction and a hand-closed task stop the change', async () => {

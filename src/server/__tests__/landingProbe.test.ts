@@ -136,6 +136,7 @@ describe('probeLanding', () => {
     expect(result.base).toBeNull()
   })
 
+  // @covers: plan-execution › Execution settings are user-level › Missing end-to-end mapping
   test('a missing floor map is a finding', async () => {
     const result = await probe({ floorChecks: null })
     expect(codes(result)).toEqual(['floor-map'])

@@ -13,6 +13,7 @@
 import type { CandidateState } from './planIntegration'
 import { agentHeldStage, type AttemptKind, type AttemptStatus, type ChangeState, type ChangeStep, type CiCheck, type RoundOutcome, type StopDetail } from './planExecution'
 import { ciClass, flakyChecks, runsByName } from './planExecutionGates'
+import type { DiagnosisSignal } from './reviewConvergence'
 
 export type SupervisionOutcome = 'landed' | 'running' | 'waiting' | 'stalled' | 'stopped' | 'cancelled' | 'not-started'
 export const SUPERVISION_OUTCOMES: readonly SupervisionOutcome[] = ['landed', 'running', 'waiting', 'stalled', 'stopped', 'cancelled', 'not-started']
@@ -32,6 +33,8 @@ export type SupervisionWait =
   | { kind: 'member-release'; member: string; reason: string }
   | { kind: 'condition'; conditions: string[] }
   | { kind: 'landing-slot'; holderKind: string | null; holderId: string | null }
+  /** review-convergence decision 8: after Amend, the owner publishes this task revision. */
+  | { kind: 'contract-revision'; taskId: string; revision: number }
 
 /** The agent-held stages (D11) and the steps Kawai holds between ticks. */
 export type SupervisionStage = AttemptKind | 'review' | 'kawai'
@@ -39,6 +42,8 @@ export type SupervisionStage = AttemptKind | 'review' | 'kawai'
 export type SupervisionStall =
   | { kind: 'no-progress'; episodeKey: string; anchorAt: string; deadlineAt: string; idle: boolean }
   | { kind: 'repeating-failure'; episodeKey: string; signature: string; rounds: [string, string] }
+  /** An open diagnosis (review-convergence decision 8): its id is the episode; `awaitingRevision` is the task revision the owner is asked to publish after Amend. */
+  | { kind: 'convergence'; episodeKey: string; signals: DiagnosisSignal[]; cardId: string; awaitingRevision: number | null }
 
 /** Append-only (D10): the immediate cause of a change's outcome. */
 export type SupervisionCause =
@@ -48,7 +53,8 @@ export type SupervisionCause =
   | { kind: 'cancelled' }
   | { kind: 'not-started' }
   | { kind: 'stage'; stage: SupervisionStage; step: ChangeStep | null }
-  | { kind: 'stall'; stall: SupervisionStall['kind'] }
+  /** `signals` names a convergence stall's signals (its label lists them). */
+  | { kind: 'stall'; stall: SupervisionStall['kind']; signals?: string[] }
 
 export type ProgressKind = 'result' | 'ci-pass' | 'verdict' | 'round-pass' | 'landing' | 'candidate-pass'
 export type ActivityKind = 'turn' | 'live-turn' | 'mail'
@@ -83,6 +89,8 @@ export interface SupervisionRound {
   verdict: 'pass' | 'fail' | null
   verdictAt: string | null
   findingsSummary: string | null
+  /** The round was decided on a structured review (its blocking set is recorded): the convergence signals judge it, not the repeating-failure key. */
+  structuredReview: boolean
 }
 
 export interface SupervisionInput {
@@ -115,6 +123,8 @@ export interface SupervisionInput {
   results: Array<{ createdAt: string }>
   /** The last time the monitor saw this change in a named wait (D11, in memory). */
   waitEndedAt: string | null
+  /** The change's open diagnosis (review-convergence decision 8); `awaitingRevision` is set once Amend applied. */
+  diagnosis: { id: string; signals: DiagnosisSignal[]; cardId: string; taskId: string | null; awaitingRevision: number | null } | null
 }
 
 export interface ChangeSupervision {
@@ -143,10 +153,14 @@ export function failingChecks(checks: readonly CiCheck[] | null): CiCheck[] {
   return [...runsByName(checks).values()].map(runs => runs.at(-1)!).filter(run => ciClass(run) === 'fail')
 }
 
-/** D11: the sorted failing check names, then `review:fail` when the review failed. */
-export function failureSignature(round: Pick<SupervisionRound, 'ci' | 'verdict'>): string {
+/**
+ * D11: the sorted failing check names, then `review:fail` when a text review
+ * failed. A structured review's failure is the convergence signals' to judge
+ * (review-convergence decision 8): two failed structured reviews never repeat.
+ */
+export function failureSignature(round: Pick<SupervisionRound, 'ci' | 'verdict' | 'structuredReview'>): string {
   const parts = failingChecks(round.ci).map(check => check.name).sort()
-  if (round.verdict === 'fail') parts.push('review:fail')
+  if (round.verdict === 'fail' && !round.structuredReview) parts.push('review:fail')
   return parts.join(',')
 }
 
@@ -184,8 +198,16 @@ function repeatingFailure(rounds: readonly SupervisionRound[]): SupervisionStall
   const [first, second] = chain.slice(-2)
   if (!first || !second || first.outcome !== 'fail' || second.outcome !== 'fail') return null
   const signature = failureSignature(second)
-  if (signature !== failureSignature(first)) return null
+  // An empty signature (structured reviews alone) is no repeating failure.
+  if (signature === '' || signature !== failureSignature(first)) return null
   return { kind: 'repeating-failure', episodeKey: second.id, signature, rounds: [first.id, second.id] }
+}
+
+/** Decision 8: an open diagnosis holding the change is its stall, ahead of every other. */
+function convergenceStall(input: SupervisionInput): Extract<SupervisionStall, { kind: 'convergence' }> | null {
+  const diagnosis = input.diagnosis
+  if (diagnosis === null || input.state !== 'gating' || input.step !== 'diagnosing') return null
+  return { kind: 'convergence', episodeKey: diagnosis.id, signals: diagnosis.signals, cardId: diagnosis.cardId, awaitingRevision: diagnosis.awaitingRevision }
 }
 
 /** D10's ten running-stage waits, in order; every applicable one. */
@@ -249,7 +271,8 @@ function stageOf(input: SupervisionInput): SupervisionStage {
 
 /**
  * D10's outcome, first match wins: landed, cancelled, stopped, waiting before
- * provisioning, a `repeating-failure` stall (whatever the change waits on),
+ * provisioning, a `convergence` stall (an open diagnosis holds the change;
+ * review-convergence decision 8), a `repeating-failure` stall (whatever the change waits on),
  * then the running stages — the first named wait, else a `no-progress` stall
  * for an agent-held stage, else running.
  */
@@ -294,6 +317,13 @@ export function changeSupervision(input: SupervisionInput, now: Date): ChangeSup
   }
   const stage = stageOf(input)
   const waits = stageWaits(input, now)
+  const convergence = convergenceStall(input)
+  if (convergence) {
+    const named: SupervisionWait[] = convergence.awaitingRevision !== null && input.diagnosis?.taskId
+      ? [{ kind: 'contract-revision', taskId: input.diagnosis.taskId, revision: convergence.awaitingRevision }, ...waits.filter(wait => wait.kind !== 'decision-card')]
+      : waits
+    return { ...base, stage, outcome: 'stalled', cause: { kind: 'stall', stall: 'convergence', signals: convergence.signals.map(signal => signal.kind) }, alsoApplying: named, stall: convergence }
+  }
   const repeating = repeatingFailure(input.rounds)
   if (repeating) return { ...base, stage, outcome: 'stalled', cause: { kind: 'stall', stall: repeating.kind }, alsoApplying: waits, stall: repeating }
   if (waits.length > 0) return { ...base, stage, outcome: 'waiting', cause: waits[0]!, alsoApplying: waits.slice(1) }
@@ -315,6 +345,7 @@ export const SUPERVISION_STOP_LABELS: Record<string, string> = {
   'ci-timeout': 'CI did not finish in time',
   'pr-closed': 'Pull request closed',
   'integration-rewritten': 'Integration branch rewritten',
+  'diagnosis-escalated': 'Escalated after a diagnosis',
 }
 
 export const stopReasonLabel = (reason: string): string => (Object.hasOwn(SUPERVISION_STOP_LABELS, reason) ? SUPERVISION_STOP_LABELS[reason]! : reason)
@@ -330,7 +361,9 @@ export function causeLabel(cause: SupervisionCause | { kind: string }): string {
     case 'cancelled': return 'Cancelled'
     case 'not-started': return 'Not started'
     case 'stage': return known.stage === 'kawai' ? 'Running: Kawai is working' : `Running: ${known.stage}`
-    case 'stall': return known.stall === 'no-progress' ? 'Stalled: no progress' : 'Stalled: repeating failure'
+    case 'stall':
+      if (known.stall === 'convergence') return `Stalled: convergence${known.signals?.length ? ` (${list(known.signals)})` : ''}`
+      return known.stall === 'no-progress' ? 'Stalled: no progress' : 'Stalled: repeating failure'
     case 'dependency': return known.stopped.length > 0 ? `Blocked by stopped ${list(known.stopped)}` : `Waiting on ${list(known.changes)}`
     case 'parallel-limit': return known.limit === null ? 'Waiting for a parallel slot' : `Waiting for a parallel slot (limit ${known.limit})`
     case 'effect': return `Waiting on Kawai's ${known.effect} (${known.state}, try ${known.tries}${known.nextAt ? `, next ${known.nextAt}` : ''})`
@@ -345,6 +378,7 @@ export function causeLabel(cause: SupervisionCause | { kind: string }): string {
     case 'ci': return known.pending.length > 0 ? `Waiting for CI: ${list(known.pending)}` : 'Waiting for CI checks to appear'
     case 'member-release': return `Waiting for ${known.member} to be released: ${known.reason}`
     case 'condition': return `Waiting for acceptance conditions: ${list(known.conditions)}`
+    case 'contract-revision': return `Waiting for the owner to publish revision ${known.revision} of task ${known.taskId}`
     case 'landing-slot': return known.holderId ? `Waiting for the landing slot, held by ${known.holderKind ?? 'holder'} ${known.holderId}` : 'Waiting for the landing slot'
     default: return String((cause as { kind: string }).kind)
   }

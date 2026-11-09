@@ -245,7 +245,7 @@ test('server-built plan items and summary rows flow through the queue, links, an
     teamId: 'team', planId: 'plan-1', planTitle: 'Wave D', leadGroup: 'lead', executionId: 'exec-1',
     changes: [{ taskId: 'task-1', generation: 0, supervision }],
     openCards: [{
-      id: 'card-1', teamId: 'team', planId: 'plan-1', revision: 2, change: 'api', taskId: 'task-1',
+      id: 'card-1', kind: 'question', teamId: 'team', planId: 'plan-1', revision: 2, change: 'api', taskId: 'task-1',
       question: 'Which schema?', options: ['A', 'B'], context: null,
       askedBy: { session: 'chat-dev', group: 'middle-devs', profile: 'glm' },
       addressedTo: 'lead', addressedGroup: 'lead', messageId: null, createdAt: '2026-10-20T09:00:00.000Z',

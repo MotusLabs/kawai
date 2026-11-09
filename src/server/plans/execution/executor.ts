@@ -9,7 +9,10 @@
 // execution a 60-second timer keeps the loop alive for CI polling, backoffs,
 // and timeouts. Everything a tick reads is stored, so a restart resumes
 // from the rows alone.
-import { fixFindings } from './fixFindings'
+import { sendRoundFix, type FixStepDeps } from './fixStep'
+import { openDiagnosisIfDue, type DiagnosisDeps } from './diagnosisOpen'
+import { applyDiagnosisStage, releaseReassigned, type DiagnosisStageDeps } from './diagnosisStage'
+import { DecisionStore } from '../decisions/decisionStore'
 import { regateOwned } from './regateRefuted'
 import type { TeamIdentity } from '../../team/teamIdentity'
 import type { ChatSessionRecord } from '../../db'
@@ -40,7 +43,7 @@ import { EffectPinConflict } from './executionEffectStore'
 import { ExecutionConflict } from './executionStore'
 import type { ExecutionStore } from './executionStore'
 import type { PlanStore } from '../planStore'
-import { dispatchFix, dispatchImplementAttempt, dispatchOwedAttempt, ensureFixAttempt, redispatchStage, type DispatchDeps } from './executionDispatch'
+import { dispatchImplementAttempt, dispatchOwedAttempt, redispatchStage, type DispatchDeps } from './executionDispatch'
 import { StepRefusal } from './stepRefusal'
 import { fixRoundOutcome } from '../../../shared/planExecutionProgress'
 import { applyRoundStage, releaseFinishedReviewers, type ReleaseSeam, roundAdapters } from './executionRounds'
@@ -91,6 +94,10 @@ export interface ExecutorDeps {
   now?: () => Date
   /** Test seam: runs inside the re-gate's transaction after its insert (review-findings-ledger D8's crash test). */
   regateAfterInsert?: () => void
+  /** Test seam: runs inside the diagnosis open transaction after the card insert (review-convergence 4.2's crash test). */
+  diagnosisAfterCardInsert?: () => void
+  /** Test seam: runs inside a diagnosis outcome's closing transaction, after its dispatch (review-convergence 5.2). */
+  diagnosisBeforeClose?: () => void
   /** The promotion runner (integration-candidates D10): its startup, a pass per tick, and whether its timer stays armed. */
   promotions?: { startup(): void; pass(teamId: string): Promise<void>; active(teamId: string): boolean }
   /** The hold gate's reads (revision-control 3.2): the plan's active holds and open pause targets. */
@@ -217,10 +224,9 @@ export class ExecutionExecutor {
       // busy now is retried by a later tick. A held change keeps its members.
       for (const change of this.deps.store.ownedChanges(teamId)) {
         if (change.state !== 'implementing' || this.gateOf(snapshot, change.executionId)(change.change)) continue
-        releaseFinishedReviewers({
-          team, executions: this.deps.store, plans: this.deps.plans, records: this.deps.records,
-          releases: this.deps.releases, groupScoped: this.deps.groupScoped,
-        }, change)
+        const releaseDeps = { team, executions: this.deps.store, plans: this.deps.plans, records: this.deps.records, releases: this.deps.releases, groupScoped: this.deps.groupScoped }
+        releaseFinishedReviewers(releaseDeps, change)
+        releaseReassigned({ ...releaseDeps, decisions: new DecisionStore(this.deps.store.db) }, change)
       }
       const steps = planSteps(snapshot, this.deps.now?.().toISOString() ?? new Date().toISOString())
       if (steps.transitions.length === 0 && steps.effects.length === 0 && steps.dispatches.length === 0 && steps.stages.length === 0 && steps.fixes.length === 0) {
@@ -262,6 +268,7 @@ export class ExecutionExecutor {
         await this.guarded(stage, async () => {
           if (stage.kind === 'landing' || stage.kind === 'post-ci') return this.applyLandingStage(team, row, stage, gate)
           if (stage.kind === 'redispatch') return redispatchStage(this.dispatchDeps(team), row)
+          if (stage.kind === 'diagnosis') return applyDiagnosisStage(this.diagnosisStageDeps(team, gate), row, gate)
           if (stage.kind === 'landing-outcome') return this.applyLandingFollowOn(team, row, stage.effectId ?? '', gate)
           return applyRoundStage(this.roundDeps(team, gate), row, stage)
         })
@@ -407,53 +414,42 @@ export class ExecutionExecutor {
   }
 
   /**
-   * D12's fix step: the count rule decides — three consecutive failed fix
-   * rounds stop the change, anything else returns it to implementing and
-   * dispatches the fix attempt naming the failing checks, findings, count,
-   * and the commit to continue from.
+   * D12's fix step under review-convergence (table DO): the count rule and
+   * the round's review decide — a signal or the backstop opens a diagnosis
+   * instead of the fix (the diagnosis stage then owns the change); anything
+   * else returns it to implementing and dispatches the fix attempt naming
+   * the failing checks, findings, count, and the commit to continue from.
    */
-  private async applyFix(team: import('../../team/teamIdentity').TeamIdentity, fix: { executionId: string; change: string; roundId: string }, gate?: (change: string) => boolean): Promise<void> {
+  private async applyFix(team: TeamIdentity, fix: { executionId: string; change: string; roundId: string }, gate?: (change: string) => boolean): Promise<void> {
     const store = this.deps.store
     const round = store.round(fix.roundId)
     const row = store.change(fix.executionId, fix.change)
+    const execution = store.execution(fix.executionId)
     // A carried round that failed base-merge CI fixes from `landing`, leaving the slot.
-    if (round === null || row === null || (row.state !== 'gating' && row.state !== 'landing')) return
+    if (round === null || row === null || execution === null || (row.state !== 'gating' && row.state !== 'landing')) return
     this.mechanismOf(fix.executionId).roundFailed?.(round)
-    const outcome = fixRoundOutcome(row.fixRounds, { fixRound: round.fixRound, outcome: 'fail' })
-    if (outcome.stop) {
-      store.transition(fix.executionId, fix.change, row, {
-        state: 'stopped', stopReason: 'round-limit', step: null,
-        stopDetail: { message: `Three consecutive failed fix rounds.`, checks: (round.ci ?? []).filter(check => check.conclusion === 'failure').map(check => check.name) },
-      })
-      return
+    const outcome = fixRoundOutcome(row.fixRounds, { fixRound: round.fixRound, outcome: 'fail' }, execution.maxFailedFixRounds)
+    const diagnosis = openDiagnosisIfDue(this.diagnosisDeps(team), row, round, { reached: outcome.backstop, count: outcome.count, limit: execution.maxFailedFixRounds })
+    if (diagnosis.kind === 'opened' || (diagnosis.kind === 'exists' && diagnosis.diagnosis.closedAt === null)) return
+    await sendRoundFix(this.fixStepDeps(team), row, round, { fixRounds: outcome.count }, gate)
+  }
+
+  private fixStepDeps(team: TeamIdentity): FixStepDeps {
+    return { store: this.deps.store, plans: this.deps.plans, tasks: this.deps.tasks, dispatch: this.dispatchDeps(team) }
+  }
+
+  private diagnosisStageDeps(team: TeamIdentity, gate?: (change: string) => boolean): DiagnosisStageDeps {
+    return {
+      team, fix: this.fixStepDeps(team), round: this.roundDeps(team, gate), decisions: new DecisionStore(this.deps.store.db),
+      ...(this.deps.diagnosisBeforeClose ? { beforeClose: this.deps.diagnosisBeforeClose } : {}),
     }
-    const revision = this.deps.plans.revision(store.execution(fix.executionId)!.planId, store.execution(fix.executionId)!.revision)
-    const group = revision?.content.changes.find(entry => entry.change === fix.change)?.group
-    if (group === null || group === undefined) return
-    const failing = (round.ci ?? []).filter(check => check.conclusion.toLowerCase() === 'failure')
-      .map(check => ({ name: check.name, conclusion: check.conclusion, link: check.link }))
-    const all = row.taskId === null ? [] : this.deps.tasks.store.results.findingsFor(round.resultId)
-    const findings = round.verdictFindingsId !== null ? all.filter(entry => entry.id === round.verdictFindingsId) : all
-    // The dispatch comes first: a refused fix stops the change while it is
-    // still gating on the failed round, so Retry finds the round again. The
-    // dispatch replays under its key if the transition below never landed.
-    // Under a hold (revision-control 3.2) the attempt row — the owed
-    // dispatch's marker — is still created and the fix transition stands;
-    // only the handoff waits, and the release dispatches it once. This is
-    // the change's one writer for its own row (H″ O2): a refused send wrote
-    // nothing, and the fixes step re-sends the same key after Retry; the
-    // owed step never fires here — 'gating' is not a fix row's owed state.
-    const input = {
-      executionId: fix.executionId, change: fix.change, group,
-      failingChecks: failing,
-      findingsIds: findings.map(entry => entry.id),
-      findings: fixFindings(this.deps.tasks.store, row.taskId!, round),
-      continueFrom: round.commitSha,
-      fixRounds: outcome.count,
+  }
+
+  private diagnosisDeps(team: TeamIdentity): DiagnosisDeps {
+    return {
+      db: this.deps.store.db, team, executions: this.deps.store, plans: this.deps.plans, tasks: this.deps.tasks.store, mail: this.deps.mailbox,
+      ...(this.deps.diagnosisAfterCardInsert ? { afterCardInsert: this.deps.diagnosisAfterCardInsert } : {}),
     }
-    const attempt = await ensureFixAttempt(this.dispatchDeps(team), input)
-    if (attempt !== null && gate?.(fix.change) !== true) await dispatchFix(this.dispatchDeps(team), input, attempt)
-    store.transition(fix.executionId, fix.change, row, { state: 'implementing', step: null, fixRounds: outcome.count })
   }
 
   private dispatchDeps(team: TeamIdentity): DispatchDeps {

@@ -252,9 +252,12 @@ same worktree at once; reuse a worktree only for follow-up work on its branch.
   the finding with `task_get`, then act: hold dependent work, tell the
   owner when it is security or data loss, or ask for a design check. Replies
   to the alert are refused.
-- Track recurring findings by defect class. After two unsuccessful correction
-  rounds on a non-architectural class, require a different approach or
-  reassignment. For an architectural finding, require an invariant-based plan
+- A diagnosis card (`stall:convergence`) means Kawai stopped a change's fix
+  loop on a convergence signal (S1–S5) or the backstop. Decide it with
+  `decision_record` and a rationale: Fix round, Reject, `Amend the contract`
+  (the owner publishes the revision), Reassign, or Escalate — the playbook
+  is "Convergence" in `docs/agent-collaboration.md`, "Review protocol".
+  For an architectural finding, require an invariant-based plan
   immediately; if its first correction still breaks that invariant, reopen
   the design before another patch. Pause only dependent implementation, keep
   independent authorized work moving, and respect execution ownership.

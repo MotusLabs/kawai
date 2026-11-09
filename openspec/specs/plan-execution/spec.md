@@ -289,7 +289,7 @@ An extra check whose name matches a check reported for the round's commit SHALL 
 - **THEN** the check is shown as verified by CI and is not listed for the reviewer to attest
 
 ### Requirement: A failed round returns the change for fixes
-When a round fails, Kawai SHALL dispatch a fix attempt to the change's implementing group as a handoff. The handoff SHALL carry the failing checks with their links, the blocking findings by id with clause, evidence, and reproduction, the count of other findings, the fix-round count, and the branch head to continue from. A round whose attempt is a fix or update attempt SHALL be a fix round.
+When a round fails and no diagnosis opens on it, Kawai SHALL dispatch a fix attempt to the change's implementing group as a handoff. The handoff SHALL carry the failing checks with their links, the blocking findings by id with clause, evidence, and reproduction, the count of other findings, the fix-round count, and the branch head to continue from. A round whose attempt is a fix or update attempt SHALL be a fix round.
 
 #### Scenario: The fix instruction carries the failure
 - **WHEN** a round fails on the end-to-end check
@@ -303,16 +303,9 @@ When a round fails, Kawai SHALL dispatch a fix attempt to the change's implement
 - **WHEN** a round fails with F1 accepted at P1, F2 advisory, and F3 out of contract
 - **THEN** the fix handoff lists F1 with its clause, evidence, and reproduction, says two other findings are in `task_get`, and does not list F2 or F3
 
-### Requirement: Three consecutive failed fix rounds stop the change
-When three consecutive fix rounds of a change fail, the change SHALL stop as `round-limit` with its last evidence, and no further attempt SHALL be dispatched for it. The first implementation round SHALL NOT count as a fix round. A passing round SHALL reset the count, and flaky checks SHALL NOT fail a round. The rest of the execution SHALL continue.
-
-#### Scenario: The third failed fix round stops
-- **WHEN** a change's implementation round fails and its next three fix rounds also fail
-- **THEN** the change shows as stopped after three failed fix rounds, with the last round's evidence, and no fourth fix is dispatched
-
-#### Scenario: A passing round resets the count
-- **WHEN** two fix rounds fail, the next round passes, and the landing's update attempt then fails its round
-- **THEN** the change shows one failed fix round of three and gets another fix attempt
+#### Scenario: A diagnosis holds the fix
+- **WHEN** a round fails and a convergence signal fires on its review
+- **THEN** no fix handoff is dispatched until the diagnosis card is decided
 
 ### Requirement: The owner retries a stopped change
 The human SHALL be able to retry a stopped change of a running execution under a command id, which replays like Start's. Retry SHALL be refused while the change has a task and that task is closed. A retried change SHALL wait for a slot under the parallel limit.
@@ -327,7 +320,7 @@ The human SHALL be able to retry a stopped change of a running execution under a
 
 ### Requirement: Retry runs again the stage the change stopped in
 Retry SHALL run the stage of the change's stop reason:
-- `round-limit`: a fix attempt, with a new fix-round count;
+- `diagnosis-escalated`, and a `round-limit` from before the backstop: a fix attempt, with a new fix-round count;
 - `instruction-failed` and `task-closed`: that stage's instruction;
 - `review-unavailable`: the review handoff;
 - `name-taken`: the name check, then provisioning;
@@ -335,9 +328,13 @@ Retry SHALL run the stage of the change's stop reason:
 - `effect-unknown`: the effect's inspection first;
 - `ci-missing` and `ci-timeout`: CI, with new timeouts.
 
-#### Scenario: Retry after the round limit
-- **WHEN** the human retries a change stopped after three failed fix rounds
+#### Scenario: Retry after an escalated diagnosis
+- **WHEN** the human retries a change stopped as `diagnosis-escalated`
 - **THEN** a fix attempt is dispatched, its fix-round count starts again at one, and the retry is recorded with the owner as actor
+
+#### Scenario: Retry after the round limit
+- **WHEN** the human retries a change that stopped as `round-limit` before the backstop existed
+- **THEN** a fix attempt is dispatched and its fix-round count starts again at one
 
 #### Scenario: Retry after an unknown outcome
 - **WHEN** the human retries a change stopped as `effect-unknown` on its merge
@@ -475,7 +472,7 @@ Plan detail SHALL offer **Retry** on each stopped change of a running execution,
 - **THEN** its plan note tells it to submit with `task_submit_result` and not to push the change's branch, and a reply to that mail is refused with the same guidance
 
 ### Requirement: Execution settings are user-level
-Each team's `planExecution` settings SHALL live only in the user-level `~/.kawai/teams.json`, and project files SHALL NOT set them. They SHALL map each floor check run in CI to CI check names, and SHALL set the parallel limit (default 3) and the merge method (default merge commit). A malformed value SHALL be logged and its default used. A floor check without a mapping SHALL refuse Start as `landing-ready`.
+Each team's `planExecution` settings SHALL live only in the user-level `~/.kawai/teams.json`, and project files SHALL NOT set them. They SHALL map each floor check run in CI to CI check names, and SHALL set the parallel limit (default 3), the merge method (default merge commit), and the backstop `maxFailedFixRounds` (an integer from 2 to 20, default 5). A malformed value SHALL be logged and its default used. A floor check without a mapping SHALL refuse Start as `landing-ready`.
 
 #### Scenario: Missing end-to-end mapping
 - **WHEN** the team's mapping names CI checks for lint, typecheck, and unit tests but none for CI end-to-end
@@ -484,6 +481,10 @@ Each team's `planExecution` settings SHALL live only in the user-level `~/.kawai
 #### Scenario: A malformed value falls back to its default
 - **WHEN** the team's `maxParallelChanges` is the string `"three"`
 - **THEN** the problem is logged and the next Start records the default limit of 3
+
+#### Scenario: An out-of-range backstop falls back
+- **WHEN** the team's `maxFailedFixRounds` is 1
+- **THEN** the problem is logged and the backstop reads 5
 
 ### Requirement: Artifact edits never change an execution task's contract
 After its task is created, a change's contract SHALL change only when the human publishes a new task revision. Edits to the change's artifacts on its branch, on the base branch, or in any worktree SHALL NOT change the task's contract or its identity.
@@ -532,3 +533,14 @@ When a round's review accepts a P0 finding, Kawai SHALL send one message tagged 
 #### Scenario: An unsupported P0 does not alert
 - **WHEN** a review submits a P0 without evidence
 - **THEN** no `review-p0` message is sent and the finding reads unsupported
+
+### Requirement: Failed fix rounds count toward the backstop
+Kawai SHALL count a change's consecutive failed fix rounds, and when the count reaches the team's backstop it SHALL open a diagnosis instead of stopping the change. The first implementation round SHALL NOT count as a fix round. A passing round and a closed diagnosis SHALL reset the count, flaky checks SHALL NOT fail a round, and the rest of the execution SHALL continue.
+
+#### Scenario: The fifth failed fix round opens a diagnosis
+- **WHEN** a change's implementation round fails, no signal fires, and its next five fix rounds also fail under the default backstop
+- **THEN** the change waits on a diagnosis naming the backstop, with the last round's evidence, and no sixth fix is dispatched until the card is decided
+
+#### Scenario: A passing round resets the count
+- **WHEN** two fix rounds fail, the next round passes, and the landing's update attempt then fails its round
+- **THEN** the change shows one failed fix round of five and gets another fix attempt

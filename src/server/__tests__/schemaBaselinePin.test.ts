@@ -545,9 +545,26 @@ const migration24: SchemaShape['tables'] = {
   },
 }
 
+// Migration 25's delta (review-convergence decisions 3, 4, 6, 7, 10): the
+// diagnoses and the manual tasks' convergence notices; its three added
+// columns are applied in the test below.
+const migration25: SchemaShape['tables'] = {
+  plan_execution_diagnoses: {
+    columns: [
+      id, column('execution_id'), column('change'), column('round_id'), optional('review_submission_id'), column('signals_json'),
+      column('card_id'), optional('message_id'), column('opened_at'), ...['outcome', 'decision_id', 'closed_at', 'close_reason'].map(optional),
+    ],
+    indexes: [{ name: 'plan_execution_diagnoses_change', unique: 0, columns: ['execution_id', 'change'] }],
+  },
+  team_task_convergence_notices: {
+    columns: [column('submission_id', 0, 1), column('task_id'), column('signals_json'), column('created_at')],
+    indexes: [{ name: 'team_task_convergence_notices_task', unique: 0, columns: ['task_id'] }],
+  },
+}
+
 test('a fresh database opened by this build has the same shape plus each migration\'s delta and schema_migrations', () => {
   const session = initDatabase({ path: ':memory:' })
-  const added = { ...migration2, ...migration3, ...migration4, ...migration5, ...migration6, ...migration7, ...migration8, ...migration9, ...migration10, ...migration11And21, ...migration13, ...migration16, ...migration17, ...migration19, ...migration20, ...migration22, ...migration24 }
+  const added = { ...migration2, ...migration3, ...migration4, ...migration5, ...migration6, ...migration7, ...migration8, ...migration9, ...migration10, ...migration11And21, ...migration13, ...migration16, ...migration17, ...migration19, ...migration20, ...migration22, ...migration24, ...migration25 }
   expect(Object.keys(added).filter(table => table in expected.tables)).toEqual([])
   // Migration 20's: the submitter's nullable coverage map (independent-
   // verification D4), appended after the baseline columns.
@@ -595,8 +612,15 @@ test('a fresh database opened by this build has the same shape plus each migrati
   const withLedger = { ...findings, columns: [...findings.columns, flag('structured'), flag('counted'), optional('contract_identity'), optionalInteger('ledger_seq'), optional('replaced_by')] }
   const rounds = migration8.plan_execution_rounds!
   const withRegate = { columns: [...rounds.columns, optional('regate_of'), optional('blocking_ids')], indexes: [...rounds.indexes, { name: 'plan_execution_rounds_regate', unique: 1, columns: ['regate_of'] }] }
+  // Migration 25's: the backstop at Start, a Reassign's group, a card's kind.
+  const appended = (table: SchemaShape['tables'][string], ...columns: SchemaShape['tables'][string]['columns']) => ({ ...table, columns: [...table.columns, ...columns] })
+  const convergence = {
+    plan_executions: appended(migration8.plan_executions!, counter('max_failed_fix_rounds', '5')),
+    plan_execution_changes: appended(migration8.plan_execution_changes!, optional('group_override')),
+    plan_decision_cards: appended(migration16.plan_decision_cards!, { name: 'kind', type: 'TEXT', notnull: 1, dflt_value: "'question'", pk: 0 }),
+  }
   expect(schemaShape(session.db)).toEqual({
-    tables: { ...expected.tables, ...added, team_messages: withProfiles, team_task_assignments: withChoice, chat_sessions: withFlag, profile_limit_events: withLimitContext, team_task_results: withCoverage, team_task_revisions: withContract, team_task_drafts: withContractText, team_task_findings: withLedger, plan_execution_rounds: withRegate },
+    tables: { ...expected.tables, ...added, ...convergence, team_messages: withProfiles, team_task_assignments: withChoice, chat_sessions: withFlag, profile_limit_events: withLimitContext, team_task_results: withCoverage, team_task_revisions: withContract, team_task_drafts: withContractText, team_task_findings: withLedger, plan_execution_rounds: withRegate },
   })
   const extra = session.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'").get()
   expect(extra).toEqual({ name: 'schema_migrations' })

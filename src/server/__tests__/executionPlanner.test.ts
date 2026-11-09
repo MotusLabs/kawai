@@ -26,7 +26,7 @@ const snapshot = (changes: PlannedChange[], over: Partial<ExecutionSnapshot> = {
     row: {
       id: 'e1', teamId: 'team', planId: 'p1', revision: 1, contentHash: 'h', reportId: 'r', inputHash: 'i',
       landingMode: 'direct', baseBranch: 'master', baseCommit: 'base', floor: { version: 1, map: { lint: ['ci'], typecheck: ['ci'], 'unit-tests': ['ci'], 'ci-e2e': ['e2e'] } },
-      maxParallel: 1, mergeMethod: 'merge', state: 'running', outcome: null, stopReason: null, startedAt: '', finishedAt: null,
+      maxParallel: 1, mergeMethod: 'merge', maxFailedFixRounds: 5, state: 'running', outcome: null, stopReason: null, startedAt: '', finishedAt: null,
     },
     changes, finished: false, holds: [], openTargets: [],
   }],

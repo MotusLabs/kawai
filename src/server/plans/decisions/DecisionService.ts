@@ -89,7 +89,7 @@ export class DecisionService {
     const lead = leadOf(this.deps.plans, scope.plan.id)
     const toLead = lead !== null && session.groupId !== lead
     const draft: DecisionCard = {
-      id: `card-${crypto.randomUUID()}`, teamId: team.teamId, planId: scope.plan.id, revision: scope.revision, change: scope.change, taskId: scope.taskId,
+      id: `card-${crypto.randomUUID()}`, kind: 'question', teamId: team.teamId, planId: scope.plan.id, revision: scope.revision, change: scope.change, taskId: scope.taskId,
       question: fields.question, options: fields.options, context: fields.context, askedBy: { session: session.sessionId, group: party.group, profile: party.profile },
       addressedTo: toLead ? 'lead' : 'owner', addressedGroup: toLead ? lead : null, messageId: null, createdAt: '',
     }
@@ -124,7 +124,7 @@ export class DecisionService {
     const lead = leadOf(this.deps.plans, scope.plan.id)
     const toLead = lead !== null && session.groupId !== lead
     const draft: DecisionCard = {
-      id: `card-${crypto.randomUUID()}`, teamId: team.teamId, planId: scope.plan.id, revision: scope.revision, change: scope.change, taskId: scope.taskId,
+      id: `card-${crypto.randomUUID()}`, kind: 'question', teamId: team.teamId, planId: scope.plan.id, revision: scope.revision, change: scope.change, taskId: scope.taskId,
       question: fields.question, options: fields.options, context: fields.context, askedBy: { session: session.sessionId, group: party.group, profile: party.profile },
       addressedTo: toLead ? 'lead' : 'owner', addressedGroup: toLead ? lead : null, messageId: null, createdAt: '',
     }
@@ -153,13 +153,14 @@ export class DecisionService {
     if (session.groupId !== card.addressedGroup) {
       throw new DecisionRefusal('forbidden', `Card ${card.id} is addressed to group ${card.addressedGroup}; your group ${session.groupId ?? '(none)'} cannot decide it.`)
     }
-    const { choice, optionIndex } = resolveChoice(card.options, input)
+    const { choice, optionIndex } = resolveChoice(card.options, input, card.kind === 'diagnosis')
     const affected = this.affected(team.teamId, input.affected_tasks, card.taskId)
     const settled = this.settledFor(team.teamId, card, party, choice)
     if (settled) return settled
     const decisionId = `decision-${crypto.randomUUID()}`
     const preview = { id: decisionId, choice, rationale, decidedBy: party } as PlanDecision
-    const prepared = card.messageId
+    // A diagnosis card's outcome is its reply (review-convergence decision 6).
+    const prepared = card.messageId && card.kind !== 'diagnosis'
       ? await this.deps.mailbox.prepareReply(caller, {
         message_id: card.messageId, body: answerBody(card, preview), tags: ['decision-answer'], ...(card.taskId ? { task_id: card.taskId } : {}),
       }, { answer: true })

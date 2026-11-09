@@ -66,6 +66,10 @@ export interface FixInstructionInput extends ImplementInstructionInput {
   /** review-findings-ledger D7: the blocking findings rendered as lines, the others' count, and today's texts. */
   findings: { blocking: ReadonlyArray<{ id: string }>; blockingText: string; others: number; legacyTexts: string[] }
   fixRounds: number
+  /** The execution's backstop (review-convergence decision 3). */
+  fixRoundLimit: number
+  /** A diagnosis decided with Fix round, Reject, or Reassign: the decision's rationale, which the fix carries. */
+  diagnosis?: string | null
   continueFrom: string
 }
 
@@ -78,7 +82,8 @@ export function fixInstruction(input: FixInstructionInput): string {
   return [
     implementInstruction(input),
     '',
-    `This is fix round ${input.fixRounds + 1} of 3. Fix the failures below and submit a new result.`,
+    `This is fix round ${input.fixRounds + 1} of ${input.fixRoundLimit}. Fix the failures below and submit a new result.`,
+    input.diagnosis ? `The Lead diagnosed this change's review rounds and decided: ${input.diagnosis}` : null,
     `Failing checks:\n${checks || '- none reported'}`,
     blockingCount > 0 ? `Blocking findings to fix (task_get has each in full):\n${input.findings.blockingText}` : null,
     others > 0 ? `${others} other finding${others === 1 ? ' is' : 's are'} (advisory, unsupported, out of contract) in task_get; ${others === 1 ? 'it is' : 'they are'} not required.` : null,

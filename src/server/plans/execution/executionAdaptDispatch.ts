@@ -78,6 +78,7 @@ export function dispatchAdaptedFixWithin(input: AdaptedFixDispatchInput): string
       legacyTexts: [`The task's direction was republished as revision ${input.taskRevision}${input.rationale ? ` (${input.rationale})` : ''}. Re-apply your work on top of the new direction.`],
     },
     fixRounds: changeRow.fixRounds,
+    fixRoundLimit: input.execution.maxFailedFixRounds,
     continueFrom: input.startCommit,
   })
   const outcome = input.assignments.dispatchWithin(resolveCaller(input.team, input.execution.id), {

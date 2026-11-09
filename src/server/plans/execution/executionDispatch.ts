@@ -15,6 +15,7 @@ import type { AssignmentService } from '../../team/AssignmentService'
 import type { TaskResultService } from '../../team/TaskResultService'
 import { runGitAsync } from '../../git/gitCommand'
 import { manifestHashInput, type AttemptManifest } from '../../../shared/planExecution'
+import { dispatchOwedFix } from './owedFix'
 import { attemptStatus } from './attemptStatus'
 import type { AttemptRow, RoundRow } from './executionRows'
 import type { ExecutionStore } from './executionStore'
@@ -156,6 +157,8 @@ export interface FixAttemptInput {
   findings: FixFindings
   continueFrom: string
   fixRounds: number
+  /** A diagnosis outcome's rationale, which the fix handoff carries (review-convergence decision 7). */
+  diagnosis?: string | null
   /** When set, the attempt is an update attempt (revision-control PR E, A1): its manifest records the failed branch update. */
   update?: { base: string; files: string[] }
 }
@@ -273,6 +276,8 @@ export async function dispatchFix(deps: DispatchDeps, input: FixAttemptInput, at
     failingChecks: input.failingChecks,
     findings: input.findings,
     fixRounds: input.fixRounds,
+    fixRoundLimit: execution.maxFailedFixRounds,
+    diagnosis: input.diagnosis ?? null,
     continueFrom: input.continueFrom,
   })
   // A fix is a handoff (D7): it supersedes the outstanding review through
@@ -305,7 +310,7 @@ export async function dispatchUpdateAttempt(deps: DispatchDeps, input: {
   const changeRow = deps.executions.change(input.executionId, input.change)
   if (changeRow === null || changeRow.worktree === null || changeRow.branch === null || changeRow.baselineCommit === null || changeRow.taskId === null) return
   const revision = deps.plans.revision(execution.planId, execution.revision)
-  const group = revision?.content.changes.find(entry => entry.change === input.change)?.group ?? null
+  const group = changeRow.groupOverride ?? revision?.content.changes.find(entry => entry.change === input.change)?.group ?? null
   if (group === null) return
   const roleProfiles = revision?.content.roles.find(role => role.group === group)?.profiles ?? []
   const attempt = await ensureFixAttempt(deps, {
@@ -393,42 +398,6 @@ async function dispatchOwedUpdate(deps: DispatchDeps, input: { executionId: stri
   })
 }
 
-/** The fix attempt's re-send, texts rebuilt at send time from the round the attempt answers — the manifest keeps only ids. */
-async function dispatchOwedFix(deps: DispatchDeps, input: { executionId: string; change: string; group: string }, newest: AttemptRow): Promise<void> {
-  const changeRow = deps.executions.change(input.executionId, input.change)
-  if (changeRow === null) return
-  const round = newest.manifest.answers !== undefined
-    ? deps.executions.round(newest.manifest.answers.roundId) ?? null
-    : null
-  let failingChecks: FixAttemptInput['failingChecks'] = []
-  let findingsIds: string[] = []
-  let notes: string[] = []
-  // The findings are rebuilt at send time from the ledger and the round the
-  // attempt answers — the manifest keeps only ids (review-findings-ledger
-  // D7). A superseded round's owed fix names the task's CURRENT revision (a
-  // second republish after the attempt was minted is still the round's
-  // answer), a failed round its failing checks and the verdict's findings.
-  if (round?.outcome === 'superseded') {
-    const task = changeRow.taskId === null ? null : deps.tasks.store.get(changeRow.taskId)
-    const rationale = task === null || task === undefined ? null : deps.tasks.store.revisions(task.id).at(-1)?.rationale ?? null
-    notes = [`The task's direction was republished as revision ${task?.revision ?? 1}${rationale ? ` (${rationale})` : ''}. Re-apply your work on top of the new direction.`]
-  } else if (round !== null && round.outcome === 'fail') {
-    failingChecks = (round.ci ?? []).filter(check => check.conclusion.toLowerCase() === 'failure')
-      .map(check => ({ name: check.name, conclusion: check.conclusion, link: check.link }))
-    const all = changeRow.taskId === null ? [] : deps.tasks.store.results.findingsFor(round.resultId)
-    findingsIds = (round.verdictFindingsId !== null ? all.filter(entry => entry.id === round.verdictFindingsId) : all).map(row => row.id)
-  }
-  const findings = changeRow.taskId === null
-    ? { blocking: [], blockingText: '', others: 0, legacyTexts: notes }
-    : fixFindings(deps.tasks.store, changeRow.taskId, round?.outcome === 'fail' ? round : null, notes)
-  await dispatchFix(deps, {
-    executionId: input.executionId, change: input.change, group: input.group,
-    failingChecks, findingsIds, findings,
-    continueFrom: round?.commitSha ?? changeRow.baselineCommit ?? '',
-    fixRounds: changeRow.fixRounds,
-  }, { id: newest.id, number: newest.number, manifestHash: newest.manifestHash })
-}
-
 /**
  * Retry of a failed or closed stage (D12): the stage's instruction is sent
  * again, in A3's order (revision-control PR E). An owed newest row is the
@@ -443,7 +412,7 @@ async function dispatchOwedFix(deps: DispatchDeps, input: { executionId: string;
  * with no linked row dispatches its implement attempt (a no-op behind H4's
  * guard when rows exist). The step clears once the decision is applied.
  */
-export async function redispatchStage(deps: DispatchDeps, row: { executionId: string; change: string; taskId: string | null; generation: number }): Promise<void> {
+export async function redispatchStage(deps: DispatchDeps, row: { executionId: string; change: string; taskId: string | null; generation: number; groupOverride: string | null }): Promise<void> {
   const execution = deps.executions.execution(row.executionId)
   if (execution === null) return
   const revision = deps.plans.revision(execution.planId, execution.revision)
@@ -489,7 +458,7 @@ export async function redispatchStage(deps: DispatchDeps, row: { executionId: st
         }))
       }
     } else {
-      const group = revision?.content.changes.find(entry => entry.change === row.change)?.group ?? null
+      const group = row.groupOverride ?? revision?.content.changes.find(entry => entry.change === row.change)?.group ?? null
       if (group !== null) await dispatchImplementAttempt(deps, { executionId: row.executionId, change: row.change, group })
     }
   }
