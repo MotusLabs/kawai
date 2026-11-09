@@ -4,6 +4,7 @@ import type { Options } from '@anthropic-ai/claude-agent-sdk'
 import { ClaudeSession } from '../../src/claude/session.js'
 import type { DriverState, ProcessEndReport, ResumeCheckpoint, TurnHandle, TurnResult } from '../../src/contract.js'
 import type { AgentEvent } from '../../src/events.js'
+import type { BeforeSubmit } from '../../src/options.js'
 import { controlledQueries, type ControlledQuery } from './controlledQuery.js'
 import { fakeClaudeHome } from './fakeClaudeHome.js'
 
@@ -26,6 +27,9 @@ export interface DriverHooks {
   onTurnResult?(result: TurnResult): void
   onState?(state: DriverState): void
   onCheckpoint?(checkpoint: ResumeCheckpoint): void | Promise<void>
+  /** Runs after the event is recorded. */
+  onEvent?(event: AgentEvent): void
+  beforeSubmit?: BeforeSubmit
   sdkOptions?: Partial<Options>
 }
 
@@ -39,7 +43,10 @@ export function driver(hooks: DriverHooks = {}): Driver {
   const d = new ClaudeSession({
     launch: fakeClaudeHome().launch(),
     callbacks: {
-      onEvent: (e) => events.push(e),
+      onEvent: (e) => {
+        events.push(e)
+        hooks.onEvent?.(e)
+      },
       onTurnResult: (r) => {
         hooks.onTurnResult?.(r)
         results.push(r)
@@ -53,6 +60,7 @@ export function driver(hooks: DriverHooks = {}): Driver {
     },
     logger: { warn: (fields: unknown, message: string) => warnings.push([message, fields]), info: () => {}, error: () => {}, debug: () => {} } as never,
     ...(hooks.sdkOptions ? { sdkOptions: hooks.sdkOptions } : {}),
+    ...(hooks.beforeSubmit ? { beforeSubmit: hooks.beforeSubmit } : {}),
     resume: { runtime: 'claude', runtimeSessionId: 'sess-saved' },
     queryFactory: factory,
   })

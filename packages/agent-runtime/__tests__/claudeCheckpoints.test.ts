@@ -4,61 +4,14 @@
 // controlled query; onCheckpoint is a test-held promise, so every ordering
 // below is decided by the test: pending, success, rejection, a stop or
 // interrupt while persisting, two persistences in a row, and reentrant
-// calls from inside onCheckpoint.
+// calls from inside onCheckpoint. Interrupts against waiting sends, row by
+// row, are in claudeInterruptWaiters.test.ts and claudeInterruptCallbacks.test.ts.
 import { describe, expect, test } from 'bun:test'
-import type { ResumeCheckpoint, TurnHandle } from '../src/contract.js'
+import type { TurnHandle } from '../src/contract.js'
 import { AgentRuntimeError } from '../src/errors.js'
-import type { AgentEvent } from '../src/events.js'
-import { driver, type Driver, type DriverHooks } from './helpers/claudeDriverHarness.js'
+import type { Driver } from './helpers/claudeDriverHarness.js'
+import { errorCategories, idle, outcome, persistence, persisting, prompts, startedTurns, tick, userMessages } from './helpers/checkpointHarness.js'
 import { frames } from './helpers/controlledQuery.js'
-
-const tick = (ms = 0) => new Promise<void>((resolve) => setTimeout(resolve, ms))
-
-/** onCheckpoint as a test-held promise per call. */
-function persistence() {
-  const calls: { checkpoint: ResumeCheckpoint; resolve(): void; reject(error: unknown): void }[] = []
-  const onCheckpoint = (checkpoint: ResumeCheckpoint) =>
-    new Promise<void>((resolve, reject) => {
-      calls.push({ checkpoint, resolve, reject })
-    })
-  return { calls, onCheckpoint }
-}
-
-async function idle(hooks: DriverHooks): Promise<Driver> {
-  const f = driver(hooks)
-  const start = f.d.start()
-  while (f.queries.length === 0) await tick()
-  f.q().ready()
-  await start
-  return f
-}
-
-/** Settles to the value, the rejection, or 'pending' after the event loop drains. */
-async function outcome<T>(promise: Promise<T>): Promise<T | AgentRuntimeError | 'pending'> {
-  let state: T | AgentRuntimeError | 'pending' = 'pending'
-  promise.then(
-    (value) => (state = value),
-    (error: AgentRuntimeError) => (state = error),
-  )
-  await tick()
-  await tick()
-  return state
-}
-
-const prompts = (f: Driver) => f.q().prompts.map((p): string | undefined => p.uuid)
-const userMessages = (f: Driver) => f.events.filter((e) => e.type === 'user_message').map((e) => (e as Extract<AgentEvent, { type: 'user_message' }>).messageUuid)
-const startedTurns = (f: Driver) => f.events.filter((e) => e.type === 'turn_started').map((e) => (e as Extract<AgentEvent, { type: 'turn_started' }>).turnId)
-const errorCategories = (f: Driver) => f.events.filter((e) => e.type === 'error').map((e) => (e as Extract<AgentEvent, { type: 'error' }>).error.category)
-
-/** An idle driver whose first turn T0 revealed `sessionId`; that persistence is held. */
-async function persisting(sessionId = 'sess-new') {
-  const p = persistence()
-  const f = await idle({ onCheckpoint: p.onCheckpoint })
-  const t0 = await f.d.send('first')
-  f.q().push(frames.init(sessionId))
-  await f.q().drain()
-  return { f, p, t0 }
-}
 
 describe('Claude checkpoints: report and gate (A1, R10, I2)', () => {
   // @covers: agent-runtime › Runtime identity is available for persistence › Checkpoint persistence fails
