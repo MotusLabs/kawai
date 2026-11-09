@@ -151,7 +151,7 @@
 
 ## 9. Properties (V4)
 
-- [ ] 9.1 Add the executor-seam properties P1 and P3 (seed `0xC0FE1D`, 24
+- [x] 9.1 Add the executor-seam properties P1 and P3 (seed `0xC0FE1D`, 24
   cases, a crash at each transaction boundary of the open step and the
   outcome), and the service-seam property P2 (300 cases), in
   `*.integration.test.ts` files. Verify:
