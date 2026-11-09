@@ -25,6 +25,88 @@ or property that would have caught it, and the source finding.
   (revision-control design.md, P-I2).
 - **Source finding.** findings-60ea7371 (RC E).
 
+### F1 — a terminal stop reentered before it is published (L12/O2)
+
+- **Hazard.** A memoized terminal transaction is stored only after it fires
+  its own callbacks (the `stopping` state publication, the teardown's turn
+  settlement). A callback that calls kill or shutdown without awaiting it
+  starts a second teardown. That teardown mints its own cancellation token.
+  The first one's owned abort then reads as an independent failure, and the
+  callers get different outcomes and modes.
+- **Oracle that catches it.** The production session with the pinned SDK
+  and the fake CLI. An external kill while a turn hangs, with a nested kill
+  or shutdown from the interrupted turn result and from `onState('stopping')`,
+  with and without an active turn. Assert one teardown in the first mode,
+  one `stopped`, the same receipt or error object for every caller, and
+  causes equal to only the callbacks' own throws
+  (`packages/agent-runtime/__tests__/claudeReentrantStop.test.ts`). The
+  omission control publishes the transaction late. Minting the token
+  earlier on its own still leaves the duplicate teardown.
+- **Source finding.** Adviser note b1298cf0 (task 4.1 F1, L12/O2).
+
+### G1 — a waiting call cancelled only through a state the interrupt no longer has (L09/L10, R3 A4)
+
+- **Hazard.** A send held on a pending checkpoint persistence notices an
+  interrupt only through state the interrupt changes when a turn is active
+  or starting (an epoch, the active turn). Once the turn that revealed the
+  id has ended, the driver is idle. The interrupt then returns
+  `no-active-turn`, and the held send runs after the persistence settles.
+  The waiter's lifetime and the turn's lifetime are different; the tables
+  had rows by state only, with no axis for a call that has not been
+  acknowledged yet. A fix that sampled the epoch earlier closed the active
+  trace and left both idle traces open.
+- **Oracle that catches it.** The waiter table
+  (`packages/agent-runtime/__tests__/oracles/interruptWaitersInputs.ts`):
+  every driver state crossed with what the pending call waits for (nothing,
+  start, persistence with `queue` or the default continuation). It adds a
+  receipt row per waiter presence and after-interrupt rows for a late
+  persistence resolution or rejection, newer sends, stop and reentrancy. It
+  runs on the production session with a held onCheckpoint. The traces: a
+  queued send held, then T0's result, then interrupt; and a default send
+  made while idle and held, then interrupt. Each must refuse before the
+  persistence is released.
+- **Source finding.** Fresh advisory note 107f4892 (child task 26d717ca);
+  lead decision R3 A4 on task 97d6bb7b.
+
+### S1 — a resume answered with another conversation (R10/I2)
+
+- **Hazard.** A resume is checked only where the runtime refuses it. A
+  runtime that answers the resume with a fresh conversation instead (or
+  with no identity) then has its first init adopted as an ordinary identity
+  change. The new id is checkpointed, the turn succeeds in a conversation
+  the caller never saved, and later sends are acknowledged against it. A
+  start-time refusal check alone never sees this, because start succeeds.
+- **Oracle that catches it.** Identity before effects: the first init of a
+  resumed generation must name its target before any checkpoint, model,
+  binding or turn effect. Rows on the production session over a controlled
+  query (`packages/agent-runtime/__tests__/claudeResumeIdentity.test.ts`):
+  the substituting runtime also answers the turn, so a missing guard shows
+  as a success, not a hang. A real-SDK row with a nonconforming fake CLI
+  (`claudeResume.test.ts`), and I2's seeded schedules in `substitute` mode
+  (`resume.test.ts`). The omission control disables the identity check.
+- **Source finding.** Lead binding note 60bfe634 (task 8eb64074, G1).
+
+### T1 — a terminal decision published before it is owned (findings-6e7c50c8 F1)
+
+- **Hazard.** A refusal publishes its callbacks (request cancellations, the
+  error event) and only afterwards takes and settles the turns it ends. A
+  stop or interrupt reentered from one of those callbacks takes the
+  still-open turns first and overwrites the refusal's results
+  (interrupted/stopped instead of failed/resume). Settling every taken turn
+  through the opened-turn path also gives a queued turn that never opened a
+  phantom `turn_completed`.
+- **Oracle that catches it.** Decide before publishing: every affected
+  turn's result is fixed, with no callback, before the first callback runs.
+  Rows on the production session
+  (`packages/agent-runtime/__tests__/claudeResumeIdentity.test.ts`):
+  interrupt, shutdown or kill reentered from each publication of the
+  refusal (`request_resolved` of a pending request, `error`,
+  `turn_completed`, `onTurnResult`). Each row asserts both handles failed
+  with resume, one `onTurnResult` each, and turn events only for the opened
+  turn. Plus an unopened-queue ledger row. Run against the uncorrected
+  sources, every one of these rows fails.
+- **Source finding.** findings-6e7c50c8 F1 (task 8eb64074, P1 A3).
+
 ## Test seams
 
 ### M1 — an oracle behind a hand-built harness (findings-6a6a844d)
