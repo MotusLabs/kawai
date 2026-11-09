@@ -171,7 +171,8 @@ let frameCounter = 0
 const id = (prefix: string) => `${prefix}-${++frameCounter}`
 
 export const frames = {
-  init(sessionId = 'sess-1', model = 'model-a'): SDKMessage {
+  /** The CLI keeps a resumed conversation's id: the default is the harness's resume target. */
+  init(sessionId = 'sess-saved', model = 'model-a'): SDKMessage {
     return { type: 'system', subtype: 'init', session_id: sessionId, model, uuid: id('init'), cwd: '/', tools: [] } as unknown as SDKMessage
   },
   text(text: string, model = 'model-a'): SDKMessage {

@@ -33,6 +33,8 @@ export interface DriverHooks {
   sdkOptions?: Partial<Options>
   onRequest?(request: PendingRequest): void
   unansweredRequests?: 'deny' | 'wait'
+  /** The conversation to resume; null launches fresh. Default: the caller's saved 'sess-saved'. */
+  resume?: ResumeCheckpoint | null
 }
 
 export function driver(hooks: DriverHooks = {}): Driver {
@@ -65,7 +67,7 @@ export function driver(hooks: DriverHooks = {}): Driver {
     ...(hooks.sdkOptions ? { sdkOptions: hooks.sdkOptions } : {}),
     ...(hooks.beforeSubmit ? { beforeSubmit: hooks.beforeSubmit } : {}),
     ...(hooks.unansweredRequests ? { unansweredRequests: hooks.unansweredRequests } : {}),
-    resume: { runtime: 'claude', runtimeSessionId: 'sess-saved' },
+    ...(hooks.resume === null ? {} : { resume: hooks.resume ?? { runtime: 'claude', runtimeSessionId: 'sess-saved' } }),
     queryFactory: factory,
   })
   return { d, queries, q: latest, events, results, ends, states, types: () => events.map((e) => e.type), starting: null, handle: null, stop: null, warnings }

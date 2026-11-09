@@ -43,7 +43,8 @@ async function stream(seed: number): Promise<string[]> {
   }
   const model = new ClaudeTurnModel()
   const reported: TurnResult[] = []
-  const f: Driver = driver({ onTurnResult: (result) => reported.push(result) })
+  // A fresh launch: each stream's init reports its own new identity.
+  const f: Driver = driver({ resume: null, onTurnResult: (result) => reported.push(result) })
   const start = f.d.start()
   while (f.queries.length === 0) await tick()
   f.q().ready()

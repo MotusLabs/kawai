@@ -54,7 +54,7 @@ describe('Claude checkpoints: report and gate (A1, R10, I2)', () => {
   })
 
   test('without onCheckpoint nothing is gated', async () => {
-    const f = await idle({})
+    const f = await idle({ resume: null })
     const t0 = await f.d.send('first')
     f.q().push(frames.init('sess-new'), frames.result([t0.messageUuid], 'zero'))
     await t0.result
@@ -200,7 +200,7 @@ describe('Claude checkpoints: admission while persisting (L08, L21, L10)', () =>
   })
 
   test('L10 without onCheckpoint: a queued send interrupted before it resumed is refused, not enqueued', async () => {
-    const f = await idle({})
+    const f = await idle({ resume: null })
     const t0 = await f.d.send('first')
     f.q().push(frames.init('sess-new'))
     await f.q().drain()
@@ -249,6 +249,7 @@ describe('Claude checkpoints: rejection and stop (A2)', () => {
   test('a synchronous throw in onCheckpoint counts as a rejection', async () => {
     const cause = new Error('sync')
     const f = await idle({
+      resume: null,
       onCheckpoint: () => {
         throw cause
       },
@@ -310,6 +311,7 @@ describe('Claude checkpoints: reentrancy (no self-join)', () => {
     let release!: () => void
     let f!: Driver
     f = await idle({
+      resume: null,
       onCheckpoint: () => {
         inner = f.d.send('from inside', { continuation: 'queue' }).catch((error: unknown) => error)
         return new Promise<void>((resolve) => (release = resolve))
@@ -335,6 +337,7 @@ describe('Claude checkpoints: reentrancy (no self-join)', () => {
     let release!: () => void
     let f!: Driver
     f = await idle({
+      resume: null,
       onCheckpoint: () => {
         inner = f.d.kill().catch((error: unknown) => error)
         return new Promise<void>((resolve) => (release = resolve))

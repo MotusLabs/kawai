@@ -48,6 +48,8 @@ export interface Generation {
   resumeTarget: string | null
   /** Its initialize response arrived. */
   initialized: boolean
+  /** A resumed generation's first init named its target (G1); later inits may then change the identity. */
+  identityConfirmed: boolean
   /** The error texts of result frames read before initialize: the CLI's startup-failure frames. */
   startupErrors: string[]
   /** Settles once the generation's end has been classified. */
@@ -60,7 +62,7 @@ export function newGeneration(number: number, sdk: SdkModule, resumeTarget: stri
   const ended = new Promise<void>((resolve) => (markEnded = resolve))
   return {
     number, query: null as unknown as Query, input: new PromptQueue<SDKUserMessage>(), owned: null, spawn: 'pending', projections: [], retired: false,
-    abort: new AbortController(), abortError: sdk.AbortError, readEnded: false, resumeTarget, initialized: false, startupErrors: [], ended, markEnded,
+    abort: new AbortController(), abortError: sdk.AbortError, readEnded: false, resumeTarget, initialized: false, identityConfirmed: false, startupErrors: [], ended, markEnded,
   }
 }
 

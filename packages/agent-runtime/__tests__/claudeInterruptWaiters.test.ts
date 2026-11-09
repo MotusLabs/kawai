@@ -380,6 +380,7 @@ describe('after the interrupt (WA3-WA6)', () => {
     let inner: Promise<unknown> | null = null
     const box: { f?: Awaited<ReturnType<typeof idle>> } = {}
     const f = await idle({
+      resume: null,
       onCheckpoint: (checkpoint) => {
         if (checkpoint.runtimeSessionId === 'sess-b') inner = box.f!.d.interrupt()
         return p.onCheckpoint(checkpoint)

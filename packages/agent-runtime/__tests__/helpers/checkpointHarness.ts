@@ -85,10 +85,13 @@ export const startedTurns = (f: Driver) => f.events.filter((e) => e.type === 'tu
 export const interruptedTurns = (f: Driver) => f.events.filter((e) => e.type === 'turn_interrupted').map((e) => (e as Extract<AgentEvent, { type: 'turn_interrupted' }>).turnId)
 export const errorCategories = (f: Driver) => f.events.filter((e) => e.type === 'error').map((e) => (e as Extract<AgentEvent, { type: 'error' }>).error.category)
 
-/** An idle driver whose first turn T0 revealed `sessionId`; that persistence is held and T0 is still active. */
+/**
+ * A fresh driver (no resume target) whose first turn T0 revealed `sessionId`;
+ * that persistence is held and T0 is still active.
+ */
 export async function persisting(sessionId = 'sess-new', hooks: DriverHooks = {}) {
   const p = persistence()
-  const f = await idle({ ...hooks, onCheckpoint: p.onCheckpoint })
+  const f = await idle({ resume: null, ...hooks, onCheckpoint: p.onCheckpoint })
   const t0 = await f.d.send('first')
   f.q().push(frames.init(sessionId))
   await f.q().drain()

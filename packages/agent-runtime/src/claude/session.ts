@@ -7,6 +7,9 @@
 //   conversation. A generation's resume target is fixed before its query;
 //   when the CLI refuses it (its startup-failure frame or stderr, before
 //   initialize), start rejects with category `resume`, never a fresh one.
+//   A resumed generation whose first init names another conversation is
+//   refused before anything adopts it (G1): its turns fail with category
+//   `resume`, later sends are refused, and the driver disposes itself.
 // - Turn binding. Results and content frames bind to turns by the client UUID
 //   each prompt carries (the CLI turn binder), so a late, duplicate or
 //   previous-turn result never completes the turn opened since. A queued
@@ -74,6 +77,8 @@ export class ClaudeSession {
   private runtimeSessionId: string | null
   private lastModel: string | null = null
   private readonly seenResults = new SeenResultFrames()
+  /** Sticky once a resumed generation named another conversation (G1). */
+  private resumeFailure: AgentErrorInfo | null = null
   /** Minted when stop cancels the queries: the abort reason that marks its own cancellations. */
   private stopToken: object | null = null
 
@@ -290,7 +295,7 @@ export class ClaudeSession {
     }
     switch (message.type) {
       case 'system':
-        if (message.subtype === 'init') this.init(message)
+        if (message.subtype === 'init') this.init(generation, message)
         else this.frames.system(message)
         return
       case 'assistant': {
@@ -313,7 +318,12 @@ export class ClaudeSession {
     }
   }
 
-  private init(message: Extract<SDKMessage, { type: 'system'; subtype: 'init' }>): void {
+  private init(generation: Generation, message: Extract<SDKMessage, { type: 'system'; subtype: 'init' }>): void {
+    // G1: a resumed generation's first identity must be its target, before any adoption, checkpoint, model, binder or turn effect.
+    if (generation.resumeTarget !== null && !generation.identityConfirmed) {
+      if (message.session_id !== generation.resumeTarget) return this.refuseSubstitution(generation)
+      generation.identityConfirmed = true
+    }
     if (message.session_id) {
       this.runtimeSessionId = message.session_id
       this.checkpoints.report({ runtime: 'claude', runtimeSessionId: message.session_id })
@@ -335,6 +345,28 @@ export class ClaudeSession {
       this.open.push(turn)
       this.openTurn(turn, true)
     })
+  }
+
+  /**
+   * G1/R10: the runtime answered a resume with another conversation (or
+   * none). Nothing of it is adopted: the generation retires (its later
+   * frames are dropped), every open turn and request settles once as a
+   * resume failure, later sends are refused with it, and the driver disposes
+   * itself from outside the consuming job. The failure stays owned, so the
+   * stop reports it.
+   */
+  private refuseSubstitution(generation: Generation): void {
+    generation.retired = true
+    const error: AgentErrorInfo = { category: 'resume', message: 'the runtime did not resume the supplied conversation' }
+    this.resumeFailure = error
+    this.lifecycle.jobs.track(`resume:${generation.number}`, Promise.reject(new AgentRuntimeError({ ...error }))).catch(() => {})
+    this.binder.reset()
+    this.requests.cancelAll('resume refused')
+    this.events.emit({ type: 'error', error })
+    this.lifecycle.holdState(() => {
+      for (const turn of this.open.take()) this.open.settle(turn, 'failed', error, 'resume_refused')
+    })
+    this.lifecycle.jobs.outside(() => void this.shutdown().catch(() => {}))
   }
 
   private result(message: SDKResultMessage): void {
@@ -369,6 +401,7 @@ export class ClaudeSession {
 
   /** R10/I2: acknowledged only once any pending identity persistence succeeded (the gate, lifecycle/checkpoints.ts). */
   send(text: string, submit: SubmitOptions = {}): Promise<TurnHandle> {
+    if (this.resumeFailure) return Promise.reject(new AgentRuntimeError({ ...this.resumeFailure }))
     return this.checkpoints.admit(submit.continuation, {
       // P12/P13: the host decides before anything is enqueued or emitted, and
       // an accepted submission keeps the identity the host recorded.
