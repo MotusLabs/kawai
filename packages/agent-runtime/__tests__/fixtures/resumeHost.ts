@@ -3,6 +3,9 @@
 // given, persists every checkpoint to the caller's own file store (written to
 // a temporary file, then renamed), optionally resumes from that store, sends
 // the prompts in order, awaits each result, then stops with kill or shutdown.
+// A store may reject every checkpoint (it records the offer, writes nothing
+// and throws), and the caller may resume an identity it already holds
+// instead of the store's.
 // It prints one JSON line to stdout describing what it observed, and exits.
 // Nothing is shared with any other host but the files under the retained
 // homes and the store.
@@ -17,6 +20,10 @@ interface HostConfig {
   store: string
   /** Resume the conversation the store holds. */
   resume: boolean
+  /** Resume this caller-held identity instead of the store's. */
+  resumeId?: string
+  /** The store refuses every checkpoint. */
+  rejectCheckpoint?: boolean
   prompts: string[]
   stop: 'kill' | 'shutdown'
 }
@@ -28,7 +35,8 @@ const error = (e: unknown) => {
   const failure = e as { category?: string; message?: string }
   return { category: failure.category ?? null, message: failure.message ?? String(e) }
 }
-const resume = config.resume ? (JSON.parse(readFileSync(config.store, 'utf8')) as ResumeCheckpoint) : undefined
+const resume: ResumeCheckpoint | undefined = config.resumeId !== undefined ? { runtime: 'claude', runtimeSessionId: config.resumeId }
+  : config.resume ? (JSON.parse(readFileSync(config.store, 'utf8')) as ResumeCheckpoint) : undefined
 const driver = createClaudeDriver({
   launch: config.launch,
   logger: { debug: silent, info: silent, warn: silent, error: silent },
@@ -37,6 +45,7 @@ const driver = createClaudeDriver({
     onEvent: silent,
     onCheckpoint: (checkpoint) => {
       checkpoints.push(checkpoint)
+      if (config.rejectCheckpoint) throw new Error('the caller store refused the checkpoint')
       writeFileSync(`${config.store}.tmp`, JSON.stringify(checkpoint))
       renameSync(`${config.store}.tmp`, config.store)
     },
@@ -52,7 +61,7 @@ try {
   for (const prompt of config.prompts) {
     const handle = await driver.send(prompt)
     const result = await handle.result
-    results.push({ outcome: result.outcome, finalText: result.finalText })
+    results.push({ outcome: result.outcome, finalText: result.finalText, ...(result.error ? { error: result.error.category } : {}) })
   }
   report.results = results
 } catch (e) {

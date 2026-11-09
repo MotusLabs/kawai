@@ -48,7 +48,8 @@
 //   errors [the line]), and exits 1 without reading stdin or answering
 //   initialize.
 // FAKE_CLAUDE_RESUME=fresh is a nonconforming CLI that silently starts a
-// new session instead. `history` answers with the prompts the conversation
+// new session instead. FAKE_CLAUDE_EARLY_EXIT=<text> fails any launch before
+// stdin: the text on stderr, no frame, exit 1. `history` answers with the prompts the conversation
 // held before it, as JSON. Without FAKE_CLAUDE_SESSIONS the id is fixed and
 // --resume is ignored.
 import { spawn } from 'node:child_process'
@@ -89,6 +90,12 @@ let sessionId = sessions ? crypto.randomUUID() : 'fake-session-0001'
 /** The prompts this conversation held before the current one. */
 let history: string[] = []
 const resumeTarget = sessions ? flag('--resume') : undefined
+if (process.env.FAKE_CLAUDE_EARLY_EXIT !== undefined) {
+  // A startup failure that is not (or not only) a resume refusal: the text on stderr, no frame, exit 1 before stdin.
+  if (log) fs.appendFileSync(log, `${JSON.stringify({ argv })}\n`)
+  fs.writeSync(2, `${process.env.FAKE_CLAUDE_EARLY_EXIT}\n`)
+  process.exit(1)
+}
 if (resumeTarget !== undefined) {
   if (fs.existsSync(transcriptOf(resumeTarget))) {
     sessionId = resumeTarget
