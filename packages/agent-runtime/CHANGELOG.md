@@ -22,6 +22,10 @@ documented API takes a new major version, even after 0.x.
   fresh conversation. A runtime that substitutes another conversation at the
   first init is refused the same way, and nothing of it is adopted. The
   Codex driver's resume is not implemented yet.
+- Claude driver process end: the results of the turns an unexpected exit
+  ends are fixed before any callback, `onState('exited')` included, so a
+  stop or interrupt called from one cannot replace them. A queued turn that
+  never opened no longer gets a `turn_completed` event.
 - Claude driver requests: each request is registered, with its abort
   listener, before its event and `onRequest` can answer it inline. The first
   terminal action wins; later, invalid and wrong-kind answers are refused.

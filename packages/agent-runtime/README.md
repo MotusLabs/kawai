@@ -162,6 +162,16 @@ are the only inputs. The driver reads no host settings files
   `user_message` and no handle. Its result reaches `onTurnResult` with a
   `messageUuid` of null. An init that arrives while starting, stopping or
   after an exit opens nothing.
+- **Process end.** When the CLI process ends unexpectedly (not through
+  `kill()` or `shutdown()`), the driver becomes `exited` and reports one
+  `error` (category `transport`) and one `onProcessEnd`. The running turn
+  ends with outcome `process-ended` and a `turn_completed`. A queued turn
+  that never opened gets the same result on its handle but no turn event.
+  These results are fixed before any callback runs, `onState('exited')`
+  included, so a stop or interrupt called from a callback cannot change
+  them. A stop called from a callback starts the stop, but that call is
+  refused with `internal`; call it again from outside to wait for it.
+  `start()` launches a new process that resumes the conversation.
 - **Checkpoints.** The CLI reports its session id in the init of a turn,
   not at `start()`. When that id is new, the driver calls
   `onCheckpoint({ runtime: 'claude', runtimeSessionId })` once. The id you

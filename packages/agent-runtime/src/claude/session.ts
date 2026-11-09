@@ -228,17 +228,22 @@ export class ClaudeSession {
     if (failure !== null && !cancelledByStop(generation, this.stopToken, failure)) throw failure
   }
 
+  /** L14-L16: classify and decide every affected turn in one held step, then publish (as refuseSubstitution). */
   private generationEnded(generation: Generation, exit: LeaderExit | null): void {
     // No process existed: the start failure reports it, not an exit (U01).
     if (generation.owned?.exited?.kind === 'spawn-failed') return
-    if (this.lifecycle.processExit(generation.number) !== 'unexpected') return
+    const error: AgentErrorInfo = { category: 'transport', message: 'the agent process exited unexpectedly' }
+    const publish = this.lifecycle.holdState(() => {
+      if (this.lifecycle.processExit(generation.number) !== 'unexpected') return null
+      this.binder.reset()
+      return this.open.decide(this.open.take(), 'process-ended', error, 'process_ended')
+    })
+    if (!publish) return
     const code = exit?.kind === 'exited' ? exit.code : null
     const signal = exit?.kind === 'exited' ? exit.signal : null
-    const error: AgentErrorInfo = { category: 'transport', message: 'the agent process exited unexpectedly' }
-    this.binder.reset()
     this.requests.cancelAll('process ended')
     this.events.emit({ type: 'error', error })
-    for (const turn of this.open.take()) this.open.settle(turn, 'process-ended', error, 'process_ended')
+    publish()
     this.frames.processEnded()
     const report = { generation: generation.number, code, signal, reason: exit?.kind === 'spawn-failed' ? 'spawn failed' : null }
     this.notify('onProcessEnd', () => this.options.callbacks.onProcessEnd?.(report))
@@ -304,14 +309,12 @@ export class ClaudeSession {
 
   /**
    * G1/R10: the runtime answered a resume with another conversation (or
-   * none). Nothing of it is adopted. First, with no callback: the generation
-   * retires (its later frames are dropped), later sends are refused with the
-   * failure, which stays owned so the stop reports it, and every open turn's
-   * result is decided as a resume failure. Only then is anything published:
-   * request cancellations, the error event, the opened turns' completions
-   * and each handle once. A stop or interrupt reentered from those callbacks
-   * finds no open turn. The driver then disposes itself from outside the
-   * consuming job.
+   * none); nothing of it is adopted. With no callback, the generation
+   * retires, the owned failure becomes sticky, and every open turn's result
+   * is decided. Only then: request cancellations, the error, the opened
+   * turns' completions and each handle once, so a stop or interrupt
+   * reentered from those callbacks finds no open turn. Then the driver
+   * disposes itself from outside the consuming job.
    */
   private refuseSubstitution(generation: Generation): void {
     generation.retired = true

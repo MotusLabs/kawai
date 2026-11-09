@@ -29,6 +29,8 @@ export interface DriverHooks {
   onCheckpoint?(checkpoint: ResumeCheckpoint): void | Promise<void>
   /** Runs after the event is recorded. */
   onEvent?(event: AgentEvent): void
+  /** Runs after the report is recorded. */
+  onProcessEnd?(report: ProcessEndReport): void
   beforeSubmit?: BeforeSubmit
   sdkOptions?: Partial<Options>
   onRequest?(request: PendingRequest): void
@@ -55,7 +57,10 @@ export function driver(hooks: DriverHooks = {}): Driver {
         hooks.onTurnResult?.(r)
         results.push(r)
       },
-      onProcessEnd: (r) => ends.push(r),
+      onProcessEnd: (r) => {
+        ends.push(r)
+        hooks.onProcessEnd?.(r)
+      },
       ...(hooks.onCheckpoint ? { onCheckpoint: hooks.onCheckpoint } : {}),
       ...(hooks.onRequest ? { onRequest: hooks.onRequest } : {}),
       onState: (s) => {

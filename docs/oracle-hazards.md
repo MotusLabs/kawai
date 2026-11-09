@@ -107,6 +107,28 @@ or property that would have caught it, and the source finding.
   sources, every one of these rows fails.
 - **Source finding.** findings-6e7c50c8 F1 (task 8eb64074, P1 A3).
 
+### T2 — a classification whose own state callback runs before the decision (L14)
+
+- **Hazard.** T1's class, on the unexpected-exit path. The exit's
+  classification sets `exited`, and its `onState` publication runs at once,
+  before the turns are taken. Moving only the error event after the
+  settlement leaves that earliest callback open. A stop or interrupt
+  reentered from `onState('exited')`, a request cancellation or the error
+  event replaces process-ended with interrupted/stopped. The queued turn
+  that never opened also got a `turn_completed`.
+- **Oracle that catches it.** Classification and decision in one held
+  step, so `onState('exited')` is published only after every affected turn
+  is decided. Rows on the production session
+  (`packages/agent-runtime/__tests__/claudeExitOwnership.test.ts`): an
+  active and a queued turn with a pending request, then the exit, with
+  interrupt, shutdown or kill reentered from each publication (including
+  `onState('exited')`). Plus a restart from `onState('exited')`, a read
+  failure whose raw error stays owned, the idle exit and an earlier stop
+  (L15). The order control publishes the classification before the hold;
+  only the `onState` rows catch it.
+- **Source finding.** Task 471 witness note 41fbeee9 (generationEnded
+  observation from task 8eb64074).
+
 ## Test seams
 
 ### M1 — an oracle behind a hand-built harness (findings-6a6a844d)
