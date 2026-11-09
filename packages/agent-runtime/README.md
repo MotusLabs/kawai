@@ -201,15 +201,78 @@ are the only inputs. The driver reads no host settings files
   `user_message`, `idle` after the `turn_completed` or `turn_interrupted`
   that ended the turn. A state entered and left inside one step is not
   reported. `stopping` and `stopped` are reported at once.
-- **Requests.** Approvals and `AskUserQuestion` questions are registered
-  before their events are emitted. `onRequest` may answer inline. A request
-  still pending when `onRequest` returns is denied by default (decided by
-  `policy`). With `unansweredRequests: 'wait'` it stays pending until
-  `resolveApproval` or `answerQuestion` is called. Interrupt, stop and
-  process exit cancel pending requests.
+- **Requests.** See [Answering requests](#answering-requests).
 - **Session signals.** Slash commands (`onCommandState`), worker and
   background-task rosters, activity, compaction notices and model changes
   are reported the same way Kawai's in-tree driver reports them.
+
+### Answering requests
+
+Approvals and `AskUserQuestion` questions arrive through the SDK's
+`canUseTool`, which the driver installs in every mode except
+`bypassPermissions`. The deny-only `permissions` policy runs first, so a
+request handler can't grant a tool the policy denies.
+
+- **Order.** A request is registered before anything can see it. Its
+  `approval_request` or `question_request` event is emitted next, then
+  `onRequest` runs in the same call. Either may answer inline. The
+  `request_resolved` event always follows the request event.
+- **First terminal action wins.** That is a valid answer, an abort of the
+  SDK's signal, `interrupt()`, `kill()` or `shutdown()`, an unexpected
+  process exit, or the default denial. Later answers report `not-pending`.
+  After stop has begun they report `stopped`. An invalid answer (an
+  unoffered option, a second choice on a single-select question, a missing
+  answer) or one of the wrong kind reports `invalid` and settles nothing.
+  The request stays open for a valid answer.
+- **Cancellation is an interrupting denial.** A cancelled tool never runs. A
+  signal already aborted when the request arrives, or a stopping session, is
+  denied at once, with no event and no `onRequest` call.
+- **Unanswered requests.** A request still pending when `onRequest` returns
+  is denied by default (`decidedBy: 'policy'`). That includes when
+  `onRequest` is absent or throws; a throw is also kept and reported by the
+  later stop. With `unansweredRequests: 'wait'` the request stays pending
+  until you answer it or it is cancelled. The runtime arms no timer and
+  waits for no UI.
+- **Original facts.** Every event, `onRequest` argument and
+  `pendingRequests()` result is a separate copy. Changing one never changes
+  what an allow runs or how an answer is checked.
+- `onRequest` runs even when the request event's handler has already
+  answered. Its own answer then reports `not-pending`.
+
+A headless host that answers inline
+(`examples/inline-requests.ts`, compiled and run unchanged by the package
+tests):
+
+<!-- example: examples/inline-requests.ts -->
+```ts
+import { createClaudeDriver } from '@motuslabs/agent-runtime/claude'
+import type { ClaudeAgentDriver, LaunchConfiguration, Logger } from '@motuslabs/agent-runtime'
+
+// A headless host that answers every request inside onRequest: Read is
+// allowed, every other tool is denied, and a question gets the host's own
+// prepared answer. Nothing waits for a UI or a timer. If the driver refuses
+// an answer (an empty or unknown one, say), the default denial applies.
+export function headlessClaude(launch: LaunchConfiguration, logger: Logger, prepared: Record<string, string>): ClaudeAgentDriver {
+  const driver: ClaudeAgentDriver = createClaudeDriver({
+    launch,
+    logger,
+    permissions: { mode: 'default', enabledTools: ['Read', 'Bash', 'AskUserQuestion'], disallowedTools: [] },
+    callbacks: {
+      onEvent: (event) => logger.debug({ type: event.type }, 'agent event'),
+      onRequest: (request) => {
+        if (request.kind === 'approval') {
+          driver.resolveApproval(request.requestId, request.tool === 'Read' ? 'allow' : 'deny')
+          return
+        }
+        const answers = Object.fromEntries(request.questions.map((q) => [q.question, { text: prepared[q.question] ?? '' }]))
+        const outcome = driver.answerQuestion(request.requestId, answers)
+        if (!outcome.ok) logger.warn({ reason: outcome.reason }, 'answer refused; the request is denied')
+      },
+    },
+  })
+  return driver
+}
+```
 
 ## Host integrations
 

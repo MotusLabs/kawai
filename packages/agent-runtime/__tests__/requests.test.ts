@@ -79,7 +79,6 @@ describe('Claude requests: inline responses (Q01, Q02)', () => {
 })
 
 describe('Claude requests: cancellation against an inline answer (Q03, G2)', () => {
-  // @covers: agent-runtime › Requests can be answered immediately › Response races stop
   test('Q03: an abort inside onRequest wins over the allow that follows it', async () => {
     const controller = new AbortController()
     let outcome: unknown = null

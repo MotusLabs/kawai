@@ -15,5 +15,12 @@ documented API takes a new major version, even after 0.x.
   refuses them, is reported and stops the driver. An interrupt refuses
   every send still waiting, also while idle, at once. The Codex driver's
   checkpoints are not implemented yet.
+- Claude driver requests: each request is registered, with its abort
+  listener, before its event and `onRequest` can answer it inline. The first
+  terminal action wins; later, invalid and wrong-kind answers are refused.
+  A signal already aborted on arrival is denied without publishing a
+  request. Events, `onRequest` and `pendingRequests()` get separate copies,
+  so a host mutation never changes what an allow runs or how an answer is
+  checked. Codex input and elicitation requests are not implemented yet.
 - Not yet released: the Claude and Codex drivers, profile helpers and usage
   parsers arrive in later entries before 0.1.0 is published.

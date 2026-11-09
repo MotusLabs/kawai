@@ -28,7 +28,12 @@
 // (a Read reads [path] first), then PostToolUse runs. `mcp <server> <tool>
 // <json>` calls an SDK MCP server tool the same way, via mcp_message control
 // requests (initialize once, then tools/call); `mcp-list <server>` answers
-// with its tools/list names. Anything else is echoed. Stdin EOF exits 0.
+// with its tools/list names. `ask <Name> <json>` attempts a tool with that
+// input the same way, then, when the SDK passed `--permission-prompt-tool
+// stdio`, asks it with a `can_use_tool` control request; an allow runs the
+// tool with the returned input and answers `allowed <Name> <json>`, a deny
+// answers `denied <Name> (<message>)`. Anything else is echoed. Stdin EOF
+// exits 0.
 // Every received frame, and first the process argv as {"argv": [...]},
 // is appended to $FAKE_CLAUDE_LOG when set.
 import { spawn } from 'node:child_process'
@@ -93,7 +98,7 @@ async function runHooks(event: string, tool: string, toolUseId: string, extra: R
 }
 
 /** One tool attempt: PreToolUse hooks, then --disallowedTools, then `execute`, then PostToolUse(Failure). */
-async function toolTurn(uuid: string, tool: string, toolInput: Record<string, unknown>, execute: () => Promise<{ text: string; isError: boolean }>) {
+async function toolTurn(uuid: string, tool: string, toolInput: Record<string, unknown>, execute: (toolUseId: string) => Promise<{ text: string; isError: boolean }>) {
   const toolUseId = `toolu_${crypto.randomUUID()}`
   write({
     type: 'assistant', session_id: sessionId, uuid: crypto.randomUUID(), parent_tool_use_id: null,
@@ -106,7 +111,7 @@ async function toolTurn(uuid: string, tool: string, toolInput: Record<string, un
   if (denial !== null) {
     text = `denied ${tool} (${denial})`
   } else {
-    const outcome = await execute()
+    const outcome = await execute(toolUseId)
     text = outcome.text
     isError = outcome.isError
     await runHooks(isError ? 'PostToolUseFailure' : 'PostToolUse', tool, toolUseId, { tool_input: toolInput, ...(isError ? { error: text } : { tool_response: text }) })
@@ -121,6 +126,19 @@ function attemptTool(uuid: string, tool: string, target: string | undefined) {
     const content = tool === 'Read' && target ? fs.readFileSync(target, 'utf8') : ''
     fs.writeFileSync(`executed-${tool}`, '')
     return { text: `executed ${tool}${content ? `: ${content}` : ''}`, isError: false }
+  })
+}
+
+/** `ask`: the documented order, then the SDK's permission prompt (can_use_tool) when it is wired. */
+function askTool(uuid: string, tool: string, input: Record<string, unknown>) {
+  return toolTurn(uuid, tool, input, async (toolUseId) => {
+    if (flag('--permission-prompt-tool') !== 'stdio') return { text: `no permission prompt for ${tool}`, isError: true }
+    const requestId = `fake-${++nextRequest}`
+    write({ type: 'control_request', request_id: requestId, request: { subtype: 'can_use_tool', tool_name: tool, input, tool_use_id: toolUseId, permission_suggestions: [] } })
+    const decision = await new Promise<Record<string, unknown>>((resolve) => pending.set(requestId, resolve))
+    if (decision.behavior !== 'allow') return { text: `denied ${tool} (${String(decision.message)})`, isError: true }
+    fs.writeFileSync(`executed-${tool}`, '')
+    return { text: `allowed ${tool} ${JSON.stringify(decision.updatedInput ?? input)}`, isError: false }
   })
 }
 
@@ -200,6 +218,9 @@ function onUser(frame: { uuid?: string; message?: { content?: unknown } }) {
     }
     case 'tool':
       void attemptTool(uuid, rest[0] ?? '', rest[1])
+      return
+    case 'ask':
+      void askTool(uuid, rest[0] ?? '', JSON.parse(rest.slice(1).join(' ') || '{}') as Record<string, unknown>)
       return
     case 'mcp':
       void attemptMcp(uuid, rest[0] ?? '', rest[1] ?? '', rest.slice(2).join(' ') || undefined)
