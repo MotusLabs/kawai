@@ -361,3 +361,20 @@ or property that would have caught it, and the source finding.
 - **Source finding.** task-3110e52b first fake-app-server run: both rows
   failed before the end was keyed on exit and EOF together and observers
   ran outside the job context.
+
+### A memoized stop assigned after its synchronous teardown (task 311 PC1/PC2)
+
+- **Hazard.** `terminal ??= terminate()` assigns the shared promise only
+  after terminate's synchronous prefix returns; that prefix aborts handler
+  signals, so an abort listener calling stop finds no terminal yet and
+  starts a second teardown. In the same stop, a reader that resolves on any
+  error once closing began treats an independent stream failure as the
+  stop's own cancellation and drops it.
+- **Oracle that catches it.** Stop from a real handler's abort listener and
+  assert the nested promise is the outer one (identity, captured before the
+  handler is released); emit a raw error on the real stdout after stop began
+  and assert the stop rejects with it by identity (codexTransportStop.test.ts).
+- **Source finding.** task-3110e52b path assessment (disposition 3e7d024d);
+  both rows failed on 17b9d294 before the terminal was reserved first and
+  the reader kept every error.
+

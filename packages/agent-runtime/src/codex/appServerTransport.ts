@@ -213,8 +213,12 @@ export class AppServerTransport {
   /** The shared terminal operation; refused `internal` from inside a handler, which it still stops. */
   stop(): Promise<ProcessExitFact> {
     if (!this.terminal) {
-      this.terminal = this.jobs.outside(() => this.terminate())
+      // Reserve the shared terminal promise before any teardown callback
+      // (an abort listener, a recorder frame) can reenter stop.
+      let settle!: { resolve(fact: ProcessExitFact): void; reject(error: unknown): void }
+      this.terminal = new Promise<ProcessExitFact>((resolve, reject) => (settle = { resolve, reject }))
       void this.terminal.catch(() => {})
+      this.jobs.outside(() => this.terminate()).then(settle.resolve, settle.reject)
     }
     if (this.jobs.insideJob()) {
       return Promise.reject(new AgentRuntimeError({ category: 'internal', message: 'a server-request handler cannot join the stop of its own transport' }))
@@ -249,10 +253,11 @@ export class AppServerTransport {
       stdout.on('data', (chunk: Buffer) => lines.write(chunk))
       stdout.once('end', done)
       stdout.once('close', done)
+      // Stop ends the reader by destroy() without an error: any 'error' is
+      // independent of the stop and stays owned evidence by identity.
       stdout.once('error', (error) => {
         this.readerEnded()
-        if (this.closing) resolve()
-        else reject(error)
+        reject(error)
       })
     })
   }

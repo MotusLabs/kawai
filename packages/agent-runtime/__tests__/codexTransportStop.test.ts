@@ -5,7 +5,9 @@
 // SIGTERM-ignoring server) and every admitted handler, a held handler's late
 // reply is never written, concurrent and reentrant stops share one terminal
 // operation, a handler's own stop is refused `internal`, and a recorder that
-// reenters stop at the spawn frame finds the process owned.
+// reenters stop at the spawn frame finds the process owned. A stop reentered
+// from a teardown callback (an abort listener) gets the same terminal promise,
+// and a raw stdout error after stop began stays in the stop's causes.
 // Control (premature join): a stop resolving before its held handler settles
 // fails the ordering assertion below.
 import { afterAll, afterEach, describe, expect, test } from 'bun:test'
@@ -157,6 +159,57 @@ describe('terminal stop (A3)', () => {
     expect((await request).category).toBe('stopped')
     expect((await stop!).state).toBe('exited')
     expect(f.received().map((line) => line.params?.value)).toEqual(['before'])
+  })
+
+  // PC1: the shared terminal promise exists before teardown callbacks run.
+  test("a stop reentered from a handler's abort listener during teardown returns the same terminal promise", async () => {
+    let release!: () => void
+    let entered = false
+    let nested: Promise<ProcessExitFact> | null = null
+    const f = fake({
+      requestTimeoutMs: 0,
+      onServerRequest: (_method, _params, signal) =>
+        new Promise((resolve) => {
+          entered = true
+          release = () => resolve({ done: true })
+          signal.addEventListener('abort', () => {
+            nested = f.transport.stop()
+          })
+        }),
+    })
+    f.transport.start()
+    void f.transport.request('ask', { method: 'tool', id: 'srv-reenter' }).catch(() => {})
+    await until(() => entered)
+    const outer = f.transport.stop()
+    const shared = nested === outer
+    release()
+    expect(shared).toBe(true)
+    expect((await outer).state).toBe('exited')
+    expect(f.received().filter((line) => line.id === 'srv-reenter')).toEqual([])
+  })
+
+  // PC2: a read error after stop began is not the stop's own cancellation.
+  test('an independent stdout error after stop began fails the stop with that error by identity', async () => {
+    let release!: () => void
+    let entered = false
+    const raw = new Error('independent read failure')
+    const f = fake({
+      requestTimeoutMs: 0,
+      onServerRequest: () =>
+        new Promise((resolve) => {
+          entered = true
+          release = () => resolve({ done: true })
+        }),
+    })
+    f.transport.start()
+    void f.transport.request('ask', { method: 'tool', id: 'srv-read-error' }).catch(() => {})
+    await until(() => entered)
+    const stop = rejection(f.transport.stop())
+    f.transport.process!.stdout.emit('error', raw)
+    release()
+    const error = await stop
+    expect(error.category).toBe('stop')
+    expect(error.causes.filter((cause: unknown) => cause === raw)).toHaveLength(1)
   })
 
   test('stop joins the whole native group: a helper holding stdout is cleared before the receipt', async () => {
