@@ -14,7 +14,7 @@ import { describe, expect, test } from 'bun:test'
 import type { DriverState, TurnResult } from '../src/contract.js'
 import type { AgentErrorInfo } from '../src/errors.js'
 import type { AgentEvent } from '../src/events.js'
-import { idle, stopError, tick } from './helpers/checkpointHarness.js'
+import { assigned, idle, stopError, tick } from './helpers/checkpointHarness.js'
 import type { Driver, DriverHooks } from './helpers/claudeDriverHarness.js'
 import { frames } from './helpers/controlledQuery.js'
 
@@ -80,7 +80,7 @@ describe('Claude unexpected exit: turn ownership (L14)', () => {
               : { onEvent: (e: AgentEvent) => e.type === trigger && reenter() }
         const run = await crashWithWork(hooks, (driver) => (f = driver), () => (armed = true))
         expect(reentered).not.toBeNull()
-        const outcome = await reentered
+        const outcome: unknown = await assigned(reentered)
         // Every trigger runs inside the generation's consuming job: a stop from there starts the stop but
         // that caller is refused (no self-join); an interrupt after the exit has nothing left to interrupt.
         if (action === 'interrupt') expect(outcome).toEqual({ outcome: 'no-active-turn', processExit: false })
@@ -158,7 +158,7 @@ describe('Claude unexpected exit: turn ownership (L14)', () => {
     g.q().failRead(failure)
     const r0 = await t0.result
     expect([r0.outcome, r0.error]).toEqual(['process-ended', ENDED])
-    expect(((await reentered) as { category?: string }).category).toBe('internal')
+    expect(((await assigned(reentered)) as { category?: string }).category).toBe('internal')
     // The external join reports the raw read failure by identity.
     const stop = await stopError(g.d.kill())
     expect(stop?.category).toBe('stop')
