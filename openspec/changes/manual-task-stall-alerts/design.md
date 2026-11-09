@@ -53,22 +53,47 @@ reach it.
 
 ### D2. Evaluated on each committed task mail, in its own transaction
 
-A `TaskStallNotices` module subscribes to `MailboxStore`. Mail is often
-enqueued inside a caller's transaction (assignments, revision notices,
-decision answers), and the existing listeners (`executionRuntime.ts`,
-`monitorComposition.ts`) only schedule work. So the listener only adds the
-message's `taskId` to a pending set, for a message with a `taskId` and
-`fromKind ≠ system`. One coalesced `setImmediate` flush, which runs after
-the caller has committed, evaluates each pending task in its own
-`store.immediate` transaction. That transaction reads D1's inputs, calls
-`stallOf`, and, when due, does `INSERT OR IGNORE INTO
-team_task_stall_notices (task_id, anchor_at, …)`. Only when the insert
-changed a row does it also journal and enqueue the creator message. A rolled-back caller
-leaves no message, so the flush finds nothing new to count. Errors are
-caught per task and logged, never rethrown from the callback. A missed
-evaluation (a crash before the flush) is recovered by the next counted mail
-on the task. That is the only case that matters: without new mail, nothing
-new can become due.
+`MailboxStore.subscribe` also fires for claims, pushes, and deliveries of
+old messages, and fires inside the caller's transaction, before it commits.
+So the trigger needs its own seam. `MailboxStore` gains
+`subscribeEnqueued(listener)`, called only from `enqueue`, with the new
+message. A `TaskStallNotices` module subscribes to it. For a message with
+a `taskId` and `fromKind ≠ system`, it adds the message **id** to a
+per-task candidate set. Mail is often enqueued inside a caller's
+transaction (assignments, revision notices, decision answers), and the
+existing listeners only schedule work. So one coalesced `setImmediate`
+flush, which runs after the synchronous caller has committed or rolled
+back, evaluates each candidate task in its own `store.immediate`
+transaction:
+
+1. **Trigger check.** At least one candidate id must exist durably in
+   `team_messages` with that task, `fromKind ≠ system`, and `created_at`
+   after the anchor. A rolled-back enqueue leaves no row, so its candidate
+   triggers nothing even when committed old mail already meets the
+   thresholds. A transition of an old message never becomes a candidate.
+2. **Derive.** Read D1's inputs and call `stallOf`.
+3. **Emit**, when due, through `emitStallNotice(store, episode)`, where
+   `episode = { taskId, anchorAt, anchorKind, count, senders, elapsedMs }`.
+   It does `INSERT OR IGNORE INTO team_task_stall_notices (task_id,
+   anchor_at, …)`. Only when the insert changed a row does it journal and
+   enqueue the creator message (Kawai's own mail, so it is never a
+   candidate).
+
+Errors are caught per task and logged, never rethrown from the callback. A
+missed evaluation (a crash before the flush) is recovered by the next
+counted message on the task. Its trigger check passes, and the episode it
+derives still has the original progress anchor, because no notice was
+written. That is the only case that matters: without new mail, nothing new
+can become due.
+
+**Replay key reachability.** Through the composition, a second evaluation
+after a notice derives the notice's own time as its anchor. That anchor is
+later than the stored episode's anchor (a notice at `n` for anchor `a`
+needs `n ≥ a + 3 h`), so the stored `(task, a)` key is never attempted
+again. The `INSERT OR IGNORE` guard is defensive: it protects a replay of
+an already-derived episode, which only `emitStallNotice` can be handed
+directly, and a second process on the same database. EF3 therefore runs at
+the `emitStallNotice` seam (see Acceptance oracles).
 
 *Alternative:* evaluate inside the mail's own transaction. Rejected: it
 couples every send path (`prepareSend`, `prepareReply`, decision answers,
@@ -132,25 +157,47 @@ Count 9 or elapsed 3 h − 1 ms are `no`.
 | AN5 | notice | 4 after | notice | 4 |
 | AN6 | none | 12 system | created | 0 |
 
-Unreachable: an anchor later than `now` (all times come from the same clock;
-a skewed row is treated as elapsed 0, so not due).
+| AN7 | revision at `t` | 1 at exactly `t`, 1 after | revision | 1 (mail at the anchor time is not after it) |
+| AN8 | revision and result at the same `t` | 2 after | revision (the tie goes to the earlier kind) | 2 |
+| AN9 | anchor later than `now` (skewed row) | 10 | that kind | 10, elapsed 0, not due |
 
-### Decision table EF (effects of one evaluation)
+An anchor later than `now` cannot arise from a single clock. AN9 pins the
+defensive handling for a skewed row.
 
-| id | due | row for (task, anchor) exists | creator | row | journal | message |
-|---|---|---|---|---|---|---|
-| EF1 | yes | no | agent session | +1 | +1 | +1 tagged `task-stall` |
-| EF2 | yes | no | human | +1 | +1 | 0 |
-| EF3 | yes | yes | * | 0 | 0 | 0 |
-| EF4 | no | * | * | 0 | 0 | 0 |
+### Decision table TR (trigger check, design D2 step 1)
+
+| id | candidate | committed old mail | evaluates | effects |
+|---|---|---|---|---|
+| TR1 | committed counted enqueue after the anchor | meets both thresholds | yes | EF1/EF2 |
+| TR2 | enqueue rolled back by its caller (old count already 10, age 3 h) | meets both thresholds | no | none |
+| TR3 | none: an old message is claimed, pushed, or delivered at 3 h | meets both thresholds | no | none |
+| TR4 | Kawai's own enqueue on the task | meets both thresholds | no | none |
+
+### Decision table EF (effects of `emitStallNotice(store, episode)`)
+
+| id | row for (task, anchor) exists | creator | row | journal | message |
+|---|---|---|---|---|---|
+| EF1 | no | agent session | +1 | +1 | +1 tagged `task-stall` |
+| EF2 | no | human | +1 | +1 | 0 |
+| EF3 | yes (the same episode handed again) | * | 0 | 0 | 0 |
+
+`emitStallNotice` is called only for a due episode. A not-due evaluation
+(SN2–SN6) emits nothing, and that is asserted through the composition as
+EF4: due = no, so no row, journal entry, or message is added. The
+combination "due, through the composition, while the row for the derived
+anchor exists" is unreachable (D2, replay key reachability). EF3 hands the
+same derived episode to `emitStallNotice` twice and snapshots the rows,
+journal, and mail. The composition-level replay (duplicate listener calls
+after a notice) is kept as a separate test, and it does not claim the
+guard mutant.
 
 ### Properties
 
 - **P1 at most one per episode:** for seeded sequences (seed `0x57A11`,
   300 cases) of mail (some enqueued inside an outer transaction that then
   rolls back), revisions, results, counted reviews, clock advances,
-  duplicate listener calls, and a simulated crash before the flush
-  (skipped evaluation), every `(task, anchor)` has ≤ 1 row, ≤ 1 journal
+  duplicate listener calls, transitions of old messages, and a simulated
+  crash before the flush (skipped evaluation), every `(task, anchor)` has ≤ 1 row, ≤ 1 journal
   entry, and ≤ 1 message. Notices equal the reference model, which replays
   `stallOf` over the same sequence and skips evaluations dropped by the crash.
 - **P2 nothing else changes:** across the same sequences, the task status,
@@ -160,8 +207,14 @@ a skewed row is treated as elapsed 0, so not due).
 ### Hazards consulted (docs/oracle-hazards.md)
 
 - *An idempotence oracle observing only the uniquely constrained row:* EF3
-  and P1 snapshot the notice rows, journal, and mail before and after a
-  replay. The control bypasses the `changes === 0` guard.
+  snapshots the notice rows, journal, and mail before and after the same
+  episode is handed to `emitStallNotice` a second time. The control
+  bypasses the `changes === 0` guard. P1 snapshots the same three sets
+  through the composition.
+- *A wiring mutant the framework absorbs:* TR3 drives a real claim and
+  delivery of an old message, so a mutant that listens to `subscribe`
+  instead of `subscribeEnqueued` fails it. The general listener would
+  otherwise be absorbed by the many enqueues in other tests.
 - *M1 an oracle behind a hand-built harness:* one SN1 row runs through
   `SessionMailbox`'s production composition. Its mutant removes the
   subscription.
@@ -187,21 +240,25 @@ at their next counted mail once the thresholds hold from their current anchor.
 ## Implementation contract
 
 ### Acceptance
-- A1: SN1–SN6, AN1–AN6, and EF1–EF4 each pass as a named table test against the shipped `stallOf` and notice module.
+- A1: SN1–SN6, AN1–AN9, TR1–TR4, and EF1–EF4 each pass as a named table test against the shipped `stallOf`, trigger check, and `emitStallNotice`.
 - A2: A counted message on an active manual task past both thresholds, sent through the production `SessionMailbox`, produces exactly one `team_task_stall_notices` row, one system journal entry, and, for an agent creator, one message tagged `task-stall` on the task.
 - A3: P1 and P2 hold over 300 seeded cases with seed `0x57A11`.
+- A5: After a threshold-crossing counted message commits and its flush is dropped, a rebuilt `SessionMailbox` over the same database shows no notice effects, and the next counted message yields exactly one notice carrying the original progress anchor; a replay changes nothing.
 - A4: `docs/architecture/tasks.md`, `docs/agent-collaboration.md`, and `docs/recovery-matrix.md` describe the notice, and the recovery-matrix test passes.
 
 ### Invariants
 - I1: A stall notice never changes a task's status, assignment, revision, result, or finding.
 - I2: At most one notice exists per `(task_id, anchor_at)`.
 - I3: Kawai's own mail is never counted and never triggers an evaluation.
+- I5: Only a durably committed enqueue triggers an evaluation; a rolled-back enqueue or a transition of an old message never does.
 - I4: A task an execution owns never gets a stall notice.
 
 ### Scope
 - src/shared/taskStall.ts
 - src/server/team/taskStallNotices.ts
 - src/server/team/sessionMailbox.ts
+- src/server/team/mailboxStore.ts
+- src/server/__tests__/mailboxStore*.test.ts
 - src/server/team/taskStallSchema.ts
 - src/server/dbSafety/migrations.ts
 - src/server/__tests__/taskStall*.test.ts
@@ -215,7 +272,7 @@ at their next counted mail once the thresholds hold from their current anchor.
 
 ### Verification
 - V1: `bun run test src/shared/__tests__/taskStall.test.ts src/server/__tests__/taskStallNotices.test.ts` passes, with every SN, AN, and EF row a named test.
-- V2: Mutants are killed: SN boundary `>=` → `>`; counting system mail; anchor ignoring counted reviews; the `changes === 0` guard bypassed; the subscription removed from `SessionMailbox`.
+- V2: Mutants are killed: SN boundary `>=` → `>`; counting system mail; anchor ignoring counted reviews; the trigger check skipped (TR2); listening on `subscribe` instead of `subscribeEnqueued` (TR3); the `changes === 0` guard bypassed (EF3 at the `emitStallNotice` seam); the subscription removed from `SessionMailbox` (A2); recovery keyed on the notice anchor instead of the original progress anchor (A5).
 - V3: `bun run check` passes on the clean committed tree.
 - V4: Every scenario in `specs/task-stall-notices/spec.md` carries an `@covers` annotation.
 

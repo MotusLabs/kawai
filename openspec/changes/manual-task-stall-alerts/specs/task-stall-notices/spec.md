@@ -20,12 +20,22 @@ Kawai SHALL measure a task's stall from its anchor: the latest of the task's cre
 - **THEN** the count is 0
 
 ### Requirement: A notice is sent when both thresholds are met
-When mail on a task commits, Kawai SHALL send a stall notice if the task is active or open, no execution owns it, at least 10 counted messages arrived since the anchor, and at least 3 hours passed since the anchor. Otherwise it SHALL send nothing. A task that receives no mail SHALL never be noticed.
+When a new message from an agent or the human is enqueued on a task and commits, Kawai SHALL send a stall notice if the task is active or open, no execution owns it, at least 10 counted messages arrived since the anchor, and at least 3 hours passed since the anchor. Otherwise it SHALL send nothing. A rolled-back message, a claim or delivery of an old message, and a task that receives no mail SHALL never trigger a notice.
 
 #### Scenario: An advisory loop crosses both thresholds
 - **GIVEN** an active manual task whose anchor is 3 h 10 min old with 9 counted messages after it
 - **WHEN** a tenth agent message on the task commits
 - **THEN** Kawai sends one stall notice for the task
+
+#### Scenario: A rolled-back message triggers nothing
+- **GIVEN** an active manual task whose anchor is 3 h old with 10 counted messages after it, gathered in its first 40 minutes
+- **WHEN** an eleventh message on the task is enqueued inside a transaction that rolls back
+- **THEN** no notice is sent
+
+#### Scenario: Delivering old mail triggers nothing
+- **GIVEN** an active manual task whose anchor is 3 h old with 10 counted messages after it, gathered in its first 40 minutes
+- **WHEN** one of those messages is claimed and delivered
+- **THEN** no notice is sent
 
 #### Scenario: Many messages in a short time
 - **GIVEN** an active manual task whose anchor is 40 minutes old
@@ -71,6 +81,11 @@ Kawai SHALL send at most one stall notice per task and anchor, across concurrent
 - **GIVEN** a task that received a stall notice
 - **WHEN** 10 more counted messages arrive within 1 hour of the notice
 - **THEN** no second notice is sent until 3 hours have passed since the first one
+
+#### Scenario: A dropped evaluation is recovered by the next message
+- **GIVEN** a counted message that crosses both thresholds committed, and the server stopped before evaluating it
+- **WHEN** the next counted message on the task commits after the restart
+- **THEN** exactly one notice is sent, measured from the original last progress
 
 #### Scenario: A restart does not repeat a notice
 - **GIVEN** a task noticed before the server restarted
