@@ -1,7 +1,10 @@
-// Interrupt versus waiting sends, SUPPLEMENT, INPUTS ONLY (task 4.4 Claude
+// Interrupt versus waiting sends, SUPPLEMENT inputs (task 4.4 Claude
 // checkpoint unit, R3 A4; lead bindings note-0250bfda). It adds only the cases
-// the first table (interruptWaitersInputs.ts) did not express. Observable
-// results are deliberately absent until a blind reader fills them.
+// the first table (interruptWaitersInputs.ts) did not express. Committed
+// inputs-only at babb659d for the blind reading (note-317de3ca); results are
+// in interruptWaitersOutputs.ts. Per binding note-ffdb1641, U22 became X05
+// and U23 the guarded row X06, and B03 is built from a waiter that A's
+// beforeSubmit creates (the gate keeps A from beforeSubmit while P pends).
 //
 // Definitions used by both tables:
 // - A send is DECIDED when the driver has committed its outcome: a refusal
@@ -34,8 +37,8 @@ export const ADMISSION_ROWS: readonly AdmissionRow[] = [
   { id: 'X03', states: ['exited'], arises: 'send() admitted while idle or active; the process ended before the send resumed' },
   { id: 'X04', states: ['stopping'], arises: 'send() admitted; stop() began before the send resumed' },
   { id: 'U21', states: ['unstarted'], arises: '-', unreachable: 'send() before start() is refused and decided at once (L05)' },
-  { id: 'U22', states: ['starting'], arises: '-', unreachable: 'a send made while starting waits on start: kind start (first table)' },
-  { id: 'U23', states: ['stopped'], arises: '-', unreachable: 'stopped follows the stop joining owned work over several turns of the event loop; a one-yield admission resumes first' },
+  { id: 'X05', states: ['starting'], arises: 'send() admitted while idle; the process ended and start() was called again before the send resumed (original kind: admission)' },
+  { id: 'X06', states: ['stopped'], arises: 'guarded row, not a measured schedule: IF an admitted send is still undecided when the stop completes' },
 ]
 
 /** Conditional cases, each one trace on the production session. */
@@ -55,7 +58,7 @@ export const CONDITIONAL_ROWS = [
   // beforeSubmit (the host submission check, P12/P13) after admission.
   { id: 'B01', state: 'idle', trace: 'send(A) admitted; its beforeSubmit calls interrupt() and then accepts' },
   { id: 'B02', state: 'idle', trace: 'send(A) admitted; its beforeSubmit calls kill() and then accepts' },
-  { id: 'B03', state: 'idle', trace: 'send(A) admitted while waiter W is held on P; A beforeSubmit calls interrupt() and then accepts' },
+  { id: 'B03', state: 'idle', trace: 'send(A) admitted; its beforeSubmit calls send(W), then interrupt(), then accepts' },
   { id: 'B04', state: 'idle', trace: 'send(A) admitted; its beforeSubmit refuses; an interrupt follows' },
   // After acceptance: publications of the accepted send.
   { id: 'P01', state: 'idle', trace: 'send(A) accepted; onState(active) during its turn_started publication calls interrupt()' },

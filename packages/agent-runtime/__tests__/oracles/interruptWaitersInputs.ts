@@ -1,9 +1,8 @@
-// Interrupt versus waiting sends, INPUTS ONLY (task 4.4 Claude checkpoint
-// unit, R3 A4; refines lifecycle rows L06/L09/L10/L13 for sends that have not
-// been acknowledged yet). Observable results are deliberately absent: a blind
-// reader of another model family derives them from the delta specs and the
-// R3 contract, and the resolved results are added beside these rows after
-// that reading.
+// Interrupt versus waiting sends, inputs (task 4.4 Claude checkpoint unit,
+// R3 A4; refines lifecycle rows L06/L09/L10/L13 for sends that have not been
+// acknowledged yet). Committed inputs-only at 81c49d5c for the blind reading
+// (note-5ed7418a); the resolved results are in interruptWaitersOutputs.ts
+// (binding note-ffdb1641). W16 split from U11 after that reading.
 //
 // A "waiter" is one send() call that has been made but has neither returned
 // a handle nor been refused when interrupt() is called. Its kind says what it
@@ -48,7 +47,8 @@ export const WAITER_ROWS: readonly WaiterRow[] = [
   { id: 'W11', states: ['starting'], kinds: ['persistence-queue', 'persistence-default'], arises: 'a send held on P; the process exited unexpectedly and start() was called again; P still held' },
   { id: 'W12', states: ['exited'], kinds: ['persistence-queue', 'persistence-default'], arises: 'a send held on P; the process exited unexpectedly; P still held' },
   { id: 'W13', states: ['stopping'], kinds: ['persistence-queue', 'persistence-default'], arises: 'a send held on P; stop() began; P still held (stop joins P)' },
-  { id: 'U11', states: ['unstarted'], kinds: ['start', 'persistence-queue', 'persistence-default'], arises: '-', unreachable: 'send() before start() is refused at once (L05); no identity can be known before a turn' },
+  { id: 'W16', states: ['unstarted'], kinds: ['start'], arises: 'the first start() failed and restored unstarted; the send waiting on it has not observed the failure (supplement F01/F03)' },
+  { id: 'U11', states: ['unstarted'], kinds: ['persistence-queue', 'persistence-default'], arises: '-', unreachable: 'no identity can be known before a turn, and no turn runs before a successful start' },
   { id: 'W14', states: ['idle', 'active', 'exited'], kinds: ['start'], arises: 'initialization settled (then a native turn opened, or the process ended) but the send waiting on it has not resumed yet' },
   { id: 'W15', states: ['stopped'], kinds: ['start', 'persistence-queue', 'persistence-default'], arises: 'the stop joined start and P and completed, but a send waiting on them has not resumed yet' },
 ]

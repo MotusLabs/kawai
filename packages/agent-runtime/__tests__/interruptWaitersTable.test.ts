@@ -15,6 +15,7 @@ import {
   waiterCompletenessErrors,
   type WaiterRow,
 } from './oracles/interruptWaitersInputs.js'
+import { SUPPLEMENT_OUTPUTS, WAITER_OUTPUTS } from './oracles/interruptWaitersOutputs.js'
 import { ADMISSION_ROWS, CONDITIONAL_ROWS, admissionCompletenessErrors } from './oracles/interruptWaitersSupplement.js'
 
 describe('interrupt versus waiting sends: inputs table', () => {
@@ -68,5 +69,15 @@ describe('interrupt versus waiting sends: inputs supplement', () => {
 
   test('control: a dropped admission row is reported', () => {
     expect(admissionCompletenessErrors(ADMISSION_ROWS.filter((row) => row.id !== 'X03'))).toEqual(['gap: exited+admission'])
+    expect(ADMISSION_ROWS.filter((row) => row.unreachable).map((row) => row.id)).toEqual(['U21'])
+  })
+})
+
+describe('interrupt versus waiting sends: resolved outputs', () => {
+  test('every row has exactly one resolved output, and no output names a missing row', () => {
+    const first = [...WAITER_ROWS, ...WAITER_RECEIPT_ROWS, ...AFTER_INTERRUPT_ROWS].map((row) => row.id).sort()
+    const supplement = [...ADMISSION_ROWS, ...CONDITIONAL_ROWS].map((row) => row.id).sort()
+    expect(Object.keys(WAITER_OUTPUTS).sort()).toEqual(first)
+    expect(Object.keys(SUPPLEMENT_OUTPUTS).sort()).toEqual(supplement)
   })
 })

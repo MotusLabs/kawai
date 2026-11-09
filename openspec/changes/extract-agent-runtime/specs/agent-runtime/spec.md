@@ -25,11 +25,15 @@ Starting a driver SHALL initialize a session without submitting a prompt and com
 - **THEN** its handle resolves once with the corresponding non-success outcome and available partial measurements
 
 ### Requirement: Cooperative interrupt is distinct from forced stop
-A cooperative interrupt SHALL cancel pending requests, settle the active turn and queued submissions as interrupted at once, and request that the turn stop while retaining its conversation. Its receipt SHALL NOT imply process exit. Callers SHALL have a separate forced-stop operation when they require proof that the agent process has ended.
+A cooperative interrupt SHALL cancel pending requests, settle the active turn and queued submissions as interrupted at once, refuse every submission not yet acknowledged, and request that the turn stop while retaining its conversation. Its receipt SHALL NOT imply process exit. Callers SHALL have a separate forced-stop operation when they require proof that the agent process has ended.
 
 #### Scenario: Interrupt then continue
 - **WHEN** a caller cooperatively interrupts a turn and later submits another
 - **THEN** the second turn continues the same conversation and the interrupt receipt makes no process-exit claim
+
+#### Scenario: Interrupt while a submission awaits checkpoint persistence
+- **WHEN** a submission waits for a checkpoint to persist, the turn before it has ended, and the caller interrupts
+- **THEN** the submission is refused as interrupted at once, before the persistence settles, it never runs later, and the receipt reports that work was cancelled
 
 ### Requirement: Forced stop has an actual exit boundary
 Forced stop SHALL prevent further submissions, request termination of every process generation still owned by the driver, and await actual process exits and owned asynchronous work. Success SHALL include an explicit exit receipt. A signal acknowledgement, closed iterator or elapsed drain bound SHALL NOT substitute for exit. Unsupported or failed stop evidence SHALL fail explicitly.
