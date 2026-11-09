@@ -343,3 +343,21 @@ or property that would have caught it, and the source finding.
   waiting for an absent event (fast-chat-switching design.md OW6).
 - **Source finding.** note-8716978d N2 (fast-chat-switching D5 spec
   advisory, task-d86465fe R4).
+
+### EOF before exit, and job context in stream listeners (task 311)
+
+- **Hazard.** A transport rejects its pending requests at stdout EOF and
+  names the end from the exit it has seen so far; the child's `exit` event
+  can follow EOF, so the reason reads "closed its output" for a process
+  that exited with a code. Separately, a reader started inside an owned
+  job registers its stream listeners there, and the listeners inherit that
+  async context: a notification observer's stop is then classified as a
+  job's own stop and refused.
+- **Oracle that catches it.** Assert the exact rejection message of a
+  pending request when the real child exits with a code and stderr, and
+  call stop from a real notification observer, expecting the shared
+  terminal receipt rather than `internal` (codexTransport.test.ts,
+  codexTransportStop.test.ts).
+- **Source finding.** task-3110e52b first fake-app-server run: both rows
+  failed before the end was keyed on exit and EOF together and observers
+  ran outside the job context.

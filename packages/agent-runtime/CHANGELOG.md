@@ -33,5 +33,12 @@ documented API takes a new major version, even after 0.x.
   request. Events, `onRequest` and `pendingRequests()` get separate copies,
   so a host mutation never changes what an allow runs or how an answer is
   checked. Codex input and elicitation requests are not implemented yet.
+- Internal Codex app-server transport (not exported): one owned
+  `codex app-server` per transport with the launch's exact env and cwd,
+  replies correlated by id and settled once, server requests and
+  notifications routed to the supplied handlers, and a stop that joins the
+  actual process group exit and every handler before it returns. A reply a
+  handler produces after the stop began is never written. The Codex driver
+  built on it is not implemented yet.
 - Not yet released: the Claude and Codex drivers, profile helpers and usage
   parsers arrive in later entries before 0.1.0 is published.
