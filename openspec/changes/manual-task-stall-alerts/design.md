@@ -265,6 +265,10 @@ at their next counted mail once the thresholds hold from their current anchor.
 - src/shared/__tests__/taskStall*.test.ts
 - src/server/__tests__/schemaMigrations.test.ts
 - src/server/__tests__/schemaBaselinePin.test.ts
+- src/server/__tests__/revisionControlMigration.test.ts
+- src/server/__tests__/planSupervisionMigration.test.ts
+- src/server/__tests__/planWorkspaceMigration.test.ts
+- src/server/__tests__/outboundStore.test.ts
 - docs/architecture/tasks.md
 - docs/agent-collaboration.md
 - docs/recovery-matrix.md

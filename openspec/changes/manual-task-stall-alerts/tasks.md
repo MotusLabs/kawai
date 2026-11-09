@@ -2,7 +2,7 @@
 
 ## 1. Stall derivation (design D1)
 
-- [ ] 1.1 Add `src/shared/taskStall.ts` with `stallOf(input)` and the exported
+- [x] 1.1 Add `src/shared/taskStall.ts` with `stallOf(input)` and the exported
   constants `STALL_MESSAGE_THRESHOLD = 10` and `STALL_ELAPSED_MS = 3 h`.
   Commit tables SN and AN verbatim as table-driven tests in
   `src/shared/__tests__/taskStall.test.ts`. Verify by running that file:
@@ -17,14 +17,14 @@
   - AN5 kills "the notice does not anchor";
   - AN7 kills ">=" for ">" on the mail-after-anchor test, AN8 pins the
     tie order, and AN9 pins the skewed-row handling.
-- [ ] 1.2 Add `@covers` annotations for the spec's "A stall episode is
+- [x] 1.2 Add `@covers` annotations for the spec's "A stall episode is
   measured from the task's last progress" and "A notice is sent when both
   thresholds are met" scenarios above the tests from 1.1. Verify that
   `scripts/__tests__/specCoverageGuard.test.ts` passes.
 
 ## 2. Schema (design D3)
 
-- [ ] 2.1 Add `src/server/team/taskStallSchema.ts` and register the
+- [x] 2.1 Add `src/server/team/taskStallSchema.ts` and register the
   `task-stall-notices` migration after `review-convergence` in
   `src/server/dbSafety/migrations.ts`. Update `schemaMigrations.test.ts` and
   `schemaBaselinePin.test.ts`. Verify that both pass and that a migrated

@@ -562,9 +562,19 @@ const migration25: SchemaShape['tables'] = {
   },
 }
 
+// Migration 26's delta (manual-task-stall-alerts D3): the manual tasks'
+// stall notices, keyed by task and anchor.
+const migration26: SchemaShape['tables'] = {
+  team_task_stall_notices: {
+    columns: [column('task_id', 1, 1), column('anchor_at', 1, 2), column('anchor_kind'), integer('message_count'), optional('message_id'), column('created_at')],
+    // The composite primary key's autoindex is skipped by the shape.
+    indexes: [],
+  },
+}
+
 test('a fresh database opened by this build has the same shape plus each migration\'s delta and schema_migrations', () => {
   const session = initDatabase({ path: ':memory:' })
-  const added = { ...migration2, ...migration3, ...migration4, ...migration5, ...migration6, ...migration7, ...migration8, ...migration9, ...migration10, ...migration11And21, ...migration13, ...migration16, ...migration17, ...migration19, ...migration20, ...migration22, ...migration24, ...migration25 }
+  const added = { ...migration2, ...migration3, ...migration4, ...migration5, ...migration6, ...migration7, ...migration8, ...migration9, ...migration10, ...migration11And21, ...migration13, ...migration16, ...migration17, ...migration19, ...migration20, ...migration22, ...migration24, ...migration25, ...migration26 }
   expect(Object.keys(added).filter(table => table in expected.tables)).toEqual([])
   // Migration 20's: the submitter's nullable coverage map (independent-
   // verification D4), appended after the baseline columns.
