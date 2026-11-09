@@ -10,7 +10,7 @@ import { describe, expect, test } from 'bun:test'
 import type { TurnHandle } from '../src/contract.js'
 import { AgentRuntimeError } from '../src/errors.js'
 import type { Driver } from './helpers/claudeDriverHarness.js'
-import { errorCategories, idle, outcome, persistence, persisting, prompts, startedTurns, tick, userMessages } from './helpers/checkpointHarness.js'
+import { errorCategories, idle, outcome, persistence, persisting, prompts, startedTurns, starting, tick, userMessages } from './helpers/checkpointHarness.js'
 import { frames } from './helpers/controlledQuery.js'
 
 describe('Claude checkpoints: report and gate (A1, R10, I2)', () => {
@@ -110,6 +110,38 @@ describe('Claude checkpoints: admission while persisting (L08, L21, L10)', () =>
     expect(await hb.result).toMatchObject({ turnId: hb.turnId, messageUuid: hb.messageUuid, finalText: 'rb' })
     expect(f.results.map((r) => r.turnId)).toEqual([t0.turnId, ha.turnId, hb.turnId])
     expect(f.d.state).toBe('idle')
+    await f.d.kill()
+  })
+
+  test('L21: a send made just after the persistence settled commits after the older waiters it released (late caller)', async () => {
+    const { f, p, t0 } = await persisting()
+    const a = f.d.send('a', { continuation: 'queue' })
+    const b = f.d.send('b', { continuation: 'queue' })
+    await tick()
+    f.q().push(frames.result([t0.messageUuid], 'zero'))
+    await t0.result
+    p.calls[0]!.resolve()
+    // The older waiters are released but have not resumed yet; C arrives in that window.
+    await Promise.resolve()
+    await Promise.resolve()
+    const c = f.d.send('c', { continuation: 'queue' })
+    const [ha, hb, hc] = (await Promise.all([a, b, c])) as [TurnHandle, TurnHandle, TurnHandle]
+    await tick()
+    expect(prompts(f)).toEqual([t0.messageUuid, ha.messageUuid, hb.messageUuid, hc.messageUuid])
+    expect(f.d.lifecycle.activeTurnId).toBe(ha.turnId)
+    await f.d.kill()
+  })
+
+  test('L06/L21: a send made just after the start finished commits after the send that waited on the start (late caller)', async () => {
+    const f = await starting({})
+    const a = f.d.send('a')
+    f.q().ready()
+    await f.start
+    const c = f.d.send('c', { continuation: 'queue' })
+    const [ha, hc] = (await Promise.all([a, c])) as [TurnHandle, TurnHandle]
+    await tick()
+    expect(prompts(f)).toEqual([ha.messageUuid, hc.messageUuid])
+    expect(f.d.lifecycle.activeTurnId).toBe(ha.turnId)
     await f.d.kill()
   })
 
