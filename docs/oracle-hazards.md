@@ -402,3 +402,46 @@ or property that would have caught it, and the source finding.
   both rows failed on 17b9d294 before the terminal was reserved first and
   the reader kept every error.
 
+
+### An observer that reenters before its frame is decided (task 73 PC1/PC2)
+
+- **Hazard.** A frame's own observation runs before the state that frame
+  decides. The Claude result frame's context usage was observed before its
+  result was decided, so an interrupt from `onContextUsage` settled the
+  turn `interrupted` and replaced the provider's success. A limit retry's
+  `failure` observer ran before its wait was registered, so an interrupt
+  from it ended the turn with no wait, and the wait registered afterwards
+  was orphaned. Only a later stop's `endAll` ended it, which hides it from
+  any assertion made after the stop.
+- **Oracle that catches it.** Interrupt from the observer itself through
+  the real fake CLI and app-server. Assert the result is the provider's
+  success. For the wait, assert `failure`, `wait-start` and then one
+  `wait-end` with the same `waitId` and cause `cancelled`, captured before
+  any stop (claudeUsageFacts.test.ts PC1/PC2, codexUsageFacts.test.ts).
+  Run the controls on that pre-stop snapshot.
+- **Source finding.** task-73ecea50 Lead path review 639cc35a of fbd90661.
+  The fix is in cd0adadd: a result is decided before its frame's
+  observations, a wait is registered before any limit observer, and limit
+  events are published in order.
+
+### A decided frame's observer acting on the queued successor (task 73 FRESH-A/B)
+
+- **Hazard.** Deciding a terminal result before its observers run is not
+  enough when a successor exists. The Claude result promoted the queued
+  turn B before the first turn's own context observation ran, so an
+  interrupt from that `onContextUsage` interrupted B instead. In the same
+  review, a stale lower Codex token total was discarded for usage but still
+  ended a limit wait as `resumed`: a progress rule keyed on the method name
+  rather than on accepted new work.
+- **Oracle that catches it.** Queue a successor behind the observed turn on
+  the default composition. Interrupt from each of the first frame's
+  publications and observations (`onTurnResult`, `onContextUsage`, a failed
+  turn's `error` event, and a send from the same callback). Assert the
+  successor's provider outcome, no successor `turn_started` before the
+  observation, and the interrupt's `no-active-turn` receipt
+  (oldFrame.test.ts). For waits, follow a stale and an equal repeated total
+  with a non-progress sentinel (a quota push), and assert the wait is still
+  open (codexUsageFacts.test.ts). A reference model that counts any update
+  as progress hides this, so the model states it too (usageModels.ts).
+- **Source finding.** task-73ecea50 fresh assessment e50cba22
+  (note-ba5046e5), disposition a546aea5. INV-A2 is note-7f2b3062.

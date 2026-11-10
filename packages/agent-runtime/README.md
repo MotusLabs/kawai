@@ -7,7 +7,8 @@ implementation.
 
 **Status: unreleased, under construction.** The public contract is frozen
 (`src/contract.ts`, `src/options.ts`, `src/events.ts`). The Claude driver
-has moved (`./claude`), and so has the Codex driver (`./codex`). See `docs/api-differences.md` for how the contract differs from
+has moved (`./claude`), and so has the Codex driver (`./codex`); both share
+the events, results and usage facts of `./usage`. See `docs/api-differences.md` for how the contract differs from
 Kawai's in-tree driver interface, and `examples/contract-consumer.ts` for a
 type-checked headless consumer.
 
@@ -455,3 +456,64 @@ decision. A throwing observer can't block, grant or repeat a tool call. Its
 error is kept and reported when the session stops.
 
 `wire` records raw protocol frames only when you supply it.
+
+## Events, results and usage (`@motuslabs/agent-runtime/usage`)
+
+Both drivers emit the same `AgentEvent` stream and settle the same
+`TurnResult`. The parsers and reducers behind them are exported from
+`./usage`, which has no SDK dependency.
+
+- **Events** are JSON values, normalized once on emission: a bigint becomes
+  a string, a non-finite number `null`; `undefined` keys are dropped and a
+  cycle becomes `null`. `sequence` counts from 1 per `streamId`, and a
+  resumed driver starts a new stream, so stored event ids never collide.
+- **Results** belong to the turn that produced them.
+  - Claude: tokens are the turn's own result usage. Codex: they are the sum
+    of the requests the turn made, as differences between the thread's
+    running totals. A repeated or lower total adds nothing. A counter the
+    previous total lacked is `null`, never the whole running total.
+  - `toolCallCount` and `compactionCount` count distinct ids within the
+    turn, so a later turn that reuses an id counts it again.
+  - Claude's cost is the sum of the turn's `message_delta` costs, subagents'
+    included. Its model is the turn's last main-thread assistant model.
+  - Anything not reported stays `null`. Nothing is borrowed from an earlier
+    turn.
+- **Limit waits.** The first limit retry of a turn emits a `failure` and
+  then a `wait-start`.
+  - The wait ends `resumed` only at that turn's next observed progress, or
+    at its success: a Claude request or assistant frame, or a Codex item,
+    delta or token update that grew a counter. A stale or repeated total is
+    not progress.
+  - It ends `cancelled` when the turn ends otherwise or the driver stops,
+    and `process-ended` on an unexpected exit.
+  - A quota push, a non-limit retry or a reset time that passes never opens
+    or ends a wait. Each `wait-end` names its `waitId`.
+- **Quota reports** don't depend on turn state, and each names its `source`
+  and `accountScope`.
+  - Claude reports pushed `rate_limit_event`s (`push`, `session`).
+  - Codex reads `account/rateLimits/read` once per driver after the first
+    readiness (`report`, `session`) and reports each pushed update (`push`).
+    A refused, unanswered or empty read reports nothing and fails nothing.
+  - Claude's pull through the supplied home's login runs only with
+    `quotaSource: 'host-login'` (`host-login-pull`, `host-login`). That
+    login may be another account than a proxy session's, so it is off by
+    default.
+  - A host that reads a proxy account's windows itself labels them with
+    `hostQuotaReport(...)` (`host-supplied`). The runtime never fills them in.
+  - Without a source, no report arrives. A missing report means unknown,
+    not "no limit".
+- **Observers** (`onLimitEvent`, `onQuotaReport`, `onContextUsage`,
+  `onCompaction`, `onModel`, `onEvent`, `onTurnResult`) are optional, and
+  they only observe.
+  - A throwing observer neither changes a result nor skips any of its
+    settlement.
+  - Each throw is reported exactly once, by identity, as a cause of the
+    stop's `stop` error. It is never an unhandled rejection.
+  - A control called from a turn's own result (its `turn_completed` or
+    `error` event, `onTurnResult`, the result frame's context usage or
+    final limit) acts on that decided turn only. `interrupt()` returns
+    `no-active-turn` and reaches neither a queued successor nor one sent from
+    the same callback. That successor opens after the callback returns. A
+    stop still stops everything.
+  - Checkpoint (`onCheckpoint`) and context (`beforeSubmit`) failures stay
+    critical, as described above.

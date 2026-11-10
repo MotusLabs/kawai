@@ -36,7 +36,8 @@
 // the JSON's `frames` verbatim, each with this session's id, then a result
 // whose `usage` is the JSON's (null: no usage key; absent: the default) and
 // whose subtype is the JSON's `subtype` (default success; any other carries
-// the `errors` list the SDK reads from an error result). Anything else is
+// the `errors` list the SDK reads from an error result); with `hold: true`
+// it writes no result and the turn runs on, like `hang`. Anything else is
 // echoed. Stdin EOF exits 0.
 // Every received frame, and first the process argv as {"argv": [...]},
 // is appended to $FAKE_CLAUDE_LOG when set.
@@ -295,8 +296,12 @@ function onUser(frame: { uuid?: string; message?: { content?: unknown } }) {
       running = uuid
       return
     case 'script': {
-      const script = JSON.parse(rest.join(' ')) as { frames?: Array<Record<string, unknown>>; usage?: unknown; subtype?: string }
+      const script = JSON.parse(rest.join(' ')) as { frames?: Array<Record<string, unknown>>; usage?: unknown; subtype?: string; hold?: boolean }
       for (const frame of script.frames ?? []) write({ ...frame, session_id: sessionId })
+      if (script.hold) {
+        running = uuid
+        return
+      }
       const subtype = script.subtype ?? 'success'
       return result(uuid, subtype, subtype === 'success' ? 'scripted' : null, subtype !== 'success', script.usage === undefined ? usage : script.usage, subtype === 'success' ? undefined : ['scripted failure'])
     }

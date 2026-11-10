@@ -2,7 +2,8 @@
 // Distribution oracles on the real packed tarball (design "Package and
 // application table"): D01 (clean consumer, no Kawai files), D09 (the
 // headless contract consumer compiles unchanged), a Codex-only consumer with
-// no Claude SDK that compiles and runs the README's Codex example, and the M-pack control (a
+// no Claude SDK that compiles and runs the README's Codex example and the
+// `./usage` helpers, runtime `./usage` exports in the clean consumer, and the M-pack control (a
 // repository-relative import in the shipped files is caught).
 import { beforeAll, describe, expect, test } from 'bun:test'
 import { appendFileSync, copyFileSync, cpSync, existsSync, mkdtempSync, writeFileSync } from 'node:fs'
@@ -40,11 +41,14 @@ describe('packed @motuslabs/agent-runtime', () => {
       [
         "import { AgentRuntimeError } from '@motuslabs/agent-runtime'",
         "import type { AgentEvent } from '@motuslabs/agent-runtime/events'",
-        "import type { QuotaReport } from '@motuslabs/agent-runtime/usage'",
+        "import { addTokenUsage, codexUpdateRequests, hostQuotaReport, type QuotaReport } from '@motuslabs/agent-runtime/usage'",
         "const error = new AgentRuntimeError({ category: 'busy', message: 'a turn is active' })",
         'const event: AgentEvent | null = null',
-        'const report: QuotaReport | null = null',
-        'console.log(JSON.stringify({ error: error.toJSON(), event, report }))',
+        "const report: QuotaReport = hostQuotaReport({ status: 'allowed', windows: [], accountScope: 'unknown', receivedAt: 'r' })",
+        'const totals = { totalTokens: 10, inputTokens: 6, cachedInputTokens: 2, outputTokens: 4 }',
+        'const update = codexUpdateRequests({ ...totals, totalTokens: 15, inputTokens: 9, outputTokens: 6 }, null, totals)',
+        'const sum = addTokenUsage(null, { inputTokens: 1, outputTokens: 2, cacheReadTokens: null, cacheCreationTokens: null })',
+        'console.log(JSON.stringify({ error: error.toJSON(), event, report, update: update.requests, sum }))',
       ].join('\n'),
     )
     const check = tsc('tsconfig.json', consumer)
@@ -52,7 +56,14 @@ describe('packed @motuslabs/agent-runtime', () => {
     expect(check.code).toBe(0)
     const smoke = run([process.execPath, 'smoke.ts'], consumer)
     expect(smoke.code).toBe(0)
-    expect(JSON.parse(smoke.out)).toEqual({ error: { category: 'busy', message: 'a turn is active' }, event: null, report: null })
+    expect(JSON.parse(smoke.out)).toEqual({
+      error: { category: 'busy', message: 'a turn is active' },
+      event: null,
+      report: { status: 'allowed', windows: [], receivedAt: 'r', source: 'host-supplied', accountScope: 'unknown' },
+      // A counter neither total reported stays unknown.
+      update: { totalTokens: 5, inputTokens: 3, cachedInputTokens: 0, outputTokens: 2, cacheWriteInputTokens: null },
+      sum: { inputTokens: 1, outputTokens: 2, cacheReadTokens: null, cacheCreationTokens: null },
+    })
   })
 
   // @covers: agent-runtime-distribution › The runtime is an ESM package with types › Clean external consumer
@@ -64,6 +75,7 @@ describe('packed @motuslabs/agent-runtime', () => {
       join(project, 'main.ts'),
       [
         "import type { LaunchConfiguration, ResumeCheckpoint } from '@motuslabs/agent-runtime'",
+        "import { codexQuotaReport } from '@motuslabs/agent-runtime/usage'",
         "import { headlessCodex } from './headless-codex.js'",
         'const launch = JSON.parse(process.argv[2]!) as LaunchConfiguration',
         'const saved: ResumeCheckpoint[] = []',
@@ -72,7 +84,8 @@ describe('packed @motuslabs/agent-runtime', () => {
         'await driver.start()',
         "const result = await (await driver.send('packed')).result",
         'const receipt = await driver.shutdown()',
-        'console.log(JSON.stringify({ finalText: result.finalText, saved: saved.length, mode: receipt.mode }))',
+        "const quota = codexQuotaReport({ primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: 0 }, secondary: null, rateLimitReachedType: 'rateLimitReached' }, 'report', 'r')",
+        'console.log(JSON.stringify({ finalText: result.finalText, saved: saved.length, mode: receipt.mode, quota: quota && [quota.status, quota.source, quota.accountScope] }))',
       ].join('\n'),
     )
     const check = tsc('tsconfig.json', project)
@@ -82,7 +95,8 @@ describe('packed @motuslabs/agent-runtime', () => {
     writeFileSync(join(root.home, 'auth.json'), JSON.stringify({ OPENAI_API_KEY: ['sample', 'key'].join('-') }))
     const main = run([process.execPath, 'main.ts', JSON.stringify(root.launch())], project)
     expect(main.code).toBe(0)
-    expect(JSON.parse(main.out.trim())).toEqual({ finalText: 'codex:dekcap|seen=', saved: 1, mode: 'shutdown' })
+    // ./usage loads and runs without the Claude SDK.
+    expect(JSON.parse(main.out.trim())).toEqual({ finalText: 'codex:dekcap|seen=', saved: 1, mode: 'shutdown', quota: ['limited', 'report', 'session'] })
   })
 
   test('control: the clean project cannot resolve a Kawai type for a consumer', () => {

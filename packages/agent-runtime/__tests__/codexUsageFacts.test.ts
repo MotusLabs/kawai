@@ -106,6 +106,7 @@ describe('Codex limit waits', () => {
     expect(h.limits.map((e) => e.type)).toEqual(['failure', 'wait-start', 'failure', 'wait-end'])
   })
 
+  // @covers: agent-runtime › Rate-limit waits have explicit boundaries › Reset passes without resumption
   test('a failed turn ends its wait cancelled after the final limit; a quota push with a past reset does not resume it', async () => {
     const h = recorded()
     await h.driver.start()
@@ -163,6 +164,26 @@ describe('Codex limit waits', () => {
     expect(settled[2]).toEqual({ type: 'wait-end', waitId: (settled[1] as { waitId: string }).waitId, cause: 'cancelled' })
     expect(h.limits).toEqual(settled)
   })
+
+  // Fresh assessment FRESH-B (ported): only a token update that grew a counter is the turn's progress.
+  for (const [name, repeat] of [['a stale lower', 50], ['an equal repeated', 100]] as const) {
+    test(`${name} token total is not progress: the wait stays open until the interrupt cancels it`, async () => {
+      const h = recorded()
+      await h.driver.start()
+      const plain = (n: number) => ({ totalTokens: n, inputTokens: n, outputTokens: 0 })
+      await (await h.driver.send(script([tokens(plain(100), plain(100))]))).result
+      // The quota push after the repeat is never progress; its report shows the repeat was handled (notifications are in order).
+      const push: Note = { method: 'account/rateLimits/updated', params: { rateLimits: snapshot(10, Math.floor(Date.now() / 1000) + 3600) } }
+      const handle = await h.driver.send(script([retry(), tokens(plain(repeat), plain(repeat)), push], 'hold'))
+      await waitFor(() => h.quotas.some((q) => q.source === 'push'))
+      const before = h.waits().map((e) => e.type)
+      await h.driver.interrupt()
+      const result = await handle.result
+      expect(before).toEqual(['wait-start'])
+      expect(h.waits().map((e) => (e.type === 'wait-end' ? e.cause : e.type))).toEqual(['wait-start', 'cancelled'])
+      if (repeat === 50) expect(result.usage).toBeNull()
+    })
+  }
 
   test('a non-limit retry opens no wait', async () => {
     const h = recorded()

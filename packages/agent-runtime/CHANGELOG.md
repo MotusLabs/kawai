@@ -59,5 +59,26 @@ documented API takes a new major version, even after 0.x.
 - `hasCodexLogin(codexHome)` reports only whether an explicit Codex home
   holds a login; unauthorized protocol failures are category
   `authentication`, usage limits `quota`, rate limits `rate-limit`.
-- Not yet released: profile helpers and usage parsers arrive in later
-  entries before 0.1.0 is published.
+- Events, results and usage (`./usage`, no SDK dependency). Both drivers
+  emit JSON-normalized events, numbered per stream; a resumed driver gets a
+  new stream. Each `TurnResult` has the turn's own tokens, distinct tool and
+  compaction counts, plus Claude's cost and model. Unknown values are
+  `null`, and nothing is borrowed from another turn; a repeated or stale
+  Codex token total adds nothing.
+- Limit waits: a turn's first limit retry opens one `wait-start`. Its
+  `wait-end` is `resumed` only at the turn's next observed progress, never
+  from a reset time or a quota push; otherwise it is `cancelled` or
+  `process-ended`.
+- Quota reports are independent of turn state and name their `source` and
+  `accountScope`: Claude pushes, Codex's one `account/rateLimits/read` plus
+  pushes, an opt-in Claude host-login pull, and host-supplied reports via
+  `hostQuotaReport`. An unavailable source reports nothing.
+- Observers only observe. A throwing usage, event or result observer
+  changes no result and skips no settlement, and the stop reports each
+  throw once.
+  A control called from a turn's own result publications or observations
+  acts on that turn only. Its interrupt can't reach a queued successor or
+  one sent from the same callback, which opens afterwards. A Codex wait
+  resumes only on a token update that grew a counter.
+- Not yet released: profile helpers arrive in later entries before 0.1.0 is
+  published.

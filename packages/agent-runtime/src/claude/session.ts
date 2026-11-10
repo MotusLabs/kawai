@@ -36,7 +36,7 @@
 //   stop, nesting the token AbortErrors stored for it. Every other failure
 //   (init, read, control, callback, recorder, cleanup) fails it too, kept by
 //   identity.
-import type { Options, Query, SDKMessage, SDKResultMessage } from '@anthropic-ai/claude-agent-sdk'
+import type { Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { AnswerOptions, AnswerOutcome, InterruptReceipt, ProcessExitFact, ProcessExitReceipt, ResumeCheckpoint, SubmitOptions, TaskOutput, TurnHandle } from '../contract.js'
 import { AgentRuntimeError, type AgentErrorInfo } from '../errors.js'
 import { EventStream, type EventBody } from '../eventStream.js'
@@ -45,6 +45,7 @@ import { CHECKPOINT_FAILED, CheckpointGate } from '../lifecycle/checkpoints.js'
 import { DriverLifecycle, type Admission } from '../lifecycle/lifecycle.js'
 import { resolveExecutable, resolveLaunch } from '../process/launch.js'
 import type { LeaderExit } from '../process/ownedProcess.js'
+import { OldFrameScope } from '../common/oldFrame.js'
 import { bindToolSet, type BoundToolSet } from '../tools/toolSet.js'
 import type { RawChatCommand } from './commands.js'
 import { ClaudeFrames } from './frames.js'
@@ -53,9 +54,10 @@ import { composeClaudePermissions, type ClaudePermissionComposition } from './pe
 import { accountGenerations, cancelledByStop, generationOptions, interruptGeneration, keepStartupFailure, loadSdk, newGeneration, ownedSpawn, readTaskOutput, startFailure, stopQueryTask, terminateGenerations, type Generation, type SdkModule } from './generations.js'
 import { ClaudeRequests } from './requests.js'
 import { SeenResultFrames } from './resultFrames.js'
+import { settleResult, type ResultSettlementHost } from './resultSettlement.js'
 import { CliTurnBinder } from './turnBinder.js'
 import { OpenTurns } from './openTurns.js'
-import { checkSubmission, newTurn, promptMessage, resultErrorText, resultUuids, type Turn } from './turns.js'
+import { checkSubmission, newTurn, promptMessage, type Turn } from './turns.js'
 import { ClaudeUsageFacts } from './usageFacts.js'
 import { UsageControls } from './usageControls.js'
 import type { ClaudeSessionOptions } from './sessionOptions.js'
@@ -68,6 +70,7 @@ export class ClaudeSession {
   private readonly generations: Generation[] = []
   /** Open turns in FIFO order: the active turn first, then queued ones (L21). */
   private readonly open: OpenTurns
+  private readonly oldFrame = new OldFrameScope()
   private readonly binder: CliTurnBinder
   private readonly requests: ClaudeRequests
   private readonly frames: ClaudeFrames
@@ -80,7 +83,7 @@ export class ClaudeSession {
   private readonly tools: BoundToolSet | null
   /** The CLI's session id, from the latest system/init. */
   private runtimeSessionId: string | null
-  private readonly seenResults = new SeenResultFrames()
+  private readonly results: ResultSettlementHost
   /** Sticky once a resumed generation named another conversation (G1). */
   private resumeFailure: AgentErrorInfo | null = null
   /** Minted when stop cancels the queries: the abort reason that marks its own cancellations. */
@@ -119,6 +122,8 @@ export class ClaudeSession {
       notify: (name, callback) => this.notify(name, callback),
       compacted: (boundaryId, preTokens, postTokens) => this.usage.compacted(boundaryId, preTokens, postTokens, this.active()),
     })
+    const { binder, open, lifecycle } = this
+    this.results = { seenResults: new SeenResultFrames(), binder, open, lifecycle, ...(logger ? { logger } : {}), active: () => this.active(), emit: (body) => this.events.emit(body) }
   }
 
   /**
@@ -282,8 +287,11 @@ export class ClaudeSession {
         this.frames.partial(message)
         return
       case 'result':
-        this.result(message) // decided and published before this frame's own context observations
-        this.usage.result(frame)
+        // INV-A2: decide, then this frame's publications and observations (old-frame scope), then a queued successor.
+        this.lifecycle.holdState(() => {
+          this.oldFrame.run(() => (settleResult(this.results, message), this.usage.result(frame)))
+          this.promote(generation)
+        })
         this.controls.probe(generation)
         return
     }
@@ -335,34 +343,10 @@ export class ClaudeSession {
     this.lifecycle.jobs.outside(() => void this.shutdown().catch(() => {}))
   }
 
-  private result(message: SDKResultMessage): void {
-    this.lifecycle.holdState(() => this.settleResult(message))
-  }
-
-  private settleResult(message: SDKResultMessage): void {
-    const identity = this.seenResults.first(message.uuid)
-    if (identity === 'unidentified') this.options.logger?.warn({}, 'claude_result_without_frame_uuid')
-    if (identity !== 'first') return
-    const uuids = resultUuids(message)
-    if (this.binder.result(uuids, message.queued_turn_count) === 'drop') return
-    const turn = this.active()
-    if (!turn || turn.settled) return
-    // Queued prompts the CLI consumed into this turn share its result.
-    const absorbed = this.open.queuedWith(uuids, turn)
-    for (const _ of absorbed) this.lifecycle.withdraw('queue')
-    if (!this.lifecycle.result(turn.turnId)) return
-    this.open.remove([turn, ...absorbed])
-    const failed = message.subtype !== 'success' || message.is_error
-    if (!failed && message.subtype === 'success') turn.finalText = message.result
-    const error: AgentErrorInfo | null = failed ? { category: 'provider', message: resultErrorText(message) } : null
-    const result = this.open.settle(turn, failed ? 'failed' : 'success', error, message.subtype, message)
-    for (const queued of absorbed) {
-      queued.settled = true
-      queued.resolve(result)
-    }
-    if (failed) this.events.emit({ type: 'error', error: error! })
+  /** A queued turn opens after its predecessor's frame, unless a stop began or the generation changed meanwhile. */
+  private promote(generation: Generation): void {
     const next = this.open.next()
-    if (next) this.openTurn(next, false)
+    if (next && !next.opened && !next.settled && !this.stopBegun() && !generation.retired && generation === this.current()) this.openTurn(next, false)
   }
 
   /** R10/I2: acknowledged only once any pending identity persistence succeeded (the gate, lifecycle/checkpoints.ts). */
@@ -400,13 +384,14 @@ export class ClaudeSession {
 
   /** Emit turn_started (and the opening user message of a submitted turn). */
   private openTurn(turn: Turn, agentStarted: boolean): void {
-    turn.opened = true
-    if (!agentStarted) this.lifecycle.beginTurn(turn.turnId)
-    this.binder.turnOpened(turn.turnId, agentStarted)
-    const trigger = agentStarted ? this.frames.takeTrigger() : null
-    this.frames.turnOpened()
-    this.emit({ type: 'turn_started', turnId: turn.turnId, ...(trigger ? { trigger } : {}) })
-    if (turn.messageUuid !== null) this.emit({ type: 'user_message', turnId: turn.turnId, text: turn.text, messageUuid: turn.messageUuid })
+    // INV-A2: inside a decided frame's scope the turn holds its admission now and opens after it.
+    this.oldFrame.openTurn({ mark: () => void (turn.opened = true), begin: () => void (agentStarted || this.lifecycle.beginTurn(turn.turnId)), settled: () => turn.settled, announce: () => {
+      this.binder.turnOpened(turn.turnId, agentStarted)
+      const trigger = agentStarted ? this.frames.takeTrigger() : null
+      this.frames.turnOpened()
+      this.emit({ type: 'turn_started', turnId: turn.turnId, ...(trigger ? { trigger } : {}) })
+      if (turn.messageUuid !== null) this.emit({ type: 'user_message', turnId: turn.turnId, text: turn.text, messageUuid: turn.messageUuid })
+    } })
   }
 
   /**
@@ -417,6 +402,8 @@ export class ClaudeSession {
    */
   async interrupt(): Promise<InterruptReceipt> {
     if (this.stopBegun()) throw new AgentRuntimeError({ category: 'stopped', message: 'the driver is stopped' })
+    // INV-A2: from a decided frame's own publications or observations it acts on that frame's turn only, already decided.
+    if (this.oldFrame.active) return { outcome: 'no-active-turn', processExit: false }
     const cancelled = this.checkpoints.cancelWaiting()
     const receipt = this.lifecycle.holdState(() => this.interruptTurns())
     return cancelled > 0 ? { outcome: 'requested', processExit: false } : receipt

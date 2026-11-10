@@ -14,8 +14,9 @@
 //   assistant model, or null.
 // - Waits: the first limit retry of a turn opens its wait; it ends resumed
 //   at that turn's next progress (or its success), cancelled when the turn
-//   ends otherwise. A quota push, a reset in the past or a non-limit retry
-//   never ends or opens one.
+//   ends otherwise. A quota push, a reset in the past, a non-limit retry or a
+//   repeated token total never ends or opens one; Codex progress is an item,
+//   a delta or a token update that grew a counter.
 // - Limits carry the latest announced reset (Claude: a rejected
 //   rate_limit_event still ahead; Codex: the latest exhausted window of the
 //   latest snapshot).
@@ -183,10 +184,8 @@ export class CodexUsageModel extends LimitModel {
     this.progressed()
   }
 
-  /** A repeated token update of the turn: progress, no tokens. */
-  repeated(): void {
-    this.progressed()
-  }
+  /** A repeated (equal or stale lower) token update of the turn: no tokens, and not progress (FRESH-B). */
+  repeated(): void {}
 
   tool(id: string): void {
     this.turn?.tools.add(id)

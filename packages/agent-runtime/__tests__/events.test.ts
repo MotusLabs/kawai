@@ -52,6 +52,7 @@ function streamViolations(streams: AgentEvent[][]): string[] {
 }
 
 describe('one ordered JSON event stream per driver (R07)', () => {
+  // @covers: agent-runtime › Events are ordered serializable values › JSONL and resumed stream
   test('Claude: a resumed driver is a new stream that never collides with the archive; original ids are kept', async () => {
     const home = fakeClaudeHome()
     const launch = home.launch({ FAKE_CLAUDE_SESSIONS: '1' })
@@ -79,6 +80,7 @@ describe('one ordered JSON event stream per driver (R07)', () => {
     }
   })
 
+  // @covers: agent-runtime › Events are ordered serializable values › JSONL and resumed stream
   test('Codex: a resumed driver is a new stream that never collides with the archive; original ids are kept', async () => {
     const root = codexRoot()
     const first = codexDriver({ root })

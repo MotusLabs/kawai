@@ -43,7 +43,8 @@ export interface FactsHost {
 type TurnError = { message?: unknown; codexErrorInfo?: unknown } | null
 
 /** Notifications that show the runtime working on their turn again (a wait's resumption). */
-const PROGRESS = new Set(['item/started', 'item/completed', 'item/agentMessage/delta', 'thread/tokenUsage/updated'])
+/** Notifications that are the turn's own work; a token update counts only when it grew a counter (FRESH-B). */
+const PROGRESS = new Set(['item/started', 'item/completed', 'item/agentMessage/delta'])
 
 export class CodexFacts {
   /** The generation's last reported token total (deltas between totals are a turn's requests). */
@@ -73,6 +74,7 @@ export class CodexFacts {
 
   notification(method: string, params: Record<string, unknown>, turn: CodexTurnState | null): void {
     if (method === 'item/started' || method === 'item/completed') this.audit(params.item)
+    let grew = false
     for (const output of mapCodexNotification(method, params, turn?.turnId ?? null)) {
       switch (output.kind) {
         case 'event':
@@ -88,7 +90,8 @@ export class CodexFacts {
           this.compacted(output.itemId, turn)
           break
         case 'token_usage':
-          this.tokens(output.total, output.last, output.window, turn)
+          // FRESH-B: only an accepted update that grew a counter is progress; a stale or repeated total is not.
+          grew = this.tokens(output.total, output.last, output.window, turn)
           break
         case 'rate_limits':
           this.quota(output.snapshot, 'push')
@@ -100,7 +103,7 @@ export class CodexFacts {
           break
       }
     }
-    if (turn && PROGRESS.has(method)) this.endWait(turn.turnId, 'resumed')
+    if (turn && (grew || PROGRESS.has(method))) this.endWait(turn.turnId, 'resumed')
   }
 
   /** The thread's model (thread/start or thread/resume); reported when it changes. */
@@ -186,17 +189,20 @@ export class CodexFacts {
     if (onCompaction) this.host.notify('onCompaction', () => onCompaction({ boundaryId: itemId, turnId: turn?.turnId ?? null, preTokens: null }))
   }
 
-  private tokens(total: CodexTokenBreakdown | null, last: CodexTokenBreakdown | null, window: number | null, turn: CodexTurnState | null): void {
+  /** Returns whether the update is new work: accepted, with some counter grown. */
+  private tokens(total: CodexTokenBreakdown | null, last: CodexTokenBreakdown | null, window: number | null, turn: CodexTurnState | null): boolean {
     const { requests, total: measured } = codexUpdateRequests(total, last, this.lastTotal)
     this.lastTotal = measured
     if (turn) turn.usage = addTokenUsage(turn.usage, codexRequestUsage(requests))
+    const grew = requests !== null && Object.values(requests).some((value) => typeof value === 'number' && value > 0)
     const onContextUsage = this.host.callbacks.onContextUsage
     const input = typeof last?.inputTokens === 'number' ? last.inputTokens : null
     const output = typeof last?.outputTokens === 'number' ? last.outputTokens : null
-    if (!onContextUsage || window === null || window <= 0 || input === null || output === null) return
+    if (!onContextUsage || window === null || window <= 0 || input === null || output === null) return grew
     const used = input + output
     const usage = { usedTokens: used, thresholdTokens: window, percentage: Math.round((used / window) * 1000) / 10, at: new Date().toISOString(), thresholdApproximate: true }
     this.host.notify('onContextUsage', () => onContextUsage(usage))
+    return grew
   }
 
   private quota(snapshot: Record<string, unknown>, source: 'push' | 'report'): void {

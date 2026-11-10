@@ -28,6 +28,7 @@
 import type { AnswerOptions, AnswerOutcome, InterruptReceipt, ProcessExitFact, ProcessExitReceipt, SubmitOptions, TurnHandle, TurnOutcome } from '../contract.js'
 import { AgentRuntimeError, type AgentErrorInfo } from '../errors.js'
 import { EventStream, type EventBody } from '../eventStream.js'
+import { OldFrameScope } from '../common/oldFrame.js'
 import type { PendingRequest, QuestionAnswers } from '../events.js'
 import type { JsonObject } from '../json.js'
 import { CHECKPOINT_FAILED, CheckpointGate } from '../lifecycle/checkpoints.js'
@@ -44,7 +45,7 @@ import { codexTurnStartParams, composeCodexPermissions, type CodexPermissionComp
 import { cancelReply, CodexRequests } from './requests.js'
 import type { CodexSessionOptions } from './sessionOptions.js'
 import { dispatchCodexToolCall, type CodexDynamicToolCall } from './tools.js'
-import { decideTurn, newCodexTurn, type CodexTurnState } from './turns.js'
+import { completionOutcome, decideTurn, INTERRUPTED, newCodexTurn, type CodexTurnState } from './turns.js'
 export type { CodexSessionOptions } from './sessionOptions.js'
 
 interface Prepared {
@@ -56,7 +57,6 @@ interface Prepared {
 }
 
 const STOPPED: AgentErrorInfo = { category: 'stopped', message: 'the driver was stopped' }
-const INTERRUPTED: AgentErrorInfo = { category: 'stopped', message: 'the turn was interrupted' }
 
 export class CodexSession {
   readonly runtime = 'codex' as const
@@ -74,6 +74,7 @@ export class CodexSession {
   private turn: CodexTurnState | null = null
   /** The current generation's bound native turn ids (late input for a settled turn is dropped). */
   private readonly native = new Map<string, CodexTurnState>()
+  private readonly oldFrame = new OldFrameScope()
   /** Submitted turns whose native id is not known yet, oldest first. */
   private unbound: CodexTurnState[] = []
   /** The one account/rateLimits/read of this driver was requested. */
@@ -271,21 +272,20 @@ export class CodexSession {
     const turn = this.turnFor({ turnId: raw.id })
     if (!turn || turn !== this.turn) return
     this.facts.finalText(turn, raw.items)
-    const status = raw.status
-    const failed = status === 'failed' || (raw.error != null && status !== 'completed' && status !== 'interrupted')
-    const error: AgentErrorInfo | null = failed ? this.facts.turnError(raw.error ?? null) : status === 'interrupted' ? INTERRUPTED : null
-    const outcome: TurnOutcome = failed ? 'failed' : status === 'interrupted' ? 'interrupted' : 'success'
-    // F2: the outcome is decided before the final limit observer runs, so a
-    // callback reentered from it finds no active turn and cannot replace it.
-    const settled = this.lifecycle.holdState(() => {
-      if (!this.lifecycle.result(turn.turnId)) return false
-      this.turn = null
-      const publish = this.decide(turn, outcome, error, failed ? 'error_during_execution' : outcome, this.facts.terminalReason(raw.error ?? null))
-      if (failed) this.facts.finalLimit(raw.error ?? null)
-      publish?.()
-      return true
+    const { outcome, error } = completionOutcome(raw, () => this.facts.turnError(raw.error ?? null))
+    // F2/INV-A2: the outcome is decided before the final limit observer runs, and the frame's publications and
+    // observations run in the old-frame scope, so a callback reentered from them neither replaces it nor reaches a successor.
+    this.oldFrame.run(() => {
+      const settled = this.lifecycle.holdState(() => {
+        if (!this.lifecycle.result(turn.turnId)) return false
+        this.turn = null
+        const publish = this.decide(turn, outcome, error, outcome === 'failed' ? 'error_during_execution' : outcome, this.facts.terminalReason(raw.error ?? null))
+        if (outcome === 'failed') this.facts.finalLimit(raw.error ?? null)
+        publish?.()
+        return true
+      })
+      if (settled && error && outcome === 'failed') this.emit({ type: 'error', error })
     })
-    if (settled && error && outcome === 'failed') this.emit({ type: 'error', error })
   }
 
   /** Decide a turn's result now (marking it settled) and return the step that publishes it (turns.ts), then ends its wait. */
@@ -416,15 +416,17 @@ export class CodexSession {
   }
 
   private openTurn(turn: CodexTurnState, agentStarted: boolean): void {
-    turn.opened = true
-    if (!agentStarted) this.lifecycle.beginTurn(turn.turnId)
-    this.emit({ type: 'turn_started', turnId: turn.turnId, ...(agentStarted ? { trigger: { kind: 'resumed' as const } } : {}) })
-    if (turn.messageUuid !== null) this.emit({ type: 'user_message', turnId: turn.turnId, text: turn.text, messageUuid: turn.messageUuid })
+    // INV-A2: inside a decided frame's scope the turn holds its admission now and opens after it.
+    this.oldFrame.openTurn({ mark: () => void (turn.opened = true), begin: () => void (agentStarted || this.lifecycle.beginTurn(turn.turnId)), settled: () => turn.settled, announce: () => {
+      this.emit({ type: 'turn_started', turnId: turn.turnId, ...(agentStarted ? { trigger: { kind: 'resumed' as const } } : {}) })
+      if (turn.messageUuid !== null) this.emit({ type: 'user_message', turnId: turn.turnId, text: turn.text, messageUuid: turn.messageUuid })
+    } })
   }
 
-  /** L09/L10, R3 A4: refuse waiting sends first, then settle the turn held, then ask Codex to stop it. */
+  /** L09/L10, R3 A4: refuse waiting sends first, then settle the turn held, then ask Codex to stop it. INV-A2: in a decided frame's scope it acts on that frame's turn only. */
   async interrupt(): Promise<InterruptReceipt> {
     if (this.stopBegun()) throw new AgentRuntimeError({ category: 'stopped', message: 'the driver is stopped' })
+    if (this.oldFrame.active) return { outcome: 'no-active-turn', processExit: false }
     const cancelled = this.checkpoints.cancelWaiting()
     const receipt = this.lifecycle.holdState(() => {
       const receipt = this.lifecycle.interrupt()

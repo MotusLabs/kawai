@@ -93,3 +93,12 @@ export function decideTurn(turn: CodexTurnState, outcome: TurnOutcome, error: Ag
     if (onTurnResult) host.notify('onTurnResult', () => onTurnResult(result))
   }
 }
+
+export const INTERRUPTED: AgentErrorInfo = { category: 'stopped', message: 'the turn was interrupted' }
+
+/** A turn/completed frame's outcome: failed (with the error `turnError` classifies), interrupted, or success. */
+export function completionOutcome(raw: { status?: unknown; error?: unknown }, turnError: () => AgentErrorInfo): { outcome: TurnOutcome; error: AgentErrorInfo | null } {
+  const failed = raw.status === 'failed' || (raw.error != null && raw.status !== 'completed' && raw.status !== 'interrupted')
+  if (failed) return { outcome: 'failed', error: turnError() }
+  return raw.status === 'interrupted' ? { outcome: 'interrupted', error: INTERRUPTED } : { outcome: 'success', error: null }
+}

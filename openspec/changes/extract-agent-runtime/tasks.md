@@ -35,10 +35,10 @@ Oracle ids, properties and local control names refer to design.md. Each implemen
 
 ## 5. Events, results and usage
 
-- [ ] 5.1 Extract SDK-independent core ChatEvent/activity/usage definitions and one ordered JSON emitter; keep team/workspace payloads as Kawai extensions. Preserve ids for stored replay and isolate resumed/stale streams. Verify R03/R07/R11/I6; M-bind or an emitter reusing a previous stream identity must fail the stale-turn/collision assertion.
-- [ ] 5.2 Move contextUsage/usageLimits/usageWindowPeriods/limitSignals/providerCost and Codex usage parsing; provide exact per-turn outcomes, model/tokens, unique tool count and compaction count with explicit unknowns. Verify R01-R04/R08/I7; M-count double-counting a repeated ID or borrowing prior-turn usage must fail.
-- [ ] 5.3 Add observed wait-start/wait-end signals and turn-independent quota reports with explicit source/account scope; do not infer resumption from reset clocks or borrow host-login usage for a proxy. Document unavailable quota behavior and optional host quota input. Verify R04-R06/R08/I7; M-wait ending from elapsed reset time must fail.
-- [ ] 5.4 Make noncritical observer/event failures safe while preserving critical checkpoint/context failures and all owned rejection evidence. Verify P12/P15/R10-R11/I8 with real result handling and simultaneous body/cleanup errors; swallowing a cleanup rejection or skipping usage settlement after an observer throw must fail.
+- [x] 5.1 Extract SDK-independent core ChatEvent/activity/usage definitions and one ordered JSON emitter; keep team/workspace payloads as Kawai extensions. Preserve ids for stored replay and isolate resumed/stale streams. Verify R03/R07/R11/I6; M-bind or an emitter reusing a previous stream identity must fail the stale-turn/collision assertion.
+- [x] 5.2 Move contextUsage/usageLimits/usageWindowPeriods/limitSignals/providerCost and Codex usage parsing; provide exact per-turn outcomes, model/tokens, unique tool count and compaction count with explicit unknowns. Verify R01-R04/R08/I7; M-count double-counting a repeated ID or borrowing prior-turn usage must fail.
+- [x] 5.3 Add observed wait-start/wait-end signals and turn-independent quota reports with explicit source/account scope; do not infer resumption from reset clocks or borrow host-login usage for a proxy. Document unavailable quota behavior and optional host quota input. Verify R04-R06/R08/I7; M-wait ending from elapsed reset time must fail.
+- [x] 5.4 Make noncritical observer/event failures safe while preserving critical checkpoint/context failures and all owned rejection evidence. Verify P12/P15/R10-R11/I8 with real result handling and simultaneous body/cleanup errors; swallowing a cleanup rejection or skipping usage settlement after an observer throw must fail.
 
 ## 6. Kawai consumes the package
 
