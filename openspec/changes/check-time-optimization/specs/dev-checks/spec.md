@@ -2,12 +2,50 @@
 
 ## ADDED Requirements
 
+### Requirement: Real-tmux files run only when affected
+Each real-tmux file SHALL declare the paths it exercises. A full run SHALL run a real-tmux file only when the working tree differs from its merge-base with `origin/master` in a declared path, the file itself, or a shared trigger (Bun pin, manifest, lockfile, runner, server entry points, test helpers), or when there is no merge-base. An explicit file argument or `--all-real-tmux` SHALL run it.
+
+#### Scenario: An unrelated change
+- **WHEN** a branch changes only files under `src/server/plans/` and no real-tmux file declares them
+- **THEN** no real-tmux file runs, and the run reports each one as skipped, unaffected
+
+#### Scenario: A terminal change
+- **WHEN** a branch changes a file that `output-coalescing` declares
+- **THEN** that file runs, and real-tmux files that do not declare it are skipped
+
+#### Scenario: A shared trigger
+- **WHEN** a branch changes the Bun pin or the lockfile
+- **THEN** every real-tmux file runs
+
+#### Scenario: No merge-base
+- **WHEN** `origin/master` is missing or shares no history with HEAD
+- **THEN** every real-tmux file runs
+
+#### Scenario: Forced
+- **WHEN** the runner is given `--all-real-tmux`
+- **THEN** every real-tmux file runs, whatever the diff
+
+#### Scenario: An undeclared file
+- **WHEN** a real-tmux file has no declaration, or a declared path matches no file in the tree
+- **THEN** the guard test fails, naming the file and the declaration
+
+### Requirement: A nightly run executes every real-tmux file
+A scheduled workflow SHALL run every real-tmux file on master once a day. On failure, it SHALL open an issue, or comment on its open one, naming each failing test.
+
+#### Scenario: A nightly failure
+- **WHEN** a real-tmux test fails in the scheduled run
+- **THEN** the workflow fails and an open issue names the failing test and the run
+
+#### Scenario: A repeated failure
+- **WHEN** the scheduled run fails while its issue is still open
+- **THEN** it comments on that issue instead of opening another
+
 ### Requirement: A failed real-tmux file is retried once
-A failing real-tmux file SHALL NOT stop the remaining real-tmux files. After them, the runner SHALL rerun each failed real-tmux file once, alone. When the main batch passed, at most two real-tmux files failed, and every rerun passed, the unit step SHALL pass. Otherwise the run SHALL fail. A main-batch failure SHALL NOT be retried, and `--no-retry` SHALL disable retries.
+A failing real-tmux file SHALL NOT stop the remaining selected real-tmux files. After them, the runner SHALL rerun each failed one once, alone. When the main batch passed, at most two real-tmux files failed, and every rerun passed, the unit step SHALL pass. Otherwise the run SHALL fail. A main-batch failure SHALL NOT be retried, and `--no-retry` SHALL disable retries.
 
 #### Scenario: One timing failure
 - **WHEN** the main batch passes and one real-tmux file fails, then passes when rerun alone
-- **THEN** the unit step passes and the remaining real-tmux files all ran
+- **THEN** the unit step passes and the remaining selected real-tmux files all ran
 
 #### Scenario: The rerun fails too
 - **WHEN** a failed real-tmux file fails again when rerun alone
@@ -26,7 +64,7 @@ A failing real-tmux file SHALL NOT stop the remaining real-tmux files. After the
 - **THEN** no file is rerun and the unit step fails
 
 ### Requirement: A recorded pass names its retries and case profile
-A full pass SHALL record each retried file with its first attempt's failing tests, and the case profile that ran: `reduced` or `full`. Its test list SHALL hold the rerun's tests for a retried file. A record without these fields SHALL read as no retries and an unknown profile. The pre-push hook SHALL accept a pass whatever its retries and profile.
+A full pass SHALL record each retried file with its first attempt's failing tests, each real-tmux file skipped as unaffected with the merge-base, and the case profile: `reduced` or `full`. Its test list SHALL hold the rerun's tests for a retried file. A record without these fields SHALL read as no retries and an unknown profile. The pre-push hook SHALL accept a pass whatever its retries and profile.
 
 #### Scenario: Pass after a retry
 - **WHEN** a full check passes after one real-tmux file was retried

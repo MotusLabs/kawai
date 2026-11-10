@@ -7,7 +7,9 @@ See proposal.md, "Why". Current state that shapes the approach:
 - `scripts/runPlan.ts` `runBatchesAndPublish` runs the planned batches in order: the parallel main batch, then one batch per real-tmux file (`REAL_TMUX_FILES` in `scripts/planBatches.ts`, 7 files). `runCommand` throws on a non-zero exit, so the first failing batch stops the run and later real-tmux files never run.
 - `scripts/lib/checkRun.ts` records a pass only when every step passed and the tree is unchanged. The test list (`scripts/lib/junitReports.ts`) is all-or-nothing over a manifest of planned report names written before the first batch.
 - `CheckRecord` (`src/server/checks/checkRecords.ts`) holds key, tree, Bun, platform, time, worktree, steps, and an optional test-list pointer. The content key holds no run options.
-- CI runs `bun run test:ci`, which is `--skip-real-tmux`, with `CI=true` (GitHub Actions). Real-tmux files run only locally.
+- CI runs `bun run test:ci`, which is `--skip-real-tmux`, with `CI=true` (GitHub Actions). Real-tmux files run only locally. The e2e job already installs tmux (`.github/workflows/ci.yml`, "Ensure tmux is available"); why `test:ci` skips real-tmux files is not recorded.
+- The 7 real-tmux files take about 90–110 s serially and start `src/server/index.ts` as a child process. They import no product module directly, except `hibernation` (`../db`) and `chatRename` (`../../shared/types`), so import-following selection (`scripts/affected-tests.ts`, Bun `--changed`) cannot see what they exercise.
+- From 2026-10-10 to 2026-11-10, the server source files changed on master were mostly under `chat/` (1,447 file changes), `team/` (685), and `plans/` (602). The terminal path (`terminal/`, `ws/`, `sessions/`, `SessionManager.ts`, `tmux*.ts`) changed rarely.
 - Heavy property tests hardcode counts (`const CASES = 300`) and seed each case as `mulberry32(SEED + index)`. 9 test files declare a `CASES` or `SEQUENCES` constant, 6 of them 50 or more. Titles quote the count, and coverage citations quote titles verbatim.
 - `throttled-reconnect.integration.test.ts:625` asserts a byte ratio and `:632` a wall-clock ratio, both `< 0.75`. `output-coalescing.integration.test.ts:197` waits 10 s for `terminal-ready` inside a 60 s test.
 - `initDatabase` on a new file took 0.56–1.18 s at load 28 and wrote 4 pre-migration backups of about 1.2 MB each (`database-safety` requires a backup before each pending migration). 176 server test files call `initDatabase`, many per test.
@@ -19,9 +21,12 @@ See proposal.md, "Why". Current state that shapes the approach:
 - Local checks run fewer generated cases without changing what CI certifies.
 - Fresh test databases cost a file copy instead of a migration and its backups.
 
+- A full check runs real-tmux files only for changes that can affect them, and a daily run covers drift that no diff shows.
+
 **Non-Goals:**
 - Changing `database-safety` or production `initDatabase`.
 - Retrying main-batch files, or any file in CI.
+- Running real-tmux files in per-PR CI.
 - A general flaky-test quarantine.
 
 ## Decisions
@@ -68,6 +73,26 @@ Alternatives:
 - A test-only branch in production `initDatabase`. Rejected: test hooks would ship.
 - `mock.module` in the preload. Rejected: it is process-wide, and it would also replace the migrations under test.
 
+### D6. Real-tmux selection by declared paths
+
+Each real-tmux file carries `// @exercises: <globs>` in its first 20 lines, beside `@reads`. A full run selects a real-tmux file when the changed set intersects its globs, the file itself, or the shared triggers. The changed set is `git diff --name-only <merge-base>`, the working tree against the merge-base of HEAD with the local `origin/master` ref, plus untracked non-ignored files. The runner does no fetch. The shared triggers are `.bun-version`, `package.json`, `bun.lock`, `tsconfig*.json`, `scripts/test-runner.ts`, `scripts/planBatches.ts`, `scripts/runPlan.ts`, `scripts/test-preload.ts`, `src/server/index.ts`, `src/server/bootstrap.ts`, and the helper files the real-tmux files import. The list lives in one constant beside `REAL_TMUX_FILES`. Without a merge-base, every file runs.
+
+A guard test, in the `readsGuard` style, fails when a real-tmux file lacks the header or a glob matches no tracked file. Explicit file arguments and `--all-real-tmux` bypass selection. The record names skipped files and the merge-base.
+
+The content key is unchanged, so a record reused on the same tree carries the earlier selection. That is sound: the tree is identical, and master's own changes were selected against their own merge-bases when they landed.
+
+Alternatives:
+- Import following. Rejected, because the tests reach the product through a child process.
+- Selecting by commit messages or a manual flag. Rejected, because neither is mechanical.
+
+### D7. A scheduled workflow instead of per-PR CI
+
+`.github/workflows/nightly-real-tmux.yml` runs on `schedule` (daily) and `workflow_dispatch`, on master. It installs tmux as the e2e job does and runs `bun run test --all-real-tmux` over the real-tmux files only. On failure, it uses `gh issue` to comment on the open issue labeled `nightly-real-tmux`, or opens one, naming the failing tests and the run URL. Why `test:ci` skips these files is unknown, so the first task is a dispatched trial. If the files cannot pass on a clean master within three trial runs, implementation stops and the owner decides between fixing the CI environment and a local scheduler.
+
+Alternatives:
+- A per-PR CI job. The owner chose the nightly run (2026-11-10).
+- A local cron. The workspace has no cron, and a cloud routine cannot reach the workspace's tmux.
+
 ## Acceptance oracles
 
 ### Retry decision table (unit step)
@@ -86,6 +111,20 @@ Inputs: main batch result; F = number of real-tmux files that failed their first
 Unreachable: rerun outcomes for rows with no reruns (RT1, RT2, RT5, RT6) are don't-cares. F > 7 cannot occur (7 real-tmux files). A signal during a rerun takes the existing interrupted path: no record.
 
 Completeness: main ∈ {pass, fail} × F ∈ {0, 1–2, ≥3} × retries ∈ {on, off} × reruns ∈ {all pass, any fail}. Every combination matches exactly one row: fail → RT1; pass,0 → RT2; pass,1–2,on → RT3 or RT4 by rerun outcome; pass,1–2,off → RT6; pass,≥3 → RT5, with either retry setting.
+
+### Selection decision table (real-tmux file × changed set)
+
+Inputs: merge-base available; `--all-real-tmux` or the file named explicitly; changed set ∩ shared triggers; changed set ∩ (the file's globs ∪ the file itself). Output: run or skip, as reported.
+
+| id | merge-base | forced or named | ∩ triggers | ∩ own | result |
+|---|---|---|---|---|---|
+| SE1 | * | yes | * | * | run |
+| SE2 | none | no | * | * | run |
+| SE3 | yes | no | non-empty | * | run |
+| SE4 | yes | no | empty | non-empty | run |
+| SE5 | yes | no | empty | empty | skip, unaffected |
+
+Completeness: forced → SE1; not forced and no merge-base → SE2; otherwise triggers non-empty → SE3; else own non-empty → SE4; else SE5. Exactly one row per combination. Guard rows: G1 a missing header fails the guard; G2 a glob matching no tracked file fails the guard.
 
 ### Reuse table (record × request)
 
@@ -112,21 +151,25 @@ Completeness: main ∈ {pass, fail} × F ∈ {0, 1–2, ≥3} × retries ∈ {on
 - **RT and RU rows:** rows run through the real `runBatchesAndPublish` and `runCheck` with fixture test files and a spawn seam that runs real `bun test` children, at least one row per table. The other rows may use the injected `runCommand`.
 - **PC1 wiring:** one probe test file under the real runner counts executed cases with and without `CI=true`.
 - **TD1:** runs the real runner over two fixture files, one migration test and one using the helper.
+- **SE rows:** SE4 and SE5 run through the real runner in a temporary git repository with an `origin/master` ref and two fixture real-tmux files, observed by which files' JUnit reports exist. The rest may use the pure selector.
 
 ## Risks / Trade-offs
 
 - [A real regression in a real-tmux file passes on its rerun] → It must fail twice in a row to be caught. The record names every retry, the runner prints a retry warning, and the real-tmux behavior assertions stay strict. A failure on the rerun fails the step.
 - [Reduced local counts miss a counterexample beyond the first quarter] → CI runs the declared counts on every PR, and `--full-properties` gives the same locally. Authors of new properties keep choosing declared counts as before.
 - [A template built from a broken migration] → The build fails the run loudly, naming the migration (D5), and migration tests still run every migration on new files.
+- [A wrong or missing `@exercises` glob lets a terminal regression through a local check] → The guard rejects missing and dead globs, the shared triggers cover entry points, and the nightly run fails within a day, opening an issue.
+- [The nightly workflow cannot run real-tmux on GitHub runners] → The first task is a dispatched trial with a stop rule (D7).
 - [Copying a WAL-mode database mid-write] → The runner closes the template with a checkpoint before any batch starts. Copies are made only from the closed file.
 
 ## Migration Plan
 
 1. Land D1 alone first; it is safe on its own.
-2. Land D2/D3, the runner and record changes, with their tests.
-3. Land D4: the helper plus the 6 files with declared counts of 50 or more.
-4. Land D5: the runner template and the helper, then migrate files heaviest first by recorded duration.
-5. Update AGENTS.md's Commands paragraph.
+2. Trial the nightly workflow by dispatch (D7). Then land D6 and D7 together, so selection never lands without the daily full run.
+3. Land D2/D3, the runner and record changes, with their tests.
+4. Land D4: the helper plus the 6 files with declared counts of 50 or more.
+5. Land D5: the runner template and the helper, then migrate files heaviest first by recorded duration.
+6. Update AGENTS.md's Commands paragraph.
 
 Rollback: each step reverts alone. Records without the new fields stay readable (D3).
 
@@ -144,7 +187,9 @@ Rollback: each step reverts alone. Records without the new fields stay readable 
 - A4. `throttled-reconnect` has no assertion on a duration or a ratio of durations, and `output-coalescing` waits allow at least half the test timeout.
 - A5. After a full runner run, no `pre-migration-*` backup exists in a non-migration file's root (TD1), and helper copies open at the latest schema version (TD2).
 - A6. `bun run check --full-properties` on a tree with a `reduced` record runs and records `full` (RU4).
-- A7. AGENTS.md's Commands paragraph states the retry, the case profile, `--no-retry`, and `--full-properties`.
+- A7. AGENTS.md's Commands paragraph states the selection, `--all-real-tmux`, the nightly run, the retry, `--no-retry`, the case profile, and `--full-properties`.
+- A8. Every row SE1–SE5 and G1–G2 holds as a table-driven test, with SE4 and SE5 through the production runner.
+- A9. A dispatched run of the nightly workflow on master runs all 7 real-tmux files. A forced failure comments on, or opens, the `nightly-real-tmux` issue.
 
 ### Invariants
 
@@ -153,6 +198,7 @@ Rollback: each step reverts alone. Records without the new fields stay readable 
 - I3. Production `initDatabase` and the `database-safety` backup rule are unchanged.
 - I4. Test titles of the counted tests are unchanged.
 - I5. The content key is unchanged; records without the new fields read as no retries and an unknown profile.
+- I6. Selection never skips a real-tmux file when there is no merge-base, when forced, or when a shared trigger changed.
 
 ### Scope
 
@@ -167,6 +213,8 @@ Rollback: each step reverts alone. Records without the new fields stay readable 
 - `src/server/__tests__/helpers/propertyCases.ts`
 - `src/server/__tests__/helpers/testDatabase.ts`
 - `src/server/__tests__/**/*.test.ts`
+- `scripts/affected-tests.ts`
+- `.github/workflows/nightly-real-tmux.yml`
 - `AGENTS.md`
 
 ### Verification
@@ -176,10 +224,12 @@ Rollback: each step reverts alone. Records without the new fields stay readable 
 - V3. TD1 and TD2 tests. Mutants: the helper's copy skipped (kills TD1), and the template not checkpointed (kills TD2 through a missing-table read).
 - V4. Both timing tests run 5 times serially next to a saturating CPU load and pass, with output kept as evidence.
 - V5. A full `bun run check` before and after, on an otherwise idle machine, reporting total test work from the timings record. Evidence only, not a pass bound.
+- V6. SE1–SE5, G1–G2 tests. Mutants: the shared-trigger check removed (kills SE3), the no-merge-base fallback removed (kills SE2), and the own-file match dropped (kills SE4).
+- V7. The nightly workflow's dispatched trial runs and one forced-failure run, with their run URLs and the issue link kept as evidence.
 
 ### Excluded
 
-- X1. CI workflow changes and `test:ci` behavior.
+- X1. Changes to the per-PR CI workflow and `test:ci` behavior.
 - X2. Changes to `database-safety` and production database code.
 - X3. Changing the worker count or the slow-tier definition.
 - X4. Retries for any file outside `REAL_TMUX_FILES`.
