@@ -61,7 +61,10 @@
   `ownedByExecution` from `TaskResultService`, and unsubscribe on shutdown.
   Add test A2 through the production `SessionMailbox`: ten counted messages
   past 3 h on an agent-created task produce one row, one journal entry, and
-  one `task-stall` message. Verify it kills "subscription removed".
+  one `task-stall` message. Verify it kills "subscription removed". Add
+  test I4 through the same composition: a task an execution owns, seen
+  through the shipped ownership binding, gets no notice while a manual task
+  beside it does. Verify it kills "ownership binding returns false".
 - [x] 3.4 Add `@covers` annotations for "The notice is journaled and sent to
   a session creator" and the trigger scenarios above the tests from
   3.2–3.3. Verify the coverage guard

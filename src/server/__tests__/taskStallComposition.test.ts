@@ -1,15 +1,16 @@
 // Manual-task stall notices through the production `SessionMailbox`
-// composition (manual-task-stall-alerts A2, A5, tasks 3.3, 4.2, 4.3): the
-// shipped subscription notices a stalled task once per episode; a restart
-// does not repeat a notice; a flush dropped by a crash is recovered by the
-// next counted message, measured from the original progress anchor.
+// composition (manual-task-stall-alerts A2, A5, I4, tasks 3.3, 4.2, 4.3): the
+// shipped subscription notices a stalled task once per episode; a task an
+// execution owns, seen through the shipped ownership binding, gets none; a
+// restart does not repeat a notice; a flush dropped by a crash is recovered
+// by the next counted message, measured from the original progress anchor.
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { ChatSessionDriver } from '../chat/ChatSessionDriver'
-import { NULL_OWNERSHIP } from '../plans/execution/executionOwnership'
+import { NULL_OWNERSHIP, type ExecutionOwnership } from '../plans/execution/executionOwnership'
 import { SessionMailbox } from '../team/sessionMailbox'
 import { SessionTeams } from '../team/sessionTeams'
 import { TASK_STALL_TAG } from '../team/taskStallNotices'
@@ -42,9 +43,9 @@ afterEach(() => {
 })
 
 /** The production composition over `database`, on the test clock. */
-function compose(database: Database = db): SessionMailbox {
+function compose(database: Database = db, ownership: ExecutionOwnership = NULL_OWNERSHIP): SessionMailbox {
   const runtime = new SessionMailbox(database, {
-    ownership: NULL_OWNERSHIP, onTaskResultWrite: () => {},
+    ownership, onTaskResultWrite: () => {},
     teams: new SessionTeams({ homeDir: dir }), records: () => [], getRecord: () => undefined, available: () => true,
     getDriver: () => ({ getPendingRequests: () => [], deliver: () => {} }) as unknown as ChatSessionDriver,
     prepare: async () => {}, restore: () => {}, watchReceipt: () => {}, archive: () => ({ ok: true }), hasLiveWorkers: () => false,
@@ -87,6 +88,25 @@ test('A2: through SessionMailbox, a counted message past both thresholds notices
   await tick()
   await tick()
   expect(effects(db, task.id)).toEqual({ rows: [{ task_id: task.id, anchor_at: at(0), anchor_kind: 'created', message_count: 11 }], journal: 1, messages: 1 })
+  expect(errors).toEqual([])
+})
+
+// @covers: task-stall-notices › A notice is sent when both thresholds are met › An execution's task is left to plan supervision
+test('I4: through SessionMailbox, a task an execution owns past both thresholds gets no notice, while a manual task beside it does', async () => {
+  let ownedId: string | null = null
+  const runtime = compose(db, { ...NULL_OWNERSHIP, ownerOfTask: id => id === ownedId
+    ? { executionId: 'execution-1', revision: 1, change: 'owned-change', step: null, worktree: null, branch: null } : null })
+  const owned = taskOf(runtime)
+  ownedId = owned.id
+  const manual = taskOf(runtime)
+  await nineEarly(runtime, owned.id)
+  await nineEarly(runtime, manual.id)
+  clock = T0 + 3 * HOUR
+  send(runtime, owned.id, 3 * HOUR)
+  send(runtime, manual.id, 3 * HOUR)
+  await tick()
+  expect(effects(db, owned.id)).toEqual({ rows: [], journal: 0, messages: 0 })
+  expect(effects(db, manual.id)).toMatchObject({ journal: 1, messages: 1 })
   expect(errors).toEqual([])
 })
 

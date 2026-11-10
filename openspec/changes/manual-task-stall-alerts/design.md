@@ -276,7 +276,7 @@ at their next counted mail once the thresholds hold from their current anchor.
 
 ### Verification
 - V1: `bun run test src/shared/__tests__/taskStall.test.ts src/server/__tests__/taskStallNotices.test.ts` passes, with every SN, AN, and EF row a named test.
-- V2: Mutants are killed: SN boundary `>=` → `>`; counting system mail; anchor ignoring counted reviews; the trigger check skipped (TR2); listening on `subscribe` instead of `subscribeEnqueued` (TR3); the `changes === 0` guard bypassed (EF3 at the `emitStallNotice` seam); the subscription removed from `SessionMailbox` (A2); recovery keyed on the notice anchor instead of the original progress anchor (A5).
+- V2: Mutants are killed: SN boundary `>=` → `>`; counting system mail; anchor ignoring counted reviews; the trigger check skipped (TR2); listening on `subscribe` instead of `subscribeEnqueued` (TR3); the `changes === 0` guard bypassed (EF3 at the `emitStallNotice` seam); the subscription removed from `SessionMailbox` (A2); the `SessionMailbox` ownership binding replaced by `() => false` (I4 through the composition); recovery keyed on the notice anchor instead of the original progress anchor (A5).
 - V3: `bun run check` passes on the clean committed tree.
 - V4: Every scenario in `specs/task-stall-notices/spec.md` carries an `@covers` annotation.
 
