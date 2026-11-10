@@ -259,6 +259,29 @@ or property that would have caught it, and the source finding.
 - **Source finding.** The Lead's rev 5.1 conformance disposition
   (note-f6467fdb; correction B of provider-relay-setup).
 
+## Protocol projections
+
+### An accept that carries no validated content (task e522, note-56b4bb9f)
+
+- **Hazard.** A protocol request whose acceptance needs structured content
+  (a Codex `form`, `openai/form` or `openaiForm` elicitation with a
+  `requestedSchema`) is projected onto an allow/deny answer. The allow then
+  sends `accept` with empty content, despite a required field, and a
+  content-free mode (`url`, `openai/userVerification`) sends `{}` where the
+  protocol binds `null`. Declining every form instead leaves the capability
+  silently disabled.
+- **Oracle that catches it.** Through the public driver and the owned fake
+  app-server, read the reply the app-server actually received. Per form
+  alias: typed JSON validated against the captured schema accepts with
+  exactly that content once; invalid JSON, a wrong type, a missing required
+  field and a non-member enum value are refused and stay pending; Decline
+  and Cancel reply their actions; a schema the codec cannot validate is
+  declined and its exact shape reported once. Per content-free mode: allow
+  replies `content: null`
+  (`packages/agent-runtime/__tests__/codexElicitation.test.ts`,
+  `codexRequests.test.ts`).
+- **Source finding.** note-56b4bb9f (task e522 path assessment).
+
 ## Transport and liveness
 
 ### A mutant masked by a required fallback (note-7bb8add0 F1)

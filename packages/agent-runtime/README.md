@@ -7,7 +7,7 @@ implementation.
 
 **Status: unreleased, under construction.** The public contract is frozen
 (`src/contract.ts`, `src/options.ts`, `src/events.ts`). The Claude driver
-has moved (`./claude`); the Codex driver has not yet. See `docs/api-differences.md` for how the contract differs from
+has moved (`./claude`), and so has the Codex driver (`./codex`). See `docs/api-differences.md` for how the contract differs from
 Kawai's in-tree driver interface, and `examples/contract-consumer.ts` for a
 type-checked headless consumer.
 
@@ -137,8 +137,9 @@ Server requests are classified as follows:
 Nothing waits for a UI.
 
 The Claude permission helpers are public from `./claude` with the driver.
-The Codex helpers become public from `./codex` with its driver (task 4.2),
-which also checks their fields against app-server transcripts.
+The Codex composition stays internal: `createCodexDriver` applies it to
+every `thread/start`, `thread/resume` and `turn/start`, and the tests check
+those fields in the fake app-server's transcripts.
 
 ## Claude driver (`@motuslabs/agent-runtime/claude`)
 
@@ -312,6 +313,103 @@ export function headlessClaude(launch: LaunchConfiguration, logger: Logger, prep
 }
 ```
 
+## Codex driver (`@motuslabs/agent-runtime/codex`)
+
+`createCodexDriver(options)` returns an inert driver. Call `start()` to
+spawn one owned `codex app-server` with exactly the launch's environment and
+working directory. The entry imports no SDK: a Codex-only host installs
+neither the Claude Agent SDK nor anything beyond the package and `zod`.
+
+- **Login.** `hasCodexLogin(codexHome)` reads `auth.json` of an explicit,
+  absolute Codex home. It returns only whether the file holds a non-empty
+  API key or access token. It never reads the host's home or environment,
+  and never returns or logs a value. A missing or malformed file is `false`.
+- **Start and checkpoints.** `start()` initializes the app-server and opens
+  the thread (`thread/start`, or `thread/resume` for a supplied `resume`).
+  A fresh thread's id is offered once to `onCheckpoint` as
+  `{ runtime: 'codex', runtimeSessionId }`, and `start()` resolves only
+  after that persistence settled. A rejection fails `start()` with
+  category `checkpoint` and stops the driver; it never falls back to an
+  unsaved thread. A resumed thread offers nothing: the id you passed counts
+  as saved. Calling `start()` or `send()` from inside `onCheckpoint` is
+  refused at once with category `internal`.
+- **Resume.** Pass `resume: { runtime: 'codex', runtimeSessionId }` and the
+  same retained Codex home, also in another host process. The thread the
+  app-server returns must be the one you asked for; another thread (or a
+  refusal) fails `start()` with category `resume`, adopts nothing and starts
+  no fresh thread. `transcriptPath` is never used to choose a thread. Every
+  resume and turn carries your own permissions, never the policy the thread
+  was stored with. After an unexpected exit, `start()` resumes the same
+  thread in a new process.
+- **Turns.** A turn binds to the native turn id from the `turn/start` reply
+  or its `turn/started` notification, never from a request or an item.
+  `{ continuation: 'steer' }` joins the active turn with `turn/steer`
+  (expecting that turn's id) and returns its handle; `queue` is refused
+  with category `unsupported`. A turn the app-server starts by itself opens
+  with trigger `resumed` and no handle.
+- **Requests.** Approvals, user input and elicitation reach `onRequest`
+  after they are registered, with the order and first-answer rules of
+  [Answering requests](#answering-requests). Disabled user input gets empty
+  answers and disabled elicitation is declined, at once. A `url` or
+  `openai/userVerification` elicitation is an approval: allow accepts with
+  no content.
+- **Form elicitations.** A `form`, `openai/form` or `openaiForm`
+  elicitation is one question. Its text is the server's message followed by
+  the exact schema; its options are `Decline` and `Cancel`. To accept, type
+  one JSON object, for example `{ text: '{"count":2,"remember":true}' }`.
+  The driver checks it against the schema it captured (fields, required
+  fields, types, bounds, formats and enum members) and sends that object as
+  the content. An answer that doesn't match is refused with `invalid` and
+  the request stays pending. A schema the driver can't check exactly (a
+  nested object, an unknown keyword) is declined, and its exact shape is
+  reported once per session as an `error` event with category
+  `unsupported`; it is never narrowed. An interrupt cancels every waiting
+  request; a stop cancels them and answers nothing more.
+- **Failures.** An unauthorized protocol failure (`codexErrorInfo`
+  `unauthorized`, or HTTP 401) is category `authentication`; a usage limit
+  is `quota`; a rate limit or overload is `rate-limit`; a connection
+  failure is `transport`. Credential values never appear in errors.
+- **Process end and stop.** These follow the Claude driver's rules: the
+  results of turns an unexpected exit ends are fixed before any callback
+  runs, and `kill()` or `shutdown()` returns only after every process and
+  host tool handler of every generation has finished.
+
+<!-- example: examples/headless-codex.ts -->
+```ts
+import { createCodexDriver, hasCodexLogin } from '@motuslabs/agent-runtime/codex'
+import type { CodexAgentDriver, LaunchConfiguration, Logger, ResumeCheckpoint } from '@motuslabs/agent-runtime'
+
+/** The host's own durable store for the thread id. */
+export interface CheckpointStore {
+  load(): ResumeCheckpoint | null
+  save(checkpoint: ResumeCheckpoint): Promise<void>
+}
+
+// A headless Codex host. It builds a driver only when the retained Codex home
+// (the launch's homeDir, also its CODEX_HOME) holds a login, and nothing ever
+// waits for a UI: approvals, user input and elicitation are off. A fresh
+// thread's id is saved before start() resolves, so a later host process with
+// the same homes resumes the same thread under this host's own policy.
+export function headlessCodex(launch: LaunchConfiguration, logger: Logger, store: CheckpointStore): CodexAgentDriver | null {
+  if (!hasCodexLogin(launch.homeDir)) return null
+  const saved = store.load()
+  return createCodexDriver({
+    launch,
+    logger,
+    permissions: { approvalPolicy: 'never', sandbox: 'read-only', networkAccess: false, writableRoots: [], userInput: 'disabled', elicitation: 'disabled' },
+    ...(saved ? { resume: saved } : {}),
+    callbacks: {
+      onEvent: (event) => logger.debug({ type: event.type }, 'agent event'),
+      onCheckpoint: (checkpoint) => store.save(checkpoint),
+    },
+  })
+}
+```
+
+This is verified against a fake app-server that follows protocol 0.163.0,
+across two host processes. It is not acceptance against the real CLI or a
+provider.
+
 ## Host integrations
 
 Every integration is an option. Leave it out and the runtime registers,
@@ -337,7 +435,7 @@ records and observes nothing for it.
   - On Claude, `toolCallId` is the MCP request id, because the CLI does not
     pass its `tool_use_id` to SDK servers.
 - **`systemPromptAppend`** appends to the claude_code preset prompt on Claude.
-  On Codex it goes into `developerInstructions` (task 4.2).
+  On Codex it goes into `developerInstructions`.
 - **`beforeSubmit`** runs synchronously inside `send()`, before anything is
   enqueued or emitted. It receives the message UUID, turn id, text and the
   opaque `context` the caller passed.

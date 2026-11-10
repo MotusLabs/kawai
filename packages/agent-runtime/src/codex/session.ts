@@ -40,7 +40,7 @@ import { AppServerRpcError, AppServerTransport, ServerRequestRefusal } from './a
 import { CodexFacts } from './facts.js'
 import { accountGenerations, CAPABILITIES, CLIENT_INFO, newGeneration, rpcError, startFailure, stopGeneration, threadOpened, threadParams, type CodexGeneration } from './generation.js'
 import { codexTurnStartParams, composeCodexPermissions, type CodexPermissionComposition } from './permissions.js'
-import { cancelReply, CodexRequests, formElicitation } from './requests.js'
+import { cancelReply, CodexRequests } from './requests.js'
 import type { CodexSessionOptions } from './sessionOptions.js'
 import { dispatchCodexToolCall, type CodexDynamicToolCall } from './tools.js'
 import { decideTurn, newCodexTurn, type CodexTurnState } from './turns.js'
@@ -324,11 +324,6 @@ export class CodexSession {
       return job ?? dispatchCodexToolCall(null, null, params as CodexDynamicToolCall)
     }
     if (!live || (typeof params.threadId === 'string' && params.threadId !== generation.threadId)) return cancelReply(method, params)
-    const unrepresentable = formElicitation(method, params)
-    if (unrepresentable) {
-      this.emit({ type: 'error', error: { category: 'unsupported', message: unrepresentable } })
-      return { action: 'decline', content: null, _meta: null }
-    }
     return this.runOwned(`request:${method}`, () => this.requests.serve(method, params, signal)) ?? cancelReply(method, params)
   }
 

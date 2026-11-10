@@ -163,10 +163,15 @@ export function pids(home: string): number[] {
   }
 }
 
+/** Whether `pid` runs; a zombie (exited, not yet reaped) counts as dead, as in ownedProcess. */
 export function alive(pid: number): boolean {
   try {
     process.kill(pid, 0)
-    return true
+  } catch {
+    return false
+  }
+  try {
+    return !/\) Z /.test(readFileSync(`/proc/${pid}/stat`, 'utf8'))
   } catch {
     return false
   }

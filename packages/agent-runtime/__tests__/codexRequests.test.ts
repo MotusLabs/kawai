@@ -66,9 +66,10 @@ describe('Codex requests: inline answers (Q01/Q02)', () => {
     ['applyPatchApproval', {}, { decision: 'approved' }],
     ['item/permissions/requestApproval', { permissions: { network: { enabled: true }, other: 1 } }, { permissions: { network: { enabled: true } }, scope: 'turn' }],
     ['mcpServer/elicitation/request', { mode: 'url', serverName: 's', message: 'm', url: 'https://x', elicitationId: 'e', _meta: null }, { action: 'accept', content: null, _meta: null }],
+    ['mcpServer/elicitation/request', { mode: 'openai/userVerification', serverName: 's', title: 't', description: 'd', challenge: 'c', _meta: null }, { action: 'accept', content: null, _meta: null }],
   ]
   for (const [method, params, expected] of allows) {
-    test(`Q01: allow on ${method} replies its protocol acceptance`, async () => {
+    test(`Q01: allow on ${method}${(params as { mode?: string }).mode ? ` (${(params as { mode: string }).mode})` : ''} replies its protocol acceptance`, async () => {
       const { reply } = await run(ask(method, params), {}, (driver, request) => void driver.resolveApproval(request.requestId, 'allow'))
       expect(reply).toEqual(expected)
     })
@@ -152,14 +153,6 @@ describe('Codex requests: fixed answers (Q04/P07)', () => {
     const { h, reply } = await run(ask('item/unknown/request', {}))
     expect(reply).toMatchObject({ code: -32601 })
     await h.driver.kill()
-  })
-
-  test('Contract: a form-mode elicitation is declined at once with an unsupported error, never accepted with invented content', async () => {
-    let requested = 0
-    const { h, reply } = await run(ask('mcpServer/elicitation/request', { mode: 'form', message: 'm', requestedSchema: { type: 'object', properties: {} } }), { callbacks: { onRequest: () => void requested++ } })
-    expect(reply).toEqual({ action: 'decline', content: null, _meta: null })
-    expect(requested).toBe(0)
-    expect(h.events.find((e) => e.type === 'error')).toMatchObject({ error: { category: 'unsupported' } })
   })
 })
 

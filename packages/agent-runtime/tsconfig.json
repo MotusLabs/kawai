@@ -22,6 +22,9 @@
       "@motuslabs/agent-runtime/claude": [
         "./src/claude/index.ts"
       ],
+      "@motuslabs/agent-runtime/codex": [
+        "./src/codex/index.ts"
+      ],
       "@motuslabs/agent-runtime/*": [
         "./src/*"
       ]

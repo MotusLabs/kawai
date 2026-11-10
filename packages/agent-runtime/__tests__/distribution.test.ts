@@ -1,13 +1,15 @@
 // @reads: packages/agent-runtime/**
 // Distribution oracles on the real packed tarball (design "Package and
 // application table"): D01 (clean consumer, no Kawai files), D09 (the
-// headless contract consumer compiles unchanged), and the M-pack control (a
+// headless contract consumer compiles unchanged), a Codex-only consumer with
+// no Claude SDK that compiles and runs the README's Codex example, and the M-pack control (a
 // repository-relative import in the shipped files is caught).
 import { beforeAll, describe, expect, test } from 'bun:test'
-import { appendFileSync, copyFileSync, cpSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { appendFileSync, copyFileSync, cpSync, existsSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PACKAGE_DIR, boundaryViolations, buildAndPack, consumerProject, run, tarballEntries, tsc } from './helpers/packArtifact.js'
+import { codexRoot } from './helpers/codexDriverHarness.js'
 
 let tarball: string
 let consumer: string
@@ -51,6 +53,36 @@ describe('packed @motuslabs/agent-runtime', () => {
     const smoke = run([process.execPath, 'smoke.ts'], consumer)
     expect(smoke.code).toBe(0)
     expect(JSON.parse(smoke.out)).toEqual({ error: { category: 'busy', message: 'a turn is active' }, event: null, report: null })
+  })
+
+  // @covers: agent-runtime-distribution › The runtime is an ESM package with types › Clean external consumer
+  test('a Codex-only project without the Claude SDK type-checks and runs the headless Codex example from the tarball', () => {
+    const project = consumerProject(tarball)
+    expect(existsSync(join(project, 'node_modules/@anthropic-ai'))).toBe(false)
+    copyFileSync(join(PACKAGE_DIR, 'examples/headless-codex.ts'), join(project, 'headless-codex.ts'))
+    writeFileSync(
+      join(project, 'main.ts'),
+      [
+        "import type { LaunchConfiguration, ResumeCheckpoint } from '@motuslabs/agent-runtime'",
+        "import { headlessCodex } from './headless-codex.js'",
+        'const launch = JSON.parse(process.argv[2]!) as LaunchConfiguration',
+        'const saved: ResumeCheckpoint[] = []',
+        'const logger = { debug() {}, info() {}, warn() {}, error() {} }',
+        'const driver = headlessCodex(launch, logger, { load: () => null, save: async (c) => void saved.push(c) })!',
+        'await driver.start()',
+        "const result = await (await driver.send('packed')).result",
+        'const receipt = await driver.shutdown()',
+        'console.log(JSON.stringify({ finalText: result.finalText, saved: saved.length, mode: receipt.mode }))',
+      ].join('\n'),
+    )
+    const check = tsc('tsconfig.json', project)
+    expect(check.out).toBe('')
+    expect(check.code).toBe(0)
+    const root = codexRoot()
+    writeFileSync(join(root.home, 'auth.json'), JSON.stringify({ OPENAI_API_KEY: ['sample', 'key'].join('-') }))
+    const main = run([process.execPath, 'main.ts', JSON.stringify(root.launch())], project)
+    expect(main.code).toBe(0)
+    expect(JSON.parse(main.out.trim())).toEqual({ finalText: 'codex:dekcap|seen=', saved: 1, mode: 'shutdown' })
   })
 
   test('control: the clean project cannot resolve a Kawai type for a consumer', () => {

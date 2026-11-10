@@ -14,10 +14,17 @@
 // - The protocol input and parsed questions are private detached copies, so a
 //   host mutation never changes what is answered or how answers validate.
 // - Cancellation answers Codex `cancel` (or the method's equivalent).
+// - A form elicitation (`form`, `openai/form`, `openaiForm`) is a question
+//   (elicitationForm.ts): typed JSON validated against the captured schema
+//   accepts with that content, `Decline` declines, `Cancel` cancels, and an
+//   invalid answer is refused and leaves it pending. A schema or mode that
+//   cannot be validated faithfully is declined and its exact shape reported
+//   once per session as an `unsupported` error.
 import type { AnswerOptions, AnswerOutcome } from '../contract.js'
 import type { EventBody } from '../eventStream.js'
 import type { AgentQuestion, PendingRequest, QuestionAnswers, RequestOutcome } from '../events.js'
 import type { JsonValue } from '../json.js'
+import { CANCEL, compileForm, DECLINE, FORM_MODES, type CompiledForm } from './elicitationForm.js'
 
 export interface CodexRequestHost {
   emit(body: EventBody): void
@@ -35,7 +42,9 @@ interface Entry {
   settled: boolean
   /** Questions: Codex question ids, parallel to request.questions. */
   questionIds: string[]
-  reply(settlement: Settlement, answers?: string[][]): unknown
+  /** Form elicitations: the private compiled schema. */
+  form: CompiledForm | null
+  reply(settlement: Settlement, payload?: unknown): unknown
   settle(result: unknown): void
   detach(): void
 }
@@ -53,17 +62,6 @@ const ELICITATION = 'mcpServer/elicitation/request'
 /** Elicitation modes an allow/deny answer represents exactly (no structured content). */
 const CONTENT_FREE_MODES = new Set(['url', 'openai/userVerification'])
 
-/**
- * A form-mode elicitation needs structured content matching its
- * requestedSchema, which the public answers (allow/deny, question answers)
- * cannot carry: it is declined at once with this reason, never accepted
- * with invented content.
- */
-export function formElicitation(method: string, params: Record<string, unknown>): string | null {
-  if (method !== ELICITATION || CONTENT_FREE_MODES.has(String(params.mode))) return null
-  return `elicitation mode ${JSON.stringify(params.mode ?? null)} needs structured content the public answers cannot express; it was declined`
-}
-
 const detached = <T>(value: T): T => JSON.parse(JSON.stringify(value ?? null)) as T
 
 /** The JSON-RPC result of one settled approval-kind request. */
@@ -75,7 +73,7 @@ function approvalReply(method: string, params: Record<string, unknown>, settleme
     return { permissions: granted, scope: 'turn' }
   }
   if (method === ELICITATION) {
-    // Only content-free modes reach the host (formElicitation): accept carries no content.
+    // Content-free modes: accept carries no content (forms reply through formReply).
     return { action: settlement === 'allow' ? 'accept' : settlement === 'deny' ? 'decline' : 'cancel', content: null, _meta: null }
   }
   if (method === 'applyPatchApproval' || method === 'execCommandApproval') {
@@ -124,11 +122,27 @@ export function cancelReply(method: string, params: Record<string, unknown>): un
   return method === USER_INPUT ? { answers: {} } : approvalReply(method, params, 'cancel')
 }
 
+/** The JSON-RPC result of one settled form elicitation. */
+function formReply(settlement: Settlement, content: unknown): unknown {
+  if (settlement === 'allow') return { action: 'accept', content, _meta: null }
+  return { action: settlement === 'deny' ? 'decline' : 'cancel', content: null, _meta: null }
+}
+
 export class CodexRequests {
   private readonly pending = new Map<string, Entry>()
+  /** Unsupported elicitation shapes already reported this session. */
+  private readonly reported = new Set<string>()
   private closed = false
 
   constructor(private readonly host: CodexRequestHost) {}
+
+  /** A form elicitation's compiled schema; null for other requests; a string for an unsupported shape. */
+  private elicitationForm(method: string, params: Record<string, unknown>): CompiledForm | string | null {
+    if (method !== ELICITATION || CONTENT_FREE_MODES.has(String(params.mode))) return null
+    if (!FORM_MODES.has(String(params.mode))) return `elicitation mode ${JSON.stringify(params.mode ?? null)} is not supported; it was declined`
+    const compiled = compileForm(params)
+    return compiled.ok ? compiled.form : compiled.shape
+  }
 
   list(): PendingRequest[] {
     return [...this.pending.values()].map((entry) => detached(entry.request))
@@ -139,22 +153,32 @@ export class CodexRequests {
     const question = method === USER_INPUT
     const tool = APPROVAL_TOOLS[method] ?? 'unknown'
     if (this.closed || signal.aborted) return Promise.resolve(cancelReply(method, params))
+    const form = this.elicitationForm(method, params)
+    if (typeof form === 'string') {
+      if (!this.reported.has(form)) {
+        this.reported.add(form)
+        this.host.emit({ type: 'error', error: { category: 'unsupported', message: form } })
+      }
+      return Promise.resolve(approvalReply(method, params, 'deny'))
+    }
     const requestId = `req-${crypto.randomUUID()}`
     const turnId = this.host.turnId(params)
     const at = new Date().toISOString()
-    const parsed = question ? parseQuestions(params) : null
+    const parsed = question ? parseQuestions(params) : form ? { ids: [], questions: [form.question] } : null
     const request: PendingRequest = parsed
       ? { kind: 'question', requestId, turnId, questions: detached(parsed.questions), at }
       : { kind: 'approval', requestId, turnId, tool, input: detached(params) as JsonValue, at }
     const abort = () => this.settle(requestId, 'cancel', 'cancelled')
-    const reply = (settlement: Settlement, answers?: string[][]) => {
+    const reply = (settlement: Settlement, payload?: unknown) => {
+      if (form) return formReply(settlement, payload)
       if (!parsed) return approvalReply(method, params, settlement)
+      const answers = payload as string[][] | undefined
       const keyed: Record<string, { answers: string[] }> = {}
       if (answers) parsed.ids.forEach((id, i) => (keyed[id] = { answers: answers[i]! }))
       return { answers: keyed }
     }
     const answer = new Promise<unknown>((resolve) => {
-      this.pending.set(requestId, { request, settled: false, questionIds: parsed?.ids ?? [], reply, settle: resolve, detach: () => signal.removeEventListener('abort', abort) })
+      this.pending.set(requestId, { request, settled: false, questionIds: parsed?.ids ?? [], form, reply, settle: resolve, detach: () => signal.removeEventListener('abort', abort) })
     })
     signal.addEventListener('abort', abort, { once: true })
     this.host.emit(
@@ -183,7 +207,20 @@ export class CodexRequests {
     if (entry.request.kind !== 'question') return { ok: false, reason: 'invalid', message: `Request ${requestId} is not a question` }
     const validated = validate(entry.request.questions, answers)
     if (!validated.ok) return { ok: false, reason: 'invalid', message: validated.error }
-    this.settle(requestId, 'allow', 'answered', options.decidedBy ?? 'caller', validated.answers)
+    const decidedBy = options.decidedBy ?? 'caller'
+    if (entry.form) {
+      // The captured question, never the caller's copy, says which answer was given.
+      const chosen = answers[entry.form.question.question]!.options ?? []
+      if (chosen[0] === DECLINE) this.settle(requestId, 'deny', 'denied', decidedBy)
+      else if (chosen[0] === CANCEL) this.settle(requestId, 'cancel', 'cancelled', decidedBy)
+      else {
+        const decoded = entry.form.decode(validated.answers[0]![0]!)
+        if (!decoded.ok) return { ok: false, reason: 'invalid', message: decoded.error }
+        this.settle(requestId, 'allow', 'answered', decidedBy, decoded.content)
+      }
+      return { ok: true }
+    }
+    this.settle(requestId, 'allow', 'answered', decidedBy, validated.answers)
     return { ok: true }
   }
 
@@ -205,13 +242,13 @@ export class CodexRequests {
     return entry
   }
 
-  private settle(requestId: string, settlement: Settlement, outcome: RequestOutcome, decidedBy?: string, answers?: string[][]): void {
+  private settle(requestId: string, settlement: Settlement, outcome: RequestOutcome, decidedBy?: string, payload?: unknown): void {
     const entry = this.pending.get(requestId)
     if (!entry || entry.settled) return
     entry.settled = true
     this.pending.delete(requestId)
     entry.detach()
-    entry.settle(entry.reply(settlement, answers))
+    entry.settle(entry.reply(settlement, payload))
     this.host.emit({
       type: 'request_resolved',
       requestId,
