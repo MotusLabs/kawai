@@ -464,5 +464,8 @@ or property that would have caught it, and the source finding.
   guard keeps a witness on the owned process. The binding mutants
   (M-bind-completed, M-bind-foreign) must fail on that witness too
   (codexTurnStreams.test.ts), not only in the in-process campaign.
+  For the I2 resume sequences, the readiness control (start not awaiting
+  the checkpoint report) must fail generated sequences and the
+  owned-process witness sequences as named log differences, not timeouts.
 - **Source finding.** task-73ecea50, Lead decision note-e5492858 (bulk
-  campaigns over a private seam).
+  campaigns over a private seam); I2 under task R2, note-d9bcb84a.

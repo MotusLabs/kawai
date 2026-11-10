@@ -1,5 +1,5 @@
-// The in-process app-server owner for the bulk Codex campaigns (I6, I7, I8;
-// Lead decision e5492858). It is passed through the transport's private
+// The in-process app-server owner for the bulk Codex campaigns (I6, I7, I8,
+// Lead decision e5492858; the I2 resume sequences, task 73 R2, d9bcb84a). It is passed through the transport's private
 // `spawn` seam (createCodexDriverWith), so the same transport, session,
 // frame, result, observer and job reducers run; only the process is
 // replaced: fakeCodexServer.ts serves over in-memory stdio. Like a pipe,
@@ -11,8 +11,8 @@
 // after its pending output; a signal sent after termination was marked ends
 // it with that signal. This is model/client
 // evidence only, never native-exit proof: the real owned-stdio witnesses
-// (oldFrame, codexUsageFacts, the R11 observer tests, codexDriver*) keep
-// spawnOwned. No wire recorder is supported here.
+// (oldFrame, codexUsageFacts, the R11 observer tests, codexDriver*, the I2
+// witness sequences, codexRecovery, codexLifecycle) keep spawnOwned. No wire recorder is supported here.
 import { PassThrough } from 'node:stream'
 import type { ProcessExitFact } from '../../src/contract.js'
 import type { LeaderExit, NativeEvidence, OwnedProcess, OwnedSpawnRequest } from '../../src/process/ownedProcess.js'
