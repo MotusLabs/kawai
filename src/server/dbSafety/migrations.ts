@@ -41,6 +41,7 @@ import { compactObservationDetailMigration } from '../metrics/observations/compa
 import { taskContractMigration } from '../team/taskContractSchema'
 import { reviewFindingsMigration } from '../team/findingSchema'
 import { reviewConvergenceMigration } from '../plans/execution/convergenceSchema'
+import { taskStallMigration } from '../team/taskStallSchema'
 import { CREATE_TEAM_APPROVAL_DEFAULTS_SQL } from '../team/teamApprovalDefaults'
 import type { BackupFile } from './backupFiles'
 import type { BackupOutcome } from './backups'
@@ -125,6 +126,9 @@ export const MIGRATIONS: readonly Migration[] = [
   // override, card kinds, diagnoses, and manual-task notices. Additive, no
   // backfill.
   reviewConvergenceMigration,
+  // manual-task-stall-alerts D3: one stall notice per manual task and
+  // anchor. Additive, no backfill.
+  taskStallMigration,
 ]
 
 export const RESTORE_DOC = 'docs/operations/database-backups.md'
