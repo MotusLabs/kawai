@@ -374,7 +374,8 @@ export class CodexSession {
     const written = new Promise<Promise<unknown>>((resolve) => (write = resolve))
     void this.lifecycle.jobs.run(`turn:${turn.turnId}`, async () => {
       try {
-        const id = (await (await written) as { turn?: { id?: unknown } } | null)?.turn?.id
+        const reply = await written
+        const id = ((await reply) as { turn?: { id?: unknown } } | null)?.turn?.id
         if (typeof id === 'string') this.bindNative(turn, id)
       } catch (error) {
         if (this.stopBegun() && error instanceof AgentRuntimeError && error.category === 'stopped') return

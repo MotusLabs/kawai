@@ -12,6 +12,8 @@
 import { z } from 'zod'
 import { refusal, type BoundToolSet } from '../tools/toolSet.js'
 import type { ToolCallResult } from '../options.js'
+import type { DynamicToolSpec } from './protocolBoundary.js'
+import type { JsonValue } from '../json.js'
 
 export interface CodexDynamicToolCall {
   threadId?: unknown
@@ -30,14 +32,15 @@ export interface CodexDynamicToolResponse {
 /** thread/start `dynamicTools`: one namespace entry, or none for an empty set. */
 export function codexDynamicTools(tools: BoundToolSet | null): unknown[] | undefined {
   if (!tools) return undefined
-  return [
+  const specs: DynamicToolSpec[] = [
     {
       type: 'namespace',
       name: tools.namespace,
       description: `Host tools bound to this session (${tools.namespace}).`,
-      tools: tools.tools.map((tool) => ({ type: 'function', name: tool.name, description: tool.description, inputSchema: z.toJSONSchema(tool.inputSchema, { io: 'input' }) })),
+      tools: tools.tools.map((tool) => ({ type: 'function', name: tool.name, description: tool.description, inputSchema: z.toJSONSchema(tool.inputSchema, { io: 'input' }) as JsonValue })),
     },
   ]
+  return specs
 }
 
 function response(result: ToolCallResult): CodexDynamicToolResponse {

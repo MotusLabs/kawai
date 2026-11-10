@@ -24,6 +24,7 @@ import type { AnswerOptions, AnswerOutcome } from '../contract.js'
 import type { EventBody } from '../eventStream.js'
 import type { AgentQuestion, PendingRequest, QuestionAnswers, RequestOutcome } from '../events.js'
 import type { JsonValue } from '../json.js'
+import type { McpServerElicitationRequestResponse } from './protocolBoundary.js'
 import { CANCEL, compileForm, DECLINE, FORM_MODES, type CompiledForm } from './elicitationForm.js'
 
 export interface CodexRequestHost {
@@ -74,7 +75,8 @@ function approvalReply(method: string, params: Record<string, unknown>, settleme
   }
   if (method === ELICITATION) {
     // Content-free modes: accept carries no content (forms reply through formReply).
-    return { action: settlement === 'allow' ? 'accept' : settlement === 'deny' ? 'decline' : 'cancel', content: null, _meta: null }
+    const reply: McpServerElicitationRequestResponse = { action: settlement === 'allow' ? 'accept' : settlement === 'deny' ? 'decline' : 'cancel', content: null, _meta: null }
+    return reply
   }
   if (method === 'applyPatchApproval' || method === 'execCommandApproval') {
     return settlement === 'allow' ? { decision: 'approved' } : settlement === 'deny' ? { decision: { denied: { rejection: 'denied by the host' } } } : { decision: 'abort' }
@@ -123,7 +125,7 @@ export function cancelReply(method: string, params: Record<string, unknown>): un
 }
 
 /** The JSON-RPC result of one settled form elicitation. */
-function formReply(settlement: Settlement, content: unknown): unknown {
+function formReply(settlement: Settlement, content: JsonValue): McpServerElicitationRequestResponse {
   if (settlement === 'allow') return { action: 'accept', content, _meta: null }
   return { action: settlement === 'deny' ? 'decline' : 'cancel', content: null, _meta: null }
 }
@@ -170,7 +172,7 @@ export class CodexRequests {
       : { kind: 'approval', requestId, turnId, tool, input: detached(params) as JsonValue, at }
     const abort = () => this.settle(requestId, 'cancel', 'cancelled')
     const reply = (settlement: Settlement, payload?: unknown) => {
-      if (form) return formReply(settlement, payload)
+      if (form) return formReply(settlement, (payload ?? null) as JsonValue)
       if (!parsed) return approvalReply(method, params, settlement)
       const answers = payload as string[][] | undefined
       const keyed: Record<string, { answers: string[] }> = {}

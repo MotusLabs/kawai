@@ -23,7 +23,9 @@
 import type { AgentQuestion } from '../events.js'
 import type { JsonValue } from '../json.js'
 
-export const FORM_MODES = new Set(['form', 'openai/form', 'openaiForm'])
+/** The structured-content elicitation modes (checked against the protocol in protocolBoundary.ts). */
+export type FormMode = 'form' | 'openai/form' | 'openaiForm'
+export const FORM_MODES: ReadonlySet<string> = new Set<FormMode>(['form', 'openai/form', 'openaiForm'])
 export const DECLINE = 'Decline'
 export const CANCEL = 'Cancel'
 

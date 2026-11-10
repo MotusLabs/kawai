@@ -274,7 +274,8 @@ or property that would have caught it, and the source finding.
   app-server, read the reply the app-server actually received. Per form
   alias: typed JSON validated against the captured schema accepts with
   exactly that content once; invalid JSON, a wrong type, a missing required
-  field and a non-member enum value are refused and stay pending; Decline
+  field, a non-member enum value, a wrong nested field and an impossible
+  calendar date are refused and stay pending; Decline
   and Cancel reply their actions; a schema the codec cannot validate is
   declined and its exact shape reported once. Per content-free mode: allow
   replies `content: null`
