@@ -163,7 +163,7 @@ export class CodexSession {
       onNotification: (method, params) => this.notification(generation, method, params),
       onServerRequest: (method, params, signal) => this.serverRequest(generation, method, params, signal),
       onExit: (exit) => this.exited(generation, exit),
-      ...(this.options.terminate ? { terminate: this.options.terminate } : {}),
+      ...(this.options.terminate ? { terminate: this.options.terminate } : {}), ...(this.options.spawn ? { spawn: this.options.spawn } : {}),
       ...(this.options.requestTimeoutMs !== undefined ? { requestTimeoutMs: this.options.requestTimeoutMs } : {}),
     })
     // The resume target is fixed before the process exists; a superseded generation is retired first.

@@ -7,6 +7,8 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFil
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createCodexDriver } from '../../src/codex/index.js'
+import { createCodexDriverWith } from '../../src/codex/driver.js'
+import { inProcessSpawn } from './inProcessCodex.js'
 import type { CodexAgentDriver, DriverState, ProcessEndReport, ResumeCheckpoint, TurnResult } from '../../src/contract.js'
 import type { AgentRuntimeError } from '../../src/errors.js'
 import type { AgentEvent } from '../../src/events.js'
@@ -84,15 +86,23 @@ export interface HarnessOptions extends Partial<Omit<CodexDriverOptions, 'callba
   env?: Record<string, string>
   callbacks?: Partial<AgentCallbacks>
   launch?: CodexDriverOptions['launch']
+  /** The bulk campaigns' in-process app-server (helpers/inProcessCodex.ts); default: the owned process. */
+  inProcess?: boolean
 }
 
-/** A public-factory driver whose callbacks record everything, then call any supplied hooks. */
+/**
+ * A public-factory driver (the package's createCodexDriver over the owned
+ * process) whose callbacks record everything, then call any supplied hooks.
+ * With `inProcess`, the same options go through createCodexDriverWith's
+ * private spawn seam instead.
+ */
 export function codexDriver(options: HarnessOptions = {}): Recorded {
-  const { root: given, env, callbacks = {}, launch, ...rest } = options
+  const { root: given, env, callbacks = {}, launch, inProcess = false, ...rest } = options
   const root = given ?? codexRoot()
   const recorded = { root, events: [] as AgentEvent[], results: [] as TurnResult[], states: [] as DriverState[], ends: [] as ProcessEndReport[], checkpoints: [] as ResumeCheckpoint[], warnings: [] as unknown[] }
   const logger = { debug() {}, info() {}, warn: (obj: object, msg?: string) => recorded.warnings.push([msg, obj]), error: (obj: object, msg?: string) => recorded.warnings.push([msg, obj]) }
-  const driver = createCodexDriver({
+  const create = (o: CodexDriverOptions) => (inProcess ? createCodexDriverWith(o, { spawn: inProcessSpawn }) : createCodexDriver(o))
+  const driver = create({
     logger,
     launch: launch ?? root.launch(env),
     permissions: PERMISSIONS,

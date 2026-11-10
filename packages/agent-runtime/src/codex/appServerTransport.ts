@@ -29,7 +29,8 @@
 // and observer failures reject the stop (`stop`) with every cause kept by
 // identity; a handler rejecting with its aborted signal's reason is the stop's
 // own cancellation. There is no thread, resume or fallback logic here: the
-// driver owns those.
+// driver owns those. `spawn` is a private seam (never a public option): the
+// bulk test campaigns supply an in-process owner; everything else is spawnOwned.
 
 import { AgentRuntimeError } from '../errors.js'
 import type { ProcessExitFact } from '../contract.js'
@@ -39,7 +40,7 @@ import { OwnedJobs } from '../lifecycle/jobs.js'
 import { runGeneration } from '../lifecycle/generation.js'
 import { resolveExecutable, type ResolvedLaunch } from '../process/launch.js'
 import { createLineSplitter } from '../process/lineSplitter.js'
-import { spawnOwned, type LeaderExit, type OwnedProcess, type TerminateOptions } from '../process/ownedProcess.js'
+import { spawnOwned, type LeaderExit, type OwnedProcess, type OwnedSpawnRequest, type TerminateOptions } from '../process/ownedProcess.js'
 
 export interface AppServerClientInfo {
   name: string
@@ -74,6 +75,8 @@ export interface AppServerTransportOptions {
   /** After the first of an unsolicited exit and EOF, how long pending requests wait for the other; default 1 000 ms. */
   drainBoundMs?: number
   terminate?: TerminateOptions
+  /** Private seam; default spawnOwned. */
+  spawn?(request: OwnedSpawnRequest): OwnedProcess
 }
 
 /**
@@ -172,8 +175,9 @@ export class AppServerTransport {
     const command = this.options.command ?? resolveExecutable(this.options.launch, 'codex')
     this.started = true
     this.open = true
+    const spawn = this.options.spawn ?? spawnOwned
     this.jobs.outside(() =>
-      spawnOwned({
+      spawn({
         command,
         args: this.options.args ?? ['app-server'],
         launch: this.options.launch,

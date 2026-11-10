@@ -1,7 +1,8 @@
 // Seeded usage streams for I7 and I8 (tasks 5.2-5.4), shared by usage.test.ts
 // and observers.test.ts. Each stream drives a production driver (Claude on
-// the controlled query, Codex through the public factory and the fake
-// app-server) through interleaved turns, quota pushes, retries, progress,
+// the controlled query, Codex through the production transport and session
+// with the fake app-server served in-process behind the private spawn seam,
+// inProcessCodex.ts) through interleaved turns, quota pushes, retries, progress,
 // subagent and foreign frames, reused ids, repeated token updates, results
 // with and without usage, and failed turns, while a reference model
 // (oracles/usageModels.ts) is told only what was sent.
@@ -244,7 +245,7 @@ export async function codexStream(seed: number, mode: ObserverMode = 'present', 
   const o = observing(mode)
   const observers = mode === 'absent' ? {} : { onLimitEvent: o.wrap('onLimitEvent', (e: LimitEvent) => limits.push(e)), onQuotaReport: o.wrap('onQuotaReport', (q: QuotaReport) => quotas.push(q)), onContextUsage: o.wrap('onContextUsage', () => {}), onCompaction: o.wrap('onCompaction', () => {}), onModel: o.wrap('onModel', () => {}) }
   const sinks = mode === 'throwing' ? { onEvent: o.wrap('onEvent', () => {}), onTurnResult: o.wrap('onTurnResult', () => {}) } : {}
-  const h = codexDriver({ ...(read ? { env: { FAKE_CODEX_RATELIMITS: JSON.stringify(wire(read)) } } : {}), callbacks: { ...observers, ...sinks } })
+  const h = codexDriver({ inProcess: true, ...(read ? { env: { FAKE_CODEX_RATELIMITS: JSON.stringify(wire(read)) } } : {}), callbacks: { ...observers, ...sinks } })
   await h.driver.start()
   if (read) {
     model.read(read)

@@ -445,3 +445,24 @@ or property that would have caught it, and the source finding.
   as progress hides this, so the model states it too (usageModels.ts).
 - **Source finding.** task-73ecea50 fresh assessment e50cba22
   (note-ba5046e5), disposition a546aea5. INV-A2 is note-7f2b3062.
+
+### An in-memory stdio fake that answers inside the writer's own write (task 73, private seam)
+
+- **Hazard.** A `PassThrough` in flowing mode emits `data` synchronously
+  inside `write()`. A fake app-server served over two of them therefore
+  handled `turn/start`, and the transport read its reply and every
+  notification, all inside the transport's own write. That happened before
+  the session's send had opened the turn. No pipe can deliver like that.
+  Deltas landed before `turn_started` and every turn hung. A campaign built
+  on such a fake tests a reentrancy the product never meets, and it can
+  hide the delivery the product does meet.
+- **Oracle that catches it.** Before running a campaign on a replaced
+  process, run one short script through both the owned process and the
+  in-process owner and compare the event order and outcomes. The seam
+  delivers each direction on a later task and coalesces the lines of one
+  task into one chunk, as a pipe can (helpers/inProcessCodex.ts). Each
+  guard keeps a witness on the owned process. The binding mutants
+  (M-bind-completed, M-bind-foreign) must fail on that witness too
+  (codexTurnStreams.test.ts), not only in the in-process campaign.
+- **Source finding.** task-73ecea50, Lead decision note-e5492858 (bulk
+  campaigns over a private seam).

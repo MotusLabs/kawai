@@ -4,13 +4,20 @@
 // a real turn returns the fake's unique transformed text on the minted
 // identity; a second new turn is refused busy; kill settles the open turn as
 // stopped only after the process actually exited; and the composed policy is
-// on the wire of thread/start and turn/start.
+// on the wire of thread/start and turn/start. The `./codex` entry exports
+// only the public factory and the login check: the session's private spawn
+// seam (createCodexDriverWith) is not part of it.
 import { afterEach, describe, expect, test } from 'bun:test'
+import * as codexEntry from '../src/codex/index.js'
 import { alive, codexDriver, pids, refusal, sent, stopDrivers, waitFor } from './helpers/codexDriverHarness.js'
 
 afterEach(stopDrivers)
 
 describe('Codex driver: the first public-factory path', () => {
+  test('the ./codex entry exports exactly createCodexDriver and hasCodexLogin', () => {
+    expect(Object.keys(codexEntry).sort()).toEqual(['createCodexDriver', 'hasCodexLogin'])
+  })
+
   // @covers: agent-runtime › Session start and turn results are distinct › Successful turn
   test('L01/L07: the factory is inert; start runs initialize then thread/start with no prompt; one turn returns the unique transformed result on the minted identity', async () => {
     const h = codexDriver()

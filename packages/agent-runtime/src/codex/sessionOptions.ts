@@ -1,9 +1,10 @@
 // The Codex session's construction options (task 4.2). The public factory
 // (driver.ts) maps CodexDriverOptions onto these; `terminate` and
-// `requestTimeoutMs` are internal bounds with the transport's defaults.
+// `requestTimeoutMs` are internal bounds with the transport's defaults, and
+// `spawn` is the transport's private process seam (default spawnOwned).
 import type { ResumeCheckpoint } from '../contract.js'
 import type { AgentCallbacks, BeforeSubmit, CodexAuditHooks, CodexPermissions, Effort, LaunchInput, Logger, ToolObservation, ToolSet, WireRecorder } from '../options.js'
-import type { TerminateOptions } from '../process/ownedProcess.js'
+import type { OwnedProcess, OwnedSpawnRequest, TerminateOptions } from '../process/ownedProcess.js'
 
 export interface CodexSessionOptions {
   launch: LaunchInput
@@ -24,4 +25,5 @@ export interface CodexSessionOptions {
   unansweredRequests?: 'deny' | 'wait'
   terminate?: TerminateOptions
   requestTimeoutMs?: number
+  spawn?(request: OwnedSpawnRequest): OwnedProcess
 }

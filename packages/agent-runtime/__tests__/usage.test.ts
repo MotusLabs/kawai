@@ -4,8 +4,10 @@
 // stays unknown. Both providers' production session, parsers and reducers
 // run unchanged: Claude on the controlled query (the session core with only
 // the SDK's query() replaced; claudeUsageFacts.test.ts covers the same facts
-// through the default fake CLI), Codex through the public factory and the
-// owned fake app-server over stdio. Each stream interleaves turns, idle
+// through the default fake CLI), Codex through the production transport and
+// session with the fake app-server served in-process behind the private
+// spawn seam (inProcessCodex.ts; codexUsageFacts.test.ts keeps the owned
+// process as the witness of the same guards). Each stream interleaves turns, idle
 // and in-turn quota pushes, limit and non-limit retries, progress frames,
 // subagent and foreign-turn frames, tool and boundary ids reused across
 // turns, repeated token updates, results with and without usage, and failed

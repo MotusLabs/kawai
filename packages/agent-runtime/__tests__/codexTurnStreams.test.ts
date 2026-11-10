@@ -1,7 +1,9 @@
 // @reads: packages/agent-runtime/__tests__/fixtures/**
 // I6 for Codex over seeded streams (task 5.1; R03/R07): the production
-// session, binder and emitter through the public factory and the owned fake
-// app-server over stdio. Each turn is one `/script` whose notes mix the
+// session, binder, emitter and transport, with the fake app-server served
+// in-process behind the transport's private spawn seam (inProcessCodex.ts;
+// Lead decision e5492858). The owned-stdio witnesses of each wiring guard
+// stay on the real process (oldFrame, codexUsageFacts, codexDriver*). Each turn is one `/script` whose notes mix the
 // turn's own deltas and tool items (ids repeated) with duplicated and
 // reordered source frames: a repeated turn/started, turn/completed frames
 // naming an earlier turn of the generation (completed or failed), an unknown
@@ -69,7 +71,7 @@ const OUTCOME: Record<(typeof ENDS)[number], TurnOutcome> = { completed: 'succes
 
 async function stream(seed: number): Promise<string[]> {
   const next = random(seed)
-  const h = codexDriver()
+  const h = codexDriver({ inProcess: true })
   await h.driver.start()
   const violations: string[] = []
   const handles: TurnHandle[] = []
@@ -193,5 +195,21 @@ describe('Codex driver: I6 over seeded streams', () => {
   }
   test('the 300 streams reached every hazard class', () => {
     expect(CLASSES.filter((c) => !seen.has(c))).toEqual([])
+  })
+})
+
+describe('Codex driver: the binding guard on the owned process (real stdio witness)', () => {
+  test('a stale failed turn/completed naming the earlier turn, one naming an unknown turn, and a tool item naming the earlier turn reach nothing: the current turn succeeds with its own text and no tool call', async () => {
+    const h = codexDriver()
+    await h.driver.start()
+    const first = await (await h.driver.send('one')).result
+    expect(first.outcome).toBe('success')
+    const notes = [completion('turn-1', true), completion('turn-x7', true), ...commandItem('cmd-f', 'turn-1'), { method: 'item/agentMessage/delta', params: { itemId: 'm1', delta: 'own' } }]
+    const handle = await h.driver.send(`/script ${JSON.stringify({ notes })}`)
+    const result = await handle.result
+    expect({ turnId: result.turnId, outcome: result.outcome, finalText: result.finalText, tools: result.toolCallCount }).toEqual({ turnId: handle.turnId, outcome: 'success', finalText: 'codex:tpircs|seen=one', tools: 0 })
+    expect(h.events.filter((e) => e.type === 'tool_call')).toEqual([])
+    expect(h.results.map((r) => r.outcome)).toEqual(['success', 'success'])
+    expect(h.events.filter((e) => e.type === 'error')).toEqual([])
   })
 })

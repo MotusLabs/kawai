@@ -4,10 +4,13 @@
 // unenforceable permission set (P08), an invalid tool set, a foreign resume
 // checkpoint or a missing logger refuses construction with category
 // `configuration`. The returned value exposes only the public contract.
+// createCodexDriverWith adds the session's private seams; the package entry
+// exports only createCodexDriver.
 import type { CodexAgentDriver } from '../contract.js'
 import { AgentRuntimeError } from '../errors.js'
 import type { CodexDriverOptions } from '../options.js'
 import { CodexSession } from './session.js'
+import type { CodexSessionOptions } from './sessionOptions.js'
 
 function configurationError(message: string): AgentRuntimeError {
   return new AgentRuntimeError({ category: 'configuration', message })
@@ -16,6 +19,10 @@ function configurationError(message: string): AgentRuntimeError {
 const LOGGER_METHODS = ['debug', 'info', 'warn', 'error'] as const
 
 export function createCodexDriver(options: CodexDriverOptions): CodexAgentDriver {
+  return createCodexDriverWith(options, {})
+}
+
+export function createCodexDriverWith(options: CodexDriverOptions, internal: Pick<CodexSessionOptions, 'spawn'>): CodexAgentDriver {
   if (!options || typeof options !== 'object') throw configurationError('driver options are required')
   const logger = options.logger as unknown as Record<string, unknown> | undefined
   if (!logger || LOGGER_METHODS.some((method) => typeof logger[method] !== 'function')) throw configurationError('logger must have debug, info, warn and error methods')
@@ -42,5 +49,6 @@ export function createCodexDriver(options: CodexDriverOptions): CodexAgentDriver
     ...(options.auditHooks ? { auditHooks: options.auditHooks } : {}),
     ...(options.resume ? { resume: options.resume } : {}),
     ...(options.unansweredRequests ? { unansweredRequests: options.unansweredRequests } : {}),
+    ...(internal.spawn ? { spawn: internal.spawn } : {}),
   })
 }
