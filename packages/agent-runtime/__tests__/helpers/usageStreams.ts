@@ -188,11 +188,13 @@ export async function claudeStream(seed: number, mode: ObserverMode = 'present',
       const op = CLAUDE_OPS[next(CLAUDE_OPS.length)]!
       const q = f.q()
       if (op === 'start' || op === 'startSub') {
-        model.messageStart(op === 'startSub')
-        q.push(stream(op === 'startSub', { type: 'message_start', message: { id: uuid(), usage: { input_tokens: 1 + next(50) } } }))
+        const id = uuid()
+        const input = 1 + next(50)
+        model.messageStart(op === 'startSub', input)
+        q.push(stream(op === 'startSub', { type: 'message_start', message: { id, usage: { input_tokens: input } } }))
       } else if (op === 'cost' || op === 'costSub') {
         const cost = next(3) === 0 ? null : [0.25, 0.5, 1.25][next(3)]!
-        model.delta(cost)
+        model.delta(cost, op === 'costSub', 1)
         q.push(stream(op === 'costSub', { type: 'message_delta', usage: { output_tokens: 1, ...(cost === null ? {} : { cost }) } }))
       } else if (op === 'tool' || op === 'text' || op === 'subTool') {
         const name = ['model-a', 'model-b'][next(2)]!
@@ -228,8 +230,8 @@ export async function claudeStream(seed: number, mode: ObserverMode = 'present',
 // ---- Codex -------------------------------------------------------------------
 
 type Note = { method: string; params?: Record<string, unknown> }
-type CodexOp = 'tok' | 'dup' | 'foreign' | 'tool' | 'foreignTool' | 'delta' | 'compact' | 'retry' | 'push'
-const CODEX_OPS: CodexOp[] = ['tok', 'tok', 'dup', 'foreign', 'tool', 'tool', 'foreignTool', 'delta', 'compact', 'retry', 'retry', 'push']
+type CodexOp = 'tok' | 'dup' | 'foreign' | 'tool' | 'foreignTool' | 'delta' | 'compact' | 'replay' | 'retry' | 'push'
+const CODEX_OPS: CodexOp[] = ['tok', 'tok', 'dup', 'foreign', 'tool', 'tool', 'foreignTool', 'delta', 'compact', 'replay', 'retry', 'retry', 'push']
 const RETRY_INFOS = ['rateLimitExceeded', 'usageLimitExceeded', 'serverOverloaded', 'sessionBudgetExceeded', 'other', 'contextWindowExceeded']
 
 export async function codexStream(seed: number, mode: ObserverMode = 'present', base = Math.floor(Date.now() / 1000)): Promise<StreamRun> {
@@ -298,6 +300,15 @@ export async function codexStream(seed: number, mode: ObserverMode = 'present', 
         const id = ['k1', 'k2'][next(2)]!
         model.boundary(id)
         notes.push({ method: 'item/completed', params: { item: { type: 'contextCompaction', id } } })
+      } else if (op === 'replay') {
+        // item/completed of an item the turn already completed (F2: a replay is no progress and no count).
+        const done = model.completedItems()
+        if (done.length > 0) {
+          const id = done[next(done.length)]!
+          model.replayed(id)
+          const item = id.startsWith('k') ? { type: 'contextCompaction', id } : { type: 'commandExecution', id, command: 'ls', cwd: '/', status: 'completed', exitCode: 0, aggregatedOutput: 'ok' }
+          notes.push({ method: 'item/completed', params: { item } })
+        }
       } else if (op === 'retry') {
         const info = RETRY_INFOS[next(RETRY_INFOS.length)]!
         model.retry(info)

@@ -3,7 +3,11 @@
 // pure ./usage parsers).
 // - Per turn: tool-call and compaction ids (counted once each), the summed
 //   provider cost of the turn's stream events, subagents' included, and the
-//   tokens of the result bound to it. Nothing is carried from another turn.
+//   tokens of the result bound to it; until then (and when the result carries
+//   none) the observed tokens of its own bound main-thread requests, each
+//   request once by message id, recorded before any observer runs. A request
+//   keeps the turn it was first bound to. Nothing is carried from another
+//   turn or a subagent.
 // - Context: the latest main-thread request's usage (assistant frames and
 //   stream events, merged per message id), a compaction's post size, the
 //   largest model window a result names, the CLI's context report and the
@@ -26,7 +30,8 @@ import { ContextTracker, EMPTY_REQUEST_USAGE, mergeRequestUsage, parsePositiveTo
 import { messageDeltaCost } from '../usage/cost.js'
 import { assistantLimitFailure, rejectedResetsAt, rejectedWindow, retryLimitFailure } from '../usage/limits.js'
 import { parseRateLimitEvent, parseUsageReport } from '../usage/quota.js'
-import type { LimitEvent, LimitWaitEnd, QuotaReport } from '../usage/types.js'
+import { addTokenUsage, mergeClaudeRequestUsage } from '../usage/tokens.js'
+import type { LimitEvent, LimitWaitEnd, QuotaReport, TokenUsage } from '../usage/types.js'
 import { LimitWaits, OrderedEvents } from '../usage/waits.js'
 import type { Turn } from './turns.js'
 
@@ -43,7 +48,8 @@ const subagent = (frame: Frame) => frame.parent_tool_use_id != null
 export class ClaudeUsageFacts {
   private readonly context = new ContextTracker()
   private readonly waits = new LimitWaits()
-  private request: { messageId: string | null; usage: RequestUsage } = { messageId: null, usage: EMPTY_REQUEST_USAGE }
+  /** The latest main-thread request and the turn it is bound to (its tokens are that turn's own). */
+  private request: { messageId: string | null; usage: RequestUsage; owner: Turn | null } = { messageId: null, usage: EMPTY_REQUEST_USAGE, owner: null }
   private limitResetsAt: string | null = null
   private limitWindow: string | null = null
   /** Compaction boundaries already reported (a repeated boundary id is reported once). */
@@ -83,7 +89,7 @@ export class ClaudeUsageFacts {
     const report = parseUsageReport(frame.usage_report)
     if (report) this.quotaReport(report)
     const message = isObject(frame.message) ? frame.message : {}
-    if (!subagent(frame) && isObject(message.usage)) this.requestUsage(String(message.id ?? frame.uuid ?? ''), message.usage)
+    if (!subagent(frame) && isObject(message.usage)) this.requestUsage(String(message.id ?? frame.uuid ?? ''), message.usage, turn)
     if (!turn || subagent(frame)) return
     if (frame.error) {
       const content = Array.isArray(message.content) ? message.content : []
@@ -101,10 +107,10 @@ export class ClaudeUsageFacts {
     if (subagent(frame)) return
     if (event.type === 'message_start') {
       const message = isObject(event.message) ? event.message : {}
-      if (typeof message.id === 'string' && message.id && isObject(message.usage)) this.requestUsage(message.id, message.usage)
+      if (typeof message.id === 'string' && message.id && isObject(message.usage)) this.requestUsage(message.id, message.usage, bound)
       if (bound) this.progressed(bound)
     } else if (event.type === 'message_delta' && isObject(event.usage) && this.request.messageId) {
-      this.requestUsage(this.request.messageId, event.usage)
+      this.requestUsage(this.request.messageId, event.usage, this.request.owner)
     }
   }
 
@@ -144,7 +150,7 @@ export class ClaudeUsageFacts {
   }
 
   private conversationReset(): void {
-    this.request = { messageId: null, usage: EMPTY_REQUEST_USAGE }
+    this.request = { messageId: null, usage: EMPTY_REQUEST_USAGE, owner: null }
     this.step(this.context.resetConversation())
   }
 
@@ -175,10 +181,21 @@ export class ClaudeUsageFacts {
     if (end) this.publish(end)
   }
 
-  private requestUsage(messageId: string, incoming: Frame): void {
-    const base = this.request.messageId === messageId ? this.request.usage : EMPTY_REQUEST_USAGE
-    const usage = mergeRequestUsage(base, incoming)
-    this.request = { messageId, usage }
+  /**
+   * One main-thread request usage source. A request keeps the turn it was
+   * first bound to; its observed tokens go on that turn first (F3), before
+   * any context observer can interrupt or stop it, merged per message id so a
+   * repeated snapshot counts once. A settled or absent owner takes nothing.
+   */
+  private requestUsage(messageId: string, incoming: Frame, bound: Turn | null): void {
+    const same = this.request.messageId === messageId
+    const usage = mergeRequestUsage(same ? this.request.usage : EMPTY_REQUEST_USAGE, incoming)
+    const owner = same ? this.request.owner : bound
+    this.request = { messageId, usage, owner }
+    if (owner && !owner.settled && messageId) {
+      owner.requests.set(messageId, mergeClaudeRequestUsage(owner.requests.get(messageId) ?? null, incoming)!)
+      owner.usage = [...owner.requests.values()].reduce<TokenUsage | null>((sum, request) => addTokenUsage(sum, request), null)
+    }
     this.step(this.context.readRequest(sumRequestUsage(usage), new Date().toISOString()))
   }
 

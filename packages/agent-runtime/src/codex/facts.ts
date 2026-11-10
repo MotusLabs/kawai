@@ -15,9 +15,15 @@
 // - Limits: a retrying `error` notification of a limit kind is a non-final
 //   failure and starts the turn's wait; a failed turn's limit is final. The
 //   reset is the latest exhausted window of the latest snapshot.
-// - Waits end resumed on the turn's next item, delta or token update after
-//   the retry, or its successful completion; cancelled when it ends any other
-//   way; process-ended on an unexpected exit. No clock ends one.
+// - Items (F2): each native item phase is accepted once per turn (the turn's
+//   own phase map, so turns never share it); a repeated or regressive phase,
+//   or a delta of a completed item, is a replay and reaches nothing: no
+//   audit, event, count or progress. Identical deltas are kept (no value dedup).
+// - Waits end resumed on the turn's next accepted item phase, delta or grown
+//   token update after the retry, or its successful completion; cancelled
+//   when it ends any other way; process-ended on an unexpected exit. No clock,
+//   quota push or method name alone ends one. The transition is decided
+//   before any audit, event, context, quota or limit observer runs.
 import type { AgentErrorInfo } from '../errors.js'
 import type { EventBody } from '../eventStream.js'
 import type { JsonValue } from '../json.js'
@@ -42,9 +48,19 @@ export interface FactsHost {
 
 type TurnError = { message?: unknown; codexErrorInfo?: unknown } | null
 
-/** Notifications that show the runtime working on their turn again (a wait's resumption). */
-/** Notifications that are the turn's own work; a token update counts only when it grew a counter (FRESH-B). */
-const PROGRESS = new Set(['item/started', 'item/completed', 'item/agentMessage/delta'])
+/** A native item's id, or null. */
+const itemId = (item: unknown): string | null => {
+  const id = (item as { id?: unknown } | null)?.id
+  return typeof id === 'string' ? id : null
+}
+
+/** Accept an item phase once per turn: a repeated start, a start after completion or a repeated completion is a replay. */
+function acceptItem(turn: CodexTurnState, method: string, id: string): boolean {
+  const phase = turn.itemPhases.get(id)
+  if (phase === 'completed' || (phase === 'started' && method === 'item/started')) return false
+  turn.itemPhases.set(id, method === 'item/started' ? 'started' : 'completed')
+  return true
+}
 
 export class CodexFacts {
   /** The generation's last reported token total (deltas between totals are a turn's requests). */
@@ -52,7 +68,6 @@ export class CodexFacts {
   private snapshot: Record<string, unknown> | null = null
   private readonly toolNames = new Map<string, string>()
   private readonly compactions = new Set<string>()
-  private readonly published = new Set<string>()
   private readonly waits = new LimitWaits()
   private lastModel: string | null = null
   private readonly limitEvents = new OrderedEvents<LimitEvent>((event) => {
@@ -73,12 +88,18 @@ export class CodexFacts {
   }
 
   notification(method: string, params: Record<string, unknown>, turn: CodexTurnState | null): void {
-    if (method === 'item/started' || method === 'item/completed') this.audit(params.item)
-    let grew = false
+    // Decide first (F2): acceptance, the turn's counts and tokens, and whether this is new progress; no observer runs yet.
+    const item = method === 'item/started' || method === 'item/completed' ? itemId(params.item) : null
+    if (turn && item !== null && !acceptItem(turn, method, item)) return
+    if (turn && method === 'item/agentMessage/delta' && typeof params.itemId === 'string' && turn.itemPhases.get(params.itemId) === 'completed') return
+    // An accepted new item phase of the turn is progress; so is a mapped delta and a token update that grew a counter.
+    let progress = turn !== null && item !== null
+    const observe: Array<() => void> = []
     for (const output of mapCodexNotification(method, params, turn?.turnId ?? null)) {
       switch (output.kind) {
         case 'event':
-          this.event(output.body)
+          if (output.body.type === 'assistant_delta') progress = progress || turn !== null
+          observe.push(() => this.event(output.body))
           break
         case 'agent_text':
           if (turn) turn.finalText = output.text
@@ -87,23 +108,29 @@ export class CodexFacts {
           turn?.toolIds.add(output.itemId)
           break
         case 'compaction':
-          this.compacted(output.itemId, turn)
+          turn?.compactionIds.add(output.itemId)
+          observe.push(() => this.compacted(output.itemId, turn))
           break
-        case 'token_usage':
-          // FRESH-B: only an accepted update that grew a counter is progress; a stale or repeated total is not.
-          grew = this.tokens(output.total, output.last, output.window, turn)
+        case 'token_usage': {
+          // FRESH-B: only an accepted update that grew a counter is progress; an equal or lower total is not.
+          const measured = this.tokens(output.total, output.last, turn)
+          progress = progress || (turn !== null && measured)
+          observe.push(() => this.contextUsage(output.last, output.window))
           break
+        }
         case 'rate_limits':
-          this.quota(output.snapshot, 'push')
+          observe.push(() => this.quota(output.snapshot, 'push'))
           break
         case 'retry_error':
-          if (output.willRetry) this.retried(output.error, turn)
+          if (output.willRetry) observe.push(() => this.retried(output.error, turn))
           break
         default:
           break
       }
     }
-    if (turn && (grew || PROGRESS.has(method))) this.endWait(turn.turnId, 'resumed')
+    if (turn && progress) this.endWait(turn.turnId, 'resumed')
+    if (item !== null) this.audit(params.item)
+    for (const step of observe) step()
   }
 
   /** The thread's model (thread/start or thread/resume); reported when it changes. */
@@ -153,12 +180,6 @@ export class CodexFacts {
   }
 
   private event(body: EventBody): void {
-    // A repeated tool item (same turn, id and phase) is published once (R03).
-    if (body.type === 'tool_call' || body.type === 'tool_result') {
-      const key = `${body.turnId}:${body.type}:${body.toolCallId}`
-      if (this.published.has(key)) return
-      this.published.add(key)
-    }
     this.host.emit(body)
     const observe = this.host.onToolObservation
     if (!observe) return
@@ -180,7 +201,6 @@ export class CodexFacts {
   }
 
   private compacted(itemId: string, turn: CodexTurnState | null): void {
-    turn?.compactionIds.add(itemId)
     const key = `${turn?.turnId ?? ''}:${itemId}`
     if (this.compactions.has(key)) return
     this.compactions.add(key)
@@ -189,20 +209,22 @@ export class CodexFacts {
     if (onCompaction) this.host.notify('onCompaction', () => onCompaction({ boundaryId: itemId, turnId: turn?.turnId ?? null, preTokens: null }))
   }
 
-  /** Returns whether the update is new work: accepted, with some counter grown. */
-  private tokens(total: CodexTokenBreakdown | null, last: CodexTokenBreakdown | null, window: number | null, turn: CodexTurnState | null): boolean {
+  /** Measures the update into the generation and the turn; returns whether it is new work (some counter grew). */
+  private tokens(total: CodexTokenBreakdown | null, last: CodexTokenBreakdown | null, turn: CodexTurnState | null): boolean {
     const { requests, total: measured } = codexUpdateRequests(total, last, this.lastTotal)
     this.lastTotal = measured
     if (turn) turn.usage = addTokenUsage(turn.usage, codexRequestUsage(requests))
-    const grew = requests !== null && Object.values(requests).some((value) => typeof value === 'number' && value > 0)
+    return requests !== null && Object.values(requests).some((value) => typeof value === 'number' && value > 0)
+  }
+
+  private contextUsage(last: CodexTokenBreakdown | null, window: number | null): void {
     const onContextUsage = this.host.callbacks.onContextUsage
     const input = typeof last?.inputTokens === 'number' ? last.inputTokens : null
     const output = typeof last?.outputTokens === 'number' ? last.outputTokens : null
-    if (!onContextUsage || window === null || window <= 0 || input === null || output === null) return grew
+    if (!onContextUsage || window === null || window <= 0 || input === null || output === null) return
     const used = input + output
     const usage = { usedTokens: used, thresholdTokens: window, percentage: Math.round((used / window) * 1000) / 10, at: new Date().toISOString(), thresholdApproximate: true }
     this.host.notify('onContextUsage', () => onContextUsage(usage))
-    return grew
   }
 
   private quota(snapshot: Record<string, unknown>, source: 'push' | 'report'): void {

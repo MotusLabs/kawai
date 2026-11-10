@@ -4,7 +4,11 @@
 // model is told what the generator sent (the true requests, the tool and
 // boundary ids, the retries, the pushes) and keeps the facts the design
 // assigns to their own turn:
-// - Usage: Claude, the turn's result usage or null; Codex, the sum of the
+// - Usage: Claude, the turn's result usage; when the result carries none,
+//   the field-wise sum of the turn's own main-thread requests (each
+//   message_start's input, its later main message_deltas' cumulative
+//   output), never a subagent's or an earlier turn's; null when neither is
+//   known (F3). Codex, the sum of the
 //   requests the turn actually made (a repeated or foreign update adds
 //   nothing), null when the turn reported none.
 // - Counts: distinct tool-call ids and distinct boundary ids of the turn
@@ -15,8 +19,10 @@
 // - Waits: the first limit retry of a turn opens its wait; it ends resumed
 //   at that turn's next progress (or its success), cancelled when the turn
 //   ends otherwise. A quota push, a reset in the past, a non-limit retry or a
-//   repeated token total never ends or opens one; Codex progress is an item,
-//   a delta or a token update that grew a counter.
+//   repeated token total never ends or opens one; Codex progress is a new
+//   item phase of the turn, a delta or a token update that grew a counter. A
+//   replayed item (an id the turn already completed, at either phase) is no
+//   progress and no count (F2).
 // - Limits carry the latest announced reset (Claude: a rejected
 //   rate_limit_event still ahead; Codex: the latest exhausted window of the
 //   latest snapshot).
@@ -45,6 +51,13 @@ interface OpenTurn {
 }
 
 const fresh = (key: string): OpenTurn => ({ key, tools: new Set(), boundaries: new Set(), cost: null, model: null, waiting: false, pushedInWait: false, requests: [] })
+
+/** Field-wise sums of requests; a field no request reported is null (none at all: null). */
+function summed(requests: TokenUsage[]): TokenUsage | null {
+  if (requests.length === 0) return null
+  const field = (key: keyof TokenUsage) => requests.reduce<number | null>((total, r) => (r[key] === null ? total : (total ?? 0) + r[key]!), null)
+  return { inputTokens: field('inputTokens'), outputTokens: field('outputTokens'), cacheReadTokens: field('cacheReadTokens'), cacheCreationTokens: field('cacheCreationTokens') }
+}
 
 /** The limit/wait signal sequence as compact strings: failure:<final>:<reset>:<window>, start:<turn>:<reset>:<window>, end:<cause>. */
 abstract class LimitModel {
@@ -109,12 +122,24 @@ export class ClaudeUsageModel extends LimitModel {
     this.quotas.push(`push:session:${status === 'rejected' ? 'limited' : status === 'allowed_warning' ? 'warning' : 'allowed'}`)
   }
 
-  messageStart(subagent: boolean): void {
-    if (!subagent) this.progressed()
+  /** The latest main-thread request and the turn it was started in (a later message_delta continues it). */
+  private request: { turn: OpenTurn | null; usage: TokenUsage } | null = null
+
+  /** A message_start: a main one is a new request of the turn, with its reported input tokens, and progress. */
+  messageStart(subagent: boolean, inputTokens: number): void {
+    if (subagent) return
+    this.request = { turn: this.turn, usage: { inputTokens, outputTokens: null, cacheReadTokens: null, cacheCreationTokens: null } }
+    this.turn?.requests.push(this.request.usage)
+    this.progressed()
   }
 
-  delta(cost: number | null): void {
+  /** A message_delta: its cost counts for the turn (subagents' too); a main one's output tokens continue the latest request, cumulatively. */
+  delta(cost: number | null, subagent = true, outputTokens = 0): void {
     if (this.turn && cost !== null) this.turn.cost = (this.turn.cost ?? 0) + cost
+    const usage = this.request?.usage
+    if (!subagent && usage && this.turn && this.request!.turn !== this.turn) this.marks.add('delta-of-earlier-turn-request')
+    if (subagent || !usage || !this.turn || this.request!.turn !== this.turn) return
+    usage.outputTokens = Math.max(usage.outputTokens ?? 0, outputTokens)
   }
 
   assistant(subagent: boolean, model: string, tools: string[]): void {
@@ -132,9 +157,11 @@ export class ClaudeUsageModel extends LimitModel {
     if (limit) this.retried()
   }
 
+  /** The bound result: its usage when it carries one, else the turn's own requests' observed tokens (F3). */
   result(failed: boolean, usage: TokenUsage | null): void {
     const turn = this.turn!
-    this.settle(failed ? 'failed' : 'success', usage, { model: turn.model, providerCostUsd: turn.cost })
+    if (usage === null && turn.requests.length > 0) this.marks.add('usage:partial')
+    this.settle(failed ? 'failed' : 'success', usage ?? summed(turn.requests), { model: turn.model, providerCostUsd: turn.cost })
   }
 }
 
@@ -187,7 +214,9 @@ export class CodexUsageModel extends LimitModel {
   /** A repeated (equal or stale lower) token update of the turn: no tokens, and not progress (FRESH-B). */
   repeated(): void {}
 
+  /** A tool item of the turn (item/started then item/completed): counted and progress unless the id was already seen. */
   tool(id: string): void {
+    if (this.replay(id)) return
     this.turn?.tools.add(id)
     this.progressed()
   }
@@ -196,10 +225,28 @@ export class CodexUsageModel extends LimitModel {
     this.progressed()
   }
 
-  /** A compaction item of the turn (item/completed: progress too). */
+  /** A compaction item of the turn (item/completed: progress too), unless the id was already seen. */
   boundary(id: string): void {
+    if (this.replay(id)) return
     this.turn?.boundaries.add(id)
     this.progressed()
+  }
+
+  /** An item/completed replaying an item the turn already completed: no count and no progress (F2). */
+  replayed(id: string): void {
+    this.replay(id)
+  }
+
+  /** The turn's own completed item ids, in order (the generator replays one). */
+  completedItems(): string[] {
+    return [...(this.turn?.tools ?? []), ...(this.turn?.boundaries ?? [])]
+  }
+
+  /** Whether `id` is an item the turn already completed; a replay inside an open wait leaves it open. */
+  private replay(id: string): boolean {
+    if (!this.turn || !(this.turn.tools.has(id) || this.turn.boundaries.has(id))) return false
+    if (this.turn.waiting) this.marks.add('replay-in-wait-unresumed')
+    return true
   }
 
   retry(info: string): void {

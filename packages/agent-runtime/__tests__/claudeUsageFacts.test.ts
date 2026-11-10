@@ -9,6 +9,14 @@
 //   message_delta costs; turn_completed carries the same values.
 // - M-count: the next turn whose result reports no usage has usage null and
 //   no cost, never the previous turn's.
+// - F3: a turn whose result carries no usage (an interrupt, an exit, a
+//   failure without usage) reports its own bound main-thread requests'
+//   observed tokens, each request once by message id, never a subagent's or
+//   an earlier turn's; an unreported field is null; a result with usage is the
+//   aggregate. The tokens are on the turn before a reentrant stop can end it.
+// - F4: quotaSource unset or 'none' asks no usage pull; 'host-login' asks
+//   exactly one, answered from the supplied home, reported host-login-pull
+//   with account scope host-login.
 // - A retried limit starts one wait for the turn; it ends resumed at the
 //   turn's next request frame, and the rejected rate_limit_event's reset and
 //   window ride on both. The push is a session-scoped quota report.
@@ -17,6 +25,8 @@
 //   decided success; one that interrupts from a retry's failure leaves no
 //   orphan wait: the wait it ends was registered first and its end follows
 //   its start.
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { createClaudeDriver } from '../src/claude/index.js'
 import type { ClaudeAgentDriver, TurnResult } from '../src/contract.js'
@@ -193,3 +203,123 @@ describe('Claude usage facts through the public driver and the fake CLI', () => 
     expect(limits).toEqual(settled)
   })
 })
+
+// Review F3/A2: a turn whose result carries no tokens keeps its own bound main-thread requests' observed tokens.
+describe('Claude partial turn usage through the public driver and the fake CLI', () => {
+  const main = { input_tokens: 123, output_tokens: 0, cache_read_input_tokens: 8, cache_creation_input_tokens: 4 }
+  const sub = (event: Record<string, unknown>) => ({ ...stream(event), parent_tool_use_id: 'toolu_parent' })
+  // One request seen three times (start, delta, its assistant frame) plus a subagent's request: counted once, the subagent's never.
+  const frames = [
+    stream({ type: 'message_start', message: { id: 'pm', usage: main } }),
+    sub({ type: 'message_start', message: { id: 'sub-m', usage: { input_tokens: 999, output_tokens: 999 } } }),
+    stream({ type: 'message_delta', usage: { output_tokens: 17, cost: 0.25 } }),
+    stream({ type: 'message_start', message: { id: 'pm', usage: main } }),
+    { ...assistant('pm', [{ type: 'text', text: 'partial' }]), message: { id: 'pm', role: 'assistant', model: 'fake-model', content: [{ type: 'text', text: 'partial' }], usage: { ...main, output_tokens: 17 } } },
+  ]
+  const partial = { inputTokens: 123, outputTokens: 17, cacheReadTokens: 8, cacheCreationTokens: 4 }
+
+  test('an interrupted turn reports the tokens its requests reported before the interrupt, once each, and no final text', async () => {
+    const { d, seen } = claude({}, { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '1000' })
+    await d.start()
+    // The previous turn's aggregate is its own: the held turn borrows none of it.
+    await (await d.send(script({ frames: [], usage: { input_tokens: 5, output_tokens: 5 } }))).result
+    const handle = await d.send(`script ${JSON.stringify({ frames, hold: true })}`)
+    await waitUntil(() => seen.contexts.some((u) => (u?.usedTokens ?? 0) >= 152))
+    await d.interrupt()
+    const result = await handle.result
+    expect(result).toMatchObject({ outcome: 'interrupted', finalText: null })
+    expect(result.usage).toEqual(partial)
+  })
+
+  test('a turn whose process ends reports its requests\' observed tokens', async () => {
+    const { d, seen } = claude({}, { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '1000' })
+    await d.start()
+    const handle = await d.send(`script ${JSON.stringify({ frames, exit: 3 })}`)
+    const result = await handle.result
+    expect(result.outcome).toBe('process-ended')
+    expect(result.usage).toEqual(partial)
+    expect(seen.events.find((e) => e.type === 'turn_completed' && e.turnId === handle.turnId)).toMatchObject({ usage: partial })
+  })
+
+  test('a failed result without usage keeps the observed tokens; a result with usage is the aggregate, never added to them', async () => {
+    const { d, seen } = claude()
+    await d.start()
+    const failed = await (await d.send(script({ frames, usage: null, subtype: 'error_during_execution' }))).result
+    expect(failed).toMatchObject({ outcome: 'failed', finalText: null, usage: partial })
+    const aggregate = await (await d.send(script({ frames: frames.map((f) => JSON.parse(JSON.stringify(f).replaceAll('"pm"', '"pm2"'))), usage: { input_tokens: 500, output_tokens: 60, cache_read_input_tokens: 9, cache_creation_input_tokens: 3 } }))).result
+    expect(aggregate.usage).toEqual({ inputTokens: 500, outputTokens: 60, cacheReadTokens: 9, cacheCreationTokens: 3 })
+    // A field no frame reported stays null: never a fabricated zero.
+    const sparse = await (await d.send(script({ frames: [stream({ type: 'message_start', message: { id: 'pm3', usage: { input_tokens: 11 } } })], usage: null, subtype: 'error_during_execution' }))).result
+    expect(sparse.usage).toEqual({ inputTokens: 11, outputTokens: null, cacheReadTokens: null, cacheCreationTokens: null })
+    expect(seen.results.map((r) => r.outcome)).toEqual(['failed', 'success', 'failed'])
+  })
+
+  test('a late message_delta of the earlier turn\'s request adds nothing to the next turn: its usage stays null', async () => {
+    const { d } = claude()
+    await d.start()
+    const first = await (await d.send(script({ frames: frames.slice(0, 1), usage: null }))).result
+    expect(first.usage).toEqual({ inputTokens: 123, outputTokens: 0, cacheReadTokens: 8, cacheCreationTokens: 4 })
+    const next = await (await d.send(script({ frames: [stream({ type: 'message_delta', usage: { output_tokens: 99 } })], usage: null }))).result
+    expect(next.usage).toBeNull()
+  })
+
+  test('a stop reentered from the first request\'s own context observation keeps the tokens that request already reported', async () => {
+    let stop: (() => void) | null = null
+    const { d } = claude({
+      callbacks: {
+        onEvent: () => {},
+        onContextUsage: (u) => {
+          if (stop && (u?.usedTokens ?? 0) >= 135) {
+            const once = stop
+            stop = null
+            once()
+          }
+        },
+      },
+    }, { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '1000' })
+    await d.start()
+    stop = () => void d.kill().catch(() => {})
+    const handle = await d.send(`script ${JSON.stringify({ frames: frames.slice(0, 1), hold: true })}`)
+    const result = await handle.result
+    expect(stop).toBeNull()
+    expect(result.outcome).toBe('interrupted')
+    expect(result.usage).toEqual({ inputTokens: 123, outputTokens: 0, cacheReadTokens: 8, cacheCreationTokens: 4 })
+  })
+})
+
+// Review F4/A3: quotaSource is the public opt-in for the host-login pull; it reads the supplied home's login.
+describe('Claude quota source through the public factory, the real SDK and the owned fake CLI', () => {
+  const pullsOnlyWhenChosen = async (quotaSource: 'none' | 'host-login' | undefined) => {
+    const home = fakeClaudeHome()
+    const launch = home.launch()
+    // Only the supplied home holds this login's windows.
+    mkdirSync(join(launch.homeDir, '.claude'), { recursive: true })
+    writeFileSync(join(launch.homeDir, '.claude', 'usage.json'), JSON.stringify({ rate_limits_available: true, rate_limits: { five_hour: { utilization: 37, resets_at: '2030-01-01T00:00:00.000Z' } } }))
+    const quotas: QuotaReport[] = []
+    const d = createClaudeDriver({
+      launch, logger, permissions: { mode: 'default', enabledTools: [], disallowedTools: [] },
+      callbacks: { onEvent: () => {}, onQuotaReport: (q) => void quotas.push(q) },
+      ...(quotaSource ? { quotaSource } : {}),
+    })
+    driver = d
+    await d.start()
+    // Native prompt exchanges are the barriers: the pull is asked at initialize, answered before these prompts' results.
+    await (await d.send('native barrier 1')).result
+    await (await d.send('native barrier 2')).result
+    const pulls = home.received().filter((f) => (f.request as { subtype?: unknown } | undefined)?.subtype === 'get_usage')
+    expect(pulls.length).toBe(quotaSource === 'host-login' ? 1 : 0)
+    const pulled = quotas.map((q) => ({ source: q.source, accountScope: q.accountScope, windows: q.windows.map((w) => [w.key, w.percentUsed]) }))
+    expect(pulled).toEqual(quotaSource === 'host-login' ? [{ source: 'host-login-pull', accountScope: 'host-login', windows: [['five_hour', 37]] }] : [])
+  }
+  test('quotaSource unset: no usage pull and no pulled report', () => pullsOnlyWhenChosen(undefined))
+  test('quotaSource none: no usage pull and no pulled report', () => pullsOnlyWhenChosen('none'))
+  test('quotaSource host-login: exactly one usage pull of the supplied home, reported as host-login-pull / host-login', () => pullsOnlyWhenChosen('host-login'))
+})
+
+async function waitUntil(condition: () => boolean, timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error('condition not reached')
+    await Bun.sleep(5)
+  }
+}

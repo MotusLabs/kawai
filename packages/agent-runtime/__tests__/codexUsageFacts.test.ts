@@ -10,7 +10,9 @@
 //   no update has usage null.
 // - A successor turn reusing a tool item id has its own call and count.
 // - Waits: a retrying limit error opens one wait; it ends resumed only on a
-//   later item, delta or token update of that turn (or its success); a quota
+//   later new item phase, delta or grown token update of that turn (or its
+//   success), decided before any observer of that frame runs; a replayed or
+//   regressive item phase is no progress and no count (F2); a quota
 //   push or an elapsed reset never ends it; a failed or interrupted turn and
 //   a stop end it cancelled, an unexpected exit process-ended.
 // - The one account/rateLimits/read is a `report` of the session's login;
@@ -184,6 +186,44 @@ describe('Codex limit waits', () => {
       if (repeat === 50) expect(result.usage).toBeNull()
     })
   }
+
+  // Review F2/A3 (ported): a replayed item is no evidence the retry resumed; the method name alone proves nothing.
+  const done = { type: 'commandExecution', id: 'same-completed', command: 'ls', cwd: '/', status: 'completed', exitCode: 0, aggregatedOutput: 'old' }
+  const replayStaysOpen = async (replay: Note[]) => {
+    const h = recorded()
+    await h.driver.start()
+    const push: Note = { method: 'account/rateLimits/updated', params: { rateLimits: snapshot(42, 1900000000) } }
+    const handle = await h.driver.send(script([{ method: 'item/completed', params: { item: done } }, retry(), ...replay, push], 'hold'))
+    await waitFor(() => h.quotas.some((q) => q.source === 'push'))
+    const before = h.waits().map((e) => e.type)
+    await h.driver.interrupt()
+    const result = await handle.result
+    expect(before).toEqual(['wait-start'])
+    expect(h.waits().map((e) => (e.type === 'wait-end' ? e.cause : e.type))).toEqual(['wait-start', 'cancelled'])
+    expect(result.toolCallCount).toBe(1)
+    expect(h.events.filter((e) => e.type === 'tool_result' || e.type === 'tool_call').map((e) => e.type)).toEqual(['tool_result'])
+    expect(h.events.filter((e) => e.type === 'assistant_delta' && e.messageId === 'same-completed')).toEqual([])
+  }
+  test('a replay of the completed item after the retry is not progress: the wait stays open until the interrupt cancels it once, and the item counts once', () =>
+    replayStaysOpen([{ method: 'item/completed', params: { item: done } }]))
+  test('a started phase after the item completed after the retry is not progress: the wait stays open until the interrupt cancels it once, and the item counts once', () =>
+    replayStaysOpen([{ method: 'item/started', params: { item: done } }]))
+  test('the whole item again, started and completed after the retry is not progress: the wait stays open until the interrupt cancels it once, and the item counts once', () =>
+    replayStaysOpen([{ method: 'item/started', params: { item: done } }, { method: 'item/completed', params: { item: done } }]))
+  test('a delta naming the completed item after the retry is not progress: the wait stays open until the interrupt cancels it once, and the item counts once', () =>
+    replayStaysOpen([{ method: 'item/agentMessage/delta', params: { itemId: 'same-completed', delta: 'late' } }]))
+
+  test('a new item after the retry resumes the wait even when an observer of its event stops the driver; identical deltas are both kept', async () => {
+    const h = recorded({ callbacks: { onEvent: (event) => void (event.type === 'tool_call' && event.toolCallId === 'fresh' && h.driver.kill().catch(() => {})) } })
+    await h.driver.start()
+    const first = await h.driver.send(script([delta('same'), delta('same')]))
+    await first.result
+    expect(h.events.filter((e) => e.type === 'assistant_delta' && e.turnId === first.turnId && e.messageId === 'm-delta').map((e) => (e as { delta: string }).delta)).toEqual(['same', 'same'])
+    const fresh = { ...done, id: 'fresh' }
+    const handle = await h.driver.send(script([retry(), { method: 'item/started', params: { item: fresh } }], 'hold'))
+    expect((await handle.result).outcome).toBe('interrupted')
+    expect(h.waits().map((e) => (e.type === 'wait-end' ? e.cause : e.type))).toEqual(['wait-start', 'resumed'])
+  })
 
   test('a non-limit retry opens no wait', async () => {
     const h = recorded()

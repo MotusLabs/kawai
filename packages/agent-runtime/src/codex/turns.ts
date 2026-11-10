@@ -27,6 +27,8 @@ export interface CodexTurnState {
   usage: TokenUsage | null
   readonly toolIds: Set<string>
   readonly compactionIds: Set<string>
+  /** Each native item's accepted phase in this turn (facts.ts): a duplicate or regressive phase is rejected. */
+  readonly itemPhases: Map<string, 'started' | 'completed'>
   /** turn/interrupt was sent (or is owed once the native id is known). */
   interruptOwed: boolean
   resolve(result: TurnResult): void
@@ -45,7 +47,7 @@ export function newCodexTurn(turnId: string, messageUuid: string | null, text: s
       turn.codexTurnId = id
       bound(id)
     },
-    finalText: null, model, usage: null, toolIds: new Set(), compactionIds: new Set(), interruptOwed: false, resolve, result,
+    finalText: null, model, usage: null, toolIds: new Set(), compactionIds: new Set(), itemPhases: new Map(), interruptOwed: false, resolve, result,
   }
   return turn
 }

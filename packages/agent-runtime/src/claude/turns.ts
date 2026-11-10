@@ -2,8 +2,9 @@
 // reported for it, and the single result every handle bound to it receives.
 // Submitted turns carry the UUID of the message that opened them; an
 // agent-started turn (L24) has none. Its facts (model, tool calls,
-// compactions, provider cost, the bound result's tokens) are its own: a
-// result of any outcome reports what is known and null for the rest.
+// compactions, provider cost, the bound result's tokens, else its own
+// requests' observed tokens) are its own: a result of any outcome reports
+// what is known and null for the rest.
 import type { SDKResultMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { TurnOutcome, TurnResult } from '../contract.js'
 import { AgentRuntimeError, type AgentErrorInfo } from '../errors.js'
@@ -25,7 +26,9 @@ export interface Turn {
   compactionIds: Set<string>
   /** Summed provider-reported cost of the turn's stream events; null when none was reported. */
   providerCost: number | null
-  /** Tokens of the result bound to this turn; null until one carries them. */
+  /** Observed tokens of this turn's own bound main-thread requests, by message id (each request once). */
+  readonly requests: Map<string, TokenUsage>
+  /** The bound result's tokens when it carries them, else the sum of `requests`; null while neither is known. */
   usage: TokenUsage | null
   resolve(result: TurnResult): void
   result: Promise<TurnResult>
@@ -36,7 +39,7 @@ export function newTurn(turnId: string, messageUuid: string | null, text: string
   const result = new Promise<TurnResult>((r) => {
     resolve = r
   })
-  return { turnId, messageUuid, text, opened: false, settled: false, finalText: null, model: null, toolIds: new Set(), compactionIds: new Set(), providerCost: null, usage: null, resolve, result }
+  return { turnId, messageUuid, text, opened: false, settled: false, finalText: null, model: null, toolIds: new Set(), compactionIds: new Set(), providerCost: null, requests: new Map(), usage: null, resolve, result }
 }
 
 export function turnResult(turn: Turn, outcome: TurnOutcome, error: AgentErrorInfo | null): TurnResult {

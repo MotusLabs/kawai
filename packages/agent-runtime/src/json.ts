@@ -12,8 +12,9 @@ export type JsonObject = { [key: string]: JsonValue }
  * keeps stays as is; a non-finite number is null; a bigint is its decimal
  * string; undefined, a function or a symbol is dropped from an object and
  * null in an array; a value with toJSON (a Date) is its result; a repeated
- * ancestor (a cycle) is null. So an event survives a JSONL round-trip
- * unchanged.
+ * ancestor (a cycle) is null. Every own enumerable key is kept as an own
+ * data property, `__proto__` included. So an event survives a JSONL
+ * round-trip unchanged.
  */
 export function toJsonValue(value: unknown): JsonValue {
   return normalize(value, new Set()) ?? null
@@ -58,7 +59,8 @@ function normalize(value: unknown, ancestors: Set<object>): JsonValue | undefine
         continue
       }
       const json = normalize(item, ancestors)
-      if (json !== undefined) out[key] = json
+      // An own data property, never an assignment: a JSON key `__proto__` stays a key, not a prototype change.
+      if (json !== undefined) Object.defineProperty(out, key, { value: json, enumerable: true, writable: true, configurable: true })
     }
     return out
   } finally {

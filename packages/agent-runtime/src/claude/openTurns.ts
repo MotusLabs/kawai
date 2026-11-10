@@ -59,8 +59,8 @@ export class OpenTurns {
   }
 
   settle(turn: Turn, outcome: TurnOutcome, error: AgentErrorInfo | null, subtype: string, message?: SDKResultMessage): TurnResult {
-    // The bound result's own tokens (none for an interrupt): never another turn's.
-    if (message && !turn.settled) turn.usage = claudeResultUsage(message.usage)
+    // The bound result's own aggregate when it carries one (never another turn's); else the turn keeps its requests' partial tokens.
+    if (message && !turn.settled) turn.usage = claudeResultUsage(message.usage) ?? turn.usage
     const result = turnResult(turn, outcome, error)
     if (turn.settled) return result
     turn.settled = true

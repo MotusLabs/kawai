@@ -7,6 +7,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { initDatabase, type ChatSessionRecord, type SessionDatabase } from '../db'
+import { schemaCopy } from './schemaDb'
 import { cleanGitEnv } from '../git/gitCommand'
 import { MailboxStore } from '../team/mailboxStore'
 import { TaskStore } from '../team/taskStore'
@@ -68,8 +69,11 @@ export const sessionRow = (sessionId: string, groupId: string | null, projectPat
   sessionId, groupId, projectPath, name: sessionId, sdkSessionId: null, status: 'waiting', createdAt: '', lastActivityAt: '',
 })
 
+/** The database a bench uses: what its stores and services read and the test closes. */
+export type BenchDatabase = Pick<SessionDatabase, 'db' | 'close'>
+
 export interface PlanBench {
-  db: SessionDatabase
+  db: BenchDatabase
   tasks: TaskStore
   mail: MailboxStore
   assignmentStore: AssignmentStore
@@ -89,8 +93,24 @@ export interface PlanBench {
 
 let benchCounter = 0
 
-export function createPlanBench(world: PlanWorld, options: Partial<ConstructorParameters<typeof PlanService>[1]> = {}): PlanBench {
-  const db = initDatabase({ path: path.join(fs.mkdtempSync(path.join(world.root, 'db-')), 'plans.db') })
+/**
+ * Opt-in fixture choices. The default opens a migrated file database through
+ * `initDatabase` (every migration with its backup); `database: 'template'`
+ * deserializes the process's migrated in-memory template instead, for a bench
+ * whose test never reopens a file or exercises a migration.
+ */
+export interface PlanBenchFixture { database?: 'file' | 'template' }
+
+function openBenchDatabase(world: PlanWorld, fixture: PlanBenchFixture): BenchDatabase {
+  if (fixture.database === 'template') {
+    const db = schemaCopy()
+    return { db, close: () => db.close() }
+  }
+  return initDatabase({ path: path.join(fs.mkdtempSync(path.join(world.root, 'db-')), 'plans.db') })
+}
+
+export function createPlanBench(world: PlanWorld, options: Partial<ConstructorParameters<typeof PlanService>[1]> = {}, fixture: PlanBenchFixture = {}): PlanBench {
+  const db = openBenchDatabase(world, fixture)
   const mail = new MailboxStore(db.db)
   const assignmentStore = new AssignmentStore(db.db, mail)
   const tasks = new TaskStore(db.db, mail, assignmentStore)

@@ -24,8 +24,8 @@ import { claudeStream, codexStream, exercised } from './helpers/usageStreams.js'
 afterEach(stopDrivers)
 
 const SHARED_CLASSES = ['failure', 'start', 'end:resumed', 'end:cancelled', 'quota:push', 'outcome:success', 'outcome:failed', 'usage:null', 'usage:known', 'tools:several', 'compaction', 'push-in-wait-unresumed']
-const CLAUDE_CLASSES = [...SHARED_CLASSES, 'cost:known', 'model:null']
-const CODEX_CLASSES = [...SHARED_CLASSES, 'quota:report']
+const CLAUDE_CLASSES = [...SHARED_CLASSES, 'cost:known', 'model:null', 'usage:partial', 'delta-of-earlier-turn-request']
+const CODEX_CLASSES = [...SHARED_CLASSES, 'quota:report', 'replay-in-wait-unresumed']
 const claudeSeen: Set<string>[] = []
 const codexSeen: Set<string>[] = []
 

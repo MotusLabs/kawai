@@ -2,7 +2,9 @@
 // report is null, never the legacy zero, and a source with no usage at all
 // has none.
 // - Claude: a result's `usage` (one turn's input, output, cache-read and
-//   cache-creation tokens).
+//   cache-creation tokens). A turn whose result carries none (an interrupt,
+//   an exit, a failure without usage) reports the summed tokens of its own
+//   bound main-thread requests observed so far, each request once.
 // - Codex: thread/tokenUsage/updated carries the thread's running `total`
 //   and the latest request's `last`. A turn's requests are the difference
 //   between consecutive totals. The first update of a generation counts its
@@ -29,6 +31,25 @@ export function claudeResultUsage(usage: unknown): TokenUsage | null {
     outputTokens: count(slice, 'output_tokens'),
     cacheReadTokens: count(slice, 'cache_read_input_tokens'),
     cacheCreationTokens: count(slice, 'cache_creation_input_tokens'),
+  }
+}
+
+/**
+ * One Claude request's observed tokens folded with another source of the same
+ * request (message_start, message_delta, the assistant frame): each counter
+ * is cumulative within a request, so the field-wise maximum of the reported
+ * values is right in any order and a repeated snapshot adds nothing. A
+ * counter no source reported stays null.
+ */
+export function mergeClaudeRequestUsage(current: TokenUsage | null, incoming: unknown): TokenUsage | null {
+  const next = claudeResultUsage(incoming)
+  if (!current || !next) return current ?? next
+  const max = (x: number | null, y: number | null) => (x === null ? y : y === null ? x : Math.max(x, y))
+  return {
+    inputTokens: max(current.inputTokens, next.inputTokens),
+    outputTokens: max(current.outputTokens, next.outputTokens),
+    cacheReadTokens: max(current.cacheReadTokens, next.cacheReadTokens),
+    cacheCreationTokens: max(current.cacheCreationTokens, next.cacheCreationTokens),
   }
 }
 

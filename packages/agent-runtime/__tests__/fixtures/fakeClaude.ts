@@ -37,8 +37,10 @@
 // whose `usage` is the JSON's (null: no usage key; absent: the default) and
 // whose subtype is the JSON's `subtype` (default success; any other carries
 // the `errors` list the SDK reads from an error result); with `hold: true`
-// it writes no result and the turn runs on, like `hang`. Anything else is
-// echoed. Stdin EOF exits 0.
+// it writes no result and the turn runs on, like `hang`; with `exit: <code>`
+// it exits with that code after the frames, mid-turn. Anything else is
+// echoed. Stdin EOF exits 0. The get_usage control request (the usage pull)
+// answers $HOME/.claude/usage.json verbatim, else rate_limits_available false.
 // Every received frame, and first the process argv as {"argv": [...]},
 // is appended to $FAKE_CLAUDE_LOG when set.
 //
@@ -296,8 +298,9 @@ function onUser(frame: { uuid?: string; message?: { content?: unknown } }) {
       running = uuid
       return
     case 'script': {
-      const script = JSON.parse(rest.join(' ')) as { frames?: Array<Record<string, unknown>>; usage?: unknown; subtype?: string; hold?: boolean }
+      const script = JSON.parse(rest.join(' ')) as { frames?: Array<Record<string, unknown>>; usage?: unknown; subtype?: string; hold?: boolean; exit?: number }
       for (const frame of script.frames ?? []) write({ ...frame, session_id: sessionId })
+      if (script.exit !== undefined) process.exit(script.exit)
       if (script.hold) {
         running = uuid
         return
@@ -361,6 +364,11 @@ function onControl(frame: { request_id: string; request: { subtype: string } }) 
       hooks = (frame.request as { hooks?: Record<string, Matcher[]> }).hooks ?? {}
       sdkServers = (frame.request as { sdkMcpServers?: string[] }).sdkMcpServers ?? []
       return respond({ commands: [], agents: [], models: [], account: {}, output_style: 'default', available_output_styles: [] })
+    case 'get_usage': {
+      // The usage pull reads this process's own home: $HOME/.claude/usage.json answers it verbatim, else no plan windows.
+      const file = `${process.env.HOME ?? ''}/.claude/usage.json`
+      return respond(fs.existsSync(file) ? (JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>) : { rate_limits_available: false })
+    }
     case 'interrupt': {
       const uuid = running
       running = null
