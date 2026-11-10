@@ -26,6 +26,10 @@
       "types": "./dist/claude/index.d.ts",
       "import": "./dist/claude/index.js"
     },
+    "./codex": {
+      "types": "./dist/codex/index.d.ts",
+      "import": "./dist/codex/index.js"
+    },
     "./events": {
       "types": "./dist/events.d.ts",
       "import": "./dist/events.js"

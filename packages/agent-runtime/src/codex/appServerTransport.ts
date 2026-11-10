@@ -14,7 +14,8 @@
 // nothing and are only counted. As in the committed client, an error with id
 // null names no request and fails every request pending at that moment.
 // A server request's handler runs only once its owned job is tracked; its
-// throw becomes the error reply and also stays owned evidence.
+// throw becomes the error reply and also stays owned evidence, except a
+// ServerRequestRefusal, which is only the deliberate error reply.
 //
 // Stop is one shared terminal operation: it closes admission and writes (stdin
 // first, so a recorder stopping from a write's own 'out' frame leaves that line
@@ -91,6 +92,21 @@ export class AppServerRpcError extends Error {
     const what = uncorrelated ? 'failed on an uncorrelated server error' : 'failed'
     super(`app-server request ${id} (${method}) ${what}${text ? `: ${(error as { message: string }).message}` : ''}`)
     this.name = 'AppServerRpcError'
+  }
+}
+
+/**
+ * Thrown by a server-request handler to answer with a JSON-RPC error on
+ * purpose (fail closed). Unlike any other throw it is the reply itself, not
+ * owned failure evidence.
+ */
+export class ServerRequestRefusal extends Error {
+  constructor(
+    readonly code: number,
+    message: string,
+  ) {
+    super(message)
+    this.name = 'ServerRequestRefusal'
   }
 }
 
@@ -224,6 +240,15 @@ export class AppServerTransport {
       return Promise.reject(new AgentRuntimeError({ category: 'internal', message: 'a server-request handler cannot join the stop of its own transport' }))
     }
     return this.terminal
+  }
+
+  /**
+   * Run `fn` outside this transport's handler jobs. A driver whose stop was
+   * begun by host code inside a handler calls stop() from here: that stop is
+   * the driver's own external one, not the handler's.
+   */
+  outside<T>(fn: () => T): T {
+    return this.jobs.outside(fn)
   }
 
   private refusal(): AgentRuntimeError | null {
@@ -363,8 +388,13 @@ export class AppServerTransport {
         try {
           reply = { result: (await handler(method, params, signal)) ?? {} }
         } catch (error) {
-          failure = { error }
-          reply = { error: { code: -32603, message: error instanceof Error ? error.message : String(error) } }
+          if (error instanceof ServerRequestRefusal) {
+            // A deliberate protocol refusal (an unknown method): answered, never a failure.
+            reply = { error: { code: error.code, message: error.message } }
+          } else {
+            failure = { error }
+            reply = { error: { code: -32603, message: error instanceof Error ? error.message : String(error) } }
+          }
         }
       }
       if (!this.write({ jsonrpc: '2.0', id, ...reply })) this.counters.droppedReplies++
