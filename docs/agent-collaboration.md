@@ -190,7 +190,10 @@ read-only senior assessment or an explicit takeover. Keep one writer.
 
 For other defect classes, the convergence signals and the backstop decide
 when a change needs a diagnosis instead of another fix (see "Convergence" in
-"Review protocol"). Environmental failures and clarified acceptance criteria should be
+"Review protocol"). On a manually managed task, any blocking finding still
+open after its first correction gets the same design reopen, and a fix result
+returns to review only with the reviewer's reproductions committed and
+passing. Environmental failures and clarified acceptance criteria should be
 recorded separately from code defects. Pause only affected work, keep other
 authorized work moving and do not infer permission to stop an execution.
 
