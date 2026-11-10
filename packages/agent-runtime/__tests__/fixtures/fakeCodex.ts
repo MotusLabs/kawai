@@ -1,10 +1,11 @@
 // A fake `codex app-server` for the Codex driver tests, launched through a
 // wrapper script as the driver's executablePath (helpers/codexDriverHarness.ts).
-// Newline-delimited JSON-RPC on stdio. Its pid is appended to $CODEX_HOME/pids
+// Newline-delimited JSON-RPC on stdio. Its pid is appended to $CODEX_HOME/pids,
+// its cwd and complete environment to $CODEX_HOME/envs.jsonl,
 // and every inbound line to $CODEX_HOME/received.jsonl; threads persist as $CODEX_HOME/threads/<id>.json,
 // so a resume in another process sees the same conversation history.
 //
-// Env: FAKE_CODEX_INIT=unauthorized|exit; FAKE_CODEX_RESUME=substitute|refuse|unauthorized;
+// Env: FAKE_CODEX_INIT=unauthorized|exit; FAKE_CODEX_RESUME=substitute|substitute-unknown|refuse|unauthorized;
 //      FAKE_CODEX_START=unauthorized.
 // A turn's text picks its script (default: one agent message with a unique
 // transformed text naming the thread's earlier messages):
@@ -18,6 +19,10 @@
 //   /late            completes, then repeats turn/completed and a foreign one
 //   /facts           tool, compaction, token, rate-limit and retry notifications
 //   /early           turn/started and the completion before the turn/start reply
+//   /foreign         a second turn/started (another id) during the turn, then completes
+//   /child           starts a helper in this process group holding stdout (pid in pids), then completes
+// FAKE_CODEX_START=agent: an agent turn starts and completes right after thread/start.
+import { spawn } from 'node:child_process'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -25,6 +30,7 @@ const home = process.env.CODEX_HOME!
 mkdirSync(join(home, 'threads'), { recursive: true })
 mkdirSync(join(home, 'sessions'), { recursive: true })
 appendFileSync(join(home, 'pids'), `${process.pid}\n`)
+appendFileSync(join(home, 'envs.jsonl'), `${JSON.stringify({ pid: process.pid, cwd: process.cwd(), env: process.env })}\n`)
 const send = (message: unknown) => process.stdout.write(`${JSON.stringify(message)}\n`)
 const reply = (id: unknown, result: unknown) => send({ jsonrpc: '2.0', id, result })
 const fail = (id: unknown, message: string, info?: unknown) => send({ jsonrpc: '2.0', id, error: { code: -32000, message, ...(info !== undefined ? { data: { codexErrorInfo: info } } : {}) } })
@@ -116,13 +122,22 @@ function turnStart(id: number, params: Record<string, any>) {
       notify('turn/started', { threadId: thread!.id, turn: { id: agentTurn, status: 'inProgress', items: [], error: null } })
       return complete(agentTurn, 'completed', 'agent-started reply')
     }
+    case '/child': {
+      const child = spawn(process.execPath, [join(import.meta.dir, 'helper.ts'), join(home, `child-${process.pid}.ticks`)], { stdio: ['ignore', 'inherit', 'ignore'] })
+      child.unref()
+      appendFileSync(join(home, 'pids'), `${child.pid}\n`)
+      return complete(turnId, 'completed', transformed('child'))
+    }
+    case '/foreign':
+      notify('turn/started', { threadId: thread!.id, turn: { id: `foreign-${turns}`, status: 'inProgress', items: [], error: null } })
+      return complete(turnId, 'completed', transformed('foreign'))
     case '/late':
       complete(turnId, 'completed', transformed('late'))
       notify('turn/completed', { threadId: thread!.id, turn: { id: turnId, status: 'completed', error: null, items: [{ type: 'agentMessage', id: 'dup', text: 'duplicate' }] } })
       return notify('turn/completed', { threadId: thread!.id, turn: { id: 'ghost', status: 'completed', error: null, items: [{ type: 'agentMessage', id: 'g', text: 'ghost' }] } })
     case '/facts': {
       const t = { threadId: thread!.id, turnId }
-      const command = { type: 'commandExecution', id: 'cmd-1', command: 'ls', cwd: '/', status: 'completed', exitCode: 0, aggregatedOutput: 'ok' }
+      const command = { type: 'commandExecution', id: 'cmd-1', command: 'curl -H SECRET-TOKEN-123 x', cwd: '/', status: 'completed', exitCode: 0, aggregatedOutput: 'ok' }
       notify('item/started', { ...t, item: command })
       notify('item/completed', { ...t, item: command })
       notify('item/completed', { ...t, item: command })
@@ -153,12 +168,17 @@ function handle(message: Record<string, any>) {
       thread = { id: threadId, path: join(home, 'sessions', `${threadId}.jsonl`), history: [] }
       writeFileSync(thread.path, '')
       save(thread)
-      return reply(id, { thread: { id: threadId, path: thread.path }, model: 'fake-model' })
+      reply(id, { thread: { id: threadId, path: thread.path }, model: 'fake-model' })
+      if (process.env.FAKE_CODEX_START === 'agent') {
+        notify('turn/started', { threadId, turn: { id: 'boot-agent', status: 'inProgress', items: [], error: null } })
+        complete('boot-agent', 'completed', 'boot agent reply')
+      }
+      return
     }
     case 'thread/resume': {
       const mode = process.env.FAKE_CODEX_RESUME
       if (mode === 'unauthorized') return fail(id, 'unauthorized', 'unauthorized')
-      if (mode === 'substitute') {
+      if (mode === 'substitute' || (mode === 'substitute-unknown' && !load(params.threadId))) {
         const other = `thr-${crypto.randomUUID()}`
         thread = { id: other, path: join(home, 'sessions', `${other}.jsonl`), history: [] }
         save(thread)

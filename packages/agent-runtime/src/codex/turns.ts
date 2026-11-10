@@ -7,6 +7,7 @@
 // requests, and unknown values stay null (R08).
 import type { TurnOutcome, TurnResult } from '../contract.js'
 import type { AgentErrorInfo } from '../errors.js'
+import type { EventBody } from '../eventStream.js'
 import type { TokenUsage } from '../usage/types.js'
 
 export interface CodexTurnState {
@@ -60,5 +61,35 @@ export function codexTurnResult(turn: CodexTurnState, outcome: TurnOutcome, erro
     toolCallCount: turn.toolIds.size,
     compactionCount: turn.compactionIds.size,
     error,
+  }
+}
+
+export interface SettleHost {
+  emit(body: EventBody): void
+  notify(name: string, callback: () => void): void
+  onTurnResult: ((result: TurnResult) => void) | undefined
+}
+
+/**
+ * Decide a turn's terminal result now, marking it settled with no callback,
+ * and return the step that publishes it: turn_interrupted or turn_completed
+ * only for a turn that opened, then its handle, then onTurnResult, once. Null
+ * when the turn was already decided.
+ */
+export function decideTurn(turn: CodexTurnState, outcome: TurnOutcome, error: AgentErrorInfo | null, subtype: string, terminalReason: string | null, host: SettleHost): (() => void) | null {
+  if (turn.settled) return null
+  turn.settled = true
+  const result = codexTurnResult(turn, outcome, error)
+  return () => {
+    if (turn.opened && outcome === 'interrupted') host.emit({ type: 'turn_interrupted', turnId: turn.turnId })
+    else if (turn.opened) {
+      host.emit({
+        type: 'turn_completed', turnId: turn.turnId, subtype, isError: outcome !== 'success', usage: result.usage, finalText: result.finalText,
+        totalCostUsd: null, providerCostUsd: null, numTurns: null, terminalReason,
+      })
+    }
+    turn.resolve(result)
+    const onTurnResult = host.onTurnResult
+    if (onTurnResult) host.notify('onTurnResult', () => onTurnResult(result))
   }
 }

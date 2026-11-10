@@ -6,30 +6,9 @@
 // stopped only after the process actually exited; and the composed policy is
 // on the wire of thread/start and turn/start.
 import { afterEach, describe, expect, test } from 'bun:test'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
-import type { AgentRuntimeError } from '../src/errors.js'
-import { codexDriver, sent, stopDrivers } from './helpers/codexDriverHarness.js'
+import { alive, codexDriver, pids, refusal, sent, stopDrivers, waitFor } from './helpers/codexDriverHarness.js'
 
 afterEach(stopDrivers)
-
-const alive = (pid: number) => {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch {
-    return false
-  }
-}
-
-const refusal = async (promise: Promise<unknown>) => {
-  try {
-    await promise
-  } catch (error) {
-    return error as AgentRuntimeError
-  }
-  throw new Error('expected a refusal')
-}
 
 describe('Codex driver: the first public-factory path', () => {
   // @covers: agent-runtime › Session start and turn results are distinct › Successful turn
@@ -95,22 +74,3 @@ describe('Codex driver: the first public-factory path', () => {
     expect(turn!.params).toMatchObject({ approvalPolicy: 'never', approvalsReviewer: 'user', sandboxPolicy: { type: 'readOnly', networkAccess: true } })
   })
 })
-
-async function waitFor<T>(probe: () => T | undefined | null | false, ms = 5000): Promise<T | undefined> {
-  const deadline = Date.now() + ms
-  for (;;) {
-    const value = probe()
-    if (value) return value
-    if (Date.now() > deadline) return undefined
-    await new Promise((resolve) => setTimeout(resolve, 10))
-  }
-}
-
-/** The pids the fake processes of this home recorded, oldest first. */
-export function pids(home: string): number[] {
-  try {
-    return readFileSync(join(home, 'pids'), 'utf8').split('\n').filter(Boolean).map(Number)
-  } catch {
-    return []
-  }
-}

@@ -95,11 +95,7 @@ export class AppServerRpcError extends Error {
   }
 }
 
-/**
- * Thrown by a server-request handler to answer with a JSON-RPC error on
- * purpose (fail closed). Unlike any other throw it is the reply itself, not
- * owned failure evidence.
- */
+/** A handler's deliberate JSON-RPC error reply (fail closed): the reply itself, not owned failure evidence. */
 export class ServerRequestRefusal extends Error {
   constructor(
     readonly code: number,
@@ -242,11 +238,7 @@ export class AppServerTransport {
     return this.terminal
   }
 
-  /**
-   * Run `fn` outside this transport's handler jobs. A driver whose stop was
-   * begun by host code inside a handler calls stop() from here: that stop is
-   * the driver's own external one, not the handler's.
-   */
+  /** Run `fn` outside the handler jobs: a driver stop begun by handler host code calls stop() from here. */
   outside<T>(fn: () => T): T {
     return this.jobs.outside(fn)
   }

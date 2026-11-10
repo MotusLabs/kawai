@@ -2,34 +2,29 @@
 // owned `codex app-server` per generation (appServerTransport.ts), composed
 // with the shared lifecycle core, checkpoint gate and event stream.
 //
-// - Start. Explicit and promptless: initialize, then thread/start, or
-//   thread/resume of the saved thread id (generation.ts). Every generation
-//   reads the launch again and spawns with exactly its cwd and env. A resume
-//   that is refused, or answered with another thread, fails start with
-//   category `resume` and never falls back to a fresh thread; the next start
-//   tries the same saved id again.
-// - Identity. send mints the turn id and message UUID (clientUserMessageId);
-//   the app-server's turn id binds from the turn/start reply or turn/started,
-//   whichever comes first (turns.ts). Results and facts bind only by that
-//   native id, so a late or foreign turn/completed completes nothing (R03).
-//   An app-server turn no send opened is agent-started while idle (L24),
-//   binds to the active turn while active (L25), and opens nothing otherwise.
-// - Continuation. steer joins the active turn through turn/steer with its
-//   native id as expectedTurnId; the handle shares that turn's result (L22).
+// - Start. Explicit and promptless: initialize, then thread/start or
+//   thread/resume of the saved thread id, re-reading the launch per
+//   generation. A refused resume, or one answered with another thread, fails
+//   with category `resume`, never falls back to a fresh thread, and the next
+//   start tries the same id. Readiness awaits the checkpoint's persistence.
+// - Identity. send mints the turn id and message UUID (clientUserMessageId).
+//   The native turn id binds only from the turn/start reply or turn/started
+//   (turns.ts); results and facts bind by it, so a late or foreign frame
+//   completes nothing (R03). An unbound app-server turn is agent-started
+//   while idle (L24), binds to the active turn while active (L25), else
+//   opens nothing (L26).
+// - Continuation. steer joins the active turn via turn/steer with that
+//   turn's own native id as expectedTurnId and shares its result (L22);
 //   queue is unsupported (L23).
 // - Policy. The composed permissions go on every thread/start, thread/resume
-//   and turn/start. Server requests follow their disposition: a fixed answer,
-//   a host request (requests.ts), a host tool call (tools.ts) or a deliberate
-//   error reply. Every host request, tool call and control is an owned job.
-// - Checkpoints. The thread id and path are reported through the gate before
-//   dependent sends are acknowledged; interrupt refuses every waiting send.
-// - Stop. The lifecycle reserves the terminal promise first; teardown closes
-//   requests, settles the open turn as stopped, then stops every generation's
-//   transport (current and retired) and joins all owned work; accounting adds
-//   each process's native evidence.
-// - Unexpected exit. The open turn's outcome is decided before any callback;
-//   then requests cancel, one transport error, the turn's completion and one
-//   onProcessEnd.
+//   and turn/start. A server request gets a fixed answer, a host request
+//   (requests.ts), a host tool call or a deliberate error reply; requests and
+//   tools of a retired generation reach no host code. All host work is owned.
+// - Stop. The lifecycle reserves the terminal first; teardown decides the
+//   open turn, closes requests, publishes, then stops every current and
+//   retired transport and joins all owned work; accounting adds each
+//   process's native evidence. An unexpected exit likewise decides the open
+//   turn before any callback, then reports one error and one onProcessEnd.
 import type { AnswerOptions, AnswerOutcome, InterruptReceipt, ProcessExitFact, ProcessExitReceipt, SubmitOptions, TurnHandle, TurnOutcome } from '../contract.js'
 import { AgentRuntimeError, type AgentErrorInfo } from '../errors.js'
 import { EventStream, type EventBody } from '../eventStream.js'
@@ -37,19 +32,18 @@ import type { PendingRequest, QuestionAnswers } from '../events.js'
 import type { JsonObject } from '../json.js'
 import { CHECKPOINT_FAILED, CheckpointGate } from '../lifecycle/checkpoints.js'
 import { DriverLifecycle } from '../lifecycle/lifecycle.js'
-import { resolveExecutable, resolveLaunch, type ResolvedLaunch } from '../process/launch.js'
+import { resolveExecutable, resolveLaunch } from '../process/launch.js'
 import type { LeaderExit } from '../process/ownedProcess.js'
 import { bindToolSet, type BoundToolSet } from '../tools/toolSet.js'
 import { checkSubmission } from '../claude/turns.js'
 import { AppServerRpcError, AppServerTransport, ServerRequestRefusal } from './appServerTransport.js'
-import { codexErrorCategory, rpcErrorInfo } from './auth.js'
 import { CodexFacts } from './facts.js'
-import { accountGenerations, CAPABILITIES, CLIENT_INFO, newGeneration, startFailure, stopGeneration, threadOpened, type CodexGeneration } from './generation.js'
-import { codexThreadResumeParams, codexThreadStartParams, codexTurnStartParams, composeCodexPermissions, type CodexPermissionComposition } from './permissions.js'
-import { cancelReply, CodexRequests } from './requests.js'
+import { accountGenerations, CAPABILITIES, CLIENT_INFO, newGeneration, rpcError, startFailure, stopGeneration, threadOpened, threadParams, type CodexGeneration } from './generation.js'
+import { codexTurnStartParams, composeCodexPermissions, type CodexPermissionComposition } from './permissions.js'
+import { cancelReply, CodexRequests, formElicitation } from './requests.js'
 import type { CodexSessionOptions } from './sessionOptions.js'
-import { codexDynamicTools, dispatchCodexToolCall, type CodexDynamicToolCall } from './tools.js'
-import { codexTurnResult, newCodexTurn, type CodexTurnState } from './turns.js'
+import { dispatchCodexToolCall, type CodexDynamicToolCall } from './tools.js'
+import { decideTurn, newCodexTurn, type CodexTurnState } from './turns.js'
 export type { CodexSessionOptions } from './sessionOptions.js'
 
 interface Prepared {
@@ -77,7 +71,7 @@ export class CodexSession {
   private threadId: string | null
   /** The open turn (Codex runs one at a time). */
   private turn: CodexTurnState | null = null
-  /** Every bound native turn id, for the session's life (late input for a settled turn is dropped). */
+  /** The current generation's bound native turn ids (late input for a settled turn is dropped). */
   private readonly native = new Map<string, CodexTurnState>()
   /** Submitted turns whose native id is not known yet, oldest first. */
   private unbound: CodexTurnState[] = []
@@ -144,6 +138,10 @@ export class CodexSession {
   }
 
   start(): Promise<void> {
+    // Readiness waits on the checkpoint barrier: from inside onCheckpoint it would wait on itself.
+    if (this.checkpoints.insideCallback() && this.lifecycle.state === 'starting') {
+      return Promise.reject(new AgentRuntimeError({ category: 'internal', message: 'start() inside onCheckpoint would wait for its own persistence' }))
+    }
     return this.lifecycle.start((generation) => this.boot(generation))
   }
 
@@ -169,6 +167,8 @@ export class CodexSession {
     generation = newGeneration(number, transport, this.threadId)
     const previous = this.current()
     if (previous) this.retire(previous)
+    // Native turn ids are the generation's own: a successor may reuse one, and old frames are dropped.
+    this.native.clear()
     this.generations.push(generation)
     // The process and its reader live outside this initialization job: host callbacks they run are not inside it.
     this.lifecycle.jobs.outside(() => transport.start())
@@ -177,7 +177,7 @@ export class CodexSession {
     try {
       await transport.initialize()
       step = generation.resumeTarget ? 'thread/resume' : 'thread/start'
-      opened = threadOpened(await transport.request(step, this.threadParams(launch, generation.resumeTarget)))
+      opened = threadOpened(await transport.request(step, threadParams(launch, generation.resumeTarget, this.options, this.permissions, this.tools)))
       if (!opened) throw new AgentRuntimeError({ category: 'transport', message: `the app-server answered ${step} without a thread` })
       if (generation.resumeTarget !== null && opened.threadId !== generation.resumeTarget) {
         throw new AgentRuntimeError({ category: 'resume', message: 'the app-server did not resume the saved thread' })
@@ -192,19 +192,11 @@ export class CodexSession {
     generation.threadId = opened.threadId
     this.threadId = opened.threadId
     this.reportModel(opened.model)
-    this.checkpoints.report({ runtime: 'codex', runtimeSessionId: opened.threadId, ...(opened.path ? { transcriptPath: opened.path } : {}) })
-  }
-
-  /** thread/start or thread/resume parameters: caller fields, then the policy (which wins). */
-  private threadParams(launch: ResolvedLaunch, resumeTarget: string | null): JsonObject {
-    const caller: Record<string, unknown> = {
-      cwd: launch.cwd,
-      ...(this.options.model ? { model: this.options.model } : {}),
-      ...(this.options.systemPromptAppend ? { developerInstructions: this.options.systemPromptAppend } : {}),
-    }
-    if (resumeTarget !== null) return codexThreadResumeParams(resumeTarget, { ...caller, excludeTurns: true }, this.permissions) as JsonObject
-    const dynamicTools = codexDynamicTools(this.tools)
-    return codexThreadStartParams({ ...caller, ephemeral: false, ...(dynamicTools ? { dynamicTools } : {}) }, this.permissions) as JsonObject
+    // The readiness barrier: start resolves only once the configured persistence of this identity finished.
+    await this.checkpoints.report({ runtime: 'codex', runtimeSessionId: opened.threadId, ...(opened.path ? { transcriptPath: opened.path } : {}) })
+    const refused = this.checkpoints.failedRefusal()
+    if (refused) throw refused
+    if (this.stopBegun()) throw this.lifecycle.cancelled('the driver was stopped while its checkpoint persisted')
   }
 
   private reportModel(model: string | null): void {
@@ -223,16 +215,17 @@ export class CodexSession {
 
   // ---- runtime input -------------------------------------------------------
 
-  /** The open turn a notification or request names (by native id), or null. */
+  /**
+   * The open turn a notification or request names, by bound native id only,
+   * or null. Nothing here binds or opens a turn: only turn/started and the
+   * turn/start reply bind a native id, so a request or item frame cannot
+   * attach itself to (or mint) a turn.
+   */
   private turnFor(params: Record<string, unknown>): CodexTurnState | null {
     const id = typeof params.turnId === 'string' ? params.turnId : null
     if (id === null) return this.turn
     const known = this.native.get(id)
-    if (known) return known.settled ? null : known
-    const unbound = this.unbound[0]
-    if (!unbound) return null
-    this.bindNative(unbound, id)
-    return unbound.settled ? null : unbound
+    return known && !known.settled ? known : null
   }
 
   private bindNative(turn: CodexTurnState, id: string): void {
@@ -296,23 +289,9 @@ export class CodexSession {
     this.decide(turn, outcome, error, subtype, terminalReason)?.()
   }
 
-  /** Decide a turn's result now (marking it settled) and return the step that publishes it. */
+  /** Decide a turn's result now (marking it settled) and return the step that publishes it (turns.ts). */
   private decide(turn: CodexTurnState, outcome: TurnOutcome, error: AgentErrorInfo | null, subtype: string, terminalReason: string | null = null): (() => void) | null {
-    if (turn.settled) return null
-    turn.settled = true
-    const result = codexTurnResult(turn, outcome, error)
-    return () => {
-      if (turn.opened && outcome === 'interrupted') this.emit({ type: 'turn_interrupted', turnId: turn.turnId })
-      else if (turn.opened) {
-        this.emit({
-          type: 'turn_completed', turnId: turn.turnId, subtype, isError: outcome !== 'success', usage: result.usage, finalText: result.finalText,
-          totalCostUsd: null, providerCostUsd: null, numTurns: null, terminalReason,
-        })
-      }
-      turn.resolve(result)
-      const onTurnResult = this.options.callbacks.onTurnResult
-      if (onTurnResult) this.notify('onTurnResult', () => onTurnResult(result))
-    }
+    return decideTurn(turn, outcome, error, subtype, terminalReason, { emit: (body) => this.emit(body), notify: (name, callback) => this.notify(name, callback), onTurnResult: this.options.callbacks.onTurnResult })
   }
 
   /** L14: decide the open turn before any callback, then publish in order; onProcessEnd once. */
@@ -345,6 +324,11 @@ export class CodexSession {
       return job ?? dispatchCodexToolCall(null, null, params as CodexDynamicToolCall)
     }
     if (!live || (typeof params.threadId === 'string' && params.threadId !== generation.threadId)) return cancelReply(method, params)
+    const unrepresentable = formElicitation(method, params)
+    if (unrepresentable) {
+      this.emit({ type: 'error', error: { category: 'unsupported', message: unrepresentable } })
+      return { action: 'decline', content: null, _meta: null }
+    }
     return this.runOwned(`request:${method}`, () => this.requests.serve(method, params, signal)) ?? cancelReply(method, params)
   }
 
@@ -389,7 +373,7 @@ export class CodexSession {
         if (typeof id === 'string') this.bindNative(turn, id)
       } catch (error) {
         if (this.stopBegun() && error instanceof AgentRuntimeError && error.category === 'stopped') return
-        this.failTurn(turn, this.rpcError(error, 'Codex refused the turn'))
+        this.failTurn(turn, rpcError(error, 'Codex refused the turn'))
       }
     })
     return { turnId: turn.turnId, messageUuid: prepared.messageUuid, result: turn.result }
@@ -406,15 +390,10 @@ export class CodexSession {
         await generation.transport.request('turn/steer', { threadId: generation.threadId, input: this.input(prepared.text), expectedTurnId: id, clientUserMessageId: prepared.messageUuid } as JsonObject)
       } catch (error) {
         if (this.stopBegun() && error instanceof AgentRuntimeError && error.category === 'stopped') return
-        if (!turn.settled) this.emit({ type: 'error', error: this.rpcError(error, 'Codex refused the steered message') })
+        if (!turn.settled) this.emit({ type: 'error', error: rpcError(error, 'Codex refused the steered message') })
       }
     })
     return { turnId: turn.turnId, messageUuid: prepared.messageUuid, result: turn.result }
-  }
-
-  private rpcError(error: unknown, what: string): AgentErrorInfo {
-    if (error instanceof AppServerRpcError) return { category: codexErrorCategory(rpcErrorInfo(error.error), 'provider'), message: `${what}: ${error.message}` }
-    return { category: 'transport', message: `${what}: ${error instanceof Error ? error.message : String(error)}` }
   }
 
   private failTurn(turn: CodexTurnState, error: AgentErrorInfo): void {
@@ -440,14 +419,14 @@ export class CodexSession {
     const cancelled = this.checkpoints.cancelWaiting()
     const receipt = this.lifecycle.holdState(() => {
       const receipt = this.lifecycle.interrupt()
-      this.requests.cancelAll()
+      // The turn's outcome is decided before the request cancellations publish anything.
       const turn = this.turn
       this.turn = null
-      if (turn) {
-        this.settle(turn, 'interrupted', INTERRUPTED, 'interrupted')
-        const generation = this.current()
-        if (generation && !generation.retired) this.sendInterrupt(generation, turn)
-      }
+      const publish = turn ? this.decide(turn, 'interrupted', INTERRUPTED, 'interrupted') : null
+      this.requests.cancelAll()
+      publish?.()
+      const generation = this.current()
+      if (turn && generation && !generation.retired) this.sendInterrupt(generation, turn)
       return receipt
     })
     return cancelled > 0 ? { outcome: 'requested', processExit: false } : receipt
@@ -494,11 +473,13 @@ export class CodexSession {
 
   /** Close requests, settle the open turn as stopped (L11), stop every generation and wait for each actual exit. */
   private async teardown(): Promise<ProcessExitFact[]> {
-    this.requests.close()
+    // Decide the open turn first, then close requests (their resolved events), then publish the turn.
     const turn = this.turn
     this.turn = null
     this.unbound = []
-    if (turn) this.settle(turn, 'interrupted', STOPPED, 'interrupted')
+    const publish = turn ? this.decide(turn, 'interrupted', STOPPED, 'interrupted') : null
+    this.requests.close()
+    publish?.()
     const stops = this.generations.map((generation) => this.retire(generation))
     const settled = await Promise.allSettled(stops)
     return settled.flatMap((result) => (result.status === 'fulfilled' ? [result.value] : []))

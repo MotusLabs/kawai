@@ -80,10 +80,21 @@ export class CheckpointGate {
     this.reported = resumed
   }
 
-  /** The runtime made `checkpoint` known: persist it after any earlier one. */
-  report(checkpoint: ResumeCheckpoint): void {
+  /** True while the caller runs inside onCheckpoint (a wait on readiness there would wait on itself). */
+  insideCallback(): boolean {
+    return this.callback.getStore() === true
+  }
+
+  /**
+   * The runtime made `checkpoint` known: persist it after any earlier one.
+   * The returned barrier settles once this persistence (and every earlier
+   * one) finished; it never rejects, and a rejection stays the sticky
+   * refusal and owned failure below. A driver whose readiness depends on the
+   * persisted identity awaits it.
+   */
+  report(checkpoint: ResumeCheckpoint): Promise<void> {
     const persist = this.host.persist
-    if (!persist || this.failure || checkpoint.runtimeSessionId === this.reported) return
+    if (!persist || this.failure || checkpoint.runtimeSessionId === this.reported) return this.pending ? this.pending.catch(() => {}) : Promise.resolve()
     this.reported = checkpoint.runtimeSessionId
     const previous = this.pending
     const jobs = this.host.lifecycle.jobs
@@ -107,6 +118,12 @@ export class CheckpointGate {
         jobs.outside(() => this.host.failed(error))
       },
     )
+    return job.catch(() => {})
+  }
+
+  /** The sticky persistence failure's refusal, or null (a driver's readiness reads it after the barrier). */
+  failedRefusal(): AgentRuntimeError | null {
+    return this.refusal()
   }
 
   /**

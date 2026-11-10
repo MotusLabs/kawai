@@ -31,6 +31,7 @@ export class CodexFacts {
   private snapshot: Record<string, unknown> | null = null
   private readonly toolNames = new Map<string, string>()
   private readonly compactions = new Set<string>()
+  private readonly published = new Set<string>()
 
   constructor(private readonly host: FactsHost) {}
 
@@ -84,6 +85,12 @@ export class CodexFacts {
   }
 
   private event(body: EventBody): void {
+    // A repeated tool item (same id and phase) is published once (R03).
+    if (body.type === 'tool_call' || body.type === 'tool_result') {
+      const key = `${body.type}:${body.toolCallId}`
+      if (this.published.has(key)) return
+      this.published.add(key)
+    }
     this.host.emit(body)
     const observe = this.host.onToolObservation
     if (!observe) return

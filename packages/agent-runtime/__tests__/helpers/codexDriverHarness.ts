@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createCodexDriver } from '../../src/codex/index.js'
 import type { CodexAgentDriver, DriverState, ProcessEndReport, ResumeCheckpoint, TurnResult } from '../../src/contract.js'
+import type { AgentRuntimeError } from '../../src/errors.js'
 import type { AgentEvent } from '../../src/events.js'
 import type { AgentCallbacks, CodexDriverOptions, CodexPermissions, LaunchConfiguration } from '../../src/options.js'
 
@@ -131,3 +132,50 @@ export async function stopDrivers(): Promise<void> {
 
 /** The requests of one method the fake received. */
 export const sent = (root: CodexRoot, method: string) => root.received().filter((message) => message.method === method)
+
+/** Poll until `probe` is truthy (or the bound passes); returns its value. */
+export async function waitFor<T>(probe: () => T | undefined | null | false, ms = 5000): Promise<T | undefined> {
+  const deadline = Date.now() + ms
+  for (;;) {
+    const value = probe()
+    if (value) return value
+    if (Date.now() > deadline) return undefined
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+}
+
+/** The rejection of `promise`; throws when it resolves. */
+export async function refusal(promise: Promise<unknown>): Promise<AgentRuntimeError> {
+  try {
+    await promise
+  } catch (error) {
+    return error as AgentRuntimeError
+  }
+  throw new Error('expected a refusal')
+}
+
+/** The pids the fake processes of this home recorded, oldest first. */
+export function pids(home: string): number[] {
+  try {
+    return readFileSync(join(home, 'pids'), 'utf8').split('\n').filter(Boolean).map(Number)
+  } catch {
+    return []
+  }
+}
+
+export function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** A promise the test settles by hand. */
+export function deferred<T = void>(): { promise: Promise<T>; resolve(value: T): void; reject(error: unknown): void } {
+  let resolve!: (value: T) => void
+  let reject!: (error: unknown) => void
+  const promise = new Promise<T>((res, rej) => ((resolve = res), (reject = rej)))
+  return { promise, resolve, reject }
+}

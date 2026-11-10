@@ -49,6 +49,20 @@ const APPROVAL_TOOLS: Record<string, string> = {
   'mcpServer/elicitation/request': 'Elicitation',
 }
 const USER_INPUT = 'item/tool/requestUserInput'
+const ELICITATION = 'mcpServer/elicitation/request'
+/** Elicitation modes an allow/deny answer represents exactly (no structured content). */
+const CONTENT_FREE_MODES = new Set(['url', 'openai/userVerification'])
+
+/**
+ * A form-mode elicitation needs structured content matching its
+ * requestedSchema, which the public answers (allow/deny, question answers)
+ * cannot carry: it is declined at once with this reason, never accepted
+ * with invented content.
+ */
+export function formElicitation(method: string, params: Record<string, unknown>): string | null {
+  if (method !== ELICITATION || CONTENT_FREE_MODES.has(String(params.mode))) return null
+  return `elicitation mode ${JSON.stringify(params.mode ?? null)} needs structured content the public answers cannot express; it was declined`
+}
 
 const detached = <T>(value: T): T => JSON.parse(JSON.stringify(value ?? null)) as T
 
@@ -60,8 +74,9 @@ function approvalReply(method: string, params: Record<string, unknown>, settleme
     if (settlement === 'allow') for (const key of ['network', 'fileSystem']) if (requested[key] != null) granted[key] = requested[key]
     return { permissions: granted, scope: 'turn' }
   }
-  if (method === 'mcpServer/elicitation/request') {
-    return { action: settlement === 'allow' ? 'accept' : settlement === 'deny' ? 'decline' : 'cancel', content: settlement === 'allow' ? {} : null, _meta: null }
+  if (method === ELICITATION) {
+    // Only content-free modes reach the host (formElicitation): accept carries no content.
+    return { action: settlement === 'allow' ? 'accept' : settlement === 'deny' ? 'decline' : 'cancel', content: null, _meta: null }
   }
   if (method === 'applyPatchApproval' || method === 'execCommandApproval') {
     return settlement === 'allow' ? { decision: 'approved' } : settlement === 'deny' ? { decision: { denied: { rejection: 'denied by the host' } } } : { decision: 'abort' }

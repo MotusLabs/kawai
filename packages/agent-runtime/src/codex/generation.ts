@@ -14,10 +14,15 @@
 //   froze at exit (a pre-stop, nonzero or unsent-signal end fails the stop),
 //   beside the transport's own stop failures, which it already joins.
 import type { ProcessExitFact } from '../contract.js'
-import { AgentRuntimeError, type AgentErrorCategory } from '../errors.js'
+import { AgentRuntimeError, type AgentErrorCategory, type AgentErrorInfo } from '../errors.js'
 import type { JsonObject } from '../json.js'
 import { nativeCauses } from '../process/nativeVerdict.js'
+import type { ResolvedLaunch } from '../process/launch.js'
+import type { BoundToolSet } from '../tools/toolSet.js'
 import { AppServerRpcError, type AppServerTransport } from './appServerTransport.js'
+import { codexThreadResumeParams, codexThreadStartParams, type CodexPermissionComposition } from './permissions.js'
+import type { CodexSessionOptions } from './sessionOptions.js'
+import { codexDynamicTools } from './tools.js'
 import { codexErrorCategory, rpcErrorInfo } from './auth.js'
 
 export interface CodexGeneration {
@@ -87,4 +92,22 @@ export function accountGenerations(generations: readonly CodexGeneration[]): unk
     const observed = new Set(owned.observerFailures)
     return nativeCauses(generation.number, owned, []).filter((cause) => !observed.has(cause))
   })
+}
+
+/** thread/start or thread/resume parameters: caller fields, then the policy (which wins); resume carries no tool set. */
+export function threadParams(launch: ResolvedLaunch, resumeTarget: string | null, options: Pick<CodexSessionOptions, 'model' | 'systemPromptAppend'>, permissions: CodexPermissionComposition, tools: BoundToolSet | null): JsonObject {
+  const caller: Record<string, unknown> = {
+    cwd: launch.cwd,
+    ...(options.model ? { model: options.model } : {}),
+    ...(options.systemPromptAppend ? { developerInstructions: options.systemPromptAppend } : {}),
+  }
+  if (resumeTarget !== null) return codexThreadResumeParams(resumeTarget, { ...caller, excludeTurns: true }, permissions) as JsonObject
+  const dynamicTools = codexDynamicTools(tools)
+  return codexThreadStartParams({ ...caller, ephemeral: false, ...(dynamicTools ? { dynamicTools } : {}) }, permissions) as JsonObject
+}
+
+/** A turn-level request failure: a recognized protocol error keeps its category, anything else is transport. */
+export function rpcError(error: unknown, what: string): AgentErrorInfo {
+  if (error instanceof AppServerRpcError) return { category: codexErrorCategory(rpcErrorInfo(error.error), 'provider'), message: `${what}: ${error.message}` }
+  return { category: 'transport', message: `${what}: ${error instanceof Error ? error.message : String(error)}` }
 }
