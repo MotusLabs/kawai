@@ -29,6 +29,7 @@ export function createClaudeDriver(options: ClaudeDriverOptions): ClaudeAgentDri
   if (options.unansweredRequests !== undefined && options.unansweredRequests !== 'deny' && options.unansweredRequests !== 'wait') {
     throw configurationError('unansweredRequests must be deny or wait')
   }
+  if (options.quotaSource !== undefined && options.quotaSource !== 'none' && options.quotaSource !== 'host-login') throw configurationError('quotaSource must be none or host-login')
   const sdkOptions: Partial<Options> = {
     settingSources: [...(options.settingSources ?? [])],
     ...(options.settings ? { settings: { ...options.settings } as Options['settings'] } : {}),
@@ -49,5 +50,6 @@ export function createClaudeDriver(options: ClaudeDriverOptions): ClaudeAgentDri
     ...(options.auditHooks ? { auditHooks: options.auditHooks } : {}),
     ...(options.resume ? { resume: options.resume } : {}),
     ...(options.unansweredRequests ? { unansweredRequests: options.unansweredRequests } : {}),
+    ...(options.quotaSource ? { quotaSource: options.quotaSource } : {}),
   })
 }

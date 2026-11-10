@@ -32,8 +32,12 @@
 // input the same way, then, when the SDK passed `--permission-prompt-tool
 // stdio`, asks it with a `can_use_tool` control request; an allow runs the
 // tool with the returned input and answers `allowed <Name> <json>`, a deny
-// answers `denied <Name> (<message>)`. Anything else is echoed. Stdin EOF
-// exits 0.
+// answers `denied <Name> (<message>)`. `script <json>` (task 5.2) writes
+// the JSON's `frames` verbatim, each with this session's id, then a result
+// whose `usage` is the JSON's (null: no usage key; absent: the default) and
+// whose subtype is the JSON's `subtype` (default success; any other carries
+// the `errors` list the SDK reads from an error result). Anything else is
+// echoed. Stdin EOF exits 0.
 // Every received frame, and first the process argv as {"argv": [...]},
 // is appended to $FAKE_CLAUDE_LOG when set.
 //
@@ -231,10 +235,10 @@ async function listMcp(uuid: string, server: string) {
 if (log) fs.appendFileSync(log, `${JSON.stringify({ argv: process.argv.slice(2) })}\n`)
 let holdOnEof = false
 
-function result(uuid: string, subtype: string, text: string | null, isError = false) {
+function result(uuid: string, subtype: string, text: string | null, isError = false, turnUsage: unknown = usage, errors?: string[]) {
   write({
-    type: 'result', subtype, is_error: isError, ...(text === null ? {} : { result: text }),
-    duration_ms: 1, duration_api_ms: 1, num_turns: 1, total_cost_usd: 0, usage,
+    type: 'result', subtype, is_error: isError, ...(text === null ? {} : { result: text }), ...(errors ? { errors } : {}),
+    duration_ms: 1, duration_api_ms: 1, num_turns: 1, total_cost_usd: 0, ...(turnUsage === null ? {} : { usage: turnUsage }),
     session_id: sessionId, uuid: crypto.randomUUID(), user_message_uuid: uuid, user_message_uuids: [uuid],
   })
 }
@@ -290,6 +294,12 @@ function onUser(frame: { uuid?: string; message?: { content?: unknown } }) {
     case 'hang':
       running = uuid
       return
+    case 'script': {
+      const script = JSON.parse(rest.join(' ')) as { frames?: Array<Record<string, unknown>>; usage?: unknown; subtype?: string }
+      for (const frame of script.frames ?? []) write({ ...frame, session_id: sessionId })
+      const subtype = script.subtype ?? 'success'
+      return result(uuid, subtype, subtype === 'success' ? 'scripted' : null, subtype !== 'success', script.usage === undefined ? usage : script.usage, subtype === 'success' ? undefined : ['scripted failure'])
+    }
     case 'crash':
       process.exit(3)
     case 'quit':

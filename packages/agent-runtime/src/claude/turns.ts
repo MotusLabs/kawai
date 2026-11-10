@@ -1,11 +1,14 @@
 // One Claude turn's bookkeeping (task 4.1): its identity, what the stream
 // reported for it, and the single result every handle bound to it receives.
 // Submitted turns carry the UUID of the message that opened them; an
-// agent-started turn (L24) has none.
-import type { SDKResultMessage } from '@anthropic-ai/claude-agent-sdk'
+// agent-started turn (L24) has none. Its facts (model, tool calls,
+// compactions, provider cost, the bound result's tokens) are its own: a
+// result of any outcome reports what is known and null for the rest.
+import type { SDKResultMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { TurnOutcome, TurnResult } from '../contract.js'
 import { AgentRuntimeError, type AgentErrorInfo } from '../errors.js'
 import type { BeforeSubmit, SubmitContext } from '../options.js'
+import type { TokenUsage } from '../usage/types.js'
 
 export interface Turn {
   turnId: string
@@ -17,6 +20,13 @@ export interface Turn {
   settled: boolean
   finalText: string | null
   model: string | null
+  /** Distinct tool-call ids and compaction boundaries observed in this turn. */
+  toolIds: Set<string>
+  compactionIds: Set<string>
+  /** Summed provider-reported cost of the turn's stream events; null when none was reported. */
+  providerCost: number | null
+  /** Tokens of the result bound to this turn; null until one carries them. */
+  usage: TokenUsage | null
   resolve(result: TurnResult): void
   result: Promise<TurnResult>
 }
@@ -26,7 +36,7 @@ export function newTurn(turnId: string, messageUuid: string | null, text: string
   const result = new Promise<TurnResult>((r) => {
     resolve = r
   })
-  return { turnId, messageUuid, text, opened: false, settled: false, finalText: null, model: null, resolve, result }
+  return { turnId, messageUuid, text, opened: false, settled: false, finalText: null, model: null, toolIds: new Set(), compactionIds: new Set(), providerCost: null, usage: null, resolve, result }
 }
 
 export function turnResult(turn: Turn, outcome: TurnOutcome, error: AgentErrorInfo | null): TurnResult {
@@ -36,11 +46,16 @@ export function turnResult(turn: Turn, outcome: TurnOutcome, error: AgentErrorIn
     outcome,
     finalText: outcome === 'success' ? turn.finalText : null,
     model: turn.model,
-    usage: null,
-    toolCallCount: 0,
-    compactionCount: 0,
+    usage: turn.usage ? { ...turn.usage } : null,
+    toolCallCount: turn.toolIds.size,
+    compactionCount: turn.compactionIds.size,
     error,
   }
+}
+
+/** The stream-json user frame of one prompt, carrying its client UUID. */
+export function promptMessage(text: string, uuid: string): SDKUserMessage {
+  return { type: 'user', message: { role: 'user', content: text }, parent_tool_use_id: null, uuid, session_id: '' } as SDKUserMessage
 }
 
 /** The client UUIDs a result echoes (`user_message_uuids`, else `user_message_uuid`). */

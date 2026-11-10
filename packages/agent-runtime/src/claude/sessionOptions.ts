@@ -32,5 +32,7 @@ export interface ClaudeSessionOptions {
   resume?: ResumeCheckpoint
   /** A request still pending after onRequest: denied at once (default) or kept. */
   unansweredRequests?: 'deny' | 'wait'
+  /** The host-login quota pull runs only when chosen (design §6). */
+  quotaSource?: 'none' | 'host-login'
   queryFactory?: ClaudeQueryFactory
 }

@@ -34,8 +34,8 @@ export interface FrameHost {
   callbacks: AgentCallbacks
   /** Run a host callback; a throw is retained and changes nothing here. */
   notify(name: string, callback: () => void): void
-  /** A compaction boundary was observed. */
-  compacted(boundaryId: string, preTokens: number | null): void
+  /** A compaction boundary was observed; true the first time its id is seen. */
+  compacted(boundaryId: string, preTokens: number | null, postTokens: unknown): boolean
 }
 
 /** The tools that spawn a worker: both names, current and old. */
@@ -199,8 +199,10 @@ export class ClaudeFrames {
         return
       case 'compact_boundary': {
         const pre = message.compact_metadata?.pre_tokens
-        this.host.compacted(message.uuid, typeof pre === 'number' && Number.isFinite(pre) && pre > 0 ? pre : null)
-        this.host.emit({ type: 'notice', text: 'Context compacted', kind: 'compacted' })
+        // A repeated boundary id is announced once (R03).
+        if (this.host.compacted(message.uuid, typeof pre === 'number' && Number.isFinite(pre) && pre > 0 ? pre : null, message.compact_metadata?.post_tokens)) {
+          this.host.emit({ type: 'notice', text: 'Context compacted', kind: 'compacted' })
+        }
         return
       }
     }

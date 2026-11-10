@@ -3,17 +3,25 @@
 // Settling a turn is idempotent: its handle resolves once, an opened turn
 // emits turn_completed or turn_interrupted once, a turn that never opened
 // emits no turn event (L10/L11), and onTurnResult runs once through the
-// driver's guarded notify.
+// driver's guarded notify. turn_completed carries the same facts as the
+// result. After each handle resolves, `settled` lets the session end the
+// turn's limit wait.
 import type { SDKResultMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { TurnOutcome, TurnResult } from '../contract.js'
 import type { AgentErrorInfo } from '../errors.js'
 import type { EventBody } from '../eventStream.js'
+import type { LimitWaitEnd } from '../usage/types.js'
+import { claudeResultUsage } from '../usage/tokens.js'
 import { turnResult, type Turn } from './turns.js'
+
+type WaitEndCause = LimitWaitEnd['cause']
 
 export interface OpenTurnsHost {
   emit(body: EventBody): void
   notify(name: string, callback: () => void): void
   onTurnResult: ((result: TurnResult) => void) | undefined
+  /** A turn's result was published (its wait ends with this cause). */
+  settled(turn: Turn, cause: WaitEndCause): void
 }
 
 export class OpenTurns {
@@ -51,18 +59,21 @@ export class OpenTurns {
   }
 
   settle(turn: Turn, outcome: TurnOutcome, error: AgentErrorInfo | null, subtype: string, message?: SDKResultMessage): TurnResult {
+    // The bound result's own tokens (none for an interrupt): never another turn's.
+    if (message && !turn.settled) turn.usage = claudeResultUsage(message.usage)
     const result = turnResult(turn, outcome, error)
     if (turn.settled) return result
     turn.settled = true
     if (outcome === 'interrupted') this.host.emit({ type: 'turn_interrupted', turnId: turn.turnId })
     else {
       this.host.emit({
-        type: 'turn_completed', turnId: turn.turnId, subtype, isError: outcome !== 'success', usage: null,
-        finalText: result.finalText, totalCostUsd: message?.total_cost_usd ?? null, providerCostUsd: null,
+        type: 'turn_completed', turnId: turn.turnId, subtype, isError: outcome !== 'success', usage: result.usage,
+        finalText: result.finalText, totalCostUsd: message?.total_cost_usd ?? null, providerCostUsd: turn.providerCost,
         numTurns: message?.num_turns ?? null, terminalReason: message?.terminal_reason ?? null,
       })
     }
-    this.resolve(turn, result)
+    // A successful result is observed progress after any retry; any other end is not.
+    this.resolve(turn, result, outcome === 'success' ? 'resumed' : 'cancelled')
     return result
   }
 
@@ -89,11 +100,11 @@ export class OpenTurns {
       for (const { turn, result } of decided) {
         if (turn.opened) {
           this.host.emit({
-            type: 'turn_completed', turnId: turn.turnId, subtype, isError: true, usage: null, finalText: result.finalText,
-            totalCostUsd: null, providerCostUsd: null, numTurns: null, terminalReason: null,
+            type: 'turn_completed', turnId: turn.turnId, subtype, isError: true, usage: result.usage, finalText: result.finalText,
+            totalCostUsd: null, providerCostUsd: turn.providerCost, numTurns: null, terminalReason: null,
           })
         }
-        this.resolve(turn, result)
+        this.resolve(turn, result, outcome === 'process-ended' ? 'process-ended' : 'cancelled')
       }
     }
   }
@@ -106,9 +117,10 @@ export class OpenTurns {
     }
   }
 
-  private resolve(turn: Turn, result: TurnResult): void {
+  private resolve(turn: Turn, result: TurnResult, cause: WaitEndCause = 'cancelled'): void {
     turn.resolve(result)
     const onTurnResult = this.host.onTurnResult
     if (onTurnResult) this.host.notify('onTurnResult', () => onTurnResult(result))
+    this.host.settled(turn, cause)
   }
 }

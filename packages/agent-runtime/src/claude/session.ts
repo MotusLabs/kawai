@@ -23,6 +23,8 @@
 //   acknowledged, and an interrupt refuses every send still waiting
 //   (lifecycle/checkpoints.ts). State publications are held while a turn
 //   opens or settles, so a callback never reenters a half-finished step.
+// - Facts. Usage, context, quota and limit-wait facts (usageFacts.ts) are fed
+//   before the frame mapping; their control calls are owned jobs (usageControls.ts).
 // - Composition. Permissions, host integrations, requests (canUseTool) and
 //   frame mapping are composed here. A generation is registered before its
 //   query() call. The owned spawner reports each process before any recorder
@@ -34,7 +36,7 @@
 //   stop, nesting the token AbortErrors stored for it. Every other failure
 //   (init, read, control, callback, recorder, cleanup) fails it too, kept by
 //   identity.
-import type { Options, Query, SDKMessage, SDKResultMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
+import type { Options, Query, SDKMessage, SDKResultMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { AnswerOptions, AnswerOutcome, InterruptReceipt, ProcessExitFact, ProcessExitReceipt, ResumeCheckpoint, SubmitOptions, TaskOutput, TurnHandle } from '../contract.js'
 import { AgentRuntimeError, type AgentErrorInfo } from '../errors.js'
 import { EventStream, type EventBody } from '../eventStream.js'
@@ -53,7 +55,9 @@ import { ClaudeRequests } from './requests.js'
 import { SeenResultFrames } from './resultFrames.js'
 import { CliTurnBinder } from './turnBinder.js'
 import { OpenTurns } from './openTurns.js'
-import { checkSubmission, newTurn, resultErrorText, resultUuids, type Turn } from './turns.js'
+import { checkSubmission, newTurn, promptMessage, resultErrorText, resultUuids, type Turn } from './turns.js'
+import { ClaudeUsageFacts } from './usageFacts.js'
+import { UsageControls } from './usageControls.js'
 import type { ClaudeSessionOptions } from './sessionOptions.js'
 export type { ClaudeQueryFactory, ClaudeSessionOptions } from './sessionOptions.js'
 
@@ -68,13 +72,14 @@ export class ClaudeSession {
   private readonly requests: ClaudeRequests
   private readonly frames: ClaudeFrames
   private readonly checkpoints: CheckpointGate
+  private readonly usage: ClaudeUsageFacts
+  private readonly controls: UsageControls
 
   /** Validated once at construction: an unenforceable restriction never starts. */
   private readonly permissions: ClaudePermissionComposition | null
   private readonly tools: BoundToolSet | null
   /** The CLI's session id, from the latest system/init. */
   private runtimeSessionId: string | null
-  private lastModel: string | null = null
   private readonly seenResults = new SeenResultFrames()
   /** Sticky once a resumed generation named another conversation (G1). */
   private resumeFailure: AgentErrorInfo | null = null
@@ -88,8 +93,10 @@ export class ClaudeSession {
     this.runtimeSessionId = options.resume?.runtimeSessionId ?? null
     const { callbacks, logger } = options
     this.events = new EventStream((event) => this.notify('onEvent', () => callbacks.onEvent(event)))
-    this.open = new OpenTurns({ emit: (body) => this.emit(body), notify: (name, callback) => this.notify(name, callback), onTurnResult: callbacks.onTurnResult })
+    this.usage = new ClaudeUsageFacts({ callbacks, notify: (name, callback) => this.notify(name, callback) })
+    this.open = new OpenTurns({ emit: (body) => this.emit(body), notify: (name, callback) => this.notify(name, callback), onTurnResult: callbacks.onTurnResult, settled: (turn, cause) => this.usage.turnSettled(turn.turnId, cause) })
     this.lifecycle = new DriverLifecycle({ continuations: new Set(['queue']), ...(callbacks.onState ? { onState: callbacks.onState } : {}) })
+    this.controls = new UsageControls({ lifecycle: this.lifecycle, quotaSource: options.quotaSource ?? 'none', stopToken: () => this.stopToken, current: () => this.current(), facts: this.usage })
     const persist = callbacks.onCheckpoint && ((checkpoint: ResumeCheckpoint) => callbacks.onCheckpoint!(checkpoint))
     const failed = () => { this.events.emit({ type: 'error', error: CHECKPOINT_FAILED }); void this.shutdown().catch(() => {}) }
     this.checkpoints = new CheckpointGate({ lifecycle: this.lifecycle, persist, failed }, this.runtimeSessionId)
@@ -110,11 +117,7 @@ export class ClaudeSession {
       activeTurnId: () => this.active()?.turnId ?? null,
       callbacks,
       notify: (name, callback) => this.notify(name, callback),
-      compacted: (boundaryId, preTokens) => {
-        const onCompaction = callbacks.onCompaction
-        const turnId = this.active()?.turnId ?? null
-        if (onCompaction) this.notify('onCompaction', () => onCompaction({ boundaryId, turnId, preTokens }))
-      },
+      compacted: (boundaryId, preTokens, postTokens) => this.usage.compacted(boundaryId, preTokens, postTokens, this.active()),
     })
   }
 
@@ -131,6 +134,7 @@ export class ClaudeSession {
   }
 
   private emit(body: EventBody): void {
+    if (body.type === 'tool_call' && this.active()?.turnId === body.turnId) this.active()!.toolIds.add(body.toolCallId)
     this.events.emit(body)
     if (body.type === 'turn_completed' || body.type === 'turn_interrupted') this.frames.turnEnded()
     else if (body.type === 'request_resolved') this.frames.requestResolved()
@@ -154,6 +158,7 @@ export class ClaudeSession {
 
   private async spawnGeneration(number: number): Promise<void> {
     const launch = resolveLaunch(this.options.launch)
+    this.usage.spawned(launch.childEnv)
     const executable = launch.executablePath ?? resolveExecutable(launch, 'claude')
     const sdk = await loadSdk()
     // Stop may have begun while the SDK loaded: refuse before any query exists.
@@ -182,6 +187,7 @@ export class ClaudeSession {
     }
     generation.initialized = true
     if (generation === this.current() && Array.isArray(initialized?.commands)) this.frames.commands.applyCommands(initialized.commands as RawChatCommand[])
+    this.controls.initialized(generation)
   }
 
   private stopBegun(): boolean {
@@ -204,9 +210,7 @@ export class ClaudeSession {
 
   /** Host work started by the CLI or a provider control: an owned job stop joins, refused once stop has begun. */
   private runOwned<T>(label: string, body: () => Promise<T>): Promise<T> | null {
-    const state = this.lifecycle.state
-    if (state === 'stopping' || state === 'stopped') return null
-    return this.lifecycle.jobs.run(label, body)
+    return this.stopBegun() ? null : this.lifecycle.jobs.run(label, body)
   }
 
   /** The generation's owned job: read every message, then wait for the ACTUAL exit. */
@@ -244,6 +248,7 @@ export class ClaudeSession {
     this.requests.cancelAll('process ended')
     this.events.emit({ type: 'error', error })
     publish()
+    this.usage.endAll('process-ended')
     this.frames.processEnded()
     const report = { generation: generation.number, code, signal, reason: exit?.kind === 'spawn-failed' ? 'spawn failed' : null }
     this.notify('onProcessEnd', () => this.options.callbacks.onProcessEnd?.(report))
@@ -253,12 +258,16 @@ export class ClaudeSession {
     // A superseded or failed generation's frames never reach the conversation.
     if (generation.retired || generation !== this.current()) return
     if (keepStartupFailure(generation, message)) return
+    const frame = message as unknown as Record<string, unknown>
+    const bound = this.binder.framesBelongToActive() ? this.active() : null
+    if (this.usage.sessionFrame(frame)) return
     switch (message.type) {
       case 'system':
-        if (message.subtype === 'init') this.init(generation, message)
-        else this.frames.system(message)
-        return
+        if (message.subtype === 'init') return this.init(generation, message)
+        if (message.subtype === 'api_retry') this.usage.apiRetry(frame, bound)
+        return this.frames.system(message)
       case 'assistant': {
+        this.usage.assistant(frame, bound)
         const content = this.frames.assistant(message)
         const turn = this.active()
         if (!content || !turn) return
@@ -267,13 +276,15 @@ export class ClaudeSession {
         return
       }
       case 'user':
-        this.frames.user(message)
-        return
+        return this.frames.user(message)
       case 'stream_event':
+        this.usage.partial(frame, this.active(), bound)
         this.frames.partial(message)
         return
       case 'result':
+        this.usage.result(frame)
         this.result(message)
+        this.controls.probe(generation)
         return
     }
   }
@@ -288,12 +299,7 @@ export class ClaudeSession {
       this.runtimeSessionId = message.session_id
       this.checkpoints.report({ runtime: 'claude', runtimeSessionId: message.session_id })
     }
-    if (typeof message.model === 'string' && message.model && message.model !== this.lastModel) {
-      const model = message.model
-      this.lastModel = model
-      const onModel = this.options.callbacks.onModel
-      if (onModel) this.notify('onModel', () => onModel(model))
-    }
+    this.usage.model(message.model)
     this.frames.commands.applyTerminalCommands((message as { terminal_slash_commands?: string[] }).terminal_slash_commands)
     // An init that no submission opened is an agent-started turn (L24); it
     // opens only while idle (L25 binds, L26 ignores), and an init that opens
@@ -383,13 +389,7 @@ export class ClaudeSession {
    */
   private accept(turn: Turn, admission: Admission): TurnHandle {
     const messageUuid = turn.messageUuid!
-    const pushed = this.current()!.input.push({
-      type: 'user',
-      message: { role: 'user', content: turn.text },
-      parent_tool_use_id: null,
-      uuid: messageUuid,
-      session_id: '',
-    } as SDKUserMessage)
+    const pushed = this.current()!.input.push(promptMessage(turn.text, messageUuid))
     if (!pushed) throw new AgentRuntimeError({ category: 'stopped', message: 'the driver is stopped' })
     this.open.push(turn)
     this.frames.sent(messageUuid, turn.text)
@@ -460,19 +460,20 @@ export class ClaudeSession {
   }
 
   /** A background task's output tail through the CLI's get_task_output control; null when unavailable. */
-  async getTaskOutput(taskId: string): Promise<TaskOutput | null> {
-    const query = this.current()?.query
-    if (!query || this.lifecycle.state === 'exited') return null
-    const owned = this.runOwned(`task-output:${taskId}`, () => readTaskOutput(query, taskId))
-    return owned ? await owned : null
+  getTaskOutput(taskId: string): Promise<TaskOutput | null> {
+    return this.taskControl(`task-output:${taskId}`, null, (query) => readTaskOutput(query, taskId))
   }
 
   /** Stop one background task; false when refused, unknown or no live process. */
-  async stopTask(taskId: string): Promise<boolean> {
+  stopTask(taskId: string): Promise<boolean> {
+    return this.taskControl(`stop-task:${taskId}`, false, (query) => stopQueryTask(query, taskId))
+  }
+
+  /** A task control on the live query as an owned job; `fallback` with no live process or once stop began. */
+  private async taskControl<T>(label: string, fallback: T, body: (query: Query) => Promise<T>): Promise<T> {
     const query = this.current()?.query
-    if (!query || this.lifecycle.state === 'exited') return false
-    const owned = this.runOwned(`stop-task:${taskId}`, () => stopQueryTask(query, taskId))
-    return owned ? await owned : false
+    const owned = query && this.lifecycle.state !== 'exited' ? this.runOwned(label, () => body(query)) : null
+    return owned ? await owned : fallback
   }
 
   kill(): Promise<ProcessExitReceipt> {
@@ -490,6 +491,7 @@ export class ClaudeSession {
     const error: AgentErrorInfo = { category: 'stopped', message: 'the driver was stopped' }
     this.requests.close()
     this.open.settleAll(this.open.take(), error)
+    this.usage.endAll('cancelled')
     this.binder.reset()
     this.frames.processEnded()
     return terminateGenerations(this.generations, mode, this.options.terminate ?? {}, this.stopToken)
