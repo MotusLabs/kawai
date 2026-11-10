@@ -2,7 +2,7 @@
 
 ## Why
 
-A full `bun run check` takes about 17 minutes: 849 test files, about 3,270 s of test work on 4 workers (the runner's timings record, 2026-11-10). On 2026-11-10, three of four full checks failed, each on one test. Two were real-tmux tests that failed for timing reasons, not behavior: `throttled-reconnect` on its wall-clock ratio and `output-coalescing` on a 10 s `terminal-ready` deadline, both under a load average of about 36 on 6 CPUs; a third run failed on a property case that hit the 20 s per-test timeout (`executionDiagnosisProperties`). A failure records nothing, so each one cost a full rerun, and one blocked a dev's commit for half an hour. Every push needs a recorded full pass, so check time and check flakiness are paid by every result the team lands.
+A full `bun run check` takes about 17 minutes: 849 test files, about 3,270 s of test work on 4 workers (the runner's timings record, 2026-11-10). On 2026-11-10, three of four full checks failed, each on one test. Two were real-tmux tests that failed for timing reasons, not behavior: `throttled-reconnect` on its wall-clock ratio and `output-coalescing` on a 10 s `terminal-ready` deadline, both while the workspace's tasks were waiting for a CPU about a quarter of the time (`cpu.pressure` some avg60 ≈ 25%, measured 2026-11-10). The workspace itself was nearly idle; other pods on the shared 16-CPU node were using the CPUs. A third run failed on a property case that hit the 20 s per-test timeout (`executionDiagnosisProperties`). A failure records nothing, so each one cost a full rerun, and one blocked a dev's commit for half an hour. Every push needs a recorded full pass, so check time and check flakiness are paid by every result the team lands.
 
 ## What Changes
 

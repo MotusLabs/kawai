@@ -2,9 +2,11 @@
 
 ## 1. Load-independent timing tests (D1)
 
-- [ ] 1.1 In `src/server/__tests__/throttled-reconnect.integration.test.ts`, remove the wall-clock ratio assertion (`meanSingle < meanDouble * 0.75`), keep the byte-ratio assertion, keep the timing report as printed diagnostics, and update the header comment. Verify: the file passes under the runner, and `grep -nE "expect\(.*(timeMs|meanSingle\b|meanDouble\b)" ` finds no duration assertion (A4).
-- [ ] 1.2 In `src/server/__tests__/output-coalescing.integration.test.ts`, set every `waitUntil` deadline to at least half the enclosing test's timeout (30 s of 60 s), with a comment that deadlines are liveness bounds and the ordering assertions are the oracle. Verify: the file passes under the runner, and a reviewer-checkable list of each wait and its deadline is in the result (A4).
-- [ ] 1.3 Run both files 5 times serially next to a CPU-saturating load (for example 6 busy loops), keeping the raw log. Verify V4: 10 of 10 runs pass, log attached. Negative control: with the 1.1 assertion restored, at least one loaded run fails or the result states it never did.
+1.1 and 1.2 landed in PR #381 (merge `80973e49`, 2026-11-10). 1.3, the loaded-run evidence, is still open.
+
+- [x] 1.1 In `src/server/__tests__/throttled-reconnect.integration.test.ts`, remove the wall-clock ratio assertion (`meanSingle < meanDouble * 0.75`), keep the byte-ratio assertion, keep the timing report as printed diagnostics, and update the header comment. Verify: the file passes under the runner, and `grep -nE "expect\(.*(timeMs|meanSingle\b|meanDouble\b)" ` finds no duration assertion (A4).
+- [x] 1.2 In `src/server/__tests__/output-coalescing.integration.test.ts`, set every `waitUntil` deadline to at least half the enclosing test's timeout (30 s of 60 s), with a comment that deadlines are liveness bounds and the ordering assertions are the oracle. Verify: the file passes under the runner, and a reviewer-checkable list of each wait and its deadline is in the result (A4).
+- [ ] 1.3 Run both files 5 times serially next to a CPU-saturating load inside the workspace (for example 6 busy loops), recording `/sys/fs/cgroup/cpu.pressure` during each run (some avg10 of 50% or more), and keep the raw log. Do not use `/proc/loadavg`; it reports the whole node. Verify V4: 10 of 10 runs pass, log attached. Negative control: with the 1.1 assertion restored, at least one loaded run fails or the result states it never did.
 
 ## 2. Real-tmux selection and the nightly run (D6, D7)
 

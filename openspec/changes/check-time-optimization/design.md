@@ -12,7 +12,8 @@ See proposal.md, "Why". Current state that shapes the approach:
 - From 2026-10-10 to 2026-11-10, the server source files changed on master were mostly under `chat/` (1,447 file changes), `team/` (685), and `plans/` (602). The terminal path (`terminal/`, `ws/`, `sessions/`, `SessionManager.ts`, `tmux*.ts`) changed rarely.
 - Heavy property tests hardcode counts (`const CASES = 300`) and seed each case as `mulberry32(SEED + index)`. 9 test files declare a `CASES` or `SEQUENCES` constant, 6 of them 50 or more. Titles quote the count, and coverage citations quote titles verbatim.
 - `throttled-reconnect.integration.test.ts:625` asserts a byte ratio and `:632` a wall-clock ratio, both `< 0.75`. `output-coalescing.integration.test.ts:197` waits 10 s for `terminal-ready` inside a 60 s test.
-- `initDatabase` on a new file took 0.56–1.18 s at load 28 and wrote 4 pre-migration backups of about 1.2 MB each (`database-safety` requires a backup before each pending migration). 176 server test files call `initDatabase`, many per test.
+- Contention comes from the shared cluster node, not from the workspace. `/proc/loadavg` (22–36 on 2026-11-10) reports the whole 16-CPU node, while the workspace has a 6-CPU quota (`cpu.max` 600000/100000). It was using about a quarter of one CPU and was never throttled, yet its tasks waited for a CPU about 25% of the time (`/sys/fs/cgroup/cpu.pressure` some avg60). Any contention figure in this change means that cgroup pressure, never the load average.
+- `initDatabase` on a new file took 0.56–1.18 s on the contended node and wrote 4 pre-migration backups of about 1.2 MB each (`database-safety` requires a backup before each pending migration). 176 server test files call `initDatabase`, many per test.
 
 ## Goals / Non-Goals
 
@@ -47,7 +48,7 @@ Each rerun's JUnit report name is appended to the manifest before it starts, and
 Alternatives:
 - Retry any failed file. Rejected: main-batch failures are rarely timing failures, and retrying them would hide real ones.
 - Unlimited retries. Rejected: three failed real-tmux files signal a broken environment or real breakage.
-- Rerunning immediately after the failure. Rejected: the cause, load, is still present then.
+- Rerunning immediately after the failure. Rejected: the cause, CPU contention, is usually still present then.
 
 ### D3. Record fields and reuse
 
@@ -222,7 +223,7 @@ Rollback: each step reverts alone. Records without the new fields stay readable 
 - V1. Table-driven tests of RT1–RT6 and RU1–RU5, with the production-composition rows, and with mutants: the rerun removed (kills RT3), the F ≤ 2 bound removed (kills RT5), the main-batch guard removed (kills RT1), and the profile check in reuse removed (kills RU4).
 - V2. The PC1 exhaustive test, plus the runner probe file. Mutants: the `CI` check removed, `ceil` replaced by `floor`, and the seed offset shifted by one.
 - V3. TD1 and TD2 tests. Mutants: the helper's copy skipped (kills TD1), and the template not checkpointed (kills TD2 through a missing-table read).
-- V4. Both timing tests run 5 times serially next to a saturating CPU load and pass, with output kept as evidence.
+- V4. Both timing tests run 5 times serially next to a CPU-saturating load inside the workspace, with `cpu.pressure` some avg10 of 50% or more recorded during each run, and pass. Output and pressure readings are kept as evidence.
 - V5. A full `bun run check` before and after, on an otherwise idle machine, reporting total test work from the timings record. Evidence only, not a pass bound.
 - V6. SE1–SE5, G1–G2 tests. Mutants: the shared-trigger check removed (kills SE3), the no-merge-base fallback removed (kills SE2), and the own-file match dropped (kills SE4).
 - V7. The nightly workflow's dispatched trial runs and one forced-failure run, with their run URLs and the issue link kept as evidence.

@@ -101,7 +101,7 @@ A test declaring a case count of 50 or more SHALL run the first quarter of its s
 A real-tmux test SHALL NOT assert on a wall-clock duration or a ratio of durations, and a wait inside it SHALL allow at least half of the test's timeout. Durations MAY be printed as diagnostics.
 
 #### Scenario: Throttled reconnect under load
-- **WHEN** `throttled-reconnect` runs on a saturated machine and single-attach still transfers under 75% of double-attach's bytes
+- **WHEN** `throttled-reconnect` runs while the workspace's CPUs are contended and single-attach still transfers under 75% of double-attach's bytes
 - **THEN** the test passes, whatever the measured times
 
 #### Scenario: Slow terminal-ready
