@@ -158,12 +158,18 @@ export class ClaudeUsageModel extends LimitModel {
     const first = this.sighting(id, inputTokens === null ? {} : { inputTokens })
     const request = this.requests.get(id)!
     const novel = first || !request.contents.has(content)
+    // Content that differs from an earlier snapshot of the request only in its thinking strings.
+    const withoutThinking = (text: string) => JSON.stringify((JSON.parse(text) as Array<Record<string, unknown>>).map((block) => (block.type === 'thinking' ? { ...block, thinking: '' } : block)))
+    const thinkingOnly = novel && !first && content.includes('"type":"thinking"') && [...request.contents].some((earlier) => withoutThinking(earlier) === withoutThinking(content))
     request.contents.add(content)
     if (!this.turn) return
     for (const tool of tools) this.turn.tools.add(tool)
     this.turn.model = model
-    if (novel && request.turn === this.turn) this.progressed()
-    else if (this.turn.waiting) this.marks.add('replay-in-wait-unresumed')
+    if (novel && request.turn === this.turn) {
+      // New thinking alone is progress too (review F5, findings-14bde0ed).
+      if (this.turn.waiting && thinkingOnly) this.marks.add('thinking-only-content-resumes-wait')
+      this.progressed()
+    } else if (this.turn.waiting) this.marks.add('replay-in-wait-unresumed')
   }
 
   /** A subagent's assistant frame: none of the turn's facts and no progress. */

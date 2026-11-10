@@ -29,7 +29,8 @@
 //   the turn's wait; a failed assistant message is final. The reset and
 //   window come from the latest rejected rate_limit_event still ahead. The
 //   wait ends resumed only on a novel phase of a request the bound turn owns
-//   (its first message_start or snapshot, or a snapshot with new content;
+//   (its first message_start or snapshot, or a snapshot with new content in
+//   a supported block field, thinking included;
 //   never a duplicate, another turn's or an unowned request, a delta or a
 //   failed message) or on its successful result. Otherwise the cause is
 //   decided when the turn is marked settled: cancelled, or process-ended for
@@ -57,9 +58,40 @@ type Frame = Record<string, unknown>
 
 const isObject = (value: unknown): value is Frame => typeof value === 'object' && value !== null && !Array.isArray(value)
 const subagent = (frame: Frame) => frame.parent_tool_use_id != null
-/** An assistant frame's content identity: each block's type with its tool id or text (a tool input is never serialized). */
+/** A tool input as JSON for content identity: cycles are marked, an unserializable value is one marker. */
+const inputIdentity = (input: unknown): string => {
+  const seen = new WeakSet<object>()
+  try {
+    return JSON.stringify(input, (_key, value: unknown) => {
+      if (typeof value !== 'object' || value === null) return value
+      if (seen.has(value)) return '[cycle]'
+      seen.add(value)
+      return value
+    }) ?? 'undefined'
+  } catch {
+    return '[unserializable]'
+  }
+}
+const field = (block: Frame, key: string): string | null => (typeof block[key] === 'string' ? (block[key] as string) : null)
+/**
+ * An assistant frame's content identity (review F5): per block, only its
+ * progress-bearing fields — text; thinking with its signature; redacted
+ * thinking's data; a tool call's id, name and input; any other block's type
+ * and id. JSON encoding keeps it unambiguous. Wrapper uuid, counters, model
+ * and quota are never part of it.
+ */
 const contentSignature = (content: unknown): string =>
-  (Array.isArray(content) ? content : []).map((block) => (isObject(block) ? `${String(block.type)}:${typeof block.id === 'string' ? block.id : ''}:${typeof block.text === 'string' ? block.text : ''}` : '?')).join('\u0000')
+  JSON.stringify(
+    (Array.isArray(content) ? content : []).map((block) => {
+      if (!isObject(block)) return ['?']
+      const type = String(block.type)
+      if (type === 'text') return [type, field(block, 'text')]
+      if (type === 'thinking') return [type, field(block, 'thinking'), field(block, 'signature')]
+      if (type === 'redacted_thinking') return [type, field(block, 'data')]
+      if (type === 'tool_use' || type === 'server_tool_use') return [type, field(block, 'id'), field(block, 'name'), inputIdentity(block.input)]
+      return [type, field(block, 'id')]
+    }),
+  )
 
 /** A request first seen with no turn bound: it never has an owner. */
 const UNKNOWN = Symbol('unknown')

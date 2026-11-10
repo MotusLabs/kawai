@@ -22,6 +22,8 @@
 //   (its first start or snapshot, or a snapshot with new content); a replay
 //   of an earlier turn's request or a duplicate never resumes it. A stop
 //   reentered from a frame's quota report sees that frame's tokens.
+//   New content is judged on each block's supported fields: new thinking
+//   alone resumes the wait; an exact duplicate does not (findings-14bde0ed).
 // - F4: quotaSource unset or 'none' asks no usage pull; 'host-login' asks
 //   exactly one, answered from the supplied home, reported host-login-pull
 //   with account scope host-login.
@@ -444,6 +446,39 @@ describe('Claude request ownership by native request id through the public drive
 
   test('reviewer F5: an earlier turn\'s assistant replayed in a held wait does not resume it', async () => {
     await reviewerF5(snapshot('old', old))
+  })
+
+  // The reviewer's R05 progress probes (findings-14bde0ed, /tmp/s73-r4-review-progress.test.ts), frame for frame:
+  // a snapshot of the turn's own request whose supported content is new resumes the wait; an exact duplicate does not.
+  const ownBlock = (block: Record<string, unknown>) => ({ type: 'assistant', uuid: crypto.randomUUID(), parent_tool_use_id: null, message: { id: 'own', role: 'assistant', model: 'm', content: [block] } })
+  const textBlock = (value: string) => ({ type: 'text', text: value })
+  const thinkingBlock = (value: string) => ({ type: 'thinking', thinking: value, signature: 'opaque' })
+  /** A held turn: an own snapshot, a retry, then the `after` snapshot and the quota push as the barrier; wait signals before and after an interrupt. */
+  const ownSnapshotAfterRetry = async (before: Record<string, unknown>, after: Record<string, unknown>) => {
+    const { d, seen } = claude()
+    await d.start()
+    const handle = await d.send(`script ${JSON.stringify({ frames: [ownBlock(before), retry, ownBlock(after), push], usage: null, hold: true })}`)
+    await waitUntil(() => seen.quotas.some((q) => q.source === 'push'))
+    const held = seen.limits.filter((e) => e.type !== 'failure').map((e) => (e.type === 'wait-end' ? `end:${e.cause}` : e.type))
+    await d.interrupt()
+    await handle.result
+    return { held, ends: seen.limits.filter((e) => e.type === 'wait-end').map((e) => (e as Extract<LimitEvent, { type: 'wait-end' }>).cause) }
+  }
+
+  test('reviewer R05: a novel own text snapshot after a retry resumes the wait once before the quota barrier', async () => {
+    expect(await ownSnapshotAfterRetry(textBlock('before'), textBlock('after'))).toEqual({ held: ['wait-start', 'end:resumed'], ends: ['resumed'] })
+  })
+
+  test('reviewer R05: a novel own thinking snapshot after a retry resumes the wait once before the quota barrier', async () => {
+    expect(await ownSnapshotAfterRetry(thinkingBlock('before'), thinkingBlock('after'))).toEqual({ held: ['wait-start', 'end:resumed'], ends: ['resumed'] })
+  })
+
+  test('an exact duplicate of the own thinking snapshot after a retry does not resume the wait: one cancelled end at the interrupt', async () => {
+    expect(await ownSnapshotAfterRetry(thinkingBlock('same'), thinkingBlock('same'))).toEqual({ held: ['wait-start'], ends: ['cancelled'] })
+  })
+
+  test('the same string as text after thinking is new content: the wait resumes once', async () => {
+    expect(await ownSnapshotAfterRetry(thinkingBlock('same'), textBlock('same'))).toEqual({ held: ['wait-start', 'end:resumed'], ends: ['resumed'] })
   })
 
   test('a turn\'s own request replayed after its second request still counts once, merged per field', async () => {

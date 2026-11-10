@@ -172,6 +172,8 @@ export async function claudeStream(seed: number, mode: ObserverMode = 'present',
     ({ type: 'assistant', uuid: uuid(), session_id: 'sess-1', parent_tool_use_id: subagent ? 'toolu_parent' : null, message: { id, role: 'assistant', model: name, content: blocks } }) as never
   const stream = (subagent: boolean, event: Record<string, unknown>) => ({ type: 'stream_event', uuid: uuid(), session_id: 'sess-1', parent_tool_use_id: subagent ? 'toolu_parent' : null, event }) as never
   // Every main start and snapshot sent, as sent (the replay op resends one).
+  // The block kind each request's text ops stream (text or thinking).
+  const kinds = new Map<string, 'text' | 'thinking'>()
   const sent: Array<{ kind: 'start' | 'snapshot'; id: string; input: number | null; name?: string; blocks?: Record<string, unknown>[] }> = []
   const turns = 1 + next(4)
   for (let t = 0; t < turns; t++) {
@@ -208,14 +210,18 @@ export async function claudeStream(seed: number, mode: ObserverMode = 'present',
       } else if (op === 'tool' || op === 'text' || op === 'subTool') {
         const name = ['model-a', 'model-b'][next(2)]!
         const ids = op === 'text' ? [] : op === 'subTool' ? ['ts'] : ['ta', 'tb', 'tc'].filter(() => next(2) === 0)
-        const blocks = op === 'text' ? [{ type: 'text', text: `x${i}` }] : ids.map((id) => ({ type: 'tool_use', id, name: 'Read', input: { file_path: '/x' } }))
         if (op === 'subTool') {
           model.subagentSnapshot()
-          q.push(assistant(true, uuid(), name, blocks))
+          q.push(assistant(true, uuid(), name, [{ type: 'tool_use', id: 'ts', name: 'Read', input: { file_path: '/x' } }]))
         } else {
           // A snapshot of the turn's latest request (its next content), or of a new one.
           const id = turnIds.length > 0 && next(2) === 0 ? turnIds[turnIds.length - 1]! : uuid()
           if (!turnIds.includes(id)) turnIds.push(id)
+          // A text op is answer text or extended thinking (signature opaque); a request's next text op
+          // grows the block kind it already streamed, so only that block's string changes.
+          const kind = kinds.get(id) ?? (next(2) === 0 ? 'text' : 'thinking')
+          if (op === 'text') kinds.set(id, kind)
+          const blocks: Array<Record<string, unknown>> = op === 'text' ? [kind === 'text' ? { type: 'text', text: `x${i}` } : { type: 'thinking', thinking: `x${i}`, signature: 'sig' }] : ids.map((tool) => ({ type: 'tool_use', id: tool, name: 'Read', input: { file_path: '/x' } }))
           model.snapshot(id, null, name, ids, JSON.stringify(blocks))
           q.push(assistant(false, id, name, blocks))
           sent.push({ kind: 'snapshot', id, input: null, name, blocks })

@@ -497,5 +497,13 @@ or property that would have caught it, and the source finding.
   starts requests without counters (request-without-counters) and marks a
   replay inside a wait that must not resume it (replay-in-wait-unresumed).
   Each frame's facts and wait are decided before any observer runs.
+- **Third miss (findings-14bde0ed).** The content identity kept only each
+  block's type, id and text, so two thinking snapshots of one request looked
+  equal and new thinking after a retry did not resume the wait. The identity
+  now covers each supported block's progress-bearing fields (thinking with
+  its signature, redacted data, tool name and input) in an unambiguous
+  encoding. The generator grows the block kind a request already streamed,
+  and the model marks content that differs only in thinking
+  (thinking-only-content-resumes-wait); a type/id/text projection fails it.
 - **Source finding.** task-73ecea50 findings-55a68ce4 (F3), creator
-  note-229f71ee; findings-040f141e (F3/A2, F5/A3).
+  note-229f71ee; findings-040f141e (F3/A2, F5/A3); findings-14bde0ed (F5).
