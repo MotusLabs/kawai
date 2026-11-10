@@ -5,10 +5,13 @@
 //   cache-creation tokens).
 // - Codex: thread/tokenUsage/updated carries the thread's running `total`
 //   and the latest request's `last`. A turn's requests are the difference
-//   between consecutive totals. The first update of a generation, or one
-//   whose total went down (a counter reset), counts its `last` instead: a
-//   difference against a missing or reset total would credit the turn with
-//   history it never ran. A counter missing from either total stays null.
+//   between consecutive totals. The first update of a generation counts its
+//   `last`: a difference against no total would credit the turn with history
+//   it never ran (a new generation, which may restart the totals, starts
+//   over). A total below the previous one within a generation is a stale
+//   repeat: it adds nothing and leaves the previous total in place, so a
+//   request is never counted twice. A counter missing from either total
+//   stays null.
 //   Codex input includes the cached input, so input is reported without it.
 import type { TokenUsage } from './types.js'
 
@@ -55,21 +58,23 @@ export function codexRequestUsage(requests: CodexTokenBreakdown | null): TokenUs
 }
 
 /**
- * The requests one tokenUsage update adds: the difference to the previous
- * total, or `last` when there is no previous total or a counter went down.
+ * One tokenUsage update: the requests it adds (the difference to the
+ * previous total, `last` when there is none, null for a stale repeat) and
+ * the total the next update is measured from.
  */
-export function codexUpdateRequests(total: CodexTokenBreakdown | null, last: CodexTokenBreakdown | null, previous: CodexTokenBreakdown | null): CodexTokenBreakdown | null {
-  if (!total || !previous) return last
+export function codexUpdateRequests(total: CodexTokenBreakdown | null, last: CodexTokenBreakdown | null, previous: CodexTokenBreakdown | null): { requests: CodexTokenBreakdown | null; total: CodexTokenBreakdown | null } {
+  if (!previous) return { requests: last, total }
+  if (!total) return { requests: last, total: previous }
   const now = total as Record<string, unknown>
   const before = previous as Record<string, unknown>
-  if (CODEX_KEYS.some((key) => count(now, key) !== null && count(before, key) !== null && count(now, key)! < count(before, key)!)) return last
+  if (CODEX_KEYS.some((key) => count(now, key) !== null && count(before, key) !== null && count(now, key)! < count(before, key)!)) return { requests: null, total: previous }
   const delta: Record<string, number | null> = {}
   for (const key of CODEX_KEYS) {
     const a = count(now, key)
     const b = count(before, key)
     delta[key] = a === null || b === null ? null : a - b
   }
-  return delta
+  return { requests: delta, total }
 }
 
 /** Two usages of one turn summed; a field stays null only when both are. */

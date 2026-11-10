@@ -3,9 +3,11 @@
 // turn sends exactly the notifications a test names, so each expected value
 // is computed from those records, not read back from the driver.
 // - Tokens: a turn's requests are the differences between the generation's
-//   consecutive thread totals; a first update or a reset total counts its
-//   `last`; a counter missing from the previous total is null, never the
-//   whole running total. A turn with no update has usage null.
+//   consecutive thread totals; a generation's first update counts its `last`
+//   (a restarted process may restart the totals); a lower total within a
+//   generation is a stale repeat and adds nothing; a counter missing from
+//   the previous total is null, never the whole running total. A turn with
+//   no update has usage null.
 // - A successor turn reusing a tool item id has its own call and count.
 // - Waits: a retrying limit error opens one wait; it ends resumed only on a
 //   later item, delta or token update of that turn (or its success); a quota
@@ -42,7 +44,7 @@ function recorded(options: HarnessOptions = {}) {
 const usageOf = (b: { inputTokens: number; cachedInputTokens: number; outputTokens: number }) => ({ inputTokens: b.inputTokens - b.cachedInputTokens, outputTokens: b.outputTokens, cacheReadTokens: b.cachedInputTokens, cacheCreationTokens: null })
 
 describe('Codex per-turn token, tool and compaction facts', () => {
-  test('requests are the differences between totals; a reset counts last; a missing previous counter is null; no update is null', async () => {
+  test('requests are the differences between totals; a stale lower total adds nothing; a missing previous counter is null; no update is null; a new generation counts its first last', async () => {
     const h = recorded()
     await h.driver.start()
     const t1 = { totalTokens: 150, inputTokens: 100, cachedInputTokens: 40, outputTokens: 50 }
@@ -55,18 +57,24 @@ describe('Codex per-turn token, tool and compaction facts', () => {
     const b = usageOf(d)
     expect(first.usage).toEqual({ inputTokens: a.inputTokens + b.inputTokens, outputTokens: a.outputTokens + b.outputTokens, cacheReadTokens: a.cacheReadTokens + b.cacheReadTokens, cacheCreationTokens: null })
 
-    // A total that went down is a reset: its own last counts, not a negative or zero difference.
-    const l3 = { totalTokens: 30, inputTokens: 20, cachedInputTokens: 5, outputTokens: 10 }
-    const reset = await (await h.driver.send(script([tokens({ totalTokens: 30, inputTokens: 20, cachedInputTokens: 5, outputTokens: 10 }, l3)]))).result
-    expect(reset.usage).toEqual(usageOf(l3))
+    // A lower total within the generation is a stale repeat (here t1 again): no tokens, and t2 stays the baseline.
+    const stale = await (await h.driver.send(script([tokens(t1, l1)]))).result
+    expect(stale.usage).toBeNull()
 
-    // The previous total lacks cachedInputTokens: that counter is unknown, not the running total.
-    await (await h.driver.send(script([tokens({ totalTokens: 60, inputTokens: 40, outputTokens: 20 }, { totalTokens: 30, inputTokens: 20, outputTokens: 10 })]))).result
-    const partial = await (await h.driver.send(script([tokens({ totalTokens: 90, inputTokens: 60, cachedInputTokens: 30, outputTokens: 30 }, { totalTokens: 30, inputTokens: 20, cachedInputTokens: 30, outputTokens: 10 })]))).result
+    // The update after t2 lacks cachedInputTokens, so the next one has no previous cached count: unknown, not its running total.
+    await (await h.driver.send(script([tokens({ totalTokens: 450, inputTokens: 330, outputTokens: 120 }, { totalTokens: 50, inputTokens: 30, outputTokens: 20 })]))).result
+    const partial = await (await h.driver.send(script([tokens({ totalTokens: 480, inputTokens: 350, cachedInputTokens: 100, outputTokens: 130 }, { totalTokens: 30, inputTokens: 20, cachedInputTokens: 10, outputTokens: 10 })]))).result
     expect(partial.usage).toEqual({ inputTokens: 20, outputTokens: 10, cacheReadTokens: null, cacheCreationTokens: null })
 
     const none = await (await h.driver.send(script([]))).result
     expect(none.usage).toBeNull()
+
+    // A restarted process is a new generation: its first update counts its last, whatever the previous totals were.
+    expect((await (await h.driver.send(script([], 'exit:0'))).result).outcome).toBe('process-ended')
+    await h.driver.start()
+    const l4 = { totalTokens: 30, inputTokens: 20, cachedInputTokens: 5, outputTokens: 10 }
+    const restarted = await (await h.driver.send(script([tokens(l4, l4)]))).result
+    expect(restarted.usage).toEqual(usageOf(l4))
   })
 
   test('a successor turn that reuses a tool or compaction item id has its own event and count', async () => {

@@ -8,7 +8,8 @@
 // host callback runs through the session's guarded notify (R11), and the
 // names-only observer never sees tool input (P14).
 // - Tokens: the generation's consecutive thread totals (usage/tokens.ts); a
-//   new generation starts from its own first update.
+//   new generation starts from its own first update, and a stale lower total
+//   adds nothing.
 // - Quota: account/rateLimits/updated (`push`) and the session's one
 //   account/rateLimits/read reply (`report`), both the session's own login.
 // - Limits: a retrying `error` notification of a limit kind is a non-final
@@ -182,8 +183,8 @@ export class CodexFacts {
   }
 
   private tokens(total: CodexTokenBreakdown | null, last: CodexTokenBreakdown | null, window: number | null, turn: CodexTurnState | null): void {
-    const requests = codexUpdateRequests(total, last, this.lastTotal)
-    if (total) this.lastTotal = total
+    const { requests, total: measured } = codexUpdateRequests(total, last, this.lastTotal)
+    this.lastTotal = measured
     if (turn) turn.usage = addTokenUsage(turn.usage, codexRequestUsage(requests))
     const onContextUsage = this.host.callbacks.onContextUsage
     const input = typeof last?.inputTokens === 'number' ? last.inputTokens : null

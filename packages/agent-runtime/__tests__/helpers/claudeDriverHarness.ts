@@ -4,7 +4,7 @@ import type { Options } from '@anthropic-ai/claude-agent-sdk'
 import { ClaudeSession } from '../../src/claude/session.js'
 import type { DriverState, ProcessEndReport, ResumeCheckpoint, TurnHandle, TurnResult } from '../../src/contract.js'
 import type { AgentEvent, PendingRequest } from '../../src/events.js'
-import type { BeforeSubmit } from '../../src/options.js'
+import type { AgentCallbacks, BeforeSubmit } from '../../src/options.js'
 import { controlledQueries, type ControlledQuery } from './controlledQuery.js'
 import { fakeClaudeHome } from './fakeClaudeHome.js'
 
@@ -35,6 +35,8 @@ export interface DriverHooks {
   sdkOptions?: Partial<Options>
   onRequest?(request: PendingRequest): void
   unansweredRequests?: 'deny' | 'wait'
+  /** Usage observers passed through as given (tasks 5.2-5.4). */
+  observers?: Pick<AgentCallbacks, 'onLimitEvent' | 'onQuotaReport' | 'onContextUsage' | 'onCompaction' | 'onModel'>
   /** The conversation to resume; null launches fresh. Default: the caller's saved 'sess-saved'. */
   resume?: ResumeCheckpoint | null
 }
@@ -49,6 +51,7 @@ export function driver(hooks: DriverHooks = {}): Driver {
   const d = new ClaudeSession({
     launch: fakeClaudeHome().launch(),
     callbacks: {
+      ...hooks.observers,
       onEvent: (e) => {
         events.push(e)
         hooks.onEvent?.(e)
