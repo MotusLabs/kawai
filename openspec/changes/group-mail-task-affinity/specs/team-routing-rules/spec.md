@@ -3,7 +3,7 @@
 ## ADDED Requirements
 
 ### Requirement: Groups may route by task owner
-A group's frontmatter SHALL accept `affinity: task-owner` and `affinityWait` in whole minutes, defaulting to 30; other values SHALL be reported and ignored. When a message records a task owner who is an eligible candidate, the built-in strategy SHALL pick the owner before applying the group's `strategy`, even when the owner's profile ranks lower or another member has been idle longer.
+A group's frontmatter SHALL accept `affinity: task-owner` and `affinityWait` in whole minutes, defaulting to 30. An invalid `affinity` SHALL be reported and leave the group without affinity; an invalid `affinityWait` SHALL be reported and the default SHALL apply. When a message records a task owner who is an eligible candidate, the built-in strategy SHALL pick the owner before applying the group's `strategy`, even when the owner's profile ranks lower or another member has been idle longer.
 
 #### Scenario: Owner preferred over the longest-idle member
 - **WHEN** lead `B` has been idle for 10 minutes, lead `A` has just become idle, and a group message records `A` as its task owner
@@ -17,16 +17,20 @@ A group's frontmatter SHALL accept `affinity: task-owner` and `affinityWait` in 
 - **WHEN** a group file sets `affinity: newest`
 - **THEN** the group reports the invalid value and routes without affinity
 
+#### Scenario: Invalid wait value
+- **WHEN** a group file sets `affinity: task-owner` and `affinityWait: -1`
+- **THEN** the group reports the invalid value and routes with affinity and a 30-minute wait
+
 #### Scenario: No owner recorded
 - **WHEN** a message to an affinity group records no task owner
 - **THEN** the group's `strategy` routes it as before
 
 ### Requirement: A busy task owner holds its mail for a bounded wait
-When a message's task owner is a live member excluded only because it is working or awaiting a card, routing SHALL hold the message until `affinityWait` minutes after its creation, then route it by the group's `strategy`. The owner going idle first SHALL end the hold. When the owner is gone, archived, context-exhausted, unavailable, parked, cooling, or excluded by the message's filters, routing SHALL NOT wait for it.
+When a message's task owner is a live member excluded only because it is working or awaiting a card, routing SHALL hold the message until `affinityWait` minutes after it became due, then route it by the group's `strategy`. The owner going idle first SHALL end the hold. Routing SHALL apply the group's current settings on each pass. When the owner is gone, archived, context-exhausted, unavailable, parked, cooling, or excluded by the message's filters, routing SHALL NOT wait for it.
 
 #### Scenario: Owner busy within the wait
 - **WHEN** a message to `lead` was created 10 minutes ago with `affinityWait: 30`, its owner `A` is working, and lead `B` is idle
-- **THEN** the message stays queued and is routed again at 30 minutes after creation or when candidates change
+- **THEN** the message stays queued, and a pass routes it again by 30 minutes after creation at the latest, or as soon as `A` goes idle
 
 #### Scenario: Owner frees up within the wait
 - **WHEN** that owner `A` becomes idle 12 minutes after the message was created
@@ -35,6 +39,10 @@ When a message's task owner is a live member excluded only because it is working
 #### Scenario: Wait runs out
 - **WHEN** the owner is still working 30 minutes after creation and `B` is idle
 - **THEN** `B` receives the message
+
+#### Scenario: Affinity removed while mail waits
+- **WHEN** a message held for its busy owner `A` is still queued, `affinity` is removed from the group file, and `B` is idle
+- **THEN** the next dispatch pass gives the message to `B`, with no restart needed, and the message still records `A` as its owner
 
 #### Scenario: Cooling owner does not hold
 - **WHEN** the owner's profile is cooling and another member is idle
@@ -49,7 +57,7 @@ When a message's task owner is a live member excluded only because it is working
 - **THEN** the message waits as group mail with no eligible candidate does, and the owner receives it once idle
 
 ### Requirement: Rules see the task owner
-The route context given to routing rules SHALL include the message's recorded task owner as an additive metadata field, absent when the message has none. A rule's pick or hold SHALL take precedence over the owner preference and the owner hold. When the rule returns default, the built-in strategy SHALL apply both.
+The route context given to routing rules SHALL include the message's recorded task owner as an additive metadata field, absent when the message has none. A rule's pick or hold SHALL take precedence over the owner preference and the owner hold. When the rule returns default, the built-in strategy SHALL apply both. With no eligible candidate, no rule SHALL run and the message SHALL wait as today.
 
 #### Scenario: Rule reads the owner
 - **WHEN** a message that records owner `A` is routed through a group rule

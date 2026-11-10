@@ -37,7 +37,8 @@ close to even.
   is idle and eligible.
 - **Bounded wait for a busy owner.** While the owner is a live member that is
   only busy or waiting on a card, the message is held for at most
-  `affinityWait` minutes (default 30) from its creation, with the waiting
+  `affinityWait` minutes (default 30) from when it became due (its scheduled
+  delivery time, else its creation), with the waiting
   reason `owner-busy`. In every other case the group's normal strategy
   decides immediately: the owner is gone, archived, context-exhausted,
   unavailable, parked, or cooling, or the message's filters exclude it, or the
@@ -51,6 +52,10 @@ close to even.
   additive `taskOwner` field. The pure eligibility check accepts the owner and
   ranks an eligible owner first, so the dispatch preview and `team_capacity`
   agree with routing.
+- **Settings apply at route time.** An invalid `affinityWait` keeps affinity
+  on with the default wait. Removing `affinity` from a group releases its
+  queued and scheduled mail on the next dispatch pass; the recorded owner
+  stays on the message for audit.
 - **The lead group opts in.** `.kawai/groups/lead.md` sets
   `affinity: task-owner`. Its guidance says to record coordination in the
   task journal instead of relaying notices to the other lead by mail.
