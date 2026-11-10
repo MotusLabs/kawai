@@ -275,10 +275,14 @@ export class CodexSession {
     const failed = status === 'failed' || (raw.error != null && status !== 'completed' && status !== 'interrupted')
     const error: AgentErrorInfo | null = failed ? this.facts.turnError(raw.error ?? null) : status === 'interrupted' ? INTERRUPTED : null
     const outcome: TurnOutcome = failed ? 'failed' : status === 'interrupted' ? 'interrupted' : 'success'
+    // F2: the outcome is decided before the final limit observer runs, so a
+    // callback reentered from it finds no active turn and cannot replace it.
     const settled = this.lifecycle.holdState(() => {
       if (!this.lifecycle.result(turn.turnId)) return false
       this.turn = null
-      this.settle(turn, outcome, error, failed ? 'error_during_execution' : outcome, this.facts.terminalReason(raw.error ?? null))
+      const publish = this.decide(turn, outcome, error, failed ? 'error_during_execution' : outcome, this.facts.terminalReason(raw.error ?? null))
+      if (failed) this.facts.finalLimit(raw.error ?? null)
+      publish?.()
       return true
     })
     if (settled && error && outcome === 'failed') this.emit({ type: 'error', error })
@@ -352,25 +356,37 @@ export class CodexSession {
     return [{ type: 'text', text, text_elements: [] }]
   }
 
-  /** A new turn: turn/start is written first, then the turn opens (P13 identities). */
+  /**
+   * A new turn (P13 identities). F1: the accepted turn and its owned reply job
+   * exist before turn/start is written, so a stop reentered from the wire
+   * recorder during that write finds and settles the turn. The turn opens
+   * after the write only if it is still current and unsettled; otherwise the
+   * already-settled handle is returned and nothing opens after the stop.
+   */
   private begin(prepared: Prepared): TurnHandle {
     const generation = this.current()!
     const turn = newCodexTurn(prepared.turnId, prepared.messageUuid, prepared.text, this.model)
     const effort = typeof this.options.effort === 'string' ? { effort: this.options.effort } : {}
     const params = codexTurnStartParams({ threadId: generation.threadId, input: this.input(prepared.text), clientUserMessageId: prepared.messageUuid, ...effort }, this.permissions)
-    const reply = generation.transport.request('turn/start', params as JsonObject)
     this.turn = turn
     this.unbound.push(turn)
-    this.lifecycle.holdState(() => this.openTurn(turn, false))
+    let write!: (reply: Promise<unknown>) => void
+    const written = new Promise<Promise<unknown>>((resolve) => (write = resolve))
     void this.lifecycle.jobs.run(`turn:${turn.turnId}`, async () => {
       try {
-        const id = (await reply as { turn?: { id?: unknown } } | null)?.turn?.id
+        const id = (await (await written) as { turn?: { id?: unknown } } | null)?.turn?.id
         if (typeof id === 'string') this.bindNative(turn, id)
       } catch (error) {
         if (this.stopBegun() && error instanceof AgentRuntimeError && error.category === 'stopped') return
         this.failTurn(turn, rpcError(error, 'Codex refused the turn'))
       }
     })
+    try {
+      write(generation.transport.request('turn/start', params as JsonObject))
+    } catch (error) {
+      write(Promise.reject(error))
+    }
+    if (!turn.settled && turn === this.turn && !this.stopBegun()) this.lifecycle.holdState(() => this.openTurn(turn, false))
     return { turnId: turn.turnId, messageUuid: prepared.messageUuid, result: turn.result }
   }
 

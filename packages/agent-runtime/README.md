@@ -358,11 +358,12 @@ neither the Claude Agent SDK nor anything beyond the package and `zod`.
   the exact schema; its options are `Decline` and `Cancel`. To accept, type
   one JSON object, for example `{ text: '{"count":2,"remember":true}' }`.
   The driver checks it against the schema it captured (fields, required
-  fields, types, bounds, formats and enum members) and sends that object as
-  the content. An answer that doesn't match is refused with `invalid` and
-  the request stays pending. A schema the driver can't check exactly (a
-  nested object, an unknown keyword) is declined, and its exact shape is
-  reported once per session as an `error` event with category
+  fields, types, bounds, formats, calendar dates and enum members, in nested
+  objects too) and sends that object as the content. Fields the schema
+  doesn't declare are refused. An answer that doesn't match is refused with
+  `invalid` and the request stays pending. A schema the driver can't check
+  exactly (an unknown keyword or format) is declined, and its exact shape
+  is reported once per session as an `error` event with category
   `unsupported`; it is never narrowed. An interrupt cancels every waiting
   request; a stop cancels them and answers nothing more.
 - **Failures.** An unauthorized protocol failure (`codexErrorInfo`

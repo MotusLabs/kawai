@@ -1,20 +1,25 @@
 // Codex form elicitations as questions (design §5, task 4.3 Codex portion).
 // The `form`, `openai/form` and `openaiForm` modes ask for structured
-// content matching a requestedSchema (MCP 2025-11-25 ElicitRequestFormParams:
-// a flat object of string, number/integer, boolean, enum and multi-select
-// properties). Such a request is published as ONE question through the
-// unchanged public callback:
+// content matching a requestedSchema: an object of string, number/integer,
+// boolean, enum and multi-select properties (MCP 2025-11-25
+// ElicitRequestFormParams), and, as the pinned 0.163.0 protocol allows any
+// JSON schema for openai/form and openaiForm, nested objects of the same
+// (F4). Such a request is published as ONE question through the unchanged
+// public callback:
 //
 // - The question text is the request's message, followed by the exact schema
 //   the answer must match. Its two options are `Decline` and `Cancel`; typed
 //   text is the answer itself, one JSON object (the local codec).
 // - The private captured schema is authoritative: decode() validates the
 //   typed text against it (unknown or missing required keys, types, bounds,
-//   formats, enum members) and returns the native content. Nothing a host
-//   mutates in a published copy changes what validates.
-// - A schema this compiler cannot validate faithfully (an unknown keyword,
-//   a nested object, a malformed bound) is not narrowed: compileForm()
-//   returns its exact shape, which the caller reports once and declines.
+//   formats, enum members, at every nesting level) and returns the native
+//   content. Every predicate is total (F3): an impossible calendar value is
+//   an invalid answer, never a thrown error. Undeclared fields are refused at
+//   every level, which `additionalProperties` (true or false) permits.
+//   Nothing a host mutates in a published copy changes what validates.
+// - A schema this compiler cannot validate faithfully (an unknown keyword or
+//   format, a malformed bound) is not narrowed: compileForm() returns its
+//   exact shape, which the caller reports once and declines.
 import type { AgentQuestion } from '../events.js'
 import type { JsonValue } from '../json.js'
 
@@ -51,7 +56,7 @@ function onlyKeys(schema: Record<string, unknown>, allowed: string[], path: stri
 }
 
 function optional(schema: Record<string, unknown>, key: string, ok: (v: unknown) => boolean, path: string): void {
-  if (key in schema && !ok(schema[key])) unsupported(path, `has an invalid "${key}"`, schema)
+  if (Object.hasOwn(schema, key) && !ok(schema[key])) unsupported(path, `has an invalid "${key}"`, schema)
 }
 
 function members(values: unknown, path: string, schema: unknown): string[] {
@@ -67,12 +72,38 @@ function consts(options: unknown, path: string, schema: unknown): string[] {
   })
 }
 
-const FORMATS: Record<string, (s: string) => boolean> = {
-  email: (s) => /^[^\s@]+@[^\s@]+$/.test(s),
-  uri: (s) => /^[A-Za-z][A-Za-z0-9+.-]*:/.test(s) && URL.canParse(s),
-  date: (s) => /^\d{4}-\d{2}-\d{2}$/.test(s) && new Date(`${s}T00:00:00Z`).toISOString().startsWith(s),
-  'date-time': (s) => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/i.test(s) && !Number.isNaN(Date.parse(s)),
+const DAYS = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+const leap = (y: number) => (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0
+/** RFC 3339 full-date with a real calendar day; total (F3). */
+function validDate(y: number, m: number, d: number): boolean {
+  return m >= 1 && m <= 12 && d >= 1 && d <= (m === 2 && leap(y) ? 29 : DAYS[m - 1]!)
 }
+const DATE = /^(\d{4})-(\d{2})-(\d{2})$/
+const DATE_TIME = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|([+-])(\d{2}):(\d{2}))$/i
+
+/** RFC 3339 date-time: real date, hours 0-23, minutes 0-59, seconds 0-59 or a leap second at 23:59 UTC. */
+function validDateTime(s: string): boolean {
+  const m = DATE_TIME.exec(s)
+  if (!m) return false
+  const [y, mo, d, h, mi, se] = m.slice(1, 7).map(Number) as [number, number, number, number, number, number]
+  const sign = m[7] === '-' ? -1 : 1
+  const oh = m[8] === undefined ? 0 : Number(m[8])
+  const om = m[9] === undefined ? 0 : Number(m[9])
+  if (!validDate(y, mo, d) || h > 23 || mi > 59 || se > 60 || oh > 23 || om > 59) return false
+  if (se < 60) return true
+  const utc = (((h * 60 + mi - sign * (oh * 60 + om)) % 1440) + 1440) % 1440
+  return utc === 23 * 60 + 59
+}
+
+const FORMATS = new Map<string, (s: string) => boolean>([
+  ['email', (s) => /^[^\s@]+@[^\s@]+$/.test(s)],
+  ['uri', (s) => /^[A-Za-z][A-Za-z0-9+.-]*:/.test(s) && URL.canParse(s)],
+  ['date', (s) => {
+    const m = DATE.exec(s)
+    return m !== null && validDate(Number(m[1]), Number(m[2]), Number(m[3]))
+  }],
+  ['date-time', validDateTime],
+])
 
 function oneOfSet(allowed: string[]): Check {
   const set = new Set(allowed)
@@ -81,29 +112,29 @@ function oneOfSet(allowed: string[]): Check {
 
 function stringCheck(schema: Record<string, unknown>, path: string): Check {
   optional(schema, 'default', (v) => typeof v === 'string', path)
-  if ('enum' in schema) {
+  if (Object.hasOwn(schema, 'enum')) {
     onlyKeys(schema, [...COMMON, 'enum', 'enumNames'], path)
     const allowed = members(schema.enum, path, schema)
     optional(schema, 'enumNames', (v) => Array.isArray(v) && v.length === allowed.length && v.every((n) => typeof n === 'string'), path)
     return oneOfSet(allowed)
   }
-  if ('oneOf' in schema) {
+  if (Object.hasOwn(schema, 'oneOf')) {
     onlyKeys(schema, [...COMMON, 'oneOf'], path)
     return oneOfSet(consts(schema.oneOf, path, schema))
   }
   onlyKeys(schema, [...COMMON, 'minLength', 'maxLength', 'format'], path)
   optional(schema, 'minLength', isCount, path)
   optional(schema, 'maxLength', isCount, path)
-  optional(schema, 'format', (v) => typeof v === 'string' && v in FORMATS, path)
+  optional(schema, 'format', (v) => typeof v === 'string' && FORMATS.has(v), path)
   const min = schema.minLength as number | undefined
   const max = schema.maxLength as number | undefined
-  const format = schema.format as string | undefined
+  const format = typeof schema.format === 'string' ? FORMATS.get(schema.format) : undefined
   return (v, name) => {
     if (typeof v !== 'string') return `"${name}" must be a string`
     const length = [...v].length
     if (min !== undefined && length < min) return `"${name}" must have at least ${min} characters`
     if (max !== undefined && length > max) return `"${name}" must have at most ${max} characters`
-    if (format && !FORMATS[format]!(v)) return `"${name}" must be a valid ${format}`
+    if (format && !format(v)) return `"${name}" must be a valid ${String(schema.format)}`
     return null
   }
 }
@@ -134,7 +165,7 @@ function arrayCheck(schema: Record<string, unknown>, path: string): Check {
   const items = schema.items
   if (!isRecord(items)) unsupported(path, 'has invalid items', schema)
   let allowed: string[]
-  if ('anyOf' in items) {
+  if (Object.hasOwn(items, 'anyOf')) {
     onlyKeys(items, ['anyOf'], `${path}.items`)
     allowed = consts(items.anyOf, `${path}.items`, items)
   } else {
@@ -165,7 +196,35 @@ function propertyCheck(schema: unknown, path: string): Check {
       optional(schema, 'default', (v) => typeof v === 'boolean', path)
       return (v, name) => (typeof v === 'boolean' ? null : `"${name}" must be true or false`)
     case 'array': return arrayCheck(schema, path)
+    case 'object': return objectCheck(schema, path, ['type', 'title', 'description'])
     default: return unsupported(path, 'has an unsupported type', schema)
+  }
+}
+
+/**
+ * An object schema at any level (F4): its declared properties, required
+ * names and additionalProperties flag. Undeclared fields are refused (any
+ * content without them conforms whatever the flag says).
+ */
+function objectCheck(schema: Record<string, unknown>, path: string, keywords: string[]): Check {
+  onlyKeys(schema, [...keywords, 'properties', 'required', 'additionalProperties'], path)
+  if (schema.type !== 'object') unsupported(path, 'is not of type "object"', schema)
+  optional(schema, 'additionalProperties', (v) => typeof v === 'boolean', path)
+  if (!isRecord(schema.properties)) unsupported(path, 'has no properties object', schema)
+  const checks = new Map(Object.entries(schema.properties).map(([name, property]) => [name, propertyCheck(property, `${path}.properties.${name}`)] as const))
+  const required = schema.required ?? []
+  if (!Array.isArray(required) || required.some((name) => typeof name !== 'string' || !checks.has(name))) unsupported(path, 'has an invalid "required"', schema)
+  const requiredNames = [...(required as string[])]
+  return (value, prefix) => {
+    const field = (name: string) => (prefix ? `${prefix}.${name}` : name)
+    if (!isRecord(value)) return prefix ? `"${prefix}" must be an object` : 'The answer must be one JSON object'
+    for (const name of Object.keys(value)) if (!checks.has(name)) return `"${field(name)}" is not a field of this form`
+    for (const name of requiredNames) if (!Object.hasOwn(value, name)) return `"${field(name)}" is required`
+    for (const [name, inner] of Object.entries(value)) {
+      const error = checks.get(name)!(inner, field(name))
+      if (error) return error
+    }
+    return null
   }
 }
 
@@ -175,15 +234,8 @@ export function compileForm(params: Record<string, unknown>): FormCompile {
   const schema = params.requestedSchema
   try {
     if (!isRecord(schema)) unsupported('requestedSchema', 'is not an object schema', schema)
-    onlyKeys(schema, ['$schema', 'type', 'properties', 'required'], 'requestedSchema')
-    if (schema.type !== 'object') unsupported('requestedSchema', 'is not of type "object"', schema)
     optional(schema, '$schema', (v) => typeof v === 'string', 'requestedSchema')
-    if (!isRecord(schema.properties)) unsupported('requestedSchema', 'has no properties object', schema)
-    const properties = schema.properties as Record<string, unknown>
-    const checks = new Map(Object.entries(properties).map(([name, property]) => [name, propertyCheck(property, `requestedSchema.properties.${name}`)] as const))
-    const required = schema.required ?? []
-    if (!Array.isArray(required) || required.some((name) => typeof name !== 'string' || !checks.has(name))) unsupported('requestedSchema', 'has an invalid "required"', schema)
-    const requiredNames = [...(required as string[])]
+    const check = objectCheck(schema, 'requestedSchema', ['$schema', 'type', 'title', 'description'])
     const message = typeof params.message === 'string' ? params.message : ''
     const question: AgentQuestion = {
       question: `${message}\n\nAnswer with one JSON object matching this schema: ${JSON.stringify(schema)}`,
@@ -199,14 +251,8 @@ export function compileForm(params: Record<string, unknown>): FormCompile {
       } catch {
         return { ok: false, error: 'The answer must be one JSON object' }
       }
-      if (!isRecord(value)) return { ok: false, error: 'The answer must be one JSON object' }
-      for (const name of Object.keys(value)) if (!checks.has(name)) return { ok: false, error: `"${name}" is not a field of this form` }
-      for (const name of requiredNames) if (!Object.hasOwn(value, name)) return { ok: false, error: `"${name}" is required` }
-      for (const [name, field] of Object.entries(value)) {
-        const error = checks.get(name)!(field, name)
-        if (error) return { ok: false, error }
-      }
-      return { ok: true, content: value as Record<string, JsonValue> }
+      const error = check(value, '')
+      return error ? { ok: false, error } : { ok: true, content: value as Record<string, JsonValue> }
     }
     return { ok: true, form: { question, decode } }
   } catch (error) {

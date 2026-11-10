@@ -72,12 +72,16 @@ export class CodexFacts {
     if (typeof last?.text === 'string' && last.text) turn.finalText = last.text
   }
 
-  /** A failed turn's error, most specific category first (R02), with its limit failure reported. */
+  /** A failed turn's error, most specific category first (R02). Pure: it publishes nothing (F2). */
   turnError(error: TurnError): AgentErrorInfo {
     const kind = codexErrorKind(error?.codexErrorInfo)
     const message = typeof error?.message === 'string' && error.message.trim() ? error.message.trim() : 'The Codex turn failed'
-    if (error) this.limit(error, true)
     return { category: codexErrorCategory(error?.codexErrorInfo, 'provider'), message: kind ? `${message} (${kind})` : message, ...(kind ? { code: kind } : {}) }
+  }
+
+  /** The final limit failure of a failed turn, reported once after its outcome is decided (F2). */
+  finalLimit(error: TurnError): void {
+    if (error) this.limit(error, true)
   }
 
   terminalReason(error: TurnError): string | null {
