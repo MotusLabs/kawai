@@ -10,8 +10,9 @@
 // process as the witness of the same guards). Each stream interleaves turns, idle
 // and in-turn quota pushes, limit and non-limit retries, progress frames,
 // subagent and foreign-turn frames, tool and boundary ids reused across
-// turns, repeated token updates, results with and without usage, and failed
-// turns. The reference models (oracles/usageModels.ts) are told only what
+// turns, repeated token updates, Claude requests replayed by their native
+// id (in their own turn or a later one), results with and without usage,
+// and failed turns. The reference models (oracles/usageModels.ts) are told only what
 // was sent; after the stop every result, the limit/wait signal sequence
 // (with each wait-end's waitId naming its start) and the quota reports must
 // equal theirs. The streams live in helpers/usageStreams.ts (I8 reuses them).
@@ -24,7 +25,7 @@ import { claudeStream, codexStream, exercised } from './helpers/usageStreams.js'
 afterEach(stopDrivers)
 
 const SHARED_CLASSES = ['failure', 'start', 'end:resumed', 'end:cancelled', 'quota:push', 'outcome:success', 'outcome:failed', 'usage:null', 'usage:known', 'tools:several', 'compaction', 'push-in-wait-unresumed']
-const CLAUDE_CLASSES = [...SHARED_CLASSES, 'cost:known', 'model:null', 'usage:partial', 'delta-of-earlier-turn-request']
+const CLAUDE_CLASSES = [...SHARED_CLASSES, 'cost:known', 'model:null', 'usage:partial', 'delta-of-earlier-turn-request', 'replay-of-earlier-turn-request', 'usage:partial-after-earlier-turn-replay']
 const CODEX_CLASSES = [...SHARED_CLASSES, 'quota:report', 'replay-in-wait-unresumed']
 const claudeSeen: Set<string>[] = []
 const codexSeen: Set<string>[] = []

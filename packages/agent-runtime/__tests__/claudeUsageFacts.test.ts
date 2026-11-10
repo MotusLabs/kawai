@@ -14,6 +14,9 @@
 //   observed tokens, each request once by message id, never a subagent's or
 //   an earlier turn's; an unreported field is null; a result with usage is the
 //   aggregate. The tokens are on the turn before a reentrant stop can end it.
+//   A request keeps the turn of its first sighting by native id: replayed
+//   after the next turn's own request (snapshot, message_start, a delta, a
+//   conversation reset between), it adds nothing to that next turn.
 // - F4: quotaSource unset or 'none' asks no usage pull; 'host-login' asks
 //   exactly one, answered from the supplied home, reported host-login-pull
 //   with account scope host-login.
@@ -284,6 +287,48 @@ describe('Claude partial turn usage through the public driver and the fake CLI',
     expect(stop).toBeNull()
     expect(result.outcome).toBe('interrupted')
     expect(result.usage).toEqual({ inputTokens: 123, outputTokens: 0, cacheReadTokens: 8, cacheCreationTokens: 4 })
+  })
+})
+
+// Review F3 (findings-55a68ce4, creator note-229f71ee): a request keeps its first owner by native id across intervening requests and turns.
+describe('Claude request ownership by native request id through the public driver and the fake CLI', () => {
+  const old = { input_tokens: 100, output_tokens: 2, cache_read_input_tokens: 4, cache_creation_input_tokens: 5 }
+  const own = { input_tokens: 7, output_tokens: 3 }
+  const start = (id: string, usage: Record<string, number>) => stream({ type: 'message_start', message: { id, usage } })
+  const snapshot = (id: string, usage: Record<string, number>) => ({ ...assistant(id, [{ type: 'text', text: 'snapshot' }]), message: { id, role: 'assistant', model: 'fake-model', content: [{ type: 'text', text: 'snapshot' }], usage } })
+  const ownOnly = { inputTokens: 7, outputTokens: 3, cacheReadTokens: null, cacheCreationTokens: null }
+  /** Turn A owns old-request and settles without an aggregate; turn B makes its own request, then sees `replay`, then fails without one. */
+  const replayedInNextTurn = async (replay: Array<Record<string, unknown>>) => {
+    const { d } = claude()
+    await d.start()
+    const a = await (await d.send(script({ frames: [start('old-request', old), snapshot('old-request', old)], usage: null }))).result
+    expect(a.usage).toEqual({ inputTokens: 100, outputTokens: 2, cacheReadTokens: 4, cacheCreationTokens: 5 })
+    const b = await (await d.send(script({ frames: [start('new-request', own), ...replay], usage: null, subtype: 'error_during_execution' }))).result
+    expect(b.outcome).toBe('failed')
+    return b.usage
+  }
+
+  test('an earlier turn\'s request replayed as an assistant snapshot after the next turn\'s own request stays with its original turn', async () => {
+    expect(await replayedInNextTurn([snapshot('old-request', old)])).toEqual(ownOnly)
+  })
+
+  test('an earlier turn\'s request replayed as a message_start after the next turn\'s own request stays with its original turn', async () => {
+    expect(await replayedInNextTurn([start('old-request', old)])).toEqual(ownOnly)
+  })
+
+  test('a message_delta after a replayed earlier-turn request continues that request: the next turn gains nothing', async () => {
+    expect(await replayedInNextTurn([start('old-request', old), stream({ type: 'message_delta', usage: { output_tokens: 50 } })])).toEqual(ownOnly)
+  })
+
+  test('a conversation reset clears the context, not request ownership: a later replay still stays with its original turn', async () => {
+    expect(await replayedInNextTurn([{ type: 'conversation_reset', uuid: crypto.randomUUID() }, snapshot('old-request', old)])).toEqual(ownOnly)
+  })
+
+  test('a turn\'s own request replayed after its second request still counts once, merged per field', async () => {
+    const { d } = claude()
+    await d.start()
+    const result = await (await d.send(script({ frames: [start('r1', { input_tokens: 10, output_tokens: 0 }), start('r2', { input_tokens: 20, output_tokens: 1 }), snapshot('r1', { input_tokens: 10, output_tokens: 6 })], usage: null, subtype: 'error_during_execution' }))).result
+    expect(result.usage).toEqual({ inputTokens: 30, outputTokens: 7, cacheReadTokens: null, cacheCreationTokens: null })
   })
 })
 

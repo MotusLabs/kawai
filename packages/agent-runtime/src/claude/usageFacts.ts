@@ -5,9 +5,21 @@
 //   provider cost of the turn's stream events, subagents' included, and the
 //   tokens of the result bound to it; until then (and when the result carries
 //   none) the observed tokens of its own bound main-thread requests, each
-//   request once by message id, recorded before any observer runs. A request
-//   keeps the turn it was first bound to. Nothing is carried from another
-//   turn or a subagent.
+//   request once by message id, recorded before any observer runs. Nothing
+//   is carried from another turn or a subagent.
+// - Request ownership (review F3, creator note-229f71ee): a main-thread
+//   request's native id (message_start's message.id, an assistant frame's
+//   message.id, else its uuid) is admitted once, to the turn bound at its
+//   first sighting, or to no turn when none was bound. Every later sighting
+//   (a replay, a snapshot, a message_delta of it) goes to that first owner
+//   only, whatever turn is bound or active then; the latest-request context
+//   cursor below is never consulted for ownership. A settled owner takes
+//   nothing more. The registry lives as long as this object: the driver's
+//   whole lifetime, across respawn and resume generations of its one
+//   conversation, so a conversation reset clears the context cursor but no
+//   ownership. When a turn settles its entries are retired: the id stays,
+//   the Turn reference is released. A frame without an id reaches the
+//   context only.
 // - Context: the latest main-thread request's usage (assistant frames and
 //   stream events, merged per message id), a compaction's post size, the
 //   largest model window a result names, the CLI's context report and the
@@ -44,12 +56,16 @@ type Frame = Record<string, unknown>
 
 const isObject = (value: unknown): value is Frame => typeof value === 'object' && value !== null && !Array.isArray(value)
 const subagent = (frame: Frame) => frame.parent_tool_use_id != null
+/** An owner that takes nothing more: a settled turn's, or a request first seen with no turn bound. */
+const RETIRED = Symbol('retired')
 
 export class ClaudeUsageFacts {
   private readonly context = new ContextTracker()
   private readonly waits = new LimitWaits()
-  /** The latest main-thread request and the turn it is bound to (its tokens are that turn's own). */
-  private request: { messageId: string | null; usage: RequestUsage; owner: Turn | null } = { messageId: null, usage: EMPTY_REQUEST_USAGE, owner: null }
+  /** The latest main-thread request: the context cursor only (a later message_delta continues it). */
+  private request: { messageId: string | null; usage: RequestUsage } = { messageId: null, usage: EMPTY_REQUEST_USAGE }
+  /** Every main-thread request id seen, to its first owner: a live turn, or RETIRED once that turn settled (or none was bound). */
+  private readonly owners = new Map<string, Turn | typeof RETIRED>()
   private limitResetsAt: string | null = null
   private limitWindow: string | null = null
   /** Compaction boundaries already reported (a repeated boundary id is reported once). */
@@ -110,7 +126,7 @@ export class ClaudeUsageFacts {
       if (typeof message.id === 'string' && message.id && isObject(message.usage)) this.requestUsage(message.id, message.usage, bound)
       if (bound) this.progressed(bound)
     } else if (event.type === 'message_delta' && isObject(event.usage) && this.request.messageId) {
-      this.requestUsage(this.request.messageId, event.usage, this.request.owner)
+      this.requestUsage(this.request.messageId, event.usage, null)
     }
   }
 
@@ -150,7 +166,7 @@ export class ClaudeUsageFacts {
   }
 
   private conversationReset(): void {
-    this.request = { messageId: null, usage: EMPTY_REQUEST_USAGE, owner: null }
+    this.request = { messageId: null, usage: EMPTY_REQUEST_USAGE }
     this.step(this.context.resetConversation())
   }
 
@@ -165,9 +181,10 @@ export class ClaudeUsageFacts {
     this.step(this.context.applyReport(report))
   }
 
-  /** A turn's result is decided and published: its open wait ends. */
-  turnSettled(turnId: string, cause: LimitWaitEnd['cause']): void {
-    const end = this.waits.ended(turnId, cause)
+  /** A turn's result is decided and published: its requests retire and its open wait ends. */
+  turnSettled(turn: Turn, cause: LimitWaitEnd['cause']): void {
+    for (const messageId of turn.requests.keys()) if (this.owners.get(messageId) === turn) this.owners.set(messageId, RETIRED)
+    const end = this.waits.ended(turn.turnId, cause)
     if (end) this.publish(end)
   }
 
@@ -182,21 +199,28 @@ export class ClaudeUsageFacts {
   }
 
   /**
-   * One main-thread request usage source. A request keeps the turn it was
-   * first bound to; its observed tokens go on that turn first (F3), before
-   * any context observer can interrupt or stop it, merged per message id so a
-   * repeated snapshot counts once. A settled or absent owner takes nothing.
+   * One main-thread request usage source. `bound` is the turn bound to this
+   * sighting; it becomes the owner only when the id is new. The tokens go on
+   * a live owner first (F3), before any context observer can interrupt or
+   * stop it, merged per field so a repeated snapshot counts once.
    */
   private requestUsage(messageId: string, incoming: Frame, bound: Turn | null): void {
     const same = this.request.messageId === messageId
     const usage = mergeRequestUsage(same ? this.request.usage : EMPTY_REQUEST_USAGE, incoming)
-    const owner = same ? this.request.owner : bound
-    this.request = { messageId, usage, owner }
-    if (owner && !owner.settled && messageId) {
+    this.request = { messageId, usage }
+    const owner = messageId ? this.owner(messageId, bound) : null
+    if (owner) {
       owner.requests.set(messageId, mergeClaudeRequestUsage(owner.requests.get(messageId) ?? null, incoming)!)
       owner.usage = [...owner.requests.values()].reduce<TokenUsage | null>((sum, request) => addTokenUsage(sum, request), null)
     }
     this.step(this.context.readRequest(sumRequestUsage(usage), new Date().toISOString()))
+  }
+
+  /** The live first owner of `messageId`, admitting `bound` when the id is new; null when retired or settled. */
+  private owner(messageId: string, bound: Turn | null): Turn | null {
+    if (!this.owners.has(messageId)) this.owners.set(messageId, bound ?? RETIRED)
+    const owner = this.owners.get(messageId)!
+    return owner === RETIRED || owner.settled ? null : owner
   }
 
   /** The announced reset and its window while still ahead. */

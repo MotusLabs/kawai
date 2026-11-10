@@ -8,7 +8,10 @@
 //   the field-wise sum of the turn's own main-thread requests (each
 //   message_start's input, its later main message_deltas' cumulative
 //   output), never a subagent's or an earlier turn's; null when neither is
-//   known (F3). Codex, the sum of the
+//   known (F3). A Claude request is named by its native message id: the
+//   turn open at its first sighting owns it, and every later sighting (a
+//   replayed message_start or assistant snapshot, a delta after it) belongs
+//   to that owner only, never to the turn open when it is replayed. Codex, the sum of the
 //   requests the turn actually made (a repeated or foreign update adds
 //   nothing), null when the turn reported none.
 // - Counts: distinct tool-call ids and distinct boundary ids of the turn
@@ -122,24 +125,53 @@ export class ClaudeUsageModel extends LimitModel {
     this.quotas.push(`push:session:${status === 'rejected' ? 'limited' : status === 'allowed_warning' ? 'warning' : 'allowed'}`)
   }
 
-  /** The latest main-thread request and the turn it was started in (a later message_delta continues it). */
-  private request: { turn: OpenTurn | null; usage: TokenUsage } | null = null
+  /** Every main-thread request by its native id: the turn open at its first sighting (or none) and its tokens. */
+  private readonly requests = new Map<string, { turn: OpenTurn | null; input: number; usage: TokenUsage }>()
+  /** The latest main-thread request's id (a later message_delta continues it). */
+  private latest: string | null = null
+  /** Turns that saw an earlier turn's request replayed after a request of their own. */
+  private readonly replayedAfterOwn = new Set<OpenTurn>()
 
-  /** A message_start: a main one is a new request of the turn, with its reported input tokens, and progress. */
-  messageStart(subagent: boolean, inputTokens: number): void {
+  /** A main message_start with native `id`: a new id is a new request of the turn; progress either way. */
+  messageStart(subagent: boolean, id: string, inputTokens: number): void {
     if (subagent) return
-    this.request = { turn: this.turn, usage: { inputTokens, outputTokens: null, cacheReadTokens: null, cacheCreationTokens: null } }
-    this.turn?.requests.push(this.request.usage)
+    this.sighting(id, inputTokens)
     this.progressed()
   }
 
-  /** A message_delta: its cost counts for the turn (subagents' too); a main one's output tokens continue the latest request, cumulatively. */
+  /** A main assistant snapshot of request `id` (its usage names `inputTokens`): the request's, then as assistant(). */
+  snapshot(id: string, inputTokens: number, model: string): void {
+    this.sighting(id, inputTokens)
+    this.assistant(false, model, [])
+  }
+
+  /** One sighting of request `id`: the first admits the open turn as its owner; every one adds to that owner only while it is open. */
+  private sighting(id: string, inputTokens: number): void {
+    let request = this.requests.get(id)
+    if (!request) {
+      request = { turn: this.turn, input: inputTokens, usage: { inputTokens: null, outputTokens: null, cacheReadTokens: null, cacheCreationTokens: null } }
+      this.requests.set(id, request)
+      this.turn?.requests.push(request.usage)
+    } else if (this.turn && request.turn !== this.turn) {
+      this.marks.add('replay-of-earlier-turn-request')
+      if (this.turn.requests.length > 0) this.replayedAfterOwn.add(this.turn)
+    }
+    this.latest = id
+    if (this.turn && request.turn === this.turn) request.usage.inputTokens = Math.max(request.usage.inputTokens ?? 0, inputTokens)
+  }
+
+  /** A message_delta: its cost counts for the turn (subagents' too); a main one's output tokens continue the latest request, cumulatively, on its owner only. */
   delta(cost: number | null, subagent = true, outputTokens = 0): void {
     if (this.turn && cost !== null) this.turn.cost = (this.turn.cost ?? 0) + cost
-    const usage = this.request?.usage
-    if (!subagent && usage && this.turn && this.request!.turn !== this.turn) this.marks.add('delta-of-earlier-turn-request')
-    if (subagent || !usage || !this.turn || this.request!.turn !== this.turn) return
-    usage.outputTokens = Math.max(usage.outputTokens ?? 0, outputTokens)
+    const request = this.latest === null ? undefined : this.requests.get(this.latest)
+    if (!subagent && request && this.turn && request.turn !== this.turn) this.marks.add('delta-of-earlier-turn-request')
+    if (subagent || !request || !this.turn || request.turn !== this.turn) return
+    request.usage.outputTokens = Math.max(request.usage.outputTokens ?? 0, outputTokens)
+  }
+
+  /** The main request ids seen so far with their reported input, in order (the generator replays one). */
+  seenRequests(): Array<[string, number]> {
+    return [...this.requests].map(([id, r]) => [id, r.input])
   }
 
   assistant(subagent: boolean, model: string, tools: string[]): void {
@@ -161,6 +193,7 @@ export class ClaudeUsageModel extends LimitModel {
   result(failed: boolean, usage: TokenUsage | null): void {
     const turn = this.turn!
     if (usage === null && turn.requests.length > 0) this.marks.add('usage:partial')
+    if (usage === null && this.replayedAfterOwn.has(turn)) this.marks.add('usage:partial-after-earlier-turn-replay')
     this.settle(failed ? 'failed' : 'success', usage ?? summed(turn.requests), { model: turn.model, providerCostUsd: turn.cost })
   }
 }

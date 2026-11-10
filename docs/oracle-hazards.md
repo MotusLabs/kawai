@@ -469,3 +469,24 @@ or property that would have caught it, and the source finding.
   owned-process witness sequences as named log differences, not timeouts.
 - **Source finding.** task-73ecea50, Lead decision note-e5492858 (bulk
   campaigns over a private seam); I2 under task R2, note-d9bcb84a.
+
+### A latest-request pointer used as the request owner (task 73 F3)
+
+- **Hazard.** Claude names each main-thread request by its native message
+  id, and a frame of an earlier request can arrive again later: a replayed
+  message_start or assistant snapshot, or a message_delta after one. The
+  first correction kept only the latest request and its owner. A turn whose
+  own request had intervened then took the earlier turn's replayed request
+  as its own, because the ids differed, and reported the old tokens and
+  cache counts as its measurements.
+- **Oracle that catches it.** Own requests by native id, apart from the
+  context cursor. The reference model keeps every id's first owner
+  (usageModels.ts) and the I7 generator replays seen ids in their own turn
+  and in later ones, after a request of the replaying turn
+  (usage:partial-after-earlier-turn-replay). A model that only remembers
+  the last request passes the adjacent case and misses this one. The public
+  owned-CLI tests replay an earlier turn's request after the next turn's own
+  one, as a snapshot, as a message_start, with a later delta and after a
+  conversation reset (claudeUsageFacts.test.ts).
+- **Source finding.** task-73ecea50 findings-55a68ce4 (F3), creator
+  note-229f71ee.

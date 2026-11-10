@@ -135,8 +135,8 @@ const resultFacts = (r: TurnResult, key: string, events: AgentEvent[], extra: bo
 
 // ---- Claude ------------------------------------------------------------------
 
-type ClaudeOp = 'start' | 'startSub' | 'cost' | 'costSub' | 'tool' | 'text' | 'subTool' | 'compact' | 'retry' | 'retryOther' | 'push'
-const CLAUDE_OPS: ClaudeOp[] = ['start', 'startSub', 'cost', 'costSub', 'tool', 'tool', 'text', 'subTool', 'compact', 'retry', 'retry', 'retryOther', 'push']
+type ClaudeOp = 'start' | 'startSub' | 'cost' | 'costSub' | 'tool' | 'text' | 'subTool' | 'compact' | 'retry' | 'retryOther' | 'push' | 'replay'
+const CLAUDE_OPS: ClaudeOp[] = ['start', 'startSub', 'cost', 'costSub', 'tool', 'tool', 'text', 'subTool', 'compact', 'retry', 'retry', 'retryOther', 'push', 'replay']
 const STATUSES = ['allowed', 'allowed_warning', 'rejected'] as const
 
 /** `base`: the stream's clock origin in epoch seconds (paired I8 runs share one so their reset times agree). */
@@ -190,7 +190,7 @@ export async function claudeStream(seed: number, mode: ObserverMode = 'present',
       if (op === 'start' || op === 'startSub') {
         const id = uuid()
         const input = 1 + next(50)
-        model.messageStart(op === 'startSub', input)
+        model.messageStart(op === 'startSub', id, input)
         q.push(stream(op === 'startSub', { type: 'message_start', message: { id, usage: { input_tokens: input } } }))
       } else if (op === 'cost' || op === 'costSub') {
         const cost = next(3) === 0 ? null : [0.25, 0.5, 1.25][next(3)]!
@@ -210,6 +210,20 @@ export async function claudeStream(seed: number, mode: ObserverMode = 'present',
         model.retry(op === 'retry')
         const [error, status] = op === 'retry' ? ([['rate_limit', 429], ['overloaded', 529]] as const)[next(2)]! : (['server_error', 500] as const)
         q.push({ type: 'system', subtype: 'api_retry', uuid: uuid(), session_id: 'sess-1', attempt: 1, max_retries: 5, retry_delay_ms: 10, error_status: status, error } as never)
+      } else if (op === 'replay') {
+        // A main request already seen (this turn's or an earlier one's), replayed by its native id with its own reported input.
+        const seen = model.seenRequests()
+        if (seen.length > 0) {
+          const [id, input] = seen[next(seen.length)]!
+          if (next(2) === 0) {
+            model.messageStart(false, id, input)
+            q.push(stream(false, { type: 'message_start', message: { id, usage: { input_tokens: input } } }))
+          } else {
+            const name = ['model-a', 'model-b'][next(2)]!
+            model.snapshot(id, input, name)
+            q.push({ type: 'assistant', uuid: uuid(), session_id: 'sess-1', parent_tool_use_id: null, message: { id, role: 'assistant', model: name, content: [{ type: 'text', text: `r${i}` }], usage: { input_tokens: input } } } as never)
+          }
+        }
       } else push(STATUSES[next(3)]!)
       await q.drain()
     }
