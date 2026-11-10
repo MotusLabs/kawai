@@ -146,6 +146,21 @@ describe('Codex lifecycle: stop and exit (L11-L16)', () => {
     for (const call of [h.driver.start(), h.driver.send('x'), h.driver.interrupt()]) expect((await refusal(call)).category).toBe('stopped')
   })
 
+  test('L18/L15: a start completing after a kill never reopens the driver; the exit while stopping reports no unexpected end', async () => {
+    const h = codexDriver()
+    const start = h.driver.start()
+    const stop = h.driver.kill()
+    expect((await refusal(start)).category).toBe('stopped')
+    await stop
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(h.driver.state).toBe('stopped')
+    expect(h.states.filter((s) => s === 'idle')).toEqual([])
+    expect(h.ends).toEqual([])
+    expect(h.events.filter((e) => e.type === 'error')).toEqual([])
+    expect((await refusal(h.driver.start())).category).toBe('stopped')
+    expect(sent(h.root, 'turn/start')).toEqual([])
+  })
+
   // @covers: agent-runtime › Unexpected process end is reported › Crash during a turn
   test('L14/L02: a crash during a turn ends it process-ended with one error and one onProcessEnd; start again resumes the same thread', async () => {
     const h = codexDriver()
