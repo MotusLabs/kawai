@@ -210,6 +210,9 @@ const ROWS: Row[] = [
 
 describe('fingerprintOpenSpecInputs FP table', () => {
   for (const row of ROWS) {
+    // FP6/FP7 and FP11 make the fingerprint differ, so RD3 runs the CLI.
+    // @covers: openspec-visibility › Reuse unchanged OpenSpec discovery results › A change is created or archived
+    // @covers: openspec-visibility › Reuse unchanged OpenSpec discovery results › The root moves
     test(`${row.id}: ${row.variation} -> ${row.expected}`, async () => {
       const fixture = baseFixture()
       const base = await fingerprintOpenSpecInputs(fixture.wt)

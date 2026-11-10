@@ -2,7 +2,7 @@
 
 Feature-by-feature behavior of Kawai, one bullet per subsystem, moved out of `AGENTS.md` so agents load it on demand. Open the file for the area you are changing, or grep the directory by feature name (`grep -rn '^- Plan execution' docs/architecture/`), and read only the matching bullet.
 
-- [`chat.md`](chat.md) — Claude and Codex chat sessions: drivers, profiles, slash commands, approval policy, question auto-answer, activity, background tasks, usage bar, notices, header, transcript, history window, drafts, search, archive, navigator.
+- [`chat.md`](chat.md) — Claude and Codex chat sessions: drivers, profiles, slash commands, approval policy, question auto-answer, activity, background tasks, usage bar, notices, header, transcript, history window, drafts, search, archive, navigator, workspace discovery.
 - [`outbound.md`](outbound.md) — The agent security note, outbound destinations, the outbound audit hooks and classifier, and the Team page Audit tab.
 - [`mailbox.md`](mailbox.md) — Teams, the kawai-team MCP server, threads, mailbox management, waiting reasons, delivery receipts, and message events.
 - [`routing.md`](routing.md) — Profile routing, routing rules, group-mail dispatch, worker choice, rate/credit limits and cooldowns, context exhaustion.

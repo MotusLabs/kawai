@@ -152,7 +152,7 @@ A fake runner records the moment its timer starts relative to the spawn. With th
 
 Hazard M1 ("an oracle behind a hand-built harness") applies. The fixture:
 
-- a real Git repository with 12 linked worktrees, in a temporary directory;
+- a real Git repository with 12 worktrees (the main one and 11 linked), in a temporary directory;
 - a stub `openspec` executable first on `PATH`, which appends its pid and start and end times to a log, holds a lock file for 300 ms, and prints a valid payload;
 - a `WorkspaceCoordinator` built with `defaultDiscoveryApi`, the production composition.
 
