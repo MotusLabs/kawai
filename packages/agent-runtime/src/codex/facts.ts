@@ -27,7 +27,7 @@ import { codexLimitFailure } from '../usage/limits.js'
 import { codexQuotaReport, codexReadSnapshot } from '../usage/quota.js'
 import { addTokenUsage, codexRequestUsage, codexUpdateRequests, type CodexTokenBreakdown } from '../usage/tokens.js'
 import type { LimitEvent } from '../usage/types.js'
-import { LimitWaits } from '../usage/waits.js'
+import { LimitWaits, OrderedEvents } from '../usage/waits.js'
 import { codexErrorCategory, codexErrorKind } from './auth.js'
 import { mapCodexNotification } from './events.js'
 import type { CodexTurnState } from './turns.js'
@@ -54,6 +54,10 @@ export class CodexFacts {
   private readonly published = new Set<string>()
   private readonly waits = new LimitWaits()
   private lastModel: string | null = null
+  private readonly limitEvents = new OrderedEvents<LimitEvent>((event) => {
+    const onLimitEvent = this.host.callbacks.onLimitEvent
+    if (onLimitEvent) this.host.notify('onLimitEvent', () => onLimitEvent(event))
+  })
 
   constructor(private readonly host: FactsHost) {}
 
@@ -207,9 +211,9 @@ export class CodexFacts {
   private retried(error: { message?: unknown; codexErrorInfo?: unknown }, turn: CodexTurnState | null): void {
     const failure = codexLimitFailure(error, false, this.snapshot)
     if (!failure) return
-    this.publish(failure)
-    const start = turn ? this.waits.retried(turn.turnId, failure.window, failure.resetsAt) : null
-    if (start) this.publish(start)
+    // The wait is registered before any observer runs (a reentrant interrupt then ends it, after its start).
+    const start = turn && !turn.settled ? this.waits.retried(turn.turnId, failure.window, failure.resetsAt) : null
+    this.limitEvents.publish(failure, start)
   }
 
   private endWait(turnId: string, cause: 'resumed' | 'cancelled' | 'process-ended'): void {
@@ -217,7 +221,6 @@ export class CodexFacts {
   }
 
   private publish(event: LimitEvent | null): void {
-    const onLimitEvent = this.host.callbacks.onLimitEvent
-    if (event && onLimitEvent) this.host.notify('onLimitEvent', () => onLimitEvent(event))
+    this.limitEvents.publish(event)
   }
 }

@@ -19,6 +19,7 @@
 //   message_start or an assistant frame without an error) or its successful
 //   result, else when the turn settles: cancelled, or process-ended for an
 //   unexpected exit.
+// Limit and wait events go out in order through one queue (usage/waits.ts).
 // Every callback runs through the session's guarded notify.
 import type { AgentCallbacks } from '../options.js'
 import { ContextTracker, EMPTY_REQUEST_USAGE, mergeRequestUsage, parsePositiveTokens, sumRequestUsage, type ContextReportSlice, type ContextStep, type RequestUsage } from '../usage/context.js'
@@ -26,7 +27,7 @@ import { messageDeltaCost } from '../usage/cost.js'
 import { assistantLimitFailure, rejectedResetsAt, rejectedWindow, retryLimitFailure } from '../usage/limits.js'
 import { parseRateLimitEvent, parseUsageReport } from '../usage/quota.js'
 import type { LimitEvent, LimitWaitEnd, QuotaReport } from '../usage/types.js'
-import { LimitWaits } from '../usage/waits.js'
+import { LimitWaits, OrderedEvents } from '../usage/waits.js'
 import type { Turn } from './turns.js'
 
 export interface UsageFactsHost {
@@ -48,6 +49,10 @@ export class ClaudeUsageFacts {
   /** Compaction boundaries already reported (a repeated boundary id is reported once). */
   private readonly boundaries = new Set<string>()
   private lastModel: string | null = null
+  private readonly limitEvents = new OrderedEvents<LimitEvent>((event) => {
+    const onLimitEvent = this.host.callbacks.onLimitEvent
+    if (onLimitEvent) this.host.notify('onLimitEvent', () => onLimitEvent(event))
+  })
 
   constructor(private readonly host: UsageFactsHost) {}
 
@@ -84,7 +89,7 @@ export class ClaudeUsageFacts {
       const content = Array.isArray(message.content) ? message.content : []
       const text = content.map((block) => (isObject(block) && block.type === 'text' ? String(block.text ?? '') : '')).join('\n')
       const { resetsAt, window } = this.currentLimit()
-      this.limit(assistantLimitFailure(frame.error, text, resetsAt, window))
+      this.limitEvents.publish(assistantLimitFailure(frame.error, text, resetsAt, window))
     } else this.progressed(turn)
   }
 
@@ -107,10 +112,9 @@ export class ClaudeUsageFacts {
   apiRetry(frame: Frame, turn: Turn | null): void {
     const { resetsAt, window } = this.currentLimit()
     const failure = retryLimitFailure(frame, resetsAt, window)
-    this.limit(failure)
-    if (!failure || failure.final || !turn) return
-    const start = this.waits.retried(turn.turnId, window, resetsAt)
-    if (start) this.publish(start)
+    // The wait is registered before any observer runs (a reentrant interrupt then ends it, after its start).
+    const start = failure && !failure.final && turn && !turn.settled ? this.waits.retried(turn.turnId, window, resetsAt) : null
+    this.limitEvents.publish(failure, start)
   }
 
   /** A compaction boundary on the active turn (or none); reported once per id, true the first time. */
@@ -187,13 +191,8 @@ export class ClaudeUsageFacts {
     return { resetsAt: this.limitResetsAt, window: this.limitWindow }
   }
 
-  private limit(failure: LimitEvent | null): void {
-    if (failure) this.publish(failure)
-  }
-
-  private publish(event: LimitEvent): void {
-    const onLimitEvent = this.host.callbacks.onLimitEvent
-    if (onLimitEvent) this.host.notify('onLimitEvent', () => onLimitEvent(event))
+  private publish(event: LimitEvent | null): void {
+    this.limitEvents.publish(event)
   }
 
   private step(step: ContextStep): void {

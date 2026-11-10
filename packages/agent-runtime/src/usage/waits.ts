@@ -9,7 +9,10 @@
 //   `process-ended` when the process exits unexpectedly.
 // No timer runs and no reset time or quota percentage ends a wait. Each
 // transition returns the events to publish; the driver decides its own facts
-// first and publishes after.
+// first (a retry registers its wait before any observer runs) and publishes
+// after, through one OrderedEvents queue: an event published from inside an
+// observer (a reentrant interrupt ending the wait) is delivered after the
+// ones already queued, so a wait's start always precedes its end.
 import type { LimitWaitEnd, LimitWaitStart } from './types.js'
 
 export class LimitWaits {
@@ -45,5 +48,24 @@ export class LimitWaits {
     if (waitId === undefined) return null
     this.open.delete(turnId)
     return { type: 'wait-end', waitId, cause }
+  }
+}
+
+/** A FIFO of events delivered one at a time; a publish reentered from a delivery is queued behind it. */
+export class OrderedEvents<T> {
+  private readonly queue: T[] = []
+  private delivering = false
+
+  constructor(private readonly deliver: (event: T) => void) {}
+
+  publish(...events: Array<T | null>): void {
+    for (const event of events) if (event !== null) this.queue.push(event)
+    if (this.delivering) return
+    this.delivering = true
+    try {
+      while (this.queue.length > 0) this.deliver(this.queue.shift()!)
+    } finally {
+      this.delivering = false
+    }
   }
 }

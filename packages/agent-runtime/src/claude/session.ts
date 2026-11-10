@@ -282,8 +282,8 @@ export class ClaudeSession {
         this.frames.partial(message)
         return
       case 'result':
+        this.result(message) // decided and published before this frame's own context observations
         this.usage.result(frame)
-        this.result(message)
         this.controls.probe(generation)
         return
     }

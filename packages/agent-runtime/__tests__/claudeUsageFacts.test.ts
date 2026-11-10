@@ -12,6 +12,11 @@
 // - A retried limit starts one wait for the turn; it ends resumed at the
 //   turn's next request frame, and the rejected rate_limit_event's reset and
 //   window ride on both. The push is a session-scoped quota report.
+// - Reentrancy (lead path review PC1/PC2 on fbd90661): an observer that
+//   interrupts from the result's own context observation cannot replace the
+//   decided success; one that interrupts from a retry's failure leaves no
+//   orphan wait: the wait it ends was registered first and its end follows
+//   its start.
 import { afterEach, describe, expect, test } from 'bun:test'
 import { createClaudeDriver } from '../src/claude/index.js'
 import type { ClaudeAgentDriver, TurnResult } from '../src/contract.js'
@@ -133,5 +138,58 @@ describe('Claude usage facts through the public driver and the fake CLI', () => 
       ['wait-start', failedQuiet.turnId], ['wait-end', 'cancelled'],
       ['wait-start', failedResumed.turnId], ['wait-end', 'resumed'],
     ])
+  })
+
+  test('PC1: an interrupt from the result frame\'s own context observation cannot replace the decided success', async () => {
+    let interrupted = false
+    const { d } = claude({
+      callbacks: {
+        onEvent: () => {},
+        onContextUsage: (usage) => {
+          if (usage && !interrupted) {
+            interrupted = true
+            void driver!.interrupt().catch(() => {})
+          }
+        },
+      },
+    })
+    await d.start()
+    const messageUuid = crypto.randomUUID()
+    const handle = await d.send(script({
+      frames: [
+        stream({ type: 'message_start', message: { id: 'message-1', usage: { input_tokens: 100 } } }),
+        { type: 'result', subtype: 'success', uuid: crypto.randomUUID(), user_message_uuid: messageUuid, user_message_uuids: [messageUuid], is_error: false, result: 'provider success', duration_ms: 1, duration_api_ms: 1, num_turns: 1, total_cost_usd: 0, usage: { input_tokens: 10, output_tokens: 5 }, modelUsage: { fake: { contextWindow: 1000 } } },
+      ],
+    }), { messageUuid })
+    const result = await handle.result
+    expect(interrupted).toBe(true)
+    expect(result).toMatchObject({ outcome: 'success', usage: { inputTokens: 10, outputTokens: 5 } })
+  })
+
+  test('PC2: an interrupt from a retry failure observer ends the registered wait once, after its start', async () => {
+    let interrupted = false
+    const limits: LimitEvent[] = []
+    const { d } = claude({
+      callbacks: {
+        onEvent: () => {},
+        onLimitEvent: (event) => {
+          limits.push(event)
+          if (event.type === 'failure' && !interrupted) {
+            interrupted = true
+            void driver!.interrupt().catch(() => {})
+          }
+        },
+      },
+    })
+    await d.start()
+    const handle = await d.send(script({ frames: [{ type: 'system', subtype: 'api_retry', uuid: crypto.randomUUID(), attempt: 1, max_retries: 5, retry_delay_ms: 10, error_status: 429, error: 'rate_limit' }] }))
+    expect((await handle.result).outcome).toBe('interrupted')
+    // Before any stop (whose endAll would end an orphan too): the turn's own end closed its wait.
+    await Bun.sleep(30)
+    const settled = [...limits]
+    await d.shutdown()
+    expect(settled.map((e) => e.type)).toEqual(['failure', 'wait-start', 'wait-end'])
+    expect(settled[2]).toEqual({ type: 'wait-end', waitId: (settled[1] as { waitId: string }).waitId, cause: 'cancelled' })
+    expect(limits).toEqual(settled)
   })
 })

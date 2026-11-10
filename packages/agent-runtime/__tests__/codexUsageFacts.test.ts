@@ -138,6 +138,32 @@ describe('Codex limit waits', () => {
     expect(s.waits().map((e) => (e.type === 'wait-end' ? e.cause : e.turnId))).toEqual([open.turnId, 'cancelled'])
   })
 
+  // Lead path review PC2 (Codex counterpart): the wait is registered before the failure observer runs.
+  test('an interrupt from a retry failure observer ends the registered wait once, after its start', async () => {
+    let interrupted = false
+    const h = recorded({
+      callbacks: {
+        onLimitEvent: (event) => {
+          h.limits.push(event)
+          if (event.type === 'failure' && !interrupted) {
+            interrupted = true
+            void h.driver.interrupt().catch(() => {})
+          }
+        },
+      },
+    })
+    await h.driver.start()
+    const handle = await h.driver.send(script([retry()], 'hold'))
+    expect((await handle.result).outcome).toBe('interrupted')
+    // Before any stop (whose endAll would end an orphan too): the turn's own end closed its wait.
+    await Bun.sleep(30)
+    const settled = [...h.limits]
+    await h.driver.shutdown()
+    expect(settled.map((e) => e.type)).toEqual(['failure', 'wait-start', 'wait-end'])
+    expect(settled[2]).toEqual({ type: 'wait-end', waitId: (settled[1] as { waitId: string }).waitId, cause: 'cancelled' })
+    expect(h.limits).toEqual(settled)
+  })
+
   test('a non-limit retry opens no wait', async () => {
     const h = recorded()
     await h.driver.start()
