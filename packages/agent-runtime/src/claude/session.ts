@@ -97,7 +97,7 @@ export class ClaudeSession {
     const { callbacks, logger } = options
     this.events = new EventStream((event) => this.notify('onEvent', () => callbacks.onEvent(event)))
     this.usage = new ClaudeUsageFacts({ callbacks, notify: (name, callback) => this.notify(name, callback) })
-    this.open = new OpenTurns({ emit: (body) => this.emit(body), notify: (name, callback) => this.notify(name, callback), onTurnResult: callbacks.onTurnResult, settled: (turn, cause) => this.usage.turnSettled(turn, cause) })
+    this.open = new OpenTurns({ emit: (body) => this.emit(body), notify: (name, callback) => this.notify(name, callback), onTurnResult: callbacks.onTurnResult, settling: (turn, cause) => this.usage.turnSettling(turn, cause), settled: (turn) => this.usage.turnSettled(turn) })
     this.lifecycle = new DriverLifecycle({ continuations: new Set(['queue']), ...(callbacks.onState ? { onState: callbacks.onState } : {}) })
     this.controls = new UsageControls({ lifecycle: this.lifecycle, quotaSource: options.quotaSource ?? 'none', stopToken: () => this.stopToken, current: () => this.current(), facts: this.usage })
     const persist = callbacks.onCheckpoint && ((checkpoint: ResumeCheckpoint) => callbacks.onCheckpoint!(checkpoint))

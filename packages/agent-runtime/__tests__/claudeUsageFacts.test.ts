@@ -16,12 +16,17 @@
 //   aggregate. The tokens are on the turn before a reentrant stop can end it.
 //   A request keeps the turn of its first sighting by native id: replayed
 //   after the next turn's own request (snapshot, message_start, a delta, a
-//   conversation reset between), it adds nothing to that next turn.
+//   conversation reset between), it adds nothing to that next turn. A start
+//   or snapshot without counters still admits its id (findings-040f141e).
+// - F5: a wait resumes only on a novel phase of the bound turn's own request
+//   (its first start or snapshot, or a snapshot with new content); a replay
+//   of an earlier turn's request or a duplicate never resumes it. A stop
+//   reentered from a frame's quota report sees that frame's tokens.
 // - F4: quotaSource unset or 'none' asks no usage pull; 'host-login' asks
 //   exactly one, answered from the supplied home, reported host-login-pull
 //   with account scope host-login.
 // - A retried limit starts one wait for the turn; it ends resumed at the
-//   turn's next request frame, and the rejected rate_limit_event's reset and
+//   turn's next novel request phase (F5), and the rejected rate_limit_event's reset and
 //   window ride on both. The push is a session-scoped quota report.
 // - Reentrancy (lead path review PC1/PC2 on fbd90661): an observer that
 //   interrupts from the result's own context observation cannot replace the
@@ -323,6 +328,110 @@ describe('Claude request ownership by native request id through the public drive
   test('a conversation reset clears the context, not request ownership: a later replay still stays with its original turn', async () => {
     expect(await replayedInNextTurn([{ type: 'conversation_reset', uuid: crypto.randomUUID() }, snapshot('old-request', old)])).toEqual(ownOnly)
   })
+
+  // Review F3 (findings-040f141e): identity admission does not depend on counters.
+  const firstWithoutCounters = async (first: Record<string, unknown>) => {
+    const { d } = claude()
+    await d.start()
+    const a = await (await d.send(script({ frames: [first], usage: null }))).result
+    expect(a.usage).toBeNull()
+    const b = await (await d.send(script({ frames: [start('new-request', own), snapshot('old-request', { input_tokens: 100, output_tokens: 2 })], usage: null, subtype: 'error_during_execution' }))).result
+    expect(b.outcome).toBe('failed')
+    return b.usage
+  }
+
+  test('a message_start without counters still owns its native id: a later snapshot of it in the next turn adds nothing there', async () => {
+    expect(await firstWithoutCounters(stream({ type: 'message_start', message: { id: 'old-request' } }))).toEqual(ownOnly)
+  })
+
+  test('an assistant snapshot without counters still owns its native id: a later snapshot of it in the next turn adds nothing there', async () => {
+    const bare = assistant('old-request', [{ type: 'text', text: 'snapshot' }])
+    expect(await firstWithoutCounters(bare)).toEqual(ownOnly)
+  })
+
+  test('a request first seen without counters takes its own later snapshot and delta tokens', async () => {
+    const { d } = claude()
+    await d.start()
+    const frames = [stream({ type: 'message_start', message: { id: 'r' } }), snapshot('r', { input_tokens: 9, output_tokens: 1 }), stream({ type: 'message_delta', usage: { output_tokens: 4 } })]
+    const result = await (await d.send(script({ frames, usage: null, subtype: 'error_during_execution' }))).result
+    expect(result.usage).toEqual({ inputTokens: 9, outputTokens: 4, cacheReadTokens: null, cacheCreationTokens: null })
+  })
+
+  // Review F5 (findings-040f141e): only a novel phase of the bound turn's own request resumes its wait.
+  const retry = { type: 'system', subtype: 'api_retry', uuid: crypto.randomUUID(), attempt: 1, max_retries: 5, retry_delay_ms: 10, error_status: 429, error: 'rate_limit' }
+  const push = { type: 'rate_limit_event', uuid: crypto.randomUUID(), rate_limit_info: { status: 'rejected', resetsAt: resetSeconds, rateLimitType: 'five_hour', utilization: 1 } }
+  /** A held turn: its own request, a retry, then `after` and a quota push as the barrier; the wait signals before and after an interrupt. */
+  const heldAfterRetry = async (before: Array<Record<string, unknown>>, after: Array<Record<string, unknown>>) => {
+    const { d, seen } = claude()
+    await d.start()
+    if (before.length > 0) await (await d.send(script({ frames: before, usage: null }))).result
+    const handle = await d.send(`script ${JSON.stringify({ frames: [start('new-request', own), snapshot('new-request', own), retry, ...after, push], hold: true })}`)
+    await waitUntil(() => seen.quotas.some((q) => q.source === 'push'))
+    const held = seen.limits.filter((e) => e.type !== 'failure').map((e) => e.type === 'wait-end' ? `end:${e.cause}` : e.type)
+    await d.interrupt()
+    await handle.result
+    return { held, ends: seen.limits.filter((e) => e.type === 'wait-end').map((e) => (e as Extract<LimitEvent, { type: 'wait-end' }>).cause) }
+  }
+  const oldTurn = [start('old-request', old), snapshot('old-request', old)]
+
+  test('an earlier turn\'s request replayed as a message_start after a retry does not resume the wait: one cancelled end at the interrupt', async () => {
+    expect(await heldAfterRetry(oldTurn, [start('old-request', old)])).toEqual({ held: ['wait-start'], ends: ['cancelled'] })
+  })
+
+  test('an earlier turn\'s request replayed as an assistant snapshot after a retry does not resume the wait: one cancelled end at the interrupt', async () => {
+    expect(await heldAfterRetry(oldTurn, [snapshot('old-request', old)])).toEqual({ held: ['wait-start'], ends: ['cancelled'] })
+  })
+
+  test('a duplicate start or snapshot of the turn\'s own request after a retry does not resume the wait', async () => {
+    expect(await heldAfterRetry([], [start('new-request', own), snapshot('new-request', own)])).toEqual({ held: ['wait-start'], ends: ['cancelled'] })
+  })
+
+  test('a novel snapshot of the turn\'s own request after a retry resumes the wait once', async () => {
+    const novel = { ...snapshot('new-request', own), message: { id: 'new-request', role: 'assistant', model: 'fake-model', content: [{ type: 'text', text: 'after the retry' }], usage: own } }
+    expect(await heldAfterRetry([], [novel])).toEqual({ held: ['wait-start', 'end:resumed'], ends: ['resumed'] })
+  })
+
+  test('a stop reentered from the quota report of an assistant frame keeps the tokens that frame reported', async () => {
+    let stop: (() => void) | null = null
+    const { d } = claude({ callbacks: { onEvent: () => {}, onQuotaReport: () => { const once = stop; stop = null; once?.() } } })
+    await d.start()
+    stop = () => void d.kill().catch(() => {})
+    const report = { rate_limits: { limits: [{ kind: 'five_hour', percent: 10, resets_at: RESET }] } }
+    const frame = { ...snapshot('r', { input_tokens: 5, output_tokens: 8 }), usage_report: report }
+    const handle = await d.send(`script ${JSON.stringify({ frames: [frame], hold: true })}`)
+    const result = await handle.result
+    expect(stop).toBeNull()
+    expect(result.usage).toEqual({ inputTokens: 5, outputTokens: 8, cacheReadTokens: null, cacheCreationTokens: null })
+  })
+
+  // The reviewer's F3/F5 reproducers (findings-040f141e, /tmp/s73-ab-review-probes.test.ts), frame for frame:
+  // usage and wait progress belong to the request that first produced them.
+  const reproducers = [
+    { kind: 'message_start', first: stream({ type: 'message_start', message: { id: 'old' } }), replay: start('old', old) },
+    { kind: 'assistant', first: assistant('old', [{ type: 'text', text: 'snapshot' }]), replay: snapshot('old', old) },
+  ] as const
+  for (const { kind, first, replay } of reproducers) {
+    test(`reviewer F3: a first ${kind} with unknown usage still owns its native id`, async () => {
+      const { d } = claude()
+      await d.start()
+      expect((await (await d.send(script({ frames: [first], usage: null }))).result).usage).toBeNull()
+      const b = await (await d.send(script({ frames: [start('new', own), snapshot('old', { input_tokens: 100, output_tokens: 2 })], usage: null, subtype: 'error_during_execution' }))).result
+      expect(b.outcome).toBe('failed')
+      expect(b.usage).toEqual(ownOnly)
+    })
+
+    test(`reviewer F5: an earlier turn's ${kind} replayed in a held wait does not resume it`, async () => {
+      const { d, seen } = claude()
+      await d.start()
+      await (await d.send(script({ frames: [start('old', old), snapshot('old', old)], usage: null }))).result
+      const handle = await d.send(`script ${JSON.stringify({ frames: [start('new', own), retry, replay, push], usage: null, hold: true })}`)
+      await waitUntil(() => seen.quotas.some((q) => q.source === 'push'))
+      expect(seen.limits.filter((e) => e.type !== 'failure').map((e) => e.type)).toEqual(['wait-start'])
+      await d.interrupt()
+      await handle.result
+      expect(seen.limits.filter((e) => e.type === 'wait-end').map((e) => (e as Extract<LimitEvent, { type: 'wait-end' }>).cause)).toEqual(['cancelled'])
+    })
+  }
 
   test('a turn\'s own request replayed after its second request still counts once, merged per field', async () => {
     const { d } = claude()

@@ -168,9 +168,11 @@ export async function claudeStream(seed: number, mode: ObserverMode = 'present',
     model.push(status, iso(resetsAt), window)
     f.q().push({ type: 'rate_limit_event', uuid: uuid(), session_id: 'sess-1', rate_limit_info: { status, resetsAt, rateLimitType: window, utilization: next(101) / 100 } } as never)
   }
-  const assistant = (subagent: boolean, name: string, blocks: Record<string, unknown>[]) =>
-    ({ type: 'assistant', uuid: uuid(), session_id: 'sess-1', parent_tool_use_id: subagent ? 'toolu_parent' : null, message: { id: uuid(), role: 'assistant', model: name, content: blocks } }) as never
+  const assistant = (subagent: boolean, id: string, name: string, blocks: Record<string, unknown>[]) =>
+    ({ type: 'assistant', uuid: uuid(), session_id: 'sess-1', parent_tool_use_id: subagent ? 'toolu_parent' : null, message: { id, role: 'assistant', model: name, content: blocks } }) as never
   const stream = (subagent: boolean, event: Record<string, unknown>) => ({ type: 'stream_event', uuid: uuid(), session_id: 'sess-1', parent_tool_use_id: subagent ? 'toolu_parent' : null, event }) as never
+  // Every main start and snapshot sent, as sent (the replay op resends one).
+  const sent: Array<{ kind: 'start' | 'snapshot'; id: string; input: number | null; name?: string; blocks?: Record<string, unknown>[] }> = []
   const turns = 1 + next(4)
   for (let t = 0; t < turns; t++) {
     if (next(3) === 0) push(STATUSES[next(3)]!)
@@ -184,14 +186,21 @@ export async function claudeStream(seed: number, mode: ObserverMode = 'present',
       await f.q().drain()
     }
     const length = next(10)
+    // The main requests this turn made, in order (an assistant frame may continue the latest one).
+    const turnIds: string[] = []
     for (let i = 0; i < length; i++) {
       const op = CLAUDE_OPS[next(CLAUDE_OPS.length)]!
       const q = f.q()
       if (op === 'start' || op === 'startSub') {
         const id = uuid()
-        const input = 1 + next(50)
+        // A start may carry no counters at all: its identity is still the request's.
+        const input = next(4) === 0 ? null : 1 + next(50)
         model.messageStart(op === 'startSub', id, input)
-        q.push(stream(op === 'startSub', { type: 'message_start', message: { id, usage: { input_tokens: input } } }))
+        q.push(stream(op === 'startSub', { type: 'message_start', message: { id, ...(input === null ? {} : { usage: { input_tokens: input } }) } }))
+        if (op === 'start') {
+          turnIds.push(id)
+          sent.push({ kind: 'start', id, input })
+        }
       } else if (op === 'cost' || op === 'costSub') {
         const cost = next(3) === 0 ? null : [0.25, 0.5, 1.25][next(3)]!
         model.delta(cost, op === 'costSub', 1)
@@ -199,9 +208,18 @@ export async function claudeStream(seed: number, mode: ObserverMode = 'present',
       } else if (op === 'tool' || op === 'text' || op === 'subTool') {
         const name = ['model-a', 'model-b'][next(2)]!
         const ids = op === 'text' ? [] : op === 'subTool' ? ['ts'] : ['ta', 'tb', 'tc'].filter(() => next(2) === 0)
-        model.assistant(op === 'subTool', name, ids)
         const blocks = op === 'text' ? [{ type: 'text', text: `x${i}` }] : ids.map((id) => ({ type: 'tool_use', id, name: 'Read', input: { file_path: '/x' } }))
-        q.push(assistant(op === 'subTool', name, blocks))
+        if (op === 'subTool') {
+          model.subagentSnapshot()
+          q.push(assistant(true, uuid(), name, blocks))
+        } else {
+          // A snapshot of the turn's latest request (its next content), or of a new one.
+          const id = turnIds.length > 0 && next(2) === 0 ? turnIds[turnIds.length - 1]! : uuid()
+          if (!turnIds.includes(id)) turnIds.push(id)
+          model.snapshot(id, null, name, ids, JSON.stringify(blocks))
+          q.push(assistant(false, id, name, blocks))
+          sent.push({ kind: 'snapshot', id, input: null, name, blocks })
+        }
       } else if (op === 'compact') {
         const id = ['b1', 'b2'][next(2)]!
         model.boundary(id)
@@ -211,17 +229,16 @@ export async function claudeStream(seed: number, mode: ObserverMode = 'present',
         const [error, status] = op === 'retry' ? ([['rate_limit', 429], ['overloaded', 529]] as const)[next(2)]! : (['server_error', 500] as const)
         q.push({ type: 'system', subtype: 'api_retry', uuid: uuid(), session_id: 'sess-1', attempt: 1, max_retries: 5, retry_delay_ms: 10, error_status: status, error } as never)
       } else if (op === 'replay') {
-        // A main request already seen (this turn's or an earlier one's), replayed by its native id with its own reported input.
-        const seen = model.seenRequests()
-        if (seen.length > 0) {
-          const [id, input] = seen[next(seen.length)]!
-          if (next(2) === 0) {
-            model.messageStart(false, id, input)
-            q.push(stream(false, { type: 'message_start', message: { id, usage: { input_tokens: input } } }))
+        // An exact earlier main frame again (this turn's or an earlier one's), under a new wrapper uuid.
+        if (sent.length > 0) {
+          const again = sent[next(sent.length)]!
+          if (again.kind === 'start') {
+            model.messageStart(false, again.id, again.input)
+            q.push(stream(false, { type: 'message_start', message: { id: again.id, ...(again.input === null ? {} : { usage: { input_tokens: again.input } }) } }))
           } else {
-            const name = ['model-a', 'model-b'][next(2)]!
-            model.snapshot(id, input, name)
-            q.push({ type: 'assistant', uuid: uuid(), session_id: 'sess-1', parent_tool_use_id: null, message: { id, role: 'assistant', model: name, content: [{ type: 'text', text: `r${i}` }], usage: { input_tokens: input } } } as never)
+            const tools = again.blocks!.flatMap((block) => (block.type === 'tool_use' ? [String(block.id)] : []))
+            model.snapshot(again.id, null, again.name!, tools, JSON.stringify(again.blocks))
+            q.push(assistant(false, again.id, again.name!, again.blocks!))
           }
         }
       } else push(STATUSES[next(3)]!)

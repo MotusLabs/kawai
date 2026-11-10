@@ -488,5 +488,14 @@ or property that would have caught it, and the source finding.
   owned-CLI tests replay an earlier turn's request after the next turn's own
   one, as a snapshot, as a message_start, with a later delta and after a
   conversation reset (claudeUsageFacts.test.ts).
+- **Second miss (findings-040f141e).** The registry admitted an id only
+  when its frame carried counters, and the wait resumed on any main-thread
+  frame. A counter-less first sighting left the id free for a later turn,
+  and a replayed or duplicate frame ended a limit wait. Admission is now
+  one mandatory identity step, counters an optional overlay, and a wait
+  resumes only on a novel phase of the live turn's own source. The model
+  starts requests without counters (request-without-counters) and marks a
+  replay inside a wait that must not resume it (replay-in-wait-unresumed).
+  Each frame's facts and wait are decided before any observer runs.
 - **Source finding.** task-73ecea50 findings-55a68ce4 (F3), creator
-  note-229f71ee.
+  note-229f71ee; findings-040f141e (F3/A2, F5/A3).

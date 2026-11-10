@@ -9,9 +9,10 @@
 //   message_start's input, its later main message_deltas' cumulative
 //   output), never a subagent's or an earlier turn's; null when neither is
 //   known (F3). A Claude request is named by its native message id: the
-//   turn open at its first sighting owns it, and every later sighting (a
-//   replayed message_start or assistant snapshot, a delta after it) belongs
-//   to that owner only, never to the turn open when it is replayed. Codex, the sum of the
+//   turn open at its first sighting owns it, counters or not, and every
+//   later sighting (a replayed message_start or assistant snapshot, a delta
+//   after it) belongs to that owner only, never to the turn open when it is
+//   replayed. A field no frame of the request reported stays null. Codex, the sum of the
 //   requests the turn actually made (a repeated or foreign update adds
 //   nothing), null when the turn reported none.
 // - Counts: distinct tool-call ids and distinct boundary ids of the turn
@@ -21,7 +22,10 @@
 //   assistant model, or null.
 // - Waits: the first limit retry of a turn opens its wait; it ends resumed
 //   at that turn's next progress (or its success), cancelled when the turn
-//   ends otherwise. A quota push, a reset in the past, a non-limit retry or a
+//   ends otherwise. Claude progress is a new phase of a request the turn
+//   owns: its first message_start or snapshot, or a snapshot with content
+//   the request's earlier ones lacked; a repeated frame, another turn's
+//   request or a delta is none (F5). A quota push, a reset in the past, a non-limit retry or a
 //   repeated token total never ends or opens one; Codex progress is a new
 //   item phase of the turn, a delta or a token update that grew a counter. A
 //   replayed item (an id the turn already completed, at either phase) is no
@@ -125,60 +129,82 @@ export class ClaudeUsageModel extends LimitModel {
     this.quotas.push(`push:session:${status === 'rejected' ? 'limited' : status === 'allowed_warning' ? 'warning' : 'allowed'}`)
   }
 
-  /** Every main-thread request by its native id: the turn open at its first sighting (or none) and its tokens. */
-  private readonly requests = new Map<string, { turn: OpenTurn | null; input: number; usage: TokenUsage }>()
-  /** The latest main-thread request's id (a later message_delta continues it). */
+  /**
+   * Every main-thread request by its native id: the turn open at its first
+   * sighting (whatever counters that frame carried), its measured tokens
+   * (null until a frame reports a counter) and the content of its snapshots.
+   */
+  private readonly requests = new Map<string, { turn: OpenTurn | null; usage: TokenUsage | null; contents: Set<string> }>()
+  /** The latest main-thread request's id, counters or not (a later message_delta continues it). */
   private latest: string | null = null
-  /** Turns that saw an earlier turn's request replayed after a request of their own. */
+  /** Turns that made a request of their own, and those that then saw an earlier turn's request again. */
+  private readonly ownRequest = new Set<OpenTurn>()
   private readonly replayedAfterOwn = new Set<OpenTurn>()
 
-  /** A main message_start with native `id`: a new id is a new request of the turn; progress either way. */
-  messageStart(subagent: boolean, id: string, inputTokens: number): void {
+  /** A main message_start of request `id`: only its first sighting is a new phase (progress). */
+  messageStart(subagent: boolean, id: string, inputTokens: number | null): void {
     if (subagent) return
-    this.sighting(id, inputTokens)
-    this.progressed()
+    if (this.sighting(id, inputTokens === null ? {} : { inputTokens })) this.progressed()
+    else if (this.turn?.waiting) this.marks.add('replay-in-wait-unresumed')
   }
 
-  /** A main assistant snapshot of request `id` (its usage names `inputTokens`): the request's, then as assistant(). */
-  snapshot(id: string, inputTokens: number, model: string): void {
-    this.sighting(id, inputTokens)
-    this.assistant(false, model, [])
+  /**
+   * A main assistant snapshot of request `id` with `content` (what the frame
+   * carried): tools and model are the turn's; it is progress when it is the
+   * request's first sighting or carries content its earlier snapshots did not,
+   * and the request is the open turn's own.
+   */
+  snapshot(id: string, inputTokens: number | null, model: string, tools: string[], content: string): void {
+    const first = this.sighting(id, inputTokens === null ? {} : { inputTokens })
+    const request = this.requests.get(id)!
+    const novel = first || !request.contents.has(content)
+    request.contents.add(content)
+    if (!this.turn) return
+    for (const tool of tools) this.turn.tools.add(tool)
+    this.turn.model = model
+    if (novel && request.turn === this.turn) this.progressed()
+    else if (this.turn.waiting) this.marks.add('replay-in-wait-unresumed')
   }
 
-  /** One sighting of request `id`: the first admits the open turn as its owner; every one adds to that owner only while it is open. */
-  private sighting(id: string, inputTokens: number): void {
+  /** A subagent's assistant frame: none of the turn's facts and no progress. */
+  subagentSnapshot(): void {}
+
+  /** One sighting of request `id`: true for the first, which makes the open turn its owner; reported counters add to that owner only while it is open. */
+  private sighting(id: string, counters: Partial<TokenUsage>): boolean {
     let request = this.requests.get(id)
+    const first = !request
     if (!request) {
-      request = { turn: this.turn, input: inputTokens, usage: { inputTokens: null, outputTokens: null, cacheReadTokens: null, cacheCreationTokens: null } }
+      request = { turn: this.turn, usage: null, contents: new Set() }
       this.requests.set(id, request)
-      this.turn?.requests.push(request.usage)
+      if (Object.keys(counters).length === 0) this.marks.add('request-without-counters')
+      if (this.turn) this.ownRequest.add(this.turn)
     } else if (this.turn && request.turn !== this.turn) {
       this.marks.add('replay-of-earlier-turn-request')
-      if (this.turn.requests.length > 0) this.replayedAfterOwn.add(this.turn)
+      if (this.ownRequest.has(this.turn)) this.replayedAfterOwn.add(this.turn)
     }
     this.latest = id
-    if (this.turn && request.turn === this.turn) request.usage.inputTokens = Math.max(request.usage.inputTokens ?? 0, inputTokens)
+    if (this.turn && request.turn === this.turn) this.measure(request, counters)
+    return first
   }
 
-  /** A message_delta: its cost counts for the turn (subagents' too); a main one's output tokens continue the latest request, cumulatively, on its owner only. */
+  /** Field-wise cumulative maxima of what the request's frames reported; a field never reported stays null. */
+  private measure(request: { turn: OpenTurn | null; usage: TokenUsage | null }, counters: Partial<TokenUsage>): void {
+    const keys = Object.keys(counters) as Array<keyof TokenUsage>
+    if (keys.length === 0) return
+    if (!request.usage) {
+      request.usage = { inputTokens: null, outputTokens: null, cacheReadTokens: null, cacheCreationTokens: null }
+      request.turn!.requests.push(request.usage)
+    }
+    for (const key of keys) request.usage[key] = Math.max(request.usage[key] ?? 0, counters[key]!)
+  }
+
+  /** A message_delta: its cost counts for the turn (subagents' too); a main one's output tokens continue the latest request, cumulatively, on its owner only; never progress. */
   delta(cost: number | null, subagent = true, outputTokens = 0): void {
     if (this.turn && cost !== null) this.turn.cost = (this.turn.cost ?? 0) + cost
     const request = this.latest === null ? undefined : this.requests.get(this.latest)
     if (!subagent && request && this.turn && request.turn !== this.turn) this.marks.add('delta-of-earlier-turn-request')
     if (subagent || !request || !this.turn || request.turn !== this.turn) return
-    request.usage.outputTokens = Math.max(request.usage.outputTokens ?? 0, outputTokens)
-  }
-
-  /** The main request ids seen so far with their reported input, in order (the generator replays one). */
-  seenRequests(): Array<[string, number]> {
-    return [...this.requests].map(([id, r]) => [id, r.input])
-  }
-
-  assistant(subagent: boolean, model: string, tools: string[]): void {
-    if (!this.turn || subagent) return
-    for (const id of tools) this.turn.tools.add(id)
-    this.turn.model = model
-    this.progressed()
+    this.measure(request, { outputTokens })
   }
 
   boundary(id: string): void {
