@@ -203,6 +203,19 @@ result submission can advance execution-owned work into its review round;
 a handoff can supersede the current assignment. Neither is a harmless way to
 ask for advice. Never submit a partial production path as a completed result.
 
+Advisory rounds are budgeted, not open-ended. Per task revision, a manually
+managed task gets at most one design challenge ("Challenge the mechanism
+before substantial coding"), one production-path checkpoint ("Review one real
+production path before expanding it"), and for concurrency, recovery or
+security work one fresh non-author assessment — a maximum, and a small task
+may need none of them. Any further advisory round requires a coordinator
+journal reason naming the specific open risk it targets; without that reason,
+the concern belongs in the formal review as a structured finding instead.
+When the budget is spent, the writer submits a complete result for formal
+review, or the coordinator escalates once with concrete options. Advice never
+gates, and Local implementation questions (see "Classify implementation
+questions before escalating") need no advisory round.
+
 Final review retains the existing exact-result/exact-commit contract and
 cross-model routing in the role instructions. Recheck checkpoint evidence
 against the final head and review conflict resolutions. The eligible continuing

@@ -145,6 +145,16 @@ work waits while independent R1 work continues.
   critical changes, seek a fresh focused assessment as described in the shared
   protocol; retain one formal review handoff. Journal decisions and publish
   material direction changes under creator rights before dependent work.
+- Budget advisory rounds per task revision: a manually managed task gets at
+  most one design challenge, one production-path checkpoint, and for
+  concurrency, recovery or security work one fresh non-author assessment —
+  a maximum, and simple tasks need none. A further advisory round requires a
+  journal reason naming the specific open risk it targets; without that
+  reason, route the concern into the formal review as a structured finding.
+  When the budget is spent, the writer submits a complete result for formal
+  review, or you escalate once with concrete options. Advice never gates;
+  Local implementation questions stay with the writer and need no advisory
+  round.
 
 ## Assigning work
 
