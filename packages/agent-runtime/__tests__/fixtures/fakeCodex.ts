@@ -21,6 +21,11 @@
 //   /early           turn/started and the completion before the turn/start reply
 //   /foreign         a second turn/started (another id) during the turn, then completes
 //   /child           starts a helper in this process group holding stdout (pid in pids), then completes
+//   /script <json>   {notes:[{method,params}], end?}: each notification with this thread and turn ids
+//                    merged into params (a params turnId wins), then end: "completed" (default, one
+//                    agent message), "failed:<info>", "hold" (until turn/interrupt) or "exit:<code>"
+// FAKE_CODEX_RATELIMITS: account/rateLimits/read answers {rateLimits: <json>}; "fail" answers an
+//   error; "hold" never answers; unset: unknown method (-32601), like any other method.
 // FAKE_CODEX_START=agent: an agent turn starts and completes right after thread/start.
 import { spawn } from 'node:child_process'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -135,6 +140,15 @@ function turnStart(id: number, params: Record<string, any>) {
       complete(turnId, 'completed', transformed('late'))
       notify('turn/completed', { threadId: thread!.id, turn: { id: turnId, status: 'completed', error: null, items: [{ type: 'agentMessage', id: 'dup', text: 'duplicate' }] } })
       return notify('turn/completed', { threadId: thread!.id, turn: { id: 'ghost', status: 'completed', error: null, items: [{ type: 'agentMessage', id: 'g', text: 'ghost' }] } })
+    case '/script': {
+      const script = JSON.parse(arg) as { notes?: Array<{ method: string; params?: Record<string, unknown> }>; end?: string }
+      for (const note of script.notes ?? []) notify(note.method, { threadId: thread!.id, turnId, ...note.params })
+      const end = script.end ?? 'completed'
+      if (end === 'hold') return void (active = { id: turnId, steer: () => {}, interrupt: () => complete(turnId, 'interrupted', null) })
+      if (end.startsWith('exit:')) return void setTimeout(() => process.exit(Number(end.slice(5))), 5)
+      if (end.startsWith('failed:')) return complete(turnId, 'failed', null, { message: 'the turn failed', codexErrorInfo: info(end.slice(7)), additionalDetails: null })
+      return complete(turnId, 'completed', transformed('script'))
+    }
     case '/facts': {
       const t = { threadId: thread!.id, turnId }
       const command = { type: 'commandExecution', id: 'cmd-1', command: 'curl -H SECRET-TOKEN-123 x', cwd: '/', status: 'completed', exitCode: 0, aggregatedOutput: 'ok' }
@@ -191,6 +205,13 @@ function handle(message: Record<string, any>) {
     }
     case 'turn/start':
       return turnStart(id, params)
+    case 'account/rateLimits/read': {
+      const mode = process.env.FAKE_CODEX_RATELIMITS
+      if (mode === undefined) break
+      if (mode === 'hold') return
+      if (mode === 'fail') return fail(id, 'rate limits unavailable')
+      return reply(id, { rateLimits: JSON.parse(mode), rateLimitsByLimitId: null })
+    }
     case 'turn/steer': {
       if (!active || params.expectedTurnId !== active.id) return fail(id, 'no active turn to steer', { activeTurnNotSteerable: { turnKind: 'review' } })
       reply(id, { turnId: active.id })
@@ -201,8 +222,9 @@ function handle(message: Record<string, any>) {
       return reply(id, {})
     }
     default:
-      return send({ jsonrpc: '2.0', id, error: { code: -32601, message: `unknown method ${method}` } })
+      break
   }
+  return send({ jsonrpc: '2.0', id, error: { code: -32601, message: `unknown method ${method}` } })
 }
 
 let buffer = ''

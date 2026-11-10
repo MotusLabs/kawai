@@ -13,7 +13,8 @@
 //   requests.ts).
 // - Modes: the form modes are exactly the protocol's elicitation modes other
 //   than the content-free ones.
-import type { CodexTokenBreakdown, CodexTurn } from './events.js'
+import type { CodexTurn } from './events.js'
+import type { CodexTokenBreakdown } from '../usage/tokens.js'
 import type { FormMode } from './elicitationForm.js'
 import type { CodexDynamicToolCall, CodexDynamicToolResponse } from './tools.js'
 import type { DynamicToolCallParams } from './protocol/v2/DynamicToolCallParams.js'

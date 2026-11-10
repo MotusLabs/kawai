@@ -51,9 +51,16 @@ export function percentValue(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100 ? value : null
 }
 
+/** ISO time of epoch seconds; null when not a number or outside the representable date range (total: never throws). */
+export function epochSecondsIso(value: unknown): string | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null
+  const date = new Date(value * 1000)
+  return Number.isNaN(date.getTime()) ? null : date.toISOString()
+}
+
 /** ISO reset time from epoch seconds or an ISO string; null when unusable. */
 export function toIsoResetsAt(value: unknown): string | null {
-  if (typeof value === 'number' && Number.isFinite(value)) return new Date(value * 1000).toISOString()
+  if (typeof value === 'number') return epochSecondsIso(value)
   if (typeof value === 'string' && value.trim() !== '' && !Number.isNaN(Date.parse(value))) return value
   return null
 }
@@ -175,12 +182,12 @@ export function codexReadSnapshot(result: unknown): Record<string, unknown> | nu
   return isObject(result) && isObject(result.rateLimits) ? result.rateLimits : null
 }
 
-/** The latest reset among a Codex snapshot's exhausted windows (used percent at 100), as ISO; null when none. */
+/** The latest reset among a Codex snapshot's exhausted windows (a valid used percent of 100), as ISO; null when none. */
 export function codexExhaustedReset(snapshot: unknown): string | null {
   let latest: string | null = null
   const slice = isObject(snapshot) ? snapshot : {}
   for (const raw of [slice.primary, slice.secondary]) {
-    if (!isObject(raw) || typeof raw.usedPercent !== 'number' || raw.usedPercent < 100) continue
+    if (!isObject(raw) || percentValue(raw.usedPercent) !== 100) continue
     const reset = toIsoResetsAt(raw.resetsAt)
     if (reset && (latest === null || Date.parse(reset) > Date.parse(latest))) latest = reset
   }

@@ -2,7 +2,7 @@
 // one of the 56 state/operation pairs is driven through DriverLifecycle and
 // checked against its row (L01-L20, L24-L26; U01/U02 are unreachable). Then
 // the terminal stop: concurrent callers, late admitted jobs, preserved
-// failures, expected cancellations and the self-join refusal (L11-L12/I1).
+// failures, expected cancellations, jobs live before their body runs (a\n// synchronous join or throw) and the self-join refusal (L11-L12/I1).
 // Control M-join: a generation completing at stdout EOF instead of actual exit.
 import { describe, expect, test } from 'bun:test'
 import { join } from 'node:path'
@@ -313,6 +313,29 @@ describe('terminal stop and owned jobs (L11-L12, I1)', () => {
     }).catch(() => {})
     await tick()
     expect((await rejection(lc.stop('kill', async () => []))).causes).toEqual([minted])
+  })
+
+  test('a job is live before its body runs: a join begun in its synchronous part waits for it', async () => {
+    const f = await inState('idle')
+    const held = deferred()
+    let joined!: Promise<unknown>
+    void f.lc.jobs.run('reentrant', () => {
+      // The host code a job body calls may join the registry before the body returns its promise.
+      joined = f.lc.jobs.outside(() => f.lc.jobs.join())
+      return held.promise
+    })
+    expect(await pending(joined)).toBe(true)
+    held.resolve()
+    expect(await joined).toEqual([])
+  })
+
+  test('a job body that throws synchronously is a retained job failure', async () => {
+    const g = await inState('idle')
+    const boom = new Error('synchronous body failure')
+    g.lc.jobs.run('sync', (() => {
+      throw boom
+    }) as unknown as () => Promise<void>).catch(() => {})
+    expect((await rejection(g.lc.stop('kill', async () => []))).causes).toEqual([boom])
   })
 
   test('jobs admitted during the join are joined before the receipt', async () => {

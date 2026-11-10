@@ -14,7 +14,7 @@
 //   final, a retrying `error` notification non-final. The reset is the latest
 //   among the snapshot's exhausted windows. A Codex 402 is not a credit limit.
 import type { LimitFailure } from './types.js'
-import { codexExhaustedReset } from './quota.js'
+import { codexExhaustedReset, epochSecondsIso } from './quota.js'
 
 /** Claude error classes that always count as a limit. */
 export const LIMIT_ERROR_CLASSES: ReadonlySet<string> = new Set(['rate_limit', 'billing_error', 'overloaded'])
@@ -47,8 +47,8 @@ export function assistantLimitFailure(error: unknown, text: string, resetsAt: st
 
 /** The reset a rejected rate_limit_event announces (epoch seconds), as ISO; null otherwise. */
 export function rejectedResetsAt(info: unknown): string | null {
-  if (!isObject(info) || info.status !== 'rejected' || typeof info.resetsAt !== 'number' || !Number.isFinite(info.resetsAt)) return null
-  return new Date(info.resetsAt * 1000).toISOString()
+  if (!isObject(info) || info.status !== 'rejected') return null
+  return epochSecondsIso(info.resetsAt)
 }
 
 /** The window a rejected rate_limit_event names; null otherwise. */

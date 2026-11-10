@@ -44,7 +44,18 @@ export class OwnedJobs {
    * cancellation during stop.
    */
   run<T>(label: string, body: () => Promise<T>, options: TrackOptions = {}): Promise<T> {
-    const result = this.context.run(this, body)
+    // The job is live before its body runs: a join that starts inside the
+    // body's synchronous part (a reentrant stop) still waits for it, and a
+    // synchronous throw is the job's rejection, retained like any other.
+    let entered!: () => void
+    const placeholder = new Promise<void>((resolve) => (entered = resolve))
+    this.live.add(placeholder)
+    let result: Promise<T>
+    try {
+      result = this.context.run(this, body)
+    } catch (error) {
+      result = Promise.reject(error)
+    }
     const settled = result.then(
       () => undefined,
       (error: unknown) => {
@@ -53,6 +64,8 @@ export class OwnedJobs {
       },
     )
     this.live.add(settled)
+    this.live.delete(placeholder)
+    entered()
     void settled.finally(() => this.live.delete(settled))
     return result
   }

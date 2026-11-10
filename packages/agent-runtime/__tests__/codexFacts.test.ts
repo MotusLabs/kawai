@@ -71,7 +71,12 @@ describe('Codex measurements (R04, R08)', () => {
         ],
       }),
     ])
-    expect(limits).toEqual([{ type: 'failure', kind: 'rateLimitExceeded', final: false, status: null, message: 'slow down', resetsAt: new Date(1900000000 * 1000).toISOString(), window: null }])
+    // The retried limit also opens the turn's wait (5.3); the agent message after it ends the wait resumed.
+    const [failure, start, end, ...rest] = limits
+    expect(rest).toEqual([])
+    expect(failure).toEqual({ type: 'failure', kind: 'rateLimitExceeded', final: false, status: null, message: 'slow down', resetsAt: new Date(1900000000 * 1000).toISOString(), window: null })
+    expect(start).toMatchObject({ type: 'wait-start', turnId: result.turnId, window: null, resetsAt: new Date(1900000000 * 1000).toISOString() })
+    expect(end).toEqual({ type: 'wait-end', waitId: (start as { waitId: string }).waitId, cause: 'resumed' })
     expect(compactions).toEqual([{ boundaryId: 'cmp-1', turnId: result.turnId, preTokens: null }])
     expect(h.events.filter((e) => e.type === 'notice')).toHaveLength(1)
   })

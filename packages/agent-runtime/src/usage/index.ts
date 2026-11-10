@@ -8,5 +8,6 @@ export type { ContextReportSlice, ContextStep, ContextThresholdSource, RequestUs
 export { codexExhaustedReset, codexQuotaReport, codexReadSnapshot, codexWindowLabel, hostQuotaReport, parseRateLimitEvent, parseUsagePull, parseUsageReport, percentValue, toIsoResetsAt, windowPeriodMs } from './quota.js'
 export { assistantLimitFailure, codexLimitFailure, codexLimitScope, CREDIT_LIMIT_WINDOW, isResetTimeZone, LIMIT_ERROR_CLASSES, rejectedResetsAt, rejectedWindow, retryLimitFailure, textResetsAt, withTextReset } from './limits.js'
 export { messageDeltaCost } from './cost.js'
-export { claudeResultUsage } from './tokens.js'
+export { addTokenUsage, claudeResultUsage, codexRequestUsage, codexUpdateRequests } from './tokens.js'
+export type { CodexTokenBreakdown } from './tokens.js'
 export { LimitWaits } from './waits.js'

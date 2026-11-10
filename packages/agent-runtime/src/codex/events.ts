@@ -4,11 +4,11 @@
 // event kinds Claude turns use: commands are `Bash`, file changes `Edit`, MCP
 // and dynamic tool calls `mcp__<server>__<tool>`, web searches `WebSearch`.
 // Turn boundaries, compaction, token usage, rate limits and retry errors are
-// typed outputs the session acts on. Unknown values stay null (R08): a
-// missing token count is never a zero.
+// typed outputs the session acts on; their token, quota and limit values are
+// read by the pure ./usage helpers (facts.ts).
 import type { EventBody } from '../eventStream.js'
 import type { JsonValue } from '../json.js'
-import type { QuotaReport, QuotaWindow, TokenUsage } from '../usage/types.js'
+import type { CodexTokenBreakdown } from '../usage/tokens.js'
 
 /** The fields of a protocol Turn the session reads. */
 export interface CodexTurn {
@@ -16,15 +16,6 @@ export interface CodexTurn {
   status?: unknown
   error?: { message?: unknown; codexErrorInfo?: unknown } | null
   items?: unknown[]
-}
-
-/** The token counters of one ThreadTokenUsage breakdown. */
-export interface CodexTokenBreakdown {
-  totalTokens?: unknown
-  inputTokens?: unknown
-  cachedInputTokens?: unknown
-  outputTokens?: unknown
-  cacheWriteInputTokens?: unknown
 }
 
 export type CodexOutput =
@@ -151,90 +142,4 @@ function toolResultOf(item: Item): { output: string; isError: boolean } | null {
     default:
       return null
   }
-}
-
-const count = (breakdown: CodexTokenBreakdown | null, key: keyof CodexTokenBreakdown): number | null => {
-  const value = breakdown?.[key]
-  return typeof value === 'number' && Number.isFinite(value) ? value : null
-}
-
-/** One turn's tokens from the latest request breakdown; an unreported counter stays null (R08). */
-export function turnUsage(last: CodexTokenBreakdown | null): TokenUsage | null {
-  if (!last) return null
-  const input = count(last, 'inputTokens')
-  const cached = count(last, 'cachedInputTokens')
-  return {
-    inputTokens: input === null ? null : Math.max(0, input - (cached ?? 0)),
-    outputTokens: count(last, 'outputTokens'),
-    cacheReadTokens: cached,
-    cacheCreationTokens: count(last, 'cacheWriteInputTokens'),
-  }
-}
-
-/**
- * The tokens between two thread totals (the requests since the previous
- * update), or null when either total is unknown.
- */
-export function usageDelta(total: CodexTokenBreakdown | null, previous: CodexTokenBreakdown | null): CodexTokenBreakdown | null {
-  if (!total || !previous) return null
-  const keys = ['totalTokens', 'inputTokens', 'cachedInputTokens', 'outputTokens', 'cacheWriteInputTokens'] as const
-  const delta: CodexTokenBreakdown = {}
-  for (const key of keys) {
-    const now = count(total, key)
-    const before = count(previous, key)
-    delta[key] = now === null ? null : Math.max(0, now - (before ?? 0))
-  }
-  return delta
-}
-
-/** Sum two turn usages (several requests in one turn); null stays null only when both are. */
-export function addUsage(a: TokenUsage | null, b: TokenUsage | null): TokenUsage | null {
-  if (!a || !b) return a ?? b
-  const add = (x: number | null, y: number | null) => (x === null && y === null ? null : (x ?? 0) + (y ?? 0))
-  return {
-    inputTokens: add(a.inputTokens, b.inputTokens),
-    outputTokens: add(a.outputTokens, b.outputTokens),
-    cacheReadTokens: add(a.cacheReadTokens, b.cacheReadTokens),
-    cacheCreationTokens: add(a.cacheCreationTokens, b.cacheCreationTokens),
-  }
-}
-
-function windowLabel(mins: number | null): string {
-  if (mins === null || mins <= 0) return 'Window'
-  if (mins === 300) return '5-hour'
-  if (mins === 10080) return 'weekly'
-  if (mins % 1440 === 0) return `${mins / 1440}-day`
-  if (mins % 60 === 0) return `${mins / 60}-hour`
-  return `${mins} min`
-}
-
-function isoReset(value: unknown): string | null {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return null
-  // The protocol reports reset times in Unix seconds.
-  return new Date(value * 1000).toISOString()
-}
-
-function quotaWindow(key: string, raw: unknown, limitName: unknown): QuotaWindow | null {
-  if (!isObject(raw) || typeof raw.usedPercent !== 'number' || !Number.isFinite(raw.usedPercent)) return null
-  const mins = typeof raw.windowDurationMins === 'number' && Number.isFinite(raw.windowDurationMins) ? raw.windowDurationMins : null
-  const name = typeof limitName === 'string' && limitName.trim() ? limitName.trim() : null
-  const label = windowLabel(mins)
-  return { key, label: name ? `${label} · ${name}` : label, percentUsed: raw.usedPercent, resetsAt: isoReset(raw.resetsAt), periodMs: mins === null ? null : mins * 60_000 }
-}
-
-/** A rate-limit snapshot as a quota report (source `push`, the session's own login). */
-export function quotaReport(snapshot: Record<string, unknown>, receivedAt = new Date().toISOString()): QuotaReport {
-  const windows = [quotaWindow('codex:primary', snapshot.primary, snapshot.limitName), quotaWindow('codex:secondary', snapshot.secondary, snapshot.limitName)].filter((w): w is QuotaWindow => w !== null)
-  return { status: snapshot.rateLimitReachedType != null ? 'limited' : 'allowed', windows, receivedAt, source: 'push', accountScope: 'session' }
-}
-
-/** The latest reset among exhausted windows of the snapshot, or null. */
-export function exhaustedReset(snapshot: Record<string, unknown> | null): string | null {
-  let latest: string | null = null
-  for (const raw of [snapshot?.primary, snapshot?.secondary]) {
-    if (!isObject(raw) || typeof raw.usedPercent !== 'number' || raw.usedPercent < 100) continue
-    const reset = isoReset(raw.resetsAt)
-    if (reset && (latest === null || reset > latest)) latest = reset
-  }
-  return latest
 }
