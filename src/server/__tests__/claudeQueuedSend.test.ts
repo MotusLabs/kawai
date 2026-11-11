@@ -17,6 +17,8 @@ import type { ChatQueryFactory } from '../chat/ChatSessionDriver'
 import { ChatSessionManager } from '../chat/ChatSessionManager'
 import { fixtureQueryFactory } from '../chat/developmentFixture'
 import { createChatDriver } from '../chat/provider/createChatDriver'
+import { createClaudeChatDriver } from '../chat/provider/claudeRuntime'
+import { createClaudeRuntime, type CreateClaudeRuntime } from '../chat/provider/claudeRuntimeLaunch'
 import type { ChatAgentDriver } from '../chat/provider/driver'
 import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
@@ -72,25 +74,24 @@ function scripted(scripts: Script[]): ChatQueryFactory {
 
 type Record_ = (input: { messageUuid: string; turnId: string }) => { ok: true } | { ok: false; message: string }
 
-function adapter(record?: Record_) {
+/** Production composition; `create` wraps the public package factory only when a case needs it. */
+function adapter(record?: Record_, create?: CreateClaudeRuntime) {
   const scripts: Script[] = []
   const events: ChatEvent[] = []
   const statuses: string[] = []
   const records: { messageUuid: string; turnId: string }[] = []
-  const driver = createChatDriver({
-    runtime: 'claude',
-    options: {
-      sessionId: 'chat-claude-queued',
-      projectPath: '/tmp',
-      queryFactory: scripted(scripts),
-      onEvent: (event) => void events.push(event),
-      onStatus: (status) => void statuses.push(status),
-      recordWorkspaceContext: (input) => {
-        records.push({ messageUuid: input.messageUuid, turnId: input.turnId })
-        return (record?.(input) ?? { ok: true }) as never
-      },
+  const options = {
+    sessionId: 'chat-claude-queued',
+    projectPath: '/tmp',
+    queryFactory: scripted(scripts),
+    onEvent: (event: ChatEvent) => void events.push(event),
+    onStatus: (status: string) => void statuses.push(status),
+    recordWorkspaceContext: (input: { messageUuid: string; turnId: string }) => {
+      records.push({ messageUuid: input.messageUuid, turnId: input.turnId })
+      return (record?.(input) ?? { ok: true }) as never
     },
-  }) as Adapter
+  }
+  const driver = (create ? createClaudeChatDriver(options as never, create) : createChatDriver({ runtime: 'claude', options: options as never })) as Adapter
   live.push(driver)
   return { driver, scripts, events, statuses, records }
 }
@@ -204,7 +205,8 @@ describe('a send queued behind the active Claude turn (R10)', () => {
     expect(await h.driver.sendWorkspaceContext!('with context', context)).toEqual({ ok: true })
     const row = h.events.filter((e) => e.type === 'user_message').at(-1) as Extract<ChatEvent, { type: 'user_message' }>
     expect([row.turnId, row.text, row.workspaceContext]).toEqual([turnA, 'with context', context])
-    expect(h.records.at(-1)!.messageUuid).toBe(row.messageUuid!)
+    // Recorded under the active turn it shows in, with its own uuid (plan-workspace I2).
+    expect(h.records.at(-1)).toEqual({ messageUuid: row.messageUuid!, turnId: turnA })
     const prompts = h.scripts[0]!.prompts.length
     const rows = h.events.filter((e) => e.type === 'user_message').length
     mode = 'refuse'
@@ -241,6 +243,106 @@ describe('a send queued behind the active Claude turn (R10)', () => {
     expect(trace(h)).toEqual([
       ['turn_started', turnA, null], ['user_message', turnA, 'first', uuidA], ['approval_request', turnA],
       ['user_message', turnA, 'second', uuidB], ['turn_interrupted', turnA],
+    ])
+  })
+})
+
+describe('queued sends: original identity and order (R10)', () => {
+  test('I2 two contextual messages in one active turn keep distinct contexts, both recorded under that turn', async () => {
+    const h = adapter()
+    const context = { teamId: '/repo/example/main', planId: 'plan-1', planTitle: 'Workspace roadmap', version: { kind: 'revision', revision: 2, contentHash: 'a'.repeat(64) }, executionId: null, changeName: 'plan-workspace', documentRefId: null } as unknown as WorkspaceMessageContext
+    const sent = [h.driver.sendWorkspaceContext!('first message', context), h.driver.sendWorkspaceContext!('second message', context)]
+    expect(await Promise.all(sent)).toEqual([{ ok: true }, { ok: true }])
+    await settle()
+    expect(h.events.filter((e) => e.type === 'turn_started')).toHaveLength(1)
+    const turnId = (h.events[0] as { turnId: string }).turnId
+    const userEvents = h.events.filter((e) => e.type === 'user_message') as Extract<ChatEvent, { type: 'user_message' }>[]
+    expect(userEvents.map((e) => [e.turnId, e.text, e.workspaceContext])).toEqual([[turnId, 'first message', context], [turnId, 'second message', context]])
+    const uuids = userEvents.map((e) => e.messageUuid ?? '')
+    expect(uuids[0]).not.toBe(uuids[1])
+    expect(h.records.map((row) => row.turnId)).toEqual([turnId, turnId])
+    expect(h.records.map((row) => row.messageUuid)).toEqual(uuids)
+    expect(h.scripts[0]!.prompts.map((p) => String(p.uuid))).toEqual(uuids)
+  })
+
+  /**
+   * The package composition with one change: the adapter gets each send's
+   * handle only once the package has published `releaseAfter` (the result
+   * that ends A), so A's result is handled between B's commit and the
+   * adapter's resume.
+   */
+  function lateHandles(releaseAfter: (pkg: string[]) => boolean): { create: CreateClaudeRuntime; pkg: string[] } {
+    const pkg: string[] = []
+    const create: CreateClaudeRuntime = (options, queryFactory, wire) => {
+      const onEvent = options.callbacks.onEvent
+      const inner = createClaudeRuntime({ ...options, callbacks: { ...options.callbacks, onEvent: (event) => (pkg.push(`${event.type}${'turnId' in event ? ` ${event.turnId}` : ''}`), onEvent?.(event)) } }, queryFactory, wire)
+      return new Proxy(inner, {
+        get(target, key) {
+          if (key !== 'send') {
+            const value = Reflect.get(target, key) as unknown
+            return typeof value === 'function' ? value.bind(target) : value
+          }
+          return async (...args: Parameters<typeof inner.send>) => {
+            const handle = await target.send(...args)
+            pkg.push(`committed ${handle.turnId}`)
+            if (target.state === 'active' && pkg.some((line) => line.startsWith('turn_started')) && pkg.filter((l) => l.startsWith('committed')).length > 1) await until(() => releaseAfter(pkg))
+            pkg.push(`resumed ${handle.turnId}`)
+            return handle
+          }
+        },
+      })
+    }
+    return { create, pkg }
+  }
+
+  test('enqueue, then A\'s separate result, then the host resume: B stays on A before A completes; its CLI turn opens as resumed', async () => {
+    const late = lateHandles((pkg) => pkg.some((line) => line.startsWith('turn_completed')))
+    const h = adapter(undefined, late.create)
+    const { turnA, uuidA } = await heldTurn(h)
+    approve(h)
+    h.driver.send('second')
+    await until(() => h.scripts[0]!.prompts.length === 2)
+    const uuidB = String(h.scripts[0]!.prompts[1]!.uuid)
+    h.scripts[0]!.push(result([uuidA], 10))
+    await until(() => late.pkg.some((line) => line.startsWith('resumed')) && late.pkg.filter((l) => l.startsWith('resumed')).length === 2)
+    // The package handled A's result (and opened B) before the adapter had B's handle.
+    const turnB = late.pkg.filter((l) => l.startsWith('committed')).at(-1)!.split(' ')[1]!
+    expect(late.pkg.indexOf(`turn_completed ${turnA}`)).toBeLessThan(late.pkg.indexOf(`resumed ${turnB}`))
+    expect(late.pkg.indexOf(`turn_started ${turnB}`)).toBeLessThan(late.pkg.indexOf(`resumed ${turnB}`))
+    h.scripts[0]!.push(init)
+    h.scripts[0]!.push(result([uuidB], 20))
+    await until(() => h.events.filter((e) => e.type === 'turn_completed').length === 2)
+    await settle()
+    expect(trace(h)).toEqual([
+      ['turn_started', turnA, null], ['user_message', turnA, 'first', uuidA], ['approval_request', turnA],
+      ['user_message', turnA, 'second', uuidB], ['turn_completed', turnA, 10], ['turn_started', turnB, 'resumed'], ['turn_completed', turnB, 20],
+    ])
+    expect(h.statuses.at(-1)).toBe('waiting')
+  })
+
+  test('enqueue, then A\'s result absorbing B, then the host resume: B stays on A before A completes; no B turn; a later send is a plain turn', async () => {
+    const late = lateHandles((pkg) => pkg.some((line) => line.startsWith('turn_completed')))
+    const h = adapter(undefined, late.create)
+    const { turnA, uuidA } = await heldTurn(h)
+    approve(h)
+    h.driver.send('second')
+    await until(() => h.scripts[0]!.prompts.length === 2)
+    const uuidB = String(h.scripts[0]!.prompts[1]!.uuid)
+    h.scripts[0]!.push(result([uuidA, uuidB], 10))
+    await until(() => late.pkg.filter((l) => l.startsWith('resumed')).length === 2)
+    await settle()
+    h.driver.send('third')
+    await until(() => h.scripts[0]!.prompts.length === 3)
+    const uuidC = String(h.scripts[0]!.prompts[2]!.uuid)
+    h.scripts[0]!.push(init)
+    h.scripts[0]!.push(result([uuidC], 30))
+    await until(() => h.events.filter((e) => e.type === 'turn_completed').length === 2)
+    await settle()
+    const turnC = (h.events.filter((e) => e.type === 'turn_started')[1] as { turnId: string }).turnId
+    expect(trace(h)).toEqual([
+      ['turn_started', turnA, null], ['user_message', turnA, 'first', uuidA], ['approval_request', turnA],
+      ['user_message', turnA, 'second', uuidB], ['turn_completed', turnA, 10],
+      ['turn_started', turnC, null], ['user_message', turnC, 'third', uuidC], ['turn_completed', turnC, 30],
     ])
   })
 })
