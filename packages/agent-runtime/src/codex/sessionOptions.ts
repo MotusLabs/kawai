@@ -23,6 +23,8 @@ export interface CodexSessionOptions {
   auditHooks?: CodexAuditHooks
   /** Asked once per ready generation; omitted, the one read per driver (quotaRead.ts). */
   claimRateLimitsRead?: () => boolean
+  /** Read per new turn/start; precedes `effort` (R2). */
+  getEffort?: () => Effort | undefined
   resume?: ResumeCheckpoint
   unansweredRequests?: 'deny' | 'wait'
   terminate?: TerminateOptions

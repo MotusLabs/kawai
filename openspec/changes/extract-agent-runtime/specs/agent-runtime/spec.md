@@ -111,6 +111,33 @@ The runtime SHALL expose token, model and compaction facts, quota-window reports
 - **WHEN** a Codex host supplies a quota-read claim and each started generation becomes ready after its checkpoint persisted
 - **THEN** the claim is asked once per generation, only a granted claim sends that generation's one account read, a denied or throwing claim sends none and reports nothing, pushed updates are still reported, and without a claim the driver reads once
 
+#### Scenario: Caller-claimed Claude usage pull
+- **WHEN** a Claude host chooses its login as quota source and supplies a usage-pull claim, and a generation's query is constructed
+- **THEN** the claim is asked once for that generation, only a granted claim makes its one usage pull, a denied, stale or failed spawn's claim makes none and reports nothing, and a rejecting claim is reported by the stop
+
+#### Scenario: Quota read yields no data
+- **WHEN** a permitted Codex read or Claude usage pull is attempted and the provider answers with no windows, lacks the method or fails
+- **THEN** the no-data callback names the source and account scope once, no quota report is fabricated, and a denied or unattempted read reports neither
+
+### Requirement: Host-compatibility inputs and observations are optional
+A host MAY supply a live Codex effort reader, a detailed Claude hook observer and callbacks for cwd changes, spawns, compaction progress, context-usage metadata and notification expiry. Each SHALL report provider facts as observed, keep unknown values null, never affect permission or transport, and leave behavior unchanged when omitted. A reader failure SHALL refuse only the work that read it.
+
+#### Scenario: Live Codex turn effort
+- **WHEN** a Codex host supplies an effort reader and changes its answer between two turns on the same process
+- **THEN** each new turn/start carries the answer read when it was sent, a steer or refused submission reads nothing, and a throwing reader refuses that turn with its raw error and sends no request
+
+#### Scenario: Detailed Claude audit facts
+- **WHEN** a Claude host supplies a detailed hook observer and a tool call succeeds, fails or is denied
+- **THEN** the observer receives each hook's JSON-safe input with its kind, and its result or throw changes no permission decision
+
+#### Scenario: Process and compaction observations
+- **WHEN** a host supplies the spawn, cwd, compaction, context and notification callbacks
+- **THEN** each actual spawn reports its launch provenance once, main-session cwd changes are reported, compaction start and completion carry their source ids and measured facts, context readings carry their persistence and threshold source, and notifications carry their timeout
+
+#### Scenario: Native Codex skill input
+- **WHEN** a Codex user message names a skill in the runtime's own skill catalog
+- **THEN** its turn/start carries the typed skill input after the text, without any host-supplied input items
+
 ### Requirement: Rate-limit waits have explicit boundaries
 A provider-observed retry wait SHALL emit a wait-start signal and one matching wait-end signal on observed resumption, cancellation or process end. Window and reset facts SHALL be retained when known. A predicted reset time alone SHALL NOT establish that work resumed.
 

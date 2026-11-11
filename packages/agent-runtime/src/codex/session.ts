@@ -32,6 +32,7 @@ import { EventStream, type EventBody } from '../eventStream.js'
 import { OldFrameScope } from '../common/oldFrame.js'
 import type { PendingRequest, QuestionAnswers } from '../events.js'
 import type { JsonObject } from '../json.js'
+import type { Effort } from '../options.js'
 import { CHECKPOINT_FAILED, CheckpointGate } from '../lifecycle/checkpoints.js'
 import { DriverLifecycle } from '../lifecycle/lifecycle.js'
 import { resolveExecutable, resolveLaunch } from '../process/launch.js'
@@ -344,7 +345,7 @@ export class CodexSession {
         if ((admission === 'steer') !== (prepared.steers !== null) || (prepared.steers && prepared.steers !== this.turn)) {
           throw new AgentRuntimeError({ category: 'not-ready', code: 'turn-ended', message: 'the turn this message was prepared for has ended' })
         }
-        return admission === 'steer' ? this.steer(prepared, prepared.steers!) : this.begin(prepared)
+        return admission === 'steer' ? this.steer(prepared, prepared.steers!) : this.begin(prepared, this.turnEffort())
       },
     })
   }
@@ -360,10 +361,11 @@ export class CodexSession {
    * after the write only if it is still current and unsettled; otherwise the
    * already-settled handle is returned and nothing opens after the stop.
    */
-  private begin(prepared: Prepared): TurnHandle {
+  private begin(prepared: Prepared, chosen: Effort | undefined): TurnHandle {
     const generation = this.current()!
     const turn = newCodexTurn(prepared.turnId, prepared.messageUuid, prepared.text, this.facts.model)
-    const effort = typeof this.options.effort === 'string' ? { effort: this.options.effort } : {}
+    // A numeric effort has no Codex equivalent and is omitted, as before.
+    const effort = typeof chosen === 'string' ? { effort: chosen } : {}
     const params = codexTurnStartParams({ threadId: generation.threadId, input: this.input(prepared.text), clientUserMessageId: prepared.messageUuid, ...effort }, this.permissions)
     this.turn = turn
     this.unbound.push(turn)
@@ -386,6 +388,24 @@ export class CodexSession {
     }
     if (!turn.settled && turn === this.turn && !this.stopBegun()) this.lifecycle.holdState(() => this.openTurn(turn, false))
     return { turnId: turn.turnId, messageUuid: prepared.messageUuid, result: turn.result }
+  }
+
+  /**
+   * The effort for a new turn (R2): the caller's live choice, read once as its
+   * turn/start is about to be sent, else the fixed option. A throwing reader
+   * refuses the turn with its raw error; one that stopped the driver sends nothing.
+   */
+  private turnEffort(): Effort | undefined {
+    const read = this.options.getEffort
+    if (!read) return this.options.effort
+    let chosen: Effort | undefined
+    try {
+      chosen = read()
+    } catch (error) {
+      throw new AgentRuntimeError({ category: 'configuration', code: 'effort', message: 'the effort callback threw' }, [error])
+    }
+    if (this.stopBegun()) throw new AgentRuntimeError({ category: 'stopped', message: 'the driver was stopped while its turn effort was read' })
+    return chosen
   }
 
   /** L22: the message joins the active turn; the handle shares its result. */

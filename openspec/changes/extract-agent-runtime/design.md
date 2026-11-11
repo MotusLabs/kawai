@@ -104,6 +104,14 @@ Keep SDK and runtime IDs separate from host session IDs. Reapply caller policy o
 
 Post-freeze exception. Task 1.2 froze these declarations. The owner later authorized exactly one additive field (decision 4a98ea6b, task-5369866c): `CodexDriverOptions.claimRateLimitsRead?: () => boolean`, so Kawai keeps its policy of one account read per login (§6). Nothing else in the frozen surface changes, and no Claude or base option is added.
 
+Second post-freeze exception (owner decision b671e3da, proposal 10bfd561, task-7811b455 R2). To keep Kawai's current behavior through the package, the owner authorized one bounded set of optional, host-compatibility fields. Each is inert when omitted:
+- `CodexDriverOptions.getEffort`: read as each new turn/start is sent.
+- `ClaudeDriverOptions.claimUsagePull`: an async, per-generation claim made after the query is constructed.
+- `ClaudeAuditHooks.onHook`: the detailed JSON-safe hook input for PreToolUse, PostToolUse, PostToolUseFailure and PermissionDenied.
+- Five callbacks: `onCwdChanged`, `onSpawn`, `onCompactionObservation` and `onQuotaNoData`, plus optional second arguments on `onContextUsage` (`{persist, thresholdSource}`) and `onNotification` (`timeoutMs`).
+
+They report source facts only. They add no lifecycle method, SDK type, testing entry or input-item API. Native Codex skill inputs are restored privately: the runtime's own skills/list catalog selects them.
+
 ### 3. Process ownership, stop and error semantics
 
 The default local process owner uses the existing Node child-process substrate on Bun and owns each spawned generation from before listener installation through terminal join. Claude always supplies SDK spawnClaudeCodeProcess; optional wire capture decorates this spawner. Codex carries AppServerClient's actual exit promise through its driver.
@@ -147,6 +155,8 @@ Codex options expose approvalPolicy (headless never), sandbox mode, network and 
 | onToolObservation | Optional names/IDs/phases only, never tool arguments; cannot affect permission or transport |
 | claimRateLimitsRead (Codex) | Optional synchronous claim asked once per ready generation before its account/rateLimits/read; only `true` permits it. Kawai answers from its own per-login state; the package keeps no claim store |
 | auditHooks | Explicit opt-in detailed provider hook adapter for Kawai's existing audit coverage, with no outbound module import |
+| getEffort (Codex), claimUsagePull (Claude) | R2 optional live inputs: effort is read per new turn/start, never for a steer or refused work, and a throw refuses that turn. The usage claim is asked once per generation after its query exists, rechecked after its await, and its rejection is retained for the stop |
+| onCwdChanged/onSpawn/onCompactionObservation/onQuotaNoData, onHook, context/notification metadata | R2 optional observations of current Kawai facts. Unknowns stay null, a throw is noncritical, nothing affects permission or transport, and old consumers are unchanged |
 | wire | Optional raw recorder; no default file, log or listener; absence changes no process ownership |
 | callbacks | onEvent/onStatus/onRequest/onProcessEnd/onCheckpoint/onTurnResult/onModel/onCompaction/onContextUsage/onLimitEvent/onRateLimit/onUsageReport plus preserved optional activity/roster/command signals |
 | runtime test seams | Controlled query/client/spawn factories with explicit ownership capabilities; package tests use them without claiming native proof from iterator completion |

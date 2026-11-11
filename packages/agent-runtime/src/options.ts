@@ -7,7 +7,7 @@ import type { JsonValue } from './json.js'
 import type { ClaudeAgentDriver, CodexAgentDriver, ProcessEndReport, ResumeCheckpoint, TurnResult, DriverState } from './contract.js'
 import type { AgentEvent, PendingRequest } from './events.js'
 import type { Activity, AgentNotification, BackgroundTask, CommandState, Worker } from './activity.js'
-import type { ContextUsage, LimitEvent, QuotaReport } from './usage/types.js'
+import type { ContextUsage, LimitEvent, QuotaReport, QuotaSource } from './usage/types.js'
 
 /** Pino-compatible object-first logger; the runtime creates no transports. */
 export interface Logger {
@@ -127,6 +127,48 @@ export interface WireRecorder {
   record(frame: WireFrame): void
 }
 
+/** One actual agent process/query construction (owner amendment R2, task-7811b455). */
+export interface SpawnInfo {
+  generation: number
+  cwd: string
+  /** The generation's complete child environment, as launched. */
+  childEnv: Readonly<Record<string, string>>
+  systemPromptAppend: string
+  /** The effort the launch carried, or null when the runtime's own settings decide. */
+  effort: Effort | null
+  /** The model the launch carried, or null when the runtime decides. */
+  model: string | null
+  resumed: boolean
+}
+
+/** A compaction's observed facts; unknowns stay null (R2). */
+export interface CompactionObservation {
+  trigger: 'auto' | 'manual' | 'unknown'
+  startedAt: string | null
+  endedAt: string | null
+  preTokens: number | null
+  postTokens: number | null
+  durationSeconds: number | null
+  outcome: 'started' | 'completed'
+  /** The provider frame the fact came from (`start:<uuid>`, `boundary:<uuid>`), or null. */
+  sourceId: string | null
+  turnId: string | null
+}
+
+/** Optional facts beside a context reading (R2). */
+export interface ContextUsageMeta {
+  /** The reading should be persisted now rather than at the next turn boundary. */
+  persist?: boolean
+  /** How the reading's threshold was derived. */
+  thresholdSource?: string
+}
+
+/** An attempted, permitted quota read that yielded no windows (R2). */
+export interface QuotaNoData {
+  source: QuotaSource
+  accountScope: QuotaReport['accountScope']
+}
+
 /** Output callbacks. onEvent is required; everything else fires only when supplied. */
 export interface AgentCallbacks {
   onEvent(event: AgentEvent): void
@@ -139,14 +181,23 @@ export interface AgentCallbacks {
   onTurnResult?(result: TurnResult): void
   onModel?(model: string): void
   onCompaction?(info: { boundaryId: string; turnId: string | null; preTokens: number | null }): void
-  onContextUsage?(usage: ContextUsage | null): void
+  onContextUsage?(usage: ContextUsage | null, meta?: ContextUsageMeta): void
   onLimitEvent?(event: LimitEvent): void
   onQuotaReport?(report: QuotaReport): void
   onActivity?(activity: Activity | null): void
   onWorkers?(workers: Worker[]): void
   onBackgroundTasks?(tasks: BackgroundTask[]): void
-  onNotification?(notification: AgentNotification): void
+  /** `timeoutMs` is the frame's own expiry when it carried one. */
+  onNotification?(notification: AgentNotification, timeoutMs?: number): void
   onCommandState?(state: CommandState): void
+  /** The main session's working directory moved (subagent moves are filtered). */
+  onCwdChanged?(cwd: string): void
+  /** Fired once per actual process/query construction, never for a failed spawn. */
+  onSpawn?(info: SpawnInfo): void
+  /** Started and completed compaction facts; onCompaction keeps its completed-only shape. */
+  onCompactionObservation?(observation: CompactionObservation): void
+  /** A permitted quota read was attempted and yielded nothing. Never for a denied or unattempted read. */
+  onQuotaNoData?(info: QuotaNoData): void
 }
 
 export interface BaseDriverOptions {
@@ -175,6 +226,11 @@ export interface BaseDriverOptions {
 export interface ClaudeAuditHooks {
   preToolUse?(input: { tool: string; toolCallId: string; input: JsonValue }): void
   postToolUse?(input: { tool: string; toolCallId: string; isError: boolean }): void
+  /**
+   * The detailed hook input, JSON-safe, for each audited SDK hook (R2). Observational:
+   * its return and throws never affect the tool.
+   */
+  onHook?(event: { kind: 'PreToolUse' | 'PostToolUse' | 'PostToolUseFailure' | 'PermissionDenied'; input: JsonValue }): void
 }
 
 export interface ClaudeDriverOptions extends BaseDriverOptions {
@@ -186,6 +242,14 @@ export interface ClaudeDriverOptions extends BaseDriverOptions {
   /** Quota pulls through the supplied home's login are off unless chosen (design §6). */
   quotaSource?: 'none' | 'host-login'
   auditHooks?: ClaudeAuditHooks
+  /**
+   * The caller's decision whether this generation may make its SDK usage pull
+   * (R2). Asked once per generation after its query was constructed; only
+   * true under quotaSource host-login permits the pull. A rejection is
+   * retained and reported by the stop. Omitted: the pull runs once per
+   * driver when host-login was chosen.
+   */
+  claimUsagePull?: () => boolean | Promise<boolean>
 }
 
 /** Optional detailed Codex audit adapter; opt-in only. */
@@ -204,6 +268,12 @@ export interface CodexDriverOptions extends BaseDriverOptions {
    * read between drivers of a login or home is the caller's own state.
    */
   claimRateLimitsRead?: () => boolean
+  /**
+   * The effort for each new turn (R2), read when its turn/start is sent and
+   * taking precedence over `effort`; undefined sends none. Steers and refused
+   * submissions never read it. A throw refuses that turn.
+   */
+  getEffort?: () => Effort | undefined
 }
 
 export type CreateClaudeDriver = (options: ClaudeDriverOptions) => ClaudeAgentDriver
