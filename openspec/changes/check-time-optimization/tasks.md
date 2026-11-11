@@ -78,7 +78,7 @@ Implementation notes (branch `feat/test-db-template`, stacked on `feat/property-
 
 ## 6. Docs and integration
 
-- [ ] 6.1 Update AGENTS.md's Commands paragraph: the real-tmux selection and `--all-real-tmux`, the nightly run, the retry and `--no-retry`, the reduced case profile, `--full-properties`, CI's full counts, and the template database. Verify: the AGENTS.md diff names all seven, and the `@reads` tests pass (A7).
+- [x] 6.1 Update AGENTS.md's Commands paragraph: the real-tmux selection and `--all-real-tmux`, the nightly run, the retry and `--no-retry`, the reduced case profile, `--full-properties`, CI's full counts, and the template database. Verify: the AGENTS.md diff names all seven, and the `@reads` tests pass (A7).
 - [ ] 6.2 Run `bun run check` on the clean committed tree before and after the change, on an otherwise idle machine, and report total test work and wall time from the timings record and the check output (V5). Verify: both figures are in the result. This is evidence, not a pass bound.
 - [ ] 6.3 Map each oracle id (SE1–SE5, G1–G2, RT1–RT6, RU1–RU5, PC1, TD1, TD2) to its test title and killed mutant in the result, and map A1–A9, I1–I6, and V1–V7 to evidence. Verify: no id is unmapped.
 
