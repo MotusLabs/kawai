@@ -3,8 +3,12 @@
 // through the public createChatDriver over a real-SDK fake CLI and actual
 // Codex stdio, a promise either callback returns holds the adapter's terminal
 // join (kill + settled) until it settles, and its original rejection is what
-// settled() reports, once. A synchronous throw is reported once as well.
+// settled() reports, once. A synchronous throw is reported once as well: an
+// onEvent throw inside a package callback goes to the package, whose stop
+// carries the raw error as its cause; an onStatus throw from the caller's own
+// send() reaches that caller, as in the source driver, and nothing more.
 import { expect, test } from 'bun:test'
+import { AgentRuntimeError } from '@motuslabs/agent-runtime'
 import fs from 'node:fs'
 import { createChatDriver } from '../chat/provider/createChatDriver'
 import { fakeClaudeHome } from '../../../packages/agent-runtime/__tests__/helpers/fakeClaudeHome'
@@ -54,7 +58,7 @@ function composition(runtime: Runtime, hook: Hook, answer: () => unknown) {
     fs.rmSync(home.root, { recursive: true, force: true })
     if (codex) fs.rmSync(codex.root, { recursive: true, force: true })
   }
-  return { driver, reached, hang: codex ? '/hold' : 'hang', cleanup }
+  return { driver, reached, entered: () => entered, hang: codex ? '/hold' : 'hang', cleanup }
 }
 
 const cases: Array<[Runtime, Hook]> = [['claude', 'onEvent'], ['claude', 'onStatus'], ['codex', 'onEvent'], ['codex', 'onStatus']]
@@ -91,6 +95,34 @@ for (const [runtime, hook] of cases) {
       c.driver.kill()
       await (wait ?? c.driver.settled()).catch(() => {})
       await callbackJob.catch(() => {})
+      c.cleanup()
+    }
+  })
+}
+
+for (const [runtime, hook] of cases) {
+  test(`public default ${runtime} composition reports a synchronous ${hook} throw exactly once`, async () => {
+    const boom = new Error(`sync ${hook} throw`)
+    const c = composition(runtime, hook, () => {
+      throw boom
+    })
+    let sendThrew: unknown = null
+    try {
+      try {
+        c.driver.send(c.hang)
+      } catch (error) {
+        sendThrew = error
+      }
+      // The status throw reaches send()'s caller; the case does not wait for a native turn.
+      await until(hook === 'onEvent' ? c.reached : c.entered)
+      c.driver.kill()
+      const first = await c.driver.settled().then(() => null, (error: unknown) => error)
+      const second = await c.driver.settled().then(() => null, (error: unknown) => error)
+      const reports = [sendThrew, first].filter((x) => x !== null).map((x) => (x === boom ? 'raw' : x instanceof AgentRuntimeError && x.causes.length === 1 && x.causes[0] === boom ? `${x.category}:cause` : String(x)))
+      expect({ reports, second }).toEqual({ reports: [hook === 'onEvent' ? 'stop:cause' : 'raw'], second: null })
+    } finally {
+      c.driver.kill()
+      await c.driver.settled().catch(() => {})
       c.cleanup()
     }
   })
