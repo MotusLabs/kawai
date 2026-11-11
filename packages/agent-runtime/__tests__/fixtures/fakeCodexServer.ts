@@ -8,7 +8,7 @@
 // so a resume in another process sees the same conversation history.
 //
 // Env: FAKE_CODEX_INIT=unauthorized|exit; FAKE_CODEX_RESUME=substitute|substitute-unknown|refuse|unauthorized;
-//      FAKE_CODEX_START=unauthorized.
+//      FAKE_CODEX_START=unauthorized|exit (exit: exits right after the thread/start reply).
 // A turn's text picks its script (default: one agent message with a unique
 // transformed text naming the thread's earlier messages):
 //   /hold            stays in progress until turn/interrupt or turn/steer
@@ -207,6 +207,7 @@ export function serveFakeCodex(io: FakeCodexIo): void {
         writeFileSync(thread.path, '')
         save(thread)
         reply(id, { thread: { id: threadId, path: thread.path }, model: 'fake-model' })
+        if (env.FAKE_CODEX_START === 'exit') return void setTimeout(() => exit(3), 5)
         if (env.FAKE_CODEX_START === 'agent') {
           notify('turn/started', { threadId, turn: { id: 'boot-agent', status: 'inProgress', items: [], error: null } })
           complete('boot-agent', 'completed', 'boot agent reply')

@@ -499,8 +499,9 @@ Both drivers emit the same `AgentEvent` stream and settle the same
     A refused, unanswered or empty read reports nothing and fails nothing.
   - `claimRateLimitsRead: () => boolean` (Codex only) replaces that rule.
     - The driver asks it once per started generation, after the checkpoint
-      persisted. Only `true` sends that generation's read; `false` sends
-      none and reports nothing, and pushed updates still arrive.
+      persisted, while that generation is still current and not stopping.
+      Only `true` sends its read; `false` sends none and reports nothing,
+      and pushed updates still arrive.
     - A throw denies the read, and the stop reports that error once.
     - Sharing one read between drivers of a login or home is your own
       state, for example a set of claimed homes. The package keeps none.

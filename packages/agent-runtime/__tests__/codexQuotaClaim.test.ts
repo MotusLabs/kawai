@@ -11,7 +11,8 @@
 //   decides sharing between drivers and homes; the package keeps no store.
 // - A denied read reports nothing, and pushed updates are still reported; a
 //   read unanswered when its generation exits reports nothing.
-// - A held persistence holds the claim; a refused one never consults it.
+// - A held persistence holds the claim; a refused one never consults it, and
+//   neither does a generation that exited while its persistence was held.
 // - A throwing claim denies the read and is the stop's one raw cause; a
 //   claim that kills its own driver is refused instead of joining itself,
 //   and no read follows.
@@ -183,6 +184,32 @@ describe('Codex quota-read claim', () => {
     expect(asked).toEqual(['claim'])
     await barrier(h)
     expect(reads(h.root)).toBe(1)
+  })
+
+  // @covers: agent-runtime › Usage and quota reports remain observable › Caller-claimed Codex quota read
+  test('a generation that exits while its checkpoint persistence is held is never asked: the caller claim stays free for the successor', async () => {
+    const root = codexRoot()
+    let generation = 0
+    const launch = () => root.launch(generation++ === 0 ? { ...answering(33), FAKE_CODEX_START: 'exit' } : answering(33))
+    const persisted = deferred()
+    const claims = homeClaims()
+    const h = recorded({ root, launch, claimRateLimitsRead: claims.claim(() => root.home), callbacks: { onCheckpoint: () => (generation === 1 ? persisted.promise : undefined) } })
+    const started = h.driver.start().then(
+      () => null,
+      (error: unknown) => error,
+    )
+    await waitFor(() => h.checkpoints.length === 1 && h.ends.length === 1)
+    expect(h.ends).toHaveLength(1)
+    persisted.resolve()
+    await started
+    // The exited generation was not eligible: no consultation, so the caller's claim for this home is unspent.
+    expect(claims.asked).toEqual([])
+    await h.driver.start()
+    await barrier(h)
+    await waitFor(() => h.quotas.length > 0)
+    expect(claims.asked).toEqual([root.home])
+    expect(reads(root)).toBe(1)
+    expect(reported(h.quotas)).toEqual([['report', 33]])
   })
 
   test('a refused checkpoint persistence fails start before the claim: no consultation and no read', async () => {

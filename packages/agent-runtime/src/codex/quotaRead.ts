@@ -31,22 +31,26 @@ export interface QuotaClaimHost extends QuotaReadHost {
 
 /**
  * A ready generation's optional read. Omitted claim: once per driver. A
- * supplied claim is asked once for this generation and only `true` permits
- * the read; a throw denies it and stays an owned failure the stop reports
- * (host.notify). A claim that stopped the driver or superseded this
- * generation permits nothing for it.
+ * supplied claim is asked once for this generation, only while it is still
+ * current and not stopping (one that exited during its checkpoint is never
+ * asked), and only `true` permits the read; a throw denies it and stays an
+ * owned failure the stop reports (host.notify). A claim that stopped the
+ * driver or superseded this generation permits nothing for it.
  */
 export function claimQuotaRead(generation: CodexGeneration, host: QuotaClaimHost): void {
   const claim = host.claim
   if (!claim) {
     if (!host.firstRead()) return
   } else {
+    if (!eligible(generation, host)) return
     let permitted = false
     host.notify('claimRateLimitsRead', () => void (permitted = claim() === true))
-    if (!permitted || generation.retired || generation !== host.current() || host.stopBegun()) return
+    if (!permitted || !eligible(generation, host)) return
   }
   readQuota(generation, host)
 }
+
+const eligible = (generation: CodexGeneration, host: QuotaClaimHost): boolean => !generation.retired && generation === host.current() && !host.stopBegun()
 
 export function readQuota(generation: CodexGeneration, host: QuotaReadHost): void {
   void host.runOwned(`quota-read:${generation.number}`, async () => {
