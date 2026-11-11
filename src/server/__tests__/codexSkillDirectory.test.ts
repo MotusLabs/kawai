@@ -93,29 +93,31 @@ test('public default Codex composition: after a move the same process lists the 
   }
 })
 
-for (const when of ['before its launch', 'after its process started'] as const) {
-  test(`public default Codex composition: a move while the driver boots, ${when}, lists only the new project's skills`, async () => {
-    const root = codexRoot()
-    const changed = path.join(root.root, 'other-project')
-    fs.mkdirSync(changed)
-    fs.writeFileSync(path.join(root.home, 'skills.json'), JSON.stringify({ skills: [OLD], byCwd: { [changed]: { skills: [NEW] } } }))
-    const driver = adapter(root)
-    try {
-      driver.start()
-      if (when === 'after its process started') await until(() => root.received().some((m) => m.method === 'initialize'))
-      driver.setProjectPath(changed)
-      await until(() => driver.getCommandState().status === 'ready' && lists(root).some((p) => p.cwds[0] === changed))
-      driver.send('/deploy')
-      await until(() => turnStarts(root).length > 0)
-      // Before its launch the new directory is the launch cwd; after, the live process lists it with forceReload.
-      expect({ last: lists(root).at(-1), nativeInput: turnStarts(root)[0]!.params.input }).toEqual({
-        last: { cwds: [changed], forceReload: when === 'after its process started' },
-        nativeInput: [{ type: 'text', text: '/deploy', text_elements: [] }, { type: 'skill', name: 'deploy', path: NEW.path }],
-      })
-    } finally {
-      driver.kill()
-      await driver.settled().catch(() => {})
-      fs.rmSync(root.root, { recursive: true, force: true })
-    }
-  })
+async function bootMove(when: 'before its launch' | 'after its process started'): Promise<void> {
+  const root = codexRoot()
+  const changed = path.join(root.root, 'other-project')
+  fs.mkdirSync(changed)
+  fs.writeFileSync(path.join(root.home, 'skills.json'), JSON.stringify({ skills: [OLD], byCwd: { [changed]: { skills: [NEW] } } }))
+  const driver = adapter(root)
+  try {
+    driver.start()
+    if (when === 'after its process started') await until(() => root.received().some((m) => m.method === 'initialize'))
+    driver.setProjectPath(changed)
+    await until(() => driver.getCommandState().status === 'ready' && lists(root).some((p) => p.cwds[0] === changed))
+    driver.send('/deploy')
+    await until(() => turnStarts(root).length > 0)
+    // Before its launch the new directory is the launch cwd; after, the live process lists it with forceReload.
+    expect({ last: lists(root).at(-1), nativeInput: turnStarts(root)[0]!.params.input }).toEqual({
+      last: { cwds: [changed], forceReload: when === 'after its process started' },
+      nativeInput: [{ type: 'text', text: '/deploy', text_elements: [] }, { type: 'skill', name: 'deploy', path: NEW.path }],
+    })
+  } finally {
+    driver.kill()
+    await driver.settled().catch(() => {})
+    fs.rmSync(root.root, { recursive: true, force: true })
+  }
 }
+
+test("public default Codex composition: a move while the driver boots, before its launch, lists only the new project's skills", () => bootMove('before its launch'))
+
+test("public default Codex composition: a move while the driver boots, after its process started, lists only the new project's skills", () => bootMove('after its process started'))

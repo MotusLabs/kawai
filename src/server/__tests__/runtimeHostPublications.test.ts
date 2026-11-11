@@ -61,69 +61,79 @@ function composition(runtime: Runtime, hook: Hook, answer: () => unknown) {
   return { driver, reached, entered: () => entered, hang: codex ? '/hold' : 'hang', cleanup }
 }
 
-const cases: Array<[Runtime, Hook]> = [['claude', 'onEvent'], ['claude', 'onStatus'], ['codex', 'onEvent'], ['codex', 'onStatus']]
+async function heldPublication(runtime: Runtime, hook: Hook): Promise<void> {
+  let release!: () => void
+  const gate = new Promise<void>((r) => (release = r))
+  const boom = new Error(`held ${hook} rejection`)
+  const callbackJob = gate.then(() => {
+    throw boom
+  })
+  // The test observes its own promise so a lost rejection cannot become a Bun
+  // unhandled-rejection failure; the assertion concerns the adapter's owner.
+  void callbackJob.catch(() => {})
+  const c = composition(runtime, hook, () => callbackJob)
+  let joined = false
+  let failure: unknown
+  let wait: Promise<void> | undefined
+  try {
+    c.driver.send(c.hang)
+    await until(c.reached)
+    c.driver.kill()
+    wait = c.driver.settled().then(() => void (joined = true), (error) => void ((joined = true), (failure = error)))
+    await Bun.sleep(100)
+    const terminalBeforeRelease = joined
+    release()
+    await wait
+    expect({ terminalBeforeRelease, rawCauseReported: failure === boom }).toEqual({ terminalBeforeRelease: false, rawCauseReported: true })
+    // Reported once: a later join has nothing new to report.
+    await c.driver.settled()
+  } finally {
+    release()
+    c.driver.kill()
+    await (wait ?? c.driver.settled()).catch(() => {})
+    await callbackJob.catch(() => {})
+    c.cleanup()
+  }
+}
 
-for (const [runtime, hook] of cases) {
-  test(`public default ${runtime} composition joins a returned ${hook} promise and reports its raw rejection once`, async () => {
-    let release!: () => void
-    const gate = new Promise<void>((r) => (release = r))
-    const boom = new Error(`held ${hook} rejection`)
-    const callbackJob = gate.then(() => {
-      throw boom
-    })
-    // The test observes its own promise so a lost rejection cannot become a Bun
-    // unhandled-rejection failure; the assertion concerns the adapter's owner.
-    void callbackJob.catch(() => {})
-    const c = composition(runtime, hook, () => callbackJob)
-    let joined = false
-    let failure: unknown
-    let wait: Promise<void> | undefined
+test('public default claude composition joins a returned onEvent promise and reports its raw rejection once', () => heldPublication('claude', 'onEvent'))
+
+test('public default claude composition joins a returned onStatus promise and reports its raw rejection once', () => heldPublication('claude', 'onStatus'))
+
+test('public default codex composition joins a returned onEvent promise and reports its raw rejection once', () => heldPublication('codex', 'onEvent'))
+
+test('public default codex composition joins a returned onStatus promise and reports its raw rejection once', () => heldPublication('codex', 'onStatus'))
+
+async function syncThrow(runtime: Runtime, hook: Hook): Promise<void> {
+  const boom = new Error(`sync ${hook} throw`)
+  const c = composition(runtime, hook, () => {
+    throw boom
+  })
+  let sendThrew: unknown = null
+  try {
     try {
       c.driver.send(c.hang)
-      await until(c.reached)
-      c.driver.kill()
-      wait = c.driver.settled().then(() => void (joined = true), (error) => void ((joined = true), (failure = error)))
-      await Bun.sleep(100)
-      const terminalBeforeRelease = joined
-      release()
-      await wait
-      expect({ terminalBeforeRelease, rawCauseReported: failure === boom }).toEqual({ terminalBeforeRelease: false, rawCauseReported: true })
-      // Reported once: a later join has nothing new to report.
-      await c.driver.settled()
-    } finally {
-      release()
-      c.driver.kill()
-      await (wait ?? c.driver.settled()).catch(() => {})
-      await callbackJob.catch(() => {})
-      c.cleanup()
+    } catch (error) {
+      sendThrew = error
     }
-  })
+    // The status throw reaches send()'s caller; the case does not wait for a native turn.
+    await until(hook === 'onEvent' ? c.reached : c.entered)
+    c.driver.kill()
+    const first = await c.driver.settled().then(() => null, (error: unknown) => error)
+    const second = await c.driver.settled().then(() => null, (error: unknown) => error)
+    const reports = [sendThrew, first].filter((x) => x !== null).map((x) => (x === boom ? 'raw' : x instanceof AgentRuntimeError && x.causes.length === 1 && x.causes[0] === boom ? `${x.category}:cause` : String(x)))
+    expect({ reports, second }).toEqual({ reports: [hook === 'onEvent' ? 'stop:cause' : 'raw'], second: null })
+  } finally {
+    c.driver.kill()
+    await c.driver.settled().catch(() => {})
+    c.cleanup()
+  }
 }
 
-for (const [runtime, hook] of cases) {
-  test(`public default ${runtime} composition reports a synchronous ${hook} throw exactly once`, async () => {
-    const boom = new Error(`sync ${hook} throw`)
-    const c = composition(runtime, hook, () => {
-      throw boom
-    })
-    let sendThrew: unknown = null
-    try {
-      try {
-        c.driver.send(c.hang)
-      } catch (error) {
-        sendThrew = error
-      }
-      // The status throw reaches send()'s caller; the case does not wait for a native turn.
-      await until(hook === 'onEvent' ? c.reached : c.entered)
-      c.driver.kill()
-      const first = await c.driver.settled().then(() => null, (error: unknown) => error)
-      const second = await c.driver.settled().then(() => null, (error: unknown) => error)
-      const reports = [sendThrew, first].filter((x) => x !== null).map((x) => (x === boom ? 'raw' : x instanceof AgentRuntimeError && x.causes.length === 1 && x.causes[0] === boom ? `${x.category}:cause` : String(x)))
-      expect({ reports, second }).toEqual({ reports: [hook === 'onEvent' ? 'stop:cause' : 'raw'], second: null })
-    } finally {
-      c.driver.kill()
-      await c.driver.settled().catch(() => {})
-      c.cleanup()
-    }
-  })
-}
+test('public default claude composition reports a synchronous onEvent throw exactly once', () => syncThrow('claude', 'onEvent'))
+
+test('public default claude composition reports a synchronous onStatus throw exactly once', () => syncThrow('claude', 'onStatus'))
+
+test('public default codex composition reports a synchronous onEvent throw exactly once', () => syncThrow('codex', 'onEvent'))
+
+test('public default codex composition reports a synchronous onStatus throw exactly once', () => syncThrow('codex', 'onStatus'))
