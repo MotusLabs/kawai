@@ -1624,7 +1624,17 @@ describe('server message handlers', () => {
     registryInstance.replaceSessions([
       { ...baseSession, id: 'ws-stale', projectPath: '/wstest/repo' },
     ])
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    // Discovery is asynchronous (fingerprint, pooled openspec run), so wait
+    // for the snapshot that knows the worktree rather than a fixed tick.
+    await waitForSent(
+      sent,
+      (message) =>
+        message.type === 'workspace-snapshot' &&
+        message.snapshot.repositories.some((repository) =>
+          repository.worktrees.some((worktree) => worktree.path === '/wstest/repo')
+        ),
+      'a workspace snapshot listing /wstest/repo'
+    )
 
     const revParseBefore = revParseCwds.length
     websocket.message?.(
@@ -1646,7 +1656,10 @@ describe('server message handlers', () => {
 
     // A scoped workspace refresh of the missing path was requested (its seed
     // resolution re-runs git against exactly that directory).
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    const refreshDeadline = Date.now() + 2000
+    while (!revParseCwds.slice(revParseBefore).includes('/wstest/repo/gone') && Date.now() < refreshDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
     expect(revParseCwds.slice(revParseBefore)).toContain('/wstest/repo/gone')
 
     // A missing path outside any known worktree keeps the generic message.
