@@ -14,14 +14,16 @@ on:
         description: Add one test that always fails, to exercise the failure report
         type: boolean
         default: false
+  # TRIAL ONLY (task 2.1): called by nightly-real-tmux-trial.yml; removed before merge.
+  workflow_call:
+    inputs:
+      force_failure:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
   issues: write
-
-concurrency:
-  group: nightly-real-tmux
-  cancel-in-progress: false
 
 jobs:
   real-tmux:
