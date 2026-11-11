@@ -21,8 +21,11 @@
 // - a resume onto a moved rollout reports the new path (R3 onThreadOpened)
 //   and no new session id;
 // - a rejected kill counts as quiescence only when its causes are exactly the
-//   exits already reported (the package's own stop of a crashed process).
-import { readFileSync } from 'node:fs'
+//   exits already reported (the package's own stop of a crashed process);
+// - native skills (A9/V7): Kawai's command state lists the app-server's own
+//   catalog, and a human send's turn/start carries its text then each whole
+//   `/name` skill once, as the fake's skills.json named them.
+import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, test } from 'bun:test'
 import type { ChatEvent } from '../../shared/chat'
@@ -97,6 +100,26 @@ const savedPath = (root: CodexRoot, threadId: string) => (JSON.parse(readFileSyn
 const pids = (root: CodexRoot) => readFileSync(join(root.home, 'pids'), 'utf8').split('\n').filter(Boolean)
 
 describe('Kawai Codex composition over the public package factory', () => {
+  // @covers: agent-runtime › Host-compatibility inputs and observations are optional › Native Codex skill input
+  test('native skills: the catalog reaches Kawai, and a send carries its text then each named skill once', async () => {
+    const root = codexRoot()
+    const deploy = { name: 'deploy', path: '/skills/deploy/SKILL.md', description: 'Deploy the service', scope: 'repo', enabled: true }
+    const review = { name: 'review', path: '/home/u/.codex/skills/review/SKILL.md', description: 'Review a diff', scope: 'user', enabled: true }
+    writeFileSync(join(root.home, 'skills.json'), JSON.stringify({ skills: [deploy, review] }))
+    const h = harness(root)
+    h.driver.start()
+    await until(() => h.driver.getCommandState().status === 'ready')
+    expect(h.driver.getCommandState().commands.map((c) => c.name)).toEqual(['deploy', 'review'])
+    const words = 'please /deploy now /deploy then /review /missing x/deploy'
+    h.driver.send(words)
+    await until(() => completed(h.events).length === 1)
+    expect(sent(root, 'turn/start').map((m) => m.params.input)).toEqual([[
+      { type: 'text', text: words, text_elements: [] },
+      { type: 'skill', name: 'deploy', path: '/skills/deploy/SKILL.md' },
+      { type: 'skill', name: 'review', path: '/home/u/.codex/skills/review/SKILL.md' },
+    ]])
+  })
+
   test('a send is one Kawai turn: events, thread id, spawn report and wire lines', async () => {
     const root = codexRoot()
     const h = harness(root, { effort: () => 'high' })
