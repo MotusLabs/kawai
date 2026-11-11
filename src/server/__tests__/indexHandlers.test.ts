@@ -525,9 +525,11 @@ mock.module('../db', () => ({
       dbState.appSettings.set(key, value)
       dbState.setAppSettingCalls.push({ key, value })
     },
-    close: () => {},
+    close: () => onDbClose(),
   }),
 }))
+// The shutdown-order probe (V11): what the mocked database's close records.
+let onDbClose: () => void = () => {}
 // Controllable refresh worker mock.
 // By default, refresh() resolves immediately with refreshWorkerSessions.
 // Set refreshWorkerDeferred = true before triggering a refresh to make it
@@ -856,6 +858,7 @@ afterEach(async () => {
   console.error = originalConsoleError
   processAny.on = originalProcessOn
   processAny.exit = originalProcessExit
+  onDbClose = () => {}
 })
 
 afterAll(() => {
@@ -5863,6 +5866,52 @@ describe('server signal handlers', () => {
 
     expect(attached?.disposed).toBe(true)
     expect(exitCodes).toEqual([0, 0])
+  })
+
+  // V11 (task 6.1 R6): the shutdown list joins the drivers the chat manager
+  // retired before the database closes and the process exits.
+  test('a signal holds the database close and exit until the retired-driver join settles', async () => {
+    const { ChatSessionManager } = await import('../chat/ChatSessionManager')
+    const proto = ChatSessionManager.prototype as unknown as { retiredSettled: () => Promise<unknown[]>; shutdown: () => void }
+    const originalRetired = proto.retiredSettled
+    const originalShutdown = proto.shutdown
+    const order: string[] = []
+    let release!: (failures: unknown[]) => void
+    const held = new Promise<unknown[]>((resolve) => (release = resolve))
+    try {
+      proto.shutdown = function (this: unknown) {
+        order.push('shutdown')
+        return originalShutdown.call(this)
+      }
+      proto.retiredSettled = () => {
+        order.push('join')
+        return held
+      }
+      onDbClose = () => void order.push('db-close')
+      const handlers = new Map<string, () => void>()
+      processAny.on = ((event: string, handler: () => void) => {
+        handlers.set(event, handler)
+        return processAny
+      }) as typeof processAny.on
+      processAny.exit = ((code?: number) => {
+        order.push(`exit:${code ?? 0}`)
+        return undefined as never
+      }) as typeof processAny.exit
+
+      await loadIndex()
+      handlers.get('SIGTERM')?.()
+      await new Promise((r) => setTimeout(r, 20))
+      expect(order).toEqual(['shutdown', 'join'])
+
+      // A join that listed a raw failure (already logged once by the manager) still exits as before.
+      release([{ sessionId: 'chat-x', error: new Error('teardown failed') }])
+      await new Promise((r) => setTimeout(r, 0))
+      expect(order).toEqual(['shutdown', 'join', 'db-close', 'exit:0'])
+    } finally {
+      release([])
+      proto.retiredSettled = originalRetired
+      proto.shutdown = originalShutdown
+    }
   })
 })
 

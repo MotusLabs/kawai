@@ -537,6 +537,10 @@ export function startServer(): void {
     remote.stop()
     clearInterval(accountNoticeTimer)
     chatSessionManager.shutdown()
+    // The drivers shutdown retired still finish their teardown (task 6.1,
+    // A5): join them before the database closes and the process exits. Each
+    // raw failure was already logged once, with its session, by that join.
+    await chatSessionManager.retiredSettled()
     db.close()
   }
 
