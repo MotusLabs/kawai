@@ -9,16 +9,28 @@
 //   supplied home's login, which can be another account than a proxy
 //   session's, so the report is labelled `host-login-pull` / `host-login`.
 //   An absent method or a reply without plan windows reports nothing.
+// - A caller's usage claim (R2, claimUsagePull) replaces the once-per-driver
+//   rule: it is asked once per generation after initialize, as an owned job,
+//   only while that generation is current and not stopping. After its await the generation must still be current and not stopping.
+//   Only true under quotaSource host-login permits that generation's pull;
+//   under none the claim runs (the caller's own work) but no SDK pull
+//   follows. A rejecting claim is retained raw for the stop.
+// - onQuotaNoData (R2) fires once for a permitted pull that was attempted and
+//   found no method, no plan windows or a rejection. The rejection itself
+//   stays retained; a stop's own cancellation is not no-data.
 import type { Query } from '@anthropic-ai/claude-agent-sdk'
 import type { DriverLifecycle } from '../lifecycle/lifecycle.js'
 import type { ContextReportSlice } from '../usage/context.js'
 import { parseUsagePull } from '../usage/quota.js'
+import type { QuotaNoData } from '../options.js'
 import type { QuotaReport } from '../usage/types.js'
 import { cancelledByStop, type Generation } from './generations.js'
 
 export interface UsageControlsHost {
   lifecycle: DriverLifecycle
   quotaSource: 'none' | 'host-login'
+  claimUsagePull?: () => boolean | Promise<boolean>
+  noData(info: QuotaNoData): void
   stopToken(): object | null
   current(): Generation | null
   facts: { contextReport(report: ContextReportSlice): void; quotaReport(report: QuotaReport): void }
@@ -34,18 +46,51 @@ export class UsageControls {
 
   constructor(private readonly host: UsageControlsHost) {}
 
-  /** A generation answered initialize: probe its context; pull the host-login quota once if chosen. */
+  /** A generation answered initialize: probe its context; claim or pull the host-login quota. */
   initialized(generation: Generation): void {
     this.probe(generation)
+    const claim = this.host.claimUsagePull
+    if (claim) {
+      this.run(generation, 'usage-claim', async () => {
+        if (!this.eligible(generation)) return
+        const permitted = (await claim()) === true
+        if (!permitted || this.host.quotaSource !== 'host-login' || !this.eligible(generation)) return
+        await this.pull(generation)
+      })
+      return
+    }
     if (this.host.quotaSource !== 'host-login' || this.pulled) return
     const query = generation.query as ControlQuery
-    const pull = query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET
-    if (typeof pull !== 'function') return
+    if (typeof query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET !== 'function') return
     this.pulled = true
-    this.run(generation, 'quota-pull', async () => {
-      const quota = parseUsagePull(await pull.call(query, { skipBehaviors: true }))
-      if (quota && quota.windows.length > 0) this.host.facts.quotaReport(quota)
-    })
+    this.run(generation, 'quota-pull', () => this.pull(generation))
+  }
+
+  /** The permitted pull: a report with windows, else one no-data observation. */
+  private async pull(generation: Generation): Promise<void> {
+    const query = generation.query as ControlQuery
+    const pull = query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET
+    if (typeof pull !== 'function') return this.noData()
+    let reply: unknown
+    try {
+      reply = await pull.call(query, { skipBehaviors: true })
+    } catch (error) {
+      // A stop's own cancellation is not no-data: eligibility already excludes a stopping driver.
+      if (this.eligible(generation)) this.noData()
+      throw error
+    }
+    const quota = parseUsagePull(reply)
+    if (quota && quota.windows.length > 0) this.host.facts.quotaReport(quota)
+    else if (this.eligible(generation)) this.noData()
+  }
+
+  private noData(): void {
+    this.host.noData({ source: 'host-login-pull', accountScope: 'host-login' })
+  }
+
+  private eligible(generation: Generation): boolean {
+    const state = this.host.lifecycle.state
+    return generation === this.host.current() && !generation.retired && state !== 'stopping' && state !== 'stopped'
   }
 
   /** Ask the CLI for its context report (after initialize and after each result). */

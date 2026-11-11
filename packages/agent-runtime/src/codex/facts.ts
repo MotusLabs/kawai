@@ -142,9 +142,9 @@ export class CodexFacts {
   }
 
   /** The account/rateLimits/read reply: a `report`; it fills the reset source only when no push came first. */
-  quotaRead(result: unknown): void {
+  quotaRead(result: unknown): boolean {
     const snapshot = codexReadSnapshot(result)
-    if (snapshot) this.quota(snapshot, 'report')
+    return snapshot ? this.quota(snapshot, 'report') : false
   }
 
   /** The completed turn's last agent message, when it carries one. */
@@ -207,6 +207,12 @@ export class CodexFacts {
     this.host.emit({ type: 'notice', text: 'The conversation was compacted', kind: 'compacted' })
     const onCompaction = this.host.callbacks.onCompaction
     if (onCompaction) this.host.notify('onCompaction', () => onCompaction({ boundaryId: itemId, turnId: turn?.turnId ?? null, preTokens: null }))
+    // R2: the app-server reports only the completed boundary, with no sizes or start.
+    const observe = this.host.callbacks.onCompactionObservation
+    if (observe) {
+      const observation = { trigger: 'auto' as const, startedAt: null, endedAt: new Date().toISOString(), preTokens: null, postTokens: null, durationSeconds: null, outcome: 'completed' as const, sourceId: `boundary:${itemId}`, turnId: turn?.turnId ?? null }
+      this.host.notify('onCompactionObservation', () => observe(observation))
+    }
   }
 
   /** Measures the update into the generation and the turn; returns whether it is new work (some counter grew). */
@@ -224,15 +230,17 @@ export class CodexFacts {
     if (!onContextUsage || window === null || window <= 0 || input === null || output === null) return
     const used = input + output
     const usage = { usedTokens: used, thresholdTokens: window, percentage: Math.round((used / window) * 1000) / 10, at: new Date().toISOString(), thresholdApproximate: true }
-    this.host.notify('onContextUsage', () => onContextUsage(usage))
+    this.host.notify('onContextUsage', () => onContextUsage(usage, { thresholdSource: 'model-window-fallback' }))
   }
 
-  private quota(snapshot: Record<string, unknown>, source: 'push' | 'report'): void {
+  /** Whether a report with windows (or any push) was published. */
+  private quota(snapshot: Record<string, unknown>, source: 'push' | 'report'): boolean {
     if (source === 'push' || this.snapshot === null) this.snapshot = snapshot
     const report = codexQuotaReport(snapshot, source)
-    if (source === 'report' && report.windows.length === 0) return
+    if (source === 'report' && report.windows.length === 0) return false
     const onQuotaReport = this.host.callbacks.onQuotaReport
     if (onQuotaReport) this.host.notify('onQuotaReport', () => onQuotaReport(report))
+    return true
   }
 
   /** A retrying limit error: a non-final failure, and the turn's wait starts. */

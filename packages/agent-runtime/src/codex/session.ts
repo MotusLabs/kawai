@@ -128,6 +128,28 @@ export class CodexSession {
     return this.lifecycle.state
   }
 
+  /** onSpawn (R2): one actual app-server construction's launch provenance. */
+  private reportSpawn(generation: CodexGeneration, launch: { cwd: string; childEnv: Readonly<Record<string, string>> }): void {
+    const onSpawn = this.options.callbacks.onSpawn
+    if (!onSpawn) return
+    const info = {
+      generation: generation.number,
+      cwd: launch.cwd,
+      childEnv: { ...launch.childEnv },
+      systemPromptAppend: this.options.systemPromptAppend ?? '',
+      effort: this.options.effort ?? null,
+      model: this.options.model ?? null,
+      resumed: generation.resumeTarget !== null,
+    }
+    this.notify('onSpawn', () => onSpawn(info))
+  }
+
+  /** onQuotaNoData (R2): a permitted account/rateLimits/read answered nothing usable. */
+  private quotaNoData(): void {
+    const onQuotaNoData = this.options.callbacks.onQuotaNoData
+    if (onQuotaNoData) this.notify('onQuotaNoData', () => onQuotaNoData({ source: 'report', accountScope: 'session' }))
+  }
+
   private stopBegun(): boolean {
     return this.lifecycle.state === 'stopping' || this.lifecycle.state === 'stopped'
   }
@@ -178,6 +200,7 @@ export class CodexSession {
     this.generations.push(generation)
     // The process and its reader live outside this initialization job: host callbacks they run are not inside it.
     this.lifecycle.jobs.outside(() => transport.start())
+    this.reportSpawn(generation, launch)
     let step: 'initialize' | 'thread/start' | 'thread/resume' = 'initialize'
     let opened: ReturnType<typeof threadOpened>
     try {
@@ -204,7 +227,7 @@ export class CodexSession {
     if (refused) throw refused
     if (this.stopBegun()) throw this.lifecycle.cancelled('the driver was stopped while its checkpoint persisted')
     const quota = { claim: this.options.claimRateLimitsRead, firstRead: () => !this.quotaRequested && (this.quotaRequested = true), stopBegun: () => this.stopBegun() }
-    claimQuotaRead(generation, { ...quota, notify: (name, callback) => this.notify(name, callback), runOwned: (label, body) => this.runOwned(label, body), current: () => this.current(), facts: this.facts })
+    claimQuotaRead(generation, { ...quota, notify: (name, callback) => this.notify(name, callback), runOwned: (label, body) => this.runOwned(label, body), current: () => this.current(), facts: this.facts, noData: () => this.quotaNoData() })
     if (this.stopBegun()) throw this.lifecycle.cancelled('the driver was stopped while its quota read was claimed')
   }
 

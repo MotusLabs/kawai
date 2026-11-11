@@ -15,7 +15,11 @@
 //   only the tool name, call id and turn. They never see or forward
 //   arguments (P14), and always answer with no decision, so they cannot
 //   grant or block a tool (P15).
-// - auditHooks: the detailed opt-in adapter. preToolUse receives the input.
+// - auditHooks: the detailed opt-in adapter. preToolUse receives the input;
+//   onHook (R2) receives each PreToolUse, PostToolUse, PostToolUseFailure and
+//   PermissionDenied hook input whole, JSON-safe, for every tool.
+// - onCwdChanged (R2): the CwdChanged hook of the main session; a subagent's
+//   (agent_id present) is filtered out.
 //
 // Observers run through `observe`, which retains a throw as a diagnostic and
 // never lets it change the hook's answer.
@@ -38,6 +42,7 @@ export interface ClaudeIntegrationInput {
   systemPromptAppend?: string
   onToolObservation?(observation: ToolObservation): void
   auditHooks?: ClaudeAuditHooks
+  onCwdChanged?(cwd: string): void
   /** The active turn at the moment a hook or call arrives. */
   turnId(): string | null
   /** The CLI session id from system/init, once known. */
@@ -54,9 +59,41 @@ export interface ClaudeIntegrationOptions {
   hooks: Hooks
 }
 
+/** A JSON-safe copy of a hook input (functions and undefined dropped). */
+function jsonCopy(value: unknown): JsonValue {
+  try {
+    return JSON.parse(JSON.stringify(value) ?? 'null') as JsonValue
+  } catch {
+    return null
+  }
+}
+
+function cwdHooks(input: ClaudeIntegrationInput): Hooks {
+  const onCwdChanged = input.onCwdChanged
+  if (!onCwdChanged) return {}
+  const matcher: HookCallbackMatcher = {
+    hooks: [
+      async (hook: HookInput) => {
+        if (hook.hook_event_name === 'CwdChanged' && !hook.agent_id) {
+          const cwd = hook.new_cwd
+          input.observe('onCwdChanged', () => onCwdChanged(cwd))
+        }
+        return {}
+      },
+    ],
+  }
+  return { CwdChanged: [matcher] }
+}
+
 function observationHooks(input: ClaudeIntegrationInput): Hooks {
   const { onToolObservation, auditHooks } = input
-  if (!onToolObservation && !auditHooks?.preToolUse && !auditHooks?.postToolUse) return {}
+  const onHook = auditHooks?.onHook
+  if (!onToolObservation && !auditHooks?.preToolUse && !auditHooks?.postToolUse && !onHook) return {}
+  const detail = (hook: HookInput) => {
+    if (!onHook) return
+    const event = { kind: hook.hook_event_name as 'PreToolUse' | 'PostToolUse' | 'PostToolUseFailure' | 'PermissionDenied', input: jsonCopy(hook) }
+    input.observe('auditHooks.onHook', () => onHook(event))
+  }
   const report = (phase: ToolObservation['phase'], tool: string, toolCallId: string, isError?: boolean) => {
     if (!onToolObservation) return
     // Built here from names only: nothing from the hook input's arguments is copied.
@@ -68,6 +105,7 @@ function observationHooks(input: ClaudeIntegrationInput): Hooks {
       async (hook: HookInput) => {
         if (hook.hook_event_name !== 'PreToolUse') return {}
         report('call', hook.tool_name, hook.tool_use_id)
+        detail(hook)
         if (auditHooks?.preToolUse) {
           const preToolUse = auditHooks.preToolUse
           input.observe('auditHooks.preToolUse', () => preToolUse({ tool: hook.tool_name, toolCallId: hook.tool_use_id, input: hook.tool_input as JsonValue }))
@@ -81,6 +119,7 @@ function observationHooks(input: ClaudeIntegrationInput): Hooks {
       async (hook: HookInput) => {
         if (hook.hook_event_name !== 'PostToolUse' && hook.hook_event_name !== 'PostToolUseFailure') return {}
         report('result', hook.tool_name, hook.tool_use_id, isError)
+        detail(hook)
         if (auditHooks?.postToolUse) {
           const postToolUse = auditHooks.postToolUse
           input.observe('auditHooks.postToolUse', () => postToolUse({ tool: hook.tool_name, toolCallId: hook.tool_use_id, isError }))
@@ -89,7 +128,15 @@ function observationHooks(input: ClaudeIntegrationInput): Hooks {
       },
     ],
   })
-  return { PreToolUse: [pre], PostToolUse: [post(false)], PostToolUseFailure: [post(true)] }
+  const denied: HookCallbackMatcher = {
+    hooks: [
+      async (hook: HookInput) => {
+        if (hook.hook_event_name === 'PermissionDenied') detail(hook)
+        return {}
+      },
+    ],
+  }
+  return { PreToolUse: [pre], PostToolUse: [post(false)], PostToolUseFailure: [post(true)], ...(onHook ? { PermissionDenied: [denied] } : {}) }
 }
 
 function toolServer(sdk: SdkModule, input: ClaudeIntegrationInput, tools: BoundToolSet): NonNullable<Options['mcpServers']> {
@@ -125,7 +172,7 @@ export function claudeIntegrationOptions(sdk: SdkModule, input: ClaudeIntegratio
   return {
     ...(input.tools ? { mcpServers: toolServer(sdk, input, input.tools) } : {}),
     ...(input.systemPromptAppend ? { systemPrompt: { type: 'preset' as const, preset: 'claude_code' as const, append: input.systemPromptAppend } } : {}),
-    hooks: observationHooks(input),
+    hooks: mergeHooks(observationHooks(input), cwdHooks(input)),
   }
 }
 

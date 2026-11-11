@@ -4,12 +4,14 @@
 // unenforceable permission set, an invalid tool set, a foreign resume
 // checkpoint or a missing logger refuses construction with category
 // `configuration`. The returned value exposes only the public contract and
-// no SDK type.
+// no SDK type. createClaudeDriverWith (not exported by any entry) is the
+// repository tests' private seam: the same validation and session core with a
+// controlled query in place of the SDK's.
 import type { Options } from '@anthropic-ai/claude-agent-sdk'
 import type { ClaudeAgentDriver } from '../contract.js'
 import { AgentRuntimeError } from '../errors.js'
 import type { ClaudeDriverOptions } from '../options.js'
-import { ClaudeSession } from './session.js'
+import { ClaudeSession, type ClaudeSessionOptions } from './session.js'
 
 function configurationError(message: string): AgentRuntimeError {
   return new AgentRuntimeError({ category: 'configuration', message })
@@ -18,6 +20,10 @@ function configurationError(message: string): AgentRuntimeError {
 const LOGGER_METHODS = ['debug', 'info', 'warn', 'error'] as const
 
 export function createClaudeDriver(options: ClaudeDriverOptions): ClaudeAgentDriver {
+  return createClaudeDriverWith(options, {})
+}
+
+export function createClaudeDriverWith(options: ClaudeDriverOptions, internal: Pick<ClaudeSessionOptions, 'queryFactory'>): ClaudeAgentDriver {
   if (!options || typeof options !== 'object') throw configurationError('driver options are required')
   const logger = options.logger as unknown as Record<string, unknown> | undefined
   if (!logger || LOGGER_METHODS.some((method) => typeof logger[method] !== 'function')) throw configurationError('logger must have debug, info, warn and error methods')
@@ -30,6 +36,7 @@ export function createClaudeDriver(options: ClaudeDriverOptions): ClaudeAgentDri
     throw configurationError('unansweredRequests must be deny or wait')
   }
   if (options.quotaSource !== undefined && options.quotaSource !== 'none' && options.quotaSource !== 'host-login') throw configurationError('quotaSource must be none or host-login')
+  if (options.claimUsagePull !== undefined && typeof options.claimUsagePull !== 'function') throw configurationError('claimUsagePull must be a function')
   const sdkOptions: Partial<Options> = {
     settingSources: [...(options.settingSources ?? [])],
     ...(options.settings ? { settings: { ...options.settings } as Options['settings'] } : {}),
@@ -51,5 +58,9 @@ export function createClaudeDriver(options: ClaudeDriverOptions): ClaudeAgentDri
     ...(options.resume ? { resume: options.resume } : {}),
     ...(options.unansweredRequests ? { unansweredRequests: options.unansweredRequests } : {}),
     ...(options.quotaSource ? { quotaSource: options.quotaSource } : {}),
+    ...(options.claimUsagePull ? { claimUsagePull: options.claimUsagePull } : {}),
+    ...(options.model ? { model: options.model } : {}),
+    ...(options.effort !== undefined ? { effort: options.effort } : {}),
+    ...(internal.queryFactory ? { queryFactory: internal.queryFactory } : {}),
   })
 }

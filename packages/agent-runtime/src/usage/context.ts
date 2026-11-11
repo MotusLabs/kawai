@@ -16,8 +16,11 @@ import type { ContextUsage } from './types.js'
 /** Threshold sources, strongest first (D2). */
 export type ContextThresholdSource = 'report' | 'profile' | 'window'
 
-/** What the caller does with a tracker answer. */
-export type ContextStep = { kind: 'none' } | { kind: 'reading'; usage: ContextUsage } | { kind: 'clear' }
+/** What the caller does with a tracker answer; `persist` asks for a write now (R2 meta). */
+export type ContextStep = { kind: 'none' } | { kind: 'reading'; usage: ContextUsage; persist: boolean } | { kind: 'clear' }
+
+/** How a reading's threshold was derived, as reported in ContextUsageMeta (R2). */
+export type ContextThresholdLabel = 'report-threshold' | 'report-window-fallback' | 'report-window-reserve' | 'profile-window-fallback' | 'profile-window-reserve' | 'model-window-fallback'
 
 /** Structural slice of a Claude context-usage control reply; other fields are ignored. */
 export interface ContextReportSlice {
@@ -103,13 +106,13 @@ export class ContextTracker {
       }
     }
     this.state = { ...this.state, reportThreshold, reportThresholdExact, reportReserve }
-    return this.publish()
+    return this.publish(true)
   }
 
   /** The profile window at a spawn (D2 step 2); process-scoped report readings die with their process. */
   setProfileWindow(window: number | null): ContextStep {
     this.state = { ...this.state, profileWindow: window, reportThreshold: null, reportThresholdExact: true, reportReserve: null }
-    return this.publish()
+    return this.publish(true)
   }
 
   /** A conversation reset empties the window: nothing is measured any more. */
@@ -133,6 +136,13 @@ export class ContextTracker {
     }
   }
 
+  /** The derivation label of a reading this tracker just published (R2 meta). */
+  thresholdLabel(usage: ContextUsage): ContextThresholdLabel {
+    if (this.state.reportThreshold !== null) return this.state.reportThresholdExact ? 'report-threshold' : usage.thresholdApproximate ? 'report-window-fallback' : 'report-window-reserve'
+    if (this.state.profileWindow !== null) return usage.thresholdApproximate ? 'profile-window-fallback' : 'profile-window-reserve'
+    return 'model-window-fallback'
+  }
+
   /** The report threshold, else the profile window less a reserve, else the profile window, else the model window. */
   private threshold(): { tokens: number; source: ContextThresholdSource } | null {
     if (this.state.reportThreshold !== null) return { tokens: this.state.reportThreshold, source: 'report' }
@@ -152,13 +162,13 @@ export class ContextTracker {
     return true
   }
 
-  private publish(): ContextStep {
+  private publish(persist = false): ContextStep {
     const usage = this.current()
     if (!usage) return NONE
     const last = this.state.lastPublished
     if (last && last.usedTokens === usage.usedTokens && last.thresholdTokens === usage.thresholdTokens && last.at === usage.at && last.thresholdApproximate === usage.thresholdApproximate) return NONE
     this.state = { ...this.state, lastPublished: usage }
-    return { kind: 'reading', usage }
+    return { kind: 'reading', usage, persist }
   }
 }
 

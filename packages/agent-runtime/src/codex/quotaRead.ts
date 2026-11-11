@@ -6,6 +6,11 @@
 // An app-server that refuses or lacks the method, or a process or stop that
 // closes the request first, gives no report and no failure: the read is
 // optional, and an exit already reports itself. Any other throw stays owned.
+// onQuotaNoData (R2) reports a read that was sent while its generation was
+// current and answered nothing usable: an RPC refusal (a missing method), a
+// reply with no windows, or an unexpected throw (then retained too). A
+// process exit or stop that closed the request is cancellation, not no-data,
+// and a reply after its generation was superseded reports nothing.
 // A host that shares one read between sessions of a login does so itself,
 // through the claim; the package keeps no store of claims or accounts.
 import { AgentRuntimeError } from '../errors.js'
@@ -18,6 +23,8 @@ export interface QuotaReadHost {
   runOwned(label: string, body: () => Promise<void>): Promise<void> | null
   current(): CodexGeneration | null
   facts: Pick<CodexFacts, 'quotaRead'>
+  /** onQuotaNoData's report for this session's login. */
+  noData(): void
 }
 
 export interface QuotaClaimHost extends QuotaReadHost {
@@ -54,14 +61,17 @@ const eligible = (generation: CodexGeneration, host: QuotaClaimHost): boolean =>
 
 export function readQuota(generation: CodexGeneration, host: QuotaReadHost): void {
   void host.runOwned(`quota-read:${generation.number}`, async () => {
+    const live = () => !generation.retired && generation === host.current()
     let reply: unknown
     try {
       reply = await generation.transport.request('account/rateLimits/read', {} as JsonObject)
     } catch (error) {
-      if (error instanceof AppServerRpcError || error instanceof AgentRuntimeError) return
+      if (error instanceof AgentRuntimeError) return
+      if (live()) host.noData()
+      if (error instanceof AppServerRpcError) return
       throw error
     }
-    if (generation.retired || generation !== host.current()) return
-    host.facts.quotaRead(reply)
+    if (!live()) return
+    if (!host.facts.quotaRead(reply)) host.noData()
   })
 }

@@ -211,7 +211,7 @@ export class ClaudeUsageFacts {
   /** A compaction boundary on the active turn (or none); reported once per id, true the first time. */
   compacted(boundaryId: string, preTokens: number | null, postTokens: unknown, turn: Turn | null): boolean {
     turn?.compactionIds.add(boundaryId)
-    this.step(this.context.compact(typeof postTokens === 'number' ? postTokens : null, new Date().toISOString()))
+    this.step(this.context.compact(typeof postTokens === 'number' ? postTokens : null, new Date().toISOString()), true)
     if (this.boundaries.has(boundaryId)) return false
     this.boundaries.add(boundaryId)
     const onCompaction = this.host.callbacks.onCompaction
@@ -351,10 +351,16 @@ export class ClaudeUsageFacts {
     if (event) this.later(() => this.limitEvents.publish(event))
   }
 
-  private step(step: ContextStep): void {
+  /** A tracker step to onContextUsage with its meta (R2): a clear always persists; a boundary reading does too. */
+  private step(step: ContextStep, boundary = false): void {
     if (step.kind === 'none') return
     const onContextUsage = this.host.callbacks.onContextUsage
-    const usage = step.kind === 'clear' ? null : step.usage
-    if (onContextUsage) this.later(() => this.host.notify('onContextUsage', () => onContextUsage(usage)))
+    if (!onContextUsage) return
+    if (step.kind === 'clear') {
+      this.later(() => this.host.notify('onContextUsage', () => onContextUsage(null, { persist: true })))
+      return
+    }
+    const meta = { persist: step.persist || boundary, thresholdSource: this.context.thresholdLabel(step.usage) }
+    this.later(() => this.host.notify('onContextUsage', () => onContextUsage(step.usage, meta)))
   }
 }

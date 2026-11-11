@@ -10,13 +10,15 @@
 // call and its result excepted, which anchor the worker row). Echoes of the
 // session's own prompts are suppressed by message UUID, then by text. Task
 // notifications that arrive between turns become the next agent-started
-// turn's trigger.
+// turn's trigger. Compaction start (`status: compacting`) and boundary frames
+// also feed onCompactionObservation (R2); a notification's timeout_ms rides
+// as onNotification's second argument.
 import type { SDKAssistantMessage, SDKMessage, SDKPartialAssistantMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { AgentNotification } from '../activity.js'
 import type { EventBody } from '../eventStream.js'
 import type { TurnTrigger, TurnTriggerTask } from '../events.js'
 import type { JsonValue } from '../json.js'
-import type { AgentCallbacks } from '../options.js'
+import type { AgentCallbacks, CompactionObservation } from '../options.js'
 import { activityBody, contentBlockToInput, initialChatActivityState, projectActivity, reduceActivity, systemFrameToInput, type ChatActivityInput } from '../common/activity.js'
 import { backgroundInputFromWorkersInput, initialChatBackgroundTasksState, projectBackgroundTasks, reduceBackgroundTasks, type ChatBackgroundTasksInput } from '../common/backgroundTasks.js'
 import { anyWorkerLive, initialChatWorkersState, projectWorkers, reduceWorkers, taskFrameToInput, type ChatWorkersInput } from '../common/workers.js'
@@ -60,6 +62,8 @@ export class ClaudeFrames {
   private activity = initialChatActivityState()
   private workers = initialChatWorkersState()
   private background = initialChatBackgroundTasksState()
+  /** When the current compaction's `status: compacting` frame arrived (R2 observation). */
+  private compactionStartedAt: number | null = null
   readonly commands: ChatCommandTracker
   private readonly agentToolCallIds = new Set<string>()
   private streamingMessageId: string | null = null
@@ -185,6 +189,7 @@ export class ClaudeFrames {
 
   /** System frames other than init: commands, output, notices, compaction, tasks, activity. */
   system(message: SystemMessage): void {
+    if (message.subtype === 'status' && (message as { status?: unknown }).status === 'compacting') this.compactionStarted(message.uuid)
     switch (message.subtype) {
       case 'commands_changed':
         this.commands.applyCommands(message.commands as RawChatCommand[])
@@ -198,6 +203,7 @@ export class ClaudeFrames {
         this.notification(message)
         return
       case 'compact_boundary': {
+        this.compactionCompleted(message)
         const pre = message.compact_metadata?.pre_tokens
         // A repeated boundary id is announced once (R03).
         if (this.host.compacted(message.uuid, typeof pre === 'number' && Number.isFinite(pre) && pre > 0 ? pre : null, message.compact_metadata?.post_tokens)) {
@@ -226,11 +232,45 @@ export class ClaudeFrames {
     if (input) this.feedActivity(input)
   }
 
+  /** onCompactionObservation (R2): the first `compacting` status of a compaction. */
+  private compactionStarted(uuid: unknown): void {
+    if (this.compactionStartedAt !== null) return
+    this.compactionStartedAt = Date.now()
+    const observe = this.host.callbacks.onCompactionObservation
+    if (!observe) return
+    const observation: CompactionObservation = {
+      trigger: 'unknown', startedAt: new Date(this.compactionStartedAt).toISOString(), endedAt: null,
+      preTokens: null, postTokens: null, durationSeconds: null, outcome: 'started',
+      sourceId: typeof uuid === 'string' && uuid ? `start:${uuid}` : null, turnId: this.host.activeTurnId(),
+    }
+    this.host.notify('onCompactionObservation', () => observe(observation))
+  }
+
+  /** onCompactionObservation (R2): every boundary frame, with the measured sizes and duration. */
+  private compactionCompleted(message: Extract<SystemMessage, { subtype: 'compact_boundary' }>): void {
+    const startedAt = this.compactionStartedAt
+    this.compactionStartedAt = null
+    const observe = this.host.callbacks.onCompactionObservation
+    if (!observe) return
+    const metadata = message.compact_metadata as { trigger?: unknown; pre_tokens?: unknown; post_tokens?: unknown } | undefined
+    const measured = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null)
+    const now = Date.now()
+    const observation: CompactionObservation = {
+      trigger: metadata?.trigger === 'auto' ? 'auto' : metadata?.trigger === 'manual' ? 'manual' : 'unknown',
+      startedAt: startedAt === null ? null : new Date(startedAt).toISOString(), endedAt: new Date(now).toISOString(),
+      preTokens: measured(metadata?.pre_tokens), postTokens: measured(metadata?.post_tokens),
+      durationSeconds: startedAt === null ? null : Math.max(0, (now - startedAt) / 1000), outcome: 'completed',
+      sourceId: typeof message.uuid === 'string' && message.uuid ? `boundary:${message.uuid}` : null, turnId: this.host.activeTurnId(),
+    }
+    this.host.notify('onCompactionObservation', () => observe(observation))
+  }
+
   private notification(message: Extract<SystemMessage, { subtype: 'notification' }>): void {
     const onNotification = this.host.callbacks.onNotification
     if (!onNotification || typeof message.key !== 'string' || !message.key || typeof message.text !== 'string' || !message.text) return
     const notice: AgentNotification = { key: message.key, severity: severity(message.color), priority: priority(message.priority), text: message.text, receivedAt: new Date().toISOString() }
-    this.host.notify('onNotification', () => onNotification(notice))
+    const timeout = (message as { timeout_ms?: unknown }).timeout_ms
+    this.host.notify('onNotification', () => (typeof timeout === 'number' ? onNotification(notice, timeout) : onNotification(notice)))
   }
 
   /** A user frame that is not this session's own prompt (e.g. CLI-injected text). */

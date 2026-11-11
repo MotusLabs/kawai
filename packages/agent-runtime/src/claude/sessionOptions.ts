@@ -2,7 +2,7 @@
 // session.ts for size, unchanged). session.ts re-exports both names.
 import type { Options, Query, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { ResumeCheckpoint } from '../contract.js'
-import type { AgentCallbacks, BeforeSubmit, ClaudeAuditHooks, ClaudePermissions, LaunchInput, Logger, ToolObservation, ToolSet, WireRecorder } from '../options.js'
+import type { AgentCallbacks, BeforeSubmit, ClaudeAuditHooks, ClaudePermissions, Effort, LaunchInput, Logger, ToolObservation, ToolSet, WireRecorder } from '../options.js'
 import type { TerminateOptions } from '../process/ownedProcess.js'
 
 /** Test seam: a controlled query in place of the SDK's (design §5, runtime test seams). */
@@ -34,5 +34,10 @@ export interface ClaudeSessionOptions {
   unansweredRequests?: 'deny' | 'wait'
   /** The host-login quota pull runs only when chosen (design §6). */
   quotaSource?: 'none' | 'host-login'
+  /** The caller's per-generation usage-pull claim (R2). */
+  claimUsagePull?: () => boolean | Promise<boolean>
+  /** Launch provenance only (onSpawn); the SDK receives these through sdkOptions. */
+  model?: string
+  effort?: Effort
   queryFactory?: ClaudeQueryFactory
 }

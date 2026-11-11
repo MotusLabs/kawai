@@ -2,6 +2,7 @@
 // driver, the queries it created, and everything its callbacks reported.
 import type { Options } from '@anthropic-ai/claude-agent-sdk'
 import { ClaudeSession } from '../../src/claude/session.js'
+import type { ClaudeSessionOptions } from '../../src/claude/sessionOptions.js'
 import type { DriverState, ProcessEndReport, ResumeCheckpoint, TurnHandle, TurnResult } from '../../src/contract.js'
 import type { AgentEvent, PendingRequest } from '../../src/events.js'
 import type { AgentCallbacks, BeforeSubmit } from '../../src/options.js'
@@ -36,7 +37,11 @@ export interface DriverHooks {
   onRequest?(request: PendingRequest): void
   unansweredRequests?: 'deny' | 'wait'
   /** Usage observers passed through as given (tasks 5.2-5.4). */
-  observers?: Pick<AgentCallbacks, 'onLimitEvent' | 'onQuotaReport' | 'onContextUsage' | 'onCompaction' | 'onModel'>
+  observers?: Pick<AgentCallbacks, 'onLimitEvent' | 'onQuotaReport' | 'onContextUsage' | 'onCompaction' | 'onModel' | 'onSpawn' | 'onCwdChanged' | 'onCompactionObservation' | 'onNotification' | 'onQuotaNoData'>
+  /** Further session options (R2 host-compatibility inputs), passed as given. */
+  session?: Partial<Pick<ClaudeSessionOptions, 'auditHooks' | 'systemPromptAppend' | 'model' | 'effort' | 'claimUsagePull' | 'quotaSource'>>
+  /** Extra launch environment for the fake home. */
+  env?: Record<string, string>
   /** The conversation to resume; null launches fresh. Default: the caller's saved 'sess-saved'. */
   resume?: ResumeCheckpoint | null
 }
@@ -49,7 +54,7 @@ export function driver(hooks: DriverHooks = {}): Driver {
   const states: DriverState[] = []
   const warnings: [string, unknown][] = []
   const d = new ClaudeSession({
-    launch: fakeClaudeHome().launch(),
+    launch: fakeClaudeHome().launch(hooks.env),
     callbacks: {
       ...hooks.observers,
       onEvent: (e) => {
@@ -76,6 +81,7 @@ export function driver(hooks: DriverHooks = {}): Driver {
     ...(hooks.beforeSubmit ? { beforeSubmit: hooks.beforeSubmit } : {}),
     ...(hooks.unansweredRequests ? { unansweredRequests: hooks.unansweredRequests } : {}),
     ...(hooks.resume === null ? {} : { resume: hooks.resume ?? { runtime: 'claude', runtimeSessionId: 'sess-saved' } }),
+    ...hooks.session,
     queryFactory: factory,
   })
   return { d, queries, q: latest, events, results, ends, states, types: () => events.map((e) => e.type), starting: null, handle: null, stop: null, warnings }

@@ -99,7 +99,15 @@ export class ClaudeSession {
     this.usage = new ClaudeUsageFacts({ callbacks, notify: (name, callback) => this.notify(name, callback) })
     this.open = new OpenTurns({ emit: (body) => this.emit(body), notify: (name, callback) => this.notify(name, callback), onTurnResult: callbacks.onTurnResult, settling: (turn, cause) => this.usage.turnSettling(turn, cause), settled: (turn) => this.usage.turnSettled(turn) })
     this.lifecycle = new DriverLifecycle({ continuations: new Set(['queue']), ...(callbacks.onState ? { onState: callbacks.onState } : {}) })
-    this.controls = new UsageControls({ lifecycle: this.lifecycle, quotaSource: options.quotaSource ?? 'none', stopToken: () => this.stopToken, current: () => this.current(), facts: this.usage })
+    this.controls = new UsageControls({
+      lifecycle: this.lifecycle,
+      quotaSource: options.quotaSource ?? 'none',
+      ...(options.claimUsagePull ? { claimUsagePull: options.claimUsagePull } : {}),
+      noData: (info) => { const onQuotaNoData = callbacks.onQuotaNoData; if (onQuotaNoData) this.notify('onQuotaNoData', () => onQuotaNoData(info)) },
+      stopToken: () => this.stopToken,
+      current: () => this.current(),
+      facts: this.usage,
+    })
     const persist = callbacks.onCheckpoint && ((checkpoint: ResumeCheckpoint) => callbacks.onCheckpoint!(checkpoint))
     const failed = () => { this.events.emit({ type: 'error', error: CHECKPOINT_FAILED }); void this.shutdown().catch(() => {}) }
     this.checkpoints = new CheckpointGate({ lifecycle: this.lifecycle, persist, failed }, this.runtimeSessionId)
@@ -182,6 +190,7 @@ export class ClaudeSession {
       if (generation.spawn === 'refused') throw this.lifecycle.cancelled('the driver was stopped before its process was created', [error])
       throw new AgentRuntimeError({ category: 'transport', message: 'the Claude Code query could not be created' }, [error])
     }
+    this.reportSpawn(generation, launch)
     this.frames.commands.beginLoading()
     void this.lifecycle.jobs.run(`generation:${number}`, () => this.consume(generation))
     let initialized: Awaited<ReturnType<Query['initializationResult']>>
@@ -195,6 +204,22 @@ export class ClaudeSession {
     this.controls.initialized(generation)
   }
 
+  /** onSpawn (R2): one actual query construction's launch provenance. */
+  private reportSpawn(generation: Generation, launch: { cwd: string; childEnv: Readonly<Record<string, string>> }): void {
+    const onSpawn = this.options.callbacks.onSpawn
+    if (!onSpawn) return
+    const info = {
+      generation: generation.number,
+      cwd: launch.cwd,
+      childEnv: { ...launch.childEnv },
+      systemPromptAppend: this.options.systemPromptAppend ?? '',
+      effort: this.options.effort ?? null,
+      model: this.options.model ?? null,
+      resumed: Boolean(generation.resumeTarget),
+    }
+    this.notify('onSpawn', () => onSpawn(info))
+  }
+
   private stopBegun(): boolean {
     return this.lifecycle.state === 'stopping' || this.lifecycle.state === 'stopped'
   }
@@ -206,6 +231,7 @@ export class ClaudeSession {
       ...(this.options.systemPromptAppend ? { systemPromptAppend: this.options.systemPromptAppend } : {}),
       ...(this.options.onToolObservation ? { onToolObservation: this.options.onToolObservation } : {}),
       ...(this.options.auditHooks ? { auditHooks: this.options.auditHooks } : {}),
+      ...(this.options.callbacks.onCwdChanged ? { onCwdChanged: this.options.callbacks.onCwdChanged } : {}),
       turnId: () => this.active()?.turnId ?? null,
       sessionId: () => this.runtimeSessionId,
       observe: (name, callback) => this.notify(name, callback),
