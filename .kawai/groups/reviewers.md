@@ -231,10 +231,18 @@ dispose of it. A disputed finding waits for its decision, not for you. Exercise 
 include affected existing workflows and shared fixtures in the review scope.
 Describe architectural findings as invariant, reproduction, affected paths,
 correction mechanism and required regression evidence. Recommend a structural
-plan immediately; if its first correction still breaks the invariant, reopen
-the design with the Lead before another patch. For other defect classes,
-Kawai's convergence signals decide when a change needs a diagnosis instead
-of another fix ("Convergence" in "Review protocol"). Respect execution
+plan immediately. Give each blocking finding a reproduction the writer can
+commit as a test through the public composition, preferably one table or
+property test that states the violated invariant rather than one example; a
+fix result must commit it and pass it before it returns to you. When a first
+correction leaves any blocking finding `still-open`, whatever its class,
+recommend that the Lead reopen its design before another patch. Kawai's
+convergence signals still decide when a whole change needs a diagnosis
+instead of another fix ("Convergence" in "Review protocol"). A re-review
+that covers only open findings under an unchanged contract checks those
+findings, their committed reproductions and variants, and regressions in
+the changed code; keep its report to dispositions, new items and the checks
+run. Respect execution
 ownership and continue independent review while dependent work waits.
 The level keeps blocking findings distinct from substantive P2 findings;
 if the criterion itself is wrong, explain why and ask for an explicit revision.

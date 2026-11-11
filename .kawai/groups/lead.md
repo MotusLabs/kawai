@@ -274,6 +274,15 @@ same worktree at once; reuse a worktree only for follow-up work on its branch.
 - For execution-owned work, Kawai dispatches review and fixes. Use advisory
   notes and ordinary mail for the pilot; never insert manual stages or submit
   a partial checkpoint result to trigger execution progression.
+- Keep manual fix rounds short. Send a fix result back to review only when
+  it commits the reviewer's reproductions (one table or property test of the
+  violated invariant where that fits) and cites them passing on its head.
+  When a re-review leaves any blocking finding still open after its first
+  correction, whatever its class, reopen that finding's design before another
+  patch. A re-review that covers only open findings under an unchanged
+  contract needs only the `task_handoff`: write no disposition, readiness or
+  dispatch notes for it. Write full notes only for a new finding, a contract
+  change, a dispute, or a finding still open after its design reopen.
 - Let the appointed dev and reviewer clarify reproductions and mechanisms
   directly, with decisions and evidence in the task journal. Do not relay
   every exchange. Direction, assignment and acceptance remain under existing

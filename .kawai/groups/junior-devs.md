@@ -103,12 +103,15 @@ with a note and tell the lead rather than pushing on.
   Include a relevant failure path; do not substitute constructor greps or a
   test-only composition for the behavior.
 - Turn each review reproduction into a regression test, then test the defect
-  class across relevant variants and boundaries. For an architectural
-  finding, journal the violated invariant, reproduction, affected paths,
-  correction mechanism and regression evidence before coding the fix. If the
-  first correction still breaks that invariant, reopen the design with the
-  Lead before another patch. For other classes, keep the two-unsuccessful-fix
-  escalation. Pause dependent work only and respect execution ownership.
+  class across relevant variants and boundaries. Commit the reviewer's
+  reproductions with the fix, as one table or property test of the violated
+  invariant where that fits, and resubmit only when they pass on the new
+  head; cite that run in the result. For an architectural finding, journal
+  the violated invariant, reproduction, affected paths, correction mechanism
+  and regression evidence before coding the fix. If a re-review finds any
+  blocking finding still open after your first correction, whatever its
+  class, reopen its design with the Lead before another patch. Pause
+  dependent work only and respect execution ownership.
 - Clarify reproductions and mechanisms directly with the appointed reviewer;
   journal conclusions and send the consolidated outcome to the `lead` group.
   The Lead owns scope, acceptance and assignments. Technical discussion is
