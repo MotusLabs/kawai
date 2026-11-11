@@ -1,3 +1,4 @@
+// @exercises: src/server/ws/**, src/server/terminal/**, src/server/tmux*.ts, src/server/SessionManager.ts
 /**
  * copy-mode-async.integration.test.ts
  *

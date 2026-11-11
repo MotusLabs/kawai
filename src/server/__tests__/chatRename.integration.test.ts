@@ -1,3 +1,4 @@
+// @exercises: src/server/sessions/rename.ts, src/server/chat/ChatSessionManager.ts, src/server/chat/developmentFixture.ts, src/server/ws/**
 /**
  * chatRename.integration.test.ts
  *

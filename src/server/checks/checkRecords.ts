@@ -30,6 +30,25 @@ export interface CheckRecord {
    * on records written before test lists existed and on a pass whose
    * reports could not be merged — both read as no list upstream. */
   tests?: RecordTestList
+  /** The full run's real-tmux selection (check-time-optimization D6): the
+   * merge-base it diffed against (null: none, so every file ran) and the
+   * files it skipped as unaffected. Absent on older records, on runs that
+   * skipped the tier, and on explicit-file runs. */
+  realTmux?: RecordRealTmuxSelection
+}
+
+export interface RecordRealTmuxSelection {
+  mergeBase: string | null
+  skipped: string[]
+}
+
+/** A selection read from disk, or null when malformed. */
+export function parseRealTmuxSelection(value: unknown): RecordRealTmuxSelection | null {
+  if (typeof value !== 'object' || value === null) return null
+  const { mergeBase, skipped } = value as Partial<RecordRealTmuxSelection>
+  if (mergeBase !== null && typeof mergeBase !== 'string') return null
+  if (!Array.isArray(skipped) || !skipped.every((file) => typeof file === 'string')) return null
+  return { mergeBase, skipped: [...skipped] }
 }
 
 export const RECORDS_DIR_NAME = 'kawai-checks'
@@ -120,6 +139,8 @@ export function readRecord(dir: string, key: string, now = Date.now()): CheckRec
       tests = { file: (record.tests as RecordTestList).file, count: (record.tests as RecordTestList).count }
     }
   }
+  // Like the list pointer, a malformed selection drops only itself.
+  const realTmux = record.realTmux === undefined ? null : parseRealTmuxSelection(record.realTmux)
   return {
     key,
     treeId: typeof record.treeId === 'string' ? record.treeId : '',
@@ -130,6 +151,7 @@ export function readRecord(dir: string, key: string, now = Date.now()): CheckRec
     worktree: record.worktree,
     steps: record.steps.map((step) => ({ name: step.name, ms: step.ms })),
     ...(tests !== undefined ? { tests } : {}),
+    ...(realTmux !== null ? { realTmux } : {}),
   }
 }
 

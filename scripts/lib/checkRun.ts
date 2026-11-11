@@ -29,6 +29,7 @@ import {
   type RecordTestList,
 } from '../../src/server/checks/testLists'
 import { mergeJUnitReports, trustworthyEntries } from './junitReports'
+import { readSelectionRecord } from './realTmuxSelection'
 
 export interface CheckStepSpec {
   name: string
@@ -212,6 +213,10 @@ export async function runCheck(options: CheckRunOptions): Promise<CheckOutcome> 
       worktree: path.resolve(cwd),
       steps: stepDurations,
     }
+    // The runner's real-tmux selection rides the record (D6): which files a
+    // full run skipped, and the merge-base it judged them against.
+    const realTmux = reportDir === null ? null : readSelectionRecord(reportDir)
+    if (realTmux !== null) record.realTmux = realTmux
     // The test list is written before its record (K1) and only when the run's
     // every report merged (all-or-nothing); anything less records the pass
     // without a list — loudly, so a reader bug that list-less-ifies every

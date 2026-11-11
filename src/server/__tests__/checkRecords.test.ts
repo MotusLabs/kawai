@@ -132,6 +132,20 @@ describe('readRecord', () => {
     expect(readRecord(dir, written.key)).toEqual(written)
   })
 
+  test('the real-tmux selection round-trips, and a malformed one drops only itself (check-time-optimization D6)', () => {
+    const realTmux = { mergeBase: 'b'.repeat(40), skipped: ['src/server/__tests__/integration.test.ts'] }
+    writeRecord(dir, record({ realTmux }))
+    expect(readRecord(dir, 'a'.repeat(64))?.realTmux).toEqual(realTmux)
+    writeRecord(dir, record({ realTmux: { mergeBase: null, skipped: [] } }))
+    expect(readRecord(dir, 'a'.repeat(64))?.realTmux).toEqual({ mergeBase: null, skipped: [] })
+    writeRecord(dir, record({ realTmux: { mergeBase: 7, skipped: [] } as never }))
+    const malformed = readRecord(dir, 'a'.repeat(64))
+    expect(malformed).not.toBeNull()
+    expect(malformed && 'realTmux' in malformed).toBe(false)
+    writeRecord(dir, record())
+    expect(readRecord(dir, 'a'.repeat(64))).toEqual(record())
+  })
+
   test('a missing record reads as none', () => {
     expect(readRecord(dir, 'b'.repeat(64))).toBeNull()
   })
