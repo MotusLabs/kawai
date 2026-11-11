@@ -1,4 +1,10 @@
 // chatSessionManager split: worker-sidecar tests.
+// The manager writes the sidecar fire-and-forget, so neither its roster
+// callbacks nor flush() mean a write landed. Every store here is a
+// TrackedStore over the actual ChatWorkerStore and its files: a restart
+// (a fresh store and manager over the directory) first joins the earlier
+// store's admitted writes, and teardown releases and joins every store
+// before the database and directory go away.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -11,6 +17,62 @@ import { ChatWorkerStore } from '../chat/chatWorkerStore'
 import { anyDirectory, FakeHandle, managedManager, closeDispatchers, fakeQueryFactory, createHarness, flush, waitForCondition, initMessage, writeTranscript, installManagerCleanup } from './helpers/chatSessionManagerHarness'
 
 installManagerCleanup()
+
+/** Every store a test built; teardown releases and joins each one. */
+const tracked: TrackedStore[] = []
+
+/**
+ * The actual store, whose admitted writes and deletes are recorded so a
+ * restart or teardown can join them. With holdSettled(), a write whose
+ * roster has a settled row waits for release(); writes stay in call order.
+ */
+class TrackedStore extends ChatWorkerStore {
+  private readonly admitted: Promise<void>[] = []
+  private order: Promise<unknown> = Promise.resolve()
+  private holding = false
+  private opened: Promise<void> = Promise.resolve()
+  private open: () => void = () => {}
+
+  constructor(options: { dir: string }) {
+    super(options)
+    tracked.push(this)
+  }
+
+  holdSettled(): void {
+    this.holding = true
+    this.opened = new Promise<void>((resolve) => (this.open = resolve))
+  }
+
+  release(): void {
+    this.open()
+  }
+
+  override write(sessionId: string, workers: ChatWorker[]): Promise<void> {
+    const held = this.holding && workers.some((worker) => worker.status !== 'running')
+    if (!this.holding) return this.admit(super.write(sessionId, workers))
+    const run = this.order.then(() => (held ? this.opened : undefined)).then(() => super.write(sessionId, workers))
+    this.order = run.catch(() => {})
+    return this.admit(run)
+  }
+
+  override delete(sessionId: string): Promise<void> {
+    return this.admit(super.delete(sessionId))
+  }
+
+  private admit(operation: Promise<void>): Promise<void> {
+    this.admitted.push(operation)
+    return operation
+  }
+
+  /** Join every admitted operation, including any admitted while joining. */
+  async settled(): Promise<void> {
+    for (let joined = 0; joined < this.admitted.length; ) {
+      const batch = this.admitted.slice(joined)
+      joined = this.admitted.length
+      await Promise.allSettled(batch)
+    }
+  }
+}
 
 describe('ChatSessionManager worker sidecar', () => {
   let tempDir: string
@@ -30,7 +92,10 @@ describe('ChatSessionManager worker sidecar', () => {
     process.env.CLAUDE_CONFIG_DIR = path.join(tempDir, 'claude-config')
     process.env.HOME = tempDir
   })
-  afterEach(() => {
+  afterEach(async () => {
+    // Even after a failed assertion: no held gate or admitted write outlives the test's directory.
+    for (const store of tracked) store.release()
+    await Promise.all(tracked.splice(0).map((store) => store.settled()))
     if (originalApiKey !== undefined) process.env.ANTHROPIC_API_KEY = originalApiKey
     else delete process.env.ANTHROPIC_API_KEY
     if (originalConfigDir !== undefined) process.env.CLAUDE_CONFIG_DIR = originalConfigDir
@@ -94,11 +159,11 @@ describe('ChatSessionManager worker sidecar', () => {
   }
 
   /** A fresh store over the same directory, as a restart would build. */
-  const reopenedStore = () => new ChatWorkerStore({ dir: sidecarDir })
+  const reopenedStore = () => new TrackedStore({ dir: sidecarDir })
 
   test('settled workers round-trip through the sidecar and the snapshot', async () => {
     process.env.ANTHROPIC_API_KEY = 'test-key'
-    const store = new ChatWorkerStore({ dir: sidecarDir })
+    const store = new TrackedStore({ dir: sidecarDir })
     const harness = await createHarness(
       db, anyDirectory, undefined, undefined, undefined, undefined, store
     )
@@ -116,6 +181,8 @@ describe('ChatSessionManager worker sidecar', () => {
     // and settle for each worker.
     expect(harness.workers.map(entry => entry.workers)).toHaveLength(6)
     harness.manager.shutdown()
+    // The settle writes were admitted fire-and-forget: join them before the restart reads the file.
+    await store.settled()
 
     // Restart: a fresh store over the same directory recovers the rows.
     const restored = await createHarness(
@@ -147,9 +214,54 @@ describe('ChatSessionManager worker sidecar', () => {
     restored.manager.shutdown()
   })
 
+  test('held settle writes: the restart join stays pending and the file keeps running rows; once released and joined, a fresh restart recovers both outcomes', async () => {
+    process.env.ANTHROPIC_API_KEY = 'test-key'
+    const store = new TrackedStore({ dir: sidecarDir })
+    store.holdSettled()
+    const harness = await createHarness(
+      db, anyDirectory, undefined, undefined, undefined, undefined, store
+    )
+    const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error(created.error)
+    const id = created.session.id
+    await harness.manager.send(id, 'research')
+    const handle = harness.handles[0]!
+    handle.push(initMessage('sdk-workers-held'))
+    await spawnWorker(handle, 'toolu_w1', 'task_1', 'Map the workspace')
+    await spawnWorker(handle, 'toolu_w2', 'task_2', 'Index the API')
+    await settleWorker(handle, 'toolu_w1', 'task_1', 'completed', 'Mapped 14 files')
+    await settleWorker(handle, 'toolu_w2', 'task_2', 'failed', 'endpoint down')
+    const outcomes = (workers: Array<{ workerId: string; status: string; summary?: string }>) =>
+      workers.map((worker) => [worker.workerId, worker.status, worker.summary ?? null])
+    const settled = [['toolu_w1', 'completed', 'Mapped 14 files'], ['toolu_w2', 'failed', 'endpoint down']]
+    // The live roster has settled; its two settle writes are still held.
+    expect(outcomes(harness.manager.getSnapshot(id)!.workers)).toEqual(settled)
+    harness.manager.shutdown()
+    let joined = false
+    const join = store.settled().then(() => {
+      joined = true
+    })
+    await flush()
+    expect(joined).toBe(false)
+    // An actual read of the file at this point holds only the spawn-time rows.
+    expect(outcomes(new ChatWorkerStore({ dir: sidecarDir }).read(id))).toEqual([
+      ['toolu_w1', 'running', null],
+      ['toolu_w2', 'running', null],
+    ])
+    store.release()
+    await join
+    expect(joined).toBe(true)
+    expect(outcomes(new ChatWorkerStore({ dir: sidecarDir }).read(id))).toEqual(settled)
+    const restored = await createHarness(
+      db, anyDirectory, undefined, undefined, undefined, undefined, reopenedStore()
+    )
+    expect(outcomes(restored.manager.getSnapshot(id)!.workers)).toEqual(settled)
+    restored.manager.shutdown()
+  })
+
   test('a restarted session keeps recovered outcomes when its agent starts again', async () => {
     process.env.ANTHROPIC_API_KEY = 'test-key'
-    const store = new ChatWorkerStore({ dir: sidecarDir })
+    const store = new TrackedStore({ dir: sidecarDir })
     const harness = await createHarness(
       db, anyDirectory, undefined, undefined, undefined, undefined, store
     )
@@ -162,6 +274,7 @@ describe('ChatSessionManager worker sidecar', () => {
     await spawnWorker(handle, 'toolu_w1', 'task_1', 'Map the workspace')
     await settleWorker(handle, 'toolu_w1', 'task_1', 'completed', 'Mapped 14 files')
     harness.manager.shutdown()
+    await store.settled()
 
     // Restart: the fresh driver is seeded with the recovered rows, so a new
     // spawn appends to the roster instead of replacing it — and the sidecar
@@ -190,7 +303,7 @@ describe('ChatSessionManager worker sidecar', () => {
 
   test('a worker still running at an abrupt stop is kept and recovered as stopped', async () => {
     process.env.ANTHROPIC_API_KEY = 'test-key'
-    const store = new ChatWorkerStore({ dir: sidecarDir })
+    const store = new TrackedStore({ dir: sidecarDir })
     const harness = await createHarness(
       db, anyDirectory, undefined, undefined, undefined, undefined, store
     )
@@ -257,7 +370,7 @@ describe('ChatSessionManager worker sidecar', () => {
 
   test('kill removes the sidecar with the session', async () => {
     process.env.ANTHROPIC_API_KEY = 'test-key'
-    const store = new ChatWorkerStore({ dir: sidecarDir })
+    const store = new TrackedStore({ dir: sidecarDir })
     const harness = await createHarness(
       db, anyDirectory, undefined, undefined, undefined, undefined, store
     )

@@ -34,7 +34,7 @@ import { PlanService } from '../plans/PlanService'
 import { StrategyStore } from '../strategy/strategyStore'
 import type { CiCheck, MergeMethod } from '../../shared/planExecution'
 import type { PlanCheck } from '../../shared/plans'
-import { createPlanBench, createPlanWorld, writeGroup, type PlanBench, type PlanWorld } from './planHarness'
+import { createPlanBench, createPlanWorld, writeGroup, type PlanBench, type PlanBenchFixture, type PlanWorld } from './planHarness'
 import { neutralExecutorSeams } from './executorTestSeams'
 import { structuredReview } from './structuredReview'
 
@@ -147,9 +147,12 @@ export interface MatrixBench {
   landingAdapters: LandingAdapters
 }
 
-export function createMatrixBench(matrix: MatrixWorld): MatrixBench {
+/** Opt-in fixture choices: the plan bench's, and deps overriding the bench's primary executor, built from its execution store (default: none). */
+export interface MatrixFixture extends PlanBenchFixture { executor?: (executions: ExecutionStore) => Partial<ExecutorDeps> }
+
+export function createMatrixBench(matrix: MatrixWorld, fixture: MatrixFixture = {}): MatrixBench {
   const { world } = matrix
-  const bench = createPlanBench(world)
+  const bench = createPlanBench(world, {}, fixture)
   bench.records.set('rev1', { sessionId: 'rev1', groupId: 'reviewers', projectPath: world.feature, name: 'rev1', sdkSessionId: null, status: 'waiting', createdAt: '', lastActivityAt: '' })
   bench.records.set('dev', { ...bench.records.get('dev')!, claudeProfileId: 'glm' })
   const mail = (bench.tasks as unknown as { mail: MailboxStore }).mail
@@ -272,7 +275,7 @@ export function createMatrixBench(matrix: MatrixWorld): MatrixBench {
     now: () => new Date(clock.now),
     ...overrides,
   })
-  const executor = makeExecutor()
+  const executor = makeExecutor(fixture.executor?.(executions))
   const tick = async (target: ExecutionExecutor = executor) => {
     target.wake(world.team.teamId)
     await target.idle()
