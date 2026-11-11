@@ -143,10 +143,6 @@ beforeEach(() => {
 afterEach(() => db.close())
 
 describe('spawning', () => {
-  // Transitional (unify-approval-defaults): the removed requirement's scenarios stay
-  // annotated until the change archives and drops them from the main spec.
-  // @covers: team-worktree-staffing › A member is spawned when none is available › Spawn for an unstaffed worktree
-  // @covers: team-worktree-staffing › A member is spawned when none is available › Group settings applied
   // @covers: team-worktree-staffing › A member is spawned into an unstaffed worktree › Spawn for an unstaffed worktree
   // @covers: team-worktree-staffing › A member is spawned into an unstaffed worktree › The group's profile is applied
   test('an unstaffed worktree gets a member with the group settings and the message reserved for it', async () => {
@@ -198,13 +194,6 @@ describe('spawn approval resolution (unify-approval-defaults D3, L2)', () => {
     ['auto', 'auto', 'auto'],
   ]
   for (const [groupKey, teamDefault, policy] of TABLE) {
-    // Transitional (unify-approval-defaults): the removed requirement's scenarios stay
-    // annotated until the change archives; "Explicit auto beats a manual default" is
-    // the group auto × team manual row, whose outcome this change reverses.
-    // @covers: team-worktree-staffing › A member is spawned when none is available › Neither set keeps manual
-    // @covers: team-worktree-staffing › A member is spawned when none is available › Team default applies to a group without the key
-    // @covers: team-worktree-staffing › A member is spawned when none is available › Explicit manual beats an auto default
-    // @covers: team-worktree-staffing › A member is spawned when none is available › Explicit auto beats a manual default
     // @covers: team-worktree-staffing › A group's approval key can only tighten its spawned members' policy › No key and no default keeps manual
     // @covers: team-worktree-staffing › A group's approval key can only tighten its spawned members' policy › Team default applies to a group without the key
     // @covers: team-worktree-staffing › A group's approval key can only tighten its spawned members' policy › A manual key beats an auto default
