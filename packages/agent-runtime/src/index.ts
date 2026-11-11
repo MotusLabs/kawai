@@ -34,6 +34,7 @@ export type {
   CodexAuditHooks,
   CodexDriverOptions,
   CodexPermissions,
+  CodexThreadOpened,
   CompactionObservation,
   ContextUsageMeta,
   CreateClaudeDriver,

@@ -112,6 +112,8 @@ Second post-freeze exception (owner decision b671e3da, proposal 10bfd561, task-7
 
 They report source facts only. They add no lifecycle method, SDK type, testing entry or input-item API. Native Codex skill inputs are restored privately: the runtime's own skills/list catalog selects them.
 
+Third post-freeze exception (owner decision 42666cd1, proposal 1f39a63b, task-7811b455 R3): `CodexDriverOptions.onThreadOpened?: (info: { generation; threadId; transcriptPath: string | null; resumed }) => void`. It reports each actual generation's successful `thread/start` or `thread/resume` reply once, after that opening's checkpoint barrier and its refusal and stop checks, and before readiness. A refused, malformed, wrong-target, retired or stopped opening reports nothing. Checkpoint dedup is unchanged: a resumed id is still already saved, so a moved rollout re-persists nothing, and the observation is how a host learns the new path. A throw or rejected promise is noncritical, owned and reported by the stop. A supplied non-function refuses construction.
+
 ### 3. Process ownership, stop and error semantics
 
 The default local process owner uses the existing Node child-process substrate on Bun and owns each spawned generation from before listener installation through terminal join. Claude always supplies SDK spawnClaudeCodeProcess; optional wire capture decorates this spawner. Codex carries AppServerClient's actual exit promise through its driver.
@@ -156,6 +158,7 @@ Codex options expose approvalPolicy (headless never), sandbox mode, network and 
 | claimRateLimitsRead (Codex) | Optional synchronous claim asked once per ready generation before its account/rateLimits/read; only `true` permits it. Kawai answers from its own per-login state; the package keeps no claim store |
 | auditHooks | Explicit opt-in detailed provider hook adapter for Kawai's existing audit coverage, with no outbound module import |
 | getEffort (Codex), claimUsagePull (Claude) | R2 optional live inputs: effort is read per new turn/start, never for a steer or refused work, and a throw refuses that turn. The usage claim is asked once per generation after its query exists, rechecked after its await, and its rejection is retained for the stop |
+| onThreadOpened (Codex) | R3 optional observation of each actual generation's opened thread: id, the reply's nonempty path or null, and whether it resumed. Never a checkpoint, never re-persists a resumed id |
 | onCwdChanged/onSpawn/onCompactionObservation/onQuotaNoData, onHook, context/notification metadata | R2 optional observations of current Kawai facts. Unknowns stay null, a throw is noncritical, nothing affects permission or transport, and old consumers are unchanged |
 | wire | Optional raw recorder; no default file, log or listener; absence changes no process ownership |
 | callbacks | onEvent/onStatus/onRequest/onProcessEnd/onCheckpoint/onTurnResult/onModel/onCompaction/onContextUsage/onLimitEvent/onRateLimit/onUsageReport plus preserved optional activity/roster/command signals |

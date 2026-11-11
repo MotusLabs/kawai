@@ -2,6 +2,9 @@
   "name": "@motuslabs/kawai",
   "version": "1.0.0",
   "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
   "description": "Web GUI for tmux optimized for AI agent TUIs",
   "author": "MotusLabs",
   "license": "MIT",
@@ -41,6 +44,7 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.289",
+    "@motuslabs/agent-runtime": "workspace:0.1.0",
     "@base-ui/react": "^1.2.0",
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",

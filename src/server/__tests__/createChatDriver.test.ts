@@ -1,5 +1,6 @@
-// The driver factory (codex-chat-sessions 2.3, 5.6): a claude record builds
-// the concrete Claude driver, a codex record the Codex driver; a runtime
+// The driver factory (codex-chat-sessions 2.3, 5.6; extract-agent-runtime
+// 6.1): a claude record builds the concrete Claude driver, a codex record
+// Kawai's adapter over the package's public Codex factory; a runtime
 // with no wired driver throws instead of starting as something else.
 import { describe, expect, test } from 'bun:test'
 import type { Query } from '@anthropic-ai/claude-agent-sdk'
@@ -23,12 +24,14 @@ describe('createChatDriver', () => {
     expect(driver.getCommandState().status).toBe('loading')
   })
 
-  test('the codex runtime builds a CodexSessionDriver without spawning', () => {
+  test('the codex runtime builds the package-backed Codex adapter without spawning', () => {
     const driver = createChatDriver({
       runtime: 'codex',
       options: { ...deps, executable: '/nonexistent/codex', codexHome: '/tmp/kawai-codex-home', network: true, wire: { record: () => {} }, withheldCredentials: () => new Set() },
     })
-    expect(driver).toBeInstanceOf(CodexSessionDriver)
+    // Never the in-tree app-server driver: the adapter owns its package promises.
+    expect(driver).not.toBeInstanceOf(CodexSessionDriver)
+    expect(typeof (driver as { settled?: unknown }).settled).toBe('function')
     // Codex has no slash commands (design D7): unavailable from the start.
     expect(driver.getCommandState()).toEqual({ status: 'unavailable', commands: [] })
     expect(driver.isDead).toBe(false)

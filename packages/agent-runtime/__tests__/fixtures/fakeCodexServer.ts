@@ -7,7 +7,8 @@
 // and every inbound line to $CODEX_HOME/received.jsonl; threads persist as $CODEX_HOME/threads/<id>.json,
 // so a resume in another process sees the same conversation history.
 //
-// Env: FAKE_CODEX_INIT=unauthorized|exit; FAKE_CODEX_RESUME=substitute|substitute-unknown|refuse|unauthorized;
+// Env: FAKE_CODEX_INIT=unauthorized|exit; FAKE_CODEX_RESUME=substitute|substitute-unknown|refuse|unauthorized|moved|nopath
+//      (moved: the saved thread answers from a new rollout path; nopath: its reply names no path);
 //      FAKE_CODEX_START=unauthorized|exit (exit: exits right after the thread/start reply).
 // A turn's text picks its script (default: one agent message with a unique
 // transformed text naming the thread's earlier messages):
@@ -229,7 +230,12 @@ export function serveFakeCodex(io: FakeCodexIo): void {
         const found = mode === 'refuse' ? null : load(params.threadId)
         if (!found) return send({ jsonrpc: '2.0', id, error: { code: -32600, message: `no rollout found for thread id ${params.threadId}` } })
         thread = found
-        return reply(id, { thread: { id: found.id, path: found.path }, model: 'fake-model' })
+        if (mode === 'moved') {
+          thread = { ...found, path: join(home, 'sessions', `${found.id}-moved-${crypto.randomUUID()}.jsonl`) }
+          writeFileSync(thread.path, '')
+          save(thread)
+        }
+        return reply(id, { thread: { id: found.id, ...(mode === 'nopath' ? {} : { path: thread.path }) }, model: 'fake-model' })
       }
       case 'turn/start':
         return turnStart(id, params)

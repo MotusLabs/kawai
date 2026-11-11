@@ -120,7 +120,7 @@ The runtime SHALL expose token, model and compaction facts, quota-window reports
 - **THEN** the no-data callback names the source and account scope once, no quota report is fabricated, and a denied or unattempted read reports neither
 
 ### Requirement: Host-compatibility inputs and observations are optional
-A host MAY supply a live Codex effort reader, a detailed Claude hook observer and callbacks for cwd changes, spawns, compaction progress, context-usage metadata and notification expiry. Each SHALL report provider facts as observed, keep unknown values null, never affect permission or transport, and leave behavior unchanged when omitted. A reader failure SHALL refuse only the work that read it.
+A host MAY supply a live Codex effort reader, a detailed Claude hook observer and callbacks for cwd changes, spawns, Codex thread openings, compaction progress, context-usage metadata and notification expiry. Each SHALL report provider facts as observed, keep unknown values null, never affect permission or transport, and leave behavior unchanged when omitted. A reader failure SHALL refuse only the work that read it.
 
 #### Scenario: Live Codex turn effort
 - **WHEN** a Codex host supplies an effort reader and changes its answer between two turns on the same process
@@ -133,6 +133,10 @@ A host MAY supply a live Codex effort reader, a detailed Claude hook observer an
 #### Scenario: Process and compaction observations
 - **WHEN** a host supplies the spawn, cwd, compaction, context and notification callbacks
 - **THEN** each actual spawn reports its launch provenance once, main-session cwd changes are reported, compaction start and completion carry their source ids and measured facts, context readings carry their persistence and threshold source, and notifications carry their timeout
+
+#### Scenario: Codex thread opening reports a moved transcript
+- **WHEN** a Codex host supplies the thread-open observer and a resume reply names the saved thread with a new transcript path
+- **THEN** the observer receives that generation, thread id, path and resumed flag once before readiness, and no checkpoint is persisted again
 
 #### Scenario: Native Codex skill input
 - **WHEN** a Codex user message names a skill in the runtime's own skill catalog

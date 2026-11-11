@@ -274,6 +274,22 @@ export interface CodexDriverOptions extends BaseDriverOptions {
    * submissions never read it. A throw refuses that turn.
    */
   getEffort?: () => Effort | undefined
+  /**
+   * Each actual generation's opened thread (R3), once, after its checkpoint
+   * settled and before readiness: the reply's nonempty path or null, and
+   * whether the opening resumed. A resumed id is never persisted again, so
+   * this is how a moved rollout path reaches the host. A throw or rejected
+   * promise changes nothing and is reported by the stop.
+   */
+  onThreadOpened?: (info: CodexThreadOpened) => void
+}
+
+/** One opened Codex thread (R3 `onThreadOpened`). */
+export interface CodexThreadOpened {
+  generation: number
+  threadId: string
+  transcriptPath: string | null
+  resumed: boolean
 }
 
 export type CreateClaudeDriver = (options: ClaudeDriverOptions) => ClaudeAgentDriver

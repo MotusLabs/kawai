@@ -3,7 +3,7 @@
 // `requestTimeoutMs` are internal bounds with the transport's defaults, and
 // `spawn` is the transport's private process seam (default spawnOwned).
 import type { ResumeCheckpoint } from '../contract.js'
-import type { AgentCallbacks, BeforeSubmit, CodexAuditHooks, CodexPermissions, Effort, LaunchInput, Logger, ToolObservation, ToolSet, WireRecorder } from '../options.js'
+import type { AgentCallbacks, BeforeSubmit, CodexAuditHooks, CodexPermissions, Effort, LaunchInput, Logger, ToolObservation, ToolSet, WireRecorder, CodexThreadOpened } from '../options.js'
 import type { OwnedProcess, OwnedSpawnRequest, TerminateOptions } from '../process/ownedProcess.js'
 
 export interface CodexSessionOptions {
@@ -25,6 +25,8 @@ export interface CodexSessionOptions {
   claimRateLimitsRead?: () => boolean
   /** Read per new turn/start; precedes `effort` (R2). */
   getEffort?: () => Effort | undefined
+  /** Each actual generation's opened thread, after its checkpoint settled (R3). */
+  onThreadOpened?: (info: CodexThreadOpened) => void
   resume?: ResumeCheckpoint
   unansweredRequests?: 'deny' | 'wait'
   terminate?: TerminateOptions

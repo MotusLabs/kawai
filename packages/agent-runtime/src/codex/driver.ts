@@ -38,6 +38,7 @@ export function createCodexDriverWith(options: CodexDriverOptions, internal: Pic
     throw configurationError('claimRateLimitsRead must be a function')
   }
   if (options.getEffort !== undefined && typeof options.getEffort !== 'function') throw configurationError('getEffort must be a function')
+  if (options.onThreadOpened !== undefined && typeof options.onThreadOpened !== 'function') throw configurationError('onThreadOpened must be a function')
   return new CodexSession({
     launch: options.launch,
     callbacks: options.callbacks,
@@ -55,6 +56,7 @@ export function createCodexDriverWith(options: CodexDriverOptions, internal: Pic
     ...(options.unansweredRequests ? { unansweredRequests: options.unansweredRequests } : {}),
     ...(options.claimRateLimitsRead ? { claimRateLimitsRead: options.claimRateLimitsRead } : {}),
     ...(options.getEffort ? { getEffort: options.getEffort } : {}),
+    ...(options.onThreadOpened ? { onThreadOpened: options.onThreadOpened } : {}),
     ...(internal.spawn ? { spawn: internal.spawn } : {}),
   })
 }

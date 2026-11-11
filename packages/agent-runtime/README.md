@@ -334,6 +334,12 @@ neither the Claude Agent SDK nor anything beyond the package and `zod`.
   unsaved thread. A resumed thread offers nothing: the id you passed counts
   as saved. Calling `start()` or `send()` from inside `onCheckpoint` is
   refused at once with category `internal`.
+- **Thread openings.** `onThreadOpened` (optional) hears each process's
+  opened thread once: `{ generation, threadId, transcriptPath, resumed }`,
+  with the reply's path or `null`. It runs after the checkpoint settled and
+  before `start()` resolves, so a resume that moved the rollout reaches you
+  even though nothing is persisted again. Its throw or rejection changes
+  nothing and is reported by the stop.
 - **Resume.** Pass `resume: { runtime: 'codex', runtimeSessionId }` and the
   same retained Codex home, also in another host process. The thread the
   app-server returns must be the one you asked for; another thread (or a

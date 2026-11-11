@@ -35,7 +35,7 @@ import { EventStream, type EventBody } from '../eventStream.js'
 import { OldFrameScope } from '../common/oldFrame.js'
 import type { PendingRequest, QuestionAnswers } from '../events.js'
 import type { JsonObject } from '../json.js'
-import type { Effort } from '../options.js'
+import type { CodexThreadOpened, Effort } from '../options.js'
 import { CHECKPOINT_FAILED, CheckpointGate } from '../lifecycle/checkpoints.js'
 import { DriverLifecycle } from '../lifecycle/lifecycle.js'
 import { resolveExecutable, resolveLaunch } from '../process/launch.js'
@@ -245,6 +245,8 @@ export class CodexSession {
       throw startFailure(step, error)
     }
     if (this.stopBegun()) throw this.lifecycle.cancelled('the driver was stopped while starting')
+    // R3: the opening's facts are fixed before any host callback runs.
+    const openedFacts = { generation: generation.number, threadId: opened.threadId, transcriptPath: opened.path ? opened.path : null, resumed: generation.resumeTarget !== null }
     generation.threadId = opened.threadId
     this.threadId = opened.threadId
     this.facts.reportModel(opened.model)
@@ -253,10 +255,28 @@ export class CodexSession {
     const refused = this.checkpoints.failedRefusal()
     if (refused) throw refused
     if (this.stopBegun()) throw this.lifecycle.cancelled('the driver was stopped while its checkpoint persisted')
+    this.reportThreadOpened(generation, openedFacts)
+    if (this.stopBegun()) throw this.lifecycle.cancelled('the driver was stopped while its thread opening was observed')
     const quota = { claim: this.options.claimRateLimitsRead, firstRead: () => !this.quotaRequested && (this.quotaRequested = true), stopBegun: () => this.stopBegun() }
     claimQuotaRead(generation, { ...quota, notify: (name, callback) => this.notify(name, callback), runOwned: (label, body) => this.runOwned(label, body), current: () => this.current(), facts: this.facts, noData: () => this.quotaNoData() })
     if (this.stopBegun()) throw this.lifecycle.cancelled('the driver was stopped while its quota read was claimed')
     this.skills.ready(generation)
+  }
+
+  /**
+   * R3 onThreadOpened: once per actual generation, only while it is current,
+   * not retired and not stopping. Noncritical: a throw or a rejected promise
+   * is owned work the stop reports, and nothing here depends on it.
+   */
+  private reportThreadOpened(generation: CodexGeneration, info: CodexThreadOpened): void {
+    const observer = this.options.onThreadOpened
+    if (!observer || generation.retired || generation !== this.current() || this.stopBegun()) return
+    this.notify('onThreadOpened', () => {
+      const result = observer({ ...info }) as unknown
+      if (result !== null && typeof result === 'object' && typeof (result as PromiseLike<unknown>).then === 'function') {
+        this.lifecycle.jobs.track('callback:onThreadOpened', Promise.resolve(result)).catch(() => {})
+      }
+    })
   }
 
   /** Retire a generation and stop its transport as owned work (joined by stop). */
