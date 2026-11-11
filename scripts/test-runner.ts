@@ -10,7 +10,8 @@
 // run the runner records per-file durations to
 // <git-common-dir>/kawai-checks/timings.json, feeds the record back with
 // --timings so the slowest files start first, and reports files the record
-// shows over 5 s outside the slow tier. Stale run roots from killed
+// shows over 5 s outside the slow tier. Up to two failed real-tmux files
+// rerun once, alone, after the last (D2; `--no-retry` off). Stale run roots from killed
 // runs are swept at startup, and SIGINT/SIGTERM are forwarded to the
 // child's whole process group before the root is removed after a bounded
 // kill; a finished batch's leftover processes are killed before the next
@@ -27,7 +28,7 @@ import {
   isSlowTierFile,
   planBatches,
 } from './planBatches'
-import { planRun, runBatchesAndPublish } from './runPlan'
+import { BatchRefusedError, planRun, runBatchesAndPublish } from './runPlan'
 import {
   formatMisplacedReport,
   misplacedFromRecords,
@@ -37,6 +38,8 @@ import {
 } from './testTimings'
 import { workersFromEnv } from './lib/workerCount'
 import { plannedReportNames, writePlannedReports } from './lib/junitReports'
+import { writeRetriesRecord } from './lib/realTmuxRetries'
+import { retryWiring } from './lib/retryWiring'
 import { planRealTmuxSelection, writeSelectionRecord, type SelectionRecord } from './lib/realTmuxSelection'
 
 const RUN_ROOT_PREFIX = 'agentboard-tests-'
@@ -55,6 +58,8 @@ interface RunArgs {
   skipSlowTier: boolean
   /** Bypass real-tmux selection (check-time-optimization D6). */
   allRealTmux: boolean
+  /** Rerun no failed real-tmux file (check-time-optimization D2). */
+  noRetry: boolean
   fileArgs: string[]
   passthrough: string[]
 }
@@ -67,6 +72,7 @@ export function parseRunArgs(args: string[]): RunArgs {
     skipRealTmux: false,
     skipSlowTier: false,
     allRealTmux: false,
+    noRetry: false,
     fileArgs: [],
     passthrough: [],
   }
@@ -74,6 +80,7 @@ export function parseRunArgs(args: string[]): RunArgs {
     if (arg === '--skip-real-tmux') parsed.skipRealTmux = true
     else if (arg === '--skip-slow') parsed.skipSlowTier = true
     else if (arg === '--all-real-tmux') parsed.allRealTmux = true
+    else if (arg === '--no-retry') parsed.noRetry = true
     else if (arg.endsWith('.test.ts') || arg.endsWith('.test.tsx')) parsed.fileArgs.push(arg)
     else parsed.passthrough.push(arg)
   }
@@ -291,7 +298,7 @@ let currentChild: RunnerChild | null = null
 // is set. Kept a pure helper so testRunner.test.ts asserts the gate directly.
 export function refuseBatchAfterSignal(signalHandled: boolean, batch: string): void {
   if (signalHandled) {
-    throw new Error(`Signal handled; not starting batch: ${batch}`)
+    throw new BatchRefusedError(`Signal handled; not starting batch: ${batch}`)
   }
 }
 
@@ -432,7 +439,9 @@ async function main() {
     // path is the only publish gate (F5) — null for a filtered run or a
     // failed seed — so the closure runs only with a snapshot to publish and
     // has no gate of its own.
-    const batches = planBatches(plan.batchOptions)
+    const privateReportDir = path.join(runRoot, 'reports') // real-tmux reports outside a check (D2)
+    fs.mkdirSync(privateReportDir, { recursive: true })
+    const batches = planBatches({ ...plan.batchOptions, privateReportDir })
     // The planned-report manifest (C2 advisor point on the all-or-nothing
     // leak): written at plan time, before the first batch, so the check's
     // merge can require the reports on disk to be exactly this run's planned
@@ -449,7 +458,7 @@ async function main() {
       // the merge-base); the merge reads only *.junit.xml, never this file.
       if (selection !== null) writeSelectionRecord(junitReportDir, selection)
     }
-    await runBatchesAndPublish({
+    const outcome = await runBatchesAndPublish({
       batches,
       env,
       publishTimingsPath: plan.batchOptions.timingsPath ?? null,
@@ -471,7 +480,10 @@ async function main() {
         }
       },
       runCommand,
+      retry: retryWiring({ enabled: !args.noRetry, junitReportDir, privateReportDir, firstIndex: batches.length }),
     })
+    // The check copies any retries into its record (D3); none, no file.
+    if (junitReportDir !== undefined && planned.length > 0 && outcome.retries.length > 0) writeRetriesRecord(junitReportDir, outcome.retries)
   } finally {
     fs.rmSync(runRoot, { recursive: true, force: true })
   }
