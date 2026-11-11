@@ -11,6 +11,8 @@
 // - R4: a workspace context is recorded at the package's pre-submit commit
 //   (its turn id), then rides `pasted_content`; a peer turn carries `origin`.
 //   A refused record enqueues nothing and reads as Kawai's error text.
+// - R10: a send queued behind the active turn shows at its admission under
+//   that turn; a later turn running it opens as resumed (queuedEchoes.ts).
 // - recovered worker and task rows under the live rosters; a task's output
 //   file stays in the sidecar records only (D); Kawai's event identity,
 //   statuses, spawn provenance, outbound audit and error texts.
@@ -36,6 +38,7 @@ import { requestOutcome } from './codexRuntimeSupport'
 import { ChatEventSequencer, chatDraftOf, type ChatEventDraft } from './runtimeEvents'
 import { OwnedWork, TerminalJoin, outsideRuntime } from './runtimeOwnership'
 import { DeliveredTurns } from './deliveredTurns'
+import { QueuedEchoes } from './queuedEchoes'
 import { RuntimeBoot } from './runtimeBoot'
 
 /** The adapter's options: the old driver's, with the query factory only when injected. */
@@ -80,6 +83,8 @@ class ClaudeChatDriver implements ChatAgentDriver {
   private readonly peers = new Map<string, ChatPeerMessage>()
   /** A delivery's turn opens at deliver() (deliveredTurns.ts). */
   private readonly delivered = new DeliveredTurns((draft) => this.emit(draft))
+  /** A send queued behind the active turn is shown at its admission (queuedEchoes.ts). */
+  private readonly echoes = new QueuedEchoes()
   /** Interrupts so far: a send still waiting for its driver when one lands is withdrawn. */
   private interrupts = 0
   /** Contextual sends by message UUID: the context to record, then the live event's attachment. */
@@ -271,8 +276,18 @@ class ClaudeChatDriver implements ChatAgentDriver {
     const job = ready.then(async (inner): Promise<ChatSendOutcome> => {
       if (!inner || this.killed || epoch !== this.interrupts) return { ok: false, error: this.killed ? KILLED : inner ? WITHDRAWN : 'The agent process did not start; the message was not sent.' }
       const queue = inner.state === 'active'
-      const handle = await inner.send(text, { messageUuid, ...(context ? { context: context as never } : {}), ...(queue ? { continuation: 'queue' as const } : {}) })
-      void this.owned.track('turn', handle.result)
+      if (queue && !this.peers.has(messageUuid)) this.echoes.begin(messageUuid, this.activeTurnId)
+      let handle: Awaited<ReturnType<ClaudeAgentDriver['send']>>
+      try {
+        handle = await inner.send(text, { messageUuid, ...(context ? { context: context as never } : {}), ...(queue ? { continuation: 'queue' as const } : {}) })
+      } catch (error) {
+        this.echoes.forget(messageUuid)
+        throw error
+      }
+      // Committed: a queued send's row shows now, under the turn it was sent during.
+      const echo = this.echoes.admitted(messageUuid, handle.turnId, text, context)
+      if (echo) this.emit(echo)
+      void this.owned.track('turn', handle.result.finally(() => this.echoes.forget(messageUuid, handle.turnId)))
       return { ok: true }
     })
     const outcome = job.catch((error: unknown): ChatSendOutcome => {
@@ -400,6 +415,8 @@ class ClaudeChatDriver implements ChatAgentDriver {
       case 'user_message': {
         // A delivery's peer message was shown when deliver() opened its turn.
         if (this.peers.delete(event.messageUuid)) break
+        // A queued send was shown at its admission.
+        if (!this.echoes.shown(event.messageUuid)) break
         const context = this.contexts.get(event.messageUuid)
         this.emit({ type: 'user_message', turnId: event.turnId, text: event.text, messageUuid: event.messageUuid, ...(context ? { workspaceContext: context } : {}) }, event.at)
         break
@@ -409,8 +426,10 @@ class ClaudeChatDriver implements ChatAgentDriver {
         if (event.error.message !== PROCESS_EXIT) this.emit({ type: 'error', message: event.error.message }, event.at)
         break
       default: {
+        // A turn running a send shown at admission opens as a resumed turn, as the old driver's init did.
+        const resumed = event.type === 'turn_started' && this.echoes.started(event.turnId)
         if (event.type === 'turn_started') {
-          const absorbed = this.delivered.started(event.turnId, Boolean(event.trigger))
+          const absorbed = this.delivered.started(event.turnId, Boolean(event.trigger) || resumed)
           this.activeTurnId = this.delivered.shownId(event.turnId)
           if (absorbed) break
         }
@@ -420,7 +439,7 @@ class ClaudeChatDriver implements ChatAgentDriver {
           this.toolCalls.set(callKey(event.tool, event.input), event.toolCallId)
         }
         const draft = chatDraftOf(event)
-        if (draft) this.emit(draft, event.at)
+        if (draft) this.emit(resumed && draft.type === 'turn_started' ? { ...draft, trigger: { kind: 'resumed' } } : draft, event.at)
         if (event.type === 'turn_completed' || event.type === 'turn_interrupted') this.delivered.ended(event.turnId)
       }
     }
