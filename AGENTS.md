@@ -27,7 +27,20 @@ manifest, lockfile, runner, preload, server entry points, and
 decision, and a full check records the skipped files and the merge-base.
 Explicit file arguments and `--all-real-tmux` run what they name, and
 `.github/workflows/nightly-real-tmux.yml` runs every real-tmux file on master
-daily, filing failures on the open `nightly-real-tmux` issue. `--skip-slow` excludes the slow tier — every `*.integration.test.ts`
+daily, filing failures on the open `nightly-real-tmux` issue. A failed
+real-tmux file does not stop the others: after the last one, one or two
+failed files rerun once each, alone, and the step passes when every rerun
+passes; three or more failures, a failed rerun, or `--no-retry` fail it, and
+a main-batch failure is never retried. Property, matrix, and model tests that
+declare 50 or more cases loop to `propertyCases(CASES)`
+(`src/server/__tests__/helpers/propertyCases.ts`): local and hook runs
+execute the first quarter of the same seeded cases, and CI (`CI=true`) and
+`bun run check --full-properties` run the declared count. The runner migrates
+one template database per run and exports it as `KAWAI_TEST_DB_TEMPLATE`;
+tests open a fresh database with `freshTestDatabase(path)`
+(`src/server/__tests__/helpers/testDatabase.ts`), which copies it, while
+migration, backup, restore, and startup-refusal tests keep `initDatabase`.
+`--skip-slow` excludes the slow tier — every `*.integration.test.ts`
 file plus the real-tmux files — and runs the rest; by default both tiers
 run. After a full run the runner
 records per-file durations to `<git-common-dir>/kawai-checks/timings.json`
@@ -51,7 +64,11 @@ a full pass under `<git-common-dir>/kawai-checks/`, keyed by a content hash of
 the working tree (tracked and untracked non-ignored files) plus the Bun
 version and platform. A run whose key already passed reports the recorded
 pass — its time and worktree — and runs nothing; a failure or an interrupted
-run records nothing; `--force` reruns everything. Records are shared by every
+run records nothing; `--force` reruns everything. A pass records each
+real-tmux file it retried, with that file's first-attempt failing tests, and
+its case profile (`reduced`, or `full` under CI or `--full-properties`);
+`--full-properties` reuses only a `full` pass or one recorded before profiles
+existed, and `--no-retry` reaches the unit runner. Records are shared by every
 linked worktree and pruned after 14 days or 500 records. The pre-commit hook
 (`scripts/pre-commit.ts`) is fast and never records a pass: a source commit
 runs lint, typecheck, and the affected fast-tier tests (`scripts/affected-tests.ts`:

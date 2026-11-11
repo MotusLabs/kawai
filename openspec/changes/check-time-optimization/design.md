@@ -66,7 +66,7 @@ Alternative: a random subset of seeds. Rejected, because it breaks reproduction 
 
 ### D5. A template database per run root
 
-Before the first batch, the runner opens `<runRoot>/template.db` with `initDatabase`, then closes it with a WAL checkpoint so one self-contained file remains. It exports `KAWAI_TEST_DB_TEMPLATE`, and a build failure fails the run, naming the migration. `src/server/__tests__/helpers/testDatabase.ts` `freshTestDatabase(path)` copies the template to `path` and calls `initDatabase({ path })`, which finds no pending migration and takes no backup. Without the variable, under a bare `bun test`, it calls `initDatabase` on a new file.
+Before the first batch, the runner opens `<runRoot>/template.db` with `initDatabase`, then closes it; the database uses a rollback journal, so the closed file is self-contained, and the build fails if a `-wal`, `-shm`, or `-journal` file remains. It exports `KAWAI_TEST_DB_TEMPLATE`, and a build failure fails the run, naming the migration. `src/server/__tests__/helpers/testDatabase.ts` `freshTestDatabase(path)` copies the template to `path` and calls `initDatabase({ path })`, which finds no pending migration and takes no pre-migration backup (its `startup` snapshot, taken on every open, still runs). Without the variable, under a bare `bun test`, it calls `initDatabase` on a new file.
 
 Files migrate to the helper heaviest first. Migration, backup, and startup-refusal tests keep `initDatabase` on new files and are listed as such in the helper's header.
 
@@ -161,7 +161,7 @@ Completeness: forced → SE1; not forced and no merge-base → SE2; otherwise tr
 - [A template built from a broken migration] → The build fails the run loudly, naming the migration (D5), and migration tests still run every migration on new files.
 - [A wrong or missing `@exercises` glob lets a terminal regression through a local check] → The guard rejects missing and dead globs, the shared triggers cover entry points, and the nightly run fails within a day, opening an issue.
 - [The nightly workflow cannot run real-tmux on GitHub runners] → The first task is a dispatched trial with a stop rule (D7).
-- [Copying a WAL-mode database mid-write] → The runner closes the template with a checkpoint before any batch starts. Copies are made only from the closed file.
+- [Copying a database mid-write] → The runner closes the template before any batch starts and fails if a `-wal`, `-shm`, or `-journal` file remains. Copies are made only from the closed file.
 
 ## Migration Plan
 
@@ -222,7 +222,7 @@ Rollback: each step reverts alone. Records without the new fields stay readable 
 
 - V1. Table-driven tests of RT1–RT6 and RU1–RU5, with the production-composition rows, and with mutants: the rerun removed (kills RT3), the F ≤ 2 bound removed (kills RT5), the main-batch guard removed (kills RT1), and the profile check in reuse removed (kills RU4).
 - V2. The PC1 exhaustive test, plus the runner probe file. Mutants: the `CI` check removed, `ceil` replaced by `floor`, and the seed offset shifted by one.
-- V3. TD1 and TD2 tests. Mutants: the helper's copy skipped (kills TD1), and the template not checkpointed (kills TD2 through a missing-table read).
+- V3. TD1 and TD2 tests. Mutants: the helper's copy skipped (kills TD1), and the template not checkpointed (equivalent under the rollback journal: committed transactions are already in the main file, so the leftover-file check guards this instead).
 - V4. Both timing tests run 5 times serially next to a CPU-saturating load inside the workspace, with `cpu.pressure` some avg10 of 50% or more recorded during each run, and pass. Output and pressure readings are kept as evidence.
 - V5. A full `bun run check` before and after, on an otherwise idle machine, reporting total test work from the timings record. Evidence only, not a pass bound.
 - V6. SE1–SE5, G1–G2 tests. Mutants: the shared-trigger check removed (kills SE3), the no-merge-base fallback removed (kills SE2), and the own-file match dropped (kills SE4).
