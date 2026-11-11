@@ -247,7 +247,8 @@ export const fixtureQueryFactory: ChatQueryFactory = ({ prompt, options, wire })
       // an allowed push and a foreign-repository gh write for real.
       const runAuditHooks = async (event: 'PreToolUse' | 'PostToolUse', toolUseID: string, input: Record<string, unknown>) => {
         for (const entry of options.hooks?.[event] ?? []) {
-          for (const hook of entry.hooks) await hook(input as never, toolUseID, { signal: controller.signal })
+          // Every hook input names its event, as the CLI's does (the package reads hook_event_name, task 6.1).
+          for (const hook of entry.hooks) await hook({ ...input, hook_event_name: event } as never, toolUseID, { signal: controller.signal })
         }
       }
       for (const command of ['git push origin main', 'gh issue create -R other/repo --title Fixture']) {
