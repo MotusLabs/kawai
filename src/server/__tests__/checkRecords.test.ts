@@ -142,8 +142,11 @@ describe('readRecord', () => {
     const malformed = readRecord(dir, 'a'.repeat(64))
     expect(malformed).not.toBeNull()
     expect(malformed && 'realTmux' in malformed).toBe(false)
-    writeRecord(dir, record())
-    expect(readRecord(dir, 'a'.repeat(64))).toEqual(record())
+    // One record value: record() stamps `at` with the clock, so two calls can
+    // differ by a millisecond.
+    const plain = record()
+    writeRecord(dir, plain)
+    expect(readRecord(dir, 'a'.repeat(64))).toEqual(plain)
   })
 
   test('a missing record reads as none', () => {
