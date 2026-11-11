@@ -18,7 +18,8 @@
 //   turn running it opens as resumed (published with the trigger).
 // - forget: the handle settled (absorbed into the active result, completed,
 //   interrupted, stopped). Bindings are dropped after anything still held.
-// A host consumer's throw is returned to the caller's owner, not raised.
+// A host consumer's throw during the flush goes to the caller's owner, not
+// raised; a promise it returns is owned by the publish the caller supplies.
 import type { WorkspaceMessageContext } from '../../../shared/planWorkspace'
 import type { ChatEventDraft } from './runtimeEvents'
 

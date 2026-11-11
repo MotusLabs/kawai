@@ -17,8 +17,8 @@
 // - recovered worker and task rows under the live rosters; a task's output
 //   file stays in the sidecar records only (D); Kawai's event identity,
 //   statuses, spawn provenance, outbound audit and error texts.
-// Every package promise and every promise a host callback returns is owned
-// (runtimeOwnership.ts); `settled()` joins them, re-acquires a terminal call
+// Every package promise and every promise a host callback returns, the
+// direct onEvent/onStatus publications included, is owned (runtimeOwnership.ts); `settled()` joins them, re-acquires a terminal call
 // refused from inside a callback (TerminalJoin), and reports raw failures once.
 import type { AgentEvent, BackgroundTask, ClaudeAgentDriver, ClaudeDriverOptions, PendingRequest, Worker } from '@motuslabs/agent-runtime'
 import { AgentRuntimeError } from '@motuslabs/agent-runtime'
@@ -86,7 +86,7 @@ class ClaudeChatDriver implements ChatAgentDriver {
   private readonly delivered = new DeliveredTurns((draft) => this.emit(draft))
   /** A send queued behind the active turn shows where it was admitted (queuedEchoes.ts). */
   private readonly echoes = new QueuedEchoes(
-    (draft, at) => this.options.onEvent(this.sequencer.stamp(draft, at)),
+    (draft, at) => this.owned.hosted('onEvent', () => this.options.onEvent(this.sequencer.stamp(draft, at))),
     (error) => void this.owned.track('callback:onEvent', Promise.reject(error)),
   )
   /** Interrupts so far: a send still waiting for its driver when one lands is withdrawn. */
@@ -511,7 +511,7 @@ class ClaudeChatDriver implements ChatAgentDriver {
     const next: SessionStatus = this.pendingCount() > 0 ? 'permission' : this.activeTurnId || this.sending > 0 || this.liveWorkers.some((w) => w.live) ? 'working' : 'waiting'
     if (next === this.lastStatus) return
     this.lastStatus = next
-    this.options.onStatus(next)
+    this.owned.hosted('onStatus', () => this.options.onStatus(next))
   }
 
   /** Package turn ids are shown under a delivery's opened id (deliveredTurns.ts). */

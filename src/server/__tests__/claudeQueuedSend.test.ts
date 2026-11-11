@@ -75,7 +75,7 @@ function scripted(scripts: Script[]): ChatQueryFactory {
 type Record_ = (input: { messageUuid: string; turnId: string }) => { ok: true } | { ok: false; message: string }
 
 /** Production composition; `create` wraps the public package factory only when a case needs it. */
-function adapter(record?: Record_, create?: CreateClaudeRuntime) {
+function adapter(record?: Record_, create?: CreateClaudeRuntime, host?: (event: ChatEvent) => unknown) {
   const scripts: Script[] = []
   const events: ChatEvent[] = []
   const statuses: string[] = []
@@ -84,7 +84,7 @@ function adapter(record?: Record_, create?: CreateClaudeRuntime) {
     sessionId: 'chat-claude-queued',
     projectPath: '/tmp',
     queryFactory: scripted(scripts),
-    onEvent: (event: ChatEvent) => void events.push(event),
+    onEvent: (event: ChatEvent) => (events.push(event), host?.(event)),
     onStatus: (status: string) => void statuses.push(status),
     recordWorkspaceContext: (input: { messageUuid: string; turnId: string }) => {
       records.push({ messageUuid: input.messageUuid, turnId: input.turnId })
@@ -344,6 +344,49 @@ describe('queued sends: original identity and order (R10)', () => {
       ['user_message', turnA, 'second', uuidB], ['turn_completed', turnA, 10],
       ['turn_started', turnC, null], ['user_message', turnC, 'third', uuidC], ['turn_completed', turnC, 30],
     ])
+  })
+
+  test('a promise onEvent returns for an event published by the delayed view flush holds kill + settled and its raw rejection is reported once (F1)', async () => {
+    const late = lateHandles((pkg) => pkg.some((line) => line.startsWith('turn_completed')))
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => (release = resolve))
+    const boom = new Error('held flushed onEvent rejection')
+    const job = gate.then(() => {
+      throw boom
+    })
+    void job.catch(() => {})
+    let answered = false
+    const h = adapter(undefined, late.create, (event) => {
+      if (event.type !== 'turn_completed' || answered) return undefined
+      answered = true
+      late.pkg.push('host turn_completed')
+      return job
+    })
+    try {
+      await heldTurn(h)
+      approve(h)
+      h.driver.send('second')
+      await until(() => h.scripts[0]!.prompts.length === 2)
+      const uuidA = String(h.scripts[0]!.prompts[0]!.uuid)
+      h.scripts[0]!.push(result([uuidA], 10))
+      await until(() => answered)
+      const turnB = late.pkg.filter((l) => l.startsWith('committed')).at(-1)!.split(' ')[1]!
+      // The host saw A's completion only when the held view flushed, after B's resume.
+      const flushed = late.pkg.indexOf('host turn_completed') > late.pkg.indexOf(`resumed ${turnB}`)
+      h.driver.kill()
+      let joined = false
+      let failure: unknown
+      const wait = h.driver.settled().then(() => void (joined = true), (error) => void ((joined = true), (failure = error)))
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      const terminalBeforeRelease = joined
+      release()
+      await wait
+      expect({ flushed, terminalBeforeRelease, rawCauseReported: failure === boom }).toEqual({ flushed: true, terminalBeforeRelease: false, rawCauseReported: true })
+      await h.driver.settled()
+    } finally {
+      release()
+      await job.catch(() => {})
+    }
   })
 })
 

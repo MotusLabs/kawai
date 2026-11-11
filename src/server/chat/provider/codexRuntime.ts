@@ -21,8 +21,8 @@
 // - A send while a turn runs steers it; mail delivers as a peer turn under
 //   its message id. Mail and question answers send codexSkills 'none'
 //   (text only, R9); a human send keeps the catalog's skill inputs. Every
-//   package promise, and every promise a host
-//   callback returns, is owned (runtimeOwnership.ts); settled() joins them
+//   package promise, and every promise a host callback returns (the
+//   direct onEvent/onStatus publications included), is owned (runtimeOwnership.ts); settled() joins them
 //   and reports their raw failures once.
 // - Terminal joins: a kill or shutdown the package refused from inside its
 //   own callback is re-issued by the next outside caller (TerminalJoin).
@@ -482,11 +482,12 @@ class CodexChatDriver implements ChatAgentDriver {
     const next: SessionStatus = this.pendingCount() > 0 ? 'permission' : this.activeTurnId || this.sending > 0 ? 'working' : 'waiting'
     if (next === this.lastStatus) return
     this.lastStatus = next
-    this.options.onStatus(next)
+    this.owned.hosted('onStatus', () => this.options.onStatus(next))
   }
 
   /** Package turn ids are shown under a delivery's opened id (deliveredTurns.ts). */
   private emit(draft: ChatEventDraft, at?: string | null): void {
-    this.options.onEvent(this.sequencer.stamp(this.delivered.shown(draft), at))
+    const stamped = this.sequencer.stamp(this.delivered.shown(draft), at)
+    this.owned.hosted('onEvent', () => this.options.onEvent(stamped))
   }
 }
