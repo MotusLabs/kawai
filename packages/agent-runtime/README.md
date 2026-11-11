@@ -391,8 +391,10 @@ export interface CheckpointStore {
 // (the launch's homeDir, also its CODEX_HOME) holds a login, and nothing ever
 // waits for a UI: approvals, user input and elicitation are off. A fresh
 // thread's id is saved before start() resolves, so a later host process with
-// the same homes resumes the same thread under this host's own policy.
-export function headlessCodex(launch: LaunchConfiguration, logger: Logger, store: CheckpointStore): CodexAgentDriver | null {
+// the same homes resumes the same thread under this host's own policy. A host
+// running several drivers on one login passes claimRateLimitsRead, so only
+// the generation its own state picks sends the one account rate-limit read.
+export function headlessCodex(launch: LaunchConfiguration, logger: Logger, store: CheckpointStore, claimRateLimitsRead?: () => boolean): CodexAgentDriver | null {
   if (!hasCodexLogin(launch.homeDir)) return null
   const saved = store.load()
   return createCodexDriver({
@@ -400,6 +402,7 @@ export function headlessCodex(launch: LaunchConfiguration, logger: Logger, store
     logger,
     permissions: { approvalPolicy: 'never', sandbox: 'read-only', networkAccess: false, writableRoots: [], userInput: 'disabled', elicitation: 'disabled' },
     ...(saved ? { resume: saved } : {}),
+    ...(claimRateLimitsRead ? { claimRateLimitsRead } : {}),
     callbacks: {
       onEvent: (event) => logger.debug({ type: event.type }, 'agent event'),
       onCheckpoint: (checkpoint) => store.save(checkpoint),
@@ -494,6 +497,13 @@ Both drivers emit the same `AgentEvent` stream and settle the same
   - Codex reads `account/rateLimits/read` once per driver after the first
     readiness (`report`, `session`) and reports each pushed update (`push`).
     A refused, unanswered or empty read reports nothing and fails nothing.
+  - `claimRateLimitsRead: () => boolean` (Codex only) replaces that rule.
+    - The driver asks it once per started generation, after the checkpoint
+      persisted. Only `true` sends that generation's read; `false` sends
+      none and reports nothing, and pushed updates still arrive.
+    - A throw denies the read, and the stop reports that error once.
+    - Sharing one read between drivers of a login or home is your own
+      state, for example a set of claimed homes. The package keeps none.
   - Claude's pull through the supplied home's login runs only with
     `quotaSource: 'host-login'` (`host-login-pull`, `host-login`). That
     login may be another account than a proxy session's, so it is off by

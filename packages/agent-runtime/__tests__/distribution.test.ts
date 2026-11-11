@@ -2,15 +2,15 @@
 // Distribution oracles on the real packed tarball (design "Package and
 // application table"): D01 (clean consumer, no Kawai files), D09 (the
 // headless contract consumer compiles unchanged), a Codex-only consumer with
-// no Claude SDK that compiles and runs the README's Codex example and the
-// `./usage` helpers, runtime `./usage` exports in the clean consumer, and the M-pack control (a
+// no Claude SDK that compiles and runs the README's Codex example (omitted and
+// supplied claimRateLimitsRead) and the `./usage` helpers, runtime `./usage` exports in the clean consumer, and the M-pack control (a
 // repository-relative import in the shipped files is caught).
 import { beforeAll, describe, expect, test } from 'bun:test'
 import { appendFileSync, copyFileSync, cpSync, existsSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PACKAGE_DIR, boundaryViolations, buildAndPack, consumerProject, run, tarballEntries, tsc } from './helpers/packArtifact.js'
-import { codexRoot } from './helpers/codexDriverHarness.js'
+import { codexRoot, sent } from './helpers/codexDriverHarness.js'
 
 let tarball: string
 let consumer: string
@@ -84,19 +84,28 @@ describe('packed @motuslabs/agent-runtime', () => {
         'await driver.start()',
         "const result = await (await driver.send('packed')).result",
         'const receipt = await driver.shutdown()',
+        '// A second home, whose host claims no read: the supplied claim is asked once.',
+        'let asked = 0',
+        'const denied = headlessCodex(JSON.parse(process.argv[3]!) as LaunchConfiguration, logger, { load: () => null, save: async () => {} }, () => (asked++, false))!',
+        'await denied.start()',
+        "await (await denied.send('denied')).result",
+        'await denied.shutdown()',
         "const quota = codexQuotaReport({ primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: 0 }, secondary: null, rateLimitReachedType: 'rateLimitReached' }, 'report', 'r')",
-        'console.log(JSON.stringify({ finalText: result.finalText, saved: saved.length, mode: receipt.mode, quota: quota && [quota.status, quota.source, quota.accountScope] }))',
+        'console.log(JSON.stringify({ finalText: result.finalText, saved: saved.length, mode: receipt.mode, quota: quota && [quota.status, quota.source, quota.accountScope], asked }))',
       ].join('\n'),
     )
     const check = tsc('tsconfig.json', project)
     expect(check.out).toBe('')
     expect(check.code).toBe(0)
     const root = codexRoot()
-    writeFileSync(join(root.home, 'auth.json'), JSON.stringify({ OPENAI_API_KEY: ['sample', 'key'].join('-') }))
-    const main = run([process.execPath, 'main.ts', JSON.stringify(root.launch())], project)
+    const claimed = codexRoot()
+    for (const home of [root.home, claimed.home]) writeFileSync(join(home, 'auth.json'), JSON.stringify({ OPENAI_API_KEY: ['sample', 'key'].join('-') }))
+    const main = run([process.execPath, 'main.ts', JSON.stringify(root.launch()), JSON.stringify(claimed.launch())], project)
     expect(main.code).toBe(0)
     // ./usage loads and runs without the Claude SDK.
-    expect(JSON.parse(main.out.trim())).toEqual({ finalText: 'codex:dekcap|seen=', saved: 1, mode: 'shutdown', quota: ['limited', 'report', 'session'] })
+    expect(JSON.parse(main.out.trim())).toEqual({ finalText: 'codex:dekcap|seen=', saved: 1, mode: 'shutdown', quota: ['limited', 'report', 'session'], asked: 1 })
+    // Omitted, the packed driver sends its one read; the denied claim sends none.
+    expect([sent(root, 'account/rateLimits/read').length, sent(claimed, 'account/rateLimits/read').length]).toEqual([1, 0])
   })
 
   test('control: the clean project cannot resolve a Kawai type for a consumer', () => {

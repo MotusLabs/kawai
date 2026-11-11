@@ -73,6 +73,11 @@ documented API takes a new major version, even after 0.x.
   `accountScope`: Claude pushes, Codex's one `account/rateLimits/read` plus
   pushes, an opt-in Claude host-login pull, and host-supplied reports via
   `hostQuotaReport`. An unavailable source reports nothing.
+- Codex `claimRateLimitsRead?: () => boolean`, added after the API freeze
+  with the owner's approval. The driver asks it once per started
+  generation, and only `true` sends that generation's account read. A host
+  can then share one read across drivers of a login. Omitted, the driver
+  reads once.
 - Observers only observe. A throwing usage, event or result observer
   changes no result and skips no settlement, and the stop reports each
   throw once.

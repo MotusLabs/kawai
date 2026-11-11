@@ -11,8 +11,10 @@ export interface CheckpointStore {
 // (the launch's homeDir, also its CODEX_HOME) holds a login, and nothing ever
 // waits for a UI: approvals, user input and elicitation are off. A fresh
 // thread's id is saved before start() resolves, so a later host process with
-// the same homes resumes the same thread under this host's own policy.
-export function headlessCodex(launch: LaunchConfiguration, logger: Logger, store: CheckpointStore): CodexAgentDriver | null {
+// the same homes resumes the same thread under this host's own policy. A host
+// running several drivers on one login passes claimRateLimitsRead, so only
+// the generation its own state picks sends the one account rate-limit read.
+export function headlessCodex(launch: LaunchConfiguration, logger: Logger, store: CheckpointStore, claimRateLimitsRead?: () => boolean): CodexAgentDriver | null {
   if (!hasCodexLogin(launch.homeDir)) return null
   const saved = store.load()
   return createCodexDriver({
@@ -20,6 +22,7 @@ export function headlessCodex(launch: LaunchConfiguration, logger: Logger, store
     logger,
     permissions: { approvalPolicy: 'never', sandbox: 'read-only', networkAccess: false, writableRoots: [], userInput: 'disabled', elicitation: 'disabled' },
     ...(saved ? { resume: saved } : {}),
+    ...(claimRateLimitsRead ? { claimRateLimitsRead } : {}),
     callbacks: {
       onEvent: (event) => logger.debug({ type: event.type }, 'agent event'),
       onCheckpoint: (checkpoint) => store.save(checkpoint),
