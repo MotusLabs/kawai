@@ -9,7 +9,7 @@ import os from 'node:os'
 import path from 'node:path'
 import type { ChatSessionManager } from '../chat/ChatSessionManager'
 import { ChatConnections } from '../chat/ChatConnections'
-import { initDatabase, type SessionDatabase } from '../db'
+import { type SessionDatabase } from '../db'
 import { MailboxStore } from '../team/mailboxStore'
 import { TaskStore } from '../team/taskStore'
 import { TaskService } from '../team/TaskService'
@@ -24,6 +24,7 @@ import type { ClientMessage, ServerMessage } from '../../shared/types'
 import type { ChatSessionRecord } from '../db'
 import type { PlanAttentionFact, PlanSummaryRows } from '../team/planAttention'
 import type { ChangeSupervision } from '../../shared/planSupervision'
+import { freshTestDatabase } from './helpers/testDatabase'
 
 let dir: string
 let db: SessionDatabase
@@ -46,7 +47,7 @@ beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-workspace-connections-'))
   fs.mkdirSync(path.join(dir, '.kawai', 'groups'), { recursive: true })
   fs.writeFileSync(path.join(dir, '.kawai', 'groups', 'devs.md'), '---\nlabel: Developers\n---\nBuild features')
-  db = initDatabase({ path: path.join(dir, 'db.sqlite') })
+  db = freshTestDatabase(path.join(dir, 'db.sqlite'))
   mail = new MailboxStore(db.db)
   const assignmentStore = new AssignmentStore(db.db, mail)
   const taskStore = new TaskStore(db.db, mail, assignmentStore)

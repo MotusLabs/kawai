@@ -8,10 +8,11 @@ import path from 'node:path'
 import type { Options } from '@anthropic-ai/claude-agent-sdk'
 import { ChatSessionManager } from '../chat/ChatSessionManager'
 import { fixtureQueryFactory } from '../chat/developmentFixture'
-import { initDatabase, type SessionDatabase } from '../db'
+import { type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
 import { sha256 } from '../metrics/provenanceHash'
 import { waitForCondition } from './helpers/chatSessionManagerHarness'
+import { freshTestDatabase } from './helpers/testDatabase'
 
 describe('chat session groups', () => {
   let tempDir: string
@@ -26,7 +27,7 @@ describe('chat session groups', () => {
     home = path.join(tempDir, 'home')
     fs.mkdirSync(path.join(project, '.kawai', 'groups'), { recursive: true })
     fs.writeFileSync(path.join(project, '.kawai', 'groups', 'devs.md'), 'Build.')
-    db = initDatabase({ path: path.join(tempDir, 'test.db') })
+    db = freshTestDatabase(path.join(tempDir, 'test.db'))
     process.env.ANTHROPIC_API_KEY = 'sk-test-key'
   })
 

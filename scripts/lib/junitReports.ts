@@ -68,11 +68,31 @@ export function plannedReportNames(batches: ReadonlyArray<{ report?: string | un
  * exact-set comparison and merge null — fail-closed, never a partial list
  * — and the runner never plans reports into a directory it does not own,
  * so the overwrite needs a foreign writer to happen at all. */
-export function writePlannedReports(dir: string, names: string[]): void {
+export function writePlannedReports(dir: string, names: string[], reruns: PlannedRerun[] = []): void {
   fs.writeFileSync(
     path.join(dir, PLANNED_REPORTS_NAME),
-    JSON.stringify({ reports: [...names].sort() })
+    JSON.stringify({
+      reports: [...names].sort(),
+      ...(reruns.length > 0 ? { reruns: [...reruns].sort((a, b) => a.report.localeCompare(b.report)) } : {}),
+    })
   )
+}
+
+/** A real-tmux rerun's report and the first attempt's report it replaces in
+ * the test list (check-time-optimization D2/D3, task 3.3). */
+export interface PlannedRerun {
+  report: string
+  replaces: string
+}
+
+/** Add a rerun's report to the plan before the rerun starts (task 3.3): it
+ * joins the planned set, and the first attempt's report it replaces leaves
+ * the merge. A plan that cannot be read stays unreadable — the merge then
+ * records no list, fail-closed. */
+export function appendPlannedRerun(dir: string, rerun: PlannedRerun): void {
+  const plan = readPlan(dir)
+  if (plan === null) return
+  writePlannedReports(dir, [...plan.reports, rerun.report], [...plan.reruns, rerun])
 }
 
 /** The plan, fail-closed: a missing, unreadable, or malformed manifest is
@@ -82,6 +102,17 @@ export function writePlannedReports(dir: string, names: string[]): void {
  * would read as a confusing empty plan instead of the malformed one it is.
  * Returned sorted, matching the merge's readdir order. */
 export function readPlannedReports(dir: string): string[] | null {
+  return readPlan(dir)?.reports ?? null
+}
+
+function isReportName(entry: unknown): entry is string {
+  return typeof entry === 'string' && entry.endsWith(REPORT_SUFFIX) && !/[/\\\0]/.test(entry)
+}
+
+/** The plan with its reruns. Each rerun's report and the report it replaces
+ * must both be planned, distinct, and used by one rerun only; anything else
+ * is a malformed plan (null). */
+export function readPlan(dir: string): { reports: string[]; reruns: PlannedRerun[] } | null {
   let text: string
   try {
     text = fs.readFileSync(path.join(dir, PLANNED_REPORTS_NAME), 'utf8')
@@ -98,13 +129,61 @@ export function readPlannedReports(dir: string): string[] | null {
   if (!Array.isArray(reports)) return null
   const names: string[] = []
   for (const entry of reports) {
-    if (typeof entry !== 'string') return null
-    if (!entry.endsWith(REPORT_SUFFIX)) return null
-    if (/[/\\\0]/.test(entry)) return null
+    if (!isReportName(entry)) return null
     names.push(entry)
   }
   if (new Set(names).size !== names.length) return null
-  return names.sort()
+  const rawReruns = (parsed as { reruns?: unknown }).reruns ?? []
+  if (!Array.isArray(rawReruns)) return null
+  const reruns: PlannedRerun[] = []
+  const used = new Set<string>()
+  for (const entry of rawReruns) {
+    const { report, replaces } = (entry ?? {}) as Partial<PlannedRerun>
+    if (!isReportName(report) || !isReportName(replaces) || report === replaces) return null
+    if (!names.includes(report) || !names.includes(replaces)) return null
+    if (used.has(report) || used.has(replaces)) return null
+    used.add(report)
+    used.add(replaces)
+    reruns.push({ report, replaces })
+  }
+  return { reports: names.sort(), reruns }
+}
+
+/** The failing tests a JUnit report names, as `describe > title` (the
+ * title alone outside any describe), in report order; null when the
+ * report cannot be read. A file that failed outside any test names none. */
+export function readJUnitFailures(reportPath: string): string[] | null {
+  let xml: string
+  try {
+    xml = fs.readFileSync(reportPath, 'utf8')
+  } catch {
+    return null
+  }
+  const failures: string[] = []
+  const describe: string[][] = [[]]
+  let current: string | null = null
+  TAG.lastIndex = 0
+  let match: RegExpExecArray | null
+  while ((match = TAG.exec(xml)) !== null) {
+    const [, closing, name, rawAttrs, selfClosing] = match as unknown as [string, string, string, string, string]
+    if (closing) {
+      if (name === 'testsuite' && describe.length > 1) describe.pop()
+      if (name === 'testcase') current = null
+      continue
+    }
+    const attrs = parseAttributes(rawAttrs)
+    if (name === 'testsuite') {
+      const parent = describe[describe.length - 1]!
+      describe.push(attrs.line !== undefined && attrs.name !== undefined ? [...parent, attrs.name] : parent)
+      if (selfClosing) describe.pop()
+    } else if (name === 'testcase') {
+      const title = [...describe[describe.length - 1]!, attrs.name ?? '(unnamed)'].join(' > ')
+      current = selfClosing ? null : title
+    } else if ((name === 'failure' || name === 'error') && current !== null) {
+      if (!failures.includes(current)) failures.push(current)
+    }
+  }
+  return failures
 }
 
 // --- XML scanning ---
@@ -267,8 +346,12 @@ function suiteFile(suites: SuiteFrame[]): string | null {
  * (K1: a partial or empty list would fabricate `not-in-run` for the tests
  * it drops; `null` reads as run unknown instead). */
 export function mergeJUnitReports(dir: string): TestListEntry[] | null {
-  const planned = readPlannedReports(dir)
-  if (planned === null) return null
+  const plan = readPlan(dir)
+  if (plan === null) return null
+  const planned = plan.reports
+  // A retried real-tmux file's first report holds its failure; the rerun's
+  // report stands for the file instead (check-time-optimization D2).
+  const replaced = new Set(plan.reruns.map((rerun) => rerun.replaces))
   let names: string[]
   try {
     names = fs.readdirSync(dir).filter((name) => name.endsWith(REPORT_SUFFIX)).sort()
@@ -285,6 +368,7 @@ export function mergeJUnitReports(dir: string): TestListEntry[] | null {
   }
   const entries: TestListEntry[] = []
   for (const name of names) {
+    if (replaced.has(name)) continue
     let xml: string
     try {
       xml = fs.readFileSync(path.join(dir, name), 'utf8')

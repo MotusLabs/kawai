@@ -15,6 +15,7 @@ import { MailboxStore } from '../team/mailboxStore'
 import { TaskStore } from '../team/taskStore'
 import { TASK_STALL_TAG, TaskStallNotices } from '../team/taskStallNotices'
 import { stallAnchor, stallOf, type StallMail } from '../../shared/taskStall'
+import { propertyCases } from './helpers/propertyCases'
 
 const SEED = 0x57A11
 const CASES = 300
@@ -143,7 +144,7 @@ const rowsOf = (db: Database, taskId: string) => (db.prepare('SELECT anchor_at, 
 test(`P1: over ${CASES} seeded cases (seed 0x57A11) the notices equal the stallOf reference model, one journal entry and one message each`, () => {
   let noticed = 0
   let repeated = 0
-  for (let c = 0; c < CASES; c++) {
+  for (let c = 0; c < propertyCases(CASES); c++) {
     const { w, model } = run(SEED + c, true)
     w.taskIds.forEach((taskId, i) => {
       const rows = rowsOf(w.db, taskId)
@@ -156,7 +157,7 @@ test(`P1: over ${CASES} seeded cases (seed 0x57A11) the notices equal the stallO
     w.db.close()
   }
   // The generator reaches the interesting space: notices, and tasks noticed more than once.
-  expect(noticed).toBeGreaterThan(CASES / 3)
+  expect(noticed).toBeGreaterThan(propertyCases(CASES) / 3)
   expect(repeated).toBeGreaterThan(10)
 }, 120_000)
 
@@ -172,7 +173,7 @@ const snapshot = (w: World) => ({
 })
 
 test(`P2: over ${CASES} seeded cases nothing but the notices differs from a run with the module unsubscribed`, () => {
-  for (let c = 0; c < CASES; c++) {
+  for (let c = 0; c < propertyCases(CASES); c++) {
     const on = run(SEED + c, true).w
     const off = run(SEED + c, false).w
     expect({ case: c, ...snapshot(on) }).toEqual({ case: c, ...snapshot(off) })

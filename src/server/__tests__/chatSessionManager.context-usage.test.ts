@@ -4,8 +4,9 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
-import { initDatabase, type SessionDatabase } from '../db'
+import { type SessionDatabase } from '../db'
 import { anyDirectory, createHarness, flush, waitForCondition, assistantUsage, resultWithWindow, compactBoundary, installManagerCleanup, spawned } from './helpers/chatSessionManagerHarness'
+import { freshTestDatabase } from './helpers/testDatabase'
 
 installManagerCleanup()
 
@@ -16,7 +17,7 @@ describe('ChatSessionManager context usage', () => {
   const originalAutoCompact = process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-chatmgr-context-'))
-    db = initDatabase({ path: path.join(tempDir, 'test.db') })
+    db = freshTestDatabase(path.join(tempDir, 'test.db'))
     process.env.ANTHROPIC_API_KEY = 'sk-test-key'
     process.env.CLAUDE_CONFIG_DIR = path.join(tempDir, 'claude-config')
     // Pinned like the main describe: a real ~/.kawai must not leak into

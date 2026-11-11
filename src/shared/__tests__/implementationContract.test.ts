@@ -7,6 +7,7 @@ import {
   type ImplementationContract,
 } from '../implementationContract'
 import { CASES, generate, mulberry32, SEED } from './contractFixtures'
+import { propertyCases } from '../../server/__tests__/helpers/propertyCases'
 
 const H = '## Implementation contract'
 
@@ -157,7 +158,7 @@ function variant(contract: ImplementationContract, rand: () => number): string {
 describe('contract properties (seed 0x1C0A7AC7, 500 cases)', () => {
   test('P1: formatting variants hash the same as the canonical form', () => {
     const rand = mulberry32(SEED)
-    for (let k = 0; k < CASES; k += 1) {
+    for (let k = 0; k < propertyCases(CASES); k += 1) {
       const contract = generate(rand)
       const parsed = parseContract(variant(contract, rand))
       expect(parsed.problems).toEqual([])
@@ -167,7 +168,7 @@ describe('contract properties (seed 0x1C0A7AC7, 500 cases)', () => {
 
   test('P2: render then parse round-trips', () => {
     const rand = mulberry32(SEED + 1)
-    for (let k = 0; k < CASES; k += 1) {
+    for (let k = 0; k < propertyCases(CASES); k += 1) {
       const contract = generate(rand)
       const parsed = parseContract(renderContract(contract))
       expect(parsed.problems).toEqual([])
@@ -177,7 +178,7 @@ describe('contract properties (seed 0x1C0A7AC7, 500 cases)', () => {
 
   test('P3: one content edit changes the hash input', () => {
     const rand = mulberry32(SEED + 2)
-    for (let k = 0; k < CASES; k += 1) {
+    for (let k = 0; k < propertyCases(CASES); k += 1) {
       const contract = generate(rand)
       const edited: ImplementationContract = structuredClone(contract)
       const kind = Math.floor(rand() * 4)

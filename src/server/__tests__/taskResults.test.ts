@@ -9,7 +9,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { cleanGitEnv } from '../git/gitCommand'
-import { initDatabase, type ChatSessionRecord, type SessionDatabase } from '../db'
+import { type ChatSessionRecord, type SessionDatabase } from '../db'
 import { AssignmentStore } from '../team/assignmentStore'
 import { MailboxStore } from '../team/mailboxStore'
 import { TaskStore } from '../team/taskStore'
@@ -17,6 +17,7 @@ import { TaskService, type TaskCaller } from '../team/TaskService'
 import { TaskResultService } from '../team/TaskResultService'
 import { taskHandlers } from '../team/taskTools'
 import { clearTeamCache, resolveTeam, type TeamIdentity } from '../team/teamIdentity'
+import { freshTestDatabase } from './helpers/testDatabase'
 
 function git(args: string[], cwd?: string) {
   const result = spawnSync('git', args, { cwd, encoding: 'utf8', env: cleanGitEnv() })
@@ -65,7 +66,7 @@ beforeEach(() => {
     ['stranger', row('stranger', 'leads', other)],
   ])
   db?.close()
-  db = initDatabase({ path: path.join(fs.mkdtempSync(path.join(root, 'db-')), 'tasks.db') })
+  db = freshTestDatabase(path.join(fs.mkdtempSync(path.join(root, 'db-')), 'tasks.db'))
   const mail = new MailboxStore(db.db)
   const store = new TaskStore(db.db, mail, new AssignmentStore(db.db, mail))
   tasks = new TaskService(store, { getSession: id => records.get(id) })

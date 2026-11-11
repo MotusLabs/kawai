@@ -12,7 +12,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { cleanGitEnv } from '../git/gitCommand'
-import { initDatabase, type ChatSessionRecord, type SessionDatabase } from '../db'
+import { type ChatSessionRecord, type SessionDatabase } from '../db'
 import type { ChatSessionDriver } from '../chat/ChatSessionDriver'
 import { formatEnvelope } from '../team/envelope'
 import type { GroupCatalog } from '../team/groupCatalog'
@@ -25,6 +25,7 @@ import type { SpawnRequest, SpawnResult } from '../team/staffing'
 import type { WaitingReason } from '../../shared/team'
 import type { ChatPeerMessage } from '../../shared/chat'
 import { NULL_OWNERSHIP } from '../plans/execution/executionOwnership'
+import { freshTestDatabase } from './helpers/testDatabase'
 
 function git(args: string[], cwd?: string): string {
   const result = spawnSync('git', args, { cwd, encoding: 'utf8', env: cleanGitEnv() })
@@ -117,7 +118,7 @@ beforeEach(async () => {
   fs.rmSync(path.join(repo, '.kawai'), { recursive: true, force: true })
   writeGroup('devs', 'max: 1\nprofile: glm\napproval: auto')
   writeGroup('leads', 'label: Team leads')
-  db = initDatabase({ path: path.join(dirCase, 'db.sqlite') })
+  db = freshTestDatabase(path.join(dirCase, 'db.sqlite'))
   records = new Map([['lead', record('lead', { groupId: 'leads' })]])
   drivers = new Map()
   pendingCards = new Map()

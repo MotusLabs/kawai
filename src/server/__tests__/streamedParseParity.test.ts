@@ -12,6 +12,7 @@ import path from 'node:path'
 import { createRolloutParser, parseCodexRollout, replayCodexRollout, replayCodexRolloutAsync } from '../chat/codex/codexRollout'
 import { LINE_CHUNK_BYTES, readLines } from '../chat/lineReader'
 import { createTranscriptParser, parseTranscriptContent, replayTranscriptFile, replayTranscriptFileAsync } from '../chat/transcriptReplay'
+import { propertyCases } from './helpers/propertyCases'
 
 const CASES = 50
 
@@ -89,7 +90,7 @@ describe('P1 streamed parse parity', () => {
 
   test('Claude transcripts: the streamed replay equals the string parse', async () => {
     const pick = lcg(0xb0a7)
-    for (let c = 0; c < CASES; c += 1) {
+    for (let c = 0; c < propertyCases(CASES); c += 1) {
       const content = generate(pick, claudeRows)
       const file = path.join(dir, `claude-${c}.jsonl`)
       fs.writeFileSync(file, content)
@@ -103,7 +104,7 @@ describe('P1 streamed parse parity', () => {
 
   test('Codex rollouts: the streamed replay equals the string parse', async () => {
     const pick = lcg(0xb0a7 ^ 0xc0de)
-    for (let c = 0; c < CASES; c += 1) {
+    for (let c = 0; c < propertyCases(CASES); c += 1) {
       const content = generate(pick, codexRows)
       const file = path.join(dir, `codex-${c}.jsonl`)
       fs.writeFileSync(file, content)

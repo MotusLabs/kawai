@@ -9,7 +9,6 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk'
-import { initDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
 import { ChatSessionManager } from '../chat/ChatSessionManager'
 import { fixtureQueryFactory } from '../chat/developmentFixture'
@@ -17,6 +16,7 @@ import { mailboxHandlers } from '../team/mailboxTools'
 import { cleanGitEnv } from '../git/gitCommand'
 import { ENVELOPE_TAG } from '../team/teamPrompt'
 import type { ChatEvent } from '../../shared/chat'
+import { freshTestDatabase } from './helpers/testDatabase'
 
 const waitFor = async (check: () => boolean, label: string) => {
   const start = Date.now()
@@ -50,7 +50,7 @@ test('a glm limit forwards progressed work to the default member, and later mail
   fs.writeFileSync(path.join(repo, '.kawai/groups/devs.md'), '---\nprofiles: [glm, default]\nmax: 3\n---\nBuild features')
   fs.writeFileSync(path.join(repo, '.kawai/groups/leads.md'), 'Coordinate work')
   const resetsAt = Math.floor(Date.now() / 1000) + 5 * 3600
-  const db = initDatabase({ path: path.join(root, 'sessions.db') })
+  const db = freshTestDatabase(path.join(root, 'sessions.db'))
   const events = new Map<string, ChatEvent[]>()
   const manager = new ChatSessionManager({
     db, registry: new SessionRegistry(), authCheck: () => true, profileCatalogHome: root,
@@ -150,7 +150,7 @@ test('a glm limit keeps juniors mail off glm-flash while its provider cools', as
   fs.mkdirSync(path.join(repo, '.kawai/groups'), { recursive: true })
   fs.writeFileSync(path.join(repo, '.kawai/groups/juniors.md'), '---\nprofiles: [glm-flash, haiku]\nmax: 3\n---\nTriage work')
   fs.writeFileSync(path.join(repo, '.kawai/groups/leads.md'), 'Coordinate work')
-  const db = initDatabase({ path: path.join(root, 'sessions.db') })
+  const db = freshTestDatabase(path.join(root, 'sessions.db'))
   const manager = new ChatSessionManager({
     db, registry: new SessionRegistry(), authCheck: () => true, profileCatalogHome: root,
     onEvent: () => {},

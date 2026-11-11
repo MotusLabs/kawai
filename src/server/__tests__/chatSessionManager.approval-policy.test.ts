@@ -7,6 +7,7 @@ import type { ChatEvent } from '../../shared/chat'
 import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
 import { anyDirectory, managedManager, closeDispatchers, createHarness, flush, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+import { freshTestDatabase } from './helpers/testDatabase'
 
 installManagerCleanup()
 
@@ -23,7 +24,7 @@ describe('ChatSessionManager', () => {
 
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-chatmgr-'))
-    db = initDatabase({ path: path.join(tempDir, 'test.db') })
+    db = freshTestDatabase(path.join(tempDir, 'test.db'))
     // Isolate auth from the host: no API key, empty CLI config dir. HOME is
     // pinned so the profile catalog resolves against an empty home — a real
     // ~/.kawai must not leak into these tests.
@@ -111,7 +112,7 @@ describe('ChatSessionManager', () => {
   test('approval policy survives a backend restart', async () => {
     process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
     const dbPath = path.join(tempDir, 'policy-restart.db')
-    const dbA = initDatabase({ path: dbPath })
+    const dbA = freshTestDatabase(dbPath)
     const harnessA = await createHarness(dbA)
     const created = harnessA.manager.createSession({ projectPath: '/tmp/proj' })
     if (!created.ok) throw new Error(created.error)
