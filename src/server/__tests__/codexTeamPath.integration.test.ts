@@ -260,6 +260,56 @@ test('a resume that moves transcript_path re-arms the receipt tail — mail sett
   await until(() => restartEvents.filter(event => event.type === 'turn_completed').length === 1)
 })
 
+// The same moved-rollout resume as a finite value witness (task 6.1 R3, V8;
+// note-39650c90): the stored path when the resumed turn has started, and the
+// mail's state after a bounded wait while the turn is still held. A missed
+// re-arm fails these values instead of a timeout.
+test('a resume onto a moved rollout has re-armed the tail by its turn start: mid-turn mail is delivered before the gate opens', async () => {
+  const events: ChatEvent[] = []
+  manager = createManager(events, [])
+  await manager.whenRestored()
+  const created = await manager.createAvailableSession({ projectPath: project, claudeProfileId: 'codex', name: 'Codex dev' })
+  if (!created.ok) throw new Error(created.error)
+  const id = created.session.id
+  const moved = path.join(codexHome, 'sessions', '2026', '10', '20', `rollout-2026-10-20T01-00-00-${THREAD_ID}.jsonl`)
+  const script = new Script().boot('thread/start', 'gpt-test', rollout)
+    .request('account/rateLimits/read', {})
+  const second = new Script().boot('thread/resume', 'gpt-test', moved)
+    .request('account/rateLimits/read', {})
+    .turn('ct-1')
+    .gate(gate)
+    .completed('ct-1')
+  script.lines.push(...second.lines)
+  process.env.FAKE_TRANSCRIPT = script.write(tempDir)
+  expect((await manager.start(id)).ok).toBe(true)
+  await until(() => db.getChatSession(id)?.transcriptPath === rollout)
+  fs.writeFileSync(rollout, `${JSON.stringify({ timestamp: '2026-10-20T00:00:00.000Z', type: 'session_meta', payload: { id: THREAD_ID } })}\n`)
+  fs.writeFileSync(moved, '')
+  manager.shutdown()
+
+  const restartEvents: ChatEvent[] = []
+  manager = createManager(restartEvents, [])
+  await manager.whenRestored()
+  process.env.FAKE_RUN = '2'
+  expect((await manager.send(id, 'go')).ok).toBe(true)
+  await until(() => restartEvents.some(event => event.type === 'turn_started'))
+  const pathAtTurnStart = db.getChatSession(id)?.transcriptPath
+
+  const store = manager.mailbox.store
+  const mail = store.enqueue({ teamId: 'team-x', toKind: 'group', toId: 'nobody', fromSession: 'lead', fromGroup: null, originPath: project, body: 'receipt on the moved rollout' })
+  store.claim(mail.id, id); store.markPushed(mail.id)
+  fs.appendFileSync(moved, `${JSON.stringify({ timestamp: '2026-10-20T01:05:00.000Z', type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: formatEnvelope(messageEnvelope(mail)) }] } })}\n`)
+  // A bounded window, then the value: still mid-turn (the gate is closed).
+  const deadline = Date.now() + 3_000
+  while (store.get(mail.id)?.state !== 'delivered' && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20))
+  const stateBeforeGate = store.get(mail.id)?.state
+  const statusBeforeGate = db.getChatSession(id)?.status
+
+  fs.writeFileSync(gate, '')
+  await until(() => restartEvents.filter(event => event.type === 'turn_completed').length === 1)
+  expect([pathAtTurnStart, stateBeforeGate, statusBeforeGate]).toEqual([moved, 'delivered', 'working'])
+})
+
 // bounded-log-reads-and-task-get D7 catalogue upgrade, row V8: what Kawai
 // controls across a thread's life. The start registers the current table
 // (bounded task_get and task_journal_read); the resume of the same thread by

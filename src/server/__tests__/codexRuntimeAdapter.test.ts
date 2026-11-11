@@ -82,6 +82,14 @@ async function until(probe: () => boolean, ms = 10_000): Promise<void> {
   }
 }
 
+/** The raw failures settled() reports after a kill: top-level messages, and each one's own causes. */
+async function reported(driver: Adapter): Promise<Array<[string, string[]]>> {
+  driver.kill()
+  const error = await driver.settled().then(() => null, (caught: unknown) => caught)
+  const all = error === null ? [] : error instanceof AggregateError ? error.errors : [error]
+  return all.map((e) => [(e as Error).message, e instanceof AgentRuntimeError ? e.causes.map((c) => (c as Error).message) : []])
+}
+
 const completed = (events: ChatEvent[]) => events.filter((e) => e.type === 'turn_completed')
 /** The rollout path the fake saved for a thread. */
 const savedPath = (root: CodexRoot, threadId: string) => (JSON.parse(readFileSync(join(root.home, 'threads', `${threadId}.json`), 'utf8')) as { path: string }).path
@@ -166,6 +174,8 @@ describe('Kawai Codex composition over the public package factory', () => {
     expect(sent(root, 'thread/resume').map((m) => m.params.threadId)).toEqual([h.sessions[0]])
     expect(h.sessions).toHaveLength(1)
     expect(h.spawns.map((s) => s.resumed)).toEqual([false, true])
+    // The crashed generation's own stop (the retire before the respawn) is reported once, raw.
+    expect(await reported(h.driver)).toEqual([['stop failed: 1 owned operation(s) failed', [exitCause(1, 3, null)]]])
   })
 
   test('a refused thread/start reports Kawai’s start error and the session is dead', async () => {
@@ -175,6 +185,7 @@ describe('Kawai Codex composition over the public package factory', () => {
     await until(() => h.driver.isDead)
     expect(h.events.filter((e) => e.type === 'error').map((e) => e.message)).toEqual(['Codex could not start the thread: app-server request 2 (thread/start) failed: 401 Unauthorized'])
     expect(sent(root, 'thread/start')).toHaveLength(1)
+    expect((await reported(h.driver)).map(([message]) => message)[0]).toBe('Codex could not start a thread: app-server request 2 (thread/start) failed: 401 Unauthorized')
   })
 
   test('an app-server that exits while booting reports only its exit, as before', async () => {
@@ -182,9 +193,10 @@ describe('Kawai Codex composition over the public package factory', () => {
     const h = harness(root, { executable: '/bin/false' })
     h.driver.start()
     await until(() => h.ended() === 1)
-    await h.driver.settled()
+    const failures = await reported(h.driver)
     expect(h.events.filter((e) => e.type === 'error').map((e) => e.message)).toEqual(['The Codex app-server exited with code 1'])
     expect(h.driver.isDead).toBe(true)
+    expect(failures.map(([message]) => message)[0]).toBe('the Codex app-server exited with code 1')
   })
 
   test('a rejected kill is quiescence only when its causes are exactly the reported exits', async () => {

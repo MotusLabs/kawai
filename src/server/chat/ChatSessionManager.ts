@@ -163,6 +163,7 @@ import { scanTranscriptMeta } from './transcriptMeta'
 import { indexTranscripts, TranscriptPathCache } from './transcriptLocator'
 import { resolveTeam } from '../team/teamIdentity'
 import { validateWorkspaceSend } from './workspaceSendValidation'
+import { RetiredDrivers, type RetiredFailure } from './retiredDrivers'
 import type { WorkspaceMessageContext, WorkspaceMessageEnvelope } from '../../shared/planWorkspace'
 
 export type { ChatQueryFactory }
@@ -384,6 +385,8 @@ export class ChatSessionManager {
   private readonly options: ChatSessionManagerOptions
   private readonly records = new Map<string, ChatSessionRecord>()
   private readonly drivers = new Map<string, ChatAgentDriver>()
+  /** Stopped drivers whose owned work the manager still joins (task 6.1, A5). */
+  private readonly retired = new RetiredDrivers()
   /** In-flight ensureDriver calls, so racing sends never build two drivers. */
   private readonly driverPromises = new Map<
     string,
@@ -2103,6 +2106,7 @@ export class ChatSessionManager {
       // exited-unexpectedly error a bare close would report.
       driver.interrupt()
       driver.kill()
+      this.retired.retire(sessionId, driver)
       this.observations.chat.processEnded(sessionId)
     }
     this.teamMail.settleRecipient(sessionId)
@@ -2276,7 +2280,11 @@ export class ChatSessionManager {
   kill(sessionId: string): boolean {
     const record = this.records.get(sessionId)
     if (!record) return false
-    this.drivers.get(sessionId)?.kill()
+    const driver = this.drivers.get(sessionId)
+    if (driver) {
+      driver.kill()
+      this.retired.retire(sessionId, driver)
+    }
     this.observations.chat.processEnded(sessionId)
     this.teamMail.settleRecipient(sessionId)
     this.drivers.delete(sessionId)
@@ -2311,6 +2319,14 @@ export class ChatSessionManager {
     return true
   }
 
+  /**
+   * Every driver this manager stopped has settled its owned work (task 6.1,
+   * A5); lists the raw terminal failures not listed before, once each.
+   */
+  retiredSettled(): Promise<RetiredFailure[]> {
+    return this.retired.settled()
+  }
+
   /** Server shutdown: settle every driver (callbacks cannot survive it). */
   shutdown(): void {
     // Any CLI process group the adapter left running dies with us otherwise.
@@ -2328,6 +2344,7 @@ export class ChatSessionManager {
     this.stopProviderUsageRefresh()
     for (const [id, driver] of this.drivers) {
       driver.shutdown()
+      this.retired.retire(id, driver)
       this.observations.chat.processEnded(id)
     }
     this.drivers.clear()
@@ -2989,6 +3006,7 @@ export class ChatSessionManager {
         this.records.get(record.sessionId)?.archivedAt != null
       ) {
         driver.kill()
+        this.retired.retire(sessionId, driver)
         this.observations.chat.processEnded(sessionId)
         return null
       }

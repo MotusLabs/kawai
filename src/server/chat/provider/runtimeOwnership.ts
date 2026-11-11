@@ -1,16 +1,22 @@
 // Owned work of one Kawai chat driver adapter (task 6.1, A5): every promise a
 // package driver returns (start, send, its turn result, interrupt, kill,
-// shutdown) is registered here, never dropped. A rejection is kept raw, once,
-// and logged; `settled()` joins everything registered so far (and anything
-// registered while it waits), so a caller can wait for the adapter to
-// quiesce before reusing or deleting what it depends on. Nothing here
-// awaits itself: `settled()` called from inside tracked work would wait for
-// that work, so the adapter never calls it from its own jobs.
+// shutdown) and every promise a host callback returns is registered here,
+// never dropped. A rejection is kept raw and logged; `settled()` joins
+// everything registered so far (and anything registered while it waits),
+// then reports the failures it has not reported yet, once: it rejects with
+// the original object for one failure, or an AggregateError of the originals
+// for several. Callers waiting at the same time share one report; a later
+// wait reports only newer failures. Nothing here awaits itself: `settled()`
+// called from inside tracked work would wait for that work, so the adapter
+// never calls it from its own jobs.
 import { logger } from '../../logger'
 
 export class OwnedWork {
   private readonly live = new Set<Promise<unknown>>()
   private readonly failures: Array<{ label: string; error: unknown }> = []
+  /** How many failures a settled() report already carried. */
+  private reported = 0
+  private joining: Promise<void> | null = null
 
   constructor(private readonly sessionId: string) {}
 
@@ -34,8 +40,28 @@ export class OwnedWork {
     return this.failures.slice()
   }
 
-  /** Resolves once every registered job (including ones registered meanwhile) settled. */
-  async settled(): Promise<void> {
-    while (this.live.size > 0) await Promise.allSettled([...this.live])
+  /**
+   * Resolves once every registered job (including ones registered meanwhile)
+   * settled, or rejects with the failures not yet reported. `before` runs
+   * between joins, so the adapter can register work that only an outside
+   * caller may start (a re-acquired terminal join).
+   */
+  settled(before?: () => void): Promise<void> {
+    this.joining ??= this.join(before).finally(() => {
+      this.joining = null
+    })
+    return this.joining
+  }
+
+  private async join(before?: () => void): Promise<void> {
+    before?.()
+    while (this.live.size > 0) {
+      await Promise.allSettled([...this.live])
+      before?.()
+    }
+    const fresh = this.failures.slice(this.reported)
+    this.reported = this.failures.length
+    if (fresh.length === 1) throw fresh[0]!.error
+    if (fresh.length > 1) throw new AggregateError(fresh.map((f) => f.error), `${fresh.length} owned chat runtime operations failed`)
   }
 }

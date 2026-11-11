@@ -170,6 +170,12 @@ export interface ChatAgentDriver {
   kill(): void
   /** Flush and stop cleanly (server shutdown), leaving the session resumable. */
   shutdown(): void
+  /**
+   * Package-runtime adapters (task 6.1): joins the driver's owned work after
+   * a kill or shutdown, rejecting with its raw failures once. Called by the
+   * manager from outside any driver callback.
+   */
+  settled?(): Promise<void>
 
   /** A live approval-policy switch applies to the next pending request. */
   onApprovalPolicyChanged(policy: ChatApprovalPolicy): void
