@@ -57,6 +57,7 @@ import { SeenResultFrames } from './resultFrames.js'
 import { settleResult, type ResultSettlementHost } from './resultSettlement.js'
 import { CliTurnBinder } from './turnBinder.js'
 import { OpenTurns } from './openTurns.js'
+import { composeEnvelope } from './compose.js'
 import { checkSubmission, newTurn, promptMessage, type Turn } from './turns.js'
 import { ClaudeUsageFacts } from './usageFacts.js'
 import { UsageControls } from './usageControls.js'
@@ -385,7 +386,14 @@ export class ClaudeSession {
         const messageUuid = submit.messageUuid ?? crypto.randomUUID()
         const turnId = crypto.randomUUID()
         checkSubmission(this.options.beforeSubmit, { messageUuid, turnId, text, context: submit.context })
-        return newTurn(turnId, messageUuid, text)
+        // R4: the host's additions to this prompt, on the same identities;
+        // the admission decides again after it, as after beforeSubmit.
+        const envelope = composeEnvelope(this.options.composePrompt, { messageUuid, turnId, text, context: submit.context }, (pending) => {
+          this.lifecycle.jobs.track('callback:composePrompt', Promise.resolve(pending)).catch(() => {})
+        })
+        const turn = newTurn(turnId, messageUuid, text)
+        turn.envelope = envelope
+        return turn
       },
       commit: (admission, turn) => this.accept(turn, admission),
     })
@@ -399,7 +407,7 @@ export class ClaudeSession {
    */
   private accept(turn: Turn, admission: Admission): TurnHandle {
     const messageUuid = turn.messageUuid!
-    const pushed = this.current()!.input.push(promptMessage(turn.text, messageUuid))
+    const pushed = this.current()!.input.push(promptMessage(turn.text, messageUuid, turn.envelope))
     if (!pushed) throw new AgentRuntimeError({ category: 'stopped', message: 'the driver is stopped' })
     this.open.push(turn)
     this.frames.sent(messageUuid, turn.text)

@@ -264,6 +264,13 @@ request handler can't grant a tool the policy denies.
   unoffered option, a second choice on a single-select question, a missing
   answer) or one of the wrong kind reports `invalid` and settles nothing.
   The request stays open for a valid answer.
+- **Explanatory response (Claude questions).** `answerQuestion(id, answers,
+  { response })` sends your non-blank string unchanged as the answer's
+  response, after the answers themselves were checked. It can't make an
+  invalid answer valid. A blank or non-string response reports `invalid`
+  and settles nothing. Codex questions and approvals on either runtime don't
+  support it: a response there reports `invalid` and the request stays
+  pending.
 - **Cancellation is an interrupting denial.** A cancelled tool never runs. A
   signal already aborted when the request arrives, or a stopping session, is
   denied at once, with no event and no `onRequest` call.
@@ -454,6 +461,14 @@ records and observes nothing for it.
     message, `turn_started` or `user_message` event follows.
   - An accepted submission keeps exactly the UUID and turn id that the
     callback saw.
+- **`composePrompt`** (Claude, optional) runs synchronously right after an
+  accepted `beforeSubmit`, with the same UUID, turn id, text and context. It
+  returns `undefined` or `{ pastedContent?, origin? }`: string entries the CLI
+  appends after the typed text, and `{ kind: 'peer', from }` provenance.
+  - Both fields go on that one prompt only, copied. The typed text, UUID and
+    turn id stay exactly as they were.
+  - A throw, a promise or any other shape rejects the send with category
+    `context`, before anything is enqueued or emitted.
 - **`onToolObservation`** receives only the phase (`call` or `result`), the
   tool name, the call id, the turn and the error flag. It never sees
   arguments.

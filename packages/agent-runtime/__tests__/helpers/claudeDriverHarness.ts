@@ -37,9 +37,9 @@ export interface DriverHooks {
   onRequest?(request: PendingRequest): void
   unansweredRequests?: 'deny' | 'wait'
   /** Usage observers passed through as given (tasks 5.2-5.4). */
-  observers?: Pick<AgentCallbacks, 'onLimitEvent' | 'onQuotaReport' | 'onContextUsage' | 'onCompaction' | 'onModel' | 'onSpawn' | 'onCwdChanged' | 'onCompactionObservation' | 'onNotification' | 'onQuotaNoData'>
+  observers?: Pick<AgentCallbacks, 'onLimitEvent' | 'onQuotaReport' | 'onContextUsage' | 'onCompaction' | 'onModel' | 'onSpawn' | 'onCwdChanged' | 'onCompactionObservation' | 'onNotification' | 'onQuotaNoData' | 'onBackgroundTasks'>
   /** Further session options (R2 host-compatibility inputs), passed as given. */
-  session?: Partial<Pick<ClaudeSessionOptions, 'auditHooks' | 'systemPromptAppend' | 'model' | 'effort' | 'claimUsagePull' | 'quotaSource'>>
+  session?: Partial<Pick<ClaudeSessionOptions, 'auditHooks' | 'systemPromptAppend' | 'model' | 'effort' | 'claimUsagePull' | 'quotaSource' | 'composePrompt'>>
   /** Extra launch environment for the fake home. */
   env?: Record<string, string>
   /** The conversation to resume; null launches fresh. Default: the caller's saved 'sess-saved'. */

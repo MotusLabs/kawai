@@ -18,6 +18,7 @@ import type { AnswerOptions, AnswerOutcome } from '../contract.js'
 import type { EventBody } from '../eventStream.js'
 import type { AgentQuestion, PendingRequest, QuestionAnswers } from '../events.js'
 import type { JsonValue } from '../json.js'
+import { questionResponse, unsupportedResponse } from '../common/answerResponse.js'
 import { validateAnswers } from './answers.js'
 import { ASK_USER_QUESTION_TOOL, parseQuestions } from './contentBlocks.js'
 
@@ -96,6 +97,8 @@ export class ClaudeRequests {
     const entry = this.lookup(requestId)
     if (!('request' in entry)) return entry
     if (entry.request.kind !== 'approval') return { ok: false, reason: 'invalid', message: `Request ${requestId} is not an approval` }
+    const unsupported = unsupportedResponse(options, 'an approval')
+    if (unsupported) return unsupported
     if (decision === 'allow') this.settle(requestId, { behavior: 'allow', updatedInput: entry.input }, 'allowed', options.decidedBy ?? 'caller')
     else this.settle(requestId, { behavior: 'deny', message: 'The tool use was denied' }, 'denied', options.decidedBy ?? 'caller')
     return { ok: true }
@@ -107,7 +110,11 @@ export class ClaudeRequests {
     if (entry.request.kind !== 'question') return { ok: false, reason: 'invalid', message: `Request ${requestId} is not a question` }
     const validated = validateAnswers(entry.request.questions, answers)
     if (!validated.ok) return { ok: false, reason: 'invalid', message: validated.error }
-    const updatedInput = { ...entry.input, answers: validated.answers, ...(validated.response !== undefined ? { response: validated.response } : {}) }
+    // R5: an explicit response only after the answers validated; it takes the derived one's place.
+    const explicit = questionResponse(options)
+    if ('ok' in explicit) return explicit
+    const response = explicit.response ?? validated.response
+    const updatedInput = { ...entry.input, answers: validated.answers, ...(response !== undefined ? { response } : {}) }
     this.settle(requestId, { behavior: 'allow', updatedInput }, 'answered', options.decidedBy ?? 'caller')
     return { ok: true }
   }

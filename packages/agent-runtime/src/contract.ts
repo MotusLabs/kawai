@@ -130,6 +130,12 @@ export type AnswerOutcome =
 export interface AnswerOptions {
   /** Echoed as the resolved event's decidedBy (default `caller`). */
   decidedBy?: string
+  /**
+   * Claude questions only (R5): sent unchanged as the answer's response once
+   * the answers validated; must be a non-blank string. A Codex question or
+   * an approval refuses a supplied response as invalid and stays pending.
+   */
+  response?: string
 }
 
 export interface AgentDriver {

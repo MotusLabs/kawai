@@ -20,6 +20,7 @@
 //   invalid answer is refused and leaves it pending. A schema or mode that
 //   cannot be validated faithfully is declined and its exact shape reported
 //   once per session as an `unsupported` error.
+import { unsupportedResponse } from '../common/answerResponse.js'
 import type { AnswerOptions, AnswerOutcome } from '../contract.js'
 import type { EventBody } from '../eventStream.js'
 import type { AgentQuestion, PendingRequest, QuestionAnswers, RequestOutcome } from '../events.js'
@@ -198,6 +199,8 @@ export class CodexRequests {
     const entry = this.lookup(requestId)
     if (!('request' in entry)) return entry
     if (entry.request.kind !== 'approval') return { ok: false, reason: 'invalid', message: `Request ${requestId} is not an approval` }
+    const unsupported = unsupportedResponse(options, 'an approval')
+    if (unsupported) return unsupported
     if (decision !== 'allow' && decision !== 'deny') return { ok: false, reason: 'invalid', message: 'decision must be allow or deny' }
     this.settle(requestId, decision, decision === 'allow' ? 'allowed' : 'denied', options.decidedBy ?? 'caller')
     return { ok: true }
@@ -207,6 +210,8 @@ export class CodexRequests {
     const entry = this.lookup(requestId)
     if (!('request' in entry)) return entry
     if (entry.request.kind !== 'question') return { ok: false, reason: 'invalid', message: `Request ${requestId} is not a question` }
+    const unsupported = unsupportedResponse(options, 'a Codex question')
+    if (unsupported) return unsupported
     const validated = validate(entry.request.questions, answers)
     if (!validated.ok) return { ok: false, reason: 'invalid', message: validated.error }
     const decidedBy = options.decidedBy ?? 'caller'

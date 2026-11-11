@@ -115,6 +115,15 @@ export interface SubmitContext {
 /** Synchronous pre-submit decision; a refusal precedes any enqueue or event (P12). */
 export type BeforeSubmit = (submission: SubmitContext) => { accepted: true } | { accepted: false; reason: string }
 
+/** What a Claude prompt composer may add to one prompt (R4): pasted entries and peer provenance only. */
+export interface PromptEnvelope {
+  pastedContent?: readonly string[]
+  origin?: { kind: 'peer'; from: string }
+}
+
+/** Synchronous per-send composition after an accepted beforeSubmit (R4). */
+export type ComposePrompt = (submission: SubmitContext) => PromptEnvelope | undefined
+
 export interface WireFrame {
   generation: number
   direction: 'out' | 'in' | 'stderr' | 'lifecycle'
@@ -250,6 +259,14 @@ export interface ClaudeDriverOptions extends BaseDriverOptions {
    * driver when host-login was chosen.
    */
   claimUsagePull?: () => boolean | Promise<boolean>
+  /**
+   * The host's additions to one prompt (R4), asked synchronously right after
+   * its beforeSubmit accepted, with the same UUID, turn id, text and context.
+   * `pastedContent` and `origin` are copied onto that prompt's SDK message;
+   * the text and identities never change. A throw, a promise or another shape
+   * refuses the send with category `context` before anything is enqueued.
+   */
+  composePrompt?: ComposePrompt
 }
 
 /** Optional detailed Codex audit adapter; opt-in only. */

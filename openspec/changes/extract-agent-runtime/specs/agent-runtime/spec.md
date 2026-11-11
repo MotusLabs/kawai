@@ -93,6 +93,10 @@ A question or approval request SHALL be registered before the request callback f
 - **WHEN** a response and stop target the same pending request
 - **THEN** exactly one settlement occurs and a late response reports that the request is no longer pending
 
+#### Scenario: Explanatory response on a Claude question
+- **WHEN** a caller answers a pending Claude question with valid answers and a non-blank response, or supplies a response that is blank, on a Codex question or on an approval
+- **THEN** the valid Claude answer carries the chosen answers and that response unchanged, and every other case reports invalid and leaves the request pending
+
 ### Requirement: Events are ordered serializable values
 Conversation events SHALL be JSON-serializable and carry stable event ids, stream ordering, timestamps when known and relevant turn, message and tool identities. An archived event SHALL retain its identity on replay. Runtime-native objects, errors, callbacks and secrets from the launch environment SHALL NOT be placed in the event envelope.
 
@@ -120,7 +124,7 @@ The runtime SHALL expose token, model and compaction facts, quota-window reports
 - **THEN** the no-data callback names the source and account scope once, no quota report is fabricated, and a denied or unattempted read reports neither
 
 ### Requirement: Host-compatibility inputs and observations are optional
-A host MAY supply a live Codex effort reader, a detailed Claude hook observer and callbacks for cwd changes, spawns, Codex thread openings, compaction progress, context-usage metadata and notification expiry. Each SHALL report provider facts as observed, keep unknown values null, never affect permission or transport, and leave behavior unchanged when omitted. A reader failure SHALL refuse only the work that read it.
+A host MAY supply a live Codex effort reader, a Claude prompt composer, a detailed Claude hook observer and callbacks for cwd changes, spawns, Codex thread openings, compaction progress, context-usage metadata and notification expiry. Each SHALL report provider facts as observed, keep unknown values null, never affect permission or transport, and leave behavior unchanged when omitted. A reader failure SHALL refuse only the work that read it.
 
 #### Scenario: Live Codex turn effort
 - **WHEN** a Codex host supplies an effort reader and changes its answer between two turns on the same process
@@ -137,6 +141,10 @@ A host MAY supply a live Codex effort reader, a detailed Claude hook observer an
 #### Scenario: Codex thread opening reports a moved transcript
 - **WHEN** a Codex host supplies the thread-open observer and a resume reply names the saved thread with a new transcript path
 - **THEN** the observer receives that generation, thread id, path and resumed flag once before readiness, and no checkpoint is persisted again
+
+#### Scenario: Claude prompt composition
+- **WHEN** a Claude host supplies a prompt composer that returns pasted content and a peer origin for an accepted send
+- **THEN** that prompt carries them beside its unchanged literal text and minted UUID, and a throwing or malformed composer refuses the send before anything is enqueued or emitted
 
 #### Scenario: Native Codex skill input
 - **WHEN** a Codex user message names a skill in the runtime's own skill catalog

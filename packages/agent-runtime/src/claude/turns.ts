@@ -10,6 +10,7 @@ import type { TurnOutcome, TurnResult } from '../contract.js'
 import { AgentRuntimeError, type AgentErrorInfo } from '../errors.js'
 import type { BeforeSubmit, SubmitContext } from '../options.js'
 import type { TokenUsage } from '../usage/types.js'
+import { envelopeFields, type ComposedEnvelope } from './compose.js'
 
 export interface Turn {
   turnId: string
@@ -32,6 +33,8 @@ export interface Turn {
   usage: TokenUsage | null
   resolve(result: TurnResult): void
   result: Promise<TurnResult>
+  /** The host's checked composition for this turn's own prompt (R4), or null. */
+  envelope?: ComposedEnvelope | null
 }
 
 export function newTurn(turnId: string, messageUuid: string | null, text: string): Turn {
@@ -56,9 +59,13 @@ export function turnResult(turn: Turn, outcome: TurnOutcome, error: AgentErrorIn
   }
 }
 
-/** The stream-json user frame of one prompt, carrying its client UUID. */
-export function promptMessage(text: string, uuid: string): SDKUserMessage {
-  return { type: 'user', message: { role: 'user', content: text }, parent_tool_use_id: null, uuid, session_id: '' } as SDKUserMessage
+/**
+ * The stream-json user frame of one prompt, carrying its client UUID and,
+ * when the host composed one (R4), its own copy of that prompt's pasted
+ * content and peer origin. Without an envelope the frame is unchanged.
+ */
+export function promptMessage(text: string, uuid: string, envelope?: ComposedEnvelope | null): SDKUserMessage {
+  return { type: 'user', message: { role: 'user', content: text }, parent_tool_use_id: null, ...envelopeFields(envelope), uuid, session_id: '' } as SDKUserMessage
 }
 
 /** The client UUIDs a result echoes (`user_message_uuids`, else `user_message_uuid`). */

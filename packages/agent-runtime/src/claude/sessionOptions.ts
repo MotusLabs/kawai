@@ -2,7 +2,7 @@
 // session.ts for size, unchanged). session.ts re-exports both names.
 import type { Options, Query, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { ResumeCheckpoint } from '../contract.js'
-import type { AgentCallbacks, BeforeSubmit, ClaudeAuditHooks, ClaudePermissions, Effort, LaunchInput, Logger, ToolObservation, ToolSet, WireRecorder } from '../options.js'
+import type { AgentCallbacks, BeforeSubmit, ClaudeAuditHooks, ComposePrompt, ClaudePermissions, Effort, LaunchInput, Logger, ToolObservation, ToolSet, WireRecorder } from '../options.js'
 import type { TerminateOptions } from '../process/ownedProcess.js'
 
 /** Test seam: a controlled query in place of the SDK's (design §5, runtime test seams). */
@@ -24,6 +24,8 @@ export interface ClaudeSessionOptions {
   systemPromptAppend?: string
   /** Synchronous pre-submit decision; a refusal or throw precedes any enqueue or event (P12). */
   beforeSubmit?: BeforeSubmit
+  /** Per-send pasted content and peer origin, after an accepted beforeSubmit (R4). */
+  composePrompt?: ComposePrompt
   /** Names-only tool observation (P14). */
   onToolObservation?(observation: ToolObservation): void
   /** Detailed opt-in audit adapter. */

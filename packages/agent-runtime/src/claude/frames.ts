@@ -323,7 +323,9 @@ export class ClaudeFrames {
     this.background = next
     const onBackgroundTasks = this.host.callbacks.onBackgroundTasks
     if (onBackgroundTasks) {
-      const projected = projectBackgroundTasks(next)
+      // Contract D: each visible task's known native output file, decided before the observer.
+      const files = new Map(next.tasks.filter((entry) => entry.visible && typeof entry.outputFile === 'string' && entry.outputFile).map((entry) => [entry.taskId, entry.outputFile!]))
+      const projected = projectBackgroundTasks(next).map((task) => (files.has(task.taskId) ? { ...task, outputFile: files.get(task.taskId)! } : task))
       this.host.notify('onBackgroundTasks', () => onBackgroundTasks(projected))
     }
   }

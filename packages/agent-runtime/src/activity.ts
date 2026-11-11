@@ -49,6 +49,12 @@ export interface BackgroundTask {
   endedAtMs?: number
   elapsedMs: number
   summary?: string
+  /**
+   * Claude only: the task's recorded output file as the SDK reported it
+   * (a nonempty string), else absent. A host showing tasks to others should
+   * keep it private.
+   */
+  outputFile?: string
 }
 
 export interface AgentNotification {
