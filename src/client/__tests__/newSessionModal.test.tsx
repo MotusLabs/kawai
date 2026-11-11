@@ -1579,8 +1579,6 @@ describe('NewSessionModal auto-approve tools (unify-approval-defaults D2)', () =
     })
   })
 
-  // Transitional (unify-approval-defaults): annotated until the change archives.
-  // @covers: chat-sessions › Users configure the default approval policy for new chat sessions › Settings default seeds new chats
   // @covers: chat-sessions › New chats start from their team's default approval policy › Team default seeds new chats
   test('an auto team default for the picked path pre-checks the box and submits auto', async () => {
     const dialog = await chatDialog({ '/base': 'auto' })
@@ -1595,8 +1593,6 @@ describe('NewSessionModal auto-approve tools (unify-approval-defaults D2)', () =
     })
   })
 
-  // Transitional (unify-approval-defaults): annotated until the change archives.
-  // @covers: chat-sessions › Users configure the default approval policy for new chat sessions › Creation dialog overrides the default
   // @covers: chat-sessions › New chats start from their team's default approval policy › Creation dialog overrides the team default
   test('unchecking an auto team default creates a manual session', async () => {
     const dialog = await chatDialog({ '/base': 'auto' })
