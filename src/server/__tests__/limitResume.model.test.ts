@@ -12,6 +12,7 @@ import type { ChatSessionRecord } from '../db'
 import { MailboxStore, type TeamMessage } from '../team/mailboxStore'
 import { LimitEventStore } from '../team/routing/limitEvents'
 import { LimitOutcomes } from '../team/routing/limitOutcomes'
+import { propertyCases } from './helpers/propertyCases'
 
 const SEED = 0x11a7
 const CASES = 500
@@ -171,7 +172,7 @@ describe('limit-resume model (design P1–P4)', () => {
     const r = rng(SEED)
     let crashes = 0
     let maxRun = 0
-    for (let c = 0; c < CASES; c++) {
+    for (let c = 0; c < propertyCases(CASES); c++) {
       const world = new World()
       const trace: string[] = [`case ${c}`]
       try {

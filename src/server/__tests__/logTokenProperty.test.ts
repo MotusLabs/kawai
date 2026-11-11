@@ -12,6 +12,7 @@ import { TOKEN_WINDOW_BYTES } from '../logmatch/tokenReader'
 import type { LogEntrySnapshot } from '../logPollData'
 import { tokenGate, type TokenEvidence } from '../logTokenEvidence'
 import { assistantLine, claudeLogPath, fillerLine, FsObserver, userLine, WitnessEnv, writeChunked, type Part } from './helpers/logTokenHarness'
+import { propertyCases } from './helpers/propertyCases'
 
 const W = TOKEN_WINDOW_BYTES
 const MAX_BYTES = 2 * W + 1
@@ -130,7 +131,7 @@ describe('P1/P2: bounded token reads over generated logs', () => {
     const rand = mulberry32(SEED)
     let maxSize = 0
     const seen = { large: 0, small: 0, complete: 0, partial: 0, limited: 0, withMessages: 0 }
-    for (let i = 0; i < CASES; i++) {
+    for (let i = 0; i < propertyCases(CASES); i++) {
       const lines = generate(rand, i)
       const logPath = claudeLogPath(`p1-${i}`)
       const size = writeChunked(logPath, lines.flatMap((l) => l.parts))
