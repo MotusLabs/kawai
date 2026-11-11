@@ -5,6 +5,7 @@ Implementation notes (feat/bounded-openspec-discovery, 2026-11-11):
 - 1.1 used the 2026-11-10 measurements instead of a fresh 10-minute log: 676 runs in 2 minutes, 235 at peak, a mean of 49 running over 20 one-second samples, and `cpu.pressure` some avg60 of 30-33%. The server was then stopped. Thirty seconds after the stop, avg10 fell from 12.8% to 0.4%, and avg60 fell from 21.6% to 7.4% within a minute.
 - 2.1, 3.1, 4.1: the tables were written with their code, not committed failing first, because the pre-commit hook runs the affected tests and refuses a failing commit. The named mutants stand in as the evidence that each table detects its fault.
 - 4.2: besides the two named mutants, two pool variants survive, a waiter that rechecks for a free slot and a waiter that takes the slot without the handoff. The window between a release and the waiter waking is one microtask, which no test reaches without a hook in the pool. The first variant keeps the size bound and loses only FIFO order.
+- A5: `indexHandlers.test.ts` › `workspace snapshots reach clients on connect, discovery, and removal` waited a single `setTimeout(0)` tick for discovery to publish. The fingerprint's `stat` calls and the pool's queue add async hops, so its two waits after a seed change now use the file's bounded `waitForSent` (2 s). Its assertions are unchanged.
 
 ## 1. Baseline evidence
 

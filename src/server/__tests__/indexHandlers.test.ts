@@ -1315,7 +1315,14 @@ describe('server message handlers', () => {
     registryInstance.replaceSessions([
       { ...baseSession, id: 'ws-1', projectPath: '/wstest/repo' },
     ])
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    // Discovery fingerprints the worktree and queues its OpenSpec run in the
+    // server-wide pool (bounded-openspec-discovery), so it publishes after
+    // several async hops, not within one tick.
+    await waitForSent(
+      firstSent,
+      (message) => message.type === 'workspace-snapshot' && message.snapshot.repositories.length === 1,
+      'the discovered repository snapshot'
+    )
     const discovered = firstSent
       .filter((message) => message.type === 'workspace-snapshot')
       .at(-1)
@@ -1343,7 +1350,11 @@ describe('server message handlers', () => {
 
     // Path removal: the session disappears, so its repository is dropped.
     registryInstance.replaceSessions([])
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    await waitForSent(
+      secondSent,
+      (message) => message.type === 'workspace-snapshot' && message.snapshot.repositories.length === 0,
+      'the snapshot after removal'
+    )
     const afterRemoval = secondSent
       .filter((message) => message.type === 'workspace-snapshot')
       .at(-1)
