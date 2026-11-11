@@ -909,8 +909,6 @@ describe('server message handlers', () => {
       else process.env.CLAUDE_CODE_OAUTH_TOKEN = previousToken
     }
   })
-  // Transitional (unify-approval-defaults): annotated until the change archives.
-  // @covers: chat-sessions › Users configure the default approval policy for new chat sessions › Unspecified policy creates a manual session
   // @covers: chat-sessions › New chats start from their team's default approval policy › A create request without a policy stays manual
   test('chat creation applies the requested approval policy and defaults to manual', async () => {
     const previousToken = process.env.CLAUDE_CODE_OAUTH_TOKEN
@@ -1627,14 +1625,16 @@ describe('server message handlers', () => {
     registryInstance.replaceSessions([
       { ...baseSession, id: 'ws-stale', projectPath: '/wstest/repo' },
     ])
-    // Discovery publishes after several async hops (bounded-openspec-discovery);
-    // the handler reads that cached snapshot, so wait for the real one.
+    // Discovery is asynchronous (fingerprint, pooled openspec run), so wait
+    // for the snapshot that knows the worktree rather than a fixed tick.
     await waitForSent(
       sent,
       (message) =>
         message.type === 'workspace-snapshot' &&
-        message.snapshot.repositories.some((repository) => repository.worktrees.some((worktree) => worktree.path === '/wstest/repo')),
-      'the snapshot holding the /wstest/repo worktree'
+        message.snapshot.repositories.some((repository) =>
+          repository.worktrees.some((worktree) => worktree.path === '/wstest/repo')
+        ),
+      'a workspace snapshot listing /wstest/repo'
     )
 
     const revParseBefore = revParseCwds.length
@@ -1657,7 +1657,10 @@ describe('server message handlers', () => {
 
     // A scoped workspace refresh of the missing path was requested (its seed
     // resolution re-runs git against exactly that directory).
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    const refreshDeadline = Date.now() + 2000
+    while (!revParseCwds.slice(revParseBefore).includes('/wstest/repo/gone') && Date.now() < refreshDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
     expect(revParseCwds.slice(revParseBefore)).toContain('/wstest/repo/gone')
 
     // A missing path outside any known worktree keeps the generic message.

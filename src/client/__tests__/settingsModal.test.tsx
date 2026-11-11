@@ -490,8 +490,6 @@ describe('SettingsModal', () => {
     await act(async () => { renderer.unmount() })
   })
 
-  // Transitional (unify-approval-defaults): annotated until the change archives.
-  // @covers: chat-sessions › Users configure the default approval policy for new chat sessions › Settings names where spawned members get their policy
   // @covers: chat-sessions › New chats start from their team's default approval policy › Settings has no approval control
   test('Settings has no approval control and points to the per-team default on the Team page', async () => {
     let renderer!: TestRenderer.ReactTestRenderer

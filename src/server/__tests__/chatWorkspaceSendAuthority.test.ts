@@ -1,7 +1,10 @@
 // I6 (plan-workspace §4): a contextual send carries no authority — it never
 // sets the session's task association, never moves the turn-usage pin, and
 // writes nothing to the plan store. The send runs through the development
-// fixture so the observable outcome is the real composition.
+// fixture so the observable outcome is the real composition. The fixture's
+// documented hold override collapses its human-scale pauses (the context
+// scenario this text selects holds about 3 s), so the 5 s guard measures the
+// composition, not the fixture's pacing; every frame still arrives.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -18,8 +21,13 @@ describe('I6 a contextual send carries no authority', () => {
   let project: string
   let db: SessionDatabase
   let registry: SessionRegistry
+  let managers: ChatSessionManager[]
+  let priorHold: string | undefined
 
   beforeEach(() => {
+    priorHold = process.env.AGENTBOARD_CHAT_FIXTURE_HOLD_MS
+    process.env.AGENTBOARD_CHAT_FIXTURE_HOLD_MS = '0'
+    managers = []
     tempDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-pwd-i6-')))
     project = path.join(tempDir, 'project')
     fs.mkdirSync(path.join(project, '.kawai', 'groups'), { recursive: true })
@@ -27,15 +35,27 @@ describe('I6 a contextual send carries no authority', () => {
     db = initDatabase({ path: path.join(tempDir, 'test.db') })
     registry = new SessionRegistry()
   })
-  afterEach(() => {
+  afterEach(async () => {
+    // Each manager's drivers and mail are joined before the database and the temp tree go.
+    for (const manager of managers) {
+      manager.shutdown()
+      await manager.retiredSettled()
+      await manager.dispatcher.settled()
+    }
     db.close()
     fs.rmSync(tempDir, { recursive: true, force: true })
+    if (priorHold === undefined) delete process.env.AGENTBOARD_CHAT_FIXTURE_HOLD_MS
+    else process.env.AGENTBOARD_CHAT_FIXTURE_HOLD_MS = priorHold
   })
 
-  const createManager = () => new ChatSessionManager({
-    db, registry, onEvent: () => {}, profileCatalogHome: tempDir, authCheck: () => true,
-    queryFactory: fixtureQueryFactory,
-  })
+  const createManager = () => {
+    const manager = new ChatSessionManager({
+      db, registry, onEvent: () => {}, profileCatalogHome: tempDir, authCheck: () => true,
+      queryFactory: fixtureQueryFactory,
+    })
+    managers.push(manager)
+    return manager
+  }
   const waitFor = async (check: () => boolean, label: string) => {
     const start = Date.now()
     while (!check()) {

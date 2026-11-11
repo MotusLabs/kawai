@@ -1,3 +1,4 @@
+// @exercises: src/server/ws/**, src/server/terminal/**, src/server/tmux*.ts, src/server/SessionManager.ts, src/server/SessionRegistry.ts, src/server/sessionRefreshWorker*.ts, src/server/refresh/**
 /**
  * double-attach.integration.test.ts
  *

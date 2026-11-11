@@ -1,3 +1,4 @@
+// @exercises: src/server/ws/**, src/server/terminal/**, src/server/tmux*.ts, src/server/SessionManager.ts
 /**
  * output-coalescing.integration.test.ts
  *

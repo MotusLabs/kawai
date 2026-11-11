@@ -1,0 +1,74 @@
+name: Nightly real-tmux
+
+# Every real-tmux file, once a day on master (check-time-optimization D7).
+# Local checks run a real-tmux file only when a change touches the paths it
+# declares (D6); this run catches what no diff shows, such as a tmux or Bun
+# upgrade. On failure it comments on the open issue labeled
+# `nightly-real-tmux`, or opens one, naming each failing test and the run.
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      force_failure:
+        description: Add one test that always fails, to exercise the failure report
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: nightly-real-tmux
+  cancel-in-progress: false
+
+jobs:
+  real-tmux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - uses: ./.github/actions/setup-bun
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Ensure tmux is available
+        run: |
+          if command -v tmux >/dev/null 2>&1; then
+            echo "tmux $(tmux -V) already present"
+            exit 0
+          fi
+          if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+            sudo apt-get update && sudo apt-get install -y tmux
+            if ! command -v tmux >/dev/null 2>&1; then
+              echo "::error::tmux install reported success but tmux is not on PATH"
+              exit 1
+            fi
+            echo "installed $(tmux -V)"
+          else
+            echo "::error::tmux is not installed on this runner and cannot be installed (no passwordless sudo). Add tmux to the runner image."
+            exit 1
+          fi
+
+      - name: Run every real-tmux file
+        env:
+          NIGHTLY_REPORT: ${{ runner.temp }}/nightly-real-tmux.md
+          NIGHTLY_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          KAWAI_NIGHTLY_FORCE_FAILURE: ${{ inputs.force_failure && 'true' || 'false' }}
+        run: bun scripts/nightly-real-tmux.ts run
+
+      - name: Report the failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          NIGHTLY_REPORT: ${{ runner.temp }}/nightly-real-tmux.md
+        run: |
+          if [ ! -s "$NIGHTLY_REPORT" ]; then
+            printf 'Run: %s\n\nThe run failed before any real-tmux file ran.\n' \
+              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" > "$NIGHTLY_REPORT"
+          fi
+          bun scripts/nightly-real-tmux.ts report

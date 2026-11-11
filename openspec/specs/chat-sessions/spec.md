@@ -117,29 +117,6 @@ this feature SHALL behave as manual.
 - **WHEN** the server loads a chat session stored before approval policies existed
 - **THEN** the session's approval policy is manual
 
-### Requirement: Users configure the default approval policy for new chat sessions
-The system SHALL let the user choose, from Settings, the approval policy that chat sessions they create start with, and SHALL apply it at creation unless they override it in the New Session dialog. A chat created by `/clear`, `/reset`, or `/new` carries over the previous chat's policy. Settings SHALL say that spawned team members follow their group's `approval:` key and the team default instead. The stored default SHALL NOT change any existing session's policy.
-
-#### Scenario: Settings default seeds new chats
-- **WHEN** the user sets the default approval policy to auto and then creates a chat session
-- **THEN** the session starts with the auto policy and its tool uses are granted without approval cards
-
-#### Scenario: Creation dialog overrides the default
-- **WHEN** the default approval policy is auto and the user creates a chat session with Auto-approve unchecked
-- **THEN** the session starts with the manual policy
-
-#### Scenario: The default does not touch existing sessions
-- **WHEN** the user changes the default approval policy while chat sessions exist
-- **THEN** every existing session keeps the policy it already had
-
-#### Scenario: Unspecified policy creates a manual session
-- **WHEN** a client creates a chat session without naming an approval policy
-- **THEN** the session starts with the manual policy regardless of the stored default
-
-#### Scenario: Settings names where spawned members get their policy
-- **WHEN** the user opens the Approval Policy setting
-- **THEN** its description says it covers chats the user creates, and that spawned team members use their group's `approval:` key, then the team default set on the Team page
-
 ### Requirement: Auto policy grants tool approvals without a card
 While a chat session's policy is auto, the system SHALL grant each tool
 approval request immediately without showing an approval card, and the
@@ -1660,3 +1637,38 @@ After a copy attempt, the control SHALL confirm success for about two seconds an
 #### Scenario: Insecure context
 - **WHEN** Kawai is opened over plain HTTP on a non-localhost address and the user copies a message
 - **THEN** the message text still reaches the clipboard and the control shows "Copied"
+
+### Requirement: New chats start from their team's default approval policy
+The New Session dialog SHALL seed its Auto-approve checkbox from the default of the team owning the picked project path, and manual when the path has no team, the team has no default, or the lookup fails. The user SHALL be able to override it. A chat made by `/clear`, `/reset`, or `/new` keeps the previous chat's policy. Settings SHALL have no approval control and SHALL say the default is set per team on the Team page. No default change SHALL alter an existing session.
+
+#### Scenario: Team default seeds new chats
+- **WHEN** the team owning the picked project path has the default auto and the user creates a chat session without touching Auto-approve
+- **THEN** the session starts with the auto policy and its tool uses are granted without approval cards
+
+#### Scenario: Creation dialog overrides the team default
+- **WHEN** the team default is auto and the user creates a chat session with Auto-approve unchecked
+- **THEN** the session starts with the manual policy
+
+#### Scenario: A path without a team default seeds manual
+- **WHEN** the picked project path belongs to no team, or to a team whose default was never set
+- **THEN** the Auto-approve checkbox starts unchecked and says no team default applies
+
+#### Scenario: Changing the path re-seeds an untouched checkbox
+- **WHEN** the user picks a path in a team whose default is auto and then picks a path in a team with no default, without touching Auto-approve
+- **THEN** the checkbox follows each path's default and ends unchecked; once the user has toggled it, a path change leaves it as the user set it
+
+#### Scenario: A team default change does not touch existing sessions
+- **WHEN** the human changes a team's default approval policy while chat sessions of that team exist
+- **THEN** every existing session keeps the policy it already had
+
+#### Scenario: A create request without a policy stays manual
+- **WHEN** a client creates a chat session without naming an approval policy
+- **THEN** the session starts with the manual policy regardless of any team default
+
+#### Scenario: Settings has no approval control
+- **WHEN** the user opens Settings → Chat
+- **THEN** it offers no approval policy control and says the default approval policy is set per team on the Team page's Members tab
+
+#### Scenario: A browser's stored value is ignored
+- **WHEN** a browser kept an approval policy from an earlier Settings version and the user opens the New Session dialog for a path whose team has no default
+- **THEN** Auto-approve starts unchecked, and no team default is set from the stored value
