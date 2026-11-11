@@ -6,7 +6,7 @@ import path from 'node:path'
 import { initDatabase, type SessionDatabase } from '../db'
 import { resolveProjectPath } from '../paths'
 import { SessionRegistry } from '../SessionRegistry'
-import { managedManager, closeDispatchers, createHarness, flush, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+import { managedManager, closeDispatchers, createHarness, flush, installManagerCleanup, spawned } from './helpers/chatSessionManagerHarness'
 
 installManagerCleanup()
 
@@ -148,6 +148,7 @@ describe('ChatSessionManager', () => {
       // Restoring the directory makes the session usable again.
       exists = true
       expect(await manager.send(sessionId, 'Hi')).toEqual({ ok: true })
+      await spawned(handles)
       expect(handles).toHaveLength(1)
     })
 
@@ -159,6 +160,7 @@ describe('ChatSessionManager', () => {
       if (!created.ok) throw new Error('create failed')
       const sessionId = created.session.id
       expect(await manager.send(sessionId, 'first')).toEqual({ ok: true })
+      await spawned(handles)
 
       // The running process keeps its cwd, so later turns still go through.
       exists = false

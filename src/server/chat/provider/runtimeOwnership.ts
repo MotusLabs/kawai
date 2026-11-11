@@ -10,8 +10,19 @@
 // called from inside tracked work would wait for that work, so the adapter
 // never calls it from its own jobs. TerminalJoin re-issues a terminal call
 // the package refused as a self-join from the next outside caller.
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { AgentRuntimeError } from '@motuslabs/agent-runtime'
 import { logger } from '../../logger'
+
+/**
+ * Run host work outside the package's callback ancestry. Kawai's identity
+ * persistence is synchronous, but its side effects start long-lived work
+ * (the mail dispatcher loop) that would inherit the package's "inside
+ * onCheckpoint" mark, so every send that work makes later would be refused.
+ * Kawai keeps no async context of its own: the module's load context is
+ * the root one.
+ */
+export const outsideRuntime: <R>(fn: () => R) => R = AsyncLocalStorage.snapshot()
 
 export class OwnedWork {
   private readonly live = new Set<Promise<unknown>>()

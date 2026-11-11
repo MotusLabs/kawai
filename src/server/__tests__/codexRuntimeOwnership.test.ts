@@ -15,6 +15,12 @@
 // - A successor driver on the same home reports nothing of its predecessor.
 // - The manager joins the drivers it kills: retiredSettled() resolves only
 //   after the process exit.
+// - A kill from inside a turn event callback after start (not refused: the
+//   event reaches Kawai outside the package's own join) is owned the same:
+//   settled() resolves only after the slow process exit.
+// - Work the identity persistence starts can send later (outsideRuntime).
+// - A delivery opens its turn synchronously in deliver() (deliveredTurns.ts);
+//   the package's turn shows under that id to its end.
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -46,11 +52,14 @@ afterEach(async () => {
 interface Hooks {
   onTranscriptPath?: (driver: Adapter, path: string) => unknown
   onModel?: (driver: Adapter) => unknown
+  onEvent?: (driver: Adapter, event: ChatEvent) => void
+  onSdkSessionId?: (driver: Adapter, id: string) => unknown
   env?: Record<string, string>
 }
 
 function adapter(root: CodexRoot, hooks: Hooks = {}) {
   const wire: Wire = []
+  const events: ChatEvent[] = []
   const box: { driver?: Adapter } = {}
   const driver = createChatDriver({
     runtime: 'codex',
@@ -63,15 +72,16 @@ function adapter(root: CodexRoot, hooks: Hooks = {}) {
       serverEnv: { PATH: process.env.PATH ?? '', HOME: root.root, ...hooks.env },
       withheldCredentials: () => new Set(),
       wire: { record: (dir, raw) => void wire.push([dir, raw]) },
-      onEvent: () => {},
+      onEvent: (event: ChatEvent) => { events.push(event); hooks.onEvent?.(box.driver!, event) },
       onStatus: () => {},
+      ...(hooks.onSdkSessionId ? { onSdkSessionId: (id: string) => hooks.onSdkSessionId!(box.driver!, id) as void } : {}),
       ...(hooks.onTranscriptPath ? { onTranscriptPath: (p: string) => hooks.onTranscriptPath!(box.driver!, p) as void } : {}),
       ...(hooks.onModel ? { onModel: () => hooks.onModel!(box.driver!) as void } : {}),
     },
   }) as Adapter
   box.driver = driver
   live.push(driver)
-  return { driver, wire, exited: () => wire.some(([dir, raw]) => dir === 'lifecycle' && raw.includes('"event":"exit"')) }
+  return { driver, wire, events, exited: () => wire.some(([dir, raw]) => dir === 'lifecycle' && raw.includes('"event":"exit"')) }
 }
 
 async function until(probe: () => boolean, ms = 10_000): Promise<void> {
@@ -97,8 +107,8 @@ const causes = (error: unknown) => (error instanceof AgentRuntimeError ? error.c
 describe('Codex adapter ownership through the public factory', () => {
   test('a kill from inside a host callback is re-acquired: settled() resolves only after the process exit', async () => {
     let calls = 0
-    // The app-server ignores SIGTERM: its teardown outlasts the cancelled start until SIGKILL.
-    const h = adapter(codexRoot(), { onTranscriptPath: (driver) => void (calls++, driver.kill()), env: { FAKE_CODEX_TERM: 'ignore' } })
+    // The app-server ignores SIGTERM and stdin's end: its teardown outlasts the cancelled start until SIGKILL.
+    const h = adapter(codexRoot(), { onTranscriptPath: (driver) => void (calls++, driver.kill()), env: { FAKE_CODEX_TERM: 'ignore', FAKE_CODEX_EOF: 'ignore' } })
     h.driver.start()
     await until(() => calls === 1)
     expect(await outcome(h)).toEqual({ resolved: true, exited: true })
@@ -144,6 +154,50 @@ describe('Codex adapter ownership through the public factory', () => {
     expect(a.error).toBe(b.error)
     expect([a.resolved, a.exited, causes(a.error).filter((cause) => cause === boom).length]).toEqual([false, true, 1])
     expect(await outcome(h)).toEqual({ resolved: true, exited: true })
+  })
+
+  test('a kill from inside a turn event after start is owned: settled() resolves only after the process exit', async () => {
+    let calls = 0
+    // The app-server ignores SIGTERM and stdin's end: the kill's teardown lasts until SIGKILL.
+    const h = adapter(codexRoot(), {
+      onEvent: (driver, event) => { if (event.type === 'turn_completed' && calls++ === 0) driver.kill() },
+      env: { FAKE_CODEX_TERM: 'ignore', FAKE_CODEX_EOF: 'ignore' },
+    })
+    h.driver.send('hello')
+    await until(() => calls === 1)
+    expect(h.exited()).toBe(false)
+    expect(await outcome(h)).toEqual({ resolved: true, exited: true })
+  })
+
+  test('work the identity persistence starts sends later, outside the callback ancestry', async () => {
+    let later: Promise<void> | null = null
+    const h = adapter(codexRoot(), {
+      // A host side effect that outlives the callback (as the mail dispatcher's loop does).
+      onSdkSessionId: (driver) => void (later ??= new Promise<void>((resolve) => setTimeout(() => { driver.send('from later work'); resolve() }, 20))),
+    })
+    h.driver.start()
+    await until(() => later !== null)
+    await later
+    await until(() => h.events.some((e) => e.type === 'turn_completed'))
+    expect(h.events.filter((e) => e.type === 'user_message').map((e) => (e as { text: string }).text)).toEqual(['from later work'])
+    expect(h.events.filter((e) => e.type === 'error')).toEqual([])
+  })
+
+  test('a delivery opens its turn in deliver(); the package turn shows under that id to its end', async () => {
+    const h = adapter(codexRoot())
+    h.driver.start()
+    await until(() => h.wire.some(([dir, raw]) => dir === 'in' && raw.includes('"thread"')))
+    h.driver.deliver({ messageId: 'm-1', senderKind: 'agent', senderSession: 'chat-lead', body: 'do it' } as never)
+    // Synchronously, before deliver() returned.
+    const opened = h.events.map((e) => [e.type, (e as { turnId?: string }).turnId])
+    expect(opened.map(([type]) => type)).toEqual(['turn_started', 'peer_message'])
+    const turnId = opened[0]![1]!
+    expect(opened[1]![1]).toBe(turnId)
+    await until(() => h.events.some((e) => e.type === 'turn_completed'))
+    // One turn start (the package's own start was absorbed), every event under the opened id.
+    expect(h.events.filter((e) => e.type === 'turn_started')).toHaveLength(1)
+    expect(new Set(h.events.filter((e) => 'turnId' in e).map((e) => (e as { turnId: string }).turnId))).toEqual(new Set([turnId]))
+    expect(h.events.filter((e) => e.type === 'user_message')).toEqual([])
   })
 
   test('a successor on the same home reports nothing of its predecessor; RetiredDrivers lists each failure once', async () => {

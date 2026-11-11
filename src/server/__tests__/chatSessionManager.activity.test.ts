@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import { initDatabase, type SessionDatabase } from '../db'
-import { createHarness, flush, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+import { createHarness, flush, installManagerCleanup, spawned } from './helpers/chatSessionManagerHarness'
 
 installManagerCleanup()
 
@@ -28,6 +28,7 @@ describe('ChatSessionManager activity', () => {
     if (!created.ok) throw new Error('create failed')
     const id = created.session.id
     await manager.send(id, 'hello')
+    await spawned(handles)
     handles[0]!.push({
       type: 'stream_event',
       event: {
@@ -56,6 +57,8 @@ describe('ChatSessionManager activity', () => {
 
     // Turn end clears it: the driver's null reaches the sink and the snapshot.
     handles[0]!.push({
+      // The CLI's frame identity: the package settles each result once by it (task 6.1).
+      uuid: crypto.randomUUID(),
       type: 'result',
       subtype: 'success',
       result: '',
@@ -79,6 +82,7 @@ describe('ChatSessionManager activity', () => {
 
     // Archived mid-phase: the row must not survive the archive.
     await manager.send(id, 'hello')
+    await spawned(handles)
     handles[0]!.push({
       type: 'stream_event',
       event: {
@@ -101,6 +105,7 @@ describe('ChatSessionManager activity', () => {
     manager.restore(id)
     const resent = await manager.send(id, 'again')
     expect(resent.ok).toBe(true)
+    await spawned(handles, 1)
     expect(handles).toHaveLength(2)
     handles[1]!.push({
       type: 'stream_event',

@@ -1627,7 +1627,15 @@ describe('server message handlers', () => {
     registryInstance.replaceSessions([
       { ...baseSession, id: 'ws-stale', projectPath: '/wstest/repo' },
     ])
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    // Discovery publishes after several async hops (bounded-openspec-discovery);
+    // the handler reads that cached snapshot, so wait for the real one.
+    await waitForSent(
+      sent,
+      (message) =>
+        message.type === 'workspace-snapshot' &&
+        message.snapshot.repositories.some((repository) => repository.worktrees.some((worktree) => worktree.path === '/wstest/repo')),
+      'the snapshot holding the /wstest/repo worktree'
+    )
 
     const revParseBefore = revParseCwds.length
     websocket.message?.(

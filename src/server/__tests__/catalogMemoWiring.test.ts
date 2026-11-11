@@ -149,6 +149,9 @@ describe('Table W — production wiring', () => {
   })
 
   test('W4: the usage cadence reads the balance key through the shared memo; only the direct launch resolution reads per tick', async () => {
+    // The package adapter loads the SDK lazily at its first spawn (task 6.1);
+    // a cold load is real module I/O that fake-timer microtask drains never cover.
+    await import('@anthropic-ai/claude-agent-sdk')
     jest.useFakeTimers()
     try {
       const { manager, sessionId } = await session('or-m')

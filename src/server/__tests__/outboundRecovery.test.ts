@@ -16,6 +16,7 @@ import type { Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import { ChatSessionManager, type ChatQueryFactory } from '../chat/ChatSessionManager'
 import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
+import { spawned } from './helpers/chatSessionManagerHarness'
 
 let tempDir: string
 let dbPath: string
@@ -95,10 +96,19 @@ const hookInput = (event: string, toolUseId: string, command: string, extra: Rec
   hook_event_name: event, tool_name: 'Bash', tool_use_id: toolUseId, tool_input: { command }, ...extra,
 }) as never
 
+/**
+ * Every registered hook for the event runs, as the SDK runs them (task 6.1:
+ * the package registers its permission policy and its observation hooks;
+ * Kawai's audit callbacks run inside the observation via onHook and their
+ * answers never reach the SDK). Each SDK-facing answer stays observational:
+ * no decision, no update — the package's empty continue answer.
+ */
 async function runHook(spawn: Spawn, event: 'PreToolUse' | 'PostToolUse', input: never) {
-  const hook = spawn.options.hooks?.[event]?.[0]?.hooks[0]
-  if (!hook) throw new Error(`${event} audit hook not registered`)
-  expect(await hook(input, undefined, { signal: new AbortController().signal })).toEqual({ continue: true })
+  const hooks = (spawn.options.hooks?.[event] ?? []).flatMap(matcher => matcher.hooks)
+  if (hooks.length === 0) throw new Error(`${event} audit hook not registered`)
+  const answers = []
+  for (const hook of hooks) answers.push(await hook(input, undefined, { signal: new AbortController().signal }))
+  expect(answers).toEqual(hooks.map(() => ({})))
   await settle()
 }
 
@@ -121,6 +131,7 @@ test('a send recorded before a stop reads outcome unknown after the restart; not
   if (!created.ok) throw new Error(created.error)
   const sessionId = created.session.id
   expect((await first.manager.send(sessionId, 'push it')).ok).toBe(true)
+  await spawned(firstSpawns)
   firstSpawns[0]!.push({ type: 'system', subtype: 'init', session_id: 'sdk-recovery' } as unknown as SDKMessage)
   await settle()
   await runHook(firstSpawns[0]!, 'PreToolUse', hookInput('PreToolUse', 'tu-before', SEND))
@@ -142,6 +153,7 @@ test('a send recorded before a stop reads outcome unknown after the restart; not
 
   // The session resumes its conversation and pushes again: a new row with its own outcome.
   expect(await second.manager.send(sessionId, 'push again')).toEqual({ ok: true })
+  await spawned(secondSpawns)
   expect(secondSpawns).toHaveLength(1)
   expect(secondSpawns[0]!.options.resume).toBe('sdk-recovery')
   secondSpawns[0]!.push({ type: 'system', subtype: 'init', session_id: 'sdk-recovery' } as unknown as SDKMessage)

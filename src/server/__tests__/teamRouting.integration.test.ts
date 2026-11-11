@@ -76,12 +76,13 @@ test('a glm limit forwards progressed work to the default member, and later mail
         for await (const message of fixture) {
           if (glm && mailTurn && message.type === 'result') {
             const toolId = crypto.randomUUID()
-            yield frame({ type: 'assistant', parent_tool_use_id: null, message: { id: crypto.randomUUID(), role: 'assistant', content: [{ type: 'tool_use', id: toolId, name: 'Edit', input: { file_path: 'src/export.ts' } }] } })
-            yield frame({ type: 'user', parent_tool_use_id: null, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolId, content: 'ok' }] } })
-            yield frame({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt } })
-            yield frame({ type: 'assistant', parent_tool_use_id: null, error: 'rate_limit', message: { id: crypto.randomUUID(), role: 'assistant', content: [{ type: 'text', text: 'API Error: 429 quota exhausted' }] } })
+            yield frame({ session_id: sdkId, type: 'assistant', parent_tool_use_id: null, message: { id: crypto.randomUUID(), role: 'assistant', content: [{ type: 'tool_use', id: toolId, name: 'Edit', input: { file_path: 'src/export.ts' } }] } })
+            yield frame({ session_id: sdkId, type: 'user', parent_tool_use_id: null, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolId, content: 'ok' }] } })
+            yield frame({ session_id: sdkId, type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt } })
+            yield frame({ session_id: sdkId, type: 'assistant', parent_tool_use_id: null, error: 'rate_limit', message: { id: crypto.randomUUID(), role: 'assistant', content: [{ type: 'text', text: 'API Error: 429 quota exhausted' }] } })
           }
-          yield message
+          // One CLI process reports one identity (the package persists every new one, task 6.1).
+          yield { ...message, session_id: sdkId } as SDKMessage
         }
       })()
       return Object.assign(stream, { interrupt: () => fixture.interrupt(), close: () => fixture.close() }) as Query

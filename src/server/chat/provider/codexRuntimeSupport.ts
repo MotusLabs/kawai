@@ -24,14 +24,17 @@ export function exitCause(generation: number, code: number | null, signal: strin
  * Whether a rejected kill still left its owner quiesced. The package rejects
  * a stop only after its terminal join, and an unexpected exit is itself one
  * of the stop's causes. So a rejection whose every cause is exactly an exit
- * this adapter already heard through onProcessEnd quiesced; any other cause
- * (a teardown that could not confirm the exit, another owned failure) did
- * not, and nothing respawns over it.
+ * this adapter already heard through onProcessEnd quiesced, as does the very
+ * start failure it already reported (`heard`: a start that never opened is
+ * owned work its stop reports again); any other cause (a teardown that could
+ * not confirm the exit, another owned failure) did not, and nothing respawns
+ * over it.
  */
-export function quiesced(error: unknown, exits: readonly string[]): boolean {
+export function quiesced(error: unknown, exits: readonly string[], heard: readonly unknown[] = []): boolean {
   if (!(error instanceof AgentRuntimeError) || error.category !== 'stop') return false
   const remaining = [...exits]
   for (const cause of error.causes) {
+    if (heard.includes(cause)) continue
     const at = cause instanceof AgentRuntimeError && cause.category === 'transport' ? remaining.indexOf(cause.message) : -1
     if (at < 0) return false
     remaining.splice(at, 1)

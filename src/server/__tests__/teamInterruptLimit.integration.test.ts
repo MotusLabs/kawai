@@ -12,6 +12,7 @@ import type { Query, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-age
 import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
 import { ChatSessionManager, type ChatQueryFactory } from '../chat/ChatSessionManager'
+import { spawned } from './helpers/chatSessionManagerHarness'
 
 interface FakeCli { push: (message: SDKMessage) => void; interrupts: number; prompts: SDKUserMessage[] }
 
@@ -43,7 +44,8 @@ function fakeQueryFactory(clis: FakeCli[]): ChatQueryFactory {
   }
 }
 
-const frame = (fields: Record<string, unknown>) => ({ uuid: 'f-uuid', session_id: 'sdk-1', ...fields }) as unknown as SDKMessage
+// Each CLI frame carries its own identity (the package settles a result once per frame uuid, task 6.1).
+const frame = (fields: Record<string, unknown>) => ({ uuid: crypto.randomUUID(), session_id: 'sdk-1', ...fields }) as unknown as SDKMessage
 const init = () => frame({ type: 'system', subtype: 'init' })
 /** A result echoing the client uuid of the prompt it answers (none: agent-started). */
 const result = (subtype: string, inputTokens: number, prompt?: SDKUserMessage) => frame({
@@ -125,6 +127,7 @@ test('urgent mail that interrupts a busy agent is parked when its delivered turn
   const { clis, project, id, teamId } = await setup()
   // A busy turn-1.
   expect((await manager!.send(id, 'long job')).ok).toBe(true)
+  await spawned(clis)
   clis[0]!.push(init())
   await waitFor(() => manager!.getSnapshot(id)?.status === 'working')
 
@@ -173,6 +176,7 @@ test('a final limit in an agent-started turn parks the work the agent last held 
     originPath: project, body: 'Build the export and watch CI' })
   manager!.dispatcher.notify()
   await manager!.dispatcher.settled()
+  await spawned(clis)
   await receipt(clis[0]!, 0)
   clis[0]!.push(init())
   clis[0]!.push(result('success', 3, clis[0]!.prompts[0]))

@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { initDatabase, type SessionDatabase } from '../db'
-import { closeDispatchers, createHarness, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+import { closeDispatchers, createHarness, installManagerCleanup, spawned } from './helpers/chatSessionManagerHarness'
 
 installManagerCleanup()
 
@@ -97,8 +97,11 @@ describe('ChatSessionManager', () => {
     const created = manager.createSession({ projectPath: '/tmp/proj' })
     if (!created.ok) throw new Error('create failed')
     await manager.send(created.session.id, 'hi')
+    await spawned(handles)
 
     manager.shutdown()
+    // The package closes its query on stop's own chain: join the retirement.
+    expect(await manager.retiredSettled()).toEqual([])
     expect(handles[0]!.closed).toBe(true)
     // Rows survive shutdown; the restart path restores them.
     expect(db.getChatSession(created.session.id)).not.toBeNull()

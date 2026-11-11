@@ -8,7 +8,7 @@ import type { ChatEvent } from '../../shared/chat'
 import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
 import { ChatTaskStore } from '../chat/chatTaskStore'
-import { anyDirectory, FakeHandle, managedManager, fakeQueryFactory, createHarness, flush, waitForCondition, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+import { anyDirectory, FakeHandle, managedManager, fakeQueryFactory, createHarness, flush, waitForCondition, installManagerCleanup, spawned } from './helpers/chatSessionManagerHarness'
 
 installManagerCleanup()
 
@@ -43,6 +43,7 @@ describe('ChatSessionManager background-task roster (background tasks D2)', () =
     if (!created.ok) throw new Error('create failed')
     const id = created.session.id
     await manager.send(id, 'run things')
+    await spawned(handles)
     const handle = handles[0]!
     handle.push({
       type: 'system', subtype: 'task_started', task_id: 'b1', tool_use_id: 'call_1',
@@ -76,6 +77,7 @@ describe('ChatSessionManager background-task roster (background tasks D2)', () =
     if (!created.ok) throw new Error('create failed')
     const id = created.session.id
     await manager.send(id, 'run things')
+    await spawned(handles)
     const handle = handles[0]!
     handle.push({
       type: 'system', subtype: 'task_started', task_id: 'b9', tool_use_id: 'call_9',
@@ -115,6 +117,7 @@ describe('ChatSessionManager background-task roster (background tasks D2)', () =
     if (!created.ok) throw new Error('create failed')
     const id = created.session.id
     await manager.send(id, 'start a dev server')
+    await spawned(handles)
     const handle = handles[0]!
     handle.push({
       type: 'system', subtype: 'task_started', task_id: 'b-end', tool_use_id: 'call_end',
@@ -144,6 +147,7 @@ describe('ChatSessionManager background-task roster (background tasks D2)', () =
     if (!created.ok) throw new Error('create failed')
     const id = created.session.id
     await manager.send(id, 'start a dev server')
+    await spawned(handles)
     const handle = handles[0]!
     handle.push({
       type: 'system', subtype: 'task_started', task_id: 'b3', tool_use_id: 'call_3',
@@ -169,6 +173,7 @@ describe('ChatSessionManager background-task roster (background tasks D2)', () =
     if (!created.ok) throw new Error('create failed')
     const id = created.session.id
     await manager.send(id, 'run things')
+    await spawned(handles)
     handles[0]!.push({
       type: 'system', subtype: 'task_started', task_id: 'b2', task_type: 'local_bash',
       description: 'sleep', is_backgrounded: true, uuid: 'u', session_id: 's',
@@ -193,6 +198,7 @@ describe('ChatSessionManager background-task roster (background tasks D2)', () =
     if (!created.ok) throw new Error('create failed')
     const id = created.session.id
     await manager.send(id, 'start a background task')
+    await spawned(handles)
     handles[0]!.push({
       type: 'system', subtype: 'task_started', task_id: 'b-crash', tool_use_id: 'c1',
       task_type: 'local_bash', is_backgrounded: true, uuid: 'u1', session_id: 's',
@@ -228,6 +234,7 @@ describe('ChatSessionManager background-task roster (background tasks D2)', () =
     if (!created.ok) throw new Error('create failed')
     const id = created.session.id
     await manager.send(id, 'run two tasks')
+    await spawned(handles)
     const handle = handles[0]!
     // One task settles before the restart; the other is still running.
     handle.push({ type: 'system', subtype: 'task_started', task_id: 'b-done', tool_use_id: 'c1', task_type: 'local_bash', description: 'quick', is_backgrounded: true, uuid: 'u1', session_id: 's' } as unknown as SDKMessage)
@@ -265,6 +272,7 @@ describe('ChatSessionManager background-task roster (background tasks D2)', () =
     if (!created.ok) throw new Error('create failed')
     const id = created.session.id
     await manager.send(id, 'run one task')
+    await spawned(handles)
     handles[0]!.push({ type: 'system', subtype: 'task_started', task_id: 'b-kill', task_type: 'local_bash', is_backgrounded: true, uuid: 'u', session_id: 's' } as unknown as SDKMessage)
     await waitForCondition(() => store().read(id).length === 1)
     manager.kill(id)
@@ -284,6 +292,7 @@ describe('ChatSessionManager background-task roster (background tasks D2)', () =
     if (!created.ok) throw new Error('create failed')
     const id = created.session.id
     await managerA.send(id, 'run a task')
+    await spawned(first)
     first[0]!.push({ type: 'system', subtype: 'task_started', task_id: 'b-old', tool_use_id: 'c1', task_type: 'local_bash', description: 'old task', is_backgrounded: true, uuid: 'u1', session_id: 's' } as unknown as SDKMessage)
     first[0]!.push({ type: 'system', subtype: 'task_notification', task_id: 'b-old', tool_use_id: 'c1', status: 'completed', summary: 'done before restart', output_file: '/tmp/claude-1000/x/tasks/b-old.output', uuid: 'u2', session_id: 's' } as unknown as SDKMessage)
     await waitForCondition(() => store().read(id).some(entry => entry.outputFile !== undefined))
@@ -300,6 +309,7 @@ describe('ChatSessionManager background-task roster (background tasks D2)', () =
     // a new task's roster publish must not rewrite the old one without its
     // recorded output path.
     await manager.send(id, 'another turn')
+    await spawned(handles)
     handles[0]!.push({ type: 'system', subtype: 'task_started', task_id: 'b-new', tool_use_id: 'c9', task_type: 'local_bash', description: 'new task', is_backgrounded: true, uuid: 'u9', session_id: 's' } as unknown as SDKMessage)
     await waitForCondition(() => store().read(id).some(entry => entry.taskId === 'b-new'))
     expect(store().read(id)).toMatchObject([
@@ -323,6 +333,7 @@ describe('ChatSessionManager background-task roster (background tasks D2)', () =
     let calls = 0
     let release: (() => void) | undefined
     const gate = new Promise<void>((resolve) => { release = resolve })
+    await spawned(handles)
     ;(handles[0]!.query as unknown as {
       getTaskOutput?: (taskId: string) => Promise<{ output: string; total_bytes: number; truncated: boolean }>
     }).getTaskOutput = async (taskId: string) => {
@@ -387,6 +398,7 @@ describe('ChatSessionManager background-task roster (background tasks D2)', () =
     const id = created.session.id
     // A turn is in flight (no result yet) while two tasks run.
     await manager.send(id, 'run two')
+    await spawned(handles)
     const handle = handles[0]!
     handle.push({ type: 'system', subtype: 'task_started', task_id: 'b-stop', task_type: 'local_bash', is_backgrounded: true, uuid: 'u1', session_id: 's' } as unknown as SDKMessage)
     handle.push({ type: 'system', subtype: 'task_started', task_id: 'b-keep', task_type: 'local_bash', is_backgrounded: true, uuid: 'u2', session_id: 's' } as unknown as SDKMessage)
@@ -421,6 +433,7 @@ describe('ChatSessionManager background-task roster (background tasks D2)', () =
     if (!created.ok) throw new Error('create failed')
     const id = created.session.id
     await manager.send(id, 'run one')
+    await spawned(handles)
     const handle = handles[0]!
     handle.push({ type: 'system', subtype: 'task_started', task_id: 'b-done', task_type: 'local_bash', is_backgrounded: true, uuid: 'u1', session_id: 's' } as unknown as SDKMessage)
     handle.push({ type: 'system', subtype: 'task_notification', task_id: 'b-done', status: 'completed', summary: 'done', uuid: 'u2', session_id: 's' } as unknown as SDKMessage)

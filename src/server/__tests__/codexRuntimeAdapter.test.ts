@@ -16,7 +16,8 @@
 //   with no card, decided by policy;
 // - a mid-turn exit reports Kawai's message with the code and ends the
 //   process; the next send respawns on a new process resuming the thread;
-// - an app-server that cannot start reports Kawai's start error;
+// - an app-server that cannot start reports Kawai's start error; a refused
+//   thread start on a live process is over, and a later start respawns;
 // - a resume onto a moved rollout reports the new path (R3 onThreadOpened)
 //   and no new session id;
 // - a rejected kill counts as quiescence only when its causes are exactly the
@@ -188,6 +189,26 @@ describe('Kawai Codex composition over the public package factory', () => {
     expect((await reported(h.driver)).map(([message]) => message)[0]).toBe('Codex could not start a thread: app-server request 2 (thread/start) failed: 401 Unauthorized')
   })
 
+  test('a refused thread/start on a live app-server is over: a later start respawns a new process (runtimeBoot.ts)', async () => {
+    const root = codexRoot()
+    const h = harness(root, { env: { FAKE_CODEX_START: 'unauthorized' } })
+    h.driver.start()
+    await until(() => h.driver.isDead)
+    expect(h.ended()).toBe(0)
+    h.driver.start()
+    await until(() => sent(root, 'thread/start').length === 2 && h.driver.isDead)
+    // The failed driver retired (its stop re-reports only the start failure it already reported), then a new process.
+    expect(pids(root)).toHaveLength(2)
+    expect(h.events.filter((e) => e.type === 'error').map((e) => e.message)).toEqual(Array(2).fill('Codex could not start the thread: app-server request 2 (thread/start) failed: 401 Unauthorized'))
+    // Each start failure is reported raw; every stop reports only a start failure as its cause.
+    const failures = await reported(h.driver)
+    const start = 'Codex could not start a thread: app-server request 2 (thread/start) failed: 401 Unauthorized'
+    expect(failures.filter(([message]) => message === start)).toHaveLength(2)
+    expect(failures.filter(([message]) => message !== start).map(([message, inner]) => [message, inner])).toEqual(
+      failures.filter(([message]) => message !== start).map(() => ['stop failed: 1 owned operation(s) failed', [start]]),
+    )
+  })
+
   test('an app-server that exits while booting reports only its exit, as before', async () => {
     const root = codexRoot()
     const h = harness(root, { executable: '/bin/false' })
@@ -227,6 +248,15 @@ describe('Kawai Codex composition over the public package factory', () => {
       ['one exit heard, two reported as causes', stop([...(crashed as AgentRuntimeError).causes, ...(crashed as AgentRuntimeError).causes]), exits, false],
     ]
     expect(table.map(([name, error, heard]) => [name, quiesced(error, heard)])).toEqual(table.map(([name, , , want]) => [name, want]))
+    // A start failure already reported counts by identity, beside the exits; an equal-looking copy does not.
+    const started = new AgentRuntimeError({ category: 'transport', message: 'the Claude Code query could not be created' })
+    const copy = new AgentRuntimeError({ category: 'transport', message: started.message })
+    expect([
+      quiesced(stop([started]), [], [started]),
+      quiesced(stop([started, ...(crashed as AgentRuntimeError).causes]), exits, [started]),
+      quiesced(stop([copy]), [], [started]),
+      quiesced(stop([started]), [], []),
+    ]).toEqual([true, true, false, false])
   })
 
   // @covers: agent-runtime › Host-compatibility inputs and observations are optional › Codex thread opening reports a moved transcript

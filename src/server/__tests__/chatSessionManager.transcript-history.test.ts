@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { initDatabase, type SessionDatabase } from '../db'
-import { closeDispatchers, createHarness, flush, initMessage, writeTranscript, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+import { closeDispatchers, createHarness, flush, initMessage, writeTranscript, installManagerCleanup, spawned } from './helpers/chatSessionManagerHarness'
 
 installManagerCleanup()
 
@@ -192,6 +192,7 @@ describe('ChatSessionManager', () => {
       if (!created.ok) throw new Error('create failed')
       const sessionId = created.session.id
       await harnessA.manager.send(sessionId, 'one')
+      await spawned(harnessA.handles)
       harnessA.handles[0]!.push(initMessage('sdk-ghost'))
       await flush()
       expect(dbA.getChatSession(sessionId)?.sdkSessionId).toBe('sdk-ghost')
@@ -216,6 +217,7 @@ describe('ChatSessionManager', () => {
       // Restoring the transcript makes the same id resume again.
       writeTranscript('sdk-ghost', MATCHED_TRANSCRIPT)
       await harnessB.manager.send(sessionId, 'continue')
+      await spawned(harnessB.handles)
       expect(harnessB.handles[0]!.options.resume).toBe('sdk-ghost')
       closeDispatchers()
       dbB.close()
@@ -233,6 +235,7 @@ describe('ChatSessionManager', () => {
       // must not block resume the way a missing one does.
       const result = await manager.send(sessionId, 'keep going')
       expect(result.ok).toBe(true)
+      await spawned(handles)
       expect(handles[0]!.options.resume).toBe('sdk-ugly')
     })
 

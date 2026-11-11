@@ -6,7 +6,7 @@ import path from 'node:path'
 import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
 import { ClaudeExecutableError } from '../chat/claudeExecutable'
-import { anyDirectory, FakeHandle, managedManager, closeDispatchers, fakeQueryFactory, createHarness, flush, initMessage, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+import { anyDirectory, FakeHandle, managedManager, closeDispatchers, fakeQueryFactory, createHarness, flush, initMessage, installManagerCleanup, spawned } from './helpers/chatSessionManagerHarness'
 
 installManagerCleanup()
 
@@ -152,6 +152,7 @@ describe('ChatSessionManager', () => {
       const created = await gated.createAvailableSession({ projectPath: '/tmp/proj' })
       if (!created.ok) throw new Error('creation should succeed')
       expect((await gated.send(created.session.id, 'first turn')).ok).toBe(true)
+      await spawned(handles)
       handles[0]!.push(initMessage('sdk-session-9'))
       await flush()
       // The agent dies (process exit); the executable then disappears.
@@ -181,6 +182,7 @@ describe('ChatSessionManager', () => {
       const created = await manager.createAvailableSession({ projectPath: '/tmp/proj' })
       if (!created.ok) throw new Error('creation should succeed')
       expect((await manager.send(created.session.id, 'first')).ok).toBe(true)
+      await spawned(handles)
       expect(handles[0]!.options.pathToClaudeCodeExecutable).toBe('/old/claude')
 
       // The agent dies; the CLI moves and PATH now resolves a replacement.
@@ -188,6 +190,7 @@ describe('ChatSessionManager', () => {
       await flush()
       current = '/new/claude'
       expect((await manager.send(created.session.id, 'second')).ok).toBe(true)
+      await spawned(handles, 1)
       expect(handles).toHaveLength(2)
       expect(handles[1]!.options.pathToClaudeCodeExecutable).toBe('/new/claude')
     })

@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { initDatabase, type SessionDatabase } from '../db'
-import { closeDispatchers, createHarness, flush, initMessage, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+import { closeDispatchers, createHarness, flush, initMessage, installManagerCleanup, spawned } from './helpers/chatSessionManagerHarness'
 
 installManagerCleanup()
 
@@ -72,6 +72,7 @@ describe('ChatSessionManager', () => {
 
     expect(handles).toHaveLength(0) // no SDK spawn at create time
     await manager.send(sessionId, 'hello')
+    await spawned(handles)
     expect(handles).toHaveLength(1) // spawned lazily by the first turn
     expect(registry.get(sessionId)?.status).toBe('working')
     expect(handles[0]!.options.cwd).toBe('/tmp/proj')
@@ -98,6 +99,7 @@ describe('ChatSessionManager', () => {
     if (!created.ok) throw new Error('create failed')
     const sessionId = created.session.id
     await manager.send(sessionId, 'go')
+    await spawned(handles)
     const handle = handles[0]!
 
     const approval = handle.options.canUseTool!(
@@ -110,6 +112,8 @@ describe('ChatSessionManager', () => {
     await flush()
 
     expect(manager.kill(sessionId)).toBe(true)
+    // The package closes its query on stop's own chain: join the retirement.
+    expect(await manager.retiredSettled()).toEqual([])
     expect(handle.closed).toBe(true)
     await expect(approval).resolves.toMatchObject({
       behavior: 'deny',

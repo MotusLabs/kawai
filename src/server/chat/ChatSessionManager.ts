@@ -52,7 +52,7 @@ import { isExistingDirectory, resolveProjectDirectory } from '../paths'
 import type { SessionRegistry } from '../SessionRegistry'
 import type { ChatQueryFactory } from './ChatSessionDriver'
 import { createChatDriver, type ChatDriverSharedOptions } from './provider/createChatDriver'
-import type { ChatAgentDriver, ChatRuntime } from './provider/driver'
+import type { ChatAgentDriver, ChatRuntime, ChatSendOutcome } from './provider/driver'
 import { chatAuthErrorMessage, hasClaudeAuth } from './chatAuth'
 import { historyWindow } from './historyWindow'
 import {
@@ -108,7 +108,7 @@ import { MessageQuery } from '../team/messageQuery'
 import { ChatTurnEndStore } from './chatTurnEndStore'
 import { DriverMailGuard } from './driverMailGuard'
 import { TeamMailbox } from '../team/TeamMailbox'
-import { createMailboxServer, teamToolTable, type MailboxServerServices } from '../team/mailboxTools'
+import { teamToolTable, type MailboxServerServices } from '../team/mailboxTools'
 import { composeExecutionCore, composePlanServices } from '../plans/planComposition'
 import type { ValidationService } from '../plans/validation/ValidationService'
 import type { DecisionService } from '../plans/decisions/DecisionService'
@@ -1973,7 +1973,9 @@ export class ChatSessionManager {
       if (!driver.sendWorkspaceContext) {
         return { ok: false, error: "This chat's runtime does not carry plan-workspace contexts." }
       }
-      const sent = this.sendDriverText(driver, text, stored)
+      // Admission (task 6.1): the outcome settles when the runtime recorded
+      // the context and enqueued, or refused with nothing opened or emitted.
+      const sent = await this.sendDriverText(driver, text, stored)
       if (!sent.ok) return { ok: false, error: sent.error }
     } else {
       const sent = this.sendDriverText(driver, text)
@@ -1989,10 +1991,12 @@ export class ChatSessionManager {
    * no child composed or started, so the caller sees the refusal instead of
    * a rejection. Every other throw rejects exactly as before.
    */
-  private sendDriverText(driver: ChatAgentDriver, text: string, stored?: WorkspaceMessageContext): { ok: true } | { ok: false; error: string } {
+  private sendDriverText(driver: ChatAgentDriver, text: string, stored: WorkspaceMessageContext): Promise<ChatSendOutcome>
+  private sendDriverText(driver: ChatAgentDriver, text: string): { ok: true } | { ok: false; error: string }
+  private sendDriverText(driver: ChatAgentDriver, text: string, stored?: WorkspaceMessageContext): ChatSendOutcome | Promise<ChatSendOutcome> {
     try {
       // The caller checked sendWorkspaceContext exists whenever stored is set.
-      if (stored) return driver.sendWorkspaceContext!(text, stored)
+      if (stored) return Promise.resolve(driver.sendWorkspaceContext!(text, stored))
       driver.send(text)
       return { ok: true }
     } catch (error) {
@@ -2828,12 +2832,15 @@ export class ChatSessionManager {
       const codexExecutable = codex ? (await ensureCodexExecutable()).path : null
       const executable =
         codex || (launch.runtime === 'claude' && launch.executable) ? null : await this.checkExecutable()
-      const queryFactory = codex ? null : await this.resolveQueryFactory()
+      // The SDK must load before a Claude spawn (a broken install refuses the
+      // send); only an injected (test or fixture) factory reaches the driver,
+      // which otherwise composes the package's public construction (6.1).
+      if (!codex) await this.resolveQueryFactory()
+      const queryFactory = codex ? null : this.options.queryFactory ?? null
       // The team must be known before the first spawn reads its prompt.
       await this.teams.track(record.sessionId, this.records.get(record.sessionId)?.projectPath ?? record.projectPath)
       // Both runtimes build their team tools from one table (D6).
       const teamServices = this.teamServices()
-      const teamMcpServer = codex ? null : await createMailboxServer(this.mailbox, record.sessionId, teamServices)
       // The options both runtimes share: identity, the audit observer, the
       // prompt/effort/policy readers, and every output callback.
       const shared: ChatDriverSharedOptions = {
@@ -2961,13 +2968,13 @@ export class ChatSessionManager {
             runtime: 'claude',
             options: {
               ...shared,
-              queryFactory: queryFactory!,
+              ...(queryFactory ? { queryFactory } : {}),
               // The wait is read per question through this getter, so a
               // setting change reaches the next question without rebuilding
               // the driver (question-auto-answer D5, hazard M1).
               getQuestionAutoAnswerMs: () =>
                 (this.options.getQuestionAutoAnswerMinutes?.() ?? 0) * 60_000,
-              ...(teamMcpServer ? { teamMcpServer } : {}),
+              teamTools: teamToolTable(this.mailbox, record.sessionId, teamServices),
               getProviderEnv: () => this.providerEnv(),
               // The secret-name registry observes and persists at every
               // Claude spawn (provider-relay-setup D2), so a name once seen

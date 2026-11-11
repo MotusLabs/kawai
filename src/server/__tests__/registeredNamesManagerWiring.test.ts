@@ -26,7 +26,7 @@ import { readRetainedNames } from '../chat/secretNameRegistry'
 import { resetCodexExecutableCache } from '../chat/codex/codexExecutable'
 import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
-import { anyDirectory, closeDispatchers, FakeHandle, fakeQueryFactory, flush, initMessage, installManagerCleanup, managedManager } from './helpers/chatSessionManagerHarness'
+import { anyDirectory, closeDispatchers, FakeHandle, fakeQueryFactory, flush, initMessage, installManagerCleanup, managedManager, spawned } from './helpers/chatSessionManagerHarness'
 import { FAKE_CODEX, Script, startHarness, THREAD_ID, until } from './codexDriverHarness'
 
 installManagerCleanup()
@@ -250,6 +250,7 @@ describe('registered names through the real manager wiring', () => {
       if (!created.ok) throw new Error(created.error)
       const id = created.session.id
       expect((await manager.send(id, 'first')).ok).toBe(true)
+      await spawned(handles)
       handles[0]!.push(initMessage('sdk-session-1'))
       await flush()
 
@@ -271,6 +272,7 @@ describe('registered names through the real manager wiring', () => {
       handles[0]!.query.close()
       await flush()
       expect((await manager.send(id, 'second')).ok).toBe(true)
+      await spawned(handles, 1)
       handles[1]!.push(initMessage('sdk-session-2'))
       await flush()
       const secondEnv = handles[1]!.options.env ?? {}
@@ -289,6 +291,7 @@ describe('registered names through the real manager wiring', () => {
       const created2 = await manager2.createAvailableSession({ projectPath: project, claudeProfileId: 'relay' })
       if (!created2.ok) throw new Error(created2.error)
       expect((await manager2.send(created2.session.id, 'third')).ok).toBe(true)
+      await spawned(restarted)
       restarted[0]!.push(initMessage('sdk-session-3'))
       await flush()
       const restartEnv = restarted[0]!.options.env ?? {}

@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { initDatabase, type SessionDatabase } from '../db'
-import { closeDispatchers, createHarness, flush, initMessage, writeTranscript, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+import { closeDispatchers, createHarness, flush, initMessage, writeTranscript, installManagerCleanup, spawned } from './helpers/chatSessionManagerHarness'
 
 installManagerCleanup()
 
@@ -81,6 +81,7 @@ describe('ChatSessionManager', () => {
       if (!fresh.ok) throw new Error('create failed')
 
       await harnessA.manager.send(startedId, 'one')
+      await spawned(harnessA.handles)
       harnessA.handles[0]!.push(initMessage('sdk-resume-me'))
       await flush()
       // Turn still in flight: the persisted row says working.
@@ -121,9 +122,11 @@ describe('ChatSessionManager', () => {
       // (resume needs the transcript on disk — see the resume gate).
       writeTranscript('sdk-resume-me', '[]')
       await harnessB.manager.send(startedId, 'continue')
+      await spawned(harnessB.handles)
       expect(harnessB.handles[0]!.options.resume).toBe('sdk-resume-me')
       // The fresh session starts with no resume.
       await harnessB.manager.send(fresh.session.id, 'begin')
+      await spawned(harnessB.handles, 1)
       expect(harnessB.handles[1]!.options.resume).toBeUndefined()
 
       // Chat sessions coexist with terminal ones in the same registry.

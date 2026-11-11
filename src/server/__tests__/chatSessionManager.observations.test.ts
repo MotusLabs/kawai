@@ -8,7 +8,7 @@ import os from 'node:os'
 import path from 'node:path'
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import { initDatabase, type SessionDatabase } from '../db'
-import { closeDispatchers, createHarness, flush, initMessage, installManagerCleanup, resultWithWindow } from './helpers/chatSessionManagerHarness'
+import { closeDispatchers, createHarness, flush, initMessage, installManagerCleanup, resultWithWindow, spawned } from './helpers/chatSessionManagerHarness'
 
 installManagerCleanup()
 
@@ -62,6 +62,7 @@ describe('ChatSessionManager observation rows', () => {
     const id = created.session.id
     expect(h.manager.setApprovalPolicy(id, 'auto')).toEqual({ ok: true })
     expect((await h.manager.send(id, 'run a command')).ok).toBe(true)
+    await spawned(h.handles)
     const handle = h.handles[0]!
     handle.push(initMessage('sdk-obs'))
     handle.push(toolUse('toolu_1', 'Bash'))

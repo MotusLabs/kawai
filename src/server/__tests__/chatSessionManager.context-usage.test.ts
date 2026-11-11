@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import { initDatabase, type SessionDatabase } from '../db'
-import { anyDirectory, createHarness, flush, waitForCondition, assistantUsage, resultWithWindow, compactBoundary, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+import { anyDirectory, createHarness, flush, waitForCondition, assistantUsage, resultWithWindow, compactBoundary, installManagerCleanup, spawned } from './helpers/chatSessionManagerHarness'
 
 installManagerCleanup()
 
@@ -46,6 +46,7 @@ describe('ChatSessionManager context usage', () => {
     expect(harness.manager.getSnapshot(id)!.contextUsage).toEqual(stale)
 
     await harness.manager.send(id, 'turn')
+    await spawned(harness.handles)
     harness.handles[0]!.push(assistantUsage(120_000, 'msg_1'))
     harness.handles[0]!.push(resultWithWindow())
     await flush()
@@ -67,6 +68,7 @@ describe('ChatSessionManager context usage', () => {
     if (!created.ok) throw new Error('create failed')
     const id = created.session.id
     await harness.manager.send(id, 'long turn')
+    await spawned(harness.handles)
     const fake = harness.handles[0]!
 
     // Three requests mid-turn: none reaches the database (no boundary yet).
@@ -102,6 +104,7 @@ describe('ChatSessionManager context usage', () => {
     if (!created.ok) throw new Error('create failed')
     const id = created.session.id
     await harness.manager.send(id, 'turn')
+    await spawned(harness.handles)
     const fake = harness.handles[0]!
     fake.push(assistantUsage(80_000, 'msg_1'))
     fake.push(resultWithWindow())
@@ -150,6 +153,7 @@ describe('ChatSessionManager context usage', () => {
     if (!created.ok) throw new Error('create failed')
     const id = created.session.id
     await harness.manager.send(id, 'turn')
+    await spawned(harness.handles)
     const fake = harness.handles[0]!
     fake.push(assistantUsage(157_900, 'msg_1'))
     fake.push(resultWithWindow())
@@ -171,6 +175,7 @@ describe('ChatSessionManager context usage', () => {
     if (!created.ok) throw new Error('create failed')
     const id = created.session.id
     await harness.manager.send(id, 'turn')
+    await spawned(harness.handles)
     const fake = harness.handles[0]!
     fake.push(assistantUsage(80_000, 'msg_1'))
     fake.push(resultWithWindow())
@@ -199,6 +204,7 @@ describe('ChatSessionManager context usage', () => {
     if (!created.ok) throw new Error('create failed')
     const id = created.session.id
     await harness.manager.send(id, 'turn')
+    await spawned(harness.handles)
     const fake = harness.handles[0]!
     fake.push(assistantUsage(80_000, 'msg_1'))
     fake.push(resultWithWindow())

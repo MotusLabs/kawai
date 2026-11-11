@@ -6,7 +6,7 @@ import path from 'node:path'
 import { initDatabase, type SessionDatabase } from '../db'
 import { MetricsSnapshot } from '../metrics/export/snapshot'
 import { NOTIFY_DEBOUNCE_MS } from '../metrics/observations/service'
-import { closeDispatchers, createHarness, flush, initMessage, assistantUsage, resultWithWindow, compactBoundary, writeTranscript, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+import { closeDispatchers, createHarness, flush, initMessage, assistantUsage, resultWithWindow, compactBoundary, writeTranscript, installManagerCleanup, spawned } from './helpers/chatSessionManagerHarness'
 
 installManagerCleanup()
 
@@ -72,6 +72,7 @@ describe('ChatSessionManager', () => {
     const created = h.manager.createSession({projectPath:'/tmp/proj',taskId:task.id})
     if(!created.ok)throw Error('create failed')
     expect((await h.manager.send(created.session.id,'fixture work')).ok).toBe(true)
+    await spawned(h.handles)
     const handle=h.handles[0]!
     handle.push(initMessage('sdk-observability'))
     handle.push(assistantUsage(12000,'context-before'))
@@ -102,6 +103,7 @@ describe('ChatSessionManager', () => {
     expect((db.db.prepare("SELECT count(*) n FROM process_observations WHERE kind='acceptance'").get() as {n:number}).n).toBe(1)
     const resumed=await restarted.manager.send(created.session.id,'work after restart')
     if(!resumed.ok)throw Error(resumed.error)
+    await spawned(restarted.handles)
     expect(restarted.handles[0]!.options.resume).toBe('sdk-observability')
     restarted.handles[0]!.push(initMessage('sdk-observability'))
     restarted.handles[0]!.push(resultWithWindow())
@@ -125,6 +127,7 @@ describe('ChatSessionManager', () => {
     const id = created.session.id
     expect(db.getChatSession(id)?.claudeProfileId).toBe('glm')
     await first.manager.send(id, 'first')
+    await spawned(first.handles)
     first.handles[0]!.push(initMessage('profile-conversation'))
     await flush()
     writeTranscript('profile-conversation', JSON.stringify({ type: 'user', message: { role: 'user', content: 'first' } }))
@@ -132,6 +135,7 @@ describe('ChatSessionManager', () => {
     const restored = await createHarness(db)
     expect(restored.registry.get(id)?.claudeProfileId).toBe('glm')
     expect((await restored.manager.send(id, 'resume')).ok).toBe(true)
+    await spawned(restored.handles)
     expect(restored.handles[0]!.options.resume).toBe('profile-conversation')
     expect(restored.handles[0]!.options.model).toBe('opus')
     expect(restored.handles[0]!.options.env?.ANTHROPIC_BASE_URL).toBe('https://api.z.ai/api/anthropic')

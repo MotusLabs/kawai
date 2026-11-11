@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import { initDatabase, type SessionDatabase } from '../db'
-import { anyDirectory, closeDispatchers, createHarness, flush, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+import { anyDirectory, closeDispatchers, createHarness, flush, installManagerCleanup, spawned } from './helpers/chatSessionManagerHarness'
 
 installManagerCleanup()
 
@@ -81,6 +81,7 @@ describe('ChatSessionManager usage', () => {
     await manager.send(first.session.id, 'hello')
     // The fake query has no usage control, so the spawn records the
     // no-data verdict first (broadcast as null).
+    await spawned(handles)
     handles[0]!.push(PROBE_EVENT)
     await flush()
 
@@ -157,6 +158,7 @@ describe('ChatSessionManager usage', () => {
     const created = manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'glm' })
     if (!created.ok) throw new Error('create failed')
     await manager.send(created.session.id, 'hello')
+    await spawned(handles)
     handles[0]!.push({
       type: 'system', subtype: 'api_retry', attempt: 1, max_retries: 10, retry_delay_ms: 100,
       error_status: 429, error: 'rate_limit', uuid: 'r-uuid', session_id: 'sdk-1',
@@ -181,6 +183,7 @@ describe('ChatSessionManager usage', () => {
     if (!created.ok) throw new Error('create failed')
     await manager.send(created.session.id, 'hello')
     const reset = Math.floor(Date.now() / 1000) + 2400
+    await spawned(handles)
     handles[0]!.push({
       type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: reset, rateLimitType: 'seven_day_opus' },
     } as unknown as SDKMessage)
@@ -208,6 +211,7 @@ describe('ChatSessionManager usage', () => {
     const created = manager.createSession({ projectPath: project, claudeProfileId: 'glm-cn' })
     if (!created.ok) throw new Error(created.error)
     await manager.send(created.session.id, 'hello')
+    await spawned(handles)
     handles[0]!.push({
       type: 'assistant', error: 'rate_limit', parent_tool_use_id: null, session_id: 'sdk-1', uuid: 'a-uuid',
       message: { id: 'msg_err', role: 'assistant', content: [{ type: 'text', text: 'API Error: [1308][Your limit will reset at 2026-10-13 17:17:00]' }] },
@@ -230,6 +234,7 @@ describe('ChatSessionManager usage', () => {
     const created = manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'glm' })
     if (!created.ok) throw new Error('create failed')
     await manager.send(created.session.id, 'hello')
+    await spawned(handles)
     handles[0]!.push({
       type: 'assistant',
       message: {

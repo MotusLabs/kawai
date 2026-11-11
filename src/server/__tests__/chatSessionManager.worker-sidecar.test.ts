@@ -16,7 +16,7 @@ import type { ChatWorker } from '../../shared/chat'
 import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
 import { ChatWorkerStore } from '../chat/chatWorkerStore'
-import { anyDirectory, FakeHandle, managedManager, closeDispatchers, fakeQueryFactory, createHarness, flush, waitForCondition, initMessage, writeTranscript, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+import { anyDirectory, FakeHandle, managedManager, closeDispatchers, fakeQueryFactory, createHarness, flush, waitForCondition, initMessage, writeTranscript, installManagerCleanup, spawned } from './helpers/chatSessionManagerHarness'
 
 installManagerCleanup()
 
@@ -173,6 +173,7 @@ describe('ChatSessionManager worker sidecar', () => {
     if (!created.ok) throw new Error(created.error)
     const id = created.session.id
     await harness.manager.send(id, 'research')
+    await spawned(harness.handles)
     const handle = harness.handles[0]!
     handle.push(initMessage('sdk-workers-1'))
     await spawnWorker(handle, 'toolu_w1', 'task_1', 'Map the workspace')
@@ -243,6 +244,7 @@ describe('ChatSessionManager worker sidecar', () => {
       if (!created.ok) throw new Error(created.error)
       const id = created.session.id
       await harness.manager.send(id, 'research')
+      await spawned(harness.handles)
       const handle = harness.handles[0]!
       handle.push(initMessage('sdk-workers-held'))
       await spawnWorker(handle, 'toolu_w1', 'task_1', 'Map the workspace')
@@ -309,6 +311,7 @@ describe('ChatSessionManager worker sidecar', () => {
     if (!created.ok) throw new Error(created.error)
     const id = created.session.id
     await harness.manager.send(id, 'research')
+    await spawned(harness.handles)
     const handle = harness.handles[0]!
     handle.push(initMessage('sdk-workers-3'))
     await spawnWorker(handle, 'toolu_w1', 'task_1', 'Map the workspace')
@@ -351,6 +354,7 @@ describe('ChatSessionManager worker sidecar', () => {
     if (!created.ok) throw new Error(created.error)
     const id = created.session.id
     await harness.manager.send(id, 'research')
+    await spawned(harness.handles)
     const handle = harness.handles[0]!
     handle.push(initMessage('sdk-workers-2'))
     await spawnWorker(handle, 'toolu_run', 'task_run', 'Map the workspace')
@@ -394,6 +398,7 @@ describe('ChatSessionManager worker sidecar', () => {
     if (!created.ok) throw new Error(created.error)
     const id = created.session.id
     await harness.manager.send(id, 'research')
+    await spawned(harness.handles)
     const handle = harness.handles[0]!
     handle.push(initMessage('sdk-workers-release'))
     await spawnWorker(handle, 'toolu_rel', 'task_rel', 'Map the workspace')
@@ -418,6 +423,7 @@ describe('ChatSessionManager worker sidecar', () => {
     if (!created.ok) throw new Error(created.error)
     const id = created.session.id
     await harness.manager.send(id, 'research')
+    await spawned(harness.handles)
     const handle = harness.handles[0]!
     handle.push(initMessage('sdk-workers-3'))
     await spawnWorker(handle, 'toolu_kill', 'task_kill', 'Map the workspace')

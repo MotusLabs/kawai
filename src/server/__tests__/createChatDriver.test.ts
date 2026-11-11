@@ -1,6 +1,6 @@
 // The driver factory (codex-chat-sessions 2.3, 5.6; extract-agent-runtime
-// 6.1): a claude record builds the concrete Claude driver, a codex record
-// Kawai's adapter over the package's public Codex factory; a runtime
+// 6.1): a claude or codex record builds Kawai's adapter over the package's
+// public factory for that runtime; a runtime
 // with no wired driver throws instead of starting as something else.
 import { describe, expect, test } from 'bun:test'
 import type { Query } from '@anthropic-ai/claude-agent-sdk'
@@ -17,9 +17,11 @@ const deps = {
 }
 
 describe('createChatDriver', () => {
-  test('the claude runtime builds a ChatSessionDriver', () => {
+  test('the claude runtime builds the package-backed Claude adapter without spawning', () => {
     const driver = createChatDriver({ runtime: 'claude', options: deps })
-    expect(driver).toBeInstanceOf(ChatSessionDriver)
+    // Never the in-tree SDK driver (A1): the adapter owns its package promises.
+    expect(driver).not.toBeInstanceOf(ChatSessionDriver)
+    expect(typeof (driver as { settled?: unknown }).settled).toBe('function')
     // A fresh driver starts its command state at loading, before any start().
     expect(driver.getCommandState().status).toBe('loading')
   })

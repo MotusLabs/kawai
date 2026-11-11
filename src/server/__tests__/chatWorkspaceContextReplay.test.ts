@@ -9,7 +9,7 @@ import os from 'node:os'
 import path from 'node:path'
 import type { ChatEvent } from '../../shared/chat'
 import type { WorkspaceMessageContext } from '../../shared/planWorkspace'
-import { createHarness, flush, initMessage, installManagerCleanup, writeTranscript, type ManagerHarness } from './helpers/chatSessionManagerHarness'
+import { createHarness, flush, initMessage, installManagerCleanup, spawned, writeTranscript, type ManagerHarness } from './helpers/chatSessionManagerHarness'
 import { initDatabase, type SessionDatabase } from '../db'
 
 installManagerCleanup()
@@ -51,6 +51,7 @@ describe('chatWorkspaceContextReplay', () => {
     const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
     if (!created.ok) throw new Error('create failed')
     await harness.manager.send(created.session.id, 'hello')
+    await spawned(harness.handles)
     harness.handles[0]!.push(initMessage('sdk-1'))
     await flush()
     return { harness, id: created.session.id }

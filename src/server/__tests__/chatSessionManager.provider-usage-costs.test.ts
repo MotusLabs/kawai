@@ -8,7 +8,7 @@ import type { ChatEvent, ChatUsageReport } from '../../shared/chat'
 import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
 import { ChatSessionManager } from '../chat/ChatSessionManager'
-import { anyDirectory, FakeHandle, managedManager, closeDispatchers, fakeQueryFactory, createHarness, flush, initMessage, resultWithWindow, writeTranscript, drainNow, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+import { anyDirectory, FakeHandle, managedManager, closeDispatchers, fakeQueryFactory, createHarness, flush, initMessage, resultWithWindow, writeTranscript, drainNow, installManagerCleanup, spawned } from './helpers/chatSessionManagerHarness'
 
 installManagerCleanup()
 
@@ -231,6 +231,7 @@ describe('ChatSessionManager provider usage pull', () => {
       // Three turns carrying a provider cost complete within 20 seconds.
       const costedTurn = async () => {
         expect(await manager.send(id, 'costly work')).toEqual({ ok: true })
+        await spawned(handles)
         handles[0]!.push(costFrame(0.002))
         handles[0]!.push(resultWithWindow())
         await drainNow()
@@ -279,6 +280,7 @@ describe('ChatSessionManager provider usage pull', () => {
       await drainNow()
       expect(fetchCalls).toHaveLength(1)
       expect(await manager.send(created.session.id, 'costly work')).toEqual({ ok: true })
+      await spawned(handles)
       handles[0]!.push(costFrame(0.002))
       handles[0]!.push(resultWithWindow())
       await drainNow()
@@ -314,6 +316,7 @@ describe('ChatSessionManager provider usage pull', () => {
       const created = first.manager.createSession({ projectPath: '/tmp/proj' })
       if (!created.ok) throw new Error('create failed')
       await first.manager.send(created.session.id, 'seed')
+      await spawned(first.handles)
       first.handles[0]!.push(initMessage('sdk-hist-window'))
       await flush()
       first.manager.shutdown()
@@ -356,6 +359,7 @@ describe('ChatSessionManager provider usage pull', () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
       const { manager, handles, sessionId } = await restartedManager()
       expect(await manager.start(sessionId)).toEqual({ ok: true })
+      await spawned(handles)
       const handle = handles[0]!
       await manager.send(sessionId, 'probe')
       handle.push({ type: 'assistant', uuid: 'live-1', message: { id: 'm-live', role: 'assistant', content: [{ type: 'text', text: 'working now' }] } } as unknown as SDKMessage)

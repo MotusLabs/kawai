@@ -8,9 +8,8 @@
 //   model and team tools. The package's own respawn is never used: a dead
 //   process is replaced by a new package driver built from these inputs,
 //   only after the old one's kill settled (its exit is joined) and resuming
-//   the saved thread. A rejected kill counts only when its causes are
-//   exactly the exits already reported (quiesced()); otherwise nothing
-//   respawns and the session stays dead.
+//   the saved thread, under runtimeBoot.ts's strict quiescence; otherwise
+//   nothing respawns and the session stays dead.
 // - Effort: read when Kawai accepts the send (as before), carried by the
 //   minted message UUID and handed to the package's getEffort when that very
 //   send commits (beforeSubmit runs just before its commit, sends in order).
@@ -43,8 +42,10 @@ import type { CodexSessionDriverOptions } from '../codex/codexThread'
 import type { ThreadItem } from '../codex/protocol/v2/ThreadItem'
 import type { ChatAgentDriver } from './driver'
 import { ChatEventSequencer, chatDraftOf, type ChatEventDraft } from './runtimeEvents'
-import { cardInput, exitCause, forwardedCallbacks, holdRefusal, launchFields, pendingOf, quiesced, requestOutcome, teamToolSet, type AsyncQuestion, type Card } from './codexRuntimeSupport'
-import { OwnedWork, TerminalJoin } from './runtimeOwnership'
+import { cardInput, forwardedCallbacks, holdRefusal, launchFields, pendingOf, requestOutcome, teamToolSet, type AsyncQuestion, type Card } from './codexRuntimeSupport'
+import { OwnedWork, TerminalJoin, outsideRuntime } from './runtimeOwnership'
+import { DeliveredTurns } from './deliveredTurns'
+import { RuntimeBoot } from './runtimeBoot'
 import { validateAsyncAnswers } from './runtimeQuestions'
 
 /** The package factory; repository tests pass the private same-core seam. */
@@ -58,9 +59,7 @@ export function createCodexChatDriver(options: CodexSessionDriverOptions, create
 }
 
 class CodexChatDriver implements ChatAgentDriver {
-  private inner: CodexAgentDriver | null = null
-  private innerEnded = false
-  private booting: Promise<CodexAgentDriver | null> | null = null
+  private readonly boot: RuntimeBoot<CodexAgentDriver>
   private killed = false
   private dead = false
   private threadId: string | null
@@ -81,11 +80,13 @@ class CodexChatDriver implements ChatAgentDriver {
   private readonly cards = new Map<string, Card>()
   private readonly autoGranted = new Set<string>()
   private readonly peers = new Map<string, ChatPeerMessage>()
+  /** A delivery's turn opens at deliver() (deliveredTurns.ts). */
+  private readonly delivered = new DeliveredTurns((draft) => this.emit(draft))
+  /** Interrupts so far: a send still waiting for its driver when one lands is withdrawn. */
+  private interrupts = 0
   private readonly silent = new Set<string>()
   private readonly asked = new Set<string>()
   private readonly questions = new Map<string, AsyncQuestion>()
-  /** The unexpected exits the package reported for the current inner driver. */
-  private exits: string[] = []
   /** Terminal calls, re-issued from an outside caller when the package refused a self-join. */
   private readonly terminals: TerminalJoin
 
@@ -94,6 +95,7 @@ class CodexChatDriver implements ChatAgentDriver {
     this.projectPath = options.projectPath
     this.owned = new OwnedWork(options.sessionId)
     this.terminals = new TerminalJoin(this.owned)
+    this.boot = new RuntimeBoot(this.owned, () => this.killed, 'the previous app-server did not stop cleanly')
   }
 
   get isDead(): boolean {
@@ -129,14 +131,22 @@ class CodexChatDriver implements ChatAgentDriver {
     if (this.activeTurnId || this.sending > 0 || this.pendingCount() > 0) throw new Error('Recipient is not idle')
     const messageUuid = UUID.test(envelope.messageId) ? envelope.messageId : crypto.randomUUID()
     this.peers.set(messageUuid, envelope)
-    this.submit(formatEnvelope(envelope), messageUuid)
+    const sent = this.submit(formatEnvelope(envelope), messageUuid)
+    const turnId = (this.activeTurnId = this.delivered.open(envelope))
+    void sent.then((accepted) => {
+      if (!accepted && this.delivered.abandon() === turnId && this.activeTurnId === turnId) this.activeTurnId = null
+      this.refreshStatus()
+    })
   }
 
   async interrupt(): Promise<void> {
     this.cancelQuestions()
-    const inner = this.inner
+    // Sends still waiting for the driver are withdrawn; a delivery the package has not opened closes here.
+    this.interrupts += 1
+    if (this.delivered.abandon(true) === this.activeTurnId) this.activeTurnId = null
+    const inner = this.boot.live
     this.refreshStatus()
-    if (!inner || this.innerEnded) return
+    if (!inner) return
     const done = this.owned.track('interrupt', inner.interrupt())
     let timer: ReturnType<typeof setTimeout> | undefined
     const bound = new Promise<void>((resolve) => {
@@ -156,7 +166,7 @@ class CodexChatDriver implements ChatAgentDriver {
 
   onApprovalPolicyChanged(policy: ChatApprovalPolicy): void {
     if (policy !== 'auto') return
-    const inner = this.inner
+    const inner = this.boot.current
     for (const request of inner?.pendingRequests() ?? []) {
       if (request.kind !== 'approval') continue
       this.autoGranted.add(request.requestId)
@@ -166,7 +176,7 @@ class CodexChatDriver implements ChatAgentDriver {
   }
 
   resolveApproval(requestId: string, decision: ChatApprovalDecision): { ok: true } | { ok: false; error: string } {
-    return requestOutcome(this.inner?.resolveApproval(requestId, decision === 'allow' ? 'allow' : 'deny'), 'approval', requestId)
+    return requestOutcome(this.boot.current?.resolveApproval(requestId, decision === 'allow' ? 'allow' : 'deny'), 'approval', requestId)
   }
 
   answerQuestion(requestId: string, answers: Record<string, ChatQuestionAnswer>): { ok: true } | { ok: false; error: string } {
@@ -182,15 +192,15 @@ class CodexChatDriver implements ChatAgentDriver {
       this.submit(own.questions.map((question, i) => `${question.question}: ${validated.answers[i]!.join(', ')}`).join('\n'), messageUuid)
       return { ok: true }
     }
-    return requestOutcome(this.inner?.answerQuestion(requestId, answers), 'question', requestId)
+    return requestOutcome(this.boot.current?.answerQuestion(requestId, answers), 'question', requestId)
   }
 
   holdQuestion(requestId: string): { ok: true } | { ok: false; error: string } {
-    return holdRefusal(requestId, this.questions.has(requestId), this.inner?.pendingRequests() ?? [])
+    return holdRefusal(requestId, this.questions.has(requestId), this.boot.current?.pendingRequests() ?? [])
   }
 
   getPendingRequests(): ChatPendingRequest[] {
-    const runtime = (this.inner?.pendingRequests() ?? []).filter((r) => !this.autoGranted.has(r.requestId)).map((request) => pendingOf(request, this.cards))
+    const runtime = (this.boot.current?.pendingRequests() ?? []).filter((r) => !this.autoGranted.has(r.requestId)).map((request) => pendingOf(request, this.cards))
     const own: ChatPendingRequest[] = [...this.questions.values()].map((q) => ({ kind: 'question', requestId: q.requestId, questions: q.questions, at: q.at }))
     return [...runtime, ...own]
   }
@@ -222,15 +232,18 @@ class CodexChatDriver implements ChatAgentDriver {
 
   // ---------------------------------------------------------------- internals
 
-  private submit(text: string, messageUuid: string): void {
+  /** One submission; settles true once the package accepted it (never rejects). */
+  private submit(text: string, messageUuid: string): Promise<boolean> {
     // A spawn refusal (a registered CODEX_HOME) throws here, before anything is accepted.
     const ready = this.ensure()
     // The effort of this send, read when Kawai accepted it (root driver order).
     if (this.options.getEffort) this.efforts.set(messageUuid, this.options.getEffort())
+    const epoch = this.interrupts
     this.sending += 1
     this.refreshStatus()
     const job = ready.then(async (inner) => {
-      if (!inner || this.killed) return
+      // A send still waiting for its driver when an interrupt landed is withdrawn.
+      if (!inner || this.killed || epoch !== this.interrupts) return false
       const steer = inner.state === 'active'
       const handle = await inner.send(text, { messageUuid, ...(steer ? { continuation: 'steer' as const } : {}) }).catch((error: unknown) => {
         // A steer prepared for a turn that ended meanwhile goes as a new turn.
@@ -238,15 +251,18 @@ class CodexChatDriver implements ChatAgentDriver {
         throw error
       })
       void this.owned.track('turn', handle.result)
+      return true
     })
-    void this.owned.track('send', job.catch((error: unknown) => {
+    const sent = job.catch((error: unknown) => {
       this.emit({ type: 'error', message: `Codex refused the turn: ${error instanceof Error ? error.message : String(error)}` })
       throw error
     }).finally(() => {
       this.efforts.delete(messageUuid)
       this.sending -= 1
       this.refreshStatus()
-    }))
+    })
+    void this.owned.track('send', sent)
+    return sent.then((accepted) => accepted, () => false)
   }
 
   /**
@@ -255,55 +271,25 @@ class CodexChatDriver implements ChatAgentDriver {
    * name refuses the caller's start or send itself, as before.
    */
   private ensure(): Promise<CodexAgentDriver | null> {
-    if (this.killed) return Promise.resolve(null)
-    if (this.booting) return this.booting
-    if (this.inner && !this.innerEnded) return Promise.resolve(this.inner)
-    const env = codexSpawnEnv(this.options.serverEnv ?? process.env, this.options.codexHome, this.options.withheldCredentials())
-    this.dead = false
-    const previous = this.inner
-    const resumed = this.threadId !== null
-    const boot = (async (): Promise<CodexAgentDriver | null> => {
-      if (previous) {
-        // The old owner must truly quiesce first (see quiesced()).
-        const exits = this.exits
-        const stopped = await previous.kill().then(() => true, (error: unknown) => {
-          void this.owned.track('retire', Promise.reject(error))
-          return quiesced(error, exits)
-        })
-        if (!stopped) throw new Error('the previous app-server did not stop cleanly')
+    let resumed = false
+    return this.boot.ensure(() => {
+      const env = codexSpawnEnv(this.options.serverEnv ?? process.env, this.options.codexHome, this.options.withheldCredentials())
+      this.dead = false
+      resumed = this.threadId !== null
+      return async () => {
+        const commonDir = await gitCommonDir(this.projectPath)
+        return this.killed ? null : this.create(this.innerOptions(env, commonDir))
       }
-      if (this.killed) return null
-      const commonDir = await gitCommonDir(this.projectPath)
-      if (this.killed) return null
-      const inner = this.create(this.innerOptions(env, commonDir))
-      this.inner = inner
-      this.exits = []
-      this.innerEnded = false
-      await inner.start()
-      return inner
-    })()
-    const settled = boot.catch((error: unknown) => {
-      // The start our own kill cancelled is that stop's consequence, not a failure.
-      if (this.killed && error instanceof AgentRuntimeError && error.category === 'stopped') return null
-      // A process that died while booting already reported its exit (root order).
-      if (!this.killed && !(this.inner && this.innerEnded)) {
-        // The package names the step ("Codex could not start a thread: …");
-        // Kawai's text keeps its own prefix over the underlying failure.
-        const cause = error instanceof AgentRuntimeError && error.causes[0] instanceof Error ? error.causes[0] : error
-        const message = cause instanceof Error ? cause.message : String(cause)
-        logger.warn('codex_thread_start_failed', { sessionId: this.options.sessionId, error: message })
-        this.emit({ type: 'error', message: `Codex could not ${resumed ? 'resume' : 'start'} the thread: ${message}` })
-        this.dead = true
-        this.refreshStatus()
-      }
-      throw error
+    }, (error) => {
+      // The package names the step ("Codex could not start a thread: …");
+      // Kawai's text keeps its own prefix over the underlying failure.
+      const cause = error instanceof AgentRuntimeError && error.causes[0] instanceof Error ? error.causes[0] : error
+      const message = cause instanceof Error ? cause.message : String(cause)
+      logger.warn('codex_thread_start_failed', { sessionId: this.options.sessionId, error: message })
+      this.emit({ type: 'error', message: `Codex could not ${resumed ? 'resume' : 'start'} the thread: ${message}` })
+      this.dead = true
+      this.refreshStatus()
     })
-    void this.owned.track('start', settled)
-    const ready = settled.then((inner) => inner, () => null).finally(() => {
-      if (this.booting === ready) this.booting = null
-    })
-    this.booting = ready
-    return ready
   }
 
   private innerOptions(env: Record<string, string>, commonDir: string | null): CodexDriverOptions {
@@ -338,13 +324,13 @@ class CodexChatDriver implements ChatAgentDriver {
       onEvent: (event) => this.onRuntimeEvent(event),
       onState: () => this.refreshStatus(),
       onRequest: (request) => {
-        if (request.kind === 'approval' && this.autoGranted.has(request.requestId)) this.inner?.resolveApproval(request.requestId, 'allow', { decidedBy: 'policy' })
+        if (request.kind === 'approval' && this.autoGranted.has(request.requestId)) this.boot.current?.resolveApproval(request.requestId, 'allow', { decidedBy: 'policy' })
       },
-      // The critical identity persistence: the host's own promise is the barrier.
+      // The critical identity persistence: the host's own promise is the barrier; run outside the callback ancestry (outsideRuntime).
       onCheckpoint: (checkpoint) => {
         if (checkpoint.runtimeSessionId === this.threadId) return
         this.threadId = checkpoint.runtimeSessionId
-        return options.onSdkSessionId?.(checkpoint.runtimeSessionId) as void
+        return outsideRuntime(() => options.onSdkSessionId?.(checkpoint.runtimeSessionId)) as void
       },
       ...forwardedCallbacks(options, hosted),
       onCommandState: (state) => {
@@ -357,8 +343,7 @@ class CodexChatDriver implements ChatAgentDriver {
         hosted('onSpawn', () => options.onSpawn?.({ cwd: info.cwd, systemPromptAppend: info.systemPromptAppend, effort: this.spawnEffort ?? null, model: info.model, env: { ...info.childEnv }, resumed: info.resumed }))
       },
       onProcessEnd: (report) => {
-        this.exits.push(exitCause(report.generation, report.code, report.signal))
-        this.innerEnded = true
+        this.boot.exited(report)
         this.dead = true
         this.endSpawn()
         this.cancelQuestions()
@@ -397,11 +382,10 @@ class CodexChatDriver implements ChatAgentDriver {
         break
       }
       case 'user_message': {
-        const peer = this.peers.get(event.messageUuid)
-        this.peers.delete(event.messageUuid)
+        // A delivery's peer message was shown when deliver() opened its turn.
+        if (this.peers.delete(event.messageUuid)) break
         if (this.silent.delete(event.messageUuid)) break
-        if (peer) this.emit({ type: 'peer_message', turnId: event.turnId, ...peer }, event.at)
-        else this.emit({ type: 'user_message', turnId: event.turnId, text: event.text, messageUuid: event.messageUuid }, event.at)
+        this.emit({ type: 'user_message', turnId: event.turnId, text: event.text, messageUuid: event.messageUuid }, event.at)
         break
       }
       case 'error':
@@ -417,7 +401,9 @@ class CodexChatDriver implements ChatAgentDriver {
           this.seenToolCallIds.clear()
           this.itemInputs.clear()
           this.asked.clear()
-          this.activeTurnId = event.turnId
+          const absorbed = this.delivered.started(event.turnId, Boolean(event.trigger))
+          this.activeTurnId = this.delivered.shownId(event.turnId)
+          if (absorbed) break
         }
         if (event.type === 'turn_completed' || event.type === 'turn_interrupted') this.activeTurnId = null
         if (event.type === 'tool_call') {
@@ -426,6 +412,7 @@ class CodexChatDriver implements ChatAgentDriver {
         }
         const draft = chatDraftOf(event)
         if (draft) this.emit(draft, event.at)
+        if (event.type === 'turn_completed' || event.type === 'turn_interrupted') this.delivered.ended(event.turnId)
       }
     }
     this.refreshStatus()
@@ -468,9 +455,9 @@ class CodexChatDriver implements ChatAgentDriver {
     }
     this.killed = true
     this.cancelQuestions()
-    const inner = this.inner
-    const booting = this.booting
-    if (inner && !this.innerEnded) this.terminals.begin(how, () => inner[how]())
+    const inner = this.boot.current
+    const booting = this.boot.booting
+    if (inner && this.boot.live) this.terminals.begin(how, () => inner[how]())
     else if (booting) void this.owned.track(how, booting.then((started) => void (started && this.terminals.begin(how, () => started[how]()))))
     else if (inner) this.terminals.begin('kill', () => inner.kill())
     this.endSpawn()
@@ -490,7 +477,8 @@ class CodexChatDriver implements ChatAgentDriver {
     this.options.onStatus(next)
   }
 
+  /** Package turn ids are shown under a delivery's opened id (deliveredTurns.ts). */
   private emit(draft: ChatEventDraft, at?: string | null): void {
-    this.options.onEvent(this.sequencer.stamp(draft, at))
+    this.options.onEvent(this.sequencer.stamp(this.delivered.shown(draft), at))
   }
 }

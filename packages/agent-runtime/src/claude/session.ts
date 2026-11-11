@@ -315,8 +315,10 @@ export class ClaudeSession {
         return
       case 'result':
         // INV-A2: decide, then this frame's publications and observations (old-frame scope), then a queued successor.
+        // The result's model window is read before the turn settles, as the source driver did, so a host
+        // writing its context reading at the turn boundary sees the reading this result completes.
         this.lifecycle.holdState(() => {
-          this.oldFrame.run(() => (settleResult(this.results, message), this.usage.result(frame)))
+          this.oldFrame.run(() => (this.usage.result(frame), settleResult(this.results, message)))
           this.promote(generation)
         })
         this.controls.probe(generation)
