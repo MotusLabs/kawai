@@ -1,0 +1,270 @@
+// Codex usage, quota and limit-wait facts through the public factory and the
+// owned fake app-server over stdio (tasks 5.2/5.3). The fake's `/script`
+// turn sends exactly the notifications a test names, so each expected value
+// is computed from those records, not read back from the driver.
+// - Tokens: a turn's requests are the differences between the generation's
+//   consecutive thread totals; a generation's first update counts its `last`
+//   (a restarted process may restart the totals); a lower total within a
+//   generation is a stale repeat and adds nothing; a counter missing from
+//   the previous total is null, never the whole running total. A turn with
+//   no update has usage null.
+// - A successor turn reusing a tool item id has its own call and count.
+// - Waits: a retrying limit error opens one wait; it ends resumed only on a
+//   later new item phase, delta or grown token update of that turn (or its
+//   success), decided before any observer of that frame runs; a replayed or
+//   regressive item phase is no progress and no count (F2); a quota
+//   push or an elapsed reset never ends it; a failed or interrupted turn and
+//   a stop end it cancelled, an unexpected exit process-ended.
+// - The one account/rateLimits/read is a `report` of the session's login;
+//   a refused or unanswered read reports nothing and fails nothing.
+// - An out-of-range reset epoch is unknown (null), never a thrown settlement.
+import { afterEach, describe, expect, test } from 'bun:test'
+import type { LimitEvent, QuotaReport } from '../src/usage/types.js'
+import { codexDriver, sent, stopDrivers, waitFor, type HarnessOptions } from './helpers/codexDriverHarness.js'
+
+afterEach(stopDrivers)
+
+type Note = { method: string; params?: Record<string, unknown> }
+const script = (notes: Note[], end?: string) => `/script ${JSON.stringify({ notes, ...(end ? { end } : {}) })}`
+const tokens = (total: Record<string, number> | null, last: Record<string, number> | null, window = 1000): Note => ({ method: 'thread/tokenUsage/updated', params: { tokenUsage: { total, last, modelContextWindow: window } } })
+const retry = (info = 'rateLimitExceeded'): Note => ({ method: 'error', params: { willRetry: true, error: { message: 'retrying', codexErrorInfo: info, additionalDetails: null } } })
+const delta = (text = 'hi'): Note => ({ method: 'item/agentMessage/delta', params: { itemId: 'm-delta', delta: text } })
+const command = (id: string): Note[] => {
+  const item = { type: 'commandExecution', id, command: 'ls', cwd: '/', status: 'completed', exitCode: 0, aggregatedOutput: 'ok' }
+  return [{ method: 'item/started', params: { item } }, { method: 'item/completed', params: { item } }]
+}
+const snapshot = (usedPercent: number, resetsAt: number, reached: string | null = null) => ({ limitId: null, limitName: null, primary: { usedPercent, windowDurationMins: 300, resetsAt }, secondary: null, credits: null, planType: null, rateLimitReachedType: reached })
+
+function recorded(options: HarnessOptions = {}) {
+  const limits: LimitEvent[] = []
+  const quotas: QuotaReport[] = []
+  const h = codexDriver({ ...options, callbacks: { onLimitEvent: (e) => void limits.push(e), onQuotaReport: (q) => void quotas.push(q), ...options.callbacks } })
+  return { ...h, limits, quotas, waits: () => limits.filter((e) => e.type !== 'failure') }
+}
+
+/** The usage a request breakdown names (Codex input includes the cached part). */
+const usageOf = (b: { inputTokens: number; cachedInputTokens: number; outputTokens: number }) => ({ inputTokens: b.inputTokens - b.cachedInputTokens, outputTokens: b.outputTokens, cacheReadTokens: b.cachedInputTokens, cacheCreationTokens: null })
+
+describe('Codex per-turn token, tool and compaction facts', () => {
+  test('requests are the differences between totals; a stale lower total adds nothing; a missing previous counter is null; no update is null; a new generation counts its first last', async () => {
+    const h = recorded()
+    await h.driver.start()
+    const t1 = { totalTokens: 150, inputTokens: 100, cachedInputTokens: 40, outputTokens: 50 }
+    const l1 = t1
+    const t2 = { totalTokens: 400, inputTokens: 300, cachedInputTokens: 90, outputTokens: 100 }
+    const first = await (await h.driver.send(script([tokens(t1, l1), tokens(t2, { totalTokens: 250, inputTokens: 200, cachedInputTokens: 50, outputTokens: 50 }), tokens(t2, null)]))).result
+    // first update: its last; second: t2 - t1; the repeated total adds nothing.
+    const d = { inputTokens: t2.inputTokens - t1.inputTokens, cachedInputTokens: t2.cachedInputTokens - t1.cachedInputTokens, outputTokens: t2.outputTokens - t1.outputTokens }
+    const a = usageOf(l1)
+    const b = usageOf(d)
+    expect(first.usage).toEqual({ inputTokens: a.inputTokens + b.inputTokens, outputTokens: a.outputTokens + b.outputTokens, cacheReadTokens: a.cacheReadTokens + b.cacheReadTokens, cacheCreationTokens: null })
+
+    // A lower total within the generation is a stale repeat (here t1 again): no tokens, and t2 stays the baseline.
+    const stale = await (await h.driver.send(script([tokens(t1, l1)]))).result
+    expect(stale.usage).toBeNull()
+
+    // The update after t2 lacks cachedInputTokens, so the next one has no previous cached count: unknown, not its running total.
+    await (await h.driver.send(script([tokens({ totalTokens: 450, inputTokens: 330, outputTokens: 120 }, { totalTokens: 50, inputTokens: 30, outputTokens: 20 })]))).result
+    const partial = await (await h.driver.send(script([tokens({ totalTokens: 480, inputTokens: 350, cachedInputTokens: 100, outputTokens: 130 }, { totalTokens: 30, inputTokens: 20, cachedInputTokens: 10, outputTokens: 10 })]))).result
+    expect(partial.usage).toEqual({ inputTokens: 20, outputTokens: 10, cacheReadTokens: null, cacheCreationTokens: null })
+
+    const none = await (await h.driver.send(script([]))).result
+    expect(none.usage).toBeNull()
+
+    // A restarted process is a new generation: its first update counts its last, whatever the previous totals were.
+    expect((await (await h.driver.send(script([], 'exit:0'))).result).outcome).toBe('process-ended')
+    await h.driver.start()
+    const l4 = { totalTokens: 30, inputTokens: 20, cachedInputTokens: 5, outputTokens: 10 }
+    const restarted = await (await h.driver.send(script([tokens(l4, l4)]))).result
+    expect(restarted.usage).toEqual(usageOf(l4))
+  })
+
+  test('a successor turn that reuses a tool or compaction item id has its own event and count', async () => {
+    const h = recorded()
+    await h.driver.start()
+    const compaction: Note = { method: 'item/completed', params: { item: { type: 'contextCompaction', id: 'cmp-x' } } }
+    const one = await (await h.driver.send(script([...command('cmd-x'), ...command('cmd-x'), compaction, compaction]))).result
+    const two = await (await h.driver.send(script([...command('cmd-x'), compaction]))).result
+    expect([one.toolCallCount, one.compactionCount, two.toolCallCount, two.compactionCount]).toEqual([1, 1, 1, 1])
+    const calls = h.events.filter((e) => e.type === 'tool_call').map((e) => e.turnId)
+    expect(calls).toEqual([one.turnId, two.turnId])
+    expect(h.events.filter((e) => e.type === 'notice').length).toBe(2)
+  })
+})
+
+describe('Codex limit waits', () => {
+  test('a retried limit opens one wait per turn that ends resumed only at the turn\'s next progress', async () => {
+    const h = recorded()
+    await h.driver.start()
+    const push: Note = { method: 'account/rateLimits/updated', params: { rateLimits: snapshot(100, Math.floor(Date.now() / 1000) - 60, 'rateLimitReached') } }
+    const handle = await h.driver.send(script([retry(), push, retry(), delta()]))
+    await handle.result
+    const [start, end, ...rest] = h.waits()
+    expect(rest).toEqual([])
+    expect(start).toMatchObject({ type: 'wait-start', turnId: handle.turnId })
+    expect(end).toEqual({ type: 'wait-end', waitId: (start as { waitId: string }).waitId, cause: 'resumed' })
+    // The quota push between the retries changed no wait; both retries are non-final failures.
+    expect(h.limits.filter((e) => e.type === 'failure').map((e) => (e as { final: boolean }).final)).toEqual([false, false])
+    expect(h.limits.map((e) => e.type)).toEqual(['failure', 'wait-start', 'failure', 'wait-end'])
+  })
+
+  // @covers: agent-runtime › Rate-limit waits have explicit boundaries › Reset passes without resumption
+  test('a failed turn ends its wait cancelled after the final limit; a quota push with a past reset does not resume it', async () => {
+    const h = recorded()
+    await h.driver.start()
+    const past = Math.floor(Date.now() / 1000) - 3600
+    const handle = await h.driver.send(script([retry('usageLimitExceeded'), { method: 'account/rateLimits/updated', params: { rateLimits: snapshot(100, past, 'rateLimitReached') } }], 'failed:"usageLimitExceeded"'))
+    const result = await handle.result
+    expect(result.outcome).toBe('failed')
+    expect(h.limits.map((e) => [e.type, e.type === 'failure' ? e.final : e.type === 'wait-end' ? e.cause : e.turnId])).toEqual([
+      ['failure', false], ['wait-start', handle.turnId], ['failure', true], ['wait-end', 'cancelled'],
+    ])
+  })
+
+  test('an interrupt and a stop end open waits cancelled; an unexpected exit ends it process-ended', async () => {
+    const h = recorded()
+    await h.driver.start()
+    const held = await h.driver.send(script([retry()], 'hold'))
+    await waitFor(() => h.waits().length === 1)
+    await h.driver.interrupt()
+    expect((await held.result).outcome).toBe('interrupted')
+    const exited = await h.driver.send(script([retry()], 'exit:7'))
+    expect((await exited.result).outcome).toBe('process-ended')
+    expect(h.waits().map((e) => (e.type === 'wait-end' ? e.cause : e.turnId))).toEqual([held.turnId, 'cancelled', exited.turnId, 'process-ended'])
+
+    const s = recorded()
+    await s.driver.start()
+    const open = await s.driver.send(script([retry()], 'hold'))
+    await waitFor(() => s.waits().length === 1)
+    await s.driver.kill()
+    expect((await open.result).outcome).toBe('interrupted')
+    expect(s.waits().map((e) => (e.type === 'wait-end' ? e.cause : e.turnId))).toEqual([open.turnId, 'cancelled'])
+  })
+
+  // Lead path review PC2 (Codex counterpart): the wait is registered before the failure observer runs.
+  test('an interrupt from a retry failure observer ends the registered wait once, after its start', async () => {
+    let interrupted = false
+    const h = recorded({
+      callbacks: {
+        onLimitEvent: (event) => {
+          h.limits.push(event)
+          if (event.type === 'failure' && !interrupted) {
+            interrupted = true
+            void h.driver.interrupt().catch(() => {})
+          }
+        },
+      },
+    })
+    await h.driver.start()
+    const handle = await h.driver.send(script([retry()], 'hold'))
+    expect((await handle.result).outcome).toBe('interrupted')
+    // Before any stop (whose endAll would end an orphan too): the turn's own end closed its wait.
+    await Bun.sleep(30)
+    const settled = [...h.limits]
+    await h.driver.shutdown()
+    expect(settled.map((e) => e.type)).toEqual(['failure', 'wait-start', 'wait-end'])
+    expect(settled[2]).toEqual({ type: 'wait-end', waitId: (settled[1] as { waitId: string }).waitId, cause: 'cancelled' })
+    expect(h.limits).toEqual(settled)
+  })
+
+  // Fresh assessment FRESH-B (ported): only a token update that grew a counter is the turn's progress.
+  for (const [name, repeat] of [['a stale lower', 50], ['an equal repeated', 100]] as const) {
+    test(`${name} token total is not progress: the wait stays open until the interrupt cancels it`, async () => {
+      const h = recorded()
+      await h.driver.start()
+      const plain = (n: number) => ({ totalTokens: n, inputTokens: n, outputTokens: 0 })
+      await (await h.driver.send(script([tokens(plain(100), plain(100))]))).result
+      // The quota push after the repeat is never progress; its report shows the repeat was handled (notifications are in order).
+      const push: Note = { method: 'account/rateLimits/updated', params: { rateLimits: snapshot(10, Math.floor(Date.now() / 1000) + 3600) } }
+      const handle = await h.driver.send(script([retry(), tokens(plain(repeat), plain(repeat)), push], 'hold'))
+      await waitFor(() => h.quotas.some((q) => q.source === 'push'))
+      const before = h.waits().map((e) => e.type)
+      await h.driver.interrupt()
+      const result = await handle.result
+      expect(before).toEqual(['wait-start'])
+      expect(h.waits().map((e) => (e.type === 'wait-end' ? e.cause : e.type))).toEqual(['wait-start', 'cancelled'])
+      if (repeat === 50) expect(result.usage).toBeNull()
+    })
+  }
+
+  // Review F2/A3 (ported): a replayed item is no evidence the retry resumed; the method name alone proves nothing.
+  const done = { type: 'commandExecution', id: 'same-completed', command: 'ls', cwd: '/', status: 'completed', exitCode: 0, aggregatedOutput: 'old' }
+  const replayStaysOpen = async (replay: Note[]) => {
+    const h = recorded()
+    await h.driver.start()
+    const push: Note = { method: 'account/rateLimits/updated', params: { rateLimits: snapshot(42, 1900000000) } }
+    const handle = await h.driver.send(script([{ method: 'item/completed', params: { item: done } }, retry(), ...replay, push], 'hold'))
+    await waitFor(() => h.quotas.some((q) => q.source === 'push'))
+    const before = h.waits().map((e) => e.type)
+    await h.driver.interrupt()
+    const result = await handle.result
+    expect(before).toEqual(['wait-start'])
+    expect(h.waits().map((e) => (e.type === 'wait-end' ? e.cause : e.type))).toEqual(['wait-start', 'cancelled'])
+    expect(result.toolCallCount).toBe(1)
+    expect(h.events.filter((e) => e.type === 'tool_result' || e.type === 'tool_call').map((e) => e.type)).toEqual(['tool_result'])
+    expect(h.events.filter((e) => e.type === 'assistant_delta' && e.messageId === 'same-completed')).toEqual([])
+  }
+  test('a replay of the completed item after the retry is not progress: the wait stays open until the interrupt cancels it once, and the item counts once', () =>
+    replayStaysOpen([{ method: 'item/completed', params: { item: done } }]))
+  test('a started phase after the item completed after the retry is not progress: the wait stays open until the interrupt cancels it once, and the item counts once', () =>
+    replayStaysOpen([{ method: 'item/started', params: { item: done } }]))
+  test('the whole item again, started and completed after the retry is not progress: the wait stays open until the interrupt cancels it once, and the item counts once', () =>
+    replayStaysOpen([{ method: 'item/started', params: { item: done } }, { method: 'item/completed', params: { item: done } }]))
+  test('a delta naming the completed item after the retry is not progress: the wait stays open until the interrupt cancels it once, and the item counts once', () =>
+    replayStaysOpen([{ method: 'item/agentMessage/delta', params: { itemId: 'same-completed', delta: 'late' } }]))
+
+  test('a new item after the retry resumes the wait even when an observer of its event stops the driver; identical deltas are both kept', async () => {
+    const h = recorded({ callbacks: { onEvent: (event) => void (event.type === 'tool_call' && event.toolCallId === 'fresh' && h.driver.kill().catch(() => {})) } })
+    await h.driver.start()
+    const first = await h.driver.send(script([delta('same'), delta('same')]))
+    await first.result
+    expect(h.events.filter((e) => e.type === 'assistant_delta' && e.turnId === first.turnId && e.messageId === 'm-delta').map((e) => (e as { delta: string }).delta)).toEqual(['same', 'same'])
+    const fresh = { ...done, id: 'fresh' }
+    const handle = await h.driver.send(script([retry(), { method: 'item/started', params: { item: fresh } }], 'hold'))
+    expect((await handle.result).outcome).toBe('interrupted')
+    expect(h.waits().map((e) => (e.type === 'wait-end' ? e.cause : e.type))).toEqual(['wait-start', 'resumed'])
+  })
+
+  test('a non-limit retry opens no wait', async () => {
+    const h = recorded()
+    await h.driver.start()
+    await (await h.driver.send(script([retry('other'), delta()]))).result
+    expect(h.limits).toEqual([])
+  })
+})
+
+describe('Codex quota sources', () => {
+  test('the one rate-limit read is a session-scoped report, asked once per driver', async () => {
+    const reset = 1900000000
+    const h = recorded({ env: { FAKE_CODEX_RATELIMITS: JSON.stringify(snapshot(42, reset)) } })
+    await h.driver.start()
+    await (await h.driver.send('one')).result
+    await waitFor(() => h.quotas.length > 0)
+    await (await h.driver.send('two')).result
+    expect(sent(h.root, 'account/rateLimits/read')).toHaveLength(1)
+    expect(h.quotas).toEqual([expect.objectContaining({ status: 'allowed', source: 'report', accountScope: 'session', windows: [{ key: 'codex:primary', label: '5-hour', percentUsed: 42, resetsAt: new Date(reset * 1000).toISOString(), periodMs: 300 * 60_000 }] })])
+    await h.driver.shutdown()
+  })
+
+  for (const mode of ['fail', 'hold', undefined]) {
+    test(`a ${mode ?? 'missing'} read reports nothing and the stop reports no failure`, async () => {
+      const h = recorded(mode ? { env: { FAKE_CODEX_RATELIMITS: mode } } : {})
+      await h.driver.start()
+      await (await h.driver.send('one')).result
+      await waitFor(() => sent(h.root, 'account/rateLimits/read').length === 1)
+      expect(h.quotas).toEqual([])
+      expect((await h.driver.shutdown()).processes.length).toBeGreaterThan(0)
+    })
+  }
+
+  test('an out-of-range reset epoch is unknown and the turn still settles', async () => {
+    const h = recorded()
+    await h.driver.start()
+    const huge = { limitId: null, limitName: null, primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: 1e300 }, secondary: { usedPercent: 250, windowDurationMins: 60, resetsAt: 1 }, credits: null, planType: null, rateLimitReachedType: 'rateLimitReached' }
+    const result = await (await h.driver.send(script([{ method: 'account/rateLimits/updated', params: { rateLimits: huge } }, retry()]))).result
+    expect(result.outcome).toBe('success')
+    // The out-of-range percent drops its window; the huge epoch is a null reset.
+    expect(h.quotas.map((q) => q.windows)).toEqual([[{ key: 'codex:primary', label: '5-hour', percentUsed: 100, resetsAt: null, periodMs: 300 * 60_000 }]])
+    expect(h.limits[0]).toMatchObject({ type: 'failure', resetsAt: null })
+  })
+})
