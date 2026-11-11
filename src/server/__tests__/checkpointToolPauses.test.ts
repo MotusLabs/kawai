@@ -9,7 +9,6 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { cleanGitEnv } from '../git/gitCommand'
-import { initDatabase } from '../db'
 import { createPlanWorld, type PlanWorld } from './planHarness'
 import { ExecutionStore } from '../plans/execution/executionStore'
 import { EffectRunner } from '../plans/execution/effects'
@@ -22,6 +21,7 @@ import { CheckpointStore } from '../plans/revisionControl/checkpointStore'
 import { CheckpointTool, type CheckpointOutcome } from '../plans/revisionControl/checkpointTool'
 import { derivePauseTarget, runPauseTick, type PauseTickDeps } from '../plans/revisionControl/pauseTick'
 import { MailboxStore } from '../team/mailboxStore'
+import { freshTestDatabase } from './helpers/testDatabase'
 
 let world: PlanWorld
 let origin = ''
@@ -59,7 +59,7 @@ function changeWorktree(name: string): { cwd: string; branch: string; commit: st
 interface Work { cwd: string; branch: string; commit: string; base: string }
 
 interface Bench {
-  db: ReturnType<typeof initDatabase>
+  db: ReturnType<typeof freshTestDatabase>
   executions: ExecutionStore
   pauses: PauseStore
   checkpoints: CheckpointStore
@@ -72,7 +72,7 @@ interface Bench {
 
 /** A running execution over the named changes, each implementing with an attempt and its own `task-<change>` task. */
 function benchWith(changes: string[]): Bench {
-  const db = initDatabase({ path: path.join(fs.mkdtempSync(path.join(world.root, 'db-')), 'cp.db') })
+  const db = freshTestDatabase(path.join(fs.mkdtempSync(path.join(world.root, 'db-')), 'cp.db'))
   const executions = new ExecutionStore(db.db)
   const pauses = new PauseStore(db.db)
   const checkpoints = new CheckpointStore(db.db)

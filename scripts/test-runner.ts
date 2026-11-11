@@ -1,21 +1,18 @@
 // The unit-suite runner (design D1–D3): one `bun test --parallel=N` over the
-// main batch, and the real-tmux files one process at a time. The runner owns one
-// run root per invocation; scripts/test-preload.ts — passed to every `bun
-// test` child with --preload — gives each test file fresh directories for
-// the four runner-provided variables beneath that root. Every child also
-// gets a 20 s default per-test timeout: per-file isolation pays cold-start
-// costs the shared process used to amortize. `--skip-slow` (design D7)
-// excludes the slow tier — every `*.integration.test.ts` file plus the
-// real-tmux files — from the run; by default both tiers run. After a full
-// run the runner records per-file durations to
-// <git-common-dir>/kawai-checks/timings.json, feeds the record back with
-// --timings so the slowest files start first, and reports files the record
-// shows over 5 s outside the slow tier. Up to two failed real-tmux files
-// rerun once, alone, after the last (D2; `--no-retry` off). Stale run roots from killed
-// runs are swept at startup, and SIGINT/SIGTERM are forwarded to the
-// child's whole process group before the root is removed after a bounded
-// kill; a finished batch's leftover processes are killed before the next
-// batch starts or the root is removed (decision D-g).
+// main batch, then the real-tmux files one process at a time. It owns one run
+// root per invocation; scripts/test-preload.ts (every child's --preload) gives
+// each test file fresh directories for the runner-provided variables beneath
+// it. Every child gets a 20 s default per-test timeout. `--skip-slow` (D7)
+// excludes the slow tier: every `*.integration.test.ts` file plus the
+// real-tmux files. A full run records per-file durations to
+// <git-common-dir>/kawai-checks/timings.json, feeds them back with --timings
+// (slowest first), and reports files over 5 s outside the slow tier.
+// check-time-optimization: real-tmux files run when affected (D6); up to two
+// failed ones rerun once, alone, after the last (D2; `--no-retry` off); every
+// child gets KAWAI_TEST_DB_TEMPLATE, one migrated database (D5). Stale run
+// roots are swept at startup; SIGINT/SIGTERM reach the child's whole process
+// group before the root is removed after a bounded kill, and a finished
+// batch's leftover processes die before the next batch starts (decision D-g).
 
 import fs from 'node:fs'
 import os from 'node:os'
@@ -37,6 +34,7 @@ import {
   seedTimingsSnapshot,
 } from './testTimings'
 import { workersFromEnv } from './lib/workerCount'
+import { spawnTemplateBuild, TEMPLATE_ENV } from './lib/testDbTemplatePaths'
 import { plannedReportNames, writePlannedReports } from './lib/junitReports'
 import { writeRetriesRecord } from './lib/realTmuxRetries'
 import { retryWiring } from './lib/retryWiring'
@@ -380,6 +378,7 @@ async function main() {
 
   try {
     writeOwnerMarker(runRoot)
+    ;(env as NodeJS.ProcessEnv)[TEMPLATE_ENV] = spawnTemplateBuild(runRoot) // D5; a failed build fails the run
     let collected: CollectedFiles
     let serialFiles: string[]
     let mainLabel: string

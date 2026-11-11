@@ -22,6 +22,7 @@ import { TeamWorktrees, worktreeRootOf } from '../team/worktreeRoots'
 import { previewGroupDispatch } from '../team/groupDispatchPreview'
 import { memberRows } from '../team/workspaceRead'
 import { resolveSpawnApproval } from '../../shared/spawnApproval'
+import { freshTestDatabase } from './helpers/testDatabase'
 
 function git(args: string[], cwd?: string): string {
   const result = spawnSync('git', args, { cwd, encoding: 'utf8', env: cleanGitEnv() })
@@ -129,7 +130,7 @@ beforeEach(() => {
   fs.rmSync(path.join(repo, '.kawai'), { recursive: true, force: true })
   writeGroup('devs', 'max: 3\nprofile: glm')
   writeGroup('qa', 'max: 2')
-  db = initDatabase({ path: path.join(dir, 'db.sqlite') })
+  db = freshTestDatabase(path.join(dir, 'db.sqlite'))
   store = new MailboxStore(db.db)
   tasks = new TaskStore(db.db, store)
   records = new Map([['lead', record('lead', { groupId: 'leads' })]])

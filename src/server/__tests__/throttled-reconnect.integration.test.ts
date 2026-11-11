@@ -536,6 +536,7 @@ if (!tmuxAvailable || !localhostBindable) {
     // The actual test
     // ----------------------------------------------------------------
 
+    // @covers: dev-checks › Real-tmux tests do not fail on machine speed › Throttled reconnect under load
     test(
       'single-attach sends under 75% of double-attach\'s bytes through the throttled proxy',
       async () => {

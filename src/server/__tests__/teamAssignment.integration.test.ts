@@ -18,6 +18,7 @@ import { fixtureQueryFactory } from '../chat/developmentFixture'
 import { resolveTeam } from '../team/teamIdentity'
 import { cleanGitEnv } from '../git/gitCommand'
 import type { ChatEvent } from '../../shared/chat'
+import { freshTestDatabase } from './helpers/testDatabase'
 
 const waitFor = async (check: () => boolean, label: string) => {
   const start = Date.now()
@@ -186,7 +187,7 @@ test('the spawn preview cools a sibling provider model through the real seam', a
   process.env.CLAUDE_CONFIG_DIR = path.join(root, 'claude')
   fs.mkdirSync(path.join(repo, '.kawai/groups'), { recursive: true })
   fs.writeFileSync(path.join(repo, '.kawai/groups/routed.md'), '---\nprofiles: [glm-flash, haiku]\n---\nRoute work')
-  const db = initDatabase({ path: path.join(root, 'sessions.db') })
+  const db = freshTestDatabase(path.join(root, 'sessions.db'))
   const manager = new ChatSessionManager({
     db, registry: new SessionRegistry(), authCheck: () => true, profileCatalogHome: root,
     onEvent: () => {},
