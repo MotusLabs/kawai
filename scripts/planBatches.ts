@@ -21,6 +21,26 @@ export const REAL_TMUX_FILES = [
   'chatRename.integration.test.ts',
 ]
 
+// Paths whose change runs every real-tmux file (check-time-optimization D6):
+// the Bun pin, the manifest and lockfile, the TypeScript configs, the runner
+// and its selection, the preload, the server entry points every real-tmux
+// file starts, and the helper they all import. Selection by each file's own
+// `@exercises` globs lives in lib/realTmuxSelection.ts.
+export const REAL_TMUX_SHARED_TRIGGERS = [
+  '.bun-version',
+  'package.json',
+  'bun.lock',
+  'tsconfig*.json',
+  'scripts/test-runner.ts',
+  'scripts/planBatches.ts',
+  'scripts/runPlan.ts',
+  'scripts/test-preload.ts',
+  'scripts/lib/realTmuxSelection.ts',
+  'src/server/index.ts',
+  'src/server/bootstrap.ts',
+  'src/server/__tests__/testEnvironment.ts',
+]
+
 // An explicit `.test.ts` argument naming one of these files goes to the
 // serial step, whatever path it was spelled with.
 export function isRealTmuxFile(file: string): boolean {

@@ -37,6 +37,7 @@ import {
 } from './testTimings'
 import { workersFromEnv } from './lib/workerCount'
 import { plannedReportNames, writePlannedReports } from './lib/junitReports'
+import { planRealTmuxSelection, writeSelectionRecord, type SelectionRecord } from './lib/realTmuxSelection'
 
 const RUN_ROOT_PREFIX = 'agentboard-tests-'
 const OWNER_MARKER = 'owner.json'
@@ -52,6 +53,8 @@ interface RunnerChild {
 interface RunArgs {
   skipRealTmux: boolean
   skipSlowTier: boolean
+  /** Bypass real-tmux selection (check-time-optimization D6). */
+  allRealTmux: boolean
   fileArgs: string[]
   passthrough: string[]
 }
@@ -63,12 +66,14 @@ export function parseRunArgs(args: string[]): RunArgs {
   const parsed: RunArgs = {
     skipRealTmux: false,
     skipSlowTier: false,
+    allRealTmux: false,
     fileArgs: [],
     passthrough: [],
   }
   for (const arg of args) {
     if (arg === '--skip-real-tmux') parsed.skipRealTmux = true
     else if (arg === '--skip-slow') parsed.skipSlowTier = true
+    else if (arg === '--all-real-tmux') parsed.allRealTmux = true
     else if (arg.endsWith('.test.ts') || arg.endsWith('.test.tsx')) parsed.fileArgs.push(arg)
     else parsed.passthrough.push(arg)
   }
@@ -371,6 +376,7 @@ async function main() {
     let collected: CollectedFiles
     let serialFiles: string[]
     let mainLabel: string
+    let selection: SelectionRecord | null = null
     if (args.fileArgs.length > 0) {
       const resolved = resolveFileArgs(args.fileArgs)
       collected = { serverTests: resolved.parallel, clientTests: [], runnerTests: [], sharedTests: [] }
@@ -379,6 +385,14 @@ async function main() {
     } else {
       collected = await collectFiles()
       serialFiles = [...REAL_TMUX_FILES].map((file) => `src/server/__tests__/${file}`)
+      // A full run selects real-tmux files by their declared paths (D6);
+      // explicit files and --all-real-tmux run what they name. A run that
+      // skips the tier anyway selects nothing and records nothing.
+      if (!args.skipRealTmux && !args.skipSlowTier) {
+        const planned = planRealTmuxSelection(process.cwd(), serialFiles, args.allRealTmux)
+        serialFiles = planned.run
+        selection = planned.record
+      }
       mainLabel = 'main batch'
     }
     // The run-shape decisions (review B1): the batch options below are passed
@@ -431,6 +445,9 @@ async function main() {
     const planned = plannedReportNames(batches)
     if (junitReportDir !== undefined && planned.length > 0) {
       writePlannedReports(junitReportDir, planned)
+      // The check copies the selection into its record (skipped files and
+      // the merge-base); the merge reads only *.junit.xml, never this file.
+      if (selection !== null) writeSelectionRecord(junitReportDir, selection)
     }
     await runBatchesAndPublish({
       batches,

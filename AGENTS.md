@@ -18,7 +18,16 @@ home directories (HOME points into the run root, so no test reads the real
 ~/.kawai, ~/.agentboard, or ~/.claude) and runs files with per-file isolation;
 a bare `bun test` keeps the old shared-process mode. Non-tmux files run in one parallel `bun test`
 step, and the real-tmux files serially after it (`--skip-real-tmux` skips
-them). `--skip-slow` excludes the slow tier — every `*.integration.test.ts`
+them). A full run runs a real-tmux file only when the working tree differs
+from its merge-base with the local `origin/master` ref (no fetch) in a path
+its `// @exercises:` header declares, the file itself, or a shared trigger
+(`REAL_TMUX_SHARED_TRIGGERS` in `scripts/planBatches.ts`: the Bun pin,
+manifest, lockfile, runner, preload, server entry points, and
+`testEnvironment.ts`), or when there is no merge-base; it prints each file's
+decision, and a full check records the skipped files and the merge-base.
+Explicit file arguments and `--all-real-tmux` run what they name, and
+`.github/workflows/nightly-real-tmux.yml` runs every real-tmux file on master
+daily, filing failures on the open `nightly-real-tmux` issue. `--skip-slow` excludes the slow tier — every `*.integration.test.ts`
 file plus the real-tmux files — and runs the rest; by default both tiers
 run. After a full run the runner
 records per-file durations to `<git-common-dir>/kawai-checks/timings.json`
