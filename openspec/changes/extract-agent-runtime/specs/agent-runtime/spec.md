@@ -107,6 +107,10 @@ The runtime SHALL expose token, model and compaction facts, quota-window reports
 - **WHEN** Codex or Claude supplies an account usage update while no turn is active
 - **THEN** the usage or rate-limit callback receives the normalized windows without creating a turn
 
+#### Scenario: Caller-claimed Codex quota read
+- **WHEN** a Codex host supplies a quota-read claim and each started generation becomes ready after its checkpoint persisted
+- **THEN** the claim is asked once per generation, only a granted claim sends that generation's one account read, a denied or throwing claim sends none and reports nothing, pushed updates are still reported, and without a claim the driver reads once
+
 ### Requirement: Rate-limit waits have explicit boundaries
 A provider-observed retry wait SHALL emit a wait-start signal and one matching wait-end signal on observed resumption, cancellation or process end. Window and reset facts SHALL be retained when known. A predicted reset time alone SHALL NOT establish that work resumed.
 

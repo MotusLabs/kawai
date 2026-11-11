@@ -20,6 +20,7 @@
 //   and turn/start. A server request gets a fixed answer, a host request
 //   (requests.ts), a host tool call or a deliberate error reply; requests and
 //   tools of a retired generation reach no host code. All host work is owned.
+// - Quota. One optional rate-limit read per driver, or per ready generation its claim permits.
 // - Stop. The lifecycle reserves the terminal first; teardown decides the
 //   open turn, closes requests, publishes, then stops every current and
 //   retired transport and joins all owned work; accounting adds each
@@ -39,7 +40,7 @@ import { bindToolSet, type BoundToolSet } from '../tools/toolSet.js'
 import { checkSubmission } from '../claude/turns.js'
 import { AppServerRpcError, AppServerTransport, ServerRequestRefusal } from './appServerTransport.js'
 import { CodexFacts } from './facts.js'
-import { readQuota } from './quotaRead.js'
+import { claimQuotaRead } from './quotaRead.js'
 import { accountGenerations, CAPABILITIES, CLIENT_INFO, newGeneration, rpcError, startFailure, stopGeneration, threadOpened, threadParams, type CodexGeneration } from './generation.js'
 import { codexTurnStartParams, composeCodexPermissions, type CodexPermissionComposition } from './permissions.js'
 import { cancelReply, CodexRequests } from './requests.js'
@@ -77,7 +78,7 @@ export class CodexSession {
   private readonly oldFrame = new OldFrameScope()
   /** Submitted turns whose native id is not known yet, oldest first. */
   private unbound: CodexTurnState[] = []
-  /** The one account/rateLimits/read of this driver was requested. */
+  /** Without a claim callback: the one account/rateLimits/read of this driver was requested. */
   private quotaRequested = false
 
   constructor(private readonly options: CodexSessionOptions) {
@@ -201,10 +202,9 @@ export class CodexSession {
     const refused = this.checkpoints.failedRefusal()
     if (refused) throw refused
     if (this.stopBegun()) throw this.lifecycle.cancelled('the driver was stopped while its checkpoint persisted')
-    if (!this.quotaRequested) {
-      this.quotaRequested = true
-      readQuota(generation, { runOwned: (label, body) => this.runOwned(label, body), current: () => this.current(), facts: this.facts })
-    }
+    const quota = { claim: this.options.claimRateLimitsRead, firstRead: () => !this.quotaRequested && (this.quotaRequested = true), stopBegun: () => this.stopBegun() }
+    claimQuotaRead(generation, { ...quota, notify: (name, callback) => this.notify(name, callback), runOwned: (label, body) => this.runOwned(label, body), current: () => this.current(), facts: this.facts })
+    if (this.stopBegun()) throw this.lifecycle.cancelled('the driver was stopped while its quota read was claimed')
   }
 
   /** Retire a generation and stop its transport as owned work (joined by stop). */

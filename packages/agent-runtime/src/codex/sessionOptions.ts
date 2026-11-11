@@ -21,6 +21,8 @@ export interface CodexSessionOptions {
   beforeSubmit?: BeforeSubmit
   onToolObservation?(observation: ToolObservation): void
   auditHooks?: CodexAuditHooks
+  /** Asked once per ready generation; omitted, the one read per driver (quotaRead.ts). */
+  claimRateLimitsRead?: () => boolean
   resume?: ResumeCheckpoint
   unansweredRequests?: 'deny' | 'wait'
   terminate?: TerminateOptions

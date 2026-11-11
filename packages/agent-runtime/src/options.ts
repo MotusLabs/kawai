@@ -196,6 +196,14 @@ export interface CodexAuditHooks {
 export interface CodexDriverOptions extends BaseDriverOptions {
   permissions: CodexPermissions
   auditHooks?: CodexAuditHooks
+  /**
+   * Whether a started generation may send its one account/rateLimits/read.
+   * Asked synchronously once per generation, after its checkpoint persisted;
+   * only `true` permits the read. A throw denies it and the stop reports it.
+   * Omitted: the driver reads once, after its first readiness. Sharing one
+   * read between drivers of a login or home is the caller's own state.
+   */
+  claimRateLimitsRead?: () => boolean
 }
 
 export type CreateClaudeDriver = (options: ClaudeDriverOptions) => ClaudeAgentDriver

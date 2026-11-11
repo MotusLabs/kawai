@@ -34,6 +34,9 @@ export function createCodexDriverWith(options: CodexDriverOptions, internal: Pic
   if (options.unansweredRequests !== undefined && options.unansweredRequests !== 'deny' && options.unansweredRequests !== 'wait') {
     throw configurationError('unansweredRequests must be deny or wait')
   }
+  if (options.claimRateLimitsRead !== undefined && typeof options.claimRateLimitsRead !== 'function') {
+    throw configurationError('claimRateLimitsRead must be a function')
+  }
   return new CodexSession({
     launch: options.launch,
     callbacks: options.callbacks,
@@ -49,6 +52,7 @@ export function createCodexDriverWith(options: CodexDriverOptions, internal: Pic
     ...(options.auditHooks ? { auditHooks: options.auditHooks } : {}),
     ...(options.resume ? { resume: options.resume } : {}),
     ...(options.unansweredRequests ? { unansweredRequests: options.unansweredRequests } : {}),
+    ...(options.claimRateLimitsRead ? { claimRateLimitsRead: options.claimRateLimitsRead } : {}),
     ...(internal.spawn ? { spawn: internal.spawn } : {}),
   })
 }

@@ -1,11 +1,13 @@
-// The Codex driver's one account/rateLimits/read (design §6, task 5.3): asked
-// once per driver, after the first generation is ready, as owned work stop
-// joins. Its reply is a `report` of the session's own login (facts.ts). A reply
+// The Codex driver's optional account/rateLimits/read (design §6, task 5.3):
+// asked once per driver after the first generation is ready, or for each ready
+// generation the caller's claimRateLimitsRead permits (session.ts), as owned
+// work stop joins. Its reply is a `report` of the session's own login (facts.ts). A reply
 // that arrives after its generation was retired or superseded reports nothing.
 // An app-server that refuses or lacks the method, or a process or stop that
 // closes the request first, gives no report and no failure: the read is
 // optional, and an exit already reports itself. Any other throw stays owned.
-// A host that shares one read between sessions of a login does so itself.
+// A host that shares one read between sessions of a login does so itself,
+// through the claim; the package keeps no store of claims or accounts.
 import { AgentRuntimeError } from '../errors.js'
 import type { JsonObject } from '../json.js'
 import { AppServerRpcError } from './appServerTransport.js'
@@ -16,6 +18,34 @@ export interface QuotaReadHost {
   runOwned(label: string, body: () => Promise<void>): Promise<void> | null
   current(): CodexGeneration | null
   facts: Pick<CodexFacts, 'quotaRead'>
+}
+
+export interface QuotaClaimHost extends QuotaReadHost {
+  /** The caller's claimRateLimitsRead, if supplied. */
+  claim: (() => boolean) | undefined
+  /** Without a claim: true only for the driver's first read, which it marks requested. */
+  firstRead(): boolean
+  notify(name: string, callback: () => void): void
+  stopBegun(): boolean
+}
+
+/**
+ * A ready generation's optional read. Omitted claim: once per driver. A
+ * supplied claim is asked once for this generation and only `true` permits
+ * the read; a throw denies it and stays an owned failure the stop reports
+ * (host.notify). A claim that stopped the driver or superseded this
+ * generation permits nothing for it.
+ */
+export function claimQuotaRead(generation: CodexGeneration, host: QuotaClaimHost): void {
+  const claim = host.claim
+  if (!claim) {
+    if (!host.firstRead()) return
+  } else {
+    let permitted = false
+    host.notify('claimRateLimitsRead', () => void (permitted = claim() === true))
+    if (!permitted || generation.retired || generation !== host.current() || host.stopBegun()) return
+  }
+  readQuota(generation, host)
 }
 
 export function readQuota(generation: CodexGeneration, host: QuotaReadHost): void {

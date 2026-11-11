@@ -102,6 +102,8 @@ The caller persists checkpoints through `onCheckpoint(checkpoint): void|Promise<
 
 Keep SDK and runtime IDs separate from host session IDs. Reapply caller policy on each resume. A rejected/missing resume target is an error, never an implicit new session. The package owns no SQLite table, transcript catalog or credential copy.
 
+Post-freeze exception. Task 1.2 froze these declarations. The owner later authorized exactly one additive field (decision 4a98ea6b, task-5369866c): `CodexDriverOptions.claimRateLimitsRead?: () => boolean`, so Kawai keeps its policy of one account read per login (§6). Nothing else in the frozen surface changes, and no Claude or base option is added.
+
 ### 3. Process ownership, stop and error semantics
 
 The default local process owner uses the existing Node child-process substrate on Bun and owns each spawned generation from before listener installation through terminal join. Claude always supplies SDK spawnClaudeCodeProcess; optional wire capture decorates this spawner. Codex carries AppServerClient's actual exit promise through its driver.
@@ -143,6 +145,7 @@ Codex options expose approvalPolicy (headless never), sandbox mode, network and 
 | systemPromptAppend | Per-session string; Kawai builds role/security/team text before construction |
 | beforeSubmit | Optional synchronous callback receiving minted message/turn IDs and opaque context, returns accepted/refused; refusal precedes visible turn/enqueue |
 | onToolObservation | Optional names/IDs/phases only, never tool arguments; cannot affect permission or transport |
+| claimRateLimitsRead (Codex) | Optional synchronous claim asked once per ready generation before its account/rateLimits/read; only `true` permits it. Kawai answers from its own per-login state; the package keeps no claim store |
 | auditHooks | Explicit opt-in detailed provider hook adapter for Kawai's existing audit coverage, with no outbound module import |
 | wire | Optional raw recorder; no default file, log or listener; absence changes no process ownership |
 | callbacks | onEvent/onStatus/onRequest/onProcessEnd/onCheckpoint/onTurnResult/onModel/onCompaction/onContextUsage/onLimitEvent/onRateLimit/onUsageReport plus preserved optional activity/roster/command signals |
@@ -165,6 +168,8 @@ Retain input/output/cache-read/cache-creation semantics, including Codex's cache
 onLimitEvent adds wait-start/wait-end variants to the existing failure signal. A retry/rate-limit observation starts a correlated wait; an actual retry resumption ends it as resumed, while stop/exit ends it as cancelled/process-ended. A reset clock or a quota percentage is not resumption. Report provider window identity/reset when known and retain null when absent.
 
 Quota reports remain independent of turn state and do not create a synthetic turn. Preserve the existing Claude parser sources and Codex pushed/initial account report. An SDK host-login usage pull can describe a different account from a proxy session: require an explicit quota-source choice and label scope/source. Disable that fallback for headless proxy sessions unless identity is established. Optional host-supplied quota reads may provide proxy-account windows; do not invent an endpoint, borrow Kawai's account store or claim unknown proxy quotas are available.
+
+Codex's initial account/rateLimits/read is optional. Omitting `claimRateLimitsRead` keeps one read per driver after the first readiness, with none after a respawn. A supplied claim is asked once per generation, after its checkpoint persisted and while it is current and not stopping. `true` permits that generation's one read; anything else permits none and fabricates no report or no-data verdict. Pushed updates are reported either way. A throwing claim denies the read, and the stop reports its raw error once. A claim that stops its own driver is refused instead of joining itself, and no read follows. Caller-side claim state is not rolled back. Sharing between drivers, homes or providers is the caller's: two drivers on one home can read once, and distinct or newly selected homes claim separately.
 
 ### 7. Kawai consumption and compatibility
 
