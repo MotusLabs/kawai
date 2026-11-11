@@ -154,6 +154,10 @@ A host MAY supply a live Codex effort reader, a Claude prompt composer, a detail
 - **WHEN** a Codex host submits text naming a catalog skill with the skill mode `none`
 - **THEN** its turn/start carries the text alone, a later submission without the mode carries the skill again, and an unknown mode or any mode on Claude is refused before anything is sent
 
+#### Scenario: Codex skill directory moves on a live process
+- **WHEN** a Codex host moves the skill directory of a ready generation to another absolute path
+- **THEN** the catalog is loading at once and a send meanwhile carries its text only, the same process lists the new directory with forceReload, a reply for the old directory publishes nothing, and later turns use only the new catalog
+
 ### Requirement: Rate-limit waits have explicit boundaries
 A provider-observed retry wait SHALL emit a wait-start signal and one matching wait-end signal on observed resumption, cancellation or process end. Window and reset facts SHALL be retained when known. A predicted reset time alone SHALL NOT establish that work resumed.
 

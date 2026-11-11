@@ -20,7 +20,9 @@
 //   questions are this adapter's cards, answered as a turn on the thread.
 // - A send while a turn runs steers it; mail delivers as a peer turn under
 //   its message id. Mail and question answers send codexSkills 'none'
-//   (text only, R9); a human send keeps the catalog's skill inputs. Every
+//   (text only, R9); a human send keeps the catalog's skill inputs, and a
+//   project move lists the new directory's skills on the live process
+//   (setSkillDirectory, R11). Every
 //   package promise, and every promise a host callback returns (the
 //   direct onEvent/onStatus publications included), is owned (runtimeOwnership.ts); settled() joins them
 //   and reports their raw failures once.
@@ -28,6 +30,7 @@
 //   own callback is re-issued by the next outside caller (TerminalJoin).
 // - Events keep Kawai's identity and texts (runtimeEvents.ts); a process
 //   exit reports Kawai's message with its code or signal.
+import { isAbsolute } from 'node:path'
 import { createCodexDriver } from '@motuslabs/agent-runtime/codex'
 import type { AgentEvent, CodexAgentDriver, CodexDriverOptions, Effort } from '@motuslabs/agent-runtime'
 import { AgentRuntimeError } from '@motuslabs/agent-runtime'
@@ -119,8 +122,16 @@ class CodexChatDriver implements ChatAgentDriver {
   }
 
   setProjectPath(path: string): void {
-    // The next spawn's cwd (the running thread keeps its own).
+    // The next spawn's cwd (the running thread keeps its own); the live
+    // generation's skill catalog moves at once (R11, as the source's
+    // commands.changeDirectory did).
     this.projectPath = path
+    this.moveSkills(this.boot.live)
+  }
+
+  /** R11: the live package driver lists the current project's skills; unchanged is a no-op there. */
+  private moveSkills(inner: CodexAgentDriver | null): void {
+    if (inner && isAbsolute(this.projectPath)) inner.setSkillDirectory?.(this.projectPath)
   }
 
   send(text: string): void {
@@ -280,6 +291,7 @@ class CodexChatDriver implements ChatAgentDriver {
    */
   private ensure(): Promise<CodexAgentDriver | null> {
     let resumed = false
+    // A move while this driver booted, after its launch cwd was taken, reaches its catalog once it is ready.
     return this.boot.ensure(() => {
       const env = codexSpawnEnv(this.options.serverEnv ?? process.env, this.options.codexHome, this.options.withheldCredentials())
       this.dead = false
@@ -297,6 +309,9 @@ class CodexChatDriver implements ChatAgentDriver {
       this.emit({ type: 'error', message: `Codex could not ${resumed ? 'resume' : 'start'} the thread: ${message}` })
       this.dead = true
       this.refreshStatus()
+    }).then((inner) => {
+      this.moveSkills(inner)
+      return inner
     })
   }
 

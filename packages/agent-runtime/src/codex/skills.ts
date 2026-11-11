@@ -4,13 +4,14 @@
 // the only source of both the public slash-command list (onCommandState) and
 // the private skill paths a turn's input carries; no caller-supplied path or
 // filesystem scan is used.
-// - A catalog is valid only when the reply names exactly the generation's cwd
-//   with skill and error arrays. Enabled skills with a safe name, an absolute
+// - A catalog is valid only when the reply names exactly the listed cwd with
+//   skill and error arrays. Enabled skills with a safe name, an absolute
 //   path, a description and a known scope are kept; clear/reset/new are
 //   reserved; one name with two paths is a conflict and is dropped.
 // - Discovery is per generation: it starts loading at the process's start,
 //   scans once the thread is ready, and rescans (forceReload) on
-//   `skills/changed`. Only the latest request may publish; a burst coalesces
+//   `skills/changed` and on setSkillDirectory (R11), which lists the new
+//   directory from then on; it never changes the thread's or a launch's cwd. Only the latest request may publish; a burst coalesces
 //   into one follow-up. Each request is owned work the stop joins; a failure
 //   or an unsupported method makes the list unavailable and never fails a turn.
 // - A turn's text references a skill only by a whole whitespace-delimited
@@ -123,6 +124,13 @@ export class CodexSkillDiscovery {
     if (this.generation !== generation) return
     this.booted = true
     this.scan()
+  }
+
+  /** R11 setSkillDirectory: the live generation lists `cwd` instead, with forceReload; no generation, nothing. */
+  changeDirectory(cwd: string): void {
+    if (!this.generation || cwd === this.cwd) return
+    this.cwd = cwd
+    this.invalidate(true)
   }
 
   /** `skills/changed`: rescan with forceReload. */

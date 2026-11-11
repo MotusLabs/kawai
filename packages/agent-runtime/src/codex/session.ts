@@ -24,12 +24,14 @@
 // - Skills. The generation's own skills/list catalog (skills.ts) publishes
 //   onCommandState, and a new turn's input appends the typed skill inputs
 //   its text names unless the send chose codexSkills 'none' (R9); a steer
-//   carries text only, as before.
+//   carries text only, as before. setSkillDirectory (R11) moves the live
+//   generation's catalog to another directory.
 // - Stop. The lifecycle reserves the terminal first; teardown decides the
 //   open turn, closes requests, publishes, then stops every current and
 //   retired transport and joins all owned work; accounting adds each
 //   process's native evidence. An unexpected exit likewise decides the open
 //   turn before any callback, then reports one error and one onProcessEnd.
+import path from 'node:path'
 import type { AnswerOptions, AnswerOutcome, InterruptReceipt, ProcessExitFact, ProcessExitReceipt, SubmitOptions, TurnHandle, TurnOutcome } from '../contract.js'
 import { AgentRuntimeError, type AgentErrorInfo } from '../errors.js'
 import { EventStream, type EventBody } from '../eventStream.js'
@@ -574,6 +576,15 @@ export class CodexSession {
 
   pendingRequests(): PendingRequest[] {
     return this.requests.list()
+  }
+
+  /** R11: the live generation's skill catalog moves to `cwd` (skills.ts); thread and launch cwds stay. */
+  setSkillDirectory(cwd: string): void {
+    if (typeof cwd !== 'string' || !cwd || !path.isAbsolute(cwd)) {
+      throw new AgentRuntimeError({ category: 'configuration', message: 'setSkillDirectory needs a nonempty absolute directory' })
+    }
+    if (this.stopBegun()) return
+    this.skills.changeDirectory(cwd)
   }
 
   kill(): Promise<ProcessExitReceipt> {

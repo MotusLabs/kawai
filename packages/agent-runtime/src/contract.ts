@@ -193,4 +193,17 @@ export interface ClaudeAgentDriver extends AgentDriver {
 
 export interface CodexAgentDriver extends AgentDriver {
   readonly runtime: 'codex'
+  /**
+   * The live generation's skill-discovery directory (R11). Throws category
+   * `configuration` unless `cwd` is a nonempty absolute path, before any
+   * change. An unchanged directory is a no-op. On the current live
+   * generation the skill catalog turns `loading` at once and is listed again
+   * with forceReload at `cwd` on the same app-server, once the generation is
+   * ready; a reply for the previous directory or generation publishes
+   * nothing, and sends while it loads carry text only. Turns already sent
+   * keep their input. The running thread's cwd and every later generation's
+   * launch cwd are unchanged. With no live generation, or once a stop began,
+   * it does nothing.
+   */
+  setSkillDirectory?(cwd: string): void
 }

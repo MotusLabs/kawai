@@ -30,8 +30,10 @@
 // FAKE_CODEX_RATELIMITS: account/rateLimits/read answers {rateLimits: <json>}; "fail" answers an
 //   error; "hold" never answers; unset: unknown method (-32601), like any other method.
 // FAKE_CODEX_START=agent: an agent turn starts and completes right after thread/start.
-// skills/list answers {data: [{cwd: <this process's cwd>, skills, errors}]} from
-// $CODEX_HOME/skills.json ({skills, errors?}), read at each request; without the
+// skills/list answers {data: [{cwd, skills, errors}]} for each requested cwd
+// (else this process's cwd) from $CODEX_HOME/skills.json ({skills, errors?,
+// byCwd?: {<cwd>: {skills, delayMs?}}}), read at each request: a byCwd entry
+// lists that directory's own skills, its delayMs holds the reply; without the
 // file it is an unknown method.
 import { spawn } from 'node:child_process'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -242,8 +244,12 @@ export function serveFakeCodex(io: FakeCodexIo): void {
       case 'skills/list': {
         const file = join(home, 'skills.json')
         if (!existsSync(file)) break
-        const listed = JSON.parse(readFileSync(file, 'utf8')) as { skills: unknown[]; errors?: unknown[] }
-        return reply(id, { data: [{ cwd: io.cwd, skills: listed.skills, errors: listed.errors ?? [] }] })
+        const listed = JSON.parse(readFileSync(file, 'utf8')) as { skills: unknown[]; errors?: unknown[]; byCwd?: Record<string, { skills: unknown[]; delayMs?: number }> }
+        const cwds: string[] = Array.isArray(params.cwds) && params.cwds.length > 0 ? params.cwds : [io.cwd]
+        const data = cwds.map((cwd) => ({ cwd, skills: listed.byCwd?.[cwd]?.skills ?? listed.skills, errors: listed.errors ?? [] }))
+        const delay = Math.max(0, ...cwds.map((cwd) => listed.byCwd?.[cwd]?.delayMs ?? 0))
+        if (delay > 0) return void setTimeout(() => reply(id, { data }), delay)
+        return reply(id, { data })
       }
       case 'account/rateLimits/read': {
         const mode = env.FAKE_CODEX_RATELIMITS

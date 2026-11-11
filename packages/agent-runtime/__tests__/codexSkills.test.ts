@@ -15,14 +15,22 @@
 //   (source S1: peer and internal turns never carried skills), read once at
 //   send(); omitted or 'auto' is the catalog selection above; any other value,
 //   and any value on Claude, refuses the send before anything is sent.
-import { writeFileSync } from 'node:fs'
+// - R11 setSkillDirectory (source CodexSessionDriver.setProjectPath ->
+//   CodexCommandDiscovery.changeDirectory): the live generation's catalog is
+//   loading at once and listed again at the new cwd with forceReload on the
+//   same process; an older reply publishes nothing; a send while it loads is
+//   text only; sent turns keep their input; unchanged, unstarted and stopping
+//   do nothing; an invalid directory throws before any change; a later
+//   generation lists its own launch cwd.
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, test } from 'bun:test'
 import type { CommandState } from '../src/activity.js'
+import { AgentRuntimeError } from '../src/errors.js'
 import { createClaudeDriver } from '../src/claude/index.js'
 import type { SubmitOptions } from '../src/contract.js'
 import type { AgentEvent } from '../src/events.js'
-import { codexDriver, refusal, sent, stopDrivers, waitFor, type CodexRoot, type HarnessOptions } from './helpers/codexDriverHarness.js'
+import { codexDriver, deferred, refusal, sent, stopDrivers, waitFor, type CodexRoot, type HarnessOptions } from './helpers/codexDriverHarness.js'
 import { fakeClaudeHome } from './helpers/fakeClaudeHome.js'
 
 const claudes: Array<{ kill(): Promise<unknown> }> = []
@@ -203,5 +211,135 @@ describe('SubmitOptions.codexSkills (R9)', () => {
     expect(events.slice(before)).toEqual([])
     const result = await (await d.send('hello')).result
     expect([result.outcome, events.filter((e) => e.type === 'user_message').map((e) => (e as { text: string }).text)]).toEqual(['success', ['hello']])
+  })
+})
+
+describe('setSkillDirectory (R11)', () => {
+  const names = (h: { states: CommandState[] }) => h.states.map((s) => [s.status, s.commands.map((c) => c.name)])
+  const listed = (root: CodexRoot) => sent(root, 'skills/list').map((m) => m.params)
+  /** A second project directory with its own catalog entry. */
+  const other = (root: CodexRoot, skills: unknown[], delayMs?: number) => {
+    const dir = join(root.root, 'other-project')
+    mkdirSync(dir, { recursive: true })
+    return { dir, entry: { [dir]: { skills, ...(delayMs ? { delayMs } : {}) } } }
+  }
+  const byCwd = (root: CodexRoot, skills: unknown[], entries: Record<string, unknown>) => writeFileSync(join(root.home, 'skills.json'), JSON.stringify({ skills, byCwd: entries }))
+
+  // @covers: agent-runtime › Host-compatibility inputs and observations are optional › Codex skill directory moves on a live process
+  test('a move loads at once, lists the new directory with forceReload on the same process, sends text only while loading, then uses only the new catalog', async () => {
+    const h = await ready()
+    const moved = other(h.root, [REVIEW])
+    byCwd(h.root, [DEPLOY], moved.entry)
+    h.driver.setSkillDirectory!(moved.dir)
+    expect(h.states.at(-1)).toEqual({ status: 'loading', commands: [] })
+    await (await h.driver.send('/deploy /review')).result
+    await waitFor(() => h.states.at(-1)?.status === 'ready')
+    await (await h.driver.send('/deploy /review')).result
+    expect({
+      listed: listed(h.root),
+      states: names(h),
+      inputs: inputs(h.root),
+      processes: sent(h.root, 'initialize').length,
+    }).toEqual({
+      listed: [{ cwds: [h.root.launch().cwd], forceReload: false }, { cwds: [moved.dir], forceReload: true }],
+      states: [['loading', []], ['ready', ['deploy']], ['loading', []], ['ready', ['review']]],
+      inputs: [[text('/deploy /review')], [text('/deploy /review'), skill(REVIEW)]],
+      processes: 1,
+    })
+  })
+
+  test('a reply for the previous directory still in flight publishes nothing; the new directory is listed after it', async () => {
+    const h = recorded()
+    const moved = other(h.root, [REVIEW])
+    byCwd(h.root, [DEPLOY], { ...moved.entry, [h.root.launch().cwd]: { skills: [DEPLOY], delayMs: 300 } })
+    await h.driver.start()
+    await waitFor(() => listed(h.root).length === 1)
+    h.driver.setSkillDirectory!(moved.dir)
+    await waitFor(() => h.states.at(-1)?.status === 'ready')
+    expect({ states: names(h), listed: listed(h.root) }).toEqual({
+      states: [['loading', []], ['ready', ['review']]],
+      listed: [{ cwds: [h.root.launch().cwd], forceReload: false }, { cwds: [moved.dir], forceReload: true }],
+    })
+  })
+
+  test('a turn already sent keeps its skill input when the directory moves after it', async () => {
+    const h = await ready()
+    const moved = other(h.root, [REVIEW])
+    byCwd(h.root, [DEPLOY], moved.entry)
+    const opening = await h.driver.send('/deploy')
+    await waitFor(() => sent(h.root, 'turn/start').length === 1)
+    h.driver.setSkillDirectory!(moved.dir)
+    await opening.result
+    await waitFor(() => h.states.at(-1)?.status === 'ready')
+    expect(inputs(h.root)).toEqual([[text('/deploy'), skill(DEPLOY)]])
+  })
+
+  test('an unchanged directory, a driver not started and a driver stopping do nothing', async () => {
+    const h = await ready()
+    h.driver.setSkillDirectory!(h.root.launch().cwd)
+    expect({ states: names(h), listed: listed(h.root).length }).toEqual({ states: [['loading', []], ['ready', ['deploy']]], listed: 1 })
+
+    const idle = recorded()
+    catalog(idle.root, [DEPLOY])
+    const moved = other(idle.root, [REVIEW])
+    idle.driver.setSkillDirectory!(moved.dir)
+    expect({ states: idle.states, received: idle.root.received() }).toEqual({ states: [], received: [] })
+    await idle.driver.start()
+    await waitFor(() => idle.states.at(-1)?.status === 'ready')
+    expect(listed(idle.root)).toEqual([{ cwds: [idle.root.launch().cwd], forceReload: false }])
+
+    const stopping = h.driver.kill()
+    h.driver.setSkillDirectory!(moved.dir)
+    await stopping
+    expect({ states: names(h), listed: listed(h.root).length }).toEqual({ states: [['loading', []], ['ready', ['deploy']], ['unavailable', []]], listed: 1 })
+  })
+
+  test('an empty, relative or non-string directory throws configuration before any change or request', async () => {
+    const h = await ready()
+    const outcomes = (['', 'relative/dir', 42, undefined] as unknown[]).map((value) => {
+      try {
+        h.driver.setSkillDirectory!(value as string)
+        return 'accepted'
+      } catch (error) {
+        return error instanceof AgentRuntimeError ? error.category : String(error)
+      }
+    })
+    expect({ outcomes, states: names(h), listed: listed(h.root).length }).toEqual({
+      outcomes: ['configuration', 'configuration', 'configuration', 'configuration'], states: [['loading', []], ['ready', ['deploy']]], listed: 1,
+    })
+  })
+
+  test('a move before readiness waits for the held checkpoint, then lists only the new directory', async () => {
+    const gate = deferred()
+    const states: CommandState[] = []
+    const h = { ...codexDriver({ callbacks: { onCommandState: (state) => states.push(state), onCheckpoint: () => gate.promise } }), states }
+    const moved = other(h.root, [REVIEW])
+    byCwd(h.root, [DEPLOY], moved.entry)
+    const starting = h.driver.start()
+    await waitFor(() => sent(h.root, 'thread/start').length === 1)
+    h.driver.setSkillDirectory!(moved.dir)
+    await Bun.sleep(50)
+    const beforeRelease = { states: names(h), listed: listed(h.root).length }
+    gate.resolve()
+    await starting
+    await waitFor(() => h.states.at(-1)?.status === 'ready')
+    expect({ beforeRelease, states: names(h), listed: listed(h.root) }).toEqual({
+      beforeRelease: { states: [['loading', []]], listed: 0 },
+      states: [['loading', []], ['ready', ['review']]],
+      listed: [{ cwds: [moved.dir], forceReload: true }],
+    })
+  })
+
+  test('a later generation lists its own launch cwd, not the moved directory', async () => {
+    const h = await ready()
+    const moved = other(h.root, [REVIEW])
+    byCwd(h.root, [DEPLOY], moved.entry)
+    h.driver.setSkillDirectory!(moved.dir)
+    await waitFor(() => h.states.at(-1)?.status === 'ready' && listed(h.root).length === 2)
+    await (await h.driver.send(`/script ${JSON.stringify({ end: 'exit:1' })}`)).result.catch(() => {})
+    await waitFor(() => h.states.at(-1)?.status === 'unavailable')
+    await h.driver.start()
+    await waitFor(() => h.states.at(-1)?.status === 'ready' && listed(h.root).length === 3)
+    expect({ last: listed(h.root).at(-1), commands: h.states.at(-1)!.commands.map((c) => c.name) }).toEqual({ last: { cwds: [h.root.launch().cwd], forceReload: false }, commands: ['deploy'] })
   })
 })

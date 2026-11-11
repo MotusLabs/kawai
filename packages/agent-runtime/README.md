@@ -368,6 +368,12 @@ neither the Claude Agent SDK nor anything beyond the package and `zod`.
   is called. A steer carries text only. Any other value, and any
   `codexSkills` on the Claude driver, is refused as `unsupported` before
   anything is sent.
+  `driver.setSkillDirectory(cwd)` moves the live generation's catalog to
+  another absolute directory: it is `loading` at once (sends carry text
+  only), then listed again there with forceReload on the same process; a
+  reply for the old directory publishes nothing. The thread's cwd and later
+  launches' cwds are unchanged, and without a live generation it does
+  nothing. Anything but a nonempty absolute path throws `configuration`.
 - **Requests.** Approvals, user input and elicitation reach `onRequest`
   after they are registered, with the order and first-answer rules of
   [Answering requests](#answering-requests). Disabled user input gets empty
