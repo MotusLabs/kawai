@@ -6,10 +6,15 @@
 // then reports the failures it has not reported yet, once: it rejects with
 // the original object for one failure, or an AggregateError of the originals
 // for several. Callers waiting at the same time share one report; a later
-// wait reports only newer failures. Nothing here awaits itself: `settled()`
-// called from inside tracked work would wait for that work, so the adapter
-// never calls it from its own jobs. TerminalJoin re-issues a terminal call
-// the package refused as a self-join from the next outside caller.
+// wait reports only newer failures. Nothing here awaits itself: the adapter
+// never calls `settled()` from its own jobs, and a host callback run by
+// `hosted()` carries a private ancestry frame (sync and async continuations
+// alike) while its result is outstanding, so a `settled()` reached from its
+// own live callback is refused at once (category `internal`) before a join is
+// created or reused (F1 R12, note-3893b594). Callers outside that ancestry,
+// of other drivers, or after the callback finished join normally.
+// TerminalJoin re-issues a terminal call the package refused as a self-join
+// from the next outside caller.
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { AgentRuntimeError } from '@motuslabs/agent-runtime'
 import { logger } from '../../logger'
@@ -23,6 +28,14 @@ import { logger } from '../../logger'
  * the root one.
  */
 export const outsideRuntime: <R>(fn: () => R) => R = AsyncLocalStorage.snapshot()
+
+/** One running host callback of one OwnedWork; live until its result is settled. */
+type Frame = { readonly owner: OwnedWork; readonly parent: Frame | undefined; live: boolean }
+const callbackAncestry = new AsyncLocalStorage<Frame>()
+
+function isThenable(value: unknown): value is PromiseLike<unknown> {
+  return value !== null && (typeof value === 'object' || typeof value === 'function') && typeof (value as PromiseLike<unknown>).then === 'function'
+}
 
 export class OwnedWork {
   private readonly live = new Set<Promise<unknown>>()
@@ -54,10 +67,35 @@ export class OwnedWork {
    * package, whose stop reports it.
    */
   hosted(label: string, fn: () => unknown): void {
-    const result = fn()
-    if (result !== null && (typeof result === 'object' || typeof result === 'function') && typeof (result as PromiseLike<unknown>).then === 'function') {
-      void this.track(`callback:${label}`, Promise.resolve(result))
+    const frame: Frame = { owner: this, parent: callbackAncestry.getStore(), live: true }
+    // The thenable check and its adoption run inside the frame too: a
+    // custom thenable's then() (and a throwing then getter) belong to the
+    // callback, and any throw finishes the frame before it propagates.
+    let adopted: Promise<unknown> | null
+    try {
+      adopted = callbackAncestry.run(frame, () => {
+        const result = fn()
+        return isThenable(result) ? Promise.resolve(result) : null
+      })
+    } catch (error) {
+      frame.live = false
+      throw error
     }
+    if (!adopted) {
+      frame.live = false
+      return
+    }
+    void this.track(`callback:${label}`, adopted).finally(() => {
+      frame.live = false
+    })
+  }
+
+  /** True while the caller runs inside one of this owner's own live host callbacks. */
+  private insideOwnCallback(): boolean {
+    for (let frame = callbackAncestry.getStore(); frame; frame = frame.parent) {
+      if (frame.owner === this && frame.live) return true
+    }
+    return false
   }
 
   /** Every raw rejection retained so far, oldest first. */
@@ -72,6 +110,9 @@ export class OwnedWork {
    * caller may start (a re-acquired terminal join).
    */
   settled(before?: () => void): Promise<void> {
+    if (this.insideOwnCallback()) {
+      return Promise.reject(new AgentRuntimeError({ category: 'internal', message: 'settled() inside a live host callback of this driver would wait for that callback' }))
+    }
     this.joining ??= this.join(before).finally(() => {
       this.joining = null
     })
@@ -79,6 +120,10 @@ export class OwnedWork {
   }
 
   private async join(before?: () => void): Promise<void> {
+    // One turn first: a join started (outside the ancestry) from inside a
+    // host callback still sees that callback's result, which hosted()
+    // registers right after the callback returns.
+    await Promise.resolve()
     before?.()
     while (this.live.size > 0) {
       await Promise.allSettled([...this.live])
