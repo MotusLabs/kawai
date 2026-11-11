@@ -8,6 +8,7 @@ import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
 import { type ChatQueryFactory } from '../chat/ChatSessionManager'
 import { anyDirectory, FakeHandle, managedManager, closeDispatchers, fakeQueryFactory, createHarness, flush, initMessage, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+import { freshTestDatabase } from './helpers/testDatabase'
 
 installManagerCleanup()
 
@@ -24,7 +25,7 @@ describe('ChatSessionManager', () => {
 
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-chatmgr-'))
-    db = initDatabase({ path: path.join(tempDir, 'test.db') })
+    db = freshTestDatabase(path.join(tempDir, 'test.db'))
     // Isolate auth from the host: no API key, empty CLI config dir. HOME is
     // pinned so the profile catalog resolves against an empty home — a real
     // ~/.kawai must not leak into these tests.
@@ -123,7 +124,7 @@ describe('ChatSessionManager', () => {
     test('start is refused when the stored transcript is missing', async () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
       const dbPath = path.join(tempDir, 'start-ghost.db')
-      const dbA = initDatabase({ path: dbPath })
+      const dbA = freshTestDatabase(dbPath)
       const harnessA = await createHarness(dbA)
       const created = harnessA.manager.createSession({ projectPath: '/tmp/proj' })
       if (!created.ok) throw new Error('create failed')

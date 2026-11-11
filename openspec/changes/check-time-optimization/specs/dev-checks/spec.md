@@ -113,7 +113,7 @@ The runner SHALL migrate one template database per run, and a test that asks for
 
 #### Scenario: A fresh test database
 - **WHEN** a test asks for a fresh database under the runner
-- **THEN** it opens at the current schema version and no backup file is written for it
+- **THEN** it opens at the current schema version and no pre-migration backup is taken for it
 
 #### Scenario: A migration test
 - **WHEN** a migration test opens a new database

@@ -35,6 +35,38 @@ export interface CheckRecord {
    * files it skipped as unaffected. Absent on older records, on runs that
    * skipped the tier, and on explicit-file runs. */
   realTmux?: RecordRealTmuxSelection
+  /** Real-tmux files that failed once and passed when rerun alone, each with
+   * its first attempt's failing tests (check-time-optimization D3). Absent:
+   * no retries (older records too). */
+  retries?: RecordRetry[]
+  /** Which property-case profile the unit step ran (D3/D4). Absent: unknown,
+   * as on every record written before the profile existed. */
+  caseProfile?: CaseProfile
+}
+
+export interface RecordRetry {
+  file: string
+  failures: string[]
+}
+
+export type CaseProfile = 'reduced' | 'full'
+
+/** Retries read from disk, or null when malformed. */
+export function parseRetries(value: unknown): RecordRetry[] | null {
+  if (!Array.isArray(value)) return null
+  const retries: RecordRetry[] = []
+  for (const entry of value) {
+    if (typeof entry !== 'object' || entry === null) return null
+    const { file, failures } = entry as Partial<RecordRetry>
+    if (typeof file !== 'string' || file === '') return null
+    if (!Array.isArray(failures) || !failures.every((failure) => typeof failure === 'string')) return null
+    retries.push({ file, failures: [...failures] })
+  }
+  return retries
+}
+
+export function isCaseProfile(value: unknown): value is CaseProfile {
+  return value === 'reduced' || value === 'full'
 }
 
 export interface RecordRealTmuxSelection {
@@ -141,6 +173,10 @@ export function readRecord(dir: string, key: string, now = Date.now()): CheckRec
   }
   // Like the list pointer, a malformed selection drops only itself.
   const realTmux = record.realTmux === undefined ? null : parseRealTmuxSelection(record.realTmux)
+  // So do malformed retries and profile: absent or unreadable, a record
+  // reads as no retries and an unknown profile (I5).
+  const retries = record.retries === undefined ? null : parseRetries(record.retries)
+  const caseProfile = isCaseProfile(record.caseProfile) ? record.caseProfile : null
   return {
     key,
     treeId: typeof record.treeId === 'string' ? record.treeId : '',
@@ -152,6 +188,8 @@ export function readRecord(dir: string, key: string, now = Date.now()): CheckRec
     steps: record.steps.map((step) => ({ name: step.name, ms: step.ms })),
     ...(tests !== undefined ? { tests } : {}),
     ...(realTmux !== null ? { realTmux } : {}),
+    ...(retries !== null && retries.length > 0 ? { retries } : {}),
+    ...(caseProfile !== null ? { caseProfile } : {}),
   }
 }
 

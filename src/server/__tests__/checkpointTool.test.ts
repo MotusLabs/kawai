@@ -10,7 +10,6 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { cleanGitEnv } from '../git/gitCommand'
-import { initDatabase } from '../db'
 import { createPlanWorld, type PlanWorld } from './planHarness'
 import { ExecutionStore } from '../plans/execution/executionStore'
 import type { ChangeRow } from '../plans/execution/executionRows'
@@ -26,6 +25,7 @@ import { CheckpointTool, type CheckpointOutcome } from '../plans/revisionControl
 import { teamToolTable, TEAM_ALLOWED_TOOLS } from '../team/mailboxTools'
 import { TeamMailbox } from '../team/TeamMailbox'
 import { MailboxStore } from '../team/mailboxStore'
+import { freshTestDatabase } from './helpers/testDatabase'
 
 let world: PlanWorld
 let origin = ''
@@ -61,7 +61,7 @@ function changeWorktree(name: string): { cwd: string; branch: string; commit: st
 }
 
 interface Bench {
-  db: ReturnType<typeof initDatabase>
+  db: ReturnType<typeof freshTestDatabase>
   executions: ExecutionStore
   pauses: PauseStore
   checkpoints: CheckpointStore
@@ -76,7 +76,7 @@ interface Bench {
 
 /** A fresh database with one running execution, an implementing change with an attempt, and an open pause targeting it. */
 function bench(stage: 'attempt' | 'review' = 'attempt', options: { withdrawn?: boolean } = {}): Bench {
-  const db = initDatabase({ path: path.join(fs.mkdtempSync(path.join(world.root, 'db-')), 'cp.db') })
+  const db = freshTestDatabase(path.join(fs.mkdtempSync(path.join(world.root, 'db-')), 'cp.db'))
   const executions = new ExecutionStore(db.db)
   const pauses = new PauseStore(db.db)
   const checkpoints = new CheckpointStore(db.db)
@@ -427,7 +427,7 @@ describe('a result counts (D7)', () => {
 
 describe('the tool joins the team table (D7)', () => {
   test('task_checkpoint is registered, allowed, and bound to the caller', async () => {
-    const mail = new MailboxStore(initDatabase({ path: path.join(fs.mkdtempSync(path.join(world.root, 'db-')), 'mail.db') }).db)
+    const mail = new MailboxStore(freshTestDatabase(path.join(fs.mkdtempSync(path.join(world.root, 'db-')), 'mail.db')).db)
     const bench1 = bench()
     const table = teamToolTable(new TeamMailbox(mail, { getSession: () => null }), 'dev', { checkpoints: bench1.tool })
     const spec = table.find(entry => entry.name === 'task_checkpoint')

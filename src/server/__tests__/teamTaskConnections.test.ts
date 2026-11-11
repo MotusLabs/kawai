@@ -9,7 +9,7 @@ import os from 'node:os'
 import path from 'node:path'
 import type { ChatSessionManager } from '../chat/ChatSessionManager'
 import { ChatConnections } from '../chat/ChatConnections'
-import { initDatabase, type SessionDatabase } from '../db'
+import { type SessionDatabase } from '../db'
 import { AssignmentService } from '../team/AssignmentService'
 import { AssignmentStore } from '../team/assignmentStore'
 import { MailboxStore } from '../team/mailboxStore'
@@ -20,6 +20,7 @@ import { TeamCaps } from '../team/teamCaps'
 import { TeamWorktrees } from '../team/worktreeRoots'
 import type { TeamIdentity } from '../team/teamIdentity'
 import type { ClientMessage, ServerMessage } from '../../shared/types'
+import { freshTestDatabase } from './helpers/testDatabase'
 
 let dir: string
 let db: SessionDatabase
@@ -37,7 +38,7 @@ beforeEach(() => {
   fs.mkdirSync(path.join(dir, '.kawai', 'groups'), { recursive: true })
   fs.writeFileSync(path.join(dir, '.kawai', 'groups', 'devs.md'), '---\nlabel: Developers\n---\nBuild features')
   fs.mkdirSync(path.join(dir, 'openspec', 'changes', 'add-x'), { recursive: true })
-  db = initDatabase({ path: path.join(dir, 'db.sqlite') })
+  db = freshTestDatabase(path.join(dir, 'db.sqlite'))
   mail = new MailboxStore(db.db)
   // Known team paths (team-workspace-pages D1): this repository and another team's.
   teams = new Map([['/repo', { teamId: 'team', groupsRoot: dir }], ['/other', { teamId: 'other', groupsRoot: dir }]])

@@ -27,6 +27,7 @@ import { TaskService, type TaskCaller } from '../team/TaskService'
 import { TaskResultService } from '../team/TaskResultService'
 import { clearTeamCache, resolveTeam } from '../team/teamIdentity'
 import { CONTRACT_MARKDOWN, nextReview, pick } from './convergenceGenerator'
+import { propertyCases } from './helpers/propertyCases'
 
 const SEED = 0xC0FE1D
 const CASES = 300
@@ -69,7 +70,7 @@ const states = (rows: readonly LedgerRow[]): string[][] => rows.map(row => [row.
 test('P2: no signal decides a finding; only a recorded diagnosis decision writes rejected, naming it (seed 0xC0FE1D, 300 cases)', async () => {
   const reached = new Map<string, number>()
   const tally = (key: string) => reached.set(key, (reached.get(key) ?? 0) + 1)
-  for (let index = 0; index < CASES; index++) {
+  for (let index = 0; index < propertyCases(CASES); index++) {
     const rng = mulberry32(SEED + index)
     const task = await tasks.create(agent('lead'), { title: `P2 ${index}`, direction: 'Build', contract: CONTRACT_MARKDOWN })
     const diagnosisDecisions = new Set<string>()

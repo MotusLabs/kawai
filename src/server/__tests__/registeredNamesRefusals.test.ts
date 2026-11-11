@@ -13,10 +13,11 @@ import path from 'node:path'
 import { resolveClaudeProfile } from '../chat/ClaudeProfiles'
 import { codexSpawnEnv } from '../chat/codexProfiles'
 import { RegisteredNameRefusal, RETAINED_SECRET_NAMES_KEY } from '../chat/secretNameRegistry'
-import { initDatabase, type SessionDatabase } from '../db'
+import { type SessionDatabase } from '../db'
 import { Script, startHarness, until } from './codexDriverHarness'
 import type { CodexClient } from '../chat/codex/codexThread'
 import type { AppServerClientOptions } from '../chat/codex/appServerClient'
+import { freshTestDatabase } from './helpers/testDatabase'
 
 const OR_URL = 'https://relay.example.internal/api'
 
@@ -37,7 +38,7 @@ beforeEach(() => {
   tempDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-relay-refusal-')))
   home = path.join(tempDir, 'home')
   fs.mkdirSync(path.join(home, '.kawai'), { recursive: true })
-  db = initDatabase({ path: path.join(tempDir, 'test.db') })
+  db = freshTestDatabase(path.join(tempDir, 'test.db'))
 })
 
 afterEach(() => {

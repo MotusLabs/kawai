@@ -13,6 +13,7 @@ import {
   OPENSPEC_POOL_SIZE,
   openspecListPool,
 } from '../workspace/openspecPool'
+import { propertyCases } from './helpers/propertyCases'
 
 /** mulberry32: a small seeded PRNG, so failing cases replay exactly. */
 function prng(seed: number): () => number {
@@ -37,7 +38,7 @@ describe('ConcurrencyPool PL1', () => {
     expect(OPENSPEC_POOL_SIZE).toBe(3)
     expect(openspecListPool.size).toBe(3)
     const random = prng(SEED)
-    for (let caseIndex = 0; caseIndex < CASES; caseIndex += 1) {
+    for (let caseIndex = 0; caseIndex < propertyCases(CASES); caseIndex += 1) {
       const pool = new ConcurrencyPool(OPENSPEC_POOL_SIZE)
       const n = 1 + Math.floor(random() * 60)
       const allAtOnce = caseIndex % 2 === 0

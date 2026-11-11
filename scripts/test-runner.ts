@@ -1,20 +1,18 @@
 // The unit-suite runner (design D1–D3): one `bun test --parallel=N` over the
-// main batch, and the real-tmux files one process at a time. The runner owns one
-// run root per invocation; scripts/test-preload.ts — passed to every `bun
-// test` child with --preload — gives each test file fresh directories for
-// the four runner-provided variables beneath that root. Every child also
-// gets a 20 s default per-test timeout: per-file isolation pays cold-start
-// costs the shared process used to amortize. `--skip-slow` (design D7)
-// excludes the slow tier — every `*.integration.test.ts` file plus the
-// real-tmux files — from the run; by default both tiers run. After a full
-// run the runner records per-file durations to
-// <git-common-dir>/kawai-checks/timings.json, feeds the record back with
-// --timings so the slowest files start first, and reports files the record
-// shows over 5 s outside the slow tier. Stale run roots from killed
-// runs are swept at startup, and SIGINT/SIGTERM are forwarded to the
-// child's whole process group before the root is removed after a bounded
-// kill; a finished batch's leftover processes are killed before the next
-// batch starts or the root is removed (decision D-g).
+// main batch, then the real-tmux files one process at a time. It owns one run
+// root per invocation; scripts/test-preload.ts (every child's --preload) gives
+// each test file fresh directories for the runner-provided variables beneath
+// it. Every child gets a 20 s default per-test timeout. `--skip-slow` (D7)
+// excludes the slow tier: every `*.integration.test.ts` file plus the
+// real-tmux files. A full run records per-file durations to
+// <git-common-dir>/kawai-checks/timings.json, feeds them back with --timings
+// (slowest first), and reports files over 5 s outside the slow tier.
+// check-time-optimization: real-tmux files run when affected (D6); up to two
+// failed ones rerun once, alone, after the last (D2; `--no-retry` off); every
+// child gets KAWAI_TEST_DB_TEMPLATE, one migrated database (D5). Stale run
+// roots are swept at startup; SIGINT/SIGTERM reach the child's whole process
+// group before the root is removed after a bounded kill, and a finished
+// batch's leftover processes die before the next batch starts (decision D-g).
 
 import fs from 'node:fs'
 import os from 'node:os'
@@ -27,7 +25,7 @@ import {
   isSlowTierFile,
   planBatches,
 } from './planBatches'
-import { planRun, runBatchesAndPublish } from './runPlan'
+import { BatchRefusedError, planRun, runBatchesAndPublish } from './runPlan'
 import {
   formatMisplacedReport,
   misplacedFromRecords,
@@ -36,7 +34,10 @@ import {
   seedTimingsSnapshot,
 } from './testTimings'
 import { workersFromEnv } from './lib/workerCount'
+import { spawnTemplateBuild, TEMPLATE_ENV } from './lib/testDbTemplatePaths'
 import { plannedReportNames, writePlannedReports } from './lib/junitReports'
+import { writeRetriesRecord } from './lib/realTmuxRetries'
+import { retryWiring } from './lib/retryWiring'
 import { planRealTmuxSelection, writeSelectionRecord, type SelectionRecord } from './lib/realTmuxSelection'
 
 const RUN_ROOT_PREFIX = 'agentboard-tests-'
@@ -55,6 +56,8 @@ interface RunArgs {
   skipSlowTier: boolean
   /** Bypass real-tmux selection (check-time-optimization D6). */
   allRealTmux: boolean
+  /** Rerun no failed real-tmux file (check-time-optimization D2). */
+  noRetry: boolean
   fileArgs: string[]
   passthrough: string[]
 }
@@ -67,6 +70,7 @@ export function parseRunArgs(args: string[]): RunArgs {
     skipRealTmux: false,
     skipSlowTier: false,
     allRealTmux: false,
+    noRetry: false,
     fileArgs: [],
     passthrough: [],
   }
@@ -74,6 +78,7 @@ export function parseRunArgs(args: string[]): RunArgs {
     if (arg === '--skip-real-tmux') parsed.skipRealTmux = true
     else if (arg === '--skip-slow') parsed.skipSlowTier = true
     else if (arg === '--all-real-tmux') parsed.allRealTmux = true
+    else if (arg === '--no-retry') parsed.noRetry = true
     else if (arg.endsWith('.test.ts') || arg.endsWith('.test.tsx')) parsed.fileArgs.push(arg)
     else parsed.passthrough.push(arg)
   }
@@ -291,7 +296,7 @@ let currentChild: RunnerChild | null = null
 // is set. Kept a pure helper so testRunner.test.ts asserts the gate directly.
 export function refuseBatchAfterSignal(signalHandled: boolean, batch: string): void {
   if (signalHandled) {
-    throw new Error(`Signal handled; not starting batch: ${batch}`)
+    throw new BatchRefusedError(`Signal handled; not starting batch: ${batch}`)
   }
 }
 
@@ -373,6 +378,7 @@ async function main() {
 
   try {
     writeOwnerMarker(runRoot)
+    ;(env as NodeJS.ProcessEnv)[TEMPLATE_ENV] = spawnTemplateBuild(runRoot) // D5; a failed build fails the run
     let collected: CollectedFiles
     let serialFiles: string[]
     let mainLabel: string
@@ -432,7 +438,9 @@ async function main() {
     // path is the only publish gate (F5) — null for a filtered run or a
     // failed seed — so the closure runs only with a snapshot to publish and
     // has no gate of its own.
-    const batches = planBatches(plan.batchOptions)
+    const privateReportDir = path.join(runRoot, 'reports') // real-tmux reports outside a check (D2)
+    fs.mkdirSync(privateReportDir, { recursive: true })
+    const batches = planBatches({ ...plan.batchOptions, privateReportDir })
     // The planned-report manifest (C2 advisor point on the all-or-nothing
     // leak): written at plan time, before the first batch, so the check's
     // merge can require the reports on disk to be exactly this run's planned
@@ -449,7 +457,7 @@ async function main() {
       // the merge-base); the merge reads only *.junit.xml, never this file.
       if (selection !== null) writeSelectionRecord(junitReportDir, selection)
     }
-    await runBatchesAndPublish({
+    const outcome = await runBatchesAndPublish({
       batches,
       env,
       publishTimingsPath: plan.batchOptions.timingsPath ?? null,
@@ -471,7 +479,10 @@ async function main() {
         }
       },
       runCommand,
+      retry: retryWiring({ enabled: !args.noRetry, junitReportDir, privateReportDir, firstIndex: batches.length }),
     })
+    // The check copies any retries into its record (D3); none, no file.
+    if (junitReportDir !== undefined && planned.length > 0 && outcome.retries.length > 0) writeRetriesRecord(junitReportDir, outcome.retries)
   } finally {
     fs.rmSync(runRoot, { recursive: true, force: true })
   }

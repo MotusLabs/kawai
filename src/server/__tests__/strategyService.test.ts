@@ -9,7 +9,7 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { initDatabase, type ChatSessionRecord, type SessionDatabase } from '../db'
+import { type ChatSessionRecord, type SessionDatabase } from '../db'
 import { MailboxStore } from '../team/mailboxStore'
 import { TaskStore } from '../team/taskStore'
 import { TeamMailbox } from '../team/TeamMailbox'
@@ -21,6 +21,7 @@ import { StrategyStore } from '../strategy/strategyStore'
 import { createMailboxServer, TEAM_ALLOWED_TOOLS } from '../team/mailboxTools'
 import { strategyHandlers, STRATEGY_FORBIDDEN_TOOL_NAMES, STRATEGY_TOOL_NAMES } from '../strategy/strategyTools'
 import { UNKNOWN } from '../../shared/productStrategy'
+import { freshTestDatabase } from './helpers/testDatabase'
 
 function git(args: string[], cwd?: string) {
   const result = spawnSync('git', args, { cwd, encoding: 'utf8', env: cleanGitEnv() })
@@ -81,7 +82,7 @@ beforeEach(() => {
     ['stranger', row('stranger', 'devs', other)],
   ])
   db?.close()
-  db = initDatabase({ path: path.join(fs.mkdtempSync(path.join(root, 'db-')), 'strategy.db') })
+  db = freshTestDatabase(path.join(fs.mkdtempSync(path.join(root, 'db-')), 'strategy.db'))
   service = new StrategyService(new StrategyStore(db.db), { getSession: id => records.get(id), homeDir: home })
   writeGroup('devs', 'Build.')
 })

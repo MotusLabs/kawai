@@ -5,10 +5,11 @@ import os from 'node:os'
 import path from 'node:path'
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { ChatEvent } from '../../shared/chat'
-import { initDatabase, type SessionDatabase } from '../db'
+import { type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
 import { ChatTaskStore } from '../chat/chatTaskStore'
 import { anyDirectory, FakeHandle, managedManager, fakeQueryFactory, createHarness, flush, waitForCondition, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+import { freshTestDatabase } from './helpers/testDatabase'
 
 installManagerCleanup()
 
@@ -21,7 +22,7 @@ describe('ChatSessionManager background-task roster (background tasks D2)', () =
 
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-chatbgtasks-'))
-    db = initDatabase({ path: path.join(tempDir, 'test.db') })
+    db = freshTestDatabase(path.join(tempDir, 'test.db'))
     delete process.env.ANTHROPIC_API_KEY
     process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
     process.env.CLAUDE_CONFIG_DIR = path.join(tempDir, 'claude-config')

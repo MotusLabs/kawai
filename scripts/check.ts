@@ -3,12 +3,21 @@
 // (see scripts/lib/checkRun.ts). Failures are never recorded, and a pass
 // records only when the tree is unchanged since the run started; --force
 // runs every step regardless of records. `bun run test` stays the raw,
-// uncached runner.
+// uncached runner. `--no-retry` reaches the unit runner, which then reruns no
+// failed real-tmux file; `--full-properties` runs every property test's
+// declared case count and reuses only a pass that did (check-time-optimization
+// D2–D4).
 
 import { runGit } from '../src/server/git/gitCommand'
-import { runCheck } from './lib/checkRun'
+import { DEFAULT_STEPS, runCheck } from './lib/checkRun'
 
-const force = process.argv.slice(2).includes('--force')
+const argv = process.argv.slice(2)
+const force = argv.includes('--force')
+const fullProperties = argv.includes('--full-properties')
+const noRetry = argv.includes('--no-retry')
+const steps = noRetry
+  ? DEFAULT_STEPS.map((step) => (step.name === 'test' ? { ...step, command: [...step.command, '--no-retry'] } : step))
+  : DEFAULT_STEPS
 
 // The hook (and any caller) may sit in a subdirectory; every step and every
 // git call runs from the repository root.
@@ -24,7 +33,7 @@ const cwd = root.stdout.trim()
 // stat cache — the key is always the working tree's), while the steps run
 // with every GIT_* variable stripped.
 const hookIndex = process.env.GIT_INDEX_FILE || undefined
-const outcome = await runCheck({ cwd, force, indexFile: hookIndex })
+const outcome = await runCheck({ cwd, force, indexFile: hookIndex, steps, fullProperties })
 
 if (outcome.kind === 'recorded') {
   console.log(`check: recorded pass ${outcome.record.at} in ${outcome.record.worktree}`)

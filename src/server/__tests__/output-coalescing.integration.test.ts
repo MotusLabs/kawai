@@ -188,6 +188,7 @@ if (!tmuxAvailable || !localhostBindable) {
         .map((m) => m.data ?? '')
         .join('')
 
+    // @covers: dev-checks › Real-tmux tests do not fail on machine speed › Slow terminal-ready
     test(
       'ordered markers arrive in order, history precedes ready, pane renders all',
       async () => {

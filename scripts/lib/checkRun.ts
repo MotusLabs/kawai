@@ -20,6 +20,7 @@ import {
   recordsDir,
   removeRecord,
   writeRecord,
+  type CaseProfile,
   type CheckRecord,
   type CheckStep,
 } from '../../src/server/checks/checkRecords'
@@ -30,6 +31,7 @@ import {
 } from '../../src/server/checks/testLists'
 import { mergeJUnitReports, trustworthyEntries } from './junitReports'
 import { readSelectionRecord } from './realTmuxSelection'
+import { readRetriesRecord } from './realTmuxRetries'
 
 export interface CheckStepSpec {
   name: string
@@ -98,6 +100,25 @@ export interface CheckRunOptions {
    * named `test` (the pipeline's own contract), with the system temporary
    * directory as the parent; `null` turns it off. */
   junit?: JunitOptions | null
+  /** `--full-properties` (check-time-optimization D3/D4): the steps get
+   * KAWAI_FULL_PROPERTIES=1, the pass records `caseProfile: 'full'`, and a
+   * recorded pass is reused only when its profile is `full` or unknown. */
+  fullProperties?: boolean
+}
+
+/** The case profile a run executes (D4): `full` under --full-properties,
+ * CI=true, or an inherited KAWAI_FULL_PROPERTIES=1 (the helper reads the
+ * same variables), `reduced` otherwise. */
+export function caseProfileFor(fullProperties: boolean, env: NodeJS.ProcessEnv): CaseProfile {
+  return fullProperties || env.CI === 'true' || env.KAWAI_FULL_PROPERTIES === '1' ? 'full' : 'reduced'
+}
+
+/** Whether a recorded pass answers this request (reuse table RU1–RU5): the
+ * default request reuses any pass; --full-properties only one whose profile
+ * is `full` or unknown, since every pass before profiles existed ran the
+ * declared counts. --force never reaches here. */
+export function recordAnswers(record: CheckRecord, fullProperties: boolean): boolean {
+  return !fullProperties || record.caseProfile !== 'reduced'
 }
 
 function defaultSpawn(request: SpawnRequest): Promise<number | null> {
@@ -145,7 +166,9 @@ export async function runCheck(options: CheckRunOptions): Promise<CheckOutcome> 
     removeRecord(dir, contentKey.key)
   } else {
     const recorded = readRecord(dir, contentKey.key)
-    if (recorded) return { kind: 'recorded', record: recorded }
+    if (recorded && recordAnswers(recorded, options.fullProperties === true)) {
+      return { kind: 'recorded', record: recorded }
+    }
   }
 
   const junit = options.junit !== undefined
@@ -155,6 +178,8 @@ export async function runCheck(options: CheckRunOptions): Promise<CheckOutcome> 
       : null
 
   const env = stepEnv(options.env ?? { ...process.env })
+  const caseProfile = caseProfileFor(options.fullProperties === true, env)
+  if (options.fullProperties === true) env.KAWAI_FULL_PROPERTIES = '1'
   // A failed or interrupted run writes neither a list nor a record (K3):
   // the reports live in a per-run directory removed in the finally below,
   // so nothing of this run survives its failure.
@@ -212,11 +237,22 @@ export async function runCheck(options: CheckRunOptions): Promise<CheckOutcome> 
       at: now().toISOString(),
       worktree: path.resolve(cwd),
       steps: stepDurations,
+      caseProfile,
     }
     // The runner's real-tmux selection rides the record (D6): which files a
     // full run skipped, and the merge-base it judged them against.
     const realTmux = reportDir === null ? null : readSelectionRecord(reportDir)
     if (realTmux !== null) record.realTmux = realTmux
+    // So do its retries (D3): each real-tmux file that passed only on its
+    // rerun, with the first attempt's failing tests.
+    if (reportDir !== null) {
+      const retries = readRetriesRecord(reportDir)
+      if (retries === null) {
+        console.error('check: the runner\'s retries file is unreadable; recording the pass without retries')
+      } else if (retries.length > 0) {
+        record.retries = retries
+      }
+    }
     // The test list is written before its record (K1) and only when the run's
     // every report merged (all-or-nothing); anything less records the pass
     // without a list — loudly, so a reader bug that list-less-ifies every

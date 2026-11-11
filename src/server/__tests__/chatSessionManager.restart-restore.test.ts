@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { initDatabase, type SessionDatabase } from '../db'
 import { closeDispatchers, createHarness, flush, initMessage, writeTranscript, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+import { freshTestDatabase } from './helpers/testDatabase'
 
 installManagerCleanup()
 
@@ -21,7 +22,7 @@ describe('ChatSessionManager', () => {
 
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-chatmgr-'))
-    db = initDatabase({ path: path.join(tempDir, 'test.db') })
+    db = freshTestDatabase(path.join(tempDir, 'test.db'))
     // Isolate auth from the host: no API key, empty CLI config dir. HOME is
     // pinned so the profile catalog resolves against an empty home — a real
     // ~/.kawai must not leak into these tests.
@@ -67,7 +68,7 @@ describe('ChatSessionManager', () => {
     test('rows load as idle chat sessions; next send resumes the stored SDK id', async () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
       const dbPath = path.join(tempDir, 'restart.db')
-      const dbA = initDatabase({ path: dbPath })
+      const dbA = freshTestDatabase(dbPath)
       const harnessA = await createHarness(dbA)
       const created = harnessA.manager.createSession({
         projectPath: '/tmp/proj',
@@ -149,7 +150,7 @@ describe('ChatSessionManager', () => {
     test('create records name provenance and a restart restores it unchanged', async () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
       const dbPath = path.join(tempDir, 'name-source.db')
-      const dbA = initDatabase({ path: dbPath })
+      const dbA = freshTestDatabase(dbPath)
       const harnessA = await createHarness(dbA)
 
       const named = harnessA.manager.createSession({
