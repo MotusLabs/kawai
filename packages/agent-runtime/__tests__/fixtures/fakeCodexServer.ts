@@ -29,6 +29,9 @@
 // FAKE_CODEX_RATELIMITS: account/rateLimits/read answers {rateLimits: <json>}; "fail" answers an
 //   error; "hold" never answers; unset: unknown method (-32601), like any other method.
 // FAKE_CODEX_START=agent: an agent turn starts and completes right after thread/start.
+// skills/list answers {data: [{cwd: <this process's cwd>, skills, errors}]} from
+// $CODEX_HOME/skills.json ({skills, errors?}), read at each request; without the
+// file it is an unknown method.
 import { spawn } from 'node:child_process'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -230,6 +233,12 @@ export function serveFakeCodex(io: FakeCodexIo): void {
       }
       case 'turn/start':
         return turnStart(id, params)
+      case 'skills/list': {
+        const file = join(home, 'skills.json')
+        if (!existsSync(file)) break
+        const listed = JSON.parse(readFileSync(file, 'utf8')) as { skills: unknown[]; errors?: unknown[] }
+        return reply(id, { data: [{ cwd: io.cwd, skills: listed.skills, errors: listed.errors ?? [] }] })
+      }
       case 'account/rateLimits/read': {
         const mode = env.FAKE_CODEX_RATELIMITS
         if (mode === undefined) break

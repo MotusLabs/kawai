@@ -21,6 +21,9 @@
 //   (requests.ts), a host tool call or a deliberate error reply; requests and
 //   tools of a retired generation reach no host code. All host work is owned.
 // - Quota. One optional rate-limit read per driver, or per ready generation its claim permits.
+// - Skills. The generation's own skills/list catalog (skills.ts) publishes
+//   onCommandState, and a new turn's input appends the typed skill inputs
+//   its text names; a steer carries text only, as before.
 // - Stop. The lifecycle reserves the terminal first; teardown decides the
 //   open turn, closes requests, publishes, then stops every current and
 //   retired transport and joins all owned work; accounting adds each
@@ -46,6 +49,7 @@ import { accountGenerations, CAPABILITIES, CLIENT_INFO, newGeneration, rpcError,
 import { codexTurnStartParams, composeCodexPermissions, type CodexPermissionComposition } from './permissions.js'
 import { cancelReply, CodexRequests } from './requests.js'
 import type { CodexSessionOptions } from './sessionOptions.js'
+import { CodexSkillDiscovery } from './skills.js'
 import { dispatchCodexToolCall, type CodexDynamicToolCall } from './tools.js'
 import { completionOutcome, decideTurn, INTERRUPTED, newCodexTurn, type CodexTurnState } from './turns.js'
 export type { CodexSessionOptions } from './sessionOptions.js'
@@ -81,6 +85,8 @@ export class CodexSession {
   private unbound: CodexTurnState[] = []
   /** Without a claim callback: the one account/rateLimits/read of this driver was requested. */
   private quotaRequested = false
+  /** Native skills from the app-server's own catalog (skills.ts); private turn inputs. */
+  private readonly skills: CodexSkillDiscovery
 
   constructor(private readonly options: CodexSessionOptions) {
     this.tools = bindToolSet(options.tools)
@@ -109,6 +115,26 @@ export class CodexSession {
       ...(options.onToolObservation ? { onToolObservation: options.onToolObservation } : {}),
       ...(options.auditHooks ? { auditHooks: options.auditHooks } : {}),
     })
+    this.skills = new CodexSkillDiscovery({
+      request: (generation, params) => this.listSkills(generation as CodexGeneration, params),
+      publish: (state) => {
+        const onCommandState = callbacks.onCommandState
+        if (onCommandState) this.notify('onCommandState', () => onCommandState(state))
+      },
+      warn: (fields, message) => options.logger?.warn(fields, message),
+    })
+  }
+
+  /** One owned skills/list on that generation; the job itself never fails (discovery is optional). */
+  private listSkills(generation: CodexGeneration, params: Record<string, unknown>): Promise<unknown> | null {
+    const job = this.runOwned(`skills:${generation.number}`, async () => {
+      try {
+        return { response: await generation.transport.request('skills/list', params as JsonObject) }
+      } catch (error) {
+        return { error }
+      }
+    })
+    return job ? job.then((outcome) => ('error' in outcome ? Promise.reject(outcome.error) : outcome.response)) : null
   }
 
   /** Run a host callback; a throw is retained as an owned failure the stop reports (R11). */
@@ -201,6 +227,7 @@ export class CodexSession {
     // The process and its reader live outside this initialization job: host callbacks they run are not inside it.
     this.lifecycle.jobs.outside(() => transport.start())
     this.reportSpawn(generation, launch)
+    this.skills.start(generation, launch.cwd)
     let step: 'initialize' | 'thread/start' | 'thread/resume' = 'initialize'
     let opened: ReturnType<typeof threadOpened>
     try {
@@ -229,10 +256,12 @@ export class CodexSession {
     const quota = { claim: this.options.claimRateLimitsRead, firstRead: () => !this.quotaRequested && (this.quotaRequested = true), stopBegun: () => this.stopBegun() }
     claimQuotaRead(generation, { ...quota, notify: (name, callback) => this.notify(name, callback), runOwned: (label, body) => this.runOwned(label, body), current: () => this.current(), facts: this.facts, noData: () => this.quotaNoData() })
     if (this.stopBegun()) throw this.lifecycle.cancelled('the driver was stopped while its quota read was claimed')
+    this.skills.ready(generation)
   }
 
   /** Retire a generation and stop its transport as owned work (joined by stop). */
   private retire(generation: CodexGeneration): Promise<ProcessExitFact> {
+    this.skills.stop(generation)
     const { stopping, first } = stopGeneration(generation)
     if (first) this.lifecycle.jobs.track(`stop:${generation.number}`, stopping).catch(() => {})
     return stopping
@@ -266,6 +295,7 @@ export class CodexSession {
     if (generation.retired || generation !== this.current() || this.stopBegun()) return
     if (typeof params.threadId === 'string' && params.threadId !== generation.threadId) return
     if (method === 'turn/started') return this.turnStarted(params)
+    if (method === 'skills/changed') return this.skills.changed(generation)
     if (method === 'turn/completed') {
       const raw = params.turn as { id?: unknown } | undefined
       return typeof raw?.id === 'string' ? this.turnCompleted(raw as never) : undefined
@@ -389,7 +419,7 @@ export class CodexSession {
     const turn = newCodexTurn(prepared.turnId, prepared.messageUuid, prepared.text, this.facts.model)
     // A numeric effort has no Codex equivalent and is omitted, as before.
     const effort = typeof chosen === 'string' ? { effort: chosen } : {}
-    const params = codexTurnStartParams({ threadId: generation.threadId, input: this.input(prepared.text), clientUserMessageId: prepared.messageUuid, ...effort }, this.permissions)
+    const params = codexTurnStartParams({ threadId: generation.threadId, input: [...this.input(prepared.text), ...this.skills.inputs(prepared.text)], clientUserMessageId: prepared.messageUuid, ...effort }, this.permissions)
     this.turn = turn
     this.unbound.push(turn)
     let write!: (reply: Promise<unknown>) => void
