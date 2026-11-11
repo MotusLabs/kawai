@@ -24,6 +24,7 @@ import { MailboxStore } from '../team/mailboxStore'
 import { TaskFindingService } from '../team/TaskFindingService'
 import { TaskStore } from '../team/taskStore'
 import { CONTRACT, nextReview, pick } from './convergenceGenerator'
+import { propertyCases } from './helpers/propertyCases'
 
 const SEED = 0x5161A1
 const CASES = 300
@@ -46,7 +47,7 @@ test('P4: the view\'s counts and the executor\'s signals equal the shared module
   const reached = new Map<string, number>()
   const tally = (key: string) => reached.set(key, (reached.get(key) ?? 0) + 1)
   const diagnoses = new DiagnosisStore(db.db)
-  for (let index = 0; index < CASES; index++) {
+  for (let index = 0; index < propertyCases(CASES); index++) {
     const rng = mulberry32(SEED + index)
     const task = store.create({ teamId: 'team', title: `P4 ${index}`, direction: 'Build', creator: { kind: 'human', sessionId: null }, contract: CONTRACT })
     const executionId = `exec-${index}`
@@ -88,7 +89,9 @@ test('P4: the view\'s counts and the executor\'s signals equal the shared module
     const round = { resultId: newestResult, blockingIds: [] } as unknown as RoundRow
     expect({ index, signals: roundSignals({ tasks: store }, diagnoses, change, round).signals }).toEqual({ index, signals })
   }
-  // The generator reaches every signal, passes, refusals, anchored and trimmed windows.
-  for (const key of ['S1', 'S2', 'S3', 'S4', 'S5', 'pass', 'fail', 'anchored', 'window-trimmed']) expect({ key, reached: (reached.get(key) ?? 0) > 0 }).toEqual({ key, reached: true })
+  // The generator reaches every signal, passes, refusals, anchored and trimmed
+  // windows over its declared 300 ledgers; a reduced local run's first 75 do
+  // not reach S1, so only the full profile (CI, --full-properties) asserts it.
+  if (propertyCases(CASES) === CASES) for (const key of ['S1', 'S2', 'S3', 'S4', 'S5', 'pass', 'fail', 'anchored', 'window-trimmed']) expect({ key, reached: (reached.get(key) ?? 0) > 0 }).toEqual({ key, reached: true })
 // 300 cases write a few thousand ledger rows: about 30 s alone, longer under the full suite's load.
 }, 240_000)

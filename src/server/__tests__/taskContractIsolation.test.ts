@@ -20,6 +20,7 @@ import { contractHash } from '../team/contractHash'
 import { clearTeamCache, resolveTeam, type TeamIdentity } from '../team/teamIdentity'
 import { renderContract, type ImplementationContract } from '../../shared/implementationContract'
 import { CASES, generate, mulberry32, SEED } from '../../shared/__tests__/contractFixtures'
+import { propertyCases } from './helpers/propertyCases'
 
 let root: string
 let team: TeamIdentity
@@ -72,7 +73,7 @@ test('P4: stored hashes match their contracts, earlier revisions never change, r
   const pick = <T>(list: readonly T[]) => list[Math.floor(rand() * list.length)]!
   let refusals = 0
   let clearsRefused = 0
-  for (let index = 0; index < CASES; index++) {
+  for (let index = 0; index < propertyCases(CASES); index++) {
     const initial = rand() < 0.5 ? generate(rand) : null
     const task = await lead.task_create({ title: `P4 ${index}`, direction: 'v1', ...(initial ? { contract: renderContract(initial) } : {}) }) as { id: string }
     let snapshot = rows(task.id)
