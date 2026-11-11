@@ -4,7 +4,9 @@
 // TrackedStore over the actual ChatWorkerStore and its files: a restart
 // (a fresh store and manager over the directory) first joins the earlier
 // store's admitted writes, and teardown releases and joins every store
-// before the database and directory go away.
+// before the database and directory go away. The held-write regression
+// also holds the real spawn-write rename, so its phases advance only on
+// joined writes.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -215,48 +217,86 @@ describe('ChatSessionManager worker sidecar', () => {
   })
 
   test('held settle writes: the restart join stays pending and the file keeps running rows; once released and joined, a fresh restart recovers both outcomes', async () => {
-    process.env.ANTHROPIC_API_KEY = 'test-key'
+    // Phases move on joined actual writes, never on roster callbacks or flush():
+    // P0 the spawn prefix is joined while its real rename is first held, P1 the
+    // file holds the running rows, P2 the settle writes are held, then
+    // released, joined and recovered. finally releases every gate.
+    const originalRename = fs.promises.rename
+    let releaseRename: () => void = () => {}
+    const renameHeld = new Promise<void>((resolve) => (releaseRename = resolve))
+    const restoreRename = () => {
+      releaseRename()
+      fs.promises.rename = originalRename
+    }
+    fs.promises.rename = (async (...args: Parameters<typeof originalRename>) => {
+      const from = String(args[0])
+      if (from.startsWith(sidecarDir) && from.endsWith('.tmp')) await renameHeld
+      return originalRename(...args)
+    }) as typeof originalRename
     const store = new TrackedStore({ dir: sidecarDir })
-    store.holdSettled()
-    const harness = await createHarness(
-      db, anyDirectory, undefined, undefined, undefined, undefined, store
-    )
-    const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
-    if (!created.ok) throw new Error(created.error)
-    const id = created.session.id
-    await harness.manager.send(id, 'research')
-    const handle = harness.handles[0]!
-    handle.push(initMessage('sdk-workers-held'))
-    await spawnWorker(handle, 'toolu_w1', 'task_1', 'Map the workspace')
-    await spawnWorker(handle, 'toolu_w2', 'task_2', 'Index the API')
-    await settleWorker(handle, 'toolu_w1', 'task_1', 'completed', 'Mapped 14 files')
-    await settleWorker(handle, 'toolu_w2', 'task_2', 'failed', 'endpoint down')
-    const outcomes = (workers: Array<{ workerId: string; status: string; summary?: string }>) =>
-      workers.map((worker) => [worker.workerId, worker.status, worker.summary ?? null])
-    const settled = [['toolu_w1', 'completed', 'Mapped 14 files'], ['toolu_w2', 'failed', 'endpoint down']]
-    // The live roster has settled; its two settle writes are still held.
-    expect(outcomes(harness.manager.getSnapshot(id)!.workers)).toEqual(settled)
-    harness.manager.shutdown()
-    let joined = false
-    const join = store.settled().then(() => {
-      joined = true
-    })
-    await flush()
-    expect(joined).toBe(false)
-    // An actual read of the file at this point holds only the spawn-time rows.
-    expect(outcomes(new ChatWorkerStore({ dir: sidecarDir }).read(id))).toEqual([
-      ['toolu_w1', 'running', null],
-      ['toolu_w2', 'running', null],
-    ])
-    store.release()
-    await join
-    expect(joined).toBe(true)
-    expect(outcomes(new ChatWorkerStore({ dir: sidecarDir }).read(id))).toEqual(settled)
-    const restored = await createHarness(
-      db, anyDirectory, undefined, undefined, undefined, undefined, reopenedStore()
-    )
-    expect(outcomes(restored.manager.getSnapshot(id)!.workers)).toEqual(settled)
-    restored.manager.shutdown()
+    try {
+      process.env.ANTHROPIC_API_KEY = 'test-key'
+      const harness = await createHarness(
+        db, anyDirectory, undefined, undefined, undefined, undefined, store
+      )
+      const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
+      if (!created.ok) throw new Error(created.error)
+      const id = created.session.id
+      await harness.manager.send(id, 'research')
+      const handle = harness.handles[0]!
+      handle.push(initMessage('sdk-workers-held'))
+      await spawnWorker(handle, 'toolu_w1', 'task_1', 'Map the workspace')
+      await spawnWorker(handle, 'toolu_w2', 'task_2', 'Index the API')
+      const outcomes = (workers: Array<{ workerId: string; status: string; summary?: string }>) =>
+        workers.map((worker) => [worker.workerId, worker.status, worker.summary ?? null])
+      const running = [['toolu_w1', 'running', null], ['toolu_w2', 'running', null]]
+      const settled = [['toolu_w1', 'completed', 'Mapped 14 files'], ['toolu_w2', 'failed', 'endpoint down']]
+
+      // P0: the live roster has both spawns, but their real renames are held, so the prefix join waits.
+      expect(outcomes(harness.manager.getSnapshot(id)!.workers)).toEqual(running)
+      let prefixJoined = false
+      const prefixJoin = store.settled().then(() => {
+        prefixJoined = true
+      })
+      await flush()
+      expect(prefixJoined).toBe(false)
+      restoreRename()
+      await prefixJoin
+      expect(prefixJoined).toBe(true)
+
+      // P1: the joined prefix is durable: an actual read holds the two running rows.
+      expect(outcomes(new ChatWorkerStore({ dir: sidecarDir }).read(id))).toEqual(running)
+
+      // P2: settle with the settle writes held.
+      store.holdSettled()
+      await settleWorker(handle, 'toolu_w1', 'task_1', 'completed', 'Mapped 14 files')
+      await settleWorker(handle, 'toolu_w2', 'task_2', 'failed', 'endpoint down')
+      // The live roster has settled; its two settle writes are still held.
+      expect(outcomes(harness.manager.getSnapshot(id)!.workers)).toEqual(settled)
+      harness.manager.shutdown()
+      let joined = false
+      const join = store.settled().then(() => {
+        joined = true
+      })
+      await flush()
+      expect(joined).toBe(false)
+      // An actual read of the file at this point holds only the spawn-time rows.
+      expect(outcomes(new ChatWorkerStore({ dir: sidecarDir }).read(id))).toEqual(running)
+      store.release()
+      await join
+      expect(joined).toBe(true)
+      expect(outcomes(new ChatWorkerStore({ dir: sidecarDir }).read(id))).toEqual(settled)
+      const restored = await createHarness(
+        db, anyDirectory, undefined, undefined, undefined, undefined, reopenedStore()
+      )
+      expect(outcomes(restored.manager.getSnapshot(id)!.workers)).toEqual(settled)
+      restored.manager.shutdown()
+    } finally {
+      // Even after a failed assertion: no held rename or settle write outlives the test.
+      restoreRename()
+      store.release()
+      await store.settled()
+    }
   })
 
   test('a restarted session keeps recovered outcomes when its agent starts again', async () => {
