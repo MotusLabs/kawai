@@ -8,7 +8,9 @@
 // for several. Callers waiting at the same time share one report; a later
 // wait reports only newer failures. Nothing here awaits itself: `settled()`
 // called from inside tracked work would wait for that work, so the adapter
-// never calls it from its own jobs.
+// never calls it from its own jobs. TerminalJoin re-issues a terminal call
+// the package refused as a self-join from the next outside caller.
+import { AgentRuntimeError } from '@motuslabs/agent-runtime'
 import { logger } from '../../logger'
 
 export class OwnedWork {
@@ -33,6 +35,18 @@ export class OwnedWork {
     this.live.add(owned)
     void owned.finally(() => this.live.delete(owned))
     return owned
+  }
+
+  /**
+   * Run a forwarded host callback. A returned promise is owned here (the
+   * package's notifier only catches synchronous throws); a throw goes to the
+   * package, whose stop reports it.
+   */
+  hosted(label: string, fn: () => unknown): void {
+    const result = fn()
+    if (result !== null && (typeof result === 'object' || typeof result === 'function') && typeof (result as PromiseLike<unknown>).then === 'function') {
+      void this.track(`callback:${label}`, Promise.resolve(result))
+    }
   }
 
   /** Every raw rejection retained so far, oldest first. */
@@ -63,5 +77,59 @@ export class OwnedWork {
     this.reported = this.failures.length
     if (fresh.length === 1) throw fresh[0]!.error
     if (fresh.length > 1) throw new AggregateError(fresh.map((f) => f.error), `${fresh.length} owned chat runtime operations failed`)
+  }
+}
+
+/**
+ * A driver's terminal calls (kill/shutdown) over its OwnedWork (decision
+ * note-d342e9bf, A5/A10). The package refuses a terminal join made from inside
+ * its own callback (category `internal`) while its teardown runs on; that
+ * refusal is not a failure but a mark: the next outside caller — a later
+ * kill, or settled() — re-issues the call, so a real caller always joins the
+ * terminal cleanup. settled() re-issues once per call; refused again (it was
+ * itself called from inside a callback), it reports that refusal once instead
+ * of waiting on itself, and the mark stays for a later caller.
+ */
+export class TerminalJoin {
+  private pending: { how: string; call: () => Promise<unknown>; refusal: unknown; reported: boolean } | null = null
+
+  constructor(private readonly owned: OwnedWork) {}
+
+  /** One owned terminal call; a self-join refusal marks it for an outside caller. */
+  begin(how: string, call: () => Promise<unknown>): void {
+    const attempt = call().then(
+      () => undefined,
+      (error: unknown) => {
+        if (error instanceof AgentRuntimeError && error.category === 'internal') {
+          this.pending = { how, call, refusal: error, reported: false }
+          return undefined
+        }
+        throw error
+      },
+    )
+    void this.owned.track(how, attempt)
+  }
+
+  /** Re-issue a refused terminal call from this outside caller. */
+  reacquire(): void {
+    const pending = this.pending
+    if (!pending) return
+    this.pending = null
+    this.begin(pending.how, pending.call)
+  }
+
+  settled(): Promise<void> {
+    let reissued = false
+    return this.owned.settled(() => {
+      const pending = this.pending
+      if (!pending) return
+      if (!reissued) {
+        reissued = true
+        this.reacquire()
+      } else if (!pending.reported) {
+        pending.reported = true
+        void this.owned.track(`${pending.how}:refused`, Promise.reject(pending.refusal))
+      }
+    })
   }
 }

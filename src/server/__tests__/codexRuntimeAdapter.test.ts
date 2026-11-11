@@ -27,7 +27,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import type { ChatEvent } from '../../shared/chat'
 import { AgentRuntimeError } from '@motuslabs/agent-runtime'
 import { createChatDriver } from '../chat/provider/createChatDriver'
-import { exitCause, quiesced } from '../chat/provider/codexRuntime'
+import { exitCause, quiesced } from '../chat/provider/codexRuntimeSupport'
 import type { ChatAgentDriver, ChatSpawnInfo } from '../chat/provider/driver'
 import { codexRoot, sent, type CodexRoot } from '../../../packages/agent-runtime/__tests__/helpers/codexDriverHarness'
 

@@ -23,16 +23,12 @@
 //   its message id. Every package promise, and every promise a host
 //   callback returns, is owned (runtimeOwnership.ts); settled() joins them
 //   and reports their raw failures once.
-// - Terminal joins: a kill or shutdown called from inside a package callback
-//   is refused by the package (it would join itself) while the teardown it
-//   started runs on. The refusal marks the join pending; the next outside
-//   kill()/shutdown() or settled() re-issues it and owns the real join, so
-//   settled() never resolves before the teardown did.
+// - Terminal joins: a kill or shutdown the package refused from inside its
+//   own callback is re-issued by the next outside caller (TerminalJoin).
 // - Events keep Kawai's identity and texts (runtimeEvents.ts); a process
 //   exit reports Kawai's message with its code or signal.
-import os from 'node:os'
 import { createCodexDriver } from '@motuslabs/agent-runtime/codex'
-import type { AgentEvent, CodexAgentDriver, CodexDriverOptions, Effort, Logger, PendingRequest, ToolSet } from '@motuslabs/agent-runtime'
+import type { AgentEvent, CodexAgentDriver, CodexDriverOptions, Effort } from '@motuslabs/agent-runtime'
 import { AgentRuntimeError } from '@motuslabs/agent-runtime'
 import type { ChatApprovalDecision, ChatApprovalPolicy, ChatBackgroundTask, ChatCommandState, ChatPeerMessage, ChatPendingRequest, ChatQuestion, ChatQuestionAnswer, ChatWorker } from '../../../shared/chat'
 import type { SessionStatus } from '../../../shared/types'
@@ -44,11 +40,11 @@ import { auditDeniedCard, auditItem, auditSpawnEnd } from '../codex/codexAudit'
 import { asyncQuestions } from '../codex/codexEvents'
 import { gitCommonDir } from '../codex/codexSandbox'
 import type { CodexSessionDriverOptions } from '../codex/codexThread'
-import { TEAM_NAMESPACE } from '../codex/codexTools'
 import type { ThreadItem } from '../codex/protocol/v2/ThreadItem'
 import type { ChatAgentDriver } from './driver'
-import { ChatEventSequencer, chatDraftOf, chatLimitSignal, chatUsageReport, type ChatEventDraft } from './runtimeEvents'
-import { OwnedWork } from './runtimeOwnership'
+import { ChatEventSequencer, chatDraftOf, type ChatEventDraft } from './runtimeEvents'
+import { cardInput, exitCause, forwardedCallbacks, holdRefusal, launchFields, pendingOf, quiesced, requestOutcome, teamToolSet, type AsyncQuestion, type Card } from './codexRuntimeSupport'
+import { OwnedWork, TerminalJoin } from './runtimeOwnership'
 import { validateAsyncAnswers } from './runtimeQuestions'
 
 /** The package factory; repository tests pass the private same-core seam. */
@@ -56,60 +52,6 @@ export type CreateCodexRuntime = (options: CodexDriverOptions) => CodexAgentDriv
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const EXIT_MESSAGE = 'the Codex app-server exited unexpectedly'
-
-/**
- * The package's own description of a generation's unexpected exit, as its
- * stop reports it (one native-exit cause per crashed generation).
- */
-export function exitCause(generation: number, code: number | null, signal: string | null): string {
-  return `agent process generation ${generation} ${signal ? `ended by ${signal}` : `exited with code ${code}`} before the stop`
-}
-
-/**
- * Whether a rejected kill still left its owner quiesced. The package rejects
- * a stop only after its terminal join, and an unexpected exit is itself one
- * of the stop's causes. So a rejection whose every cause is exactly an exit
- * this adapter already heard through onProcessEnd quiesced; any other cause
- * (a teardown that could not confirm the exit, another owned failure) did
- * not, and nothing respawns over it.
- */
-export function quiesced(error: unknown, exits: readonly string[]): boolean {
-  if (!(error instanceof AgentRuntimeError) || error.category !== 'stop') return false
-  const remaining = [...exits]
-  for (const cause of error.causes) {
-    const at = cause instanceof AgentRuntimeError && cause.category === 'transport' ? remaining.indexOf(cause.message) : -1
-    if (at < 0) return false
-    remaining.splice(at, 1)
-  }
-  return error.causes.length > 0
-}
-
-/** A package logger writing Kawai's structured log. */
-export function runtimeLogger(sessionId: string): Logger {
-  const write = (level: 'debug' | 'info' | 'warn' | 'error') => (obj: object, msg?: string) => logger[level](msg ?? 'agent_runtime', { sessionId, ...(obj as Record<string, unknown>) })
-  return { debug: write('debug'), info: write('info'), warn: write('warn'), error: write('error') }
-}
-
-/** The approval card's input: what the request names, plus the started item's paths (codexRequests D5). */
-function cardInput(tool: string, params: Record<string, unknown>, item: Record<string, unknown> | undefined): Record<string, unknown> {
-  const reason = typeof params.reason === 'string' && params.reason ? { reason: params.reason } : {}
-  if (tool === 'Bash') return { command: params.command ?? item?.command ?? '', ...(params.cwd ? { cwd: params.cwd } : {}), ...reason }
-  if (tool === 'Edit') return { file_path: item?.file_path ?? '', paths: item?.paths ?? [], ...(params.grantRoot ? { grantRoot: params.grantRoot } : {}), ...reason }
-  return { permissions: params.permissions ?? {}, ...(params.cwd ? { cwd: params.cwd } : {}), ...reason }
-}
-
-interface Card {
-  tool: string
-  itemId: string
-  input: Record<string, unknown>
-}
-
-interface AsyncQuestion {
-  requestId: string
-  turnId: string
-  questions: ChatQuestion[]
-  at: string
-}
 
 export function createCodexChatDriver(options: CodexSessionDriverOptions, create: CreateCodexRuntime = createCodexDriver): ChatAgentDriver & { settled(): Promise<void> } {
   return new CodexChatDriver(options, create)
@@ -144,39 +86,23 @@ class CodexChatDriver implements ChatAgentDriver {
   private readonly questions = new Map<string, AsyncQuestion>()
   /** The unexpected exits the package reported for the current inner driver. */
   private exits: string[] = []
-  /** A terminal call the package refused as a self-join; an outside caller re-issues it. */
-  private pendingTerminal: { inner: CodexAgentDriver; how: 'kill' | 'shutdown'; refusal: unknown; reported: boolean } | null = null
+  /** Terminal calls, re-issued from an outside caller when the package refused a self-join. */
+  private readonly terminals: TerminalJoin
 
   constructor(private readonly options: CodexSessionDriverOptions, private readonly create: CreateCodexRuntime) {
     this.threadId = options.resumeThreadId ?? null
     this.projectPath = options.projectPath
     this.owned = new OwnedWork(options.sessionId)
+    this.terminals = new TerminalJoin(this.owned)
   }
 
   get isDead(): boolean {
     return this.dead
   }
 
-  /**
-   * Joins every package and callback promise this driver registered (A5),
-   * re-issuing a refused terminal join from this outside caller once; rejects
-   * with the raw failures not yet reported. Called again from inside a
-   * package callback, the join is still refused: that refusal is reported
-   * instead of waiting on itself, and the mark stays for a later caller.
-   */
+  /** Joins every owned promise (A5) and a re-acquired terminal call; raw failures once (TerminalJoin). */
   settled(): Promise<void> {
-    let reissued = false
-    return this.owned.settled(() => {
-      const pending = this.pendingTerminal
-      if (!pending) return
-      if (!reissued) {
-        reissued = true
-        this.reacquire()
-      } else if (!pending.reported) {
-        pending.reported = true
-        void this.owned.track(`${pending.how}:refused`, Promise.reject(pending.refusal))
-      }
-    })
+    return this.terminals.settled()
   }
 
   getCommandState(): ChatCommandState {
@@ -240,9 +166,7 @@ class CodexChatDriver implements ChatAgentDriver {
   }
 
   resolveApproval(requestId: string, decision: ChatApprovalDecision): { ok: true } | { ok: false; error: string } {
-    const outcome = this.inner?.resolveApproval(requestId, decision === 'allow' ? 'allow' : 'deny')
-    if (!outcome || (!outcome.ok && outcome.reason === 'not-pending')) return { ok: false, error: `No pending approval with id ${requestId}; it may already be answered or cancelled` }
-    return outcome.ok ? { ok: true } : { ok: false, error: outcome.message }
+    return requestOutcome(this.inner?.resolveApproval(requestId, decision === 'allow' ? 'allow' : 'deny'), 'approval', requestId)
   }
 
   answerQuestion(requestId: string, answers: Record<string, ChatQuestionAnswer>): { ok: true } | { ok: false; error: string } {
@@ -258,23 +182,15 @@ class CodexChatDriver implements ChatAgentDriver {
       this.submit(own.questions.map((question, i) => `${question.question}: ${validated.answers[i]!.join(', ')}`).join('\n'), messageUuid)
       return { ok: true }
     }
-    const outcome = this.inner?.answerQuestion(requestId, answers)
-    if (!outcome || (!outcome.ok && outcome.reason === 'not-pending')) return { ok: false, error: `No pending question with id ${requestId}; it may already be answered or cancelled` }
-    return outcome.ok ? { ok: true } : { ok: false, error: outcome.message }
+    return requestOutcome(this.inner?.answerQuestion(requestId, answers), 'question', requestId)
   }
 
   holdQuestion(requestId: string): { ok: true } | { ok: false; error: string } {
-    const isQuestion = this.questions.has(requestId) || (this.inner?.pendingRequests() ?? []).some((r) => r.requestId === requestId && r.kind === 'question')
-    if (!isQuestion) {
-      const approval = (this.inner?.pendingRequests() ?? []).some((r) => r.requestId === requestId)
-      return { ok: false, error: approval ? `Request ${requestId} is not a question` : `No pending question with id ${requestId}; it may already be answered or cancelled` }
-    }
-    // Codex chats never arm an auto-answer deadline (QA-U4).
-    return { ok: false, error: `Request ${requestId} has no auto-answer deadline to hold` }
+    return holdRefusal(requestId, this.questions.has(requestId), this.inner?.pendingRequests() ?? [])
   }
 
   getPendingRequests(): ChatPendingRequest[] {
-    const runtime = (this.inner?.pendingRequests() ?? []).filter((r) => !this.autoGranted.has(r.requestId)).map((request) => this.pendingOf(request))
+    const runtime = (this.inner?.pendingRequests() ?? []).filter((r) => !this.autoGranted.has(r.requestId)).map((request) => pendingOf(request, this.cards))
     const own: ChatPendingRequest[] = [...this.questions.values()].map((q) => ({ kind: 'question', requestId: q.requestId, questions: q.questions, at: q.at }))
     return [...runtime, ...own]
   }
@@ -394,28 +310,9 @@ class CodexChatDriver implements ChatAgentDriver {
     const options = this.options
     const prompt = options.getSystemPromptAppend?.() ?? ''
     this.spawnEffort = options.getEffort?.()
-    const table = options.teamTools ?? []
-    const tools: ToolSet | undefined = table.length
-      ? {
-          namespace: TEAM_NAMESPACE,
-          tools: table.map((tool) => ({
-            name: tool.name,
-            description: tool.description,
-            inputSchema: tool.schema,
-            handler: async (input: unknown) => {
-              try {
-                return { content: JSON.stringify(await tool.handler(input)) }
-              } catch (error) {
-                return { content: error instanceof Error ? error.message : String(error), isError: true }
-              }
-            },
-          })),
-        }
-      : undefined
+    const tools = teamToolSet(options.teamTools ?? [])
     return {
-      logger: runtimeLogger(options.sessionId),
-      launch: { cwd: this.projectPath, childEnv: env, executablePath: options.executable, homeDir: options.codexHome, cacheDir: os.tmpdir(), tempDir: os.tmpdir() },
-      permissions: { approvalPolicy: 'on-request', sandbox: 'workspace-write', networkAccess: options.network, writableRoots: commonDir ? [commonDir] : [], userInput: 'enabled', elicitation: 'disabled' },
+      ...launchFields(options, this.projectPath, env, commonDir),
       ...(this.threadId ? { resume: { runtime: 'codex' as const, runtimeSessionId: this.threadId } } : {}),
       ...(options.model ? { model: options.model } : {}),
       ...(prompt ? { systemPromptAppend: prompt } : {}),
@@ -425,9 +322,6 @@ class CodexChatDriver implements ChatAgentDriver {
         this.turnEffort = this.efforts.get(submission.messageUuid)
         return { accepted: true }
       },
-      wire: { record: (frame) => options.wire.record(frame.direction, frame.text) },
-      unansweredRequests: 'wait',
-      ...(options.claimRateLimitsRead ? { claimRateLimitsRead: options.claimRateLimitsRead } : {}),
       // R3: every opened thread's rollout, a resume's moved one included (the
       // checkpoint never re-reports a resumed id); null keeps the stored path.
       // Its returned promise goes back to the package, which owns it (A10).
@@ -439,6 +333,7 @@ class CodexChatDriver implements ChatAgentDriver {
 
   private callbacks(): CodexDriverOptions['callbacks'] {
     const options = this.options
+    const hosted = (label: string, fn: () => unknown) => this.owned.hosted(label, fn)
     return {
       onEvent: (event) => this.onRuntimeEvent(event),
       onState: () => this.refreshStatus(),
@@ -451,25 +346,15 @@ class CodexChatDriver implements ChatAgentDriver {
         this.threadId = checkpoint.runtimeSessionId
         return options.onSdkSessionId?.(checkpoint.runtimeSessionId) as void
       },
-      onModel: (model) => this.hosted('onModel', () => options.onModel?.(model)),
-      onActivity: (activity) => this.hosted('onActivity', () => options.onActivity?.(activity)),
+      ...forwardedCallbacks(options, hosted),
       onCommandState: (state) => {
         this.commandState = state
-        this.hosted('onCommandState', () => options.onCommandState?.(state))
-      },
-      onContextUsage: (usage, meta) => this.hosted('onContextUsage', () => options.onContextUsage?.(usage, meta)),
-      onCompactionObservation: (o) =>
-        this.hosted('onCompaction', () => options.onCompaction?.({ trigger: o.trigger, startedAt: o.startedAt, endedAt: o.endedAt, preTokens: o.preTokens, postTokens: o.postTokens, durationSeconds: o.durationSeconds, outcome: o.outcome }, o.sourceId ?? undefined)),
-      onQuotaReport: (report) => this.hosted('onRateLimit', () => options.onRateLimit?.(chatUsageReport(report, 'provider'))),
-      onQuotaNoData: () => this.hosted('onUsageNoData', () => options.onUsageNoData?.()),
-      onLimitEvent: (event) => {
-        const signal = chatLimitSignal(event)
-        if (signal) this.hosted('onLimitEvent', () => options.onLimitEvent?.(signal))
+        hosted('onCommandState', () => options.onCommandState?.(state))
       },
       onSpawn: (info) => {
         this.spawnId = `ob-s-${crypto.randomUUID()}`
         this.spawnOpen = true
-        this.hosted('onSpawn', () => options.onSpawn?.({ cwd: info.cwd, systemPromptAppend: info.systemPromptAppend, effort: this.spawnEffort ?? null, model: info.model, env: { ...info.childEnv }, resumed: info.resumed }))
+        hosted('onSpawn', () => options.onSpawn?.({ cwd: info.cwd, systemPromptAppend: info.systemPromptAppend, effort: this.spawnEffort ?? null, model: info.model, env: { ...info.childEnv }, resumed: info.resumed }))
       },
       onProcessEnd: (report) => {
         this.exits.push(exitCause(report.generation, report.code, report.signal))
@@ -477,7 +362,7 @@ class CodexChatDriver implements ChatAgentDriver {
         this.dead = true
         this.endSpawn()
         this.cancelQuestions()
-        this.hosted('onProcessEnd', () => options.onProcessEnd?.())
+        hosted('onProcessEnd', () => options.onProcessEnd?.())
         const how = report.signal ? `on ${report.signal}` : report.code !== null ? `with code ${report.code}` : 'without starting'
         this.emit({ type: 'error', message: `The Codex app-server exited ${how}` })
         this.refreshStatus()
@@ -564,12 +449,6 @@ class CodexChatDriver implements ChatAgentDriver {
     auditItem(phase, detail as unknown as ThreadItem, { sink: this.options.outbound, spawnId: this.spawnId, cwd: this.projectPath })
   }
 
-  private pendingOf(request: PendingRequest): ChatPendingRequest {
-    if (request.kind === 'question') return { kind: 'question', requestId: request.requestId, questions: request.questions as ChatQuestion[], at: request.at }
-    const card = this.cards.get(request.requestId)
-    return { kind: 'approval', requestId: request.requestId, tool: request.tool, input: card?.input ?? request.input, at: request.at }
-  }
-
   private pendingCount(): number {
     return this.getPendingRequests().length
   }
@@ -584,52 +463,18 @@ class CodexChatDriver implements ChatAgentDriver {
   private stop(how: 'kill' | 'shutdown'): void {
     if (this.killed) {
       // A later outside call owns the terminal join an inner call could not.
-      this.reacquire()
+      this.terminals.reacquire()
       return
     }
     this.killed = true
     this.cancelQuestions()
     const inner = this.inner
     const booting = this.booting
-    if (inner && !this.innerEnded) this.terminal(inner, how)
-    else if (booting) void this.owned.track(how, booting.then((started) => void (started && this.terminal(started, how))))
-    else if (inner) this.terminal(inner, 'kill')
+    if (inner && !this.innerEnded) this.terminals.begin(how, () => inner[how]())
+    else if (booting) void this.owned.track(how, booting.then((started) => void (started && this.terminals.begin(how, () => started[how]()))))
+    else if (inner) this.terminals.begin('kill', () => inner.kill())
     this.endSpawn()
     this.refreshStatus()
-  }
-
-  /** One owned terminal call; a self-join refusal marks it for an outside caller instead of failing. */
-  private terminal(inner: CodexAgentDriver, how: 'kill' | 'shutdown'): void {
-    const attempt = inner[how]().then(
-      () => undefined,
-      (error: unknown) => {
-        if (error instanceof AgentRuntimeError && error.category === 'internal') {
-          this.pendingTerminal = { inner, how, refusal: error, reported: false }
-          return undefined
-        }
-        throw error
-      },
-    )
-    void this.owned.track(how, attempt)
-  }
-
-  private reacquire(): void {
-    const pending = this.pendingTerminal
-    if (!pending) return
-    this.pendingTerminal = null
-    this.terminal(pending.inner, pending.how)
-  }
-
-  /**
-   * Run a forwarded host callback. A returned promise is owned here (the
-   * package's notifier only catches synchronous throws); a throw goes to the
-   * package, whose stop reports it.
-   */
-  private hosted(label: string, fn: () => unknown): void {
-    const result = fn()
-    if (result !== null && (typeof result === 'object' || typeof result === 'function') && typeof (result as PromiseLike<unknown>).then === 'function') {
-      void this.owned.track(`callback:${label}`, Promise.resolve(result))
-    }
   }
 
   private endSpawn(): void {
