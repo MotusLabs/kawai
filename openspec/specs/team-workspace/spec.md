@@ -151,6 +151,14 @@ The Members tab SHALL list each of the team's groups with its role description, 
 - **WHEN** the team has no default and a group has no `approval:` key
 - **THEN** the group's row shows manual as the built-in policy
 
+#### Scenario: An ignored auto key is a warning
+- **WHEN** the team has no default and a group sets `approval: auto`
+- **THEN** the group's row shows manual as the built-in policy and a warning that `approval: auto` has no effect and auto comes only from the team default
+
+#### Scenario: A manual key is shown as the group's own policy
+- **WHEN** the team default is auto and a group sets `approval: manual`
+- **THEN** the group's row shows manual from the group file
+
 ### Requirement: Members names the source file of every setting
 Each group row SHALL name the file that defines it and, when both layers define it, both paths with the one in effect marked. The row SHALL state that prompt changes apply to future agent starts only.
 #### Scenario: A project file overrides a user file
@@ -389,11 +397,11 @@ The attention queue SHALL list each context-exhaustion item with its cause (the 
 - **THEN** the item is under needs you and its action opens the chat
 
 ### Requirement: The Members tab sets the team's default approval policy
-The Members tab SHALL show the team's default approval policy for spawned members (not set, manual, or auto) and SHALL let the human set it to manual or auto. It SHALL say that the default covers spawned members of groups without an `approval:` key, and changes only later spawns. A save SHALL show the server's refusal inline, and the control SHALL be disabled while disconnected. After a save, every open view of that team SHALL show the new default and the resolved group policies.
+The Members tab SHALL show the team's default approval policy (not set, manual, or auto) and let the human set it to manual or auto. It SHALL say the default covers spawned members of groups without `approval: manual` and seeds chats the human creates, changing only later chats, and SHALL name groups whose `approval: auto` has no effect. A refused save SHALL show inline; the control SHALL be disabled while disconnected. Every open view of the team SHALL follow a save.
 
 #### Scenario: Setting the default updates the group rows
 - **WHEN** the human sets the team default to auto on the Members tab
-- **THEN** every group without an `approval:` key shows auto from the team default, and groups with the key keep their own policy
+- **THEN** every group without `approval: manual` shows auto from the team default, and groups with `approval: manual` keep manual from the group file
 
 #### Scenario: Another open view follows the change
 - **WHEN** two browser tabs show the same team's Members tab and one sets the default to auto
@@ -402,3 +410,11 @@ The Members tab SHALL show the team's default approval policy for spawned member
 #### Scenario: The control is disabled while disconnected
 - **WHEN** the Team page loses its server connection
 - **THEN** the default approval control is disabled and the last known value stays shown
+
+#### Scenario: Groups asking for auto are named next to the control
+- **WHEN** the team default is not auto and the `devs` and `reviewers` groups set `approval: auto`
+- **THEN** the control names `devs` and `reviewers` as asking for auto, and says setting the team default to auto grants it
+
+#### Scenario: The notice clears once the default is auto
+- **WHEN** the human sets the team default to auto while groups set `approval: auto`
+- **THEN** the control no longer names any group as asking for auto

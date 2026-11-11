@@ -906,8 +906,6 @@ describe('server message handlers', () => {
       else process.env.CLAUDE_CODE_OAUTH_TOKEN = previousToken
     }
   })
-  // Transitional (unify-approval-defaults): annotated until the change archives.
-  // @covers: chat-sessions › Users configure the default approval policy for new chat sessions › Unspecified policy creates a manual session
   // @covers: chat-sessions › New chats start from their team's default approval policy › A create request without a policy stays manual
   test('chat creation applies the requested approval policy and defaults to manual', async () => {
     const previousToken = process.env.CLAUDE_CODE_OAUTH_TOKEN
