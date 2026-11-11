@@ -24,13 +24,22 @@
 //   exits already reported (the package's own stop of a crashed process);
 // - native skills (A9/V7): Kawai's command state lists the app-server's own
 //   catalog, and a human send's turn/start carries its text then each whole
-//   `/name` skill once, as the fake's skills.json named them.
+//   `/name` skill once, as the fake's skills.json named them;
+// - R9 codexSkills (source S1): a peer delivery's and a question answer's
+//   turn carries its text alone, even naming a catalog skill, and a following
+//   human send carries the skill again; an answer steering a running turn asks
+//   the package for 'none' too (recorded through the same-core create seam).
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, test } from 'bun:test'
 import type { ChatEvent } from '../../shared/chat'
 import { AgentRuntimeError } from '@motuslabs/agent-runtime'
+import { createCodexDriver } from '@motuslabs/agent-runtime/codex'
+import type { CodexDriverOptions, SubmitOptions } from '@motuslabs/agent-runtime'
 import { createChatDriver } from '../chat/provider/createChatDriver'
+import { createCodexChatDriver, type CreateCodexRuntime } from '../chat/provider/codexRuntime'
+import type { CodexSessionDriverOptions } from '../chat/codex/codexThread'
+import { formatEnvelope } from '../team/envelope'
 import { exitCause, quiesced } from '../chat/provider/codexRuntimeSupport'
 import type { ChatAgentDriver, ChatSpawnInfo } from '../chat/provider/driver'
 import { codexRoot, sent, type CodexRoot } from '../../../packages/agent-runtime/__tests__/helpers/codexDriverHarness'
@@ -44,7 +53,7 @@ afterEach(async () => {
   }
 })
 
-function harness(root: CodexRoot, extra: { effort?: () => string | undefined; policy?: () => 'manual' | 'auto'; executable?: string; env?: Record<string, string>; resume?: string } = {}) {
+function harness(root: CodexRoot, extra: { effort?: () => string | undefined; policy?: () => 'manual' | 'auto'; executable?: string; env?: Record<string, string>; resume?: string; create?: CreateCodexRuntime } = {}) {
   const transcripts: string[] = []
   const events: ChatEvent[] = []
   const statuses: string[] = []
@@ -52,28 +61,27 @@ function harness(root: CodexRoot, extra: { effort?: () => string | undefined; po
   const spawns: ChatSpawnInfo[] = []
   const wire: Array<[string, string]> = []
   let ended = 0
-  const driver = createChatDriver({
-    runtime: 'codex',
-    options: {
-      sessionId: 'chat-codex-adapter',
-      projectPath: join(root.root, 'work'),
-      executable: extra.executable ?? root.wrapper,
-      codexHome: root.home,
-      network: true,
-      serverEnv: { PATH: process.env.PATH ?? '', HOME: root.root, ...extra.env },
-      withheldCredentials: () => new Set(),
-      wire: { record: (dir, raw) => void wire.push([dir, raw]) },
-      ...(extra.effort ? { getEffort: extra.effort as never } : {}),
-      ...(extra.policy ? { getApprovalPolicy: extra.policy } : {}),
-      onEvent: (event) => void events.push(event),
-      onStatus: (status) => void statuses.push(status),
-      onSdkSessionId: (id) => void sessions.push(id),
-      onTranscriptPath: (path) => void transcripts.push(path),
-      ...(extra.resume ? { resumeThreadId: extra.resume } : {}),
-      onSpawn: (info) => void spawns.push(info),
-      onProcessEnd: () => void ended++,
-    },
-  }) as Adapter
+  const options = {
+    sessionId: 'chat-codex-adapter',
+    projectPath: join(root.root, 'work'),
+    executable: extra.executable ?? root.wrapper,
+    codexHome: root.home,
+    network: true,
+    serverEnv: { PATH: process.env.PATH ?? '', HOME: root.root, ...extra.env },
+    withheldCredentials: () => new Set(),
+    wire: { record: (dir, raw) => void wire.push([dir, raw]) },
+    ...(extra.effort ? { getEffort: extra.effort as never } : {}),
+    ...(extra.policy ? { getApprovalPolicy: extra.policy } : {}),
+    onEvent: (event) => void events.push(event),
+    onStatus: (status) => void statuses.push(status),
+    onSdkSessionId: (id) => void sessions.push(id),
+    onTranscriptPath: (path) => void transcripts.push(path),
+    ...(extra.resume ? { resumeThreadId: extra.resume } : {}),
+    onSpawn: (info) => void spawns.push(info),
+    onProcessEnd: () => void ended++,
+  } satisfies CodexSessionDriverOptions
+  // The same-core create seam only records what Kawai asked the package factory for.
+  const driver = (extra.create ? createCodexChatDriver(options, extra.create) : createChatDriver({ runtime: 'codex', options })) as Adapter
   live.push(driver)
   return { driver, events, statuses, sessions, spawns, wire, transcripts, ended: () => ended }
 }
@@ -99,6 +107,10 @@ const completed = (events: ChatEvent[]) => events.filter((e) => e.type === 'turn
 const savedPath = (root: CodexRoot, threadId: string) => (JSON.parse(readFileSync(join(root.home, 'threads', `${threadId}.json`), 'utf8')) as { path: string }).path
 const pids = (root: CodexRoot) => readFileSync(join(root.home, 'pids'), 'utf8').split('\n').filter(Boolean)
 
+const DEPLOY = { name: 'deploy', path: '/skills/deploy/SKILL.md', description: 'Deploy the service', scope: 'repo', enabled: true }
+const DEPLOY_INPUT = { type: 'skill', name: 'deploy', path: '/skills/deploy/SKILL.md' }
+const text = (t: string) => ({ type: 'text', text: t, text_elements: [] })
+
 describe('Kawai Codex composition over the public package factory', () => {
   // @covers: agent-runtime › Host-compatibility inputs and observations are optional › Native Codex skill input
   test('native skills: the catalog reaches Kawai, and a send carries its text then each named skill once', async () => {
@@ -118,6 +130,54 @@ describe('Kawai Codex composition over the public package factory', () => {
       { type: 'skill', name: 'deploy', path: '/skills/deploy/SKILL.md' },
       { type: 'skill', name: 'review', path: '/home/u/.codex/skills/review/SKILL.md' },
     ]])
+  })
+
+  // @covers: agent-runtime › Host-compatibility inputs and observations are optional › Codex skill suppression per submission
+  test('S1: a peer delivery naming a catalog skill sends its envelope text alone; the following human send carries the skill', async () => {
+    const root = codexRoot()
+    writeFileSync(join(root.home, 'skills.json'), JSON.stringify({ skills: [DEPLOY] }))
+    const h = harness(root)
+    h.driver.start()
+    await until(() => h.driver.getCommandState().status === 'ready')
+    const envelope = { messageId: crypto.randomUUID(), senderKind: 'agent', senderSession: 'chat-lead', body: 'please /deploy now' } as never
+    h.driver.deliver(envelope)
+    await until(() => completed(h.events).length === 1)
+    h.driver.send('/deploy now')
+    await until(() => completed(h.events).length === 2)
+    expect(sent(root, 'turn/start').map((m) => m.params.input)).toEqual([[text(formatEnvelope(envelope))], [text('/deploy now'), DEPLOY_INPUT]])
+  })
+
+  // @covers: agent-runtime › Host-compatibility inputs and observations are optional › Codex skill suppression per submission
+  test('S1: a question answer is an internal turn with its text alone, as a new turn and as a steer', async () => {
+    const root = codexRoot()
+    writeFileSync(join(root.home, 'skills.json'), JSON.stringify({ skills: [DEPLOY] }))
+    const asked: SubmitOptions[] = []
+    const create = (options: CodexDriverOptions) => {
+      const inner = createCodexDriver(options)
+      const send = inner.send.bind(inner)
+      inner.send = (text, submit) => (asked.push({ ...submit }), send(text, submit))
+      return inner
+    }
+    const { driver, events } = harness(root, { create })
+    driver.start()
+    await until(() => driver.getCommandState().status === 'ready')
+    const ask = (end: string) => `/script ${JSON.stringify({ notes: [{ method: 'item/completed', params: { item: { type: 'agentMessage', id: `q-${end}`, text: 'Ship it?', questions: [{ title: 'Ship /deploy?', options: ['/deploy'] }] } } }], end })}`
+    const answer = async () => {
+      await until(() => driver.getPendingRequests().length === 1)
+      expect(driver.answerQuestion(driver.getPendingRequests()[0]!.requestId, { 'Ship /deploy?': { options: ['/deploy'] } })).toEqual({ ok: true })
+    }
+    // The question's turn ends first: the answer is a new turn.
+    driver.send(ask('completed'))
+    await until(() => completed(events).length === 1)
+    await answer()
+    await until(() => sent(root, 'turn/start').length === 2 && completed(events).length === 2)
+    // The question's turn is still running: the answer steers it.
+    driver.send(ask('hold'))
+    await answer()
+    await until(() => sent(root, 'turn/steer').length === 1)
+    expect(sent(root, 'turn/start').map((m) => m.params.input).filter((_, i) => i !== 0 && i !== 2)).toEqual([[text('Ship /deploy?: /deploy')]])
+    expect(sent(root, 'turn/steer').map((m) => m.params.input)).toEqual([[text('Ship /deploy?: /deploy')]])
+    expect(asked.map((submit) => [submit.codexSkills, submit.continuation])).toEqual([[undefined, undefined], ['none', undefined], [undefined, undefined], ['none', 'steer']])
   })
 
   test('a send is one Kawai turn: events, thread id, spawn report and wire lines', async () => {

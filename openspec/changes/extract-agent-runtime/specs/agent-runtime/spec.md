@@ -150,6 +150,10 @@ A host MAY supply a live Codex effort reader, a Claude prompt composer, a detail
 - **WHEN** a Codex user message names a skill in the runtime's own skill catalog
 - **THEN** its turn/start carries the typed skill input after the text, without any host-supplied input items
 
+#### Scenario: Codex skill suppression per submission
+- **WHEN** a Codex host submits text naming a catalog skill with the skill mode `none`
+- **THEN** its turn/start carries the text alone, a later submission without the mode carries the skill again, and an unknown mode or any mode on Claude is refused before anything is sent
+
 ### Requirement: Rate-limit waits have explicit boundaries
 A provider-observed retry wait SHALL emit a wait-start signal and one matching wait-end signal on observed resumption, cancellation or process end. Window and reset facts SHALL be retained when known. A predicted reset time alone SHALL NOT establish that work resumed.
 

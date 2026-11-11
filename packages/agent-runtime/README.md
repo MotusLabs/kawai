@@ -361,6 +361,13 @@ neither the Claude Agent SDK nor anything beyond the package and `zod`.
   (expecting that turn's id) and returns its handle; `queue` is refused
   with category `unsupported`. A turn the app-server starts by itself opens
   with trigger `resumed` and no handle.
+- **Skills.** A new turn's input is its text, then one typed skill input per
+  whole `/name` word the app-server's own `skills/list` catalog lists.
+  `{ codexSkills: 'none' }` sends that submission's text alone; omitted or
+  `'auto'` keeps the catalog selection. The mode is read once, when `send()`
+  is called. A steer carries text only. Any other value, and any
+  `codexSkills` on the Claude driver, is refused as `unsupported` before
+  anything is sent.
 - **Requests.** Approvals, user input and elicitation reach `onRequest`
   after they are registered, with the order and first-answer rules of
   [Answering requests](#answering-requests). Disabled user input gets empty

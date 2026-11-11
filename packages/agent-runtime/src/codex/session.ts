@@ -23,7 +23,8 @@
 // - Quota. One optional rate-limit read per driver, or per ready generation its claim permits.
 // - Skills. The generation's own skills/list catalog (skills.ts) publishes
 //   onCommandState, and a new turn's input appends the typed skill inputs
-//   its text names; a steer carries text only, as before.
+//   its text names unless the send chose codexSkills 'none' (R9); a steer
+//   carries text only, as before.
 // - Stop. The lifecycle reserves the terminal first; teardown decides the
 //   open turn, closes requests, publishes, then stops every current and
 //   retired transport and joins all owned work; accounting adds each
@@ -58,6 +59,8 @@ interface Prepared {
   messageUuid: string
   turnId: string
   text: string
+  /** R9: whether a new turn appends the catalog's skill inputs (codexSkills auto/omitted), captured at send(). */
+  skills: boolean
   /** The active turn a steer was prepared against, else null. */
   steers: CodexTurnState | null
 }
@@ -406,13 +409,19 @@ export class CodexSession {
 
   /** R10/I2: acknowledged only once any pending identity persistence succeeded. */
   send(text: string, submit: SubmitOptions = {}): Promise<TurnHandle> {
+    // R9: the mode is read once, here, so a wait or a later caller mutation cannot change it.
+    const mode: unknown = submit.codexSkills
+    if (mode !== undefined && mode !== 'auto' && mode !== 'none') {
+      return Promise.reject(new AgentRuntimeError({ category: 'unsupported', message: "codexSkills must be 'auto' or 'none'" }))
+    }
+    const skills = mode !== 'none'
     return this.checkpoints.admit(submit.continuation, {
       prepare: (): Prepared => {
         const steers = submit.continuation === 'steer' && this.turn && !this.turn.settled ? this.turn : null
         const messageUuid = submit.messageUuid ?? crypto.randomUUID()
         const turnId = steers?.turnId ?? crypto.randomUUID()
         checkSubmission(this.options.beforeSubmit, { messageUuid, turnId, text, context: submit.context })
-        return { messageUuid, turnId, text, steers }
+        return { messageUuid, turnId, text, skills, steers }
       },
       commit: (admission, prepared) => {
         if ((admission === 'steer') !== (prepared.steers !== null) || (prepared.steers && prepared.steers !== this.turn)) {
@@ -439,7 +448,7 @@ export class CodexSession {
     const turn = newCodexTurn(prepared.turnId, prepared.messageUuid, prepared.text, this.facts.model)
     // A numeric effort has no Codex equivalent and is omitted, as before.
     const effort = typeof chosen === 'string' ? { effort: chosen } : {}
-    const params = codexTurnStartParams({ threadId: generation.threadId, input: [...this.input(prepared.text), ...this.skills.inputs(prepared.text)], clientUserMessageId: prepared.messageUuid, ...effort }, this.permissions)
+    const params = codexTurnStartParams({ threadId: generation.threadId, input: [...this.input(prepared.text), ...(prepared.skills ? this.skills.inputs(prepared.text) : [])], clientUserMessageId: prepared.messageUuid, ...effort }, this.permissions)
     this.turn = turn
     this.unbound.push(turn)
     let write!: (reply: Promise<unknown>) => void

@@ -11,13 +11,25 @@
 //   first-use order; a steer carries text only;
 // - skills/changed rescans with forceReload; no catalog means unavailable and
 //   a text-only turn; a stop withdraws the list.
+// - R9 SubmitOptions.codexSkills: 'none' sends that submission's text alone
+//   (source S1: peer and internal turns never carried skills), read once at
+//   send(); omitted or 'auto' is the catalog selection above; any other value,
+//   and any value on Claude, refuses the send before anything is sent.
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, test } from 'bun:test'
 import type { CommandState } from '../src/activity.js'
-import { codexDriver, sent, stopDrivers, waitFor, type CodexRoot } from './helpers/codexDriverHarness.js'
+import { createClaudeDriver } from '../src/claude/index.js'
+import type { SubmitOptions } from '../src/contract.js'
+import type { AgentEvent } from '../src/events.js'
+import { codexDriver, refusal, sent, stopDrivers, waitFor, type CodexRoot, type HarnessOptions } from './helpers/codexDriverHarness.js'
+import { fakeClaudeHome } from './helpers/fakeClaudeHome.js'
 
-afterEach(stopDrivers)
+const claudes: Array<{ kill(): Promise<unknown> }> = []
+afterEach(async () => {
+  for (const d of claudes.splice(0)) await d.kill().catch(() => {})
+  await stopDrivers()
+})
 
 const DEPLOY = { name: 'deploy', path: '/skills/deploy/SKILL.md', description: 'Deploy the service', interface: { shortDescription: 'Deploy it' }, scope: 'repo', enabled: true }
 const REVIEW = { name: 'review', path: '/home/u/.codex/skills/review/SKILL.md', description: 'Review a diff', scope: 'user', enabled: true }
@@ -34,10 +46,19 @@ const text = (t: string) => ({ type: 'text', text: t, text_elements: [] })
 const skill = (s: { name: string; path: string }) => ({ type: 'skill', name: s.name, path: s.path })
 const inputs = (root: CodexRoot) => sent(root, 'turn/start').map((message) => message.params.input)
 
-function recorded() {
+function recorded(options: HarnessOptions = {}) {
   const states: CommandState[] = []
-  const h = codexDriver({ callbacks: { onCommandState: (state) => states.push(state) } })
+  const h = codexDriver({ ...options, callbacks: { onCommandState: (state) => states.push(state) } })
   return { ...h, states }
+}
+
+/** A driver whose catalog lists DEPLOY and is ready. */
+async function ready(options: HarnessOptions = {}) {
+  const h = recorded(options)
+  catalog(h.root, [DEPLOY])
+  await h.driver.start()
+  await waitFor(() => h.states.at(-1)?.status === 'ready')
+  return h
 }
 
 describe('Codex native skills', () => {
@@ -94,5 +115,93 @@ describe('Codex native skills', () => {
     const steered = await h.driver.send('/deploy', { continuation: 'steer' })
     await Promise.all([opening.result, steered.result])
     expect(sent(h.root, 'turn/steer').map((m) => m.params.input)).toEqual([[text('/deploy')]])
+  })
+})
+
+describe('SubmitOptions.codexSkills (R9)', () => {
+  // @covers: agent-runtime › Host-compatibility inputs and observations are optional › Codex skill suppression per submission
+  test("S1: 'none' sends the text alone, and the following omitted and 'auto' sends carry the catalog's skill again", async () => {
+    const h = await ready()
+    await (await h.driver.send('peer says /deploy', { codexSkills: 'none' })).result
+    await (await h.driver.send('human says /deploy')).result
+    await (await h.driver.send('human again /deploy', { codexSkills: 'auto' })).result
+    expect(inputs(h.root)).toEqual([[text('peer says /deploy')], [text('human says /deploy'), skill(DEPLOY)], [text('human again /deploy'), skill(DEPLOY)]])
+  })
+
+  // @covers: agent-runtime › Host-compatibility inputs and observations are optional › Codex skill suppression per submission
+  test('the mode is read once at send(): a caller mutation before admission or inside beforeSubmit changes nothing', async () => {
+    // beforeSubmit rewrites the options object of the send being prepared to this value.
+    const rewrite = new Map<SubmitOptions, 'auto' | 'none'>()
+    const h = await ready({
+      beforeSubmit: () => {
+        for (const [submit, mode] of rewrite) submit.codexSkills = mode
+        rewrite.clear()
+        return { accepted: true }
+      },
+    })
+    const early: SubmitOptions = { codexSkills: 'none' }
+    const first = h.driver.send('/deploy one', early)
+    // Mutated in the same tick, before the admission yield ends.
+    early.codexSkills = 'auto'
+    await (await first).result
+    const quiet: SubmitOptions = { codexSkills: 'none' }
+    rewrite.set(quiet, 'auto')
+    await (await h.driver.send('/deploy two', quiet)).result
+    const loud: SubmitOptions = { codexSkills: 'auto' }
+    rewrite.set(loud, 'none')
+    await (await h.driver.send('/deploy three', loud)).result
+    expect(inputs(h.root)).toEqual([[text('/deploy one')], [text('/deploy two')], [text('/deploy three'), skill(DEPLOY)]])
+  })
+
+  test("a steer with 'none' carries its text only, as every steer does", async () => {
+    const h = await ready()
+    const opening = await h.driver.send('/hold', { codexSkills: 'none' })
+    await waitFor(() => sent(h.root, 'turn/start').length === 1)
+    const steered = await h.driver.send('/deploy', { continuation: 'steer', codexSkills: 'none' })
+    await Promise.all([opening.result, steered.result])
+    expect([inputs(h.root), sent(h.root, 'turn/steer').map((m) => m.params.input)]).toEqual([[[text('/hold')]], [[text('/deploy')]]])
+  })
+
+  test('a steer asked for after its turn ended opens a new turn that keeps its mode', async () => {
+    const h = await ready()
+    await (await h.driver.send('first')).result
+    await (await h.driver.send('late /deploy', { continuation: 'steer', codexSkills: 'none' })).result
+    await (await h.driver.send('late again /deploy', { continuation: 'steer' })).result
+    expect([inputs(h.root), sent(h.root, 'turn/steer').length]).toEqual([[[text('first')], [text('late /deploy')], [text('late again /deploy'), skill(DEPLOY)]], 0])
+  })
+
+  // @covers: agent-runtime › Host-compatibility inputs and observations are optional › Codex skill suppression per submission
+  test('any other value refuses as unsupported before an event or turn/start, and the driver stays usable', async () => {
+    const h = await ready()
+    const before = h.events.length
+    for (const bad of ['', 'None', 'off', null, 0, false, {}, ['none']]) {
+      const error = await refusal(h.driver.send('/deploy', { codexSkills: bad as never }))
+      expect([error.category, error.message]).toEqual(['unsupported', "codexSkills must be 'auto' or 'none'"])
+    }
+    expect([h.events.length, sent(h.root, 'turn/start').length]).toEqual([before, 0])
+    await (await h.driver.send('/deploy')).result
+    expect(inputs(h.root)).toEqual([[text('/deploy'), skill(DEPLOY)]])
+  })
+
+  // @covers: agent-runtime › Host-compatibility inputs and observations are optional › Codex skill suppression per submission
+  test('Claude refuses any supplied mode as unsupported before a prompt or event, then sends normally (public factory, fake CLI)', async () => {
+    const home = fakeClaudeHome()
+    const events: AgentEvent[] = []
+    const d = createClaudeDriver({
+      launch: home.launch(),
+      logger: { debug() {}, info() {}, warn() {}, error() {} },
+      permissions: { mode: 'default', enabledTools: [], disallowedTools: [] },
+      callbacks: { onEvent: (event) => events.push(event) },
+    })
+    claudes.push(d)
+    await d.start()
+    const before = events.length
+    for (const mode of ['auto', 'none', 'bogus'] as const) {
+      const error = await refusal(d.send('/deploy', { codexSkills: mode as 'auto' }))
+      expect([error.category, error.message]).toEqual(['unsupported', 'codexSkills is not supported by the Claude runtime'])
+    }
+    expect(events.slice(before)).toEqual([])
+    const result = await (await d.send('hello')).result
+    expect([result.outcome, events.filter((e) => e.type === 'user_message').map((e) => (e as { text: string }).text)]).toEqual(['success', ['hello']])
   })
 })

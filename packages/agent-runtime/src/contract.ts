@@ -34,6 +34,14 @@ export interface SubmitOptions {
   continuation?: ContinuationMode
   /** Opaque context handed to the beforeSubmit callback before anything is enqueued. */
   context?: JsonValue
+  /**
+   * Codex only (task-7811b455 R9). `auto` (the default when omitted) appends
+   * the native skill inputs the text names from the runtime's own catalog;
+   * `none` sends this submission's text alone. Read once when send() is
+   * called. Any other value, or any value on Claude, refuses the send as
+   * `unsupported` before anything is enqueued.
+   */
+  codexSkills?: 'auto' | 'none'
 }
 
 /**

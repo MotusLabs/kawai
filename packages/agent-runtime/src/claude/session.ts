@@ -380,6 +380,8 @@ export class ClaudeSession {
 
   /** R10/I2: acknowledged only once any pending identity persistence succeeded (the gate, lifecycle/checkpoints.ts). */
   send(text: string, submit: SubmitOptions = {}): Promise<TurnHandle> {
+    // R9: the Codex-only skill mode is refused, not ignored, before anything is admitted.
+    if (submit.codexSkills !== undefined) return Promise.reject(new AgentRuntimeError({ category: 'unsupported', message: 'codexSkills is not supported by the Claude runtime' }))
     if (this.resumeFailure) return Promise.reject(new AgentRuntimeError({ ...this.resumeFailure }))
     return this.checkpoints.admit(submit.continuation, {
       // P12/P13: the host decides before anything is enqueued or emitted, and

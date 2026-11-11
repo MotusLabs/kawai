@@ -19,7 +19,9 @@
 //   declined or cancelled card feeds the outbound audit. Async agentMessage
 //   questions are this adapter's cards, answered as a turn on the thread.
 // - A send while a turn runs steers it; mail delivers as a peer turn under
-//   its message id. Every package promise, and every promise a host
+//   its message id. Mail and question answers send codexSkills 'none'
+//   (text only, R9); a human send keeps the catalog's skill inputs. Every
+//   package promise, and every promise a host
 //   callback returns, is owned (runtimeOwnership.ts); settled() joins them
 //   and reports their raw failures once.
 // - Terminal joins: a kill or shutdown the package refused from inside its
@@ -131,7 +133,7 @@ class CodexChatDriver implements ChatAgentDriver {
     if (this.activeTurnId || this.sending > 0 || this.pendingCount() > 0) throw new Error('Recipient is not idle')
     const messageUuid = UUID.test(envelope.messageId) ? envelope.messageId : crypto.randomUUID()
     this.peers.set(messageUuid, envelope)
-    const sent = this.submit(formatEnvelope(envelope), messageUuid)
+    const sent = this.submit(formatEnvelope(envelope), messageUuid, 'none')
     const turnId = (this.activeTurnId = this.delivered.open(envelope))
     void sent.then((accepted) => {
       if (!accepted && this.delivered.abandon() === turnId && this.activeTurnId === turnId) this.activeTurnId = null
@@ -189,7 +191,7 @@ class CodexChatDriver implements ChatAgentDriver {
       // The answer is turn input on the thread, shown as no user message.
       const messageUuid = crypto.randomUUID()
       this.silent.add(messageUuid)
-      this.submit(own.questions.map((question, i) => `${question.question}: ${validated.answers[i]!.join(', ')}`).join('\n'), messageUuid)
+      this.submit(own.questions.map((question, i) => `${question.question}: ${validated.answers[i]!.join(', ')}`).join('\n'), messageUuid, 'none')
       return { ok: true }
     }
     return requestOutcome(this.boot.current?.answerQuestion(requestId, answers), 'question', requestId)
@@ -233,7 +235,12 @@ class CodexChatDriver implements ChatAgentDriver {
   // ---------------------------------------------------------------- internals
 
   /** One submission; settles true once the package accepted it (never rejects). */
-  private submit(text: string, messageUuid: string): Promise<boolean> {
+  /**
+   * `codexSkills` 'none' (R9) keeps a peer delivery or an internal answer
+   * text-only, as the source driver's deliver and answer paths were; a human
+   * send omits it and keeps the catalog's skill inputs.
+   */
+  private submit(text: string, messageUuid: string, codexSkills?: 'none'): Promise<boolean> {
     // A spawn refusal (a registered CODEX_HOME) throws here, before anything is accepted.
     const ready = this.ensure()
     // The effort of this send, read when Kawai accepted it (root driver order).
@@ -245,9 +252,10 @@ class CodexChatDriver implements ChatAgentDriver {
       // A send still waiting for its driver when an interrupt landed is withdrawn.
       if (!inner || this.killed || epoch !== this.interrupts) return false
       const steer = inner.state === 'active'
-      const handle = await inner.send(text, { messageUuid, ...(steer ? { continuation: 'steer' as const } : {}) }).catch((error: unknown) => {
-        // A steer prepared for a turn that ended meanwhile goes as a new turn.
-        if (steer && (error as { code?: unknown } | null)?.code === 'turn-ended') return inner.send(text, { messageUuid })
+      const mode = codexSkills ? { codexSkills } : {}
+      const handle = await inner.send(text, { messageUuid, ...mode, ...(steer ? { continuation: 'steer' as const } : {}) }).catch((error: unknown) => {
+        // A steer prepared for a turn that ended meanwhile goes as a new turn, with the same skill mode.
+        if (steer && (error as { code?: unknown } | null)?.code === 'turn-ended') return inner.send(text, { messageUuid, ...mode })
         throw error
       })
       void this.owned.track('turn', handle.result)
