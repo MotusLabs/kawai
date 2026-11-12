@@ -1,5 +1,11 @@
+// Provider-row periods are Kawai's observed Z.AI policy; plan-window periods
+// are the public package's (@motuslabs/agent-runtime/usage), read here with
+// an unknown length (the package's null) as undefined, as Kawai's view omits it.
 import { describe, expect, test } from 'bun:test'
-import { providerRowPeriodMs, windowPeriodMs } from '../chat/usageWindowPeriods'
+import { windowPeriodMs as packageWindowPeriodMs } from '@motuslabs/agent-runtime/usage'
+import { providerRowPeriodMs } from '../chat/usageWindowPeriods'
+
+const windowPeriodMs = (key: string, group?: string): number | undefined => packageWindowPeriodMs(key, group) ?? undefined
 
 const HOUR_MS = 60 * 60 * 1000
 const DAY_MS = 24 * HOUR_MS
