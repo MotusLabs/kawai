@@ -54,6 +54,11 @@ export interface Generation {
   identityConfirmed: boolean
   /** The error texts of result frames read before initialize: the CLI's startup-failure frames. */
   startupErrors: string[]
+  /**
+   * Whether its interrupts carry `cancelQueued` (interrupt_cancel_queued_v1):
+   * true until an init reports a capabilities array, which then replaces it.
+   */
+  cancelQueued: boolean
   /** Settles once the generation's end has been classified. */
   ended: Promise<void>
   markEnded(): void
@@ -64,7 +69,7 @@ export function newGeneration(number: number, sdk: SdkModule, resumeTarget: stri
   const ended = new Promise<void>((resolve) => (markEnded = resolve))
   return {
     number, query: null as unknown as Query, input: new PromptQueue<SDKUserMessage>(), owned: null, spawn: 'pending', projections: [], retired: false,
-    abort: new AbortController(), abortError: sdk.AbortError, readEnded: false, resumeTarget, initialized: false, identityConfirmed: false, startupErrors: [], ended, markEnded,
+    abort: new AbortController(), abortError: sdk.AbortError, readEnded: false, resumeTarget, initialized: false, identityConfirmed: false, startupErrors: [], cancelQueued: true, ended, markEnded,
   }
 }
 
@@ -135,10 +140,13 @@ export async function loadSdk(): Promise<SdkModule> {
 /** The SDK's runtime interrupt takes `{ cancelQueued }` (SDK 0.3.289); its d.ts declares no parameter. */
 type InterruptWithOptions = (options?: { cancelQueued?: boolean }) => Promise<{ cancelled?: string[] } | undefined>
 
-/** Interrupt the CLI's turn and cancel what it queued; resolves to the cancelled prompt UUIDs. */
+/**
+ * Interrupt the CLI's turn, cancelling what it queued when the generation
+ * supports it (else a plain interrupt); resolves to the cancelled prompt UUIDs.
+ */
 export async function interruptGeneration(generation: Generation): Promise<string[]> {
   const interrupt = generation.query.interrupt as unknown as InterruptWithOptions
-  const ack = await interrupt.call(generation.query, { cancelQueued: true })
+  const ack = await interrupt.call(generation.query, generation.cancelQueued ? { cancelQueued: true } : undefined)
   return Array.isArray(ack?.cancelled) ? ack.cancelled : []
 }
 

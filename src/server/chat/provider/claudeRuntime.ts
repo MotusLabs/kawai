@@ -14,6 +14,9 @@
 // - R10: a send made during an active turn is recorded and shown under that
 //   turn at its admission, in order; a later turn running it opens as
 //   resumed (queuedEchoes.ts).
+// - GAP8: a later process's first spawn re-anchors the last forwarded
+//   context reading on its profile window, as a correction, before its first
+//   frame (claudeContextMirror.ts).
 // - recovered worker and task rows under the live rosters; a task's output
 //   file stays in the sidecar records only (D); Kawai's event identity,
 //   statuses, spawn provenance, outbound audit and error texts.
@@ -41,6 +44,7 @@ import { OwnedWork, TerminalJoin, outsideRuntime } from './runtimeOwnership'
 import { DeliveredTurns } from './deliveredTurns'
 import { QueuedEchoes } from './queuedEchoes'
 import { RuntimeBoot } from './runtimeBoot'
+import { ClaudeContextMirror } from './claudeContextMirror'
 
 /** The adapter's options: the old driver's, with the query factory only when injected. */
 export type ClaudeChatDriverOptions = Omit<ChatSessionDriverOptions, 'queryFactory' | 'teamMcpServer'> &
@@ -101,6 +105,7 @@ class ClaudeChatDriver implements ChatAgentDriver {
   private readonly recoveredWorkers: ChatWorker[]
   private readonly recoveredTasks: BackgroundTaskRecord[]
   private readonly audit
+  private readonly contextMirror = new ClaudeContextMirror()
 
   constructor(private readonly options: ClaudeChatDriverOptions, private readonly create: CreateClaudeRuntime) {
     this.sessionId = options.resumeSessionId ?? null
@@ -368,6 +373,11 @@ class ClaudeChatDriver implements ChatAgentDriver {
         return outsideRuntime(() => options.onSdkSessionId?.(checkpoint.runtimeSessionId)) as void
       },
       ...forwardedCallbacks(options, hosted),
+      // The respawn mirror (claudeContextMirror.ts) is updated before the host sees the reading.
+      onContextUsage: (usage, meta) => {
+        this.contextMirror.observe(usage, meta)
+        hosted('onContextUsage', () => options.onContextUsage?.(usage, meta))
+      },
       onWorkers: (workers) => {
         this.liveWorkers = workers
         hosted('onWorkers', () => options.onWorkers?.(this.getWorkers()))
@@ -384,6 +394,9 @@ class ClaudeChatDriver implements ChatAgentDriver {
       onSpawn: (info) => {
         this.spawnId = `ob-s-${crypto.randomUUID()}`
         this.spawnOpen = true
+        // A later process's first spawn re-anchors the retained reading before any of its frames (GAP8).
+        const correction = this.contextMirror.spawned(info.generation, info.childEnv)
+        if (correction) hosted('onContextUsage', () => options.onContextUsage?.(correction.usage, correction.meta))
         hosted('onSpawn', () => options.onSpawn?.({ cwd: info.cwd, systemPromptAppend: info.systemPromptAppend, effort: info.effort, model: info.model, env: { ...info.childEnv }, resumed: info.resumed }))
       },
       onProcessEnd: (report) => {
@@ -396,7 +409,8 @@ class ClaudeChatDriver implements ChatAgentDriver {
   private onRuntimeEvent(event: AgentEvent): void {
     switch (event.type) {
       case 'approval_request': {
-        const toolCallId = this.toolCalls.get(callKey(event.tool, event.input)) ?? ''
+        // The request's native tool-call ID first; the stream's tool_use map only when the runtime gave none.
+        const toolCallId = event.toolCallId ?? this.toolCalls.get(callKey(event.tool, event.input)) ?? ''
         this.cards.set(event.requestId, { tool: event.tool, input: event.input, toolCallId })
         if (TEAM_ALLOWED_TOOLS.includes(event.tool)) this.granted.set(event.requestId, 'silent')
         else if (decideApproval(this.options.getApprovalPolicy?.() ?? 'manual', event.tool) === 'allow') this.granted.set(event.requestId, 'policy')

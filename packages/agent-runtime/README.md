@@ -285,6 +285,12 @@ request handler can't grant a tool the policy denies.
   what an allow runs or how an answer is checked.
 - `onRequest` runs even when the request event's handler has already
   answered. Its own answer then reports `not-pending`.
+- **Native tool-call ID.** On Claude, a request and its event carry
+  `toolCallId` when the SDK's permission callback gave a nonempty tool-use
+  ID. It is copied exactly, and the request is registered only after it is
+  set. When the SDK gives none, the field is absent: it is never derived from
+  the tool, the input or the order. It is for correlation only.
+  `requestId` alone answers the request. Codex requests never carry it.
 
 A headless host that answers inline
 (`examples/inline-requests.ts`, compiled and run unchanged by the package
@@ -482,6 +488,18 @@ records and observes nothing for it.
     turn id stay exactly as they were.
   - A throw, a promise or any other shape rejects the send with category
     `context`, before anything is enqueued or emitted.
+- **`joinAgentStartedTurns`** (Claude, optional boolean, default false)
+  changes one case: a `queue` send made while the only open turn is one the
+  agent started on its own. The send joins that turn instead of queueing a
+  turn of its own.
+  - `beforeSubmit` and `composePrompt` see that turn's id with the send's
+    own new message UUID.
+  - The `user_message` event and the handle name that turn. The handle's
+    `result` is that turn's one result. No second turn starts or completes.
+  - If that turn ended or changed while the callbacks ran, the send is
+    refused (`busy`) and nothing is enqueued.
+  - A user-started active turn, `new-turn` sends and an omitted or false
+    option keep the queue. A non-boolean value refuses construction.
 - **`onToolObservation`** receives only the phase (`call` or `result`), the
   tool name, the call id, the turn and the error flag. It never sees
   arguments.

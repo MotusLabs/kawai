@@ -38,6 +38,7 @@ export function createClaudeDriverWith(options: ClaudeDriverOptions, internal: P
   if (options.quotaSource !== undefined && options.quotaSource !== 'none' && options.quotaSource !== 'host-login') throw configurationError('quotaSource must be none or host-login')
   if (options.claimUsagePull !== undefined && typeof options.claimUsagePull !== 'function') throw configurationError('claimUsagePull must be a function')
   if (options.composePrompt !== undefined && typeof options.composePrompt !== 'function') throw configurationError('composePrompt must be a function')
+  if (options.joinAgentStartedTurns !== undefined && typeof options.joinAgentStartedTurns !== 'boolean') throw configurationError('joinAgentStartedTurns must be a boolean')
   const sdkOptions: Partial<Options> = {
     settingSources: [...(options.settingSources ?? [])],
     ...(options.settings ? { settings: { ...options.settings } as Options['settings'] } : {}),
@@ -55,6 +56,7 @@ export function createClaudeDriverWith(options: ClaudeDriverOptions, internal: P
     ...(options.systemPromptAppend ? { systemPromptAppend: options.systemPromptAppend } : {}),
     ...(options.beforeSubmit ? { beforeSubmit: options.beforeSubmit } : {}),
     ...(options.composePrompt ? { composePrompt: options.composePrompt } : {}),
+    ...(options.joinAgentStartedTurns === true ? { joinAgentStartedTurns: true } : {}),
     ...(options.onToolObservation ? { onToolObservation: options.onToolObservation } : {}),
     ...(options.auditHooks ? { auditHooks: options.auditHooks } : {}),
     ...(options.resume ? { resume: options.resume } : {}),

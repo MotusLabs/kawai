@@ -26,6 +26,8 @@ export interface ClaudeSessionOptions {
   beforeSubmit?: BeforeSubmit
   /** Per-send pasted content and peer origin, after an accepted beforeSubmit (R4). */
   composePrompt?: ComposePrompt
+  /** A queued send joins a live agent-started turn (eighth exception); omitted: it queues. */
+  joinAgentStartedTurns?: boolean
   /** Names-only tool observation (P14). */
   onToolObservation?(observation: ToolObservation): void
   /** Detailed opt-in audit adapter. */

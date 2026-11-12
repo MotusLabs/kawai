@@ -267,6 +267,17 @@ export interface ClaudeDriverOptions extends BaseDriverOptions {
    * refuses the send with category `context` before anything is enqueued.
    */
   composePrompt?: ComposePrompt
+  /**
+   * Join a queued send to a live agent-started turn (design §2, eighth
+   * exception). Omitted or false: a queued send is its own queued turn. True:
+   * a `queue` send made while an agent-started turn is the only open turn
+   * joins it. beforeSubmit and composePrompt get that turn's id with the
+   * send's own new message UUID, and the handle shares that turn's one
+   * result. If the turn ended or changed while those callbacks ran, the send
+   * is refused (`busy`) with nothing enqueued. A non-boolean refuses
+   * construction.
+   */
+  joinAgentStartedTurns?: boolean
 }
 
 /** Optional detailed Codex audit adapter; opt-in only. */

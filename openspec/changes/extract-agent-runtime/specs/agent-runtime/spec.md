@@ -82,6 +82,14 @@ When the runtime opens a turn without a submitted message, such as after a backg
 - **WHEN** a driver attaches idle without a prompt, or turn-opening input arrives after stop
 - **THEN** no turn start, turn result or state change is reported
 
+#### Scenario: Opt-in queued send joins the agent-started turn
+- **WHEN** a Claude driver constructed with `joinAgentStartedTurns: true` accepts a queued send while an agent-started turn is the only open turn, and that turn's result arrives naming the prompt or naming none
+- **THEN** the send's user message and handle name that turn, its handle keeps its own message UUID and shares the turn's one result, and no second turn start, completion or result is reported
+
+#### Scenario: Join defaults and stale owners
+- **WHEN** `joinAgentStartedTurns` is omitted or false, the active turn was user-started, or the agent-started turn ended or was replaced while the submission callbacks ran
+- **THEN** omitted, false and user-started cases queue as before, and the stale case refuses the send with nothing enqueued
+
 ### Requirement: Requests can be answered immediately
 A question or approval request SHALL be registered before the request callback fires with its identity. The caller SHALL be able to answer or deny inside that callback. Only the first valid response SHALL apply. Headless handling SHALL NOT depend on a browser, UI deadline or recommended answer.
 
@@ -92,6 +100,10 @@ A question or approval request SHALL be registered before the request callback f
 #### Scenario: Response races stop
 - **WHEN** a response and stop target the same pending request
 - **THEN** exactly one settlement occurs and a late response reports that the request is no longer pending
+
+#### Scenario: Native tool-call identity on requests
+- **WHEN** Claude's permission callback supplies a nonempty tool-use ID for an approval or question, including two concurrent calls with equal tool and input and no preceding tool-use frame
+- **THEN** the request event, the request callback and the pending list carry that exact ID as `toolCallId` beside a distinct request id, and a request without a native ID carries none
 
 #### Scenario: Explanatory response on a Claude question
 - **WHEN** a caller answers a pending Claude question with valid answers and a non-blank response, or supplies a response that is blank, on a Codex question or on an approval

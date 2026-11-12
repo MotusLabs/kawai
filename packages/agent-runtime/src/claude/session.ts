@@ -18,11 +18,17 @@
 // - A result frame binds once per session: every frame id is kept for the
 //   session's life, and a frame without one is refused.
 // - Agent-started turns. An init that no submission opened starts an
-//   agent-started turn (L24), but only while idle.
+//   agent-started turn (L24), but only while idle. With
+//   joinAgentStartedTurns, a queued send while it is the only open turn
+//   joins it (send/join below) instead of queueing a turn of its own.
 // - Checkpoints. A new session id is persisted before later sends are
 //   acknowledged, and an interrupt refuses every send still waiting
 //   (lifecycle/checkpoints.ts). State publications are held while a turn
 //   opens or settles, so a callback never reenters a half-finished step.
+// - Interrupt capability. A generation sends cancelQueued on interrupt until
+//   an init's capabilities array lacks interrupt_cancel_queued_v1 (each such
+//   array replaces the answer); then it sends a plain interrupt and logs
+//   interrupt-cancel-queued-unsupported. Stop never interrupts.
 // - Facts. Usage, context, quota and limit-wait facts (usageFacts.ts) are fed
 //   before the frame mapping; their control calls are owned jobs (usageControls.ts).
 // - Composition. Permissions, host integrations, requests (canUseTool) and
@@ -55,7 +61,7 @@ import { accountGenerations, cancelledByStop, generationOptions, interruptGenera
 import { ClaudeRequests } from './requests.js'
 import { SeenResultFrames } from './resultFrames.js'
 import { settleResult, type ResultSettlementHost } from './resultSettlement.js'
-import { CliTurnBinder } from './turnBinder.js'
+import { CliTurnBinder, type CliContractViolation } from './turnBinder.js'
 import { OpenTurns } from './openTurns.js'
 import { composeEnvelope } from './compose.js'
 import { checkSubmission, newTurn, promptMessage, type Turn } from './turns.js'
@@ -73,6 +79,8 @@ export class ClaudeSession {
   private readonly open: OpenTurns
   private readonly oldFrame = new OldFrameScope()
   private readonly binder: CliTurnBinder
+  /** Logs a deviation from the pinned CLI contract (docs/claude-cli-contract.md). */
+  private readonly violation: (reason: CliContractViolation) => void
   private readonly requests: ClaudeRequests
   private readonly frames: ClaudeFrames
   private readonly checkpoints: CheckpointGate
@@ -112,8 +120,9 @@ export class ClaudeSession {
     const persist = callbacks.onCheckpoint && ((checkpoint: ResumeCheckpoint) => callbacks.onCheckpoint!(checkpoint))
     const failed = () => { this.events.emit({ type: 'error', error: CHECKPOINT_FAILED }); void this.shutdown().catch(() => {}) }
     this.checkpoints = new CheckpointGate({ lifecycle: this.lifecycle, persist, failed }, this.runtimeSessionId)
+    this.violation = (reason) => logger?.warn({ reason }, 'claude_cli_contract_violation')
     this.binder = new CliTurnBinder({
-      violation: (reason) => logger?.warn({ reason }, 'claude_cli_contract_violation'),
+      violation: this.violation,
       unknownUuid: (uuid) => logger?.warn({ uuid }, 'claude_unknown_result_uuid'),
     })
     this.requests = new ClaudeRequests({
@@ -332,6 +341,9 @@ export class ClaudeSession {
       if (message.session_id !== generation.resumeTarget) return this.refuseSubstitution(generation)
       generation.identityConfirmed = true
     }
+    // Each init reporting a capabilities array replaces this generation's answer; any other value keeps it.
+    const capabilities = (message as { capabilities?: unknown }).capabilities
+    if (Array.isArray(capabilities)) generation.cancelQueued = capabilities.includes('interrupt_cancel_queued_v1')
     if (message.session_id) {
       this.runtimeSessionId = message.session_id
       this.checkpoints.report({ runtime: 'claude', runtimeSessionId: message.session_id })
@@ -387,8 +399,10 @@ export class ClaudeSession {
       // P12/P13: the host decides before anything is enqueued or emitted, and
       // an accepted submission keeps the identity the host recorded.
       prepare: () => {
+        // Opt-in join (eighth exception): the live agent-started turn is chosen before the host sees the identity.
+        const joining = this.joinTarget(submit.continuation)
         const messageUuid = submit.messageUuid ?? crypto.randomUUID()
-        const turnId = crypto.randomUUID()
+        const turnId = joining?.turn.turnId ?? crypto.randomUUID()
         checkSubmission(this.options.beforeSubmit, { messageUuid, turnId, text, context: submit.context })
         // R4: the host's additions to this prompt, on the same identities;
         // the admission decides again after it, as after beforeSubmit.
@@ -397,10 +411,42 @@ export class ClaudeSession {
         })
         const turn = newTurn(turnId, messageUuid, text)
         turn.envelope = envelope
-        return turn
+        return { turn, joining }
       },
-      commit: (admission, turn) => this.accept(turn, admission),
+      commit: (admission, { turn, joining }) => (joining ? this.join(turn, joining, admission) : this.accept(turn, admission)),
     })
+  }
+
+  /** The agent-started turn a queued send would join: opted in, and that turn is the only open one. */
+  private joinTarget(continuation: SubmitOptions['continuation']): { turn: Turn; generation: Generation } | null {
+    if (this.options.joinAgentStartedTurns !== true || continuation !== 'queue') return null
+    const turn = this.open.only()
+    const generation = this.current()
+    if (!turn || !generation || !turn.opened || turn.settled || turn.messageUuid !== null) return null
+    return { turn, generation }
+  }
+
+  /**
+   * Commit a joining send (eighth exception). After the host callbacks, the
+   * same agent-started turn must still be the only open turn on the same
+   * generation, and the send still a queue admission. Otherwise it is
+   * refused before anything is enqueued, because the host recorded that
+   * turn's id. Joined, the prompt is the turn's own: no second turn, no
+   * queued lifecycle entry, and the handle shares the turn's one result.
+   */
+  private join(prompt: Turn, joining: { turn: Turn; generation: Generation }, admission: Admission): TurnHandle {
+    const { turn, generation } = joining
+    if (admission !== 'queue' || this.open.only() !== turn || turn.settled || generation !== this.current() || generation.retired) {
+      throw new AgentRuntimeError({ category: 'busy', message: 'the agent-started turn this send was joining ended or changed before it was sent' })
+    }
+    const messageUuid = prompt.messageUuid!
+    const pushed = generation.input.push(promptMessage(prompt.text, messageUuid, prompt.envelope))
+    if (!pushed) throw new AgentRuntimeError({ category: 'stopped', message: 'the driver is stopped' })
+    this.lifecycle.withdraw('queue')
+    this.frames.sent(messageUuid, prompt.text)
+    this.binder.promptSent(messageUuid, turn.turnId)
+    this.emit({ type: 'user_message', turnId: turn.turnId, text: prompt.text, messageUuid })
+    return { turnId: turn.turnId, messageUuid, result: turn.result }
   }
 
   /**
@@ -459,6 +505,8 @@ export class ClaudeSession {
     this.open.settleAll(turns, error)
     this.frames.interrupted()
     if (generation && active) {
+      // Stop and urgent mail reach here; kill and shutdown never interrupt.
+      if (!generation.cancelQueued) this.violation('interrupt-cancel-queued-unsupported')
       void this.lifecycle.jobs.run(
         `interrupt:${generation.number}`,
         async () => {

@@ -157,8 +157,8 @@ function matches(matcher: string | undefined, tool: string): boolean {
 /**
  * The per-spawn package fields Kawai fixes: its logger, the launch, the
  * default permission mode over every tool, all three setting sources, the
- * profile's flag-layer env, the wire, waiting requests, and the host-login
- * usage claim.
+ * profile's flag-layer env, the wire, waiting requests, joined sends into an
+ * agent-started turn, and the host-login usage claim.
  */
 export function launchFields(options: Pick<ChatSessionDriverOptions, 'sessionId' | 'wire' | 'claimUsagePull'>, spawn: ClaudeSpawnLaunch) {
   const wire = options.wire
@@ -170,6 +170,8 @@ export function launchFields(options: Pick<ChatSessionDriverOptions, 'sessionId'
     ...(spawn.settingsEnv ? { settings: { env: spawn.settingsEnv } } : {}),
     ...(wire ? { wire: { record: (frame) => wire.record(frame.direction, frame.text) } } : {}),
     unansweredRequests: 'wait',
+    // A send while the agent's own turn runs joins that turn, as the source driver did (GAP9).
+    joinAgentStartedTurns: true,
     ...(options.claimUsagePull ? { quotaSource: 'host-login' as const, claimUsagePull: options.claimUsagePull } : {}),
   } satisfies Partial<ClaudeDriverOptions>
 }
