@@ -9,6 +9,10 @@
 // - From the current turn's notifications: reasoning deltas and a started
 //   reasoning item are a thinking block; an `error` notification that will
 //   retry is one retry (`retrying`, attempt 1 of 1).
+// Order (F2): an event's transition is decided before the host's onEvent
+// runs and published after it, unless a later decision — a stop the host
+// made from inside that onEvent — superseded it, so an outer turn_started
+// cannot revive the activity a nested turn end cleared.
 // Scope: the session feeds only events it publishes (current generation,
 // bound turns) and only notifications it routed to the open turn, so a
 // retired, foreign or settled turn's frame cannot revive the activity; the
@@ -53,25 +57,35 @@ function notificationInput(method: string, params: Record<string, unknown>): Cha
 
 export class CodexActivity {
   private state: ChatActivityState = initialChatActivityState()
+  /** The newest decided transition; an older one is not published. */
+  private decided = 0
 
   constructor(private readonly publish: (activity: Activity | null) => void) {}
 
-  /** A published event of this session. */
-  event(event: AgentEvent): void {
+  /**
+   * A published event of this session: its transition is decided now, then
+   * `observe` (the host's onEvent) runs, then the decision is published
+   * unless a later one superseded it.
+   */
+  event(event: AgentEvent, observe: () => void): void {
     const input = eventInput(event)
-    if (input) this.feed(input)
+    const decision = input ? this.decide(input) : null
+    observe()
+    if (decision !== null && decision.number === this.decided) this.publish(decision.activity)
   }
 
   /** A notification the session routed to the open turn. */
   notification(method: string, params: Record<string, unknown>): void {
     const input = notificationInput(method, params)
-    if (input) this.feed(input)
+    const decision = input ? this.decide(input) : null
+    if (decision !== null) this.publish(decision.activity)
   }
 
-  private feed(input: ChatActivityInput): void {
+  /** Reduce now; a changed phase or clock is a numbered publication. */
+  private decide(input: ChatActivityInput): { number: number; activity: Activity | null } | null {
     const previous = this.state
     this.state = reduceActivity(previous, input)
     const changed = JSON.stringify(activityBody(previous)) !== JSON.stringify(activityBody(this.state)) || previous.phaseStartedAt !== this.state.phaseStartedAt
-    if (changed) this.publish(projectActivity(this.state))
+    return changed ? { number: ++this.decided, activity: projectActivity(this.state) } : null
   }
 }

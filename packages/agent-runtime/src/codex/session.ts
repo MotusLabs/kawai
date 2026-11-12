@@ -110,10 +110,8 @@ export class CodexSession {
       const onActivity = callbacks.onActivity
       if (onActivity) this.notify('onActivity', () => onActivity(activity))
     })
-    this.events = new EventStream((event) => {
-      this.notify('onEvent', () => callbacks.onEvent(event))
-      this.activity.event(event)
-    })
+    // F2: the activity transition is decided before onEvent and published after it (activity.ts).
+    this.events = new EventStream((event) => this.activity.event(event, () => this.notify('onEvent', () => callbacks.onEvent(event))))
     this.lifecycle = new DriverLifecycle({ continuations: new Set(['steer']), ...(callbacks.onState ? { onState: callbacks.onState } : {}) })
     const persist = callbacks.onCheckpoint && ((checkpoint: Parameters<NonNullable<typeof callbacks.onCheckpoint>>[0]) => callbacks.onCheckpoint!(checkpoint))
     const failed = () => {
